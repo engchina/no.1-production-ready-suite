@@ -1,4 +1,6 @@
 import type { RunStepDetailCode, RunStepDetailField, RunStepDetails } from "../data/run-step-details";
+import { DEFAULT_TRACE_DETAILS_LABELS, type TraceDetailsLabels } from "../../lib/trace-labels";
+import { traceSpanDisplayName, traceSpanFields } from "../../lib/trace-tree";
 import type { ChatProgressStep, ChatProgressStepStatus } from "./chat-progress";
 import { CHAT_PROGRESS_STATUS_RANK } from "./chat-progress-steps";
 
@@ -13,6 +15,11 @@ import { CHAT_PROGRESS_STATUS_RANK } from "./chat-progress-steps";
  * - `seq` は対象（`target_id`）ごとに 1 から連続する。試行が増えたら段階の一覧を作り直す。
  *
  * 段階の名前は契約に入れない。製品の段階の定義（`ChatProgressStepDefinitions`。`kind` → i18n の名前）で付ける。
+ *
+ * **段は span（#3226）**: 処理の経過は trace（span の木）の投影で、段のイベントは span の開始・表示用のデータの変更・
+ * 終了を表す（`name`・`parent_id`・`root` を持つ）。段は親子から入れ子にして木の順に並べ、実行の全体の span
+ * （`root`）は行にしない（見出しの要約が全体を表す）。名前は `kind` の製品の定義、無ければ共通の規則（#3219 の技術の
+ * span の名前）で付ける。
  */
 
 export const CHAT_PROGRESS_SCHEMA_VERSION = 1;
@@ -59,6 +66,17 @@ export interface ChatProgressStepEvent extends ChatProgressEventBase {
   params?: ChatProgressParams;
   /** 段を開いて見る詳細（見出しと値・行・SQL や JSON。backend が長さを切り、秘密らしい値を伏せる。#2294）。 */
   details?: RunStepDetails;
+  /** span の名前（段が span のとき。#3226）。 */
+  name?: string;
+  /** 親の span の id。 */
+  parent_id?: string;
+  /** 実行の全体の span。 */
+  root?: boolean;
+  trace_id?: string;
+  /** span の安全な属性（モデル・ツール・利用量・試行）。 */
+  attributes?: ChatProgressParams;
+  /** 停止で終わった span（状態は skipped）。 */
+  cancelled?: boolean;
 }
 
 export interface ChatProgressTerminalEvent extends ChatProgressEventBase {
@@ -177,6 +195,16 @@ export function parseChatProgressEvent(value: unknown): ChatProgressEvent | null
   if (values) event.params = values;
   const details = parseChatProgressStepDetails(source.details);
   if (details) event.details = details;
+  const name = text(source.name);
+  if (name) event.name = name.slice(0, 128);
+  const parentId = text(source.parent_id);
+  if (parentId) event.parent_id = parentId;
+  if (source.root === true) event.root = true;
+  const traceId = text(source.trace_id);
+  if (traceId && /^[0-9a-f]{32}$/.test(traceId)) event.trace_id = traceId;
+  const attributes = params(source.attributes);
+  if (attributes) event.attributes = attributes;
+  if (source.cancelled === true) event.cancelled = true;
   return event;
 }
 
@@ -207,6 +235,16 @@ export function parseChatProgressPage(value: unknown): ChatProgressPage | null {
 // 組み立て（イベント → 段階の一覧）。backend の `fold_chat_progress_events` と同じ規則。
 // ---------------------------------------------------------------------------
 
+/** 段が span のときの span の値（#3226）。 */
+export interface ChatProgressEventSpan {
+  name: string;
+  parentId?: string;
+  root?: boolean;
+  traceId?: string;
+  attributes?: ChatProgressParams;
+  cancelled?: boolean;
+}
+
 /** 組み立てた 1 つの段階（名前を付ける前）。 */
 export interface ChatProgressEventStep {
   id: string;
@@ -217,6 +255,7 @@ export interface ChatProgressEventStep {
   detail?: string;
   params?: ChatProgressParams;
   details?: RunStepDetails;
+  span?: ChatProgressEventSpan;
 }
 
 export interface ChatProgressEventsState {
@@ -273,6 +312,15 @@ function applyEvent(state: ChatProgressEventsState, event: ChatProgressEvent): C
   if (event.detail) step.detail = event.detail;
   if (event.params) step.params = event.params;
   if (event.details) step.details = event.details;
+  if (event.name) {
+    const span: ChatProgressEventSpan = { name: event.name };
+    if (event.parent_id) span.parentId = event.parent_id;
+    if (event.root) span.root = true;
+    if (event.trace_id) span.traceId = event.trace_id;
+    if (event.attributes) span.attributes = event.attributes;
+    if (event.cancelled) span.cancelled = true;
+    step.span = span;
+  }
   const steps = [...next.steps];
   if (index >= 0) steps[index] = step;
   else steps.push(step);
@@ -356,17 +404,82 @@ export type ChatProgressStepDefinitions = Readonly<Record<string, ChatProgressSt
 
 const EMPTY_PARAMS: ChatProgressParams = Object.freeze({});
 
-/** 組み立てた段階に名前を付ける（未知の種類は id をそのまま出す）。 */
+/** 名前の付け方の設定（span の段の名前・root の扱い。#3226）。 */
+export interface ChatProgressLabelOptions {
+  /** 技術の span の名前・停止の文言（既定は共通の日本語）。 */
+  traceLabels?: TraceDetailsLabels;
+}
+
+interface OrderedStep {
+  step: ChatProgressEventStep;
+  level: number;
+}
+
+/**
+ * span の段を木の順（親の直後に子。兄弟は始まった順）に並べ、入れ子の深さを付ける（#3226）。実行の全体の span（root）は
+ * 行にせず、子を最上位にする。親の無い段（親が記録の上限を超えた・別の区間）も最上位に出す。
+ */
+function orderSpanSteps(steps: readonly ChatProgressEventStep[]): OrderedStep[] {
+  const ids = new Set(steps.map((step) => step.id));
+  const children = new Map<string, ChatProgressEventStep[]>();
+  const tops: ChatProgressEventStep[] = [];
+  for (const step of steps) {
+    const parent = step.span?.parentId;
+    if (parent && ids.has(parent) && parent !== step.id) {
+      const list = children.get(parent) ?? [];
+      list.push(step);
+      children.set(parent, list);
+    } else {
+      tops.push(step);
+    }
+  }
+  const ordered: OrderedStep[] = [];
+  const visited = new Set<string>();
+  const visit = (step: ChatProgressEventStep, level: number) => {
+    if (visited.has(step.id)) return;
+    visited.add(step.id);
+    const hidden = step.span?.root === true;
+    if (!hidden) ordered.push({ step, level });
+    for (const child of children.get(step.id) ?? []) visit(child, hidden ? level : level + 1);
+  };
+  for (const step of tops) visit(step, 0);
+  // cycle の段も捨てずに最上位に出す。
+  for (const step of steps) if (!visited.has(step.id)) visit(step, 0);
+  return ordered;
+}
+
+function mergeDetails(product: RunStepDetails | undefined, technical: RunStepDetailField[]): RunStepDetails | undefined {
+  if (!technical.length) return product;
+  return { ...(product ?? {}), fields: [...(product?.fields ?? []), ...technical] };
+}
+
+/** 組み立てた段階に名前を付ける（未知の種類は id をそのまま出す。span の段は共通の規則で付ける）。 */
 export function labelChatProgressSteps(
   steps: readonly ChatProgressEventStep[],
-  definitions: ChatProgressStepDefinitions
+  definitions: ChatProgressStepDefinitions,
+  options: ChatProgressLabelOptions = {}
 ): ChatProgressStep[] {
-  return steps.map((step) => {
+  const traceLabels = options.traceLabels ?? DEFAULT_TRACE_DETAILS_LABELS;
+  const spanMode = steps.some((step) => step.span);
+  const ordered: OrderedStep[] = spanMode ? orderSpanSteps(steps) : steps.map((step) => ({ step, level: 0 }));
+  return ordered.map(({ step, level: treeLevel }) => {
     const definition = Object.prototype.hasOwnProperty.call(definitions, step.kind) ? definitions[step.kind] : undefined;
     const values = step.params ?? EMPTY_PARAMS;
+    const span = step.span;
+    const spanName = span
+      ? traceSpanDisplayName(
+          {
+            operationName: span.name,
+            status: span.cancelled ? "cancelled" : step.status === "running" || step.status === "pending" ? "done" : step.status,
+            root: span.root === true,
+            attributes: span.attributes ?? EMPTY_PARAMS,
+          },
+          traceLabels
+        )
+      : undefined;
     const result: ChatProgressStep = {
       id: step.id,
-      label: definition ? definition.label(step.status, values) : step.id,
+      label: definition ? definition.label(step.status, values) : spanName ?? step.id,
       status: step.status,
     };
     // 状態で変わらない名詞の名前（「SQL の生成」）。失敗のカードの止まった段に使う（#2342）。
@@ -374,26 +487,41 @@ export function labelChatProgressSteps(
     if (name && name !== result.label) result.name = name;
     if (step.startedAt) result.startedAt = step.startedAt;
     if (step.finishedAt) result.finishedAt = step.finishedAt;
-    const detail = definition?.detail?.(step.status, values) ?? step.detail;
+    const detail = definition?.detail?.(step.status, values) ?? step.detail ?? (span?.cancelled ? traceLabels.cancelled : undefined);
     if (detail) result.detail = detail;
     const meta = definition?.meta?.(step.status, values);
     if (meta) result.meta = meta;
-    const level = definition?.level?.(values);
+    const level = spanMode ? treeLevel : definition?.level?.(values);
     if (level) result.level = level;
-    const details = definition?.details ? definition.details(step.status, values, step.details) : step.details;
+    const productDetails = definition?.details ? definition.details(step.status, values, step.details) : step.details;
+    const details = span
+      ? mergeDetails(productDetails, traceSpanFields(undefined, span.name, span.attributes ?? EMPTY_PARAMS, traceLabels))
+      : productDetails;
     if (details) result.details = details;
     return result;
   });
+}
+
+/** 段が span の記録の trace id（実行の全体の span。無ければ最初の span）。 */
+export function chatProgressTraceIdOf(events: readonly ChatProgressEvent[]): string | undefined {
+  const spans = events.filter((event): event is ChatProgressStepEvent => event.type === "step" && Boolean(event.trace_id));
+  return (spans.find((event) => event.root) ?? spans[0])?.trace_id;
+}
+
+/** 段が span の記録か（#3226。古い形式の段だけの記録と分ける）。 */
+export function chatProgressHasSpans(events: readonly ChatProgressEvent[]): boolean {
+  return events.some((event) => event.type === "step" && Boolean(event.name));
 }
 
 /** 保存済みのイベント（完了した回答など）を、名前を付けた段階の一覧にする。 */
 export function chatProgressStepsFromEvents(
   events: readonly ChatProgressEvent[],
   definitions: ChatProgressStepDefinitions,
-  key: string | null = events[0]?.target_id ?? null
+  key: string | null = events[0]?.target_id ?? null,
+  options: ChatProgressLabelOptions = {}
 ): ChatProgressStep[] {
   const state = reduceChatProgressEvents(null, { key, events, since: 0 });
-  return labelChatProgressSteps(state.steps, definitions);
+  return labelChatProgressSteps(state.steps, definitions, options);
 }
 
 /** 保存済みのイベントの終端（無ければ null）。 */

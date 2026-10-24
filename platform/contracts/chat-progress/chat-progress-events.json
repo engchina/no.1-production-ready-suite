@@ -308,6 +308,90 @@
             ],
             "default": null,
             "description": "段を開いて見る詳細（見出しと値・行・SQL や JSON。上限で切り、秘密を伏せる）。"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "span の名前（段が span のとき。#3226）。",
+            "title": "Name"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "親の span の id（入れ子を作る）。",
+            "title": "Parent Id"
+          },
+          "root": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "実行の全体の span。",
+            "title": "Root"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "span の trace id。",
+            "title": "Trace Id"
+          },
+          "attributes": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/$defs/ChatProgressParamValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "span の安全な属性（モデル・ツール・利用量・試行）。",
+            "title": "Attributes"
+          },
+          "cancelled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "停止で終わった span（状態は skipped）。",
+            "title": "Cancelled"
           }
         },
         "required": [
@@ -692,6 +776,90 @@
             ],
             "default": null,
             "description": "段を開いて見る詳細（見出しと値・行・SQL や JSON。上限で切り、秘密を伏せる）。"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "span の名前（段が span のとき。#3226）。",
+            "title": "Name"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "親の span の id（入れ子を作る）。",
+            "title": "Parent Id"
+          },
+          "root": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "実行の全体の span。",
+            "title": "Root"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "span の trace id。",
+            "title": "Trace Id"
+          },
+          "attributes": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/$defs/ChatProgressParamValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "span の安全な属性（モデル・ツール・利用量・試行）。",
+            "title": "Attributes"
+          },
+          "cancelled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "停止で終わった span（状態は skipped）。",
+            "title": "Cancelled"
           }
         },
         "required": [

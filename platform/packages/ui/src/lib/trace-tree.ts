@@ -17,7 +17,7 @@ const TECHNICAL_SPANS: Readonly<Record<string, { name: Exclude<keyof TraceSpanNa
   "http.request": { name: "httpRequest" },
 };
 
-interface SpanNameInput {
+export interface TraceSpanNameInput {
   operationName: string;
   status: TraceSpanStatus;
   root: boolean;
@@ -29,7 +29,7 @@ interface SpanNameInput {
  * （処理の経過と同じ。無ければ `pr.stage` の値）、`gen_ai.*`・MCP・Select AI・HTTP は日本語の名前に対象を添え、
  * それ以外は `operation_name`。2 回目以降の試行（`pr.attempt`）は回数を付ける。元の名前は詳細の `Span name` に残す。
  */
-function spanDisplayName(span: SpanNameInput, labels: TraceDetailsLabels): string {
+export function traceSpanDisplayName(span: TraceSpanNameInput, labels: TraceDetailsLabels = DEFAULT_TRACE_DETAILS_LABELS): string {
   const names = labels.spanNames;
   const stage = textAttribute(span.attributes, "pr.stage");
   let name: string;
@@ -45,6 +45,34 @@ function spanDisplayName(span: SpanNameInput, labels: TraceDetailsLabels): strin
   }
   const attempt = span.attributes["pr.attempt"];
   return typeof attempt === "number" && Number.isInteger(attempt) && attempt > 1 ? names.attempt(name, attempt) : name;
+}
+
+/** span の技術の値（詳細の見出しと値）。モデル・ツール・試行・利用量・エラーの種類の allowlist だけ。 */
+const TECHNICAL_FIELDS = ["pr.stage", "gen_ai.request.model", "gen_ai.tool.name", "pr.attempt", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.reasoning.output_tokens", "error.type"];
+
+/**
+ * span の詳細の技術の値（3 製品共通）。行の名前は日本語にし、実測の記録を引けるように元の span の名前を残す。
+ * `gen_ai.chat` の利用量が無いときは 0 にせず「未計測」と出す。
+ */
+export function traceSpanFields(
+  spanId: string | undefined,
+  operationName: string,
+  attributes: Readonly<Record<string, unknown>>,
+  labels: TraceDetailsLabels = DEFAULT_TRACE_DETAILS_LABELS
+): { label: string; value: string; mono: boolean }[] {
+  const fields: { label: string; value: string; mono: boolean }[] = [];
+  if (spanId) fields.push({ label: "Span ID", value: spanId, mono: true });
+  fields.push({ label: "Span name", value: operationName, mono: true });
+  for (const key of TECHNICAL_FIELDS) {
+    const v = attributes[key];
+    if (typeof v === "string" || (typeof v === "number" && Number.isFinite(v))) fields.push({ label: key, value: String(v).slice(0, 128), mono: true });
+  }
+  if (operationName === "gen_ai.chat") {
+    for (const key of ["gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens"]) {
+      if (attributes[key] == null) fields.push({ label: key, value: labels.unknown, mono: false });
+    }
+  }
+  return fields;
 }
 
 /** 外部の summary を検証し、親子関係を有限回で並べる。本文や任意の属性は描画しない。 */
@@ -75,23 +103,13 @@ export function traceTimeline(value: unknown, labels: TraceDetailsLabels = DEFAU
     visited.add(id);
     const attributes = span.attributes && typeof span.attributes === "object" ? span.attributes as Record<string, unknown> : {};
     const operationName = String(span.operation_name).slice(0, 128);
-    const label = spanDisplayName({
+    const label = traceSpanDisplayName({
       operationName,
       status: span.status as TraceSpanStatus,
       root: data.root_span_id != null ? id === data.root_span_id : !span.parent_span_id,
       attributes,
     }, labels);
-    // 行の名前は日本語にし、実測の記録を引けるように元の span の名前を詳細に残す。
-    const fields = [{ label: "Span ID", value: id, mono: true }, { label: "Span name", value: operationName, mono: true }];
-    for (const key of ["pr.stage", "gen_ai.request.model", "gen_ai.tool.name", "pr.attempt", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.reasoning.output_tokens", "error.type"]) {
-      const v = attributes[key];
-      if (typeof v === "string" || (typeof v === "number" && Number.isFinite(v))) fields.push({ label: key, value: String(v).slice(0, 128), mono: true });
-    }
-    if (span.operation_name === "gen_ai.chat") {
-      for (const key of ["gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens"]) {
-        if (attributes[key] == null) fields.push({ label: key, value: labels.unknown, mono: false });
-      }
-    }
+    const fields = traceSpanFields(id, operationName, attributes, labels);
     steps.push({ id, label, level,
       status: span.status === "cancelled" ? "skipped" : span.status as "done" | "failed" | "skipped",
       detail: span.status === "cancelled" ? labels.cancelled : undefined,
