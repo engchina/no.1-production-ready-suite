@@ -68,13 +68,12 @@ async def _warm_search(settings: Settings) -> None:
     """回答の検索が最初の問で待つものを、起動時に用意する(#1498)。
 
     - 接続 pool を作り、``RAG_ORACLE_POOL_MIN`` 本の接続を開く。
-    - vector index の検索の設定(target accuracy)を解決する(pipeline-vector-index サービスに
-      届かなければ同じ計算を in-process で行う。どちらもメモ化する)。
+    - vector index の検索の設定(target accuracy)を解決する(backend の中の計算。メモ化する)。
     用意できなければ最初の問で作る(起動は続ける)。DB の接続の設定が無ければ何もしない。
     """
     try:
         if await asyncio.to_thread(warm_oracle_pool, settings):
-            await asyncio.to_thread(resolve_vector_index_adapter, settings)
+            resolve_vector_index_adapter(settings)
     except Exception as exc:  # noqa: BLE001 - 温められなくても起動は続ける(要るときに作り直す)。
         logger.warning("search_warm_failed", extra={"error_type": type(exc).__name__})
 

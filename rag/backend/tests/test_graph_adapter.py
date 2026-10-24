@@ -6,7 +6,6 @@ import pytest
 from pydantic import ValidationError
 from pytest import MonkeyPatch
 from rag_pipeline_core.graph import GraphResolved
-from rag_pipeline_core.stage import GraphStageResponse
 
 from app.config import Settings
 from app.rag.graph_adapter import (
@@ -44,9 +43,6 @@ def test_profiles_are_only_off_and_entities() -> None:
     for dataclass_type in (GraphResolved, GraphAdapterParams, GraphAdapterRuntimeSettings):
         names = {field.name for field in fields(dataclass_type)}
         assert not {name for name in names if "claim" in name or "communit" in name}
-    assert not {
-        name for name in GraphStageResponse.model_fields if "claim" in name or "communit" in name
-    }
 
 
 def test_document_recipe_off_overrides_global_entities() -> None:
@@ -84,10 +80,9 @@ def test_graph_temporal_setting_is_removed(monkeypatch: MonkeyPatch) -> None:
 
     assert "rag_graph_temporal_enabled" not in Settings.model_fields
     assert not hasattr(settings, "rag_graph_temporal_enabled")
-    # 構築フラグの解決結果・サービス応答・画面の snapshot にも timestamp 付与の項目を残さない。
+    # 構築フラグの解決結果・画面の snapshot にも timestamp 付与の項目を残さない。
     for dataclass_type in (GraphResolved, GraphAdapterParams, GraphAdapterRuntimeSettings):
         assert "temporal" not in {field.name for field in fields(dataclass_type)}
-    assert "temporal" not in GraphStageResponse.model_fields
 
 
 def test_runtime_settings_orders_and_marks_selected() -> None:

@@ -11,10 +11,6 @@ import { APP_ROUTES } from "@/lib/routes";
 export const SERVICE_CATEGORY_ROUTES = {
   preprocess: APP_ROUTES.settingsPreprocess,
   parser: APP_ROUTES.settingsParserAdapters,
-  vector_index: APP_ROUTES.settingsVectorIndex,
-  graphrag: APP_ROUTES.settingsGraph,
-  guardrail: APP_ROUTES.settingsGuardrail,
-  evaluation: APP_ROUTES.settingsEvaluation,
 } as const satisfies Record<ServiceCategory, string>;
 
 export interface ServiceStage {

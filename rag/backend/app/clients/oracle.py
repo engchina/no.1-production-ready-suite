@@ -6462,9 +6462,8 @@ class OracleClient:
         binds.update(
             {"embedding": embedding_bind, "min_similarity": self._settings.rag_min_similarity}
         )
-        # 解決は初回だけ pipeline-vector-index サービスへ同期の HTTP を送ることがあるため、
-        # イベントループを止めないようスレッドで呼ぶ(以降はメモ化した値。#828)。
-        vector_index = await asyncio.to_thread(resolve_vector_index_adapter, self._settings)
+        # backend の中の決定論の解決(メモ化した値。#828・#3218)。
+        vector_index = resolve_vector_index_adapter(self._settings)
         fetch_clause = _oracle_vector_fetch_clause(
             top_k=top_k, target_accuracy=vector_index.target_accuracy
         )

@@ -151,3 +151,30 @@ async def test_vector_index_build_params_on_real_oracle() -> None:
     assert actual is not None
     neighbors, efconstruction = actual
     assert neighbors > 0 and efconstruction > 0
+
+
+def test_resolution_is_memoized_by_profile_and_accuracy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """解決は backend の中の決定論で、(プロファイル, 設定の target accuracy) ごとに 1 回だけ。
+
+    #828・#3218。
+    """
+    from rag_pipeline_core.vector_index import resolve_vector_index
+
+    from app.rag import vector_index_adapter
+
+    vector_index_adapter.reset_vector_index_static_cache()
+    calls: list[tuple[object, ...]] = []
+
+    def counting(*args: object) -> object:
+        calls.append(args)
+        return resolve_vector_index(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("app.rag.vector_index_adapter.resolve_vector_index", counting)
+    accurate = Settings(rag_vector_index_profile="accurate")
+    assert resolve_vector_index_adapter(accurate) == resolve_vector_index_adapter(accurate)
+    balanced = resolve_vector_index_adapter(
+        Settings(rag_vector_index_profile="balanced", oracle_vector_target_accuracy=90)
+    )
+    assert balanced.profile == "balanced" and balanced.target_accuracy == 90
+    assert len(calls) == 2
+    vector_index_adapter.reset_vector_index_static_cache()
