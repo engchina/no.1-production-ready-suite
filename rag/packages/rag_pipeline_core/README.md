@@ -1,15 +1,11 @@
 # rag_pipeline_core
 
-pipeline ステージのプラグイン化のための共有契約パッケージ。backend と各ステージ
-マイクロサービス(`services/pipeline/<stage>`)が **同一の決定論ロジック + HTTP 契約** を
-共有する。`rag_parser_core` と同じ軽量方針(依存は pydantic + rag_parser_core のみ、
-HTTP サーバ依存は `[service]` extra に隔離)。
+pipeline の段の決定論ロジックの共有パッケージ。backend の中で直接実行する(段のサービスへの HTTP の
+委譲は持たない。#3218)。`rag_parser_core` と同じ軽量方針(依存は pydantic + rag_parser_core のみ)。
 
 - `chunking.py` — chunk 分割の決定論ロジック(backend `app.rag.chunking` はここを再 export)。
-- `stage.py` — `StageHealth` と各ステージの request/response wire schema。
-- `stage_service.py` — `create_vector_index_app` など 1 ステージ用 FastAPI app factory。
-
-文書分割は backend 内で `chunking.py` を直接実行し、分割用の HTTP 契約・サービスは持たない。
-その他のステージは `app.clients.pipeline_stage.PipelineStageClient` で `POST /run` へ委譲する。
-サービス未起動・未到達時は in-process(同一ロジック)へ安全縮退し、remote が応答した後の
-HTTP error / 不正応答は壊れたサービスとして停止する。
+- `vector_index.py` — 索引・検索の精度のプリセットの解決(`app.rag.vector_index_adapter`)。
+- `guardrail.py` — groundedness の閾値の静的な解決(`app.rag.guardrail_adapter`)。
+- `evaluation.py` — 評価の suite から閾値への解決。
+- `graph.py` — 関係情報の構築のプロファイルの解決(`app.rag.graph_adapter`)。
+- `raptor.py` — RAPTOR の再帰要約索引の決定論の部分(クラスタリングと summary chunk の構築)。

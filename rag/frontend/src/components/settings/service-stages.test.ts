@@ -48,14 +48,7 @@ describe("サービス管理の工程とサイドナビ", () => {
       .map((item) => t(item.sidebarLabelKey ?? item.labelKey));
     expect(stages.map((stage) => t(stage.labelKey))).toEqual(expected);
     // 現在のナビでの並び（ナビを変えたら、この期待値も合わせて見直す）。
-    expect(expected).toEqual([
-      "ファイル準備",
-      "文書解析",
-      "検索インデックス",
-      "関係情報の構築",
-      "安全チェック",
-      "評価の基準",
-    ]);
+    expect(expected).toEqual(["ファイル準備", "文書解析"]);
   });
 
   it("backend のカタログも、工程の並び（サイドナビの並び）の順に並ぶ", () => {
@@ -81,18 +74,11 @@ describe("サービス管理の工程とサイドナビ", () => {
 });
 
 describe("サービス管理のサービス名", () => {
-  const stageName = new Map(serviceStages().map((stage) => [stage.category, t(stage.labelKey)]));
 
   it("カタログの label_key はすべて i18n にある", () => {
     expect(catalogEntries.length).toBeGreaterThan(0);
     for (const entry of catalogEntries) {
       expect(entry.labelKey in ja, entry.labelKey).toBe(true);
-    }
-  });
-
-  it("backend 内処理の工程のサービスは、工程と同じ名前", () => {
-    for (const entry of catalogEntries.filter((candidate) => candidate.labelKey.startsWith("settings.services.item.pipeline"))) {
-      expect(t(entry.labelKey as I18nKey)).toBe(stageName.get(entry.category as never));
     }
   });
 

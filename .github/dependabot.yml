@@ -170,10 +170,6 @@ updates:
     directories:
       - /rag/services/parsers/structured_records_jsonl
       - /rag/services/parsers/xml_tree_json
-      - /rag/services/pipeline/evaluation
-      - /rag/services/pipeline/graphrag
-      - /rag/services/pipeline/guardrail
-      - /rag/services/pipeline/vector_index
       - /rag/services/preprocess/csv_to_jsonl
       - /rag/services/preprocess/excel_to_jsonl
       - /rag/services/preprocess/word_to_jsonl

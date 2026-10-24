@@ -1,11 +1,6 @@
-"""rag_pipeline_core: pipeline ステージのプラグイン共有契約。
+"""rag_pipeline_core: pipeline の段の決定論ロジック。
 
-各 pipeline ステージ(chunking / vector_index / guardrail / evaluation / graphrag)を
-独立マイクロサービス化するための共有契約・
-決定論ロジック・FastAPI app factory を提供する。``rag_parser_core`` と同じく軽量(依存は
-pydantic + rag_parser_core のみ)で、重い実行依存は各サービス側へ隔離する。
+文書分割(chunking)・vector index・guardrail・evaluation・関係情報の構築(graph)・RAPTOR の設定の
+解決を、backend の中で実行する決定論ロジックとして提供する(段のサービスへの委譲は持たない。#3218)。
+``rag_parser_core`` と同じく軽量(依存は pydantic + rag_parser_core のみ)。
 """
-
-from rag_pipeline_core.stage import StageHealth
-
-__all__ = ["StageHealth"]

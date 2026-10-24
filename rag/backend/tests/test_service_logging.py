@@ -5,16 +5,26 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from rag_parser_core.preprocess import ConvertHealth, ConvertOutcome
+from rag_parser_core.preprocess_service import create_preprocess_app
 from rag_parser_core.service import create_parse_app
-from rag_pipeline_core.stage_service import create_vector_index_app
+from rag_parser_core.source import SourceProfile
 
 
-@pytest.mark.parametrize("kind", ["parser", "pipeline"])
+def _convert(
+    _data: bytes, _filename: str, _profile: str, _source: SourceProfile | None
+) -> ConvertOutcome:
+    raise AssertionError("呼ばれない")
+
+
+@pytest.mark.parametrize("kind", ["parser", "preprocess"])
 def test_service_factory_uses_common_wire_contract(kind: str, capsys: Any) -> None:
     app = (
         create_parse_app(backend="stub", import_name="json", title="parser-stub")
         if kind == "parser"
-        else create_vector_index_app(title="pipeline-stub")
+        else create_preprocess_app(
+            converter=_convert, health_probe=ConvertHealth, title="preprocess-stub"
+        )
     )
     with TestClient(app) as client:
         response = client.get(

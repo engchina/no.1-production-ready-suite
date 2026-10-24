@@ -205,6 +205,16 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `RAG_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#3218 pipeline の段のサービスへの委譲を削除）
+
+検索インデックス・関係情報の構築・安全チェック・評価の基準の段は、backend の中で実行する（`rag_pipeline_core` の決定論の解決）。段のサービス（`services/pipeline/{vector_index,graphrag,guardrail,evaluation}`）と、そこへ HTTP で委譲する仕組み（`app/clients/pipeline_stage.py`）を削除し、サービス管理の一覧からも外した。これらのサービスは配備の対象ではなく（systemd の unit も無い）、委譲の許可の既定が有効だったため、Chunk 作成の job ごとに接続に失敗して WARNING「pipeline stage service unavailable; falling back to in-process」を出していた。
+
+- **環境変数**: 次は読まない（`backend/.env` に残っていても無視する。消さなくてもよい）。
+  - `RAG_VECTOR_INDEX_SERVICE_ENABLED`・`RAG_VECTOR_INDEX_SERVICE_URL`・`RAG_GRAPH_SERVICE_ENABLED`・`RAG_GRAPH_SERVICE_URL`・`RAG_GUARDRAIL_SERVICE_ENABLED`・`RAG_GUARDRAIL_SERVICE_URL`・`RAG_EVALUATION_SERVICE_ENABLED`・`RAG_EVALUATION_SERVICE_URL`・`RAG_PIPELINE_STAGE_TIMEOUT_SECONDS`
+- **サービス管理の API**: `GET /api/services/catalog` の各サービスから `deployable` を削除し、`systemd_unit` は常に unit 名を返す。稼働状態の `in_process` と、使用方針の `in_process_when_disabled`・`required_no_fallback` は返さない（どのサービスも使っていない）。
+- **データベース**: DDL・データの移行は要らない。
+- **手順**: コードを更新して backend・取込 worker・frontend を再起動する（`sudo platform/deploy/suite-update.sh`）。Compute で段のサービスを手で起動していた場合は止めてよい。
+
 ## 既存環境の更新手順（#2831 引用証拠のキーの改名）
 
 回答の引用一覧は `cited_evidence`、その ID 一覧は `cited_evidence_ids`、引用一覧の各 ID は `evidence_id` に変更した。旧名の `used_images` / `used_image_ids` / 引用一覧内の `image_id` は実行時には受け付けない。SDK の呼び出し側も新名へ更新する。実際の画像のメタデータ `image_evidence[*].image_id` は変更しない。
