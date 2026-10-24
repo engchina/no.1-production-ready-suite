@@ -1,4 +1,4 @@
-import {timelineSnapshot} from "../../../../platform/packages/ui/e2e/timeline-snapshot";
+import {timelineSnapshot, timelineTypography} from "../../../../platform/packages/ui/e2e/timeline-snapshot";
 import { expect, test, type Locator, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import {
@@ -2324,6 +2324,10 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   await page.goto("/chat?profile_id=sales&conversation_id=chat-1");
   await page.getByTestId("sql-chat-progress-summary").click();
   const live = await timelineSnapshot(page.getByTestId("sql-chat-progress"));
+  const liveTypography = await timelineTypography(page.getByTestId("sql-chat-progress"));
+  expect(liveTypography.steps.length).toBeGreaterThan(0);
+  expect(liveTypography.steps.every(style => style?.fontSize === "12px" && style.fontFamily.includes("Noto Sans JP"))).toBe(true);
+  expect(liveTypography.summary?.fontSize).toBe("12px");
   expect(live).toHaveLength(6);
   await page.screenshot({path: testInfo.outputPath("chat-process.png")});
   await page.route("**/api/nl2sql/history/synthetic-parity", (route) => route.fulfill({json: {data: {
@@ -2337,6 +2341,7 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   await expect(page.getByTestId("history-detail-summary").locator("[data-run-summary-heading] [data-status-variant]")).toHaveCount(0);
   await page.getByTestId("history-detail-timeline-summary").click();
   expect(await timelineSnapshot(page.getByTestId("history-detail-timeline"))).toEqual(live);
+  expect(await timelineTypography(page.getByTestId("history-detail-timeline"))).toEqual(liveTypography);
   await expectChatNoOverflow(page);
   const details = page.locator("[data-run-process-details]");
   await expect(details).not.toHaveAttribute("open", "");

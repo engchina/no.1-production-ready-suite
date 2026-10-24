@@ -426,7 +426,7 @@ function CurrentStepRow({
             {activityIndicator ? <Spinner size={TEXT_ICON_SIZE.xs} className="text-accent-fg" /> : <Clock3 size={TEXT_ICON_SIZE.xs} className="text-fg-muted" aria-hidden />}
           </span>
           <span className="min-w-0 break-words [overflow-wrap:anywhere]">
-            <span className="font-medium text-fg">{label}</span>
+            <span className="font-medium text-fg" data-run-timeline-label="">{label}</span>
             {detail ? <span className="text-fg-muted">{`（${detail}）`}</span> : null}
             <span className="sr-only">{` ${labels.status.running}`}</span>
           </span>
@@ -556,7 +556,7 @@ export function ChatProgress({
           meta={<HeaderTimer startedAt={overallStartedAt} labels={labels} testId={testId} />}
           open={summaryIsOpen}
           onOpenChange={setSummaryOpen}
-          summaryProps={{ "data-testid": testId ? `${testId}-running` : undefined }}
+          summaryProps={{ "data-testid": testId ? `${testId}-running` : undefined, "data-run-progress-summary": "" }}
           summaryClassName="w-full text-fg-muted"
         >
           {/* 1 本のタイムライン: 始まった段階を開始順に並べ、今の段階の行をその位置に出す（#2309 / #2840）。 */}
@@ -590,7 +590,7 @@ export function ChatProgress({
           }
           open={summaryIsOpen}
           onOpenChange={setSummaryOpen}
-          summaryProps={{ "data-testid": testId ? `${testId}-summary` : undefined }}
+          summaryProps={{ "data-testid": testId ? `${testId}-summary` : undefined, "data-run-progress-summary": "" }}
           summaryClassName={failed ? "text-danger-fg" : "text-fg-muted"}
         >
           {footer ? (

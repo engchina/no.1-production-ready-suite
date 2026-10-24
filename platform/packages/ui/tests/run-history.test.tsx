@@ -323,6 +323,14 @@ describe("RunSummary", () => {
 });
 
 describe("RunTimeline", () => {
+  it("操作画面と履歴の既定は共通の小さい文字とアイコンで描く", () => {
+    render(<RunTimelineSection title="処理の経過" steps={[{id: "a", label: "合成の工程", status: "done", details: {fields: [{label: "結果", value: "完了"}]}}]} />);
+    const label = container.querySelector("[data-run-timeline-label]");
+    expect(label?.closest("div")?.className).toContain("text-xs");
+    expect(container.querySelector('[data-run-progress-summary]')?.className).toContain("text-xs");
+    expect(container.querySelector('[data-run-timeline-toggle] svg')?.getAttribute("width")).toBe("12");
+  });
+
   it("時刻のある段は実際の位置、無い段は前の段の後ろに積む", () => {
     const steps: RunTimelineStep[] = [
       { id: "a", label: "A", status: "done", startedAt: "2026-10-15T00:00:00.000Z", finishedAt: "2026-10-15T00:00:01.000Z" },

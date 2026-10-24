@@ -1,4 +1,4 @@
-import {timelineSnapshot} from "../../../../platform/packages/ui/e2e/timeline-snapshot";
+import {timelineSnapshot, timelineTypography} from "../../../../platform/packages/ui/e2e/timeline-snapshot";
 import {jobProgressEvents, type JobProgressStep} from "./_helpers/job-progress";
 import { mockTabularPreview } from "./_helpers/tabular-preview";
 import { readFile } from "node:fs/promises";
@@ -20145,7 +20145,7 @@ test("実測 trace の親子関係を SQL 生成で開ける", { tag: "@responsi
   const api = await mockNl2SqlApi(page);
   api.traceSummary = syntheticTraceSummary;
   await page.goto("/query");
-  await nl2sqlQuestionInput(page).fill("合成データの件数");
+  await fillQuestionWhenReady(page, "合成データの件数");
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "done");
   await page.getByTestId("nl2sql-job-summary").click();
@@ -20192,13 +20192,17 @@ for (const scenario of ["正常", "プレビュー", "安全性の確認の省�
     await page.route("**/api/nl2sql/jobs", (route) => fulfillJson(route, {job_id: job.job_id, status: "running", created_at: start, steps: []}));
     await page.route("**/api/nl2sql/jobs/synthetic-3198", (route) => fulfillJson(route, job));
     await page.goto("/query");
-    await nl2sqlQuestionInput(page).fill("合成の質問");
+    await fillQuestionWhenReady(page, "合成の質問");
     await page.getByRole("button", {name: "SQL を生成して実行", exact: true}).click();
     await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", job.status);
     const progress = page.getByTestId("nl2sql-job");
     const rows = progress.locator("[data-run-timeline-step]");
     if (!(await rows.first().isVisible())) await page.getByTestId("nl2sql-job-summary").click();
     const live = await timelineSnapshot(progress);
+  const liveTypography = await timelineTypography(progress);
+  expect(liveTypography.steps.length).toBeGreaterThan(0);
+  expect(liveTypography.steps.every(style => style?.fontSize === "12px" && style.fontFamily.includes("Noto Sans JP"))).toBe(true);
+  expect(liveTypography.summary?.fontSize).toBe("12px");
     expect(live).toHaveLength(6);
     await progress.screenshot({path: testInfo.outputPath("sql-generation-process.png")});
     if (cancelled) {
@@ -20214,6 +20218,7 @@ for (const scenario of ["正常", "プレビュー", "安全性の確認の省�
     await page.goto("/history?id=synthetic-3198");
     await page.getByTestId("history-detail-timeline-summary").click();
     expect(await timelineSnapshot(page.getByTestId("history-detail-timeline"))).toEqual(live);
+  expect(await timelineTypography(page.getByTestId("history-detail-timeline"))).toEqual(liveTypography);
     await page.getByTestId("history-detail-timeline").screenshot({path: testInfo.outputPath("history-process.png")});
     await expectNoHorizontalScroll(page);
   });
@@ -20232,7 +20237,7 @@ test("SQL 生成は最初の取得が終わる前から作成応答の開始待�
   });
   try {
     await page.goto("/query");
-    await nl2sqlQuestionInput(page).fill("合成の質問");
+    await fillQuestionWhenReady(page, "合成の質問");
     await page.getByRole("button", {name: "SQL を生成して実行", exact: true}).click();
     await expect(page.getByTestId("nl2sql-job-current")).toHaveAttribute("data-step-id", "queue");
     await expect(page.getByTestId("nl2sql-job-current")).toContainText("待っています");
