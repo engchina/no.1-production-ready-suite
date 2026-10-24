@@ -16,6 +16,12 @@ class TracingSettings(BaseModel):
     trace_shutdown_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     trace_ui_max_segments: int = Field(default=16, ge=1, le=1000)
     trace_ui_max_spans: int = Field(default=1000, ge=1, le=10000)
+    # 共通の span の表（`PLATFORM_TRACE_SPANS`。#3226）。保存期限の 0 は無期限（既定。
+    # 自動で消さない）。
+    trace_retention_days: int = Field(default=0, ge=0, le=36500)
+    trace_store_flush_seconds: float = Field(default=0.5, gt=0, le=60)
+    trace_store_batch_size: int = Field(default=100, ge=1, le=10000)
+    trace_store_queue_size: int = Field(default=5000, ge=1, le=1000000)
 
     @model_validator(mode="after")
     def validate_trace_batch(self) -> TracingSettings:

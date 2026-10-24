@@ -897,3 +897,9 @@ export { traceSpanDisplayName, traceSpanFields, traceTimeline } from "./lib/trac
 
 export { TRACE_DETAILS_JA, createTraceDetailsLabels, type TraceDetailsLabels, type TraceSpanNames, type TraceSpanStatus, type TraceStageName } from "./lib/trace-labels";
 export { TraceDetailsLabelsProvider, useTraceDetailsLabels } from "./components/data/trace-labels-provider";
+export {
+  TRACE_SNAPSHOT_INTERVAL_MS,
+  useTraceProgressSnapshot,
+  type TraceProgressSnapshot,
+  type TraceProgressSnapshotOptions,
+} from "./components/feedback/trace-progress-snapshot";
