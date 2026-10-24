@@ -13,35 +13,17 @@ import {
 describe("ServicesManagementClient service policy helpers", () => {
   it("maps execution policies to compact badge labels", () => {
     expect(t(serviceExecutionPolicyLabelKey("default_adapter"))).toBe("既定で使用");
-    expect(t(serviceStoppedHintKey("default_adapter")!)).toContain("解析が失敗します");
+    expect(t(serviceStoppedHintKey("default_adapter"))).toContain("解析が失敗します");
     expect(t("settings.services.confirm.stop.defaultDescription", { service: "Docling" })).toContain("既定の解析エンジン");
-    expect(serviceExecutionPolicyLabelKey("required_no_fallback")).toBe(
-      "settings.services.executionPolicy.requiredNoFallback"
-    );
-    expect(serviceExecutionPolicyLabelKey("in_process_when_disabled")).toBe(
-      "settings.services.executionPolicy.inProcessWhenDisabled"
-    );
     expect(serviceExecutionPolicyLabelKey("selected_adapter")).toBe(
       "settings.services.executionPolicy.selectedAdapter"
     );
   });
 
   it("maps stopped services to the right clarification text", () => {
-    expect(serviceStoppedHintKey("required_no_fallback")).toBe(
-      "settings.services.requiredStoppedHint"
-    );
-    expect(serviceStoppedHintKey("in_process_when_disabled")).toBe(
-      "settings.services.optionalStoppedHint.inProcess"
-    );
     expect(serviceStoppedHintKey("selected_adapter")).toBe(
       "settings.services.optionalStoppedHint.selectedAdapter"
     );
-  });
-
-  // deployable=false 段は「backend 内処理」固定表示 + 補足文を出す(操作系は非表示)。
-  it("provides an in_process status label and a future-service hint", () => {
-    expect(t("settings.services.status.in_process")).toBe("backend 内処理");
-    expect(t("settings.services.futureServiceHint")).toContain("将来");
   });
 
   // 行に常に出す主操作は状態に応じて 1 つだけ（#158）。

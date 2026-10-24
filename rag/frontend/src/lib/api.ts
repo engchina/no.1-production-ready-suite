@@ -2336,13 +2336,7 @@ export interface PreprocessSettingsUpdate {
 
 // --- サービス管理（各工程のサービスの稼働可視化・起動/停止）---
 // カテゴリと工程の設定画面の対応は components/settings/service-stages.ts（並びはサイドナビ。#638）。
-export type ServiceCategory =
-  | "preprocess"
-  | "parser"
-  | "vector_index"
-  | "graphrag"
-  | "guardrail"
-  | "evaluation";
+export type ServiceCategory = "preprocess" | "parser";
 export type ServiceProfile = "cpu" | "gpu" | "oci";
 // systemd の unit の状態 + /health（#286）。starting は unit が動いているが /health にまだ届かない、
 // failed は unit が失敗して止まった、not_installed は unit が登録されていない。
@@ -2353,10 +2347,8 @@ export type ServiceRuntimeStatus =
   | "failed"
   | "stopped"
   | "not_installed"
-  | "unconfigured"
-  | "in_process";
-export type ServiceExecutionPolicy =
-  "required_no_fallback" | "in_process_when_disabled" | "selected_adapter" | "default_adapter";
+  | "unconfigured";
+export type ServiceExecutionPolicy = "selected_adapter" | "default_adapter";
 // 起動 = systemctl enable --now、停止 = systemctl disable --now、再起動 = systemctl restart。
 export type ServiceAction = "start" | "stop" | "restart";
 
@@ -2372,10 +2364,9 @@ export interface ServiceCatalogItemData {
   profile: ServiceProfile;
   label_key: string;
   execution_policy: ServiceExecutionPolicy;
-  deployable: boolean;
   configured: boolean;
-  /** 起動/停止・ログに使う systemd の unit 名。backend 内処理のステージは null。 */
-  systemd_unit: string | null;
+  /** 起動/停止・ログに使う systemd の unit 名。 */
+  systemd_unit: string;
   model_cache: ServiceModelCacheData | null;
 }
 

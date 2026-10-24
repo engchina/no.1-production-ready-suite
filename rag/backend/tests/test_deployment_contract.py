@@ -222,10 +222,10 @@ def test_systemd_units_match_service_catalog() -> None:
     from app.services.catalog import SERVICE_CATALOG, SYSTEMD_UNIT_PREFIX
 
     services = _script_microservices()
-    deployable = {entry.service_id: entry for entry in SERVICE_CATALOG if entry.deployable}
-    assert set(services) == set(deployable)
+    catalog = {entry.service_id: entry for entry in SERVICE_CATALOG}
+    assert set(services) == set(catalog)
     for service_id, (directory, port, _timeout) in services.items():
-        entry = deployable[service_id]
+        entry = catalog[service_id]
         assert directory == entry.working_dir, service_id
         assert port == entry.port, service_id
         assert (REPO_ROOT / directory / "pyproject.toml").is_file(), service_id

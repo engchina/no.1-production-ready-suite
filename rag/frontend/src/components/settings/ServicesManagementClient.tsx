@@ -32,7 +32,6 @@ import {
   CircleDashed,
   CircleSlash,
   CircleX,
-  Cpu,
   HardDriveDownload,
   Hourglass,
   MinusCircle,
@@ -95,10 +94,6 @@ const PROFILE_GROUP_META: Record<
 
 export function serviceExecutionPolicyLabelKey(policy: ServiceExecutionPolicy): I18nKey {
   switch (policy) {
-    case "required_no_fallback":
-      return "settings.services.executionPolicy.requiredNoFallback";
-    case "in_process_when_disabled":
-      return "settings.services.executionPolicy.inProcessWhenDisabled";
     case "default_adapter":
       return "settings.services.executionPolicy.defaultAdapter";
     case "selected_adapter":
@@ -106,12 +101,8 @@ export function serviceExecutionPolicyLabelKey(policy: ServiceExecutionPolicy): 
   }
 }
 
-export function serviceStoppedHintKey(policy: ServiceExecutionPolicy): I18nKey | null {
+export function serviceStoppedHintKey(policy: ServiceExecutionPolicy): I18nKey {
   switch (policy) {
-    case "required_no_fallback":
-      return "settings.services.requiredStoppedHint";
-    case "in_process_when_disabled":
-      return "settings.services.optionalStoppedHint.inProcess";
     case "default_adapter":
       return "settings.services.defaultStoppedHint";
     case "selected_adapter":
@@ -531,11 +522,9 @@ function ServiceRow({
   onAct: (service: DisplayServiceData, action: ServiceControlAction) => void;
   onToggleLogs: (service: DisplayServiceData) => void;
 }) {
-  const deployable = service.deployable;
   const stopped = service.status === "stopped";
   const statusLoading = service.status === "loading";
   const statusError = service.status === "error";
-  const required = service.execution_policy === "required_no_fallback";
   const stoppedHintKey = stopped ? serviceStoppedHintKey(service.execution_policy) : null;
   const notInstalled = service.status === "not_installed";
   const failed = service.status === "failed";
@@ -599,54 +588,39 @@ function ServiceRow({
             </p>
           ) : null}
           {stoppedHintKey ? (
-            <p
-              className={cn(
-                "mt-1 flex items-center gap-1 text-xs",
-                required ? "font-medium text-danger-fg" : "text-fg-muted"
-              )}
-            >
-              {required ? <AlertTriangle size={14} aria-hidden /> : null}
-              {t(stoppedHintKey)}
-            </p>
-          ) : null}
-          {!deployable ? (
-            <p className="mt-1 text-xs text-fg-muted">{t("settings.services.futureServiceHint")}</p>
+            <p className="mt-1 text-xs text-fg-muted">{t(stoppedHintKey)}</p>
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <ServiceStatusBadge status={service.status} />
-          {deployable ? (
-            <>
-              {/* 行に常に出すのは状態に応じた起動 / 停止の 1 つだけ（#158）。 */}
-              <span className="inline-flex" title={controlHint}>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  tone={primaryAction === "stop" ? "danger" : "default"}
-                  size="sm"
-                  loading={primaryPending}
-                  disabled={
-                    !controlEnabled ||
-                    !service.statusReady ||
-                    notInstalled ||
-                    (thisPending && !primaryPending)
-                  }
-                  onClick={() => onAct(service, primaryAction)}
-                  aria-label={`${serviceLabel(service)} ${t(`settings.services.action.${primaryAction}` as I18nKey)}`}
-                  icon={primaryAction === "stop" ? Square : Play}
-                  data-testid={`service-primary-action-${service.service_id}`}
-                >
-                  {t(`settings.services.action.${primaryAction}` as I18nKey)}
-                </Button>
-              </span>
-              <RowActionMenu
-                actions={rowActions}
-                ariaLabel={t("common.objectActions.aria", { name: serviceLabel(service) })}
-                loading={restartPending}
-                testId={`service-row-actions-${service.service_id}`}
-              />
-            </>
-          ) : null}
+          {/* 行に常に出すのは状態に応じた起動 / 停止の 1 つだけ（#158）。 */}
+          <span className="inline-flex" title={controlHint}>
+            <Button
+              type="button"
+              variant="secondary"
+              tone={primaryAction === "stop" ? "danger" : "default"}
+              size="sm"
+              loading={primaryPending}
+              disabled={
+                !controlEnabled ||
+                !service.statusReady ||
+                notInstalled ||
+                (thisPending && !primaryPending)
+              }
+              onClick={() => onAct(service, primaryAction)}
+              aria-label={`${serviceLabel(service)} ${t(`settings.services.action.${primaryAction}` as I18nKey)}`}
+              icon={primaryAction === "stop" ? Square : Play}
+              data-testid={`service-primary-action-${service.service_id}`}
+            >
+              {t(`settings.services.action.${primaryAction}` as I18nKey)}
+            </Button>
+          </span>
+          <RowActionMenu
+            actions={rowActions}
+            ariaLabel={t("common.objectActions.aria", { name: serviceLabel(service) })}
+            loading={restartPending}
+            testId={`service-row-actions-${service.service_id}`}
+          />
         </div>
       </div>
       {thisPending ? (
@@ -699,15 +673,8 @@ function ServiceActionFailure({
 function ServiceExecutionPolicyBadge({ policy }: { policy: ServiceExecutionPolicy }) {
   return (
     <span
-      data-surface-tint={policy === "required_no_fallback" ? "danger" : policy === "in_process_when_disabled" ? "info" : "neutral"}
-      className={cn(
-        "inline-flex min-h-5 items-center rounded-full px-2 py-0.5 text-xs font-medium",
-        policy === "required_no_fallback"
-          ? "bg-danger-subtle text-danger-fg"
-          : policy === "in_process_when_disabled"
-            ? "bg-info-subtle text-info-fg"
-            : "bg-surface-hover text-fg-muted"
-      )}
+      data-surface-tint="neutral"
+      className="inline-flex min-h-5 items-center rounded-full bg-surface-hover px-2 py-0.5 text-xs font-medium text-fg-muted"
     >
       {t(serviceExecutionPolicyLabelKey(policy))}
     </span>
@@ -742,7 +709,7 @@ function ServiceLogPanel({
           {logsQuery.data ? (
             <p className="mt-0.5 text-xs text-fg-muted">
               {t("settings.services.logs.source.journald", {
-                unit: service.systemd_unit ?? service.service_id,
+                unit: service.systemd_unit,
                 lines: String(logsQuery.data.lines),
               })}
             </p>
@@ -865,7 +832,6 @@ export const SERVICE_STATUS_BADGE: Record<
   stopped: { variant: "neutral", icon: CircleSlash },
   not_installed: { variant: "neutral", icon: CircleDashed },
   unconfigured: { variant: "neutral", icon: MinusCircle },
-  in_process: { variant: "info", icon: Cpu },
   loading: { variant: "neutral", icon: Hourglass },
   error: { variant: "danger", icon: AlertTriangle },
 };

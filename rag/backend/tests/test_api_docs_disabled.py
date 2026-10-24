@@ -1,6 +1,6 @@
 """API ドキュメント（/docs・/redoc・/openapi.json）を公開しないことの回帰テスト（#748）。
 
-RAG の backend と、parser / 前処理 / pipeline のサービスの app factory が対象。
+RAG の backend と、parser / 前処理のサービスの app factory が対象。
 """
 
 from __future__ import annotations
@@ -12,12 +12,6 @@ from rag_parser_core.preprocess_service import create_preprocess_app
 from rag_parser_core.result import ParseResponse
 from rag_parser_core.service import create_parse_app, create_service_parse_app
 from rag_parser_core.source import SourceProfile
-from rag_pipeline_core.stage_service import (
-    create_evaluation_app,
-    create_graph_app,
-    create_guardrail_app,
-    create_vector_index_app,
-)
 
 from app.main import app as backend_app
 from tests.support import AsgiTestClient
@@ -42,10 +36,6 @@ def _service_apps() -> list[FastAPI]:
         create_parse_app(backend="docling", import_name="docling"),
         create_service_parse_app(backend="oci_document_understanding", parse=_service_parse),
         create_preprocess_app(converter=_convert, health_probe=ConvertHealth),
-        create_vector_index_app(),
-        create_graph_app(),
-        create_guardrail_app(),
-        create_evaluation_app(),
     ]
 
 

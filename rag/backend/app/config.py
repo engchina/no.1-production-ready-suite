@@ -2297,65 +2297,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, TracingSettings, 
         le=300.0,
         description="HTTP マイクロサービス retry の最大待機秒数。",
     )
-    # --- pipeline ステージのプラグイン(マイクロサービス)化 ---
-    # 各 stage は remote サービスが使える場合だけ委譲し、未起動・未到達なら同一
-    # rag_pipeline_core 実装を backend in-process で実行する。応答済みサービスの HTTP error /
-    # 不正応答は壊れた remote として停止し、静かに隠さない。
-    rag_pipeline_stage_timeout_seconds: float = Field(
-        default=120.0,
-        gt=0,
-        description=(
-            "pipeline ステージサービス呼び出しの HTTP timeout(秒)。"
-            "サービス未起動・未到達時は backend in-process の同一実装へ縮退する。"
-            "応答済みサービスの HTTP error / 不正応答は停止する。"
-        ),
-    )
-    rag_vector_index_service_enabled: bool = Field(
-        default=True,
-        description=(
-            "vector_index プロファイル解決の remote 委譲を許可する。サービス未起動・未到達時は "
-            "backend in-process の同一実装へ縮退する。OFF は常に in-process。"
-        ),
-    )
-    rag_vector_index_service_url: str = Field(
-        default="http://127.0.0.1:18031",
-        description="vector_index ステージマイクロサービスの base URL。",
-    )
-    rag_graph_service_enabled: bool = Field(
-        default=True,
-        description=(
-            "graphrag プロファイル解決の remote 委譲を許可する。サービス未起動・未到達時は "
-            "backend in-process の同一実装へ縮退する。OFF は常に in-process。"
-        ),
-    )
-    rag_graph_service_url: str = Field(
-        default="http://127.0.0.1:18032",
-        description="graphrag ステージマイクロサービスの base URL。",
-    )
-    rag_guardrail_service_enabled: bool = Field(
-        default=True,
-        description=(
-            "guardrail の policy 解決(groundedness 閾値 + 監査強調)の remote 委譲を許可する。"
-            "サービス未起動・未到達時は backend in-process の同一実装へ縮退する。"
-            "OFF は常に in-process。"
-            "RAG の OCI Guardrails の安全チェックからは使用しない。"
-        ),
-    )
-    rag_guardrail_service_url: str = Field(
-        default="http://127.0.0.1:18034",
-        description="guardrail ステージマイクロサービスの base URL。",
-    )
-    rag_evaluation_service_enabled: bool = Field(
-        default=True,
-        description=(
-            "evaluation の suite→閾値解決の remote 委譲を許可する。サービス未起動・未到達時は "
-            "backend in-process の同一実装へ縮退する。OFF は常に in-process。"
-        ),
-    )
-    rag_evaluation_service_url: str = Field(
-        default="http://127.0.0.1:18037",
-        description="evaluation ステージマイクロサービスの base URL。",
-    )
     rag_raptor_enabled: bool = Field(
         default=False,
         description=(

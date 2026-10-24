@@ -1,13 +1,9 @@
 """Vector Index アダプター(索引/検索精度の手動選択プリセット)。
 
 決定論ロジック・spec は共有パッケージ ``rag_pipeline_core.vector_index`` を単一ソースとして使い、
-backend と vector_index マイクロサービスが同一結果を返す。`rag_vector_index_service_enabled` が
-真のとき profile 解決を pipeline-vector-index サービスへ委譲する。無効時は in-process(同一
-ロジック)、サービス未起動・未到達時も in-process へ縮退する。応答済み remote の HTTP error /
-不正応答は処理停止する。外部ベクトル DB は導入しない。
+backend の中で解決する(サービスへは委譲しない。#3218)。外部ベクトル DB は導入しない。
 
-解決結果は (プロファイル, 設定の target accuracy) ごとにプロセス内でメモ化する(#828)。解決は決定論で
-remote と in-process が同じ値を返すため、検索のたびにサービスへ HTTP を送らない。
+解決結果は (プロファイル, 設定の target accuracy) ごとにプロセス内でメモ化する(#828)。
 """
 
 from __future__ import annotations
@@ -127,10 +123,8 @@ def default_vector_index_build() -> VectorIndexParams:
     )
 
 
-# profile→パラメータの解決はプロセス内で不変(決定論。remote も in-process も同じ値)。検索のたびの
-# サービスへの HTTP と、応答しないサービスを待つことを避けるため、解決結果を (プロファイル, 設定の
-# target accuracy) ごとにメモ化する(guardrail の静的解決と同じ。#828)。応答済み remote の HTTP
-# error / 不正応答は例外のまま返し、キャッシュしない。
+# profile→パラメータの解決はプロセス内で不変(決定論)。解決結果を (プロファイル, 設定の target
+# accuracy) ごとにメモ化する(guardrail の静的解決と同じ。#828)。
 _STATIC_CACHE: dict[tuple[str, int], VectorIndexParams] = {}
 
 
@@ -142,8 +136,6 @@ def reset_vector_index_static_cache() -> None:
 def resolve_vector_index_adapter(settings: Settings) -> VectorIndexParams:
     """Settings から Vector Index アダプターの解決済みパラメータを作る。
 
-    `rag_vector_index_service_enabled` のときは pipeline-vector-index サービスへ委譲する。
-    無効時と remote 未到達時は in-process(同一 rag_pipeline_core ロジック)へ縮退する。
     結果は (プロファイル, 設定の target accuracy) ごとにメモ化する(#828)。
     """
     profile = normalize_vector_index_profile(
@@ -154,45 +146,17 @@ def resolve_vector_index_adapter(settings: Settings) -> VectorIndexParams:
     cached = _STATIC_CACHE.get(key)
     if cached is not None:
         return cached
-    params = _resolve_remote(settings, profile, settings_accuracy)
-    if params is None:
-        resolved = resolve_vector_index(profile, settings_accuracy)
-        params = VectorIndexParams(
-            profile=resolved.profile,  # type: ignore[arg-type]
-            target_accuracy=resolved.target_accuracy,
-            neighbors=resolved.neighbors,
-            efconstruction=resolved.efconstruction,
-            distance=resolved.distance,
-            requires_reprovision=resolved.requires_reprovision,
-        )
+    resolved = resolve_vector_index(profile, settings_accuracy)
+    params = VectorIndexParams(
+        profile=resolved.profile,  # type: ignore[arg-type]
+        target_accuracy=resolved.target_accuracy,
+        neighbors=resolved.neighbors,
+        efconstruction=resolved.efconstruction,
+        distance=resolved.distance,
+        requires_reprovision=resolved.requires_reprovision,
+    )
     _STATIC_CACHE[key] = params
     return params
-
-
-def _resolve_remote(
-    settings: Settings, profile: str, settings_accuracy: int
-) -> VectorIndexParams | None:
-    """サービス委譲が有効なら remote 解決する(未達/無効は None)。"""
-    from rag_pipeline_core.stage import VectorIndexStageRequest
-
-    from app.clients.pipeline_stage import PipelineStageClient
-
-    client = PipelineStageClient(settings)
-    if not client.is_enabled("vector_index"):
-        return None
-    response = client.run_vector_index(
-        VectorIndexStageRequest(profile=profile, settings_target_accuracy=settings_accuracy)
-    )
-    if response is None:
-        return None
-    return VectorIndexParams(
-        profile=response.profile,  # type: ignore[arg-type]
-        target_accuracy=response.target_accuracy,
-        neighbors=response.neighbors,
-        efconstruction=response.efconstruction,
-        distance=response.distance,
-        requires_reprovision=response.requires_reprovision,
-    )
 
 
 def vector_index_adapter_runtime_settings(

@@ -12,20 +12,10 @@ type ServiceStatus =
 
 interface ServiceRow {
   service_id: string;
-  category:
-    | "preprocess"
-    | "parser"
-    | "vector_index"
-    | "graphrag"
-    | "guardrail"
-    | "evaluation";
+  category: "preprocess" | "parser";
   profile: "cpu" | "gpu" | "oci";
   label_key: string;
-  execution_policy:
-    | "required_no_fallback"
-    | "in_process_when_disabled"
-    | "selected_adapter"
-    | "default_adapter";
+  execution_policy: "selected_adapter" | "default_adapter";
   status: ServiceStatus;
   configured: boolean;
 }
@@ -86,33 +76,6 @@ function defaultServices(): ServiceRow[] {
       status: "unconfigured",
       configured: false,
     },
-    {
-      service_id: "pipeline-graphrag",
-      category: "graphrag",
-      profile: "cpu",
-      label_key: "settings.services.item.pipelineGraphrag",
-      execution_policy: "in_process_when_disabled",
-      status: "stopped",
-      configured: true,
-    },
-    {
-      service_id: "pipeline-guardrail",
-      category: "guardrail",
-      profile: "cpu",
-      label_key: "settings.services.item.pipelineGuardrail",
-      execution_policy: "in_process_when_disabled",
-      status: "stopped",
-      configured: true,
-    },
-    {
-      service_id: "pipeline-evaluation",
-      category: "evaluation",
-      profile: "cpu",
-      label_key: "settings.services.item.pipelineEvaluation",
-      execution_policy: "in_process_when_disabled",
-      status: "stopped",
-      configured: true,
-    },
   ];
 }
 
@@ -137,13 +100,7 @@ async function mockServices(
       label_key: service.label_key,
       execution_policy: service.execution_policy,
       configured: service.configured,
-      // deployable=false の段は in_process 固定表示(操作ボタン非表示)。純 CPU の
-      // pipeline 段(in_process_when_disabled)は demote 済み、それ以外は deployable。
-      deployable: service.execution_policy !== "in_process_when_disabled",
-      systemd_unit:
-        service.execution_policy !== "in_process_when_disabled"
-          ? `production-ready-rag-${service.service_id}.service`
-          : null,
+      systemd_unit: `production-ready-rag-${service.service_id}.service`,
       model_cache:
         service.service_id === "parser-docling"
           ? { path: "/var/lib/production-ready-rag/.cache", editable: false }
@@ -241,15 +198,13 @@ for (const viewport of [
     // 工程の見出しはサイドナビ（取込・検索・回答設定）と同じ並び・名前（#638）。
     // ナビのリンクと区別するため heading role で限定する。
     await expect(page.getByTestId("service-row-pipeline-chunking")).toHaveCount(0);
-    await expect(page.getByRole("heading", { name: "文書分割", exact: true })).toHaveCount(0);
-    const stageHeadings = [
-      "ファイル準備",
-      "文書解析(CPU)",
-      "文書解析(OCI)",
-      "関係情報の構築",
-      "安全チェック",
-      "評価の基準",
-    ];
+    // backend の中で動く段（文書分割・検索インデックス・関係情報の構築・安全チェック・評価の基準）は
+    // サービスを持たない（#3218）。
+    for (const internal of ["文書分割", "検索インデックス", "関係情報の構築", "安全チェック", "評価の基準"]) {
+      await expect(page.getByRole("heading", { name: internal, exact: true })).toHaveCount(0);
+    }
+    await expect(page.getByText("backend 内処理", { exact: false })).toHaveCount(0);
+    const stageHeadings = ["ファイル準備", "文書解析(CPU)", "文書解析(OCI)"];
     for (const name of stageHeadings) {
       await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
     }
@@ -292,10 +247,6 @@ for (const viewport of [
     await expect(page.getByText("OCI 認証はメイン設定を継承", { exact: false })).toBeVisible();
     // 単一プロファイルの工程は接尾辞なし（上の見出しの確認に含む）。
     await expect(page.getByText("選択時のみ使用").first()).toBeVisible();
-    await expect(page.getByText("既定は backend 内処理").first()).toBeVisible();
-    await expect(
-      page.getByText("停止中です。backend 内処理で継続します", { exact: false }).first()
-    ).toBeVisible();
     await expect(
       page.getByText("ファイル準備・文書解析の設定か処理レシピでこのサービスを選んだ場合だけ", { exact: false }).first()
     ).toBeVisible();
@@ -518,24 +469,18 @@ for (const viewport of [
     await page.goto("/settings/services");
     await expect(page.getByRole("heading", { name: "マイクロサービス" })).toBeVisible();
 
-    const expected: Record<string, "起動" | "停止" | null> = {
+    const expected: Record<string, "起動" | "停止"> = {
       "preprocess-office-to-pdf": "停止",
       "parser-docling": "起動",
       "parser-unstructured": "停止",
       "parser-structured-records-jsonl": "停止",
       "parser-xml-tree-json": "起動",
       "parser-oci-document-understanding": "起動",
-      // backend 内処理の段は操作を出さない。
-      "pipeline-guardrail": null,
     };
     for (const [serviceId, primary] of Object.entries(expected)) {
       const row = page.getByTestId(`service-row-${serviceId}`);
       await expect(row).toBeVisible();
       const buttons = row.getByRole("button");
-      if (primary === null) {
-        await expect(buttons).toHaveCount(0);
-        continue;
-      }
       // 主操作のボタン + メニューのトリガーの 2 個だけ。
       await expect(buttons).toHaveCount(2);
       await expect(row.locator('[aria-haspopup="menu"]')).toHaveCount(1);

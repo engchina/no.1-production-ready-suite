@@ -71,12 +71,12 @@ def normalize_guardrail_policy(value: object) -> GuardrailPolicy:
 def resolve_guardrail_adapter(settings: Settings) -> GuardrailAdapterParams:
     """Settings から Guardrail アダプターの effective パラメータを作る。
 
-    静的 groundedness/audit は core / サービスで解決し、backend 設定由来の安全レバーを上乗せする。
+    静的 groundedness/audit は core で解決し、backend 設定由来の安全レバーを上乗せする。
     """
     policy = normalize_guardrail_policy(
         getattr(settings, "rag_guardrail_policy", DEFAULT_GUARDRAIL_POLICY)
     )
-    overlap, ratio, audit = _resolve_static(settings, policy)
+    overlap, ratio, audit = _resolve_static(policy)
     return GuardrailAdapterParams(
         policy=policy,
         block_prompt_injection=bool(getattr(settings, "guardrail_block_prompt_injection", True)),
@@ -90,8 +90,8 @@ def resolve_guardrail_adapter(settings: Settings) -> GuardrailAdapterParams:
     )
 
 
-# policy→静的閾値はプロセス内で不変(定数)。サービス委譲時の毎リクエスト HTTP と
-# hard-fail を避けるため、解決成功結果を policy 名でメモ化する(policy あたり最大 1 回)。
+# policy→静的閾値はプロセス内で不変(定数)。解決結果を policy 名でメモ化する
+# (policy あたり最大 1 回)。
 _STATIC_CACHE: dict[str, tuple[int, float, bool]] = {}
 
 
@@ -100,26 +100,11 @@ def reset_guardrail_static_cache() -> None:
     _STATIC_CACHE.clear()
 
 
-def _resolve_static(settings: Settings, policy: str) -> tuple[int, float, bool]:
+def _resolve_static(policy: str) -> tuple[int, float, bool]:
     """静的 (grounding_min_overlap, grounding_min_ratio, audit_emphasis) を解決する。"""
     cached = _STATIC_CACHE.get(policy)
     if cached is not None:
         return cached
-    from rag_pipeline_core.stage import GuardrailStageRequest
-
-    from app.clients.pipeline_stage import PipelineStageClient
-
-    client = PipelineStageClient(settings)
-    if client.is_enabled("guardrail"):
-        response = client.run_guardrail(GuardrailStageRequest(policy=policy))
-        if response is not None:
-            result = (
-                response.grounding_min_overlap,
-                response.grounding_min_ratio,
-                response.audit_emphasis,
-            )
-            _STATIC_CACHE[policy] = result
-            return result
     resolved = resolve_guardrail(policy)
     result = (resolved.grounding_min_overlap, resolved.grounding_min_ratio, resolved.audit_emphasis)
     _STATIC_CACHE[policy] = result

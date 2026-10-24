@@ -1645,11 +1645,8 @@ export const ja = {
   "settings.services.status.not_installed":
     "未登録",
   "settings.services.status.unconfigured": "未設定",
-  "settings.services.status.in_process": "backend 内処理",
   "settings.services.status.loading": "確認中",
   "settings.services.status.error": "取得失敗",
-  "settings.services.futureServiceHint":
-    "backend 内処理で動作します。サービス化(独立した起動/停止)は将来対応予定です。",
   "settings.services.modelCache.label": "モデルキャッシュ",
   "settings.services.modelCache.readonly": "変更不可",
   "settings.services.modelCache.hint":
@@ -1660,15 +1657,10 @@ export const ja = {
     "systemd の unit が登録されていません。本番は Terraform の stack で配備を選び、開発は rag/scripts/rag-services.sh install で登録します。",
   "settings.services.failedHint":
     "起動に失敗しました。ログで原因を確認してから起動し直してください。",
-  "settings.services.executionPolicy.requiredNoFallback": "必須 / fallbackなし",
-  "settings.services.executionPolicy.inProcessWhenDisabled": "既定は backend 内処理",
   "settings.services.executionPolicy.defaultAdapter": "既定で使用",
   "settings.services.defaultStoppedHint": "停止中です。このエンジンを処理レシピで指定する取込と、エンジンを指定せず全体設定を継承する取込は、解析が失敗します。取込前に起動してください。",
   "settings.services.confirm.stop.defaultDescription": "{service} は既定の解析エンジンです。停止すると、このエンジンを指定する取込と、処理レシピでエンジンを指定せず全体設定を継承する取込の解析が失敗します。",
   "settings.services.executionPolicy.selectedAdapter": "選択時のみ使用",
-  "settings.services.requiredStoppedHint": "文書分割サービス停止中 / 取込不可",
-  "settings.services.optionalStoppedHint.inProcess":
-    "停止中です。backend 内処理で継続します。負荷分散や外部サービス検証が必要な場合のみ起動してください。",
   "settings.services.optionalStoppedHint.selectedAdapter":
     "停止中です。ファイル準備・文書解析の設定か処理レシピでこのサービスを選んだ場合だけ起動してください。",
   "settings.services.action.start": "起動",
@@ -1717,10 +1709,6 @@ export const ja = {
   "settings.services.item.parserStructuredRecordsJsonl": "構造化レコード JSONL",
   "settings.services.item.parserXmlTreeJson": "XML ツリー JSON",
   "settings.services.item.parserOciDocumentUnderstanding": "OCI Document Understanding",
-  "settings.services.item.pipelineVectorIndex": "検索インデックス",
-  "settings.services.item.pipelineGraphrag": "関係情報の構築",
-  "settings.services.item.pipelineGuardrail": "安全チェック",
-  "settings.services.item.pipelineEvaluation": "評価の基準",
   "settings.services.loadError": "サービス一覧を取得できませんでした。",
   "settings.retrieval.subtitle":
     "回答の検索方法と生成方式の全体設定、および回答の記録の保存期間・質問履歴を設定します。",

@@ -3060,14 +3060,9 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi", marker = "extra == 'service'", specifier = ">=0.121,<1.0" },
-    { name = "gunicorn", marker = "extra == 'service'", specifier = ">=23,<24" },
-    { name = "production-ready-backend-core", marker = "extra == 'service'", editable = "../../platform/packages/backend_core" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "rag-parser-core", editable = "../packages/rag_parser_core" },
-    { name = "uvicorn", extras = ["standard"], marker = "extra == 'service'", specifier = ">=0.37" },
 ]
-provides-extras = ["service"]
 
 [[package]]
 name = "rapidfuzz"

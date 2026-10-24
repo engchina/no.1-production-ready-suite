@@ -20,26 +20,17 @@ from typing import Literal
 
 from app.config import Settings
 
-# 工程の並びはサイドナビ(ファイル準備 → 文書解析 → 文書分割 → 検索インデックス → 関係情報の構築 →
-# 安全チェック → 評価の基準)と同じ。画面の工程の並び・名前はフロントの nav-config.ts が正本(#638)。
+# 工程の並びはサイドナビ(ファイル準備 → 文書解析)と同じ。画面の工程の並び・名前はフロントの
+# nav-config.ts が正本(#638)。検索インデックス・関係情報の構築・安全チェック・評価の基準の段は
+# backend の中で動き、サービスを持たない(#3218)。
 ServiceCategory = Literal[
     "preprocess",
     "parser",
-    # pipeline 各ステージのプラグイン(マイクロサービス)化。
-    "vector_index",
-    "graphrag",
-    "guardrail",
-    "evaluation",
 ]
 # cpu/gpu はローカル ML 依存の重さで分ける。oci は OCI クラウドサービスを呼ぶ薄い
 # プロキシ microservice(GPU 不要・OCI 認証はメイン設定を継承)。
 ServiceProfile = Literal["cpu", "gpu", "oci"]
-ServiceExecutionPolicy = Literal[
-    "required_no_fallback",
-    "in_process_when_disabled",
-    "selected_adapter",
-    "default_adapter",
-]
+ServiceExecutionPolicy = Literal["selected_adapter", "default_adapter"]
 
 # systemd の unit 名の接頭辞。init_script.sh / scripts/rag-services.sh が作る unit と同じ。
 SYSTEMD_UNIT_PREFIX = "production-ready-rag-"
@@ -57,9 +48,6 @@ class ServiceCatalogEntry:
     - ``working_dir``: リポジトリ root からのサービス実装の相対パス(uv の venv を置く場所)。
     - ``port``: ``127.0.0.1`` で listen するポート(本番・開発で共通)。URL 設定の既定値と一致させる。
     - ``execution_policy``: 停止時・未使用時の runtime 契約。UI/API で fallback 境界を明示する。
-    - ``deployable``: UI/API から起動/停止を提供し、systemd の unit を持つか。
-      ``execution_policy``(停止時の fallback 契約)とは別軸。False のステージは backend 内処理
-      (``rag_pipeline_core``)で動作し、サービス化は将来対応(操作系を出さず /health も叩かない)。
     - ``model_cache_path``: モデル DL を行うサービスのキャッシュ親(実行ユーザーの ``~/.cache``)。
       HF・docling・mineru など tool 別キャッシュをまとめて含めるため ``huggingface`` ではなく
       ``.cache`` 親を指す。None のサービスはモデル DL なし。
@@ -73,14 +61,11 @@ class ServiceCatalogEntry:
     working_dir: str
     port: int
     execution_policy: ServiceExecutionPolicy = "selected_adapter"
-    deployable: bool = True
     model_cache_path: str | None = None
 
     @property
-    def systemd_unit(self) -> str | None:
-        """このサービスの systemd の unit 名。backend 内処理のステージ(deployable=False)は None。"""
-        if not self.deployable:
-            return None
+    def systemd_unit(self) -> str:
+        """このサービスの systemd の unit 名。"""
         return f"{SYSTEMD_UNIT_PREFIX}{self.service_id}.service"
 
     @property
@@ -198,60 +183,13 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/parsers/oci_document_understanding",
         port=18028,
     ),
-    # ---- pipeline ステージのプラグイン(マイクロサービス)----
-    ServiceCatalogEntry(
-        service_id="pipeline-vector-index",
-        category="vector_index",
-        profile="cpu",
-        url_field="rag_vector_index_service_url",
-        label_key="settings.services.item.pipelineVectorIndex",
-        working_dir="services/pipeline/vector_index",
-        port=18031,
-        execution_policy="in_process_when_disabled",
-        deployable=False,
-    ),
-    ServiceCatalogEntry(
-        service_id="pipeline-graphrag",
-        category="graphrag",
-        profile="cpu",
-        url_field="rag_graph_service_url",
-        label_key="settings.services.item.pipelineGraphrag",
-        working_dir="services/pipeline/graphrag",
-        port=18032,
-        execution_policy="in_process_when_disabled",
-        deployable=False,
-    ),
-    ServiceCatalogEntry(
-        service_id="pipeline-guardrail",
-        category="guardrail",
-        profile="cpu",
-        url_field="rag_guardrail_service_url",
-        label_key="settings.services.item.pipelineGuardrail",
-        working_dir="services/pipeline/guardrail",
-        port=18034,
-        execution_policy="in_process_when_disabled",
-        deployable=False,
-    ),
-    ServiceCatalogEntry(
-        service_id="pipeline-evaluation",
-        category="evaluation",
-        profile="cpu",
-        url_field="rag_evaluation_service_url",
-        label_key="settings.services.item.pipelineEvaluation",
-        working_dir="services/pipeline/evaluation",
-        port=18037,
-        execution_policy="in_process_when_disabled",
-        deployable=False,
-    ),
 )
 
 _CATALOG_BY_ID: dict[str, ServiceCatalogEntry] = {
     entry.service_id: entry for entry in SERVICE_CATALOG
 }
-# 画面から操作してよい systemd の unit(カタログの deployable なサービスだけ)。
-ALLOWED_SYSTEMD_UNITS: frozenset[str] = frozenset(
-    unit for entry in SERVICE_CATALOG if (unit := entry.systemd_unit) is not None
-)
+# 画面から操作してよい systemd の unit(カタログのサービスだけ)。
+ALLOWED_SYSTEMD_UNITS: frozenset[str] = frozenset(entry.systemd_unit for entry in SERVICE_CATALOG)
 
 
 def get_catalog_entry(service_id: str) -> ServiceCatalogEntry | None:
