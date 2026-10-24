@@ -2,7 +2,8 @@ import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider, createBrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ConfirmProvider, Toaster, TraceDetailsLabelsProvider } from "@production-ready/ui";
+import { ConfirmProvider, Toaster } from "@production-ready/ui";
+import { TraceDetailsLabelsProvider } from "@production-ready/ui";
 import { initTheme } from "@production-ready/ui";
 import {
   UnsavedChangesBlocker,
