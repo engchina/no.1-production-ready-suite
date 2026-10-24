@@ -2333,6 +2333,7 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
     result_row_count: 1, result_columns: ["VALUE"], feedback_comment: "", feedback_updated_at: "", progress_events: events,
   }}}));
   await page.goto("/history?id=synthetic-parity");
+  await expect(page.getByTestId("history-detail-summary")).toBeVisible();
   await expect(page.getByTestId("history-detail-summary").locator("[data-run-summary-heading] [data-status-variant]")).toHaveCount(0);
   await page.getByTestId("history-detail-timeline-summary").click();
   expect(await timelineSnapshot(page.getByTestId("history-detail-timeline"))).toEqual(live);

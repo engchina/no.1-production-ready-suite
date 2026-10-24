@@ -556,6 +556,7 @@ test("詳細は概要 → 処理の経過（処理の詳細を含む）→ SQL �
     "history-detail-feedback",
   ]);
   const summary = page.getByTestId("history-detail-summary");
+  await expect(summary).toBeVisible();
   await expect(summary.locator("[data-run-status]")).toHaveCount(0);
   await expect(summary.locator("[data-run-summary-heading] [data-status-variant]")).toHaveCount(0);
   await expect(summary.locator('[data-run-fact="runId"] dd')).toHaveText("history-new");
@@ -627,6 +628,7 @@ test("ブロックした実行は概要に理由を出し、無い実行・見�
   await mockHistory(page);
   await page.goto("/history?id=history-old");
   const summary = page.getByTestId("history-detail-summary");
+  await expect(summary).toBeVisible();
   await expect(summary.locator("[data-run-status]")).toHaveCount(0);
   await expect(summary.locator("[data-run-summary-heading] [data-status-variant]")).toHaveCount(0);
   await expect(page.getByTestId("history-detail-blocked")).toContainText("安全性の判定で SQL の実行を止めました");

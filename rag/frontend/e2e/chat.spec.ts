@@ -2489,6 +2489,7 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
     answer_diagnostics: null, conversation_owner_display_name: "利用者 A", owned_by_me: true,
   }}}));
   await page.goto("/history/synthetic-parity");
+  await expect(page.getByTestId("run-history-summary")).toBeVisible();
   await expect(page.getByTestId("run-history-summary").locator("[data-run-summary-heading] [data-status-variant]")).toHaveCount(0);
   const history = page.getByTestId("run-history-timeline");
   await page.getByTestId("run-history-timeline-summary").click();

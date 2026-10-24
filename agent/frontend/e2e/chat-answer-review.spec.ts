@@ -411,6 +411,7 @@ test("確認待ちの質問だけがある回答は、見出しにバッジを�
 test("実行の詳細は内部の記録を成果物に出さず、監査ログで元の JSON まで見る", async ({ page, mockApi }, testInfo) => {
   seedRun(mockApi, "run-review-1", [answer(WITHHELD_ANSWER), supportTask(), WITHHELD]);
   await page.goto("/runs?id=run-review-1");
+  await expect(page.getByTestId("run-summary")).toBeVisible();
 
   await expect(page.getByTestId("run-answer-section")).toContainText("精算は申請から始めます。");
   // 出すものが無いので「成果物」の節ごと出さない。
@@ -501,6 +502,7 @@ for (const viewport of VIEWPORTS) {
 
       // 実行の概要の見出しにはバッジを出さない。
       await page.goto("/runs?id=run-outcome-1");
+      await expect(page.getByTestId("run-summary")).toBeVisible();
       const runBadge = page.getByTestId("run-answer-outcome-answer-outcome-1").locator("[data-status-variant]");
       await expect(runBadge).toHaveCount(0);
       await expectNoHorizontalOverflow(page);
@@ -551,6 +553,8 @@ for (const viewport of VIEWPORTS) {
     await page.screenshot({ path: testInfo.outputPath(`no-tool-chat-${viewport.name}.png`), fullPage: true });
 
     await page.goto("/runs?id=run-no-tool");
+
+    await expect(page.getByTestId("run-summary")).toBeVisible();
     const runBadge = page.getByTestId("run-answer-outcome-answer-no-tool").locator("[data-status-variant]");
     await expect(runBadge).toHaveCount(0);
     await expect(page.getByText("社内の資料・業務データで確かめられなかったため、お答えできません。", { exact: false }).first()).toBeVisible();
@@ -627,14 +631,20 @@ test("実行の概要は回答の対応の有無によらずバッジを出さ�
   seedRun(mockApi, "run-detail-answered", [{ ...answer("答えた実行の回答", outcome("answered")), id: "answer-detail-3" }]);
 
   await page.goto("/runs?id=run-detail-outcome");
+
+  await expect(page.getByTestId("run-summary")).toBeVisible();
   const badge = page.getByTestId("run-answer-outcome-answer-detail-1").locator("[data-status-variant]");
   await expect(badge).toHaveCount(0);
 
   await page.goto("/runs?id=run-detail-legacy");
+
+  await expect(page.getByTestId("run-summary")).toBeVisible();
   await expect(page.getByText("古い実行の回答")).toBeVisible();
   await expect(page.getByTestId("run-answer-outcome-answer-detail-2")).toHaveCount(0);
 
   await page.goto("/runs?id=run-detail-answered");
+
+  await expect(page.getByTestId("run-summary")).toBeVisible();
   await expect(page.getByText("答えた実行の回答")).toBeVisible();
   await expect(page.getByTestId("run-answer-outcome-answer-detail-3")).toHaveCount(0);
 });
