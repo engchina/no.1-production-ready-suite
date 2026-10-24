@@ -825,7 +825,16 @@ class ChatProgressRecorder:
             "done" if status == "done" else "failed" if status == "failed" else "skipped"
         )
         for step in list(self._fold.steps.values()):
-            if step.status == "running":
+            if step.status == "running" and step.span is not None and status == "cancelled":
+                # 停止で終わった span は「停止」と出す（スキップと分ける。#3226）。
+                self._record_step(
+                    step.step_id,
+                    status="skipped",
+                    started_at=step.started_at,
+                    finished_at=finished_at,
+                    span={**step.span, "cancelled": True},
+                )
+            elif step.status == "running":
                 self.finish(step.step_id, running_status, at=finished_at)
             elif step.status == "pending":
                 self.finish(step.step_id, "skipped", at=finished_at)
