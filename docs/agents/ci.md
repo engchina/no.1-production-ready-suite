@@ -28,6 +28,6 @@
 ローカルでは変更した範囲だけを検査し、全件は CI に任せる。PR の `検証結果` には、ローカルの command と CI の job の結果を分けて書く。
 
 - backend: 変更したファイルの `ruff check` / `ruff format --check`、関係するテスト（`uv run pytest tests/test_<対象>.py`）と `uv run pytest --lf -x`。`mypy` は変更したパッケージを渡してよい。全件を流すなら `-n auto`。全テスト・全体の `mypy`・`pip-audit` は CI。
-- frontend: `npm run lint` と `npm run build`（型検査を兼ねる）、関係する単体テスト（`npx vitest related <ファイル>` / `--changed`、NL2SQL は `node --import jiti/register --test tests/<対象>.test.ts`）。
+- frontend: `npm run lint` と `npm run build`（型検査を兼ねる）、関係する単体テスト（`npx vitest related <ファイル>` / `--changed`、NL2SQL は `node scripts/run-unit-tests.mjs tests/<対象>.test.ts`）。
 - e2e: 関係する spec だけ（[ui.md](./ui.md)「UI 変更の検証」）。
 - worktree の準備は `scripts/setup-worktree.sh <製品…>`。

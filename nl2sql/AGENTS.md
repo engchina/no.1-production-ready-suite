@@ -69,7 +69,7 @@ uv run ruff format --check . && uv run ruff check . && uv run mypy .   # 整形/
 cd frontend && npm install
 BACKEND_URL=http://127.0.0.1:8010 npm run dev   # BACKEND_URL 未指定なら /api は proxy せず 404（hermetic。起動時に警告）
 npm run lint && npm run build
-node --import jiti/register --test tests/<対象>.test.ts   # ロジックテスト
+node scripts/run-unit-tests.mjs tests/<対象>.test.ts   # ロジックテスト
 npx playwright test tests/e2e/<対象>.spec.ts               # e2e（関係する spec だけ）
 ```
 
