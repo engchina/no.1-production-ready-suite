@@ -221,3 +221,12 @@ test("履歴はチャットと同じイベントを使い、旧い計時表か�
   assert.deepEqual(rows.map(({offsetMs: _offset, durationMs: _duration, level: _level, ...row}) => row), actual);
   assert.deepEqual(rows.map((row) => row.status), ["done", "skipped", "done"]);
 });
+
+test("未実行の工程に記録の無い時刻や所要時間を補わない", () => {
+  const events = parseChatProgressEvents([{schema_version: 1, target_id: "synthetic", seq: 1, attempt: 0,
+    type: "step", step_id: "safety_check", kind: "safety_check", status: "skipped", emitted_at: "2026-10-23T00:00:02Z"}]);
+  const [row] = historyTimelineSteps({...base, progress_events: events});
+  assert.equal(row.durationMs, null);
+  assert.equal(row.startedAt, null);
+  assert.equal(row.finishedAt, null);
+});

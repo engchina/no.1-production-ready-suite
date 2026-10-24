@@ -184,7 +184,7 @@ export interface HistoryTimelineStep {
   id: string;
   label: string;
   status: RunTimelineStepStatus;
-  durationMs: number;
+  durationMs: number | null;
   /**
    * 処理の始まりからの位置（ミリ秒）。記録は段ごとの所要時間だけなので、段は順に積み、生成の方式の試行は
    * SQL の生成の段の始まりから積む（時間の線で試行が親の段の中に重なり、後の段の位置をずらさない）。
@@ -244,8 +244,17 @@ export function historyTimelineSteps(item: HistoryItem): HistoryTimelineStep[] {
   if (events.length) {
     return chatProgressStepsFromEvents(events, CHAT_PROGRESS_STEP_DEFINITIONS).map((step) => {
       const row = chatProgressTimelineStep(step);
-      const duration = row.durationMs ?? (row.startedAt && row.finishedAt ? Date.parse(row.finishedAt) - Date.parse(row.startedAt) : 0);
-      return {...row, durationMs: duration, level: row.level ?? 0, offsetMs: 0};
+      const duration = row.durationMs ?? (
+        row.startedAt && row.finishedAt ? Date.parse(row.finishedAt) - Date.parse(row.startedAt) : null
+      );
+      return {
+        ...row,
+        durationMs: duration,
+        startedAt: row.startedAt ?? null,
+        finishedAt: row.finishedAt ?? null,
+        level: row.level ?? 0,
+        offsetMs: 0,
+      };
     });
   }
   const steps: HistoryTimelineStep[] = [];
