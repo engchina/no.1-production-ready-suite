@@ -365,6 +365,7 @@ _WARNING_CODE_BY_UNSUPPORTED_REASON = {
     "outlook_msg_not_supported": "unsupported_outlook_msg",
     "tiff_image_not_supported": "unsupported_tiff_image",
     "legacy_office_binary_not_supported": "unsupported_legacy_office_binary",
+    "odt_rtf_not_supported": "unsupported_odt_rtf",
 }
 _QUALITY_REPORT_REQUIRED_FIELDS = frozenset(
     {

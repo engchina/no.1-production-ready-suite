@@ -36,6 +36,16 @@ for (const viewport of [
     await expect(
       page.getByRole("radio", { name: /Unstructured.*選んだ場合だけ使用/ })
     ).toBeVisible();
+    // 対応形式の拡張子に .rst / .org を出し、読まない形式（.heic / .epub など）は出さない（#3351）。
+    const unstructuredCard = page.locator('label[for="settings-parser-backend-unstructured"]');
+    await expect(unstructuredCard).toContainText(".org");
+    await expect(unstructuredCard).toContainText(".rst");
+    await expect(unstructuredCard).not.toContainText(".heic");
+    await expect(unstructuredCard).not.toContainText(".epub");
+    await page.screenshot({
+      path: test.info().outputPath(`parser-settings-${viewport.name}.png`),
+      fullPage: true,
+    });
     await expect(page.getByRole("radio", { name: /MinerU.*GPU.*未設定/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /Dots\.OCR.*GPU.*設定済み/ })).toBeVisible();
     // Marker / Unlimited-OCR / GLM-OCR は #270 で削除した。選択肢に出さない。
@@ -1108,6 +1118,13 @@ function parserAdapterEnvelope(data: object) {
       ],
       capabilities: [
         { backend: "docling", modalities: ["pdf", "image"], extensions: [".pdf", ".png"] },
+        // Unstructured の代表の拡張子（rag_parser_core.capabilities の一部。#3351 で .rst / .org を足し、
+        // pandoc・pi-heif を入れないため HEIC / EPUB / ODT / RTF は出さない）。
+        {
+          backend: "unstructured",
+          modalities: ["pdf", "image", "text", "html", "email", "office"],
+          extensions: [".pdf", ".txt", ".md", ".rst", ".org", ".csv", ".html", ".eml", ".png", ".docx"],
+        },
         { backend: "structured_records_jsonl", modalities: [], extensions: [".jsonl"] },
         { backend: "xml_tree_json", modalities: [], extensions: [".json"] },
       ],
