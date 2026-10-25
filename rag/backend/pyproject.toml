@@ -21,7 +21,7 @@ dependencies = [
     "prometheus-client>=0.24",
     "charset-normalizer>=3.4,<4",
     "pypdf>=6.4,<7",
-    "pymupdf>=1.26,<2",
+    "pymupdf>=1.26,<3",
     "rag-parser-core",
     "rag-pipeline-core",
     # rag_poc 由来の Small-to-Big 分割・検索・根拠付き回答・FAQ/ドメインキーワード。
