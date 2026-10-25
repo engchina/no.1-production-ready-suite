@@ -2,6 +2,7 @@ import { expect, type Locator, type Page, test } from "./fixtures/test";
 import { mockTraceApi, ragSpan, savedSpanProgress, SPAN_TRACE_ID, traceSnapshotJson } from "./_chat-progress";
 import {
   apiEnvelope,
+  expectedControlHeight,
   expectNoPageOverflow,
   mockAuthUser,
   mockDatabaseReady,
@@ -56,6 +57,8 @@ interface RunRow {
   /** 詳細だけの項目（見えている根拠と、今の権限で見られない根拠の数。#3252）。 */
   citations?: (typeof CITATION)[];
   withheld_evidence_count?: number;
+  /** 詳細だけの項目（RAG 検索の件数と絞り込み。「RAG 検索で開く」が画面に戻す。#3309）。 */
+  search_conditions?: { top_k: number | null; filters: Record<string, string> } | null;
 }
 
 function run(index: number, overrides: Partial<RunRow> = {}): RunRow {
@@ -663,6 +666,90 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await page.goto("/history/run-3");
     await expect(summary.locator('[data-run-fact="owner"] dd')).toHaveText("ボブ");
     await expect(page.getByTestId("run-history-open-chat")).toHaveCount(0);
+  });
+
+  test("詳細: 本人の RAG 検索の実行は「RAG 検索で開く」で質問と条件を入れた画面を開き、検索はしない（Issue 3309）", async ({
+    page,
+  }) => {
+    await mockDatabaseReady(page);
+    await mockAuthUser(page, { permissions: ["menu.chat", "menu.search", "menu.history"] });
+    const question = "合成の質問 A の手順は？";
+    await mockRuns(page, [
+      run(2, {
+        question,
+        search_answer_profile_id: "profile-a",
+        search_answer_profile_name: "プロファイル A",
+        answer_generated: true,
+        search_conditions: { top_k: 10, filters: { large_category: "分類 A", as_of: "2026-04-01" } },
+      }),
+      // system_admin が見る他の人の RAG 検索の実行（#3244）には出さない。
+      run(4, { executed_by_me: false, executor_display_name: "利用者 B" }),
+    ]);
+    await page.route("**/api/search-answer-profiles**", async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname.endsWith("/query-suggestions") || pathname.endsWith("/approved-faq/suggest")) {
+        await route.fulfill({ json: apiEnvelope({ suggestions: [] }) });
+        return;
+      }
+      await route.fulfill({
+        json: apiEnvelope({
+          items: [
+            {
+              id: "profile-a",
+              name: "プロファイル A",
+              description: null,
+              status: "ACTIVE",
+              knowledge_base_count: 1,
+              created_at: "2026-10-01T00:00:00Z",
+              updated_at: "2026-10-01T00:00:00Z",
+              archived_at: null,
+            },
+          ],
+          total: 1,
+          limit: 50,
+          offset: 0,
+          has_next: false,
+        }),
+      });
+    });
+    const searchRequests: string[] = [];
+    await page.route("**/api/search/stream", async (route) => {
+      searchRequests.push(route.request().url());
+      await route.abort();
+    });
+
+    await page.goto("/history/run-4");
+    await expect(page.getByTestId("run-history-summary")).toBeVisible();
+    await expect(page.getByTestId("run-history-open-search")).toHaveCount(0);
+
+    await page.goto("/history/run-2");
+    const open = page.getByTestId("run-history-open-search");
+    await expect(open).toHaveText("RAG 検索で開く");
+    await expect(open).toHaveAccessibleName("この実行の質問と条件を RAG 検索の画面に入れて開く");
+    // RAG 検索の実行に「会話を開く」は出さない（どちらか 1 つ）。
+    await expect(page.getByTestId("run-history-open-chat")).toHaveCount(0);
+    // 見出しの右の操作は他の操作と同じ高さ（タッチ端末は 44px）。
+    expect((await open.boundingBox())?.height).toBe(await expectedControlHeight(page));
+    await expectNoPageOverflow(page);
+    await open.click();
+
+    // URL の初期値は一度だけ入れて外す（再読込で作業状態を上書きしない）。
+    await expect(page).toHaveURL(/\/search$/);
+    await expect(page.locator("#search-query")).toHaveValue(question);
+    await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("プロファイル A");
+    await expect(page.getByRole("switch", { name: "LLM で回答を生成する" })).toHaveAttribute("aria-checked", "true");
+    // 記録の条件が入り、詳細条件が開いて見える。
+    await expect(page.locator("#search-top-k")).toContainText("10");
+    await expect(page.locator("#search-as_of")).toHaveValue("2026-04-01");
+    await expect(page.locator("#search-classification-filters")).toContainText("分類 A");
+    await expectNoPageOverflow(page);
+    // 検索はしない（利用者が「検索」を押す）。
+    await page.waitForTimeout(300);
+    expect(searchRequests).toEqual([]);
+
+    await page.reload();
+    await expect(page.locator("#search-query")).toHaveValue(question);
+    expect(searchRequests).toEqual([]);
   });
 });
 

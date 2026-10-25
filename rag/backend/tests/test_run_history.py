@@ -20,6 +20,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from app.api.routes import history as history_route
+from app.api.routes.search import _search_run_recorder
 from app.clients.oracle import OracleClient
 from app.clients.oracle_run_history import RunHistoryStore, run_history_list_where
 from app.config import Settings, get_settings
@@ -33,7 +34,7 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
-from app.rag.run_history import RunRecorder, answer_verification
+from app.rag.run_history import RunRecorder, answer_verification, search_run_conditions
 from app.schemas.search import SearchRequest, StorageFailure
 from tests.security_support import enable_production_auth, login, login_configured_admin
 from tests.span_progress_support import RecordingTrace
@@ -865,3 +866,107 @@ def test_final_validation_overrides_request_audit_verification(
         "answer_validation": validation,
     }
     assert answer_verification(diagnostics) == expected
+
+
+async def test_search_recorder_keeps_the_screen_conditions() -> None:
+    """RAG 検索の実行は、件数と画面の絞り込みを記録に残す（詳細の「RAG 検索で開く」。#3309）。
+
+    画面が送れない条件（ナレッジベースの ID・ページの範囲など）と空の値は残さない。
+    """
+    request = SearchRequest(
+        query="合成の質問 A",
+        top_k=10,
+        search_answer_profile_id="profile-a",
+        generate_answer=False,
+        filters={
+            "large_category": "分類 A",
+            "small_category": "",
+            "as_of": "2026-04-01",
+            "extraction_fields": (
+                '[{"name":"項目 A","value_type":"string","op":"eq","value":"値 A"}]'
+            ),
+            "knowledge_base_id": "kb-a",
+            "page_ranges": "[]",
+        },
+    )
+    recorder = _search_run_recorder(request)
+    assert recorder is not None
+    assert recorder.conditions == {
+        "top_k": 10,
+        "filters": {
+            "large_category": "分類 A",
+            "as_of": "2026-04-01",
+            "extraction_fields": request.filters["extraction_fields"],
+        },
+    }
+    # 根拠の検索だけの実行は記録しない。
+    assert _search_run_recorder(request.model_copy(update={"retrieval_only": True})) is None
+    # 絞り込みの無い実行は件数だけ。
+    assert search_run_conditions(SearchRequest(query="q")) == {"top_k": 20}
+
+    store = RecordingStore()
+    recorder.store = store
+    await recorder.record(
+        run_id="trace-conditions",
+        question="合成の質問 A",
+        search_answer_profile_id="profile-a",
+        answer_generated=False,
+        status="success",
+        elapsed_ms=1.0,
+    )
+    assert store.records[0]["stages"]["conditions"] == recorder.conditions
+
+
+@pytest.mark.parametrize(
+    ("surface", "stages", "expected"),
+    [
+        (
+            "search",
+            {
+                "conditions": {
+                    "top_k": 10,
+                    "filters": {"as_of": "2026-04-01", "middle_category": ""},
+                }
+            },
+            {"top_k": 10, "filters": {"as_of": "2026-04-01"}},
+        ),
+        # この機能より前の記録・壊れた記録は、質問とプロファイルだけを戻す（条件は None）。
+        ("search", {"trace": {}}, None),
+        ("search", {"conditions": "broken"}, None),
+        (
+            "search",
+            {"conditions": {"top_k": True, "filters": ["x"]}},
+            {"top_k": None, "filters": {}},
+        ),
+        # チャットの実行は条件を返さない（「会話を開く」で会話を開く）。
+        ("chat", {"conditions": {"top_k": 10}}, None),
+    ],
+    ids=["search", "legacy", "broken", "wrong-types", "chat"],
+)
+def test_detail_api_returns_the_search_conditions(
+    monkeypatch: MonkeyPatch,
+    surface: str,
+    stages: dict[str, object],
+    expected: dict[str, object] | None,
+) -> None:
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("viewer", ["menu.history"])
+    viewer = login(client, "viewer")
+    _capture(
+        monkeypatch,
+        [
+            [
+                {
+                    **_row("run-conditions", surface=surface),
+                    "question_full": "合成の質問 A",
+                    "error_type": None,
+                    "stages_json": stages,
+                    "citations_json": None,
+                }
+            ],
+            [],
+        ],
+    )
+    detail = client.get("/api/history/runs/run-conditions", headers=viewer)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["data"]["search_conditions"] == expected

@@ -45,7 +45,7 @@ import {
   sqlExecutePayload,
 } from "../src/features/nl2sql/previewState.ts";
 import {
-  historyRerunUrl,
+  querySqlGenerationUrl,
   parseNl2SqlEngine,
   prefillFromSearchParams,
 } from "../src/features/nl2sql/queryPrefillState.ts";
@@ -530,7 +530,7 @@ test("history rerun URL and query prefill preserve question, engine, and profile
     feedback_comment: "",
   };
 
-  const url = historyRerunUrl(item);
+  const url = querySqlGenerationUrl(item);
   assert.equal(url, "/query?question=%E8%AB%8B%E6%B1%82+%E9%87%91%E9%A1%8D%E3%82%92%E5%86%8D%E5%AE%9F%E8%A1%8C&engine=select_ai_agent&profile_id=finance");
   assert.deepEqual(prefillFromSearchParams(new URLSearchParams(url.split("?")[1])), {
     question: "請求 金額を再実行",

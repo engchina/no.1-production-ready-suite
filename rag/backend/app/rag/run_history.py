@@ -25,13 +25,27 @@ from pr_backend_core.observability.tracing import finish_operation_trace
 
 from app.config import Settings
 from app.rag.stored_answer import stored_citations
-from app.schemas.search import RetrievedChunk, StorageFailure
+from app.schemas.search import (
+    EXTRACTION_FIELD_FILTER_KEY,
+    SUPPORTED_SEARCH_CLASSIFICATION_FILTERS,
+    RetrievedChunk,
+    SearchRequest,
+    StorageFailure,
+)
 
 logger = logging.getLogger(__name__)
 
 RunSurface = Literal["search", "chat"]
 RunStatus = Literal["success", "blocked", "error"]
 RunVerification = Literal["verified", "partial", "unverified"]
+
+# RAG 検索の画面が送る絞り込みの条件（文書の分類・基準日・抽出項目の値）。実行の詳細の
+# 「RAG 検索で開く」が画面に戻す条件で、画面が送れない条件は残さない（#3309）。
+SEARCH_SCREEN_FILTER_KEYS = (
+    *sorted(SUPPORTED_SEARCH_CLASSIFICATION_FILTERS),
+    "as_of",
+    EXTRACTION_FIELD_FILTER_KEY,
+)
 
 # 期限切れの削除は、プロセスごとにこの間隔で 1 回だけ行う（実行のたびに全件を走査しない）。
 PURGE_INTERVAL_SECONDS = 3600.0
@@ -53,6 +67,19 @@ class _RunStore(Protocol):
     async def save_run(self, record: Mapping[str, object]) -> None: ...
 
     async def purge_runs(self, retention_days: int) -> int: ...
+
+
+def search_run_conditions(request: SearchRequest) -> dict[str, object]:
+    """RAG 検索の実行の条件（件数と画面の絞り込み）。詳細の「RAG 検索で開く」が画面に戻す（#3309）。
+
+    質問・検索・回答プロファイル・回答の生成の有無は実行の行の列にあるので、ここには入れない。
+    """
+    filters = {
+        key: value
+        for key in SEARCH_SCREEN_FILTER_KEYS
+        if isinstance(value := request.filters.get(key), str) and value.strip()
+    }
+    return {"top_k": request.top_k, **({"filters": filters} if filters else {})}
 
 
 def answer_verification(diagnostics: Mapping[str, Any] | None) -> RunVerification | None:
@@ -102,6 +129,8 @@ class RunRecorder:
     message_id: str | None = None
     model_id: str | None = None
     trace_source: Callable[[], dict[str, Any]] | None = None
+    # 実行の条件（RAG 検索の件数・絞り込み。`search_run_conditions`。#3309）。チャットは持たない。
+    conditions: Mapping[str, object] | None = None
     # 終わった段（止まった段を決める。保存しない）。
     stages: list[dict[str, object]] = field(default_factory=list)
     # 安全チェックの後の質問（pipeline が受け取った時点で入れる。失敗の記録に使う）。
@@ -184,6 +213,8 @@ class RunRecorder:
             "stages": {
                 # 詳細の処理の経過（共通の span の表の trace id と工程の詳細。#3226）。
                 **({"trace": trace} if (trace := self._trace_record()) is not None else {}),
+                # 実行の条件（詳細の「RAG 検索で開く」が画面に戻す。#3309）。
+                **({"conditions": dict(self.conditions)} if self.conditions else {}),
                 # 失敗のエラーコードと保存できなかった記録（処理の段と一緒に持つ。#2342）。
                 **({"error_code": str(error_code)} if error_code is not None else {}),
                 **(

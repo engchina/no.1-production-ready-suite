@@ -54,7 +54,7 @@ from app.rag.observability import (
 from app.rag.pipeline import RagPipeline, SearchStageProgress
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
-from app.rag.run_history import RunRecorder
+from app.rag.run_history import RunRecorder, search_run_conditions
 from app.rag.saved_evidence import withhold_saved_answer
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
@@ -247,7 +247,10 @@ def _search_run_recorder(request: SearchRequest) -> RunRecorder | None:
     if request.retrieval_only:
         return None
     return RunRecorder(
-        surface="search", settings=get_settings(), store=RunHistoryStore(OracleClient())
+        surface="search",
+        settings=get_settings(),
+        store=RunHistoryStore(OracleClient()),
+        conditions=search_run_conditions(request),
     )
 
 

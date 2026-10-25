@@ -9609,6 +9609,41 @@ test("history detail shows the SQL without a rerun action (#2343)", async ({ pag
   await expect(page.getByRole("button", { name: "履歴から再実行したい請求金額の操作" })).toHaveCount(0);
 });
 
+test("本人の SQL 生成の実行は「SQL 生成で開く」で質問と業務プロファイルを入れた画面を開き、実行はしない (#3309)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const api = await mockNl2SqlApi(page);
+  const question = "合成の質問 A を確認";
+  const own = { ...historyItem, question, engine: "enterprise_ai_direct", kind: "query", executed_by_me: true };
+  // system_admin が見る他の人の実行（#3244）には出さない。
+  const others = { ...own, id: "hist-other", executed_by_me: false };
+  await page.route("**/api/nl2sql/history/*", (route) =>
+    fulfillJson(route, new URL(route.request().url()).pathname.endsWith("/hist-other") ? others : own)
+  );
+
+  await page.goto("/history?id=hist-other");
+  await expect(page.getByTestId("history-detail-summary")).toBeVisible();
+  await expect(page.getByTestId("history-detail-open-query")).toHaveCount(0);
+
+  await page.goto("/history?id=hist-001");
+  const open = page.getByTestId("history-detail-open-query");
+  await expect(open).toHaveText("SQL 生成で開く");
+  await expect(open).toHaveAccessibleName("この実行の質問と条件を SQL 生成の画面に入れて開く");
+  await expect(page.getByTestId("history-detail-open-chat")).toHaveCount(0);
+  expect((await open.boundingBox())?.height).toBe(await expectedControlHeight(page));
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("history-open-query.png") });
+  await open.click();
+
+  // 初期値は一度だけ入れて URL から外す。SQL の生成と実行は利用者が押す。
+  await expect(page).toHaveURL(/\/query$/);
+  await expect(nl2sqlQuestionInput(page)).toHaveValue(question);
+  await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "default");
+  await page.waitForTimeout(300);
+  expect(api.jobPayload).toBeNull();
+  expect(api.executePayload).toBeNull();
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("query-opened-from-history.png") });
+});
+
 test("root route opens SQL generation and sidebar exposes feature surfaces", async ({ page }) => {
   await mockNl2SqlApi(page);
 

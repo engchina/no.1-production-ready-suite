@@ -11,6 +11,7 @@ import {
   runExecutorParam,
   runOutcomeView,
   runProfileLabel,
+  runSearchHref,
   runStartedAt,
   runStatusLabels,
   runStatusParam,
@@ -110,6 +111,31 @@ describe("実行履歴の表示の対応表", () => {
     expect(
       runConversationOwner({ ...base, conversation_owner_display_name: null, executed_by_me: true, owned_by_me: null })
     ).toBeNull();
+  });
+
+  it("「RAG 検索で開く」は本人の RAG 検索の実行だけ、質問と条件を入れた RAG 検索の URL にする（Issue 3309）", () => {
+    const run = {
+      surface: "search" as const,
+      executed_by_me: true,
+      question: "合成の質問 A",
+      search_answer_profile_id: "profile-a",
+      answer_generated: false,
+      search_conditions: { top_k: 50, filters: { middle_category: "分類 B" } },
+    };
+    const href = runSearchHref(run, { canOpenSearch: true });
+    expect(href).toBe(
+      "/search?question=%E5%90%88%E6%88%90%E3%81%AE%E8%B3%AA%E5%95%8F+A&search_answer_profile_id=profile-a" +
+        "&generate_answer=false&top_k=50&middle_category=%E5%88%86%E9%A1%9E+B"
+    );
+    // 条件の記録の無い古い実行は、質問・プロファイル・回答の生成の有無だけ。
+    expect(runSearchHref({ ...run, search_conditions: null }, { canOpenSearch: true })).toBe(
+      "/search?question=%E5%90%88%E6%88%90%E3%81%AE%E8%B3%AA%E5%95%8F+A&search_answer_profile_id=profile-a&generate_answer=false"
+    );
+    // 他の人の実行（system_admin が見る）・画面の権限が無い・チャット・質問を保存していない実行は出さない。
+    expect(runSearchHref({ ...run, executed_by_me: false }, { canOpenSearch: true })).toBeNull();
+    expect(runSearchHref(run, { canOpenSearch: false })).toBeNull();
+    expect(runSearchHref({ ...run, surface: "chat" }, { canOpenSearch: true })).toBeNull();
+    expect(runSearchHref({ ...run, question: null }, { canOpenSearch: true })).toBeNull();
   });
 });
 
