@@ -20,6 +20,7 @@ from app.api.routes.search import _stored_citation_rows
 from app.clients.oracle import OracleClient
 from app.clients.oracle_run_history import RunHistoryStore, owner_user_uuids
 from app.rag.request_context import current_audit_request_context
+from app.rag.saved_evidence import withhold_saved_answer
 from app.rag.trace_store import TraceSnapshot, run_trace_snapshot
 from app.schemas.common import ApiResponse, Page
 from app.schemas.history import (
@@ -131,6 +132,12 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
             detail["citations"] = _citations(_stored_citation_rows(record.get("citations_json")))
             diagnostics = record.get("diagnostics_json")
             detail["answer_diagnostics"] = diagnostics if isinstance(diagnostics, dict) else None
+    # 保存した根拠と診断は、見る人の今の権限で確かめ直す（見られない根拠は数だけ。#3252）。
+    (
+        detail["citations"],
+        detail["withheld_evidence_count"],
+        detail["answer_diagnostics"],
+    ) = await withhold_saved_answer(oracle, detail["citations"], detail.get("answer_diagnostics"))
     detail["feedback"] = await store.list_run_feedback(run_id)
     return ApiResponse(data=RunDetail.model_validate(detail))
 

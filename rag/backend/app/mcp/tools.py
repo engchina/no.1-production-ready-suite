@@ -1008,6 +1008,29 @@ class VersionedOutput(BaseModel):
     )
 
 
+# 保存した根拠の確かめ直し（内部のツール）で 1 回に渡せる文書の数
+# （Agent の Run の根拠の上限と同じ）。
+READABLE_DOCUMENTS_MAX = 200
+
+
+class ReadableDocumentsInput(BaseModel):
+    """保存した根拠の文書を、呼び出した利用者が今見られるかを確かめる条件。"""
+
+    # Agent の画面の保存した根拠の出し直し（#3252）。
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_ids: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(
+        ..., min_length=1, max_length=READABLE_DOCUMENTS_MAX, description="文書の id の一覧。"
+    )
+
+
+class ReadableDocumentsOutput(VersionedOutput):
+    readable_document_ids: list[str] = Field(
+        description="渡した文書のうち、今の権限で見られる文書の id（渡した順）。"
+    )
+
+
 class OutlineSection(BaseModel):
     """文書の 1 つの章節（章節ナビゲーションの章節。#1438）。"""
 
@@ -2912,6 +2935,22 @@ def _subtree(outline: SectionOutline, section_id: str | None) -> list[SectionNod
     return [node for node in nodes if node.section_id in keep]
 
 
+async def readable_documents(arguments: ReadableDocumentsInput) -> ReadableDocumentsOutput:
+    """保存した根拠の文書のうち、呼び出した利用者が今見られる文書（#3252）。
+
+    Agent の画面が Run・会話の保存した根拠を出し直すとき、画面を見ている利用者を ``sub`` にして
+    呼ぶ（内部のツール。``tools/list`` に出さない）。条件は検索・``rag_read_source`` と同じ見え方
+    （tenant・ナレッジベースの範囲。データの範囲の claim があればその範囲）で、削除した文書は
+    含まない。
+    """
+    readable = await OracleClient().accessible_document_ids(arguments.document_ids)
+    return ReadableDocumentsOutput(
+        readable_document_ids=list(
+            dict.fromkeys(item for item in arguments.document_ids if item in readable)
+        )
+    )
+
+
 async def outline_document(arguments: OutlineInput) -> OutlineOutput:
     """文書の章節の構成を、章節ナビゲーションの章節から返す（#1332 / #1438）。
 
@@ -4481,6 +4520,18 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 handler=scoped(read_document),
                 output_model=ReadDocumentOutput,
                 permissions=(SEARCH_PERMISSIONS,),
+            ),
+            McpTool(
+                name="rag_readable_documents",
+                title="根拠の文書の閲覧の確かめ",
+                # Agent の画面が保存した根拠を出し直すときだけ名前で呼ぶ内部のツール（#3252）。
+                # モデル・外部の MCP クライアントには見せない。
+                description="渡した文書のうち、今の権限で見られる文書の id を返します。",
+                input_model=ReadableDocumentsInput,
+                handler=scoped(readable_documents),
+                output_model=ReadableDocumentsOutput,
+                permissions=(SEARCH_PERMISSIONS,),
+                listed=False,
             ),
             McpTool(
                 name="rag_read_section",

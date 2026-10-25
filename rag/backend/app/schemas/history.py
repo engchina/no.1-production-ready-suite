@@ -91,6 +91,8 @@ class RunDetail(RunSummary):
     # 回答に付けた注意書き（回答の記録から読む。#2405）。
     answer_notice: str | None = None
     citations: list[RetrievedChunk] = Field(default_factory=list)
+    # 保存した根拠のうち、見る人が今の権限で見られない根拠の数（抜粋・文書は返さない。#3252）。
+    withheld_evidence_count: int = 0
     answer_diagnostics: dict[str, JsonValue] | None = None
     feedback: list[RunFeedback] = Field(default_factory=list)
     # RAG 検索の実行の条件（#3309）。チャットの実行と、この機能より前の記録は None。

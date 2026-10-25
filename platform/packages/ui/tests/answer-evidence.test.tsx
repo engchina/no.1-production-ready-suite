@@ -7,6 +7,7 @@ import {
   AnswerEvidence,
   EvidenceCard,
   EvidenceList,
+  EvidenceWithheldNote,
   evidenceCountLabel,
   evidenceLabels,
   evidenceScoreMeterPercent,
@@ -139,6 +140,23 @@ describe("AnswerEvidence", () => {
     expect(details.hasAttribute("open")).toBe(false);
     expect(host.querySelector("summary")?.textContent).toContain("AI に渡した 2 件 ／ 回答で引用 1 件");
     expect(host.querySelectorAll('[data-testid="evidence-card"]')).toHaveLength(2);
+  });
+
+  it("権限の無い根拠は数と理由だけを出し、AI に渡した件数に含める（#3252）", () => {
+    const host = html(<AnswerEvidence items={[item({ usedInAnswer: true })]} withheldCount={2} />);
+    expect(host.querySelector("summary")?.textContent).toContain(
+      "AI に渡した 3 件 ／ 回答で引用 1 件 ／ 権限の無い根拠 2 件",
+    );
+    const note = host.querySelector('[data-testid="evidence-withheld"]');
+    expect(note?.textContent).toContain("権限の無い根拠 2 件");
+    expect(note?.textContent).toContain("抜粋・資料名・原文は表示しません");
+    expect(host.querySelectorAll('[data-testid="evidence-card"]')).toHaveLength(1);
+    // 見られる根拠が無くても、権限の無い根拠があれば折りたたみと数の行だけを出す。
+    const onlyWithheld = html(<AnswerEvidence items={[]} withheldCount={1} />);
+    expect(onlyWithheld.querySelector("summary")?.textContent).toContain("AI に渡した 1 件 ／ 権限の無い根拠 1 件");
+    expect(onlyWithheld.querySelectorAll('[data-testid="evidence-card"]')).toHaveLength(0);
+    expect(renderToStaticMarkup(<EvidenceWithheldNote count={0} />)).toBe("");
+    expect(evidenceCountLabel([item()], undefined, 0)).toBe("AI に渡した 1 件");
   });
 
   it("スコアは小数 3 桁、メーターは 0〜100%", () => {

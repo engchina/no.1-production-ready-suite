@@ -76,6 +76,7 @@ from app.rag.request_context import (
     current_audit_request_context,
 )
 from app.rag.run_history import RunRecorder
+from app.rag.saved_evidence import readable_document_ids, visible_citations
 from app.rag.search_answer_profile_knowledge import (
     clarification_document_ids,
     clarification_record,
@@ -200,21 +201,32 @@ async def _owner_names(conversations: list[StoredConversation]) -> dict[str, str
     return await run_in_threadpool(display_names_by_user_hash, hashes)
 
 
+def _saved_citations(message: StoredMessage) -> list[RetrievedChunk]:
+    """保存した引用（以前に保存した会話の回答も、保存するときと同じ項目だけにする。#1371）。"""
+    citations: list[RetrievedChunk] = []
+    for raw in message.citations:
+        with suppress(Exception):
+            citations.append(stored_citation(RetrievedChunk.model_validate(raw)))
+    return citations
+
+
 def _to_chat_message(
     message: StoredMessage,
     conversation: StoredConversation | None = None,
     sender_names: dict[str, str] | None = None,
+    readable_documents: set[str] | None = None,
 ) -> ChatMessage:
     """保存したメッセージの応答の形。
 
     会話の持ち主以外（#3244 より前の system_admin）が送った質問には、送った人の表示名を添える。
+    ``readable_documents`` を渡すと、引用をその文書（見る人が今見られる文書）だけにし、見られない
+    根拠は数だけを返す（保存した根拠の再表示。#3252）。
     """
     sent_by_owner = _sent_by_owner(message, conversation)
-    citations: list[RetrievedChunk] = []
-    for raw in message.citations:
-        with suppress(Exception):
-            # 以前に保存した会話の回答も、保存するときと同じ項目だけを返す（#1371）。
-            citations.append(stored_citation(RetrievedChunk.model_validate(raw)))
+    citations = _saved_citations(message)
+    withheld = 0
+    if readable_documents is not None:
+        citations, withheld = visible_citations(citations, readable_documents)
     return ChatMessage(
         message_id=message.id,
         conversation_id=message.conversation_id,
@@ -222,6 +234,7 @@ def _to_chat_message(
         content=message.content,
         model=message.model,
         citations=citations,
+        withheld_evidence_count=withheld,
         guardrail_warnings=message.guardrail_warnings,
         trace_id=message.trace_id,
         status=MessageStatus(message.status),
@@ -402,9 +415,15 @@ async def get_conversation(conversation_id: str) -> ApiResponse[ConversationDeta
     if await _close_interrupted_answers(oracle, messages):
         messages = await oracle.list_messages(conversation_id)
     sender_names = await _sender_names(conversation, messages)
+    # 保存した引用は、見る人の今の権限で確かめ直す（会話のすべての回答を 1 回で。#3252）。
+    readable = await readable_document_ids(
+        oracle, [_saved_citations(message) for message in messages]
+    )
     detail = ConversationDetail(
         **_to_conversation_summary(conversation, await _owner_names([conversation])).model_dump(),
-        messages=[_to_chat_message(message, conversation, sender_names) for message in messages],
+        messages=[
+            _to_chat_message(message, conversation, sender_names, readable) for message in messages
+        ],
     )
     return ApiResponse(data=detail)
 
@@ -1215,7 +1234,7 @@ async def cancel_message_answer(
         return ApiResponse(data=ChatAnswerCancelResult(cancelled=True))
     messages = await oracle.list_messages(conversation_id)
     if not any(message.id == message_id for message in messages):
-        service.remember_early_cancel(message_id)
+        service.remember_early_cancel(message_id, conversation_id)
         return ApiResponse(data=ChatAnswerCancelResult(cancelled=True))
     cancelled = False
     for message in messages:

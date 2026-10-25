@@ -369,6 +369,7 @@ export {
   EvidenceList,
   EvidenceSourceSheet,
   EvidenceSourceButton,
+  EvidenceWithheldNote,
   evidenceCountLabel,
   useEvidenceSource,
   type EvidenceSourceSheetProps,

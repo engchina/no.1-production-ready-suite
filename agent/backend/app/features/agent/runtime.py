@@ -874,6 +874,9 @@ class RunViewer(BaseModel):
     # 承認・再開・Agent 自身の確認への回答を、見ている利用者ができるか（実行した人と
     # system_admin だけ。会話の持ち主でも、ほかの人が実行した Run は False。#1928）。
     can_decide: bool = True
+    # 保存した根拠のうち、見ている利用者が今の権限で見られない根拠の数（抜粋・文書は返さない。
+    # `evidence_access`。#3252）。
+    withheld_evidence_count: int = 0
 
 
 class RunView(RunViewer, RunState):

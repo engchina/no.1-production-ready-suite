@@ -298,6 +298,7 @@ function AssistantColumn({
   label,
   answer,
   citations,
+  withheldCount = 0,
   traceId,
   searchAnswerProfileId,
   messageId,
@@ -319,6 +320,8 @@ function AssistantColumn({
   label: string | null;
   answer: string;
   citations: RetrievedChunk[];
+  /** 保存した引用のうち、見ている利用者が今の権限で見られない根拠の数（#3252）。 */
+  withheldCount?: number;
   traceId: string | null;
   searchAnswerProfileId: string;
   messageId: string | null;
@@ -466,7 +469,9 @@ function AssistantColumn({
           {guardrailWarnings.join(" / ")}
         </Banner>
       ) : null}
-      {citations.length > 0 || (finished && (traceId || answerDiagnostics || progress || notice)) ? (
+      {citations.length > 0 ||
+      withheldCount > 0 ||
+      (finished && (traceId || answerDiagnostics || progress || notice)) ? (
         // 回答の下は 3 製品共通の並び（#2707）: 回答の本文 → 回答の注意書き（#2405）→ 根拠の一覧（AI に渡した
         // N 件。#1202 / #1417）→ 評価（処理の経過は回答の上。#2115。Agent のチャットと同じ）。比較の列の高さを
         // そろえるため、回答の枠の下端にそろえる。
@@ -477,6 +482,7 @@ function AssistantColumn({
           evidence={
             <AnswerCitations
               citations={citations}
+              withheldCount={withheldCount}
               // まとまり（根拠の木）は回答が終わってから届く診断にある（#2097）。
               idPrefix={messageId ? `message-${messageId}` : listId}
               // 他の利用者の会話では根拠の評価を出さない（trace が無ければ評価を出さない。#3244）。
@@ -535,6 +541,7 @@ function MessageTurn({
     label: string | null;
     answer: string;
     citations: RetrievedChunk[];
+    withheldCount?: number;
     traceId: string | null;
     messageId: string | null;
     streaming: boolean;
@@ -611,6 +618,7 @@ function MessageTurn({
               label={column.label}
               answer={column.answer}
               citations={column.citations}
+              withheldCount={column.withheldCount}
               traceId={column.traceId}
               searchAnswerProfileId={searchAnswerProfileId}
               messageId={column.messageId}
@@ -1736,6 +1744,7 @@ export function ChatClient() {
                         label: reply.model ? (modelLabels.get(reply.model) ?? reply.model) : null,
                         answer: streaming ? "" : reply.content,
                         citations: reply.citations,
+                        withheldCount: reply.withheld_evidence_count ?? 0,
                         traceId: reply.trace_id,
                         messageId: reply.message_id,
                         // 作成中の回答（再読込の後など）は「作成中」で出し、会話の取り直しで完了に変わる（#1175）。

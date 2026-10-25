@@ -653,3 +653,57 @@ async def test_older_versions_of_hit_documents_on_real_oracle() -> None:
         assert [version.document_id for version in found] == [old]
     finally:
         reset_audit_request_context(scoped)
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_accessible_document_ids_follow_the_viewer_scope_on_real_oracle() -> None:
+    """保存した根拠の確かめ直し（#3252）: 見る人の今の KB の範囲の文書だけを返す。
+
+    重複アップロードの正本は複製の KB で見え、削除した文書・範囲の外の文書は含まない。
+    """
+    from dataclasses import replace
+
+    from app.rag.request_context import (
+        current_audit_request_context,
+        reset_audit_request_context,
+        set_audit_request_context,
+    )
+
+    client = OracleClient()
+    token = uuid4().hex[:12]
+    kb_a = await client.create_knowledge_base(name=f"根拠 A {token}")
+    kb_b = await client.create_knowledge_base(name=f"根拠 B {token}")
+    in_a = await _indexed_document(
+        client, file_name=f"a-{token}.pdf", chunks=[_chunk(0, "A")], knowledge_base_ids=[kb_a.id]
+    )
+    in_b = await _indexed_document(
+        client, file_name=f"b-{token}.pdf", chunks=[_chunk(0, "B")], knowledge_base_ids=[kb_b.id]
+    )
+    # B の文書を A に重複アップロードした複製（正本の chunk を使う）。
+    await client.create_document(
+        file_name=f"b-{token}.pdf",
+        object_storage_path=f"local://b-{token}-dup.pdf",
+        content_type="application/pdf",
+        duplicate_of_document_id=in_b,
+        knowledge_base_ids=[kb_a.id],
+    )
+    removed = await _indexed_document(
+        client, file_name=f"c-{token}.pdf", chunks=[_chunk(0, "C")], knowledge_base_ids=[kb_a.id]
+    )
+    assert await client.delete_document(removed) is True
+    ids = [in_a, in_b, removed, f"missing-{token}"]
+
+    assert await client.accessible_document_ids(ids) == {in_a, in_b}
+    for allowed, expected in (
+        (frozenset({kb_b.id}), {in_b}),
+        # 正本（B）は A の複製から見える（検索と同じ見え方）。
+        (frozenset({kb_a.id}), {in_a, in_b}),
+        (frozenset(), set()),
+    ):
+        scoped = set_audit_request_context(
+            replace(current_audit_request_context(), allowed_knowledge_base_ids=allowed)
+        )
+        try:
+            assert await client.accessible_document_ids(ids) == expected
+        finally:
+            reset_audit_request_context(scoped)

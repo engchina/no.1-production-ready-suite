@@ -1494,6 +1494,34 @@ class OracleClient:
         )
         return row is not None
 
+    async def accessible_document_ids(self, document_ids: Sequence[str]) -> set[str]:
+        """``document_ids`` のうち、利用者が今見られる文書の ID（保存した根拠の確かめ直し。#3252）。
+
+        ``accessible_document_exists`` と同じ条件（tenant・文書 / 分類 / ナレッジベースの範囲。
+        重複アップロードの正本は複製の KB で見える）を、IN の上限より少ない数ずつまとめて当てる。
+        削除した文書は行が無いので含まない。
+        """
+        ids = _unique_optional_sequence(document_ids)
+        readable: set[str] = set()
+        for start in range(0, len(ids), _EVALUATION_LOCATION_BATCH):
+            batch = ids[start : start + _EVALUATION_LOCATION_BATCH]
+            in_sql, in_binds = _oracle_in_predicate("d.document_id", "readable_document", batch)
+            rows = await self._fetch_all(
+                _render_sql(
+                    """
+                SELECT d.document_id
+                FROM rag_documents d
+                WHERE {in_sql}
+                  AND {access_predicate}
+                """,
+                    in_sql=in_sql,
+                    access_predicate=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind(in_binds),
+            )
+            readable.update(str(row["document_id"]) for row in rows if row.get("document_id"))
+        return readable
+
     async def document_reading_index(
         self, document_id: str, *, chunk_set_id: str | None = None, limit: int = 5000
     ) -> tuple[str | None, list[dict[str, object]]]:

@@ -114,6 +114,11 @@ class RagEvidenceRefIn(_ContractInput):
     chunk_id: str = Field(min_length=1, max_length=512)
 
 
+class RagReadableDocumentsIn(_ContractInput):
+    # 保存した根拠の文書を、見る人が今見られるかを確かめる内部のツール（#3252）。
+    document_ids: list[str] = Field(min_length=1, max_length=200)
+
+
 class RagValidateRequestIn(_ContractInput):
     id: str = Field(min_length=1, max_length=64)
     text: str = Field(default="", max_length=2000)
@@ -684,6 +689,8 @@ class FakeProductMcp:
     # MCP 以外の URL（外部 MCP など）への応答と、その request（url / json / timeout）。
     other_responses: dict[str, dict[str, Any]] = field(default_factory=dict)
     other_calls: list[dict[str, Any]] = field(default_factory=list)
+    # `rag_readable_documents` が見られないと答える文書（保存した根拠の確かめ直し。#3252）。
+    unreadable_documents: set[str] = field(default_factory=set)
     _session_counter: int = 0
 
     def __post_init__(self) -> None:
@@ -704,6 +711,13 @@ class FakeProductMcp:
                     self._tool("rag_read_document", RagReadDocumentIn),
                     self._tool("rag_read_section", RagReadSectionIn),
                     self._tool("rag_validate_answer", RagValidateAnswerIn),
+                    McpTool(
+                        name="rag_readable_documents",
+                        description="rag_readable_documents",
+                        input_model=RagReadableDocumentsIn,
+                        handler=self._readable_documents,
+                        listed=False,
+                    ),
                 ],
             ),
             "nl2sql": McpServer(
@@ -733,6 +747,14 @@ class FakeProductMcp:
         return McpTool(
             name=name, description=name, input_model=model, handler=handler, read_only=read_only
         )
+
+    async def _readable_documents(self, argument: RagReadableDocumentsIn) -> dict[str, Any]:
+        return {
+            "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
+            "readable_document_ids": [
+                item for item in argument.document_ids if item not in self.unreadable_documents
+            ],
+        }
 
     def calls_of(self, name: str) -> list[dict[str, Any]]:
         return [call for call in self.tool_calls if call["name"] == name]

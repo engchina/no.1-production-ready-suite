@@ -174,8 +174,9 @@ def test_fake_product_mcp_follows_the_input_contracts() -> None:
             assert set(schema.get("required", [])) == set(contract[name].get("required", [])), name
             assert set(schema["properties"]) <= set(contract[name]["properties"]), name
             checked += 1
-    # + nl2sql_list_profiles / nl2sql_recommend_profile / nl2sql_cancel_requirement（#1441）
-    assert checked == len(READ_ONLY) + 3
+    # + nl2sql_list_profiles / nl2sql_recommend_profile / nl2sql_cancel_requirement（#1441）と、
+    # 画面が保存した根拠を確かめ直す内部のツール rag_readable_documents（#3252）。
+    assert checked == len(READ_ONLY) + 4
 
 
 # ---------------------------------------------------------------------------
