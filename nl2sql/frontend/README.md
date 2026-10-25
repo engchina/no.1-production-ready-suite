@@ -3,7 +3,8 @@
 Noto Sans JP / Noto Sans SC / Noto Sans TC / Noto Sans HK / Roboto / Google Sans Code は Fontsource パッケージ（各 5.3.x）として
 `npm ci` 時にローカルの `node_modules/@fontsource/` へダウンロードする。
 `src/main.tsx` が通常体の 400 / 500 / 600 / 700 を読み込み、Vite が CSS と
-フォント実体を `dist/assets/` に同梱する。実行時のフォント取得はアプリと
+フォント実体を `dist/assets/` に同梱する。Noto Sans SC / TC / HK の `@font-face` は主の CSS に入れず、
+`src/fonts-cjk.css` を最初の描画の後に `import()` で読む（別の CSS の chunk。共有の `loadStylesAfterFirstRender`。#3305）。実行時のフォント取得はアプリと
 同一 origin へのリクエストのみで、Google Fonts / CDN や端末への事前インストールを必要としない。
 
 日本語・中国語の文字範囲別サブセットは CSS の `unicode-range` により必要な分だけ取得する（preload しない）。
