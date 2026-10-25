@@ -9,9 +9,10 @@ import { SavedAnswerRecord } from "./SavedAnswerRecord";
  * 行が増え、今の行に Spinner と経過時間）と、その中の末尾の「処理の詳細」（回答の記録の詳細。技術的な詳細は既定で
  * 閉じる。messaging.md §10）を 1 か所にまとめる。
  *
- * 工程の行は回答の trace（span の木）の投影（#3226）。実行中も span のイベントで行が増え、2 つ目の表示（「トレースの
- * 詳細」）は出さない。trace id は「処理の詳細」の先頭に出す（`traceId`）。span の無い古い形式の記録（`legacy`）は、
- * 処理の経過の位置に古い形式の案内を出す（空白にしない）。
+ * 工程の行は回答の trace（span の木）の投影で、共通の span の表の snapshot から作る（#3226 の案 A）。実行中も読み直す
+ * たびに行が増え、2 つ目の表示（「トレースの詳細」）は出さない。trace id は「処理の詳細」の先頭に出す（`traceId`）。
+ * span の無い古い形式の記録（`legacy`）は、処理の経過の位置に古い形式の案内を出す（空白にしない）。書けなかった span
+ * がある記録（`partial`）は、開いた中身の末尾に「一部の処理だけを記録しています。」を出す。
  *
  * 「処理の詳細」は回答の補足ではなく処理の経過に属する技術的な詳細なので、処理の経過を開いたときだけタイムラインの
  * 後ろに出し、閉じると一緒に隠れる（#2325。回答の本文との間に独立して置かない）。段階の記録の無い回答（段階が 0 件）は
@@ -33,6 +34,7 @@ export function AnswerProcess({
   diagnostics,
   traceId,
   legacy = false,
+  partial = false,
   savedRecord,
   showNotices = false,
   showAutoFieldFilter,
@@ -54,6 +56,8 @@ export function AnswerProcess({
   traceId?: string;
   /** 処理の経過が span の無い古い形式の記録か（工程の行の代わりに案内を出す）。 */
   legacy?: boolean;
+  /** 書けなかった span がある（一部の処理だけを記録している）。 */
+  partial?: boolean;
   /** 診断の無い保存済みの回答（会話を開き直したとき）。回答の記録を読み直して「処理の詳細」に出す。 */
   savedRecord?: { traceId: string; searchAnswerProfileId: string } | null;
   /** 回答を読むときに要る案内を「処理の詳細」に出すか。回答の本文の下に出すときは false（既定）。 */
@@ -92,6 +96,12 @@ export function AnswerProcess({
       {details}
     </RunProcessDetails>
   ) : null;
+  const partialNote =
+    partial && rows.length > 0 ? (
+      <p className="text-xs text-fg-muted" data-testid={testId ? `${testId}-partial` : undefined}>
+        {traceLabels.partial}
+      </p>
+    ) : null;
   return (
     <section
       className={className}
@@ -106,7 +116,14 @@ export function AnswerProcess({
           elapsedMs={elapsedMs}
           reconnecting={reconnecting}
           progressKey={progressKey}
-          footer={detailsDisclosure}
+          footer={
+            partialNote || detailsDisclosure ? (
+              <>
+                {partialNote}
+                {detailsDisclosure}
+              </>
+            ) : null
+          }
           testId={testId}
         />
       ) : (

@@ -72,7 +72,7 @@ def _pipeline(flow: _Flow) -> type:
             *,
             trace_id: str,
             progress_callback: Any,
-            span_listener: Any = None,
+            trace: Any = None,
         ) -> Any:
             await progress_callback(
                 SearchStageProgress(

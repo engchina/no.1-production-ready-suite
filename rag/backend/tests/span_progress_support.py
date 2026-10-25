@@ -2,22 +2,31 @@
 
 偽の pipeline が本物と同じ span（実行の全体・パイプラインの段・回答フローの工程）を作れるように、
 `operation_trace` と工程の観測（`_observe_engine_call`）を束ね、工程の span を開く関数を持つ。
+`RecordingTrace` は span の知らせを処理の経過のイベント（画面の span の段と同じ形）にも集める
+（共通の span の表を読まずに、span の名前・種類・詳細・親子を確かめる）。
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from threading import Lock
 from typing import Any
 
-from pr_backend_core.chat_progress import ChatProgressStepEvent, fold_chat_progress_events
-from pr_backend_core.observability.tracing import SpanListener, operation_trace
+from pr_backend_core.chat_progress import (
+    ChatProgressRecorder,
+    ChatProgressStepEvent,
+    fold_chat_progress_events,
+)
+from pr_backend_core.observability.tracing import SpanListener, SpanUpdate, operation_trace
 from rag_engine.generation.execution_record import _execution_step
 from rag_engine.resources.tracing import bind_trace_observer
 
 from app.rag.pipeline import _observe_engine_call, _observe_stage
+from app.rag.trace_store import AnswerTrace
 
 __all__ = [
+    "RecordingTrace",
     "answer_step",
     "answer_trace",
     "pipeline_stage",
@@ -26,16 +35,46 @@ __all__ = [
 ]
 
 
+class RecordingTrace(AnswerTrace):
+    """`AnswerTrace` に、span の知らせを処理の経過のイベントとして集める機能を足す（テスト）。"""
+
+    def __init__(
+        self, operation_id: str = "a" * 32, *, owner_user_uuid: str | None = None, **kwargs: Any
+    ) -> None:
+        super().__init__(operation_id, owner_user_uuid=owner_user_uuid, **kwargs)
+        self._recorder = ChatProgressRecorder(operation_id)
+        self._events_lock = Lock()
+        self.updates: list[SpanUpdate] = []
+
+    def listener(self) -> SpanListener:
+        base = super().listener()
+
+        def listen(update: SpanUpdate) -> None:
+            base(update)
+            with self._events_lock:
+                self.updates.append(update)
+                self._recorder.record_span(update)
+
+        return listen
+
+    @property
+    def events(self) -> list[Any]:
+        with self._events_lock:
+            return list(self._recorder.events)
+
+
 @contextmanager
 def answer_trace(
-    span_listener: SpanListener | None,
+    trace: AnswerTrace | None,
     *,
     trace_id: str = "trace",
     name: str = "rag.answer",
 ) -> Iterator[None]:
     """本物の pipeline と同じ実行の全体の span と工程の観測を開く。"""
     with (
-        operation_trace(name, operation_id=trace_id, listener=span_listener),
+        operation_trace(
+            name, operation_id=trace_id, listener=trace.listener() if trace is not None else None
+        ),
         bind_trace_observer(_observe_engine_call),
     ):
         yield

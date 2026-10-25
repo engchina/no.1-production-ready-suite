@@ -87,31 +87,16 @@ describe("streamSearch", () => {
     expect(done).toBe(true);
   });
 
-  it("処理の経過の chat_progress（span のイベント）を検証して onChatProgress へ渡す（形の違うイベントは捨てる。Issue 3226）", async () => {
-    const event = {
-      schema_version: 1,
-      seq: 1,
-      target_id: "t1",
-      attempt: 0,
-      emitted_at: "2026-10-24T00:00:00.000Z",
-      type: "step",
-      step_id: "a".repeat(16),
-      kind: "answer_step",
-      status: "running",
-      params: { name: "文書検索" },
-      name: "rag.engine.stage",
-      parent_id: "b".repeat(16),
-      trace_id: "c".repeat(32),
-    };
+  it("最初の run の実行の id を onRun へ渡す（処理の経過は実行の trace の API で読む。Issue 3226）", async () => {
     const body = [
-      `event: chat_progress\ndata: ${JSON.stringify({ event })}\n\n`,
-      `event: chat_progress\ndata: ${JSON.stringify({ event: { seq: 0 } })}\n\n`,
+      `event: run\ndata: ${JSON.stringify({ trace_id: "t1" })}\n\n`,
+      `event: run\ndata: ${JSON.stringify({ trace_id: 1 })}\n\n`,
       'event: done\ndata: {"trace_id":"t1"}\n\n',
     ];
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sseResponse(body)));
     const received: unknown[] = [];
-    await streamSearch({ query: "q", top_k: 5 }, { onChatProgress: (progress) => received.push(progress) });
-    expect(received).toEqual([event]);
+    await streamSearch({ query: "q", top_k: 5 }, { onRun: (run) => received.push(run) });
+    expect(received).toEqual([{ trace_id: "t1" }]);
   });
 
   it("replace event はマスク済み本文で onReplace を呼ぶ", async () => {

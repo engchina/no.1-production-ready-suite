@@ -124,7 +124,7 @@ function spanEvent(seq: number, id: string, fields: Record<string, unknown>) {
   };
 }
 
-it("処理の経過は実行の trace の span のイベントを、操作画面と同じ関数で木にする（Issue 3226）", () => {
+it("処理の経過は実行の trace の API の snapshot の段を、操作画面と同じ組み立てで木にする（Issue 3226）", () => {
   const raw = [
     spanEvent(1, "1", { name: "rag.answer", root: true }),
     spanEvent(2, "2", { name: "rag.answer", parent_id: "1".repeat(16), attributes: { "pr.stage": "answer" } }),
@@ -136,19 +136,17 @@ it("処理の経過は実行の trace の span のイベントを、操作画面
     spanEvent(4, "4", { name: "rag.answer_guardrail", parent_id: "1".repeat(16), kind: "answer_guardrail", status: "skipped" }),
   ];
   const events = parseChatProgressEvents(raw);
-  const actual = runTimeline({ progress_events: events });
+  const steps = chatProgressStepsFromEvents(events, CHAT_PROGRESS_DEFINITIONS);
+  const actual = runTimeline({ steps, traceId: TRACE_ID, legacy: false });
   expect(actual.legacy).toBe(false);
   expect(actual.traceId).toBe(TRACE_ID);
-  expect(actual.steps).toEqual(chatProgressStepsFromEvents(events, CHAT_PROGRESS_DEFINITIONS).map(chatProgressTimelineStep));
+  expect(actual.steps).toEqual(steps.map(chatProgressTimelineStep));
   expect(actual.steps.map((row) => [row.level ?? 0, row.status])).toEqual([[0, "done"], [1, "done"], [0, "skipped"]]);
   expect(actual.steps[1].detail).toContain("根拠不足で終了");
 });
 
-it("span の無い古い形式の記録（段だけのイベント・記録なし）は行を作らず古い形式にする", () => {
-  const legacy = parseChatProgressEvents([
-    { schema_version: 1, target_id: "synthetic", seq: 1, attempt: 0, emitted_at: "2026-10-23T00:00:02Z",
-      type: "step", step_id: "s1", kind: "answer_step", status: "done", params: { name: "文書検索", depth: 0 } },
-  ]);
-  expect(runTimeline({ progress_events: legacy })).toEqual({ steps: [], legacy: true });
-  expect(runTimeline({ progress_events: [] })).toEqual({ steps: [], legacy: true });
+it("span の無い古い形式の記録は行を作らず古い形式にする。span の見えない記録は空（古い形式にしない）", () => {
+  const steps = [{ id: "s1", label: "文書検索", status: "done" as const }];
+  expect(runTimeline({ steps, legacy: true })).toEqual({ steps: [], legacy: true });
+  expect(runTimeline({ steps: [], legacy: false })).toEqual({ steps: [], traceId: undefined, legacy: false });
 });

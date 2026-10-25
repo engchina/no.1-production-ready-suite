@@ -5,8 +5,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pr_backend_core.chat_progress import ChatProgressEvent
-from pr_backend_core.observability.tracing import TraceSummary
 from pydantic import BaseModel, Field
 
 from app.schemas.common import JsonValue
@@ -65,8 +63,6 @@ class RunFeedback(BaseModel):
 class RunDetail(RunSummary):
     """実行の詳細（質問の全文・回答・根拠・回答の診断・処理の段・フィードバック）。"""
 
-    trace_summary: TraceSummary | None = None
-
     error_type: str | None = None
     # 失敗のエラーコード（ORA-03146 など。例外の本文は持たない。#2342）。
     error_code: str | None = None
@@ -85,7 +81,4 @@ class RunDetail(RunSummary):
     answer_notice: str | None = None
     citations: list[RetrievedChunk] = Field(default_factory=list)
     answer_diagnostics: dict[str, JsonValue] | None = None
-    # 処理の経過（実行の trace の span のイベント。#3226）。span の無い古い記録は空か
-    # 段だけのイベントで、画面は古い形式の案内を出す。
-    progress_events: list[ChatProgressEvent] = Field(default_factory=list)
     feedback: list[RunFeedback] = Field(default_factory=list)

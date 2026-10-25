@@ -6,6 +6,7 @@ OracleClient の fake と決定論の pipeline の stub で確かめる（LLM・
 """
 
 import asyncio
+import hashlib
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -31,10 +32,10 @@ from tests.test_chat_api import (
     FakeChatOracle,
     _chat_conversation,
     _FakePipeline,
-    _progress_events,
     _sse_events,
     _stub_stream,
 )
+from tests.trace_store_support import FakeTraceDb
 
 CLIENT_MESSAGE_ID = "0123456789abcdef0123456789abcdef"
 
@@ -55,12 +56,12 @@ class _GatedPipeline(_FakePipeline):
         *,
         history=None,
         query_guardrail_result=None,
-        span_listener=None,
+        trace=None,
     ):
         assert progress_callback is not None
         assert _GatedPipeline.started is not None and _GatedPipeline.release is not None
         # 工程の span を 1 つ開いたまま待つ（処理の経過の実行中の段。#3226）。
-        with answer_trace(span_listener, trace_id=trace_id or "trace"), answer_step("文書検索"):
+        with answer_trace(trace, trace_id=trace_id or "trace"), answer_step("文書検索"):
             # 開いた段の保存（別の task）が先に進むよう、ループに 1 回譲る。
             await asyncio.sleep(0)
             _GatedPipeline.started.set()
@@ -174,44 +175,57 @@ def _client() -> httpx.AsyncClient:
 
 
 def _final_statuses(events: list[dict[str, Any]]) -> set[str]:
-    """段階のイベントを畳んだ、段階ごとの最後の状態の集合。"""
+    """段のイベントの、段ごとの最後の状態の集合（root を除く）。"""
     last: dict[str, str] = {}
     for event in events:
-        if event["type"] == "step":
+        if event["type"] == "step" and not event.get("root"):
             last[str(event["step_id"])] = str(event["status"])
     return set(last.values())
 
 
-def _saved_events(message_id: str, *, running: str = "retrieve") -> list[dict[str, object]]:
-    """保存済みの段階のイベント（5 段階を待機中で出し、1 つを実行中にした記録）。"""
-    at = "2026-10-09T00:00:00Z"
-    steps = ["rewrite_query", "retrieve", "rerank", "generate_answer", "check_guardrail"]
-    events: list[dict[str, object]] = [
-        {
-            "schema_version": 1,
-            "seq": index + 1,
-            "target_id": message_id,
+SAVED_TRACE_ID = "c" * 32
+
+
+def _saved_record(trace_db: FakeTraceDb, message_id: str) -> dict[str, object]:
+    """別のプロセスが作成中の回答の記録（表に実行中の span を書いた trace と、その trace id）。"""
+    trace_id = (
+        SAVED_TRACE_ID if message_id == "a-1" else hashlib.md5(message_id.encode()).hexdigest()
+    )
+    at = datetime(2026, 10, 9, tzinfo=UTC).replace(tzinfo=None)
+    for span_id, parent, name, root in (
+        ("1" * 16, None, "rag.answer", 1),
+        ("2" * 16, "1" * 16, "rag.engine.stage", 0),
+    ):
+        trace_db.rows[(trace_id, span_id)] = {
+            "trace_id": trace_id,
+            "span_id": span_id,
+            "parent_span_id": parent,
+            "product": "rag",
+            "operation_id": message_id,
             "attempt": 0,
-            "emitted_at": at,
-            "type": "step",
-            "step_id": step,
-            "status": "pending",
-        }
-        for index, step in enumerate(steps)
-    ]
-    events.append(
-        {
-            "schema_version": 1,
-            "seq": len(events) + 1,
-            "target_id": message_id,
-            "attempt": 0,
-            "emitted_at": at,
-            "type": "step",
-            "step_id": running,
+            "is_root": root,
+            "owner_user_uuid": "local-user",
+            "name": name,
+            "span_kind": "internal",
             "status": "running",
             "started_at": at,
+            "finished_at": None,
+            "display_kind": None if root else "answer_step",
+            "display_params_json": None if root else '{"name":"文書検索"}',
+            "attributes_json": None,
         }
-    )
+    return {"trace_id": trace_id, "trace_dropped_spans": 0, "span_details": {}}
+
+
+async def _trace_events(message_id: str, conversation_id: str = "conv-r") -> list[dict[str, Any]]:
+    """回答の処理の経過の snapshot（共通の span の表。#3226）のイベント。"""
+    async with _client() as client:
+        response = await client.get(
+            f"/api/chat/conversations/{conversation_id}/messages/{message_id}/trace"
+        )
+    assert response.status_code == 200, response.text
+    events = response.json()["data"]["events"]
+    assert isinstance(events, list)
     return events
 
 
@@ -222,7 +236,7 @@ def _assistant(fake: FakeChatOracle, conversation_id: str = "conv-r") -> StoredM
 
 
 async def test_disconnect_does_not_stop_answer_and_saves_it(
-    fake: FakeChatOracle, gated: _Gate, service: ChatAnswerRunService
+    fake: FakeChatOracle, gated: _Gate, service: ChatAnswerRunService, trace_db: FakeTraceDb
 ) -> None:
     """SSE を途中で切っても作成は最後まで進み、回答と処理の経過が保存される。"""
     status, text = await _post_stream_until_disconnect(
@@ -247,11 +261,12 @@ async def test_disconnect_does_not_stop_answer_and_saves_it(
     assert assistant.reply_to_message_id == CLIENT_MESSAGE_ID
     assert assistant.citations
     assert gated.cancelled == []
-    # 処理の経過（段階のイベントの一覧。完了の終端まで）も保存する（再読込の後も回答の上に出せる）。
+    # 処理の経過は共通の span の表にあり、回答には表を引く trace id を保存する（#3226）。
     assert assistant.progress is not None
-    assert assistant.progress[-1]["type"] == "terminal"
-    assert assistant.progress[-1]["status"] == "done"
-    assert _final_statuses(assistant.progress) <= {"done", "skipped"}
+    assert assistant.progress["trace_id"] == trace_db.spans()[0]["trace_id"]
+    events = await _trace_events(assistant.id)
+    assert events[-1] == {**events[-1], "type": "terminal", "status": "done"}
+    assert _final_statuses(events) == {"done"}
 
 
 async def test_start_event_carries_the_streaming_message_ids(
@@ -298,12 +313,10 @@ async def test_resume_stream_continues_after_last_event_id(
     # 続きの event から、重複も欠けもなく受け取る。
     resumed_ids = [int(line[4:]) for line in body.splitlines() if line.startswith("id: ")]
     assert resumed_ids == list(range(last_id + 1, last_id + 1 + len(resumed_ids)))
-    for name in ("chat_progress", "delta", "citations", "done", "all_done"):
+    for name in ("delta", "citations", "done", "all_done"):
         assert f"event: {name}" in body
-    # 段階のイベントも続きから届き、完了の終端で終わる（#1359）。
-    progress = _progress_events(body)
-    assert progress[-1]["type"] == "terminal"
-    assert progress[-1]["status"] == "done"
+    # 処理の経過は配信では送らない（画面は trace の API で読む。#3226）。
+    assert "event: chat_progress" not in body
     done = _sse_events(body, "done")[0]
     assert done["message_id"] == _assistant(fake).id
     # `after` の指定も同じ（作成が終わった後も、記録を残す間は最初から読める）。
@@ -332,7 +345,7 @@ async def test_resume_stream_is_404_when_not_running_here(
 
 
 async def test_cancel_stops_answer_and_marks_it_cancelled(
-    fake: FakeChatOracle, gated: _Gate, service: ChatAnswerRunService
+    fake: FakeChatOracle, gated: _Gate, service: ChatAnswerRunService, trace_db: FakeTraceDb
 ) -> None:
     """明示の取消で作成を止め、作成中の回答を停止（CANCELLED）として保存する。"""
     await _post_stream_until_disconnect(
@@ -358,13 +371,10 @@ async def test_cancel_stops_answer_and_marks_it_cancelled(
     error = _sse_events(replay.text, "error")[0]
     assert error["cancelled"] is True
     assert "event: all_done" in replay.text
-    # 処理の段階は停止の終端まで記録して送り、保存する（実行中の段階はスキップ。#1359）。
-    progress = _progress_events(replay.text)
-    assert progress[-1]["type"] == "terminal"
-    assert progress[-1]["status"] == "cancelled"
-    assert assistant.progress == progress
-    assert _final_statuses(progress) == {"skipped"}
-    assert replay.text.rindex("event: chat_progress") < replay.text.index("event: error")
+    # 処理の経過の終端は回答の状態（停止）。実行中だった工程は取り消しの印で終わる（#3226）。
+    events = await _trace_events(assistant.id)
+    assert events[-1] == {**events[-1], "type": "terminal", "status": "cancelled"}
+    assert _final_statuses(events) == {"skipped"}
     # 会話の取得では停止として返る（再読込しても作成中にしない）。
     async with _client() as client:
         detail = (await client.get("/api/chat/conversations/conv-r")).json()["data"]
@@ -393,7 +403,7 @@ async def test_cancel_before_start_cancels_when_the_answer_starts(
 
 
 async def test_cancel_from_another_process_closes_streaming_answer(
-    fake: FakeChatOracle, service: ChatAnswerRunService
+    fake: FakeChatOracle, service: ChatAnswerRunService, trace_db: FakeTraceDb
 ) -> None:
     """別のプロセスが作成中の回答も、取消で停止にする（そのプロセスは heartbeat で止まる）。"""
     now = datetime.now(UTC)
@@ -409,7 +419,7 @@ async def test_cancel_from_another_process_closes_streaming_answer(
             lease_owner="other-host:1:abc",
             heartbeat_at=now,
             created_at=now,
-            progress=_saved_events("a-1"),
+            progress=_saved_record(trace_db, "a-1"),
         ),
     ]
     async with _client() as client:
@@ -417,16 +427,20 @@ async def test_cancel_from_another_process_closes_streaming_answer(
     assert response.json()["data"] == {"cancelled": True}
     stopped = fake.messages["conv-r"][1]
     assert stopped.status == "CANCELLED"
-    # 保存済みの段階の続きの番号で、停止の終端を記録する（#1359）。
-    assert stopped.progress is not None
-    assert [event["seq"] for event in stopped.progress] == list(range(1, 13))
-    assert stopped.progress[-1] == {
-        **stopped.progress[-1],
+    # 記録はそのまま（別のプロセスの記録）。表で実行中の span は回答の状態（停止）に合わせて閉じる。
+    assert stopped.progress == {
+        "trace_id": SAVED_TRACE_ID,
+        "trace_dropped_spans": 0,
+        "span_details": {},
+    }
+    events = await _trace_events("a-1")
+    assert events[-1] == {
+        **events[-1],
         "type": "terminal",
         "status": "cancelled",
         "target_id": "a-1",
     }
-    assert _final_statuses(stopped.progress) == {"skipped"}
+    assert _final_statuses(events) == {"skipped"}
 
 
 async def test_heartbeat_stops_the_task_when_cancelled_elsewhere(
@@ -450,7 +464,7 @@ async def test_heartbeat_stops_the_task_when_cancelled_elsewhere(
 
 
 async def test_interrupted_streaming_answers_become_errors_on_get(
-    fake: FakeChatOracle, service: ChatAnswerRunService
+    fake: FakeChatOracle, service: ChatAnswerRunService, trace_db: FakeTraceDb
 ) -> None:
     """作成していたプロセスが止まった作成中の回答は、会話の取得で中断の失敗にする。
 
@@ -471,7 +485,7 @@ async def test_interrupted_streaming_answers_become_errors_on_get(
             lease_owner=owner,
             heartbeat_at=heartbeat,
             created_at=now,
-            progress=_saved_events(message_id),
+            progress=_saved_record(trace_db, message_id),
         )
 
     def question(message_id: str) -> StoredMessage:
@@ -494,22 +508,26 @@ async def test_interrupted_streaming_answers_become_errors_on_get(
     assert by_id["a-own"]["content"] == CHAT_ANSWER_INTERRUPTED_MESSAGE
     assert by_id["a-stale"]["status"] == "ERROR"
     assert by_id["a-live"]["status"] == "STREAMING"
-    # 作成中の段階は会話の取得でも返す（再読込で「作成中」と今の段階を出す）。
-    assert by_id["a-live"]["progress"][-1]["status"] == "running"
-    assert by_id["a-live"]["progress"][-1]["step_id"] == "retrieve"
-    # 中断の失敗にした回答は、段階も失敗の終端にする（実行中の段階は失敗。#1359）。
+    # 会話の取得は処理の経過を返さない（画面は回答ごとの trace の API で読む。#3226）。
+    assert "progress" not in by_id["a-live"]
+    # 作成中の回答は、表の実行中の段をそのまま返す（終端は無い）。
+    live = await _trace_events("a-live")
+    assert _final_statuses(live) == {"running"}
+    assert all(event["type"] == "step" for event in live)
+    # 中断の失敗にした回答は、表で実行中の段を失敗にし、失敗の終端を付ける。
     for message_id in ("a-own", "a-stale"):
-        events = by_id[message_id]["progress"]
-        assert events[-1]["type"] == "terminal"
-        assert events[-1]["status"] == "failed"
-        retrieve = [event for event in events if event.get("step_id") == "retrieve"][-1]
-        assert retrieve["status"] == "failed"
+        events = await _trace_events(message_id)
+        assert events[-1] == {**events[-1], "type": "terminal", "status": "failed"}
+        assert _final_statuses(events) == {"failed"}
 
 
-async def test_saved_snapshot_progress_is_dropped(
-    fake: FakeChatOracle, service: ChatAnswerRunService
+async def test_saved_legacy_progress_is_shown_as_legacy(
+    fake: FakeChatOracle, service: ChatAnswerRunService, trace_db: FakeTraceDb
 ) -> None:
-    """旧形式（段階の snapshot）の保存は捨てて空にする（未リリースのため互換を持たない。#1359）。"""
+    """古い形式（段のイベントの一覧・段階の snapshot）の記録は読まない（互換を持たない。#3226）。
+
+    終わった回答の trace の API は終端だけを返す（画面は古い形式の案内を出す）。
+    """
     now = datetime.now(UTC)
     fake.messages["conv-r"] = [
         StoredMessage(id="u-1", conversation_id="conv-r", role="USER", content="q", created_at=now),
@@ -525,7 +543,12 @@ async def test_saved_snapshot_progress_is_dropped(
     ]
     async with _client() as client:
         detail = (await client.get("/api/chat/conversations/conv-r")).json()["data"]
-    assert detail["messages"][1]["progress"] == []
+    assert "progress" not in detail["messages"][1]
+    events = await _trace_events("a-1")
+    assert [event["type"] for event in events] == ["terminal"]
+    assert events[0]["status"] == "done"
+    # 表は読まない（trace id が無い）。
+    assert trace_db.queries == []
 
 
 async def test_active_answers_per_user_are_limited(
@@ -571,7 +594,7 @@ async def test_duplicate_client_message_id_is_rejected(
 
 
 async def test_shutdown_marks_running_answers_interrupted(
-    fake: FakeChatOracle, gated: _Gate, service: ChatAnswerRunService
+    fake: FakeChatOracle, gated: _Gate, service: ChatAnswerRunService, trace_db: FakeTraceDb
 ) -> None:
     """backend の停止では、このプロセスの作成を打ち切り、中断の失敗として保存する。"""
     await _post_stream_until_disconnect(
@@ -583,17 +606,15 @@ async def test_shutdown_marks_running_answers_interrupted(
     await service.shutdown()
     assistant = _assistant(fake)
     assert (assistant.status, assistant.content) == ("ERROR", CHAT_ANSWER_INTERRUPTED_MESSAGE)
-    # 処理の段階は中断の失敗の終端まで記録して保存する（#1359）。
+    # 処理の経過の記録（trace id）も保存し、終端は回答の状態（中断の失敗。#3226）。
     assert assistant.progress is not None
-    assert assistant.progress[-1]["type"] == "terminal"
-    assert assistant.progress[-1]["status"] == "failed"
-    # 段は span（#3226）。実行中だった文書検索の工程は、打ち切りで取り消した span として終わる
-    # （実行中のまま残さない）。
-    search = [
-        event
-        for event in assistant.progress
-        if (event.get("params") or {}).get("name") == "文書検索"
-    ][-1]
+    assert assistant.progress["trace_id"] == trace_db.spans()[0]["trace_id"]
+    events = await _trace_events(assistant.id)
+    assert events[-1] == {**events[-1], "type": "terminal", "status": "failed"}
+    # 実行中だった文書検索の工程は、打ち切りで取り消した span として終わる（実行中のまま残さない）。
+    search = next(
+        event for event in events if (event.get("params") or {}).get("name") == "文書検索"
+    )
     assert search["status"] == "skipped"
     assert search["cancelled"] is True
 
@@ -677,20 +698,16 @@ def test_close_streaming_sql_only_touches_streaming_rows(monkeypatch: MonkeyPatc
         asyncio.run(client.close_streaming_chat_message("a-1", status="COMPLETE", content=""))
 
 
-def test_close_streaming_sql_locks_row_to_finalize_progress(monkeypatch: MonkeyPatch) -> None:
-    """段階を終端にして閉じるときは、行を lock して読み、同じ transaction で段階も書く（#1359）。"""
+def test_close_streaming_sql_saves_the_trace_record(monkeypatch: MonkeyPatch) -> None:
+    """閉じるときは作成していたプロセスの処理の経過の記録を同じ更新で書く（#3226）。
+
+    記録を渡さないとき（別のプロセスの停止・中断の後始末）は列に触らない（読まずに 1 回の更新）。
+    """
     from collections.abc import Mapping
 
     from app.clients import oracle as oracle_module
 
-    fetched: list[str] = []
     updated: list[tuple[str, Mapping[str, object]]] = []
-
-    def fake_fetch_one(
-        _connection: object, statement: str, _binds: Mapping[str, object]
-    ) -> dict[str, object]:
-        fetched.append(statement)
-        return {"progress_json": json.dumps(_saved_events("a-1"))}
 
     def fake_execute_count(_connection: object, statement: str, binds: Mapping[str, object]) -> int:
         updated.append((statement, binds))
@@ -700,23 +717,16 @@ def test_close_streaming_sql_locks_row_to_finalize_progress(monkeypatch: MonkeyP
         async def _run_transaction(self, operation, *, retry_deadlocks=False):  # type: ignore[no-untyped-def]
             return operation(object())
 
-    monkeypatch.setattr(oracle_module, "_fetch_one", fake_fetch_one)
     monkeypatch.setattr(oracle_module, "_execute_count", fake_execute_count)
     client = _Client.__new__(_Client)
-    assert asyncio.run(
-        client.close_streaming_chat_message(
-            "a-1",
-            status="CANCELLED",
-            content="停止",
-            scoped=False,
-            finalize_progress=chat_answer_runs.chat_progress_closer("a-1", "cancelled"),
+    record = {"trace_id": "a" * 32, "trace_dropped_spans": 2, "span_details": {}}
+    for progress in (record, None):
+        assert asyncio.run(
+            client.close_streaming_chat_message(
+                "a-1", status="CANCELLED", content="停止", scoped=False, progress=progress
+            )
         )
-    )
-    assert fetched[0].endswith("FOR UPDATE")
-    assert "m.status = 'STREAMING'" in fetched[0]
-    statement, binds = updated[0]
-    assert "m.progress_json = :progress_json" in statement
-    saved = json.loads(str(binds["progress_json"]))
-    assert saved[-1]["type"] == "terminal"
-    assert saved[-1]["status"] == "cancelled"
-    assert saved[-1]["seq"] == 12
+    (with_record, with_record_binds), (without_record, _binds) = updated
+    assert "m.progress_json = :progress_json" in with_record
+    assert json.loads(str(with_record_binds["progress_json"])) == record
+    assert "progress_json" not in without_record

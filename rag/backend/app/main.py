@@ -38,6 +38,7 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
+from app.rag.trace_store import start_trace_span_writer, stop_trace_span_writer
 from app.rag.vector_index_adapter import resolve_vector_index_adapter
 from app.readiness import pending_legacy_local_storage_dir
 
@@ -88,6 +89,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         _warn_pending_legacy_local_storage_dir(settings)
         # 起動直後の問で接続の作成などを待たないよう、検索の準備をする(#1498)。起動は待たせない。
         pool_warm_task = asyncio.create_task(_warm_search(settings))
+        # 処理の経過の span を共通の span の表に書く書き手（process ごと。fork の後に始める。
+        # #3226）。
+        start_trace_span_writer(settings)
         worker_task: asyncio.Task[None] | None = None
         worker_stop: asyncio.Event | None = None
         if (
@@ -146,6 +150,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     worker_stop.set()
                 with suppress(asyncio.CancelledError):
                     await worker_task
+            # 待っている span を書いてから接続の pool を閉じる。
+            stop_trace_span_writer()
             close_trace_exporter()
             close_oracle_pool()
 

@@ -6,7 +6,6 @@ SSE は pipeline を stub して event 列と永続化を検証する。実 SQL 
 
 import asyncio
 import json
-from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -42,6 +41,7 @@ from app.rag.request_context import (
 from app.schemas.search import RetrievedChunk, SearchResponse, StorageFailure
 from tests.span_progress_support import answer_step, answer_trace, pipeline_stage
 from tests.support import AsgiTestClient
+from tests.trace_store_support import FakeTraceDb
 
 client = AsgiTestClient(app)
 
@@ -225,7 +225,7 @@ class FakeChatOracle:
         return None
 
     async def update_chat_message_progress(
-        self, message_id: str, *, lease_owner: str, progress: list[dict[str, object]]
+        self, message_id: str, *, lease_owner: str, progress: dict[str, Any]
     ) -> bool:
         message = self._find(message_id)
         if message is None or message.status != "STREAMING" or message.lease_owner != lease_owner:
@@ -265,7 +265,7 @@ class FakeChatOracle:
         lease_owner: str | None = None,
         stale_seconds: float | None = None,
         scoped: bool = True,
-        finalize_progress: Callable[[object], list[dict[str, Any]] | None] | None = None,
+        progress: dict[str, Any] | None = None,
     ) -> bool:
         message = self._find(message_id)
         if message is None or message.status != "STREAMING":
@@ -281,8 +281,8 @@ class FakeChatOracle:
             return False
         message.status = status
         message.content = content
-        if finalize_progress is not None:
-            message.progress = finalize_progress(message.progress)
+        if progress is not None:
+            message.progress = progress
         return True
 
 
@@ -618,12 +618,12 @@ class _FakePipeline:
         *,
         history=None,
         query_guardrail_result=None,
-        span_listener=None,
+        trace=None,
     ):
         assert token_callback is None
         _FakePipeline.filters.append(dict(request.filters))
         # 本物の pipeline と同じく、実行の全体の span を処理の経過に流す（#3226）。
-        with answer_trace(span_listener, trace_id=trace_id or "trace"):
+        with answer_trace(trace, trace_id=trace_id or "trace"):
             return self._response(request, trace_id)
 
     def _response(self, request: Any, trace_id: str | None) -> SearchResponse:
@@ -729,10 +729,10 @@ class _SlowPlanningPipeline(_FakePipeline):
         *,
         history=None,
         query_guardrail_result=None,
-        span_listener=None,
+        trace=None,
     ):
         assert progress_callback is not None
-        with answer_trace(span_listener, trace_id=trace_id or "trace"):
+        with answer_trace(trace, trace_id=trace_id or "trace"):
             await pipeline_stage("history_rewrite", progress_callback=progress_callback)
             await pipeline_stage("answer", asyncio.sleep(1), progress_callback=progress_callback)
         raise AssertionError("時間切れの前に終わらない")
@@ -750,7 +750,7 @@ class _SlowAnswerPipeline(_FakePipeline):
         *,
         history=None,
         query_guardrail_result=None,
-        span_listener=None,
+        trace=None,
     ):
         await asyncio.sleep(0.1)
         return await super().run(  # type: ignore[no-untyped-call]
@@ -760,11 +760,13 @@ class _SlowAnswerPipeline(_FakePipeline):
             token_callback,
             history=history,
             query_guardrail_result=query_guardrail_result,
-            span_listener=span_listener,
+            trace=trace,
         )
 
 
-def test_stream_message_timeout_names_stage_and_saves_error(monkeypatch: MonkeyPatch) -> None:
+def test_stream_message_timeout_names_stage_and_saves_error(
+    monkeypatch: MonkeyPatch, trace_db: FakeTraceDb
+) -> None:
     """回答生成の時間切れは、工程を含む文言を ERROR として保存し SSE で返す（#375）。"""
     fake = FakeChatOracle()
     _chat_conversation(fake, "conv-timeout")
@@ -778,8 +780,8 @@ def test_stream_message_timeout_names_stage_and_saves_error(monkeypatch: MonkeyP
 
     assert resp.status_code == 200
     text = resp.text
-    # 質問の書き換え・回答フローの処理の経過（span）は時間切れの前に届く（#3226）。
-    names = [event.get("name") for event in _progress_events(text)]
+    # 質問の書き換え・回答フローの処理の経過（span）は共通の span の表に書く（#3226）。
+    names = [row["name"] for row in trace_db.spans()]
     assert "rag.history_rewrite" in names
     assert "rag.answer" in names
     expected = answer_timeout_message("answer", 0.05)
@@ -820,7 +822,7 @@ class _StagedPipeline(_FakePipeline):
         *,
         history=None,
         query_guardrail_result=None,
-        span_listener=None,
+        trace=None,
     ):
         assert progress_callback is not None
 
@@ -832,7 +834,7 @@ class _StagedPipeline(_FakePipeline):
             with answer_step("回答文の生成と根拠確認（1回目）"):
                 pass
 
-        with answer_trace(span_listener, trace_id=trace_id or "trace"):
+        with answer_trace(trace, trace_id=trace_id or "trace"):
             await pipeline_stage("answer", answer(), progress_callback=progress_callback)
             await pipeline_stage("answer_guardrail", progress_callback=progress_callback)
             return self._response(request, trace_id)
@@ -850,7 +852,7 @@ class _SlowPipeline(_FakePipeline):
         *,
         history=None,
         query_guardrail_result=None,
-        span_listener=None,
+        trace=None,
     ):
         await asyncio.sleep(0.25)
         return await super().run(  # type: ignore[no-untyped-call]
@@ -860,7 +862,7 @@ class _SlowPipeline(_FakePipeline):
             token_callback,
             history=history,
             query_guardrail_result=query_guardrail_result,
-            span_listener=span_listener,
+            trace=trace,
         )
 
 
@@ -887,27 +889,23 @@ def test_stream_message_sends_heartbeat_while_waiting(monkeypatch: MonkeyPatch) 
     assert roles == ["USER", "ASSISTANT"]
 
 
-def _progress_events(text: str) -> list[dict[str, Any]]:
-    """回答の配信の `chat_progress`（段階のイベント。#1359）の event だけを順に取り出す。"""
-    events: list[dict[str, Any]] = []
-    for payload in _sse_events(text, "chat_progress"):
-        event = payload["event"]
-        assert isinstance(event, dict)
-        events.append(event)
+def _trace_events(conversation_id: str, message_id: str) -> list[dict[str, Any]]:
+    """回答の処理の経過の snapshot（共通の span の表。#3226）のイベント。"""
+    response = client.get(f"/api/chat/conversations/{conversation_id}/messages/{message_id}/trace")
+    assert response.status_code == 200, response.text
+    events = response.json()["data"]["events"]
+    assert isinstance(events, list)
     return events
 
 
-def _fold_statuses(events: list[dict[str, Any]]) -> dict[str, str]:
-    """段階のイベントを畳んだ、段階ごとの最後の状態。"""
-    statuses: dict[str, str] = {}
-    for event in events:
-        if event["type"] == "step":
-            statuses[str(event["step_id"])] = str(event["status"])
-    return statuses
+def test_stream_message_writes_answer_spans_to_shared_table(
+    monkeypatch: MonkeyPatch, trace_db: FakeTraceDb
+) -> None:
+    """回答の span は共通の span の表に書き、回答の配信では送らない（#3226）。
 
-
-def test_stream_message_sends_chat_progress_events(monkeypatch: MonkeyPatch) -> None:
-    """処理の段階を `chat_progress` のイベントで送り、完了の終端は回答の前に届く（#1359）。"""
+    回答のメッセージには表を引く trace id と工程の詳細だけを保存し、trace の API は表の span を段の
+    イベント（包む段・工程の親子・回答のメッセージの状態の終端）にして返す。
+    """
     fake = FakeChatOracle()
     _chat_conversation(fake, "conv-progress")
     _stub_stream(monkeypatch, fake, ["m1"])
@@ -919,22 +917,23 @@ def test_stream_message_sends_chat_progress_events(monkeypatch: MonkeyPatch) -> 
     )
 
     assert resp.status_code == 200
-    payloads = _sse_events(resp.text, "chat_progress")
+    # 処理の経過は配信で送らない（旧形式の `progress`・工程の `stage` も送らない）。
+    assert "event: chat_progress" not in resp.text
+    assert "event: progress" not in resp.text
+    assert "event: stage" not in resp.text
     assistant = fake.messages["conv-progress"][1]
-    assert all(payload["model_id"] == "m1" for payload in payloads)
-    assert all(payload["message_id"] == assistant.id for payload in payloads)
-    events = _progress_events(resp.text)
-    # 番号は 1 から連続し、対象は作成中の回答のメッセージ。
-    assert [event["seq"] for event in events] == list(range(1, len(events) + 1))
+    rows = trace_db.spans()
+    assert {row["operation_id"] for row in rows} == {assistant.id}
+    assert {row["product"] for row in rows} == {"rag"}
+    assert assistant.progress is not None
+    assert assistant.progress["trace_id"] == rows[0]["trace_id"]
+    events = _trace_events("conv-progress", assistant.id)
     assert {event["target_id"] for event in events} == {assistant.id}
-    # 段は span（#3226）。包む段・工程を始まった順に出す。名前（文言）は入れない。
-    assert all("label" not in event and "detail" not in event for event in events)
-    running = [
+    steps = [event for event in events if event["type"] == "step" and not event.get("root")]
+    assert [
         (event.get("name"), event.get("kind"), (event.get("params") or {}).get("name"))
-        for event in events
-        if event.get("status") == "running" and not event.get("root")
-    ]
-    assert running == [
+        for event in steps
+    ] == [
         ("rag.answer", None, None),
         ("rag.engine.stage", "answer_step", "質問の理解"),
         ("rag.engine.stage", "answer_step", "文書検索"),
@@ -942,31 +941,21 @@ def test_stream_message_sends_chat_progress_events(monkeypatch: MonkeyPatch) -> 
         ("rag.engine.stage", "answer_step", "回答文の生成と根拠確認（1回目）"),
         ("rag.answer_guardrail", "answer_guardrail", None),
     ]
-    by_id = {event["step_id"]: event for event in events if event["type"] == "step"}
-    rerank = next(e for e in by_id.values() if (e.get("params") or {}).get("name") == "Rerank")
+    by_id = {event["step_id"]: event for event in steps}
+    rerank = next(e for e in steps if (e.get("params") or {}).get("name") == "Rerank")
     assert (by_id[rerank["parent_id"]].get("params") or {}).get("name") == "文書検索"
-    assert len({event["step_id"] for event in events if event.get("root")}) == 1
-    assert events[-1]["type"] == "terminal"
-    assert events[-1]["status"] == "done"
-    assert set(_fold_statuses(events).values()) == {"done"}
-    # 完了の終端は回答（delta）の前に届く。旧形式の `progress`（snapshot）と工程の `stage` は
-    # 送らない（処理の経過は span のイベントだけ）。
-    assert resp.text.rindex("event: chat_progress") < resp.text.index("event: delta")
-    assert "event: progress" not in resp.text
-    assert "event: stage" not in resp.text
-    # 保存した段階は配信と同じイベントの一覧（会話の取得でも同じものを返す）。
-    assert assistant.progress == events
+    assert len([event for event in events if event.get("root")]) == 1
+    assert {event["status"] for event in steps} == {"done"}
+    assert events[-1] == {**events[-1], "type": "terminal", "status": "done"}
+    # 会話の取得は処理の経過を返さない（画面は回答ごとの trace の API で読む）。
     detail = client.get("/api/chat/conversations/conv-progress").json()["data"]
-    assert [
-        {key: value for key, value in event.items() if value is not None}
-        for event in detail["messages"][1]["progress"]
-    ] == events
+    assert "progress" not in detail["messages"][1]
 
 
 def test_stream_message_progress_marks_running_step_failed_on_timeout(
-    monkeypatch: MonkeyPatch,
+    monkeypatch: MonkeyPatch, trace_db: FakeTraceDb
 ) -> None:
-    """時間切れでは実行中の段階を失敗にし、失敗の終端を error の前に送る（#1146 / #1359）。"""
+    """時間切れで止まった段は取り消しの印で終わり、終端は回答の失敗（#1146 / #3226）。"""
     fake = FakeChatOracle()
     _chat_conversation(fake, "conv-progress-timeout")
     _stub_stream(monkeypatch, fake, ["m1"])
@@ -977,18 +966,20 @@ def test_stream_message_progress_marks_running_step_failed_on_timeout(
         "/api/chat/conversations/conv-progress-timeout/messages/stream", json={"content": "得点は?"}
     )
 
-    text = resp.text
-    events = _progress_events(text)
-    latest = {event["step_id"]: event for event in events if event["type"] == "step"}
-    # 質問の書き換えは完了。時間切れで止まった段は取り消しの印で終わり、終端は失敗（#3226）。
-    by_name = {event["name"]: event for event in latest.values() if not event.get("root")}
+    assert "event: error" in resp.text
+    assistant = fake.messages["conv-progress-timeout"][1]
+    assert assistant.status == "ERROR"
+    events = _trace_events("conv-progress-timeout", assistant.id)
+    by_name = {
+        event["name"]: event
+        for event in events
+        if event["type"] == "step" and not event.get("root")
+    }
     assert by_name["rag.history_rewrite"]["status"] == "done"
     assert by_name["rag.answer"]["status"] == "skipped"
     assert by_name["rag.answer"]["cancelled"] is True
-    assert "running" not in {event["status"] for event in latest.values()}
+    assert "running" not in {event.get("status") for event in events}
     assert events[-1] == {**events[-1], "type": "terminal", "status": "failed"}
-    assert text.rindex("event: chat_progress") < text.index("event: error")
-    assert fake.messages["conv-progress-timeout"][1].progress == events
 
 
 def test_chat_answer_uses_answer_timeout_not_search_timeout(monkeypatch: MonkeyPatch) -> None:
@@ -1368,10 +1359,10 @@ class _RecordSaveFailedPipeline(_FakePipeline):
         *,
         history=None,
         query_guardrail_result=None,
-        span_listener=None,
+        trace=None,
     ):
         assert progress_callback is not None
-        with answer_trace(span_listener, trace_id=trace_id or "trace"):
+        with answer_trace(trace, trace_id=trace_id or "trace"):
             with pytest.raises(_DatabaseError):
                 await pipeline_stage(
                     "answer_record_save",
@@ -1386,7 +1377,7 @@ class _RecordSaveFailedPipeline(_FakePipeline):
 
 
 def test_stream_message_marks_failed_record_save_step_and_still_answers(
-    monkeypatch: MonkeyPatch,
+    monkeypatch: MonkeyPatch, trace_db: FakeTraceDb
 ) -> None:
     """回答の記録を保存できなくても回答を返し、工程「回答の記録の保存」を失敗にする（#2342）。"""
     fake = FakeChatOracle()
@@ -1405,7 +1396,9 @@ def test_stream_message_marks_failed_record_save_step_and_still_answers(
     assert metadata["storage_failures"] == [
         {"step": "answer_record_save", "error_type": "DatabaseError", "error_code": "ORA-03146"}
     ]
-    events = _progress_events(resp.text)
+    assistant = fake.messages["conv-record"][1]
+    # 失敗の詳細は表に入れず、回答のメッセージの記録から足す（#3226）。
+    events = _trace_events("conv-record", assistant.id)
     failed = [event for event in events if event.get("status") == "failed"]
     assert {event.get("kind") for event in failed} == {"answer_record_save"}
     assert failed[-1]["details"]["lines"] == [

@@ -475,19 +475,17 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # 作成中の回答の再購読と停止（#1175）。
     ("GET", "/chat/conversations/{conversation_id}/messages/{message_id}/stream"): _any(MENU_CHAT),
     ("POST", "/chat/conversations/{conversation_id}/messages/{message_id}/cancel"): _any(MENU_CHAT),
-    # 回答の処理の段階の polling と SSE（3 製品共通のイベント。#1359）。
-    ("GET", "/chat/conversations/{conversation_id}/messages/{assistant_message_id}/progress"): _any(
+    # 回答の処理の経過（共通の span の表の snapshot。#3226）。
+    ("GET", "/chat/conversations/{conversation_id}/messages/{assistant_message_id}/trace"): _any(
         MENU_CHAT
     ),
-    (
-        "GET",
-        "/chat/conversations/{conversation_id}/messages/{assistant_message_id}/progress/stream",
-    ): _any(MENU_CHAT),
     # ---- 検索・回答プロファイル: 検索と回答履歴 ----
     # 文書ワークスペースのレシピ検索テストも同期検索を使う。
     ("POST", "/search"): _any(MENU_SEARCH, MENU_UPLOAD, MENU_FILE_LIST),
     # KB 詳細の検索テストもストリーム検索を使う。
     ("POST", "/search/stream"): _any(MENU_SEARCH, MENU_KNOWLEDGE_BASES),
+    # ストリーム検索の実行の処理の経過（共通の span の表の snapshot。#3226）。
+    ("GET", "/search/runs/{run_id}/trace"): _any(MENU_SEARCH, MENU_KNOWLEDGE_BASES),
     # 検索の絞り込みに使える項目（検索・回答プロファイルの KB の項目抽出の定義。#549）。
     ("GET", "/search/extraction-fields"): _any(MENU_SEARCH),
     # RAG 検索の回答に選べるモデル（既定のテキストモデルと Vision モデル。#675）。
@@ -495,8 +493,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- 実行履歴（#1890）----
     ("GET", "/history/runs"): _any(MENU_HISTORY),
     ("GET", "/history/runs/{run_id}"): _any(MENU_HISTORY),
+    ("GET", "/history/runs/{run_id}/trace"): _any(MENU_HISTORY),
     ("GET", "/search/answers"): _ANSWER_USE,
     ("GET", "/search/answers/{trace_id}"): _ANSWER_USE,
+    ("GET", "/search/answers/{trace_id}/trace"): _ANSWER_USE,
     # ---- 検索・回答プロファイル: 品質評価 ----
     ("POST", "/evaluation/run"): _any(MENU_EVALUATION),
     # 評価リクエストの Excel のテンプレートと検証（#2065。保存しない）。

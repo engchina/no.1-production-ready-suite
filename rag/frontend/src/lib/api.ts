@@ -1412,11 +1412,6 @@ export interface ChatMessage {
   status: MessageStatus;
   reply_to_message_id: string | null;
   created_at: string;
-  /**
-   * 回答の処理の段階のイベント（3 製品共通の契約。#1359）。作成中は記録の途中、終わった後は終端まで。
-   * 未検証の入力として `parseChatProgressEvents` で読む。段階を保存していない回答は null / 未指定。
-   */
-  progress?: unknown[] | null;
   /** 回答前に確認した内容（USER のメッセージだけ。確認しなかった質問は null / 未指定。#1839）。 */
   clarification?: ChatClarificationRecord | null;
   /** 回答の注意書き（システム設定の文。backend が回答の確定の後に付ける。確認の質問・無効のときは null / 未指定。#2405）。 */
@@ -1557,7 +1552,6 @@ export interface CompareModel {
 }
 
 export interface SearchDiagnostics {
-  trace_summary?: unknown;
   /** 回答エンジンの名前（"grounded"）。 */
   retrieval_strategy: string;
   /** "grounded"（回答）/ "retrieval_only"（検索だけ）/ "blocked"（安全チェックで止めた）。 */
@@ -3688,6 +3682,9 @@ export const api = {
   },
   getRun: (runId: string) =>
     request<RunDetail>(`/api/history/runs/${encodeURIComponent(runId)}`),
+  /** 実行の処理の経過（実行の詳細と同じ見え方。共通の span の表の snapshot。#3226）。 */
+  getRunTrace: (runId: string, signal?: AbortSignal) =>
+    request<TraceSnapshotData>(`/api/history/runs/${encodeURIComponent(runId)}/trace`, { signal }),
   getAnswerRecord: (traceId: string) =>
     request<AnswerRecordDetail>(
       `/api/search/answers/${encodeURIComponent(traceId)}`,
@@ -3848,14 +3845,17 @@ export const api = {
       { method: "POST" },
     ),
   /**
-   * 回答（`messageId` は ASSISTANT のメッセージ）の処理の段階のイベントのうち、`since` より後（#1359）。応答は
-   * 未検証の入力として `parseChatProgressPage` で読む。
+   * 回答（`messageId` は ASSISTANT のメッセージ）の処理の経過（共通の span の表の snapshot。#3226）。会話を開ける
+   * 利用者だけ（他人の会話は 404）。イベントは未検証の入力として `useTraceProgressSnapshot` が検証する。
    */
-  getChatAnswerProgress: (conversationId: string, messageId: string, since: number, signal?: AbortSignal) =>
-    request<unknown>(
-      `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/progress?since=${since}`,
+  getChatAnswerTrace: (conversationId: string, messageId: string, signal?: AbortSignal) =>
+    request<TraceSnapshotData>(
+      `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/trace`,
       { signal },
     ),
+  /** RAG 検索の実行（配信の `run` の trace_id）の処理の経過（実行中は表を実行の id で引く。#3226）。 */
+  getSearchRunTrace: (runId: string, signal?: AbortSignal) =>
+    request<TraceSnapshotData>(`/api/search/runs/${encodeURIComponent(runId)}/trace`, { signal }),
   listCompareModels: () => request<CompareModel[]>("/api/chat/models"),
   listSearchAnswerModels: () => request<CompareModel[]>("/api/search/models"),
   listProfileAnswerModels: () => request<CompareModel[]>("/api/search-answer-profiles/answer-models"),
@@ -4783,7 +4783,6 @@ export interface StorageFailure {
 }
 
 export interface RunDetail extends RunSummary {
-  trace_summary?: unknown;
   error_type: string | null;
   /** 失敗のエラーコード（ORA-03146 など。#2342）。古い記録には無い。 */
   error_code?: string | null;
@@ -4800,12 +4799,16 @@ export interface RunDetail extends RunSummary {
   answer_notice?: string | null;
   citations: RetrievedChunk[];
   answer_diagnostics: Record<string, JsonValue> | null;
-  /**
-   * 処理の経過（実行の trace の span のイベント。#3226）。span の無い古い記録は空か段だけのイベントで、画面は古い
-   * 形式の案内を出す。
-   */
-  progress_events?: import("@production-ready/ui").ChatProgressEvent[];
   feedback: RunFeedback[];
+}
+
+/**
+ * 処理の経過の snapshot（共通の span の表を、記録の判定を通して読んだもの。#3226）。`events` は span の段のイベント
+ * （未検証の入力）。`dropped_spans` は書けなかった span の数（1 以上のときだけ。「一部の処理だけを記録しています。」）。
+ */
+export interface TraceSnapshotData {
+  events: unknown[];
+  dropped_spans?: number | null;
 }
 
 // --- 保存された回答(rag_poc の answer JSON 相当) ---

@@ -43,7 +43,6 @@ from app.rag.answer_timeout import (
     run_answer_with_timeout,
 )
 from app.rag.audit import record_rag_search_audit
-from app.rag.chat_progress import ChatProgressTracker
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
 from app.rag.observability import (
@@ -86,6 +85,7 @@ from app.rag.support_guide_runtime import (
     with_draft,
     with_guide_rule,
 )
+from app.rag.trace_store import AnswerTrace, TraceSnapshot, run_trace_snapshot, trace_snapshot
 from app.schemas.common import ApiResponse, Page
 from app.schemas.search import (
     AnswerRecordDetail,
@@ -688,14 +688,12 @@ async def _run_search_with_timeout(
     if guide_preview is not None:
         trace_id = GUIDE_PREVIEW_TRACE_PREFIX + trace_id
     answer_model_id = _answer_model_id(request, settings)
-    # 実行履歴の詳細の処理の経過（実行の trace の span のイベント。#3226）。
-    # 実行履歴に残す実行だけ記録する。
-    progress: ChatProgressTracker | None = None
+    # 処理の経過（共通の span の表に書く。MCP の要求の中では Agent の trace の下に入る。#3226）。
+    trace = AnswerTrace(trace_id, owner_user_uuid=current_audit_request_context().user_uuid)
     if run_recorder is not None:
         run_recorder.model_id = answer_model_id if request.generate_answer else None
-        progress = ChatProgressTracker(trace_id)
-        progress.trace_id = trace_id
-        run_recorder.progress_source = progress.dump
+        # 実行履歴の詳細の処理の経過（表を引く trace id と工程の詳細）。
+        run_recorder.trace_source = trace.record
     # 取り消したときに止まった工程を残す（#2691）。
     stages = StageTracker(_report_tool_progress)
     try:
@@ -711,7 +709,7 @@ async def _run_search_with_timeout(
                 request,
                 trace_id=trace_id,
                 progress_callback=tracker,
-                span_listener=progress.span_listener() if progress is not None else None,
+                trace=trace,
             ),
             settings,
             stages,
@@ -745,8 +743,6 @@ async def _run_search_with_timeout(
             error=exc.original_error,
             error_stage="timeout",
         )
-        if progress is not None:
-            progress.fail()
         await _record_failed_run(run_recorder, request, trace_id, started_at, exc)
         raise HTTPException(status_code=504, detail=exc.user_message) from exc
     except asyncio.CancelledError:
@@ -766,8 +762,6 @@ async def _run_search_with_timeout(
     except HTTPException:
         raise
     except Exception as exc:
-        if progress is not None:
-            progress.fail()
         await _record_failed_run(run_recorder, request, trace_id, started_at, exc)
         incomplete = find_incomplete_response(exc)
         if incomplete is not None and incomplete.user_message:
@@ -872,23 +866,19 @@ async def _stream_search_events_with_timeout(
     `resolved` は `_resolve_query_context` の結
     果（有効 request・Settings・適用 KB・検索・回答プロファイル）。
 
-    処理の経過は実行の trace の span のイベント（`chat_progress`。対象は trace_id。#3226）で送り、
-    実行履歴にも同じイベントを残す。工程の開始・終了の `stage` は状態の 1 行（ナレッジベースの検索
-    テスト）だけに使う。
+    最初に実行の id（`run`。trace_id）を送る。処理の経過は配信では送らず、画面が実行の trace の
+    API（`GET /search/runs/{trace_id}/trace`。共通の span の表の snapshot。#3226）で読む。実行履歴
+    には表を引く trace id と工程の詳細を残す。工程の開始・終了の `stage` は状態の 1 行（ナレッジベ
+    ースの検索テスト）だけに使う。
     """
     request, settings, applied_kb, applied_view = resolved
     started_at = perf_counter()
     trace_id = new_trace_id()
     queue: asyncio.Queue[tuple[str, object] | None] = asyncio.Queue()
-    progress = ChatProgressTracker(
-        trace_id,
-        sink=lambda event: queue.put_nowait(
-            ("chat_progress", {"event": event.model_dump(mode="json", exclude_none=True)})
-        ),
-    )
-    progress.trace_id = trace_id
+    queue.put_nowait(("run", {"trace_id": trace_id}))
+    trace = AnswerTrace(trace_id, owner_user_uuid=current_audit_request_context().user_uuid)
     if run_recorder is not None:
-        run_recorder.progress_source = progress.dump
+        run_recorder.trace_source = trace.record
 
     async def emit_progress(stage: SearchStageProgress) -> None:
         await queue.put(
@@ -920,19 +910,17 @@ async def _stream_search_events_with_timeout(
                     request,
                     trace_id=trace_id,
                     progress_callback=tracker,
-                    span_listener=progress.span_listener(),
+                    trace=trace,
                 ),
                 settings,
                 emit_progress,
             )
-            progress.finish()
             if applied_kb is not None:
                 result.diagnostics.kb_adapter_config_applied = applied_kb
             if applied_view is not None:
                 result.diagnostics.search_answer_profile_applied = applied_view
             await queue.put(("result", result))
         except AnswerTimeoutError as exc:
-            progress.fail()
             elapsed = elapsed_ms(started_at)
             diagnostics = build_search_diagnostics(
                 request, settings=settings, retrieval_strategy_adapter="grounded"
@@ -975,7 +963,6 @@ async def _stream_search_events_with_timeout(
             # それ以外は秘匿した定型文を返し、画面の「詳細」に出す項目（種類・工程・理由）を
             # 添える（#2023）。
             _log_answer_failure("rag_search_stream_failed", trace_id, exc, STREAM_ERROR_MESSAGE)
-            progress.fail()
             await _record_failed_run(run_recorder, request, trace_id, started_at, exc)
             failure = describe_answer_failure(exc, STREAM_ERROR_MESSAGE)
             await queue.put(("error", {"trace_id": trace_id, **failure.event_fields()}))
@@ -1131,6 +1118,38 @@ async def get_saved_answer(trace_id: str) -> ApiResponse[AnswerRecordDetail]:
     if row is None:
         raise HTTPException(status_code=404, detail="回答が見つかりません。")
     return ApiResponse(data=_answer_record_detail(row))
+
+
+@router.get("/answers/{trace_id}/trace", response_model=ApiResponse[TraceSnapshot])
+async def get_saved_answer_trace(trace_id: str) -> ApiResponse[TraceSnapshot]:
+    """保存された回答の処理の経過（共通の span の表の snapshot。#3226）。
+
+    回答の記録と同じ判定で開き（範囲の外は 404）、記録の trace id で表を読む。保存した回答は完了の
+    実行。
+    """
+    row = await OracleClient().get_answer_record(trace_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="回答が見つかりません。")
+    diagnostics = row.get("diagnostics_json")
+    saved = diagnostics.get("trace") if isinstance(diagnostics, Mapping) else None
+    return ApiResponse(data=await trace_snapshot(saved, target_id=trace_id, terminal="done"))
+
+
+@router.get("/runs/{run_id}/trace", response_model=ApiResponse[TraceSnapshot])
+async def get_search_run_trace(run_id: str) -> ApiResponse[TraceSnapshot]:
+    """RAG 検索の実行（`POST /search/stream` の `run` の trace_id）の処理の経過（#3226）。
+
+    実行の記録（実行履歴）は実行の終わりに保存するので、記録があればその判定（実行履歴と同じ見え方）
+    で開いて読む。まだ無い（実行中・実行履歴に残さない根拠の検索だけの実行）ときは、表を実行の id
+    で引く（system_admin 以外は自分が実行した span だけ。他人の実行は空）。
+    """
+    oracle = OracleClient()
+    row = await RunHistoryStore(oracle).get_run(run_id)
+    if row is not None:
+        return ApiResponse(data=await run_trace_snapshot(oracle, row))
+    return ApiResponse(
+        data=await trace_snapshot(None, target_id=run_id, terminal=None, lookup_operation_id=run_id)
+    )
 
 
 def _answer_record_detail(row: dict[str, object]) -> AnswerRecordDetail:

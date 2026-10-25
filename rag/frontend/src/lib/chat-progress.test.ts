@@ -70,19 +70,19 @@ describe("CHAT_PROGRESS_DEFINITIONS", () => {
     ]);
   });
 
-  it("チャットの SSE の chat_progress を検証して onChatProgress へ渡す（形の違うイベントは捨てる）", async () => {
+  it("チャットの SSE の chat_progress（古い配信）は受け取らない（処理の経過は trace の API で読む。Issue 3226）", async () => {
     seq = 0;
     const event = step("retrieve", "running");
     const body = [
       `event: chat_progress\ndata: ${JSON.stringify({ model_id: "m1", message_id: TARGET, event })}\n\n`,
-      `event: chat_progress\ndata: ${JSON.stringify({ model_id: "m1", message_id: TARGET, event: { seq: 0 } })}\n\n`,
+      `event: all_done\ndata: ${JSON.stringify({ conversation_id: "c1" })}\n\n`,
     ].join("");
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }))
     );
-    const received: unknown[] = [];
-    await streamChatMessage("c1", { content: "質問" }, { onChatProgress: (payload) => received.push(payload) });
-    expect(received).toEqual([{ model_id: "m1", message_id: TARGET, event }]);
+    const onAllDone = vi.fn();
+    await expect(streamChatMessage("c1", { content: "質問" }, { onAllDone })).resolves.toEqual({ completed: true });
+    expect(onAllDone).toHaveBeenCalledTimes(1);
   });
 });

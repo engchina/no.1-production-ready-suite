@@ -321,10 +321,10 @@ class StoredMessage:
     elapsed_ms: float | None = None
     tenant_id_hash: str | None = None
     user_id_hash: str | None = None
-    # 回答の処理の段階のイベントの一覧（`pr_backend_core.chat_progress` の JSON。#1359）。
-    # 作成中は記録の途中、終わった後は終端まで。段階の無いメッセージ（USER）は None。読むときは
-    # `parse_chat_progress_events` を通す（旧形式の段階の snapshot は捨てる）。
-    progress: list[dict[str, Any]] | None = None
+    # 回答の処理の経過の記録（共通の span の表の trace id・書けなかった数・工程の詳細。
+    # `app.rag.trace_store.TraceRecord` の JSON。#3226）。段階の無いメッセージ（USER）は None。読
+    # むときは `parse_trace_record` を通す（古い形式の段のイベントの一覧は読まない）。
+    progress: dict[str, Any] | None = None
     # 作成中（STREAMING）の回答を作っているプロセスと、その最後の heartbeat（#1175）。
     lease_owner: str | None = None
     heartbeat_at: datetime | None = None
@@ -4413,9 +4413,9 @@ class OracleClient:
         return [_stored_message_from_row(row) for row in rows]
 
     async def update_chat_message_progress(
-        self, message_id: str, *, lease_owner: str, progress: list[dict[str, Any]]
+        self, message_id: str, *, lease_owner: str, progress: dict[str, Any]
     ) -> bool:
-        """作成中の回答の段階を保存し、heartbeat を進める(#1175)。
+        """作成中の回答の処理の経過の記録を保存し、heartbeat を進める(#1175・#3226)。
 
         このプロセスが作っている ``STREAMING`` の行だけを更新する。取消・中断で
         ``STREAMING`` でなくなっていたら False(作成を止める合図)。
@@ -4522,7 +4522,7 @@ class OracleClient:
         lease_owner: str | None = None,
         stale_seconds: float | None = None,
         scoped: bool = True,
-        finalize_progress: Callable[[object], list[dict[str, Any]] | None] | None = None,
+        progress: dict[str, Any] | None = None,
     ) -> bool:
         """作成中(``STREAMING``)の回答を停止(``CANCELLED``)・中断(``ERROR``)にする(#1175)。
 
@@ -4531,9 +4531,8 @@ class OracleClient:
           ``stale_seconds`` を超えて途絶えた行だけ(会話の取得のときの中断の判定)。
         - どちらも無し: ``STREAMING`` の行(利用者の停止)。
         ``scoped`` のときは会話の範囲(tenant・作成した利用者・検索・回答プロファイル)に閉じる。
-        ``finalize_progress`` は、保存済みの処理の段階(``progress_json`` の JSON の値)から、
-        閉じるときに保存する段階(終端まで記録したイベントの一覧。#1359)を作る。行を lock して
-        読み、同じ transaction で書く(別のプロセスの記録と入れ違えない)。
+        ``progress`` は閉じるときに保存する処理の経過の記録(作成していたプロセスの記録。#3226)。
+        None なら保存済みの記録のまま(処理の経過の終端はメッセージの状態で出す)。
         """
         if status not in {"CANCELLED", "ERROR"}:
             raise ValueError(f"status={status} では閉じられません。")
@@ -4571,28 +4570,16 @@ class OracleClient:
         where_sql = " AND ".join(conditions)
         statement = (
             "UPDATE rag_messages m SET m.status = :status, m.content = :content"
-            + (", m.progress_json = :progress_json" if finalize_progress is not None else "")
+            + (", m.progress_json = :progress_json" if progress is not None else "")
             + " WHERE "
             + where_sql
         )
 
+        if progress is not None:
+            binds["progress_json"] = _json_dumps(progress)
+
         def operation(connection: OracleConnectionProtocol) -> int:
-            if finalize_progress is None:
-                return _execute_count(connection, statement, binds)
-            row = _fetch_one(
-                connection,
-                "SELECT m.progress_json FROM rag_messages m WHERE " + where_sql + " FOR UPDATE",
-                binds,
-            )
-            if row is None:
-                return 0
-            saved = row.get("progress_json")
-            progress = finalize_progress(None if saved is None else _json_object_list(saved))
-            return _execute_count(
-                connection,
-                statement,
-                {**binds, "progress_json": None if progress is None else _json_dumps(progress)},
-            )
+            return _execute_count(connection, statement, binds)
 
         return await self._run_transaction(operation) > 0
 
@@ -14019,11 +14006,7 @@ def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
         status=str(row.get("status") or "COMPLETE"),
         elapsed_ms=_optional_float(row.get("elapsed_ms")),
         created_at=_datetime_value(row.get("created_at")),
-        progress=(
-            _json_object_list(row.get("progress_json"))
-            if row.get("progress_json") is not None
-            else None
-        ),
+        progress=_json_object_or_none(row.get("progress_json")),
         lease_owner=_optional_str(row.get("lease_owner")),
         clarification=_json_object_or_none(row.get("clarification_json")),
         answer_notice=_optional_str(row.get("answer_notice")),

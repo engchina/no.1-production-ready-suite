@@ -3,17 +3,13 @@
  *
  * - 状態は共通の 7 つ（`@production-ready/ui` の `RunStatus`）に写す（run-history.md「状態の写し方」）。
  *   RAG は `success` → 完了、`blocked`（安全チェック）→ ブロック（文言は「安全チェックで停止」）、`error` → 失敗。
- * - 処理の経過は実行の trace の span のイベントを、チャット・RAG 検索と同じ関数で木にする（#3226）。span の無い
- *   古い形式の記録は行を作らず、古い形式の案内を出す。
+ * - 処理の経過は共通の span の表の snapshot（実行の trace の API）を、チャット・RAG 検索と同じ hook で木にする
+ *   （#3226）。span の無い古い形式の記録は行を作らず、古い形式の案内を出す。
  */
 import {
   formatRunDuration,
-  chatProgressHasSpans,
   chatProgressTimelineStep,
-  chatProgressStepsFromEvents,
-  chatProgressTraceIdOf,
-  parseChatProgressEvents,
-  type ChatProgressLabelOptions,
+  type ChatProgressStep,
   type RunExecutorFilter as SharedRunExecutorFilter,
   type RunStatus as SharedRunStatus,
   type RunStatusFilter as SharedRunStatusFilter,
@@ -32,7 +28,6 @@ import type {
   RunVerification,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { CHAT_PROGRESS_DEFINITIONS } from "@/lib/chat-progress";
 
 export interface BadgeView {
   variant: StatusVariant;
@@ -167,20 +162,16 @@ export interface RunTimelineView {
 }
 
 /**
- * 処理の経過の行（実行の trace の span の木。チャット・RAG 検索の処理の経過と同じ関数で作る。#3226）。
- * 段だけの古い形式の記録は行にせず、古い形式として返す（段の再構成はしない）。
+ * 処理の経過の行（実行の trace の API の snapshot。チャット・RAG 検索の処理の経過と同じ hook で作った段。#3226）。
+ * 古い形式の記録（span の無い記録）は行にせず、古い形式として返す（段の再構成はしない）。
  */
-export function runTimeline(
-  run: Pick<RunDetail, "progress_events">,
-  options: ChatProgressLabelOptions = {}
-): RunTimelineView {
-  const events = parseChatProgressEvents(run.progress_events);
-  if (!chatProgressHasSpans(events)) return { steps: [], legacy: true };
-  return {
-    steps: chatProgressStepsFromEvents(events, CHAT_PROGRESS_DEFINITIONS, undefined, options).map(chatProgressTimelineStep),
-    traceId: chatProgressTraceIdOf(events),
-    legacy: false,
-  };
+export function runTimeline(snapshot: {
+  steps: readonly ChatProgressStep[];
+  traceId?: string;
+  legacy: boolean;
+}): RunTimelineView {
+  if (snapshot.legacy) return { steps: [], legacy: true };
+  return { steps: snapshot.steps.map(chatProgressTimelineStep), traceId: snapshot.traceId, legacy: false };
 }
 
 /** 所要時間（ミリ秒）の表記（共通の書式。「1.2 秒」「2 分 5 秒」、記録なしは「—」）。 */
