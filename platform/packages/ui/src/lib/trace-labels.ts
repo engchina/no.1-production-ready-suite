@@ -24,6 +24,9 @@ export const TRACE_DETAILS_JA = {
   "trace.status.cancelled": "停止",
   "trace.status.stopped": "処理を停止しました",
   "trace.timing.reconstructed": "時刻の記録がない処理は、所要時間から順番を再構成しています。",
+  "trace.product.rag": "RAG",
+  "trace.product.nl2sql": "NL2SQL",
+  "trace.product.agent": "Agent",
 } as const;
 
 export type TraceLabelKey = keyof typeof TRACE_DETAILS_JA;
@@ -47,8 +50,16 @@ export interface TraceDetailsLabels {
   cancelled: string; stopped: string; reconstructed: string;
   spanNames: TraceSpanNames;
   stageName?: TraceStageName;
+  /**
+   * 画面の製品（`rag` / `nl2sql` / `agent`。#3272）。別の製品が書いた span は、この製品の工程の定義で訳さずに、書いた製品が
+   * 付けた名前（`display_name`）を出し、製品の境目の行に製品名を添える。
+   */
+  product?: string;
+  /** span を書いた製品の名前（知らない値はそのまま）。 */
+  productName: (product: string) => string;
 }
-export function createTraceDetailsLabels(t: (key: TraceLabelKey) => string, options: { stageName?: TraceStageName } = {}): TraceDetailsLabels {
+const PRODUCT_KEYS: Readonly<Record<string, TraceLabelKey>> = { rag: "trace.product.rag", nl2sql: "trace.product.nl2sql", agent: "trace.product.agent" };
+export function createTraceDetailsLabels(t: (key: TraceLabelKey) => string, options: { stageName?: TraceStageName; product?: string } = {}): TraceDetailsLabels {
   return {
     segment: (index, total) => t("trace.details.segment").replace("{index}", String(index)).replace("{total}", String(total)),
     notSampled: t("trace.details.notSampled"), legacy: t("trace.details.legacy"),
@@ -62,6 +73,8 @@ export function createTraceDetailsLabels(t: (key: TraceLabelKey) => string, opti
       attempt: (name, count) => t("trace.span.attempt").replace("{name}", name).replace("{count}", String(count)),
     },
     stageName: options.stageName,
+    product: options.product,
+    productName: (product) => (Object.prototype.hasOwnProperty.call(PRODUCT_KEYS, product) ? t(PRODUCT_KEYS[product]) : product),
   };
 }
 export const DEFAULT_TRACE_DETAILS_LABELS = createTraceDetailsLabels(key => TRACE_DETAILS_JA[key]);

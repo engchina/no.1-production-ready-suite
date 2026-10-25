@@ -374,6 +374,60 @@ for (const viewport of VIEWPORTS) {
   }
 }
 
+// #3272: MCP で呼んだ RAG の span は、RAG が付けた工程の名前（`display_name`）で出し、製品の境目の行に製品名を添える。
+// MCP の手続き（initialize・通知）の行は出さない。チャットと実行の詳細で同じ。
+test("呼び先の製品の span は書いた製品の工程の名前で出し、製品の境目に製品名を添える", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
+  const {run} = seedRunningRun(mockApi);
+  const start = "2026-10-23T00:00:00.000Z";
+  const end = "2026-10-23T00:00:02.000Z";
+  run.created_at = start;
+  run.updated_at = end;
+  run.status = "completed";
+  const tool = "tool:rag__rag_retrieve_evidence";
+  const mcp = (method: string, extra: Record<string, string> = {}) => ({
+    startedAt: start, finishedAt: end, parent: tool, attributes: {"mcp.method.name": method, ...extra},
+  });
+  const rag = (parent: string, extra: Record<string, unknown> = {}) => ({startedAt: start, finishedAt: end, parent, product: "rag", ...extra});
+  run.progress_events = new ProgressLog(RUN_ID, () => end, start)
+    .step("chat-1", "done", {startedAt: start, finishedAt: end, kind: "plan"})
+    .step(tool, "running", {startedAt: start})
+    .step("mcp-init", "done", mcp("initialize"))
+    .step("mcp-notify", "done", mcp("notifications/initialized"))
+    .step("mcp-call", "done", mcp("tools/call", {"gen_ai.tool.name": "rag_retrieve_evidence"}))
+    .step("rag-server", "done", rag("mcp-call", {name: "mcp.server", root: true}))
+    .step("rag-search", "done", rag("rag-server", {name: "rag.search", root: true}))
+    .step("rag-retrieval", "done", rag("rag-search", {name: "rag.retrieval", displayName: "検索", attributes: {"pr.stage": "retrieval"}}))
+    .step("rag-stage", "done", rag("rag-retrieval", {name: "rag.engine.stage", kind: "answer_step", params: {name: "文書検索"}, displayName: "文書の検索", attributes: {"pr.stage": "文書検索"}}))
+    .step("rag-embed", "done", rag("rag-stage", {name: "gen_ai.embeddings", attributes: {"gen_ai.request.model": "synthetic-embed"}}))
+    .step(tool, "done", {finishedAt: end})
+    .step("chat-2", "done", {startedAt: start, finishedAt: end, kind: "respond"}).terminal("done").events;
+  run.events = [{id: "end", run_id: RUN_ID, type: "run.completed", message: "", payload: {}, created_at: end}];
+  await page.goto("/chat");
+  await openThread(page);
+  await page.getByTestId("chat-progress-summary").click();
+  const list = page.getByTestId("chat-progress");
+  const live = await timelineSnapshot(list);
+  expect(live.map((row) => [row.text.replace(/ 完了( [\d.]+ 秒)?$/, ""), row.level])).toEqual([
+    ["進め方を決めました", 0],
+    ["処理を実行しました", 0],
+    ["MCP の呼び出し · rag_retrieve_evidence", 1],
+    ["RAG · 検索", 2],
+    ["文書の検索", 3],
+    ["埋め込みの作成 · synthetic-embed", 4],
+    ["回答を作りました", 0],
+  ]);
+  await expect(list.getByTestId("chat-progress-step-mcp-init")).toHaveCount(0);
+  await expect(list.locator("[data-run-timeline-product]")).toHaveText(["RAG · "]);
+  await expectNoHorizontalOverflow(page);
+  await list.screenshot({path: testInfo.outputPath("chat-process-products.png")});
+  await page.goto(`/runs?id=${RUN_ID}`);
+  await expect(page.getByTestId("run-summary")).toBeVisible();
+  await page.getByTestId("run-timeline-section-summary").click();
+  expect(await timelineSnapshot(page.getByTestId("run-timeline-section"))).toEqual(live);
+  await expectNoHorizontalOverflow(page);
+  await page.getByTestId("run-timeline-section").screenshot({path: testInfo.outputPath("history-process-products.png")});
+});
+
 test("チャットと履歴の工程の内容・階層・状態・時間が一致する", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
   const {run} = seedRunningRun(mockApi);
   const start = "2026-10-23T00:00:00.000Z";

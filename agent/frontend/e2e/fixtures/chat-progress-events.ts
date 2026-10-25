@@ -44,6 +44,12 @@ export interface ProgressStepOptions {
   name?: string;
   /** span の属性（省略時はモデル名・ツール名）。 */
   attributes?: Params;
+  /** span を書いた製品（省略時は Agent。呼び先の RAG / NL2SQL の span は `rag` / `nl2sql`。#3272）。 */
+  product?: string;
+  /** 実行の全体の span（呼び先の製品の server の span・実行の span）。 */
+  root?: boolean;
+  /** span を書いた製品が付けた工程の名前（#3272）。 */
+  displayName?: string;
 }
 
 interface SpanState {
@@ -57,6 +63,8 @@ interface SpanState {
   finishedAt?: string;
   details?: Record<string, unknown>;
   attributes?: Params;
+  product?: string;
+  displayName?: string;
 }
 
 function spanName(id: string): string | undefined {
@@ -114,13 +122,15 @@ export class ProgressLog {
       name,
       parent: options.parent ?? (before ? before.parent : this.root),
       status,
-      root: before?.root,
+      root: options.root ?? before?.root,
       kind: options.kind ?? before?.kind ?? defaultKind(name),
       params,
       startedAt,
       finishedAt,
       details: options.details ?? before?.details,
       attributes: options.attributes ?? before?.attributes ?? defaultAttributes(id, name),
+      product: options.product ?? before?.product,
+      displayName: options.displayName ?? before?.displayName,
     });
     return this;
   }
@@ -181,7 +191,10 @@ export class ProgressLog {
       status: span.status,
       name: span.name,
       trace_id: SYNTHETIC_TRACE_ID,
+      // backend は表の span の製品（PRODUCT 列）を入れる（#3272）。
+      product: span.product ?? "agent",
     };
+    if (span.displayName) event.display_name = span.displayName;
     if (span.kind && span.kind !== id) event.kind = span.kind;
     if (span.parent) event.parent_id = span.parent;
     if (span.root) event.root = true;

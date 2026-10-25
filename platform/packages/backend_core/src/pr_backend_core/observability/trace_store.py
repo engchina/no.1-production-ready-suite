@@ -50,6 +50,13 @@ logger = logging.getLogger(__name__)
 TRACE_SPANS_TABLE = "PLATFORM_TRACE_SPANS"
 TraceProduct = Literal["rag", "nl2sql", "agent"]
 type ConnectionFactory = Callable[[], AbstractContextManager[Any]]
+# span を書いた製品が付ける、工程の利用者向けの名前（名詞。#3272）。`DISPLAY_PARAMS_JSON` の値の
+# この key に入れる（列は足さない）。別の製品の画面は、自分の工程の定義で訳さずにこの名前を出す
+# （Jaeger / Langfuse / Phoenix と同じく、span を作ったサービスの名前をそのまま出す）。
+DISPLAY_NAME_PARAM = "display_name"
+_DISPLAY_NAME_MAX = 128
+# 工程の利用者向けの名前を決める関数（製品が書き手に渡す。知らない span は None）。
+type SpanDisplayNamer = Callable[[SpanUpdate], str | None]
 
 # JSON の列（VARCHAR2(4000)）に入れる上限。超えたら key を後ろから外して収める。
 _JSON_MAX = 4000
@@ -160,8 +167,22 @@ def _bounded_json(values: Mapping[str, object] | None) -> str | None:
     return None
 
 
-def span_row(update: SpanUpdate, owner: TraceSpanOwner) -> dict[str, Any]:
-    """書き込みの bind（工程の詳細は入れない）。"""
+def _display_params(
+    update: SpanUpdate, namer: SpanDisplayNamer | None
+) -> Mapping[str, object] | None:
+    """表に入れる名前の値。製品の名前（`DISPLAY_NAME_PARAM`）は先頭に置く（上限で後ろから外す）。"""
+    params = dict(update.display.params) if update.display and update.display.params else {}
+    name = namer(update) if namer is not None else None
+    if isinstance(name, str) and name.strip():
+        params.pop(DISPLAY_NAME_PARAM, None)
+        return {DISPLAY_NAME_PARAM: name.strip()[:_DISPLAY_NAME_MAX], **params}
+    return params
+
+
+def span_row(
+    update: SpanUpdate, owner: TraceSpanOwner, *, namer: SpanDisplayNamer | None = None
+) -> dict[str, Any]:
+    """書き込みの bind（工程の詳細は入れない）。`namer` は製品の工程の利用者向けの名前。"""
     display = update.display
     return {
         "trace_id": update.trace_id,
@@ -178,7 +199,7 @@ def span_row(update: SpanUpdate, owner: TraceSpanOwner) -> dict[str, Any]:
         "started_at": _utc_naive(update.started_at),
         "finished_at": _utc_naive(update.finished_at),
         "display_kind": display.kind[:_DISPLAY_KIND_MAX] if display and display.kind else None,
-        "display_params_json": _bounded_json(display.params if display else None),
+        "display_params_json": _bounded_json(_display_params(update, namer)),
         "attributes_json": _bounded_json(update.attributes),
     }
 
@@ -201,9 +222,11 @@ class TraceSpanWriter:
       開始の知らせを押し出して入れる）。境界の span の queue は満杯でも捨てない。
     - 書き込みに失敗した行は間をおいて再送し、`retries` 回で諦めて数える。境界の span は
       `boundary_retry_seconds` まで再送を続ける。
+    - `display_name` は製品の工程の利用者向けの名前（`DISPLAY_NAME_PARAM` に入れる。#3272）。
     """
 
     connection_factory: ConnectionFactory
+    display_name: SpanDisplayNamer | None = None
     flush_seconds: float = 0.5
     batch_size: int = 100
     queue_size: int = 5000
@@ -230,7 +253,7 @@ class TraceSpanWriter:
     def submit(self, update: SpanUpdate, owner: TraceSpanOwner) -> None:
         key = (update.trace_id, update.span_id)
         boundary = is_boundary_span(update)
-        row = span_row(update, owner)
+        row = span_row(update, owner, namer=self.display_name)
         with self._lock:
             target = self._boundary if boundary else self._normal
             before = target.get(key)
@@ -536,6 +559,7 @@ def trace_progress_events(
             "started_at": span.started_at.isoformat(),
             "name": span.name,
             "trace_id": span.trace_id,
+            "product": span.product,
         }
         if finished is not None and status != "running":
             event["finished_at"] = finished.isoformat()
@@ -545,8 +569,13 @@ def trace_progress_events(
             event["root"] = True
         if span.display_kind:
             event["kind"] = span.display_kind
-        if span.display_params:
-            event["params"] = span.display_params
+        # 製品が付けた工程の名前は、製品の工程の定義の値（params）と分けて送る（#3272）。
+        params = dict(span.display_params)
+        display_name = params.pop(DISPLAY_NAME_PARAM, None)
+        if isinstance(display_name, str) and display_name.strip():
+            event["display_name"] = display_name.strip()[:_DISPLAY_NAME_MAX]
+        if params:
+            event["params"] = params
         if span.attributes:
             event["attributes"] = span.attributes
         if cancelled:
@@ -570,8 +599,10 @@ def trace_progress_events(
 
 
 __all__ = [
+    "DISPLAY_NAME_PARAM",
     "TRACE_SPANS_TABLE",
     "ConnectionFactory",
+    "SpanDisplayNamer",
     "StoredTraceSpan",
     "TraceProduct",
     "TraceSpanOwner",

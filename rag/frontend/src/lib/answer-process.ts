@@ -93,7 +93,7 @@ export function answerStageName(stage: string): string | undefined {
 }
 
 /** RAG の span の名前の文言（root の `TraceDetailsLabelsProvider` で全画面に渡す。段の名前は工程の行と同じ）。 */
-export const RAG_TRACE_DETAILS_LABELS: TraceDetailsLabels = createTraceDetailsLabels(t, { stageName: answerStageName });
+export const RAG_TRACE_DETAILS_LABELS: TraceDetailsLabels = createTraceDetailsLabels(t, { stageName: answerStageName, product: "rag" });
 
 /**
  * 右の列の計測値（結果の説明・LLM の回数）。無ければ undefined。送り直しで API への送信（`llmSends`）が呼び出しより

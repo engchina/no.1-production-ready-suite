@@ -402,6 +402,15 @@ export function RunProcessDetails({
 /** 段の状態（チャットの処理の経過 `ChatProgressStepStatus` と同じ値 + 応答待ち）。 */
 export type RunTimelineStepStatus = ChatProgressStepStatus | "waiting";
 
+/** 段の名前の前の製品名（別の製品の処理の行。#3272）。読み上げでも名前の前に読む。 */
+export function RunTimelineProduct({ product }: { product: string }) {
+  return (
+    <span className="text-fg-muted" data-run-timeline-product="">
+      {`${product} · `}
+    </span>
+  );
+}
+
 export interface RunTimelineStep {
   id: string;
   /** 段の名前（翻訳済み。例「SQL を生成」「ツール: search_documents」）。 */
@@ -421,6 +430,11 @@ export interface RunTimelineStep {
    * 製品は記録をこの形に写すだけにし、描き方は部品が持つ（チャットの処理の経過と実行の詳細で同じ形）。
    */
   details?: RunStepDetails;
+  /**
+   * 別の製品の処理の行の製品名（例「RAG」。#3272）。名前の前に控えめな文字で出す（色だけに頼らない）。製品の境目の行だけに
+   * 渡す（子の行は字下げで分かる）。
+   */
+  product?: string;
   /** 開いて見る自由な中身（結果の表など。`details` の下に出す）。渡すと行に開閉のボタンが付く。 */
   children?: ReactNode;
   /**
@@ -661,6 +675,7 @@ export function RunTimeline({
           const level = stepLevel(step.level);
           const name = (
             <span className={cn("min-w-0 break-words [overflow-wrap:anywhere]", !hasDetails && "flex-1")}>
+              {step.product ? <RunTimelineProduct product={step.product} /> : null}
               <span
                 className={
                   step.status === "failed" ? "text-danger-fg" : step.status === "pending" ? "text-fg-muted" : "text-fg"

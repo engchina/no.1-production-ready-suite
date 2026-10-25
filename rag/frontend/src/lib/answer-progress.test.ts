@@ -49,7 +49,7 @@ describe("answer-progress（Issue 375）", () => {
 
   it("工程の名前は backend の時間切れの文言（ANSWER_STAGE_LABELS）と同じ", () => {
     const source = readFileSync(
-      resolve(__dirname, "../../../backend/app/rag/answer_timeout.py"),
+      resolve(__dirname, "../../../backend/app/rag/span_display.py"),
       "utf-8"
     );
     const block = source.slice(
