@@ -4574,9 +4574,9 @@ async def _validate_final_answer(
     `rag_tools` は Agent が RAG の根拠のツールを持つか（根拠の無い回答に注記するか）。
 
     今のターンに根拠が無いとき（#1879）: 資料に無い・答えられないことだけを述べる回答は注記せずに
-    `skipped`（`absence_only`）。会話の続きで、今のターンが根拠・データのツールで結果を得ずに
-    答えた（前の回答の整形・言い換え。#1835 の `grounded_in_thread` で拒答にしない回答）なら、
-    前のターンの検証で裏付けた根拠（`carried_evidence`）だけで検証する。
+    `skipped`（`absence_only`）。会話の続きで、今のターンが資料の根拠を得ずに答えた（前の回答の
+    整形・言い換え。#1835 の `grounded_in_thread` で拒答にしない回答。検索を呼んで 0 件だった
+    ときも同じ。#3314）なら、前のターンの検証で裏付けた根拠（`carried_evidence`）だけで検証する。
     """
     from app.features.agent.runtime import runtime_repository
 
@@ -4606,8 +4606,11 @@ async def _validate_final_answer(
         if rag_tools and is_absence_only(answer):
             # 資料に無い・答えられないことだけを述べる回答（拒答）は資料の主張を含まない（#1879）。
             return answer, save(validation_content(STATUS_SKIPPED, reason=REASON_ABSENCE_ONLY))
-        if carried and not tool_grounding.grounding_used(run.steps):
-            # 前の回答の整形・言い換え（#1879）は、前のターンで裏付けた根拠で確かめる。
+        if carried and not _read_attachments(run.steps):
+            # 今のターンで資料の根拠を得なかった回答（ツールを呼ばずに前の回答を整形・言い換えた。
+            # #1879。検索・照会が 0 件だったときも同じ。#3314）は、前のターンで裏付けた根拠で
+            # 確かめる（ツールが成功しただけでは根拠を得たことにしない）。添付を読んだ回答は下で
+            # 資料と照らし合わせない。
             groups = carried_evidence_groups(carried, answer)
     if not groups and _read_attachments(run.steps):
         # 利用者が添付したファイルを読んで答えた（#2517）。資料と照らし合わせない（注記しない）。
