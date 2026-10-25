@@ -77,6 +77,7 @@ from .store import (
     AuthStore,
     OracleAuthStore,
 )
+from .visibility import can_view_all_users_data
 
 logger = logging.getLogger(__name__)
 
@@ -995,6 +996,20 @@ class AuthService:
         if all_users:
             return records
         return [record for record in records if record.owner_user_uuid == actor.user_uuid]
+
+    def api_key_names(self, actor: Principal, key_ids: Iterable[str]) -> dict[str, str]:
+        """見ている利用者が見られる API キーの ID → 名前（実行履歴の「MCP（キーの名前）」。#3348）。
+
+        既存のキーの一覧（`list_api_keys`）を、見ている利用者の権限で引く: system_admin は全員の
+        キー、それ以外は自分のキーだけ（「AI 活用」のデータの見え方と同じ。`visibility`）。
+        見られないキー・削除したキーは返さない（呼び出し側は「MCP」だけを出す）。名前のほかは
+        返さない。
+        """
+        wanted = {key_id for key_id in key_ids if key_id}
+        if not wanted:
+            return {}
+        records = self.list_api_keys(actor, all_users=can_view_all_users_data(actor))
+        return {record.key_id: record.name for record in records if record.key_id in wanted}
 
     def create_api_key(
         self, request: ApiKeyCreateRequest, *, actor: Principal

@@ -45,6 +45,7 @@ import {
   HISTORY_KIND_FILTERS,
   HISTORY_KINDS,
   HISTORY_RUN_STATUSES,
+  isCancelledHistory,
   hasActiveHistoryFilters,
   historyDetailPath,
   historyExecutor,
@@ -410,7 +411,10 @@ function HistoryList({
                       header: t("history.column.rating"),
                       className: "whitespace-nowrap",
                       render: (item) =>
-                        item.feedback_rating ? (
+                        // 停止の行（#3348）は評価できない。
+                        isCancelledHistory(item) ? (
+                          <span className="text-fg-muted">—</span>
+                        ) : item.feedback_rating ? (
                           <StatusBadge
                             variant={item.feedback_rating === "good" ? "success" : "warning"}
                             label={feedbackRatingLabel(item.feedback_rating)}
@@ -425,7 +429,7 @@ function HistoryList({
                       align: "right",
                       className: "whitespace-nowrap tnum text-fg-muted",
                       render: (item) =>
-                        item.generation_only || !item.safety_is_safe
+                        item.generation_only || !item.safety_is_safe || isCancelledHistory(item)
                           ? t("history.notExecuted")
                           : formatNumber(item.result_row_count),
                     },
