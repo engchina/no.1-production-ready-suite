@@ -3166,7 +3166,7 @@ test("ローカルコードフォントで英日混在 SQL を表示し業務数
     return counts;
   });
   expect(loaded.every((count) => count > 0)).toBe(true);
-  await expect(sql).toHaveCSS("font-family", '"Google Sans Code", "Noto Sans JP", "Noto Sans SC", "Noto Sans TC", "Noto Sans HK", Roboto, monospace');
+  await expect(sql).toHaveCSS("font-family", '"Google Sans Code", "Noto Sans JP", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", Roboto, monospace');
   const rowLimit = page.getByTestId("nl2sql-direct-sql").getByLabel("取得件数上限");
   await expect(rowLimit).toHaveCSS("font-family", await page.locator("body").evaluate((node) => getComputedStyle(node).fontFamily));
   const cdp = await context.newCDPSession(page);

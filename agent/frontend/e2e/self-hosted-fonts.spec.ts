@@ -92,7 +92,7 @@ async function checkDeferredCjkFallbackFonts(page: Page) {
       for (const kind of ["sans", "mono"] as const) {
         const families = rendered[`${sample.id}-${kind}`];
         expect(families.length, `${sample.id}-${kind}`).toBeGreaterThan(0);
-        expect(families.every((family) => family.startsWith(sample.family)), `${sample.id}-${kind}: ${families.join(", ")}`).toBe(true);
+        expect(families.every((family) => family.startsWith(sample.renderedFamily)), `${sample.id}-${kind}: ${families.join(", ")}`).toBe(true);
       }
     }
   } finally {
