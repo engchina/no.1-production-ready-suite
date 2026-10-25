@@ -238,6 +238,8 @@ jobs:
               - "rag/frontend/src/lib/i18n.ts"
               - "rag/frontend/src/lib/permissions.ts"
               - "rag/frontend/src/lib/stored-citations.fixture.json"
+              # アップロードで受け付ける形式の画面と backend の一致（tests/test_upload_format_contract.py。#3351）。
+              - "rag/frontend/src/lib/upload-selection.ts"
             nl2sql_backend_frontend:
               - "nl2sql/frontend/src/components/layout/nav-config.ts"
               - "nl2sql/frontend/src/features/security/menu-permissions.ts"

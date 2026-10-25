@@ -65,6 +65,7 @@ from rag_parser_core.result import (
 from rag_parser_core.source import (
     SourceModality,
     SourceProfile,
+    is_plain_text_markup,
     template_for_source_profile,
 )
 from rag_parser_core.structured_records import (
@@ -78,6 +79,7 @@ from rag_parser_core.structured_records import (
     structured_records_extraction,
     with_record_boundaries,
 )
+from rag_parser_core.unstructured_compat import ensure_pi_heif_absent_stub
 
 # 共有 contract 型・定数は result.py(軽量)へ移設済み。registry は実装専用とし、backend が
 # registry を読み込まずに型を参照できるようにする。本モジュール固有の定数のみ残す。
@@ -667,6 +669,16 @@ def parse_with_registry(
             warnings=("unsupported_legacy_office_binary",),
             unsupported_reason="legacy_office_binary_not_supported",
         )
+    if _is_unsupported_odt_rtf(source_profile):
+        # ODT / RTF は原本のままでは解析しない(unstructured は pandoc で読むが、pandoc は入れない。
+        # ファイル準備の Office→PDF で PDF にしてから読む。#3351)。
+        return ParserRegistryResult(
+            extraction=None,
+            parser_backend="unsupported",
+            template="unsupported_odt_rtf",
+            warnings=("unsupported_odt_rtf",),
+            unsupported_reason="odt_rtf_not_supported",
+        )
 
     normalized_backend = adapter_backend.strip().casefold()
     if normalized_backend in SERVICE_ADAPTER_BACKENDS:
@@ -1165,10 +1177,21 @@ def _unstructured_adapter_result(
     content_type: str,
 ) -> ParserRegistryResult:
     """Unstructured の partition elements を共通抽出 schema へ再マップする。"""
+    # pi-heif は入れない(#3351)。unstructured の PDF・画像の解析が import する pi_heif を
+    # stub で満たす。
+    ensure_pi_heif_absent_stub()
     partition_module = importlib.import_module("unstructured.partition.auto")
     partition = partition_module.partition
+    suffix: str | None = None
+    if is_plain_text_markup(
+        source_profile.extension if source_profile is not None else None,
+        content_type or (source_profile.content_type if source_profile is not None else ""),
+    ):
+        # .rst / .org を unstructured は拡張子・MIME type で pandoc(入れない)へ回すので、
+        # プレーンテキストとして渡す(#3351)。
+        content_type, suffix = "text/plain", ".txt"
     partition_kwargs = _unstructured_partition_kwargs(source_profile, content_type)
-    with _temporary_source_file(source_bytes, source_profile, content_type) as path:
+    with _temporary_source_file(source_bytes, source_profile, content_type, suffix=suffix) as path:
         partitioned = _call_with_supported_kwargs(
             partition,
             {
@@ -1793,7 +1816,6 @@ def _unstructured_supports_page_breaks(content_type: str, extension: str) -> boo
         ".png",
         ".jpg",
         ".jpeg",
-        ".heic",
     }
 
 
@@ -1808,7 +1830,6 @@ def _unstructured_supports_table_inference(content_type: str, extension: str) ->
             ".jpg",
             ".jpeg",
             ".bmp",
-            ".heic",
         }
     )
 
@@ -4002,8 +4023,10 @@ def _temporary_source_file(
     source_bytes: bytes,
     source_profile: SourceProfile | None,
     content_type: str,
+    *,
+    suffix: str | None = None,
 ) -> Iterator[Path]:
-    suffix = _source_suffix(source_profile, content_type)
+    suffix = suffix or _source_suffix(source_profile, content_type)
     with tempfile.NamedTemporaryFile(prefix="rag-parser-", suffix=suffix) as handle:
         handle.write(source_bytes)
         handle.flush()
@@ -5273,6 +5296,15 @@ def _is_unsupported_legacy_office_binary(source_profile: SourceProfile | None) -
     return (
         source_profile.modality == SourceModality.OFFICE
         and source_profile.unsupported_reason == "legacy_office_binary_not_supported"
+    )
+
+
+def _is_unsupported_odt_rtf(source_profile: SourceProfile | None) -> bool:
+    if source_profile is None:
+        return False
+    return (
+        source_profile.modality == SourceModality.OFFICE
+        and source_profile.unsupported_reason == "odt_rtf_not_supported"
     )
 
 

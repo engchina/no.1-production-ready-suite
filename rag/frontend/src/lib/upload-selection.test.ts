@@ -14,6 +14,16 @@ describe("uploadFileProblem", () => {
     expect(uploadFileProblem(file("huge.PDF", 11), 10)).toBe("tooLarge");
     expect(uploadFileProblem(file("規程.md", 10), 10)).toBeNull();
   });
+
+  it("HEIC / HEIF・EPUB は変換を案内する理由で止め、ODT・RTF・RST・Org は送る", () => {
+    // pandoc・pi-heif を入れないため（#3351）。
+    expect(uploadFileProblem(file("photo.HEIC", 5), 10)).toBe("heicImage");
+    expect(uploadFileProblem(file("photo.heif", 5), 10)).toBe("heicImage");
+    expect(uploadFileProblem(file("book.epub", 5), 10)).toBe("epubBook");
+    for (const name of ["memo.odt", "memo.rtf", "guide.rst", "notes.org"]) {
+      expect(uploadFileProblem(file(name, 5), 10)).toBeNull();
+    }
+  });
 });
 
 describe("mergeUploadSelection", () => {
