@@ -216,13 +216,16 @@ export interface AnswerPlainTextProps {
  */
 export function AnswerPlainText({ text, live = false, lang, children, className, testId }: AnswerPlainTextProps) {
   const contentLang = useMemo(() => resolveContentLang(lang, text), [lang, text]);
+  // 後ろに置くものが無ければ段落が本文だけなので段落に付け、あれば本文だけを包む。
+  const trailing = children !== undefined && children !== null && children !== false;
   return (
     <p
       className={cn("whitespace-pre-wrap text-sm leading-relaxed text-fg", className)}
       aria-live={live ? "polite" : undefined}
+      lang={trailing ? undefined : contentLang}
       data-testid={testId}
     >
-      <ContentLang lang={contentLang}>{text}</ContentLang>
+      {trailing ? <ContentLang lang={contentLang}>{text}</ContentLang> : text}
       {children}
     </p>
   );

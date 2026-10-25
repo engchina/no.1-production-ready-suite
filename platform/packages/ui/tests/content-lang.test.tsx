@@ -149,8 +149,8 @@ describe("共有の部品は利用者の内容に lang を付ける", () => {
   });
 
   it("節に分けない回答の本文（AnswerPlainText）", () => {
-    expect(langOf(html(<AnswerPlainText text={ZH_HANT} testId="plain" />), '[data-testid="plain"] [lang]')).toBe("zh-Hant");
-    expect(langOf(html(<AnswerPlainText text={ZH_HANT} lang={null} testId="plain" />), '[data-testid="plain"] [lang]')).toBeNull();
+    expect(langOf(html(<AnswerPlainText text={ZH_HANT} testId="plain" />), '[data-testid="plain"]')).toBe("zh-Hant");
+    expect(langOf(html(<AnswerPlainText text={ZH_HANT} lang={null} testId="plain" />), '[data-testid="plain"]')).toBeNull();
   });
 
   it("根拠の抜粋（EvidenceCard）は item.lang か本文から判定する", () => {
