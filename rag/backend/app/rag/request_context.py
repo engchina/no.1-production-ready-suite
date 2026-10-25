@@ -1,7 +1,9 @@
 """監査ログ用のリクエストコンテキスト。"""
 
 import hashlib
+import logging
 import re
+import threading
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -9,6 +11,8 @@ from dataclasses import dataclass, field, replace
 from functools import wraps
 
 from app.config import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 TENANT_ID_HEADER = "x-tenant-id"
 USER_ID_HEADER = "x-user-id"
@@ -248,6 +252,41 @@ def current_audit_request_context() -> AuditRequestContext:
     """現在の監査 context を返す。文脈が無ければ何も使えない context（fail-closed。#3250）。"""
     context = _AUDIT_REQUEST_CONTEXT.get()
     return NO_ACCESS_AUDIT_REQUEST_CONTEXT if context is None else context
+
+
+def access_scope_context(reader: str) -> AuditRequestContext:
+    """対象範囲で絞って DB を読む SQL の条件に使う context（`current_audit_request_context`）。
+
+    文脈を作らずに範囲の条件に来た（要求の外の入口が `system_access_context` も利用者の context も
+    作っていない）ときは、黙って 0 件にせず WARNING `no_access_context_read` を出す（`reader`
+    ごとに process で 1 回。#3334）。要求は middleware が必ず context を作るので、ここに来ない。
+    """
+    context = _AUDIT_REQUEST_CONTEXT.get()
+    if context is None:
+        _warn_no_access_context_read(reader)
+        return NO_ACCESS_AUDIT_REQUEST_CONTEXT
+    return context
+
+
+_NO_ACCESS_READ_WARNED: set[str] = set()
+_NO_ACCESS_READ_WARNED_LOCK = threading.Lock()
+
+
+def _warn_no_access_context_read(reader: str) -> None:
+    with _NO_ACCESS_READ_WARNED_LOCK:
+        if reader in _NO_ACCESS_READ_WARNED:
+            return
+        _NO_ACCESS_READ_WARNED.add(reader)
+    logger.warning(
+        "no_access_context_read",
+        extra={
+            "reader": reader,
+            "advice": (
+                "a scoped DB read ran without a request context and returns nothing; "
+                "wrap the entry point in system_access_context / with_system_access"
+            ),
+        },
+    )
 
 
 def caller_owns(owner_user_id_hash: str | None) -> bool:

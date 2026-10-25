@@ -1488,7 +1488,7 @@ def build_agent_mcp_server(request: Request) -> McpServer:
             include_notice=called_with_api_key(request),
         )
 
-    def cancel_run(arguments: AgentCancelRunInput) -> CancelRunOutput:
+    async def cancel_run(arguments: AgentCancelRunInput) -> CancelRunOutput:
         """Run を取り消す（画面の `POST /runs/{id}/cancel` と同じ人。冪等。#3240）。
 
         止められるのは Run を見て運用の操作をしてよい人（実行した利用者・会話の持ち主・
@@ -1497,17 +1497,22 @@ def build_agent_mcp_server(request: Request) -> McpServer:
         （`PLATFORM_API_KEY_RUNS_PER_DAY`）に数えない。
         """
         caller = _principal(request)
-        run = _readable_run(request, arguments.run_id)
+        run = await run_in_threadpool(_readable_run, request, arguments.run_id)
         before = run.status
         if before not in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}:
             try:
-                run = runtime_repository.cancel_run(
-                    run.id, cancelled_by=caller.login_user_id, via=_cancel_via(request)
+                run = await run_in_threadpool(
+                    runtime_repository.cancel_run,
+                    run.id,
+                    cancelled_by=caller.login_user_id,
+                    via=_cancel_via(request),
                 )
             except KeyError as exc:
                 raise McpToolError(
                     RUN_NOT_FOUND_CODE, "Run が見つかりません。", status=404
                 ) from exc
+            # 取り消した Run が始めた NL2SQL のジョブも止める（画面の取消と同じ。#3318）。
+            agent_api._schedule_nl2sql_job_cancel(before, run)
         result = _cancel_result(before, run)
         return CancelRunOutput(
             run_id=run.id,

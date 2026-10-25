@@ -353,9 +353,9 @@ class AgentProfile(BaseModel):
     # Agent を管理し、使える。
     owner_user_uuid: str | None = None
     share_request: AgentShareRequest | None = None
-    # Run が使う版に固定したスキル（`_agent_for_run` が入れる。保存・応答には出さない。#1855）。
+    # Run が使う版に固定したスキル（`agent_for_run` が入れる。保存・応答には出さない。#1855）。
     pinned_skills: list[PinnedSkill] | None = Field(default=None, exclude=True)
-    # Run が使うスキルの宣言（Agent 主体の根拠の取得。#2651）に従ってよいか（`_agent_for_run` が
+    # Run が使うスキルの宣言（Agent 主体の根拠の取得。#2651）に従ってよいか（`agent_for_run` が
     # 入れる。保存・応答には出さない）。固定の中身の無い公開の版は宣言を確かめられないので False。
     caller_planning_allowed: bool = Field(default=True, exclude=True)
 
@@ -2715,7 +2715,7 @@ class AgentRuntimeRepository:
                 )
                 return None
         self._set_builtin_running_locked(run, "実行を開始しました。", claim)
-        return run.model_copy(deep=True), _agent_for_run(agent, run)
+        return run.model_copy(deep=True), agent_for_run(agent, run)
 
     def begin_builtin_resume(
         self, run_id: str, *, claim: RunClaim | None = None
@@ -2762,7 +2762,7 @@ class AgentRuntimeRepository:
         self._set_builtin_running_locked(
             run, "承認・確認の答えを反映して実行を再開しました。", claim
         )
-        return run.model_copy(deep=True), _agent_for_run(agent, run), state_text, decisions
+        return run.model_copy(deep=True), agent_for_run(agent, run), state_text, decisions
 
     def builtin_run_ended(self, run_id: str) -> bool:
         """この実行が新しいツール・モデルの呼び出しを始めてはいけないか（#2609・#2606）。
@@ -6194,7 +6194,7 @@ def _prune_agent_versions(agent: AgentProfile, *, keep: tuple[int, ...] = ()) ->
         agent.versions = [item for item in agent.versions if item.version not in pruned]
 
 
-def _agent_for_run(agent: AgentProfile, run: RunState) -> AgentProfile:
+def agent_for_run(agent: AgentProfile, run: RunState) -> AgentProfile:
     """Run が使う版の内容を重ねた Agent（下書きの Run・版の無い古い Run は現在の内容）。
 
     版の履歴の上限で消えた版を使う Run（承認を待つ間に公開が続いたときなど。#2356）は、下書きでは

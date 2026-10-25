@@ -14,6 +14,9 @@ Agent は Run の利用者のサービストークンで `POST /api/mcp` を呼�
 - `nl2sql_get_job`: `GET /nl2sql/jobs/{job_id}`（本人のジョブだけ。利用者が system_admin なら
   全員のジョブを見られる。画面の「AI 活用」と同じ規則。#1889）。`nl2sql_query` の
   `requirement_session_id` で確認を続けられるのは、確認を始めた本人だけ（#3244）
+- `nl2sql_cancel_job`: 実行中のジョブを止める（`POST /nl2sql/jobs/{id}/cancel` と同じ協調の取消。
+  冪等で、終わったジョブはエラーにせず `result` で返す。止められるのは本人と system_admin〔#3244 の
+  運用の操作〕。Agent は Run の取消で、その Run が始めたジョブを止める。#3318）
 - `nl2sql_cancel_requirement`: SQL の生成前の確認の session を閉じる
   （`POST /nl2sql/query-sessions/{id}/cancel`。利用者が Agent のチャットで
   「データベースの検索は不要」としたとき、Agent の Control Plane が呼ぶ）
@@ -29,6 +32,8 @@ SELECT と FROM が明確になってから SQL を生成・実行する。確�
 サービストークンにプロファイルの範囲の claim（`profile_ids`。業務 Agent のデータの範囲。#1379）が
 あれば、業務プロファイルは「利用者の権限 ∩ claim」で判定する: 範囲外の `profile_id` は 403
 （`PROFILE_SCOPE_FORBIDDEN`）、一覧・推薦は範囲で絞る。claim の無い呼び出しは今までどおり。
+ジョブ（`nl2sql_get_job`・`nl2sql_cancel_job`）と確認の session も、読むたび・操作するたびに
+その時点の claim と利用者の業務プロファイルの権限で判定する（OWASP API1。#3318）。
 """
 
 from __future__ import annotations
@@ -91,6 +96,7 @@ from app.features.nl2sql.profile_access import (
 from app.features.nl2sql.router import _with_requirement
 from app.features.nl2sql.select_ai_readiness import select_ai_credential_missing_message
 from app.features.nl2sql.service import (
+    JOB_CANCELLED_ERROR_CODE,
     JOB_FAILED_ERROR_CODE,
     SCHEMA_CATALOG_EMPTY_ERROR_CODE,
     Nl2SqlPersistenceUnavailable,
@@ -110,7 +116,8 @@ from app.settings import get_settings
 SERVER_NAME = "production-ready-nl2sql"
 # ツールの出力の版（出力の形を変えたら上げる。3 製品の MCP の出力の外枠をそろえる）。
 # 1: すべてのツールの出力に schema_version を足した（#3240）。
-MCP_OUTPUT_SCHEMA_VERSION = 1
+# 2: ジョブを取り消すツール（nl2sql_cancel_job）を足した（#3318）。
+MCP_OUTPUT_SCHEMA_VERSION = 2
 # 業務プロファイルを自動で 1 つに決められなかった nl2sql_query のエラー（#2355）。
 PROFILE_NOT_SELECTED_CODE = "NL2SQL_PROFILE_NOT_SELECTED"
 # そのエラーの message に示す推薦の候補の数。
@@ -345,6 +352,10 @@ class GetJobInput(_Input):
     )
 
 
+class CancelJobInput(_Input):
+    job_id: str = Field(min_length=1, max_length=128, description="nl2sql_query の job_id")
+
+
 class VersionedOutput(BaseModel):
     """ツールの出力の共通部分（出力の形の版）。"""
 
@@ -444,6 +455,30 @@ class RequirementOutput(BaseModel):
 class CancelRequirementOutput(VersionedOutput):
     requirement_session_id: str
     status: str = Field(description="cancelled（閉じた）/ closed（もう閉じていた）")
+
+
+CancelJobResult = Literal["cancelled", "already_cancelled", "already_finished"]
+# 取消の結果の文（#3318。Agent の agent_cancel_run と同じ語彙）。
+_CANCEL_JOB_MESSAGES: dict[str, str] = {
+    "cancelled": "ジョブの取消を受け付けました。実行中の段階の区切りで止まります。",
+    "already_cancelled": "ジョブはすでに取り消されています。",
+    "already_finished": (
+        "ジョブはすでに終わっているため、取り消していません。nl2sql_get_job で結果を読めます。"
+    ),
+}
+
+
+class CancelJobOutput(VersionedOutput):
+    job_id: str
+    status: QueryStatus = Field(description="取消の後のジョブの状態。")
+    result: CancelJobResult = Field(
+        description=(
+            "cancelled=取消を受け付けた（止まると status が error・error_code が JOB_CANCELLED）/ "
+            "already_cancelled=すでに取り消されていた / "
+            "already_finished=終わっていたため変えていない（status が done / error）。"
+        )
+    )
+    message: str
 
 
 class AutoSelectedProfile(BaseModel):
@@ -587,6 +622,34 @@ def _job_origin(request: Request) -> JobOrigin:
         api_key_name=getattr(api_key, "name", None),
         service_token_claims=claims if api_key is None and isinstance(claims, dict) else None,
     )
+
+
+def _cancel_via(request: Request) -> dict[str, str]:
+    """取消の要求に残す入口（MCP と、API キーの ID か Agent の Run の ID。#3318）。
+
+    署名した claim と認証の結果だけを読む（引数からは決めない）。
+    """
+    via = {"via": "mcp"}
+    api_key = getattr(request.state, "api_key", None)
+    if api_key is not None:
+        key_id = getattr(api_key, "key_id", None)
+        if key_id:
+            via["api_key_id"] = str(key_id)
+        return via
+    claims = getattr(request.state, "service_token_claims", None)
+    run_id = claims.get("run_id") if isinstance(claims, dict) else None
+    if isinstance(run_id, str) and run_id:
+        via["agent_run_id"] = run_id
+    return via
+
+
+def _cancel_job_result(job: JobData, *, already_requested: bool) -> CancelJobResult:
+    """取消の結果（終わったジョブはエラーにせず値で返す。Agent の agent_cancel_run と同じ）。"""
+    if job.status not in _TERMINAL_STATUSES:
+        return "already_cancelled" if already_requested else "cancelled"
+    if job.error_code == JOB_CANCELLED_ERROR_CODE:
+        return "already_cancelled"
+    return "already_finished"
 
 
 def _job_error_message(job: JobData) -> str | None:
@@ -756,6 +819,13 @@ def build_mcp_server(request: Request) -> McpServer:
             job = None  # 他人のジョブは存在も明かさない
         if job is None:
             raise HTTPException(status_code=404, detail=_JOB_NOT_FOUND_MESSAGE)
+        # 読むたびにその時点の範囲で判定する（OWASP API1。#3318）: 呼び出し元（業務 Agent）の
+        # claim の外と、利用者が今は使えない業務プロファイルのジョブは、本人のジョブでも返さない
+        # （確認の session の `own_session` と同じ 403）。
+        scoped = scope()
+        if scoped is not None and job.profile_id not in scoped:
+            raise _profile_scope_forbidden(job.profile_id)
+        assert_profile_access(request, job.profile_id)
         return job
 
     def own_session(session_id: str, *, adding: bool = False) -> QuerySessionData:
@@ -1141,6 +1211,33 @@ def build_mcp_server(request: Request) -> McpServer:
         return await wait_for_job(arguments.job_id, arguments.wait_seconds)
 
     @_translate_domain_errors
+    async def cancel_job(arguments: CancelJobInput) -> CancelJobOutput:
+        def run() -> CancelJobOutput:
+            # 本人か system_admin（#3244 の運用の操作）・範囲の判定は nl2sql_get_job と同じ。
+            own_job(arguments.job_id)
+            actor_user_uuid, _ = _actor(request)
+            try:
+                outcome = nl2sql_service.cancel_job(
+                    arguments.job_id,
+                    actor_user_uuid=actor_user_uuid,
+                    actor_can_manage=can_view_all_users_data(principal_from_request(request)),
+                    via=_cancel_via(request),
+                )
+            except PermissionError:
+                outcome = None
+            if outcome is None:
+                raise HTTPException(status_code=404, detail=_JOB_NOT_FOUND_MESSAGE)
+            result = _cancel_job_result(outcome.job, already_requested=outcome.already_requested)
+            return CancelJobOutput(
+                job_id=outcome.job.job_id,
+                status=QueryStatus(outcome.job.status.value),
+                result=result,
+                message=_CANCEL_JOB_MESSAGES[result],
+            )
+
+        return await run_sync_io(run)
+
+    @_translate_domain_errors
     async def cancel_requirement(arguments: CancelRequirementInput) -> CancelRequirementOutput:
         def run() -> CancelRequirementOutput:
             runtime = ontology_router.ontology_runtime
@@ -1216,6 +1313,23 @@ def build_mcp_server(request: Request) -> McpServer:
             handler=get_job,
             output_model=Nl2SqlJobResult,
             permissions=(frozenset({QUERY_GENERATE_PERMISSION}),),
+        ),
+        McpTool(
+            name="nl2sql_cancel_job",
+            title="照会のジョブの取り消し",
+            description=(
+                "nl2sql_query の job_id のジョブ（pending / running）を止めます"
+                "（本人のジョブだけ。利用者が system_admin なら全員のジョブ）。"
+                "利用者が止めると言ったとき、結果を待たないと決めたときに使います。"
+            ),
+            input_model=CancelJobInput,
+            handler=cancel_job,
+            output_model=CancelJobOutput,
+            permissions=(frozenset({QUERY_GENERATE_PERMISSION}),),
+            read_only=False,
+            destructive=True,
+            idempotent=True,
+            open_world=False,
         ),
         McpTool(
             name="nl2sql_cancel_requirement",

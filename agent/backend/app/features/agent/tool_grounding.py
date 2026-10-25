@@ -72,6 +72,7 @@ from app.features.agent.answer_passages import (
 from app.features.agent.chat_attachments import ATTACHMENT_READ_TOOLS
 from app.features.agent.clarification_cancel import CANCEL_TRACE_PREFIX
 from app.features.agent.confirmation import CONFIRMATION_TOOL
+from app.features.agent.job_cancel import RUN_CANCEL_TRACE_PREFIX
 from app.features.agent.support_task import (
     GUIDE_CHECK_TRACE_PREFIX,
     nl2sql_clarification_pending,
@@ -107,12 +108,14 @@ _NON_GROUNDING_TOOLS = frozenset(
         "nl2sql_list_profiles",
         "nl2sql_recommend_profile",
         "nl2sql_cancel_requirement",
+        "nl2sql_cancel_job",
     }
 )
 # Control Plane が自分で呼んだ step の trace_id の接頭辞（最終の検証は回答の確定の後なので
 # ここでは現れないが、念のため数えない）。
 _CONTROL_PLANE_TRACE_PREFIXES = (
     CANCEL_TRACE_PREFIX,
+    RUN_CANCEL_TRACE_PREFIX,
     GUIDE_CHECK_TRACE_PREFIX,
     "answer_validation_",
 )

@@ -100,6 +100,7 @@ from app.features.agent.answer_validation import (
     unexplained_guide_steps,
 )
 from app.features.agent.clarification_cancel import CANCEL_TRACE_PREFIX
+from app.features.agent.job_cancel import RUN_CANCEL_TRACE_PREFIX
 from app.features.agent.support_task import (
     RAG_RETRIEVE_EVIDENCE,
     RAG_SEARCH,
@@ -245,7 +246,9 @@ def _environment_call(step: RunStep) -> bool:
         _succeeded(step)
         and step.tool_call is not None
         and is_environment_tool(step.tool_call.name)
-        and not (step.tool_call.trace_id or "").startswith(CANCEL_TRACE_PREFIX)
+        and not (step.tool_call.trace_id or "").startswith(
+            (CANCEL_TRACE_PREFIX, RUN_CANCEL_TRACE_PREFIX)
+        )
     )
 
 

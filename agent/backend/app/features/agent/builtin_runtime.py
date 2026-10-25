@@ -220,6 +220,11 @@ from app.features.agent.context_window import (
     tools_text,
 )
 from app.features.agent.guide_steps import unresolved_guide_steps, unresolved_guide_steps_message
+from app.features.agent.job_cancel import (
+    NL2SQL_CANCEL_JOB_TOOL,
+    RUN_CANCEL_TRACE_PREFIX,
+    in_flight_nl2sql_jobs,
+)
 from app.features.agent.output_fields import (
     OUTPUT_RETRY_MESSAGE,
     AgentOutputField,
@@ -3354,6 +3359,9 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                 with suppress(KeyError):
                     final_status = runtime_repository.get_run(run_id).status.value
                 if final_status == "cancelled":
+                    # 取り消した Run が始めた NL2SQL のジョブを止める（#3318。取消の後に届いた
+                    # nl2sql_query の結果のジョブも、ここで分かる）。
+                    await cancel_run_nl2sql_jobs(run_id, agent.data_scopes)
                     finish_operation_trace(run_id, status="cancelled")
                 reset_pinned_skills(pinned)
                 run_claim.release_execution(execution)
@@ -3470,6 +3478,9 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                 with suppress(KeyError):
                     final_status = runtime_repository.get_run(run_id).status.value
                 if final_status == "cancelled":
+                    # 取り消した Run が始めた NL2SQL のジョブを止める（#3318。取消の後に届いた
+                    # nl2sql_query の結果のジョブも、ここで分かる）。
+                    await cancel_run_nl2sql_jobs(run_id, agent.data_scopes)
                     finish_operation_trace(run_id, status="cancelled")
                 reset_pinned_skills(pinned)
                 run_claim.release_execution(execution)
@@ -3542,6 +3553,53 @@ async def _apply_clarification_cancel(
     return records
 
 
+async def _control_plane_nl2sql_call(
+    run: Any,
+    connection: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    trace_id: str,
+    data_scopes: data_scope.AgentDataScopes | None = None,
+) -> ToolResult | None:
+    """Control Plane が NL2SQL の後始末のツールを Run の利用者のサービストークンで呼ぶ。
+
+    ポリシー・監査・step はモデルのツールと同じ境界で、予算には数えない。Run を取り消した後でも
+    送る（`cleanup`。#2609）。接続・ツールが無ければ None。
+    """
+    function_name = f"{connection}{MCP_TOOL_SEPARATOR}{tool_name}"
+    config = next(
+        (
+            item
+            for item in runtime_config_store.list_mcp_servers()
+            if mcp_function_name(item.server_id, tool_name) == function_name
+        ),
+        None,
+    )
+    if config is None:
+        return None
+    context = _run_tool_context(run)
+    try:
+        listed = await asyncio.to_thread(
+            list_mcp_connection_tools, config.server_id, context=context
+        )
+    except (KeyError, ExternalToolError):
+        return None
+    tool = next((item for item in listed.tools if item.name == tool_name), None)
+    if tool is None:
+        return None
+    definition = mcp_tool_definition(config, tool)
+    recorder = _ToolRecorder(run.id)
+    recorder.data_scopes = dict(data_scopes or {})
+    _step_id, result = await recorder.call(
+        ToolCall(name=definition.name, arguments=arguments, trace_id=trace_id),
+        definition=definition,
+        handler=mcp_tool_handler(config, tool),
+        cleanup=True,
+    )
+    return result
+
+
 async def _cancel_requirement_session(
     run: Any,
     connection: str,
@@ -3552,49 +3610,71 @@ async def _cancel_requirement_session(
 ) -> str:
     """NL2SQL の SQL の生成前の確認の session を閉じる（`nl2sql_cancel_requirement`。#1441）。
 
-    Control Plane が Run の利用者のサービストークンで呼ぶ（ポリシー・監査・step はモデルのツールと
-    同じ境界。予算には数えない）。閉じられなくても Run は続ける（session は操作が途絶えると期限で
-    閉じる）。返すのは記録に残す状態（cancelled / closed / failed / unavailable）。
+    閉じられなくても Run は続ける（session は操作が途絶えると期限で閉じる）。確認をやめた後の
+    session の後始末は、Run を取り消した後でも閉じる（#2609）。返すのは記録に残す状態
+    （cancelled / closed / failed / unavailable）。
     """
-    function_name = f"{connection}{MCP_TOOL_SEPARATOR}{NL2SQL_CANCEL_TOOL}"
-    config = next(
-        (
-            item
-            for item in runtime_config_store.list_mcp_servers()
-            if mcp_function_name(item.server_id, NL2SQL_CANCEL_TOOL) == function_name
-        ),
-        None,
+    result = await _control_plane_nl2sql_call(
+        run,
+        connection,
+        NL2SQL_CANCEL_TOOL,
+        {"requirement_session_id": session_id},
+        trace_id=trace_id,
+        data_scopes=data_scopes,
     )
-    if config is None:
+    if result is None:
         return "unavailable"
-    context = _run_tool_context(run)
-    try:
-        listed = await asyncio.to_thread(
-            list_mcp_connection_tools, config.server_id, context=context
-        )
-    except (KeyError, ExternalToolError):
-        return "unavailable"
-    tool = next((item for item in listed.tools if item.name == NL2SQL_CANCEL_TOOL), None)
-    if tool is None:
-        return "unavailable"
-    definition = mcp_tool_definition(config, tool)
-    recorder = _ToolRecorder(run.id)
-    recorder.data_scopes = dict(data_scopes or {})
-    _step_id, result = await recorder.call(
-        ToolCall(
-            name=definition.name,
-            arguments={"requirement_session_id": session_id},
-            trace_id=trace_id,
-        ),
-        definition=definition,
-        handler=mcp_tool_handler(config, tool),
-        # 確認をやめた後の session の後始末は、Run を取り消した後でも閉じる（#2609）。
-        cleanup=True,
-    )
     if not result.success or not isinstance(result.output, dict):
         return "failed"
     status = result.output.get("status")
     return status if isinstance(status, str) and status else "cancelled"
+
+
+async def cancel_run_nl2sql_jobs(
+    run_id: str, data_scopes: data_scope.AgentDataScopes | None = None
+) -> None:
+    """取り消した Run が始めて、まだ終わっていない NL2SQL のジョブを止める（#3318）。
+
+    Run の取消（#2691）では呼び先の NL2SQL のジョブは止まらないため、Control Plane が
+    `nl2sql_cancel_job` を Run の利用者のサービストークンで送る（`job_cancel`）。`data_scopes` は
+    Run が使う版のデータの範囲（ジョブを作ったときと同じ claim。省略すると Run の版から引く）。
+    止められなくても取消は済んでいる（ジョブは worker の上限で終わる）。
+    """
+    from app.features.agent.runtime import RunStatus, agent_for_run, runtime_repository
+
+    with bind_log_context(run_id=run_id):
+        try:
+            run = await asyncio.to_thread(runtime_repository.get_run, run_id)
+            if run.status != RunStatus.CANCELLED:
+                return
+            jobs = in_flight_nl2sql_jobs(list(run.steps))
+            if not jobs:
+                return
+            if data_scopes is None:
+                agents = await asyncio.to_thread(runtime_repository.list_agents)
+                agent = next((item for item in agents if item.id == run.agent_id), None)
+                data_scopes = agent_for_run(agent, run).data_scopes if agent is not None else None
+            cancelled: list[str] = []
+            for job_id in jobs:
+                result = await _control_plane_nl2sql_call(
+                    run,
+                    data_scope.NL2SQL_CONNECTION_ID,
+                    NL2SQL_CANCEL_JOB_TOOL,
+                    {"job_id": job_id},
+                    trace_id=f"{RUN_CANCEL_TRACE_PREFIX}{run.id}_{job_id}",
+                    data_scopes=data_scopes,
+                )
+                if result is not None and result.success:
+                    cancelled.append(job_id)
+            logger.info(
+                "builtin_runtime_nl2sql_jobs_cancelled",
+                extra={"run_id": run_id, "requested": len(jobs), "cancelled": len(cancelled)},
+            )
+        except Exception as exc:  # noqa: BLE001 - 止められなくても Run の取消は済んでいる
+            logger.warning(
+                "builtin_runtime_nl2sql_job_cancel_failed",
+                extra={"run_id": run_id, "exception_type": type(exc).__name__},
+            )
 
 
 async def close_requirement_sessions(run_id: str, sessions: list[dict[str, Any]]) -> None:

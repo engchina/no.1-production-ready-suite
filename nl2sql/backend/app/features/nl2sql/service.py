@@ -1222,6 +1222,19 @@ JOB_INTERRUPTED_ERROR_CODE = "JOB_INTERRUPTED"
 _JOB_INTERRUPTED_MESSAGE = "サーバ再起動前に完了しなかったため、ジョブを終了扱いにしました。"
 
 
+# 取消の要求のドキュメントに残す入口の項目（MCP の nl2sql_cancel_job。#3318）。
+_JOB_CANCEL_VIA_KEYS = frozenset({"via", "api_key_id", "agent_run_id"})
+
+
+@dataclass(frozen=True, slots=True)
+class JobCancelOutcome:
+    """ジョブの取消の要求の結果（MCP の nl2sql_cancel_job。#3318）。"""
+
+    job: JobData
+    # この要求の前から取消を要求済みだった（実行中のジョブだけ）。
+    already_requested: bool
+
+
 class JobCancelledError(RuntimeError):
     """利用者要求による job の協調キャンセル(stage 境界で検出)。"""
 
@@ -9197,10 +9210,29 @@ class Nl2SqlService:
         actor_user_uuid: str = "",
         actor_can_manage: bool = False,
     ) -> JobData | None:
-        """実行中 job の協調キャンセルを要求する(stage 境界で停止)。
+        """実行中 job の協調キャンセルを要求する(stage 境界で停止)。画面の取消。
+
+        terminal な job には no-op。アクセス制御は get_job と同一。
+        """
+        outcome = self.cancel_job(
+            job_id, actor_user_uuid=actor_user_uuid, actor_can_manage=actor_can_manage
+        )
+        return outcome.job if outcome is not None else None
+
+    def cancel_job(
+        self,
+        job_id: str,
+        *,
+        actor_user_uuid: str = "",
+        actor_can_manage: bool = False,
+        via: Mapping[str, str] | None = None,
+    ) -> JobCancelOutcome | None:
+        """実行中 job の協調キャンセルを要求し、要求の前の状態も返す（MCP の取消。#3318）。
 
         terminal な job には no-op。アクセス制御は get_job と同一。job を実行している
         worker が別プロセスでも届くよう、要求は repository の専用ドキュメントにも書く。
+        要求のドキュメントには操作した人（`actor_user_uuid`）と入口（`via`。MCP なら
+        `{"via": "mcp", ...}`）を残す。2 回目以降の要求は最初の要求の記録を上書きしない。
         """
         job = self._load_job_record(job_id)
         if job is None:
@@ -9212,22 +9244,43 @@ class Nl2SqlService:
         )
         with self._lock:
             in_flight = job.status in _IN_FLIGHT_JOB_STATUSES
+            already_requested = in_flight and job.cancel_requested
             if in_flight:
                 job.cancel_requested = True
         if in_flight and self._incremental_repository is not None:
-            self._persist_entities(
-                [
-                    (
-                        _JOB_CANCEL_COLLECTION,
-                        job_id,
-                        {
-                            "job_id": job_id,
-                            "requested_at": _utc_now(),
-                            "actor_user_uuid": actor_user_uuid,
-                        },
+            if not already_requested:
+                # 別のプロセスが受けた要求は、要求のドキュメントで分かる（job の文書を読み直した
+                # 手元の job は印を持たない）。
+                try:
+                    already_requested = (
+                        self._incremental_repository.get_document(_JOB_CANCEL_COLLECTION, job_id)
+                        is not None
                     )
-                ]
-            )
+                except Exception as exc:
+                    self._raise_incremental_repository_failure(
+                        operation="job_cancel",
+                        exc=exc,
+                        operation_error_code="job_query_failed",
+                    )
+            if not already_requested:
+                self._persist_entities(
+                    [
+                        (
+                            _JOB_CANCEL_COLLECTION,
+                            job_id,
+                            {
+                                "job_id": job_id,
+                                "requested_at": _utc_now(),
+                                "actor_user_uuid": actor_user_uuid,
+                                **{
+                                    key: value
+                                    for key, value in (via or {}).items()
+                                    if key in _JOB_CANCEL_VIA_KEYS
+                                },
+                            },
+                        )
+                    ]
+                )
             # job の文書にも印を付ける。worker は stage の保存で読む job の文書からキャンセル要求を
             # 知り、stage の境界ごとの確認の往復を省く（#904）。worker の保存は job の文書へ差分を
             # 重ねる（fence 付きの更新）ため、この印は消えない。
@@ -9241,11 +9294,24 @@ class Nl2SqlService:
                     exc=exc,
                     operation_error_code="incremental_document_save_failed",
                 )
-        return self.get_job(
+        if in_flight:
+            logger.info(
+                "nl2sql_job_cancel_requested",
+                extra={
+                    "job_id": job_id,
+                    "actor_user_uuid": actor_user_uuid,
+                    "via": (via or {}).get("via", ""),
+                    "already_requested": already_requested,
+                },
+            )
+        data = self.get_job(
             job_id,
             actor_user_uuid=actor_user_uuid,
             actor_can_manage=actor_can_manage,
         )
+        if data is None:
+            return None
+        return JobCancelOutcome(job=data, already_requested=already_requested)
 
     def get_job(
         self,
