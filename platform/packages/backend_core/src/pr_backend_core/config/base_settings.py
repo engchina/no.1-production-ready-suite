@@ -4,10 +4,11 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .env import PlatformEnvSourcesMixin
+from .timezone import TimezoneSettings
 from .tracing import TracingSettings
 
 
-class BaseServiceSettings(PlatformEnvSourcesMixin, TracingSettings, BaseSettings):
+class BaseServiceSettings(PlatformEnvSourcesMixin, TracingSettings, TimezoneSettings, BaseSettings):
     """3 サービス共通の最小設定。
 
     各サービスはこれを継承し、自分のドメイン設定（OCI/Oracle 接続等）を追加する。

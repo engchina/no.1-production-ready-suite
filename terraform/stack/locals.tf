@@ -165,7 +165,10 @@ EOT
   # データの置き場所（PLATFORM_LOCAL_STORAGE_DIR）と model-settings.json は書かず、各製品の Settings の既定値を使う
   # （データは /u01/data/production-ready-<製品>、model-settings.json は platform/.env と同じ場所で 3 製品が共有）。
   # Cookie は HTTPS が on なら Secure にする（3 製品で同じ。#1316）。
+  # 時間帯（PLATFORM_TIMEZONE。#3255）は suite-init.sh が Compute の OS の時間帯にも使う。
   platform_env = <<-EOT
+PLATFORM_TIMEZONE=${var.timezone}
+
 PLATFORM_OCI_REGION=${var.region}
 PLATFORM_OCI_COMPARTMENT_ID=${var.compartment_ocid}
 
@@ -233,6 +236,7 @@ EOT
     products            = join(" ", local.selected_products)
     rag_services        = var.deploy_rag ? join(" ", local.rag_services) : ""
     region              = var.region
+    timezone            = var.timezone
     wallet_content      = data.external.wallet_files.result.wallet_content
     wallet_dir_host     = local.wallet_dir_host
   }))

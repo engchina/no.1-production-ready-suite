@@ -1069,3 +1069,28 @@ def test_platform_and_product_env_examples_load(monkeypatch: pytest.MonkeyPatch)
     assert all(origin.startswith("http://") for origin in settings.cors_origins)
     assert settings.oci_enterprise_ai_models == []
     assert settings.oracle_password in ("", None)
+
+
+def test_settings_today_uses_common_timezone_not_os_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """基準日の既定は共通の設定の時間帯（PLATFORM_TIMEZONE。既定 Asia/Tokyo）の今日（#3255）。"""
+    from datetime import UTC, date, datetime
+
+    import pr_backend_core.timezones as timezones_module
+
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[no-untyped-def]
+            # 2026-10-25 01:30 JST（UTC では前の日）。
+            return datetime(2026, 10, 24, 16, 30, tzinfo=UTC).astimezone(tz)
+
+    monkeypatch.setattr(timezones_module, "datetime", _FixedDatetime)
+    settings = config_module.get_settings()
+    assert settings.timezone == "Asia/Tokyo"
+    assert config_module.settings_today() == date(2026, 10, 25)
+    monkeypatch.setattr(settings, "timezone", "UTC")
+    assert config_module.settings_today() == date(2026, 10, 24)
+
+
+def test_platform_timezone_rejects_fixed_offsets() -> None:
+    with pytest.raises(ValidationError):
+        config_module.Settings(timezone="+09:00")

@@ -3530,3 +3530,17 @@ def test_requirement_context_includes_authorized_attachment_tables() -> None:
     assert table["columns"][0]["data_type"] == "NUMBER"
     assert "rows" not in table
     assert "sample_values" not in table["columns"][0]
+
+
+def test_requirement_today_uses_common_timezone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """相対的な期間の基準日は共通の設定の時間帯（PLATFORM_TIMEZONE。#3255）の今日。"""
+    calls: list[object] = []
+
+    def fake_local_today(settings: object) -> date:
+        calls.append(settings)
+        return TODAY
+
+    monkeypatch.setattr(ontology_router_module, "local_today", fake_local_today)
+    runtime = OntologyApiRuntime(legacy_service=_LegacyService(), store=InMemoryOntologyStore())
+    assert runtime._requirement_today() == TODAY
+    assert calls == [get_settings()]

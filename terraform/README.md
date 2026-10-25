@@ -74,6 +74,23 @@ Resource Manager の画面では製品を選ばず、RAG / NL2SQL / Agent Contro
   **送信元 = Compute の subnet の CIDR、TCP `1522`** の ingress の規則を足してください（同じ subnet なら、その subnet 自身の CIDR から）。
   規則の一覧は直下の [README.md](../README.md#配備の前に-vcn-の-security-list) にあります。
 - DB の password / user / DSN に single quote は使えません（共通 `.env` では値を single quote で囲むため）。
+- **時間帯（#3255）**: 時刻は UTC で保存します（3 製品の DB の session の時間帯は、Compute の OS の時間帯に関わらず
+  `'+00:00'` に固定します。`pr_backend_core.oracle_session`）。stack の `timezone`（既定 `Asia/Tokyo`）は Compute の OS と
+  共通の設定 `PLATFORM_TIMEZONE`（今日〔検索・期間の基準日〕と既定の時間帯）に使い、ADB の時間帯（`DBTIMEZONE`）は変えません
+  （OCI の Terraform provider の `oci_database_autonomous_database` に時間帯の引数が無く、stack は DB に接続しないため）。
+  ADB の時間帯も合わせるときは、ADMIN で次を実行し、ADB を再起動します（再起動の間は 3 製品が DB を使えません。共有の ADB では
+  使っている全員に確かめてから）。
+  ```sql
+  SELECT DBTIMEZONE FROM DUAL;                -- 今の値（既定 +00:00）
+  ALTER DATABASE SET TIME_ZONE = 'Asia/Tokyo'; -- PLATFORM_TIMEZONE と同じ IANA の地域名
+  -- OCI コンソールで ADB を再起動する（「その他のアクション › 再起動」）。その後:
+  SELECT DBTIMEZONE FROM DUAL;                -- Asia/Tokyo
+  ```
+  - `ALTER DATABASE SET TIME_ZONE` は `TIMESTAMP WITH LOCAL TIME ZONE` の列がある DB では `ORA-30079` で失敗します（3 製品の表には無い）。
+  - DB の時間帯を変えても `SYSDATE` / `SYSTIMESTAMP` は UTC のままです（ADB の `SYSDATE_AT_DBTIMEZONE` の既定 `FALSE`）。
+    **`SYSDATE_AT_DBTIMEZONE` を `TRUE` にしない**でください（3 製品は `SYSTIMESTAMP` で書いた時間帯の無い `TIMESTAMP` の列を UTC として
+    読むため、時刻が 9 時間ずれます）。
+  - 参考: [Autonomous AI Database の SYSDATE_AT_DBTIMEZONE](https://docs.oracle.com/en/cloud/paas/autonomous-database/serverless/adbsb/autonomous-initialization-parameters.html)。
 - ADB の DDL は Terraform にも cloud-init にも持ちません。各製品の `init_script.sh` がアプリの CLI（冪等）で作成・更新します。
   作成・更新に失敗しても backend は起動します（画面の システムテーブル から直せる）が、配備の最後の確認が `check: <製品> schema NG` で失敗します（[配備が正常かの確認](#配備が正常かの確認1642)）。
 
@@ -228,7 +245,7 @@ Compute には `platform/.env` を 1 つと、製品ごとの `backend/.env` を
 
 | ファイル | 内容 | 接頭辞 |
 |---|---|---|
-| `platform/.env` | 3製品共通の設定（ADB 接続・OCI の region / compartment・アップロード保存先・構成管理者 `PLATFORM_ADMIN_*`・サービス間 token の署名鍵 `PLATFORM_SERVICE_TOKEN_SECRET`・`PLATFORM_AUTH_COOKIE_SECURE`（`https_enabled` と同じ値）・ログインの Cookie 名 `PLATFORM_AUTH_SESSION_COOKIE_NAME` / `PLATFORM_AUTH_CSRF_COOKIE_NAME`）。1 台の Compute では 3 製品が同じファイルを読み書きする（システム設定画面の保存先）。既にあれば上書きしない | `PLATFORM_` |
+| `platform/.env` | 3製品共通の設定（ADB 接続・OCI の region / compartment・アップロード保存先・構成管理者 `PLATFORM_ADMIN_*`・サービス間 token の署名鍵 `PLATFORM_SERVICE_TOKEN_SECRET`・`PLATFORM_AUTH_COOKIE_SECURE`（`https_enabled` と同じ値）・時間帯 `PLATFORM_TIMEZONE`（`timezone` と同じ値。#3255）・ログインの Cookie 名 `PLATFORM_AUTH_SESSION_COOKIE_NAME` / `PLATFORM_AUTH_CSRF_COOKIE_NAME`）。1 台の Compute では 3 製品が同じファイルを読み書きする（システム設定画面の保存先）。既にあれば上書きしない | `PLATFORM_` |
 | `<製品>/backend/.env` | その製品だけの設定 | `RAG_` / `NL2SQL_` / `AGENT_` |
 
 `model-settings.json` は `platform/.env` と同じ場所の 1 つを 3 製品で共有し、アップロードの原本などのデータは製品ごとの
@@ -434,6 +451,7 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
 
 | 項目 | Oracle Linux 9 の Compute |
 |---|---|
+| 時間帯 | stack の `timezone`（既定 `Asia/Tokyo`。#3255）。cloud-init の `timezone` と、`suite-init.sh` の `configure_timezone`（`platform/.env` の `PLATFORM_TIMEZONE` を `timedatectl set-timezone` で。同じなら変えない。再配備でも効く）が合わせる。不正な値は配備の最初で失敗する。時刻の保存は UTC のまま |
 | ログイン・実行ユーザー | `opc`（`ssh opc@<IP>`。3 製品のプロセスと repository の所有者。sudo は OCI の image の設定のまま無制限） |
 | package | `dnf`。BaseOS / AppStream だけを使い、EPEL・CodeReady Builder は有効にしない。Nginx は module `nginx:1.24`、Node.js は module `nodejs:24`（入らなければ公式の tarball を SHASUMS256 で確かめて `/usr/local/lib/nodejs`）。Python は今までどおり uv の `uv python install 3.12` |
 | Nginx | site は `/etc/nginx/conf.d/production-ready-suite.conf`。worker のユーザーは `nginx`、ログは `/var/log/nginx/production-ready-<製品>-*.log` |

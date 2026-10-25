@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from pr_backend_core.logging import safe_exception_fields
 from pydantic import ValidationError
 
+from app.config import settings_today
 from app.rag.extraction_field_adapter import (
     FieldDefinition,
     extract_json_array,
@@ -73,7 +74,7 @@ async def read_field_conditions(
         return []
     context = (
         f"項目の定義: {field_definitions_prompt(list(field_defs))}\n"
-        f"今日の日付: {(today or date.today()).isoformat()}"
+        f"今日の日付: {(today or settings_today()).isoformat()}"
     )
     try:
         raw = await llm.generate(question, context, system_prompt=FIELD_FILTER_SYSTEM_PROMPT)

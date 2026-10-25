@@ -10,6 +10,7 @@ import os
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Self
@@ -30,12 +31,14 @@ from pr_backend_core.chat_history_window import (
 )
 from pr_backend_core.config import (
     PlatformEnvSourcesMixin,
+    TimezoneSettings,
     TracingSettings,
     platform_env_file,
     product_env_file,
     product_settings_config,
     settings_env_name,
 )
+from pr_backend_core.timezones import local_today
 from pr_system_settings.auth.domain import DEFAULT_CSRF_COOKIE_NAME, DEFAULT_SESSION_COOKIE_NAME
 from pr_system_settings.chat_attachments.limits import (
     CHAT_ATTACHMENT_DEFAULT_MAX_BYTES,
@@ -406,7 +409,9 @@ def resolve_ingestion_queue_concurrency(
     )
 
 
-class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, TracingSettings, BaseSettings):
+class Settings(
+    PlatformEnvSourcesMixin, ModelSecretStateMixin, TracingSettings, TimezoneSettings, BaseSettings
+):
     """環境変数ベースの設定。旧名（属性名と同じ環境変数名）は読まない（#211）。"""
 
     # 環境変数名は属性名から決める（共通の属性は `PLATFORM_*`、それ以外は `RAG_*`。#211）。
@@ -2822,6 +2827,15 @@ def get_settings() -> Settings:
     PARSER_SETTINGS_STORE.reload_if_changed(settings)
     LANGUAGE_PACK_STORE.reload_if_changed(resolve_language_pack_file(settings))
     return settings
+
+
+def settings_today() -> date:
+    """共通の設定の時間帯（`PLATFORM_TIMEZONE`。既定 Asia/Tokyo）の今日（#3255）。
+
+    OS の時間帯に左右されない。検索の基準日（`as_of`）・業務ガイドの期間・LLM に渡す
+    「今日の日付」の既定に使う。
+    """
+    return local_today(get_settings())
 
 
 def reset_settings_cache() -> None:

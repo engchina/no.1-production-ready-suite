@@ -44,7 +44,7 @@ from app.clients.oracle_read_stats import (
     read_rows_per_round_trip,
     rows_per_round_trip,
 )
-from app.config import Settings, get_settings
+from app.config import Settings, get_settings, settings_today
 from app.rag.chunking import Chunk
 from app.rag.chunking_small_to_big import FIRST_PAGE_CONTEXT_KEY, engine_search_text
 from app.rag.extraction_field_adapter import (
@@ -13090,7 +13090,7 @@ def _classification_where(filters: Mapping[str, str]) -> tuple[list[str], dict[s
     clauses.append(
         "COALESCE(JSON_VALUE(d.classification, '$.effective_to'), '9999-12-31') > :filter_as_of"
     )
-    binds["filter_as_of"] = (filters.get("as_of") or "").strip() or date.today().isoformat()
+    binds["filter_as_of"] = (filters.get("as_of") or "").strip() or settings_today().isoformat()
     return clauses, binds
 
 

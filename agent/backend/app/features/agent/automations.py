@@ -39,7 +39,7 @@ from app.features.agent.runtime import (
     RunStatus,
     agent_unavailable_reason,
 )
-from app.features.agent.timezones import DEFAULT_TIMEZONE, resolve_timezone, timezone_name
+from app.features.agent.timezones import default_timezone_name, resolve_timezone, timezone_name
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,8 @@ class AutomationSchedule(BaseModel):
     weekdays: list[int] = Field(default_factory=lambda: [0])
     # 毎時の分。
     minute: int = Field(default=0, ge=0, le=59)
-    timezone: str = DEFAULT_TIMEZONE
+    # 省いたときは共通の設定の時間帯（PLATFORM_TIMEZONE。#3255）。
+    timezone: str = Field(default_factory=default_timezone_name)
 
     @field_validator("time")
     @classmethod

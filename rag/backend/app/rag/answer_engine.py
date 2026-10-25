@@ -64,6 +64,7 @@ from app.config import (
     enterprise_ai_reasoning_effort_to_send,
     enterprise_ai_seed,
     enterprise_ai_vision_model_id,
+    settings_today,
 )
 from app.rag.answer_metrics import score_answer_evaluation
 from app.rag.answer_prompts import prompt_overrides
@@ -2858,8 +2859,8 @@ def _document_name_targets(
 
 
 def _today() -> date:
-    """今日の日付(基準日の既定。テストで差し替える)。"""
-    return date.today()
+    """今日の日付(基準日の既定。共通の設定の時間帯。#3255。テストで差し替える)。"""
+    return settings_today()
 
 
 def _with_effective_as_of(request: SearchRequest) -> SearchRequest:

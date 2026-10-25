@@ -36,6 +36,7 @@ from typing import Any, Literal
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.knowledge.runtime_knowledge import label_matches, parse_runtime_terms
 
+from app.config import settings_today
 from app.schemas.classification import category_label
 from app.schemas.support_guide import (
     SUPPORT_GUIDE_BOOLEAN_VALUES,
@@ -589,7 +590,7 @@ def _candidates(
 ) -> list[_Candidate]:
     """期間・照合の点・適用範囲に通る候補（点の高い順、同点は guide_id の順。決定的）。"""
     items = list(guides)
-    today = today or date.today()
+    today = today or settings_today()
     context = context if context is not None else build_guide_context(query.text, items)
     result: list[_Candidate] = []
     for guide_id, revision, content in items:
