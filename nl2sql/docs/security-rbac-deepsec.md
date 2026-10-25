@@ -143,26 +143,28 @@ NL2SQL 固有の `NL2SQL_APP_ROLE_PERMISSIONS` / `NL2SQL_APP_ROLE_PROFILES` / `N
   そのロールが他の製品の権限テーブル（`RAG_ROLE_PERMISSIONS` / `AGENT_ROLE_PERMISSIONS`）に持つ権限コードを、
   操作者が製品ごとにすべて持っていることも要求する（製品をまたぐ権限昇格の防止）。
 
-## 「AI 活用」の下の機能のデータの見え方（#1889・#1928・#1954）
+## 「AI 活用」の下の機能のデータの見え方（#1889・#1954・#3244）
 
 3 製品共通の規則（[backend-standard.md](../../platform/docs/backend-standard.md)「「AI 活用」の下の機能のデータの見え方」）:
 **system_admin は全員のデータ、それ以外の利用者は自分のデータだけ**。判定は `pr_system_settings.auth.visibility`。
 `nl2sql.feedback.manage` などの製品の管理権限は、「AI 活用」の画面で全員を見る理由にしない。他人のデータの詳細・操作は 404。
-system_admin は他の利用者のデータに、本人と同じすべての操作ができる（#1928。実行するのは操作した system_admin 自身）。
+system_admin が他の利用者のデータにできるのは閲覧と運用の操作（停止・削除）だけで、新しい実行・内容を足す操作（続きの質問・SQL の実行・回答前の確認・評価・名前の変更）は持ち主だけ（見える他人のデータは 403 で `OTHERS_CONTENT_FORBIDDEN_MESSAGE`。#3244。#1928 を置き換え）。
 実行履歴の行は、実行した人と会話の持ち主の両方に見える（#1954。判定は `can_access_run` と同じ範囲）。利用量・API キーの
 上限（キーごと）・監査（実行履歴の `actor_user_uuid`・実行のログ）は実行した人に数える。
 
 | 画面 | API | 一般の利用者 | system_admin |
 |---|---|---|---|
 | チャット | `GET /nl2sql/chats` | 本人の会話 | 全員の会話。応答の `actor_display_name`（共通の表示名。#1696）を、他の利用者の会話（`owned=false`）の履歴の日時に添える。`owned` で本人の会話かを返す（持ち主の UUID は出さない） |
-| チャット | `GET`・`PATCH`・`DELETE /nl2sql/chats/{id}` | 本人の会話（他人は 404） | 全員の会話を見て、名前の変更・削除ができる |
-| チャット | `GET /nl2sql/chats/{id}`（入力欄） | — | 他の利用者の会話（`conversation.owned=false`）を開いているときだけ、入力欄の直上に「この会話の持ち主にも、回答と途中の結果が見えます」（`ChatComposer` の `notice`。#1954） |
-| チャット | `GET /nl2sql/chats/{id}` のターン | 本人の会話のすべてのターン（system_admin が送ったターンを含む） | 同じ。持ち主以外が送ったターンには `sender_display_name`（共通の表示名。引けない利用者は空、持ち主のターンは null）を付け、画面は質問の吹き出しの上に「〈名前〉 が送信」と出す（送り手の UUID は出さない） |
-| チャット | `POST /nl2sql/jobs`（続き）・`POST /jobs/{id}/execute` | 本人の会話（他人は 404） | 全員の会話（#1928）。ジョブ・実行の actor は送った system_admin で、権限・業務プロファイル・SQL の実行の接続（#904 の system_admin 用の接続）・実行履歴の利用者も system_admin。会話の持ち主は変えない（持ち主も system_admin が送ったターンの後に続けられ、そのターンの SQL を自分の接続で実行できる） |
+| チャット | `GET`・`DELETE /nl2sql/chats/{id}` | 本人の会話（他人は 404） | 全員の会話を見て、削除ができる |
+| チャット | `PATCH /nl2sql/chats/{id}`（名前の変更） | 本人の会話（他人は 404） | 本人の会話だけ。他の利用者の会話は 403（#3244） |
+| チャット | `GET /nl2sql/chats/{id}`（入力欄） | — | 他の利用者の会話（`conversation.owned=false`）を開いているときは、入力欄・「実行」・履歴の名前の変更を出さず、入力欄の代わりに閲覧だけの案内（処理中なら「停止」）を出す（#3244） |
+| チャット | `GET /nl2sql/chats/{id}` のターン | 本人の会話のすべてのターン（#3244 より前に system_admin が送ったターンを含む） | 同じ。持ち主以外が送ったターンには `sender_display_name`（共通の表示名。引けない利用者は空、持ち主のターンは null）を付け、画面は質問の吹き出しの上に「〈名前〉 が送信」と出す（送り手の UUID は出さない） |
+| チャット | `POST /nl2sql/jobs`（続き）・`POST /jobs/{id}/execute` | 本人の会話（他人は 404）。持ち主は #3244 より前に system_admin が送ったターンの後にも続けられ、そのターンの SQL を自分の接続で実行できる | 本人の会話だけ。他の利用者の会話は 403（#3244。判定は `_assert_chat_owner_adds`。ジョブも実行も作らない） |
 | チャット | `POST /jobs/{id}/execution-result`（ジョブの中で実行した結果の行） | 本人が送ったターン（ほかは 404） | 同じ。行は送った人の権限と接続で取ったものなので、送った人だけが受け取る（ほかの人は 404 で、「もう一度実行」で自分の権限と接続で実行する。受け取らない人の要求で送った人の行を消さない） |
-| チャット・SQL 生成 | `GET /nl2sql/jobs/{id}`・`/trace`・`POST /jobs/{id}/cancel` | 本人の job（他人は 404） | 全員の job（チャットの job を含む） |
-| SQL 生成 | `POST /nl2sql/feedback`（実行結果の評価） | 本人の履歴（他人・持ち主の無い履歴は 404） | 全員の履歴。評価した人を `feedback_actor_user_uuid` に残す（実行履歴の利用者 `actor_user_uuid` は変えない） |
-| SQL 生成・チャット | `/nl2sql/query-sessions/*`（回答前の確認） | 本人の session（他人・持ち主の無い session は 404） | 全員の session。他の利用者の会話の続きで始めた確認は system_admin の session で、会話の前のターンを読める |
+| チャット・SQL 生成 | `GET /nl2sql/jobs/{id}`・`/trace`・`POST /jobs/{id}/cancel` | 本人の job（他人は 404） | 全員の job（チャットの job を含む。停止は運用の操作） |
+| SQL 生成 | `POST /nl2sql/feedback`（実行結果の評価） | 本人の履歴（他人・持ち主の無い履歴は 404） | 本人の履歴だけ。他の利用者・持ち主の無い履歴は 403（#3244）。評価した人を `feedback_actor_user_uuid` に残す |
+| SQL 生成・チャット | `/nl2sql/query-sessions/*`（回答前の確認） | 本人の session（他人・持ち主の無い session は 404） | 全員の session を見て（`GET`）取り消せる（`/cancel`）。回答・反映・意図の変更・SQL の生成・確定・実行・改善提案は本人の session だけで、他の利用者・持ち主の無い session は 403。他の利用者の会話の続きで確認を始める（`POST /query-sessions` の `previous_job_id`）のも 403（#3244） |
+| DB 管理チャット | `/nl2sql/db-admin-chat/*` | 本人の会話（他人は 404） | 全員の会話を見て（会話・ターンの処理の経過）、削除できる。続きの質問（`/generate`）・実行（`/execute`）・SQL の置き換え（`PUT .../plan`）・エラーの分析（`.../analyze-error`）・名前の変更は本人の会話だけで、他の利用者の会話は 403（#3244） |
 | 実行履歴 | `GET /nl2sql/history`・`GET /nl2sql/history/{history_id}`（詳細。見えない行は 404。#1955） | 本人が実行した行と、本人の会話で他の人（system_admin）が実行した行（#1954）。SQL 生成・SQL 直接実行など会話の無い実行は実行した人だけ | 全員の行。ログイン ID（`actor_login_user_id`・`actor_display_name`）は system_admin の応答だけ |
 | SQL 直接実行・SQL から質問 | `POST /nl2sql/execute`・`/reverse*` | 保存しない（利用者のデータを返さない） | 同じ |
 
@@ -172,15 +174,17 @@ system_admin は他の利用者のデータに、本人と同じすべての操�
   応答の各行に `executed_by_me`・`executor_display_name`（実行した人の共通の表示名。見る人を問わず返す）・
   `conversation_owner_display_name`・`owned_by_me`（会話の無い実行は null）を添える。`executor=all|mine|others`
   （既定 all。`others` は実行した人の記録の無い行を含む）で絞り、`total` も同じ条件、`unfiltered_total` は見られる範囲。
-  詳細は一覧の行のため、見られない行は一覧に出ない。行の評価（`POST /nl2sql/feedback`）は今までどおり実行した人と system_admin。
+  詳細は一覧の行のため、見られない行は一覧に出ない。行の評価（`POST /nl2sql/feedback`）は実行した人だけ（#3244）。
   #1954 より前に書いた行は持ち主を持たないため、実行した人にだけ出る。
 - SQL の実行の接続は、要求した利用者で system_admin / それ以外に分ける（#904）。この規則は「だれのデータを扱えるか」で、
-  接続の選び方は変えない（system_admin が他の利用者の会話で実行しても system_admin の接続で、会話の持ち主の権限・接続を借りない）。
+  接続の選び方は変えない（実行は要求した利用者の接続で、他の利用者の権限・接続を借りない。system_admin は他の利用者の会話では実行できない。#3244）。
 - 規則の外: フィードバック管理（`GET /nl2sql/feedback`・`/feedback/admin-review`・`DELETE /feedback/{id}`）・品質評価・
   利用状況などの「改善・運用」は、それぞれの権限のまま。`POST /nl2sql/similar-history`（管理者が良いと評価した
   過去の SQL の候補）は、管理者が確かめた共有の知識なので、業務プロファイルの範囲で全員の物を返す。
 - MCP（`nl2sql_get_job`・`nl2sql_cancel_requirement`）も同じ規則: 本人のジョブ・session だけ、キー（またはサービストークン）の
-  利用者が system_admin なら全員のジョブ・session（#1928。キーの製品・業務プロファイルの範囲の制限は残す）。
+  利用者が system_admin なら全員のジョブ・session を見て、確認を取り消せる（キーの製品・業務プロファイルの範囲の制限は残す）。
+  `nl2sql_query` の `requirement_session_id` で確認を続ける（回答して SQL を作る）のは本人だけで、system_admin でも他の利用者の
+  session は 403（#3244）。
 
 ## Agent からの呼び出し（MCP、#231）
 
@@ -760,8 +764,8 @@ user の管理の接続（DeepSec の data plane ではない）で実行する�
 DROP / TRUNCATE は対象の名前）の確認語を要し、方針で止める文（`ALTER SYSTEM`・`DROP USER`・動的 SQL・
 外部への通信のパッケージなど）はコードの規則で止める。API は画面だけで、MCP・API キーからは使えない。
 会話の履歴（#2319。表 `NL2SQL_DB_ADMIN_CHATS` / `NL2SQL_DB_ADMIN_CHAT_TURNS`）は「AI 活用」と同じ見え方で、
-system_admin は全員の会話、それ以外は自分の会話だけ（他人の会話は 404）。実行は操作した人の権限で行い、
-会話の持ち主は変えない。
+system_admin は全員の会話、それ以外は自分の会話だけ（他人の会話は 404）。system_admin が他の利用者の会話にできるのは
+閲覧と削除だけで、続きの質問・実行・SQL の置き換え・名前の変更は持ち主だけ（403。#3244）。
 詳細は [db-admin-chat.md](./db-admin-chat.md)。
 
 Select AI `DBMS_CLOUD_AI.GENERATE` と Select AI Agent の

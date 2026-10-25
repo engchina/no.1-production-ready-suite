@@ -550,8 +550,9 @@ test("会話を開き直したときは前回の実行の要約と「もう一�
   await history.click();
   await page.getByTestId("sql-chat-history").getByText("売上の明細", { exact: true }).click();
   const turn = page.getByTestId("sql-chat-turn");
+  // 日時は既定の表示の時間帯（UTC。#3274・#3291）で書く。
   await expect(turn.getByTestId("sql-chat-last-execution")).toHaveText(
-    "前回の実行（10/5 14:03）: 12 行・8 列。結果の行は保存していないため、見るにはもう一度実行してください。",
+    "前回の実行（10/5 05:03）: 12 行・8 列。結果の行は保存していないため、見るにはもう一度実行してください。",
   );
   await expect(turn.getByText("安全検査済み・実行済み")).toBeVisible();
   // 受け取りを 1 回試み、受け取れなければ要約のまま（失敗の表示を出さない）。

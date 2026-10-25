@@ -243,6 +243,12 @@ export {
   type ChatComposerProps,
 } from "./components/chat/chat-composer";
 export {
+  ChatReadOnlyNotice,
+  DEFAULT_CHAT_READ_ONLY_NOTICE_LABELS,
+  type ChatReadOnlyNoticeLabels,
+  type ChatReadOnlyNoticeProps,
+} from "./components/chat/chat-read-only-notice";
+export {
   ChatAttachmentList,
   formatAttachmentSize,
   type ChatAttachmentItem,

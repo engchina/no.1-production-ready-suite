@@ -12,7 +12,8 @@ Agent は Run の利用者のサービストークンで `POST /api/mcp` を呼�
   切り替えず（#1379）、使える業務プロファイルが 1 つならそれを、そうでなければ質問の推薦が決めた
   ものを使い、結果の `auto_selected_profile` に示す（決まらなければ候補つきのエラー。#2355）
 - `nl2sql_get_job`: `GET /nl2sql/jobs/{job_id}`（本人のジョブだけ。利用者が system_admin なら
-  全員のジョブ。画面の「AI 活用」と同じ規則。#1889・#1928）
+  全員のジョブを見られる。画面の「AI 活用」と同じ規則。#1889）。`nl2sql_query` の
+  `requirement_session_id` で確認を続けられるのは、確認を始めた本人だけ（#3244）
 - `nl2sql_cancel_requirement`: SQL の生成前の確認の session を閉じる
   （`POST /nl2sql/query-sessions/{id}/cancel`。利用者が Agent のチャットで
   「データベースの検索は不要」としたとき、Agent の Control Plane が呼ぶ）
@@ -48,7 +49,14 @@ from pr_system_settings.auth.service_token import (
     PROFILE_SCOPE_MAX_IDS,
     narrow_to_profile_scope,
 )
-from pr_system_settings.auth.visibility import can_access_user_data, can_view_all_users_data
+from pr_system_settings.auth.visibility import (
+    OTHERS_CONTENT_FORBIDDEN_CODE,
+    OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+    OTHERS_CONTENT_FORBIDDEN_STATUS,
+    can_access_user_data,
+    can_add_user_content,
+    can_view_all_users_data,
+)
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.api.concurrency import run_sync_io
@@ -87,6 +95,7 @@ from app.features.nl2sql.service import (
     SCHEMA_CATALOG_EMPTY_ERROR_CODE,
     Nl2SqlPersistenceUnavailable,
     Nl2SqlRepositoryOperationFailed,
+    OthersContentForbiddenError,
     SchemaCatalogEmptyError,
     nl2sql_service,
 )
@@ -497,6 +506,18 @@ class Nl2SqlJobResult(BaseModel):
     )
 
 
+def _others_content_forbidden() -> McpToolError:
+    """system_admin が他の利用者の確認・会話に内容を足そうとしたときのツールのエラー。
+
+    code は 3 製品の MCP で同じ（#3244）。
+    """
+    return McpToolError(
+        OTHERS_CONTENT_FORBIDDEN_CODE,
+        OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+        status=OTHERS_CONTENT_FORBIDDEN_STATUS,
+    )
+
+
 def _translate_domain_errors[A, R](
     handler: Callable[[A], Awaitable[R]],
 ) -> Callable[[A], Awaitable[R]]:
@@ -511,6 +532,10 @@ def _translate_domain_errors[A, R](
             raise McpToolError(exc.reason_code, exc.public_message) from exc
         except SchemaCatalogEmptyError as exc:
             raise McpToolError(SCHEMA_CATALOG_EMPTY_ERROR_CODE, str(exc)) from exc
+        except OthersContentForbiddenError as exc:
+            # 他の利用者の会話・実行に内容を足す system_admin（画面の 403 と同じ。code は 3 製品の
+            # MCP で同じ。#3244）。
+            raise _others_content_forbidden() from exc
         except SelectAiCredentialMissingError as exc:
             # Select AI / Select AI Agent の生成は Credential が前提（画面の 409 と同じ。#1688）。
             raise McpToolError(exc.code, select_ai_credential_missing_message(exc)) from exc
@@ -708,8 +733,8 @@ def build_mcp_server(request: Request) -> McpServer:
     def own_job(job_id: str) -> JobData:
         actor_user_uuid, _ = _actor(request)
         try:
-            # 画面の「AI 活用」と同じ規則（#1889・#1928）: 本人のジョブだけ、利用者（キー・
-            # サービストークンの持ち主）が system_admin なら全員のジョブ。製品の管理権限
+            # 画面の「AI 活用」と同じ規則（#1889）: 本人のジョブだけ、利用者（キー・
+            # サービストークンの持ち主）が system_admin なら全員のジョブを見られる。製品の管理権限
             # （フィードバック管理など）は理由にしない。
             job = nl2sql_service.get_job(
                 job_id,
@@ -722,8 +747,12 @@ def build_mcp_server(request: Request) -> McpServer:
             raise HTTPException(status_code=404, detail=_JOB_NOT_FOUND_MESSAGE)
         return job
 
-    def own_session(session_id: str) -> QuerySessionData:
-        """SQL の生成前の確認の session（ジョブと同じく本人だけ、system_admin は全員。#1928）。"""
+    def own_session(session_id: str, *, adding: bool = False) -> QuerySessionData:
+        """SQL の生成前の確認の session（ジョブと同じく本人だけ、system_admin は全員見られる）。
+
+        `adding`（確認に答える・反映して SQL を作る）は持ち主だけで、見える他の利用者の session
+        （system_admin）は 403（#3244）。取り消しは `adding` なし。
+        """
         try:
             data = ontology_router.ontology_runtime.get_session(session_id)
         except OntologyNotFoundError:
@@ -739,6 +768,12 @@ def build_mcp_server(request: Request) -> McpServer:
             data = None  # 他人の session は存在も明かさない
         if data is None or data.session.clarification_mode != ClarificationMode.GUIDED:
             raise HTTPException(status_code=404, detail=_REQUIREMENT_NOT_FOUND_MESSAGE)
+        if (
+            adding
+            and principal is not None
+            and not can_add_user_content(principal, data.session.actor_user_uuid.strip())
+        ):
+            raise _others_content_forbidden()
         scoped = scope()
         if scoped is not None and data.session.profile_id not in scoped:
             raise _profile_scope_forbidden(data.session.profile_id)
@@ -905,7 +940,7 @@ def build_mcp_server(request: Request) -> McpServer:
             # 確認の続きは、その確認の業務プロファイル（違う ID は呼び出しの先で 400）。
             if requested is not None:
                 return requested, None
-            data = await run_sync_io(own_session, arguments.requirement_session_id)
+            data = await run_sync_io(own_session, arguments.requirement_session_id, adding=True)
             return data.session.profile_id, None
         scoped = scope()
         if requested is not None and scoped is not None and requested not in scoped:
@@ -961,7 +996,7 @@ def build_mcp_server(request: Request) -> McpServer:
                     actor_is_system_admin=actor_is_system_admin,
                     profile_confirmed=True,
                 )
-            data = own_session(arguments.requirement_session_id)
+            data = own_session(arguments.requirement_session_id, adding=True)
             if data.session.profile_id != profile_id:
                 raise HTTPException(
                     status_code=400,

@@ -129,28 +129,31 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
   （テーブルの削除はシステムテーブルの Issue #751）。
 - 対象範囲が制限された利用者の `GET /observability/events` は、範囲内の Run の event だけを返します。
 
-### 4.1 「AI 活用」の Run・会話の見え方（#1889・#1928・#1954）
+### 4.1 「AI 活用」の Run・会話の見え方（#1889・#1954・#3244）
 
 3 製品共通の規則（[backend-standard.md](../../platform/docs/backend-standard.md)「「AI 活用」の下の機能のデータの見え方」）:
 **system_admin は全員のデータ、それ以外の利用者は自分のデータだけ**。判定は `pr_system_settings.auth.visibility`。
 
 - Run の持ち主は Run を実行した利用者（actor。`RunState.created_by_user_uuid`）。自動実行の Run は実行する利用者（`run_as_user_uuid`）、品質評価の Run は評価を始めた利用者。持ち主の無い古い Run は system_admin だけが見られる。
-- 会話の持ち主は会話を始めた利用者（`RunState.thread_owner_user_uuid`。記録の無い既存の Run は会話の最初の Run の `created_by_user_uuid`）。system_admin が続けても会話の持ち主は変わらない（#1928）。
-- 「AI 活用」の API（実行履歴の `GET /runs`、Run の詳細・監査・成果物・図の URL・イベント・処理の段階、取消・再開・再実行・回答前の確認への回答・評価、チャットの会話）は、自分が実行した Run・自分の会話の Run か system_admin だけ。ほかの利用者の Run は 404 で、存在を漏らさない。対象範囲（業務 Agent）の判定はその上に重ねてかかる（自分の Run でも範囲外は 403）。
+- 会話の持ち主は会話を始めた利用者（`RunState.thread_owner_user_uuid`。記録の無い既存の Run は会話の最初の Run の `created_by_user_uuid`）。#3244 より前に system_admin が続けた往復があっても、会話の持ち主は変わらない。
+- 「AI 活用」の API（実行履歴の `GET /runs`、Run の詳細・監査・成果物・図の URL・イベント・処理の段階、取消・再開・再実行・回答前の確認への回答・評価、チャットの会話）は、自分が実行した Run・自分の会話の Run か system_admin だけ（system_admin が他の利用者のデータにできる操作は下の「system_admin の操作」）。ほかの利用者の Run は 404 で、存在を漏らさない。対象範囲（業務 Agent）の判定はその上に重ねてかかる（自分の Run でも範囲外は 403）。
 - `agent.admin`（Agent 管理）・`agent.audit.view`・`agent.approvals.decide` は、「AI 活用」の画面で全員を見る理由にしない。
 - **実行履歴（#1954。3 製品で同じ規則）**: 行は実行した人と会話の持ち主の両方に出る（system_admin は全件）。一般の利用者には、自分が実行した Run と、自分の会話で他の人（system_admin）が実行した Run だけ（判定は `can_access_run` と同じ範囲。Agent は in-memory の store を router の `_run_visible_to` で絞る）。
   - API（`GET /runs` の行・`GET /runs/{id}`・会話の Run）: `executed_by_me`・`executor_display_name`（実行した人の表示名。見る人を問わず返す。引けなければ空）・`can_decide`（待ちの操作をできるか）。詳細と会話の Run は `owned_by_me`・`conversation_owner_display_name`（会話の無い Run は null）も返す（`RunViewer` / `RunView`。保存はしない）。
   - 絞り込み `GET /runs?executor=all|mine|others`（既定 `all`。`run_executor_matches`。`total` も同じ条件、`unfiltered_total` は見られる全件）。
   - 画面: 「実行者」の列（全員。system_admin の旧「利用者」の列を置き換えた。system_admin には `RunsData.creator_display_names` も返す）、実行した人が自分でない行の目標の下に「〈名前〉 が実行」、ツールバーに「実行者で絞り込み」（すべて / 自分が実行 / 他の人が実行。作業状態 `listFilter.runsExecutor`）、詳細に「実行者」「会話の持ち主」。
-  - 利用量・API キーの上限・監査は実行した人（`created_by_user_uuid`）に数える（#1928 のまま）。
-- **承認（ユーザーの指示による設計の変更）**: 承認の権限（`agent.approvals.decide`）を持つ利用者は、自分が実行した Run の承認だけを見て判断する。以前は、業務 Agent の範囲のほかの利用者の Run も判断できた。ほかの利用者の Run の承認は system_admin だけが判断する。承認したツールは Run の利用者の権限（サービストークンの `sub`）で実行するため、自分の会話でも system_admin が実行した Run の承認は判断しない（一覧・詳細・決定は 404。画面は判断のボタンを出さない）。system_admin が他の利用者の会話で始めた Run の承認は、system_admin の承認の一覧に出る（#1954）。
-- **持ち主の側の待ち（#1954）**: 再開・Agent 自身の確認への回答も承認と同じく実行した人と system_admin だけ（`can_decide=false`）。持ち主のチャット・実行の詳細は、system_admin が実行して承認・確認の待ちで止まった Run に「システム管理者（〈名前〉）の承認・回答を待っています」（info の Banner）を出し、操作のボタンは出さない（実行履歴の行メニューも承認・却下・再開を出さない）。チャットの「自分で質問し直す」は、その Run を止め（取消は持ち主もできる）、同じ質問を同じ会話で送る。新しい Run は持ち主の権限（`created_by_user_uuid`・業務 Agent の範囲・サービストークンの `sub`）で動く。持ち主の「再実行」（`POST /runs/{id}/replay`）も操作した持ち主の権限で、新しい会話の Run を作る。
-- **送る前の案内（#1954）**: system_admin が他の利用者の会話（`ThreadData.owned=false`）を開いているとき、チャットの入力欄の上に「この会話の持ち主にも、回答と途中の結果が見えます」（共有 UI の `ChatComposer` の `notice`）を出す。新しい会話・自分の会話では出さない。
-- **system_admin の操作（ユーザーの指示による設計の変更。#1928。#1889 の「続きは本人だけ」を外した）**: system_admin は他の利用者の会話・Run に、本人と同じすべての操作ができる（見る・名前の変更・削除・続きの質問・停止・回答前の確認への回答・評価・取消・再開・再実行・承認の判断）。
-  - 実行するのは操作した system_admin 自身。続きの質問・確認への回答・再実行で作る Run は `created_by_user_uuid` が system_admin で、権限・業務 Agent の範囲・RAG / NL2SQL のサービストークンの `sub` も system_admin（会話の持ち主の権限を借りない）。再開は止まった Run を Run の利用者のまま続ける。
-  - 操作した人を残す: Run の `created_by_user_uuid`（実行履歴・利用状況・監査ログの利用者）、取消のイベントの `cancelled_by`、承認の `decided_by`、回答前の確認のイベントの `decided_by`、評価の `feedback.user_uuid`（`AGENT_RUN_FACTS.FEEDBACK_USER_UUID`）、再開はログ `agent_run_resume_requested` の `requested_by`。
-  - 会話の持ち主は変えず、持ち主の会話の一覧・詳細・実行履歴にも system_admin の往復が出る。会話の詳細は持ち主以外が送った往復に送った人の表示名（`ThreadData.sender_display_names`。Run の ID → 表示名）を返し、画面は質問の吹き出しの上に「〈名前〉 が送信」を出す（共有 UI の `ChatTurn` の `questionSender`）。同じ会話の前の往復（履歴・支援タスクの状態）は持ち主と system_admin の往復をまとめて引き継ぐ。
-  - 外部の MCP（API キー）も同じ: キーの持ち主が system_admin なら、他の利用者の Run を読み（`agent_get_run`）、会話を続け（`agent_chat` の `thread_id`）、確認に答えられる（`agent_answer_confirmation`）。Run はキーの持ち主として実行する。キーの業務 Agent の範囲（`resource_scopes["agent"]`）と回数の上限はそのままかかる。
+  - 利用量・API キーの上限・監査は実行した人（`created_by_user_uuid`）に数える。
+- **承認（ユーザーの指示による設計の変更）**: 承認の権限（`agent.approvals.decide`）を持つ利用者は、自分が実行した Run の承認だけを見て判断する。以前は、業務 Agent の範囲のほかの利用者の Run も判断できた。ほかの利用者の Run の承認は system_admin だけが判断する。承認したツールは Run の利用者の権限（サービストークンの `sub`）で実行するため、自分の会話でも system_admin が実行した Run の承認は判断しない（一覧・詳細・決定は 404。画面は判断のボタンを出さない）。#3244 より前に system_admin が他の利用者の会話で始めた Run の承認は、system_admin の承認の一覧に出る（#1954）。
+- **持ち主の側の待ち（#1954。#3244 より前のデータ）**: 再開・Agent 自身の確認への回答も承認と同じく実行した人と system_admin だけ（`can_decide=false`）。持ち主のチャット・実行の詳細は、system_admin が実行して承認・確認の待ちで止まった Run に「システム管理者（〈名前〉）の承認・回答を待っています」（info の Banner）を出し、操作のボタンは出さない（実行履歴の行メニューも承認・却下・再開を出さない）。チャットの「自分で質問し直す」は、その Run を止め（取消は持ち主もできる）、同じ質問を同じ会話で送る。新しい Run は持ち主の権限（`created_by_user_uuid`・業務 Agent の範囲・サービストークンの `sub`）で動く。持ち主の「再実行」（`POST /runs/{id}/replay`）も操作した持ち主の権限で、新しい会話の Run を作る。
+- **system_admin の操作（ユーザーの指示による設計の変更。#3244。#1928 の「本人と同じすべての操作」を置き換えた）**: system_admin が他の利用者の会話・Run にできるのは、閲覧と運用の操作だけ。
+  - 閲覧: 会話の一覧・詳細、Run の詳細・処理の経過（`GET /runs/{id}/trace`）・成果物・イベント、実行履歴。
+  - 運用の操作（今どおり）: 取消（`POST /runs/{id}/cancel`。イベントの `cancelled_by`）、会話の削除（`DELETE /threads/{id}`）、承認の判断（`POST /approvals/{id}/decision`。`decided_by`）と再開（`POST /runs/{id}/resume`。ログ `agent_run_resume_requested` の `requested_by`）、回答前の確認をやめる（`POST /runs/{id}/confirmations/{cid}` の `action=cancel`）。承認・再開の続きは Run を実行した人の権限で動く（`_run_approvable_by`。実行した人と system_admin）。
+  - 再実行（`POST /runs/{id}/replay`）は会話を引き継がず、操作した system_admin 自身の新しい会話の Run を作る（持ち主の会話には足さない）ので、今どおりできる。
+  - **内容を足す操作は持ち主だけ**（403。`can_add_user_content`・`OTHERS_CONTENT_FORBIDDEN_MESSAGE`）: 続きの質問（`POST /runs` の `thread_id`。router の `_may_continue_thread`）、回答前の確認への答え・確認せずに回答（`POST /runs/{id}/confirmations/{cid}` の `answer` / `skip`）、評価（`PUT /runs/{id}/feedback`）、会話の名前の変更（`PATCH /threads/{id}`）。Run の持ち主は会話の持ち主（会話の無い Run は実行した人。`_run_content_addable_by`）。system_admin の権限・業務 Agent の範囲・サービストークンの `sub` で作った回答・ツールの出力が持ち主の会話に入り、持ち主が権限の外の内容を見るのを防ぐ。調べ直すときは system_admin が自分の会話で質問する。
+  - 既存のデータ: #3244 より前に system_admin が持ち主の会話で続けた往復は消さない。会話の詳細は持ち主以外が送った往復に送った人の表示名（`ThreadData.sender_display_names`。Run の ID → 表示名）を返し、画面は質問の吹き出しの上に「〈名前〉 が送信」を出す（共有 UI の `ChatTurn` の `questionSender`）。持ち主はその往復も評価できる（自分の会話の内容）。
+  - 画面: system_admin が他の利用者の会話（`ThreadData.owned=false`）を開くと、入力欄の代わりに閲覧だけの案内（3 製品共通の `ChatReadOnlyNotice`。info の Banner「他の利用者の会話です（閲覧のみ）」。文は `OTHERS_CONTENT_FORBIDDEN_MESSAGE` と同じ）を出し、回答の作成中・承認待ちなら案内の中に「停止」を置く。回答前の確認のカード・確認の取り消しの操作・評価・「自分で質問し直す」は出さない。承認の判断のボタンと会話の削除は出す。#1954 の送る前の案内（「この会話の持ち主にも…」）は外した。会話の履歴の行の「名前の変更」は出さない（共有 UI の `useChatHistoryActions` の `canRename`。削除は出す）。
+  - 会話の添付（`/api/chat-attachments`。platform の共通の API）: 会話の添付の一覧は閲覧なので返し、会話への添付（`POST` の `conversation_id`）は内容を足す操作なので 403（持ち主の分からない会話も 403）。
+  - 外部の MCP（API キー）も同じ: キーの持ち主が system_admin なら他の利用者の Run を読める（`agent_get_run`）が、会話の続き（`agent_chat` の `thread_id`）と確認への答え（`agent_answer_confirmation`）は 403 の `OTHERS_CONTENT_FORBIDDEN`。キーの業務 Agent の範囲（`resource_scopes["agent"]`）と回数の上限はそのままかかる。
 - チャット: 一般の利用者は自分の会話だけを見て続ける（他人の会話の詳細・送信・操作は 404）。system_admin の会話の一覧は利用者の表示名・`owned` を返す。
 - 規則の外（「改善・運用」）: フィードバック（`GET /feedback*`・管理者の評価 `PUT /runs/{id}/admin-review`）・品質評価のケースへの追加（`GET /runs/{id}/evaluation-case`）・利用状況・監査ログ（`GET /audit/tool-calls*`・`/observability/events`）は、従来どおり権限と業務 Agent の範囲で判定する。
 
@@ -177,8 +180,8 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
   `agent_answer_confirmation` は `agent.runs.operate` / `agent.admin`）と対象範囲（使える業務 Agent）で判定し、キーに
   業務 Agent の範囲（`resource_scopes["agent"]`）があればさらに絞ります（範囲の外は 403 の `AGENT_OUT_OF_KEY_SCOPE`）。
   Run と会話は画面と同じ規則（§4.1）で、自分が実行した Run・自分の会話だけを読み、続け、答えられます（他人の Run は
-  `RUN_NOT_FOUND`、他人の会話は `THREAD_NOT_FOUND`）。キーの持ち主が system_admin なら全員の Run・会話を扱えます（#1928。
-  Run はキーの持ち主として実行し、キーの業務 Agent の範囲はそのまま）。MCP の Run は承認の要るツールを呼びません。
+  `RUN_NOT_FOUND`、他人の会話は `THREAD_NOT_FOUND`）。キーの持ち主が system_admin なら全員の Run を読めますが、他の利用者の
+  会話の続きと確認への答えは 403 の `OTHERS_CONTENT_FORBIDDEN` です（#3244。キーの業務 Agent の範囲はそのまま）。MCP の Run は承認の要るツールを呼びません。
   キーの発行・一覧・削除は `/api/account/api-keys*`（ログインだけ）、全員のキーは `/api/security/api-keys*`（Agent 管理）。
   Agent 独自の旧 API キー（`/api/settings/api-keys`・`menu.settings_api_keys`・`AGENT_CONTROL_PLANE_ITEMS` の kind
   `api_key`）は #1809 で削除し、使いません（migration `20261014_011_remove_agent_mcp_api_keys`）。

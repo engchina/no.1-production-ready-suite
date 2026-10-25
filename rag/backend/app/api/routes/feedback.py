@@ -7,11 +7,15 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pr_backend_core.api import OffsetParams, offset_params, paginate
+from pr_system_settings.auth.visibility import (
+    OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+    OTHERS_CONTENT_FORBIDDEN_STATUS,
+)
 
 from app.clients.oracle import OracleClient
 from app.rag.evaluation_excel import XLSX_MEDIA_TYPE, evaluation_cases_xlsx, evidence_line
 from app.rag.rate_limit import enforce_rate_limit
-from app.rag.request_context import current_audit_request_context
+from app.rag.request_context import caller_owns, current_audit_request_context
 from app.rag.search_answer_profile_knowledge import import_approved_faq
 from app.rag.support_guide_runtime import is_guide_preview_trace
 from app.schemas.common import ApiResponse
@@ -29,6 +33,7 @@ from app.schemas.feedback import (
     FeedbackReasonCount,
     FeedbackRequest,
     FeedbackSortOrder,
+    FeedbackSourceSurface,
     FeedbackSubmissionResponse,
     FeedbackSummary,
     FeedbackTargetType,
@@ -290,7 +295,14 @@ async def _resolve_feedback_details(
         details = await oracle.get_feedback_message_context(request.message_id, request.trace_id)
         if details is None:
             raise HTTPException(status_code=404, detail="評価対象のメッセージが見つかりません。")
+        _ensure_conversation_owner(details.pop("conversation_user_id_hash", None))
         details["citations"] = _feedback_citations(details.get("citations"))
+    elif request.source_surface == FeedbackSourceSurface.CHAT:
+        # メッセージ ID の無いチャットの評価も、trace の回答の会話の持ち主だけ（#3244）。会話に無い
+        # trace（None）は持ち主で絞らない。
+        owner = await oracle.get_chat_answer_owner_hash(request.trace_id)
+        if owner is not None:
+            _ensure_conversation_owner(owner)
     elif request.content_snapshot is not None:
         details = {
             "message_id": None,
@@ -318,6 +330,18 @@ async def _resolve_feedback_details(
         details["comment_text"] = request.comment
         details["corrected_answer_text"] = request.corrected_answer
     return details
+
+
+def _ensure_conversation_owner(owner_user_id_hash: object) -> None:
+    """チャットの回答を評価するのは会話の持ち主だけ（system_admin でも他の利用者は 403。#3244）。
+
+    持ち主の分からない会話の回答には誰も評価を足せない（チャットの `owned` と同じ `caller_owns`）。
+    """
+    owner = owner_user_id_hash if isinstance(owner_user_id_hash, str) else None
+    if not caller_owns(owner):
+        raise HTTPException(
+            status_code=OTHERS_CONTENT_FORBIDDEN_STATUS, detail=OTHERS_CONTENT_FORBIDDEN_MESSAGE
+        )
 
 
 def _feedback_citations(value: object) -> list[dict[str, object]]:

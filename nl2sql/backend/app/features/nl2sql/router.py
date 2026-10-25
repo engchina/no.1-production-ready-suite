@@ -35,6 +35,8 @@ from pr_backend_core.chat_history_window import chat_history_days
 from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE, SecurityApiError
 from pr_system_settings.auth.visibility import (
     DEFAULT_RUN_EXECUTOR_FILTER,
+    OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+    OTHERS_CONTENT_FORBIDDEN_STATUS,
     OWNER_NOT_FOUND_STATUS,
     RunExecutorFilter,
     can_access_run,
@@ -247,6 +249,7 @@ from .service import (
     DbAdminChatGenerationError,
     JobIdConflictError,
     JobTraceData,
+    OthersContentForbiddenError,
     ProfileNameConflict,
     ProfileOracleCleanupFailed,
     ProfileScopePermissionError,
@@ -438,6 +441,13 @@ _CHAT_TURN_NOT_FOUND_DETAIL = "指定された会話のターンが見つかり�
 
 def _chat_not_found() -> HTTPException:
     return HTTPException(status_code=OWNER_NOT_FOUND_STATUS, detail=_CHAT_NOT_FOUND_DETAIL)
+
+
+def _others_content_forbidden() -> HTTPException:
+    """他の利用者の会話・実行に新しい実行・内容を足そうとした system_admin への 403（#3244）。"""
+    return HTTPException(
+        status_code=OTHERS_CONTENT_FORBIDDEN_STATUS, detail=OTHERS_CONTENT_FORBIDDEN_MESSAGE
+    )
 
 
 def _chat_all_users(request: Request) -> bool:
@@ -697,9 +707,9 @@ def _with_requirement(req: JobCreateRequest, principal: object) -> JobCreateRequ
 def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreateData]:
     """NL2SQL の SQL 生成・実行の job を開始する。
 
-    チャットの続き（`previous_job_id`）は会話の持ち主と system_admin だけ（ほかは 404。#1928）。
-    ジョブの actor は送った利用者で、権限・業務プロファイル・SQL の実行の接続（#904）もその人で
-    決める（会話の持ち主の権限を借りない）。
+    チャットの続き（`previous_job_id`）は会話の持ち主だけ（#3244）。他の利用者の会話は、見えない
+    一般の利用者には 404、見える system_admin には 403。ジョブの actor は送った利用者で、権限・
+    業務プロファイル・SQL の実行の接続（#904）もその人で決める。
     """
     principal = getattr(request.state, "principal", None)
     # job は生成に加えて SQL を実行する。manifest（生成）に加えて実行の権限も要求する（#242）。
@@ -725,8 +735,10 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
                 actor_is_system_admin=bool(getattr(principal, "is_system_admin", False)),
             )
         )
+    except OthersContentForbiddenError as exc:
+        raise _others_content_forbidden() from exc
     except PermissionError as exc:
-        # 続けられるのは会話の持ち主と system_admin（#1928）。ほかは存在を漏らさない 404。
+        # 見えない他の利用者の会話は存在を漏らさない 404。
         raise _chat_not_found() from exc
     except SelectAiCredentialMissingError as exc:
         # Select AI / Select AI Agent の生成は Credential が前提（#1688）。
@@ -747,16 +759,16 @@ def execute_chat_turn(job_id: str, request: Request) -> ApiResponse[SqlChatExecu
 
     SQL は画面から受け取らず、ターンのジョブに保存した生成 SQL を、SQL 生成のジョブの実行の段階と
     同じ経路（業務プロファイルの範囲・安全検査・接続の分離・実行履歴）で実行する。権限は SQL の実行
-    （route の権限）、扱える会話（会話の持ち主か system_admin。#1928）、ターンの業務プロファイルの
-    利用権限を確かめる。
+    （route の権限）、実行できる会話（会話の持ち主だけ。#3244。見える他の利用者の会話は 403、
+    見えない会話は 404）、ターンの業務プロファイルの利用権限を確かめる。
     """
     principal = getattr(request.state, "principal", None)
     actor_user_uuid = str(getattr(principal, "user_uuid", ""))
     all_users = _chat_all_users(request)
     try:
-        # 扱える会話のターンか（会話の持ち主か system_admin。#1928。管理の権限は理由にしない）と、
-        # 業務プロファイルの利用権限を、実行の前に確かめる。実行は要求した利用者の権限と接続
-        # （#904）で行う。
+        # 見える会話のターンか（管理の権限は理由にしない）と、業務プロファイルの利用権限を、
+        # 実行の前に確かめる。実行できるのは会話の持ち主だけ（#3244。service が確かめる）で、
+        # 要求した利用者の権限と接続（#904）で行う。
         job = nl2sql_service.get_job(
             job_id, actor_user_uuid=actor_user_uuid, actor_can_manage=all_users
         )
@@ -773,6 +785,8 @@ def execute_chat_turn(job_id: str, request: Request) -> ApiResponse[SqlChatExecu
             actor_user_uuid=actor_user_uuid,
             actor_is_system_admin=bool(getattr(principal, "is_system_admin", False)),
         )
+    except OthersContentForbiddenError as exc:
+        raise _others_content_forbidden() from exc
     except PermissionError as exc:
         raise HTTPException(
             status_code=OWNER_NOT_FOUND_STATUS, detail=_CHAT_TURN_NOT_FOUND_DETAIL
@@ -793,8 +807,8 @@ def take_chat_execution_result(job_id: str, request: Request) -> ApiResponse[Sql
     """チャットのジョブの中で実行した結果（行を含む）を 1 回だけ受け取る（#1176）。
 
     行は会話に残さず、受け取ったら消す。期限を過ぎた・受け取り済みの結果は 404（画面は要約と
-    「もう一度実行」を出す）。権限は SQL の実行（route の権限）、扱える会話（会話の持ち主か
-    system_admin。#1928）、ターンの業務プロファイルの利用権限（`/execute` と同じ）。行を受け取れる
+    「もう一度実行」を出す）。権限は SQL の実行（route の権限）、見える会話（会話の持ち主か
+    system_admin）、ターンの業務プロファイルの利用権限（`/execute` と同じ）。行を受け取れる
     のは実行した利用者だけ（その人の権限と接続で取った行。ほかの人は 404 で、「もう一度実行」で
     自分の権限で実行する）。
     """
@@ -884,7 +898,8 @@ def get_sql_chat(conversation_id: str, request: Request) -> ApiResponse[SqlChatD
 def rename_sql_chat(
     conversation_id: str, update: SqlChatUpdateRequest, request: Request
 ) -> ApiResponse[SqlChatSummary]:
-    """会話の名前を変える（#1817）。system_admin は全員、それ以外は本人の会話だけ（#1889）。"""
+    """会話の名前を変える（#1817）。持ち主だけ（#3244。system_admin が他の利用者の会話を変えるのは
+    403、見えない会話は 404）。"""
     principal = getattr(request.state, "principal", None)
     actor = str(getattr(principal, "user_uuid", ""))
     all_users = _chat_all_users(request)
@@ -896,6 +911,8 @@ def rename_sql_chat(
         data = nl2sql_service.rename_sql_chat(
             conversation_id, actor=actor, title=update.title, all_users=all_users
         )
+    except OthersContentForbiddenError as exc:
+        raise _others_content_forbidden() from exc
     except PermissionError as exc:
         raise _chat_not_found() from exc
     except LookupError as exc:
@@ -2101,8 +2118,8 @@ def _with_history_people(
 def feedback(req: FeedbackRequest, request: Request) -> ApiResponse[FeedbackData]:
     """実行結果への feedback を保存する（SQL 生成の画面）。
 
-    system_admin は全員の履歴、それ以外は本人の履歴だけ（他人の履歴は 404。#1889）。評価した人を
-    履歴の `feedback_actor_user_uuid` に残す（#1928）。
+    評価できるのは実行した本人だけ（#3244）。見える他の利用者の履歴（system_admin）は 403、
+    見えない履歴は 404。評価した人を履歴の `feedback_actor_user_uuid` に残す。
     """
     try:
         access = _ai_use_access(request)
@@ -2118,6 +2135,8 @@ def feedback(req: FeedbackRequest, request: Request) -> ApiResponse[FeedbackData
         raise HTTPException(status_code=404, detail="対象の SQL 履歴が見つかりません。") from exc
     except ProfileScopePermissionError as exc:
         raise _profile_access_denied() from exc
+    except OthersContentForbiddenError as exc:
+        raise _others_content_forbidden() from exc
     except PermissionError as exc:
         raise HTTPException(
             status_code=OWNER_NOT_FOUND_STATUS, detail="対象の SQL 履歴が見つかりません。"
@@ -3210,6 +3229,8 @@ def rename_db_admin_chat(
         data = nl2sql_service.rename_db_admin_chat(
             conversation_id, actor=actor, all_users=all_users, title=update.title
         )
+    except OthersContentForbiddenError as exc:
+        raise _others_content_forbidden() from exc
     except (PermissionError, LookupError) as exc:
         raise _chat_not_found() from exc
     return ApiResponse(data=_with_chat_owner(data, actor=actor, all_users=all_users))
@@ -3244,6 +3265,8 @@ def replace_db_admin_chat_turn_sql(
             all_users=all_users,
             statement_index=req.statement_index,
         )
+    except OthersContentForbiddenError as exc:
+        raise _others_content_forbidden() from exc
     except (PermissionError, LookupError) as exc:
         raise HTTPException(
             status_code=OWNER_NOT_FOUND_STATUS, detail=_CHAT_TURN_NOT_FOUND_DETAIL
@@ -3277,6 +3300,8 @@ def db_admin_chat_generate(
             status_code=409,
             detail="この会話は往復の上限に達しました。新しい会話を始めてください。",
         ) from exc
+    except OthersContentForbiddenError as exc:
+        raise _others_content_forbidden() from exc
     except (PermissionError, LookupError) as exc:
         raise _chat_not_found() from exc
     if data is None:
@@ -3306,6 +3331,8 @@ def db_admin_chat_execute(
     actor, all_users = _db_admin_chat_actor(request)
     try:
         data = nl2sql_service.execute_db_admin_chat_turn(req, actor=actor, all_users=all_users)
+    except OthersContentForbiddenError as exc:
+        raise _others_content_forbidden() from exc
     except (PermissionError, LookupError) as exc:
         raise HTTPException(
             status_code=OWNER_NOT_FOUND_STATUS, detail=_CHAT_TURN_NOT_FOUND_DETAIL
@@ -3337,6 +3364,8 @@ def db_admin_chat_analyze_error(
                 all_users=all_users,
             )
         )
+    except OthersContentForbiddenError as exc:
+        raise _others_content_forbidden() from exc
     except (PermissionError, LookupError) as exc:
         raise HTTPException(
             status_code=OWNER_NOT_FOUND_STATUS, detail=_CHAT_TURN_NOT_FOUND_DETAIL

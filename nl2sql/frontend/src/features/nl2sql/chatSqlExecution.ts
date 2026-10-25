@@ -23,9 +23,12 @@ export { isIncompleteResult, toResultTableData as toChatResultTable } from "./qu
 export function lastExecutionText(
   summary: Pick<SqlChatExecutionSummary, "status" | "row_count" | "column_count" | "has_more">,
   executedAtLabel: string,
+  { readOnly = false }: { readOnly?: boolean } = {},
 ): string {
-  if (summary.status === "error") return t("chat.execute.last.failed", { at: executedAtLabel });
-  return t(summary.has_more ? "chat.execute.last.truncated" : "chat.execute.last.done", {
+  // 他の利用者の会話を見ているとき（実行は持ち主だけ。#3244）は「もう一度実行」を案内しない。
+  const suffix = readOnly ? ".readOnly" : "";
+  if (summary.status === "error") return t(`chat.execute.last.failed${suffix}`, { at: executedAtLabel });
+  return t(`${summary.has_more ? "chat.execute.last.truncated" : "chat.execute.last.done"}${suffix}`, {
     at: executedAtLabel,
     rows: formatCount(summary.row_count),
     columns: formatCount(summary.column_count),

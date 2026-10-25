@@ -193,6 +193,27 @@ def test_other_users_cannot_use_attachment_or_thread(setup: Setup) -> None:
     )
 
 
+def test_system_admin_lists_but_cannot_attach_to_others_thread(setup: Setup) -> None:
+    """system_admin は他の利用者の会話の添付を見られるが、添付は足せない（403。#3244）。"""
+    from pr_system_settings.auth.visibility import OTHERS_CONTENT_FORBIDDEN_MESSAGE
+    from security_support import login_configured_admin
+
+    alice, admin = login(setup.alice_login), login_configured_admin()
+    own = client.post(
+        "/api/runs", json={"goal": "質問", "agent_id": setup.agent_id}, headers=alice
+    ).json()["data"]
+    refused = _upload(admin, conversation_id=own["thread_id"])
+    assert refused.status_code == 403, refused.text
+    assert refused.json()["error_messages"] == [OTHERS_CONTENT_FORBIDDEN_MESSAGE]
+    listed = client.get(
+        "/api/chat-attachments", params={"conversation_id": own["thread_id"]}, headers=admin
+    )
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["data"]["items"] == []
+    # 持ち主は今どおり会話に添付できる。
+    assert _upload(alice, conversation_id=own["thread_id"]).status_code == 200
+
+
 def test_deleting_thread_deletes_its_attachments(setup: Setup) -> None:
     alice = login(setup.alice_login)
     item = _upload(alice).json()["data"]

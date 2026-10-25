@@ -1072,8 +1072,9 @@ def test_confirmation_api_checks_owner_answers_and_state(
     closed = client.post(url, json={"action": "skip"})
     assert closed.status_code == 409
 
-    # system_admin（local のローカル利用者）は、他の利用者の Run の確認にも答えられる（#1928。
-    # system_admin でない利用者の 404 は test_admin_operates_others.py）。
+    # system_admin（local のローカル利用者）は、他の利用者の Run の確認には答えられない
+    # （403。#3244。system_admin でない利用者の 404 は test_admin_operates_others.py）。
+    # やめる（取り消し）は運用の操作としてできる。
     other = runtime_repository.create_builtin_run(
         RunCreateRequest(goal=GOAL, agent_id=AGENT_ID), created_by_user_uuid=USER_UUID
     )
@@ -1083,10 +1084,12 @@ def test_confirmation_api_checks_owner_answers_and_state(
     runtime_repository.request_builtin_approvals(
         other.id, [], state="{}", confirmations=[other_request]
     )
-    by_admin = client.post(
-        f"/api/runs/{other.id}/confirmations/{other_request.id}", json={"action": "skip"}
-    )
-    assert by_admin.status_code == 200, by_admin.text
+    other_url = f"/api/runs/{other.id}/confirmations/{other_request.id}"
+    by_admin = client.post(other_url, json={"action": "skip"})
+    assert by_admin.status_code == 403, by_admin.text
+    assert runtime_repository.get_run(other.id).status == RunStatus.WAITING_CONFIRMATION
+    withdrawn = client.post(other_url, json={"action": "cancel"})
+    assert withdrawn.status_code == 200, withdrawn.text
     [decided] = [
         event.payload
         for event in runtime_repository.get_run(other.id).events
@@ -1094,6 +1097,7 @@ def test_confirmation_api_checks_owner_answers_and_state(
         and "decided_by" in event.payload
     ]
     assert decided["decided_by"] == "local"
+    assert runtime_repository.get_run(other.id).status == RunStatus.CANCELLED
 
 
 # ---- 先に資料・業務データのツールで調べる（#1917） -------------------------------------------
