@@ -9,6 +9,21 @@ from pathlib import PurePath
 
 from pydantic import BaseModel, Field
 
+# 軽量マークアップのテキスト(reStructuredText・Org)。unstructured は pandoc(GPL。入れない。#3351)で
+# 読む形式なので、どの解析エンジンでもプレーンテキストとして読む。
+PLAIN_TEXT_MARKUP_EXTENSIONS = frozenset({".rst", ".org"})
+PLAIN_TEXT_MARKUP_CONTENT_TYPES = frozenset(
+    {"text/x-rst", "text/prs.fallenstein.rst", "text/org", "text/x-org"}
+)
+
+
+def is_plain_text_markup(extension: str | None, content_type: str | None) -> bool:
+    """プレーンテキストとして読む軽量マークアップ(.rst / .org)か。"""
+    normalized = (content_type or "").split(";", 1)[0].strip().casefold()
+    return (extension or "").casefold() in PLAIN_TEXT_MARKUP_EXTENSIONS or (
+        normalized in PLAIN_TEXT_MARKUP_CONTENT_TYPES
+    )
+
 
 class SourceModality(StrEnum):
     """アップロード原本の大まかな種類。"""

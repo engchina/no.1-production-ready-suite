@@ -60,3 +60,32 @@ export function writeDraft(storage: DraftStorage, owner: string, key: string, va
     return false;
   }
 }
+
+/** 草稿の置き場所（利用者・DB・画面・field。`draftKey` の要素）。 */
+export interface DraftScope {
+  owner: string;
+  context: string;
+  page: string;
+  field: string;
+}
+
+/** field が変わったときに、変わる前の値を新しい field へ引き継ぐかの判定（`useWorkspaceState` の `carryOver`）。 */
+export type DraftCarryOver<T> = (change: { from: string; to: string; value: T; stored: T }) => boolean;
+
+/**
+ * 草稿の置き場所が変わった render の値（#3357）。新しい置き場所の草稿（`stored`）を読み直すのが既定で、
+ * 利用者・DB・画面が同じまま field だけが変わり、`carryOver` が認めたときだけ、変わる前の値（`value`。その render の
+ * 最新の値で、同じ render で起きた入力を含む）を引き継ぐ。利用者・DB・画面をまたいでは引き継がない。
+ */
+export function draftValueOnScopeChange<T>(
+  previous: DraftScope,
+  next: DraftScope,
+  value: T,
+  stored: T,
+  carryOver?: DraftCarryOver<T>
+): T {
+  const sameBoundary =
+    previous.owner === next.owner && previous.context === next.context && previous.page === next.page;
+  if (!carryOver || !sameBoundary || previous.field === next.field) return stored;
+  return carryOver({ from: previous.field, to: next.field, value, stored }) ? value : stored;
+}

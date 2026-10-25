@@ -18,6 +18,7 @@ from app.config import Settings, get_settings
 from app.main import app
 from app.rag.document_cleanup import retry_due_document_cleanups
 from app.rag.request_context import current_audit_request_context
+from app.rag.source_profile import EPUB_UPLOAD_REJECTED_MESSAGE, HEIC_UPLOAD_REJECTED_MESSAGE
 from app.schemas.document import (
     DocumentChunkView,
     DocumentDetail,
@@ -1991,6 +1992,95 @@ def test_document_upload_accepts_macro_enabled_office() -> None:
     assert body["source_profile"]["modality"] == "office"
     assert body["source_profile"]["unsupported_reason"] == "macro_enabled_office_not_supported"
     assert body["parser_notice"]["code"] == "office_conversion_required"
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type", "expected"),
+    [
+        ("photo.heic", "image/heic", HEIC_UPLOAD_REJECTED_MESSAGE),
+        ("photo.HEIF", "application/octet-stream", HEIC_UPLOAD_REJECTED_MESSAGE),
+        ("photo.bin", "image/heif-sequence", HEIC_UPLOAD_REJECTED_MESSAGE),
+        ("book.epub", "application/epub+zip", EPUB_UPLOAD_REJECTED_MESSAGE),
+    ],
+    ids=["heic", "heif-octet-stream", "heif-mime", "epub"],
+)
+def test_document_upload_rejects_heic_and_epub_with_conversion_guide(
+    fake_document_dependencies: FakeWorkspaceOracle,
+    file_name: str,
+    content_type: str,
+    expected: str,
+) -> None:
+    """HEIC / HEIF・EPUB は保存せずに 415 で変換の方法を返す(pi-heif・pandoc を入れない。#3351)。"""
+    resp = client.post(
+        "/api/documents/upload",
+        files={"file": (file_name, b"\x00\x00\x00\x18ftypheic", content_type)},
+    )
+
+    assert resp.status_code == 415
+    assert resp.json()["error_messages"] == [expected]
+    assert fake_document_dependencies.documents == {}
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type"),
+    [
+        ("memo.odt", "application/vnd.oasis.opendocument.text"),
+        ("memo.rtf", "text/rtf"),
+        ("memo.rtf", "application/rtf"),
+    ],
+    ids=["odt", "rtf-text", "rtf-application"],
+)
+def test_document_upload_accepts_odt_rtf_as_office_conversion(
+    file_name: str, content_type: str
+) -> None:
+    """ODT・RTF はアップロードでき、Office→PDF で変換する形式として案内する(#3351)。"""
+    resp = client.post(
+        "/api/documents/upload",
+        files={"file": (file_name, b"{\\rtf1 synthetic}", content_type)},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["ingestion_started"] is False
+    assert body["source_profile"]["modality"] == "office"
+    assert body["source_profile"]["unsupported_reason"] == "odt_rtf_not_supported"
+    assert body["parser_notice"]["code"] == "office_conversion_required"
+    assert "「Office→PDF」" in body["parser_notice"]["message"]
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type"),
+    [
+        ("guide.rst", "text/x-rst"),
+        ("guide.rst", "application/octet-stream"),
+        ("notes.org", "text/org"),
+        ("notes.org", "text/plain"),
+    ],
+    ids=["rst-mime", "rst-octet-stream", "org-mime", "org-text"],
+)
+def test_document_upload_accepts_rst_org_as_text(file_name: str, content_type: str) -> None:
+    """reStructuredText・Org はプレーンテキストとして受け付ける(pandoc を通さない。#3351)。"""
+    resp = client.post(
+        "/api/documents/upload",
+        files={"file": (file_name, b"Title\n=====\n\nBody.\n", content_type)},
+    )
+
+    assert resp.status_code == 200
+    profile = resp.json()["data"]["source_profile"]
+    assert profile["modality"] == "text"
+    assert profile["unsupported_reason"] is None
+    assert profile["preview_kind"] == "text"
+
+
+def test_document_upload_accepts_text_xml() -> None:
+    """.xml は text/xml でも受け付ける(#3360)。"""
+    resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("data.xml", b"<root><item>a</item></root>", "text/xml")},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["source_profile"]["modality"] == "text"
 
 
 def test_drain_queued_ingestion_jobs_runs_persisted_jobs(

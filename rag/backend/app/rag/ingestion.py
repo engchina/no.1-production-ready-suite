@@ -4100,6 +4100,11 @@ def _unsupported_parser_message(result: ParserRegistryResult) -> str:
             "Word は「Word→JSONL」も可、Excel は「Excel→JSONL」)を選んでから取り込んでください"
             "(マクロは実行しません)。"
         )
+    if result.unsupported_reason == "odt_rtf_not_supported":
+        return (
+            "ODT・RTF は原本のままでは解析できません。"
+            "文書レシピのファイル準備で「Office→PDF」を選んでから取り込んでください。"
+        )
     return "このファイル形式は取込に対応していません。"
 
 
