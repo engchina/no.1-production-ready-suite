@@ -104,9 +104,10 @@ jobs:
           python3 ../../.github/scripts/pytest-skip-gate.py "${RUNNER_TEMP}/junit.xml"
 
       # NL2SQL: Oracle の明示 opt-in のテスト。Free に無い ADB の機能を使うもの（Select AI の
-      # test_select_ai_quoted_object_list_oracle_live.py・DBMS_CLOUD の DBA_LOAD_OPERATIONS を読む
-      # test_nl2sql_synthetic_oracle_live.py・DeepSec の test_deepsec_real_oracle_integration.py）は実行しない。
-      # LLM の Select AI の test_select_ai_generates_into_staging_only（NL2SQL_SYNTHETIC_LLM_LIVE_TEST）は skip を許す。
+      # test_select_ai_quoted_object_list_oracle_live.py・DeepSec の test_deepsec_real_oracle_integration.py）は
+      # 実行しない。LLM の Select AI の test_select_ai_generates_into_staging_only（NL2SQL_SYNTHETIC_LLM_LIVE_TEST）と、
+      # DBMS_CLOUD の DBA_LOAD_OPERATIONS を読む test_capture_session_reads_adb_load_operations
+      # （NL2SQL_SYNTHETIC_ADB_LIVE_TEST）は skip を許す。
       # 3 製品のテストは手元の .env を読まない（#1972）ので、接続の設定を環境変数で渡す（PLATFORM_ORACLE_USER は
       # conftest が APP に固定する）。
       - name: Oracle integration tests (NL2SQL)
@@ -125,10 +126,12 @@ jobs:
             tests/test_nl2sql_db_admin_chat_history_oracle_live.py \
             tests/test_nl2sql_history_sort_oracle_live.py \
             tests/test_nl2sql_profile_delete_oracle_live.py \
+            tests/test_nl2sql_synthetic_oracle_live.py \
             tests/test_nl2sql_synthetic_preview_oracle_live.py \
             tests/test_system_schema_columns_oracle_live.py
           python3 ../../.github/scripts/pytest-skip-gate.py "${RUNNER_TEMP}/junit.xml" \
-            --allow "test_nl2sql_synthetic_preview_oracle_live::test_select_ai_generates_into_staging_only"
+            --allow "test_nl2sql_synthetic_preview_oracle_live::test_select_ai_generates_into_staging_only" \
+            --allow "test_nl2sql_synthetic_oracle_live::test_capture_session_reads_adb_load_operations"
 
       # Agent: migration の後の状態を読み、ready（管理対象がそろっている）を確かめる
       # （--status は ready でなくても 0 で終わる）。

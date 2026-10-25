@@ -379,7 +379,9 @@ class RunHistoryStore:
         )
 
     async def purge_runs(self, retention_days: int) -> int:
-        """保持期間を過ぎた実行を削除し、削除件数を返す。"""
+        """保持期間を過ぎた実行を削除し、削除件数を返す（0 以下は無期限で削除しない）。"""
+        if retention_days <= 0:
+            return 0
 
         def operation(connection: OracleConnectionProtocol) -> int:
             return _execute_count(

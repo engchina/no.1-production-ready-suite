@@ -98,11 +98,10 @@ EVALUATION_EXPECTED_TOOLS_MAX = 10
 EVALUATION_CLARIFICATION_ANSWERS_MAX = 10
 EVALUATION_CLARIFICATION_ROUNDS_MAX = 3
 EVALUATION_CLARIFICATION_TEXT_MAX_CHARS = 2000
-# 終わった job を残す期間（日）。利用状況・フィードバックの最長の期間（365 日）と同じ（#794）。
-# 以前は件数（50 件）で消していたため、前回との比較・評価の履歴が 50 件より前を失っていた。
-EVALUATION_JOBS_RETENTION_DAYS = 365
-# メモリと保存先を守るための件数の上限（期間内でもこれを超えたら古い終わった job から消す）。
-EVALUATION_JOBS_MAX = 2000
+# 終わった job を残す期間（日）と件数の上限。どちらも 0 は無期限・上限なしで、評価の履歴（実行の
+# 記録）を自動では消さない（#3235。以前は 365 日・2,000 件、その前は 50 件で消していた。#794）。
+EVALUATION_JOBS_RETENTION_DAYS = 0
+EVALUATION_JOBS_MAX = 0
 # 評価の履歴の一覧の 1 ページの既定と上限。
 EVALUATION_JOBS_PAGE_SIZE = DEFAULT_PAGE_LIMIT
 EVALUATION_JOBS_PAGE_SIZE_MAX = 100
@@ -829,7 +828,7 @@ def cases_fingerprint(job: EvaluationJob) -> tuple[tuple[Any, ...], ...]:
 
 
 class EvaluationStore:
-    """評価の job（終わった job は `EVALUATION_JOBS_RETENTION_DAYS` 日残す。#794）。"""
+    """評価の job（終わった job は既定で無期限に残す。#794・#3235）。"""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -854,13 +853,21 @@ class EvaluationStore:
         return copy
 
     def _prune_locked(self, now: datetime) -> list[str]:
-        """保持期間を過ぎた・件数の上限を超えた、終わった job を古い順に消す（実行中は残す）。"""
-        cutoff = now - timedelta(days=EVALUATION_JOBS_RETENTION_DAYS)
+        """保持期間を過ぎた・件数の上限を超えた、終わった job を古い順に消す（実行中は残す）。
+
+        保持期間・件数の上限は 0 以下なら使わない（既定はどちらも 0 で、何も消さない）。
+        """
+        retention_days = EVALUATION_JOBS_RETENTION_DAYS
+        max_jobs = EVALUATION_JOBS_MAX
+        if retention_days <= 0 and max_jobs <= 0:
+            return []
+        cutoff = now - timedelta(days=retention_days) if retention_days > 0 else None
         removed: list[str] = []
         for key, item in list(self._jobs.items()):
             if item.status in ACTIVE_JOB_STATUSES:
                 continue
-            if item.created_at < cutoff or len(self._jobs) > EVALUATION_JOBS_MAX:
+            expired = cutoff is not None and item.created_at < cutoff
+            if expired or (max_jobs > 0 and len(self._jobs) > max_jobs):
                 self._jobs.pop(key)
                 removed.append(key)
         return removed

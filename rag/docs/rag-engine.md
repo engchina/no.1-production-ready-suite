@@ -146,7 +146,8 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_APPROVED_FAQ_SUGGESTION_MAX_GAP` | `0.1` | チャットと RAG 検索で類似問を提示するとき、1 位の一致度からこの差より離れた候補を出さない（#709） |
 | `RAG_ANSWER_VISION_ENABLED` | `true` | 画像を見て答える必要がある質問（rag_engine の `should_include_image_evidence`）では、根拠の図を切り出して既定の Vision モデル（システム設定 > モデル）へ添付して回答する。それ以外の回答・質問の拡張・監査は既定のテキストモデル（チャットの比較ではその列のモデル）で行う。Vision モデルが未設定なら添付しない（#649） |
 | `RAG_HISTORY_REWRITE_ENABLED` | `true` | チャットで、会話履歴から質問を書き換える |
-| `RAG_ANSWER_RECORD_RETENTION_DAYS` | `90` | 回答の記録の保存日数（`0` は無期限）。取込・検索・回答設定 > 検索方法の「回答の記録の保存期間」で変更できる（#593 で回答スタイルの画面から移した） |
+| `RAG_ANSWER_RECORD_RETENTION_DAYS` | `0` | 回答の記録とチャット・RAG 検索の実行履歴の保存日数。既定の `0` は無期限で、自動では削除しない（#3235。以前の既定は 90 日）。正の値にすると、回答の保存時と設定の保存時に期限を過ぎた記録を削除する。取込・検索・回答設定 > 検索方法の「回答の記録の保存期間」で変更できる（#593 で回答スタイルの画面から移した） |
+| `RAG_QUERY_HISTORY_RETENTION_DAYS` | `0` | 質問履歴（よく聞かれる質問の候補。`RAG_QUERY_HISTORY_ENABLED` が有効なときだけ記録する）の保存日数。既定の `0` は無期限で、自動では削除しない（#3235。以前の既定は 90 日）。正の値にすると、記録時と設定の保存時に期限を過ぎた履歴を削除する。取込・検索・回答設定 > 検索方法の「質問履歴」で変更できる |
 | `RAG_ANSWER_PROFILE` | `legacy` | 回答フローの業務 profile。回答フローは rag_engine の `current_profile()`（runtime を渡さないときの既定 = `legacy`）で動くため、rag_poc と同じく日本語問い合わせ規則が有効で、業務分類・別名は `RAG_ENGINE_DOMAIN_PROFILE_FILE` の JSON（未指定なら作業ディレクトリの `domain_profile.json`、なければ分類・別名なし）から読む（書式は rag_poc の `domain_profile.example.json`。業務固有の profile は同梱していない）。既定はこの実際の挙動に合わせて `legacy`（#300。以前の既定 `generic` は回答フローに届いていなかった）。`generic` は既存の `.env` との互換のため受け付けるが、回答フローには反映されない |
 | `RAG_ENGINE_DOMAIN_PROFILE_FILE`（backend の process の環境変数） | 未指定 | legacy profile の JSON（業務固有の語。書式は rag_poc の `domain_profile.example.json`。業務固有の profile は同梱していない）。rag_engine の `rag_engine.profiles` が process の環境変数（`os.environ`）を直接読み、未指定なら作業ディレクトリ（backend は `rag/backend/`）の `domain_profile.json` を読む。どちらのファイルもなければ分類・別名・判定語なしで動く。`backend/.env` / 共通 `.env` に書いても process の環境変数にはならないため効かない。指定するときは systemd の unit の `Environment=` か、起動する shell の `export` で渡す。読んだ内容は process 内で cache するため、変えたら backend を再起動する。rag_engine の設定（`build_engine_settings`）には読み先を渡していない（#569）。質問の業務名（`business_patterns`）には使わない（検索範囲の大分類の語の一覧から照合する。#553）。今も使う項目は、質問の検索語の別名（`aliases`）、ファイル・データの確認と外部連携の判定語（`file_data_terms` / `external_context_terms`）、操作手順の節ラベル（`operation_section_pattern`）、問い合わせ元の語（`requester_terms`）、大分類・中分類の候補（`categories`。business_match の番号付きの分類名の照合）と、取込時の chunk の `retrieval_profile.business_domains`（`business_patterns`。business_match の照合先の 1 つ）。画面からは管理できない |
 | `RAG_ENGINE_RENDER_DPI`（docling サービス） | `300` | 解析時のページ画像の解像度。bbox はこの画像の px 座標になる |
@@ -474,7 +475,7 @@ ai-foundations-lab の検証との照合（#512）:
 
 ## 保存先
 
-- **質問履歴**：`rag_query_history`（検索・回答プロファイル単位。安全チェックでマスクした後の質問・正規化した質問・分類条件）。migration `20260926_005_query_history` で作成する。設定が有効なときだけ、回答に成功した質問（検索とチャット）を記録し、保存期間を過ぎたものを削除する。候補は rag_poc の `suggest_query_history_questions`（最小回数・類似度・分類・除外する語）で出す。
+- **質問履歴**：`rag_query_history`（検索・回答プロファイル単位。安全チェックでマスクした後の質問・正規化した質問・分類条件）。migration `20260926_005_query_history` で作成する。設定が有効なときだけ、回答に成功した質問（検索とチャット）を記録する。既定の保存期間は無期限で自動では削除せず、保存期間を決めたときは過ぎたものを削除する（#3235）。候補は rag_poc の `suggest_query_history_questions`（最小回数・類似度・分類・除外する語）で出す。
 - **文書の分類と有効期間**：`rag_documents.classification`（JSON）。migration `20260926_001_documents_classification` で列を追加する（取り消した migration `20261016_002_document_effective_period` を当てた DB は、`20261019_001_restore_document_classification` が列を戻す。#2450）。ACL に使う `category_name` とは別に持つ。
 - **検索・回答プロファイルの知識**：`rag_search_answer_profile_knowledge`（検索・回答プロファイル × 種別、rag_poc の JSON payload のまま）。表は「運用設定 > システムテーブル」から、migration `20260925_001_business_view_knowledge` で作成する。
 - **親子チャンク**：子を `rag_chunks` に保存する。親の本文（`parent_text`）、検索用テキスト（`engine_search_text`）、metadata v4（`engine_metadata_json`）は子の metadata に持つ。

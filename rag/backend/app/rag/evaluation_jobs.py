@@ -61,8 +61,8 @@ EVALUATION_JOB_STALE_SECONDS = 120.0
 # 同時に実行する品質評価の job の数の上限（全プロセスの合計）。評価は LLM を何度も呼ぶため、
 # 画面と nightly が同時に動く程度に抑える。
 EVALUATION_JOB_MAX_RUNNING = 2
-# 終わった job の保持期間（日）。結果は評価 artifact（`rag_evaluation_runs`）にも残る。
-EVALUATION_JOB_RETENTION_DAYS = 7
+# 終わった job の保持期間（日）。0 は無期限で、自動では削除しない（実行の記録は残す。#3235）。
+EVALUATION_JOB_RETENTION_DAYS = 0
 # current_case_id の列（VARCHAR2(200 CHAR)）に収める。
 _CASE_ID_MAX_CHARS = 200
 # lease_owner の列（VARCHAR2(128)）に収める。
@@ -358,6 +358,8 @@ class MemoryEvaluationJobStore:
         return sum(1 for record in self._jobs.values() if record.status == "RUNNING")
 
     async def purge(self, *, retention_days: int) -> int:
+        if retention_days <= 0:
+            return 0
         threshold = self._clock() - timedelta(days=retention_days)
         expired = [
             job_id
@@ -608,9 +610,10 @@ class EvaluationJobService:
         await store.fail_stale(
             stale_seconds=self._stale_seconds, error_message=EVALUATION_JOB_STALE_MESSAGE
         )
-        with contextlib.suppress(Exception):
-            # 保持期間を過ぎた job の削除は補助。失敗しても投入は止めない。
-            await store.purge(retention_days=EVALUATION_JOB_RETENTION_DAYS)
+        if EVALUATION_JOB_RETENTION_DAYS > 0:
+            with contextlib.suppress(Exception):
+                # 保持期間を過ぎた job の削除は補助。失敗しても投入は止めない。
+                await store.purge(retention_days=EVALUATION_JOB_RETENTION_DAYS)
         if await store.count_running() >= self._max_running:
             raise EvaluationJobLimitError(
                 EVALUATION_JOB_LIMIT_MESSAGE.format(limit=self._max_running)

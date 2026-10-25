@@ -13129,7 +13129,7 @@ for (const uuidAvailable of [false, true]) {
     await page.getByRole("tab", { name: "合成データ生成" }).click();
     const workspace = page.locator("#data-management-panel-synthetic");
     const panel = page.getByTestId("synthetic-run-panel");
-    await expect(panel).toContainText("確認用データと履歴は生成終了から24時間保持します。");
+    await expect(panel).toContainText("確認用データは生成終了から24時間保持し、期限後に破棄します。生成記録は履歴に残ります。");
     await workspace.getByRole("button", { name: "テーブル一覧を取得" }).click();
     await workspace.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
     await workspace.getByLabel("実行確認語").fill("APP.INVOICES");
@@ -17918,37 +17918,49 @@ test("synthetic manual refresh discards feedback after switching history", async
   await expect(panel.getByText(/生成状況に変更はありません/)).toBeVisible();
 });
 
-test("synthetic history keeps the last 24 hours after completion and preserves unfinished runs", async ({ page }, testInfo) => {
+test("synthetic history keeps finished runs after the review window and reads expired previews only", async ({ page }, testInfo) => {
+  // #3235: 生成の記録は期間で消さない。24 時間を過ぎるのは確認用データ（表示・適用・破棄）だけ。
   await mockNl2SqlApi(page);
   const at = Date.now();
   const old = new Date(at - 3 * 24 * 60 * 60_000).toISOString();
   const recent = syntheticRunFixture("completed");
-  const expired = { ...recent, run_id: "expired-run", created_at: old, finished_at: old };
+  const expired = { ...recent, run_id: "expired-run", created_at: old, finished_at: old, review_expired: true };
+  const expiredPreview = { ...expired, run_id: "expired-preview", preview: true, review_status: "ready" };
   const longRun = { ...recent, run_id: "recent-finish", created_at: old };
   const active = { ...syntheticRunFixture("unknown"), run_id: "old-unknown", created_at: old };
-  let runs = [recent, expired, longRun, active];
+  const runs = [recent, expired, expiredPreview, longRun, active];
+  let resultRequests = 0;
   await page.route("**/api/nl2sql/synthetic-data/runs", (route) => fulfillJson(route, runs));
-  await page.route("**/api/nl2sql/synthetic-data/runs/expired-run", (route) => route.fulfill({ status: 404, body: "expired" }));
+  await page.route("**/api/nl2sql/synthetic-data/runs/missing-run", (route) => route.fulfill({ status: 404, body: "missing" }));
+  await page.route("**/api/nl2sql/synthetic-data/runs/expired-preview/results**", (route) => { resultRequests += 1; return route.fulfill({ status: 409, body: "expired" }); });
   await page.goto("/data-management?synthetic_run=run-001");
   const panel = page.getByTestId("synthetic-run-panel");
   const history = panel.getByRole("combobox", { name: "生成履歴", exact: true });
   const historyOptions = await openSelectFieldOptions(history);
-  await expect(historyOptions).toHaveCount(3);
-  await expect(historyOptions.and(page.locator('[data-value="expired-run"]'))).toHaveCount(0);
+  await expect(historyOptions).toHaveCount(5);
+  await expect(historyOptions.and(page.locator('[data-value="expired-run"]'))).toHaveCount(1);
   await expect(historyOptions.and(page.locator('[data-value="recent-finish"]'))).toHaveCount(1);
   await expect(historyOptions.and(page.locator('[data-value="old-unknown"]'))).toHaveCount(1);
   await closeSelectFieldOptions(history);
-  await expect(panel).toContainText("履歴は処理終了から24時間保存します");
+  await expect(panel).toContainText("生成記録は削除せずに履歴に残します");
   await chooseSelectFieldOption(history, "old-unknown");
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成結果を確認できていません");
-  await chooseSelectFieldOption(history, "recent-finish");
+  await chooseSelectFieldOption(history, "expired-run");
+  await expect(panel.getByTestId("synthetic-run-reference")).toContainText("expired-run");
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
+  // 確認用データの期間を過ぎた確認の記録は読めるが、表示・適用・破棄はできない。
+  await chooseSelectFieldOption(history, "expired-preview");
+  const review = page.getByTestId("synthetic-review");
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("確認用データの保持期間を過ぎました（未適用）");
+  await expect(review).toContainText("確認用データの保持期間（生成終了から24時間）を過ぎたため");
+  await expect(review.getByRole("button", { name: "確認したデータを適用", exact: true })).toHaveCount(0);
+  await expect(review.getByRole("button", { name: "確認用データを破棄", exact: true })).toHaveCount(0);
+  expect(resultRequests).toBe(0);
   await history.scrollIntoViewIfNeeded();
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: testInfo.outputPath("synthetic-history-retention.png") });
-  // 保存済みの期限切れ ID を開いても、別の run を黙って選択しない。
-  runs = [recent, longRun, active];
-  await page.goto("/data-management?synthetic_run=expired-run");
+  // 開けない ID（別の利用者・別の DB の記録など）を開いても、別の run を黙って選択しない。
+  await page.goto("/data-management?synthetic_run=missing-run");
   await expectSelectFieldValue(history, "");
   await expect(panel.getByTestId("synthetic-run-reference")).toHaveCount(0);
 });

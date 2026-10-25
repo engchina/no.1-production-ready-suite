@@ -1037,7 +1037,7 @@ async def test_answer_record_is_saved_per_surface(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     oracle = SavingOracle()
     pipeline = RagPipeline(
-        settings=Settings(),
+        settings=Settings(rag_answer_record_retention_days=90),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
@@ -1080,20 +1080,22 @@ async def test_answer_record_is_saved_per_surface(monkeypatch: pytest.MonkeyPatc
             "children",
         }
     assert second["surface"] == "chat"
-    assert oracle.purged == [90, 90]  # 既定の保持日数で保存のたびに期限切れを削除する
+    assert oracle.purged == [90, 90]  # 保持日数を決めたときは保存のたびに期限切れを削除する
 
 
 async def test_answer_record_purge_skipped_when_retention_unlimited(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """既定の保持日数は 0（無期限）で、回答の記録を自動では削除しない（#3235）。"""
     import rag_engine.adapters.oci as engine_oci
 
     from app.rag.pipeline import RagPipeline
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     oracle = SavingOracle()
+    assert Settings().rag_answer_record_retention_days == 0
     pipeline = RagPipeline(
-        settings=Settings(rag_answer_record_retention_days=0),
+        settings=Settings(),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )

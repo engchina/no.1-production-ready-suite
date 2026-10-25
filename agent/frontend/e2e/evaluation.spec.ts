@@ -440,8 +440,8 @@ for (const viewport of VIEWPORTS) {
 }
 
 for (const viewport of VIEWPORTS) {
-  test(`最近の評価は 365 日残し、サーバー側でページングする (${viewport.name})`, async ({ page, mockApi }) => {
-    // #794: 評価の履歴は件数（旧 50 件）ではなく期間で残し、一覧は offset / limit で取得する。
+  test(`最近の評価は削除せずに残し、サーバー側でページングする (${viewport.name})`, async ({ page, mockApi }) => {
+    // #794・#3235: 評価の履歴は件数・期間で消さずに残し、一覧は offset / limit で取得する。
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     seedFinishedJobs(mockApi);
     const [latest] = mockApi.state.evaluations;
@@ -450,7 +450,7 @@ for (const viewport of VIEWPORTS) {
     }
     await page.goto("/evaluation");
 
-    await expect(page.getByText("新しい順。終わった評価は 365 日残します。")).toBeVisible();
+    await expect(page.getByText("新しい順。終わった評価は削除せずに残します。")).toBeVisible();
     const pager = page.getByTestId("evaluation-jobs-pagination");
     await expect(pager).toContainText("1–25 / 29 件");
     await pager.getByRole("button", { name: "次へ" }).click();
