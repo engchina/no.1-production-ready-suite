@@ -20,6 +20,7 @@ from rag_parser_core.result import ParserRegistryResult
 
 from app.clients.http_retry import request_with_retry, retry_config_from_settings
 from app.config import Settings
+from app.rag.pdf_backend import PdfSource, SourceOpenError, png_bytes
 from app.schemas.document import SourceProfile
 
 logger = logging.getLogger(__name__)
@@ -263,27 +264,28 @@ class ExternalParserClient:
             yield _RenderedPage(1, source_bytes, width, height, mime_type)
             return
         try:
-            import fitz  # type: ignore[import-untyped]
-
-            rendered = False
-            with fitz.open(stream=source_bytes, filetype="pdf") as document:
-                for index, page in enumerate(document, 1):
-                    pixmap = page.get_pixmap(dpi=dpi, alpha=False)
-                    rendered = True
-                    yield _RenderedPage(
-                        number=index,
-                        png=pixmap.tobytes("png"),
-                        width=pixmap.width,
-                        height=pixmap.height,
-                    )
-        except Exception as exc:
+            source = PdfSource(source_bytes)
+        except SourceOpenError as exc:
             raise ExternalParserCallError(
                 "adapter_invalid_input", warning_code="external_parser_pdf_render_failed"
             ) from exc
-        if not rendered:
-            raise ExternalParserCallError(
-                "adapter_invalid_input", warning_code="external_parser_pdf_empty"
-            )
+        with source:
+            if source.page_count < 1:
+                raise ExternalParserCallError(
+                    "adapter_invalid_input", warning_code="external_parser_pdf_empty"
+                )
+            for index in range(source.page_count):
+                try:
+                    # 描画は PDFium の lock の中、PNG の符号化は lock の外で行う。
+                    image = source.render(index, dpi / 72)
+                    png = png_bytes(image)
+                except Exception as exc:
+                    raise ExternalParserCallError(
+                        "adapter_invalid_input", warning_code="external_parser_pdf_render_failed"
+                    ) from exc
+                yield _RenderedPage(
+                    number=index + 1, png=png, width=image.width, height=image.height
+                )
 
     def _openai_chat(
         self,

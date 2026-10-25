@@ -226,7 +226,7 @@ RAGFlow / Docling / Marker / Unstructured / Dify / RAG-Anything / MultiDocFusion
 | **nvk/llm-wiki** | 中 | Agent 研究/ナレッジ編纂ツール。Claude/Codex/OpenCode 等の Agent プラグイン流向け。 |
 | **engchina/no.1-rag** | シナリオ型 | **Oracle/OCI 方向のサンプル**。コミュニティシグナルは弱いが、本プロジェクトの OCI シナリオに参考価値あり。 |
 | **engchina/no.1-semantic-doc-search** | シナリオ型 | Oracle Cloud / ADB / Compute / Terraform 構成の semantic document search サンプル。大阪リージョン向け deploy 手順や OSS ライセンス棚卸しも含み、本プロジェクトの OCI 配備・文書検索 UI/API の比較参考になる。 |
-| **engchina/No.1-PdfParser-Free** | シナリオ型(取込後に**削除**) | PDF をページ画像に変換して VLM/OCR で Markdown 化する解析サンプル。「先变换、再 parse」の手法を前処理(Preprocess)ステージの `pdf_to_page_images`(PyMuPDF でラスタライズ→画像 PDF→後段の OCR / VLM)として取り込んだが、#3347 で削除した。スキャンの PDF は既定の解析エンジン Docling が OCR で読み、ページを画像として検索に使う用途はページ画像の埋め込みの方式(描画は pypdfium2)が受け持つ。あわせて AGPL の PyMuPDF への依存を 1 つ減らした(#3343)。 |
+| **engchina/No.1-PdfParser-Free** | シナリオ型(取込後に**削除**) | PDF をページ画像に変換して VLM/OCR で Markdown 化する解析サンプル。「先变换、再 parse」の手法を前処理(Preprocess)ステージの `pdf_to_page_images`(PyMuPDF でラスタライズ→画像 PDF→後段の OCR / VLM)として取り込んだが、#3347 で削除した。スキャンの PDF は既定の解析エンジン Docling が OCR で読み、ページを画像として検索に使う用途はページ画像の埋め込みの方式(描画は pypdfium2)が受け持つ。backend の PDF の描画・文字の層の読み取りも pypdfium2 に置き換え(#3343)、AGPL の PyMuPDF への依存は無くなった。 |
 | **hkuds/rag-anything** | 非常に高 | マルチモーダル RAG の重点プロジェクト。長期トラッキング推奨。 |
 | **FareedKhan-dev/rag-zero-hallucinations** | 非常に高 | **near-zero hallucination RAG の end-to-end 参照(チュートリアル + コード)**。引用付き生成・claim faithfulness 検証・校正済み棄権・CRAG 自己修正を一通り通す。プロダクトではないが、本プロジェクトの「ハルシネーション抑止 preset」設計の中核参考。確定スタックへの再マップは §2.1(LanceDB / Qwen3+vLLM / bm25s は導入せず Oracle AI Database / OCI Enterprise AI / OCI Cohere へ)。 |
 | **oceanbase/powerrag** | シナリオ型(**取込済**) | RAGFlow ベースの OceanBase 強化版。優点を確定スタックへ再マップ済み: scalar/日付/カテゴリ pre-filter(Oracle AI Database `JSON_VALUE`/`TIMESTAMP`/`IN`)、schema 駆動 field/entity 抽出(`extraction_field_adapter`、LangExtract→OCI Enterprise AI structured output)、prompt 版管理(`prompt_versions`、custom generation profile。#595 で削除し、回答は回答生成のプロンプト(`rag_answer_prompts`)で編集する)、MinerU/Dots.OCR を parser adapter 候補として登録(`rag_parser_mineru_enabled`/`rag_parser_dots_ocr_enabled`、未導入時は安全に fallback)。 |
@@ -248,7 +248,7 @@ RAGFlow / Docling / Marker / Unstructured / Dify / RAG-Anything / MultiDocFusion
 
 - **Flowise**: ローコード生態系は強いが、深刻な脆弱性が悪用された報道あり。公開デプロイ時は**必ず最新化し隔離**する。
 - **Dify / Open WebUI / FastGPT** などソース利用可能プロジェクトは、**ライセンス/ブランド/商用制限**を企業商用前に法務確認する。
-- **engchina/No.1-PdfParser-Free**: README 上では PyMuPDF の AGPL / 商用ライセンス注意が明記されている。PDF 画像化・OCR prompt・Markdown artifact 設計は参考に留め、商用採用時は PyMuPDF ライセンスを法務確認する(取り込んだ前処理 `pdf_to_page_images` は #3347 で削除した。backend に残る PyMuPDF の扱いは #3343)。VLM/OCR 呼び出しは OpenAI 互換 chat API のまま導入せず、OCI Enterprise AI に置き換える。
+- **engchina/No.1-PdfParser-Free**: README 上では PyMuPDF の AGPL / 商用ライセンス注意が明記されている。PDF 画像化・OCR prompt・Markdown artifact 設計は参考に留め、商用採用時は PyMuPDF ライセンスを法務確認する(取り込んだ前処理 `pdf_to_page_images` は #3347 で削除し、backend の PyMuPDF も #3343 で pypdfium2 に置き換えた)。VLM/OCR 呼び出しは OpenAI 互換 chat API のまま導入せず、OCI Enterprise AI に置き換える。
 - 本プロジェクトへ取り込む際は、確定スタック(OCI Enterprise AI / OCI Generative AI Cohere Embed v4・Rerank v4 fast / Oracle AI Vector Search / Vite + React Router)に**必ず再マッピング**する。外部ベクトル DB・別 LLM プロバイダの直接導入は AGENTS.md §3・§8 に反するため不可(逸脱時は理由を添えて要確認)。
 
 ## 8. リンク集
