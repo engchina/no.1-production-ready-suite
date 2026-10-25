@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
+  PageLoadingState,
   ProcessingIndicator,
   TimedLoadingState,
   elapsedMsBetween,
@@ -142,5 +143,13 @@ describe("TimedLoadingState", () => {
     const html = renderToStaticMarkup(<TimedLoadingState label="読み込んでいます" />);
     expect(html).toContain('data-processing-activity-icon="spinner"');
     expect(html).toContain("animate-spin");
+  });
+});
+
+describe("PageLoadingState", () => {
+  it("3 製品の画面と同じく全幅で出し、本文の最大幅で絞らない（#3311）", () => {
+    const html = renderToStaticMarkup(<PageLoadingState label="読み込んでいます" testId="page-loading" />);
+    expect(html).toContain("max-w-none");
+    expect(html).not.toContain("max-w-[var(--content-max-width)]");
   });
 });
