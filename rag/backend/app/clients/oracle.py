@@ -13136,11 +13136,14 @@ def _context_group_siblings_batch_sql(
     """
     if len(targets) > _CONTEXT_ANCHOR_BATCH_SIZE:
         raise ValueError("前後の文脈の起点が 1 回の SQL の上限を超えています。")
+    # 前後の文脈は起点と同じ文書。有効期間(文書の単位)は起点を選んだ検索で当て済みなので、
+    # 今日の日付で絞り直さない(過去の基準日の検索で起点の前後が落ちないように。#3268)。
     where_sql, binds = _oracle_retrieval_where(
         {
             "document_id": _CONTEXT_ANCHOR_DOCUMENT_PLACEHOLDER,
             "chunk_set_id": _CONTEXT_ANCHOR_CHUNK_SET_PLACEHOLDER,
-        }
+        },
+        effective_period=False,
     )
     if (
         binds.pop("filter_document_id", None) != _CONTEXT_ANCHOR_DOCUMENT_PLACEHOLDER
@@ -13248,14 +13251,17 @@ def _anchor_positions(value: object) -> list[tuple[int, int]]:
 def _context_anchor_retrieval_where(
     anchor: RetrievedChunk,
 ) -> tuple[str, dict[str, object]]:
-    """context 補完を anchor と同じ recipe lineage に限定する。"""
+    """context 補完を anchor と同じ recipe lineage に限定する。
+
+    有効期間は起点を選んだ検索で当て済み(同じ文書)なので絞り直さない(#3268)。
+    """
     chunk_set_id = _metadata_str(anchor.metadata.get("chunk_set_id"))
     filters = {"document_id": anchor.document_id}
     if chunk_set_id is not None:
         filters["chunk_set_id"] = chunk_set_id
-        return _oracle_retrieval_where(filters)
+        return _oracle_retrieval_where(filters, effective_period=False)
 
-    where_sql, binds = _oracle_retrieval_where(filters)
+    where_sql, binds = _oracle_retrieval_where(filters, effective_period=False)
     recipe_id = _metadata_str(anchor.metadata.get("recipe_id"))
     if recipe_id is not None:
         binds["anchor_recipe_id"] = recipe_id
