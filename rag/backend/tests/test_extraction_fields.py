@@ -404,7 +404,6 @@ def _pipeline(oracle: _FieldSetOracle, vlm: _PromptRecorder) -> IngestionPipelin
         oracle=cast(Any, oracle),
         object_storage=cast(Any, object()),
         document_understanding=cast(Any, object()),
-        speech=cast(Any, object()),
         settings=Settings().model_copy(update={"rag_field_extraction_enabled": True}),
     )
 

@@ -1569,9 +1569,6 @@ export const ja = {
   "settings.preprocess.profile.office_to_pdf": "Office→PDF",
   "settings.preprocess.profile.office_to_pdf.description":
     "Word・PowerPoint の文書(旧形式の .doc・.ppt、マクロ付きの .docm・.pptm を含む)を PDF にしてから解析します。マクロは実行しません。PDF にした文書はブラウザーでプレビューできます。Excel は「Excel→JSONL」を使います。",
-  "settings.preprocess.profile.pdf_to_page_images": "PDF を画像として読み直す",
-  "settings.preprocess.profile.pdf_to_page_images.description":
-    "PDF の各ページを画像にして、画像から文字を読み取り直します。文字化けする PDF や、文字を選択・コピーできない PDF に使います。",
   "settings.preprocess.profile.csv_to_jsonl": "CSV→JSONL",
   "settings.preprocess.profile.csv_to_jsonl.description":
     "CSV の 1 行を、見出しの列名と値の組の 1 件の記録(JSONL)にしてから解析します。元の行の位置を保ちます。文書解析は「構造化レコード JSONL」を使います。",
@@ -1581,9 +1578,6 @@ export const ja = {
   "settings.preprocess.profile.word_to_jsonl": "Word→JSONL",
   "settings.preprocess.profile.word_to_jsonl.description":
     "Word ファイル(.doc・.docx・マクロ付きの .docm)を、見出しの下の段落・リスト・表のまとまりを 1 件の記録(JSONL)にしてから解析します。見出しの階層と本文の位置を保ちます。.doc は .docx にしてから読み、マクロは実行しません。文書解析は「構造化レコード JSONL」を使います。",
-  "settings.preprocess.profile.pii_redact": "PIIマスク",
-  "settings.preprocess.profile.pii_redact.description":
-    "テキストの氏名・メールアドレス・電話番号などの個人情報(PII)をマスクしてから解析します。",
   "settings.preprocess.actions.save": "保存",
   "settings.preprocess.actions.label": "ファイル準備の設定の操作",
   "settings.preprocess.actions.saved": "ファイル準備の設定を保存しました。",
@@ -1697,11 +1691,9 @@ export const ja = {
   "settings.services.failure.fallback":
     "サービスのログと状態を確認してから、もう一度実行してください。",
   "settings.services.item.preprocessOfficeToPdf": "Office→PDF",
-  "settings.services.item.preprocessPdfToPageImages": "PDF を画像として読み直す",
   "settings.services.item.preprocessCsvToJsonl": "CSV→JSONL",
   "settings.services.item.preprocessExcelToJsonl": "Excel→JSONL",
   "settings.services.item.preprocessWordToJsonl": "Word→JSONL",
-  "settings.services.item.preprocessPiiRedact": "PIIマスク",
   "settings.services.item.parserDocling": "Docling",
   "settings.services.item.parserUnstructured": "Unstructured",
   "settings.services.item.parserStructuredRecordsJsonl": "構造化レコード JSONL",
@@ -2587,13 +2579,15 @@ export const ja = {
   "upload.dropzone":
     "PDF・画像・テキスト・HTML・メール・Office をここにドラッグ＆ドロップ",
   "upload.dropzoneHint":
-    "複数ファイルをまとめて選択できます（最大 {size} / ファイル）。選んだファイルは下の一覧で確かめてから送ります。音声は保存のみで取込はスキップされます。",
+    "複数ファイルをまとめて選択できます（最大 {size} / ファイル）。選んだファイルは下の一覧で確かめてから送ります。",
   "upload.dropzoneFormats": "対応形式: {formats}",
   "upload.dropzoneUnsupported":
-    "HEIC / HEIF の画像と EPUB は対応していません。画像は JPEG / PNG、EPUB は PDF に変換してからアップロードしてください（iPhone は「設定 › カメラ › フォーマット › 互換性優先」で JPEG で保存できます）。",
+    "HEIC / HEIF の画像・EPUB・音声・動画のファイルは対応していません。画像は JPEG / PNG、EPUB は PDF に変換し、音声・動画は内容をテキストに書き起こしてからアップロードしてください（iPhone は「設定 › カメラ › フォーマット › 互換性優先」で JPEG で保存できます）。",
   "upload.rejected.heicImage":
     "HEIC / HEIF の画像は対応していません。JPEG / PNG に変換してからアップロードしてください（iPhone は「設定 › カメラ › フォーマット › 互換性優先」で JPEG で保存できます）。",
   "upload.rejected.epubBook": "EPUB の電子書籍は対応していません。PDF に変換してからアップロードしてください。",
+  "upload.rejected.audioVideo":
+    "音声・動画のファイル（MP3・WAV・OGG・MP4 など）は対応していません。内容をテキストに書き起こしてからアップロードしてください。",
   "upload.uploading": "{count} 件のファイルをアップロードしています",
   "upload.progress.aria": "送信の進み具合",
   "upload.progress.sent": "送信済み {sent} / {total}（{percent}%）",
@@ -2627,6 +2621,7 @@ export const ja = {
   "upload.selection.problem.empty": "空のファイル",
   "upload.selection.problem.heicImage": "HEIC / HEIF は対応していません",
   "upload.selection.problem.epubBook": "EPUB は対応していません",
+  "upload.selection.problem.audioVideo": "音声・動画は対応していません",
   "upload.batch.title": "アップロード結果",
   "upload.batch.total": "選択したファイル",
   "upload.batch.uploaded": "保存済み",
@@ -2694,7 +2689,6 @@ export const ja = {
   "sourceProfile.modality.html": "HTML",
   "sourceProfile.modality.email": "メール",
   "sourceProfile.modality.office": "Office",
-  "sourceProfile.modality.audio": "音声",
   "sourceProfile.modality.unknown": "不明",
   "sourceProfile.preview.pdf": "PDF",
   "sourceProfile.preview.image": "画像",
@@ -2710,7 +2704,6 @@ export const ja = {
   "sourceProfile.parser.html": "HTML セマンティック解析",
   "sourceProfile.parser.email": "メール構造化",
   "sourceProfile.parser.office": "Office 構造化",
-  "sourceProfile.parser.audio": "音声未対応",
   "sourceProfile.parser.outlookMsg": "Outlook MSG 未対応",
   "sourceProfile.parser.tiffImage": "TIFF 画像未対応",
   "sourceProfile.parser.legacyOffice": "旧 Office(要変換)",
@@ -2723,7 +2716,6 @@ export const ja = {
     "MIME type と拡張子の推定が一致していません。",
   "sourceProfile.warning.largeFile": "大きなファイルのため、取込に時間がかかる可能性があります。",
   "sourceProfile.warning.unknown": "原本種別を判定できませんでした。",
-  "sourceProfile.warning.unsupportedAudio": "音声ファイルは現在の取込対象外です。",
   "sourceProfile.warning.unsupportedOutlookMsg":
     "Outlook MSG は現在のメール parser では取込対象外です。",
   "sourceProfile.warning.unsupportedTiffImage":
@@ -2741,8 +2733,6 @@ export const ja = {
   "sourceProfile.warning.formulaReview": "数式抽出結果の確認が必要です。",
   "sourceProfile.warning.lowConfidenceElements": "低信頼度の構造要素があります。",
   "sourceProfile.warning.generic": "原本メタデータに確認事項があります。",
-  "sourceProfile.unsupported.audioTranscriptionNotConfigured":
-    "音声文字起こし経路が未設定です。",
   "sourceProfile.unsupported.outlookMsgNotSupported":
     "Outlook MSG 形式は現在未対応です。EML 形式に変換してください。",
   "sourceProfile.unsupported.tiffImageNotSupported":
@@ -4258,7 +4248,6 @@ export const ja = {
   "evaluation.ingestionQuality.warning.parserFallback": "Parser fallback",
   "evaluation.ingestionQuality.warning.failedSegments": "失敗 segment",
   "evaluation.ingestionQuality.warning.segmentArtifactCacheMiss": "Segment artifact 再抽出",
-  "evaluation.ingestionQuality.warning.unsupportedAudio": "音声未対応",
   "evaluation.ingestionQuality.warning.unsupportedOutlookMsg": "Outlook MSG 未対応",
   "evaluation.ingestionQuality.warning.unsupportedTiffImage": "TIFF 画像未対応",
   "evaluation.ingestionQuality.warning.unsupportedLegacyOffice": "旧 Office(要変換)",

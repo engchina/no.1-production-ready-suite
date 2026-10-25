@@ -9,7 +9,6 @@ import { t, type I18nKey } from "@/lib/i18n";
 // 未知の組合せは「判定しない」(null)へ倒し、誤警告を出さない。
 const PREPROCESS_MODALITY_TRANSFORMS: Record<string, { from: string; to: string }> = {
   office_to_pdf: { from: "office", to: "pdf" },
-  pdf_to_page_images: { from: "pdf", to: "image" },
   excel_to_jsonl: { from: "office", to: "text" },
   word_to_jsonl: { from: "office", to: "text" },
 };
@@ -64,7 +63,7 @@ export function effectiveModalityForParser(
 
 /**
  * backend が文書の modality を処理できるか。
- * 判定材料が足りない(宣言なし・unknown/audio modality)場合は null = 判定しない。
+ * 判定材料が足りない(宣言なし・unknown modality)場合は null = 判定しない。
  */
 export function parserSupportsDocument({
   capabilities,
@@ -80,7 +79,7 @@ export function parserSupportsDocument({
   const capability = findParserCapability(capabilities, backend);
   if (!capability || !modality) return null;
   const effective = effectiveModalityForParser(modality, preprocessProfile);
-  if (effective === "unknown" || effective === "audio") return null;
+  if (effective === "unknown") return null;
   // modality を持たない backend（XML ツリー JSON は拡張子 .json で判定する）。テキストの文書は
   // JSON かどうかを modality だけでは決められないので判定しない（取込の前の検査に任せる）。
   if (capability.modalities.length === 0) return effective === "text" ? null : false;

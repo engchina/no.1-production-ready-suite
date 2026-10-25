@@ -15,7 +15,10 @@ SourceFileKind = Literal["pdf", "image"]
 SUPPORTED_IMAGE_FILE_TYPES = (".png", ".jpg", ".jpeg", ".jfif", ".webp", ".bmp", ".gif", ".tif", ".tiff")
 SUPPORTED_SOURCE_FILE_TYPES = (".pdf", *SUPPORTED_IMAGE_FILE_TYPES)
 MAX_IMAGE_PDF_PAGE_DIMENSION = 14400.0
-_PDFIUM_LOCK = RLock()
+# PDFium はスレッド安全ではない（pypdfium2 の Known limitations「Incompatibility with Threading」）。
+# 同じ process の中の PDFium の呼び出し（開く・描く・読む・閉じる）は、すべてこの 1 つの lock の中で行う
+# （#3362）。rag_engine の外（RAG backend など）から呼ぶときも、この lock を使う。
+PDFIUM_LOCK = RLock()
 
 
 def source_file_kind(source_path: str | Path) -> SourceFileKind:
@@ -73,7 +76,7 @@ def source_frame_warnings(source_path: str | Path) -> list[str]:
 def get_pdf_page_count(pdf_path: str | Path) -> int:
     """pypdfium2 を使って PDF のページ数を取得します。"""
     pdfium = _import_pdfium()
-    with _PDFIUM_LOCK:
+    with PDFIUM_LOCK:
         document = pdfium.PdfDocument(str(pdf_path))
         try:
             return len(document)
@@ -94,7 +97,7 @@ def render_pdf_pages(
     pages_dir.mkdir(parents=True, exist_ok=True)
     rendered: list[PageImage] = []
     scale = float(dpi) / 72.0
-    with _PDFIUM_LOCK:
+    with PDFIUM_LOCK:
         document = pdfium.PdfDocument(str(pdf_path))
         try:
             for page_number in page_numbers:
@@ -137,7 +140,7 @@ def pdf_text_lines_in_bbox(pdf_path: str | Path, page_number: int, bbox: dict) -
     def lines(text: str) -> list[str]:
         return [line for line in (" ".join(raw.split()) for raw in text.splitlines()) if line]
 
-    with _PDFIUM_LOCK:
+    with PDFIUM_LOCK:
         document = pdfium.PdfDocument(str(pdf_path))
         try:
             page = document[page_number - 1]
@@ -223,7 +226,7 @@ def _open_image_as_rgb(image_path: str | Path):
 def _write_image_pdf(image_path: Path, target_path: Path, width: int, height: int) -> tuple[float, float]:
     pdfium = _import_pdfium()
     page_width, page_height = _image_pdf_page_size(width, height)
-    with _PDFIUM_LOCK:
+    with PDFIUM_LOCK:
         document = pdfium.PdfDocument.new()
         try:
             with TemporaryDirectory(prefix="image_pdf_", dir=target_path.parent) as temp_dir:

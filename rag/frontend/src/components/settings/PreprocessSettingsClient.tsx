@@ -31,11 +31,9 @@ import { cn } from "@/lib/utils";
 const PROFILE_ORDER: PreprocessProfileName[] = [
   "passthrough",
   "office_to_pdf",
-  "pdf_to_page_images",
   "csv_to_jsonl",
   "excel_to_jsonl",
   "word_to_jsonl",
-  "pii_redact",
 ];
 
 /** 前処理(Preprocess)アダプター(parse 前の原本変換)の runtime 設定を管理する設定画面。 */

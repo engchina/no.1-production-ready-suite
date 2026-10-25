@@ -26,16 +26,14 @@ from pydantic import BaseModel, Field
 from rag_parser_core.source import SourceProfile
 
 # 変換プリセット。backend の `app.config.PreprocessProfile` と同期させる。
-# 重い変換(office_to_pdf / pdf_to_page_images / csv_to_jsonl)は各々独立した
+# 重い変換(office_to_pdf / csv_to_jsonl / excel_to_jsonl)は各々独立した
 # 前処理マイクロサービス(`services/preprocess/<name>`)へ HTTP 委譲する。
 PREPROCESS_PROFILES: tuple[str, ...] = (
     "passthrough",
     "office_to_pdf",
-    "pdf_to_page_images",
     "csv_to_jsonl",
     "excel_to_jsonl",
     "word_to_jsonl",
-    "pii_redact",
 )
 DEFAULT_PREPROCESS_PROFILE = "passthrough"
 

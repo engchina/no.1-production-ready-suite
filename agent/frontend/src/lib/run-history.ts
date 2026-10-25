@@ -11,6 +11,7 @@ import {
   type RunStepDetailField,
   type RunStepDetails,
   type RunExecutorFilter as CommonRunExecutorFilter,
+  type RunCancellation,
   type RunDetailLabelsInput,
   type RunHistoryLabelsInput,
   type RunStatus as CommonRunStatus,
@@ -144,8 +145,15 @@ export function agentRunDetailLabels(): RunDetailLabelsInput {
       tokens: t("run.fact.tokens"),
       cost: t("run.fact.cost"),
       runId: t("run.fact.runId"),
+      cancellation: t("run.fact.cancellation"),
     },
     self: t("run.self"),
+    cancellation: {
+      screen: t("run.cancellation.screen"),
+      mcp: t("run.cancellation.mcp"),
+      mcpKey: (name) => t("run.cancellation.mcpKey", { name }),
+      system: t("run.cancellation.system"),
+    },
     timelineSummary: (count, duration) => t("run.timelineSummary", { count, duration }),
     stepStatus: {
       pending: t("run.stepStatus.pending"),
@@ -315,4 +323,19 @@ export function runConversationHref(
   if (!canOpenChat || !run.thread_id || runSourceOf(run.metadata) !== "user") return null;
   if (!seesAllUsers && run.owned_by_me === false) return null;
   return `${APP_ROUTES.chat}?${new URLSearchParams({ agent_id: run.agent_id, thread_id: run.thread_id }).toString()}`;
+}
+
+/**
+ * 実行の詳細の「取消」（共通の `RunSummary` の `cancellation`。#3348）。取り消していない Run は null。
+ * 引けない利用者（削除済みなど）は「（削除済みのユーザー）」。
+ */
+export function runCancellation(run: Pick<RunState, "cancellation">): RunCancellation | null {
+  const value = run.cancellation;
+  if (!value) return null;
+  if (value.via === "system") return { via: "system" };
+  return {
+    via: value.via,
+    actor: { name: value.actor_display_name || t("run.userUnknown"), isSelf: value.by_me },
+    apiKeyName: value.api_key_name || null,
+  };
 }

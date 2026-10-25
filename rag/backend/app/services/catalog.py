@@ -86,15 +86,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         port=18010,
     ),
     ServiceCatalogEntry(
-        service_id="preprocess-pdf-to-page-images",
-        category="preprocess",
-        profile="cpu",
-        url_field="rag_preprocess_pdf_to_page_images_service_url",
-        label_key="settings.services.item.preprocessPdfToPageImages",
-        working_dir="services/preprocess/pdf_to_page_images",
-        port=18011,
-    ),
-    ServiceCatalogEntry(
         service_id="preprocess-csv-to-jsonl",
         category="preprocess",
         profile="cpu",
@@ -120,15 +111,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.preprocessWordToJsonl",
         working_dir="services/preprocess/word_to_jsonl",
         port=18017,
-    ),
-    ServiceCatalogEntry(
-        service_id="preprocess-pii-redact",
-        category="preprocess",
-        profile="cpu",
-        url_field="rag_preprocess_pii_redact_service_url",
-        label_key="settings.services.item.preprocessPiiRedact",
-        working_dir="services/preprocess/pii_redact",
-        port=18016,
     ),
     ServiceCatalogEntry(
         service_id="parser-docling",

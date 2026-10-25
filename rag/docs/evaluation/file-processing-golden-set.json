@@ -366,18 +366,6 @@
       "notes": "TIFF remains accepted for upload metadata but must be skipped before Enterprise AI image input until conversion or a supported adapter is available."
     },
     {
-      "id": "audio-unsupported",
-      "fixture": "meeting.m4a",
-      "modality": "audio",
-      "scenario": "audio_unsupported",
-      "expected_parser_profile": "unsupported_audio",
-      "expected_chunk_template": "unsupported_audio",
-      "expected_warning": "unsupported_audio",
-      "expected_unsupported_reason": "audio_transcription_not_configured",
-      "required_checks": ["unsupported_reason", "safe_error", "parser_warning_taxonomy"],
-      "notes": "Audio is profiled and skipped with a clear warning until an approved OCI transcription path exists."
-    },
-    {
       "id": "duplicate-file-canonical-kb",
       "fixture": "policy-ja.pdf",
       "duplicate_fixture": "policy-ja-duplicate.pdf",

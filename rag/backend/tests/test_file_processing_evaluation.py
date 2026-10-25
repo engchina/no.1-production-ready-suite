@@ -1326,8 +1326,8 @@ def test_parser_warning_taxonomy_accepts_known_unsupported_and_segment_codes() -
         error_code = "office_segment_parse_failed"
 
     assert evaluation_module._check_parser_warning_taxonomy(
-        ["unsupported_audio"],
-        unsupported_reason="audio_transcription_not_configured",
+        ["unsupported_tiff_image"],
+        unsupported_reason="tiff_image_not_supported",
         segment_failures=[],
     ) == ("passed", "ok")
     assert evaluation_module._check_parser_warning_taxonomy(
@@ -1350,7 +1350,7 @@ def test_parser_warning_taxonomy_rejects_free_text_and_unknown_codes() -> None:
         segment_failures=[],
     ) == ("failure", "unknown_warning_code")
     assert evaluation_module._check_parser_warning_taxonomy(
-        ["unsupported_audio"],
+        ["unsupported_outlook_msg"],
         unsupported_reason="tiff_image_not_supported",
         segment_failures=[],
     ) == ("failure", "unsupported_warning_missing")
@@ -1721,7 +1721,6 @@ def test_file_processing_golden_manifest_tracks_traceability_metrics() -> None:
     assert any(case["id"] == "two-column-pdf-reading-order" for case in manifest["cases"])
     assert any(case["id"] == "image-ocr-bbox" for case in manifest["cases"])
     assert any(case["id"] == "tiff-image-unsupported" for case in manifest["cases"])
-    assert any(case["id"] == "audio-unsupported" for case in manifest["cases"])
     assert any(case["id"] == "markdown-code-formula-blocks" for case in manifest["cases"])
     assert any(case["id"] == "corrupted-file-partial-failure" for case in manifest["cases"])
     assert any(case["id"] == "legacy-office-unsupported" for case in manifest["cases"])
@@ -1808,7 +1807,7 @@ def test_file_processing_contract_runner_executes_local_parser_checks() -> None:
     report = run_file_processing_contract_checks(manifest, manifest_path=manifest_path)
 
     assert report.passed is True
-    assert report.case_count == 17
+    assert report.case_count == 16
     assert report.failure_count == 0
     assert report.pending_staging_check_count > 0
 
@@ -1926,13 +1925,6 @@ def test_file_processing_contract_runner_executes_local_parser_checks() -> None:
         "safe_error",
         "unsupported_reason",
     } <= set(by_id["tiff-image-unsupported"].passed_checks)
-    assert {
-        "expected_unsupported_reason",
-        "expected_warning",
-        "parser_warning_taxonomy",
-        "safe_error",
-        "unsupported_reason",
-    } <= set(by_id["audio-unsupported"].passed_checks)
     assert any(
         check.startswith("ocr_text:") for check in by_id["scanned-pdf-ocr-ja"].pending_checks
     )
@@ -1975,7 +1967,7 @@ def test_file_processing_golden_cli_writes_non_sensitive_report(tmp_path: Path) 
     assert exit_code == 0
     assert payload["passed"] is True
     assert payload["promotion_ready"] is False
-    assert payload["case_count"] == 17
+    assert payload["case_count"] == 16
     assert payload["pending_staging_check_count"] > 0
     assert payload["staging_policy"] == {
         "required_for_promotion": True,
@@ -1984,11 +1976,11 @@ def test_file_processing_golden_cli_writes_non_sensitive_report(tmp_path: Path) 
     }
     assert set(payload["metric_summary"]) >= set(manifest_metrics())
     assert payload["metric_summary"]["retrieval_recall"]["status"] == "requires_staging"
-    assert payload["metric_summary"]["parser_fallback_rate"]["value"] == 1 / 17
+    assert payload["metric_summary"]["parser_fallback_rate"]["value"] == 1 / 16
     assert payload["metric_summary"]["extraction_page_coverage"]["status"] == "requires_staging"
     assert payload["metric_summary"]["extraction_page_coverage"]["value"] is None
     assert payload["metric_summary"]["low_confidence_document_rate"]["value"] == 0.0
-    assert payload["metric_summary"]["failed_segment_rate"]["value"] == 1 / 17
+    assert payload["metric_summary"]["failed_segment_rate"]["value"] == 1 / 16
     assert payload["metric_summary"]["parser_routing_accuracy"]["status"] == "measured"
     assert payload["metric_summary"]["parser_routing_accuracy"]["value"] == 1.0
     assert payload["metric_summary"]["table_qa_accuracy"]["status"] == "measured"
@@ -2123,13 +2115,13 @@ def test_file_processing_golden_cli_writes_non_sensitive_trend_snapshot(
     assert len(trend["result_sha256"]) == 64
     assert trend["passed"] is True
     assert trend["promotion_ready"] is False
-    assert trend["case_count"] == 17
+    assert trend["case_count"] == 16
     assert trend["pending_staging_check_count"] > 0
     assert trend["promotion_blocker_code_counts"]["pending_staging_checks"] == 1
     assert trend["threshold_status_counts"]["passed"] > 0
     assert trend["threshold_status_counts"]["pending"] > 0
     assert any(item["metric"] == "page_hit_accuracy" for item in trend["threshold_pending"])
-    assert trend["metrics"]["parser_fallback_rate"]["value"] == 1 / 17
+    assert trend["metrics"]["parser_fallback_rate"]["value"] == 1 / 16
     assert trend["metrics"]["table_qa_accuracy"]["value"] == 1.0
     assert trend["metrics"]["page_hit_accuracy"]["status"] == "requires_staging"
     assert trend["metrics"]["bbox_coordinate_validity_coverage"]["status"] == ("requires_staging")
@@ -2221,7 +2213,7 @@ def test_file_processing_golden_cli_fails_when_local_threshold_regresses(
         for blocker in payload["promotion_blockers"]
     )
     assert threshold_by_metric["parser_fallback_rate"]["status"] == "failed"
-    assert threshold_by_metric["parser_fallback_rate"]["actual"] == 1 / 17
+    assert threshold_by_metric["parser_fallback_rate"]["actual"] == 1 / 16
 
 
 def test_file_processing_golden_cli_fails_when_parser_routing_regresses(

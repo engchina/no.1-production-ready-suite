@@ -1,4 +1,4 @@
-"""例ファイルで 5 つの前処理サービスを実依存込みで自動検証する。
+"""例ファイルで 3 つの前処理サービスを実依存込みで自動検証する。
 
 各サービスは独立 venv(いずれも `app.converters`)で名前衝突するため 1 プロセスで
 まとめて import できない。よって本ランナーは各サービスディレクトリで `uv run` を
@@ -8,7 +8,7 @@ subprocess 起動し、それぞれの venv 内で `convert()` を実行して�
     python examples/test-preprocess/test_examples.py      # 直接(全件まとめ)
     cd examples/test-preprocess && uv run pytest           # pytest として(要 uv)
 
-各サービスは実バイナリ依存(LibreOffice / PyMuPDF / openpyxl / Presidio)。
+各サービスは実バイナリ依存(LibreOffice / openpyxl)。
 依存欠如・変換失敗時は passthrough(converted=False)へ縮退し、本テストは fail する。
 """
 
@@ -37,14 +37,6 @@ assert o.converted and o.derived_bytes[:5] == b"%PDF-", o.warnings
 print("PASS:pdf", len(o.derived_bytes))
 """
 
-_PDF = """
-import os, app.converters as c
-d = open(os.environ["EX"] + "/pages.pdf", "rb").read()
-o = c.convert(d, "application/pdf", "pdf_to_page_images", None)
-assert o.converted and o.derived_bytes[:5] == b"%PDF-" and o.page_map, o.warnings
-print("PASS:pages", o.page_map)
-"""
-
 _CSV = """
 import os, json, app.converters as c
 d = open(os.environ["EX"] + "/table.csv", "rb").read()
@@ -68,21 +60,10 @@ assert len(sheets) == 2, lines
 print("PASS:sheets", len(sheets))
 """
 
-_PII = """
-import os, app.converters as c
-d = open(os.environ["EX"] + "/pii.txt", "rb").read()
-o = c.convert(d, "text/plain", "pii_redact", None)
-kinds = {w.split(":")[1].split("=")[0] for w in o.warnings if w.startswith("pii_redacted:")}
-assert o.converted and {"EMAIL_ADDRESS", "PHONE_NUMBER"} <= kinds, o.warnings
-print("PASS:pii", sorted(kinds))
-"""
-
 CASES = {
     "office_to_pdf": _OFFICE,
-    "pdf_to_page_images": _PDF,
     "csv_to_jsonl": _CSV,
     "excel_to_jsonl": _XLSX,
-    "pii_redact": _PII,
 }
 
 

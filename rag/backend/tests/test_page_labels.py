@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
+
+import pytest
 
 from app.rag.page_labels import (
     PAGE_LABELS_ARTIFACT_KEY,
@@ -80,3 +84,95 @@ def test_ingestion_records_labels_only_for_pdfs() -> None:
     )
     assert labels_from_artifacts(labeled.parser_artifacts) == {1: "i", 2: "ii", 3: "iii"}
     assert _extraction_with_page_labels(extraction, b"text", "text/plain") is extraction
+
+
+class _TrackingLock:
+    """PDFium の lock の代わり。中に入っているスレッドの数の最大と、持ち主を記録する。"""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._meta = threading.Lock()
+        self._owner: int | None = None
+        self._depth = 0
+        self.active = 0
+        self.max_active = 0
+        self.entries = 0
+
+    def __enter__(self) -> _TrackingLock:
+        self._lock.acquire()
+        self._depth += 1
+        if self._depth == 1:
+            self._owner = threading.get_ident()
+            with self._meta:
+                self.active += 1
+                self.entries += 1
+                self.max_active = max(self.max_active, self.active)
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._depth -= 1
+        if self._depth == 0:
+            self._owner = None
+            with self._meta:
+                self.active -= 1
+        self._lock.release()
+
+    def held_by_current_thread(self) -> bool:
+        return self._owner == threading.get_ident()
+
+
+def test_pdf_page_labels_calls_pdfium_only_inside_the_shared_lock_across_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """並行する取込から呼ばれても、PDFium を開く・読む・閉じるは process の lock の中（#3362）。"""
+    import pypdfium2  # type: ignore[import-untyped]
+
+    from app.rag import page_labels
+
+    lock = _TrackingLock()
+    monkeypatch.setattr(page_labels, "PDFIUM_LOCK", lock)
+    real_document = pypdfium2.PdfDocument
+    outside_lock: list[str] = []
+
+    def check(operation: str) -> None:
+        if not lock.held_by_current_thread():
+            outside_lock.append(operation)
+
+    class _CheckedDocument:
+        def __init__(self, source: bytes) -> None:
+            check("open")
+            self._document = real_document(source)
+
+        def __len__(self) -> int:
+            check("len")
+            return len(self._document)
+
+        def get_page_label(self, index: int) -> str:
+            check("get_page_label")
+            return str(self._document.get_page_label(index))
+
+        def close(self) -> None:
+            check("close")
+            self._document.close()
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", _CheckedDocument)
+    labeled = _pdf_with_labels("0 << /S /r >> 2 << /S /D /St 1 >>")
+    expected = {1: "i", 2: "ii", 3: "1"}
+    calls = 8 * 25
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _index: pdf_page_labels(labeled), range(calls)))
+
+    assert results == [expected] * calls
+    assert outside_lock == []
+    assert lock.entries == calls
+    assert lock.max_active == 1
+
+
+def test_pdf_page_labels_shares_the_rag_engine_pdfium_lock() -> None:
+    """RAG backend と rag_engine（Vision の描画など）が同じ 1 つの lock を使う（#3362）。"""
+    from rag_engine.parsing import rendering, table_vision
+
+    from app.rag import page_labels
+
+    assert vars(page_labels)["PDFIUM_LOCK"] is rendering.PDFIUM_LOCK
+    assert vars(table_vision)["PDFIUM_LOCK"] is rendering.PDFIUM_LOCK

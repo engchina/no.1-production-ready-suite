@@ -15,16 +15,22 @@ const PROBLEM_LABEL: Record<UploadFileProblem, I18nKey> = {
   empty: "upload.selection.problem.empty",
   heicImage: "upload.selection.problem.heicImage",
   epubBook: "upload.selection.problem.epubBook",
+  audioVideo: "upload.selection.problem.audioVideo",
 };
 
-/** 受け付けない形式の変換の方法（API の 415 の文言と同じ。#3351）。 */
+/** 受け付けない形式の変換の方法（API の 415 の文言と同じ。#3351・#3369）。 */
 const REJECTED_FORMAT_GUIDE: Record<RejectedUploadFormat, I18nKey> = {
   heicImage: "upload.rejected.heicImage",
   epubBook: "upload.rejected.epubBook",
+  audioVideo: "upload.rejected.audioVideo",
 };
 
+function isRejectedUploadFormat(problem: UploadFileProblem | null): problem is RejectedUploadFormat {
+  return problem !== null && Object.hasOwn(REJECTED_FORMAT_GUIDE, problem);
+}
+
 function rejectedFormatGuide(problem: UploadFileProblem | null): I18nKey | null {
-  return problem === "heicImage" || problem === "epubBook" ? REJECTED_FORMAT_GUIDE[problem] : null;
+  return isRejectedUploadFormat(problem) ? REJECTED_FORMAT_GUIDE[problem] : null;
 }
 
 /**

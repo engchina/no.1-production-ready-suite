@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from contextvars import ContextVar
 from dataclasses import dataclass
 from io import BytesIO
-from pathlib import Path, PurePath
+from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 
@@ -37,7 +37,7 @@ from rag_parser_core.result import (
     SERVICE_ADAPTER_BACKENDS,
     ParserRegistryResult,
 )
-from rag_parser_core.source import SourceModality, template_for_source_profile
+from rag_parser_core.source import template_for_source_profile
 from rag_parser_core.structured_records import (
     STRUCTURED_RECORDS_CONTENT_TYPE,
     STRUCTURED_RECORDS_FILE_EXTENSION,
@@ -59,7 +59,6 @@ from app.clients.oci_enterprise_ai import (
     OciEnterpriseAiClient,
 )
 from app.clients.oci_genai import OciGenAiClient
-from app.clients.oci_speech import OciSpeechClient
 from app.clients.oracle import OracleClient
 from app.clients.parser_service import (
     STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_REASON,
@@ -597,7 +596,6 @@ class IngestionPipeline:
         oracle: OracleClient | None = None,
         object_storage: ObjectStorageClient | None = None,
         document_understanding: OciDocumentUnderstandingClient | None = None,
-        speech: OciSpeechClient | None = None,
         settings: Settings | None = None,
         recipe_id: str | None = None,
         recipe_revision: int | None = None,
@@ -620,8 +618,6 @@ class IngestionPipeline:
         self._document_understanding = document_understanding or OciDocumentUnderstandingClient(
             settings=self._settings
         )
-        # 音声/動画の文字起こし。失敗時は別経路へ切り替えず取込を止める。
-        self._speech = speech or OciSpeechClient(settings=self._settings)
 
     def _selected_parser_backend(self) -> str:
         """設定の解析エンジン(小文字)。廃止済みの local / local_partition は既定のエンジン。"""
@@ -656,7 +652,6 @@ class IngestionPipeline:
         in-process 解析・local fallback は一切持たない。
         - 非対応形式(outlook .msg / TIFF / 旧 Office バイナリ)は profiling 済みの
           ``source_profile.unsupported_reason`` を sentinel として返す。
-        - 音声/動画は sentinel を返し、ingestion 本体が転写経路へ振り分ける。
         - OCI service backend(Document Understanding)も sentinel を返し、
           ``_extract_with_service_backend`` が直接 HTTP 呼び出しする。
         - それ以外(既定 ``docling`` 含む)は runner を fail-fast で実行する。
@@ -672,14 +667,6 @@ class IngestionPipeline:
                 template=f"unsupported_{unsupported_reason}",
                 warnings=(unsupported_reason,),
                 unsupported_reason=unsupported_reason,
-            )
-        if _is_audio_source(source_profile, content_type):
-            return ParserRegistryResult(
-                extraction=None,
-                parser_backend="unsupported",
-                template="unsupported_audio",
-                warnings=("unsupported_audio",),
-                unsupported_reason="audio_transcription_not_configured",
             )
         backend = self._selected_parser_backend()
         if backend not in ADAPTER_CAPABILITIES and backend not in SERVICE_ADAPTER_BACKENDS:
@@ -1452,20 +1439,7 @@ class IngestionPipeline:
                     attributes=partition_attributes,
                     progress=progress,
                 )
-            audio_extraction: StructuredExtraction | None = None
-            if parser_result.unsupported_reason == "audio_transcription_not_configured":
-                # 音声/動画は OCI AI Speech → ローカル faster-whisper の順で文字起こしする。
-                audio_extraction = await self._transcribe_audio(
-                    trace_id=trace_id,
-                    document_id=document_id,
-                    source_bytes=parse_bytes,
-                    content_type=parse_content_type,
-                    source_profile=source_profile,
-                    cancel_checker=cancel_checker,
-                )
-                if audio_extraction is None:
-                    raise IngestionUserError(_unsupported_parser_message(parser_result))
-            elif parser_result.unsupported_reason:
+            if parser_result.unsupported_reason:
                 raise IngestionUserError(_unsupported_parser_message(parser_result))
             self._raise_if_selected_parser_was_not_used(parser_result)
             effective_parser_profile = _checkpoint_parser_profile(
@@ -1483,8 +1457,7 @@ class IngestionPipeline:
                     recipe_id=self._recipe_id,
                 )
             await _raise_if_cancelled(cancel_checker)
-            # 音声文字起こしが成功していれば以降の parser/VLM 経路は短絡する。
-            extraction: StructuredExtraction | None = audio_extraction
+            extraction: StructuredExtraction | None = None
             service_backend = _service_parser_backend(parser_result.parser_backend)
             try:
                 if service_backend is not None:
@@ -1551,7 +1524,11 @@ class IngestionPipeline:
             # 派生系譜(溯源)を抽出 metadata へ刻む。artifact cache / document payload 経由で永続。
             extraction = _extraction_with_source_derivation(extraction, source_derivation)
             # PDF の印刷の頁番号（ページラベル）を残し、chunk の場所に付ける（#1244）。
-            extraction = _extraction_with_page_labels(extraction, parse_bytes, parse_content_type)
+            # PDFium の呼び出しは lock の中で同期に行うため、event loop を止めないよう
+            # 別のスレッドで読む（#3362）。
+            extraction = await asyncio.to_thread(
+                _extraction_with_page_labels, extraction, parse_bytes, parse_content_type
+            )
             # 図・画像の読み取り(Vision)は解析エンジンに関係なくここで行う(#497)。抽出の cache より
             # 前に行い、後段の失敗から再開しても読み取り済みの図を読み直さない。
             extraction = await self._attach_vision(
@@ -3465,7 +3442,7 @@ class IngestionPipeline:
         segment は文書ごとで、解析に渡した内容(ファイル準備の後の bytes)・設定・レシピの revision を
         持たない。artifact に保存した鍵(``parse_key``)が今回と違えば再利用しない。ファイル準備や
         解析エンジンを変えて取り込み直したのに前回の解析の結果を使うと、新しい設定が chunk に
-        反映されない(PIIマスクに変えても元の PII が残る。#2076)。
+        反映されない(#2076)。
         """
         if not checkpoint_segments:
             return None
@@ -3745,40 +3722,6 @@ class IngestionPipeline:
                 "RAPTOR の階層の要約に失敗しました。別経路には切り替えずに取込を停止しました。"
                 "RAPTOR 設定と Enterprise AI の応答を確認してから再実行してください。"
             ) from exc
-
-    async def _transcribe_audio(
-        self,
-        *,
-        trace_id: str,
-        document_id: str,
-        source_bytes: bytes,
-        content_type: str,
-        source_profile: SourceProfile | None,
-        cancel_checker: Callable[[], Awaitable[bool]] | None,
-    ) -> StructuredExtraction | None:
-        """音声/動画を文字起こしする。失敗時は別経路へ切り替えない。"""
-        _ = trace_id
-        if not getattr(self._settings, "rag_parser_asr_enabled", True):
-            return None
-        await _raise_if_cancelled(cancel_checker)
-        payload = await self._speech.transcribe(
-            source_bytes, content_type=content_type, document_id=document_id
-        )
-        if payload is not None:
-            try:
-                return _validate_structured_extraction_payload(payload)
-            except Exception as exc:
-                logger.warning("OCI Speech 結果の検証に失敗。", exc_info=True)
-                raise IngestionUserError(
-                    "音声文字起こし結果の形式が保存用 schema と一致しません。"
-                    "別経路には切り替えずに取込を停止しました。OCI Speech の出力と"
-                    "変換設定を確認してから再実行してください。"
-                ) from exc
-        _ = source_profile
-        raise IngestionUserError(
-            "音声文字起こしに失敗しました。別経路には切り替えずに取込を停止しました。"
-            "OCI Speech の設定、Object Storage、対象ファイル形式を確認してから再実行してください。"
-        )
 
     async def _save_index(
         self,
@@ -4076,11 +4019,6 @@ async def _raise_if_cancelled(
 
 def _unsupported_parser_message(result: ParserRegistryResult) -> str:
     """parser registry の未対応理由を利用者向け文言へ寄せる。"""
-    if result.unsupported_reason == "audio_transcription_not_configured":
-        return (
-            "音声ファイルの取込は現在未対応です。"
-            "承認済みの音声文字起こし経路を設定してから再試行してください。"
-        )
     if result.unsupported_reason == "tiff_image_not_supported":
         return (
             "TIFF 画像の取込は現在未対応です。"
@@ -4269,26 +4207,6 @@ def _uses_external_adapter_extraction(parser_result: ParserRegistryResult) -> bo
     return parser_result.extraction is not None and _is_external_adapter_backend(
         parser_result.parser_backend
     )
-
-
-_AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
-
-
-def _is_audio_source(source_profile: SourceProfile | None, content_type: str) -> bool:
-    """音声/動画ソースかどうか(転写経路へ振り分けるための軽量判定)。"""
-    if source_profile is not None and source_profile.modality == SourceModality.AUDIO:
-        return True
-    normalized = (
-        (content_type or (source_profile.content_type if source_profile is not None else ""))
-        .strip()
-        .casefold()
-    )
-    if normalized.startswith("audio/"):
-        return True
-    extension = (source_profile.extension if source_profile is not None else None) or ""
-    if not extension and source_profile is not None:
-        extension = PurePath(source_profile.sanitized_file_name).suffix
-    return extension.strip().casefold() in _AUDIO_EXTENSIONS
 
 
 def _is_external_adapter_backend(parser_backend: str) -> bool:

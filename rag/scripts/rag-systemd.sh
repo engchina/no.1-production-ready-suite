@@ -13,11 +13,9 @@
 # 提供しないサービスとして扱う（init_script.sh は rag_services.txt にあっても読み飛ばす）。
 RAG_MICROSERVICES=(
   "preprocess-office-to-pdf|services/preprocess/office_to_pdf|18010|300"
-  "preprocess-pdf-to-page-images|services/preprocess/pdf_to_page_images|18011|300"
   "preprocess-csv-to-jsonl|services/preprocess/csv_to_jsonl|18012|300"
   "preprocess-excel-to-jsonl|services/preprocess/excel_to_jsonl|18013|300"
   "preprocess-word-to-jsonl|services/preprocess/word_to_jsonl|18017|300"
-  "preprocess-pii-redact|services/preprocess/pii_redact|18016|300"
   "parser-docling|services/parsers/docling|18020|300"
   "parser-unstructured|services/parsers/unstructured|18022|300"
   "parser-structured-records-jsonl|services/parsers/structured_records_jsonl|18023|300"
@@ -79,24 +77,8 @@ rag_service_port() { rag_service_field "$1" 3; }
 rag_service_timeout() { rag_service_field "$1" 4; }
 
 # サービスごとの venv を作る（uv の lock どおり。開発用の依存は入れない）。
-# pii_redact は spaCy の日本語モデルを venv へ追加で入れるため、lock に無い package を消さない（--inexact）。
 rag_uv_sync_args() {
-  local id="$1"
-  local args=(sync --locked --no-dev --python "${RAG_PYTHON_VERSION}")
-  if [ "${id}" = "preprocess-pii-redact" ]; then
-    args+=(--inexact)
-  fi
-  printf '%s\n' "${args[@]}"
-}
-
-# venv を作った後に venv へ追加で入れるもの（venv の所有者が、サービスのディレクトリで実行する）。
-# pii_redact: Presidio の spaCy NLP エンジンが使う日本語 NER モデル（spacy download は pip を使う）。
-rag_service_venv_extra_command() {
-  case "$1" in
-    preprocess-pii-redact)
-      printf '%s\n' '.venv/bin/python -c "import ja_core_news_lg" 2>/dev/null || { uv pip install --python .venv/bin/python pip && .venv/bin/python -m spacy download ja_core_news_lg; }'
-      ;;
-  esac
+  printf '%s\n' sync --locked --no-dev --python "${RAG_PYTHON_VERSION}"
 }
 
 # サービスが実行時に使うモデルを、サービスの実行ユーザーの ~/.cache に取得するコマンド

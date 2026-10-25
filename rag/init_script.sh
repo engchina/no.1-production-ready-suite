@@ -86,11 +86,9 @@ DATABASE_INITIALIZATION_READY=false
 # 残っていても読み飛ばす（その unit は configure_systemd が止めて消す）。
 ALLOWED_RAG_SERVICES=(
   preprocess-office-to-pdf
-  preprocess-pdf-to-page-images
   preprocess-csv-to-jsonl
   preprocess-excel-to-jsonl
   preprocess-word-to-jsonl
-  preprocess-pii-redact
   parser-docling
   parser-unstructured
   parser-structured-records-jsonl
@@ -278,9 +276,6 @@ service_os_packages() {
     preprocess-word-to-jsonl)
       # .doc を .docx にするだけなので Writer だけでよい（#2457）。
       printf '%s\n' libreoffice-core libreoffice-writer
-      ;;
-    preprocess-pdf-to-page-images)
-      printf '%s\n' google-noto-sans-cjk-ttc-fonts google-noto-serif-cjk-ttc-fonts
       ;;
     parser-unstructured)
       printf '%s\n' poppler-utils tesseract tesseract-langpack-eng tesseract-langpack-jpn
@@ -651,7 +646,7 @@ install_wallet() {
 
 # backend と前処理 / parser の venv をサービスごとに作る（uv の lock どおり。Python 3.12）。
 install_service_venvs() {
-  local service dir extra model_command
+  local service dir model_command
   local sync_args=()
 
   log "Installing backend dependencies with uv."
@@ -662,10 +657,6 @@ install_service_venvs() {
     mapfile -t sync_args < <(rag_uv_sync_args "${service}")
     log "Installing ${service} dependencies with uv."
     retry_command 3 run_as_app_user_in_dir "${dir}" "uv ${sync_args[*]}"
-    extra="$(rag_service_venv_extra_command "${service}")"
-    if [ -n "${extra}" ]; then
-      retry_command 3 run_as_app_user_in_dir "${dir}" "${extra}"
-    fi
     model_command="$(rag_service_model_command "${service}")"
     if [ -n "${model_command}" ] && ! retry_command 3 run_as_service_user_in_dir "${dir}" "${model_command}"; then
       log "WARNING: ${service} could not download its models now; it will download them on first use."

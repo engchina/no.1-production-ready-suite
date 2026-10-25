@@ -253,6 +253,7 @@ from app.features.agent.runtime import (
     ConfirmationOutcome,
     FeedbackRating,
     FeedbackReason,
+    RunCancellationView,
     RunCreateRequest,
     RunEvent,
     RunFeedback,
@@ -277,6 +278,7 @@ from app.features.agent.runtime import (
     builtin_resume_pending,
     max_published_versions,
     reserved_run_metadata_keys,
+    run_cancel_record,
     run_summary,
     run_thread_owner,
     runtime_repository,
@@ -2970,10 +2972,14 @@ async def cancel_evaluation(job_id: str, request: Request) -> ApiResponse[Evalua
     """評価を取り消す（実行中のケースの Run も取り消し、残りのケースは実行しない）。"""
     job = _evaluation_for_actor(request, job_id)
     cancelled = evaluation_store.cancel(job.id)
+    actor = _actor_login_id(request)
     for result in cancelled.results:
         if result.status == CaseStatus.RUNNING and result.run_id:
             with contextlib.suppress(KeyError):
-                await run_in_threadpool(runtime_repository.cancel_run, result.run_id)
+                # 取り消した人を残す（実行の詳細の「取消: 〈利用者〉 · 画面」。#3348）。
+                await run_in_threadpool(
+                    runtime_repository.cancel_run, result.run_id, cancelled_by=actor
+                )
     return ApiResponse(data=evaluation_store.with_previous(evaluation_store.get(job.id)))
 
 
@@ -3291,12 +3297,50 @@ async def _evidence_checked_views(
     unreadable = await _unreadable_evidence(
         request, runs, [artifact for items in loaded.values() for artifact in items]
     )
+    cancellations = await _run_cancellations(request, runs)
     views: list[RunView] = []
     for run in runs:
         viewer = _run_viewer(request, run, names)
         viewer.withheld_evidence_count = withheld_count(run, unreadable, loaded[run.id])
+        viewer.cancellation = cancellations.get(run.id)
         views.append(RunView.of(withhold_run(run, unreadable), viewer))
     return views
+
+
+async def _run_cancellations(
+    request: Request, runs: Sequence[RunState]
+) -> dict[str, RunCancellationView]:
+    """取り消した Run の「取消」（取り消した人の表示名と入口。Run の ID → 事実。#3348）。
+
+    取り消した人は `run.cancelled` のイベントのログイン ID から引く。MCP の取消の API キーの名前は、
+    見ている利用者の権限で引ける既存のキーの一覧から引く（system_admin は全員のキー、それ以外は
+    自分のキーだけ。見られないキー・削除したキーは空）。キーの ID は返さない。
+    """
+    records = {run.id: record for run in runs if (record := run_cancel_record(run)) is not None}
+    if not records:
+        return {}
+    principal = _request_principal(request)
+    logins = sorted({item.cancelled_by for item in records.values() if item.cancelled_by})
+    key_ids = sorted({item.api_key_id for item in records.values() if item.api_key_id})
+    names = await run_in_threadpool(login_display_names, logins) if logins else {}
+    key_names: dict[str, str] = {}
+    if key_ids and principal is not None:
+        try:
+            key_names = await run_in_threadpool(
+                get_security_service().api_key_names, principal, key_ids
+            )
+        except Exception:  # noqa: BLE001 - キーの名前は表示の補助（引けなければ「MCP」だけ）
+            logger.warning("agent_run_cancel_key_names_unavailable", exc_info=True)
+    me = principal.login_user_id if principal is not None else None
+    return {
+        run_id: RunCancellationView(
+            via=record.via,
+            actor_display_name=names.get(record.cancelled_by, "") if record.cancelled_by else "",
+            by_me=bool(record.cancelled_by) and record.cancelled_by == me,
+            api_key_name=key_names.get(record.api_key_id, "") if record.api_key_id else "",
+        )
+        for run_id, record in records.items()
+    }
 
 
 async def _evidence_checked_run(request: Request, run: RunState) -> tuple[RunState, int]:

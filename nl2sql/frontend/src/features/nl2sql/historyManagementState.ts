@@ -6,6 +6,7 @@ import {
   runPeriodSince,
   RUN_EXECUTOR_FILTERS,
   RUN_PERIODS,
+  type RunCancellation,
   type RunExecutorFilter,
   type RunPeriod,
   type RunStatus,
@@ -17,8 +18,11 @@ import { APP_ROUTES } from "../../lib/routes";
 import { querySqlGenerationUrl } from "./queryPrefillState";
 import type { HistoryItem } from "./types";
 
-/** NL2SQL が写せる共通の状態（完了 = 安全性の判定を通過、ブロック = 実行を止めた）。失敗は記録しない。 */
-export const HISTORY_RUN_STATUSES: readonly RunStatus[] = ["succeeded", "blocked"] as const;
+/**
+ * NL2SQL が写せる共通の状態（完了 = 安全性の判定を通過、ブロック = 実行を止めた、停止 = 利用者が止めた。#3348）。
+ * 失敗は記録しない。
+ */
+export const HISTORY_RUN_STATUSES: readonly RunStatus[] = ["succeeded", "blocked", "cancelled"] as const;
 
 /** 行の種類（チャットの往復 / SQL 生成 / MCP / 品質評価。backend の `HistoryItem.kind`。#1986）。 */
 export type HistoryKind = "chat" | "query" | "mcp" | "evaluation";
@@ -102,7 +106,29 @@ export function historyRequestUrl(
 
 /** 行の状態（共通の 7 つのうち NL2SQL が写せる 2 つ）。 */
 export function historyRunStatus(item: HistoryItem): RunStatus {
+  if (isCancelledHistory(item)) return "cancelled";
   return item.safety_is_safe ? "succeeded" : "blocked";
+}
+
+/** 停止で終わった実行の行か（SQL・実行結果・評価を持たない。#3348）。 */
+export function isCancelledHistory(item: Pick<HistoryItem, "run_status">): boolean {
+  return item.run_status === "cancelled";
+}
+
+/**
+ * 停止の行の「取消」（共通の `RunSummary` の `cancellation`。#3348）。表示名を引けない利用者は「削除済みのユーザー」、
+ * 取り消した人の記録が無い取消（認証無効の期間）は人を出さずに入口だけを出す。
+ */
+export function historyCancellation(item: HistoryItem): RunCancellation | null {
+  const value = isCancelledHistory(item) ? item.cancellation : null;
+  if (!value) return null;
+  return {
+    via: value.via === "agent_run" ? "agentRun" : value.via,
+    actor: value.actor_recorded
+      ? { name: value.actor_display_name.trim() || t("history.actor.missing"), isSelf: value.by_me }
+      : null,
+    apiKeyName: value.api_key_name || null,
+  };
 }
 
 /** 行の種類。古い応答（`kind` の無い行）はきっかけと会話の持ち主の有無で決める（backend と同じ）。 */

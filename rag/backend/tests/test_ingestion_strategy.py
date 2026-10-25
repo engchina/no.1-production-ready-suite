@@ -583,7 +583,6 @@ async def test_recipe_extraction_artifacts_are_isolated_and_pointer_switches_aft
         oracle=cast(Any, oracle),
         object_storage=cast(Any, FakeObjectStorage()),
         document_understanding=cast(Any, object()),
-        speech=cast(Any, object()),
         settings=settings,
         recipe_id="recipe-1",
         recipe_revision=2,
@@ -594,7 +593,6 @@ async def test_recipe_extraction_artifacts_are_isolated_and_pointer_switches_aft
         oracle=cast(Any, oracle),
         object_storage=cast(Any, FakeObjectStorage()),
         document_understanding=cast(Any, object()),
-        speech=cast(Any, object()),
         settings=settings,
         recipe_id="recipe-2",
         recipe_revision=2,
@@ -624,7 +622,6 @@ async def test_recipe_extraction_persistence_failure_is_fatal() -> None:
         oracle=cast(Any, FailingRecipeOracle()),
         object_storage=cast(Any, FakeObjectStorage()),
         document_understanding=cast(Any, object()),
-        speech=cast(Any, object()),
         settings=Settings(rag_parser_adapter_backend="local"),
         recipe_id="recipe-1",
         recipe_revision=1,
@@ -649,7 +646,6 @@ async def test_recipe_review_load_does_not_fall_back_to_document_extraction() ->
         oracle=cast(Any, oracle),
         object_storage=cast(Any, FakeObjectStorage()),
         document_understanding=cast(Any, object()),
-        speech=cast(Any, object()),
         settings=Settings(rag_parser_adapter_backend="local"),
         recipe_id="recipe-empty",
         recipe_revision=1,
@@ -916,7 +912,7 @@ async def test_preprocess_canonical_persist_failure_surfaces_as_error() -> None:
         settings=Settings(
             rag_parser_adapter_backend="local",
             rag_preprocess_enabled=True,
-            rag_preprocess_profile="pdf_to_page_images",
+            rag_preprocess_profile="office_to_pdf",
         ),
     )
     pipeline._preprocess = cast(Any, _StubConvertingPreprocess())
@@ -996,7 +992,7 @@ async def test_preprocess_artifact_save_not_persisted_surfaces_as_error() -> Non
     )
     derivation = SourceDerivation(
         derivation_id="d1",
-        preprocess_profile="pdf_to_page_images",
+        preprocess_profile="office_to_pdf",
         converted=True,
         derived_object_path="local://artifacts/canonical/doc-x/t/canonical.pdf",
         derived_content_type="application/pdf",
@@ -1401,7 +1397,6 @@ def _preflight_pipeline(backend: str, monkeypatch: pytest.MonkeyPatch) -> Ingest
         oracle=cast(Any, FakeOracle()),
         object_storage=cast(Any, FakeObjectStorage()),
         document_understanding=cast(Any, object()),
-        speech=cast(Any, object()),
         settings=Settings().model_copy(update={"rag_parser_adapter_backend": backend}),
     )
 
@@ -1512,7 +1507,6 @@ def test_partition_source_maps_legacy_or_empty_backend_to_default_docling(
         oracle=cast(Any, FakeOracle()),
         object_storage=cast(Any, FakeObjectStorage()),
         document_understanding=cast(Any, object()),
-        speech=cast(Any, object()),
         # validator を通さず旧値・空値を直接入れる(保存済み snapshot 相当)。
         settings=Settings().model_copy(update={"rag_parser_adapter_backend": configured}),
     )

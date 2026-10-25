@@ -2073,6 +2073,29 @@ class TraceProgressData(BaseModel):
     dropped_spans: int = 0
 
 
+# 実行履歴の行の状態（#3348）。空は SQL を実行した行、`cancelled` は停止で終わったジョブの行。
+HistoryRunStatus = Literal["", "cancelled"]
+HISTORY_RUN_STATUS_CANCELLED: HistoryRunStatus = "cancelled"
+
+
+class HistoryCancellation(BaseModel):
+    """実行履歴の「取消」（取り消した人と入口。応答だけに付ける。#3348）。
+
+    `via` は画面の操作（`screen`）・外部の MCP クライアントの `nl2sql_cancel_job`（`mcp`。
+    API キー）・Agent の実行から（`agent_run`。Agent の Run の取消に連動した取消と、Agent が
+    呼んだ取消）。
+    API キーの名前は見ている利用者が見られるキーだけ（見られなければ空で、画面は「MCP」だけ）。
+    """
+
+    via: Literal["screen", "mcp", "agent_run"]
+    # 取り消した人を記録しているか（認証無効の期間の取消は False）。
+    actor_recorded: bool = False
+    # 取り消した人の表示名（引けない利用者〔削除済み〕・記録の無い取消は ""）。
+    actor_display_name: str = ""
+    by_me: bool = False
+    api_key_name: str = ""
+
+
 class HistoryItem(BaseModel):
     """実行履歴。"""
 
@@ -2138,6 +2161,18 @@ class HistoryItem(BaseModel):
     # Agent の Run の ID（サービストークンの claim `run_id`）。どちらも秘密ではない。
     api_key_name: str = ""
     agent_run_id: str = ""
+    # 停止で終わった実行（#3348）。空は SQL を実行した行（完了・ブロックは `safety_is_safe`）。
+    # 停止の行は SQL・実行結果・評価を持たない。
+    run_status: HistoryRunStatus = ""
+    # 取り消した人と入口（停止の行だけ。取消の要求の記録から写す。#3348）。入口は MCP の
+    # `nl2sql_cancel_job`（`mcp`。API キーの ID か Agent の Run の ID）か画面（空）。応答では
+    # `cancellation` に置き換え、この 4 つは返さない（`_with_history_people`）。
+    cancelled_by_user_uuid: str = ""
+    cancel_via: str = ""
+    cancel_api_key_id: str = ""
+    cancel_agent_run_id: str = ""
+    # 取り消した人と入口の表示（応答だけ。見ている利用者に合わせて補完する。#3348）。
+    cancellation: HistoryCancellation | None = None
     # 種類（チャットの往復 `chat` / SQL 生成 `query` / MCP `mcp` / 品質評価 `evaluation`）。
     # きっかけ（`run_source`）と会話の持ち主の有無で決め、応答だけに入れる（#1955・#1986）。
     kind: Literal["chat", "query", "mcp", "evaluation"] | None = None

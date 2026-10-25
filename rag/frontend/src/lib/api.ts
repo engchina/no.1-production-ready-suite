@@ -174,7 +174,7 @@ export type CitationFeedbackReason =
 export type FeedbackTargetType = "answer" | "citation";
 export type FeedbackSourceSurface = "search" | "chat";
 export type SourceModality =
-  "pdf" | "image" | "text" | "html" | "email" | "office" | "audio" | "unknown";
+  "pdf" | "image" | "text" | "html" | "email" | "office" | "unknown";
 export type SourcePreviewKind =
   "pdf" | "image" | "text" | "html" | "email" | "office" | "unsupported";
 export type IngestionJobStatus =
@@ -243,7 +243,7 @@ export type ParserAdapterScoreBackend = "local" | ParserAdapterBackendName;
 export type ParserAdapterScoreStatus =
   "recommended" | "eligible" | "available" | "disabled" | "ignored" | "missing";
 export type ParserAdapterSourceKind =
-  "pdf" | "image" | "office" | "html" | "email" | "audio" | "text" | "unknown";
+  "pdf" | "image" | "office" | "html" | "email" | "text" | "unknown";
 
 export interface ApiResponse<T> {
   data: T | null;
@@ -2296,11 +2296,9 @@ export type ChunkingStrategyName =
 export type PreprocessProfileName =
   | "passthrough"
   | "office_to_pdf"
-  | "pdf_to_page_images"
   | "csv_to_jsonl"
   | "excel_to_jsonl"
-  | "word_to_jsonl"
-  | "pii_redact";
+  | "word_to_jsonl";
 
 export interface PreprocessProfileStatusData {
   name: PreprocessProfileName;

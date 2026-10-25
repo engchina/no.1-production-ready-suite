@@ -44,23 +44,13 @@ describe("Dropzone accepted upload types", () => {
     );
   });
 
-  it("keeps unsupported audio formats selectable so backend can return a clear skipped state", () => {
-    expect(accepted).toEqual(
-      expect.arrayContaining([
-        ".aac",
-        ".flac",
-        ".m4a",
-        ".mp3",
-        ".ogg",
-        ".wav",
-        "audio/aac",
-        "audio/flac",
-        "audio/mp4",
-        "audio/ogg",
-        "audio/x-m4a",
-        "application/ogg",
-      ])
-    );
+  // 音声・動画は取り込まない形式（#3369）。
+  it("does not offer audio or video files, which are not ingested", () => {
+    for (const item of [".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav", ".mp4", ".mov", ".webm"]) {
+      expect(accepted).not.toContain(item);
+    }
+    expect(accepted.filter((item) => item.startsWith("audio/") || item.startsWith("video/"))).toEqual([]);
+    expect(accepted).not.toContain("application/ogg");
   });
 
   it("advertises formats read without pandoc and hides formats whose parsers are not installed", () => {

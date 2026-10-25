@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from rag_engine.models.layout import LayoutRecord, PageImage
-from rag_engine.parsing.rendering import _PDFIUM_LOCK, _import_pdfium
+from rag_engine.parsing.rendering import PDFIUM_LOCK, _import_pdfium
 
 
 def missing_table_image_regions(
@@ -34,7 +34,7 @@ def missing_table_image_regions(
     pdfium = _import_pdfium()
     page_lookup = {page.page: page for page in pages}
     result: dict[str, list[list[float]]] = {}
-    with _PDFIUM_LOCK:
+    with PDFIUM_LOCK:
         document = pdfium.PdfDocument(str(pdf_path))
         try:
             for number in sorted({r.page for r in tables}):

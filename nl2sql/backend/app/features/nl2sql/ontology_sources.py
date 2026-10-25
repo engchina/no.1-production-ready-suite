@@ -13,6 +13,7 @@ import json
 import logging
 import mimetypes
 import re
+import threading
 import unicodedata
 import zipfile
 from collections.abc import Callable
@@ -825,6 +826,28 @@ def _extract_docx(content: bytes) -> ExtractedOntologySource:
 
 _OCR_FAILED = "の VLM OCR に失敗したためスキップしました。"
 
+# PDFium はスレッド安全ではない（pypdfium2 の Known limitations「Incompatibility with
+# Threading」）。
+# 資料の抽出は構築のジョブごとのスレッドで並行に走るため、PDFium の呼び出し（開く・描く・閉じる）は
+# process 全体のこの lock の中で行う（#3362）。
+_PDFIUM_LOCK = threading.RLock()
+
+
+def _render_pdf_page_jpeg(document: Any, page_index: int) -> bytes:
+    """PDFium で 1 頁を描いて JPEG にする。呼ぶ側が ``_PDFIUM_LOCK`` を持つ。"""
+    page = document[page_index]
+    try:
+        bitmap = page.render(scale=2)
+        try:
+            image = bitmap.to_pil()
+            image_buffer = io.BytesIO()
+            image.save(image_buffer, format="JPEG", quality=90)
+        finally:
+            bitmap.close()
+    finally:
+        page.close()
+    return image_buffer.getvalue()
+
 
 def _extract_pdf(
     content: bytes,
@@ -857,14 +880,12 @@ def _extract_pdf(
                 text = normalize_source_text(page.extract_text() or "")
                 if not text and vlm_page_runner is not None:
                     try:
-                        if pdfium_document is None:
-                            import pypdfium2  # type: ignore[import-untyped]
+                        with _PDFIUM_LOCK:
+                            if pdfium_document is None:
+                                import pypdfium2  # type: ignore[import-untyped]
 
-                            pdfium_document = pypdfium2.PdfDocument(content)
-                        bitmap = pdfium_document[index - 1].render(scale=2)
-                        image = bitmap.to_pil()
-                        image_buffer = io.BytesIO()
-                        image.save(image_buffer, format="JPEG", quality=90)
+                                pdfium_document = pypdfium2.PdfDocument(content)
+                            page_image = _render_pdf_page_jpeg(pdfium_document, index - 1)
                     except Exception:
                         pages.append((index, None, _OCR_FAILED))
                         continue
@@ -874,7 +895,7 @@ def _extract_pdf(
                             pool.submit(
                                 contextvars.copy_context().run,
                                 vlm_page_runner,
-                                image_buffer.getvalue(),
+                                page_image,
                                 index,
                             ),
                             "",
@@ -917,6 +938,10 @@ def _extract_pdf(
                 if isinstance(value, Future):
                     value.cancel()
             raise
+        finally:
+            if pdfium_document is not None:
+                with _PDFIUM_LOCK:
+                    pdfium_document.close()
     if not chunks:
         skipped_detail = f"({', '.join(skipped_pages)})" if skipped_pages else ""
         raise OntologySourceError(

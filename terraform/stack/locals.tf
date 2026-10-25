@@ -47,11 +47,9 @@ locals {
   rag_services = concat(
     [
       "preprocess-office-to-pdf",
-      "preprocess-pdf-to-page-images",
       "preprocess-csv-to-jsonl",
       "preprocess-excel-to-jsonl",
       "preprocess-word-to-jsonl",
-      "preprocess-pii-redact",
       "parser-docling",
     ],
     var.rag_enable_parser_unstructured ? ["parser-unstructured"] : [],

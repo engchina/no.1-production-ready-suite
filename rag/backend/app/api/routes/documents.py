@@ -430,7 +430,8 @@ async def _store_uploaded_document(
     file_name = _safe_display_filename(original_file_name)
     rejected_message = rejected_upload_format_message(file_name, content_type)
     if rejected_message is not None:
-        # HEIC / HEIF・EPUB は解析の依存を入れないため、保存せずに変換の方法を返す(#3351)。
+        # HEIC / HEIF・EPUB(解析の依存を入れない。#3351)と音声・動画(取り込まない。#3369)は、
+        # 保存せずに変換の方法を返す。
         raise HTTPException(status_code=415, detail=rejected_message)
     if not _is_allowed_upload_content_type(
         content_type,

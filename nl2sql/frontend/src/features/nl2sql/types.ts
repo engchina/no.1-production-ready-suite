@@ -795,6 +795,21 @@ export interface HistoryItem {
   kind?: "chat" | "query" | "mcp" | "evaluation" | null;
   /** チャットの往復の会話の ID（実行の詳細の「会話を開く」に使う。チャットでない実行は意味を持たない。#2343）。 */
   session_id?: string;
+  /** 停止で終わった実行の行（#3348）。空・無しは SQL を実行した行。停止の行は SQL・実行結果・評価を持たない。 */
+  run_status?: "" | "cancelled";
+  /** 取り消した人と入口（停止の行だけ。backend の `HistoryCancellation`。#3348）。 */
+  cancellation?: HistoryCancellation | null;
+}
+
+/** 実行履歴の「取消」（API キーの名前は見ている利用者が見られるキーだけ。見られなければ空。#3348）。 */
+export interface HistoryCancellation {
+  via: "screen" | "mcp" | "agent_run";
+  /** 取り消した人を記録しているか（認証無効の期間の取消は false）。 */
+  actor_recorded: boolean;
+  /** 取り消した人の表示名（引けない利用者〔削除済み〕・記録の無い取消は空）。 */
+  actor_display_name: string;
+  by_me: boolean;
+  api_key_name: string;
 }
 
 export interface HistoryData extends OffsetPage<HistoryItem> {

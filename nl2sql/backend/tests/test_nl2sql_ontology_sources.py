@@ -4,8 +4,11 @@ import hashlib
 import io
 import json
 import tempfile
+import threading
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import BinaryIO, cast
+from typing import Any, BinaryIO, cast
 
 import pytest
 from docx import Document
@@ -336,3 +339,119 @@ def test_pdf_page_level_failures_skip_with_warning_and_all_empty_raises() -> Non
     assert exc_info.value.code == "ONTOLOGY_SOURCE_PDF_TEXT_MISSING"
     assert "page:1" in exc_info.value.message_ja
     assert "OCR 設定" in exc_info.value.message_ja
+
+
+class _TrackingLock:
+    """PDFium の lock の代わり。中に入っているスレッドの数の最大と、持ち主を記録する。"""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._meta = threading.Lock()
+        self._owner: int | None = None
+        self._depth = 0
+        self.active = 0
+        self.max_active = 0
+        self.entries = 0
+
+    def __enter__(self) -> _TrackingLock:
+        self._lock.acquire()
+        self._depth += 1
+        if self._depth == 1:
+            self._owner = threading.get_ident()
+            with self._meta:
+                self.active += 1
+                self.entries += 1
+                self.max_active = max(self.max_active, self.active)
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._depth -= 1
+        if self._depth == 0:
+            self._owner = None
+            with self._meta:
+                self.active -= 1
+        self._lock.release()
+
+    def held_by_current_thread(self) -> bool:
+        return self._owner == threading.get_ident()
+
+
+class _CheckedPdfium:
+    """pypdfium2 の object の代わり。呼び出しのたびに lock を持っているかを確かめ、結果も包む。"""
+
+    def __init__(self, target: Any, check: Callable[[str], None]) -> None:
+        self._target = target
+        self._check = check
+
+    def _wrap(self, value: Any) -> Any:
+        if type(value).__module__.startswith("pypdfium2"):
+            return _CheckedPdfium(value, self._check)
+        return value
+
+    def __getattr__(self, name: str) -> Any:
+        attribute = getattr(self._target, name)
+        if not callable(attribute):
+            return attribute
+
+        def call(*args: Any, **kwargs: Any) -> Any:
+            self._check(name)
+            return self._wrap(attribute(*args, **kwargs))
+
+        return call
+
+    def __getitem__(self, index: int) -> Any:
+        self._check("__getitem__")
+        return self._wrap(self._target[index])
+
+    def __len__(self) -> int:
+        self._check("__len__")
+        return len(self._target)
+
+
+def test_scanned_pdf_calls_pdfium_only_inside_the_process_lock_across_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """構築のジョブが並行しても、PDFium を開く・描く・閉じるは process の lock の中（#3362）。"""
+    import pypdfium2  # type: ignore[import-untyped]
+
+    from app.features.nl2sql import ontology_sources
+
+    lock = _TrackingLock()
+    monkeypatch.setattr(ontology_sources, "_PDFIUM_LOCK", lock)
+    real_document = pypdfium2.PdfDocument
+    outside_lock: list[str] = []
+
+    def check(operation: str) -> None:
+        if not lock.held_by_current_thread():
+            outside_lock.append(operation)
+
+    def checked_document(source: bytes) -> _CheckedPdfium:
+        check("open")
+        return _CheckedPdfium(real_document(source), check)
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", checked_document)
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.add_blank_page(width=100, height=100)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    content = buffer.getvalue()
+
+    def extract(index: int) -> list[str]:
+        extracted = extract_ontology_source(
+            _source(f"scan-{index}.pdf", content),
+            content,
+            vlm_page_runner=lambda image, page: f"{page} ページ目 {len(image) > 0}",
+            vlm_concurrency=2,
+        )
+        return [chunk.text for chunk in extracted.chunks]
+
+    jobs = 8 * 5
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(extract, range(jobs)))
+
+    assert results == [["1 ページ目 True", "2 ページ目 True"]] * jobs
+    assert outside_lock == []
+    # 1 資料につき 2 頁の描画と、最後の close。
+    assert lock.entries == jobs * 3
+    assert lock.max_active == 1

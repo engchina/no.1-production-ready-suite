@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronUp, FileText } from "lucide-react";
 import { useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import { resolveContentLang } from "../../lib/content-lang";
+import { detectContentLang, resolveContentLang } from "../../lib/content-lang";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { TEXT_ICON_SIZE } from "../ui/text-icon";
@@ -37,7 +37,10 @@ import {
  * 本文の上に回答全体の注意、本文の後ろに「根拠と矛盾し除いた内容」「確認が必要な点」の節を足す。段落の照合は
  * 段落・項目の原文（`passageText`。無ければ文字列の `content`）と印の `text` で行う。
  *
- * 本文の入れ物には回答の言語の `lang` を付ける（`lang`。渡さなければ本文から判定する。#3335）。
+ * 回答の言語の `lang`（`lang`。渡さなければ本文から判定する。#3335）は、段落・項目の文・表やコードの塊・引用だけを包む
+ * 要素に付ける。部品と製品の文言（節の見出し・根拠の行・ボタン・段落の印・注意・`extra`）は包まず、画面の言語
+ * （`<html lang>`）のまま描く（中国語の回答の中の日本語の文言を中国語の字形にしない。#3349）。節の見出しは見出しの文字から
+ * 判定した言語にする（判定できなければ画面の言語）。製品の決まった文言の段落・項目は `lang: null` で除く。
  */
 
 /** 畳める節で、畳んだときに出す項目の数。 */
@@ -79,6 +82,11 @@ export interface AnswerSectionEntry {
   extra?: ReactNode;
   /** 段落の印の照合に使う原文（無ければ文字列の `content`）。 */
   passageText?: string;
+  /**
+   * 項目の文の言語（#3349）。渡さなければ回答の言語、文字列ならその言語、`null` なら `lang` を付けない
+   * （製品の決まった説明の文など、画面の言語で描く文）。
+   */
+  lang?: string | null;
 }
 
 export type AnswerSectionsBlock =
@@ -90,6 +98,8 @@ export type AnswerSectionsBlock =
       citations?: readonly AnswerCitationRef[];
       /** 段落の印の照合に使う原文（無ければ文字列の `content`）。 */
       passageText?: string;
+      /** 段落の言語（`AnswerSectionEntry.lang` と同じ。`null` は製品の決まった文言）。 */
+      lang?: string | null;
     }
   | {
       /** 段落にできない本文（表・コード・見出しなど。製品が描いたもの）と、その下の根拠の行。 */
@@ -99,6 +109,8 @@ export type AnswerSectionsBlock =
       citations?: readonly AnswerCitationRef[];
       /** 段落の印の照合に使う原文。 */
       passageText?: string;
+      /** 塊の言語（`AnswerSectionEntry.lang` と同じ）。 */
+      lang?: string | null;
     }
   | {
       kind: "section";
@@ -204,7 +216,7 @@ export interface AnswerSectionsProps {
   passageLabels?: AnswerPassageLabels;
   /**
    * 回答の言語（BCP 47。#3335。`resolveContentLang`）。渡さなければ段落・項目の文（文字列の `content` と
-   * `passageText`）から判定して本文の入れ物に `lang` を付け、`null` なら付けない。
+   * `passageText`）から判定して段落・項目の文に `lang` を付け、`null` なら付けない。
    */
   lang?: string | null;
 }
@@ -243,39 +255,52 @@ export interface AnswerPlainTextProps {
 
 /**
  * 節に分けない回答の本文（生成中・回答エンジンの書式に合わない本文。#3335）。`AnswerSections` と同じ文字の大きさ・
- * 行の高さで、回答の言語の `lang` を付ける（中国語の回答は中国語の字形で描く）。
+ * 行の高さで、本文だけを回答の言語の `lang` で包む（中国語の回答は中国語の字形で描く。後ろに置く `children` は画面の
+ * 言語のまま。#3349）。
  */
 export function AnswerPlainText({ text, live = false, lang, children, className, testId }: AnswerPlainTextProps) {
   const contentLang = useMemo(() => resolveContentLang(lang, text), [lang, text]);
+  // 後ろに置くものが無ければ段落が本文だけなので段落に付け、あれば本文だけを包む。
+  const trailing = children !== undefined && children !== null && children !== false;
   return (
     <p
       className={cn("whitespace-pre-wrap text-sm leading-relaxed text-fg", className)}
       aria-live={live ? "polite" : undefined}
-      lang={contentLang}
+      lang={trailing ? undefined : contentLang}
       data-testid={testId}
     >
-      {text}
+      {trailing ? <ContentLang lang={contentLang}>{text}</ContentLang> : text}
       {children}
     </p>
   );
 }
 
-/** 言語の判定に使う回答の文（段落・節の見出し・項目の原文）。 */
+/** 言語の判定に使う回答の文（段落・項目の原文。製品の決まった文言 `lang: null` と節の見出しは入れない）。 */
 function answerText(blocks: readonly AnswerSectionsBlock[]): string {
   const parts: string[] = [];
   for (const block of blocks) {
     if (block.kind === "section") {
-      if (block.title) parts.push(block.title);
       for (const entry of block.entries) {
-        const text = passageTextOf(entry.passageText, entry.content);
+        const text = entry.lang === null ? undefined : passageTextOf(entry.passageText, entry.content);
         if (text) parts.push(text);
       }
     } else {
-      const text = passageTextOf(block.passageText, block.content);
+      const text = block.lang === null ? undefined : passageTextOf(block.passageText, block.content);
       if (text) parts.push(text);
     }
   }
   return parts.join("\n");
+}
+
+/** 段落・項目の言語（`lang` を渡さなければ回答の言語、`null` は付けない）。 */
+function partLang(lang: string | null | undefined, answerLang: string | undefined): string | undefined {
+  if (lang === undefined) return answerLang;
+  return resolveContentLang(lang, null);
+}
+
+/** 利用者の内容だけを包む行内の要素（言語が無ければ包まない）。 */
+function ContentLang({ lang, children }: { lang: string | undefined; children: ReactNode }) {
+  return lang ? <span lang={lang}>{children}</span> : <>{children}</>;
 }
 
 /** 回答の本文の節（段落・見出しつきの箇条書き・各項目の根拠の行）。 */
@@ -321,12 +346,11 @@ export function AnswerSections({
     };
   }, [blocks, passages, baseId]);
 
-  const extraSections = passages ? passageSections(passages, anchors, passageLabels) : [];
+  const extraSections = passages ? passageSections(passages, anchors, passageLabels, contentLang) : [];
   return (
     <div
       className={cn("space-y-3 text-sm leading-relaxed text-fg", className)}
       aria-live={live ? "polite" : undefined}
-      lang={contentLang}
       data-testid={testId}
     >
       {passages?.warnings.length ? <AnswerPassageWarnings warnings={passages.warnings} labels={passageLabels} /> : null}
@@ -335,9 +359,17 @@ export function AnswerSections({
           // 節の見出しの前は、段落の間（0.75rem）より広い 1.25rem（`--space-5`。0.75rem + pt-2）を空け、節の区切りを
           // 見て分かるようにする（#2325。見出しは後ろの内容に近く、前の内容から離す）。先頭の節には付けない。
           return (
-            <AnswerSection key={block.key} block={block} labels={labels} marked={marked} passageLabels={passageLabels} />
+            <AnswerSection
+              key={block.key}
+              block={block}
+              labels={labels}
+              marked={marked}
+              passageLabels={passageLabels}
+              answerLang={contentLang}
+            />
           );
         }
+        const blockLang = partLang(block.lang, contentLang);
         const target = marked.get(block.key);
         const citations = block.citations?.length ? <AnswerCitationLinks citations={block.citations} /> : null;
         if (target) {
@@ -350,7 +382,9 @@ export function AnswerSections({
               render={(marker) =>
                 block.kind === "content" ? (
                   <>
-                    {block.content}
+                    <div className="min-w-0" lang={blockLang}>
+                      {block.content}
+                    </div>
                     {/* 表・コードの後ろには文が続かないので、印は塊の下の行に置く。 */}
                     <p>{marker}</p>
                     {citations}
@@ -358,7 +392,7 @@ export function AnswerSections({
                 ) : (
                   <>
                     <p className="whitespace-pre-wrap">
-                      {block.content}
+                      <ContentLang lang={blockLang}>{block.content}</ContentLang>
                       {marker}
                     </p>
                     {citations}
@@ -371,24 +405,35 @@ export function AnswerSections({
         if (block.kind === "content") {
           return (
             <div key={block.key} className="min-w-0">
-              {block.content}
+              <div className="min-w-0" lang={blockLang}>
+                {block.content}
+              </div>
               {citations}
             </div>
           );
         }
         return citations ? (
           <div key={block.key}>
-            <p className="whitespace-pre-wrap">{block.content}</p>
+            <p className="whitespace-pre-wrap" lang={blockLang}>
+              {block.content}
+            </p>
             {citations}
           </div>
         ) : (
-          <p key={block.key} className="whitespace-pre-wrap">
+          <p key={block.key} className="whitespace-pre-wrap" lang={blockLang}>
             {block.content}
           </p>
         );
       })}
       {extraSections.map((block) => (
-        <AnswerSection key={block.key} block={block} labels={labels} marked={NO_MARKS} passageLabels={passageLabels} />
+        <AnswerSection
+          key={block.key}
+          block={block}
+          labels={labels}
+          marked={NO_MARKS}
+          passageLabels={passageLabels}
+          answerLang={contentLang}
+        />
       ))}
       {children}
     </div>
@@ -403,7 +448,9 @@ function passageSections(
   passages: AnswerPassageRecords,
   anchors: readonly string[],
   labels: AnswerPassageLabels,
+  answerLang: string | undefined,
 ): Extract<AnswerSectionsBlock, { kind: "section" }>[] {
+  // 節の見出し・説明・理由は部品の文言（画面の言語）。引用だけが回答の言語（#3349）。
   const sections: Extract<AnswerSectionsBlock, { kind: "section" }>[] = [];
   if (passages.removed.length) {
     sections.push({
@@ -413,12 +460,15 @@ function passageSections(
       collapsible: true,
       testId: "answer-removed-passages",
       entries: [
-        { key: "note", content: labels.removedNote, muted: true },
+        { key: "note", content: labels.removedNote, muted: true, lang: null },
         ...passages.removed.map((item, index) => ({
           key: `removed-${index}`,
+          lang: null,
           content: (
             <span className="block whitespace-normal" data-testid="answer-removed-passage">
-              <span className="[overflow-wrap:anywhere]">{answerPassageQuote(item.text, 200)}</span>
+              <span className="[overflow-wrap:anywhere]" lang={answerLang}>
+                {answerPassageQuote(item.text, 200)}
+              </span>
               {item.reasons.length ? (
                 <span className="block text-xs text-fg-muted [overflow-wrap:anywhere]">
                   {item.reasons.map(answerPassageReasonText).join(" / ")}
@@ -438,7 +488,7 @@ function passageSections(
       collapsible: true,
       testId: "answer-marked-passages",
       entries: [
-        { key: "note", content: labels.marksNote, muted: true },
+        { key: "note", content: labels.marksNote, muted: true, lang: null },
         ...passages.marks.map((mark, index) => {
           const Icon = ANSWER_PASSAGE_STATE_ICON[mark.state];
           const quote = answerPassageQuote(mark.text);
@@ -446,6 +496,7 @@ function passageSections(
           const reasons = [...new Set(mark.reasons.map((reason) => reason.label))].join("・");
           return {
             key: `mark-${index}`,
+            lang: null,
             content: (
               <span className="block whitespace-normal" data-testid="answer-marked-passage" data-passage-state={mark.state}>
                 {anchor ? (
@@ -457,10 +508,12 @@ function passageSections(
                     onClick={() => focusAnswerPassage(anchor)}
                     data-testid="answer-marked-passage-link"
                   >
-                    {quote}
+                    <ContentLang lang={answerLang}>{quote}</ContentLang>
                   </button>
                 ) : (
-                  <span className="[overflow-wrap:anywhere]">{quote}</span>
+                  <span className="[overflow-wrap:anywhere]" lang={answerLang}>
+                    {quote}
+                  </span>
                 )}
                 <span className="flex items-start gap-1 text-xs text-fg-muted">
                   <span className="pr-icon-line">
@@ -486,11 +539,13 @@ function AnswerSection({
   labels,
   marked,
   passageLabels,
+  answerLang,
 }: {
   block: Extract<AnswerSectionsBlock, { kind: "section" }>;
   labels: AnswerSectionsLabels;
   marked: MarkedTargets;
   passageLabels: AnswerPassageLabels;
+  answerLang: string | undefined;
 }) {
   const [expanded, setExpanded] = useState(false);
   const listId = useId();
@@ -499,10 +554,17 @@ function AnswerSection({
   const toggle = Boolean(block.collapsible) && items > ANSWER_SECTION_COLLAPSE_AFTER;
   const entries = toggle && !expanded ? firstItems(block.entries, ANSWER_SECTION_COLLAPSE_AFTER) : block.entries;
   const render = (entry: AnswerSectionEntry) =>
-    renderEntry(entry, marked.get(entryTargetKey(block.key, entry.key)), passageLabels);
+    renderEntry(entry, marked.get(entryTargetKey(block.key, entry.key)), passageLabels, partLang(entry.lang, answerLang));
+  // 見出しは製品の決まった見出しのことも回答の見出しのこともあるので、見出しの文字だけで決める（判定できなければ画面の
+  // 言語。#3349）。
+  const titleLang = useMemo(() => detectContentLang(block.title), [block.title]);
   return (
     <section className="space-y-1.5 not-first:pt-2" data-testid={block.testId ?? "answer-section"}>
-      {block.title ? <h4 className="text-sm font-semibold text-fg">{block.title}</h4> : null}
+      {block.title ? (
+        <h4 className="text-sm font-semibold text-fg" lang={titleLang}>
+          {block.title}
+        </h4>
+      ) : null}
       {block.ordered ? (
         <ol id={listId} className="list-decimal space-y-1.5 pl-5">
           {entries.map(render)}
@@ -544,7 +606,13 @@ function firstItems(entries: readonly AnswerSectionEntry[], limit: number): Answ
   return result;
 }
 
-function renderEntry(entry: AnswerSectionEntry, target: MarkedTarget | undefined, passageLabels: AnswerPassageLabels) {
+function renderEntry(
+  entry: AnswerSectionEntry,
+  target: MarkedTarget | undefined,
+  passageLabels: AnswerPassageLabels,
+  entryLang: string | undefined,
+) {
+  // 項目の文だけを言語で包み、根拠の行・`extra`・段落の印は画面の言語のまま（#3349）。
   if (entry.muted) {
     return (
       <li key={entry.key} className="list-none whitespace-pre-wrap text-fg-muted">
@@ -555,13 +623,13 @@ function renderEntry(entry: AnswerSectionEntry, target: MarkedTarget | undefined
             labels={passageLabels}
             render={(marker) => (
               <span>
-                {entry.content}
+                <ContentLang lang={entryLang}>{entry.content}</ContentLang>
                 {marker}
               </span>
             )}
           />
         ) : (
-          entry.content
+          <ContentLang lang={entryLang}>{entry.content}</ContentLang>
         )}
       </li>
     );
@@ -577,7 +645,7 @@ function renderEntry(entry: AnswerSectionEntry, target: MarkedTarget | undefined
           render={(marker) => (
             <>
               <span>
-                {entry.content}
+                <ContentLang lang={entryLang}>{entry.content}</ContentLang>
                 {marker}
               </span>
               {citations}
@@ -590,7 +658,7 @@ function renderEntry(entry: AnswerSectionEntry, target: MarkedTarget | undefined
   }
   return (
     <li key={entry.key} className="whitespace-pre-wrap">
-      {entry.content}
+      <ContentLang lang={entryLang}>{entry.content}</ContentLang>
       {citations}
       {entry.extra}
     </li>

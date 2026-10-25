@@ -636,7 +636,7 @@ test("マクロ付きの Office はアップロードでき、ファイル準備
 });
 
 test(
-  "HEIC / HEIF・EPUB は送る前に変換の方法を示して送らず、対応形式の案内にも未対応と出す（#3351）",
+  "HEIC / HEIF・EPUB・音声・動画は送る前に変換の方法を示して送らず、対応形式の案内にも未対応と出す（#3351・#3369）",
   { tag: "@responsive" },
   async ({ page }, testInfo) => {
     await mockLocalAuth(page);
@@ -650,19 +650,22 @@ test(
     });
 
     await page.goto("/upload");
-    // 対応形式の一覧に ODT・RST を出し、HEIC / HEIF・EPUB は未対応と変換の方法を出す。
+    // 対応形式の一覧に ODT・RST を出し、HEIC / HEIF・EPUB・音声・動画は未対応と変換の方法を出す。
     const formats = page.getByText(/^対応形式: /);
     await expect(formats).toContainText("ODT");
     await expect(formats).toContainText("RST");
-    await expect(formats).not.toContainText("HEIC");
-    await expect(formats).not.toContainText("EPUB");
+    for (const label of ["HEIC", "EPUB", "MP3", "WAV", "OGG", "MP4"]) {
+      await expect(formats).not.toContainText(label);
+    }
     await expect(page.getByTestId("upload-dropzone-unsupported")).toContainText(
-      "HEIC / HEIF の画像と EPUB は対応していません"
+      "HEIC / HEIF の画像・EPUB・音声・動画のファイルは対応していません"
     );
 
     await page.locator('input[type="file"]').setInputFiles([
       { name: "photo.HEIC", mimeType: "image/heic", buffer: Buffer.alloc(6, 1) },
       { name: "book.epub", mimeType: "application/epub+zip", buffer: Buffer.alloc(6, 1) },
+      { name: "voice.mp3", mimeType: "audio/mpeg", buffer: Buffer.alloc(6, 1) },
+      { name: "clip.mp4", mimeType: "video/mp4", buffer: Buffer.alloc(6, 1) },
       { name: "memo.odt", mimeType: "application/vnd.oasis.opendocument.text", buffer: Buffer.alloc(6, 1) },
     ]);
     const selection = page.getByTestId("upload-selection");
@@ -673,7 +676,14 @@ test(
     const epub = selection.getByRole("listitem").filter({ hasText: "book.epub" });
     await expect(epub).toContainText("EPUB は対応していません");
     await expect(epub.getByTestId("upload-selection-guide")).toContainText("PDF に変換して");
-    await expect(selection).toContainText("送れない 2 件は送りません。");
+    for (const name of ["voice.mp3", "clip.mp4"]) {
+      const media = selection.getByRole("listitem").filter({ hasText: name });
+      await expect(media).toContainText("音声・動画は対応していません");
+      await expect(media.getByTestId("upload-selection-guide")).toContainText(
+        "音声・動画のファイル（MP3・WAV・OGG・MP4 など）は対応していません"
+      );
+    }
+    await expect(selection).toContainText("送れない 4 件は送りません。");
     await page.screenshot({ path: testInfo.outputPath("upload-rejected-formats.png"), fullPage: true });
     await expectNoPageOverflow(page);
 

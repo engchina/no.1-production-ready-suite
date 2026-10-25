@@ -73,6 +73,9 @@ export function AnswerText({
   const format = answerFormat(diagnostics);
   const passages = streaming ? null : answerPassages(diagnostics);
   const blocks = streaming ? null : (parseAnswerText(text, format) ?? (passages ? plainParagraphs(text) : null));
+  // 回答エンジンの決まった文言（保存した表示形式の値と同じ段落・説明）は画面の言語で描く（回答の言語の lang を付けない。#3349）。
+  const fixedTexts = new Set(Object.values(format ?? {}));
+  const fixedLang = (value: string) => (fixedTexts.has(value) ? null : undefined);
   if (!blocks) {
     return (
       // 節に分けない本文も共通の部品で出し、回答の言語の字形で描く（#3335）。
@@ -89,7 +92,7 @@ export function AnswerText({
       passageLabels={answerPassageLabels()}
       blocks={blocks.map((block, index): AnswerSectionsBlock =>
         block.kind === "paragraph"
-          ? { kind: "paragraph", key: String(index), content: block.text }
+          ? { kind: "paragraph", key: String(index), content: block.text, lang: fixedLang(block.text) }
           : {
               kind: "section",
               key: String(index),
@@ -150,7 +153,7 @@ export function AnswerText({
 
   function toEntry(entry: AnswerTextEntry, index: number, title: string): AnswerSectionEntry {
     if (entry.kind === "text") {
-      return { key: String(index), content: entry.text, muted: true };
+      return { key: String(index), content: entry.text, muted: true, lang: fixedLang(entry.text) };
     }
     return {
       key: String(index),
