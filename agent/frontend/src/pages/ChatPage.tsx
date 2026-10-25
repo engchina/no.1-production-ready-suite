@@ -1268,10 +1268,11 @@ function RunChatTurn({
           notice={run.status === "completed" ? answerNoticeText(run.artifacts) : null}
           noticeLabel={t("answer.notice.label")}
           evidence={
-            evidence ? (
+            evidence || (run.withheld_evidence_count ?? 0) > 0 ? (
               <AnswerEvidenceBlock
                 runId={run.id}
                 evidence={evidence}
+                withheldCount={run.withheld_evidence_count ?? 0}
                 idPrefix={`chat-${run.id}`}
                 className="border-t border-border px-2 pt-1"
               />

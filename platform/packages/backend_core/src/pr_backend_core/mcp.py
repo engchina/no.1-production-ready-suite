@@ -126,6 +126,9 @@ class McpTool:
       `structuredContent` を返すこと（呼び出し側と契約で出力の形を確かめられる）。
     - `title`: 人が読む表示名（MCP の仕様のツールの `title`）。指定すると `tools/list` に出す。
       呼び出し側の画面（Agent の処理の経過など）が内部名の代わりに出す。モデルの判断には使わない。
+    - `listed`: False のツールは `tools/list` に出さない（`tools/call` では呼べ、権限は同じに
+      確かめる）。製品間の画面の操作だけが名前で呼ぶ内部のツール（Agent の画面が保存した根拠を
+      出し直すときの確かめなど。#3252）に使い、モデルと外部の MCP クライアントに見せない。
     """
 
     name: str
@@ -136,6 +139,7 @@ class McpTool:
     read_only: bool = True
     output_model: type[BaseModel] | None = None
     title: str | None = None
+    listed: bool = True
 
     def allowed(self, has_any_permission: HasAnyPermission) -> bool:
         return all(has_any_permission(group) for group in self.permissions)
@@ -186,7 +190,11 @@ class McpServer:
         if method == "ping":
             return _result(request_id, {})
         if method == "tools/list":
-            tools = [t.descriptor() for t in self.tools.values() if t.allowed(has_any_permission)]
+            tools = [
+                t.descriptor()
+                for t in self.tools.values()
+                if t.listed and t.allowed(has_any_permission)
+            ]
             return _result(request_id, {"tools": tools})
         if method == "tools/call":
             return await self._call_tool(request_id, params, has_any_permission)

@@ -2416,6 +2416,60 @@
       }
     },
     {
+      "name": "rag_readable_documents",
+      "title": "根拠の文書の閲覧の確かめ",
+      "description": "渡した文書のうち、今の権限で見られる文書の id を返します。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "description": "保存した根拠の文書を、呼び出した利用者が今見られるかを確かめる条件。",
+        "properties": {
+          "document_ids": {
+            "description": "文書の id の一覧。",
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Document Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "document_ids"
+        ],
+        "title": "ReadableDocumentsInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "properties": {
+          "schema_version": {
+            "default": 31,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "readable_document_ids": {
+            "description": "渡した文書のうち、今の権限で見られる文書の id（渡した順）。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Readable Document Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "readable_document_ids"
+        ],
+        "title": "ReadableDocumentsOutput",
+        "type": "object"
+      }
+    },
+    {
       "name": "rag_recommend_search_answer_profile",
       "title": "検索・回答プロファイルの推薦",
       "description": "質問に合う検索・回答プロファイルを推薦します（回答は作りません）。候補が違う資料に割れたとき・当たりが無いときは recommended_profile_id が nullです。profile_ids を渡すと、その中からだけ推薦します。同じ会話の続きの質問では前のターンと同じプロファイルを使い、推薦し直すのは話題が変わったときだけです。",

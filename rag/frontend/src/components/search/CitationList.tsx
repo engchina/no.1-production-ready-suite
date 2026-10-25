@@ -1,4 +1,10 @@
-import { AnswerEvidence, EvidenceList, useEvidenceSource, type EvidenceSourceState } from "@production-ready/ui";
+import {
+  AnswerEvidence,
+  EvidenceList,
+  EvidenceWithheldNote,
+  useEvidenceSource,
+  type EvidenceSourceState,
+} from "@production-ready/ui";
 
 import type { RetrievedChunk } from "@/lib/api";
 
@@ -18,15 +24,21 @@ export function AnswerCitations({
   cardProps,
   className,
   listTestId,
+  withheldCount = 0,
 }: {
   citations: RetrievedChunk[];
   idPrefix: string;
   cardProps?: CitationCardOptions;
   className?: string;
   listTestId?: string;
+  /**
+   * 保存した根拠のうち、見ている利用者が今の権限で見られない根拠の数（backend の `withheld_evidence_count`。中身は
+   * 届かない。#3252）。
+   */
+  withheldCount?: number;
 }) {
   const source = useEvidenceSource<number>();
-  if (!citations.length) return null;
+  if (!citations.length && withheldCount <= 0) return null;
   const preview = cardProps?.preview ?? true;
   return (
     <>
@@ -36,6 +48,7 @@ export function AnswerCitations({
         labels={EVIDENCE_LABELS}
         className={className}
         listTestId={listTestId}
+        withheldCount={withheldCount}
         onOpenSource={preview ? source.open : undefined}
         renderActions={(_item, index) => <CitationActions chunk={citations[index]} {...cardProps} />}
       />
@@ -53,17 +66,21 @@ export function CitationList({
   idPrefix,
   cardProps = {},
   listTestId,
+  withheldCount = 0,
 }: {
   citations: RetrievedChunk[];
   /** 同じ画面に複数の一覧があるときに、開くボタンの id を分ける。 */
   idPrefix: string;
   cardProps?: CitationCardOptions;
   listTestId?: string;
+  /** 保存した結果のうち、見ている利用者が今の権限で見られない根拠の数（#3252）。 */
+  withheldCount?: number;
 }) {
   const source = useEvidenceSource<number>();
   const preview = cardProps.preview ?? true;
   return (
     <>
+      <EvidenceWithheldNote count={withheldCount} labels={EVIDENCE_LABELS} className="mb-2" />
       <EvidenceList
         items={citations.map(citationEvidenceItem)}
         idPrefix={idPrefix}

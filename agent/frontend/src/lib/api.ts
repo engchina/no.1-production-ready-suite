@@ -348,6 +348,8 @@ export interface RunState {
   conversation_owner_display_name?: string | null;
   /** 承認・再開・Agent 自身の確認への回答を、見ている利用者ができるか（実行した人と system_admin だけ。#1928）。 */
   can_decide?: boolean;
+  /** 保存した根拠のうち、見ている利用者が今の権限で見られない根拠の数（抜粋・文書は届かない。#3252）。 */
+  withheld_evidence_count?: number;
   /** 回答への評価（#774）。評価していない Run は null / 無し。 */
   feedback?: RunFeedback | null;
   /** 管理者の評価（本人の評価とは別。#774）。 */
