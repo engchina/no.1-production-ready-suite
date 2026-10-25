@@ -2,14 +2,35 @@ import { expect, type Page } from "@playwright/test";
 
 import {
   CJK_FALLBACK_SAMPLES,
+  DEFERRED_CJK_FAMILIES,
   FONT_MONO_FAMILY,
   FONT_SANS_PREFIX,
+  firstRenderFontFaces,
+  initialStylesheetFontFaces,
   loadCjkFallbackFonts,
   renderedCjkFallbackFonts,
 } from "../../../../../platform/packages/ui/e2e/font-checks";
 
-/** 自前ホストの書体の太さ（src/main.tsx。Noto Sans JP と SC・TC・HK で同じ）。 */
+export { recordFirstRenderFontFaces } from "../../../../../platform/packages/ui/e2e/font-checks";
+
+/** 自前ホストの書体の太さ（src/main.tsx・src/fonts-cjk.css。Noto Sans JP と SC・TC・HK で同じ）。 */
 export const LOCAL_FONT_WEIGHTS = [400, 500, 600, 700] as const;
+
+/**
+ * Noto Sans SC・TC・HK の @font-face が主の CSS に無く、最初の描画の後に読まれることを確かめる（#3305）。
+ * `recordFirstRenderFontFaces(page)` を `page.goto` の前に呼んでおく。
+ */
+export async function expectDeferredCjkFontFaces(page: Page) {
+  const firstRender = await firstRenderFontFaces(page);
+  expect(firstRender.families).toContain("Noto Sans JP");
+  const initial = await initialStylesheetFontFaces(page);
+  // dev サーバの index.html は CSS の <link> を持たない（preview・本番だけ主の CSS を確かめられる）。
+  if (initial.hrefs.length > 0) expect(initial.families).toContain("Noto Sans JP");
+  for (const family of DEFERRED_CJK_FAMILIES) {
+    expect(firstRender.families, `最初の描画の CSS に ${family}`).not.toContain(family);
+    expect(initial.families, `index.html の CSS に ${family}`).not.toContain(family);
+  }
+}
 
 /** 画面内の全テキストと入力欄を走査し、局所指定やコード要素の字体漏れを検出する。 */
 export async function expectLocalUiFonts(page: Page) {
