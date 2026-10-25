@@ -22,6 +22,7 @@ import pytest
 
 import app.config as config_module
 from app.clients.oracle import OracleClient, _oracle_retrieval_where
+from app.clients.section_map_store import SectionMapStore
 
 _PERIOD_PREDICATE = "'$.effective_to'), '9999-12-31') > :filter_as_of"
 # 日本時間の 2026-04-01 0:00 の直前と直後(UTC では 2026-03-31)。
@@ -132,3 +133,90 @@ def test_engine_settings_use_common_timezone(tmp_path: Path) -> None:
 
     assert build_engine_settings(Settings(timezone="UTC"), output_dir=tmp_path).timezone == "UTC"
     assert build_engine_settings(Settings(), output_dir=tmp_path).timezone == "Asia/Tokyo"
+
+
+_SECTION_READS: list[tuple[str, Callable[[SectionMapStore], Coroutine[Any, Any, Any]]]] = [
+    ("readable_chunk_set", lambda store: store.readable_chunk_set("doc-1")),
+    ("readable_owner_section", lambda store: store.readable_owner_section("doc-1", "chunk-1")),
+    (
+        "section_first_chunks",
+        lambda store: store.section_first_chunks("doc-1", chunk_set_id="cs-1", section_ids=["s-1"]),
+    ),
+    (
+        "section_chunks",
+        lambda store: store.section_chunks(
+            "doc-1", chunk_set_id="cs-1", section_id="s-1", from_order=0, limit=10
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize(("name", "read"), _SECTION_READS, ids=[name for name, _ in _SECTION_READS])
+def test_section_map_reads_by_id_do_not_filter_by_effective_period(
+    name: str, read: Callable[[SectionMapStore], Coroutine[Any, Any, Any]]
+) -> None:
+    """章節ナビゲーションの読み取り(`rag_outline` / `rag_read_section`)も有効期間で絞らない。
+
+    #3268。
+    """
+    client = _CapturingClient.__new__(_CapturingClient)
+    client.captured = []
+
+    asyncio.run(read(SectionMapStore(client)))
+
+    assert client.captured, name
+    for statement, binds in client.captured:
+        assert "effective_to" not in statement
+        assert "filter_as_of" not in binds
+        assert "d.status = 'INDEXED'" in statement
+
+
+def test_section_chunks_of_answer_search_keep_its_as_of() -> None:
+    """回答の検索の章節の拡張(検索の条件を渡す)は、その検索の基準日で有効期間を絞る(#2602)。"""
+    client = _CapturingClient.__new__(_CapturingClient)
+    client.captured = []
+
+    asyncio.run(
+        SectionMapStore(client).section_chunks(
+            "doc-1",
+            chunk_set_id="cs-1",
+            section_id="s-1",
+            from_order=0,
+            limit=10,
+            filters={"as_of": "2025-04-01"},
+        )
+    )
+
+    statement, binds = client.captured[0]
+    assert _PERIOD_PREDICATE in statement
+    assert binds["filter_as_of"] == "2025-04-01"
+
+
+@pytest.mark.parametrize("chunk_set_id", ["set-a", None], ids=["chunk-set", "legacy-recipe"])
+def test_context_siblings_do_not_filter_by_effective_period(chunk_set_id: str | None) -> None:
+    """前後の文脈は起点と同じ文書で、有効期間は起点を選んだ検索で当て済み(#3268)。
+
+    過去の基準日の検索で、起点の前後が今日の日付で落ちないこと。
+    """
+    from app.clients.oracle import (
+        _context_anchor_retrieval_where,
+        _context_group_siblings_batch_sql,
+    )
+    from app.schemas.search import RetrievedChunk
+
+    metadata: dict[str, Any] = {"chunk_index": 1, "chunk_group_id": "grp-a"}
+    if chunk_set_id is not None:
+        metadata["chunk_set_id"] = chunk_set_id
+    else:
+        metadata["recipe_id"] = "recipe-legacy"
+    anchor = RetrievedChunk(
+        document_id="doc-1", chunk_id="a", text="a", score=0.5, metadata=metadata
+    )
+
+    for sql, binds in (
+        _context_anchor_retrieval_where(anchor),
+        _context_group_siblings_batch_sql([(anchor, "grp-a", 1)], max_chunks_per_group=4),
+    ):
+        assert "effective_to" not in sql
+        assert "filter_as_of" not in binds
+        assert "d.status = 'INDEXED'" in sql

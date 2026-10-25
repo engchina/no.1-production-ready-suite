@@ -392,7 +392,10 @@ class SectionMapStore:
     ) -> ReadableChunkSet | None:
         """利用者が読める文書の chunk_set（``chunk_set_id`` が無ければ、有効な chunk_set のうち
         レシピの番号が最も小さいもの）。読めなければ None。"""
-        where_sql, binds = _oracle_retrieval_where({INCLUDE_SUPERSEDED_FILTER_KEY: "true"})
+        # ID で読むので有効期間では絞らない（検索で選んだ根拠を今日の日付で読めなくしない。#3268）。
+        where_sql, binds = _oracle_retrieval_where(
+            {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False
+        )
         chunk_set_sql = (
             ":read_chunk_set_id"
             if chunk_set_id is not None
@@ -459,7 +462,10 @@ class SectionMapStore:
         self, document_id: str, chunk_id: str
     ) -> tuple[str, str] | None:
         """利用者が読める chunk の (chunk_set_id, 所有の章節の id)。無ければ None。"""
-        where_sql, binds = _oracle_retrieval_where({INCLUDE_SUPERSEDED_FILTER_KEY: "true"})
+        # ID で読むので有効期間では絞らない（検索で選んだ根拠を今日の日付で読めなくしない。#3268）。
+        where_sql, binds = _oracle_retrieval_where(
+            {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False
+        )
         row = await self._oracle._fetch_one(
             _render_sql(
                 f"""
@@ -496,10 +502,12 @@ class SectionMapStore:
 
         ``filters`` は回答の検索の条件（ナレッジベース・ページの範囲など。#1436）。渡すと、章節の
         chunk のうちその条件に入るものだけを読む（文書は起点の chunk の文書なので、旧版の扱いは
-        問わない）。
+        問わない）。有効期間は ``filters`` を渡したときだけ、その基準日で絞る（MCP の
+        ``rag_read_section`` のように ``filters`` の無い ID の読み取りは絞らない。#3268）。
         """
         where_sql, binds = _oracle_retrieval_where(
-            {**(filters or {}), INCLUDE_SUPERSEDED_FILTER_KEY: "true"}
+            {**(filters or {}), INCLUDE_SUPERSEDED_FILTER_KEY: "true"},
+            effective_period=filters is not None,
         )
         rows = await self._oracle._fetch_all(
             _render_sql(
@@ -546,7 +554,10 @@ class SectionMapStore:
         """
         found: dict[str, RetrievedChunk] = {}
         ids = list(dict.fromkeys(section_ids))
-        where_sql, binds = _oracle_retrieval_where({INCLUDE_SUPERSEDED_FILTER_KEY: "true"})
+        # ID で読むので有効期間では絞らない（検索で選んだ根拠を今日の日付で読めなくしない。#3268）。
+        where_sql, binds = _oracle_retrieval_where(
+            {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False
+        )
         for start in range(0, len(ids), _SECTION_FIRST_CHUNK_BATCH):
             batch = ids[start : start + _SECTION_FIRST_CHUNK_BATCH]
             names = {f"lead_section_{index}": section_id for index, section_id in enumerate(batch)}
