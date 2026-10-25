@@ -190,10 +190,10 @@ def test_client_service_unreachable_raises() -> None:
         )
 
 
-def _pii_client_with_response(
+def _word_client_with_response(
     monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]
 ) -> PreprocessServiceClient:
-    """前処理サービスの応答を差し替えた PIIマスクのクライアント(HTTP は呼ばない)。"""
+    """前処理サービスの応答を差し替えた Word→JSONL のクライアント(HTTP は呼ばない)。"""
     import httpx
 
     from app.clients import preprocess_service
@@ -205,72 +205,74 @@ def _pii_client_with_response(
     return PreprocessServiceClient(
         Settings(
             rag_preprocess_enabled=True,
-            rag_preprocess_pii_redact_service_url="http://127.0.0.1:9/",
+            rag_preprocess_word_to_jsonl_service_url="http://127.0.0.1:9/",
         )
     )
+
+
+_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
 @pytest.mark.parametrize(
     ("reason", "expected"),
     [
-        ("pii_not_text", "「PIIマスク」はテキスト形式の文書"),
-        ("pii_too_large", "100 万文字"),
-        ("pii_empty", "空の文書"),
+        ("word_encrypted", "パスワードで保護"),
+        ("word_input_too_large", "64 MB"),
+        ("word_no_content", "空の文書"),
     ],
-    ids=["not-text", "too-large", "empty"],
+    ids=["encrypted", "too-large", "empty"],
 )
-def test_client_pii_redact_source_reason_is_user_actionable(
+def test_client_source_reason_is_user_actionable(
     monkeypatch: pytest.MonkeyPatch, reason: str, expected: str
 ) -> None:
     """原本の側の理由は、サービスのログの確認ではなく対処を案内する(#2068)。"""
-    client = _pii_client_with_response(
+    client = _word_client_with_response(
         monkeypatch,
         ConvertResponse.from_outcome(ConvertOutcome.passthrough(reason=reason)).model_dump(),
     )
     with pytest.raises(PreprocessServiceError) as caught:
         client.convert(
-            b"%PDF-1.7", content_type="application/pdf", source_profile=None, profile="pii_redact"
+            b"PK\x03\x04", content_type=_DOCX, source_profile=None, profile="word_to_jsonl"
         )
     assert caught.value.reason == reason
     assert expected in str(caught.value)
     assert "ログを確認" not in str(caught.value)
-    assert "原本のまま" in str(caught.value) or reason == "pii_empty"
 
 
-def test_client_pii_redact_failure_keeps_service_message(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _pii_client_with_response(
+def test_client_failure_keeps_service_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _word_client_with_response(
         monkeypatch,
         ConvertResponse.from_outcome(
-            ConvertOutcome.passthrough(reason="pii_redact_failed")
+            ConvertOutcome.passthrough(reason="word_to_jsonl_failed")
         ).model_dump(),
     )
     with pytest.raises(PreprocessServiceError) as caught:
         client.convert(
-            b"text", content_type="text/plain", source_profile=None, profile="pii_redact"
+            b"PK\x03\x04", content_type=_DOCX, source_profile=None, profile="word_to_jsonl"
         )
     assert caught.value.reason == "no_conversion"
-    assert "preprocess-pii-redact のログを確認" in str(caught.value)
+    assert "preprocess-word-to-jsonl のログを確認" in str(caught.value)
 
 
-def test_client_pii_redact_no_findings_is_converted(monkeypatch: pytest.MonkeyPatch) -> None:
-    """検出 0 件はサービスが原本と同じ内容を派生物として返し、取込を続ける(#2068)。"""
+def test_client_converted_outcome_keeps_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """変換した派生物と warning をそのまま返し、取込を続ける。"""
     outcome = ConvertOutcome(
         converted=True,
-        converter_name="pii_redact",
-        converter_version="v2",
-        derived_bytes=b"no pii",
-        derived_content_type="text/plain; charset=utf-8",
-        warnings=("pii_no_findings",),
+        converter_name="word_to_jsonl",
+        converter_version="v1",
+        derived_bytes=b"{}\n",
+        derived_content_type="application/x-ndjson",
+        warnings=("word_sample_warning",),
     )
-    client = _pii_client_with_response(
+    client = _word_client_with_response(
         monkeypatch, ConvertResponse.from_outcome(outcome).model_dump()
     )
     result = client.convert(
-        b"no pii", content_type="text/plain", source_profile=None, profile="pii_redact"
+        b"PK\x03\x04", content_type=_DOCX, source_profile=None, profile="word_to_jsonl"
     )
     assert result.converted is True
-    assert result.derived_bytes == b"no pii"
-    assert result.warnings == ("pii_no_findings",)
+    assert result.derived_bytes == b"{}\n"
+    assert result.warnings == ("word_sample_warning",)
 
 
 def test_csv_to_jsonl_profile_routes_to_dedicated_service() -> None:

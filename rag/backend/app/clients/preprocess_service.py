@@ -3,9 +3,9 @@
 parse の **前** に原本を一度だけ canonical な中間物へ変換する(`先变换、再 parse`)。
 
 - `passthrough`(既定)は変換せず原本のまま parse する(no-op)。
-- サービス必須の変換(`office_to_pdf` / `csv_to_jsonl` / `excel_to_jsonl` / `word_to_jsonl` /
-  `pii_redact`)は **各々独立した**前処理マイクロサービスへ
-  HTTP 委譲する(profile ごとに専用 base URL)。in-process 変換・local fallback は持たない。
+- サービス必須の変換(`office_to_pdf` / `csv_to_jsonl` / `excel_to_jsonl` / `word_to_jsonl`)は
+  **各々独立した**前処理マイクロサービスへ HTTP 委譲する(profile ごとに専用 base URL)。
+  in-process 変換・local fallback は持たない。
   サービス無効・未達・timeout・5xx 時は、選択した前処理を別経路へ黙って縮退せず、
   利用者向けエラーとして呼び出し側へ伝える。
 
@@ -62,7 +62,7 @@ class PreprocessServiceClient:
         if resolved == "passthrough":
             # 削除した変換方式(#2042 など)は normalize_preprocess_profile で passthrough へ寄る。
             return ConvertOutcome.passthrough()
-        # office_to_pdf / csv_to_jsonl / excel_to_jsonl / word_to_jsonl / pii_redact:
+        # office_to_pdf / csv_to_jsonl / excel_to_jsonl / word_to_jsonl:
         # 各専用サービスへ委譲。
         return self._convert_via_service(
             resolved,
@@ -160,22 +160,7 @@ class PreprocessServiceClient:
 
 # 前処理サービスが変換しなかった理由(warning)のうち、原本の側の理由で利用者が対処できるもの(#2068)。
 # サービスの不具合ではないため、ログの確認ではなく処理レシピの変更・文書の分割を案内する。
-PII_REDACT_TEXT_FORMATS_LABEL = "テキスト・Markdown・CSV・JSON・XML・HTML"
 _SOURCE_REASON_MESSAGES: dict[str, str] = {
-    "pii_not_text": (
-        "ファイル準備の「PIIマスク」はテキスト形式の文書（"
-        f"{PII_REDACT_TEXT_FORMATS_LABEL}）だけに使えます。この文書の形式では個人情報を"
-        "マスクできないため、取込を停止しました（原本のままでは取り込みません）。"
-        "この文書の「処理レシピ」で「ファイル準備」を別の方式に変えてから再実行してください。"
-    ),
-    "pii_too_large": (
-        "ファイル準備の「PIIマスク」が扱える本文の長さ（100 万文字）を超えているため、"
-        "取込を停止しました（原本のままでは取り込みません）。文書を分けてから再実行してください。"
-    ),
-    "pii_empty": (
-        "ファイル準備の「PIIマスク」で本文を読み取れませんでした（空の文書）。"
-        "文書の内容を確認してから再実行してください。"
-    ),
     # ファイル準備「Word→JSONL」(word_to_jsonl。#2457)が変換しなかった理由。
     "word_encrypted": (
         "ファイル準備の「Word→JSONL」: パスワードで保護(暗号化)された Word 文書は読めないため、"
@@ -216,11 +201,6 @@ _SOURCE_REASON_MESSAGES: dict[str, str] = {
         "(.docx・.docm は LibreOffice なしで読めます)。"
     ),
 }
-
-
-def pii_redact_not_text_message() -> str:
-    """PIIマスクで扱えない形式の文書の案内(取込の前の判定と、サービスの理由で共用する)。"""
-    return _SOURCE_REASON_MESSAGES["pii_not_text"]
 
 
 def source_unsupported_reason(warnings: list[str] | tuple[str, ...]) -> str | None:
