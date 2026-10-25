@@ -118,7 +118,8 @@ function splitAnswerCitationLabel(label: string, location?: string): { head: str
   const tail = location?.trim();
   if (!tail || !label.endsWith(tail)) return { head: label, location: null };
   const head = label.slice(0, -tail.length).trimEnd();
-  return head ? { head, location: tail } : { head: label, location: null };
+  // 区切りの空白は位置の側に残す（読み上げ・文字の取得で「文書 A.pdf p.3」のまま。見た目の間は Button の gap）。
+  return head ? { head, location: label.slice(head.length) } : { head: label, location: null };
 }
 
 /**

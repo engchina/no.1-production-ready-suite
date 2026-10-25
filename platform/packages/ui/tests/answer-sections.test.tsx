@@ -86,8 +86,9 @@ describe("AnswerSections", () => {
     const links = host.querySelectorAll('[data-testid="answer-citation-link"]');
     expect(Array.from(links[0].querySelectorAll(":scope > span")).map((node) => node.textContent)).toEqual([
       "根拠：文書 A.pdf",
-      "p.3",
+      " p.3",
     ]);
+    expect(links[0].textContent).toBe("根拠：文書 A.pdf p.3");
     expect(links[0].querySelectorAll(":scope > span")[1].className).toContain("shrink-0");
     expect(Array.from(links[1].querySelectorAll(":scope > span")).map((node) => node.textContent)).toEqual([
       "根拠：文書 B.pdf p.4",
