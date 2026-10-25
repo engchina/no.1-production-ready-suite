@@ -3,13 +3,10 @@ import {
   apiErrorDetail,
   httpApiErrorPresentation,
   isAbortError,
-  parseChatProgressEvents,
-  parseChatProgressPage,
   toApiTransportError,
   type ApiErrorDetailLabels,
   type ApiErrorPresentable,
   type ApiErrorPresentation,
-  type ChatProgressEvent,
 } from "@production-ready/ui";
 
 // OCI 認証 API の型は platform の共有パッケージが正本（#100）。
@@ -312,8 +309,6 @@ export interface ConfirmationResponseRecord {
 }
 
 export interface RunState {
-  trace_segments?: unknown[];
-  trace_summary?: unknown;
   id: string;
   goal: string;
   agent_id: string;
@@ -360,10 +355,14 @@ export interface RunState {
   /** モデルの利用量（#772）。モデルを呼ぶ前の Run・記録を始める前の Run は null / 無し。 */
   usage?: RunUsage | null;
   /**
-   * チャットの処理の段階のイベント（3 製品共通の契約。#1359）。backend が Run の状態から記録する。
-   * API の応答は `parseRunState` が検証する（形の違う要素は捨てる）。
+   * 処理の経過の span を共通の span の表に書く Run か（#3226 の案 A）。false・無しは古い形式の記録（画面は古い形式の
+   * 案内を出す）。処理の経過は `GET /api/runs/{id}/trace`（`agentApi.getRunTrace`）で読む。
    */
-  progress_events?: ChatProgressEvent[];
+  trace_store?: boolean;
+  /** 実行の全体の span の trace id（受け付けただけ・開始の前に終わった Run は null）。 */
+  trace_id?: string | null;
+  /** 表に書けなかった span の数（1 以上なら一部だけの記録）。 */
+  trace_dropped_spans?: number;
   created_at: string;
   updated_at: string;
 }
@@ -1822,11 +1821,6 @@ async function requestDownload(path: string, fallbackName: string): Promise<{ bl
   }
 }
 
-/** API の Run の処理の段階のイベントを検証する（未検証の入力。形の違う要素は捨てる。#1359）。 */
-export function parseRunState(run: RunState): RunState {
-  return { ...run, progress_events: parseChatProgressEvents((run as { progress_events?: unknown }).progress_events) };
-}
-
 /** 一覧の query（空の値は送らない）。 */
 function listQuery(filters: object): string {
   const params = new URLSearchParams();
@@ -1839,12 +1833,19 @@ function listQuery(filters: object): string {
 }
 
 function requestRun(path: string, init?: RequestInit): Promise<RunState> {
-  return request<RunState>(path, init).then(parseRunState);
+  return request<RunState>(path, init);
 }
 
-/** Run の処理の段階の SSE の URL（配信の基点を含む。`useChatProgressStream` が `since` を付ける。#1359）。 */
-export function runProgressStreamUrl(runId: string): string {
-  return appPath(`/api/runs/${encodeURIComponent(runId)}/progress/stream`);
+/**
+ * Run の処理の経過（共通の span の表の snapshot。#3226 の案 A）。`events` は未検証の入力で、
+ * `useTraceProgressSnapshot` が検証する。
+ */
+export interface RunTraceData {
+  target_id: string;
+  trace_id: string | null;
+  events: unknown;
+  /** 表に書けなかった span の数（1 以上なら「一部の処理だけを記録しています。」）。 */
+  dropped_spans: number;
 }
 
 function auditQuery(filters: ToolCallAuditFilters): string {
@@ -1963,10 +1964,7 @@ export const agentApi = {
   },
   /** 会話（Run の一覧）。チャットは取り直しの `signal`（中止・待ち時間の上限）を渡す（#1160）。 */
   getThread: (threadId: string, options: { signal?: AbortSignal } = {}) =>
-    request<ThreadData>(`/api/threads/${encodeURIComponent(threadId)}`, { signal: options.signal }).then((data) => ({
-      ...data,
-      runs: data.runs.map(parseRunState),
-    })),
+    request<ThreadData>(`/api/threads/${encodeURIComponent(threadId)}`, { signal: options.signal }),
   /** チャットにファイルを添付する（会話があれば結び付ける。#2517）。 */
   uploadChatAttachment: (file: File, threadId?: string | null) => {
     const body = new FormData();
@@ -1987,11 +1985,9 @@ export const agentApi = {
       body: JSON.stringify(payload),
     }),
   getRun: (runId: string) => requestRun(`/api/runs/${runId}`),
-  /** Run の処理の段階のイベント（`since` より後。SSE が使えないときの polling と取り直し。#1359）。 */
-  getRunProgress: (runId: string, since: number, options: { signal?: AbortSignal } = {}) =>
-    request<unknown>(`/api/runs/${encodeURIComponent(runId)}/progress?since=${since}`, {
-      signal: options.signal,
-    }).then(parseChatProgressPage),
+  /** Run の処理の経過（共通の span の表の snapshot。実行中は画面が読み直す。#3226 の案 A）。 */
+  getRunTrace: (runId: string, options: { signal?: AbortSignal } = {}) =>
+    request<RunTraceData>(`/api/runs/${encodeURIComponent(runId)}/trace`, { signal: options.signal }),
   /** Run の RAG の根拠の原文のプレビュー（#2389。画面を見ている利用者として RAG が作る）。 */
   getRunSourcePreview: (runId: string, documentId: string, chunkId: string) =>
     request<RunSourcePreview>(
@@ -2106,11 +2102,7 @@ export const agentApi = {
     request<ConfirmationOutcome>(`/api/runs/${runId}/confirmations/${confirmationId}`, {
       method: "POST",
       body: JSON.stringify(payload),
-    }).then((outcome) => ({
-      ...outcome,
-      run: parseRunState(outcome.run),
-      next_run: outcome.next_run ? parseRunState(outcome.next_run) : null,
-    })),
+    }),
   decideApproval: (approvalId: string, payload: ApprovalDecisionPayload) =>
     requestRun(`/api/approvals/${approvalId}/decision`, {
       method: "POST",

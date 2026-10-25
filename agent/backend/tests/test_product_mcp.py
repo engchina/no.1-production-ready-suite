@@ -210,10 +210,18 @@ def test_initialize_session_id_and_headers(monkeypatch: MonkeyPatch) -> None:
         assert request["headers"]["mcp-protocol-version"] == "2025-06-18"
     # 標準の tools/call（旧 gateway の server_id は送らない）。trace_id は JSON-RPC の id。
     assert call["body"]["id"] == "t-1"
-    assert call["body"]["params"] == {
+    params = dict(call["body"]["params"])
+    meta = params.pop("_meta")
+    assert params == {
         "name": "rag_search",
         "arguments": {"query": "契約の更新条件"},
     }
+    # traceparent は HTTP header と JSON-RPC の `params._meta` の両方に入れる（#3226。呼び先は
+    # サービストークンの要求の `_meta` を優先して親にする）。値は `mcp.request` の span。
+    assert meta == {"traceparent": call["headers"]["traceparent"]}
+    assert "_meta" in initialize["body"]["params"]
+    # 通知（id の無いメッセージ）は変えない。
+    assert "params" not in initialized["body"]
     assert result.output is not None
     assert result.output["answer"] == "根拠付き回答"
     assert result.output["evidence"][0]["file_name"] == "契約書.pdf"
@@ -779,7 +787,10 @@ def test_api_key_connection_sends_bearer_and_returns_text_content(
     assert result.success is True, result.error
     assert result.output == {"content": "在庫は 12 個です。"}
     assert all(item["headers"]["authorization"] == "Bearer k-757" for item in requests)
-    assert requests[-1]["body"]["params"] == {"name": "stock_lookup", "arguments": {"sku": "A-1"}}
+    params = dict(requests[-1]["body"]["params"])
+    # 外部の MCP にも trace の `_meta` を送る（呼び先は親にするかを自分で決める。#3226）。
+    assert set(params.pop("_meta")) == {"traceparent"}
+    assert params == {"name": "stock_lookup", "arguments": {"sku": "A-1"}}
 
 
 # ---------------------------------------------------------------------------

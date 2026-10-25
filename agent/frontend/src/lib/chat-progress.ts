@@ -1,9 +1,9 @@
 /**
  * チャットの回答の処理の段階（3 製品共通の `ChatProgress`。#1145 / #1147）の、Agent の段階の定義（#1359）。
  *
- * 処理の経過は Run の trace（span の木。#3226）の投影で、backend が記録した span のイベント
- * （`RunState.progress_events`。3 製品共通の契約）で届き、共通の `useChatProgressStream` / `chatProgressStepsFromEvents`
- * が木の順・入れ子にする。ここは工程の span の種類（`kind`）→ i18n の名前だけを持つ: モデルの呼び出しがツールを
+ * 処理の経過は Run の trace（span の木。#3226）の投影で、span は共通の span の表にあり（案 A）、Run の trace の API
+ * （`GET /api/runs/{id}/trace`。3 製品共通のイベントの形）で届く。共通の `useTraceProgressSnapshot`
+ * （`useRunTraceProgress`）/ `chatProgressStepsFromEvents` が木の順・入れ子にする。ここは工程の span の種類（`kind`）→ i18n の名前だけを持つ: モデルの呼び出しがツールを
  * 求めたら進め方の検討（`plan`）、最終の回答なら回答の作成（`respond`）、ツールの呼び出し（`tool`）、承認の待ち
  * （`approval`）、回答前の確認の待ち（`confirmation`。#1839）。種類の無い span（呼び出し中のモデル・MCP の呼び出し
  * など）は共通の規則の名前で出す。

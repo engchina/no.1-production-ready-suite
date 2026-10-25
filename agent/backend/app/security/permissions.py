@@ -448,9 +448,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # RAG の根拠の原文のプレビュー（#2389。閲覧者として RAG に作らせる）。
     ("GET", f"{_RUN}/source-preview"): _RUN_DETAIL,
     ("GET", f"{_RUN}/events"): _any(MENU_RUNS, MENU_APPROVALS),
-    # チャットの処理の段階（#1359）。チャットと、Run を見る画面が読む（handler が対象範囲で絞る）。
-    ("GET", f"{_RUN}/progress"): _RUN_PROGRESS,
-    ("GET", f"{_RUN}/progress/stream"): _RUN_PROGRESS,
+    # チャットと実行の詳細の処理の経過（共通の span の表の snapshot。#1359・#3226）。チャットと、
+    # Run を見る画面が読む（handler が Run の判定で絞る）。
+    ("GET", f"{_RUN}/trace"): _RUN_PROGRESS,
     ("POST", f"{_RUN}/cancel"): _OPERATE,
     # 回答前の確認（#1839）に答える・やめる。Run を作った利用者だけ（handler が確かめる）。
     ("POST", f"{_RUN}/confirmations/{{confirmation_id}}"): _OPERATE,

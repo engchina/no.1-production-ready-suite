@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import {
@@ -22,8 +22,6 @@ import {
   ChatLayout,
   ChatProgress,
   ChatSkeleton,
-  chatProgressTraceIdOf,
-  useChatProgressStream,
   useTraceDetailsLabels,
   ChatAnswer,
   ChatPendingTurn,
@@ -47,14 +45,12 @@ import {
   chatAttachmentItems,
   type ChatAttachmentItem,
   DEFAULT_PAGE_SIZE,
-  type ChatProgressEvent,
   type ClarificationBusyAction,
 } from "@production-ready/ui";
 
 import {
   ApiError,
   agentApi,
-  runProgressStreamUrl,
   type AgentProfile,
   type ApprovalRequest,
   type Artifact,
@@ -92,7 +88,8 @@ import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { useCapabilities } from "@/lib/permissions";
 import { answerNoticeText } from "@/lib/run-artifacts";
 import { toolProgressTable } from "@/components/chat/ToolProgressTable";
-import { agentProgressDefinitions, runProgressIsLegacy, runProgressSteps } from "@/lib/run-history";
+import { runProgressSteps } from "@/lib/run-history";
+import { useRunTraceProgress } from "@/lib/run-trace-progress";
 import { outputMissing, runOutputTable, runToolResultTables } from "@/lib/run-tables";
 import { runStatusView } from "@/lib/status-labels";
 import { isNullableString, isString, useWorkspaceState } from "@/lib/workspace-state";
@@ -111,7 +108,6 @@ const STOPPABLE_STATUSES = new Set<RunState["status"]>(["queued", "running", "wa
 const WAITING_STATUSES = new Set<RunState["status"]>(["waiting_approval", "waiting_confirmation"]);
 const POLL_INTERVAL_MS = 1500;
 /** 処理の段階の記録が無い Run（同じ参照を渡し、描画ごとに積み直さない）。 */
-const NO_PROGRESS_EVENTS: readonly ChatProgressEvent[] = [];
 // 持ち主以外が送った往復の無い会話（#1928）。
 const NO_SENDER_NAMES: Record<string, string> = {};
 /** 会話の 1 回の取得の上限（応答が返らない取得で取り直しを止めない。#1160）。 */
@@ -1001,38 +997,29 @@ function RunChatTurn({
   const cancelKinds = (
     latest && run.status === "completed" ? pendingClarificationKinds(run.artifacts) : []
   ).filter((kind) => kind !== toolConfirmationKind);
-  // 処理の経過（3 製品共通のイベント。#1359）は Run の trace（span の木。#3226）の投影。backend が記録した span の
-  // イベントを、実行中は SSE で受け取り（承認待ちの間も heartbeat で途絶えない）、使えなければ polling に縮退する。
-  // 会話の取り直しに入っている記録も積む。途絶えたら共通の hook が取り直し、「接続を確認しています」を出す（#1160）。
+  // 処理の経過（3 製品共通のイベント。#1359）は Run の trace（span の木。#3226）の投影。span は共通の span の表にあり
+  // （案 A）、Run の trace の API を実行中は読み直す（承認待ちの間も続ける）。読み出しが失敗・応答しない間は前の内容を
+  // 残して「接続を確認しています」を出す（#1160）。
   const stoppable = STOPPABLE_STATUSES.has(run.status);
-  const runId = run.id;
-  const fetchProgress = useCallback(
-    (since: number, signal: AbortSignal) => agentApi.getRunProgress(runId, since, { signal }),
-    [runId]
-  );
-  // ツールの span の詳細に、Run の step のデータの範囲の記録・取り直した結果を足す（実行の詳細と同じ。#2294）。
-  const definitions = useMemo(() => agentProgressDefinitions(run.steps), [run.steps]);
   const traceLabels = useTraceDetailsLabels();
-  const legacyProgress = runProgressIsLegacy(run);
-  const progress = useChatProgressStream({
-    key: run.id,
-    definitions,
-    events: run.progress_events ?? NO_PROGRESS_EVENTS,
-    streamUrl: stoppable ? runProgressStreamUrl(run.id) : null,
-    fetchEvents: fetchProgress,
-    active: stoppable,
-    // 途絶えの判定は共通の既定（15 秒。SSE の heartbeat の 10 秒より長い）。
-    // 段階の配信で先に終わりが届いたら、回答・成果物を会話の取り直しを待たずに取りに行く（会話の取得で
-    // 終わった Run を開いたときは取り直さない）。
-    onTerminal: () => {
-      if (stoppable) onProgressTerminal();
-    },
-  });
+  const progress = useRunTraceProgress(run, { active: stoppable });
+  const legacyProgress = progress.legacy;
+  // 処理の経過で先に終わりが届いたら、回答・成果物を会話の取り直しを待たずに取りに行く（会話の取得で終わった Run を
+  // 開いたときは取り直さない）。
+  const progressTerminal = progress.terminal;
+  useEffect(() => {
+    if (progressTerminal && stoppable) onProgressTerminal();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 終わりが届いたときに 1 回だけ取り直す
+  }, [progressTerminal]);
   const failure = runFailure(run, progress.steps, "chat");
   // ツールの行に、Run の step の表の結果を中身として結ぶ（実行の詳細と同じ対応。#2294）。結果は会話の取り直し
   // （実行中は 1.5 秒ごと・終わったとき）で届く。
-  const progressSteps = progress.progressProps.steps;
-  const stepsWithDetails = useMemo(() => runProgressSteps(run, progressSteps, toolProgressTable), [progressSteps, run]);
+  const progressSteps = progress.steps;
+  const progressEvents = progress.events;
+  const stepsWithDetails = useMemo(
+    () => runProgressSteps(run, progressEvents, progressSteps, toolProgressTable),
+    [progressEvents, progressSteps, run]
+  );
   // 承認・回答前の確認の答えを待っている間は、実行中の span が無い。待っていることを今の行の名前で示す（待ちの
   // 区間は、待ちが終わったときに span として記録する。#3226）。
   const waitingLabel =
@@ -1074,10 +1061,12 @@ function RunChatTurn({
           </p>
         ) : (
           <ChatProgress
-            {...progress.progressProps}
+            progressKey={run.id}
+            active={stoppable && progressTerminal === null}
+            reconnecting={stoppable && progress.failed}
             cancelled={run.status === "cancelled"}
             // 処理の経過は trace の投影なので、「処理の詳細」には Trace ID だけを出す（2 つ目の表示を置かない。#3226）。
-            traceId={chatProgressTraceIdOf(run.progress_events ?? NO_PROGRESS_EVENTS)}
+            traceId={progress.traceId}
             steps={stepsWithDetails}
             startedAt={run.created_at}
             slowAfterMs={WAITING_STATUSES.has(run.status) ? Number.POSITIVE_INFINITY : undefined}
@@ -1085,6 +1074,12 @@ function RunChatTurn({
             testId="chat-progress"
           />
         )}
+        {progress.partial ? (
+          // 共通の span の表に書けなかった span がある（#3226 の案 A）。経過の一覧が全部ではないことを示す。
+          <p className="text-xs text-fg-muted" data-testid="chat-progress-partial">
+            {traceLabels.partial}
+          </p>
+        ) : null}
         {failure ? (
           // 失敗は 3 製品共通の失敗のカード（止まった段・原因・次の操作・「詳細」。#2342）。進めない理由を先に
           // 読めるよう、処理の経過の直下（回答・結果の上）に 1 つだけ出す。

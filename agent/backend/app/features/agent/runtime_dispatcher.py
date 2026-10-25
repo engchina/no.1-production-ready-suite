@@ -28,6 +28,7 @@ from pr_backend_core.observability.tracing import tracing_lifecycle
 
 from app.features.agent import builtin_runtime, run_claim
 from app.features.agent.runtime import builtin_resume_pending, runtime_repository
+from app.features.agent.trace_spans import trace_spans
 from app.observability import start_trace_export_retry_worker, stop_trace_export_retry_worker
 from app.settings import get_settings
 
@@ -97,9 +98,12 @@ async def run_forever() -> None:
 
 async def _run_with_event_delivery() -> None:
     await start_trace_export_retry_worker()
+    # 処理の経過の span の書き手（共通の span の表。#3226 の案 A。worker の起動の後に始める）。
+    await asyncio.to_thread(trace_spans.start)
     try:
         await run_forever()
     finally:
+        await asyncio.to_thread(trace_spans.stop)
         await stop_trace_export_retry_worker()
 
 
