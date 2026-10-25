@@ -2,6 +2,7 @@ import { FONT_SANS_PREFIX } from "../../../../platform/packages/ui/e2e/font-chec
 import {
   expectDeferredCjkFontFaces,
   expectLocalCjkFallbackFonts,
+  expectLocalJapaneseFonts,
   expectLocalUiFonts,
   recordFirstRenderFontFaces,
 } from "./_helpers/local-fonts";
@@ -503,11 +504,11 @@ test("ローカルフォントで全体と並べ替え列名を描画しキー�
   // check() だけでは未登録フォントの fallback を見逃すため、実際にロードした face も検証する。
   const fonts = await page.evaluate(async () => {
     const loaded = [];
-    for (const family of ["Noto Sans JP", "Roboto"]) {
+    for (const family of ["Noto Sans JP Variable", "Roboto"]) {
       for (const weight of [400, 500, 600, 700]) {
         const faces = await document.fonts.load(
           `${weight} 14px "${family}"`,
-          family === "Noto Sans JP" ? "名称 許可表 許可ビュー" : "Production Ready NL2SQL"
+          family === "Noto Sans JP Variable" ? "名称 許可表 許可ビュー" : "Production Ready NL2SQL"
         );
         loaded.push({ family, weight, count: faces.length, loaded: faces.every((face) => face.status === "loaded") });
       }
@@ -545,6 +546,8 @@ test("ローカルフォントで全体と並べ替え列名を描画しキー�
   } finally {
     await cdp.detach();
   }
+  // Noto Sans JP（可変書体）の各太さは本物の字形で描く（合成の太字にしない。#3333）。
+  await expectLocalJapaneseFonts(page);
   // Noto Sans JP に無い字（合成の例）は Noto Sans SC → TC → HK で補う（#3292）。
   await expectLocalCjkFallbackFonts(page);
   expect(fontResponses.some(({ url }) => url.includes("noto-sans-jp"))).toBe(true);

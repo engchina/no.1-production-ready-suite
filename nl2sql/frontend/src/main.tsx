@@ -18,10 +18,9 @@ import { useUiStore } from "@/lib/ui-store";
 import { AuthProvider } from "@/features/security/AuthProvider";
 import { NL2SQL_TRACE_DETAILS_LABELS } from "@/features/nl2sql/chatProgress";
 // フォント実体をビルドへ同梱し、Google Fonts / CDN に依存せず同一 origin から配信する。
-import "@fontsource/noto-sans-jp/400.css";
-import "@fontsource/noto-sans-jp/500.css";
-import "@fontsource/noto-sans-jp/600.css";
-import "@fontsource/noto-sans-jp/700.css";
+// Noto Sans JP は可変書体（1 つの face が太さ 100〜900 を持つ。書体名は Noto Sans JP Variable）。@font-face を slice の数に
+// 抑える（静的な書体の slice × 太さの @font-face は描画を止めた。#3328・#3333）。
+import "@fontsource-variable/noto-sans-jp/wght.css";
 // Noto Sans SC / TC / HK は主の CSS に入れず、fonts-cjk.css を最初の描画の後に読む（末尾の loadStylesAfterFirstRender。#3305）。
 import "@fontsource/roboto/400.css";
 import "@fontsource/roboto/500.css";

@@ -5,15 +5,20 @@ import {
   DEFERRED_CJK_FAMILIES,
   FONT_MONO_FAMILY,
   FONT_SANS_PREFIX,
+  JAPANESE_FONT,
+  faceCoversWeight,
   firstRenderFontFaces,
   initialStylesheetFontFaces,
+  japaneseInkByWeight,
   loadCjkFallbackFonts,
+  loadJapaneseFonts,
   renderedCjkFallbackFonts,
+  renderedJapaneseFonts,
 } from "../../../../../platform/packages/ui/e2e/font-checks";
 
 export { recordFirstRenderFontFaces } from "../../../../../platform/packages/ui/e2e/font-checks";
 
-/** 自前ホストの書体の太さ（src/main.tsx・src/fonts-cjk.css。Noto Sans JP と SC・TC・HK で同じ）。 */
+/** 自前ホストの書体の太さ（共有 tokens の太さ。JP・SC・TC・HK は可変書体で、どの太さも本物の字形で出す）。 */
 export const LOCAL_FONT_WEIGHTS = [400, 500, 600, 700] as const;
 
 /**
@@ -22,10 +27,10 @@ export const LOCAL_FONT_WEIGHTS = [400, 500, 600, 700] as const;
  */
 export async function expectDeferredCjkFontFaces(page: Page) {
   const firstRender = await firstRenderFontFaces(page);
-  expect(firstRender.families).toContain("Noto Sans JP");
+  expect(firstRender.families).toContain(JAPANESE_FONT.family);
   const initial = await initialStylesheetFontFaces(page);
   // dev サーバの index.html は CSS の <link> を持たない（preview・本番だけ主の CSS を確かめられる）。
-  if (initial.hrefs.length > 0) expect(initial.families).toContain("Noto Sans JP");
+  if (initial.hrefs.length > 0) expect(initial.families).toContain(JAPANESE_FONT.family);
   for (const family of DEFERRED_CJK_FAMILIES) {
     expect(firstRender.families, `最初の描画の CSS に ${family}`).not.toContain(family);
     expect(initial.families, `index.html の CSS に ${family}`).not.toContain(family);
@@ -62,6 +67,38 @@ export async function expectLocalUiFonts(page: Page) {
   expect(result.codeFont.replaceAll('"Roboto"', "Roboto")).toBe(FONT_MONO_FAMILY);
   expect(result.checked).toBeGreaterThan(0);
   expect(result.mismatches).toEqual([]);
+}
+
+/**
+ * Noto Sans JP（可変書体。#3333）を各太さで読み込み、読み込んだ face の太さの範囲がその太さを含む（合成の太字にならない）こと、
+ * 合成の日本語の字を各太さの本文と等幅で描いたときに Chromium が自前ホストの Noto Sans JP を使うことを確かめる。
+ */
+export async function expectLocalJapaneseFonts(page: Page) {
+  for (const font of await loadJapaneseFonts(page, LOCAL_FONT_WEIGHTS)) {
+    expect(font.count, `${JAPANESE_FONT.family} ${font.weight}`).toBeGreaterThan(0);
+    expect(
+      font.weights.every((range) => faceCoversWeight(range, font.weight)),
+      `${font.weight}: ${font.weights.join(", ")}`
+    ).toBe(true);
+  }
+  // 太さごとに別の字形（太いほど墨が多い）。近い太さの face で代わりに描くと同じ量になる。
+  const ink = await japaneseInkByWeight(page, LOCAL_FONT_WEIGHTS);
+  for (let index = 1; index < ink.length; index += 1) {
+    expect(ink[index]!.ink, JSON.stringify(ink)).toBeGreaterThan(ink[index - 1]!.ink);
+  }
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const rendered = await renderedJapaneseFonts(page, cdp, LOCAL_FONT_WEIGHTS);
+    for (const [key, fonts] of Object.entries(rendered)) {
+      expect(fonts.length, key).toBeGreaterThan(0);
+      expect(
+        fonts.every((font) => font.familyName.startsWith(JAPANESE_FONT.renderedFamily) && font.isCustomFont),
+        `${key}: ${JSON.stringify(fonts)}`
+      ).toBe(true);
+    }
+  } finally {
+    await cdp.detach();
+  }
 }
 
 /**

@@ -1165,12 +1165,13 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 ### 書体の並び（#3292）
 
 ```
---font-sans: "Noto Sans JP", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", system-ui, …, sans-serif
---font-mono: "Google Sans Code", "Noto Sans JP", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", monospace
+--font-sans: "Noto Sans JP Variable", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", system-ui, …, sans-serif
+--font-mono: "Google Sans Code", "Noto Sans JP Variable", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", monospace
 ```
 
 - 日本語の字形を優先するため Noto Sans JP を先頭に置き、JP に無い字（簡体字・繁体字・香港の字）だけを Noto Sans SC → Noto Sans TC → Noto Sans HK の順で補う。JP にある字（同じ符号の漢字）は JP の字形のまま。
-- 4 書体とも 3 製品が `@fontsource` で自前ホストする（外部の CDN を使わない）。太さは Noto Sans JP と同じ。SC / TC / HK は unicode-range で分けた CSS を読み、画面に出た字を含む分だけを取得する。preload はせず、`font-display` は `@fontsource` の既定（`swap`）のまま。
+- 4 書体とも 3 製品が `@fontsource` で自前ホストする（外部の CDN を使わない）。太さは Noto Sans JP と同じ。4 書体とも unicode-range で分けた CSS を読み、画面に出た字を含む分だけを取得する。preload はせず、`font-display` は `@fontsource` の既定（`swap`）のまま。
+- Noto Sans JP（主の CSS）も可変書体（`@fontsource-variable/noto-sans-jp` の `wght.css`。書体名は `Noto Sans JP Variable`。#3333）にし、`@font-face` を slice の数（124）に抑える。静的な書体は NL2SQL が slice × 4 太さ（496）、RAG・Agent が slice に分けない subset × 3 太さ（9。1 つの太さの日本語の woff2 が約 1.1 MB で、最初の画面で約 3.4 MB を読んだ）だった。可変書体は 1 つの face が太さ 100〜900 を持つので、tokens の 400 / 500 / 600 / 700 はどれも本物の字形で出る（RAG・Agent の 600 は、静的な書体に無く 700 で出ていた。§7 #163）。
 - SC / TC / HK は可変書体（`@fontsource-variable/noto-sans-{sc,tc,hk}` の `wght.css`。1 つの face が太さ 100〜900 を持ち、書体名は `Noto Sans SC Variable` など）にし、`@font-face` を slice の数（3 書体で 318）に抑える。静的な書体の `<weight>.css` は slice × 太さ（4 太さで 1272）の `@font-face` になり、Chromium がページの読み込み・離脱のたびに face ごとの処理を main thread に積んで、画面の描画が数秒止まった（#3328）。デザインモック（`css/tokens/`。Google Fonts）の書体名は `Noto Sans SC` などのまま。
 - SC / TC / HK の `@font-face`（約 100 の slice × 太さ）は主の CSS（描画を止める）に入れず、製品の `src/fonts-cjk.css` を `main.tsx` が共有の `loadStylesAfterFirstRender`（最初の commit の後の次の frame の後）で `import()` し、Vite が別の CSS の chunk にする（#3305）。読み込む前の中国語の字は JP・端末の書体で出て、読み込んだ後に置き換わる。Noto Sans JP・Roboto・Google Sans Code は主の CSS のまま。
 - e2e は共通の `platform/packages/ui/e2e/font-checks.ts`（JP に無い合成の字で SC / TC / HK の読み込みと、実際に使われた書体を確かめる。最初の描画の時点の CSS と index.html が読む CSS に SC / TC / HK の `@font-face` が無いことも確かめる）。
@@ -1350,6 +1351,7 @@ QA に事前共有してください。**96点あります。**
 | 160 | **3 製品のチャットで、system_admin が他の利用者の会話を開くと、入力欄の代わりに閲覧だけの案内が出て、会話の履歴の行の「名前の変更」が出なくなる**（#3244。`ChatReadOnlyNotice`・`useChatHistoryActions` の `canRename`。`ChatComposer` の `notice` を削除） | 入力欄の直上に「この会話の持ち主にも、回答と途中の結果が見えます」（#1954）を出して送れた。行の「名前の変更」も出た → 入力欄の代わりに info の `Banner`（見出し「他の利用者の会話です（閲覧のみ）」・本文は backend の 403 の文と同じ）を出し、回答の作成中・処理中なら案内の中に「停止」を置く。会話の履歴の行は「削除」だけ。自分の会話・新しい会話は今までどおり | system_admin が他の利用者のデータにできるのは閲覧と運用の操作だけ（利用者の判断。#1928 を置き換え）。system_admin の権限で作った内容が持ち主の会話に入るのを防ぐ。3 製品で同じ部品・同じ文にする |
 | 161 | **Noto Sans JP に無い簡体字・繁体字・香港の字が、端末の書体ではなく自前ホストの Noto Sans SC → TC → HK で描かれる**（#3292。`--font-sans` / `--font-mono`） | `"Noto Sans JP", "Roboto", …`（JP に無い字は端末の書体に任せ、字形がそろわない・豆腐になる）→ `"Noto Sans JP", "Noto Sans SC", "Noto Sans TC", "Noto Sans HK", "Roboto", …`（等幅も Google Sans Code → JP の後ろに同じ順） | JP の字形を優先したまま、中国語の資料・質問・回答の字を端末によらずそろえる。JP にある字の見た目は変わらない |
 | 162 | **DB の状態の確認・ログインの確認・NL2SQL の公開ルートの読み込み中の表示が、画面と同じ全幅で出る**（#3311。`PageLoadingState`） | 本文の最大幅（1440px）の中央寄せで出て、読み込み後に全幅の画面へ広がり左右の端がずれた → 常に `PageBody wide` で出し、読み込み後の画面と同じ幅にする | 3 製品の画面はすべて全幅。Skeleton は読み込み後の配置を先に取り、読み込みの前後で配置を動かさない |
+| 163 | **RAG・Agent の太さ 600（`--font-weight-semibold`。セクション・カードの見出しなど）の日本語・ラテン字が、700 ではなく本来の 600 の字形で出る**（#3333。`--font-sans` / `--font-mono` の Noto Sans JP を可変書体の `Noto Sans JP Variable` に） | Noto Sans JP の静的な書体を 400 / 500 / 700 だけ読み、600 は一番近い 700 で描いていた → 可変書体（太さ 100〜900）で 600 を本物の字形で描く。NL2SQL は前から 600 を読んでいたので変わらない。400 / 500 / 700 の見た目は変わらない | tokens の太さ（400 / 500 / 600 / 700）を 3 製品で同じ字形にそろえる。可変書体で `@font-face` を slice の数（124）にし、日本語の woff2 を画面に出た字の slice だけ読む |
 
 確認カードの質問見出しは、青い外枠を表示しない。読み上げのための自動フォーカスと操作部品のキーボードフォーカス表示は維持する（#3118）。
 
