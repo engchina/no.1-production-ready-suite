@@ -26,13 +26,22 @@ Agent は MCP を呼ぶ側でもある（RAG / NL2SQL / 外部 MCP）。ここ�
 from __future__ import annotations
 
 import asyncio
+import json
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pr_backend_core.mcp import McpServer, McpTool, McpToolError, mcp_http_response
+from pr_backend_core.source_text import (
+    SOURCE_TEXT_ITEM_MAX_TOKENS as PLATFORM_SOURCE_TEXT_ITEM_MAX_TOKENS,
+)
+from pr_backend_core.source_text import (
+    SOURCE_TEXT_RESPONSE_BUDGET_TOKENS as PLATFORM_SOURCE_TEXT_RESPONSE_BUDGET_TOKENS,
+)
+from pr_backend_core.source_text import SourceText, SourceTextItem, fit_source_texts
+from pr_backend_core.token_estimate import estimate_input_tokens
 from pr_system_settings.auth.visibility import (
     OTHERS_CONTENT_FORBIDDEN_CODE,
     OTHERS_CONTENT_FORBIDDEN_MESSAGE,
@@ -95,14 +104,19 @@ wait_poll_seconds = 0.5
 
 # 根拠の抜き出しの長さと件数（呼び出し側のモデルの文脈を膨らませない）。
 # RunOutput の形の版（#2738 で段落の印・外した段落・回答の警告を足して 2、#3240 で回答の対応・
-# 根拠の ID・引用の印・見られない根拠の数を足して 3）。
-RUN_OUTPUT_SCHEMA_VERSION = 3
+# 根拠の ID・引用の印・見られない根拠の数を足して 3、#3321 で根拠の本文を 400 文字の先頭から全文と
+# 応答の予算・境界での切り詰めにし、truncated・text_omitted・text_length・excerpt_range・
+# header_range・next_offset・sources_text_omitted を足して 4）。
+RUN_OUTPUT_SCHEMA_VERSION = 4
 # agent_list・agent_skill_export の出力の形の版（3 製品の MCP の出力に版を持たせる。#3240）。
 LIST_OUTPUT_SCHEMA_VERSION = 1
 SKILL_EXPORT_SCHEMA_VERSION = 1
 CANCEL_OUTPUT_SCHEMA_VERSION = 1
-_SOURCE_EXCERPT_CHARS = 400
+# 根拠の件数の上限。本文は件ごとの全文を応答の予算に入れる（3 製品で共通の規則。値と決め方は
+# pr_backend_core.source_text。#3321）。
 _MAX_SOURCES = 10
+SOURCE_TEXT_ITEM_MAX_TOKENS = PLATFORM_SOURCE_TEXT_ITEM_MAX_TOKENS
+SOURCE_TEXT_BUDGET_TOKENS = PLATFORM_SOURCE_TEXT_RESPONSE_BUDGET_TOKENS
 
 _READ = frozenset({RUNS_VIEW, RUNS_OPERATE, ADMIN})
 _OPERATE = frozenset({RUNS_OPERATE, ADMIN})
@@ -303,12 +317,58 @@ class ConfirmationOutput(BaseModel):
     can_skip: bool
 
 
+class TextRangeOutput(BaseModel):
+    """本文の中の範囲（文字の位置。[start, end)。RAG の根拠の excerpt_range と同じ）。"""
+
+    start: int
+    end: int
+
+
 class SourceOutput(BaseModel):
     """回答の根拠（RAG の資料。回答に使ったもの）。"""
 
     title: str
     location: str = ""
-    excerpt: str = ""
+    excerpt: str = Field(
+        default="",
+        description=(
+            "根拠の本文（既定は全文）。応答の合計の予算（token の見積もり "
+            f"{SOURCE_TEXT_BUDGET_TOKENS}）に根拠の順で入れ、入らない根拠は空（text_omitted）。"
+            f"1 件で {SOURCE_TEXT_ITEM_MAX_TOKENS} を超える根拠は、質問に当たる部分を中心に"
+            "文・段落（表は行）の境界で切った一部（truncated）。"
+        ),
+    )
+    truncated: bool = Field(
+        default=False, description="excerpt が本文の一部だけか（範囲は excerpt_range）。"
+    )
+    text_omitted: bool = Field(
+        default=False,
+        description=(
+            "応答の予算に入らず excerpt を空にしたか（本文は RAG の rag_read_source に "
+            "document_id と chunk_id を渡して読む）。"
+        ),
+    )
+    text_length: int | None = Field(
+        default=None, description="根拠の本文の文字数（分からなければ null）。"
+    )
+    excerpt_range: TextRangeOutput | None = Field(
+        default=None,
+        description="excerpt の本文の位置（文字の [start, end)）。text_omitted・不明なら null。",
+    )
+    header_range: TextRangeOutput | None = Field(
+        default=None,
+        description=(
+            "切った表で excerpt の先頭に付けた見出しの行の位置（excerpt_range と続かないとき"
+            "だけ）。無ければ null。"
+        ),
+    )
+    next_offset: int | None = Field(
+        default=None,
+        description=(
+            "excerpt の後ろの続きを RAG の rag_read_source で読むときの offset（続きが無ければ "
+            "null）。"
+        ),
+    )
     # ID の名前は RAG の根拠（`rag_search` の evidence）と同じ（契約の一致はテストで確かめる）。
     document_id: str | None = Field(
         default=None, description="RAG の文書の ID（会話の添付の根拠は null）。"
@@ -385,6 +445,9 @@ class RunOutput(BaseModel):
     # 回答前の確認（答えていないもの）。あれば agent_answer_confirmation で答える。
     confirmation: ConfirmationOutput | None = None
     sources: list[SourceOutput] = Field(default_factory=list)
+    sources_text_omitted: int = Field(
+        default=0, ge=0, description="応答の予算に入らず本文を省いた根拠（text_omitted）の数。"
+    )
     withheld_evidence_count: int = Field(
         default=0, ge=0, description="今の権限で見られないため sources に出さない根拠の数。"
     )
@@ -655,30 +718,119 @@ def _outcome(run: RunState) -> AnswerOutcomeValue | None:
     return cast(AnswerOutcomeValue, value) if value in ANSWER_OUTCOMES else None
 
 
-def _sources(run: RunState) -> list[SourceOutput]:
+def _source_items(run: RunState) -> list[Mapping[str, Any]]:
     """回答の根拠（RAG の資料）。回答で引用した根拠（画面のチャットの「回答で引用」と同じ判定。
-    #2328）を選び、1 件も無ければ AI に渡した根拠の全件。
+    #2328）を選び、1 件も無ければ AI に渡した根拠の全件（資料ごとにまとめ、最大 _MAX_SOURCES 件）。
     """
     items = [item for item in _answer_evidence(run).get("items") or [] if isinstance(item, Mapping)]
     cited = [item for item in items if item.get("cited") is True]
-    sources: list[SourceOutput] = []
-    for item in _by_document(cited or items):
-        title = str(item.get("file_name") or item.get("document_id") or "名前の無い資料")
-        excerpt = item.get("excerpt")
-        document_id, chunk_id = _rag_ids(item)
-        sources.append(
-            SourceOutput(
-                title=title,
-                location=_location(item.get("locator")),
-                excerpt=excerpt[:_SOURCE_EXCERPT_CHARS] if isinstance(excerpt, str) else "",
-                document_id=document_id,
-                chunk_id=chunk_id,
-                cited=item.get("cited") is True,
-            )
+    return _by_document(cited or items)[:_MAX_SOURCES]
+
+
+def _source(item: Mapping[str, Any]) -> SourceOutput:
+    """根拠 1 件（本文は空。`_fit_sources` が予算に入れて埋める）。"""
+    document_id, chunk_id = _rag_ids(item)
+    return SourceOutput(
+        title=str(item.get("file_name") or item.get("document_id") or "名前の無い資料"),
+        location=_location(item.get("locator")),
+        document_id=document_id,
+        chunk_id=chunk_id,
+        cited=item.get("cited") is True,
+    )
+
+
+def _text_range(value: object) -> TextRangeOutput | None:
+    if isinstance(value, Mapping):
+        start, end = value.get("start"), value.get("end")
+    else:
+        start, end = getattr(value, "start", None), getattr(value, "end", None)
+    if isinstance(start, int) and isinstance(end, int) and 0 <= start <= end:
+        return TextRangeOutput(start=start, end=end)
+    return None
+
+
+def _int_or_none(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _with_source_text(
+    source: SourceOutput, item: Mapping[str, Any], text: str, piece: SourceText
+) -> SourceOutput:
+    """根拠に本文を入れる。範囲と続きの位置は RAG の chunk の本文の位置で返す。
+
+    保存した本文は RAG の根拠の excerpt（既定は全文。RAG が 1 件の上限で切った・応答の予算で省いた
+    ときはその一部・空）。RAG が切った本文をここでさらに切ったときは、chunk の中の位置を示せない
+    ので範囲を返さない。
+    """
+    rag_length = _int_or_none(item.get("text_length"))
+    text_length = rag_length if rag_length is not None else len(text)
+    if item.get("text_omitted") is True or piece.text_omitted:
+        return source.model_copy(
+            update={"excerpt": "", "text_omitted": True, "text_length": text_length}
         )
-        if len(sources) >= _MAX_SOURCES:
-            break
-    return sources
+    rag_truncated = item.get("truncated") is True
+    if not piece.truncated:
+        if rag_truncated:
+            update: dict[str, Any] = {
+                "truncated": True,
+                "excerpt_range": _text_range(item.get("excerpt_range")),
+                "header_range": _text_range(item.get("header_range")),
+                "next_offset": _int_or_none(item.get("next_offset")),
+            }
+        else:
+            update = {"excerpt_range": TextRangeOutput(start=0, end=len(text))}
+        return source.model_copy(
+            update={"excerpt": piece.text, "text_length": text_length, **update}
+        )
+    update = {"excerpt": piece.text, "truncated": True, "text_length": text_length}
+    if not rag_truncated:
+        update |= {
+            "excerpt_range": _text_range(piece.excerpt_range),
+            "header_range": _text_range(piece.header_range),
+            "next_offset": piece.next_offset,
+        }
+    return source.model_copy(update=update)
+
+
+def _fit_sources(
+    items: Sequence[Mapping[str, Any]], *, queries: Sequence[str | None], reserved_tokens: int
+) -> tuple[list[SourceOutput], int]:
+    """根拠の本文を応答の予算に入れる（3 製品で共通の規則。#3321）。根拠と、本文を省いた数。
+
+    予算は応答の全体（`reserved_tokens` は根拠の外の項目の分）。根拠の本文の外の項目は省いた根拠にも
+    残るので先に引き、本文を根拠の順に入れる。
+    """
+    sources = [_source(item) for item in items]
+    texts = [item.get("excerpt") if isinstance(item.get("excerpt"), str) else "" for item in items]
+    fitted = fit_source_texts(
+        [
+            SourceTextItem(
+                text=str(text),
+                kind="table" if _is_table(item) else "text",
+                fixed_tokens=estimate_input_tokens(source.model_dump_json())
+                + _json_overhead_tokens(str(text)),
+            )
+            for item, source, text in zip(items, sources, texts, strict=True)
+        ],
+        budget_tokens=SOURCE_TEXT_BUDGET_TOKENS - reserved_tokens,
+        item_max_tokens=SOURCE_TEXT_ITEM_MAX_TOKENS,
+        queries=queries,
+    )
+    filled = [
+        _with_source_text(source, item, str(text), piece)
+        for source, item, text, piece in zip(sources, items, texts, fitted, strict=True)
+    ]
+    return filled, sum(1 for source in filled if source.text_omitted)
+
+
+def _is_table(item: Mapping[str, Any]) -> bool:
+    return "table" in {item.get("evidence_type"), item.get("content_kind")}
+
+
+def _json_overhead_tokens(text: str) -> int:
+    """本文を JSON の文字列にしたときに増える分（エスケープ）と、一覧の区切りの token。"""
+    escaped = json.dumps(text, ensure_ascii=False)[1:-1]
+    return estimate_input_tokens(escaped) - estimate_input_tokens(text) + 1
 
 
 def _failure_message(run: RunState) -> str:
@@ -734,7 +886,7 @@ def run_output(
             "止めるときは agent_cancel_run を使います。"
         )
     passage_marks, removed_passages, warnings = _review(run)
-    return RunOutput(
+    output = RunOutput(
         run_id=run.id,
         agent_id=run.agent_id,
         thread_id=run.thread_id,
@@ -743,7 +895,6 @@ def run_output(
         in_progress=in_progress,
         answer=run_answer_text(run),
         confirmation=_confirmation_output(confirmation) if confirmation is not None else None,
-        sources=_sources(run),
         withheld_evidence_count=withheld_evidence_count,
         passage_marks=passage_marks,
         removed_passages=removed_passages,
@@ -758,6 +909,15 @@ def run_output(
             else None
         ),
     )
+    sources, text_omitted = _fit_sources(
+        _source_items(run), queries=[run.goal], reserved_tokens=_output_tokens(output)
+    )
+    return output.model_copy(update={"sources": sources, "sources_text_omitted": text_omitted})
+
+
+def _output_tokens(output: BaseModel) -> int:
+    """出力の token の見積もり（MCP が返す JSON の形）。"""
+    return estimate_input_tokens(output.model_dump_json())
 
 
 _CANCEL_MESSAGES: dict[str, str] = {

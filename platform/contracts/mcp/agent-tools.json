@@ -284,8 +284,71 @@
               },
               "excerpt": {
                 "default": "",
+                "description": "根拠の本文（既定は全文）。応答の合計の予算（token の見積もり 20000）に根拠の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
                 "title": "Excerpt",
                 "type": "string"
+              },
+              "truncated": {
+                "default": false,
+                "description": "excerpt が本文の一部だけか（範囲は excerpt_range）。",
+                "title": "Truncated",
+                "type": "boolean"
+              },
+              "text_omitted": {
+                "default": false,
+                "description": "応答の予算に入らず excerpt を空にしたか（本文は RAG の rag_read_source に document_id と chunk_id を渡して読む）。",
+                "title": "Text Omitted",
+                "type": "boolean"
+              },
+              "text_length": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠の本文の文字数（分からなければ null）。",
+                "title": "Text Length"
+              },
+              "excerpt_range": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TextRangeOutput"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "excerpt の本文の位置（文字の [start, end)）。text_omitted・不明なら null。"
+              },
+              "header_range": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TextRangeOutput"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "切った表で excerpt の先頭に付けた見出しの行の位置（excerpt_range と続かないときだけ）。無ければ null。"
+              },
+              "next_offset": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "excerpt の後ろの続きを RAG の rag_read_source で読むときの offset（続きが無ければ null）。",
+                "title": "Next Offset"
               },
               "document_id": {
                 "anyOf": [
@@ -325,11 +388,30 @@
             ],
             "title": "SourceOutput",
             "type": "object"
+          },
+          "TextRangeOutput": {
+            "description": "本文の中の範囲（文字の位置。[start, end)。RAG の根拠の excerpt_range と同じ）。",
+            "properties": {
+              "start": {
+                "title": "Start",
+                "type": "integer"
+              },
+              "end": {
+                "title": "End",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "title": "TextRangeOutput",
+            "type": "object"
           }
         },
         "properties": {
           "schema_version": {
-            "default": 3,
+            "default": 4,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -412,6 +494,13 @@
             },
             "title": "Sources",
             "type": "array"
+          },
+          "sources_text_omitted": {
+            "default": 0,
+            "description": "応答の予算に入らず本文を省いた根拠（text_omitted）の数。",
+            "minimum": 0,
+            "title": "Sources Text Omitted",
+            "type": "integer"
           },
           "withheld_evidence_count": {
             "default": 0,
@@ -804,8 +893,71 @@
               },
               "excerpt": {
                 "default": "",
+                "description": "根拠の本文（既定は全文）。応答の合計の予算（token の見積もり 20000）に根拠の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
                 "title": "Excerpt",
                 "type": "string"
+              },
+              "truncated": {
+                "default": false,
+                "description": "excerpt が本文の一部だけか（範囲は excerpt_range）。",
+                "title": "Truncated",
+                "type": "boolean"
+              },
+              "text_omitted": {
+                "default": false,
+                "description": "応答の予算に入らず excerpt を空にしたか（本文は RAG の rag_read_source に document_id と chunk_id を渡して読む）。",
+                "title": "Text Omitted",
+                "type": "boolean"
+              },
+              "text_length": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠の本文の文字数（分からなければ null）。",
+                "title": "Text Length"
+              },
+              "excerpt_range": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TextRangeOutput"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "excerpt の本文の位置（文字の [start, end)）。text_omitted・不明なら null。"
+              },
+              "header_range": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TextRangeOutput"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "切った表で excerpt の先頭に付けた見出しの行の位置（excerpt_range と続かないときだけ）。無ければ null。"
+              },
+              "next_offset": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "excerpt の後ろの続きを RAG の rag_read_source で読むときの offset（続きが無ければ null）。",
+                "title": "Next Offset"
               },
               "document_id": {
                 "anyOf": [
@@ -845,11 +997,30 @@
             ],
             "title": "SourceOutput",
             "type": "object"
+          },
+          "TextRangeOutput": {
+            "description": "本文の中の範囲（文字の位置。[start, end)。RAG の根拠の excerpt_range と同じ）。",
+            "properties": {
+              "start": {
+                "title": "Start",
+                "type": "integer"
+              },
+              "end": {
+                "title": "End",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "title": "TextRangeOutput",
+            "type": "object"
           }
         },
         "properties": {
           "schema_version": {
-            "default": 3,
+            "default": 4,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -932,6 +1103,13 @@
             },
             "title": "Sources",
             "type": "array"
+          },
+          "sources_text_omitted": {
+            "default": 0,
+            "description": "応答の予算に入らず本文を省いた根拠（text_omitted）の数。",
+            "minimum": 0,
+            "title": "Sources Text Omitted",
+            "type": "integer"
           },
           "withheld_evidence_count": {
             "default": 0,
@@ -1234,8 +1412,71 @@
               },
               "excerpt": {
                 "default": "",
+                "description": "根拠の本文（既定は全文）。応答の合計の予算（token の見積もり 20000）に根拠の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
                 "title": "Excerpt",
                 "type": "string"
+              },
+              "truncated": {
+                "default": false,
+                "description": "excerpt が本文の一部だけか（範囲は excerpt_range）。",
+                "title": "Truncated",
+                "type": "boolean"
+              },
+              "text_omitted": {
+                "default": false,
+                "description": "応答の予算に入らず excerpt を空にしたか（本文は RAG の rag_read_source に document_id と chunk_id を渡して読む）。",
+                "title": "Text Omitted",
+                "type": "boolean"
+              },
+              "text_length": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠の本文の文字数（分からなければ null）。",
+                "title": "Text Length"
+              },
+              "excerpt_range": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TextRangeOutput"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "excerpt の本文の位置（文字の [start, end)）。text_omitted・不明なら null。"
+              },
+              "header_range": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TextRangeOutput"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "切った表で excerpt の先頭に付けた見出しの行の位置（excerpt_range と続かないときだけ）。無ければ null。"
+              },
+              "next_offset": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "excerpt の後ろの続きを RAG の rag_read_source で読むときの offset（続きが無ければ null）。",
+                "title": "Next Offset"
               },
               "document_id": {
                 "anyOf": [
@@ -1275,11 +1516,30 @@
             ],
             "title": "SourceOutput",
             "type": "object"
+          },
+          "TextRangeOutput": {
+            "description": "本文の中の範囲（文字の位置。[start, end)。RAG の根拠の excerpt_range と同じ）。",
+            "properties": {
+              "start": {
+                "title": "Start",
+                "type": "integer"
+              },
+              "end": {
+                "title": "End",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "title": "TextRangeOutput",
+            "type": "object"
           }
         },
         "properties": {
           "schema_version": {
-            "default": 3,
+            "default": 4,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1362,6 +1622,13 @@
             },
             "title": "Sources",
             "type": "array"
+          },
+          "sources_text_omitted": {
+            "default": 0,
+            "description": "応答の予算に入らず本文を省いた根拠（text_omitted）の数。",
+            "minimum": 0,
+            "title": "Sources Text Omitted",
+            "type": "integer"
           },
           "withheld_evidence_count": {
             "default": 0,
