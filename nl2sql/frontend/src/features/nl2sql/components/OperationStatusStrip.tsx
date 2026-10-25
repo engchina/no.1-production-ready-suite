@@ -10,7 +10,6 @@ import { useNl2SqlTraceProgress } from "../useTraceProgress";
 import { GeneratedSqlSummary } from "./GeneratedSqlPanel";
 import { JobFailureBody } from "./JobFailureBody";
 import { ProgressLegacyNotice } from "./ProgressLegacyNotice";
-import { ProgressPartialNotice } from "./ProgressPartialNotice";
 
 export function OperationStatusStrip({
   job,
@@ -96,7 +95,7 @@ export function OperationStatusStrip({
         traceId={progress.traceId}
         testId="nl2sql-job"
         labels={CHAT_PROGRESS_LABELS}
-        footer={progress.partial ? <ProgressPartialNotice testId="nl2sql-job-progress-partial" /> : undefined}
+        partial={progress.partial}
         steps={steps}
       />
     )}

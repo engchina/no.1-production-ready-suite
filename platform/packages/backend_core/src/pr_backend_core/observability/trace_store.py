@@ -111,6 +111,15 @@ class TraceSpanOwner:
     owner_user_uuid: str
     attempt: int = 0
 
+    def __post_init__(self) -> None:
+        # 列は NOT NULL で、Oracle は空の文字列を NULL にする。空のまま積むと同じまとめの書き込み
+        # ごと失敗するので、作るときに断る（利用者の分からない実行は、製品が書かないか、決まった値を
+        # 持ち主にする）。
+        if not self.operation_id.strip():
+            raise ValueError("operation_id is required")
+        if not self.owner_user_uuid.strip():
+            raise ValueError("owner_user_uuid is required")
+
 
 def is_boundary_span(update: SpanUpdate) -> bool:
     """落としてはいけない span（実行の全体と、製品の境界の client / server の span）。"""

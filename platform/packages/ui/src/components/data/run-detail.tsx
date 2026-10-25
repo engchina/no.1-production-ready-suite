@@ -782,8 +782,13 @@ export interface RunTimelineSectionProps {
   processDetailsProps?: Omit<RunProcessDetailsProps, "children" | "traceSummary" | "traceId">;
   /** 段の一覧を最初から開く。既定は閉じる（#2473）。 */
   defaultOpen?: boolean;
+  /**
+   * 表に書けなかった span がある（一部だけの記録。#3226）。段の一覧の後ろ（段が無いときは `empty` の後ろ）に案内を
+   * 出す。製品は `useTraceProgressSnapshot` の `partial` をそのまま渡す。
+   */
+  partial?: boolean;
   labels?: RunDetailLabelsInput;
-  /** 節の `data-testid`。開閉の見出しは `<testId>-summary`。 */
+  /** 節の `data-testid`。開閉の見出しは `<testId>-summary`、一部だけの記録の案内は `<testId>-partial`。 */
   testId?: string;
 }
 
@@ -803,10 +808,17 @@ export function RunTimelineSection({
   processDetails,
   processDetailsProps,
   defaultOpen = false,
+  partial = false,
   labels: labelsInput,
   testId,
 }: RunTimelineSectionProps) {
   const labels = resolveRunDetailLabels(labelsInput);
+  const traceLabels = useTraceDetailsLabels();
+  const partialNote = partial ? (
+    <p className="text-xs text-fg-muted" data-testid={testId ? `${testId}-partial` : undefined}>
+      {traceLabels.partial}
+    </p>
+  ) : null;
   const total = totalDurationMs ?? runTimelineDuration(steps);
   const failed = steps.some((step) => step.status === "failed");
   return (
@@ -825,11 +837,13 @@ export function RunTimelineSection({
           data-run-timeline-section=""
         >
           <RunTimeline steps={steps} totalDurationMs={totalDurationMs} showSummary={false} labels={labelsInput} />
+          {partialNote}
           {processDetails != null || traceSummary != null || traceId ? <RunProcessDetails {...processDetailsProps} traceSummary={traceSummary} traceId={traceId}>{processDetails}</RunProcessDetails> : null}
         </Disclosure>
       ) : (
         <>
           {empty}
+          {partialNote}
           {processDetails != null || traceSummary != null || traceId ? <RunProcessDetails {...processDetailsProps} traceSummary={traceSummary} traceId={traceId}>{processDetails}</RunProcessDetails> : null}
         </>
       )}

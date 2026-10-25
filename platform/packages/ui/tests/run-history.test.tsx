@@ -421,6 +421,15 @@ describe("RunTimelineSection（#2473）", () => {
     { id: "answer", label: "回答の作成", status: "done", durationMs: 300 },
   ];
 
+  it("一部だけの記録は段の一覧の後ろ（段が無ければ empty の後ろ）に案内を出す（#3226）", () => {
+    render(<RunTimelineSection title="処理の経過" steps={steps} partial defaultOpen testId="section" />);
+    expect(container.querySelector("[data-testid='section-partial']")?.textContent).toBe("一部の処理だけを記録しています。");
+    render(<RunTimelineSection title="処理の経過" steps={[]} empty={<p>記録なし</p>} partial testId="empty-section" />);
+    expect(container.querySelector("[data-testid='empty-section-partial']")?.textContent).toBe("一部の処理だけを記録しています。");
+    render(<RunTimelineSection title="処理の経過" steps={steps} defaultOpen testId="full" />);
+    expect(container.querySelector("[data-testid='full-partial']")).toBeNull();
+  });
+
   it("既定で「N ステップ・合計 M 秒」の 1 行に閉じ、開くと段の一覧と処理の詳細を出す", () => {
     render(
       <RunTimelineSection

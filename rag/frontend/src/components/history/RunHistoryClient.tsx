@@ -492,13 +492,8 @@ function RunDetailView({ run }: { run: RunDetail }) {
   // 処理の詳細（#2325）: 回答の記録の詳細と技術的な識別子を、処理の経過のタイムラインの後ろに 1 か所で畳む。
   // チャット・RAG 検索の処理の経過の「処理の詳細」と同じ名前・同じ部品（`RunProcessDetails`）・同じ位置。
   const processDetails =
-    run.answer_diagnostics || technicalFacts.length || trace.partial ? (
+    run.answer_diagnostics || technicalFacts.length ? (
       <>
-        {trace.partial ? (
-          <p className="text-xs text-fg-muted" data-testid="run-history-trace-partial">
-            {traceLabels.partial}
-          </p>
-        ) : null}
         {run.answer_diagnostics ? <AnswerDetailsPanel diagnostics={run.answer_diagnostics} /> : null}
         {technicalFacts.length ? <RunFactList facts={technicalFacts} /> : null}
       </>
@@ -592,7 +587,9 @@ function RunDetailView({ run }: { run: RunDetail }) {
             )
           }
           processDetailsProps={{ title: t("answer.process.details"), testId: "run-history-technical", summaryTestId: "run-history-process-details" }}
-              processDetails={processDetails}
+          processDetails={processDetails}
+          // 表に書けなかった span がある（#3226。3 製品共通の案内を段の一覧の後ろに出す）。
+          partial={trace.partial}
           testId="run-history-timeline"
         />
       }

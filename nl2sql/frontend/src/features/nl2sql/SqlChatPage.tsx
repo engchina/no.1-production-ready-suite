@@ -101,7 +101,6 @@ import {
   jobTracePath,
 } from "./chatProgress";
 import { ProgressLegacyNotice } from "./components/ProgressLegacyNotice";
-import { ProgressPartialNotice } from "./components/ProgressPartialNotice";
 import { useNl2SqlTraceProgress } from "./useTraceProgress";
 import type { ChatHistoryOffsetPage, JobCreateData, JobData, Nl2SqlEngine } from "./types";
 import { useProfileEngine } from "./useProfileEngine";
@@ -1048,7 +1047,7 @@ function SqlChatTurn({
               progressKey={queuePlaceholder ? `${progressKey}:queue` : progressKey}
               startedAt={sentAtMs}
               labels={CHAT_PROGRESS_LABELS}
-              footer={progress.partial ? <ProgressPartialNotice testId="sql-chat-progress-partial" /> : undefined}
+              partial={progress.partial}
               testId="sql-chat-progress"
             />
           )}

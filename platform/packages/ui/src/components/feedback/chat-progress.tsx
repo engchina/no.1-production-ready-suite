@@ -165,6 +165,11 @@ export interface ChatProgressProps {
    * （製品が単独で出す）。
    */
   footer?: ReactNode;
+  /**
+   * 表に書けなかった span がある（一部だけの記録。#3226）。開いた中身の段の一覧の後ろ（`footer` の前）に案内を出す。
+   * 製品は `useTraceProgressSnapshot` の `partial` をそのまま渡す。
+   */
+  partial?: boolean;
   className?: string;
   testId?: string;
 }
@@ -485,6 +490,7 @@ export function ChatProgress({
   progressKey = null,
   labels: labelOverrides,
   footer: footerInput,
+  partial = false,
   traceSummary,
   traceId,
   activityIndicator = true,
@@ -493,8 +499,18 @@ export function ChatProgress({
   testId,
 }: ChatProgressProps) {
   const traceLabels = useTraceDetailsLabels();
-  const footer = traceSummary != null || traceId ? <RunProcessDetails traceSummary={traceSummary} traceId={traceId} summaryTestId={testId ? `${testId}-details` : undefined}>{footerInput}</RunProcessDetails> : footerInput;
   const labels = { ...DEFAULT_CHAT_PROGRESS_LABELS, ...labelOverrides };
+  const details = traceSummary != null || traceId ? <RunProcessDetails traceSummary={traceSummary} traceId={traceId} summaryTestId={testId ? `${testId}-details` : undefined}>{footerInput}</RunProcessDetails> : footerInput;
+  const footer = partial ? (
+    <>
+      <p className="text-xs text-fg-muted" data-testid={testId ? `${testId}-partial` : undefined}>
+        {traceLabels.partial}
+      </p>
+      {details}
+    </>
+  ) : (
+    details
+  );
   // 終端の判定は配信の最新の一覧で行い、表示する一覧は処理中に段階を消さない・戻さない（#1358）。
   const active = activeProp ?? isChatProgressActive(incomingSteps);
   const trackedSteps = useChatProgressSteps({ key: progressKey, steps: incomingSteps, active });

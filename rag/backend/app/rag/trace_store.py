@@ -24,17 +24,18 @@ import asyncio
 import contextlib
 import logging
 import threading
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from contextvars import ContextVar
 from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import Request
-from opentelemetry import context as otel_context
-from opentelemetry import trace as otel_trace
 from pr_backend_core.observability import request_id_var
-from pr_backend_core.observability.mcp_trace import incoming_mcp_traceparent, mcp_server_trace
+from pr_backend_core.observability.mcp_trace import (
+    incoming_mcp_traceparent,
+    mcp_server_trace,
+    operation_trace_parent,
+)
 from pr_backend_core.observability.trace_store import (
     TraceSpanOwner,
     TraceSpanWriter,
@@ -54,10 +55,6 @@ type TraceTerminal = Literal["done", "failed", "cancelled"]
 
 _WRITER: TraceSpanWriter | None = None
 _WRITER_LOCK = threading.Lock()
-# サービストークンの MCP の要求の server の span の中か（中の検索は Agent の trace を続ける）。
-_IN_TRUSTED_SERVER_TRACE: ContextVar[bool] = ContextVar(
-    "rag_in_trusted_server_trace", default=False
-)
 
 
 # --------------------------------------------------------------------------- 書き手（process ごと）
@@ -296,26 +293,6 @@ def _log_step(update: SpanUpdate, trace: AnswerTrace) -> None:
 
 
 @contextmanager
-def operation_trace_parent() -> Iterator[Sequence[otel_trace.Link]]:
-    """回答・検索の実行の全体の span を置く trace の文脈。
-
-    サービストークンの MCP の要求（`mcp_request_trace`）の中なら今の trace を続ける。それ以外（画
-    面の要求・外部の MCP クライアント・品質評価）は新しい trace を始め、今の span（ブラウザの
-    traceparent を親にした HTTP の span など）は span link にだけ残す（他人の trace に span を差し
-    込めないようにする）。
-    """
-    if _IN_TRUSTED_SERVER_TRACE.get():
-        yield ()
-        return
-    current = otel_trace.get_current_span().get_span_context()
-    token = otel_context.attach(otel_context.Context())
-    try:
-        yield [otel_trace.Link(current)] if current.is_valid else ()
-    finally:
-        otel_context.detach(token)
-
-
-@contextmanager
 def mcp_request_trace(request: Request, message: Mapping[str, Any]) -> Iterator[None]:
     """`POST /api/mcp` の `tools/call` を server の span（`mcp.server`）の中で処理する。
 
@@ -332,17 +309,14 @@ def mcp_request_trace(request: Request, message: Mapping[str, Any]) -> Iterator[
     )
     operation_id = str(getattr(request.state, "request_id", "") or "") or uuid4().hex
     listener = _owner_listener(operation_id, current_audit_request_context().user_uuid)
-    token = _IN_TRUSTED_SERVER_TRACE.set(trusted)
-    try:
-        with mcp_server_trace(
-            operation_id=operation_id,
-            trusted=trusted,
-            traceparent=traceparent,
-            listener=listener,
-        ):
-            yield
-    finally:
-        _IN_TRUSTED_SERVER_TRACE.reset(token)
+    # 中の回答・検索は共通の `operation_trace_parent` で、信頼した要求なら Agent の trace を続ける。
+    with mcp_server_trace(
+        operation_id=operation_id,
+        trusted=trusted,
+        traceparent=traceparent,
+        listener=listener,
+    ):
+        yield
 
 
 # --------------------------------------------------------------------------- 読み出し

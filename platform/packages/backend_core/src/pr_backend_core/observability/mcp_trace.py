@@ -10,12 +10,17 @@
 - API キーの外部の MCP クライアントとブラウザの traceparent は親にせず、新しい trace を始める
   （他人の trace に span を差し込めないようにする）。相関のため、外部の span context は
   OpenTelemetry の span link として新しい trace の root に結ぶ（export だけ。表には入れない）。
+- 製品の実行（回答・検索・ジョブ）の全体の span は `operation_trace_parent` の中で始める。信頼した
+  MCP の要求（`mcp_server_trace` の trusted）の中なら今の trace を続け、それ以外（画面の要求・
+  API キー・評価）は新しい trace にして、今の span は span link にだけ残す。別の process で実行する
+  ジョブは、受け付けた要求の traceparent を `traceparent_links` で span link にする。
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from contextvars import ContextVar
 
 from opentelemetry import context, trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
@@ -25,6 +30,11 @@ from .tracing import SpanListener, TraceSummary, capture_trace_context, operatio
 
 _PROPAGATOR = TraceContextTextMapPropagator()
 MCP_SERVER_SPAN = "mcp.server"
+# 信頼した MCP の要求（サービストークン）の server の span の中か。中なら製品の実行は今の trace
+# を続ける。
+_IN_TRUSTED_SERVER_TRACE: ContextVar[bool] = ContextVar(
+    "pr_in_trusted_mcp_server_trace", default=False
+)
 
 
 def mcp_trace_meta() -> dict[str, str]:
@@ -66,6 +76,7 @@ def mcp_server_trace(
     linked = _span_context(traceparent) if traceparent and not trusted else None
     carrier_context = _PROPAGATOR.extract({"traceparent": parent}) if parent else context.Context()
     token = context.attach(carrier_context)
+    trusted_token = _IN_TRUSTED_SERVER_TRACE.set(trusted)
     try:
         with operation_trace(
             MCP_SERVER_SPAN,
@@ -76,7 +87,38 @@ def mcp_server_trace(
         ) as summary:
             yield summary
     finally:
+        _IN_TRUSTED_SERVER_TRACE.reset(trusted_token)
         context.detach(token)
+
+
+@contextmanager
+def operation_trace_parent() -> Iterator[Sequence[trace.Link]]:
+    """製品の実行の全体の span を置く trace の文脈。
+
+    中で `operation_trace(..., links=...)` を始める。信頼した MCP の要求（`mcp_server_trace` の
+    trusted）の中なら今の trace を続ける（links は空）。それ以外（画面の要求・API キーの外部の
+    MCP クライアント・品質評価）は新しい trace を始め、今の span（ブラウザの traceparent を親に
+    した HTTP の span など）は span link にだけ残す。
+    """
+    if _IN_TRUSTED_SERVER_TRACE.get():
+        yield ()
+        return
+    current = trace.get_current_span().get_span_context()
+    token = context.attach(context.Context())
+    try:
+        yield [trace.Link(current)] if current.is_valid else ()
+    finally:
+        context.detach(token)
+
+
+def traceparent_links(traceparent: str | None) -> list[trace.Link]:
+    """受け付けた要求の traceparent を span link にする（親にはしない。形の違う値は捨てる）。
+
+    別の process で実行するジョブが、新しい trace の root に受け付けた要求との関係を残すときに使う。
+    """
+    valid = validated_traceparent(traceparent)
+    span_context = _span_context(valid) if valid else None
+    return [trace.Link(span_context)] if span_context is not None else []
 
 
 __all__ = [
@@ -84,4 +126,6 @@ __all__ = [
     "incoming_mcp_traceparent",
     "mcp_server_trace",
     "mcp_trace_meta",
+    "operation_trace_parent",
+    "traceparent_links",
 ]

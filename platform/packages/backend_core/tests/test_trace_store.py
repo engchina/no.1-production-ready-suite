@@ -22,6 +22,8 @@ from pr_backend_core.observability.mcp_trace import (
     incoming_mcp_traceparent,
     mcp_server_trace,
     mcp_trace_meta,
+    operation_trace_parent,
+    traceparent_links,
 )
 from pr_backend_core.observability.trace_store import (
     StoredTraceSpan,
@@ -339,3 +341,46 @@ def test_mcp_trace_context_trusts_only_service_tokens() -> None:
     exported = {span.context.trace_id: span for span in exporter.get_finished_spans()}
     linked = exported[int(external.telemetry_trace_id or "0", 16)]
     assert [f"{link.context.trace_id:032x}" for link in linked.links] == [caller_trace]
+
+
+def test_owner_requires_operation_and_owner() -> None:
+    # 空の値は Oracle で NULL になり、同じまとめの書き込みごと失敗するので、作るときに断る（#3226）
+    # 。
+    with pytest.raises(ValueError):
+        TraceSpanOwner(product="rag", operation_id="op-a", owner_user_uuid=" ")
+    with pytest.raises(ValueError):
+        TraceSpanOwner(product="rag", operation_id="", owner_user_uuid="user-a")
+
+
+def test_operation_trace_parent_continues_only_trusted_mcp_traces() -> None:
+    exporter = InMemorySpanExporter()
+    configure_tracing(TracingSettings(), service_name="synthetic", exporter=exporter)
+    caller_trace = "d" * 32
+    incoming = f"00-{caller_trace}-{'e' * 16}-01"
+    # 信頼した MCP の要求の中は、今の trace を続ける（links は空）。
+    with (
+        mcp_server_trace(operation_id="mcp-a", trusted=True, traceparent=incoming),
+        operation_trace_parent() as links,
+    ):
+        assert links == ()
+        with operation_trace("rag.answer", operation_id="op-a") as continued:
+            pass
+    # 画面の要求などの span の中は、新しい trace にして今の span を link に残す。
+    with (
+        operation_trace("http.request", operation_id="req-b") as request,
+        operation_trace_parent() as links,
+    ):
+        assert len(links) == 1
+        with operation_trace("rag.answer", operation_id="op-b", links=links) as detached:
+            pass
+    assert continued.telemetry_trace_id == caller_trace
+    assert detached.telemetry_trace_id not in {request.telemetry_trace_id, caller_trace}
+    assert [f"{link.context.trace_id:032x}" for link in links] == [request.telemetry_trace_id]
+    assert shutdown_tracing()
+
+
+def test_traceparent_links_ignores_invalid_values() -> None:
+    valid = f"00-{'f' * 32}-{'1' * 16}-01"
+    assert [f"{link.context.trace_id:032x}" for link in traceparent_links(valid)] == ["f" * 32]
+    assert traceparent_links("invalid") == []
+    assert traceparent_links(None) == []

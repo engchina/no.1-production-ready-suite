@@ -899,6 +899,9 @@ export { TRACE_DETAILS_JA, createTraceDetailsLabels, type TraceDetailsLabels, ty
 export { TraceDetailsLabelsProvider, useTraceDetailsLabels } from "./components/data/trace-labels-provider";
 export {
   TRACE_SNAPSHOT_INTERVAL_MS,
+  TRACE_SNAPSHOT_SETTLE_ATTEMPTS,
+  TRACE_SNAPSHOT_SETTLE_DELAY_MS,
+  TRACE_SNAPSHOT_TIMEOUT_MS,
   useTraceProgressSnapshot,
   type TraceProgressSnapshot,
   type TraceProgressSnapshotOptions,

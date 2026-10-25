@@ -1071,15 +1071,11 @@ function RunChatTurn({
             startedAt={run.created_at}
             slowAfterMs={WAITING_STATUSES.has(run.status) ? Number.POSITIVE_INFINITY : undefined}
             labels={waitingLabel ? { working: waitingLabel } : undefined}
+            // 共通の span の表に書けなかった span がある（#3226 の案 A）。経過の一覧が全部ではないことを示す。
+            partial={progress.partial}
             testId="chat-progress"
           />
         )}
-        {progress.partial ? (
-          // 共通の span の表に書けなかった span がある（#3226 の案 A）。経過の一覧が全部ではないことを示す。
-          <p className="text-xs text-fg-muted" data-testid="chat-progress-partial">
-            {traceLabels.partial}
-          </p>
-        ) : null}
         {failure ? (
           // 失敗は 3 製品共通の失敗のカード（止まった段・原因・次の操作・「詳細」。#2342）。進めない理由を先に
           // 読めるよう、処理の経過の直下（回答・結果の上）に 1 つだけ出す。

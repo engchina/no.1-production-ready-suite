@@ -301,6 +301,8 @@ export function RunDetail({
               steps={timelineSteps}
               totalDurationMs={runDurationMs(run)}
               labels={labels}
+              // 共通の span の表に書けなかった span がある（#3226 の案 A）。経過の一覧が全部ではないことを示す。
+              partial={progress.partial}
               empty={
                 legacyProgress ? (
                   // span の無い古い形式の記録（空白にしない。#3226）。
@@ -340,12 +342,6 @@ export function RunDetail({
                 </>
               }
             />
-            {progress.partial ? (
-              // 共通の span の表に書けなかった span がある（#3226 の案 A）。経過の一覧が全部ではないことを示す。
-              <p className="text-xs text-fg-muted" data-testid="run-timeline-partial">
-                {traceLabels.partial}
-              </p>
-            ) : null}
           </>
         }
         evidence={

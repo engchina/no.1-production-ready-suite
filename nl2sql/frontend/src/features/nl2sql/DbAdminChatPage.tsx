@@ -41,7 +41,6 @@ import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 
 import { CHAT_PROGRESS_LABELS, dbAdminChatTurnTracePath, parseTraceProgressResponse } from "./chatProgress";
 import { ProgressLegacyNotice } from "./components/ProgressLegacyNotice";
-import { ProgressPartialNotice } from "./components/ProgressPartialNotice";
 import {
   Nl2SqlChatComposer,
   Nl2SqlChatHistoryList,
@@ -667,7 +666,7 @@ function DbAdminChatTurn({
             steps={progress.steps}
             traceId={progress.traceId}
             labels={CHAT_PROGRESS_LABELS}
-            footer={progress.partial ? <ProgressPartialNotice testId={`${TEST_ID}-progress-partial`} /> : undefined}
+            partial={progress.partial}
             testId={`${TEST_ID}-progress`}
           />
         )}

@@ -456,8 +456,9 @@ test("共通の span の表に書けなかった span がある実行は、一�
   await openThread(page);
   const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
   await expect(turn.getByText("合成の回答です。")).toBeVisible();
-  // 書けた span の経過は出し、全部ではないことを経過の直下に出す。
+  // 書けた span の経過は出し、全部ではないことを経過を開いた段の一覧の後ろに出す（3 製品共通の ChatProgress の partial）。
   await expect(turn.getByTestId("chat-progress")).toHaveAttribute("data-chat-progress-state", "done");
+  await turn.getByTestId("chat-progress-summary").click();
   await expect(turn.getByTestId("chat-progress-partial")).toHaveText("一部の処理だけを記録しています。");
   await expectNoHorizontalOverflow(page);
   await page.screenshot({path: testInfo.outputPath("chat-partial.png")});
@@ -465,7 +466,8 @@ test("共通の span の表に書けなかった span がある実行は、一�
   await page.goto(`/runs?id=${RUN_ID}`);
   await expect(page.getByTestId("run-summary")).toBeVisible();
   await expect(page.getByTestId("run-timeline-section-summary")).toBeVisible();
-  await expect(page.getByTestId("run-timeline-partial")).toHaveText("一部の処理だけを記録しています。");
+  await page.getByTestId("run-timeline-section-summary").click();
+  await expect(page.getByTestId("run-timeline-section-partial")).toHaveText("一部の処理だけを記録しています。");
   await expectNoHorizontalOverflow(page);
   await page.screenshot({path: testInfo.outputPath("history-partial.png"), fullPage: true});
 });
