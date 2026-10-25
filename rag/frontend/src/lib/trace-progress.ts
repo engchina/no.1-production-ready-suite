@@ -22,7 +22,7 @@ export function useRagTraceProgress({
   fetchSnapshot,
   intervalMs,
 }: {
-  /** 対象（回答のメッセージ・実行の id）。null なら読まない。 */
+  /** 対象（回答のメッセージ・実行の id。snapshot のイベントの `target_id` と同じ値）。null なら読まない。 */
   key: string | null;
   active: boolean;
   fetchSnapshot: (signal: AbortSignal) => Promise<TraceSnapshotData>;

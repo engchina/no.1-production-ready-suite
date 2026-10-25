@@ -2,7 +2,17 @@ import {timelineSnapshot, timelineTypography} from "../../../platform/packages/u
 import { findIconTextMisalignment } from "../../../platform/packages/ui/e2e/layout-checks";
 
 import { expect, type Locator, type Page, test } from "./fixtures/test";
-import { answerSpans, ragSpan, savedSpanProgress, SPAN_TRACE_ID } from "./_chat-progress";
+import {
+  answerSpans,
+  installTraceRecorder,
+  mockTraceApi,
+  ragSpan,
+  savedSpanProgress,
+  SPAN_TRACE_ID,
+  traceSnapshotJson,
+  traceSse,
+  type ChatProgressEventJson,
+} from "./_chat-progress";
 
 import {
   expectNoPageOverflow,
@@ -151,6 +161,8 @@ async function mockChat(
 
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
+  // 配信の中の span の記録の印（`traceSse`）を、回答の trace の API が返す（#3226）。
+  await installTraceRecorder(page);
   await page.route("**/api/search-answer-profiles**", (route) =>
     route.fulfill({ json: pageEnvelope([searchAnswerProfile]) })
   );
@@ -191,6 +203,17 @@ async function mockChat(
   await page.route("**/api/chat/conversations**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
+    const trace = /\/messages\/([^/]+)\/trace$/.exec(path);
+    if (trace) {
+      // 回答の trace の API（共通の span の表の snapshot。#3226）。mock のメッセージの `progress` は表の span を段の
+      // イベントにしたもの（会話の取得は処理の経過を返さない）。
+      const messages = sent ? (options.sentMessages ?? [userMessage, assistantMessage]) : initialMessages;
+      const message = messages.find((item) => (item as { message_id?: string }).message_id === trace[1]) as
+        | { progress?: ChatProgressEventJson[] }
+        | undefined;
+      await route.fulfill({ json: traceSnapshotJson(message?.progress ?? []) });
+      return;
+    }
     if (path.endsWith("/messages/stream")) {
       sent = true;
       created = true;
@@ -2196,13 +2219,18 @@ test("生成中に新しい会話を作ると、前の会話の生成を止め�
 });
 
 
-// 失敗の表示（3 製品共通の失敗のカード。#2342）。
+// 失敗の表示（3 製品共通の失敗のカード。#2342）。処理の経過は表へ書いた span（回答の trace の API が返す。#3226）。
 function progressEvent(seq: number, extra: Record<string, unknown>) {
-  return `event: chat_progress\ndata: ${JSON.stringify({
-    model_id: "m1",
-    message_id: "a1",
-    event: { seq, target_id: "a1", at: `2026-01-01T00:00:0${seq}Z`, ...extra },
-  })}\n\n`;
+  return traceSse([
+    {
+      schema_version: 1,
+      seq,
+      target_id: "a1",
+      attempt: 0,
+      emitted_at: `2026-01-01T00:00:0${seq}Z`,
+      ...extra,
+    } as unknown as ChatProgressEventJson,
+  ]);
 }
 
 // 処理の経過は span のイベント（#3226）。工程の span（文書検索）が失敗し、実行の全体の span も失敗で終わる。
@@ -2485,7 +2513,8 @@ test("処理の経過は回答の trace の span の木で、2 つ目の「ト�
   );
   const streamBody = [
     sseStart,
-    ...progress.map(event => `event: chat_progress\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", event })}\n\n`),
+    // 処理の経過は表へ書いた span（回答の trace の API が返す。#3226）。
+    traceSse(progress),
     `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "合成の回答です。" })}\n\n`,
     `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "synthetic-a", elapsed_ms: 2000, guardrail_warnings: [], answer_diagnostics: { outcome: "answered", execution_steps: [{ name: "合成の処理", status: "完了", elapsed_seconds: 2 }] } })}\n\n`,
     `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
@@ -2541,11 +2570,9 @@ test("保存した回答を開き直しても処理の経過は span の木 1 �
 test("span の無い古い形式の処理の経過は、空白にせず古い形式の案内を出す", { tag: "@responsive" }, async ({ page }) => {
   const reply = {
     ...longProcessReply(1),
-    // 段だけのイベント（#3226 の前の形式）。
+    // 古い形式の記録（#3226 の前の段のイベント）は表を読めないので、trace の API は終端だけを返す。
     progress: [
-      { schema_version: 1, seq: 1, target_id: "long-answer-1", attempt: 0, emitted_at: "2026-01-01T00:00:01Z",
-        type: "step", step_id: "s1", kind: "answer_step", status: "done", params: { name: "文書検索", depth: 0 } },
-      { schema_version: 1, seq: 2, target_id: "long-answer-1", attempt: 0, emitted_at: "2026-01-01T00:00:01Z", type: "terminal", status: "done" },
+      { schema_version: 1, seq: 1, target_id: "long-answer-1", attempt: 0, emitted_at: "2026-01-01T00:00:01Z", type: "terminal", status: "done" },
     ],
   };
   await mockChat(page, "ready", [userMessage, reply]);
@@ -2583,10 +2610,17 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
     citation_count: 0, answer_outcome: "insufficient_evidence", search_answer_profile_id: "bv-1", search_answer_profile_name: "プロファイル A",
     run_id: "synthetic-parity", surface: "chat", question: "合成の質問", status: "success", answer_generated: true,
     created_at: "2026-01-01T00:00:03Z", elapsed_ms: 3000, executed_by_me: true, executor_display_name: "利用者 A",
-    conversation_id: "conv-1", message_id: reply.message_id, progress_events: reply.progress,
+    conversation_id: "conv-1", message_id: reply.message_id,
     feedback: [], citations: [], answer: reply.content, answer_available: true,
     answer_diagnostics: null, conversation_owner_display_name: "利用者 A", owned_by_me: true,
   }}}));
+  // 実行の trace の API は会話の回答と同じ span を返す（#3226）。
+  await mockTraceApi(page, {
+    "synthetic-parity": (reply.progress as unknown as ChatProgressEventJson[]).map((event) => ({
+      ...event,
+      target_id: "synthetic-parity",
+    })),
+  });
   await page.goto("/history/synthetic-parity");
   await expect(page.getByTestId("run-history-summary")).toBeVisible();
   await expect(page.getByTestId("run-history-summary").locator("[data-run-summary-heading] [data-status-variant]")).toHaveCount(0);

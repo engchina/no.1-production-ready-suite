@@ -111,7 +111,7 @@ import { cn } from "@/lib/utils";
  */
 const CHAT_STREAM_STALE_AFTER_MS = 30_000;
 /** 配信が途絶えたかを確かめる間隔。 */
-const CHAT_STREAM_STALL_CHECK_MS = 5_000;
+const CHAT_STREAM_STALL_CHECK_MS = 1_000;
 /**
  * 接続が切れたときに続きを購読し直す回数の上限（#1175）。event を受け取れたら数え直す。超えたら、保存済みの
  * 会話（作成中の回答）に引き継いで polling で待つ。待ちは 1 秒・2 秒・4 秒 … `CHAT_STREAM_RESUME_MAX_DELAY_MS`。
@@ -274,7 +274,8 @@ function useColumnProgress(source: ColumnProgressSource | null): ColumnProgress 
   const messageId = source?.messageId ?? null;
   const active = source?.active ?? false;
   const snapshot = useRagTraceProgress({
-    key: conversationId && messageId ? `${conversationId}:${messageId}` : null,
+    // 対象は回答のメッセージ（snapshot のイベントの `target_id`）。会話が決まるまでは読まない。
+    key: conversationId && messageId ? messageId : null,
     active,
     fetchSnapshot: (signal) => api.getChatAnswerTrace(conversationId ?? "", messageId ?? "", signal),
   });

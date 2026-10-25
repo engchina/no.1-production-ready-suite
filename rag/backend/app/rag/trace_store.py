@@ -36,7 +36,6 @@ from opentelemetry import trace as otel_trace
 from pr_backend_core.observability import request_id_var
 from pr_backend_core.observability.mcp_trace import incoming_mcp_traceparent, mcp_server_trace
 from pr_backend_core.observability.trace_store import (
-    TRACE_SPANS_TABLE,
     TraceSpanOwner,
     TraceSpanWriter,
     fetch_trace_spans,
@@ -359,8 +358,9 @@ class TraceSnapshot(BaseModel):
     dropped_spans: int | None = None
 
 
+# 表の名前と列は固定の文字列（値はすべて bind。共通の `TRACE_SPANS_TABLE` と同じ表）。
 _LOOKUP_SQL = (
-    f"SELECT TRACE_ID FROM {TRACE_SPANS_TABLE} "
+    "SELECT TRACE_ID FROM PLATFORM_TRACE_SPANS "
     "WHERE PRODUCT = :product AND OPERATION_ID = :operation_id AND IS_ROOT = 1"
 )
 

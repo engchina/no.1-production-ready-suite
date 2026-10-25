@@ -538,7 +538,8 @@ async def test_saved_legacy_progress_is_shown_as_legacy(
             content="回答",
             reply_to_message_id="u-1",
             created_at=now,
-            progress=[{"id": "retrieve", "label": "文書を探しています", "status": "done"}],
+            # 古い形式の値（列の JSON は一覧でも入りうる）。
+            progress=[{"id": "retrieve", "label": "文書を探しています", "status": "done"}],  # type: ignore[arg-type]
         ),
     ]
     async with _client() as client:

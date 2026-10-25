@@ -1,10 +1,17 @@
+import type { Page } from "@playwright/test";
+
 /**
  * 処理の経過のイベント（3 製品共通の契約。#1359）を spec の mock で作る。
  *
- * 処理の経過は回答の trace（span の木）の投影（#3226）。backend（`app/rag/chat_progress.py` の
- * `ChatProgressTracker.record_span`）と同じく、span の開始（実行中）・終了（完了・失敗・スキップ）を番号（`seq`。
- * 対象ごとに 1 から連続）つきで記録する。`step_id` は span の id、親子は `parent_id`、実行の全体は `root`。
- * 工程の名前（文言）は入れない（画面が工程の種類と工程名から i18n で付ける）。
+ * 処理の経過は回答の trace（span の木）の投影で、span は共通の span の表にある（#3226 の案 A）。画面は記録ごとの
+ * trace の API（`.../messages/{回答の id}/trace`・`/history/runs/{id}/trace`・`/search/runs/{id}/trace`）で、表の
+ * span を段のイベントにした snapshot を読み直す。mock は span の開始（実行中）・終了（完了・失敗・スキップ）を番号
+ * （`seq`）つきのイベントで作り、trace の API の応答にする。`step_id` は span の id、親子は `parent_id`、実行の全体は
+ * `root`。工程の名前（文言）は入れない（画面が工程の種類と工程名から i18n で付ける）。
+ *
+ * - 時間をおいて流す配信の mock（init script の fetch）は、chunk に `traceSse` の印を入れ、`installTraceRecorder` が
+ *   その印を配信から外して記録する（送った時点までの span を trace の API が返す）。
+ * - 一度に返す mock は `mockTraceApi` で記録ごとの snapshot を返す。
  */
 
 export type ChatStepStatus = "pending" | "running" | "done" | "failed" | "skipped";
@@ -230,4 +237,117 @@ export function answerSpans(steps: string[], options: { guardrail?: boolean } = 
     ...steps.map((name, index) => ({ key: `step-${index}`, spec: ragSpan.step(name) })),
     ...(options.guardrail ? [{ key: "guardrail", spec: ragSpan.stage("answer_guardrail") }] : []),
   ];
+}
+
+/** trace の API の応答（snapshot。`droppedSpans` は書けなかった span の数）。 */
+export function traceSnapshotJson(events: ChatProgressEventJson[], droppedSpans: number | null = null) {
+  return { data: { events, dropped_spans: droppedSpans }, error_messages: [], warning_messages: [] };
+}
+
+/** 記録の trace の API の path（`/trace` の前の id）。 */
+const TRACE_PATH = /\/api\/(?:chat\/conversations\/[^/]+\/messages|history\/runs|search\/runs|search\/answers)\/([^/?]+)\/trace(?:\?|$)/;
+
+export type TraceSnapshotSource =
+  | ChatProgressEventJson[]
+  | { events: ChatProgressEventJson[]; droppedSpans?: number | null };
+
+/**
+ * 記録ごとの trace の API を返す（id → イベント。関数なら読むたびに呼ぶ）。無い id は空の snapshot。
+ * 画面の route（会話の取得など）より先に当たるよう、それらの route の後に呼ぶ（後に登録した route が先に当たる）。
+ */
+export async function mockTraceApi(
+  page: Page,
+  snapshots: Record<string, TraceSnapshotSource> | ((id: string) => TraceSnapshotSource | undefined)
+): Promise<{ requests: string[] }> {
+  const requests: string[] = [];
+  await page.route(TRACE_PATH, async (route) => {
+    const id = decodeURIComponent(TRACE_PATH.exec(route.request().url())?.[1] ?? "");
+    requests.push(id);
+    const source = typeof snapshots === "function" ? snapshots(id) : snapshots[id];
+    const value = source === undefined ? [] : source;
+    const json = Array.isArray(value)
+      ? traceSnapshotJson(value)
+      : traceSnapshotJson(value.events, value.droppedSpans ?? null);
+    await route.fulfill({ json });
+  });
+  return { requests };
+}
+
+/** 配信の mock の chunk に入れる span の記録の印（`installTraceRecorder` が外して trace の API で返す）。 */
+export function traceSse(events: ChatProgressEventJson[]): string {
+  return events.map((event) => `event: __trace\ndata: ${JSON.stringify(event)}\n\n`).join("");
+}
+
+/**
+ * 画面の fetch を包み、span の記録（`traceSse` の印）を表へ書いたものとして記録する init script を入れる。
+ *
+ * - 配信（`text/event-stream`）の応答は、流れる本文から印の block を外して記録する（page.route の一度に返す配信も、
+ *   init script の時間をおいて流す配信も同じ）。init script の配信の mock は `window.__ragTraceRecord(text)` で直接
+ *   記録してもよい。
+ * - 記録のある対象の trace の API は、送った時点までの span を返す。記録の無い対象は元の fetch（page.route）へ渡す。
+ *
+ * 配信の mock の init script より先に呼ぶ（その mock の「元の fetch」がこの fetch になる）。
+ */
+export async function installTraceRecorder(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const win = window as unknown as {
+      __ragTrace: Record<string, unknown[]>;
+      __ragTraceRecord?: (text: string) => string;
+    };
+    if (win.__ragTraceRecord) return;
+    win.__ragTrace = {};
+    const marker = "event: __trace\n";
+    const record = (text: string) =>
+      text
+        .split(/(?<=\n\n)/)
+        .filter((block) => {
+          if (!block.startsWith(marker)) return true;
+          const data = block.slice(marker.length).replace(/^data: /, "").trim();
+          const event = JSON.parse(data) as { target_id: string };
+          (win.__ragTrace[event.target_id] ??= []).push(event);
+          return false;
+        })
+        .join("");
+    win.__ragTraceRecord = record;
+    const originalFetch = window.fetch.bind(window);
+    const tracePath =
+      /\/api\/(?:chat\/conversations\/[^/]+\/messages|history\/runs|search\/runs|search\/answers)\/([^/?]+)\/trace(?:\?|$)/;
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const match = tracePath.exec(url);
+      if (match) {
+        const events = win.__ragTrace[decodeURIComponent(match[1])];
+        if (events !== undefined) {
+          return new Response(
+            JSON.stringify({ data: { events, dropped_spans: null }, error_messages: [], warning_messages: [] }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        return originalFetch(input, init);
+      }
+      const response = await originalFetch(input, init);
+      if (!response.body || !(response.headers.get("content-type") ?? "").includes("text/event-stream")) return response;
+      // 配信の本文から span の記録の印を外す（block の途中で切れた分は次の chunk と合わせる）。
+      const decoder = new TextDecoder();
+      const encoder = new TextEncoder();
+      let pending = "";
+      const body = response.body.pipeThrough(
+        new TransformStream<Uint8Array, Uint8Array>({
+          transform(chunk, controller) {
+            pending += decoder.decode(chunk, { stream: true });
+            const end = pending.lastIndexOf("\n\n");
+            if (end < 0) return;
+            const complete = pending.slice(0, end + 2);
+            pending = pending.slice(end + 2);
+            const rest = record(complete);
+            if (rest) controller.enqueue(encoder.encode(rest));
+          },
+          flush(controller) {
+            if (pending) controller.enqueue(encoder.encode(record(pending)));
+          },
+        })
+      );
+      return new Response(body, { status: response.status, headers: response.headers });
+    };
+  });
 }
