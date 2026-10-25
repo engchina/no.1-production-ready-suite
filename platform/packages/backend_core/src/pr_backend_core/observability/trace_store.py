@@ -24,13 +24,13 @@ span store と同じ形）。実行中の span も読めるので、どの proce
 - **保存期限**: `retention_days` が 0（既定）なら消さない。正の値のときだけ、
   その日数を過ぎた行を消す。
 
-共有パッケージは oracledb に依存しない。接続は製品が `connection_factory`（DB-API の接続を返す
-context
-manager）で渡す。
+共有パッケージは oracledb に直接依存しない（時刻の bind の型を指すときだけ import する）。接続は
+製品が `connection_factory`（DB-API の接続を返す context manager）で渡す。
 """
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import threading
@@ -89,6 +89,20 @@ _PURGE_SQL = (
     "DELETE FROM PLATFORM_TRACE_SPANS "
     "WHERE STARTED_AT < FROM_TZ(CAST(:cutoff AS TIMESTAMP), '+00:00') AND ROWNUM <= :batch"
 )
+
+# 時刻の bind。python-oracledb は `datetime` を既定で `DB_TYPE_DATE`（秒まで）で bind するため、
+# `TIMESTAMP` で bind して秒より細かい部分（マイクロ秒）を残す（#3271）。
+_TIMESTAMP_BINDS = ("started_at", "finished_at")
+
+
+def _load_oracledb() -> Any:
+    return importlib.import_module("oracledb")
+
+
+def _timestamp_input_sizes(names: Iterable[str]) -> dict[str, Any]:
+    timestamp = _load_oracledb().DB_TYPE_TIMESTAMP
+    return {name: timestamp for name in names}
+
 
 # 表の名前と列は固定の文字列（値はすべて bind。SQL の文字列に値を組み込まない）。時刻は
 # `SYS_EXTRACT_UTC` で UTC の TIMESTAMP にして読む（時間帯の形に関わらず thin mode で読める。
@@ -290,6 +304,7 @@ class TraceSpanWriter:
         try:
             with self.connection_factory() as connection:
                 cursor = connection.cursor()
+                cursor.setinputsizes(**_timestamp_input_sizes(_TIMESTAMP_BINDS))
                 cursor.executemany(_MERGE_SQL, [pending.row for pending in batch])
                 connection.commit()
             return True
@@ -361,6 +376,7 @@ def purge_trace_spans(
         with connection_factory() as connection:
             cursor = connection.cursor()
             for _ in range(max_batches):
+                cursor.setinputsizes(**_timestamp_input_sizes(("cutoff",)))
                 cursor.execute(_PURGE_SQL, {"cutoff": cutoff, "batch": batch})
                 count = int(cursor.rowcount or 0)
                 connection.commit()
