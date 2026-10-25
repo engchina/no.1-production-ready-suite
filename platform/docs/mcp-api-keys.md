@@ -3,7 +3,7 @@
 RAG（非構造化データ）・NL2SQL（構造化データ）・Agent（業務 Agent へのチャット）は、標準の MCP（Streamable HTTP の `POST /api/mcp`。`initialize` / `tools/list` / `tools/call`）を公開している。Claude Code・Codex・Cursor などの外部の MCP クライアントは、利用者が自分で発行した **API キー** で接続する（#1805・#1874）。
 
 - RAG / NL2SQL: 資料の検索・業務データの照会のツール（契約は `platform/contracts/mcp/rag-tools.json` / `nl2sql-tools.json`）。
-- Agent: 業務 Agent を「専門家」として呼ぶチャットのツール（`agent_list` / `agent_chat` / `agent_get_run` / `agent_answer_confirmation` / `agent_cancel_run` / `agent_skill_export`。契約は `platform/contracts/mcp/agent-tools.json`）。下の「Agent のツール」。
+- Agent: 業務 Agent を「専門家」として呼ぶチャットのツール（`agent_list` / `agent_chat` / `agent_get_run` / `agent_answer_confirmation` / `agent_cancel_run` / `agent_get_run_observation` / `agent_skill_export`。契約は `platform/contracts/mcp/agent-tools.json`）。下の「Agent のツール」。
 
 ## 接続先
 
@@ -54,6 +54,7 @@ RAG（非構造化データ）・NL2SQL（構造化データ）・Agent（業務
 | `agent_get_run` | Run の状態・回答の対応（`outcome`。RAG の `rag_search` と同じ語彙。完了した Run だけ）・回答・根拠（`sources`。RAG の `document_id` / `chunk_id` と引用の印 `cited`。今の権限で見られない根拠は除いて数を `withheld_evidence_count` に。#3240。本文は既定で全文で、応答の予算に入らない根拠は `text_omitted`、1 件の上限を超える根拠は境界で切って `truncated`・`next_offset`。#3321）・段落の印（`passage_marks`・`removed_passages`・`answer_warnings`。#2738）・回答前の確認（`confirmation`）・使ったツール。まだ終わっていなければ `wait_seconds`（既定 30 秒）まで待つ。出力は `agent_chat` / `agent_answer_confirmation` と同じ形（`schema_version` 4） |
 | `agent_answer_confirmation` | 回答前の確認に答える（`action=answer` で確認事項ごとに選択肢の ID か自由入力）か、確認せずに回答させる（`action=skip`） |
 | `agent_cancel_run` | 実行（`run_id`）を止める（承認・回答前の確認の待ちも閉じる）。冪等で、終わった Run はエラーにせず `result`（`cancelled` / `already_cancelled` / `already_finished`）と取消の後の `status` を返す。止められるのは画面の取消と同じ人（実行した利用者・会話の持ち主・system_admin）。Run を作らないので直近 24 時間の Run の数に数えない（#3240） |
+| `agent_get_run_observation` | 評価・監査の機械が読む実行（`run_id`）の観測（#3240）。Run の情報（業務 Agent の公開の版 `agent_version`・`trace_id`・最終の検証の状態 `validation_status`・`created_at` / `finished_at`）、モデルの利用量（`usage`。OpenTelemetry の `gen_ai.usage.*` の名前）、ツールの呼び出しの経過（`tool_calls`。状態・失敗の分類 `error_code`・根拠の数・旧版も検索したか `include_superseded`・NL2SQL の状態と行の数だけ。引数・SQL・行・エラーの文は出さない）、調べた根拠の全件（`evidence`。読み取りのツールで読んだ chunk を含み、初めて現れた順 `rank`・RAG の検索の順位 `retrieval_rank`・引用 `cited` / `answer_use`・RAG と同じ名前の場所 `locator`）。根拠の本文は生成に渡した本文そのもの（切らない）で、件数（`limit`。既定 20・最大 100）と 1 ページの合計の予算でページに分け（続きは `next_cursor` を `cursor` に渡す）、1 件で予算を超える根拠は本文を省いて `text_omitted`（`rag_read_source` で読む）。根拠は呼ぶたびに今の権限で確かめ直し、見られない根拠は除いて数を `withheld_evidence_count` に返す。読めるのは `agent_get_run` と同じ人 |
 | `agent_skill_export` | 使える業務 Agent が使うスキルを Agent Skills の形（`SKILL.md` と `references/` のファイル）で返す。`name` のフォルダに置くと外部の Agent でも使える |
 
 - 業務 Agent は画面のチャットと同じく、公開中の版で RAG / NL2SQL などを調べて答える。会話（`thread_id`）は画面のチャットの会話と同じで、作った利用者だけが続けられる。

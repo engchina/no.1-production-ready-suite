@@ -74,3 +74,36 @@ def test_every_agent_tool_output_has_a_schema_version() -> None:
     """3 製品の MCP の出力の外枠をそろえる（形の版を記録できる。#3240）。"""
     for name, tool in _tools(CONTRACT).items():
         assert "schema_version" in tool["outputSchema"]["properties"], name
+
+
+def test_run_observation_uses_the_names_of_the_rag_contract() -> None:
+    """観測の根拠は RAG の根拠（RagEvidence）・場所（EvidenceLocator）と同じ名前・型の部分集合、
+    outcome は rag_search の outcome と同じ語彙（#3240。RAG が名前を変えたらここで落ちる）。"""
+    rag = _tools(RAG_CONTRACT)["rag_search"]["outputSchema"]
+    observation = _tools(CONTRACT)["agent_get_run_observation"]["outputSchema"]
+    assert _enum(observation["properties"]["outcome"]) == _enum(rag["properties"]["outcome"])
+    rag_locator = rag["$defs"]["EvidenceLocator"]["properties"]
+    locator = observation["$defs"]["ObservedLocator"]["properties"]
+    assert set(locator) <= set(rag_locator)
+    assert "bbox" not in locator
+    for field, schema in locator.items():
+        assert schema.get("type") == rag_locator[field].get("type"), field
+        assert schema.get("anyOf") == rag_locator[field].get("anyOf"), field
+    rag_evidence = rag["$defs"]["RagEvidence"]["properties"]
+    evidence = observation["$defs"]["ObservedEvidence"]["properties"]
+    shared = {
+        "document_id",
+        "chunk_id",
+        "file_name",
+        "chunk_set_id",
+        "superseded",
+        "retrieval_rank",
+        "answer_use",
+        "text_omitted",
+        "text_length",
+        "truncated",
+    }
+    assert shared <= set(evidence) and shared <= set(rag_evidence)
+    assert _enum(evidence["answer_use"]) == _enum(rag_evidence["answer_use"])
+    # スコアは出さない（内部の算法に依存させない）。
+    assert not {"score", "rerank_score"} & set(evidence)

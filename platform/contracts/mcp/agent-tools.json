@@ -1710,6 +1710,713 @@
       }
     },
     {
+      "name": "agent_get_run_observation",
+      "title": "実行の観測の取得",
+      "description": "実行（run_id）の評価・監査に使う観測（調べた根拠の全件と場所・ツールの呼び出しの経過・利用量）を返す。利用者への回答には agent_get_run を使う。",
+      "inputSchema": {
+        "properties": {
+          "run_id": {
+            "description": "agent_chat の run_id",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "前の応答の next_cursor（続きの根拠を読む）。省略すると先頭から。",
+            "title": "Cursor"
+          },
+          "limit": {
+            "default": 20,
+            "description": "1 回に返す根拠の件数の上限。",
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "AgentGetRunObservationInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "ObservedEvidence": {
+            "description": "Run が調べた RAG の根拠（根拠のツールの evidence と、読み取りのツールで読んだ chunk）。",
+            "properties": {
+              "rank": {
+                "description": "Run の中で初めて現れた順（document_id・chunk_id で重複を除く）。",
+                "minimum": 1,
+                "title": "Rank",
+                "type": "integer"
+              },
+              "tool_call_index": {
+                "description": "初めて返した呼び出しの index。",
+                "minimum": 0,
+                "title": "Tool Call Index",
+                "type": "integer"
+              },
+              "source": {
+                "description": "search=根拠のツール / read=読み取りのツール。",
+                "enum": [
+                  "search",
+                  "read"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "document_id": {
+                "title": "Document Id",
+                "type": "string"
+              },
+              "chunk_id": {
+                "title": "Chunk Id",
+                "type": "string"
+              },
+              "file_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "File Name"
+              },
+              "chunk_set_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Chunk Set Id"
+              },
+              "evidence_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の evidence_type（読み取りの chunk は分からなければ null）。",
+                "title": "Evidence Type"
+              },
+              "origin": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の origin（読み取りの chunk は null）。",
+                "title": "Origin"
+              },
+              "superseded": {
+                "default": false,
+                "title": "Superseded",
+                "type": "boolean"
+              },
+              "retrieval_rank": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の検索の順位（読み取りの chunk・前後の文脈は null）。",
+                "title": "Retrieval Rank"
+              },
+              "cited": {
+                "default": false,
+                "description": "回答で引用した根拠か。",
+                "title": "Cited",
+                "type": "boolean"
+              },
+              "answer_use": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "confirmed",
+                      "reference"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "回答での使われ方（RAG の answer_use と同じ。引用でなければ null）。",
+                "title": "Answer Use"
+              },
+              "locator": {
+                "$ref": "#/$defs/ObservedLocator"
+              },
+              "text": {
+                "default": "",
+                "description": "生成に渡した本文そのもの（切らない。同じ chunk を別の呼び出しが渡した本文は改行でつなぐ）。text_omitted なら空。",
+                "title": "Text",
+                "type": "string"
+              },
+              "text_length": {
+                "description": "生成に渡した本文の文字数。",
+                "minimum": 0,
+                "title": "Text Length",
+                "type": "integer"
+              },
+              "text_omitted": {
+                "default": false,
+                "description": "1 件でページの予算（token の見積もり 20000）を超えるため本文を省いたか（RAG の rag_read_source で読む）。",
+                "title": "Text Omitted",
+                "type": "boolean"
+              },
+              "truncated": {
+                "default": false,
+                "description": "生成に渡した本文が chunk の一部だけだったか（RAG が切った・途中まで読んだ）。",
+                "title": "Truncated",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "rank",
+              "tool_call_index",
+              "source",
+              "document_id",
+              "chunk_id",
+              "text_length"
+            ],
+            "title": "ObservedEvidence",
+            "type": "object"
+          },
+          "ObservedLocator": {
+            "description": "根拠の場所（RAG の根拠の locator と同じ名前。一致はテストで確かめる）。",
+            "properties": {
+              "section_path": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Section Path",
+                "type": "array"
+              },
+              "page_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Page Start"
+              },
+              "page_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Page End"
+              },
+              "page_label_start": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Page Label Start"
+              },
+              "page_label_end": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Page Label End"
+              },
+              "sheet_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Sheet Name"
+              },
+              "row_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Row Start"
+              },
+              "row_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Row End"
+              },
+              "cell_range": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Cell Range"
+              },
+              "element_locator": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Element Locator"
+              }
+            },
+            "title": "ObservedLocator",
+            "type": "object"
+          },
+          "ObservedToolCall": {
+            "description": "ツールの呼び出し（Run の順）。",
+            "properties": {
+              "index": {
+                "description": "Run の中の呼び出しの順（0 始まり）。",
+                "minimum": 0,
+                "title": "Index",
+                "type": "integer"
+              },
+              "call_id": {
+                "description": "呼び出しの ID（gen_ai.tool.call.id）。",
+                "title": "Call Id",
+                "type": "string"
+              },
+              "name": {
+                "description": "ツールの名前（<接続>__<ツール>。tools_used と同じ）。",
+                "title": "Name",
+                "type": "string"
+              },
+              "status": {
+                "description": "approval_skipped=承認が要るため呼ばなかった。ほかは呼び出しの状態。",
+                "enum": [
+                  "pending",
+                  "running",
+                  "waiting_approval",
+                  "completed",
+                  "failed",
+                  "cancelled",
+                  "approval_skipped"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "error_code": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "失敗の分類（error.type）。",
+                "title": "Error Code"
+              },
+              "started_at": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Started At"
+              },
+              "completed_at": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Completed At"
+              },
+              "evidence_count": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の根拠・読み取りのツールが返した根拠の数（今の権限で見られない根拠を除く）。ほかのツールは null。",
+                "title": "Evidence Count"
+              },
+              "include_superseded": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の根拠のツールで旧版も検索したか。ほかのツールは null。",
+                "title": "Include Superseded"
+              },
+              "job_status": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "NL2SQL の nl2sql_query / nl2sql_get_job の status。",
+                "title": "Job Status"
+              },
+              "row_count": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "NL2SQL の returned_count。",
+                "title": "Row Count"
+              },
+              "rows_truncated": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "NL2SQL の truncated。",
+                "title": "Rows Truncated"
+              }
+            },
+            "required": [
+              "index",
+              "call_id",
+              "name",
+              "status"
+            ],
+            "title": "ObservedToolCall",
+            "type": "object"
+          },
+          "ObservedUsage": {
+            "description": "モデルの利用量（承認の後の再開を含む累計。名前は OpenTelemetry の gen_ai.usage.*）。",
+            "properties": {
+              "model": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "モデルの ID（gen_ai.request.model）。",
+                "title": "Model"
+              },
+              "requests": {
+                "default": 0,
+                "description": "モデルの呼び出しの回数。",
+                "minimum": 0,
+                "title": "Requests",
+                "type": "integer"
+              },
+              "input_tokens": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Input Tokens",
+                "type": "integer"
+              },
+              "output_tokens": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Output Tokens",
+                "type": "integer"
+              }
+            },
+            "title": "ObservedUsage",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "schema_version": {
+            "default": 1,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "agent_id": {
+            "description": "業務 Agent の ID（gen_ai.agent.id）。",
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "会話の ID（gen_ai.conversation.id）。",
+            "title": "Thread Id"
+          },
+          "agent_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Run に使った業務 Agent の公開の版（下書きの実行は null）。",
+            "title": "Agent Version"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Run の trace id（W3C Trace Context。始まっていなければ null）。",
+            "title": "Trace Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "answered",
+                  "conditional",
+                  "needs_clarification",
+                  "needs_environment_data",
+                  "needs_human",
+                  "insufficient_evidence"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "agent_get_run の outcome と同じ。completed でなければ null。",
+            "title": "Outcome"
+          },
+          "validation_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "completed",
+                  "skipped",
+                  "unvalidated"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "回答の最終の検証の状態（無ければ null）。",
+            "title": "Validation Status"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "終わっていなければ null。",
+            "title": "Finished At"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ObservedUsage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tool_calls": {
+            "description": "ツールの呼び出し（Run の順。tool_call_total 件まで）。",
+            "items": {
+              "$ref": "#/$defs/ObservedToolCall"
+            },
+            "title": "Tool Calls",
+            "type": "array"
+          },
+          "tool_call_total": {
+            "default": 0,
+            "description": "ツールの呼び出しの全件の数。",
+            "minimum": 0,
+            "title": "Tool Call Total",
+            "type": "integer"
+          },
+          "evidence": {
+            "description": "cursor からの根拠（rank の順。limit 件と、本文の合計の予算 20000 まで）。",
+            "items": {
+              "$ref": "#/$defs/ObservedEvidence"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "evidence_total": {
+            "default": 0,
+            "description": "今の権限で見られる根拠の全件の数。",
+            "minimum": 0,
+            "title": "Evidence Total",
+            "type": "integer"
+          },
+          "withheld_evidence_count": {
+            "default": 0,
+            "description": "今の権限で見られないため除いた根拠の数。",
+            "minimum": 0,
+            "title": "Withheld Evidence Count",
+            "type": "integer"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "続きの根拠があれば、次の呼び出しの cursor。",
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "run_id",
+          "agent_id",
+          "status",
+          "created_at"
+        ],
+        "title": "RunObservation",
+        "type": "object"
+      }
+    },
+    {
       "name": "agent_list",
       "title": "業務 Agent の一覧",
       "description": "使える業務 Agent（ID・名前・説明・使うスキル）の一覧を返す。質問の内容に合う業務 Agent を選ぶのに使う。",

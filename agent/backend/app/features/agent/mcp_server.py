@@ -11,8 +11,10 @@
   キーでも他の利用者の会話・Run には 403（`OTHERS_CONTENT_FORBIDDEN`。#3244）。
 - ツール: `agent_list`（使える業務 Agent）・`agent_chat`（質問。`thread_id` で会話を続ける）・
   `agent_get_run`（状態・回答・根拠・回答前の確認）・`agent_answer_confirmation`（回答前の確認に
-  答える / 確認せずに回答）・`agent_cancel_run`（実行の取消。冪等。#3240）。回答を待つのは
-  `wait_seconds` まで。終わらなければ途中の状態を返し、`agent_get_run` で続きを読む。
+  答える / 確認せずに回答）・`agent_cancel_run`（実行の取消。冪等。#3240）・
+  `agent_get_run_observation`（評価・監査の観測。根拠の全件・ツールの呼び出しの経過・利用量。
+  #3240）。回答を待つのは `wait_seconds` まで。終わらなければ途中の状態を返し、`agent_get_run` で
+  続きを読む。
 - MCP から作った Run は無人の実行と同じく、承認の要るツールを呼ばない（#1813 と同じ扱い。
   `runtime.is_mcp_run`）。承認する人が画面にいるとは限らないため。
 - キーごとに直近 24 時間に作れる Run の数（`PLATFORM_API_KEY_RUNS_PER_DAY`）。超えたら 429 相当の
@@ -26,6 +28,8 @@ Agent は MCP を呼ぶ側でもある（RAG / NL2SQL / 外部 MCP）。ここ�
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -33,14 +37,23 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from pr_backend_core.mcp import McpServer, McpTool, McpToolError, mcp_http_response
 from pr_backend_core.source_text import (
     SOURCE_TEXT_ITEM_MAX_TOKENS as PLATFORM_SOURCE_TEXT_ITEM_MAX_TOKENS,
 )
 from pr_backend_core.source_text import (
+    SOURCE_TEXT_PAGE_BUDGET_TOKENS,
+    SOURCE_TEXT_PAGE_LIMIT_DEFAULT,
+    SOURCE_TEXT_PAGE_LIMIT_MAX,
+    SourceText,
+    SourceTextItem,
+    fit_source_texts,
+    page_source_texts,
+)
+from pr_backend_core.source_text import (
     SOURCE_TEXT_RESPONSE_BUDGET_TOKENS as PLATFORM_SOURCE_TEXT_RESPONSE_BUDGET_TOKENS,
 )
-from pr_backend_core.source_text import SourceText, SourceTextItem, fit_source_texts
 from pr_backend_core.token_estimate import estimate_input_tokens
 from pr_system_settings.auth.visibility import (
     OTHERS_CONTENT_FORBIDDEN_CODE,
@@ -64,7 +77,17 @@ from app.features.agent.confirmation import (
     ConfirmationAnswerError,
     ConfirmationRequest,
 )
-from app.features.agent.run_facts import run_answer_outcome
+from app.features.agent.evidence_access import unreadable_documents
+from app.features.agent.run_facts import run_answer_outcome, run_finished_at
+from app.features.agent.run_observation import (
+    ObservedEvidenceItem,
+    ObservedToolStatus,
+    ValidationStatus,
+    answer_citations,
+    observe_run,
+    run_agent_version,
+    validation_status,
+)
 from app.features.agent.runtime import (
     AGENT_UNPUBLISHED_MESSAGE,
     CANCEL_VIA_KEY,
@@ -112,6 +135,8 @@ RUN_OUTPUT_SCHEMA_VERSION = 4
 LIST_OUTPUT_SCHEMA_VERSION = 1
 SKILL_EXPORT_SCHEMA_VERSION = 1
 CANCEL_OUTPUT_SCHEMA_VERSION = 1
+# agent_get_run_observation の出力の形の版（#3240）。
+OBSERVATION_SCHEMA_VERSION = 1
 # 根拠の件数の上限。本文は件ごとの全文を応答の予算に入れる（3 製品で共通の規則。値と決め方は
 # pr_backend_core.source_text。#3321）。
 _MAX_SOURCES = 10
@@ -144,6 +169,7 @@ CONFIRMATION_NOT_FOUND_CODE = "CONFIRMATION_NOT_FOUND"
 CONFIRMATION_CLOSED_CODE = "CONFIRMATION_CLOSED"
 CONFIRMATION_ANSWER_INVALID_CODE = "CONFIRMATION_ANSWER_INVALID"
 SKILL_NOT_FOUND_CODE = "SKILL_NOT_FOUND"
+INVALID_CURSOR_CODE = "INVALID_CURSOR"
 
 _OUT_OF_SCOPE_MESSAGE = (
     "この API キーではこの業務 Agent を使えません。キーの「使える業務 Agent」を確認してください。"
@@ -474,7 +500,170 @@ class RunOutput(BaseModel):
     )
 
 
-# ---- 判定 ---------------------------------------------------------------------------
+class AgentGetRunObservationInput(BaseModel):
+    run_id: str = Field(min_length=1, max_length=200, description="agent_chat の run_id")
+    cursor: str | None = Field(
+        default=None,
+        max_length=500,
+        description="前の応答の next_cursor（続きの根拠を読む）。省略すると先頭から。",
+    )
+    limit: int = Field(
+        default=SOURCE_TEXT_PAGE_LIMIT_DEFAULT,
+        ge=1,
+        le=SOURCE_TEXT_PAGE_LIMIT_MAX,
+        description="1 回に返す根拠の件数の上限。",
+    )
+
+
+class ObservedLocator(BaseModel):
+    """根拠の場所（RAG の根拠の locator と同じ名前。一致はテストで確かめる）。"""
+
+    section_path: list[str] = Field(default_factory=list)
+    page_start: int | None = None
+    page_end: int | None = None
+    page_label_start: str | None = None
+    page_label_end: str | None = None
+    sheet_name: str | None = None
+    row_start: int | None = None
+    row_end: int | None = None
+    cell_range: str | None = None
+    element_locator: str | None = None
+
+
+class ObservedUsage(BaseModel):
+    """モデルの利用量（承認の後の再開を含む累計。名前は OpenTelemetry の gen_ai.usage.*）。"""
+
+    model: str | None = Field(default=None, description="モデルの ID（gen_ai.request.model）。")
+    requests: int = Field(default=0, ge=0, description="モデルの呼び出しの回数。")
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+
+
+class ObservedToolCall(BaseModel):
+    """ツールの呼び出し（Run の順）。"""
+
+    index: int = Field(ge=0, description="Run の中の呼び出しの順（0 始まり）。")
+    call_id: str = Field(description="呼び出しの ID（gen_ai.tool.call.id）。")
+    name: str = Field(description="ツールの名前（<接続>__<ツール>。tools_used と同じ）。")
+    status: ObservedToolStatus = Field(
+        description="approval_skipped=承認が要るため呼ばなかった。ほかは呼び出しの状態。"
+    )
+    error_code: str | None = Field(default=None, description="失敗の分類（error.type）。")
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    evidence_count: int | None = Field(
+        default=None,
+        description=(
+            "RAG の根拠・読み取りのツールが返した根拠の数（今の権限で見られない根拠を除く）。"
+            "ほかのツールは null。"
+        ),
+    )
+    include_superseded: bool | None = Field(
+        default=None,
+        description="RAG の根拠のツールで旧版も検索したか。ほかのツールは null。",
+    )
+    job_status: str | None = Field(
+        default=None, description="NL2SQL の nl2sql_query / nl2sql_get_job の status。"
+    )
+    row_count: int | None = Field(default=None, description="NL2SQL の returned_count。")
+    rows_truncated: bool | None = Field(default=None, description="NL2SQL の truncated。")
+
+
+class ObservedEvidence(BaseModel):
+    """Run が調べた RAG の根拠（根拠のツールの evidence と、読み取りのツールで読んだ chunk）。"""
+
+    rank: int = Field(
+        ge=1, description="Run の中で初めて現れた順（document_id・chunk_id で重複を除く）。"
+    )
+    tool_call_index: int = Field(ge=0, description="初めて返した呼び出しの index。")
+    source: Literal["search", "read"] = Field(
+        description="search=根拠のツール / read=読み取りのツール。"
+    )
+    document_id: str
+    chunk_id: str
+    file_name: str | None = None
+    chunk_set_id: str | None = None
+    evidence_type: str | None = Field(
+        default=None, description="RAG の evidence_type（読み取りの chunk は分からなければ null）。"
+    )
+    origin: str | None = Field(
+        default=None, description="RAG の origin（読み取りの chunk は null）。"
+    )
+    superseded: bool = False
+    retrieval_rank: int | None = Field(
+        default=None, description="RAG の検索の順位（読み取りの chunk・前後の文脈は null）。"
+    )
+    cited: bool = Field(default=False, description="回答で引用した根拠か。")
+    answer_use: Literal["confirmed", "reference"] | None = Field(
+        default=None,
+        description="回答での使われ方（RAG の answer_use と同じ。引用でなければ null）。",
+    )
+    locator: ObservedLocator = Field(default_factory=ObservedLocator)
+    text: str = Field(
+        default="",
+        description=(
+            "生成に渡した本文そのもの（切らない。同じ chunk を別の呼び出しが渡した本文は改行で"
+            "つなぐ）。text_omitted なら空。"
+        ),
+    )
+    text_length: int = Field(ge=0, description="生成に渡した本文の文字数。")
+    text_omitted: bool = Field(
+        default=False,
+        description=(
+            f"1 件でページの予算（token の見積もり {SOURCE_TEXT_PAGE_BUDGET_TOKENS}）を超えるため"
+            "本文を省いたか（RAG の rag_read_source で読む）。"
+        ),
+    )
+    truncated: bool = Field(
+        default=False,
+        description="生成に渡した本文が chunk の一部だけだったか（RAG が切った・途中まで読んだ）。",
+    )
+
+
+class RunObservation(BaseModel):
+    schema_version: int = Field(
+        default=OBSERVATION_SCHEMA_VERSION, description="出力の形の版（変わったら上がる）。"
+    )
+    run_id: str
+    agent_id: str = Field(description="業務 Agent の ID（gen_ai.agent.id）。")
+    thread_id: str | None = Field(default=None, description="会話の ID（gen_ai.conversation.id）。")
+    agent_version: int | None = Field(
+        default=None, description="Run に使った業務 Agent の公開の版（下書きの実行は null）。"
+    )
+    trace_id: str | None = Field(
+        default=None, description="Run の trace id（W3C Trace Context。始まっていなければ null）。"
+    )
+    status: str
+    outcome: AnswerOutcomeValue | None = Field(
+        default=None, description="agent_get_run の outcome と同じ。completed でなければ null。"
+    )
+    validation_status: ValidationStatus | None = Field(
+        default=None, description="回答の最終の検証の状態（無ければ null）。"
+    )
+    created_at: datetime
+    finished_at: datetime | None = Field(default=None, description="終わっていなければ null。")
+    usage: ObservedUsage | None = None
+    tool_calls: list[ObservedToolCall] = Field(
+        default_factory=list, description="ツールの呼び出し（Run の順。tool_call_total 件まで）。"
+    )
+    tool_call_total: int = Field(default=0, ge=0, description="ツールの呼び出しの全件の数。")
+    evidence: list[ObservedEvidence] = Field(
+        default_factory=list,
+        description=(
+            "cursor からの根拠（rank の順。limit 件と、本文の合計の予算 "
+            f"{SOURCE_TEXT_PAGE_BUDGET_TOKENS} まで）。"
+        ),
+    )
+    evidence_total: int = Field(default=0, ge=0, description="今の権限で見られる根拠の全件の数。")
+    withheld_evidence_count: int = Field(
+        default=0, ge=0, description="今の権限で見られないため除いた根拠の数。"
+    )
+    next_cursor: str | None = Field(
+        default=None, description="続きの根拠があれば、次の呼び出しの cursor。"
+    )
+
+
+# ---- 判定---------------------------------------------------------------------------
 
 
 def _principal(request: Request) -> Principal:
@@ -920,6 +1109,187 @@ def _output_tokens(output: BaseModel) -> int:
     return estimate_input_tokens(output.model_dump_json())
 
 
+_INVALID_CURSOR_MESSAGE = (
+    "cursor が正しくありません。同じ run_id の前の応答の next_cursor をそのまま渡すか、"
+    "省略して先頭から読んでください。"
+)
+
+
+def _encode_cursor(run_id: str, offset: int) -> str:
+    """観測の続きの位置（Run の ID と、根拠の全件の中のずれ）。中身は不透明として扱わせる。"""
+    raw = json.dumps({"run_id": run_id, "offset": offset}, separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _cursor_offset(cursor: str | None, run_id: str, total: int) -> int:
+    """cursor のずれ（別の Run の cursor・壊れた cursor は INVALID_CURSOR）。"""
+    if cursor is None:
+        return 0
+    try:
+        decoded = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+    except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
+        raise McpToolError(INVALID_CURSOR_CODE, _INVALID_CURSOR_MESSAGE, status=400) from exc
+    offset = decoded.get("offset") if isinstance(decoded, dict) else None
+    if (
+        not isinstance(decoded, dict)
+        or decoded.get("run_id") != run_id
+        or not isinstance(offset, int)
+        or isinstance(offset, bool)
+        or not 0 <= offset <= total
+    ):
+        raise McpToolError(INVALID_CURSOR_CODE, _INVALID_CURSOR_MESSAGE, status=400)
+    return offset
+
+
+async def _unreadable_for_viewer(
+    request: Request, run: RunState, document_ids: set[str]
+) -> frozenset[str]:
+    """見る人（キーの持ち主）が今見られない RAG の文書（#3252 と同じ確かめ。fail closed）。"""
+    if not document_ids:
+        return frozenset()
+    viewer = agent_api._run_creator_user_uuid(request)
+    if not viewer:
+        return frozenset(document_ids)
+    return await run_in_threadpool(unreadable_documents, run, viewer, document_ids)
+
+
+def _observed_evidence(
+    item: ObservedEvidenceItem, cited: Mapping[tuple[str, str], str | None]
+) -> ObservedEvidence:
+    """根拠 1 件（本文は空。ページに入れるときに埋める）。"""
+    key = (item.document_id, item.chunk_id)
+    use = cited.get(key)
+    return ObservedEvidence(
+        rank=item.rank,
+        tool_call_index=item.tool_call_index,
+        source=item.source,
+        document_id=item.document_id,
+        chunk_id=item.chunk_id,
+        file_name=item.file_name,
+        chunk_set_id=item.chunk_set_id,
+        evidence_type=item.evidence_type,
+        origin=item.origin,
+        superseded=item.superseded,
+        retrieval_rank=item.retrieval_rank,
+        cited=key in cited,
+        answer_use=cast(Literal["confirmed", "reference"], use) if use is not None else None,
+        locator=ObservedLocator.model_validate(item.locator),
+        text_length=len(item.text),
+        truncated=item.truncated,
+    )
+
+
+async def run_observation(
+    request: Request, run: RunState, *, cursor: str | None, limit: int
+) -> RunObservation:
+    """Run の観測（評価・監査）。根拠は見る人の今の権限で毎回確かめ直す（#3252。OWASP API1）。
+
+    観測は Run が保存した記録だけから作る（`run_observation.observe_run`）。根拠の本文は生成に
+    渡した本文そのもので、件数（`limit`）と 1 ページの本文の合計の予算でページに分ける（3 製品で
+    共通の規則 `page_source_texts`。#3321）。cursor のずれは見られない根拠も含めた全件の中の位置に
+    するので、ページの間で権限が変わっても根拠を飛ばさない。
+    """
+    data = observe_run(run)
+    offset = _cursor_offset(cursor, run.id, len(data.evidence))
+    unreadable = await _unreadable_for_viewer(
+        request, run, {item.document_id for item in data.evidence}
+    )
+    loaded = {item.id: item for item in await agent_api._evidence_artifacts(run)}
+    hydrated = run.model_copy(
+        update={"artifacts": [loaded.get(item.id, item) for item in run.artifacts]}
+    )
+    cited = answer_citations(
+        [
+            item
+            for item in _answer_evidence(hydrated).get("items") or []
+            if isinstance(item, Mapping)
+        ]
+    )
+    visible = [
+        (position, item)
+        for position, item in enumerate(data.evidence)
+        if item.document_id not in unreadable
+    ]
+    usage = run.usage
+    output = RunObservation(
+        run_id=run.id,
+        agent_id=run.agent_id,
+        thread_id=run.thread_id,
+        agent_version=run_agent_version(run),
+        trace_id=run.trace_id,
+        status=str(run.status.value),
+        outcome=_outcome(run),
+        validation_status=validation_status(_answer_validation(hydrated)),
+        created_at=run.created_at,
+        finished_at=run_finished_at(run),
+        usage=(
+            ObservedUsage(
+                model=usage.model or None,
+                requests=usage.requests,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+            )
+            if usage is not None
+            else None
+        ),
+        tool_calls=[
+            ObservedToolCall(
+                index=call.index,
+                call_id=call.call_id,
+                name=call.name,
+                status=call.status,
+                error_code=call.error_code,
+                started_at=call.started_at,
+                completed_at=call.completed_at,
+                evidence_count=(
+                    sum(1 for document in call.evidence_documents if document not in unreadable)
+                    if call.evidence_documents is not None
+                    else None
+                ),
+                include_superseded=call.include_superseded,
+                job_status=call.job_status,
+                row_count=call.row_count,
+                rows_truncated=call.rows_truncated,
+            )
+            for call in data.tool_calls
+        ],
+        tool_call_total=data.tool_call_total,
+        evidence_total=len(visible),
+        withheld_evidence_count=len(data.evidence) - len(visible),
+    )
+    # 本文の外の項目（応答の外枠・次の cursor・根拠の本文以外）は予算から先に引く。
+    reserved = _output_tokens(
+        output.model_copy(update={"next_cursor": _encode_cursor(run.id, len(data.evidence))})
+    )
+    shells = [_observed_evidence(item, cited) for _position, item in visible]
+    start = next(
+        (index for index, (position, _item) in enumerate(visible) if position >= offset),
+        len(visible),
+    )
+    page = page_source_texts(
+        [
+            SourceTextItem(
+                text=item.text,
+                fixed_tokens=_output_tokens(shell) + _json_overhead_tokens(item.text),
+            )
+            for (_position, item), shell in zip(visible, shells, strict=True)
+        ],
+        offset=start,
+        limit=limit,
+        budget_tokens=max(1, SOURCE_TEXT_PAGE_BUDGET_TOKENS - reserved),
+    )
+    evidence = [
+        shells[index].model_copy(update={"text": piece.text, "text_omitted": piece.text_omitted})
+        for index, piece in page.items
+    ]
+    next_cursor = (
+        _encode_cursor(run.id, visible[page.next_offset][0])
+        if page.next_offset is not None
+        else None
+    )
+    return output.model_copy(update={"evidence": evidence, "next_cursor": next_cursor})
+
+
 _CANCEL_MESSAGES: dict[str, str] = {
     "cancelled": "実行を取り消しました。",
     "already_cancelled": "実行はすでに取り消されています。",
@@ -1040,6 +1410,12 @@ def build_agent_mcp_server(request: Request) -> McpServer:
             include_notice=called_with_api_key(request),
             withheld_evidence_count=withheld,
         )
+
+    async def get_run_observation(arguments: AgentGetRunObservationInput) -> RunObservation:
+        # 読める Run は agent_get_run と同じ（実行した利用者・会話の持ち主・system_admin。キーの
+        # 業務 Agent の範囲。ほかの利用者の Run は「無い」。#3244）。ID を知っていても読めない。
+        run = _readable_run(request, arguments.run_id)
+        return await run_observation(request, run, cursor=arguments.cursor, limit=arguments.limit)
 
     async def answer_confirmation(arguments: AgentAnswerConfirmationInput) -> RunOutput:
         caller = _principal(request)
@@ -1201,6 +1577,18 @@ def build_agent_mcp_server(request: Request) -> McpServer:
                 handler=get_run,
                 permissions=(_READ,),
                 output_model=RunOutput,
+            ),
+            McpTool(
+                name="agent_get_run_observation",
+                title="実行の観測の取得",
+                description=(
+                    "実行（run_id）の評価・監査に使う観測（調べた根拠の全件と場所・ツールの呼び出しの"
+                    "経過・利用量）を返す。利用者への回答には agent_get_run を使う。"
+                ),
+                input_model=AgentGetRunObservationInput,
+                handler=get_run_observation,
+                permissions=(_READ,),
+                output_model=RunObservation,
             ),
             McpTool(
                 name="agent_answer_confirmation",
