@@ -1,4 +1,5 @@
 import {
+  displayDateTimeFormat,
   Button,
   Card,
   CardContent,
@@ -1479,7 +1480,8 @@ function dsnRequiredMessageKey(
     : "settings.database.validation.serviceDsnRequired";
 }
 
-const dateTimeFormat = new Intl.DateTimeFormat("ja-JP", {
+// システムの設定の時間帯で書く（#3265）。
+const dateTimeFormat = displayDateTimeFormat({
   month: "2-digit",
   day: "2-digit",
   hour: "2-digit",

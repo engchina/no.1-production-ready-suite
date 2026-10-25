@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef,
 import { useLocation, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
-import { Banner, useListDetailSplit, useUrlSelection, type UrlSelection } from "@production-ready/ui";
+import { Banner, useListDetailSplit, useUrlSelection, type UrlSelection, DISPLAY_DATE_TIME_SECONDS, formatDisplayDateTime } from "@production-ready/ui";
 import { useAuth } from "@/features/security/AuthProvider";
 import { t } from "@/lib/i18n";
 import { draftKey, readDraft, writeDraft } from "@/lib/workspace-drafts";
@@ -195,7 +195,7 @@ export function WorkspaceResultNotice({ result, inputSignature, finishedAt, rest
   const changed = snapshot.inputSignature !== inputSignature;
   if (!restored && previous !== result && !changed) return null;
   return <Banner severity="info" title={t("workspace.previousResult")}>
-    {t("workspace.executedAt", { date: new Date(finishedAt || snapshot.at).toLocaleString("ja-JP") })}
+    {t("workspace.executedAt", { date: formatDisplayDateTime(finishedAt || snapshot.at, DISPLAY_DATE_TIME_SECONDS) })}
     {changed ? ` — ${t("workspace.inputChanged")}` : ""}
   </Banner>;
 }

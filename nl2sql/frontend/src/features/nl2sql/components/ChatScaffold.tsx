@@ -24,6 +24,7 @@ import {
   type ChatProgressStep,
   type ChatAttachmentItem,
   type OptimisticChatMessage,
+  displayDateTimeFormat,
 } from "@production-ready/ui";
 
 import { isTransportError } from "@/lib/api";
@@ -51,8 +52,8 @@ export interface Nl2SqlChatHistory {
   historyDays?: number;
 }
 
-const historyDateFormatter = new Intl.DateTimeFormat("ja-JP", {
-  timeZone: "Asia/Tokyo",
+// システムの設定の時間帯で書く（#3265）。
+const historyDateFormatter = displayDateTimeFormat({
   month: "numeric",
   day: "numeric",
   hour: "2-digit",

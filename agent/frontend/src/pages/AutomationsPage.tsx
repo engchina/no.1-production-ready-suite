@@ -36,6 +36,7 @@ import {
   type StatusVariant,
   ApiErrorBanner,
   apiErrorMessage,
+  displayTimeZone,
 } from "@production-ready/ui";
 
 import { useAuth } from "@/components/security/AuthProvider";
@@ -61,7 +62,7 @@ import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
 import { useCapabilities } from "@/lib/permissions";
 import { canOpenRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
-import { browserTimezone, isValidTimezone } from "@/lib/timezones";
+import { isValidTimezone } from "@/lib/timezones";
 import { runStatusView } from "@/lib/status-labels";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
@@ -72,7 +73,7 @@ const FREQUENCIES: readonly ScheduleFrequency[] = ["daily", "weekdays", "weekly"
 const WEEKDAYS = [0, 1, 2, 3, 4, 5, 6];
 
 function defaultSchedule(): AutomationSchedule {
-  return { frequency: "daily", time: "09:00", weekdays: [0], minute: 0, timezone: browserTimezone() };
+  return { frequency: "daily", time: "09:00", weekdays: [0], minute: 0, timezone: displayTimeZone() };
 }
 
 export function describeSchedule(schedule: AutomationSchedule): string {

@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 
 from pr_backend_core import CursorPage
+from pr_system_settings.auth.router import DisplayTimezoneData
 from pr_system_settings.auth.router import LoginRequest as LoginRequest
 from pr_system_settings.auth.router import PasswordChangeRequest as PasswordChangeRequest
 from pr_system_settings.auth.router import assigned_role_data as assigned_role_data
@@ -645,7 +646,7 @@ class DeepSecDataEntitlementApplyData(BaseModel):
     applied_count: int = Field(ge=0)
 
 
-class CurrentUserData(BaseModel):
+class CurrentUserData(DisplayTimezoneData):
     user_uuid: str
     login_user_id: str
     display_name: str

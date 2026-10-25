@@ -46,6 +46,7 @@ import {
   type ChatAttachmentItem,
   DEFAULT_PAGE_SIZE,
   type ClarificationBusyAction,
+  formatDisplayDateTime,
 } from "@production-ready/ui";
 
 import {
@@ -1352,8 +1353,5 @@ function isThreadGone(error: unknown): boolean {
 }
 
 function formatTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return formatDisplayDateTime(value, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }, value);
 }

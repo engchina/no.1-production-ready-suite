@@ -26,6 +26,7 @@ import {
   FieldLegend,
   SelectField,
   TextField,
+  formatDisplayDateTime,
 } from "@production-ready/ui";
 import { useEffect, useMemo, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -1577,11 +1578,7 @@ function formatPercent(value: number) {
 }
 
 function formatDate(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? value : new Intl.DateTimeFormat("ja-JP", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
+  return formatDisplayDateTime(value, { dateStyle: "medium", timeStyle: "short" }, value);
 }
 
 function validationMessage(

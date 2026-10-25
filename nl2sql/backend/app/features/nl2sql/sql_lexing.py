@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 
 _Q_CLOSERS = {"[": "]", "(": ")", "{": "}", "<": ">"}
+# DB のサーバーの時刻を返す関数と、session の時間帯の時刻を返す同じ型の関数（#3265）。
+_SESSION_CURRENT_DATETIME = {"SYSDATE": "CURRENT_DATE", "SYSTIMESTAMP": "CURRENT_TIMESTAMP"}
+# 識別子の一部（`T.SYSDATE`・`SYSDATE_X`・`X@LINK`）は関数ではないため置き換えない。
+_DB_CLOCK_FUNCTION = re.compile(r"(?<![\w$#.@])(SYSDATE|SYSTIMESTAMP)(?![\w$#@])", re.IGNORECASE)
 
 
 def _tokens(sql: str) -> Iterator[tuple[str, str]]:
@@ -84,3 +89,34 @@ def prepare_oracle_query(sql: str, *, for_parser: bool = True) -> str:
             text = ("N" if kind == "nq" else "") + "'" + value + "'"
         result.append(text)
     return "".join(result).strip()
+
+
+def use_session_current_datetime(sql: str) -> str:
+    """`SYSDATE` / `SYSTIMESTAMP` を `CURRENT_DATE` / `CURRENT_TIMESTAMP` に置き換える（#3265）。
+
+    ADB の `SYSDATE` / `SYSTIMESTAMP` は DB のサーバーの時刻（UTC）を返し、session の時間帯に
+    従わない。置き換えた関数は同じ型・同じ瞬間で、業務データの SELECT の session の時間帯
+    （共通の設定の時間帯。`OracleNl2SqlAdapter.execute_select`）の暦の「今」を返す。
+    生成した SQL に使う（利用者が自分で書いた SQL は変えない）。引用・コメントの中は変えない。
+    """
+    parts: list[str] = []
+    code: list[str] = []
+
+    def flush() -> None:
+        if code:
+            parts.append(
+                _DB_CLOCK_FUNCTION.sub(
+                    lambda match: _SESSION_CURRENT_DATETIME[match.group(1).upper()],
+                    "".join(code),
+                )
+            )
+            code.clear()
+
+    for kind, text in _tokens(sql):
+        if kind == "code":
+            code.append(text)
+            continue
+        flush()
+        parts.append(text)
+    flush()
+    return "".join(parts)

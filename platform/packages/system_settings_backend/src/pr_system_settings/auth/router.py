@@ -14,6 +14,7 @@ from typing import Annotated, Any, Protocol
 
 from fastapi import APIRouter, Header, Query, Request, Response
 from pr_backend_core import ApiResponse
+from pr_backend_core.timezones import DEFAULT_TIMEZONE, configured_timezone_name
 from pydantic import BaseModel, Field
 
 from ..users_roles import (
@@ -52,6 +53,18 @@ class LoginRequest(BaseModel):
 class PasswordChangeRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=256)
     new_password: str = Field(min_length=1, max_length=256)
+
+
+class DisplayTimezoneData(BaseModel):
+    """`/auth/me` とログインの応答に足す、システムの時間帯（#3265）。
+
+    製品の `current_user_model` はこれを継承する。値は共通の設定 `PLATFORM_TIMEZONE`
+    （`pr_backend_core.timezones`）で、router が応答のたびに入れる。画面は日時をこの時間帯で
+    表示する（ブラウザの時間帯に従わない）。認証の確認の応答に載せるため、画面は日時を出す前に
+    追加の要求なしで時間帯を知る。
+    """
+
+    timezone: str = DEFAULT_TIMEZONE
 
 
 class AuthCookieSettings(Protocol):
@@ -149,6 +162,7 @@ def build_auth_router(
     """共通認証の API を作る。
 
     - `current_user_data(principal, debug_mode)`: `/auth/me` などの応答（製品が項目を足せる）。
+      `current_user_model` は `DisplayTimezoneData` を継承し、`timezone` は router が入れる。
     - `role_data(role)`: ロールの応答（製品が権限などを足した RoleData）。
     - `api_keys`: 外部の MCP クライアント向けの API キーの API（`/account/api-keys*`・
       `/security/api-keys*`）を足す
@@ -156,6 +170,8 @@ def build_auth_router(
     - `public_base_url()`: 自分のキーの一覧が返す公開の基底の URL
       （`PLATFORM_PUBLIC_BASE_URL`。#1870）。
     """
+    if not issubclass(current_user_model, DisplayTimezoneData):
+        raise TypeError("current_user_model は DisplayTimezoneData を継承してください。")
     router = APIRouter(tags=tags or ["security"])
     current_user_response: Any = ApiResponse[current_user_model]  # type: ignore[valid-type]
     role_response: Any = ApiResponse[role_model]  # type: ignore[valid-type]
@@ -178,6 +194,12 @@ def build_auth_router(
         response.delete_cookie(settings.app_auth_session_cookie_name, path="/")
         response.delete_cookie(settings.app_auth_csrf_cookie_name, path="/")
 
+    def user_payload(principal: Principal, debug_mode: bool) -> BaseModel:
+        # システムの時間帯は利用者ではなく設定から入れる（製品の current_user_data は扱わない）。
+        return current_user_data(principal, debug_mode).model_copy(
+            update={"timezone": configured_timezone_name(get_settings())}
+        )
+
     def roles_by_id() -> dict[str, RoleRecord]:
         return {role.role_id: role for role in get_service().list_roles(include_archived=True)}
 
@@ -187,7 +209,7 @@ def build_auth_router(
     @router.post("/auth/login", response_model=current_user_response)
     def login(payload: LoginRequest, request: Request, response: Response) -> Any:
         if get_settings().local_debug_enabled:
-            return ApiResponse(data=current_user_data(local_debug_principal(), True))
+            return ApiResponse(data=user_payload(local_debug_principal(), True))
         request_id, client_ip = request_context(request)
         service = get_service()
         principal, session_token, csrf_token = service.login(
@@ -204,12 +226,12 @@ def build_auth_router(
         set_auth_cookie(
             response, name=settings.app_auth_csrf_cookie_name, value=csrf_token, httponly=False
         )
-        return ApiResponse(data=current_user_data(principal, False))
+        return ApiResponse(data=user_payload(principal, False))
 
     @router.get("/auth/me", response_model=current_user_response)
     def me(request: Request) -> Any:
         return ApiResponse(
-            data=current_user_data(current_principal(request), get_settings().local_debug_enabled)
+            data=user_payload(current_principal(request), get_settings().local_debug_enabled)
         )
 
     @router.post("/auth/logout", response_model=ApiResponse[dict[str, bool]])

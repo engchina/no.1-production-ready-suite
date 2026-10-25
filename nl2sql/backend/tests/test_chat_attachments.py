@@ -279,7 +279,8 @@ def test_execute_select_binds_rows_as_clob() -> None:
             return _Cursor()
 
     adapter = OracleNl2SqlAdapter.__new__(OracleNl2SqlAdapter)
-    adapter.settings = get_settings()
+    # 時間帯の ALTER SESSION（#3265）を除き、bind の渡し方だけを見る。
+    adapter.settings = get_settings().model_copy(update={"timezone": "UTC"})
     adapter.user_data_connection = lambda read_only=True: _Connection()  # type: ignore[method-assign,assignment,misc]
     adapter._load_oracledb = lambda: SimpleNamespace(DB_TYPE_CLOB="CLOB")  # type: ignore[method-assign]
     adapter.execute_select("WITH ATTACHMENT_1 ... SELECT 1", 10, binds={"attachment_1": "[]"})

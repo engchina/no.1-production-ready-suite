@@ -19,6 +19,8 @@ import {
   ListSkeleton,
   TextareaField,
   FormGrid,
+  DISPLAY_TIME_SECONDS,
+  formatDisplayDateTime,
 } from "@production-ready/ui";
 import {
   useCallback,
@@ -131,10 +133,7 @@ function formatElapsed(startIso: string | null | undefined, endIso: string | nul
 }
 
 function formatEventTime(iso: string): string {
-  const parsed = new Date(iso);
-  return Number.isNaN(parsed.getTime())
-    ? ""
-    : parsed.toLocaleTimeString("ja-JP", { hour12: false });
+  return formatDisplayDateTime(iso, DISPLAY_TIME_SECONDS, "");
 }
 
 type BuildEvent = NonNullable<OntologyBuildJob["events"]>[number];
