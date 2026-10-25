@@ -425,6 +425,44 @@ test("イベントの記録は 1 行ずつ並び、多いときは内側だけ�
   expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
 });
 
+test("ツールの開始のイベントはツールに分け、回答前の確認のツールは「回答前の確認」と出す", { tag: "@responsive" }, async ({
+  page,
+  mockApi,
+}) => {
+  // #3352: `step.started` は「不明」ではなく「開始」、回答前の確認のツールは内部の名前を出さない。
+  seedRun(mockApi);
+  const run = mockApi.state.runs[mockApi.state.runs.length - 1] as unknown as { events: unknown[] };
+  run.events = [
+    {
+      id: "event-ask-start",
+      type: "step.started",
+      message: "ツール ask_user_confirmation を開始しました。",
+      created_at: MOCK_NOW,
+      payload: { step_id: "step-ask", tool_name: "ask_user_confirmation" },
+    },
+    {
+      id: "event-rag-start",
+      type: "step.started",
+      message: "ツール rag__rag_search を開始しました。",
+      created_at: MOCK_NOW,
+      payload: { step_id: "step-rag", tool_name: "rag__rag_search" },
+    },
+    { id: "event-status", type: "run.status_changed", message: "状態が変わりました", created_at: MOCK_NOW, payload: {} },
+  ];
+  await page.goto("/runs?id=run-layout");
+  await page.getByTestId("run-timeline-section-summary").click();
+  await page.getByTestId("run-process-details").click();
+  const log = page.getByTestId("run-event-log");
+  const ask = page.getByTestId("run-event-log-event-event-ask-start");
+  await expect(ask).toContainText("回答前の確認");
+  await expect(ask).toContainText("開始");
+  await expect(page.getByTestId("run-event-log-event-event-rag-start")).toContainText("rag__rag_search");
+  await expect(log).not.toContainText("不明");
+  await page.getByTestId("run-event-log-filter").getByRole("button", { name: /^ツール/ }).click();
+  await expect(log.locator("[data-run-event]")).toHaveCount(2);
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+});
+
 test("作成は独立画面で入力を確認し、成功した実行の詳細へ移る", { tag: "@responsive" }, async ({ page, mockApi }) => {
   await page.goto("/runs");
   await page.getByRole("button", { name: "実行を作成", exact: true }).click();

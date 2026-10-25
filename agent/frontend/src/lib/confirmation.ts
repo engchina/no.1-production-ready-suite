@@ -19,6 +19,9 @@ import type {
  * 読めない記録は無いものとして扱う（古い Run・壊れた記録で画面を止めない）。
  */
 
+/** Agent 自身の回答前の確認のツールの名前（backend の `CONFIRMATION_TOOL`）。イベントの記録の名前に使う。 */
+export const CONFIRMATION_TOOL = "ask_user_confirmation";
+
 function records<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value.filter((item) => item && typeof item === "object") as T[]) : [];
 }

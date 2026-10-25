@@ -443,11 +443,17 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     `waiting_confirmation`（確認待ち）にして SDK の状態を保存する（承認待ちと同じ仕組み。承認と同時に中断したら承認待ち）。答え・
     スキップで `queued` に戻し、同じ Run を再開する（確認のツールは実行され、結果が利用者の答え `status=answered`（`selected`・
     `other_text`）か `status=skipped`（前提を示して答える指示））。処理の段階は `confirmation_wait`（kind `confirmation`）。
+    **確認は Run の状態を変える中断**（#3352。LangGraph の `interrupt` と同じ考え方）: 利用者に聞ける確認は、どの経路（差し戻しの
+    後を含む）でも Run を確認待ちにし、問いを画面と MCP（`agent_chat` の `confirmation`）に出す。中断の判断はツールを実行する前に
+    応答ごとに 1 回決め（SDK の `on_llm_end`。`_ToolRecorder.hold_for_confirmation`）、確認で中断する応答のほかのツールの呼び出しは
+    実行せず、承認にも回さない（結果は `error_code=tool.confirmation_pending`。答えの後にモデルが必要なら呼び直す）。中断しない
+    呼び出し（下のツールの確認のカード・ツールの失敗の直後・`nl2sql_query` の前の表・列の確認・スキップ・上限）は、確認を出して
+    いないことと次にすることを結果で返す。
     **先に資料・業務データのツールで調べる**（#1917）: 根拠・データのツールを渡した Run で、モデルがまだ MCP 接続のツール（根拠・
-    データのツールとプロファイルの一覧・推薦）を 1 つも呼んでいない確認は、1 回目は中断せずに `status=consult_tools_first`
-    （利用者の質問のままツールで調べる指示）を返し、2 回目からはモデルが作った選択肢を外した自由入力の確認にする（選択肢を
-    ツールの結果から作れないため。`ConfirmationBudget.tools_consulted`）。期間など NL2SQL・RAG が確かめる観点を Agent が先に
-    聞き、NL2SQL の確認と重なるのを防ぐ。拒答のガード（`AGENT_TOOL_GROUNDING_REQUIRED`）と同じ設定で切れる。
+    データのツールとプロファイルの一覧・推薦）を 1 つも呼んでいない確認は、モデルが作った選択肢を外した自由入力の確認にする（選択肢を
+    ツールの結果から作れないため。`ConfirmationBudget.tools_consulted`）。先に調べることは指示とツールの説明に置く（中断せずに
+    「先に調べる」を返すと、モデルは確認を出したと取り違え、答えを待つと述べるだけの回答で完了した。#3352）。拒答のガード
+    （`AGENT_TOOL_GROUNDING_REQUIRED`）と同じ設定で切れる。
     **ツールの確認に任せる**（#1934・#2726）: この Run のツールの結果が確認事項を返して止まっている（NL2SQL・`rag_search` の
     `needs_clarification`・根拠の取得のルールの確認と、最も新しい業務ガイドの判断（`rag_lookup_guides`・`rag_search` の
     `guide`）が条件を確かめる `clarify`。答えた条件の問いは数えない）ときは中断せず、`status=tool_confirmation_pending` を返す。
