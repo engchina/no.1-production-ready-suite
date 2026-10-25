@@ -6,12 +6,13 @@ import json
 import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import httpx
 import pytest
 
 from app.rag.agent_evaluation_cli import (
+    FORBIDDEN_ACTION_REASON,
     AgentApi,
     agent_turn,
     evaluate,
@@ -22,7 +23,7 @@ from app.rag.agent_evaluation_cli import (
     summary_markdown,
     superseded_case_summary,
 )
-from app.schemas.evaluation import EvaluationRunRequest
+from app.schemas.evaluation import EvaluationFailureReason, EvaluationRunRequest
 
 
 def _evidence(document_id: str, chunk_id: str, excerpt: str) -> dict[str, Any]:
@@ -481,8 +482,20 @@ def test_summary_compares_results_in_a_markdown_table() -> None:
         "response_decision_accuracy": 0.5,
         "claim_support_rate": 0.5,
         "case_results": [
-            {"case_id": "a", "status": "success", "elapsed_ms": 1000.0, "forbidden_hits": []},
-            {"case_id": "b", "status": "success", "elapsed_ms": 3000.0, "forbidden_hits": ["x"]},
+            {"case_id": "a", "status": "success", "elapsed_ms": 1000.0, "failure_reasons": []},
+            {
+                "case_id": "b",
+                "status": "success",
+                "elapsed_ms": 3000.0,
+                "failure_reasons": ["forbidden_action"],
+            },
+            # 失敗したケースは危険な回答に数えない。
+            {
+                "case_id": "c",
+                "status": "error",
+                "elapsed_ms": 500.0,
+                "failure_reasons": ["case_error", "forbidden_action"],
+            },
         ],
         "split_breakdown": {
             "holdout": {
@@ -491,20 +504,48 @@ def test_summary_compares_results_in_a_markdown_table() -> None:
                 "metrics": {"response_decision_accuracy": 0.0},
             }
         },
+        # 評価の結果（EvaluationCategorySummary）の形: 分類の指標は metrics の下にある。
         "category_breakdown": {
-            "clarification_required": {"case_count": 2, "handling_correct_rate": 0.5}
+            "clarification_required": {
+                "case_count": 2,
+                "error_count": 0,
+                "metrics": {"response_decision_accuracy": 0.5},
+            }
         },
     }
     summary = summarize_result(data)
     assert summary["median_elapsed_seconds"] == 2.0
     assert summary["dangerous_case_count"] == 1
     assert summary["dangerous_case_ids"] == ["b"]
+    assert summary["failed_case_ids"] == ["c"]
     assert summary["splits"]["holdout"]["response_decision_accuracy"] == 0.0
+    assert summary["categories"]["clarification_required"]["handling_correct_rate"] == 0.5
     table = summary_markdown({"A": summary, "D": summary})
     assert "| 指標 | A | D |" in table
     assert "| 回答・確認・保留の判断の正しさ | 0.50 | 0.50 |" in table
+    assert "| 危険な回答のケース | 1 | 1 |" in table
     assert "| holdout: 回答・確認・保留の判断の正しさ | 0.00 | 0.00 |" in table
+    assert "| clarification_required: 回答・確認・保留の判断の正しさ | 0.50 | 0.50 |" in table
     assert "| 1 問の時間の中央値（秒） | 2.00 | 2.00 |" in table
+
+
+def test_summary_marks_dangerous_cases_unmeasured_without_forbidden_action() -> None:
+    """今の採点は勧めてはいけない操作を測らないため、該当が無ければ 0 ではなく測れない（-）。"""
+    data = {
+        "case_count": 1,
+        "error_count": 0,
+        "case_results": [
+            {"case_id": "a", "status": "success", "elapsed_ms": 1000.0, "failure_reasons": []}
+        ],
+    }
+    summary = summarize_result(data)
+    assert summary["dangerous_case_count"] is None
+    assert summary["dangerous_case_ids"] == []
+    assert "| 危険な回答のケース | - |" in summary_markdown({"D": summary})
+
+
+def test_forbidden_action_reason_is_in_the_failure_reason_vocabulary() -> None:
+    assert FORBIDDEN_ACTION_REASON in get_args(EvaluationFailureReason)
 
 
 def test_main_creates_agent_runs_and_writes_result(

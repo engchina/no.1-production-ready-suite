@@ -50,13 +50,15 @@
 
 回答の指標（`answer_correctness`・`requirement_coverage`・`claim_support_rate`）は、今の CLI が標準回答による評価を渡さないため、Agent の経路ではいつも測れない（`not_evaluable` に全ケースが入る）。
 
-## 今の挙動として固定した不具合
+## 意図して作り直した値
 
-基線は今の出力をそのまま固定する。次は CLI の比較の要約の不具合で、直すときは基線の `expected.cli` も直す（#3282）。
+### #3282: CLI の比較の要約の不具合の修正
 
-- `summary_markdown` の分類ごとの行は、要約の分類（`handling_correct_rate`）ではなく `metrics.response_decision_accuracy` を読むため、いつも `-` になる。
-- `summarize_result` の危険な回答のケースは、今のケースの結果に無い項目（`forbidden_hits`）を数えるため、いつも 0 になる。
+段 1 の基線は、CLI の比較の要約の 2 つの不具合をそのまま固定していた。#3282 で CLI を直し、`summaries.json` の `expected.cli` のうち次の値だけを作り直した。採点（`cases/<id>.json` の `expected.scores`）・集計（`expected.metrics`）・分母（`expected.denominators`）は変えていない。
+
+- `summary_markdown` の分類ごとの行（`<分類>: 回答・確認・保留の判断の正しさ`）: 要約の分類の `handling_correct_rate` を読むようにした。前は `metrics.response_decision_accuracy` を読んでいつも `-` だった。`all` / `completed` は `document_answerable` が 0.50、`clarification_required`・`environment_data_required`・`knowledge_missing`・`conflicting_sources` が 1.00、`passing` は `clarification_required` が 1.00（`uncategorized` は測れないので `-` のまま）。
+- `summary.dangerous_case_count` と表の「危険な回答のケース」: 失敗の理由に `forbidden_action` が付いた成功のケースを数え、該当が無ければ 0 ではなく測れない（`null`・表は `-`）とした。前は今のケースの結果に無い項目（`forbidden_hits`）を数えていつも 0 だった。今の採点（六指標）は勧めてはいけない操作を測らないため、4 つの評価セットとも `null` / `-` になる。
 
 ## 基線を作り直すとき
 
-採点を意図して変えたときだけ作り直す。今のコードで `replay` の結果（`case_result`・`suite_result`）を `expected` に書き、変わった値を PR で一つずつ説明する。移設のために作り直さない（移設の後の実装を、この基線で確かめる）。
+採点を意図して変えたときと、CLI の出力の不具合を直したとき（`expected.cli` だけ。上の「意図して作り直した値」に記録する）だけ作り直す。今のコードで `replay` の結果（`case_result`・`suite_result`）を `expected` に書き、変わった値を PR で一つずつ説明する。移設のために作り直さない（移設の後の実装を、この基線で確かめる）。
