@@ -23,7 +23,8 @@ PLATFORM_AUTH_DDL_IGNORED_ERRORS = frozenset(
     }
 )
 
-# 処理の経過の span の表（#3226）。製品のシステムテーブルの再作成で消さない（各製品の PRESERVED_TABLES）。
+# 処理の経過の span の表（#3226）。製品のシステムテーブルの再作成で消さない
+# （各製品の PRESERVED_TABLES）。
 # 認証の準備の判定（`PLATFORM_AUTH_TABLES`）には入れない（表が無くても認証は動く）。
 TRACE_SPAN_TABLES: tuple[str, ...] = ("PLATFORM_TRACE_SPANS",)
 

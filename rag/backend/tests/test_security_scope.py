@@ -653,6 +653,8 @@ def test_preserved_platform_tables_are_not_managed() -> None:
         # チャットの添付と、製品ごとの使うか（#2517）。
         "PLATFORM_CHAT_ATTACHMENTS",
         "PLATFORM_CHAT_ATTACHMENT_SETTINGS",
+        # 処理の経過の span の表（3 製品で共有。#3226）。
+        "PLATFORM_TRACE_SPANS",
     }
     assert set(PRESERVED_TABLES).isdisjoint(MANAGED_TABLES)
     assert {

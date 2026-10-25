@@ -56,8 +56,8 @@ _JSON_MAX = 4000
 _DISPLAY_KIND_MAX = 64
 _STATUS_RANK = {"running": 0, "done": 1, "failed": 1, "cancelled": 1, "skipped": 1}
 
-_MERGE_SQL = f"""
-MERGE INTO {TRACE_SPANS_TABLE} t
+_MERGE_SQL = """
+MERGE INTO PLATFORM_TRACE_SPANS t
 USING (SELECT :trace_id AS TRACE_ID, :span_id AS SPAN_ID FROM DUAL) s
 ON (t.TRACE_ID = s.TRACE_ID AND t.SPAN_ID = s.SPAN_ID)
 WHEN MATCHED THEN UPDATE SET
@@ -82,14 +82,15 @@ WHEN NOT MATCHED THEN INSERT (
 """
 
 _PURGE_SQL = (
-    f"DELETE FROM {TRACE_SPANS_TABLE} "
+    "DELETE FROM PLATFORM_TRACE_SPANS "
     "WHERE STARTED_AT < FROM_TZ(CAST(:cutoff AS TIMESTAMP), 'UTC') AND ROWNUM <= :batch"
 )
 
-_SELECT_COLUMNS = (
-    "TRACE_ID, SPAN_ID, PARENT_SPAN_ID, PRODUCT, OPERATION_ID, ATTEMPT, IS_ROOT, OWNER_USER_UUID, "
-    "NAME, SPAN_KIND, STATUS, STARTED_AT, FINISHED_AT, DISPLAY_KIND, DISPLAY_PARAMS_JSON, "
-    "ATTRIBUTES_JSON"
+# 表の名前と列は固定の文字列（値はすべて bind。SQL の文字列に値を組み込まない）。
+_SELECT_SQL = (
+    "SELECT TRACE_ID, SPAN_ID, PARENT_SPAN_ID, PRODUCT, OPERATION_ID, ATTEMPT, IS_ROOT, "
+    "OWNER_USER_UUID, NAME, SPAN_KIND, STATUS, STARTED_AT, FINISHED_AT, DISPLAY_KIND, "
+    "DISPLAY_PARAMS_JSON, ATTRIBUTES_JSON FROM PLATFORM_TRACE_SPANS WHERE TRACE_ID = :trace_id"
 )
 
 
@@ -418,7 +419,7 @@ def fetch_trace_spans(
     画面から任意の trace id を受け取らない。製品は自分の記録を今の判定で開き、その記録の trace id
     を渡す。
     """
-    sql = f"SELECT {_SELECT_COLUMNS} FROM {TRACE_SPANS_TABLE} WHERE TRACE_ID = :trace_id"
+    sql = _SELECT_SQL
     binds: dict[str, Any] = {"trace_id": trace_id, "limit": limit}
     if viewer_user_uuid is not None:
         sql += " AND OWNER_USER_UUID = :viewer"
