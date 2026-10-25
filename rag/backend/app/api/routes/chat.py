@@ -26,6 +26,10 @@ from pr_backend_core.chat_history_window import (
     chat_history_days,
 )
 from pr_backend_core.logging import safe_exception_fields
+from pr_system_settings.auth.visibility import (
+    OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+    OTHERS_CONTENT_FORBIDDEN_STATUS,
+)
 from pr_system_settings.chat_attachments import ChatAttachmentReference
 from starlette.concurrency import run_in_threadpool
 
@@ -143,7 +147,7 @@ def _to_conversation_summary(
     """会話の要約。
 
     system_admin が全員の会話を見るときは、本人の会話かと利用者の表示名を付ける（#1889）。
-    system_admin は他の利用者の会話にも本人と同じ操作ができる（#1928）。
+    `owned` が False の会話は閲覧と停止・削除だけで、続きの質問・名前の変更・評価は 403（#3244）。
     """
     context = current_audit_request_context()
     return ConversationSummary(
@@ -170,6 +174,19 @@ def _owned_by_caller(conversation: StoredConversation) -> bool:
     return owner is None or caller is None or owner == caller
 
 
+def _ensure_caller_owns(conversation: StoredConversation) -> None:
+    """会話に新しい内容を足すのは持ち主だけ（#3244。`can_add_user_content` と同じ規則）。
+
+    続きの質問（確認への回答・添付を含む）・名前の変更が対象。system_admin でも他の利用者の
+    会話には 403（見える会話なので 404 にしない。見えない会話は呼ぶ前に 404）。会話は利用者を
+    hash でしか持たないので、応答の `owned` と同じ判定で比べる。
+    """
+    if not _owned_by_caller(conversation):
+        raise HTTPException(
+            status_code=OTHERS_CONTENT_FORBIDDEN_STATUS, detail=OTHERS_CONTENT_FORBIDDEN_MESSAGE
+        )
+
+
 async def _owner_names(conversations: list[StoredConversation]) -> dict[str, str]:
     """system_admin の一覧の利用者の表示名（`user_id_hash` → 表示名。#1889・#1696）。"""
     if not current_audit_request_context().all_users_visible:
@@ -187,7 +204,7 @@ def _to_chat_message(
 ) -> ChatMessage:
     """保存したメッセージの応答の形。
 
-    会話の持ち主以外（system_admin）が送った質問には、送った人の表示名を添える（#1928）。
+    会話の持ち主以外（#3244 より前の system_admin）が送った質問には、送った人の表示名を添える。
     """
     sent_by_owner = _sent_by_owner(message, conversation)
     citations: list[RetrievedChunk] = []
@@ -394,11 +411,16 @@ async def rename_conversation(
     conversation_id: str,
     request: ConversationUpdateRequest,
 ) -> ApiResponse[ConversationSummary]:
-    """会話タイトルを変更する。"""
+    """会話タイトルを変更する（持ち主だけ。system_admin でも他の利用者の会話は 403。#3244）。"""
     settings = get_settings()
     _require_chat_enabled(settings)
+    oracle = OracleClient()
+    existing = await oracle.get_conversation(conversation_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE)
+    _ensure_caller_owns(existing)
     try:
-        conversation = await OracleClient().rename_conversation(conversation_id, request.title)
+        conversation = await oracle.rename_conversation(conversation_id, request.title)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE) from exc
     return ApiResponse(
@@ -408,7 +430,7 @@ async def rename_conversation(
 
 @router.delete("/conversations/{conversation_id}", response_model=ApiResponse[None])
 async def delete_conversation(conversation_id: str) -> ApiResponse[None]:
-    """会話とそのメッセージを削除する。"""
+    """会話とそのメッセージを削除する（運用の操作。system_admin は他の利用者の会話も。#3244）。"""
     settings = get_settings()
     _require_chat_enabled(settings)
     try:
@@ -478,10 +500,14 @@ async def stream_message(
 async def _load_sendable_conversation(
     oracle: OracleClient, conversation_id: str
 ) -> StoredConversation:
-    """送信できる会話を返す(会話・検索・回答プロファイルの存在と状態、参照 KB の範囲を確認する)。"""
+    """送信できる会話を返す(会話・検索・回答プロファイルの存在と状態、参照 KB の範囲を確認する)。
+
+    送れるのは会話の持ち主だけ（system_admin でも他の利用者の会話は 403。#3244）。
+    """
     conversation = await oracle.get_conversation(conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE)
+    _ensure_caller_owns(conversation)
     if conversation.status != "ACTIVE":
         raise HTTPException(status_code=409, detail="アーカイブ済みの会話には送信できません。")
     view = await oracle.get_search_answer_profile(conversation.search_answer_profile_id)
@@ -1124,7 +1150,8 @@ def _run_belongs_to_conversation(run: ChatAnswerRun, conversation_id: str) -> bo
     """run が、この会話の（同じ tenant の）ものか。
 
     会話を開けるか（本人の会話か system_admin。#1889）は呼び出し側が会話を読んで確かめる。会話を
-    開ける利用者は、誰が送った質問の回答でも購読し直し・停止できる（持ち主と system_admin。#1928）。
+    開ける利用者は、誰が送った質問の回答でも購読し直し・停止できる（持ち主と system_admin。
+    購読し直しは閲覧、停止は運用の操作。#3244）。
     """
     context = current_audit_request_context()
     return run.conversation_id == conversation_id and run.tenant_id_hash == context.tenant_id_hash

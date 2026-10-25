@@ -67,15 +67,3 @@ def display_names_by_user_hash(user_id_hashes: Collection[str]) -> dict[str, str
         if hashed is not None and hashed in wanted:
             names[hashed] = name
     return names
-
-
-def user_uuid_by_hash(user_id_hash: str) -> str | None:
-    """`user_id_hash` の利用者の UUID（会話の持ち主。#2517 の添付の持ち主）。引けなければ None。"""
-    candidates = [LOCAL_DEFAULT_USER_ID, LOCAL_DEBUG_USER_UUID, CONFIGURED_SYSTEM_ADMIN_USER_UUID]
-    try:
-        candidates.extend(user.user_uuid for user in get_security_service().list_users())
-    except Exception:  # noqa: BLE001 - 引けなければ呼ぶ側が操作した人にする
-        logger.warning("rag_conversation_owner_uuid_unavailable", exc_info=True)
-    return next(
-        (user_id for user_id in candidates if user_id_hash_for(user_id) == user_id_hash), None
-    )

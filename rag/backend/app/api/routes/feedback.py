@@ -7,6 +7,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pr_backend_core.api import OffsetParams, offset_params, paginate
+from pr_system_settings.auth.visibility import (
+    OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+    OTHERS_CONTENT_FORBIDDEN_STATUS,
+)
 
 from app.clients.oracle import OracleClient
 from app.rag.evaluation_excel import XLSX_MEDIA_TYPE, evaluation_cases_xlsx, evidence_line
@@ -29,6 +33,7 @@ from app.schemas.feedback import (
     FeedbackReasonCount,
     FeedbackRequest,
     FeedbackSortOrder,
+    FeedbackSourceSurface,
     FeedbackSubmissionResponse,
     FeedbackSummary,
     FeedbackTargetType,
@@ -290,7 +295,11 @@ async def _resolve_feedback_details(
         details = await oracle.get_feedback_message_context(request.message_id, request.trace_id)
         if details is None:
             raise HTTPException(status_code=404, detail="評価対象のメッセージが見つかりません。")
+        _ensure_conversation_owner(details.pop("conversation_user_id_hash", None))
         details["citations"] = _feedback_citations(details.get("citations"))
+    elif request.source_surface == FeedbackSourceSurface.CHAT:
+        # メッセージ ID の無いチャットの評価も、trace の回答の会話の持ち主だけ（#3244）。
+        _ensure_conversation_owner(await oracle.get_chat_answer_owner_hash(request.trace_id))
     elif request.content_snapshot is not None:
         details = {
             "message_id": None,
@@ -318,6 +327,23 @@ async def _resolve_feedback_details(
         details["comment_text"] = request.comment
         details["corrected_answer_text"] = request.corrected_answer
     return details
+
+
+def _ensure_conversation_owner(owner_user_id_hash: object) -> None:
+    """チャットの回答を評価するのは会話の持ち主だけ（system_admin でも他の利用者は 403。#3244）。
+
+    持ち主・利用者の分からない古い行は本人の会話とみなす（チャットの `owned` と同じ判定）。
+    """
+    caller = current_audit_request_context().user_id_hash
+    if (
+        isinstance(owner_user_id_hash, str)
+        and owner_user_id_hash
+        and caller is not None
+        and owner_user_id_hash != caller
+    ):
+        raise HTTPException(
+            status_code=OTHERS_CONTENT_FORBIDDEN_STATUS, detail=OTHERS_CONTENT_FORBIDDEN_MESSAGE
+        )
 
 
 def _feedback_citations(value: object) -> list[dict[str, object]]:
