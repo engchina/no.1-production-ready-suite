@@ -116,11 +116,12 @@ def test_text_lines_are_split_by_line_and_column_with_top_left_boxes() -> None:
 
 def test_stacked_glyphs_are_not_read_as_a_horizontal_line() -> None:
     document = SyntheticPdf()
-    document.page().vertical_text(500, 300, "縦書き")
+    # 書体を埋め込まない CID の字は OS の書体の有無で読めるかが変わるため、標準の書体の字で積む。
+    document.page().vertical_text(500, 300, "ABC", font="Helvetica")
     with open_source(document.to_bytes()) as source:
         lines = source.text_lines(0)
     # 1 字ずつ積んだ字は、横に並んだ 1 行にはならない（縦の行か 1 字ずつの行）。
-    assert "".join(line.text for line in lines) == "縦書き"
+    assert "".join(line.text for line in lines) == "ABC"
     assert all(len(line.chars) == 1 or line.dir == (0.0, 1.0) for line in lines)
 
 
