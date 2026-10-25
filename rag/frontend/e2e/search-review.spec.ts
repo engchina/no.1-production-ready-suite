@@ -808,6 +808,8 @@ for (const scenario of [
     await selectSearchAnswerProfile(page, VIEWS[0].name);
     await search(page, "合成データを確認");
     await expect(page.getByText("合成の回答です。", { exact: true })).toBeVisible();
+    // 処理の経過は実行の trace の API で読む（回答の本文の後に届くことがある。#3226）。段が出てから開閉を決める。
+    await expect(page.getByTestId("search-run-progress-summary")).toContainText("1 ステップ");
     const row = page.getByTestId(`search-run-progress-step-${spanStepId("guardrail")}`);
     if (!(await row.isVisible())) await page.getByTestId("search-run-progress-summary").click();
     await expect(row).toHaveAttribute("data-status", scenario.status);
