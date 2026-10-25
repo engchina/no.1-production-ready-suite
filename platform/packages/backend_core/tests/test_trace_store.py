@@ -10,6 +10,7 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -42,6 +43,8 @@ from pr_backend_core.observability.tracing import (
 )
 
 OWNER = TraceSpanOwner(product="rag", operation_id="op-a", owner_user_uuid="user-a")
+# python-oracledb の `DB_TYPE_TIMESTAMP` の代わり（共有パッケージのテストは oracledb を入れない）。
+DB_TYPE_TIMESTAMP = object()
 
 
 @pytest.fixture(autouse=True)
@@ -50,10 +53,22 @@ def reset_tracing() -> Iterator[None]:
     shutdown_tracing()
 
 
+@pytest.fixture(autouse=True)
+def fake_oracledb(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        trace_store,
+        "_load_oracledb",
+        lambda: SimpleNamespace(DB_TYPE_TIMESTAMP=DB_TYPE_TIMESTAMP),
+    )
+
+
 class FakeCursor:
     def __init__(self, db: FakeDb) -> None:
         self.db = db
         self.rowcount = 0
+
+    def setinputsizes(self, **sizes: Any) -> None:
+        self.db.calls.append(("setinputsizes", "", dict(sizes)))
 
     def executemany(self, sql: str, rows: list[dict[str, Any]]) -> None:
         if self.db.fail_writes:
@@ -145,6 +160,35 @@ def test_writer_coalesces_and_never_writes_step_details() -> None:
     assert sum(len(call[2]) for call in db.calls if call[0] == "executemany") == 3
 
 
+def test_writer_binds_span_times_as_timestamp_to_keep_sub_seconds() -> None:
+    """python-oracledb は `datetime` を既定で DATE（秒まで）で bind するので、開始・終了の時刻は
+    TIMESTAMP で bind して秒より細かい部分を残す（#3271）。"""
+    db = FakeDb()
+    writer = TraceSpanWriter(db.connect)
+    started = datetime(2026, 1, 1, 0, 0, 1, 123456, tzinfo=UTC)
+    writer.submit(
+        SpanUpdate(
+            span_id="1".rjust(16, "0"),
+            trace_id="a" * 32,
+            operation_name="llm",
+            status="done",
+            started_at=started,
+            finished_at=started + timedelta(milliseconds=5),
+        ),
+        OWNER,
+    )
+    writer.flush()
+    kinds = [call[0] for call in db.calls]
+    assert kinds == ["setinputsizes", "executemany"]
+    assert db.calls[0][2] == {
+        "started_at": DB_TYPE_TIMESTAMP,
+        "finished_at": DB_TYPE_TIMESTAMP,
+    }
+    [row] = db.calls[1][2]
+    assert row["started_at"] == datetime(2026, 1, 1, 0, 0, 1, 123456)
+    assert row["finished_at"] == datetime(2026, 1, 1, 0, 0, 1, 128456)
+
+
 def test_full_queue_drops_only_normal_span_starts_and_counts_them() -> None:
     db = FakeDb()
     writer = TraceSpanWriter(db.connect, queue_size=2)
@@ -197,8 +241,11 @@ def test_retention_zero_never_deletes_and_positive_days_delete_old_spans() -> No
     db.purge_counts = [3, 1]
     now = datetime(2026, 3, 1, tzinfo=UTC)
     assert purge_trace_spans(db.connect, retention_days=30, batch=3, now=now) == 4
-    assert db.calls[0][0] == "execute" and "DELETE FROM PLATFORM_TRACE_SPANS" in db.calls[0][1]
-    assert db.calls[0][2]["cutoff"] == datetime(2026, 1, 30)
+    executes = [call for call in db.calls if call[0] == "execute"]
+    assert "DELETE FROM PLATFORM_TRACE_SPANS" in executes[0][1]
+    assert executes[0][2]["cutoff"] == datetime(2026, 1, 30)
+    # 期限の時刻も TIMESTAMP で bind する（#3271）。
+    assert ("setinputsizes", "", {"cutoff": DB_TYPE_TIMESTAMP}) in db.calls
     writer = TraceSpanWriter(db.connect)
     assert writer.retention_days == 0
 

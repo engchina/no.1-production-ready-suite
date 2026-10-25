@@ -387,6 +387,8 @@ jobs:
               - "agent/backend/app/features/agent/runtime.py"
               # Run の span の共通の span の表への書き込みと読み出し（#3226）。
               - "agent/backend/app/features/agent/trace_spans.py"
+              # 共通の span の表の SQL と bind（#3271。実 Oracle は Agent の結合テストで確かめる）。
+              - "platform/packages/backend_core/src/pr_backend_core/observability/trace_store.py"
               # Run の事実と確かめるべき実行のシグナルの SQL（#1822）と、実 Oracle の結合テスト。
               - "agent/backend/app/features/agent/run_facts.py"
               - "agent/backend/app/features/agent/run_signals.py"
