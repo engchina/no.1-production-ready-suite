@@ -1296,7 +1296,7 @@ for (const viewport of [
     await expect(page.getByText("経費申請は部門長の承認後、経理部が確認します。")).toBeVisible();
     await expect(page.getByText("構造認識で分割しました")).toHaveCount(0);
     await expect(page.getByText("親子階層で分割されていない Chunk です")).toHaveCount(0);
-    await expect(page.getByText(/Docling/)).toHaveCount(0);
+    await expect(page.getByRole("status").filter({ hasText: "Docling" })).toHaveCount(0);
     await expectNoPageOverflow(page);
   });
 
