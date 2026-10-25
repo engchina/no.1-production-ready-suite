@@ -5,6 +5,7 @@
  *   実行時に Google Fonts などの外部 CDN へはアクセスしない。
  * - unicode-range によるサブセット分割のため、ブラウザは描画に必要な
  *   サブセットのみ取得する(日本語第一 UI なので japanese サブセットが主)。
+ *   Noto Sans SC / TC / HK は JP に無い字が画面に出たときだけ、その字を含む分を取得する。
  * - weight は AGENTS.md タイポグラフィ方針に合わせ 400 / 500 / 700 のみ。
  * - font-display: swap は @fontsource 側で設定済み(FOIT 回避)。
  *
@@ -22,7 +23,20 @@
 @import "@fontsource/noto-sans-jp/latin-ext-500.css";
 @import "@fontsource/noto-sans-jp/latin-ext-700.css";
 
-/* Roboto — ラテン用 fallback(--font-sans の 2 番目。これも自前ホスト) */
+/* Noto Sans SC / TC / HK — Noto Sans JP に無い簡体字・繁体字・香港の字だけを SC → TC → HK の順で補う（--font-sans / --font-mono の JP の後ろ。#3292）。
+   太さは Noto Sans JP と同じ。中国語の字は数が多いため、unicode-range で約 100 に分けた CSS（<weight>.css）を使い、
+   画面に出た字を含む分だけを読み込む（preload しない）。 */
+@import "@fontsource/noto-sans-sc/400.css";
+@import "@fontsource/noto-sans-sc/500.css";
+@import "@fontsource/noto-sans-sc/700.css";
+@import "@fontsource/noto-sans-tc/400.css";
+@import "@fontsource/noto-sans-tc/500.css";
+@import "@fontsource/noto-sans-tc/700.css";
+@import "@fontsource/noto-sans-hk/400.css";
+@import "@fontsource/noto-sans-hk/500.css";
+@import "@fontsource/noto-sans-hk/700.css";
+
+/* Roboto — ラテン用 fallback(--font-sans の JP・SC・TC・HK の後ろ。これも自前ホスト) */
 @import "@fontsource/roboto/latin-400.css";
 @import "@fontsource/roboto/latin-500.css";
 @import "@fontsource/roboto/latin-700.css";
