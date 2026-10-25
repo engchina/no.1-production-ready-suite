@@ -137,7 +137,8 @@ def test_run_step_searches_records_errors_and_continues() -> None:
 
     results, _ = run_step_searches(QUESTION, plan(STEP_A, {"id": "s3", "title": "画面 C"}), limit=4, deadline_seconds=10, retrieve=retrieve)
 
-    assert results[0].error.startswith("RuntimeError") and results[0].parents == ()
+    # 例外の型の名前だけを残し、本文は残さない（#3259）。
+    assert results[0].error == "RuntimeError" and results[0].parents == ()
     assert [p.record.chunk_uid for p in results[1].parents] == ["run:b1"]
 
 

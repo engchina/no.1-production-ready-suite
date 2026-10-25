@@ -34,6 +34,7 @@ import logging
 import math
 import re
 import tempfile
+import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
@@ -369,6 +370,27 @@ class _SearchState:
     derived_sources: dict[tuple[str, tuple[tuple[str, str], ...]], list[str]] = field(
         default_factory=dict
     )
+    # 失敗して空のまま続けた補助の処理(#3259)。(処理の種類, 例外の型の名前) → {kind, count,
+    # exc_type}。「当たらなかった」と「読めなかった」を診断で分ける。例外の文・SQL・本文・識別子は
+    # 入れない(ログの exc_info だけに残す)。rag_engine の thread からも記録するので lock で守る。
+    degraded: dict[tuple[str, str], dict[str, object]] = field(default_factory=dict)
+    _degraded_lock: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
+    )
+
+    def record_degraded(self, kind: str, exc: BaseException) -> None:
+        """補助の処理 ``kind`` が ``exc`` で失敗し、空のまま続けたことを数える(#3259)。"""
+        exc_type = type(exc).__name__
+        with self._degraded_lock:
+            entry = self.degraded.setdefault(
+                (kind, exc_type), {"kind": kind, "count": 0, "exc_type": exc_type}
+            )
+            entry["count"] = cast(int, entry["count"]) + 1
+
+    def degraded_steps(self) -> list[dict[str, object]]:
+        """失敗した補助の処理の記録(最初に失敗した順)。"""
+        with self._degraded_lock:
+            return [dict(entry) for entry in self.degraded.values()]
 
     @property
     def auto_field_relaxed(self) -> bool:
@@ -739,10 +761,11 @@ class AnswerEngine:
         state = _SearchState(requested_as_of=requested.filters.get(AS_OF_FILTER_KEY, ""))
         try:
             overrides = await self._oracle.answer_prompt_overrides()
-        except Exception:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で回答を続ける。
+        except Exception as exc:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で回答を続ける。
             logger.warning("answer prompt overrides load failed", exc_info=True)
+            state.record_degraded("prompt_overrides", exc)
             overrides = {}
-        business_names = await self._business_names(request)
+        business_names = await self._business_names(request, state)
         with tempfile.TemporaryDirectory(prefix="rag-engine-answer-") as work:
             work_dir = Path(work)
             state.work_dir = work_dir
@@ -849,6 +872,9 @@ class AnswerEngine:
                 "relaxed": list(state.relaxed),
                 "max_steps": self._settings.rag_filter_relaxation_max_steps,
             }
+        if degraded := state.degraded_steps():
+            # 失敗して空のまま続けた補助の処理(#3259)。根拠 0 件の診断にも入れる。
+            outcome.diagnostics["degraded_steps"] = degraded
         if not outcome.citations and (
             zero_evidence := _zero_evidence_diagnostics(result, state, requested)
         ):
@@ -1045,15 +1071,16 @@ class AnswerEngine:
             if child.chunk_uid in state.chunks
         ]
 
-    async def _business_names(self, request: SearchRequest) -> list[str]:
+    async def _business_names(self, request: SearchRequest, state: _SearchState) -> list[str]:
         """検索範囲(``request.filters``)の文書の大分類の語の一覧を、1 回の回答で 1 回読む(#553)。
 
         読めないときは空(業務の絞り込みをせずに回答を続ける)。
         """
         try:
             return await self._oracle.retrieval_large_categories(dict(request.filters))
-        except Exception:  # noqa: BLE001 - 業務の絞り込みは補助。絞らずに回答を続ける。
+        except Exception as exc:  # noqa: BLE001 - 業務の絞り込みは補助。絞らずに回答を続ける。
             logger.warning("business names load failed", exc_info=True)
+            state.record_degraded("business_names", exc)
             return []
 
     def _answer_sync(
@@ -1127,13 +1154,15 @@ class AnswerEngine:
             ),
             # 条の選択の 2 段目で見せる、同じ章の条の本文の書き出し。
             article_leads=lambda *, document_id, chunk_set_id, sections, **kwargs: run_async(
-                lambda: self._article_leads(document_id, chunk_set_id, sections)
+                lambda: self._article_leads(document_id, chunk_set_id, sections, state=state)
             ),
             # 呼び出し元が検索文を短く言い換えたときの元の質問(#2261)。条の選択に使う(回答の要求の
             # 単位には answer_question_result の request_question で使う。#2665)。
             article_question=lambda: request.original_question,
             # 業務ガイドの手順の充足を意味の近さで決める embedding(#2649)。検索と同じ Cohere Embed。
             embedder=_LoopEmbedder(self._genai, loop),
+            # rag_engine の中の補助の処理(画面の選択など)の失敗を、同じ記録に残す(#3259)。
+            report_degraded=state.record_degraded,
         )
 
         def notify_step(name: str, outcome: str, elapsed: float, record: Mapping[str, Any]) -> None:
@@ -1647,8 +1676,9 @@ class AnswerEngine:
                     exclude_chunk_ids={chunk.chunk_id for chunk in seeds},
                     max_chunks=self._settings.rag_entity_expansion_max_chunks,
                 )
-            except Exception:  # noqa: BLE001 - 実体の拡張は補助。足さずに回答を続ける。
+            except Exception as exc:  # noqa: BLE001 - 実体の拡張は補助。足さずに回答を続ける。
                 logger.warning("entity expansion failed", exc_info=True)
+                state.record_degraded("entity_expansion", exc)
                 plan = []
             state.entity_plans[key] = plan
         added: list[RetrievedChunk] = []
@@ -1714,8 +1744,9 @@ class AnswerEngine:
                     max_chunks=self._settings.rag_graph_expansion_max_chunks,
                     diagnostics=attempt,
                 )
-            except Exception:  # noqa: BLE001 - 関係情報の拡張は補助。足さずに回答を続ける。
+            except Exception as exc:  # noqa: BLE001 - 関係情報の拡張は補助。足さずに回答を続ける。
                 logger.warning("graph expansion failed", exc_info=True)
+                state.record_degraded("graph_expansion", exc)
                 state.graph_attempts[key] = {"status": "error"}
                 plan = []
             state.graph_plans[key] = plan
@@ -1826,8 +1857,9 @@ class AnswerEngine:
                 continue
             try:
                 targets = await self._anchor_reference_targets(scope, state, anchor)
-            except Exception:  # noqa: BLE001 - 参照先は補助。この候補の参照を辿らずに続ける。
+            except Exception as exc:  # noqa: BLE001 - 参照先は補助。この候補の参照を辿らずに続ける。
                 logger.warning("reference target resolution failed", exc_info=True)
+                state.record_degraded("reference_resolve", exc)
                 continue
             if not targets:
                 continue
@@ -1854,8 +1886,9 @@ class AnswerEngine:
                     chunks = await self._reference_target_chunks(
                         scope, state, anchor, target, request=request, question=question
                     )
-                except Exception:  # noqa: BLE001 - 参照先は補助。この参照先を足さずに続ける。
+                except Exception as exc:  # noqa: BLE001 - 参照先は補助。この参照先を足さずに続ける。
                     logger.warning("reference target load failed", exc_info=True)
+                    state.record_degraded("reference_load", exc)
                     outcomes.append("error")
                     continue
                 fresh = [chunk for chunk in chunks if chunk.chunk_id not in seen | added.keys()]
@@ -1952,8 +1985,9 @@ class AnswerEngine:
             found = await self._oracle.retrieval_reference_documents_many(
                 scope, titles=keys, limit=_REFERENCE_DOCUMENT_CANDIDATES
             )
-        except Exception:  # noqa: BLE001 - 参照先は補助。辿るときに 1 つずつ照合する。
+        except Exception as exc:  # noqa: BLE001 - 参照先は補助。辿るときに 1 つずつ照合する。
             logger.warning("reference document prefetch failed", exc_info=True)
+            state.record_degraded("reference_prefetch", exc)
             return
         for key in keys:
             state.reference_document_rows[(scope_key, key)] = found.get(key, [])
@@ -2180,8 +2214,9 @@ class AnswerEngine:
                 [_reference_rerank_document(row) for row in rows],
                 len(rows),
             )
-        except Exception:  # noqa: BLE001 - 並べ替えは補助。検索の順のまま足す。
+        except Exception as exc:  # noqa: BLE001 - 並べ替えは補助。検索の順のまま足す。
             logger.warning("document reference rerank failed", exc_info=True)
+            state.record_degraded("reference_rerank", exc)
             return rows
         order = [index for index, _score in ranked if 0 <= index < len(rows)]
         order.extend(index for index in range(len(rows)) if index not in order)
@@ -2254,8 +2289,9 @@ class AnswerEngine:
             if cached is not None:
                 return cached
             sections = await self._oracle.retrieval_screen_sections(filters)
-        except Exception:  # noqa: BLE001 - 画面目録は補助。画面を足さずに回答を続ける。
+        except Exception as exc:  # noqa: BLE001 - 画面目録は補助。画面を足さずに回答を続ける。
             logger.warning("screen catalog load failed", exc_info=True)
+            state.record_degraded("screen_catalog", exc)
             return {}
         catalog = catalog_from_section_paths(
             (file_name, _section_headings(section_path), count)
@@ -2290,8 +2326,9 @@ class AnswerEngine:
                     heading=heading,
                     limit=MAX_CHILDREN_PER_SCREEN * 4 + len(existing),
                 )
-            except Exception:  # noqa: BLE001 - 画面の根拠は補助。この画面を足さずに続ける。
+            except Exception as exc:  # noqa: BLE001 - 画面の根拠は補助。この画面を足さずに続ける。
                 logger.warning("screen chunks load failed", exc_info=True)
+                state.record_degraded("screen_chunks", exc)
                 continue
             matched = [
                 chunk
@@ -2347,8 +2384,9 @@ class AnswerEngine:
                     chunk.document_id, chunk_set_id=chunk_set_id, oracle=self._oracle
                 )
             outline = state.section_outlines[key]
-        except Exception:  # noqa: BLE001 - 章節の拡張は補助。広げずに回答を続ける。
+        except Exception as exc:  # noqa: BLE001 - 章節の拡張は補助。広げずに回答を続ける。
             logger.warning("section outline load failed", exc_info=True)
+            state.record_degraded("section_outline", exc)
             return None
         if outline is None:
             return None
@@ -2398,8 +2436,9 @@ class AnswerEngine:
                 filters=dict(state.filters if state.filters is not None else request.filters),
                 oracle=self._oracle,
             )
-        except Exception:  # noqa: BLE001 - 章節の拡張は補助。この章節を足さずに続ける。
+        except Exception as exc:  # noqa: BLE001 - 章節の拡張は補助。この章節を足さずに続ける。
             logger.warning("section chunks load failed", exc_info=True)
+            state.record_degraded("section_chunks", exc)
             return SectionRead(complete=False, reason="read_error")
         # #2590 より前に作った章節の対応には派生の chunk が残りうるので、原文だけを足す(#2641)。
         chunks = [
@@ -2477,15 +2516,21 @@ class AnswerEngine:
                                 lines=tuple(lines),
                                 section_ids=tuple(node.section_id for node in nodes[: len(lines)]),
                             )
-                except Exception:  # noqa: BLE001 - 条の選択は補助。この文書を飛ばして続ける。
+                except Exception as exc:  # noqa: BLE001 - 条の選択は補助。この文書を飛ばして続ける。
                     logger.warning("article catalog load failed", exc_info=True)
+                    state.record_degraded("article_catalog", exc)
                 state.article_catalogs[document_id] = catalog
             if state.article_catalogs[document_id] is not None:
                 catalogs.append(state.article_catalogs[document_id])
         return catalogs
 
     async def _article_leads(
-        self, document_id: str, chunk_set_id: str, sections: Mapping[str, str]
+        self,
+        document_id: str,
+        chunk_set_id: str,
+        sections: Mapping[str, str],
+        *,
+        state: _SearchState | None = None,
     ) -> dict[str, str]:
         """章節の本文の書き出し(条の選択の 2 段目)。
 
@@ -2501,8 +2546,10 @@ class AnswerEngine:
             chunks = await SectionMapStore(self._oracle).section_first_chunks(
                 document_id, chunk_set_id=chunk_set_id, section_ids=list(sections)
             )
-        except Exception:  # noqa: BLE001 - 2 段目は補助。書き出し無しで続ける。
+        except Exception as exc:  # noqa: BLE001 - 2 段目は補助。書き出し無しで続ける。
             logger.warning("article lead load failed", exc_info=True)
+            if state is not None:
+                state.record_degraded("article_lead", exc)
             return {}
         leads: dict[str, str] = {}
         for section_id, chunk in chunks.items():
@@ -2533,8 +2580,9 @@ class AnswerEngine:
                 if len(_ARTICLE_DOCUMENTS_CACHE) >= _SCREEN_CATALOG_CACHE_SIZE:
                     _ARTICLE_DOCUMENTS_CACHE.clear()
                 _ARTICLE_DOCUMENTS_CACHE[key] = documents
-        except Exception:  # noqa: BLE001 - 一覧は補助。候補の文書だけで続ける。
+        except Exception as exc:  # noqa: BLE001 - 一覧は補助。候補の文書だけで続ける。
             logger.warning("article documents load failed", exc_info=True)
+            state.record_degraded("article_documents", exc)
             documents = []
         state.article_documents = list(documents)
         return state.article_documents
@@ -2562,8 +2610,9 @@ class AnswerEngine:
                     chunk_set_id=chunk_set_id,
                     section_ids=[item.section_id for item in items],
                 )
-            except Exception:  # noqa: BLE001 - 条の根拠は補助。この文書の条を足さずに続ける。
+            except Exception as exc:  # noqa: BLE001 - 条の根拠は補助。この文書の条を足さずに続ける。
                 logger.warning("article chunks load failed", exc_info=True)
+                state.record_degraded("article_chunks", exc)
                 continue
             found.extend(
                 (firsts[item.section_id], item)
@@ -3665,6 +3714,9 @@ def _zero_evidence_diagnostics(
         "automatic_filters": active,
         "relaxed": list(state.relaxed),
         "searches": list(state.search_log),
+        # 失敗して空のまま続けた補助の処理(#3259)。0 件が「当たらなかった」のか
+        # 「読めなかった」のかを分ける(処理の種類・回数・例外の型の名前だけ)。
+        "degraded_steps": state.degraded_steps(),
     }
 
 
