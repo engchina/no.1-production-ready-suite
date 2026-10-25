@@ -8,6 +8,8 @@ import type { ChatAttachmentItem } from "./chat-attachments";
 export interface ChatTurnProps {
   /** 送った質問（改行はそのまま出す）。 */
   question?: ReactNode;
+  /** 質問の言語（`ChatUserMessage` の `lang`。渡さなければ文字列の質問から判定する。#3335）。 */
+  questionLang?: string | null;
   /**
    * 質問の吹き出しの代わりに出す利用者の側の表示（回答前の確認の答えの `ClarificationRecord`。#1839）。
    * 渡すと `question` の吹き出しは出さない。
@@ -38,6 +40,7 @@ export interface ChatTurnProps {
  */
 export function ChatTurn({
   question,
+  questionLang,
   userContent,
   questionStatus = "sent",
   failedLabel,
@@ -62,6 +65,7 @@ export function ChatTurn({
           senderLabel={questionSender}
           attachments={questionAttachments}
           attachmentsLabel={attachmentsLabel}
+          lang={questionLang}
         >
           {question}
         </ChatUserMessage>

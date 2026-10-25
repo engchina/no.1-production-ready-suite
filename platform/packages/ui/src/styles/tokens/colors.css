@@ -31,12 +31,7 @@
    値が「宣言した要素」で確定してから継承される。:root だけで宣言すると [data-surface] の内側で
    上書きしていないトークンがライト値のまま残るため。 */
 :root, [data-theme], [data-surface] {
-  --font-sans: "Noto Sans JP Variable", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  /* 本文の書体（--font-sans）は、日本語の字形を優先して Noto Sans JP を先頭に置き、JP に無い簡体字・繁体字・
-     香港の字だけを Noto Sans SC → Noto Sans TC → Noto Sans HK で補う（3 製品とも @fontsource で自前ホストする。#3292）。
-     4 書体とも可変書体（@fontsource-variable。書体名に Variable が付く）で、@font-face を slice の数に抑える（#3328・#3333）。 */
-  /* 等幅書体。3製品とも Google Sans Code を @fontsource で自前ホストする（#75）。 */
-  --font-mono: "Google Sans Code", "Noto Sans JP Variable", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", monospace;
+  /* 書体の並び（--font-sans / --font-mono）は fonts.css（内容の言語で切り替えるため、ここでは宣言し直さない。#3335）。 */
 
   /* ── 面 (surface) ──────────────────────────────────────────────────────
      ライトでは「浮き」を影で、ダークでは「浮き」を明るさで表現します。

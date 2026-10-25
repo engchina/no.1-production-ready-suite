@@ -1,4 +1,5 @@
 import {
+  AnswerPlainText,
   AnswerSections,
   useEvidenceSource,
   type AnswerCitationRef,
@@ -73,10 +74,10 @@ export function AnswerText({
   const blocks = streaming ? null : (parseAnswerText(text, format) ?? (passages ? plainParagraphs(text) : null));
   if (!blocks) {
     return (
-      <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg" aria-live={live ? "polite" : undefined}>
-        {text}
+      // 節に分けない本文も共通の部品で出し、回答の言語の字形で描く（#3335）。
+      <AnswerPlainText text={text} live={live}>
         {cursor}
-      </p>
+      </AnswerPlainText>
     );
   }
   // 節・段落・根拠の行の見た目は 3 製品で共通の AnswerSections（#2328）。

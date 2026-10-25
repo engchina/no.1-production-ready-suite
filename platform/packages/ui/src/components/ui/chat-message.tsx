@@ -1,6 +1,7 @@
 import { AlertCircle, UserRound } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { resolveContentLang } from "../../lib/content-lang";
 import { cn } from "../../lib/utils";
 import { ChatAttachmentList, type ChatAttachmentItem } from "../chat/chat-attachments";
 
@@ -23,6 +24,11 @@ export interface ChatUserMessageProps {
   attachments?: ChatAttachmentItem[];
   /** 添付の一覧の名前（翻訳済み。例:「添付ファイル」）。読み上げだけ。 */
   attachmentsLabel?: string;
+  /**
+   * 質問の言語（#3335。`resolveContentLang`）。渡さなければ、本文が文字列のときに本文から判定して吹き出しに
+   * `lang` を付ける。`null` なら付けない。
+   */
+  lang?: string | null;
   className?: string;
   testId?: string;
 }
@@ -37,6 +43,7 @@ export interface ChatUserMessageProps {
  * - 状態は `data-status` にも出す（e2e で状態を確かめる）。
  * - 会話の持ち主以外（system_admin）が送った質問は、吹き出しの上に送った人を文で出す
  *   （`senderLabel`。色だけに頼らない。#1928）。
+ * - 質問の本文の言語を吹き出しの `lang` に付ける（中国語の質問は中国語の字形。#3335）。
  */
 export function ChatUserMessage({
   children,
@@ -45,9 +52,12 @@ export function ChatUserMessage({
   senderLabel,
   attachments,
   attachmentsLabel,
+  lang,
   className,
   testId,
 }: ChatUserMessageProps) {
+  // 質問は利用者の内容なので、言語の字形で描く（#3335）。本文が要素のときは呼び出し側が `lang` を渡す。
+  const contentLang = resolveContentLang(lang, typeof children === "string" ? children : null);
   return (
     <div
       className={cn("flex flex-col items-end gap-1", className)}
@@ -58,6 +68,7 @@ export function ChatUserMessage({
       <div
         data-surface-tint="accent"
         className="max-w-[85%] whitespace-pre-wrap break-words rounded-md bg-accent-subtle px-3 py-2 text-sm text-fg"
+        lang={contentLang}
       >
         {children}
       </div>

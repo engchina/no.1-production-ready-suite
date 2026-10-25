@@ -1165,9 +1165,11 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 ### 書体の並び（#3292）
 
 ```
---font-sans: "Noto Sans JP Variable", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", system-ui, …, sans-serif
---font-mono: "Google Sans Code", "Noto Sans JP Variable", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", monospace
+--font-sans: "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", system-ui, …, sans-serif
+--font-mono: "Google Sans Code", "Google Sans Code Fallback", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", monospace
 ```
+
+（`lang="ja"`・既定の並び。内容の言語ごとの並びは下の「内容の言語の字形」、`… Fallback` は「寸法を合わせた代わりの書体」。）
 
 - 日本語の字形を優先するため Noto Sans JP を先頭に置き、JP に無い字（簡体字・繁体字・香港の字）だけを Noto Sans SC → Noto Sans TC → Noto Sans HK の順で補う。JP にある字（同じ符号の漢字）は JP の字形のまま。
 - 4 書体とも 3 製品が `@fontsource` で自前ホストする（外部の CDN を使わない）。太さは Noto Sans JP と同じ。4 書体とも unicode-range で分けた CSS を読み、画面に出た字を含む分だけを取得する。preload はせず、`font-display` は `@fontsource` の既定（`swap`）のまま。
@@ -1175,6 +1177,41 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 - SC / TC / HK は可変書体（`@fontsource-variable/noto-sans-{sc,tc,hk}` の `wght.css`。1 つの face が太さ 100〜900 を持ち、書体名は `Noto Sans SC Variable` など）にし、`@font-face` を slice の数（3 書体で 318）に抑える。静的な書体の `<weight>.css` は slice × 太さ（4 太さで 1272）の `@font-face` になり、Chromium がページの読み込み・離脱のたびに face ごとの処理を main thread に積んで、画面の描画が数秒止まった（#3328）。デザインモック（`css/tokens/`。Google Fonts）の書体名は `Noto Sans SC` などのまま。
 - SC / TC / HK の `@font-face`（約 100 の slice × 太さ）は主の CSS（描画を止める）に入れず、製品の `src/fonts-cjk.css` を `main.tsx` が共有の `loadStylesAfterFirstRender`（最初の commit の後の次の frame の後）で `import()` し、Vite が別の CSS の chunk にする（#3305）。読み込む前の中国語の字は JP・端末の書体で出て、読み込んだ後に置き換わる。Noto Sans JP・Roboto・Google Sans Code は主の CSS のまま。
 - e2e は共通の `platform/packages/ui/e2e/font-checks.ts`（JP に無い合成の字で SC / TC / HK の読み込みと、実際に使われた書体を確かめる。最初の描画の時点の CSS と index.html が読む CSS に SC / TC / HK の `@font-face` が無いことも確かめる）。
+
+### 内容の言語の字形（`lang` と `:lang()`。#3335）
+
+同じ符号の漢字（Han unification。例: 骨・直・角）は、日本・中国（簡体）・台湾・香港で字形が違う。画面の文言は `<html lang="ja">` のまま JP の字形にし、利用者の内容（回答・根拠の抜粋・質問・文書のプレビューの本文）は内容の言語の書体を先頭にする。
+
+```
+--font-han（lang="ja"・既定） "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable"
+--font-han（lang="zh-Hans"）  "Noto Sans SC Variable", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans TC Variable", "Noto Sans HK Variable"
+--font-han（lang="zh-Hant"）  "Noto Sans TC Variable", "Noto Sans HK Variable", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable"
+--font-han（lang="zh-HK"）    "Noto Sans HK Variable", "Noto Sans TC Variable", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable"
+--font-sans = var(--font-han), "Roboto", system-ui, …   --font-mono = "Google Sans Code", "Google Sans Code Fallback", var(--font-han), "Roboto", monospace
+```
+
+- 正本は `tokens/fonts.css`。`:where([lang]:lang(…))` が `--font-han` を替え、`:where([lang])` が `--font-sans` / `--font-mono`（と Tailwind の preflight の `--default-font-family` / `--default-mono-font-family`）を `lang` を付けた要素で組み直す（`var()` は宣言した要素で解決されるため）。書体の指定（`font-family: var(--font-sans)`）は Tailwind の `base` の層に置き、`code` / `pre` の等幅と `font-mono` などの utility を上書きしない。入れ子の `lang="ja"` は JP に戻る。
+- `lang` は共有の部品が付ける（`AnswerSections` / `AnswerPlainText` / `MarkdownText` / `ExcerptContent` / `EvidenceCard`（`item.lang`）/ `ChatUserMessage`・`ChatTurn`（`questionLang`）/ `DocumentPreview`（`textLang`））。部品の `lang` に値（BCP 47。取込で分かっている言語）を渡せばそれを、`null` なら付けず、渡さなければ本文から `detectContentLang` で決める。`zh-CN` → `zh-Hans`、`zh-TW` → `zh-Hant`、`zh-HK` / `zh-Hant-HK` → `zh-HK` にそろえる（`normalizeContentLang`）。
+- 判定（`src/lib/content-lang.ts`。先頭 4000 字）: かなが漢字とかなの 2 割以上なら `ja`。簡体字だけ・繁体字だけの字があれば、多い方が 2 倍以上で `zh-Hans` / `zh-Hant`（かながあって印の字が 1 字だけなら `ja`）。漢字だけで印の字が無い・漢字が無いなら付けない（画面の `ja` のまま）。香港の字形は字だけでは台湾の繁体字と分けられないので判定せず、値で渡されたときだけ `zh-HK`。特定の文書・語に合わせた規則は持たない。
+- 簡体字だけ・繁体字だけの字の集合（`src/lib/han-script-sets.ts`。約 1,000 字ずつ）は Unihan（Unicode 17.0.0）の符号化の表から `scripts/generate-han-script-sets.py` で作る。簡体字だけ = GB 2312 第 1 水準にあり Big5 に無く、繁体字の異体が別の字で、日本語の字（JIS X 0208・JIS X 0213・常用漢字・人名用漢字）に無い字。繁体字だけ = Big5 の常用字にあり GB 2312 に無く、簡体字の異体が別の字で、現代の日本語の字（JIS X 0208 第 1 水準・常用漢字・人名用漢字）に無い字。
+- 読み上げも内容の言語で読む（WCAG 3.1.2 Language of Parts）。
+
+### 寸法を合わせた代わりの書体（`Noto Sans JP Fallback` / `Google Sans Code Fallback`。#3335）
+
+Web の書体は `font-display: swap` で、届くまでは端末の書体で描き、届いたら差し替える。差し替えで行の高さ・字幅が変わって配置が動かない（CLS）よう、Web の書体の直後に、端末の書体を `local()` で参照して寸法を合わせた `@font-face` を置く（Next.js の `next/font`・Fontaine と同じ。通信はしない。8 face）。
+
+| face | `local()` | `size-adjust` | `ascent-override` | `descent-override` | `line-gap-override` |
+|---|---|---|---|---|---|
+| JP Fallback かな・漢字 100–500 / 600–900 | Hiragino Sans W3 / W6・Hiragino Kaku Gothic ProN・Yu Gothic Medium / Bold・Meiryo（/ Bold） | 100% | 116% | 28.8% | 0% |
+| JP Fallback ラテン文字 100–400（`U+0000-024F`） | Arial・Liberation Sans | 104.66% | 110.84% | 27.52% | 0% |
+| 〃 500 | 〃 | 107.41% | 108% | 26.81% | 0% |
+| 〃 600 | Arial Bold・Liberation Sans Bold | 101.42% | 114.38% | 28.4% | 0% |
+| 〃 700–900 | 〃 | 103.11% | 112.5% | 27.93% | 0% |
+| Google Sans Code Fallback 100–500 / 600–900 | Courier New・Liberation Mono（/ Bold） | 99.98% | 96.62% | 28.6% | 0% |
+
+- 求め方（`platform/packages/ui/scripts/font-fallback-metrics.py`。fontTools で `@fontsource` の woff2 と Liberation Sans / Mono のファイルを読む。Liberation は Arial / Courier New と字幅が同じ）: `size-adjust` = Web の書体の平均の字幅 / 代わりの書体の平均の字幅（capsize の `xWidthAvg` と同じ英文の字の頻度の重み。可変の Noto Sans JP は太さごとの instance で測る）。`*-override` = Web の書体の hhea の値 / units-per-em / `size-adjust`（Noto Sans JP は ascent 1.16・descent 0.288・line-gap 0、Google Sans Code は 0.966・0.286・0）。
+- かな・漢字は日本語・中国語の書体のどれも全角（1em）なので `size-adjust` は 100% のまま、縦の寸法だけを合わせる。ラテン文字は `unicode-range` で分けた face（同じ family で後に書いた face が先に当たる）で、太さごとに字幅を合わせる。太字は端末の太字の書体を当てる（合成の太字にしない）。
+- Noto Sans CJK JP（Linux・Android）は Noto Sans JP に無い字（簡体字など）も持ち、JP の後ろに置くと SC / TC / HK より先に当たるため入れない。`system-ui` などの総称の書体は `local()` で参照できないので並びの後ろのまま。Safari は `ascent-override` などを無視する（`size-adjust` だけが効く）。
 
 ### アクセシビリティモード（`tokens/a11y.css`）
 
@@ -1352,6 +1389,7 @@ QA に事前共有してください。**96点あります。**
 | 161 | **Noto Sans JP に無い簡体字・繁体字・香港の字が、端末の書体ではなく自前ホストの Noto Sans SC → TC → HK で描かれる**（#3292。`--font-sans` / `--font-mono`） | `"Noto Sans JP", "Roboto", …`（JP に無い字は端末の書体に任せ、字形がそろわない・豆腐になる）→ `"Noto Sans JP", "Noto Sans SC", "Noto Sans TC", "Noto Sans HK", "Roboto", …`（等幅も Google Sans Code → JP の後ろに同じ順） | JP の字形を優先したまま、中国語の資料・質問・回答の字を端末によらずそろえる。JP にある字の見た目は変わらない |
 | 162 | **DB の状態の確認・ログインの確認・NL2SQL の公開ルートの読み込み中の表示が、画面と同じ全幅で出る**（#3311。`PageLoadingState`） | 本文の最大幅（1440px）の中央寄せで出て、読み込み後に全幅の画面へ広がり左右の端がずれた → 常に `PageBody wide` で出し、読み込み後の画面と同じ幅にする | 3 製品の画面はすべて全幅。Skeleton は読み込み後の配置を先に取り、読み込みの前後で配置を動かさない |
 | 163 | **RAG・Agent の太さ 600（`--font-weight-semibold`。セクション・カードの見出しなど）の日本語・ラテン字が、700 ではなく本来の 600 の字形で出る**（#3333。`--font-sans` / `--font-mono` の Noto Sans JP を可変書体の `Noto Sans JP Variable` に） | Noto Sans JP の静的な書体を 400 / 500 / 700 だけ読み、600 は一番近い 700 で描いていた → 可変書体（太さ 100〜900）で 600 を本物の字形で描く。NL2SQL は前から 600 を読んでいたので変わらない。400 / 500 / 700 の見た目は変わらない | tokens の太さ（400 / 500 / 600 / 700）を 3 製品で同じ字形にそろえる。可変書体で `@font-face` を slice の数（124）にし、日本語の woff2 を画面に出た字の slice だけ読む |
+| 164 | **中国語の内容（回答・根拠の抜粋・質問・文書のプレビュー）の共通の漢字が、中国語の字形で描かれる。Web の書体が届く前の代わりの書体が寸法を合わせた端末の書体になる**（#3335。`tokens/fonts.css`・`resolveContentLang`・共有の部品の `lang`） | 内容の言語によらず JP → SC → TC → HK の 1 つの並び（中国語の内容の骨・直・角なども日本の字形）。届く前は `system-ui` などの寸法の違う端末の書体で、差し替えで行の折り返しが変わった → 共有の部品が内容に `lang`（`zh-Hans` / `zh-Hant` / `zh-HK` / `ja`）を付け、`:lang()` で SC / TC / HK を先頭にする。並びの Web の書体の直後に `Noto Sans JP Fallback` / `Google Sans Code Fallback`（`local()` と `size-adjust`・`*-override`）を置く | Han unification で同じ符号の漢字の字形が地域で違う。画面の文言は日本語の字形のまま、利用者の内容は内容の言語の字形で読めるようにする。書体の差し替えの前後で配置を動かさない（CLS。web.dev の Web の書体の指針・Next.js の `next/font` と同じ） |
 
 確認カードの質問見出しは、青い外枠を表示しない。読み上げのための自動フォーカスと操作部品のキーボードフォーカス表示は維持する（#3118）。
 

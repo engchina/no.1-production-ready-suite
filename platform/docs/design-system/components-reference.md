@@ -3682,6 +3682,7 @@ import { MarkdownText, ResultTable, splitMarkdownTables } from "@production-read
 | `text` | `string` | — | Markdown の本文。空なら何も描かない |
 | `headingLevel` | `2 \| 3 \| 4 \| 5 \| 6` | `3` | 本文の最上位の見出しの HTML の段。置く場所の見出しの下の段を渡す（カードの h2 の下なら 3、h1 だけの画面なら 2） |
 | `labels` | `Partial<MarkdownTextLabels>` | `{ newTab: "（新しいタブで開きます）" }` | 新しいタブで開くリンクの読み上げの補足 |
+| `lang` | `string \| null` | 本文から判定 | 外側の `div` の `lang`（#3335。下の「内容の言語」） |
 | `className` / `testId` | `string` | — | 外側の `div`（`data-markdown-text`）に付ける |
 
 - 描くもの: 見出し（`#`〜`######`）・段落（中の改行は `<br>`）・`-` / `*` / `+` / `1.` の箇条書き（字下げで入れ子）・` ``` ` / `~~~` のコードブロック（`data-language`）・`>` の引用・`---` の区切り線、行の中の `` `code` ``・`**強調**`・`*斜体*`・`[文字](https://…)`・`<https://…>`・裸の URL、`\*` の取り消し。
@@ -3960,3 +3961,23 @@ NL2SQL のチャット・DB 管理チャットと、Agent のチャット・実�
 
 - Agent: `lib/run-tables.ts` の `toolResultSql`（`executable_sql` を優先し、無ければ `generated_sql`。`is_safe`・`status`）。
 - 単体テストは `packages/ui/tests/chat-sql-block.test.tsx`。
+
+---
+
+## 内容の言語: resolveContentLang / detectContentLang / normalizeContentLang — **新規**（#3335）
+
+利用者の内容（回答・根拠の抜粋・質問・文書のプレビューの本文）の要素に内容の言語の `lang` を付け、共有の tokens（`tokens/fonts.css`）の `:lang()` で漢字の字形を切り替える（`zh-Hans` は Noto Sans SC、`zh-Hant` は TC、`zh-HK` は HK を先頭にした並び。画面の文言は `<html lang="ja">` のまま）。決めたことと理由は README §2「内容の言語の字形」。
+
+| 部品・関数 | `lang` の渡し方 | 付ける要素 |
+|---|---|---|
+| `AnswerSections` | `lang?`（無ければ段落・節の見出し・項目の `passageText` / 文字列の `content` から判定） | 本文の入れ物（`data-testid="answer-text"`） |
+| `AnswerPlainText`（新規） | `lang?`（無ければ `text` から） | 節に分けない回答（生成中・書式に合わない本文）の `p`。`text`・`live?`・`children`（カーソル） |
+| `MarkdownText` / `ExcerptContent` | `lang?` | 外側の `div` |
+| `EvidenceCard` などの根拠の一覧 | `EvidenceListItem.lang?` | 抜粋（`citation-text`） |
+| `ChatUserMessage` / `ChatTurn` | `lang?` / `questionLang?`（無ければ文字列の質問から） | 質問の吹き出し |
+| `DocumentPreview`（`kind="text"`） | `textLang?` | 本文の `pre` |
+| `resolveContentLang(lang, text)` | 値（BCP 47）ならそれ（`normalizeContentLang` でそろえる）、`null` なら付けない、`undefined` なら `detectContentLang(text)` | 製品が内容を自前の要素で出すとき |
+
+- 取込などで言語が分かっていれば値を渡す（`zh-CN` → `zh-Hans`、`zh-TW` → `zh-Hant`、`zh-HK` / `zh-Hant-HK` → `zh-HK`、`ja-JP` → `ja`）。今は 3 製品とも取込で言語を持たないので、本文からの判定で付く。
+- `detectContentLang` は決められなければ `undefined`（`lang` を付けない）。`zh-HK` は判定しない。
+- 単体テストは `packages/ui/tests/content-lang.test.tsx`。e2e は `font-checks.ts` の `renderedLangFonts`（3 製品の書体の spec）と、RAG の `chat.spec.ts` の中国語の内容の会話（Chromium が実際に使った書体を CDP で確かめる）。

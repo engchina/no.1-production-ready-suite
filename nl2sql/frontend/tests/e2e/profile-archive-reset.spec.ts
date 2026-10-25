@@ -1,6 +1,7 @@
 import { FONT_SANS_PREFIX } from "../../../../platform/packages/ui/e2e/font-checks";
 import {
   expectDeferredCjkFontFaces,
+  expectLangFonts,
   expectLocalCjkFallbackFonts,
   expectLocalJapaneseFonts,
   expectLocalUiFonts,
@@ -550,6 +551,8 @@ test("ローカルフォントで全体と並べ替え列名を描画しキー�
   await expectLocalJapaneseFonts(page);
   // Noto Sans JP に無い字（合成の例）は Noto Sans SC → TC → HK で補う（#3292）。
   await expectLocalCjkFallbackFonts(page);
+  // 内容の言語（lang）で共通の漢字の字形を切り替える（#3335）。
+  await expectLangFonts(page);
   expect(fontResponses.some(({ url }) => url.includes("noto-sans-jp"))).toBe(true);
   for (const family of ["noto-sans-sc", "noto-sans-tc", "noto-sans-hk"]) {
     expect(fontResponses.some(({ url }) => url.includes(family)), family).toBe(true);

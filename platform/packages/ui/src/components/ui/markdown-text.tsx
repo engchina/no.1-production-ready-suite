@@ -1,5 +1,6 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useMemo, type ReactNode } from "react";
 
+import { resolveContentLang } from "../../lib/content-lang";
 import {
   parseMarkdownBlocks,
   parseMarkdownInline,
@@ -26,6 +27,11 @@ export interface MarkdownTextProps {
    */
   headingLevel?: 2 | 3 | 4 | 5 | 6;
   labels?: Partial<MarkdownTextLabels>;
+  /**
+   * 本文の言語（#3335。`resolveContentLang`）。渡さなければ本文から判定して `lang` を付け、`null` なら付けない。
+   * 取込などで言語が分かっていれば、その値（BCP 47）を渡す。
+   */
+  lang?: string | null;
   className?: string;
   testId?: string;
 }
@@ -40,8 +46,10 @@ export interface MarkdownTextProps {
  * - 段落の中の改行はそのまま改行にする（日本語の回答は改行を区切りに使うため、空白にまとめない）。
  * - 長いコードは枠の中で横にスクロールし（キーボードでもスクロールできるようフォーカスを受ける）、長い URL・語は
  *   折り返して、375px でもページを横にはみ出さない。色・余白・コードの地はトークン。
+ * - 本文の言語を `lang` に付け、漢字を内容の言語の字形で描く（中国語の回答は Noto Sans SC など。#3335）。
  */
-export function MarkdownText({ text, headingLevel = 3, labels, className, testId }: MarkdownTextProps) {
+export function MarkdownText({ text, headingLevel = 3, labels, lang, className, testId }: MarkdownTextProps) {
+  const contentLang = useMemo(() => resolveContentLang(lang, text), [lang, text]);
   const blocks = parseMarkdownBlocks(text);
   const levels = collectHeadingLevels(blocks);
   const context: RenderContext = {
@@ -58,6 +66,7 @@ export function MarkdownText({ text, headingLevel = 3, labels, className, testId
         className,
       )}
       data-markdown-text
+      lang={contentLang}
       data-testid={testId}
     >
       {renderBlocks(blocks, context)}

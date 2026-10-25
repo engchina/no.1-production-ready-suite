@@ -9,6 +9,7 @@ import {
   JAPANESE_FONT,
   UI_FONT_WEIGHTS,
   faceCoversWeight,
+  LANG_FONT_SAMPLES,
   firstRenderFontFaces,
   japaneseInkByWeight,
   initialStylesheetFontFaces,
@@ -17,6 +18,7 @@ import {
   recordFirstRenderFontFaces,
   renderedCjkFallbackFonts,
   renderedJapaneseFonts,
+  renderedLangFonts,
 } from "../../../platform/packages/ui/e2e/font-checks";
 
 /** 共有 tokens の太さ（400 / 500 / 600 / 700）。JP・SC・TC・HK は可変書体で、どの太さも本物の字形で出す。 */
@@ -44,6 +46,23 @@ async function checkMonoFont(page: Page) {
   expect(result.counts.every((count) => count > 0), "Google Sans Code 400/500/600/700").toBe(true);
   for (const family of result.families) {
     expect(family).toBe(FONT_MONO_FAMILY);
+  }
+}
+
+/** 内容の言語（lang）ごとに、共通の漢字（合成の例）がその言語の書体で描かれることを確かめる（#3335）。 */
+async function checkLangFonts(page: Page) {
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const rendered = await renderedLangFonts(page, cdp);
+    for (const sample of LANG_FONT_SAMPLES) {
+      for (const kind of ["sans", "mono"] as const) {
+        const families = rendered[`${sample.lang}-${kind}`];
+        expect(families.length, `${sample.lang}-${kind}`).toBeGreaterThan(0);
+        expect(families.every((family) => family.startsWith(sample.renderedFamily)), `${sample.lang}-${kind}: ${families.join(", ")}`).toBe(true);
+      }
+    }
+  } finally {
+    await cdp.detach();
   }
 }
 
@@ -184,5 +203,12 @@ test.describe("自前ホストフォント", () => {
       await cdp.detach();
     }
     expect(external, "外部フォント CDN への通信").toEqual([]);
+  });
+
+  // 利用者の内容は lang を付けた要素で、言語の字形の書体を先頭にする（#3335）。画面の文言（html の ja）は JP のまま。
+  test("内容の言語（lang）で共通の漢字を JP・SC・TC・HK の字形で描き分ける", { tag: "@responsive" }, async ({ page }) => {
+    await mockDatabaseReady(page);
+    await page.goto("/");
+    await checkLangFonts(page);
   });
 });

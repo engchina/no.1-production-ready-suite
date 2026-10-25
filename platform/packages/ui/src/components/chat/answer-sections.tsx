@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp, FileText } from "lucide-react";
 import { useId, useMemo, useState, type ReactNode } from "react";
 
+import { resolveContentLang } from "../../lib/content-lang";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { TEXT_ICON_SIZE } from "../ui/text-icon";
@@ -34,6 +35,8 @@ import {
  * 段落の印の記録（`passages`。#2738）を渡すと、印の付いた段落・項目に左の区切りの線と末尾の印を付け、
  * 本文の上に回答全体の注意、本文の後ろに「根拠と矛盾し除いた内容」「確認が必要な点」の節を足す。段落の照合は
  * 段落・項目の原文（`passageText`。無ければ文字列の `content`）と印の `text` で行う。
+ *
+ * 本文の入れ物には回答の言語の `lang` を付ける（`lang`。渡さなければ本文から判定する。#3335）。
  */
 
 /** 畳める節で、畳んだときに出す項目の数。 */
@@ -155,6 +158,11 @@ export interface AnswerSectionsProps {
    */
   passages?: AnswerPassageRecords | null;
   passageLabels?: AnswerPassageLabels;
+  /**
+   * 回答の言語（BCP 47。#3335。`resolveContentLang`）。渡さなければ段落・項目の文（文字列の `content` と
+   * `passageText`）から判定して本文の入れ物に `lang` を付け、`null` なら付けない。
+   */
+  lang?: string | null;
 }
 
 /** 印を当てた段落（照合の結果と、移る先の id）。 */
@@ -176,6 +184,56 @@ function passageTextOf(passageText: string | undefined, content: ReactNode): str
   return typeof content === "string" ? content : undefined;
 }
 
+export interface AnswerPlainTextProps {
+  /** 回答の本文（節に分けない文字列。改行はそのまま出す）。 */
+  text: string;
+  /** 本文の更新を読み上げる（チャット）。 */
+  live?: boolean;
+  /** 回答の言語（BCP 47。`resolveContentLang`）。渡さなければ本文から判定し、`null` なら `lang` を付けない。 */
+  lang?: string | null;
+  /** 本文の後ろに置くもの（生成中のカーソルなど）。 */
+  children?: ReactNode;
+  className?: string;
+  testId?: string;
+}
+
+/**
+ * 節に分けない回答の本文（生成中・回答エンジンの書式に合わない本文。#3335）。`AnswerSections` と同じ文字の大きさ・
+ * 行の高さで、回答の言語の `lang` を付ける（中国語の回答は中国語の字形で描く）。
+ */
+export function AnswerPlainText({ text, live = false, lang, children, className, testId }: AnswerPlainTextProps) {
+  const contentLang = useMemo(() => resolveContentLang(lang, text), [lang, text]);
+  return (
+    <p
+      className={cn("whitespace-pre-wrap text-sm leading-relaxed text-fg", className)}
+      aria-live={live ? "polite" : undefined}
+      lang={contentLang}
+      data-testid={testId}
+    >
+      {text}
+      {children}
+    </p>
+  );
+}
+
+/** 言語の判定に使う回答の文（段落・節の見出し・項目の原文）。 */
+function answerText(blocks: readonly AnswerSectionsBlock[]): string {
+  const parts: string[] = [];
+  for (const block of blocks) {
+    if (block.kind === "section") {
+      if (block.title) parts.push(block.title);
+      for (const entry of block.entries) {
+        const text = passageTextOf(entry.passageText, entry.content);
+        if (text) parts.push(text);
+      }
+    } else {
+      const text = passageTextOf(block.passageText, block.content);
+      if (text) parts.push(text);
+    }
+  }
+  return parts.join("\n");
+}
+
 /** 回答の本文の節（段落・見出しつきの箇条書き・各項目の根拠の行）。 */
 export function AnswerSections({
   blocks,
@@ -186,8 +244,11 @@ export function AnswerSections({
   labels = DEFAULT_ANSWER_SECTIONS_LABELS,
   passages = null,
   passageLabels = DEFAULT_ANSWER_PASSAGE_LABELS,
+  lang,
 }: AnswerSectionsProps) {
   const baseId = useId();
+  // 回答の本文の言語（中国語の回答は中国語の字形で描く。#3335）。
+  const contentLang = useMemo(() => resolveContentLang(lang, answerText(blocks)), [lang, blocks]);
   // 本文の段落・項目（表示の順）に印を当てる。
   const { marked, anchors } = useMemo(() => {
     if (!passages?.marks.length) return { marked: NO_MARKS, anchors: [] as string[] };
@@ -221,6 +282,7 @@ export function AnswerSections({
     <div
       className={cn("space-y-3 text-sm leading-relaxed text-fg", className)}
       aria-live={live ? "polite" : undefined}
+      lang={contentLang}
       data-testid={testId}
     >
       {passages?.warnings.length ? <AnswerPassageWarnings warnings={passages.warnings} labels={passageLabels} /> : null}

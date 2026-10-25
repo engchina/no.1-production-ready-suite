@@ -58,6 +58,13 @@ export {
 } from "./lib/excerpt-text";
 export { ExcerptContent, type ExcerptContentProps } from "./components/data/excerpt-content";
 export {
+  CONTENT_LANG_SCAN_LIMIT,
+  detectContentLang,
+  normalizeContentLang,
+  resolveContentLang,
+  type ContentLang,
+} from "./lib/content-lang";
+export {
   parseMarkdownBlocks,
   parseMarkdownInline,
   safeMarkdownHref,
@@ -325,9 +332,11 @@ export {
 export {
   ANSWER_SECTION_COLLAPSE_AFTER,
   AnswerCitationLinks,
+  AnswerPlainText,
   AnswerSections,
   DEFAULT_ANSWER_SECTIONS_LABELS,
   type AnswerCitationRef,
+  type AnswerPlainTextProps,
   type AnswerSectionEntry,
   type AnswerSectionsBlock,
   type AnswerSectionsLabels,

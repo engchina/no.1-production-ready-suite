@@ -1,5 +1,6 @@
 import {timelineSnapshot, timelineTypography} from "../../../platform/packages/ui/e2e/timeline-snapshot";
 import { findIconTextMisalignment } from "../../../platform/packages/ui/e2e/layout-checks";
+import { renderedFontsForSelector, waitForCjkFallbackFaces } from "../../../platform/packages/ui/e2e/font-checks";
 
 import { expect, type Locator, type Page, test } from "./fixtures/test";
 import {
@@ -588,6 +589,83 @@ test("送信開始後に永続化された質問を重複表示しない", async
     chat.getByText(userMessage.content, { exact: true }).and(chat.locator(":not(h2)"))
   ).toHaveCount(1);
 });
+
+// 内容の言語の字形（#3335）。合成の例文だけを使う（業務の内容ではない）。同じ符号の漢字（骨・直・角）が、中国語の内容では
+// Noto Sans SC、日本語の内容では Noto Sans JP で描かれることを、Chromium が実際に使った書体で確かめる。
+const zhQuestion = "这个示例句子说明了什么？";
+const zhAnswer = "这是一个用于测试的示例回答：骨、直、角三个字的字形因地区而不同。";
+const zhExcerpt = "示例资料：同一个字在不同地区的字形可能不同，例如骨、直、角。";
+const jaQuestion = "この例文は何を説明していますか？";
+const jaAnswer = "これはテスト用の例文です。骨・直・角の三つの字の字形は地域で異なります。";
+const langMessages = [
+  { ...userMessage, message_id: "u-zh", content: zhQuestion },
+  {
+    ...assistantMessage,
+    message_id: "a-zh",
+    reply_to_message_id: "u-zh",
+    content: zhAnswer,
+    citations: [{ ...citationChunk, chunk_id: "ch-zh", text: zhExcerpt, file_name: "示例资料.txt" }],
+  },
+  { ...userMessage, message_id: "u-ja", content: jaQuestion, created_at: "2026-01-01T00:00:02Z" },
+  { ...assistantMessage, message_id: "a-ja", reply_to_message_id: "u-ja", content: jaAnswer, created_at: "2026-01-01T00:00:03Z" },
+];
+
+/** `target` の子の文字を Chromium が描いた書体の名前（CDP）。 */
+async function renderedFontsOf(page: Page, target: Locator, family: string, text: string): Promise<string[]> {
+  await waitForCjkFallbackFaces(page);
+  await target.evaluate(async (element, { family, text }) => {
+    element.setAttribute("data-e2e-font-target", "");
+    await document.fonts.load(`400 14px "${family}"`, text);
+    await document.fonts.ready;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  }, { family, text });
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    return await renderedFontsForSelector(cdp, "[data-e2e-font-target]");
+  } finally {
+    await cdp.detach();
+    await target.evaluate((element) => element.removeAttribute("data-e2e-font-target"));
+  }
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280 },
+  { name: "mobile", width: 375 },
+]) {
+  test(`中国語の質問・回答・根拠の抜粋は中国語の字形、日本語の内容は日本語の字形で描く（#3335） (${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await openPersistedConversation(page, viewport.width, langMessages);
+
+    const zhQuestionBubble = page.getByText(zhQuestion, { exact: true });
+    const zhAnswerText = page.getByText(zhAnswer, { exact: true });
+    const jaAnswerText = page.getByText(jaAnswer, { exact: true });
+    await expect(zhAnswerText).toBeVisible();
+    // 共有の部品が内容の言語を lang に付ける（画面の文言は html の ja のまま）。
+    await expect(page.locator("html")).toHaveAttribute("lang", "ja");
+    await expect(zhQuestionBubble).toHaveAttribute("lang", "zh-Hans");
+    await expect(page.getByText(jaQuestion, { exact: true })).toHaveAttribute("lang", "ja");
+    await expect(zhAnswerText.locator("xpath=ancestor-or-self::*[@lang][1]")).toHaveAttribute("lang", "zh-Hans");
+    await expect(jaAnswerText.locator("xpath=ancestor-or-self::*[@lang][1]")).toHaveAttribute("lang", "ja");
+
+    const zhFonts = await renderedFontsOf(page, zhAnswerText, "Noto Sans SC Variable", zhAnswer);
+    expect(zhFonts.length).toBeGreaterThan(0);
+    expect(zhFonts.every((family) => family.startsWith("Noto Sans SC")), zhFonts.join(", ")).toBe(true);
+    const jaFonts = await renderedFontsOf(page, jaAnswerText, "Noto Sans JP Variable", jaAnswer);
+    expect(jaFonts.length).toBeGreaterThan(0);
+    expect(jaFonts.every((family) => family.startsWith("Noto Sans JP")), jaFonts.join(", ")).toBe(true);
+
+    // 根拠の抜粋も中国語の字形（開いた一覧のカード）。
+    const citationSummary = page.locator("summary").filter({ hasText: "AI に渡した 1 件" }).first();
+    await citationSummary.click();
+    const excerpt = page.getByTestId("citation-text").filter({ hasText: zhExcerpt }).first();
+    await expect(excerpt).toHaveAttribute("lang", "zh-Hans");
+    const excerptFonts = await renderedFontsOf(page, excerpt, "Noto Sans SC Variable", zhExcerpt);
+    expect(excerptFonts.every((family) => family.startsWith("Noto Sans SC")), excerptFonts.join(", ")).toBe(true);
+
+    await expectNoPageOverflow(page);
+    await zhQuestionBubble.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`chat-content-lang-${viewport.name}.png`) });
+  });
+}
 
 const longJapaneseAnswer =
   "テストデータの根拠によると、申請前に担当者と承認者を確認し、必要な資料をそろえて期限までに提出してください。";
