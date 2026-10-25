@@ -47,7 +47,6 @@ locals {
   rag_services = concat(
     [
       "preprocess-office-to-pdf",
-      "preprocess-pdf-to-page-images",
       "preprocess-csv-to-jsonl",
       "preprocess-excel-to-jsonl",
       "preprocess-word-to-jsonl",

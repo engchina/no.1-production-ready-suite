@@ -78,7 +78,7 @@ health の確認）への HTTP は、`HTTP_PROXY` を設定していてもプロ
 
 | サービス | ディレクトリ | port |
 |---|---|---|
-| preprocess-office-to-pdf / pdf-to-page-images / csv-to-jsonl / excel-to-jsonl / pii-redact | `services/preprocess/<name>` | 18010〜18013・18016 |
+| preprocess-office-to-pdf / csv-to-jsonl / excel-to-jsonl / pii-redact | `services/preprocess/<name>` | 18010・18012・18013・18016 |
 | preprocess-word-to-jsonl（Word→JSONL。既定で配備・起動。#2457） | `services/preprocess/word_to_jsonl` | 18017 |
 | parser-docling（既定の解析エンジン） | `services/parsers/docling` | 18020 |
 | parser-unstructured（既定では配備しない。Docling が扱えない形式を取り込む場合） | `services/parsers/unstructured` | 18022 |
@@ -87,7 +87,8 @@ health の確認）への HTTP は、`HTTP_PROXY` を設定していてもプロ
 | parser-oci-document-understanding（OCI Document Understanding） | `services/parsers/oci_document_understanding` | 18028 |
 
 音声・動画の文字起こしは parser のサービスを使わず、backend が OCI AI Speech で行う（GPU の ASR の parser と、
-OCI Generative AI（Vision）の parser は #2042 で削除した）。
+OCI Generative AI（Vision）の parser は #2042 で削除した）。ファイル準備の「PDF を画像として読み直す」
+（`preprocess-pdf-to-page-images`、18011）は #3347 で削除した。
 
 backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_URL`）の既定はこの `127.0.0.1:<port>`。
 `backend/.env` に以前の Docker Compose の service 名（`http://parser-docling:8000` など）が残っている場合は `127.0.0.1:<port>` に直す（#356 から読み替えない）。
@@ -212,6 +213,30 @@ ln -s "${NEW}" "${OLD}"
 移行後に backend を起動し、警告ログが出ないこと、既存文書のプレビュー / 再取込ができることを確認してから退避ディレクトリを削除する。
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `RAG_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
+
+## 既存環境の更新手順（#3347 ファイル準備「PDF を画像として読み直す」の削除）
+
+ファイル準備の変換方式「PDF を画像として読み直す」（`pdf_to_page_images`。サービス `preprocess-pdf-to-page-images`、18011、
+PyMuPDF）を削除した。スキャンの PDF は既定の解析エンジン Docling が OCR で読み、ページを画像として検索に使う用途は
+ページ画像の埋め込みの方式が受け持つ。後方互換は持たない。
+
+- **設定**: `RAG_PREPROCESS_PDF_TO_PAGE_IMAGES_SERVICE_URL` は読まない（`backend/.env` に残っていても無視する。消してよい）。
+  `RAG_PREPROCESS_PROFILE=pdf_to_page_images` や、文書レシピ・KB 構築設定の `preprocess_profile` に `pdf_to_page_images`
+  が残っていれば、読み替えずに検証エラーになる。更新の前に別の変換方式（多くは「変換なし」）を選んで保存し直す。
+- **データベース**: DDL・データの移行は要らない。
+- **本番（OCI Compute）**: `sudo platform/deploy/suite-update.sh` だけでよい。`rag/init_script.sh` は以前の stack が書いた
+  `/u01/aipoc/props/rag_services.txt` の `preprocess-pdf-to-page-images` を読み飛ばして一覧を書き戻し、その unit を止めて
+  （`disable --now`）消し、sudoers も今の unit だけで作り直す。
+- **開発（`scripts/rag-services.sh install` で unit を入れた環境）**: `install` は今のサービスの unit しか探さないため、手で消す。
+
+  ```bash
+  sudo systemctl disable --now production-ready-rag-preprocess-pdf-to-page-images.service
+  sudo rm -f /etc/systemd/system/production-ready-rag-preprocess-pdf-to-page-images.service
+  sudo systemctl daemon-reload
+  scripts/rag-services.sh install            # rag/ で実行。sudoers を今の unit で作り直す
+  ```
+
+  使っていなかった venv（`services/preprocess/pdf_to_page_images/.venv`）が残っていれば消してよい。
 
 ## 既存環境の更新手順（#3345 MinerU の解析の連携の削除）
 
