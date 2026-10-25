@@ -806,11 +806,12 @@ for (const viewport of [
       });
       // 押しても選ばれず、一覧は開いたまま（値は変わらない）。
       const before = await combobox.getAttribute("data-value");
-      await roadmap.click();
+      // aria-disabled の選択肢は Playwright が押せないものとして待つため、押す操作を強制して確かめる。
+      await roadmap.click({ force: true });
       await expect(page.getByRole("listbox")).toBeVisible();
       await expect(combobox).toHaveAttribute("data-value", before ?? "");
       // キーボードでも選べない: 強調して Enter を押しても値は変わらない。
-      await roadmap.hover();
+      await roadmap.hover({ force: true });
       await page.keyboard.press("Enter");
       await expect(combobox).toHaveAttribute("data-value", before ?? "");
       await page.keyboard.press("Escape");
