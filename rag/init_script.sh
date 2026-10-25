@@ -90,7 +90,6 @@ ALLOWED_RAG_SERVICES=(
   preprocess-csv-to-jsonl
   preprocess-excel-to-jsonl
   preprocess-word-to-jsonl
-  preprocess-pii-redact
   parser-docling
   parser-unstructured
   parser-structured-records-jsonl
@@ -651,7 +650,7 @@ install_wallet() {
 
 # backend と前処理 / parser の venv をサービスごとに作る（uv の lock どおり。Python 3.12）。
 install_service_venvs() {
-  local service dir extra model_command
+  local service dir model_command
   local sync_args=()
 
   log "Installing backend dependencies with uv."
@@ -662,10 +661,6 @@ install_service_venvs() {
     mapfile -t sync_args < <(rag_uv_sync_args "${service}")
     log "Installing ${service} dependencies with uv."
     retry_command 3 run_as_app_user_in_dir "${dir}" "uv ${sync_args[*]}"
-    extra="$(rag_service_venv_extra_command "${service}")"
-    if [ -n "${extra}" ]; then
-      retry_command 3 run_as_app_user_in_dir "${dir}" "${extra}"
-    fi
     model_command="$(rag_service_model_command "${service}")"
     if [ -n "${model_command}" ] && ! retry_command 3 run_as_service_user_in_dir "${dir}" "${model_command}"; then
       log "WARNING: ${service} could not download its models now; it will download them on first use."

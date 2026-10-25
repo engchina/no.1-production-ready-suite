@@ -124,15 +124,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         port=18017,
     ),
     ServiceCatalogEntry(
-        service_id="preprocess-pii-redact",
-        category="preprocess",
-        profile="cpu",
-        url_field="rag_preprocess_pii_redact_service_url",
-        label_key="settings.services.item.preprocessPiiRedact",
-        working_dir="services/preprocess/pii_redact",
-        port=18016,
-    ),
-    ServiceCatalogEntry(
         service_id="parser-docling",
         category="parser",
         profile="cpu",

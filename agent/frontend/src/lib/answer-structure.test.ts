@@ -196,7 +196,7 @@ describe("structureAnswer の照合が判定を出さなかった回答", () => 
         title: "参考",
         ordered: false,
         entries: [
-          { key: "reference-note", text: "原文の説明", chunkIds: [], muted: true, plain: true },
+          { key: "reference-note", text: "原文の説明", chunkIds: [], muted: true, plain: true, uiText: true },
           { key: "reference-0", text: "「申請は 30 日前までに行う。」", chunkIds: ["c1"], plain: true },
         ],
       },

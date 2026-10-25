@@ -35,6 +35,7 @@ from app.features.agent.runtime import (
     RunStatus,
     RunStep,
     StepStatus,
+    run_cancel_record,
     runtime_repository,
 )
 from app.features.agent.tools import ToolCall, ToolResult
@@ -917,3 +918,69 @@ def test_cancel_run_with_an_api_key_records_the_key_and_ignores_the_run_budget(
     assert outside["structuredContent"]["error_code"] == "AGENT_OUT_OF_KEY_SCOPE"
     missing = _call("agent_cancel_run", {"run_id": "run_missing"}, headers)
     assert missing["structuredContent"]["error_code"] == "RUN_NOT_FOUND"
+
+
+def _cancellation(run_id: str, headers: dict[str, str]) -> dict[str, Any] | None:
+    response = client.get(f"/api/runs/{run_id}", headers=headers)
+    assert response.status_code == 200, response.text
+    value: dict[str, Any] | None = response.json()["data"]["cancellation"]
+    return value
+
+
+def test_run_detail_shows_who_cancelled_and_the_key_visible_to_the_viewer(
+    auth: ProductionAuth, agents: None
+) -> None:
+    """実行の詳細の「取消」: 取り消した人・入口と、見ている人が見られるキーの名前だけ（#3348）。"""
+    del agents
+    auth.user_with_permissions("mcp3348-a", [RUNS_OPERATE], agent_ids=[AGENT_ID])
+    auth.user_with_permissions("mcp3348-b", [RUNS_OPERATE], agent_ids=[AGENT_ID])
+    auth.create_user("mcp3348-admin", system_admin=True)
+    user_a, user_b, admin = login("mcp3348-a"), login("mcp3348-b"), login("mcp3348-admin")
+    key_a = _bearer(_issue_key(user_a, name="合成のキー A")["token"])
+    key_admin = _bearer(_issue_key(admin, name="合成のキー 管理")["token"])
+    chat = {"agent_id": AGENT_ID, "question": "q", "wait_seconds": 0}
+
+    # 本人が自分のキーで取り消した Run: 本人も system_admin もキーの名前が見える。
+    mine = _call("agent_chat", chat, key_a)["structuredContent"]["run_id"]
+    assert _cancellation(mine, user_a) is None
+    _call("agent_cancel_run", {"run_id": mine}, key_a)
+    expected = {"via": "mcp", "actor_display_name": "mcp3348-a", "api_key_name": "合成のキー A"}
+    assert _cancellation(mine, user_a) == {**expected, "by_me": True}
+    assert _cancellation(mine, admin) == {**expected, "by_me": False}
+
+    # system_admin が自分のキーで他の利用者の Run を取り消した: 持ち主にはキーの名前を出さない。
+    others = _call("agent_chat", chat, _bearer(_issue_key(user_b)["token"]))["structuredContent"]
+    _call("agent_cancel_run", {"run_id": others["run_id"]}, key_admin)
+    assert _cancellation(others["run_id"], user_b) == {
+        "via": "mcp",
+        "actor_display_name": "mcp3348-admin",
+        "by_me": False,
+        "api_key_name": "",
+    }
+    assert _cancellation(others["run_id"], admin) == {
+        "via": "mcp",
+        "actor_display_name": "mcp3348-admin",
+        "by_me": True,
+        "api_key_name": "合成のキー 管理",
+    }
+
+    # 画面の取消は入口が screen（キーの名前は無い）。
+    screen = _call("agent_chat", chat, key_a)["structuredContent"]["run_id"]
+    assert client.post(f"/api/runs/{screen}/cancel", headers=user_a).status_code == 200
+    assert _cancellation(screen, user_a) == {
+        "via": "screen",
+        "actor_display_name": "mcp3348-a",
+        "by_me": True,
+        "api_key_name": "",
+    }
+
+
+def test_run_cancel_record_without_an_actor_is_a_system_cancel(agents: None) -> None:
+    """操作した人の記録の無い取消（品質評価の後始末など）は system（#3348）。"""
+    del agents
+    run = _running()
+    runtime_repository.cancel_run(run.id)
+    record = run_cancel_record(runtime_repository.get_run(run.id))
+    assert record is not None
+    assert (record.via, record.cancelled_by, record.api_key_id) == ("system", None, None)
+    assert run_cancel_record(_running()) is None

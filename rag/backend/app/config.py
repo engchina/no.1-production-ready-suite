@@ -182,7 +182,6 @@ PreprocessProfile = Literal[
     "csv_to_jsonl",
     "excel_to_jsonl",
     "word_to_jsonl",
-    "pii_redact",
 ]
 # 削除したファイル準備の変換方式(text_normalize、#2042: スキャン画像の補正・URL→Markdown)。
 # 保存済みの設定(backend/.env・文書レシピ・KB 構築設定・取込ジョブ)に残っていても起動・取込を
@@ -2146,8 +2145,7 @@ class Settings(
             "(.doc/.docm/.ppt/.pptm を含む。Excel は対象外)、"
             "csv_to_jsonl は CSV→構造化 JSON、"
             "excel_to_jsonl は Excel(.xls/.xlsx/.xlsm)→構造化 JSON、"
-            "pii_redact は取込時の PII マスク"
-            "(Presidio + 日本語 NER、外部 SaaS 非使用)"
+            "word_to_jsonl は Word→構造化 JSON"
             "(いずれも各々独立した前処理マイクロサービス)。"
         ),
     )
@@ -2185,10 +2183,6 @@ class Settings(
         description=(
             "Word(.doc/.docx/.docm)→構造化レコード JSONL 前処理マイクロサービスの base URL(#2457)。"
         ),
-    )
-    rag_preprocess_pii_redact_service_url: str = Field(
-        default="http://127.0.0.1:18016",
-        description="PII マスク(取込時)前処理マイクロサービスの base URL。",
     )
     rag_preprocess_service_timeout_seconds: float = Field(
         default=300.0,

@@ -6,12 +6,8 @@ worker が parser サービスを呼んだ後で失敗する。アップロー�
 この判定を使い、取込を始める前に理由と対処(処理レシピで Unstructured を選ぶ・サービスを
 起動する)を返す。
 
-ファイル準備の「PIIマスク」(pii_redact)はテキスト形式だけを扱うため、それ以外の形式は同じ判定で
-取込を始める前に止める(原本のまま取り込まない。#2068)。PIIマスクは形式を変えないので、解析エンジンの
-対応形式の判定は passthrough と同じく行う。
-
 判定しない(取込時の判定に任せる)もの:
-- 形式を変えるファイル準備(passthrough・pii_redact 以外): 変換後の形式が解析エンジンに渡る
+- 形式を変えるファイル準備(passthrough 以外): 変換後の形式が解析エンジンに渡る
   (例: Office→PDF)。ただし構造化レコードの JSONL を作るファイル準備
   (CSV→JSONL・Excel→JSONL・Word→JSONL)は、構造化レコード JSONL 以外の解析エンジンでは読めないため、
   ここで止める(#2457)。
@@ -39,19 +35,15 @@ from app.clients.parser_service import (
     structured_records_requires_jsonl_backend_message,
     supported_formats_label,
 )
-from app.clients.preprocess_service import pii_redact_not_text_message
 from app.config import DEFAULT_PARSER_ADAPTER_BACKEND, Settings
 from app.rag.preprocess_strategy import resolve_preprocess_profile
 from app.schemas.document import SourceModality, SourceProfile
 
 PARSER_SOURCE_UNSUPPORTED_CODE = "parser_source_unsupported"
-PREPROCESS_SOURCE_UNSUPPORTED_CODE = "preprocess_source_unsupported"
 # 形式を変えないファイル準備(原本と同じ形式が解析エンジンに渡る)。
-_FORMAT_PRESERVING_PREPROCESS = frozenset({"passthrough", "pii_redact"})
+_FORMAT_PRESERVING_PREPROCESS = frozenset({"passthrough"})
 # 構造化レコードの JSONL を作るファイル準備(解析エンジンは構造化レコード JSONL だけ。#2457)。
 STRUCTURED_RECORDS_PREPROCESS = frozenset({"csv_to_jsonl", "excel_to_jsonl", "word_to_jsonl"})
-# PIIマスクが扱う原本の種類(サービスの判定 `services/preprocess/pii_redact` と同じ)。
-_PII_REDACT_MODALITIES = frozenset({SourceModality.TEXT, SourceModality.HTML})
 # 原本のままでは解析しない Office(旧形式のバイナリ・マクロ付き・ODT / RTF。source_profile の
 # unsupported_reason)と、それを変換できるファイル準備の対応(#2470・#3351)。マクロは実行しない。
 CONVERSION_REQUIRED_OFFICE_REASONS = frozenset(
@@ -277,14 +269,6 @@ def parser_source_block(
             )
     elif source_profile.unsupported_reason:
         return None
-    if preprocess_profile == "pii_redact" and source_profile.modality not in _PII_REDACT_MODALITIES:
-        return ParserSourceBlock(
-            code=PREPROCESS_SOURCE_UNSUPPORTED_CODE,
-            backend=effective_parser_backend(settings),
-            file_format=_file_format(source_profile),
-            suggested_backend=None,
-            message=pii_redact_not_text_message(),
-        )
     if preprocess_profile in STRUCTURED_RECORDS_PREPROCESS:
         backend = effective_parser_backend(settings)
         if backend == STRUCTURED_RECORDS_JSONL_BACKEND:

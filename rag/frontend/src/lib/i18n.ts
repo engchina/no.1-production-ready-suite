@@ -1580,9 +1580,6 @@ export const ja = {
   "settings.preprocess.profile.word_to_jsonl": "Word→JSONL",
   "settings.preprocess.profile.word_to_jsonl.description":
     "Word ファイル(.doc・.docx・マクロ付きの .docm)を、見出しの下の段落・リスト・表のまとまりを 1 件の記録(JSONL)にしてから解析します。見出しの階層と本文の位置を保ちます。.doc は .docx にしてから読み、マクロは実行しません。文書解析は「構造化レコード JSONL」を使います。",
-  "settings.preprocess.profile.pii_redact": "PIIマスク",
-  "settings.preprocess.profile.pii_redact.description":
-    "テキストの氏名・メールアドレス・電話番号などの個人情報(PII)をマスクしてから解析します。",
   "settings.preprocess.actions.save": "保存",
   "settings.preprocess.actions.label": "ファイル準備の設定の操作",
   "settings.preprocess.actions.saved": "ファイル準備の設定を保存しました。",
@@ -1702,7 +1699,6 @@ export const ja = {
   "settings.services.item.preprocessCsvToJsonl": "CSV→JSONL",
   "settings.services.item.preprocessExcelToJsonl": "Excel→JSONL",
   "settings.services.item.preprocessWordToJsonl": "Word→JSONL",
-  "settings.services.item.preprocessPiiRedact": "PIIマスク",
   "settings.services.item.parserDocling": "Docling",
   "settings.services.item.parserUnstructured": "Unstructured",
   "settings.services.item.parserStructuredRecordsJsonl": "構造化レコード JSONL",

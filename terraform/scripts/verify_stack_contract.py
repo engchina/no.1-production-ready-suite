@@ -152,7 +152,6 @@ RAG_BASE_SERVICES = [
     "preprocess-csv-to-jsonl",
     "preprocess-excel-to-jsonl",
     "preprocess-word-to-jsonl",
-    "preprocess-pii-redact",
     "parser-docling",
     # 構造化レコード JSONL・XML ツリー JSON は使用エンジンに選べる解析エンジン。常に配備する
     # (#2457・#2042)。

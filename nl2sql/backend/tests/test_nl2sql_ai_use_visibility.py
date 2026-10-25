@@ -31,8 +31,10 @@ from app.features.nl2sql.models import (
     AnalyzeData,
     FeedbackRating,
     FeedbackRequest,
+    HistoryItem,
     JobCreateRequest,
     JobOrigin,
+    Nl2SqlEngine,
     QueryResults,
     SafetyReport,
     SqlChatUpdateRequest,
@@ -539,3 +541,104 @@ def test_history_rejects_unknown_executor_filter(chats: dict[str, str]) -> None:
     with pytest.raises(HTTPException) as invalid:
         _history_page(ALICE, "everyone")
     assert invalid.value.status_code == 422
+
+
+KEY_A = "key-alice"
+KEY_ADMIN = "key-admin"
+
+
+class _NamesAndKeys(_Names):
+    """表示名と、見ている利用者が見られる API キーの名前（system_admin は全員、ほかは自分の分）。"""
+
+    KEYS = {KEY_A: ("alice", "合成のキー A"), KEY_ADMIN: ("admin", "合成のキー 管理")}
+
+    def api_key_names(self, actor: Any, key_ids: list[str]) -> dict[str, str]:
+        return {
+            key_id: name
+            for key_id, (owner, name) in self.KEYS.items()
+            if key_id in key_ids and (actor.is_system_admin or owner == actor.user_uuid)
+        }
+
+
+def _cancelled(index: int, **record: str) -> HistoryItem:
+    return HistoryItem(
+        id=f"cancelled-{index}",
+        question="合成の質問",
+        engine=Nl2SqlEngine.SELECT_AI,
+        generated_sql="",
+        created_at=f"2026-10-26T00:00:0{index}+00:00",
+        profile_id=_PROFILE_ID,
+        actor_user_uuid="alice",
+        run_status="cancelled",
+        **record,
+    )
+
+
+def test_history_cancellation_shows_who_and_the_key_visible_to_the_viewer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """停止の行の「取消」（#3348）: 取り消した人と入口、見ている人が見られるキーの名前だけ。
+
+    記録の値（取り消した人の UUID・キーの ID・Agent の Run の ID）は応答に出さない。
+    """
+    monkeypatch.setattr(router, "get_security_service", lambda: _NamesAndKeys())
+    rows = [
+        _cancelled(
+            1, cancelled_by_user_uuid="alice", cancel_via="mcp", cancel_api_key_id="key-alice"
+        ),
+        _cancelled(
+            2, cancelled_by_user_uuid="admin", cancel_via="mcp", cancel_api_key_id="key-admin"
+        ),
+        _cancelled(
+            3, cancelled_by_user_uuid="alice", cancel_via="mcp", cancel_agent_run_id="run-1"
+        ),
+        _cancelled(4, cancelled_by_user_uuid="gone"),
+        HistoryItem(
+            id="done",
+            question="合成の質問",
+            engine=Nl2SqlEngine.SELECT_AI,
+            generated_sql="SELECT 1 FROM DUAL",
+            created_at="2026-10-26T00:00:00+00:00",
+            actor_user_uuid="alice",
+        ),
+    ]
+
+    def view(principal: Any) -> dict[str, Any]:
+        items = router._with_history_people(  # noqa: SLF001 - 応答の補完の契約
+            rows,
+            viewer_user_uuid=principal.user_uuid,
+            is_system_admin=principal.is_system_admin,
+            principal=principal,
+        )
+        for item in items:
+            assert (
+                item.cancelled_by_user_uuid,
+                item.cancel_via,
+                item.cancel_api_key_id,
+                item.cancel_agent_run_id,
+            ) == ("", "", "", "")
+        return {
+            item.id: item.cancellation.model_dump() if item.cancellation else None for item in items
+        }
+
+    def cancel(via: str, name: str, by_me: bool, key: str = "") -> dict[str, Any]:
+        return {
+            "via": via,
+            "actor_recorded": True,
+            "actor_display_name": name,
+            "by_me": by_me,
+            "api_key_name": key,
+        }
+
+    assert view(ALICE) == {
+        "cancelled-1": cancel("mcp", "alice さん", True, "合成のキー A"),
+        # system_admin のキーは持ち主には見えない（「MCP」だけ）。
+        "cancelled-2": cancel("mcp", "admin さん", False),
+        "cancelled-3": cancel("agent_run", "alice さん", True),
+        # 削除済みの利用者（表示名を引けない）は、記録はあるが名前が空。
+        "cancelled-4": cancel("screen", "", False),
+        "done": None,
+    }
+    admin = view(ADMIN)
+    assert admin["cancelled-1"] == cancel("mcp", "alice さん", False, "合成のキー A")
+    assert admin["cancelled-2"] == cancel("mcp", "admin さん", True, "合成のキー 管理")

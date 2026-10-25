@@ -202,6 +202,7 @@ from .metadata_sql_batches import (
 )
 from .models import (
     DEFAULT_FEEDBACK_SIMILARITY_THRESHOLD,
+    HISTORY_RUN_STATUS_CANCELLED,
     RUN_SOURCE_EVALUATION,
     RUN_SOURCE_MCP,
     STORED_JOB_REQUEST_CONTEXT,
@@ -3990,6 +3991,9 @@ class StoredJob:
     attempt: int = 0
     # 協調キャンセル要求。worker が stage 境界で検出して JobCancelledError を送出する。
     cancel_requested: bool = False
+    # 最初の取消の要求の記録（操作した人と入口。このプロセスで受けた要求だけ。別のプロセスが受けた
+    # 要求は取消の要求のドキュメントにある）。停止の実行履歴の行に写す（#3348）。
+    cancel_record: dict[str, str] = field(default_factory=dict)
     # 自プロセスの worker スレッドが実行している job か。False は他 worker / 再起動前の
     # snapshot 由来で、in-flight の間は repository を正本として読み直す(永続化しない)。
     owned: bool = False
@@ -4413,6 +4417,15 @@ def _restore_job_steps(
     return _normalize_terminal_step_order(restored)
 
 
+class HistoryNotRatableError(ValueError):
+    """評価できない実行履歴の行（停止の行。SQL・実行結果を持たない。#3348）。"""
+
+
+def _raise_if_history_not_ratable(item: HistoryItem) -> None:
+    if item.run_status == HISTORY_RUN_STATUS_CANCELLED:
+        raise HistoryNotRatableError("停止した実行は SQL と実行結果が無いため評価できません。")
+
+
 def _history_item_matches_payload_filters(
     item: HistoryItem,
     filters: Mapping[str, str],
@@ -4444,7 +4457,10 @@ def _history_item_matches_payload_filters(
 # 「品質評価以外」）。
 HISTORY_KIND_NOT_EVALUATION = "not_evaluation"
 HISTORY_KIND_FILTERS = ("all", HISTORY_KIND_NOT_EVALUATION, "chat", "query", "mcp", "evaluation")
-HISTORY_STATUS_FILTERS = ("all", "succeeded", "blocked")
+HISTORY_STATUS_FILTERS = ("all", "succeeded", "blocked", HISTORY_RUN_STATUS_CANCELLED)
+# 停止の行（#3348）。安全性の判定・評価を持たないので、完了・ブロック・フィードバックの一覧から
+# 除く。
+_HISTORY_CANCELLED_FILTER = {"run_status": HISTORY_RUN_STATUS_CANCELLED}
 _HISTORY_EVALUATION_FILTER = {"run_source": RUN_SOURCE_EVALUATION}
 
 
@@ -5746,6 +5762,80 @@ class Nl2SqlService:
             current = self._jobs[job_id]
             job = replace(current, span_details=dict(current.span_details))
         self._persist_job_snapshot(job)
+
+    def _persist_cancelled_job(self, job_id: str) -> None:
+        """停止で終わったジョブと、その実行履歴の行（停止・取り消した人と入口）を保存する（#3348）。
+
+        行の保存はジョブの終わりの保存と同じ往復（fence 付き）に載せる。保存の成否にかかわらず、
+        このプロセスの実行履歴には足す（完了の行と同じ）。
+        """
+        with self._lock:
+            current = self._jobs[job_id]
+            job = replace(current, span_details=dict(current.span_details))
+        history = self._cancelled_job_history_item(job)
+        try:
+            self._persist_job_snapshot(job, history)
+        finally:
+            with self._lock:
+                self._history.append(history)
+                self._prune_history_locked()
+
+    def _job_cancel_record(self, job: StoredJob) -> dict[str, str]:
+        """最初の取消の要求の記録（このプロセスで受けた要求か、取消の要求のドキュメント）。"""
+        if job.cancel_record or self._incremental_repository is None:
+            return dict(job.cancel_record)
+        try:
+            document = self._incremental_repository.get_document(_JOB_CANCEL_COLLECTION, job.job_id)
+        except Exception:  # noqa: BLE001 - 記録が読めなくても停止の行は残す（取り消した人は空）
+            logger.warning("nl2sql_job_cancel_record_unavailable", extra={"job_id": job.job_id})
+            return {}
+        return {
+            key: str(value)
+            for key, value in (document or {}).items()
+            if key in {"actor_user_uuid", *_JOB_CANCEL_VIA_KEYS} and isinstance(value, str)
+        }
+
+    def _cancelled_job_history_item(self, job: StoredJob) -> HistoryItem:
+        """停止で終わったジョブの実行履歴の行（#3348）。SQL・実行結果・評価は持たない。"""
+        request = job.request
+        try:
+            profile: Nl2SqlProfile | None = self.get_profile(request.profile_id)
+        except Exception:  # noqa: BLE001 - 業務プロファイルが消えていても行は残す
+            profile = None
+        finished = job.finished_at or _utc_now()
+        started = _parse_job_time(job.started_at or job.created_at)
+        ended = _parse_job_time(finished)
+        record = self._job_cancel_record(job)
+        return HistoryItem(
+            job_id=job.job_id,
+            trace_id=job.trace_id,
+            trace_dropped_spans=_job_trace_dropped(job),
+            span_details=dict(job.span_details),
+            generation_only=request.generation_only,
+            business_release_id=job.business_release_id,
+            id=str(uuid.uuid4()),
+            question=request.question,
+            engine=request.engine,
+            generated_sql="",
+            created_at=finished,
+            elapsed_ms=(
+                max(0, int((ended - started).total_seconds() * 1000))
+                if started is not None and ended is not None
+                else None
+            ),
+            profile_id=profile.id if profile is not None else request.profile_id or "",
+            profile_name=profile.name if profile is not None else "",
+            profile_category=profile.category if profile is not None else "",
+            actor_user_uuid=job.actor_user_uuid,
+            session_id=job.conversation_id,
+            conversation_owner_user_uuid=self._history_conversation_owner(job),
+            **job.origin.history_fields(),
+            run_status=HISTORY_RUN_STATUS_CANCELLED,
+            cancelled_by_user_uuid=record.get("actor_user_uuid", ""),
+            cancel_via=record.get("via", ""),
+            cancel_api_key_id=record.get("api_key_id", ""),
+            cancel_agent_run_id=record.get("agent_run_id", ""),
+        )
 
     def _snapshot_locked(self) -> dict[str, Any]:
         return {
@@ -9242,11 +9332,17 @@ class Nl2SqlService:
             actor_user_uuid=actor_user_uuid,
             actor_can_manage=actor_can_manage,
         )
+        cancel_record = {
+            "actor_user_uuid": actor_user_uuid,
+            **{key: value for key, value in (via or {}).items() if key in _JOB_CANCEL_VIA_KEYS},
+        }
         with self._lock:
             in_flight = job.status in _IN_FLIGHT_JOB_STATUSES
             already_requested = in_flight and job.cancel_requested
             if in_flight:
                 job.cancel_requested = True
+                if not already_requested and not job.cancel_record:
+                    job.cancel_record = cancel_record
         if in_flight and self._incremental_repository is not None:
             if not already_requested:
                 # 別のプロセスが受けた要求は、要求のドキュメントで分かる（job の文書を読み直した
@@ -9271,12 +9367,7 @@ class Nl2SqlService:
                             {
                                 "job_id": job_id,
                                 "requested_at": _utc_now(),
-                                "actor_user_uuid": actor_user_uuid,
-                                **{
-                                    key: value
-                                    for key, value in (via or {}).items()
-                                    if key in _JOB_CANCEL_VIA_KEYS
-                                },
+                                **cancel_record,
                             },
                         )
                     ]
@@ -10964,8 +11055,13 @@ class Nl2SqlService:
         _unused, visible_any_filters, _unused_exclude = history_visibility_filters(
             viewer_user_uuid=viewer_user_uuid, all_users=all_users
         )
-        # 状態（#1955）は安全性の判定に写す（完了 = 安全、ブロック = 実行を止めた）。
-        if status != "all":
+        # 状態（#1955）は安全性の判定に写す（完了 = 安全、ブロック = 実行を止めた）。停止（#3348）は
+        # 停止の行（`run_status`）で、安全性の判定を持たない（安全性の条件と重ねたら、どの行にも
+        # 一致させない）。
+        if status == HISTORY_RUN_STATUS_CANCELLED:
+            payload_filters.update(_HISTORY_CANCELLED_FILTER)
+            safety = "all" if safety == "all" else "none"
+        elif status != "all":
             status_safety = "safe" if status == "succeeded" else "blocked"
             # 安全性の条件と食い違うときは、どの行にも一致させない（"none"）。
             safety = "none" if safety not in {"all", status_safety} else status_safety
@@ -10974,6 +11070,8 @@ class Nl2SqlService:
             payload_filters["safety_is_safe"] = "none"
         elif safety != "all":
             payload_filters["safety_is_safe"] = "true" if safety == "safe" else "false"
+            # 安全性の判定で絞るときは、判定を持たない停止の行を除く。
+            exclude_filters.update(_HISTORY_CANCELLED_FILTER)
         kind_filters, kind_exclude, present_filters = history_kind_filters(kind)
         payload_filters.update(kind_filters)
         exclude_filters.update(kind_exclude)
@@ -11162,6 +11260,7 @@ class Nl2SqlService:
             if actor_can_manage:
                 raise OthersContentForbiddenError()
             raise PermissionError(history_id)
+        _raise_if_history_not_ratable(current)
         updated = self._patch_history_item(
             current,
             {
@@ -11191,6 +11290,7 @@ class Nl2SqlService:
             raise KeyError(request.history_id)
         if not self._profile_in_allowed_profile_ids(current.profile_id, allowed_profile_ids):
             raise PermissionError(current.profile_id)
+        _raise_if_history_not_ratable(current)
         feedback_content = request.feedback_content.strip()
         updated = self._patch_history_item(
             current,
@@ -11406,12 +11506,15 @@ class Nl2SqlService:
         """
         self._load_classifier_state()
         status = rating if rating in {"good", "bad", "unrated"} else ""
+        # 停止の行（#3348）は SQL・実行結果を持たず評価できないので、フィードバックの一覧に
+        # 出さない。
         items, _next_cursor, total = self._history_page(
             offset=offset,
             limit=limit,
             profile_id=profile_id,
             status=status,
             query=query,
+            payload_exclude_filters=_HISTORY_CANCELLED_FILTER,
             allowed_profile_ids=allowed_profile_ids,
         )
         records: list[FeedbackRecord] = []
@@ -11434,7 +11537,12 @@ class Nl2SqlService:
             )
         filtered = bool(status or profile_id or query.strip())
         unfiltered_total = (
-            self._history_count(allowed_profile_ids=allowed_profile_ids) if filtered else total
+            self._history_count(
+                payload_exclude_filters=_HISTORY_CANCELLED_FILTER,
+                allowed_profile_ids=allowed_profile_ids,
+            )
+            if filtered
+            else total
         )
         page = paginate(records, total=total, limit=limit, offset=offset)
         return FeedbackListData.model_validate({**dict(page), "unfiltered_total": unfiltered_total})
@@ -23529,7 +23637,8 @@ class Nl2SqlService:
                 ):
                     return
                 job.status = JobStatus.ERROR
-                if isinstance(exc, JobCancelledError):
+                cancelled = isinstance(exc, JobCancelledError)
+                if cancelled:
                     job.error_message = str(exc)
                     job.error_code = JOB_CANCELLED_ERROR_CODE
                 else:
@@ -23559,7 +23668,11 @@ class Nl2SqlService:
                 },
             )
             try:
-                self._persist_job(job_id)
+                if cancelled:
+                    # 停止も実行履歴に行を残す（取り消した人と入口。#3348）。
+                    self._persist_cancelled_job(job_id)
+                else:
+                    self._persist_job(job_id)
             except Exception as persist_exc:  # pragma: no cover - defensive log boundary
                 logger.exception(
                     "nl2sql_job_error_state_persist_failed",
