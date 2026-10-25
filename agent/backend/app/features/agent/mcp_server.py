@@ -737,8 +737,11 @@ def build_agent_mcp_server(request: Request) -> McpServer:
 
     async def get_run(arguments: AgentGetRunInput) -> RunOutput:
         run = _readable_run(request, arguments.run_id)
+        waited = await _wait(run.id, arguments.wait_seconds)
+        # 後から読む Run の根拠は、呼んだ利用者の今の権限で確かめ直す（見られない根拠は sources に
+        # 出さない。#3252）。
         return run_output(
-            await _wait(run.id, arguments.wait_seconds),
+            await agent_api._evidence_checked_run(request, waited),
             include_notice=called_with_api_key(request),
         )
 

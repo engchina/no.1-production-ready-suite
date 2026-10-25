@@ -1407,6 +1407,8 @@ export interface ChatMessage {
   content: string;
   model: string | null;
   citations: RetrievedChunk[];
+  /** 保存した根拠のうち、見ている利用者が今の権限で見られない根拠の数（抜粋・文書は届かない。#3252）。 */
+  withheld_evidence_count?: number;
   guardrail_warnings: string[];
   trace_id: string | null;
   status: MessageStatus;
@@ -4798,6 +4800,8 @@ export interface RunDetail extends RunSummary {
   /** 回答に付けた注意書き（回答の記録から。この機能より前の回答は null / 未指定。#2405）。 */
   answer_notice?: string | null;
   citations: RetrievedChunk[];
+  /** 保存した根拠のうち、見ている利用者が今の権限で見られない根拠の数（抜粋・文書は届かない。#3252）。 */
+  withheld_evidence_count?: number;
   answer_diagnostics: Record<string, JsonValue> | null;
   feedback: RunFeedback[];
 }
@@ -4826,6 +4830,8 @@ export interface AnswerRecordSummary {
 export interface AnswerRecordDetail extends AnswerRecordSummary {
   answer: string;
   citations: RetrievedChunk[];
+  /** 保存した根拠のうち、見ている利用者が今の権限で見られない根拠の数（抜粋・文書は届かない。#3252）。 */
+  withheld_evidence_count?: number;
   answer_diagnostics: Record<string, JsonValue>;
   /** 回答に付けた注意書き（この機能より前の回答・確認の質問は null / 未指定。#2405）。 */
   notice?: string | null;

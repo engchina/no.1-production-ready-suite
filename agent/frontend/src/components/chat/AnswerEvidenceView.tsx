@@ -28,11 +28,18 @@ import { answerPassageLabels, type StructuredBlock } from "@/lib/answer-structur
 export function AnswerEvidenceBlock({
   runId,
   evidence,
+  withheldCount = 0,
   idPrefix,
   className,
 }: {
   runId: string;
-  evidence: AnswerEvidenceData;
+  /** 見られる根拠が 1 件も無い（すべて権限の無い根拠）ときは null。 */
+  evidence: AnswerEvidenceData | null;
+  /**
+   * 保存した根拠のうち、見ている利用者が今の権限で見られない根拠の数（backend の `withheld_evidence_count`。中身は
+   * 届かない。RAG のチャットと同じ共通の行。#3252）。
+   */
+  withheldCount?: number;
   idPrefix: string;
   className?: string;
 }) {
@@ -40,18 +47,21 @@ export function AnswerEvidenceBlock({
   return (
     <>
       <AnswerEvidence
-        items={evidence.entries.map((entry) => entry.item)}
+        items={evidence?.entries.map((entry) => entry.item) ?? []}
+        withheldCount={withheldCount}
         labels={EVIDENCE_LABELS}
         idPrefix={idPrefix}
         className={className}
         onOpenSource={source.open}
       />
-      <EvidenceSource
-        runId={runId}
-        evidence={evidence}
-        source={source}
-        testId={`${idPrefix}-source-sheet`}
-      />
+      {evidence ? (
+        <EvidenceSource
+          runId={runId}
+          evidence={evidence}
+          source={source}
+          testId={`${idPrefix}-source-sheet`}
+        />
+      ) : null}
     </>
   );
 }

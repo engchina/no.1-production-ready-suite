@@ -55,6 +55,7 @@ from app.rag.pipeline import RagPipeline, SearchStageProgress
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
 from app.rag.run_history import RunRecorder
+from app.rag.saved_evidence import withhold_saved_answer
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.rag.stored_answer import stored_citation_metadata
@@ -1114,10 +1115,24 @@ def _normalize_trace_id_filter(values: list[str] | None) -> list[str] | None:
 @router.get("/answers/{trace_id}", response_model=ApiResponse[AnswerRecordDetail])
 async def get_saved_answer(trace_id: str) -> ApiResponse[AnswerRecordDetail]:
     """保存された回答 1 件(回答・引用・根拠と実行記録)を返す。"""
-    row = await OracleClient().get_answer_record(trace_id)
+    oracle = OracleClient()
+    row = await oracle.get_answer_record(trace_id)
     if row is None:
         raise HTTPException(status_code=404, detail="回答が見つかりません。")
-    return ApiResponse(data=_answer_record_detail(row))
+    detail = _answer_record_detail(row)
+    # 保存した引用と診断は、見る人の今の権限で確かめ直す（見られない根拠は数だけ。#3252）。
+    citations, withheld, diagnostics = await withhold_saved_answer(
+        oracle, detail.citations, detail.answer_diagnostics
+    )
+    return ApiResponse(
+        data=detail.model_copy(
+            update={
+                "citations": citations,
+                "withheld_evidence_count": withheld,
+                "answer_diagnostics": diagnostics,
+            }
+        )
+    )
 
 
 @router.get("/answers/{trace_id}/trace", response_model=ApiResponse[TraceSnapshot])

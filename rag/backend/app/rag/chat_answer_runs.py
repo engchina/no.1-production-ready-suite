@@ -206,8 +206,9 @@ class ChatAnswerRunService:
         self._worker_id: str | None = None
         self._worker_pid: int | None = None
         self._runs: dict[str, ChatAnswerRun] = {}
-        # 開始の前に届いた取消（run_id → 届いた時刻）。
-        self._early_cancels: dict[str, float] = {}
+        # 開始の前に届いた取消（(run_id, 会話) → 届いた時刻）。会話に結び付け、別の会話の
+        # 質問の ID を混ぜた取消をその会話の回答に当てない（#3302）。
+        self._early_cancels: dict[tuple[str, str], float] = {}
 
     @property
     def worker_id(self) -> str:
@@ -228,9 +229,9 @@ class ChatAnswerRunService:
                 and now - run.finished_at > self.retention_seconds
             ):
                 self._runs.pop(run_id, None)
-        for run_id, at in list(self._early_cancels.items()):
+        for key, at in list(self._early_cancels.items()):
             if now - at > CHAT_ANSWER_EARLY_CANCEL_SECONDS:
-                self._early_cancels.pop(run_id, None)
+                self._early_cancels.pop(key, None)
 
     def get(self, run_id: str | None) -> ChatAnswerRun | None:
         """このプロセスの run（作成中か、終わって間もないもの）。"""
@@ -283,7 +284,7 @@ class ChatAnswerRunService:
             store=store,
         )
         # 開始の前に届いた取消（送信の直後の停止）は、作成を始めずに停止として保存する。
-        if self._early_cancels.pop(run_id, None) is not None:
+        if self._early_cancels.pop((run_id, conversation_id), None) is not None:
             run.cancel_requested = True
         self._runs[run_id] = run
         return run
@@ -301,10 +302,14 @@ class ChatAnswerRunService:
             self._run(run, executor, timeout_seconds), name=f"rag-chat-answer-{run.run_id[:8]}"
         )
 
-    def remember_early_cancel(self, run_id: str) -> None:
-        """まだ始まっていない run への取消を覚えておく（始まったら停止として保存する）。"""
+    def remember_early_cancel(self, run_id: str, conversation_id: str) -> None:
+        """まだ始まっていない run への取消を覚えておく（同じ会話の run が始まったら停止にする）。
+
+        取消を受けた会話に結び付ける（会話を開ける利用者が、別の会話の質問の ID を混ぜても、
+        その会話の回答は止まらない。#3302）。
+        """
         self._purge()
-        self._early_cancels[run_id] = time.monotonic()
+        self._early_cancels[(run_id, conversation_id)] = time.monotonic()
 
     async def cancel(self, run: ChatAnswerRun, *, wait_seconds: float = 10.0) -> None:
         """このプロセスの run を止め、作成中のメッセージを `CANCELLED` にするまで待つ。"""

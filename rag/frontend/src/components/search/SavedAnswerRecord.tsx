@@ -75,9 +75,10 @@ export function SavedAnswerRecord({
         notice={showAnswer ? record.notice : null}
         noticeLabel={t("answer.notice.label")}
         evidence={
-          showCitations && record.citations.length > 0 ? (
+          showCitations && (record.citations.length > 0 || (record.withheld_evidence_count ?? 0) > 0) ? (
             <AnswerCitations
               citations={record.citations}
+              withheldCount={record.withheld_evidence_count ?? 0}
               idPrefix={`answer-record-${record.trace_id}`}
               cardProps={{
                 traceId: record.trace_id,

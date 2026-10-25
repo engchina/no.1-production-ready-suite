@@ -6,6 +6,7 @@ SSE は pipeline を stub して event 列と永続化を検証する。実 SQL 
 
 import asyncio
 import json
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -100,6 +101,11 @@ class FakeChatOracle:
         self.search_answer_profiles: dict[str, str] = {"bv-1": "経理アシスタント"}
         # 1 つのメッセージを読んだ回数（処理の段階の SSE が読み直すこと。#1359）。
         self.message_reads = 0
+        # 見る人が今見られない文書（保存した引用の確かめ直し。#3252）。既定はすべて見られる。
+        self.unreadable_documents: set[str] = set()
+
+    async def accessible_document_ids(self, document_ids: Sequence[str]) -> set[str]:
+        return {item for item in document_ids if item not in self.unreadable_documents}
 
     async def get_search_answer_profile(self, search_answer_profile_id: str) -> object | None:
         if search_answer_profile_id not in self.search_answer_profiles:

@@ -696,6 +696,8 @@ class AnswerRecordDetail(AnswerRecordSummary):
 
     answer: str
     citations: list[RetrievedChunk] = Field(default_factory=list)
+    # 保存した引用のうち、見る人が今の権限で見られない根拠の数（抜粋・文書は返さない。#3252）。
+    withheld_evidence_count: int = 0
     answer_diagnostics: dict[str, JsonValue] = Field(default_factory=dict)
     # 回答に付けた注意書き（#2405。この機能より前の回答・確認の質問は None）。
     notice: str | None = None
