@@ -3565,7 +3565,7 @@ def _linked_screen_children(
 
 
 # 目録での条の選択（質問・文書・chunk_set・上限・モデル → 選んだ (section_id, 行)）。CRAG の各回と要求ごとの再検索で
-# 同じ質問の同じ文書を選び直さない。
+# 同じ質問の同じ文書を選び直さない。1 段目・2 段目の LLM に失敗した結果は cache しない（次の回で選び直す。#3285）。
 _ARTICLE_SELECTION_CACHE: dict[tuple[object, ...], list[tuple[str, str]]] = {}
 
 
@@ -3629,9 +3629,9 @@ def _catalog_terms(question: str, settings: Settings) -> tuple[Any, ...]:
 
 def _select_catalog_articles(
     question: str, catalogs: Sequence[Any], settings: Settings, *, terms: Sequence[Any] = ()
-) -> tuple[list[Any], list[tuple[str, str]], int]:
+) -> tuple[list[Any], list[tuple[str, str]], int, list[str]]:
     """文書ごとに目録から条を選び（並行に呼ぶ）、文書を順に回した順・選べなかった文書（名前, 理由）・2 段目で足した条の
-    数を返す（#2254）。
+    数・2 段目に失敗した文書の名前を返す（#2254）。
 
     文書ごとに 2 段で選ぶ。1 段目は目録の行（条の名前）から論点ごとに選び、2 段目は選んだ条と同じ章の条を本文の
     書き出しつきで見せて、足りない論点の条を足させる（`article_catalog_refine_articles` 件まで。書き出しの読み込み
@@ -3640,7 +3640,8 @@ def _select_catalog_articles(
     呼び出し 1 回の出力と時間は役目に合わせて抑える（`article_catalog_output_token_cap` /
     `article_catalog_call_timeout_seconds`。段ごとに数える）。同じ出力を繰り返して書き続ける呼び出しが 1 つあると、
     並行の呼び出しをすべて待つ段全体が数分止まるため。1 段目で超えた文書は選ばずに続け（同じ入力は温度 0 で同じ出力
-    になるので送り直さない）、記録にも残さない（次の質問では呼び直す）。2 段目で失敗したら 1 段目の条だけを使う。
+    になるので送り直さない）、記録にも残さない（次の質問では呼び直す）。2 段目で失敗したら 1 段目の条だけを使い、
+    その結果も記録に残さない（#3285）。
     """
     from rag_engine.adapters.oci import IncompleteResponse, bind_output_cap
     from rag_engine.dependencies import injected_article_leads, llm_call_count
@@ -3663,6 +3664,8 @@ def _select_catalog_articles(
     ]
     missing = [index for index, key in enumerate(keys) if key not in _ARTICLE_SELECTION_CACHE]
     failures: dict[int, str] = {}
+    refine_failures: set[int] = set()
+    results: dict[int, list[tuple[str, str]]] = {}
     calls: dict[int, int] = {}
     added_counts: dict[int, int] = {}
     if missing:
@@ -3707,6 +3710,9 @@ def _select_catalog_articles(
                     )
             except Exception:  # noqa: BLE001 - 2 段目は補助。1 段目の条で続ける。
                 logger.warning("article catalog refine failed", exc_info=True)
+                added = None
+            if added is None:
+                refine_failures.add(index)
                 return chosen
             added_counts[index] = len(added)
             # 足した条は足りない論点の根拠なので、1 段目の条と交互に並べて前に出す（後ろに置くと、文書を順に回した
@@ -3724,13 +3730,16 @@ def _select_catalog_articles(
         if len(_ARTICLE_SELECTION_CACHE) + len(missing) > 256:
             _ARTICLE_SELECTION_CACHE.clear()
         for index, chosen in results.items():
-            if index not in failures:
+            if index not in failures and index not in refine_failures:
                 _ARTICLE_SELECTION_CACHE[keys[index]] = chosen
-    selections = [_ARTICLE_SELECTION_CACHE.get(key, []) for key in keys]
+    # 2 段目に失敗した文書は cache しないが、この回は 1 段目の条で続ける。
+    selections = [results[index] if index in results else _ARTICLE_SELECTION_CACHE.get(key, []) for index, key in enumerate(keys)]
     failed = [(catalogs[index].file_name, failures[index]) for index in sorted(failures)]
-    return interleave_selections(catalogs, selections), failed, sum(added_counts.values())
+    refine_failed = [catalogs[index].file_name for index in sorted(refine_failures)]
+    return interleave_selections(catalogs, selections), failed, sum(added_counts.values()), refine_failed
 
 
+# 範囲の文書の選択（質問・文書の一覧・件数・モデル → 選んだ文書）。選択に失敗した結果は cache しない（#3285）。
 _ARTICLE_DOCUMENT_CACHE: dict[tuple[object, ...], list[str]] = {}
 
 
@@ -3748,12 +3757,12 @@ def _catalog_question(query: str) -> str:
     return f"{original}\n\n（検索文: {query}）"
 
 
-def _scope_catalog_documents(question: str, settings: Settings, exclude: set[str]) -> list[str]:
+def _scope_catalog_documents(question: str, settings: Settings, exclude: set[str]) -> list[str] | None:
     """検索の範囲の条で構成された文書の一覧から、根拠の条がありそうな文書を LLM で選ぶ（#2254）。
 
     `exclude`（目録を読む候補の文書）と重なる分だけ多く選ばせ、重なりを除いて `article_catalog_scope_documents`
     件まで返す（選んだ文書が候補の文書と重なっても枠を使い切る。#2261）。一覧の注入が無い・件数が 0・一覧が空なら
-    選ばない（LLM を呼ばない）。
+    選ばない（LLM を呼ばない）。選択の LLM に失敗したら None を返し、cache しない（次の回で選び直す。#3285）。
     """
     from rag_engine.dependencies import injected_article_documents
     from rag_engine.retrieval.article_catalog import select_documents
@@ -3769,11 +3778,15 @@ def _scope_catalog_documents(question: str, settings: Settings, exclude: set[str
     ask = limit + overlap
     digest = hashlib.sha256(json.dumps(documents, ensure_ascii=False).encode("utf-8")).hexdigest()
     key = (question, digest, ask, str(getattr(settings, "default_answer_llm", "") or ""))
-    if key not in _ARTICLE_DOCUMENT_CACHE:
+    chosen = _ARTICLE_DOCUMENT_CACHE.get(key)
+    if chosen is None:
+        chosen = select_documents(question, documents, parse_text_response, settings, limit=ask)
+        if chosen is None:
+            return None
         if len(_ARTICLE_DOCUMENT_CACHE) >= 256:
             _ARTICLE_DOCUMENT_CACHE.clear()
-        _ARTICLE_DOCUMENT_CACHE[key] = select_documents(question, documents, parse_text_response, settings, limit=ask)
-    return [document_id for document_id in _ARTICLE_DOCUMENT_CACHE[key] if document_id not in exclude][:limit]
+        _ARTICLE_DOCUMENT_CACHE[key] = chosen
+    return [document_id for document_id in chosen if document_id not in exclude][:limit]
 
 
 def _catalog_article_children(
@@ -3810,11 +3823,13 @@ def _catalog_article_children(
     # 検索の候補に出ない文書（手続の一般的な規則の文書など）は、範囲の文書の一覧から LLM が選んで足す。
     known = {catalog.document_id for catalog in catalogs}
     extra = _scope_catalog_documents(question, settings, known)
+    scope_failed = extra is None
+    extra = extra or []
     if extra:
         catalogs += list(load_catalogs(document_ids=extra, limit=len(extra), settings=settings))
     with _execution_step("条の選択", "候補の文書の条の目録から、質問の根拠になる条を選び、その条の根拠を候補に加えます。") as step:
         terms = _catalog_terms(question, settings)
-        selected, failed, refined = _select_catalog_articles(question, catalogs, settings, terms=terms)
+        selected, failed, refined, refine_failed = _select_catalog_articles(question, catalogs, settings, terms=terms)
         if terms:
             step.field("選択に渡した用語", join_values(term.term for term in terms))
         if refined:
@@ -3824,15 +3839,29 @@ def _catalog_article_children(
             step.field("範囲の一覧から加えた文書", f"{len(extra)} 件")
         if failed:
             step.field("条を選べなかった文書", f"{len(failed)} 件")
+        if refine_failed:
+            step.field("同じ章の条の選択に失敗した文書", f"{len(refine_failed)} 件")
         step.add("条の目録を読んだ文書:", *numbered([catalog.file_name for catalog in catalogs], limit=8))
         if failed:
             step.add(
                 "上限を超えて条を選べなかった文書（選ばずに続けました）:",
                 *numbered([f"{name}（{reason}）" for name, reason in failed], limit=8),
             )
+        if refine_failed:
+            step.add(
+                "同じ章の条の選択に失敗した文書（目録から選んだ条だけで続けました）:",
+                *numbered(refine_failed, limit=8),
+            )
+        if scope_failed:
+            step.add("範囲の条で構成された文書の一覧からの文書の選択に失敗したため、候補の文書だけで続けました。")
         if not selected:
-            step.status = "該当なし"
-            step.add("目録から根拠になる条を選べませんでした。")
+            if failed or scope_failed:
+                # 選択の失敗を「該当なし」と分ける（#3285）。
+                step.status = "条の選択に失敗"
+                step.add("条の選択に失敗したため、目録の条を加えずに続けます。")
+            else:
+                step.status = "該当なし"
+                step.add("目録から根拠になる条を選べませんでした。")
             return list(ranked_children), []
         loaded = [_stored_chunk_answer_record(chunk) for chunk in load_chunks(articles=selected, settings=settings)]
         # 読み込みは選んだ条の章節の最初の child に印（選んだ順・文書・目録の行）を付けて返す。
