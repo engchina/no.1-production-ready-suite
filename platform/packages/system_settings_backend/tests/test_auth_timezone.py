@@ -65,8 +65,8 @@ def _client(settings: SimpleNamespace, model: type[BaseModel] = _CurrentUser) ->
 
 @pytest.mark.parametrize(
     ("configured", "expected"),
-    [("UTC", "UTC"), ("America/New_York", "America/New_York"), ("+09:00", "Asia/Tokyo")],
-    ids=["utc", "region", "invalid-falls-back"],
+    [("Asia/Tokyo", "Asia/Tokyo"), ("America/New_York", "America/New_York"), ("+09:00", "UTC")],
+    ids=["tokyo", "region", "invalid-falls-back"],
 )
 def test_me_and_login_return_configured_timezone(configured: str, expected: str) -> None:
     client = _client(_settings(timezone=configured))
@@ -76,8 +76,9 @@ def test_me_and_login_return_configured_timezone(configured: str, expected: str)
     assert login.json()["data"]["timezone"] == expected
 
 
-def test_me_defaults_to_tokyo_when_setting_is_missing() -> None:
-    assert _client(_settings()).get("/auth/me").json()["data"]["timezone"] == "Asia/Tokyo"
+def test_me_defaults_to_utc_when_setting_is_missing() -> None:
+    # 既定は UTC（#3274）。
+    assert _client(_settings()).get("/auth/me").json()["data"]["timezone"] == "UTC"
 
 
 def test_current_user_model_must_carry_timezone() -> None:
