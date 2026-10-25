@@ -3682,7 +3682,7 @@ import { MarkdownText, ResultTable, splitMarkdownTables } from "@production-read
 | `text` | `string` | — | Markdown の本文。空なら何も描かない |
 | `headingLevel` | `2 \| 3 \| 4 \| 5 \| 6` | `3` | 本文の最上位の見出しの HTML の段。置く場所の見出しの下の段を渡す（カードの h2 の下なら 3、h1 だけの画面なら 2） |
 | `labels` | `Partial<MarkdownTextLabels>` | `{ newTab: "（新しいタブで開きます）" }` | 新しいタブで開くリンクの読み上げの補足 |
-| `lang` | `string \| null` | 本文から判定 | 外側の `div` の `lang`（#3335。下の「内容の言語」） |
+| `lang` | `string \| null` | 本文から判定 | 外側の `div` の `lang`（#3335。下の「内容の言語」。リンクの読み上げの補足は画面の言語。#3349） |
 | `className` / `testId` | `string` | — | 外側の `div`（`data-markdown-text`）に付ける |
 
 - 描くもの: 見出し（`#`〜`######`）・段落（中の改行は `<br>`）・`-` / `*` / `+` / `1.` の箇条書き（字下げで入れ子）・` ``` ` / `~~~` のコードブロック（`data-language`）・`>` の引用・`---` の区切り線、行の中の `` `code` ``・`**強調**`・`*斜体*`・`[文字](https://…)`・`<https://…>`・裸の URL、`\*` の取り消し。
@@ -3970,12 +3970,14 @@ NL2SQL のチャット・DB 管理チャットと、Agent のチャット・実�
 
 | 部品・関数 | `lang` の渡し方 | 付ける要素 |
 |---|---|---|
-| `AnswerSections` | `lang?`（無ければ段落・節の見出し・項目の `passageText` / 文字列の `content` から判定） | 本文の入れ物（`data-testid="answer-text"`） |
-| `AnswerPlainText`（新規） | `lang?`（無ければ `text` から） | 節に分けない回答（生成中・書式に合わない本文）の `p`。`text`・`live?`・`children`（カーソル） |
-| `MarkdownText` / `ExcerptContent` | `lang?` | 外側の `div` |
+| `AnswerSections` | `lang?`（無ければ段落・項目の `passageText` / 文字列の `content` から判定）。段落・項目の `lang?`（`null` は製品の決まった文言。#3349） | 段落・項目の文・表やコードの塊・引用だけ。節の見出しは見出しの文字から判定。入れ物・根拠の行・ボタン・段落の印・`extra` には付けない（#3349） |
+| `AnswerPlainText`（新規） | `lang?`（無ければ `text` から） | 節に分けない回答（生成中・書式に合わない本文）の本文だけ（`children` のカーソルは外。#3349） |
+| `MarkdownText` | `lang?` | 外側の `div`（リンクの読み上げの補足は `uiTextLang()`） |
+| `ExcerptContent` | `lang?` | 段落・表の題・セル（表の読み上げの名前 `tableLabel` は外。#3349） |
 | `EvidenceCard` などの根拠の一覧 | `EvidenceListItem.lang?` | 抜粋（`citation-text`） |
 | `ChatUserMessage` / `ChatTurn` | `lang?` / `questionLang?`（無ければ文字列の質問から） | 質問の吹き出し |
-| `DocumentPreview`（`kind="text"`） | `textLang?` | 本文の `pre` |
+| `DocumentPreview`（`kind="text"`） | `textLang?` | 本文の `pre` の中の本文（`preview-text-body`。領域の読み上げの名前は外。#3349） |
+| `uiTextLang()` | — | 画面の文言の言語（`<html lang>`、無ければ `ja`）。内容の要素の中に置くしかない部品の文言にだけ付ける（#3349） |
 | `resolveContentLang(lang, text)` | 値（BCP 47）ならそれ（`normalizeContentLang` でそろえる）、`null` なら付けない、`undefined` なら `detectContentLang(text)` | 製品が内容を自前の要素で出すとき |
 
 - 取込などで言語が分かっていれば値を渡す（`zh-CN` → `zh-Hans`、`zh-TW` → `zh-Hant`、`zh-HK` / `zh-Hant-HK` → `zh-HK`、`ja-JP` → `ja`）。今は 3 製品とも取込で言語を持たないので、本文からの判定で付く。
