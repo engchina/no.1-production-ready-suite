@@ -120,7 +120,7 @@
 | プロジェクト | 種別 | 重要性 |
 |---|---|---|
 | **Docling** (IBM) | 文書解析 | PDF 等多形式を解析。企業 RAG ingestion パイプラインへの組込みに適す。 |
-| **MinerU** (opendatalab) | PDF/Office/画像 → Markdown/JSON | 高精度文書抽出。複雑 PDF・スキャン・Office を検索可能な構造に変換。 |
+| **MinerU** (opendatalab) | PDF/Office/画像 → Markdown/JSON | 高精度文書抽出。複雑 PDF・スキャン・Office を検索可能な構造に変換。許可（MinerU Open Source License）が企業の規模で商用の利用に条件を付けるため、この repo は連携を持たない（#3345）。 |
 | **Marker** (datalab-to) | 文書 → Markdown/JSON/chunks | PDF・画像・PPTX・DOCX・XLSX・HTML・EPUB 対応。表・数式・コードも処理。 |
 | **Unstructured** | 汎用文書前処理 | 企業 RAG の定番 ingestion 部品。PDF/HTML/Word/画像/テキストの非構造化処理。 |
 | **Knowhere** (ontos-ai) | 文書解析 API / RAG-ready chunks | PDF・Office・画像などを構造化 JSON / Markdown / chunks へ変換。表・数式・layout・source traceability・階層 memory / progressive disclosure を重視。商用 API / オンプレ対応の位置づけのため、採用時は本プロジェクト schema と OCI/Oracle stack へ adapter として再マップする。 |

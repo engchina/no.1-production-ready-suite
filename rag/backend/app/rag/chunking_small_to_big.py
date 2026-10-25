@@ -1,7 +1,6 @@
 """親子階層（small-to-big）(rag_poc の Small-to-Big 親子分割)を backend の Chunk へ写す。
 
-docling サービス・MinerU の解析(``app.clients.mineru_layout``。#1334)が
-``parser_artifacts["layout_records"]`` に保持した LayoutRecord から
+docling サービスの解析が ``parser_artifacts["layout_records"]`` に保持した LayoutRecord から
 ``rag_engine.chunking.build_small_to_big_chunks`` で親子チャンクを作り、子だけを索引単位として返す。
 親の本文と ID は子の metadata(``chunk_group_id`` / ``parent_text``)に保持し、既存の
 group sibling 展開と回答文脈で使う。Oracle Text と embedding には rag_poc の search_text を使う。
@@ -15,7 +14,7 @@ Excel の前処理(``excel_to_jsonl``)の行の記録(``rag_parser_core.sheet_re
 検索は行の子で当て、回答の文脈には親(表の一部)の本文を渡す。表頭より上の行(前書き)は記録と
 混ぜず、単独の子(親は自分)にする。
 
-文書解析が Docling・MinerU 以外で layout_records も行の記録もない文書は、失敗させずに
+文書解析が Docling 以外で layout_records も行の記録もない文書は、失敗させずに
 「構造認識」(structure_aware)で分割する(#300)。縮退したことは chunk の metadata
 (``chunk_strategy_requested`` / ``chunk_strategy_fallback_reason``)に残し、分割プレビューと
 Chunk 一覧で利用者に示す。
@@ -49,11 +48,11 @@ if TYPE_CHECKING:
 
 SMALL_TO_BIG_STRATEGY = "small_to_big"
 LAYOUT_ARTIFACT = "layout_records"
-# chunk の source_parser(解析エンジンの名前 + "_layout")。Docling は "docling_layout"、MinerU は
-# "mineru_layout"(``layout_source_parser``)。
+# chunk の source_parser(解析エンジンの名前 + "_layout"。``layout_source_parser``)。Docling は
+# "docling_layout"。
 LAYOUT_SOURCE_PARSER = "docling_layout"
 # record の engine → 分割の結果に出す解析エンジンの表示名。
-_ENGINE_LABELS = {"docling": "Docling", "mineru": "MinerU"}
+_ENGINE_LABELS = {"docling": "Docling"}
 # 検索・embedding 用 text(rag_poc の retrieval_text)を載せる metadata key。
 ENGINE_SEARCH_TEXT_KEY = "engine_search_text"
 # 文書の物理 1 ページ目の本文(回答の「文書の背景」。rag_poc の first_page_context)を JSON で
@@ -82,7 +81,7 @@ def layout_source_parser(engine: str) -> str:
 
 
 class LayoutRecordsMissingError(ValueError):
-    """親子階層の分割に必要なレイアウト(Docling・MinerU の LayoutRecord)が抽出結果にない。
+    """親子階層の分割に必要なレイアウト(Docling の LayoutRecord)が抽出結果にない。
 
     取込と分割プレビューは ``has_layout_records`` で先に判定して構造認識へ縮退するため、
     通常は起きない(``build_parent_child_chunks`` を直接呼んだときの防御)。起きた場合も
@@ -208,8 +207,8 @@ def build_parent_child_chunks(
         return build_sheet_parent_child_chunks(extraction, params=params)
     if not isinstance(layout, Mapping) or not layout.get("records"):
         raise LayoutRecordsMissingError(
-            "親子階層（small-to-big）には Docling か MinerU の解析結果が必要です。"
-            "文書解析を Docling か MinerU にして再解析するか、別の分割方式を選んでください。"
+            "親子階層（small-to-big）には Docling の解析結果が必要です。"
+            "文書解析を Docling にして再解析するか、別の分割方式を選んでください。"
         )
     records = [dict(record) for record in _items(layout.get("records")) if isinstance(record, dict)]
     pages = [dict(page) for page in _items(layout.get("pages")) if isinstance(page, dict)]

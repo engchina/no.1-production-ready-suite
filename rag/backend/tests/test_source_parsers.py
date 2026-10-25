@@ -1244,15 +1244,15 @@ def test_parser_registry_unsupported_explicit_adapter_skips_simple_text(
         data,
         source_profile=profile,
         content_type=profile.content_type,
-        adapter_backend="mineru",
+        adapter_backend="dots_ocr",
         docling_enabled=True,
         unstructured_enabled=True,
-        mineru_enabled=True,
+        dots_ocr_enabled=True,
     )
 
     assert result.parser_backend == "local_partition"
     assert result.fallback_used is True
-    assert result.warnings == ("mineru_adapter_source_unsupported",)
+    assert result.warnings == ("dots_ocr_adapter_source_unsupported",)
     assert result.extraction is not None
     assert result.extraction.parser_artifacts["chunk_template"] == "markdown_by_heading"
 
@@ -1494,13 +1494,13 @@ def test_image_adapter_without_bbox_gets_full_frame_source_asset(
     assert asset.metadata["bbox_unit"] == "ratio"
 
 
-def test_parser_registry_explicit_mineru_rejects_html_source(
+def test_parser_registry_explicit_dots_ocr_rejects_html_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """実装済み MinerU adapter が扱えない source は warning を残して local fallback する。"""
+    """Dots.OCR adapter が扱えない source は warning を残して local fallback する。"""
 
     def fail_if_checked(name: str) -> bool:
-        raise AssertionError(f"unsupported mineru source should not import adapter: {name}")
+        raise AssertionError(f"unsupported dots_ocr source should not import adapter: {name}")
 
     monkeypatch.setattr("rag_parser_core.registry._module_available", fail_if_checked)
     data = b"<h1>Title</h1><p>Body</p>"
@@ -1517,13 +1517,13 @@ def test_parser_registry_explicit_mineru_rejects_html_source(
         data,
         source_profile=profile,
         content_type=profile.content_type,
-        adapter_backend="mineru",
-        mineru_enabled=True,
+        adapter_backend="dots_ocr",
+        dots_ocr_enabled=True,
     )
 
     assert result.parser_backend == "local_partition"
     assert result.fallback_used is True
-    assert "mineru_adapter_source_unsupported" in result.warnings
+    assert "dots_ocr_adapter_source_unsupported" in result.warnings
     assert result.extraction is not None
     assert result.extraction.parser_artifacts["chunk_template"] == "html_semantic"
 
@@ -3338,10 +3338,9 @@ _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         # unstructured: 汎用(メール含む)
         ("unstructured", "mail.eml", "message/rfc822", True),
         ("unstructured", "doc.pdf", "application/pdf", True),
-        # mineru: PDF・画像・Office(HTML 不可)
-        ("mineru", "sheet.xlsx", _XLSX_MIME, True),
-        ("mineru", "page.html", "text/html", False),
-        # 外部 GPU OCR は backend 側で PDF をページ画像化する。
+        # 外部 GPU OCR は backend 側で PDF をページ画像化する(Office・HTML 不可)。
+        ("dots_ocr", "sheet.xlsx", _XLSX_MIME, False),
+        ("dots_ocr", "page.html", "text/html", False),
         ("dots_ocr", "scan.png", "image/png", True),
         ("dots_ocr", "doc.pdf", "application/pdf", True),
         # XML ツリー JSON: JSON だけ(#2042。対応する形かは解析で判定する)

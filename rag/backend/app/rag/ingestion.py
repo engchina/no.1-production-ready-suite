@@ -2134,7 +2134,7 @@ class IngestionPipeline:
             raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
         await _raise_if_cancelled(cancel_checker)
         chunking_params = resolve_chunking_params(self._settings)
-        # 親子階層（small-to-big）は Docling・MinerU の解析結果(layout_records。#1334)を入力にする。
+        # 親子階層（small-to-big）は Docling の解析結果(layout_records)を入力にする。
         # それがない文書は失敗させず構造認識で分割し、縮退したことを chunk metadata と trace に
         # 残す(#300)。
         small_to_big_fallback = small_to_big_fallback_needed(chunking_params.strategy, extraction)
@@ -4206,7 +4206,6 @@ def _parser_backend_label(backend: str) -> str:
         "unstructured": "Unstructured",
         "structured_records_jsonl": "構造化レコード JSONL",
         "xml_tree_json": "XML ツリー JSON",
-        "mineru": "MinerU",
         "dots_ocr": "Dots.OCR",
         "oci_document_understanding": "OCI Document Understanding",
     }
@@ -4298,7 +4297,6 @@ def _is_external_adapter_backend(parser_backend: str) -> bool:
         "unstructured",
         "structured_records_jsonl",
         "xml_tree_json",
-        "mineru",
         "dots_ocr",
     }
 
