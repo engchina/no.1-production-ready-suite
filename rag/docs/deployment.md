@@ -243,8 +243,8 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 ## 既存環境の更新手順（#3347 ファイル準備「PDF を画像として読み直す」の削除）
 
 ファイル準備の変換方式「PDF を画像として読み直す」（`pdf_to_page_images`。サービス `preprocess-pdf-to-page-images`、18011、
-PyMuPDF）を削除した。スキャンの PDF は既定の解析エンジン Docling が OCR で読み、ページを画像として検索に使う用途は
-ページ画像の埋め込みの方式が受け持つ。後方互換は持たない。
+PyMuPDF）を削除した。スキャンの PDF は既定の解析エンジン Docling が OCR（RapidOCR）で読む。ページの単位で検索したいときは、
+分割方式「ページ単位」（`page_level`）を使う。後方互換は持たない。
 
 - **設定**: `RAG_PREPROCESS_PDF_TO_PAGE_IMAGES_SERVICE_URL` は読まない（`backend/.env` に残っていても無視する。消してよい）。
   `RAG_PREPROCESS_PROFILE=pdf_to_page_images` や、文書レシピ・KB 構築設定の `preprocess_profile` に `pdf_to_page_images`
