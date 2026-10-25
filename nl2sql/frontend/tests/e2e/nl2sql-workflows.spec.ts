@@ -3166,7 +3166,7 @@ test("ローカルコードフォントで英日混在 SQL を表示し業務数
     return counts;
   });
   expect(loaded.every((count) => count > 0)).toBe(true);
-  await expect(sql).toHaveCSS("font-family", '"Google Sans Code", "Noto Sans JP", "Noto Sans SC", "Noto Sans TC", "Noto Sans HK", Roboto, monospace');
+  await expect(sql).toHaveCSS("font-family", '"Google Sans Code", "Noto Sans JP", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", Roboto, monospace');
   const rowLimit = page.getByTestId("nl2sql-direct-sql").getByLabel("取得件数上限");
   await expect(rowLimit).toHaveCSS("font-family", await page.locator("body").evaluate((node) => getComputedStyle(node).fontFamily));
   const cdp = await context.newCDPSession(page);
@@ -20325,7 +20325,19 @@ for (const scenario of ["正常", "プレビュー", "安全性の確認の省�
     await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", job.status);
     const progress = page.getByTestId("nl2sql-job");
     const rows = progress.locator("[data-run-timeline-step]");
-    if (!(await rows.first().isVisible())) await page.getByTestId("nl2sql-job-summary").click();
+    // 終端の一覧（見出しは nl2sql-job-summary）に切り替わってから読む。終端の状態の属性が変わった瞬間は、実行中の
+    // 一覧のままか、段階の失敗の反映の前のことがある（#3329）。既定の開閉は、失敗は開いたまま・それ以外は閉じる。
+    const summary = page.getByTestId("nl2sql-job-summary");
+    const details = progress.locator("details").filter({ has: summary });
+    if (blocked) {
+      await expect(details).toHaveAttribute("open", "");
+    } else {
+      await expect(details).not.toHaveAttribute("open", "");
+      await summary.click();
+      await expect(details).toHaveAttribute("open", "");
+    }
+    await expect(rows).toHaveCount(6);
+    await expect(rows.last()).toBeVisible();
     const live = await timelineSnapshot(progress);
   const liveTypography = await timelineTypography(progress);
   expect(liveTypography.steps.length).toBeGreaterThan(0);

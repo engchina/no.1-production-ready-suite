@@ -80,7 +80,7 @@ export async function expectLocalCjkFallbackFonts(page: Page) {
         const families = rendered[`${sample.id}-${kind}`];
         expect(families.length, `${sample.id}-${kind}`).toBeGreaterThan(0);
         expect(
-          families.every((family) => family.startsWith(sample.family)),
+          families.every((family) => family.startsWith(sample.renderedFamily)),
           `${sample.id}-${kind}: ${families.join(", ")}`
         ).toBe(true);
       }

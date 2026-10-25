@@ -1,15 +1,17 @@
 # フロントエンドのローカルフォント
 
 Noto Sans JP / Noto Sans SC / Noto Sans TC / Noto Sans HK / Roboto / Google Sans Code は Fontsource パッケージ（各 5.3.x）として
-`npm ci` 時にローカルの `node_modules/@fontsource/` へダウンロードする。
+`npm ci` 時にローカルの `node_modules/@fontsource/`（SC / TC / HK は可変書体の `node_modules/@fontsource-variable/`）へダウンロードする。
 `src/main.tsx` が通常体の 400 / 500 / 600 / 700 を読み込み、Vite が CSS と
 フォント実体を `dist/assets/` に同梱する。Noto Sans SC / TC / HK の `@font-face` は主の CSS に入れず、
-`src/fonts-cjk.css` を最初の描画の後に `import()` で読む（別の CSS の chunk。共有の `loadStylesAfterFirstRender`。#3305）。実行時のフォント取得はアプリと
+`src/fonts-cjk.css` を最初の描画の後に `import()` で読む（別の CSS の chunk。共有の `loadStylesAfterFirstRender`。#3305）。SC / TC / HK は
+1 つの face が太さ 100〜900 を持つ可変書体（書体名は `Noto Sans SC Variable` など）にし、`@font-face` を slice の数に抑える
+（静的な書体の slice × 太さの `@font-face` は、ページを読み込むたびに描画を数秒止めた。#3328）。実行時のフォント取得はアプリと
 同一 origin へのリクエストのみで、Google Fonts / CDN や端末への事前インストールを必要としない。
 
 日本語・中国語の文字範囲別サブセットは CSS の `unicode-range` により必要な分だけ取得する（preload しない）。
 `font-display: swap` で初回ロード中も文字を表示する。
-共有 UI の `"Noto Sans JP", "Noto Sans SC", "Noto Sans TC", "Noto Sans HK", "Roboto", system-ui, ...` の優先順位を維持し、
+共有 UI の `"Noto Sans JP", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", system-ui, ...` の優先順位を維持し、
 表頭もグローバルフォントを継承する。英数字も Noto Sans JP に収録される文字は同フォントが優先される。
 日本語の字形を優先し、Noto Sans JP に無い簡体字・繁体字・香港の字だけを Noto Sans SC → TC → HK で補う。
 

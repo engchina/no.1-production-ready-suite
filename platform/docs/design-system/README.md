@@ -1165,12 +1165,13 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 ### 書体の並び（#3292）
 
 ```
---font-sans: "Noto Sans JP", "Noto Sans SC", "Noto Sans TC", "Noto Sans HK", "Roboto", system-ui, …, sans-serif
---font-mono: "Google Sans Code", "Noto Sans JP", "Noto Sans SC", "Noto Sans TC", "Noto Sans HK", "Roboto", monospace
+--font-sans: "Noto Sans JP", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", system-ui, …, sans-serif
+--font-mono: "Google Sans Code", "Noto Sans JP", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", monospace
 ```
 
 - 日本語の字形を優先するため Noto Sans JP を先頭に置き、JP に無い字（簡体字・繁体字・香港の字）だけを Noto Sans SC → Noto Sans TC → Noto Sans HK の順で補う。JP にある字（同じ符号の漢字）は JP の字形のまま。
-- 4 書体とも 3 製品が `@fontsource` で自前ホストする（外部の CDN を使わない）。太さは Noto Sans JP と同じ。SC / TC / HK は unicode-range で分けた CSS（`<weight>.css`）を読み、画面に出た字を含む分だけを取得する。preload はせず、`font-display` は `@fontsource` の既定（`swap`）のまま。
+- 4 書体とも 3 製品が `@fontsource` で自前ホストする（外部の CDN を使わない）。太さは Noto Sans JP と同じ。SC / TC / HK は unicode-range で分けた CSS を読み、画面に出た字を含む分だけを取得する。preload はせず、`font-display` は `@fontsource` の既定（`swap`）のまま。
+- SC / TC / HK は可変書体（`@fontsource-variable/noto-sans-{sc,tc,hk}` の `wght.css`。1 つの face が太さ 100〜900 を持ち、書体名は `Noto Sans SC Variable` など）にし、`@font-face` を slice の数（3 書体で 318）に抑える。静的な書体の `<weight>.css` は slice × 太さ（4 太さで 1272）の `@font-face` になり、Chromium がページの読み込み・離脱のたびに face ごとの処理を main thread に積んで、画面の描画が数秒止まった（#3328）。デザインモック（`css/tokens/`。Google Fonts）の書体名は `Noto Sans SC` などのまま。
 - SC / TC / HK の `@font-face`（約 100 の slice × 太さ）は主の CSS（描画を止める）に入れず、製品の `src/fonts-cjk.css` を `main.tsx` が共有の `loadStylesAfterFirstRender`（最初の commit の後の次の frame の後）で `import()` し、Vite が別の CSS の chunk にする（#3305）。読み込む前の中国語の字は JP・端末の書体で出て、読み込んだ後に置き換わる。Noto Sans JP・Roboto・Google Sans Code は主の CSS のまま。
 - e2e は共通の `platform/packages/ui/e2e/font-checks.ts`（JP に無い合成の字で SC / TC / HK の読み込みと、実際に使われた書体を確かめる。最初の描画の時点の CSS と index.html が読む CSS に SC / TC / HK の `@font-face` が無いことも確かめる）。
 

@@ -2,7 +2,9 @@
  * 3 製品の e2e が共通に使う、自前ホストの書体の検査（#3292）。
  *
  * - `FONT_SANS_PREFIX` / `FONT_MONO_FAMILY`: 共有 tokens の `--font-sans` / `--font-mono` の計算値（先頭・全体）
- * - `CJK_FALLBACK_SAMPLES`: Noto Sans JP に無く、Noto Sans SC・TC・HK のそれぞれだけにある合成の字
+ * - `CJK_FALLBACK_SAMPLES`: Noto Sans JP に無く、Noto Sans SC・TC・HK のそれぞれだけにある合成の字。SC・TC・HK は
+ *   可変書体（`@fontsource-variable`）で、CSS の書体名（`family`）は `Noto Sans SC Variable` など、Chromium が描画に
+ *   使った書体の名前（`renderedFamily`）は `Noto Sans SC` で始まる（#3328）
  * - `loadCjkFallbackFonts`: Noto Sans SC / TC / HK の各太さを、合成の字で `document.fonts.load` する
  * - `renderedCjkFallbackFonts`: 合成の字を本文の書体（`--font-sans`）と等幅（`code`）で描き、Chromium が実際に使った
  *   書体の名前を CDP（`CSS.getPlatformFontsForNode`）で返す。JP が先頭のまま、JP に無い字だけが SC → TC → HK で補われるか
@@ -17,19 +19,20 @@
  */
 
 /** 本文の書体（`--font-sans`）の計算値の先頭。日本語の字形を優先し、JP に無い字だけを SC → TC → HK で補う。 */
-export const FONT_SANS_PREFIX = '"Noto Sans JP", "Noto Sans SC", "Noto Sans TC", "Noto Sans HK", Roboto,';
+export const FONT_SANS_PREFIX = '"Noto Sans JP", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", Roboto,';
 
 /** 等幅書体（`--font-mono`）の計算値。Google Sans Code に無い字は本文と同じ順で補う。 */
-export const FONT_MONO_FAMILY = '"Google Sans Code", "Noto Sans JP", "Noto Sans SC", "Noto Sans TC", "Noto Sans HK", Roboto, monospace';
+export const FONT_MONO_FAMILY =
+  '"Google Sans Code", "Noto Sans JP", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", Roboto, monospace';
 
 /**
  * Noto Sans JP に無い合成の字（業務の内容ではなく、字の収録の違いだけで選ぶ）。
  * 「们」は SC だけ、「亷」は TC と HK（TC が先）、「乪」は HK だけに収録される（JP には無い）。
  */
 export const CJK_FALLBACK_SAMPLES = [
-  { id: "simplified", family: "Noto Sans SC", text: "们" },
-  { id: "traditional", family: "Noto Sans TC", text: "亷" },
-  { id: "hongkong", family: "Noto Sans HK", text: "乪" },
+  { id: "simplified", family: "Noto Sans SC Variable", renderedFamily: "Noto Sans SC", text: "们" },
+  { id: "traditional", family: "Noto Sans TC Variable", renderedFamily: "Noto Sans TC", text: "亷" },
+  { id: "hongkong", family: "Noto Sans HK Variable", renderedFamily: "Noto Sans HK", text: "乪" },
 ] as const;
 
 export type CjkFallbackSampleId = (typeof CJK_FALLBACK_SAMPLES)[number]["id"];
