@@ -21,7 +21,7 @@ from pr_system_settings.auth.api_keys import api_key_rate_limiter
 from pytest import MonkeyPatch
 from security_support import client, enable_production_auth, login
 
-from app.features.agent import mcp_server
+from app.features.agent import mcp_server, run_observation
 from app.features.agent.runtime import (
     MCP_APPROVAL_SKIPPED_CODE,
     AgentProfile,
@@ -217,6 +217,18 @@ def _full_run(setup: Setup) -> RunState:
                 superseded=True,
                 evidence_type="table",
                 origin="derived",
+                # 表の 1 行の根拠のセルの座標（RAG の EvidenceLocator の table_row・table_cells）。
+                locator={
+                    "sheet_name": "シート 1",
+                    "row_start": 5,
+                    "row_end": 5,
+                    "cell_range": "A5:C5",
+                    "table_row": 5,
+                    "table_cells": [
+                        {"table_col": "A", "header_path": []},
+                        {"table_col": "B", "header_path": ["上の段", "下の段"]},
+                    ],
+                },
             ),
             # 会話の添付の根拠は観測に含めない。
             _evidence("attachment:att-1", "att:1", "添付の本文。"),
@@ -482,7 +494,16 @@ def test_observation_returns_the_run_metadata_tool_calls_and_all_evidence(setup:
         "row_end": None,
         "cell_range": None,
         "element_locator": "doc:doc-a/el:1",
+        "table_row": None,
+        "table_cells": [],
     }
+    assert (second["locator"]["table_row"], second["locator"]["table_cells"]) == (
+        5,
+        [
+            {"table_col": "A", "header_path": []},
+            {"table_col": "B", "header_path": ["上の段", "下の段"]},
+        ],
+    )
     # RAG が切った根拠を後で全文で読んだ: まだ無い本文をつなぎ、全文を渡したことになる。
     assert second["text"] == "文書 B の前半。\n文書 B の前半。文書 B の後半。"
     assert (second["truncated"], second["cited"], second["answer_use"]) == (False, False, None)
@@ -505,6 +526,8 @@ def test_observation_returns_the_run_metadata_tool_calls_and_all_evidence(setup:
         "row_end": 1,
         "cell_range": "A1:C1",
         "element_locator": None,
+        "table_row": None,
+        "table_cells": [],
     }
     assert fourth["text"] == "シート の 2 行目。"
     # text と structuredContent は同じ JSON（MCP の structured tool output）。
@@ -669,3 +692,20 @@ def test_observation_limits_the_tool_calls_and_reports_the_total(setup: Setup) -
     output = _observe(setup, run.id)["structuredContent"]
     assert output["tool_call_total"] == total
     assert len(output["tool_calls"]) == 200
+
+
+@pytest.mark.parametrize(
+    "cells",
+    [
+        [{"table_col": "B", "header_path": "上の段"}],
+        [{"table_col": "", "header_path": []}],
+        [{"table_col": "B", "header_path": [1]}],
+        ["B"],
+        {"table_col": "B", "header_path": []},
+    ],
+    ids=["path-not-list", "empty-column", "path-not-text", "cell-not-object", "not-list"],
+)
+def test_observation_drops_table_cells_of_another_shape(cells: object) -> None:
+    """RAG の table_cells の形に合わないセルがあれば、セルを 1 つも写さない（行の番号は写す）。"""
+    locator = run_observation._locator({"table_row": 5, "table_cells": cells})
+    assert locator == {"table_row": 5}

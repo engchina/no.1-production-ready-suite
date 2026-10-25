@@ -132,9 +132,9 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 | 項目 | 現状 | コード |
 |---|---|---|
-| 行・列の位置 | `EvidenceLocator` の `sheet_name`・`row_start`・`row_end`・`cell_range` は表計算の根拠にだけある。PDF・HTML の表の根拠には行・列の位置が無く、頁・bbox・要素の定位子だけ | `rag/backend/app/mcp/tools.py::EvidenceLocator` |
-| 版 | 根拠の版は処理の単位の `chunk_set_id`（文書の改訂の版ではない） | `rag/backend/app/mcp/tools.py` |
-| 位置が無いときの見え方 | 位置の項目は空（`null`）のまま。精密な位置を持つように見せる値は入れない（静的確認）。PDF / 表計算 / 画像の全経路で、引用が正しい表・版・位置へ結び付くことは未確認（#3262 の後の段） | `rag/backend/app/mcp/tools.py::EvidenceLocator` |
+| 行・列の位置 | `EvidenceLocator` の `sheet_name`・`row_start`・`row_end`・`cell_range` は表計算の根拠にだけある。表計算の 1 つのデータの行の根拠は、セルの座標の `table_row`（シートの行）と `table_cells`（値のあるセルの列 `table_col` と表頭の段 `header_path`）も持つ（#3262。取込で記録した chunk だけ）。PDF・HTML の表の根拠には行・列の位置が無く、頁・bbox・要素の定位子だけ（`table_row` は `null`、`table_cells` は空） | `rag/backend/app/mcp/tools.py::EvidenceLocator`・`rag/packages/rag_parser_core/rag_parser_core/sheet_records.py::_table_locator_metadata` |
+| 版 | 根拠の版は処理の単位の `chunk_set_id`（取込み直すと変わる。文書の改訂の版ではない）。改訂した文書は別の `document_id` で、置き換えた旧版は `superseded`。文書の改訂の番号は持たない | `rag/backend/app/mcp/tools.py::RagEvidence` |
+| 位置が無いときの見え方 | 位置の項目は空（`null`・空の配列）のまま。精密な位置を持つように見せる値は入れない（`table_cells` は表頭の段を記録していない古い記録から推測せず、壊れた値は空にする。`rag/backend/tests/test_mcp_api.py` が確かめる）。PDF・HTML・画像の表の行列の位置、CSV・Word の表のセルの座標は未対応 | `rag/backend/app/mcp/tools.py::_locator` |
 
 ## `degraded_steps` の処理の種類
 
@@ -187,4 +187,4 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 - 実 Oracle・実 LLM での失敗の振る舞い（すべて静的確認）。
 - chat の入口（`rag/backend/app/api/routes/chat.py`）の質問の安全チェックの工程の span。
 - 表の行・列の対応の検査が働かなかった（表として読めなかった）根拠を、呼び出し元が見分ける方法。
-- PDF / 表計算 / 画像の全経路で、引用が正しい表・版・位置へ結び付くこと（#3262 の後の段）。
+- PDF・HTML・画像の表の根拠を、原本の表の行・列へ結び付けること（解析が読んだ表の行の番号は原本の座標ではないので出していない。#3262 の後の段）。CSV・Word の表のセルの座標（原本の行・列は前処理が持つが、根拠の locator には出していない）。

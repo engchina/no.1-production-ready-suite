@@ -779,6 +779,9 @@ def test_search_maps_evidence_and_uses_token_user_context(
         "bbox_unit": "absolute",
         # 要素の ID の無い chunk は定位子を持たない（#1330）。
         "element_locator": None,
+        # 表の 1 行の根拠でなければセルの座標は無い（#3262）。
+        "table_row": None,
+        "table_cells": [],
     }
     # 1 件の上限より短い本文は全文を返す（#3321）。
     assert evidence["excerpt"] == "長" * 1500
@@ -846,7 +849,112 @@ def test_search_evidence_locates_spreadsheet_rows(
         "bbox": None,
         "bbox_unit": None,
         "element_locator": None,
+        # 複数行にまたがる根拠は表の 1 行ではない（セルの座標は無い。#3262）。
+        "table_row": None,
+        "table_cells": [],
     }
+
+
+def _locator_of(auth: ProductionAuth, monkeypatch: MonkeyPatch, **metadata: Any) -> Any:
+    """1 件の根拠の chunk（metadata は引数）を rag_search で返した locator。"""
+
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
+        del request
+        return SearchResponse(
+            answer="回答",
+            citations=[_chunk("c-1", used=True, **metadata)],
+            trace_id="trace-1",
+            elapsed_ms=1.0,
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call("rag_search", {"query": "値"}, _token(user.user_uuid))["structuredContent"]
+    return body["evidence"][0]["locator"]
+
+
+def test_search_evidence_of_a_spreadsheet_row_cites_cells_and_headers(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """表計算の 1 行の記録の根拠は、行（table_row）と値のあるセルの列・表頭の段を返す（#3262）。"""
+    cells = [["A", ["区分"]], ["C", ["上の段", "下の段"]], ["D", []]]
+    locator = _locator_of(
+        auth,
+        monkeypatch,
+        content_kind="record",
+        sheet_name="シート A",
+        row_start=7,
+        row_end=7,
+        cell_range="A7:D7",
+        table_row=7,
+        table_cells_json=json.dumps(cells, ensure_ascii=False),
+    )
+    assert (locator["sheet_name"], locator["row_start"], locator["cell_range"]) == (
+        "シート A",
+        7,
+        "A7:D7",
+    )
+    assert locator["table_row"] == 7
+    assert locator["table_cells"] == [
+        {"table_col": "A", "header_path": ["区分"]},
+        {"table_col": "C", "header_path": ["上の段", "下の段"]},
+        {"table_col": "D", "header_path": []},
+    ]
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        # 表頭の段を記録していない記録（取込み直す前）: 行だけ返し、セルは推測しない。
+        {"sheet_name": "シート A", "row_start": 7, "row_end": 7, "table_row": 7},
+        # 壊れたセルの記録は、セルを 1 つも返さない。
+        {"sheet_name": "シート A", "table_row": 7, "table_cells_json": '[["A"]]'},
+        {"sheet_name": "シート A", "table_row": 7, "table_cells_json": "{"},
+        {"sheet_name": "シート A", "table_row": 7, "table_cells_json": '[["A", "区分"]]'},
+    ],
+    ids=["no-cells", "cell-without-path", "broken-json", "path-not-list"],
+)
+def test_search_evidence_of_a_spreadsheet_row_without_cells_returns_the_row_only(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch, metadata: dict[str, Any]
+) -> None:
+    locator = _locator_of(auth, monkeypatch, content_kind="record", **metadata)
+    assert (locator["table_row"], locator["table_cells"]) == (7, [])
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        # PDF の表（解析が読んだ表の行のまとまり）: 原本の行は決まらない。
+        {
+            "content_kind": "table",
+            "page_start": 2,
+            "page_end": 2,
+            "table_id": "t-1",
+            "table_data_row_start": 3,
+            "table_data_row_end": 9,
+        },
+        # HTML の表（解析が読んだ表）。
+        {"content_kind": "table", "section_path": "節 A", "table_row_count": 12},
+        # 表計算でない chunk に同じ名前の値があっても使わない。
+        {
+            "content_kind": "table",
+            "table_row": 3,
+            "table_cells_json": '[["B", ["列 B"]]]',
+        },
+    ],
+    ids=["pdf-table", "html-table", "not-spreadsheet"],
+)
+def test_search_evidence_of_a_parsed_table_has_no_cell_coordinates(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch, metadata: dict[str, Any]
+) -> None:
+    """PDF・HTML など解析が読んだ表の根拠は、原本の行・列を持たない（null / 空。#3262）。"""
+    locator = _locator_of(auth, monkeypatch, **metadata)
+    assert (locator["table_row"], locator["table_cells"]) == (None, [])
+    assert (locator["sheet_name"], locator["row_start"], locator["cell_range"]) == (
+        None,
+        None,
+        None,
+    )
 
 
 def test_retrieve_evidence_skips_answer_generation(

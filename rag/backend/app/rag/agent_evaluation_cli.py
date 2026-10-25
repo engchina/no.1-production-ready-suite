@@ -90,7 +90,7 @@ OBSERVATION_PAGE_LIMIT = 100
 MAX_OBSERVATION_PAGES = 1000
 # 読める出力の形の版（契約 agent-tools.json の schema_version。知らない版は採点しない）。
 RUN_OUTPUT_SCHEMA_VERSION = 4
-OBSERVATION_SCHEMA_VERSION = 1
+OBSERVATION_SCHEMA_VERSION = 2
 CANCEL_SCHEMA_VERSION = 1
 # Agent の経路の採点の版。RAG の六指標の版に、Agent の経路の規則の版を足す（agent_v1 は段 1 の
 # 画面の API と Run の内部の記録で採点した版。agent_v2 は公開の MCP の出力だけで採点し、承認の要る

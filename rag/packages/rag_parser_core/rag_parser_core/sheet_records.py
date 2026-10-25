@@ -21,7 +21,8 @@ RAG の要素化と、モデルの再公開だけを持つ。
   （同じシート名・`table_index`・`region`）になる。親子階層の親は表をまたがない
   （metadata の `sheet_table_index`）。
 - 要素の metadata に `sheet_name`・`row_start` / `row_end`・`cell_range`・`cell_column_start` /
-  `cell_column_end`・`header_row` を持ち、chunking が chunk の場所にする。
+  `cell_column_end`・`header_row` を持ち、chunking が chunk の場所にする。表の 1 行の記録は、
+  セルの座標（`table_row`・値のあるセルの列と表頭の段の `table_cells_json`。#3262）も持つ。
 - 分割（#1349。engchina/no.1-rag の「1 行 = 1 chunk」に合わせる）: 記録（`content_kind=record`）は
   1 つずつ単独の chunk にし、他の記録・前書きと結合せず、途中で切らない
   （`rag_pipeline_core.chunking`）。
@@ -41,6 +42,7 @@ RAG の要素化と、モデルの再公開だけを持つ。
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 
 from pr_backend_core.spreadsheet.models import (
@@ -75,6 +77,13 @@ SHEET_PREAMBLE_CONTENT_KIND = "text"
 _BLOCK_TEXT_MAX_CHARS = 8000
 # 表頭の推定の信頼度が低いシートの warning（文書レシピを確認（REVIEW）で止める。#1229）。
 EXCEL_HEADER_LOW_CONFIDENCE_WARNING = "excel_header_low_confidence"
+# 表の 1 行の記録の、セルの座標の metadata（#3262。根拠の locator の table_row / table_cells）。
+# ``table_row`` は記録が 1 つのデータの行のときのシートの行番号。``table_cells_json`` は値のある
+# セルの列の記号と表頭の段（``[["B", ["上の段", "下の段"]], …]``。本文の順）で、表頭の段を記録して
+# いない古い行の記録（``SheetColumn.header_path`` が None）からは作らない（推測しない）。
+TABLE_ROW_KEY = "table_row"
+TABLE_CELLS_KEY = "table_cells_json"
+TABLE_LOCATOR_METADATA_KEYS: tuple[str, ...] = (TABLE_ROW_KEY, TABLE_CELLS_KEY)
 
 
 def _block_text(
@@ -114,6 +123,29 @@ def _column_bounds(cell_range: str) -> tuple[str | None, str | None]:
     letters_start = "".join(char for char in start if char.isalpha()) or None
     letters_end = "".join(char for char in (end or start) if char.isalpha()) or None
     return letters_start, letters_end
+
+
+def _table_locator_metadata(
+    block: SheetBlock, columns: Mapping[str, SheetColumn]
+) -> dict[str, str | int]:
+    """表の 1 行の記録のセルの座標（``TABLE_LOCATOR_METADATA_KEYS``）。
+
+    手順・帳票・前書き・複数行にまたがる記録は表の 1 行ではないので作らない。
+    """
+    if block.kind != "row" or block.row_start != block.row_end:
+        return {}
+    metadata: dict[str, str | int] = {TABLE_ROW_KEY: block.row_start}
+    cells: list[list[object]] = []
+    for name, value in block.values.items():
+        column = columns.get(name)
+        if not value.strip():
+            continue
+        if column is None or column.header_path is None:
+            return metadata
+        cells.append([column.column, column.header_path])
+    if cells:
+        metadata[TABLE_CELLS_KEY] = json.dumps(cells, ensure_ascii=False, separators=(",", ":"))
+    return metadata
 
 
 def sheet_block_record_id(sheet_id: str, block: SheetBlock, mode: str) -> str:
@@ -163,6 +195,7 @@ def sheet_records_extraction(
         sheet_metadata = _sheet_metadata(sheet)
         roles = {column.name: column.role for column in sheet.columns if column.role}
         roles_metadata = _column_roles_metadata(roles)
+        columns_by_name = {column.name: column for column in sheet.columns}
         # シート名は節（section_path）と chunk の文脈の見出しに入るので、見出しだけの要素は作らない
         # （シート名だけの場所の無い小さな chunk を作らない）。
         heading_id = f"sheet-{sheet_index:03d}"
@@ -227,6 +260,7 @@ def sheet_records_extraction(
                             else {}
                         ),
                         **_shape_metadata(block.shape_cells),
+                        **_table_locator_metadata(block, columns_by_name),
                     },
                 )
             )
@@ -277,6 +311,9 @@ __all__ = [
     "SHEET_RECORDS_FORMAT",
     "SHEET_RECORDS_FORMAT_VERSION",
     "SHEET_RECORD_CONTENT_KIND",
+    "TABLE_CELLS_KEY",
+    "TABLE_LOCATOR_METADATA_KEYS",
+    "TABLE_ROW_KEY",
     "ColumnRole",
     "ColumnRoleSetting",
     "ExcelOptions",

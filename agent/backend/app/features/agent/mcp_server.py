@@ -135,8 +135,9 @@ RUN_OUTPUT_SCHEMA_VERSION = 4
 LIST_OUTPUT_SCHEMA_VERSION = 1
 SKILL_EXPORT_SCHEMA_VERSION = 1
 CANCEL_OUTPUT_SCHEMA_VERSION = 1
-# agent_get_run_observation の出力の形の版（#3240）。
-OBSERVATION_SCHEMA_VERSION = 1
+# agent_get_run_observation の出力の形の版（#3240。#3262 で根拠の場所に RAG の表のセルの座標の
+# table_row・table_cells を足して 2）。
+OBSERVATION_SCHEMA_VERSION = 2
 # 根拠の件数の上限。本文は件ごとの全文を応答の予算に入れる（3 製品で共通の規則。値と決め方は
 # pr_backend_core.source_text。#3321）。
 _MAX_SOURCES = 10
@@ -515,6 +516,13 @@ class AgentGetRunObservationInput(BaseModel):
     )
 
 
+class ObservedTableCell(BaseModel):
+    """表の 1 行の根拠の値のあるセル（RAG の EvidenceTableCell と同じ名前）。"""
+
+    table_col: str
+    header_path: list[str]
+
+
 class ObservedLocator(BaseModel):
     """根拠の場所（RAG の根拠の locator と同じ名前。一致はテストで確かめる）。"""
 
@@ -528,6 +536,8 @@ class ObservedLocator(BaseModel):
     row_end: int | None = None
     cell_range: str | None = None
     element_locator: str | None = None
+    table_row: int | None = None
+    table_cells: list[ObservedTableCell] = Field(default_factory=list)
 
 
 class ObservedUsage(BaseModel):

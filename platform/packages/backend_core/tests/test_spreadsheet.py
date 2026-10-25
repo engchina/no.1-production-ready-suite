@@ -373,3 +373,28 @@ def test_two_row_header_with_merged_upper_row_is_inferred() -> None:
     (configured,) = _sheets(_bytes(workbook), header_row_count=1)
     assert configured.header_row_count == 1
     assert configured.blocks[0].row_start == 2
+
+
+def test_columns_keep_the_rows_of_a_multi_row_header() -> None:
+    """列は表頭の段の文字を上の段から持つ（「 / 」を含むセルも 1 段のまま。#3262）。"""
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    _put(worksheet, "A1:A2", "項目A")
+    _put(worksheet, "B1:C1", "区分 / 甲")
+    worksheet["B2"] = "値A"
+    worksheet["C2"] = "値B"
+    worksheet["D2"] = "値C"
+    for row in range(3, 7):
+        worksheet.append([f"行{row}", row, row * 10, row * 100])
+    (sheet,) = _sheets(_bytes(workbook), header_row=1, header_row_count=2)
+    assert [(column.column, column.header_path) for column in sheet.columns] == [
+        ("A", ["項目A"]),
+        ("B", ["区分 / 甲", "値A"]),
+        ("C", ["区分 / 甲", "値B"]),
+        ("D", ["値C"]),
+    ]
+    # 列名は段を「 / 」でつないだもので、セルの中の「 / 」と区別できない。
+    assert sheet.columns[1].name == "区分 / 甲 / 値A"
+    (single,) = _sheets(_bytes(workbook), header_row_count=1, header_row=2)
+    assert [column.header_path for column in single.columns] == [[], ["値A"], ["値B"], ["値C"]]

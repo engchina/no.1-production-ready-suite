@@ -1042,6 +1042,7 @@ def _sheet_records(grid: Grid, options: ExcelOptions) -> SheetRecords | None:
     )
     excludes = {item.strip().casefold() for item in options.exclude_columns if item.strip()}
     raw_names: list[tuple[int, str, str]] = []
+    header_paths: dict[str, list[str]] = {}
     for col in used_columns:
         letter = column_letter(col)
         parts: list[str] = []
@@ -1052,6 +1053,7 @@ def _sheet_records(grid: Grid, options: ExcelOptions) -> SheetRecords | None:
         name = " / ".join(parts)
         if not _excluded(name, letter, excludes):
             raw_names.append((col, letter, name))
+            header_paths[letter] = parts
     names = dict(zip([col for col, _, _ in raw_names], _column_names(raw_names), strict=True))
     columns = [col for col, _, _ in raw_names]
     detect_roles = options.column_role_detection == "auto"
@@ -1068,6 +1070,11 @@ def _sheet_records(grid: Grid, options: ExcelOptions) -> SheetRecords | None:
         options.column_roles,
         detect=detect_roles,
     )
+    # 表頭の段の文字（「 / 」でつないだ列名からは、セルの中の「 / 」と区別して戻せない）。
+    sheet_columns = [
+        item.model_copy(update={"header_path": header_paths.get(item.column, [])})
+        for item in sheet_columns
+    ]
     diagnostics.extend(role_diagnostics)
     roles = {item.name: item.role for item in sheet_columns if item.role}
 

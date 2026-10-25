@@ -24,7 +24,10 @@ from rag_parser_core.preprocess import ConvertHealth, ConvertOutcome, ConvertRes
 from rag_parser_core.preprocess_service import create_preprocess_app
 from rag_parser_core.registry import run_external_adapter
 from rag_parser_core.sheet_records import (
+    TABLE_CELLS_KEY,
+    TABLE_ROW_KEY,
     SheetBlock,
+    SheetColumn,
     SheetPreambleRow,
     SheetRecords,
     SheetRecordsDocument,
@@ -196,6 +199,86 @@ def test_chunks_carry_sheet_rows_and_cell_ranges() -> None:
     assert (step["row_start"], step["row_end"], step["cell_range"]) == (3, 4, "A3:D4")
     assert step["section_path"] == "手順 > 事前準備 > アカウントの登録"
     assert len(chunks) == 5
+
+
+def _table_document(*, header_paths: bool = True) -> SheetRecordsDocument:
+    """2 段の表頭の表（合成）。``header_paths=False`` は表頭の段を記録していない古い記録。"""
+    paths: dict[str, list[str] | None] = {
+        "A": ["項目A"],
+        "B": ["区分 / 甲", "値A"],
+        "C": ["区分 / 甲", "値B"],
+    }
+    names = {"A": "項目A", "B": "区分 / 甲 / 値A", "C": "区分 / 甲 / 値B"}
+    columns = [
+        SheetColumn(
+            name=names[letter], column=letter, header_path=paths[letter] if header_paths else None
+        )
+        for letter in "ABC"
+    ]
+    rows = [
+        SheetBlock(
+            kind="row",
+            row_start=row,
+            row_end=row,
+            cell_range=f"A{row}:C{row}",
+            # 空の値のセルは本文にもセルにも入らない。
+            values={
+                names["A"]: f"行{row}",
+                names["B"]: str(row),
+                names["C"]: "" if row == 4 else "x",
+            },
+        )
+        for row in (3, 4)
+    ]
+    return SheetRecordsDocument(
+        source_format="xlsx",
+        sheets=[
+            SheetRecords(
+                name="表A",
+                header_row=1,
+                header_row_count=2,
+                mode="table",
+                columns=columns,
+                preamble=[],
+                blocks=rows,
+            ),
+            _document().sheets[1],
+        ],
+    )
+
+
+def _table_chunks(strategy: str, document: SheetRecordsDocument) -> list[Any]:
+    extraction = _extraction(document)
+    if strategy == "small_to_big":
+        from app.rag.chunking_small_to_big import build_parent_child_chunks
+
+        return build_parent_child_chunks(extraction)
+    return chunk_extraction_with_strategy(
+        extraction, strategy=strategy, chunk_size=800, overlap=120, min_chars=120
+    )
+
+
+@pytest.mark.parametrize("strategy", ["structure_aware", "small_to_big", "fixed_delimiter"])
+def test_table_row_chunks_carry_cell_coordinates_and_header_rows(strategy: str) -> None:
+    """表の 1 行の chunk は、行とセルの列・表頭の段を持つ（どの分割でも。#3262）。"""
+    chunks = _table_chunks(strategy, _table_document())
+    rows = [chunk.metadata for chunk in chunks if chunk.metadata.get("sheet_name") == "表A"]
+    assert [meta[TABLE_ROW_KEY] for meta in rows] == [3, 4]
+    assert [json.loads(meta[TABLE_CELLS_KEY]) for meta in rows] == [
+        [["A", ["項目A"]], ["B", ["区分 / 甲", "値A"]], ["C", ["区分 / 甲", "値B"]]],
+        [["A", ["項目A"]], ["B", ["区分 / 甲", "値A"]]],
+    ]
+    # 手順（複数行の記録）は表の 1 行ではない。
+    step = next(chunk.metadata for chunk in chunks if chunk.metadata.get("sheet_name") == "手順")
+    assert TABLE_ROW_KEY not in step and TABLE_CELLS_KEY not in step
+
+
+def test_table_row_chunks_of_old_records_have_no_cells() -> None:
+    """表頭の段を記録していない記録は、行の番号だけを持ち、セルの表頭を推測しない（#3262）。"""
+    chunks = _table_chunks("structure_aware", _table_document(header_paths=False))
+    rows = [chunk.metadata for chunk in chunks if chunk.metadata.get("sheet_name") == "表A"]
+    assert [meta[TABLE_ROW_KEY] for meta in rows] == [3, 4]
+    assert all(TABLE_CELLS_KEY not in meta for meta in rows)
 
 
 def test_long_record_stays_in_one_chunk() -> None:
@@ -510,6 +593,66 @@ def test_system_ledger_becomes_row_chunks_and_preamble(strategy: str) -> None:
         assert str(preamble.metadata["chunk_group_id"]) not in groups
     else:
         assert len({chunk.metadata["chunk_group_id"] for chunk in chunks}) == len(chunks)
+
+
+def test_excel_with_a_two_row_header_cites_cells_and_header_rows() -> None:
+    """前処理から根拠の locator まで、2 段の表頭の表の行を行・列・表頭の段で引用できる（#3262）。
+
+    合成の表を前処理の変換（openpyxl）で JSONL にし、要素化・分割・locator の順に通す。
+    """
+    import io
+
+    import openpyxl
+    from rag_parser_core.structured_records import (
+        StructuredRecordsDocument,
+        parse_structured_records,
+        structured_records_extraction,
+    )
+
+    from app.mcp.tools import _locator
+
+    converter = _excel_to_jsonl_converter()
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.title = "表A"
+    worksheet["A1"] = "項目A"
+    worksheet.merge_cells("A1:A2")
+    worksheet["B1"] = "区分甲"
+    worksheet.merge_cells("B1:C1")
+    worksheet["B2"], worksheet["C2"] = "値A", "値B"
+    for row in range(3, 7):
+        worksheet.append([f"行{row}", row, row * 10])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    outcome = converter.convert(
+        buffer.getvalue(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "excel_to_jsonl",
+        None,
+        options={"header_row": 1, "header_row_count": 2},
+    )
+    assert outcome.converted is True
+    document = parse_structured_records(outcome.derived_bytes)
+    assert isinstance(document, StructuredRecordsDocument)
+    extraction = structured_records_extraction(
+        document, source_parser="structured_records", parser_backend="docling", parser_version="v1"
+    )
+    chunks = chunk_extraction_with_strategy(
+        extraction, strategy="structure_aware", chunk_size=800, overlap=120, min_chars=120
+    )
+    first = next(chunk for chunk in chunks if chunk.metadata.get("row_start") == 3)
+    locator = _locator(dict(first.metadata)).model_dump()
+    assert (locator["sheet_name"], locator["table_row"], locator["cell_range"]) == (
+        "表A",
+        3,
+        "A3:C3",
+    )
+    assert locator["table_cells"] == [
+        {"table_col": "A", "header_path": ["項目A"]},
+        {"table_col": "B", "header_path": ["区分甲", "値A"]},
+        {"table_col": "C", "header_path": ["区分甲", "値B"]},
+    ]
 
 
 def test_preprocess_service_passes_options_only_to_converters_that_take_them() -> None:

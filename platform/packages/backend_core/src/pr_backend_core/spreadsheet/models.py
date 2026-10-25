@@ -256,6 +256,14 @@ class SheetColumn(BaseModel):
     role_term: str | None = Field(
         default=None, description="役割を決めた表頭の語（判定のとき）か、指定の key。"
     )
+    header_path: list[str] | None = Field(
+        default=None,
+        description=(
+            "列の表頭のセルの文字（複数段の表頭は上の段から。横に結合した見出しは覆う列のすべてに"
+            "入る。表頭の文字の無い列は空）。`name` はこれを「 / 」でつなぎ、重複を区別した名前。"
+            "None は表頭の段を記録していない（この項目より前に作った記録）。"
+        ),
+    )
 
 
 class SheetPreambleRow(BaseModel):

@@ -2035,9 +2035,50 @@
                 ],
                 "default": null,
                 "title": "Element Locator"
+              },
+              "table_row": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Table Row"
+              },
+              "table_cells": {
+                "items": {
+                  "$ref": "#/$defs/ObservedTableCell"
+                },
+                "title": "Table Cells",
+                "type": "array"
               }
             },
             "title": "ObservedLocator",
+            "type": "object"
+          },
+          "ObservedTableCell": {
+            "description": "表の 1 行の根拠の値のあるセル（RAG の EvidenceTableCell と同じ名前）。",
+            "properties": {
+              "table_col": {
+                "title": "Table Col",
+                "type": "string"
+              },
+              "header_path": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Header Path",
+                "type": "array"
+              }
+            },
+            "required": [
+              "table_col",
+              "header_path"
+            ],
+            "title": "ObservedTableCell",
             "type": "object"
           },
           "ObservedToolCall": {
@@ -2229,7 +2270,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 1,
+            "default": 2,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

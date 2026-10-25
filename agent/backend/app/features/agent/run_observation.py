@@ -69,6 +69,8 @@ LOCATOR_FIELDS = (
     "row_end",
     "cell_range",
     "element_locator",
+    "table_row",
+    "table_cells",
 )
 # 失敗の分類として出してよい形（外部の MCP の結果の任意の文を分類として写さない）。
 _ERROR_CODE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
@@ -160,7 +162,7 @@ def _locator(value: Mapping[str, Any]) -> dict[str, Any]:
     sections = value.get("section_path")
     if isinstance(sections, list):
         locator["section_path"] = [item for item in sections if isinstance(item, str)]
-    for key in ("page_start", "page_end", "row_start", "row_end"):
+    for key in ("page_start", "page_end", "row_start", "row_end", "table_row"):
         number = _int(value.get(key))
         if number is not None:
             locator[key] = number
@@ -174,7 +176,26 @@ def _locator(value: Mapping[str, Any]) -> dict[str, Any]:
         text = _str(value.get(key))
         if text is not None:
             locator[key] = text
+    cells = _table_cells(value.get("table_cells"))
+    if cells:
+        locator["table_cells"] = cells
     return locator
+
+
+def _table_cells(value: object) -> list[dict[str, Any]]:
+    """表のセル（RAG の `EvidenceTableCell`）。形の合わないセルがあれば何も写さない。"""
+    items = value if isinstance(value, list) else []
+    cells: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            return []
+        column, path = _str(item.get("table_col")), item.get("header_path")
+        if column is None or not isinstance(path, list):
+            return []
+        if not all(isinstance(part, str) for part in path):
+            return []
+        cells.append({"table_col": column, "header_path": list(path)})
+    return cells
 
 
 @dataclass(slots=True)
