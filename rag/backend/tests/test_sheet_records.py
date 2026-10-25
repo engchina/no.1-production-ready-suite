@@ -602,7 +602,7 @@ def test_excel_with_a_two_row_header_cites_cells_and_header_rows() -> None:
     """
     import io
 
-    import openpyxl
+    import openpyxl  # type: ignore[import-untyped]
     from rag_parser_core.structured_records import (
         StructuredRecordsDocument,
         parse_structured_records,
