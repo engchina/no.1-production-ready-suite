@@ -13,7 +13,6 @@
 # 提供しないサービスとして扱う（init_script.sh は rag_services.txt にあっても読み飛ばす）。
 RAG_MICROSERVICES=(
   "preprocess-office-to-pdf|services/preprocess/office_to_pdf|18010|300"
-  "preprocess-pdf-to-page-images|services/preprocess/pdf_to_page_images|18011|300"
   "preprocess-csv-to-jsonl|services/preprocess/csv_to_jsonl|18012|300"
   "preprocess-excel-to-jsonl|services/preprocess/excel_to_jsonl|18013|300"
   "preprocess-word-to-jsonl|services/preprocess/word_to_jsonl|18017|300"

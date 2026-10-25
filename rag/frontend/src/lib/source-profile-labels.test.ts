@@ -18,6 +18,7 @@ describe("source profile labels", () => {
     expect(t(parserProfileKey("unsupported_tiff_image"))).toBe("TIFF 画像未対応");
     expect(t(parserProfileKey("unsupported_legacy_office_binary"))).toBe("旧 Office(要変換)");
     expect(t(parserProfileKey("unsupported_macro_enabled_office"))).toBe("マクロ付き Office(要変換)");
+    expect(t(parserProfileKey("unsupported_odt_rtf"))).toBe("ODT・RTF(要変換)");
   });
 
   it("unsupported warnings avoid falling back to generic copy", () => {
@@ -34,6 +35,8 @@ describe("source profile labels", () => {
       "旧形式の Office は変換が必要です（文書レシピのファイル準備で変換を選択）。"
     );
     expect(unsupportedReasonLabel("outlook_msg_not_supported")).toContain("EML");
+    // ODT・RTF は Office→PDF で PDF にしてから読む（#3351）。
+    expect(unsupportedReasonLabel("odt_rtf_not_supported")).toContain("Office→PDF");
     expect(unsupportedReasonLabel("custom_reason")).toBe("custom_reason");
   });
 
@@ -49,6 +52,7 @@ describe("source profile labels", () => {
   it("evaluation quality labels share the same unsupported warning mapping", () => {
     expect(qualityCodeLabel("unsupported_tiff_image")).toBe("TIFF 画像未対応");
     expect(qualityCodeLabel("unsupported_legacy_office_binary")).toBe("旧 Office(要変換)");
+    expect(qualityCodeLabel("unsupported_odt_rtf")).toBe("ODT・RTF(要変換)");
   });
 
   it("evaluation quality labels expose segment artifact cache misses in Japanese", () => {

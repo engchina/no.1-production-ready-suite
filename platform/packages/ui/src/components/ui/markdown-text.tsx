@@ -1,6 +1,6 @@
 import { Fragment, useMemo, type ReactNode } from "react";
 
-import { resolveContentLang } from "../../lib/content-lang";
+import { resolveContentLang, uiTextLang } from "../../lib/content-lang";
 import {
   parseMarkdownBlocks,
   parseMarkdownInline,
@@ -46,7 +46,8 @@ export interface MarkdownTextProps {
  * - 段落の中の改行はそのまま改行にする（日本語の回答は改行を区切りに使うため、空白にまとめない）。
  * - 長いコードは枠の中で横にスクロールし（キーボードでもスクロールできるようフォーカスを受ける）、長い URL・語は
  *   折り返して、375px でもページを横にはみ出さない。色・余白・コードの地はトークン。
- * - 本文の言語を `lang` に付け、漢字を内容の言語の字形で描く（中国語の回答は Noto Sans SC など。#3335）。
+ * - 本文の言語を `lang` に付け、漢字を内容の言語の字形で描く（中国語の回答は Noto Sans SC など。#3335）。リンクの
+ *   読み上げの補足（部品の文言）は画面の言語（#3349）。
  */
 export function MarkdownText({ text, headingLevel = 3, labels, lang, className, testId }: MarkdownTextProps) {
   const contentLang = useMemo(() => resolveContentLang(lang, text), [lang, text]);
@@ -222,7 +223,12 @@ function Inline({ parts, context }: { parts: MarkdownInline[]; context: RenderCo
                 className="text-accent-fg underline underline-offset-2 hover:text-accent-fg-strong"
               >
                 <Inline parts={part.children} context={context} />
-                {external ? <span className="sr-only">{context.labels.newTab}</span> : null}
+                {/* 読み上げの補足は部品の文言なので、本文の言語ではなく画面の言語で読む（#3349）。 */}
+                {external ? (
+                  <span className="sr-only" lang={uiTextLang()}>
+                    {context.labels.newTab}
+                  </span>
+                ) : null}
               </a>
             );
           }

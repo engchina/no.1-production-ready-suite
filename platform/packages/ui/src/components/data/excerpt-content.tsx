@@ -19,20 +19,21 @@ export interface ExcerptContentProps {
 
 /**
  * 抜粋の全文の表示（#2387）。本文は改行を保って出し、文書の表（HTML の `<table>`）は共通の `DataTable` で表にする。
- * 3 行に畳む表示は {@link excerptPlainText}（表は「セル | セル」の行）を使う。本文の言語を `lang` に付ける（#3335）。
+ * 3 行に畳む表示は {@link excerptPlainText}（表は「セル | セル」の行）を使う。本文の言語の `lang`（#3335）は本文の段落・
+ * 表の題・セルにだけ付け、表の読み上げの名前（`tableLabel`。部品の文言）は画面の言語のまま（#3349）。
  */
 export function ExcerptContent({ text, className, tableLabel = "抜粋の表", lang, testId }: ExcerptContentProps) {
   const blocks = useMemo(() => parseExcerpt(text), [text]);
   const contentLang = useMemo(() => resolveContentLang(lang, text), [lang, text]);
   return (
-    <div className={cn("min-w-0 space-y-2", className)} lang={contentLang} data-testid={testId}>
+    <div className={cn("min-w-0 space-y-2", className)} data-testid={testId}>
       {blocks.map((block, index) =>
         block.kind === "text" ? (
-          <p key={index} className="whitespace-pre-wrap break-words">
+          <p key={index} className="whitespace-pre-wrap break-words" lang={contentLang}>
             {block.text}
           </p>
         ) : (
-          <ExcerptTable key={index} block={block} label={tableLabel} />
+          <ExcerptTable key={index} block={block} label={tableLabel} lang={contentLang} />
         )
       )}
     </div>
@@ -41,12 +42,20 @@ export function ExcerptContent({ text, className, tableLabel = "抜粋の表", l
 
 type TableRow = { key: number; cells: ExcerptTableCell[] };
 
-function ExcerptTable({ block, label }: { block: Extract<ExcerptBlock, { kind: "table" }>; label: string }) {
+function ExcerptTable({
+  block,
+  label,
+  lang,
+}: {
+  block: Extract<ExcerptBlock, { kind: "table" }>;
+  label: string;
+  lang: string | undefined;
+}) {
   const [head, ...body] = block.rows;
   // 1 行だけの表は見出しと区別できないので、行の文字にする。
   if (!head || body.length === 0) {
     return (
-      <p className="whitespace-pre-wrap break-words">
+      <p className="whitespace-pre-wrap break-words" lang={lang}>
         {[block.caption, head?.map((cell) => cell.text).join(" | ")].filter(Boolean).join("\n")}
       </p>
     );
@@ -54,15 +63,19 @@ function ExcerptTable({ block, label }: { block: Extract<ExcerptBlock, { kind: "
   // 見出しの行（`<th>`・`<thead>`）が無い表も、文書の表は先頭の行が項目名のことが多いので先頭の行を見出しにする。
   const columns: DataTableColumn<TableRow>[] = head.map((cell, column) => ({
     key: `c${column}`,
-    header: cell.text,
-    render: (row) => row.cells[column]?.text ?? "",
+    header: <span lang={lang}>{cell.text}</span>,
+    render: (row) => <span lang={lang}>{row.cells[column]?.text ?? ""}</span>,
     className: "min-w-24 whitespace-pre-wrap break-words align-top",
     headerClassName: "min-w-24 whitespace-pre-wrap break-words align-bottom",
   }));
   const rows: TableRow[] = body.map((cells, index) => ({ key: index, cells }));
   return (
     <figure className="min-w-0 space-y-1" data-testid="excerpt-table">
-      {block.caption ? <figcaption className="text-xs text-fg-muted">{block.caption}</figcaption> : null}
+      {block.caption ? (
+        <figcaption className="text-xs text-fg-muted" lang={lang}>
+          {block.caption}
+        </figcaption>
+      ) : null}
       <DataTable columns={columns} rows={rows} getRowKey={(row) => row.key} dense ariaLabel={block.caption || label} />
     </figure>
   );

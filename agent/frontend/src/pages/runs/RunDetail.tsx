@@ -54,6 +54,7 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { MENU_PERMISSIONS, type AgentCapabilities } from "@/lib/permissions";
 import { runAnswerEvidence } from "@/lib/answer-evidence";
+import { CONFIRMATION_TOOL } from "@/lib/confirmation";
 import { answerNoticeText, internalRecordArtifacts, userOutputArtifacts } from "@/lib/run-artifacts";
 import { answerPassageLabels, answerStructureTitles, noticeHeading, structureAnswer } from "@/lib/answer-structure";
 import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerEvidenceView";
@@ -500,7 +501,8 @@ function EventLog({ events, cancellationText }: { events: RunEvent[]; cancellati
 /** 種類の絞り込みのまとまり（実行環境のイベントは「実行」にまとめ、チップを 4 つまでにする）。 */
 function eventCategory(type: string): { id: string; label: string } {
   const prefix = type.split(".")[0] ?? "";
-  if (prefix === "tool") return { id: "tool", label: t("status.eventCategory.tool") };
+  // ツールの呼び出しの開始（`step.started`）もツールにまとめる（#3352）。
+  if (prefix === "tool" || prefix === "step") return { id: "tool", label: t("status.eventCategory.tool") };
   if (prefix === "approval") return { id: "approval", label: t("status.eventCategory.approval") };
   if (prefix === "artifact") return { id: "artifact", label: t("status.eventCategory.artifact") };
   return { id: "run", label: t("status.eventCategory.run") };
@@ -571,12 +573,14 @@ function runEventItem(event: RunEvent, cancellationText: string | null = null): 
       defaultOpen: warnings.length > 0,
     };
   }
-  if (event.type.startsWith("tool.")) {
+  if (event.type.startsWith("tool.") || event.type.startsWith("step.")) {
     const warnings = payloadStringArray(payload, "guardrail_warnings");
     const duration = payload.duration_ms;
+    const toolName = payloadString(payload, "tool_name");
     return {
       ...base,
-      title: payloadString(payload, "tool_name") ?? t("common.tool"),
+      // 回答前の確認のツールは、内部の名前ではなく「回答前の確認」と出す（#3352）。
+      title: toolName === CONFIRMATION_TOOL ? t("agent.clarification.title") : (toolName ?? t("common.tool")),
       summary: event.message,
       icon: PlayCircle,
       durationMs: typeof duration === "number" && Number.isFinite(duration) ? duration : null,

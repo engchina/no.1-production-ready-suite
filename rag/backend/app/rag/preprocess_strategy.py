@@ -2,7 +2,7 @@
 
 `chunking_strategy.py` / `parser_adapter_readiness.py` と同型で、選択された変換
 プリセットと利用可能なプリセット一覧を非機密 runtime snapshot として返す。実際の
-変換はすべて前処理マイクロサービス(`office_to_pdf` / `pdf_to_page_images` など)へ
+変換はすべて前処理マイクロサービス(`office_to_pdf` / `csv_to_jsonl` など)へ
 委譲する(in-process 変換・local fallback は持たない)。`passthrough` のみ no-op。
 確定スタックは不変で、外部変換物は本プロジェクトの `SourceDerivation`(派生系譜)へ
 決定論的に再マップする。
@@ -21,7 +21,6 @@ DEFAULT_PREPROCESS_PROFILE: PreprocessProfileName = "passthrough"
 PREPROCESS_PROFILE_ORDER: tuple[PreprocessProfileName, ...] = (
     "passthrough",
     "office_to_pdf",
-    "pdf_to_page_images",
     "csv_to_jsonl",
     "excel_to_jsonl",
     "word_to_jsonl",
@@ -55,12 +54,6 @@ PREPROCESS_PROFILE_SPECS: dict[PreprocessProfileName, PreprocessProfileSpec] = {
         name="office_to_pdf",
         origin="libreoffice_headless",
         recommended_for=("office",),
-        requires_service=True,
-    ),
-    "pdf_to_page_images": PreprocessProfileSpec(
-        name="pdf_to_page_images",
-        origin="no1_pdfparser_page_images",
-        recommended_for=("pdf", "scan"),
         requires_service=True,
     ),
     "csv_to_jsonl": PreprocessProfileSpec(
@@ -118,7 +111,6 @@ class PreprocessRuntimeSettings:
 # 各 service 必須プロファイルが委譲する前処理マイクロサービスの URL 設定名。
 PREPROCESS_SERVICE_URL_ATTRS: dict[PreprocessProfileName, str] = {
     "office_to_pdf": "rag_preprocess_office_to_pdf_service_url",
-    "pdf_to_page_images": "rag_preprocess_pdf_to_page_images_service_url",
     "csv_to_jsonl": "rag_preprocess_csv_to_jsonl_service_url",
     "excel_to_jsonl": "rag_preprocess_excel_to_jsonl_service_url",
     "word_to_jsonl": "rag_preprocess_word_to_jsonl_service_url",

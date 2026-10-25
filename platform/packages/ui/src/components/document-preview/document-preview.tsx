@@ -451,25 +451,27 @@ function TextPreviewBody({
           "relative min-h-40 flex-1 overflow-auto rounded-md border border-border bg-surface p-4 text-sm leading-relaxed whitespace-pre-wrap break-words text-fg",
           INFORMATION_TABLE_FOCUS_CLASS
         )}
-        lang={contentLang}
         data-testid="preview-text"
       >
-        {range ? (
-          <>
-            {text.slice(0, range.start)}
-            <mark
+        {/* 本文だけを言語で包む（領域の読み上げの名前は画面の言語。#3349）。 */}
+        <span lang={contentLang} data-testid="preview-text-body">
+          {range ? (
+            <>
+              {text.slice(0, range.start)}
+              <mark
               ref={markRef}
               data-surface-tint="accent"
               className="rounded-sm bg-accent-muted text-fg underline decoration-accent-emphasis decoration-2 underline-offset-2 box-decoration-clone"
-              data-testid="preview-text-quote"
-            >
-              {text.slice(range.start, range.end)}
-            </mark>
-            {text.slice(range.end)}
-          </>
-        ) : (
-          text
-        )}
+                data-testid="preview-text-quote"
+              >
+                {text.slice(range.start, range.end)}
+              </mark>
+              {text.slice(range.end)}
+            </>
+          ) : (
+            text
+          )}
+        </span>
       </pre>
     </div>
   );

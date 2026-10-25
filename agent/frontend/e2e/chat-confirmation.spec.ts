@@ -188,6 +188,34 @@ test.describe("回答前の確認のカード", { tag: "@responsive" }, () => {
     await page.screenshot({ path: testInfo.outputPath("agent-confirmation-answered.png"), fullPage: true });
   });
 
+  test("選択肢の無い Agent の確認も問いを出し、自由入力の答えで続きが動く", async ({ page, mockApi }, testInfo) => {
+    // #3352: ツールを呼ぶ前の確認は、モデルが作った選択肢を外して自由入力で聞く（Run は確認待ち）。
+    const freeText = {
+      ...AGENT_CONFIRMATION,
+      id: "confirmation_agent_free",
+      items: [{ ...AGENT_CONFIRMATION.items[0], prompt: "どの資料の概要ですか？", reason: "", options: [] }],
+    };
+    seedRun(mockApi, "run-ask-free", { status: "waiting_confirmation", confirmations: [freeText] });
+    await openSeedThread(page);
+
+    const turn = page.getByTestId("chat-turn-run-ask-free");
+    const card = turn.getByTestId("chat-confirmation");
+    await expect(card.getByRole("heading", { name: "どの資料の概要ですか？" })).toBeVisible();
+    await expect(card.getByRole("radio")).toHaveCount(0);
+    const other = card.getByLabel("その他（自由入力）");
+    await expect(other).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath("agent-confirmation-free-text.png"), fullPage: true });
+
+    await other.fill("請求の資料");
+    await card.getByRole("button", { name: "この内容で回答" }).click();
+    await expect
+      .poll(() => mockApi.lastRequest("POST", "/api/runs/run-ask-free/confirmations/confirmation_agent_free")?.body)
+      .toEqual({ action: "answer", answers: [{ item_id: "item_1", option_ids: [], other_text: "請求の資料" }] });
+    await expect(turn.getByTestId("chat-confirmation")).toHaveCount(0);
+    await expect(turn.getByTestId("chat-confirmation-record-confirmation_agent_free").getByText("請求の資料")).toBeVisible();
+  });
+
   test("ダークテーマでも確認のカードと答えの記録を出す", async ({ page, mockApi }, testInfo) => {
     await page.addInitScript(() => {
       window.localStorage.setItem("production-ready-agent.ui", JSON.stringify({ state: { theme: "dark" }, version: 0 }));

@@ -1569,9 +1569,6 @@ export const ja = {
   "settings.preprocess.profile.office_to_pdf": "Office→PDF",
   "settings.preprocess.profile.office_to_pdf.description":
     "Word・PowerPoint の文書(旧形式の .doc・.ppt、マクロ付きの .docm・.pptm を含む)を PDF にしてから解析します。マクロは実行しません。PDF にした文書はブラウザーでプレビューできます。Excel は「Excel→JSONL」を使います。",
-  "settings.preprocess.profile.pdf_to_page_images": "PDF を画像として読み直す",
-  "settings.preprocess.profile.pdf_to_page_images.description":
-    "PDF の各ページを画像にして、画像から文字を読み取り直します。文字化けする PDF や、文字を選択・コピーできない PDF に使います。",
   "settings.preprocess.profile.csv_to_jsonl": "CSV→JSONL",
   "settings.preprocess.profile.csv_to_jsonl.description":
     "CSV の 1 行を、見出しの列名と値の組の 1 件の記録(JSONL)にしてから解析します。元の行の位置を保ちます。文書解析は「構造化レコード JSONL」を使います。",
@@ -1697,7 +1694,6 @@ export const ja = {
   "settings.services.failure.fallback":
     "サービスのログと状態を確認してから、もう一度実行してください。",
   "settings.services.item.preprocessOfficeToPdf": "Office→PDF",
-  "settings.services.item.preprocessPdfToPageImages": "PDF を画像として読み直す",
   "settings.services.item.preprocessCsvToJsonl": "CSV→JSONL",
   "settings.services.item.preprocessExcelToJsonl": "Excel→JSONL",
   "settings.services.item.preprocessWordToJsonl": "Word→JSONL",
@@ -2589,6 +2585,11 @@ export const ja = {
   "upload.dropzoneHint":
     "複数ファイルをまとめて選択できます（最大 {size} / ファイル）。選んだファイルは下の一覧で確かめてから送ります。音声は保存のみで取込はスキップされます。",
   "upload.dropzoneFormats": "対応形式: {formats}",
+  "upload.dropzoneUnsupported":
+    "HEIC / HEIF の画像と EPUB は対応していません。画像は JPEG / PNG、EPUB は PDF に変換してからアップロードしてください（iPhone は「設定 › カメラ › フォーマット › 互換性優先」で JPEG で保存できます）。",
+  "upload.rejected.heicImage":
+    "HEIC / HEIF の画像は対応していません。JPEG / PNG に変換してからアップロードしてください（iPhone は「設定 › カメラ › フォーマット › 互換性優先」で JPEG で保存できます）。",
+  "upload.rejected.epubBook": "EPUB の電子書籍は対応していません。PDF に変換してからアップロードしてください。",
   "upload.uploading": "{count} 件のファイルをアップロードしています",
   "upload.progress.aria": "送信の進み具合",
   "upload.progress.sent": "送信済み {sent} / {total}（{percent}%）",
@@ -2620,6 +2621,8 @@ export const ja = {
   "upload.selection.problem.unsupported": "対応していない形式",
   "upload.selection.problem.tooLarge": "上限を超えるサイズ",
   "upload.selection.problem.empty": "空のファイル",
+  "upload.selection.problem.heicImage": "HEIC / HEIF は対応していません",
+  "upload.selection.problem.epubBook": "EPUB は対応していません",
   "upload.batch.title": "アップロード結果",
   "upload.batch.total": "選択したファイル",
   "upload.batch.uploaded": "保存済み",
@@ -2708,6 +2711,7 @@ export const ja = {
   "sourceProfile.parser.tiffImage": "TIFF 画像未対応",
   "sourceProfile.parser.legacyOffice": "旧 Office(要変換)",
   "sourceProfile.parser.macroOffice": "マクロ付き Office(要変換)",
+  "sourceProfile.parser.odtRtf": "ODT・RTF(要変換)",
   "sourceProfile.parser.generic": "汎用解析",
   "sourceProfile.warning.duplicate": "同一内容の文書が既に登録されています。",
   "sourceProfile.warning.contentTypeMissing": "MIME type が未確定です。拡張子と原本を確認してください。",
@@ -2724,6 +2728,8 @@ export const ja = {
     "旧形式の Office は変換が必要です（文書レシピのファイル準備で変換を選択）。",
   "sourceProfile.warning.unsupportedMacroOffice":
     "マクロ付きの Office は変換が必要です（文書レシピのファイル準備で変換を選択。マクロは実行しません）。",
+  "sourceProfile.warning.unsupportedOdtRtf":
+    "ODT・RTF は変換が必要です（文書レシピのファイル準備で Office→PDF を選択）。",
   "sourceProfile.warning.parserFallback": "一部の解析で fallback が使われました。",
   "sourceProfile.warning.officeFallback": "Office のローカル解析に失敗したため fallback します。",
   "sourceProfile.warning.officeSegmentFailed": "Office の一部 segment 解析に失敗しました。",
@@ -2741,6 +2747,8 @@ export const ja = {
     "旧形式の Office は変換が必要です（文書レシピのファイル準備で変換を選択）。",
   "sourceProfile.unsupported.macroOfficeNotSupported":
     "マクロ付きの Office は変換が必要です（文書レシピのファイル準備で変換を選択。マクロは実行しません）。",
+  "sourceProfile.unsupported.odtRtfNotSupported":
+    "ODT・RTF は変換が必要です（文書レシピのファイル準備で Office→PDF を選択）。",
   "sourceProfile.unsupported.unknownFileType": "対応する parser を判定できないファイル形式です。",
 
   "flow.jobs.title": "工程ごとの実行状況",
@@ -4251,6 +4259,7 @@ export const ja = {
   "evaluation.ingestionQuality.warning.unsupportedTiffImage": "TIFF 画像未対応",
   "evaluation.ingestionQuality.warning.unsupportedLegacyOffice": "旧 Office(要変換)",
   "evaluation.ingestionQuality.warning.unsupportedMacroOffice": "マクロ付き Office(要変換)",
+  "evaluation.ingestionQuality.warning.unsupportedOdtRtf": "ODT・RTF(要変換)",
   "evaluation.ingestionQuality.parser.legacy": "旧形式",
   "evaluation.thresholdFailures": "閾値未達",
   "evaluation.cases": "ケース別結果",
