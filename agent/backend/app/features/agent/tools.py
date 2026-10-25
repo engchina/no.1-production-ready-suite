@@ -22,6 +22,7 @@ from uuid import uuid4
 
 import httpx
 from pr_backend_core.internal_http import http_client_options
+from pr_backend_core.observability.mcp_trace import mcp_trace_meta
 from pr_backend_core.observability.request_context import outbound_correlation_headers
 from pr_backend_core.observability.tracing import capture_trace_context, observed_span
 from pr_system_settings.auth.errors import SecurityApiError
@@ -736,6 +737,23 @@ def _post_mcp_message(
         raise _call_aborted_error(service_code, service_label, payload, abort) from exc
 
 
+def _with_trace_meta(payload: JsonObject) -> JsonObject:
+    """JSON-RPC の request の `params._meta` に今の span の traceparent を足す（#3226）。
+
+    通知（`id` の無いメッセージ）と、traceparent の無いとき（span の外）はそのまま。`params` が
+    object でない request も変えない。呼んだ側の `_meta` の値は残す。
+    """
+    meta = mcp_trace_meta()
+    if not meta or "id" not in payload:
+        return payload
+    params = payload.get("params", {})
+    if not isinstance(params, dict):
+        return payload
+    existing = params.get("_meta")
+    merged = {**existing, **meta} if isinstance(existing, dict) else meta
+    return {**payload, "params": {**params, "_meta": merged}}
+
+
 def _call_aborted_error(
     service_code: str, service_label: str, payload: JsonObject, abort: CallAbort
 ) -> ExternalToolError:
@@ -795,9 +813,12 @@ def _post_mcp_attempts(
                 ),
                 httpx.Client(timeout=timeout, **http_client_options(url)) as client,
             ):
+                # traceparent は HTTP header と JSON-RPC の `params._meta`（OpenTelemetry の MCP の
+                # 置き場所）の両方に入れる（#3226）。呼び先（RAG / NL2SQL）はサービストークンの要求
+                # だけ親にし、呼び先の span がこの `mcp.request` の下につながる。
                 response = client.post(
                     url,
-                    json=payload,
+                    json=_with_trace_meta(payload),
                     headers={**headers, **capture_trace_context()},
                     **request_options,
                 )

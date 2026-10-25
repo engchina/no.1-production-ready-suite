@@ -3,9 +3,9 @@ import type { Page } from "@playwright/test";
 import { ProgressLog, SYNTHETIC_MODEL, SYNTHETIC_TRACE_ID } from "./fixtures/chat-progress-events";
 import { expect, test, type MockApi } from "./fixtures/mock-api";
 
-// #1160: チャットの回答の作成中に、処理の経過の配信（#1359。SSE の `/progress/stream` と polling の `/progress`）が
-// 応答しない・失敗し続けても、画面を止めない。「接続を確認しています」を出して取り直し、完了・失敗の終端まで追う。
-// 処理の経過は Run の trace（span の木。#3226）の投影。
+// #1160: チャットの回答の作成中に、処理の経過の読み出し（共通の span の表の snapshot。`GET /api/runs/{id}/trace`。
+// #3226 の案 A）が応答しない・失敗し続けても、画面を止めない。「接続を確認しています」を出して読み直し、完了・失敗の
+// 終端まで追う。処理の経過は Run の trace（span の木）の投影。
 
 const MODEL_CALL = `モデルの呼び出し · ${SYNTHETIC_MODEL}`;
 
@@ -59,12 +59,12 @@ function complete(run: Record<string, unknown>, progress: ProgressLog) {
 }
 
 /**
- * 処理の段階の配信（SSE と polling。`GET /api/runs/{id}/progress…`）を、応答しない・失敗させる。それ以外は
- * mock-api に任せる。会話の取得（回答・成果物）は止めない。
+ * 処理の経過の読み出し（`GET /api/runs/{id}/trace`）を、応答しない・失敗させる。それ以外は mock-api に任せる。
+ * 会話の取得（回答・成果物）は止めない。
  */
 async function controlProgressFetch(page: Page) {
   const control = { hang: 0, fail: 0, requests: 0 };
-  await page.route(`**/api/runs/${RUN_ID}/progress**`, async (route) => {
+  await page.route(`**/api/runs/${RUN_ID}/trace**`, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     control.requests += 1;
     if (control.hang > 0) {
@@ -105,8 +105,8 @@ for (const theme of ["light", "dark"] as const) {
     const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
     const current = turn.getByTestId("chat-progress-current");
     await expect(current).toContainText(MODEL_CALL);
-    // 応答を止める（SSE の張り直し・途絶えの後の SSE の張り直し・取り直しの 3 回）。修正前（#1160）は 1 回目の取得を
-    // 待ったまま取り直しが止まった。
+    // 応答を止める（3 回の読み出し。1 回の読み出しは時間の上限で打ち切って読み直す）。修正前（#1160）は 1 回目の
+    // 取得を待ったまま取り直しが止まった。
     control.hang = 3;
     const reconnecting = turn.getByTestId("chat-progress-reconnecting");
     await expect(reconnecting).toHaveText("接続を確認しています。", { timeout: 30_000 });

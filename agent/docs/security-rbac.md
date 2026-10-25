@@ -100,7 +100,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 | `POST /agents/{id}/share-request/approve`・`reject`（#2523） | `agent.admin` | 承認で組織の業務 Agent（持ち主なし）になる。却下は理由（必須）を持ち主に返す。承認前の個人の Agent はロールに割り当てられない（`PUT /security/roles/{id}/access` が 409） |
 | `GET /runs/{id}`・`/audit`・`/artifacts*`・`/figure-url` | `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上（監査は auditor）・ほかの利用者の Run は 404（§4.1。自分の会話の Run は読める）・範囲外は 403 |
 | `GET /runs/{id}/events`（SSE） | `menu.runs` / `menu.approvals` | viewer 以上・ほかの利用者の Run は 404・範囲外は 403 |
-| `GET /runs/{id}/progress`・`/progress/stream`（チャットの処理の段階の polling と SSE。#1359） | `menu.chat` / `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上・ほかの利用者の Run は 404・範囲外は 403 |
+| `GET /runs/{id}/trace`（チャットと実行の詳細の処理の経過。共通の span の表の snapshot。#1359・#3226） | `menu.chat` / `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上・ほかの利用者の Run は 404・範囲外は 403。span は Run を実行した利用者の span だけ（system_admin は同じ trace の全員の span） |
 | `POST /runs`・`/runs/{id}/cancel`・`resume`・`replay`・`/runs/{id}/confirmations/{id}`・`PUT /runs/{id}/feedback` | `agent.runs.operate` / `agent.admin` | operator・ほかの利用者の Run・会話は 404（system_admin は全員。§4.1）・範囲外は 403・新しい Run は操作した利用者の Run |
 | `GET /threads`・`GET`・`PATCH`・`DELETE /threads/{thread_id}`（チャットの会話。#768） | `menu.chat` | 会話の持ち主の会話だけ（別の利用者の会話は 404）。system_admin は全員の会話（利用者の表示名・送った人の表示名つき。§4.1）・範囲外の Agent の会話は出さない |
 | `POST /approvals/{id}/decision` | `agent.approvals.decide` / `agent.admin` | approver・自分が実行した Run の承認だけ（ほかの利用者の Run は、自分の会話の Run でも 404。system_admin は全員。§4.1）・範囲外は 403・決定者は利用者 |

@@ -202,7 +202,7 @@ def test_run_list_and_detail_are_scoped_by_principal(
     _scoped_user(auth, "scoped-peer", ["agent.runs.view", "agent.runs.operate"])
     peer = login("scoped-peer")
     assert _run_ids(peer) == set()
-    for path in ("", "/artifacts", "/events", "/progress"):
+    for path in ("", "/artifacts", "/events", "/trace"):
         assert (
             client.get(f"/api/runs/{scope_data.run_a1.id}{path}", headers=peer).status_code == 404
         )

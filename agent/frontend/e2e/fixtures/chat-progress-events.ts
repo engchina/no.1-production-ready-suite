@@ -2,9 +2,10 @@
  * e2e の mock の Run が持つ、チャットの処理の経過のイベント（3 製品共通の契約。#1359）。
  *
  * 処理の経過は Run の trace（span の木。#3226）の投影で、backend は実行の区間の span の開始・終了をイベントに記録する
- * （`app/features/agent/chat_progress.py`）。e2e は実 backend を起動しないので、spec が `ProgressLog` で backend と
- * 同じ形の span のイベントを積み、`run.progress_events` に入れる。イベントは追記型（番号は 1 から連続、span の
- * イベントはその span の今の状態の全体）なので、進めるときは同じ log に足していく（前のイベントを書き換えない）。
+ * （共通の span の表。#3226 の案 A）。e2e は実 backend を起動しないので、spec が `ProgressLog` で backend と同じ形の
+ * span のイベントを積み、mock の Run の `progress_events`（mock の中だけの記録）に入れる。mock は backend と同じく、
+ * span ごとの最新の状態と Run の状態の終端にした snapshot（`GET /api/runs/{id}/trace`）で返す。イベントは追記型
+ * （span のイベントはその span の今の状態の全体）なので、進めるときは同じ log に足していく。
  *
  * span の id は spec が付ける読みやすい名前（`chat-1`・`tool:<名前>`・`approval_wait` など。画面の test id に出る。
  * backend は 16 桁の hex。工程の種類の名前〔`plan` など〕と同じ id にしない: 種類の無い span は id が種類の代わりに

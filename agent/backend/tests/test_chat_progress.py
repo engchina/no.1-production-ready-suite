@@ -1,16 +1,21 @@
 """チャットの処理の経過（3 製品共通の契約。#1359）を、Run の trace（span の木。#3226）から
-記録・配信するテスト。
+作るテスト。span は共通の span の表（`PLATFORM_TRACE_SPANS`。#3226 の案 A）に書く。
 
 組み込み Runtime は SDK の `ScriptedModel` で台本にし（OCI へは接続しない）、モデルの呼び出しの
 span は OCI の client と同じ形（`gen_ai.chat` に工程の種類を付ける）で作る。記録の位置（ツール
 なし・ツール・実行中・並列・承認・却下・承認の 2 回目・引数の誤り・失敗・停止・実行中の停止）、
-保存先（file / Oracle の checkpoint・normalized）、polling と SSE の endpoint を確かめる。
+Run に残すもの（trace id・工程の詳細）の保存先（file / Oracle の checkpoint・normalized）、表への
+書き込み（Oracle の書き手。fake の DB）、読み出しの API（`GET /api/runs/{run_id}/trace`）と権限を
+確かめる。テストの保存先は memory なので、span は process の中の表（`trace_spans.memory`）にある。
 """
 
 from __future__ import annotations
 
 import contextvars
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Barrier
 from typing import Any
@@ -21,9 +26,16 @@ from agents.testing import ScriptedModel, assistant_message, function_call
 from pr_backend_core.chat_progress import (
     ChatProgressStepEvent,
     ChatProgressTerminalEvent,
+    chat_progress_details,
     fold_chat_progress_events,
 )
-from pr_backend_core.observability.tracing import observed_span, operation_trace
+from pr_backend_core.observability.trace_store import TraceSpanOwner, TraceSpanWriter
+from pr_backend_core.observability.tracing import (
+    SpanDisplay,
+    SpanUpdate,
+    observed_span,
+    operation_trace,
+)
 from pr_system_settings.auth.domain import LOCAL_DEBUG_USER_UUID
 from pytest import MonkeyPatch
 from security_support import (
@@ -36,13 +48,10 @@ from test_builtin_runtime import AGENT_ID, LOOKUP, WRITE, _create_run
 from test_builtin_runtime import _script as _script_model
 from test_builtin_runtime import calls as _calls_fixture  # noqa: F401 - pytestmark の fixture
 from test_health import _FakeOracleConnection, _FakeOracleStore
+from trace_support import run_progress_events
 
 from app.features.agent import builtin_runtime
-from app.features.agent.chat_progress import (
-    RUN_STEP_PARAM,
-    model_turn_kind,
-    record_run_terminal,
-)
+from app.features.agent.chat_progress import RUN_STEP_PARAM, model_turn_kind, tool_display
 from app.features.agent.runtime import (
     AgentRuntimeOracleCheckpointRepository,
     AgentRuntimeOracleNormalizedRepository,
@@ -53,6 +62,7 @@ from app.features.agent.runtime import (
     runtime_repository,
 )
 from app.features.agent.tools import ToolCall, ToolInvocationContext, tool_registry
+from app.features.agent.trace_spans import run_trace_owner, trace_spans
 from app.security.service import set_security_service
 
 # 組み込み Runtime のテスト用のツール・Skill・業務 Agent（test_builtin_runtime の fixture）。
@@ -96,7 +106,7 @@ def _rows(run: RunState) -> list[Row]:
     params の Run の step の id は値が毎回変わるので省く（`_run_step_of` で確かめる）。
     """
     rows: list[Row] = []
-    for step in fold_chat_progress_events(run.progress_events).step_list():
+    for step in fold_chat_progress_events(run_progress_events(run)).step_list():
         span = step.span or {}
         if span.get("root"):
             continue
@@ -107,23 +117,22 @@ def _rows(run: RunState) -> list[Row]:
 
 
 def _terminal(run: RunState) -> str | None:
-    return fold_chat_progress_events(run.progress_events).terminal
+    return fold_chat_progress_events(run_progress_events(run)).terminal
 
 
 def _roots(run: RunState) -> list[Any]:
     return [
         step
-        for step in fold_chat_progress_events(run.progress_events).step_list()
+        for step in fold_chat_progress_events(run_progress_events(run)).step_list()
         if (step.span or {}).get("root")
     ]
 
 
 def _assert_contiguous(run: RunState) -> None:
     """番号は 1 から連続し、どのイベントも Run の id を対象にする。"""
-    assert [event.seq for event in run.progress_events] == list(
-        range(1, len(run.progress_events) + 1)
-    )
-    assert {event.target_id for event in run.progress_events} == {run.id}
+    events = run_progress_events(run)
+    assert [event.seq for event in events] == list(range(1, len(events) + 1))
+    assert {event.target_id for event in events} == {run.id}
 
 
 def _approve(run_id: str, *, approved: bool = True) -> None:
@@ -165,7 +174,9 @@ def test_queued_run_has_no_progress_yet() -> None:
     """受け付けただけの Run には span が無い（実行の区間が始まってから記録する）。"""
     run = runtime_repository.get_run(_create_run())
 
-    assert run.progress_events == []
+    assert run.trace_store is True
+    assert run.trace_id is None
+    assert run_progress_events(run) == []
     assert _terminal(run) is None
 
 
@@ -182,7 +193,7 @@ def test_answer_without_tools_records_one_model_call(monkeypatch: MonkeyPatch) -
     # 実行の全体の span（root）も記録し（行にはしない）、モデルの呼び出しはその子。
     [root] = _roots(run)
     assert root.span is not None and root.span["name"] == "agent.execute"
-    fold = fold_chat_progress_events(run.progress_events)
+    fold = fold_chat_progress_events(run_progress_events(run))
     [chat] = [step for step in fold.step_list() if (step.span or {}).get("name") == CHAT]
     assert chat.span is not None
     assert chat.span["parent_id"] == root.step_id
@@ -213,7 +224,7 @@ def test_tool_call_records_plan_tool_and_respond(monkeypatch: MonkeyPatch) -> No
     [step] = run.steps
     finished = [
         event
-        for event in run.progress_events
+        for event in run_progress_events(run)
         if isinstance(event, ChatProgressStepEvent)
         and event.name == TOOL
         and event.status == "done"
@@ -243,7 +254,7 @@ def test_running_tool_is_visible_while_it_runs(monkeypatch: MonkeyPatch) -> None
         seen.append(_rows(current))
         details.extend(
             event.details
-            for event in current.progress_events
+            for event in run_progress_events(current)
             if isinstance(event, ChatProgressStepEvent) and event.name == TOOL
         )
         return {"rows": 1}
@@ -320,7 +331,7 @@ def test_span_from_a_tool_thread_is_nested_under_the_tool(monkeypatch: MonkeyPat
     anyio.run(builtin_runtime.execute_run, run_id)
 
     run = runtime_repository.get_run(run_id)
-    steps = fold_chat_progress_events(run.progress_events).step_list()
+    steps = fold_chat_progress_events(run_progress_events(run)).step_list()
     [tool] = [step for step in steps if (step.span or {}).get("name") == TOOL]
     [mcp] = [step for step in steps if (step.span or {}).get("name") == "mcp.request"]
     assert mcp.span is not None and mcp.span["parent_id"] == tool.step_id
@@ -360,7 +371,7 @@ def test_approval_wait_is_recorded_when_the_run_resumes(monkeypatch: MonkeyPatch
     assert resume.span["parent_id"] == execute.step_id
     assert resume.span["trace_id"] == execute.span["trace_id"]
     approval = run.approvals[0]
-    fold = fold_chat_progress_events(run.progress_events)
+    fold = fold_chat_progress_events(run_progress_events(run))
     [wait] = [step for step in fold.step_list() if (step.span or {}).get("name") == APPROVAL]
     assert wait.span is not None and wait.span["parent_id"] == resume.step_id
     assert (wait.started_at, wait.finished_at) == (approval.created_at, approval.decided_at)
@@ -468,7 +479,7 @@ def test_invalid_arguments_are_a_skipped_tool_span(monkeypatch: MonkeyPatch) -> 
     assert rows[1] == (TOOL, "tool", "skipped", {"tool": LOOKUP})
     skipped = [
         event
-        for event in run.progress_events
+        for event in run_progress_events(run)
         if isinstance(event, ChatProgressStepEvent) and event.name == TOOL
     ]
     details = skipped[-1].details
@@ -500,7 +511,7 @@ def test_unattended_run_keeps_the_tool_it_did_not_run(monkeypatch: MonkeyPatch) 
     [step] = run.steps
     skipped = [
         event
-        for event in run.progress_events
+        for event in run_progress_events(run)
         if isinstance(event, ChatProgressStepEvent) and event.name == TOOL
     ]
     assert skipped[-1].params is not None and skipped[-1].params[RUN_STEP_PARAM] == step.id
@@ -525,17 +536,14 @@ def test_failed_run_records_failed_terminal(monkeypatch: MonkeyPatch) -> None:
     assert not any(status == "running" for _, _, status, _ in rows)
 
 
-def test_cancelled_run_records_cancelled_terminal() -> None:
+def test_run_cancelled_before_it_started_has_no_progress() -> None:
+    """開始の前に停止した Run は span が無く、処理の経過は空（古い形式の記録ではない）。"""
     run_id = _create_run()
 
     cancelled = runtime_repository.cancel_run(run_id)
 
-    assert _rows(cancelled) == []
-    assert _terminal(cancelled) == "cancelled"
-    # 終端の後は記録しない（もう一度呼んでも増えない）。
-    before = len(cancelled.progress_events)
-    record_run_terminal(cancelled)
-    assert len(cancelled.progress_events) == before
+    assert cancelled.trace_id is None and cancelled.trace_store is True
+    assert run_progress_events(cancelled) == []
 
 
 def test_cancel_while_waiting_for_approval_ends_the_progress(monkeypatch: MonkeyPatch) -> None:
@@ -551,7 +559,8 @@ def test_cancel_while_waiting_for_approval_ends_the_progress(monkeypatch: Monkey
 
 def test_cancel_from_another_context_while_a_tool_runs(monkeypatch: MonkeyPatch) -> None:
     """実行中のツールの間に別の文脈（画面の操作）で停止したら、終端は停止で、開いていた span は
-    スキップで閉じる。停止の後に終わった span は記録しない（終端の後に行を増やさない）。"""
+    スキップで閉じる。停止の後に終わった span は表に書かない（表では実行中のまま残り、Run の終端
+    に合わせて閉じる。終端の後に行を増やさない）。"""
 
     def lookup(_arguments: dict[str, Any], context: ToolInvocationContext) -> dict[str, Any]:
         # 実行の文脈（trace の記録）を持たない、新しい文脈で停止する。
@@ -573,7 +582,7 @@ def test_cancel_from_another_context_while_a_tool_runs(monkeypatch: MonkeyPatch)
     run = runtime_repository.get_run(run_id)
     assert run.status == "cancelled"
     assert _terminal(run) == "cancelled"
-    assert isinstance(run.progress_events[-1], ChatProgressTerminalEvent)
+    assert isinstance(run_progress_events(run)[-1], ChatProgressTerminalEvent)
     assert _rows(run) == [
         (CHAT, "plan", "done", None),
         (TOOL, "tool", "skipped", {"tool": LOOKUP}),
@@ -588,46 +597,60 @@ def test_cancel_from_another_context_while_a_tool_runs(monkeypatch: MonkeyPatch)
 
 
 def _seed_completed_run(repository: AgentRuntimeRepository) -> RunState:
-    run = repository.create_builtin_run(RunCreateRequest(goal="保存", agent_id="default"))
-    assert repository.begin_builtin_run(run.id) is not None
+    """trace id と工程の詳細（ツールの引数と結果）を Run に残して完了した Run。"""
     from app.features.agent.tools import ToolResult
 
-    with operation_trace(
-        "agent.execute",
-        operation_id=run.id,
-        listener=lambda update: repository.record_builtin_span(run.id, update),
-    ):
-        with observed_span("gen_ai.execute_tool", attributes={"gen_ai.tool.name": "echo"}):
-            step_id, _context = repository.start_builtin_tool_step(
-                run.id, ToolCall(name="echo", arguments={"text": "x"}, trace_id="call-1")
-            )
-            repository.finish_builtin_tool_step(
-                run.id, step_id, ToolResult(name="echo", success=True, output={"text": "x"})
-            )
+    run = repository.create_builtin_run(
+        RunCreateRequest(goal="保存", agent_id="default"),
+        created_by_user_uuid=LOCAL_DEBUG_USER_UUID,
+    )
+    assert repository.begin_builtin_run(run.id) is not None
+    owner = run_trace_owner(run.id, LOCAL_DEBUG_USER_UUID)
+    assert owner is not None
+
+    def listen(update: SpanUpdate) -> None:
+        if repository.record_builtin_span(run.id, update):
+            trace_spans.submit(update, owner)
+
+    call = ToolCall(name="echo", arguments={"text": "x"}, trace_id="call-1")
+    result = ToolResult(name="echo", success=True, output={"text": "x"})
+    with operation_trace("agent.execute", operation_id=run.id, listener=listen):
+        with observed_span("gen_ai.execute_tool", attributes={"gen_ai.tool.name": "echo"}) as span:
+            step_id, _context = repository.start_builtin_tool_step(run.id, call)
+            repository.finish_builtin_tool_step(run.id, step_id, result)
+            display = tool_display(call, {}, result=result, run_step=step_id)
+            span.set_display(kind=display.kind, params=display.params, details=display.details)
         return repository.complete_builtin_run(run.id, "回答しました。")
 
 
-def test_progress_events_survive_the_file_snapshot(tmp_path: Path) -> None:
+def test_trace_id_and_step_details_survive_the_file_snapshot(tmp_path: Path) -> None:
     path = tmp_path / "runtime.json"
     repository = AgentRuntimeRepository(snapshot_path=path)
     completed = _seed_completed_run(repository)
+    assert completed.trace_id is not None
     assert _terminal(completed) == "done"
     assert [row[0] for row in _rows(completed)] == ["gen_ai.execute_tool"]
+    [details] = completed.span_details.values()
+    assert details.fields[0].value == "echo"
 
     reloaded = AgentRuntimeRepository(snapshot_path=path).get_run(completed.id)
 
-    assert reloaded.progress_events == completed.progress_events
-    # 保存の JSON は値の無い項目を出さない（契約の JSON と同じ形）。
+    assert reloaded.trace_id == completed.trace_id
+    assert reloaded.span_details == completed.span_details
+    assert reloaded.trace_store is True
+    # 保存の JSON には処理の経過のイベント・trace の要約を書かない（記録は表 1 つ）。工程の詳細は
+    # 値の無い項目を出さない。
     saved = json.loads(path.read_text(encoding="utf-8"))
     [saved_run] = [item for item in saved["runs"] if item["id"] == completed.id]
-    assert all("detail" not in event for event in saved_run["progress_events"])
+    assert not {"progress_events", "trace_summary", "trace_segments"} & set(saved_run)
+    assert all("truncated" not in item for item in saved_run["span_details"].values())
 
 
-def test_span_records_are_saved_together_in_the_background(
+def test_span_details_are_saved_together_in_the_background(
     tmp_path: Path, monkeypatch: MonkeyPatch
 ) -> None:
-    """span の知らせはメモリの Run にすぐ記録し、保存先へは少し待ってまとめて書く（知らせのたびに
-    Run の JSON を書かない）。"""
+    """span の知らせで Run に残すもの（工程の詳細）はメモリの Run にすぐ入れ、保存先へは少し待って
+    まとめて書く（知らせのたびに Run の JSON を書かない）。"""
     from app.features.agent import runtime as runtime_module
 
     monkeypatch.setattr(runtime_module, "BACKGROUND_WRITES", True)
@@ -650,23 +673,24 @@ def test_span_records_are_saved_together_in_the_background(
         operation_id=run.id,
         listener=lambda update: repository.record_builtin_span(run.id, update),
     ):
-        for _ in range(5):
-            with observed_span("mcp.request", kind="client"):
+        for index in range(5):
+            details = chat_progress_details(fields=[("ツール", f"synthetic_{index}")])
+            with observed_span("gen_ai.execute_tool", display=SpanDisplay(details=details)):
                 pass
         # メモリの Run にはすぐ入る。
-        assert len(_rows(repository.get_run(run.id))) == 5
+        assert len(repository.get_run(run.id).span_details) == 5
 
-    def saved_rows() -> int:
+    def saved_details() -> int:
         saved = json.loads(path.read_text(encoding="utf-8"))
         [item] = [entry for entry in saved["runs"] if entry["id"] == run.id]
-        return sum(1 for event in item["progress_events"] if event.get("name") == "mcp.request")
+        return len(item.get("span_details", {}))
 
     for _ in range(100):
-        if repository.pending_writes() == 0 and saved_rows() == 10:
+        if repository.pending_writes() == 0 and saved_details() == 5:
             break
         anyio.run(anyio.sleep, 0.05)
-    # 開始と終了の 10 個のイベントが保存され、保存の予定は知らせの数より少ない。
-    assert saved_rows() == 10
+    # 5 つの詳細と trace id が保存され、保存の予定は知らせの数（開始と終了の 12）より少ない。
+    assert saved_details() == 5
     assert 0 < len(staged) < 12
 
 
@@ -675,7 +699,7 @@ def test_span_records_are_saved_together_in_the_background(
     [AgentRuntimeOracleCheckpointRepository, AgentRuntimeOracleNormalizedRepository],
     ids=["checkpoint", "normalized"],
 )
-def test_progress_events_survive_the_oracle_checkpoint(repository_class: Any) -> None:
+def test_trace_id_and_step_details_survive_the_oracle_checkpoint(repository_class: Any) -> None:
     store = _FakeOracleStore()
 
     def connect() -> _FakeOracleConnection:
@@ -686,37 +710,190 @@ def test_progress_events_survive_the_oracle_checkpoint(repository_class: Any) ->
 
     reloaded = repository_class(connect_factory=connect).get_run(completed.id)
 
-    assert reloaded.progress_events == completed.progress_events
+    assert reloaded.trace_id == completed.trace_id
+    assert reloaded.span_details == completed.span_details
     assert _terminal(reloaded) == "done"
     assert [row[0] for row in _rows(reloaded)] == ["gen_ai.execute_tool"]
 
 
-def test_broken_saved_progress_events_are_dropped() -> None:
+def test_old_progress_records_are_not_read_and_broken_details_are_dropped() -> None:
+    """古い処理の経過のイベント・trace の要約は読まない（#3226 の案 A。後方互換は持たない）。
+    形の違う工程の詳細は捨てる（壊れた記録で Run の読み込みを止めない）。"""
     run = RunState.model_validate(
         {
-            "id": "run_broken_progress",
+            "id": "run_old_progress",
             "goal": "x",
             "agent_id": "default",
             "status": "completed",
-            "progress_events": [
-                {"type": "step", "seq": 1},  # 形の違う要素は捨てる
-                {
-                    "type": "terminal",
-                    "seq": 2,
-                    "target_id": "run_broken_progress",
-                    "emitted_at": "2026-10-09T00:00:00Z",
-                    "status": "done",
-                },
-            ],
+            "progress_events": [{"type": "terminal", "seq": 1, "status": "done"}],
+            "trace_summary": {"schema_version": 1},
+            "trace_segments": [],
+            "span_details": {
+                "a000000000000001": {"fields": [{"label": "ツール", "value": "echo"}]},
+                "a000000000000002": "broken",
+            },
         }
     )
 
-    assert [event.seq for event in run.progress_events] == [2]
-    assert isinstance(run.progress_events[0], ChatProgressTerminalEvent)
+    assert run.trace_store is False
+    assert run.trace_id is None
+    assert list(run.span_details) == ["a000000000000001"]
+    dumped = run.model_dump(mode="json")
+    assert not {"progress_events", "trace_summary", "trace_segments"} & set(dumped)
+    # trace の無い Run は表を読まない（処理の経過は空。画面は古い形式の案内を出す）。
+    assert run_progress_events(run) == []
 
 
 # --------------------------------------------------------------------------------------------
-# API（polling・SSE・権限）
+# 共通の span の表への書き込み（Oracle の書き手。fake の DB）
+# --------------------------------------------------------------------------------------------
+
+
+class _FakeSpanCursor:
+    def __init__(self, db: _FakeSpanDb) -> None:
+        self.db = db
+        self._result: list[tuple[Any, ...]] = []
+
+    def executemany(self, sql: str, rows: list[dict[str, Any]]) -> None:
+        assert "MERGE INTO PLATFORM_TRACE_SPANS" in sql
+        for row in rows:
+            self.db.rows[(row["trace_id"], row["span_id"])] = dict(row)
+
+    def execute(self, sql: str, binds: dict[str, Any]) -> None:
+        assert sql.startswith("SELECT") and "FROM PLATFORM_TRACE_SPANS" in sql
+        rows = [
+            row
+            for row in self.db.rows.values()
+            if row["trace_id"] == binds["trace_id"]
+            and ("viewer" not in binds or row["owner_user_uuid"] == binds["viewer"])
+        ]
+        rows.sort(key=lambda row: (row["started_at"], row["span_id"]))
+        self._result = [tuple(row[column] for column in _SPAN_COLUMNS) for row in rows]
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return self._result
+
+
+_SPAN_COLUMNS = (
+    "trace_id",
+    "span_id",
+    "parent_span_id",
+    "product",
+    "operation_id",
+    "attempt",
+    "is_root",
+    "owner_user_uuid",
+    "name",
+    "span_kind",
+    "status",
+    "started_at",
+    "finished_at",
+    "display_kind",
+    "display_params_json",
+    "attributes_json",
+)
+
+
+class _FakeSpanConnection:
+    def __init__(self, db: _FakeSpanDb) -> None:
+        self.db = db
+
+    def cursor(self) -> _FakeSpanCursor:
+        return _FakeSpanCursor(self.db)
+
+    def commit(self) -> None:
+        self.db.commits += 1
+
+
+class _FakeSpanDb:
+    """共通の span の表の fake（主キーで MERGE・trace id と持ち主で SELECT）。"""
+
+    def __init__(self) -> None:
+        self.rows: dict[tuple[str, str], dict[str, Any]] = {}
+        self.commits = 0
+
+    @contextmanager
+    def connect(self, _settings: Any = None) -> Iterator[_FakeSpanConnection]:
+        yield _FakeSpanConnection(self)
+
+
+@pytest.fixture
+def span_table(monkeypatch: MonkeyPatch) -> Iterator[_FakeSpanDb]:
+    """Oracle の保存先と同じく、共通の書き手で表（fake）に書いて表から読む。"""
+    import app.oracle_connection as oracle_connection
+
+    db = _FakeSpanDb()
+    monkeypatch.setattr(oracle_connection, "platform_oracle_connection", db.connect)
+    writer = TraceSpanWriter(connection_factory=db.connect, flush_seconds=60)
+    trace_spans.use_writer(writer)
+    try:
+        yield db
+    finally:
+        trace_spans.use_writer(None)
+
+
+def test_oracle_writer_writes_the_run_spans_without_step_details(
+    monkeypatch: MonkeyPatch, span_table: _FakeSpanDb
+) -> None:
+    """Run の span は共通の書き手で表に書く（製品・Run の id・実行した利用者が持ち主）。工程の詳細
+    （ツールの引数と結果）は表に入れず Run に残し、読み出しの API が Run から足す。"""
+    _script(
+        monkeypatch,
+        [function_call(LOOKUP, {"query": "合成の語"}, call_id="call-1")],
+        [assistant_message("3 件です。")],
+    )
+    run_id = _create_run()
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+    assert trace_spans.uses_table
+    # 主の処理は queue に積むだけ（書き手の間隔の前は表に無い）。
+    assert span_table.rows == {}
+    assert trace_spans._writer is not None  # noqa: SLF001 - テストで待たずに書く
+    trace_spans._writer.flush()  # noqa: SLF001
+
+    run = runtime_repository.get_run(run_id)
+    rows = list(span_table.rows.values())
+    assert {row["trace_id"] for row in rows} == {run.trace_id}
+    assert {(row["product"], row["operation_id"], row["owner_user_uuid"]) for row in rows} == {
+        ("agent", run_id, run.created_by_user_uuid)
+    }
+    assert sum(row["is_root"] for row in rows) == 1
+    assert {row["name"] for row in rows} >= {"agent.execute", CHAT, TOOL}
+    assert all(row["status"] != "running" for row in rows)
+    # 工程の詳細（検索の語を含む引数）は表に入れない。
+    assert not any("合成の語" in json.dumps(row, default=str, ensure_ascii=False) for row in rows)
+    assert any(
+        "合成の語" in json.dumps(item.model_dump(), ensure_ascii=False)
+        for item in run.span_details.values()
+    )
+    assert run.trace_dropped_spans == 0
+    # 読み出しの API は表を読み、工程の詳細を Run から足す。
+    response = client.get(f"/api/runs/{run_id}/trace")
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    [tool] = [
+        event for event in data["events"] if event.get("name") == TOOL and event["type"] == "step"
+    ]
+    assert "合成の語" in json.dumps(tool["details"], ensure_ascii=False)
+    assert data["events"][-1]["type"] == "terminal"
+
+
+def test_dropped_spans_are_kept_on_the_run(monkeypatch: MonkeyPatch) -> None:
+    """書けなかった span の数は、実行の区切りを確定するときに Run に残す（画面は一部だけの
+    案内）。"""
+    monkeypatch.setattr(trace_spans, "dropped", lambda _trace_id: 3)
+    _script(monkeypatch, [assistant_message("こんにちは。")])
+    run_id = _create_run("挨拶して")
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    assert runtime_repository.get_run(run_id).trace_dropped_spans == 3
+    data = client.get(f"/api/runs/{run_id}/trace").json()["data"]
+    assert data["dropped_spans"] == 3
+
+
+# --------------------------------------------------------------------------------------------
+# API（`GET /api/runs/{run_id}/trace`・権限）
 # --------------------------------------------------------------------------------------------
 
 
@@ -735,28 +912,20 @@ def _completed_api_run(monkeypatch: MonkeyPatch, owner: str = LOCAL_DEBUG_USER_U
     return run_id
 
 
-def _sse_events(text: str) -> list[tuple[str | None, str, dict[str, Any]]]:
-    """SSE の本文を (id, event, data) の一覧にする。"""
-    items: list[tuple[str | None, str, dict[str, Any]]] = []
-    for block in text.split("\n\n"):
-        fields: dict[str, str] = {}
-        for line in block.splitlines():
-            key, _, value = line.partition(": ")
-            fields[key] = value
-        if "data" in fields:
-            items.append((fields.get("id"), fields.get("event", ""), json.loads(fields["data"])))
-    return items
-
-
-def test_thread_and_run_responses_include_progress_events(
-    monkeypatch: MonkeyPatch,
-) -> None:
+def test_run_trace_returns_the_span_snapshot(monkeypatch: MonkeyPatch) -> None:
     run_id = _completed_api_run(monkeypatch)
     run = runtime_repository.get_run(run_id)
 
-    detail = client.get(f"/api/runs/{run_id}")
-    assert detail.status_code == 200, detail.text
-    events = detail.json()["data"]["progress_events"]
+    response = client.get(f"/api/runs/{run_id}/trace")
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert (data["target_id"], data["trace_id"], data["dropped_spans"]) == (
+        run_id,
+        run.trace_id,
+        0,
+    )
+    events = data["events"]
     assert [event["seq"] for event in events] == list(range(1, len(events) + 1))
     assert events[-1] == {
         "schema_version": 1,
@@ -769,61 +938,27 @@ def test_thread_and_run_responses_include_progress_events(
     }
     # span のイベントは span の名前・親・trace id を持つ（画面が木にする）。
     spans = [event for event in events if event["type"] == "step"]
-    assert spans and all(event.get("name") and event.get("trace_id") for event in spans)
+    assert spans and all(event.get("name") and event["trace_id"] == run.trace_id for event in spans)
     assert {event["name"] for event in spans} >= {"agent.execute", CHAT, TOOL}
-    thread = client.get(f"/api/threads/{run.thread_id}")
-    assert thread.status_code == 200, thread.text
-    assert thread.json()["data"]["runs"][0]["progress_events"] == events
+    # Run の応答には処理の経過のイベントを入れない（記録は表 1 つ。画面は trace の API で読む）。
+    detail = client.get(f"/api/runs/{run_id}").json()["data"]
+    assert "progress_events" not in detail
+    assert (detail["trace_store"], detail["trace_id"]) == (True, run.trace_id)
+    assert client.get("/api/runs/run-missing/trace").status_code == 404
 
 
-def test_progress_polling_returns_events_after_since(
-    monkeypatch: MonkeyPatch,
-) -> None:
+def test_run_trace_read_failure_is_503(monkeypatch: MonkeyPatch) -> None:
     run_id = _completed_api_run(monkeypatch)
-    total = len(runtime_repository.get_run(run_id).progress_events)
 
-    first = client.get(f"/api/runs/{run_id}/progress")
-    assert first.status_code == 200, first.text
-    page = first.json()["data"]
-    assert (page["target_id"], page["attempt"], page["last_seq"], page["terminal"]) == (
-        run_id,
-        0,
-        total,
-        True,
-    )
-    assert [event["seq"] for event in page["events"]] == list(range(1, total + 1))
+    def unavailable(_trace_id: str, *, viewer_user_uuid: str | None) -> list[Any]:
+        raise RuntimeError("ORA-00942")
 
-    rest = client.get(f"/api/runs/{run_id}/progress?since={total - 2}").json()["data"]
-    assert [event["seq"] for event in rest["events"]] == [total - 1, total]
-    assert client.get(f"/api/runs/{run_id}/progress?since=-1").status_code == 422
-    assert client.get("/api/runs/run-missing/progress").status_code == 404
+    monkeypatch.setattr(trace_spans, "fetch", unavailable)
 
+    response = client.get(f"/api/runs/{run_id}/trace")
 
-def test_progress_stream_sends_events_and_closes_at_the_terminal(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    run_id = _completed_api_run(monkeypatch)
-    total = len(runtime_repository.get_run(run_id).progress_events)
-
-    response = client.get(f"/api/runs/{run_id}/progress/stream")
-    assert response.status_code == 200, response.text
-    assert response.headers["content-type"].startswith("text/event-stream")
-    assert response.headers["x-accel-buffering"] == "no"
-    events = _sse_events(response.text)
-    assert [item[0] for item in events] == [str(seq) for seq in range(1, total + 1)]
-    assert {item[1] for item in events} == {"chat_progress"}
-    assert events[-1][2]["type"] == "terminal"
-
-    # 続き（`since` と、ブラウザの張り直しの `Last-Event-ID` の大きい方）から送る。
-    resumed = client.get(
-        f"/api/runs/{run_id}/progress/stream?since=1",
-        headers={"Last-Event-ID": str(total - 1)},
-    )
-    assert [item[0] for item in _sse_events(resumed.text)] == [str(total)]
-    # 終わった Run を続きから求めたら 204（ブラウザは張り直しをやめる）。
-    finished = client.get(f"/api/runs/{run_id}/progress/stream?since={total}")
-    assert finished.status_code == 204
-    assert client.get("/api/runs/run-missing/progress/stream").status_code == 404
+    assert response.status_code == 503
+    assert "ORA-" not in response.text
 
 
 @pytest.fixture
@@ -832,46 +967,87 @@ def auth(monkeypatch: MonkeyPatch) -> Any:
     set_security_service(None)
 
 
-def test_progress_endpoints_follow_the_run_scope(
-    monkeypatch: MonkeyPatch, auth: ProductionAuth
-) -> None:
+def test_run_trace_follows_the_run_scope(monkeypatch: MonkeyPatch, auth: ProductionAuth) -> None:
     owner = auth.user_with_permissions(
         "progress-chat", ["agent.runs.operate"], agent_ids=[AGENT_ID]
     )
     run_id = _completed_api_run(monkeypatch, owner=owner.user_uuid)
-    paths = [f"/api/runs/{run_id}/progress", f"/api/runs/{run_id}/progress/stream?since=0"]
+    path = f"/api/runs/{run_id}/trace"
 
     # チャットの利用者（業務 Agent の実行）は、対象範囲の Agent の自分の Run を読める。
-    headers = login("progress-chat")
-    for path in paths:
-        assert client.get(path, headers=headers).status_code == 200, path
+    assert client.get(path, headers=login("progress-chat")).status_code == 200
 
     # 同じ範囲でも、ほかの利用者の Run は 404（存在を漏らさない。#1889）。
     auth.user_with_permissions("progress-peer", ["agent.runs.operate"], agent_ids=[AGENT_ID])
-    peer = login("progress-peer")
-    for path in paths:
-        assert client.get(path, headers=peer).status_code == 404, path
+    assert client.get(path, headers=login("progress-peer")).status_code == 404
 
     # 対象範囲の外の Agent の、ほかの利用者の Run も 404。
     auth.user_with_permissions("progress-other", ["agent.runs.operate"], agent_ids=["other"])
-    other = login("progress-other")
-    for path in paths:
-        assert client.get(path, headers=other).status_code == 404, path
+    assert client.get(path, headers=login("progress-other")).status_code == 404
 
     # メニューも capability も無い利用者は経路で 403。
     auth.user_with_permissions("progress-none", [], agent_ids=[AGENT_ID])
-    none = login("progress-none")
-    for path in paths:
-        assert client.get(path, headers=none).status_code == 403, path
+    assert client.get(path, headers=login("progress-none")).status_code == 403
     # ログインしていなければ 401。
-    assert client.get(paths[0]).status_code == 401
+    assert client.get(path).status_code == 401
 
 
-def test_created_run_response_has_no_progress_yet(monkeypatch: MonkeyPatch) -> None:
+def test_run_trace_shows_only_the_run_users_spans_except_to_system_admin(
+    monkeypatch: MonkeyPatch, auth: ProductionAuth
+) -> None:
+    """同じ trace にほかの利用者が書いた span は、system_admin だけに見える（表の持ち主の判定）。
+
+    呼び先の MCP の span はサービストークンの `sub`（Run の利用者）が持ち主なので、Run の利用者に
+    見える。
+    """
+    owner = auth.user_with_permissions("trace-owner", ["agent.runs.operate"], agent_ids=[AGENT_ID])
+    run_id = _completed_api_run(monkeypatch, owner=owner.user_uuid)
+    run = runtime_repository.get_run(run_id)
+    assert run.trace_id is not None
+    [root] = [span for span in trace_spans.fetch(run.trace_id, viewer_user_uuid=None) if span.root]
+    now = datetime.now(UTC)
+
+    def called(span_id: str, user_uuid: str) -> None:
+        trace_spans.submit(
+            SpanUpdate(
+                span_id=span_id,
+                parent_span_id=root.span_id,
+                trace_id=run.trace_id or "",
+                operation_name="mcp.server",
+                status="done",
+                started_at=now,
+                finished_at=now,
+                root=True,
+                span_kind="server",
+            ),
+            TraceSpanOwner(product="rag", operation_id="synthetic-call", owner_user_uuid=user_uuid),
+        )
+
+    called("b000000000000001", owner.user_uuid)
+    called("b000000000000002", "synthetic-other-user")
+
+    def server_spans(headers: dict[str, str]) -> set[str]:
+        response = client.get(f"/api/runs/{run_id}/trace", headers=headers)
+        assert response.status_code == 200, response.text
+        return {
+            event["step_id"]
+            for event in response.json()["data"]["events"]
+            if event.get("name") == "mcp.server"
+        }
+
+    assert server_spans(login("trace-owner")) == {"b000000000000001"}
+    auth.create_user("trace-admin", system_admin=True)
+    assert server_spans(login("trace-admin")) == {"b000000000000001", "b000000000000002"}
+
+
+def test_created_run_has_no_trace_yet(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr("app.features.agent.router._schedule_builtin_run", lambda run: None)
 
     created = client.post("/api/runs", json={"goal": "質問", "agent_id": "default"})
 
     assert created.status_code == 200, created.text
-    # 処理の経過は実行の区間の span から記録する（受け付けただけの Run は空）。
-    assert created.json()["data"]["progress_events"] == []
+    data = created.json()["data"]
+    # 処理の経過は実行の区間の span から記録する（受け付けただけの Run は trace が無く空）。
+    assert (data["trace_store"], data["trace_id"]) == (True, None)
+    trace = client.get(f"/api/runs/{data['id']}/trace").json()["data"]
+    assert (trace["trace_id"], trace["events"]) == (None, [])

@@ -319,6 +319,7 @@ from app.features.agent.tools import (
     tool_result_images,
     with_tool_result_images,
 )
+from app.features.agent.trace_spans import run_trace_owner, trace_spans
 from app.observability import (
     CONTEXT_COMPACTIONS_TOTAL,
     MODEL_INCOMPLETE_RETRIES_TOTAL,
@@ -3161,12 +3162,20 @@ def _save_support_task(run_id: str, task: _SupportTaskRun) -> dict[str, Any] | N
         return None
 
 
-def _progress_listener(run_id: str) -> SpanListener:
-    """実行区間の span の知らせを Run の処理の経過に記録する listener（#3226）。"""
+def _progress_listener(run: Any) -> SpanListener:
+    """実行区間の span の知らせを、共通の span の表に書く listener（#3226 の案 A）。
+
+    Run が受け付けた知らせ（終わった Run・置き換わった実行の知らせを除く）だけを、Run を実行した
+    利用者を持ち主にして書く。表に入れない工程の詳細などは Run に残す（`record_builtin_span`）。
+    """
     from app.features.agent.runtime import runtime_repository
 
+    run_id = run.id
+    owner = run_trace_owner(run_id, run.created_by_user_uuid)
+
     def listen(update: SpanUpdate) -> None:
-        runtime_repository.record_builtin_span(run_id, update)
+        if runtime_repository.record_builtin_span(run_id, update) and owner is not None:
+            trace_spans.submit(update, owner)
 
     return listen
 
@@ -3275,9 +3284,7 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
         run, agent = started
         with (
             attach_trace_context(run.trace_context),
-            operation_trace(
-                "agent.execute", operation_id=run.id, listener=_progress_listener(run.id)
-            ),
+            operation_trace("agent.execute", operation_id=run.id, listener=_progress_listener(run)),
         ):
             execution = run_claim.bind_execution(run.id, run.metadata)
             # 公開中の版に固定したスキルで動く（#1855）。
@@ -3360,9 +3367,7 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
         run, agent, state_text, decisions = resumed
         with (
             attach_trace_context(run.trace_context),
-            operation_trace(
-                "agent.resume", operation_id=run.id, listener=_progress_listener(run.id)
-            ),
+            operation_trace("agent.resume", operation_id=run.id, listener=_progress_listener(run)),
         ):
             execution = run_claim.bind_execution(run.id, run.metadata)
             # 終わった承認・確認の待ちは、再開した区間の span として残す（#3226）。表示の記録

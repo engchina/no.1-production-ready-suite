@@ -17,6 +17,7 @@ from starlette.responses import JSONResponse, Response
 from app.api.router import api_router
 from app.features.agent import storage_bootstrap
 from app.features.agent.runtime import AgentRuntimeStorageUnavailableError
+from app.features.agent.trace_spans import trace_spans
 from app.observability import (
     metrics_response,
     start_trace_export_retry_worker,
@@ -42,6 +43,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     with tracing_lifecycle(get_settings(), service_name=get_settings().service_name):
         storage_bootstrap.start_background_load()
         await start_trace_export_retry_worker()
+        # 処理の経過の span の書き手（共通の span の表。#3226 の案 A。in_process の実行が書く）。
+        await asyncio.to_thread(trace_spans.start)
         # 業務 Agent の自動実行のスケジューラ（#784。gunicorn は 1 worker のため 1 つだけ動く）。
         from app.features.agent.automations import run_scheduler
 
@@ -54,6 +57,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 await scheduler
             storage_bootstrap.stop_background_load()
             await stop_trace_export_retry_worker()
+            # 待っている span を書いてから終える（書けなければ書き手がログに残す）。
+            await asyncio.to_thread(trace_spans.stop)
             # まだ書いていない Run・業務 Agent の変更を書いてから終える（#1939。event loop の上の
             # 変更はバックグラウンドで書くため）。書けなければログに残す。
             await _flush_runtime_writes()

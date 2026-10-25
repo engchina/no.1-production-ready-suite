@@ -26,7 +26,7 @@ import {
   type CurrentUserPayload,
 } from "./auth";
 import { maskUrlCredentials, mcpUrlCredentialProblem } from "../../src/lib/mcp-url";
-import { progressEventsForStatus } from "./chat-progress-events";
+import { SYNTHETIC_TRACE_ID, progressEventsForStatus } from "./chat-progress-events";
 
 type Json = Record<string, unknown>;
 
@@ -1964,10 +1964,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       };
     }
     if (method === "GET" && at("runs", "*", "artifacts")) return { artifacts: [] };
-    // チャットの処理の段階のイベント（polling。`since` より後。#1359）。
-    if (method === "GET" && at("runs", "*", "progress")) {
-      return progressPage(run, Number(query.get("since") ?? 0));
-    }
+    // Run の処理の経過（共通の span の表の snapshot。backend の `GET /api/runs/{id}/trace`。#3226 の案 A）。
+    if (method === "GET" && at("runs", "*", "trace")) return traceSnapshot(run);
     // RAG の根拠の原文のプレビュー（#2389）。spec は `http://rag.e2e.test/**` を page.route で応答する。
     if (method === "GET" && at("runs", "*", "source-preview")) {
       if (!runEvidenceOf(run, query)) throw new HttpError(404, "この実行の根拠に、その資料はありません。");
@@ -2024,20 +2022,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       };
     }
     if (method === "POST" && at("runs", "*", "cancel")) {
+      // 処理の経過の終端は Run の状態から作る（backend と同じく Run の状態が正本。#3226）。
       run.status = "cancelled";
-      // spec が積んだ処理の段階のイベントには、backend と同じく停止の終端を足す（#1359）。
-      const events = run.progress_events;
-      if (Array.isArray(events) && !events.some((event) => (event as Json).type === "terminal")) {
-        events.push({
-          schema_version: 1,
-          type: "terminal",
-          seq: events.length + 1,
-          target_id: run.id,
-          attempt: 0,
-          emitted_at: new Date().toISOString(),
-          status: "cancelled",
-        });
-      }
       return run;
     }
     // 回答前の確認（#1839）。backend の `decide_confirmation` と同じ結果の形。mock の Run は答えですぐ完了する。
@@ -3061,21 +3047,62 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   return undefined;
 }
 
-/** Run の処理の段階のイベント（spec が入れていなければ、状態から作る最小のイベント。#1359）。 */
+/**
+ * Run の span のイベント（spec が `run.progress_events` に `ProgressLog` で積んだ記録。無ければ状態から作る最小の
+ * 記録）。mock の中だけの記録で、画面へは `traceSnapshot` の形（共通の span の表の snapshot）で返す。
+ */
 function runProgressEvents(run: Json): Json[] {
   return Array.isArray(run.progress_events) ? (run.progress_events as Json[]) : progressEventsForStatus(run);
 }
 
-/** polling の応答（backend の `chat_progress_page`）。 */
-function progressPage(run: Json, since: number): Json {
-  const events = runProgressEvents(run);
-  return {
-    target_id: run.id,
-    attempt: 0,
-    events: events.filter((event) => Number(event.seq) > since),
-    last_seq: events.length > 0 ? Number(events[events.length - 1].seq) : 0,
-    terminal: events.some((event) => event.type === "terminal"),
-  };
+const RUN_TERMINAL: Readonly<Record<string, "done" | "failed" | "cancelled">> = {
+  completed: "done",
+  failed: "failed",
+  cancelled: "cancelled",
+};
+
+/**
+ * 共通の span の表の snapshot（backend の `trace_progress_events`）。span ごとに最新の状態だけを、最初に現れた順に
+ * 番号を振り直して返す。終わった Run は、表で実行中のままの span を Run の終端に合わせて閉じ（停止はスキップ）、
+ * 終端のイベントを足す（Run の状態が正本）。trace の無い Run は空。
+ */
+function traceSnapshot(run: Json): Json {
+  const latest = new Map<string, Json>();
+  for (const event of runProgressEvents(run)) {
+    if (event.type === "step") latest.set(String(event.step_id), event);
+  }
+  const terminal = RUN_TERMINAL[String(run.status)];
+  const emittedAt = typeof run.updated_at === "string" ? run.updated_at : new Date().toISOString();
+  const events: Json[] = [...latest.values()].map((event, index) => {
+    const step: Json = { ...event, seq: index + 1, target_id: run.id };
+    if (terminal && (step.status === "running" || step.status === "pending")) {
+      step.status = terminal === "done" ? "done" : terminal === "failed" ? "failed" : "skipped";
+      step.finished_at = step.finished_at ?? emittedAt;
+      if (terminal === "cancelled") step.cancelled = true;
+    }
+    return step;
+  });
+  const traceId = runTraceId(run, events);
+  if (traceId === null) return { target_id: run.id, trace_id: null, events: [], dropped_spans: 0 };
+  if (terminal) {
+    events.push({
+      schema_version: 1,
+      type: "terminal",
+      seq: events.length + 1,
+      target_id: run.id,
+      attempt: 0,
+      emitted_at: emittedAt,
+      status: terminal,
+    });
+  }
+  return { target_id: run.id, trace_id: traceId, events, dropped_spans: Number(run.trace_dropped_spans ?? 0) };
+}
+
+/** Run の trace id（spec が入れていなければ、span の記録があれば mock の trace id）。 */
+function runTraceId(run: Json, events?: Json[]): string | null {
+  if (typeof run.trace_id === "string" || run.trace_id === null) return run.trace_id as string | null;
+  const spans = events ?? runProgressEvents(run).filter((event) => event.type === "step");
+  return spans.length > 0 ? SYNTHETIC_TRACE_ID : null;
 }
 
 function isRunPayload(value: unknown): value is Json {
@@ -3088,44 +3115,26 @@ function isRunPayload(value: unknown): value is Json {
   );
 }
 
-/** 応答の Run（単体・`runs` の一覧）に処理の段階のイベントを入れる（state は書き換えない）。 */
+/**
+ * 応答の Run（単体・`runs` の一覧）に、共通の span の表の記録の項目（`trace_store`・`trace_id`・
+ * `trace_dropped_spans`）を入れる（state は書き換えない）。mock の中の span の記録（`progress_events`）は返さない。
+ */
 function withRunProgress(data: unknown): unknown {
-  const decorate = (run: Json): Json => ({ ...run, progress_events: runProgressEvents(run) });
+  const decorate = (run: Json): Json => {
+    const rest = { ...run };
+    delete rest.progress_events;
+    return {
+      ...rest,
+      trace_store: run.trace_store ?? true,
+      trace_id: runTraceId(run),
+      trace_dropped_spans: Number(run.trace_dropped_spans ?? 0),
+    };
+  };
   if (isRunPayload(data)) return decorate(data);
   if (typeof data === "object" && data !== null && Array.isArray((data as Json).runs)) {
     return { ...(data as Json), runs: ((data as Json).runs as unknown[]).map((run) => (isRunPayload(run) ? decorate(run) : run)) };
   }
   return data;
-}
-
-/**
- * 処理の段階の SSE（backend の `chat_progress_sse_response`）。e2e は stream を保てないため、続き（`since` と
- * `Last-Event-ID` の大きい方）のイベントと heartbeat を送って閉じる。ブラウザが `retry` の後に `Last-Event-ID` で
- * 張り直すので、続けて届く。終わった Run を続きから求めたら 204。
- */
-async function fulfillProgressStream(route: Route, state: MockApiState, runId: string, url: URL, headers: Record<string, string>) {
-  const run = state.runs.find((candidate) => candidate.id === runId);
-  if (!run) {
-    await fulfillHttpError(route, new HttpError(404, "実行が見つかりません。"));
-    return;
-  }
-  if (!agentAllowed(state, run.agent_id)) {
-    await fulfillHttpError(route, new HttpError(403, "この業務 Agent を使う権限がありません。"));
-    return;
-  }
-  const lastEventId = Number(headers["last-event-id"] ?? 0);
-  const cursor = Math.max(Number(url.searchParams.get("since") ?? 0), Number.isFinite(lastEventId) ? lastEventId : 0);
-  const page = progressPage(run, cursor);
-  if (page.terminal && cursor >= Number(page.last_seq)) {
-    await route.fulfill({ status: 204, headers: { "Cache-Control": "no-cache" }, body: "" });
-    return;
-  }
-  const lines = ["retry: 500\n\n"];
-  for (const event of page.events as Json[]) {
-    lines.push(`id: ${String(event.seq)}\nevent: chat_progress\ndata: ${JSON.stringify(event)}\n\n`);
-  }
-  lines.push(`event: heartbeat\ndata: ${JSON.stringify({ last_seq: page.last_seq })}\n\n`);
-  await route.fulfill({ status: 200, contentType: "text/event-stream", headers: { "Cache-Control": "no-cache" }, body: lines.join("") });
 }
 
 async function fulfillJson(route: Route, status: number, payload: unknown) {
@@ -3191,11 +3200,6 @@ export async function installMockApi(page: Page): Promise<MockApi> {
         contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         body: Buffer.from("PK-mock-xlsx"),
       });
-      return;
-    }
-    const progressStream = /^\/api\/runs\/([^/]+)\/progress\/stream$/.exec(url.pathname);
-    if (method === "GET" && progressStream) {
-      await fulfillProgressStream(route, mockApi.state, decodeURIComponent(progressStream[1]), url, await request.allHeaders());
       return;
     }
     if (method === "GET" && /^\/api\/runs\/[^/]+\/events$/.test(url.pathname)) {
