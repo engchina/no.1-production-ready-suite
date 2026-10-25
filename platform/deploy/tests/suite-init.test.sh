@@ -344,7 +344,7 @@ prepare_case() {
   [ ! -e "${SUITE_REPO_DIR}/platform/.env" ] || fail "初回に platform/.env を作った"
 )
 
-# 6c. 時間帯（#3255）: platform/.env → props の platform.env → 既定（Asia/Tokyo）の順に PLATFORM_TIMEZONE を読み、
+# 6c. 時間帯（#3255・#3274）: platform/.env → props の platform.env → 既定（UTC）の順に PLATFORM_TIMEZONE を読み、
 #     OS の時間帯を timedatectl で合わせる（同じなら変えない）。不正な値は失敗。timedatectl が使えなければ
 #     /etc/localtime を置き換え、それもできなければ警告だけで続ける。
 (
@@ -362,7 +362,7 @@ prepare_case() {
   SUITE_LOCALTIME_PATH="${case_dir}/localtime"
   calls="${case_dir}/timedatectl.calls"
   current="${case_dir}/timedatectl.current"
-  printf 'UTC\n' > "${current}"
+  printf 'Asia/Tokyo\n' > "${current}"
   # timedatectl の代わり（show は今の時間帯、set-timezone は呼び出しを記録して今の時間帯を変える）。
   cat > "${case_dir}/bin/timedatectl" <<EOF
 #!/usr/bin/env bash
@@ -375,24 +375,24 @@ exit 2
 EOF
   chmod +x "${case_dir}/bin/timedatectl"
   PATH="${case_dir}/bin:${PATH}"
-  # 既定: どちらの .env にも key が無ければ Asia/Tokyo。
-  [ "$(suite_timezone)" = "Asia/Tokyo" ] || fail "既定の時間帯: $(suite_timezone)"
+  # 既定: どちらの .env にも key が無ければ UTC（#3274）。
+  [ "$(suite_timezone)" = "UTC" ] || fail "既定の時間帯: $(suite_timezone)"
   configure_timezone >/dev/null || fail "既定の時間帯にできない"
-  [ "$(cat "${calls}")" = "set-timezone Asia/Tokyo" ] || fail "timedatectl の呼び出し: $(cat "${calls}")"
+  [ "$(cat "${calls}")" = "set-timezone UTC" ] || fail "timedatectl の呼び出し: $(cat "${calls}")"
   # 同じなら変えない（冪等）。
   : > "${calls}"
   configure_timezone | grep -qF '変更なし' || fail "同じ時間帯で変更なしと出さない"
   [ ! -s "${calls}" ] || fail "同じ時間帯なのに timedatectl を呼んだ"
   # props の platform.env（初回。Terraform の timezone）。quote は外す。
-  printf "PLATFORM_ORACLE_USER=APP\nPLATFORM_TIMEZONE='UTC'\n" > "${PROPS_DIR}/platform.env"
-  [ "$(suite_timezone)" = "UTC" ] || fail "props の時間帯: $(suite_timezone)"
+  printf "PLATFORM_ORACLE_USER=APP\nPLATFORM_TIMEZONE='Asia/Tokyo'\n" > "${PROPS_DIR}/platform.env"
+  [ "$(suite_timezone)" = "Asia/Tokyo" ] || fail "props の時間帯: $(suite_timezone)"
   # repository の platform/.env（再配備）を優先する。key があって空なら既定。
   printf 'PLATFORM_TIMEZONE=Etc/GMT-9\n' > "${SUITE_REPO_DIR}/platform/.env"
   [ "$(suite_timezone)" = "Etc/GMT-9" ] || fail "platform/.env の時間帯: $(suite_timezone)"
   configure_timezone >/dev/null || fail "Etc/GMT-9 にできない"
   [ "$(cat "${current}")" = "Etc/GMT-9" ] || fail "OS の時間帯を変えない"
   printf 'PLATFORM_TIMEZONE=\n' > "${SUITE_REPO_DIR}/platform/.env"
-  [ "$(suite_timezone)" = "Asia/Tokyo" ] || fail "空の値は既定: $(suite_timezone)"
+  [ "$(suite_timezone)" = "UTC" ] || fail "空の値は既定: $(suite_timezone)"
   # 不正な値（固定の offset・tzdata に無い名前・相対の path）は失敗にし、OS を変えない。
   for bad in '+09:00' 'Asia/Osaka' '../../etc/passwd' 'Asia/Tokyo;id'; do
     printf 'PLATFORM_TIMEZONE=%s\n' "${bad}" > "${SUITE_REPO_DIR}/platform/.env"

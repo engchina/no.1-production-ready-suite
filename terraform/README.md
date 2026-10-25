@@ -74,8 +74,8 @@ Resource Manager の画面では製品を選ばず、RAG / NL2SQL / Agent Contro
   **送信元 = Compute の subnet の CIDR、TCP `1522`** の ingress の規則を足してください（同じ subnet なら、その subnet 自身の CIDR から）。
   規則の一覧は直下の [README.md](../README.md#配備の前に-vcn-の-security-list) にあります。
 - DB の password / user / DSN に single quote は使えません（共通 `.env` では値を single quote で囲むため）。
-- **時間帯（#3255）**: 時刻は UTC で保存します（3 製品の DB の session の時間帯は、Compute の OS の時間帯に関わらず
-  `'+00:00'` に固定します。`pr_backend_core.oracle_session`）。stack の `timezone`（`Asia/Tokyo`〔日本時間: 東京・大阪など。既定〕か `UTC`〔OCI の Database の Time Zone の既定〕）は Compute の OS と
+- **時間帯（#3255・#3274）**: 時刻は UTC で保存します（3 製品の DB の session の時間帯は、Compute の OS の時間帯に関わらず
+  `'+00:00'` に固定します。`pr_backend_core.oracle_session`）。stack の `timezone`（`UTC`〔既定。OCI の Database の Time Zone の既定〕か `Asia/Tokyo`〔日本時間: 東京・大阪など〕）は Compute の OS と
   共通の設定 `PLATFORM_TIMEZONE`（今日〔検索・期間の基準日〕・既定の時間帯・画面の日時の表示・NL2SQL の業務データの SQL の今の日時。#3265）に使い、ADB の時間帯（`DBTIMEZONE`）は変えません
   （OCI の Terraform provider の `oci_database_autonomous_database` に時間帯の引数が無く、stack は DB に接続しないため）。
   ADB の時間帯も合わせるときは、ADMIN で次を実行し、ADB を再起動します（再起動の間は 3 製品が DB を使えません。共有の ADB では
@@ -451,7 +451,7 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
 
 | 項目 | Oracle Linux 9 の Compute |
 |---|---|
-| 時間帯 | stack の `timezone`（`Asia/Tokyo`〔既定〕か `UTC`。値は OCI と同じ IANA の地域名。#3255）。配備した後は `platform/.env` の `PLATFORM_TIMEZONE` に任意の IANA の地域名を書ける（`suite-restart.sh` で OS にも反映）。cloud-init の `timezone` と、`suite-init.sh` の `configure_timezone`（`platform/.env` の `PLATFORM_TIMEZONE` を `timedatectl set-timezone` で。同じなら変えない。再配備でも効く）が合わせる。不正な値は配備の最初で失敗する。時刻の保存は UTC のまま |
+| 時間帯 | stack の `timezone`（`UTC`〔既定〕か `Asia/Tokyo`。値は OCI と同じ IANA の地域名。#3255・#3274）。配備した後は `platform/.env` の `PLATFORM_TIMEZONE` に任意の IANA の地域名を書ける（`suite-restart.sh` で OS にも反映）。cloud-init の `timezone` と、`suite-init.sh` の `configure_timezone`（`platform/.env` の `PLATFORM_TIMEZONE` を `timedatectl set-timezone` で。同じなら変えない。再配備でも効く）が合わせる。不正な値は配備の最初で失敗する。時刻の保存は UTC のまま |
 | ログイン・実行ユーザー | `opc`（`ssh opc@<IP>`。3 製品のプロセスと repository の所有者。sudo は OCI の image の設定のまま無制限） |
 | package | `dnf`。BaseOS / AppStream だけを使い、EPEL・CodeReady Builder は有効にしない。Nginx は module `nginx:1.24`、Node.js は module `nodejs:24`（入らなければ公式の tarball を SHASUMS256 で確かめて `/usr/local/lib/nodejs`）。Python は今までどおり uv の `uv python install 3.12` |
 | Nginx | site は `/etc/nginx/conf.d/production-ready-suite.conf`。worker のユーザーは `nginx`、ログは `/var/log/nginx/production-ready-<製品>-*.log` |

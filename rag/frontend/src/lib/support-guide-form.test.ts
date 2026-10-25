@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setDisplayTimeZone } from "@production-ready/ui";
 
 import type { SupportGuideChange, SupportGuideContent } from "./api";
 import {
@@ -366,10 +367,18 @@ describe("parseSupportGuideImport", () => {
 });
 
 it("書き出しのファイル名はプロファイルと日付を含む", () => {
-  // 日付はシステムの設定の時間帯（既定 Asia/Tokyo）。UTC の 10/06 15:00 は東京の 10/07。
+  // 日付はシステムの設定の時間帯（既定 UTC。#3274）。東京なら UTC の 10/06 15:00 は 10/07。
   expect(supportGuideExportFileName("bv/1", new Date("2026-10-06T15:00:00Z"))).toBe(
-    "support-guides-bv_1-20261007.json",
+    "support-guides-bv_1-20261006.json",
   );
+  setDisplayTimeZone("Asia/Tokyo");
+  try {
+    expect(supportGuideExportFileName("bv/1", new Date("2026-10-06T15:00:00Z"))).toBe(
+      "support-guides-bv_1-20261007.json",
+    );
+  } finally {
+    setDisplayTimeZone(null);
+  }
 });
 
 describe("言い換え（value_aliases）", () => {

@@ -32,7 +32,7 @@ DEFAULT_OSAKA_REGION = "ap-osaka-1"
 DEFAULT_OCI_CONFIG_FILE = "~/.oci/config"
 DEFAULT_OCI_PROFILE = "DEFAULT"
 # 「今日」(検索の基準日の既定)を決める時間帯(#3249)。backend の共通の設定 `PLATFORM_TIMEZONE` の既定と同じ。
-DEFAULT_TIMEZONE = "Asia/Tokyo"
+DEFAULT_TIMEZONE = "UTC"
 OCI_INFERENCE_ENDPOINT_TEMPLATE = "https://inference.generativeai.{region}.oci.oraclecloud.com"
 DEFAULT_OCI_VISION_ENDPOINT = OCI_INFERENCE_ENDPOINT_TEMPLATE.format(region=DEFAULT_CHICAGO_REGION)
 OPENAI_RESPONSES_LLM_API_MODE = "openai_responses"

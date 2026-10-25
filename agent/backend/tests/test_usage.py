@@ -278,10 +278,10 @@ def test_omitted_timezone_uses_the_common_setting(monkeypatch: MonkeyPatch) -> N
     from app.features.agent.automations import AutomationSchedule
     from app.settings import get_settings
 
-    assert resolve_timezone("") == ZoneInfo("Asia/Tokyo")
-    monkeypatch.setattr(get_settings(), "timezone", "UTC")
-    assert resolve_timezone(None) == ZoneInfo("UTC")
-    assert resolve_timezone("  ") == ZoneInfo("UTC")
-    # 渡した時間帯（画面のブラウザの時間帯）は設定より優先する。
-    assert resolve_timezone("Asia/Tokyo") == ZoneInfo("Asia/Tokyo")
-    assert AutomationSchedule().timezone == "UTC"
+    assert resolve_timezone("") == ZoneInfo("UTC")  # 既定は UTC（#3274）。
+    monkeypatch.setattr(get_settings(), "timezone", "Asia/Tokyo")
+    assert resolve_timezone(None) == ZoneInfo("Asia/Tokyo")
+    assert resolve_timezone("  ") == ZoneInfo("Asia/Tokyo")
+    # 渡した時間帯は設定より優先する。
+    assert resolve_timezone("UTC") == ZoneInfo("UTC")
+    assert AutomationSchedule().timezone == "Asia/Tokyo"

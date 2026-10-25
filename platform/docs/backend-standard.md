@@ -295,7 +295,7 @@ API・worker・RAG の独立微サービス・browser の共通 schema、JST 時
 ### 時刻と時間帯（#3255）
 
 - **時刻は UTC で保存する。** DB の session の時間帯は `pr_backend_core.oracle_session.init_oracle_session` が `'+00:00'` に固定する（python-oracledb は OS の時間帯の offset を session の時間帯にし、`datetime` の tzinfo を無視して bind するため、OS の時間帯で `TIMESTAMP WITH TIME ZONE` の値がずれる）。新しい接続の経路も、pool の `session_callback` か単発の接続の直後にこれを当てる。時間帯は名前（`'UTC'`）ではなく offset で書く（名前の時間帯の値は thin mode で読めない: DPY-3022。#3241）。
-- **「今日」と既定の時間帯は共通の設定 `PLATFORM_TIMEZONE`（属性 `timezone`。既定 `Asia/Tokyo`）から決める**（`pr_backend_core.timezones.local_today(settings)` / `configured_timezone(settings)`）。`date.today()`・`datetime.now()`（時間帯なし）・時間帯の名前の定数を使わない。
+- **「今日」と既定の時間帯は共通の設定 `PLATFORM_TIMEZONE`（属性 `timezone`。既定 `UTC`）から決める**（`pr_backend_core.timezones.local_today(settings)` / `configured_timezone(settings)`）。`date.today()`・`datetime.now()`（時間帯なし）・時間帯の名前の定数を使わない。
 - **画面の日時はこの時間帯で表示する（#3265）。** `GET /api/auth/me` とログインの応答の `timezone`（`pr_system_settings.auth.router.DisplayTimezoneData`。製品の `CurrentUserData` が継承する）を `AuthProvider` が `@production-ready/ui` の `setDisplayTimeZone` に渡し、日時は `formatDisplayDateTime` / `displayDateTimeFormat` / `formatRunDateTime` などで書く（ブラウザの時間帯・`timeZone` の直書きを使わない）。
 - **業務データの SQL の「今」はこの時間帯（#3265）。** 業務データの SELECT を実行する間だけ `local_session_time_zone(connection, session_time_zone_offset(settings))` で session の時間帯を offset にし、抜けると `'+00:00'` に戻す（pool に返す接続とアプリの表は UTC のまま）。`CURRENT_DATE` / `CURRENT_TIMESTAMP` が設定の時間帯の今を返す（NL2SQL は生成した SQL の `SYSDATE` / `SYSTIMESTAMP` をこれに置き換える）。
 - ADB の `SYSDATE` / `SYSTIMESTAMP` は UTC を返す。`SYSDATE_AT_DBTIMEZONE` を `TRUE` にしない（手順と理由は [terraform/README.md](../../terraform/README.md)「Autonomous AI Database（全製品で共有）」）。

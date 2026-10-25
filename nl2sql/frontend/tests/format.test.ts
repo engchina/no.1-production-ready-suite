@@ -13,10 +13,11 @@ test("formatDateTimeWithYear は年を含む日本語形式で日時を表示す
 
 test("日時は端末ではなくシステムの設定の時間帯で書く（#3265）", () => {
   try {
+    // 既定は UTC（#3274）。
+    assert.equal(formatDateTimeWithYear("2026-07-18T15:30:00Z"), "2026/07/18 15:30");
+    setDisplayTimeZone("Asia/Tokyo");
     assert.equal(formatDateTimeWithYear("2026-07-18T15:30:00Z"), "2026/07/19 00:30");
     assert.equal(formatDateTime("2026-07-18T15:30:00Z"), "07/19 00:30");
-    setDisplayTimeZone("UTC");
-    assert.equal(formatDateTimeWithYear("2026-07-18T15:30:00Z"), "2026/07/18 15:30");
   } finally {
     setDisplayTimeZone(null);
   }

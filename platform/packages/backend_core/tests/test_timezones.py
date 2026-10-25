@@ -30,11 +30,11 @@ class _ProductSettings(PlatformEnvSourcesMixin, TimezoneSettings, BaseSettings):
     model_config = product_settings_config(prefix="RAG_", backend_dir=Path("."))
 
 
-def test_timezone_is_a_platform_setting_with_tokyo_default() -> None:
+def test_timezone_is_a_platform_setting_with_utc_default() -> None:
     assert "timezone" in PLATFORM_SETTING_FIELDS
     assert settings_env_name("RAG_", "timezone") == "PLATFORM_TIMEZONE"
-    assert DEFAULT_TIMEZONE == "Asia/Tokyo"
-    assert BaseServiceSettings().timezone == "Asia/Tokyo"
+    assert DEFAULT_TIMEZONE == "UTC"  # #3274
+    assert BaseServiceSettings().timezone == "UTC"
 
 
 def test_timezone_is_read_from_platform_env(
@@ -42,11 +42,11 @@ def test_timezone_is_read_from_platform_env(
 ) -> None:
     monkeypatch.delenv("PLATFORM_TIMEZONE", raising=False)
     env = tmp_path / "platform.env"
-    env.write_text("PLATFORM_TIMEZONE=UTC\n", encoding="utf-8")
-    assert _ProductSettings(_env_file=(env,)).timezone == "UTC"
-    # 旧名（属性名と同じ環境変数名）は読まない（#211）。
-    env.write_text("TIMEZONE=UTC\n", encoding="utf-8")
+    env.write_text("PLATFORM_TIMEZONE=Asia/Tokyo\n", encoding="utf-8")
     assert _ProductSettings(_env_file=(env,)).timezone == "Asia/Tokyo"
+    # 旧名（属性名と同じ環境変数名）は読まない（#211）。既定は UTC（#3274）。
+    env.write_text("TIMEZONE=Asia/Tokyo\n", encoding="utf-8")
+    assert _ProductSettings(_env_file=(env,)).timezone == "UTC"
 
 
 @pytest.mark.parametrize(
@@ -56,8 +56,8 @@ def test_timezone_is_read_from_platform_env(
         (" UTC ", "UTC"),
         ("America/Argentina/Buenos_Aires", "America/Argentina/Buenos_Aires"),
         ("Etc/GMT-9", "Etc/GMT-9"),
-        ("", "Asia/Tokyo"),
-        (None, "Asia/Tokyo"),
+        ("", "UTC"),
+        (None, "UTC"),
     ],
     ids=["tokyo", "utc-trimmed", "three-levels", "etc-offset-zone", "empty", "none"],
 )
@@ -78,8 +78,9 @@ def test_validate_timezone_name_rejects_offsets_and_unknown_names(value: str) ->
 
 
 def test_configured_timezone_falls_back_to_default() -> None:
-    assert configured_timezone_name(SimpleNamespace()) == "Asia/Tokyo"
-    assert configured_timezone_name(SimpleNamespace(timezone="+09:00")) == "Asia/Tokyo"
+    # 既定は UTC（#3274）。
+    assert configured_timezone_name(SimpleNamespace()) == "UTC"
+    assert configured_timezone_name(SimpleNamespace(timezone="+09:00")) == "UTC"
     assert configured_timezone(SimpleNamespace(timezone="UTC")) == ZoneInfo("UTC")
 
 
@@ -90,7 +91,10 @@ def test_local_today_uses_configured_timezone_not_os_clock() -> None:
     assert local_today(SimpleNamespace(timezone="UTC"), now=moment) == date(2026, 10, 24)
     # 時間帯の無い値は UTC とみなす。
     naive = datetime(2026, 10, 24, 16, 30)
-    assert local_now(SimpleNamespace(), now=naive).isoformat() == "2026-10-25T01:30:00+09:00"
+    assert local_now(SimpleNamespace(timezone="Asia/Tokyo"), now=naive).isoformat() == (
+        "2026-10-25T01:30:00+09:00"
+    )
+    assert local_now(SimpleNamespace(), now=naive).isoformat() == "2026-10-24T16:30:00+00:00"
 
 
 @pytest.mark.parametrize(

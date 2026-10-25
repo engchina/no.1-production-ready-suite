@@ -23,7 +23,7 @@ afterEach(() => {
   container.remove();
 });
 
-// 東京（既定の表示の時間帯）の 2026-10-15 09:12:05。
+// 既定の表示の時間帯（UTC。#3274）の 2026-10-15 00:12:05。
 const AT = "2026-10-15T00:12:05Z";
 
 function items(): RunEventLogItem[] {
@@ -71,8 +71,8 @@ describe("RunEventLog", () => {
     const rows = container.querySelectorAll("[data-run-event]");
     expect(rows).toHaveLength(4);
     const row = container.querySelector('[data-testid="log-event-e2"]')!;
-    expect(row.querySelector("time")?.textContent).toBe("09:12:05");
-    expect(row.querySelector("time")?.getAttribute("title")).toBe("2026/10/15 09:12:05");
+    expect(row.querySelector("time")?.textContent).toBe("00:12:05");
+    expect(row.querySelector("time")?.getAttribute("title")).toBe("2026/10/15 00:12:05");
     expect(row.textContent).toContain("search_documents");
     expect(row.textContent).toContain("完了");
     expect(row.textContent).toContain("1.2 秒");
@@ -133,7 +133,7 @@ describe("runEventCategories / formatRunEventTime", () => {
   });
 
   it("時刻は時:分:秒だけを返し、空は空文字", () => {
-    expect(formatRunEventTime(AT)).toBe("09:12:05");
+    expect(formatRunEventTime(AT)).toBe("00:12:05");
     expect(formatRunEventTime(null)).toBe("");
   });
 });

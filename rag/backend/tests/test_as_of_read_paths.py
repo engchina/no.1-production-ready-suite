@@ -131,8 +131,10 @@ def test_engine_settings_use_common_timezone(tmp_path: Path) -> None:
     from app.config import Settings
     from app.rag.answer_engine import build_engine_settings
 
-    assert build_engine_settings(Settings(timezone="UTC"), output_dir=tmp_path).timezone == "UTC"
-    assert build_engine_settings(Settings(), output_dir=tmp_path).timezone == "Asia/Tokyo"
+    assert build_engine_settings(Settings(timezone="Asia/Tokyo"), output_dir=tmp_path).timezone == (
+        "Asia/Tokyo"
+    )
+    assert build_engine_settings(Settings(), output_dir=tmp_path).timezone == "UTC"
 
 
 _SECTION_READS: list[tuple[str, Callable[[SectionMapStore], Coroutine[Any, Any, Any]]]] = [
