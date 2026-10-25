@@ -494,19 +494,27 @@ def test_original_question_search_runs_once_vector_only_and_only_when_injected(m
         assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, settings) == []
 
 
-def _select_with(parse, settings, catalogs, terms=(), leads=None, refined=None):
+def _select_with(parse, settings, catalogs, terms=(), leads=None, refined=None, reported=None, refine_failed=None):
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 
     def unused(*args, **kwargs):
         raise AssertionError("呼ばない")
 
     dependencies = AnswerDependencies(
-        search=unused, check_ready=unused, rerank=unused, parse_images=unused, parse_text=parse, article_leads=leads
+        search=unused,
+        check_ready=unused,
+        rerank=unused,
+        parse_images=unused,
+        parse_text=parse,
+        article_leads=leads,
+        report_degraded=None if reported is None else lambda kind, exc: reported.append(kind),
     )
     with bind_dependencies(dependencies):
-        selected, failed, added = answering._select_catalog_articles("届出の期限は", catalogs, settings, terms=terms)
+        selected, failed, added, refine_names = answering._select_catalog_articles("届出の期限は", catalogs, settings, terms=terms)
     if refined is not None:
         refined.append(added)
+    if refine_failed is not None:
+        refine_failed.append(refine_names)
     return selected, failed
 
 
@@ -722,3 +730,241 @@ def test_second_stage_articles_alternate_with_the_first_stage():
     selected, _ = _select_with(parse, settings, [NESTED], leads=lambda **kwargs: {})
 
     assert [a.section_id for a in selected] == ["n4", "n6", "n1", "n2"]
+
+
+def test_select_documents_returns_none_and_reports_when_the_model_fails():
+    """文書の選択の LLM の失敗は None（「選ぶ文書が無い」の [] と分ける）にし、失敗を記録する（#3285）。"""
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.retrieval.article_catalog import select_documents
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("provider unavailable")
+
+    def unused(*args, **kwargs):
+        raise AssertionError("呼ばない")
+
+    reported = []
+    dependencies = AnswerDependencies(
+        search=unused,
+        check_ready=unused,
+        rerank=unused,
+        parse_images=unused,
+        parse_text=unused,
+        report_degraded=lambda kind, exc: reported.append((kind, type(exc).__name__)),
+    )
+    documents = [("doc-a", "架空規程.json")]
+    with bind_dependencies(dependencies):
+        assert select_documents("届出の補正は", documents, broken, None, limit=2) is None
+        assert select_documents("届出の補正は", documents, lambda *a, **k: ArticleSelection(lines=[]), None, limit=2) == []
+    assert reported == [("article_document_selection", "RuntimeError")]
+
+
+def _scope_dependencies(parse, reported):
+    """範囲の文書の一覧を注入し、選択の LLM（parse）と失敗の記録（reported）を差し替えた依存。"""
+    from rag_engine.dependencies import AnswerDependencies
+
+    def unused(*args, **kwargs):
+        raise AssertionError("呼ばない")
+
+    return AnswerDependencies(
+        search=unused,
+        check_ready=unused,
+        rerank=unused,
+        parse_images=unused,
+        parse_text=parse,
+        article_documents=lambda *, settings: [("doc-a", "架空規程.json"), ("doc-g", "架空手続通則.json")],
+        report_degraded=lambda kind, exc: reported.append(kind),
+    )
+
+
+def test_scope_document_selection_failure_is_not_cached_and_the_next_answer_selects_again():
+    """範囲の文書の選択の LLM が一時的に失敗しても cache に残さず、同じ質問の次の回で選び直す（#3285）。"""
+    from rag_engine.dependencies import bind_dependencies
+
+    calls = []
+
+    def flaky(system, prompt, settings, schema, **kwargs):
+        calls.append(prompt)
+        if len(calls) == 1:
+            raise RuntimeError("provider unavailable")
+        return ArticleSelection(lines=[1])
+
+    reported = []
+    settings = get_settings(environ={}, dotenv_path=None)
+    answering._ARTICLE_DOCUMENT_CACHE.clear()
+
+    with bind_dependencies(_scope_dependencies(flaky, reported)):
+        assert answering._scope_catalog_documents("届出の補正は", settings, {"doc-a"}) is None
+        assert answering._ARTICLE_DOCUMENT_CACHE == {}
+        assert answering._scope_catalog_documents("届出の補正は", settings, {"doc-a"}) == ["doc-g"]
+
+    assert len(calls) == 2
+    assert reported == ["article_document_selection"]
+    answering._ARTICLE_DOCUMENT_CACHE.clear()
+
+
+def test_scope_document_selection_failure_is_reported_on_every_attempt():
+    """失敗が続けば、回ごとに失敗を記録する（最初の 1 回だけにしない。#3285）。"""
+    from rag_engine.dependencies import bind_dependencies
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("provider unavailable")
+
+    reported = []
+    settings = get_settings(environ={}, dotenv_path=None)
+    answering._ARTICLE_DOCUMENT_CACHE.clear()
+
+    with bind_dependencies(_scope_dependencies(broken, reported)):
+        for _ in range(2):
+            assert answering._scope_catalog_documents("届出の補正は", settings, {"doc-a"}) is None
+
+    assert reported == ["article_document_selection", "article_document_selection"]
+    assert answering._ARTICLE_DOCUMENT_CACHE == {}
+
+
+def test_scope_document_selection_with_no_match_is_cached_and_not_asked_again():
+    """選択に成功して文書が無かった（[]）ときは cache し、同じ質問では LLM を呼び直さない。"""
+    from rag_engine.dependencies import bind_dependencies
+
+    calls = []
+
+    def no_match(system, prompt, settings, schema, **kwargs):
+        calls.append(prompt)
+        return ArticleSelection(lines=[])
+
+    reported = []
+    settings = get_settings(environ={}, dotenv_path=None)
+    answering._ARTICLE_DOCUMENT_CACHE.clear()
+
+    with bind_dependencies(_scope_dependencies(no_match, reported)):
+        for _ in range(2):
+            assert answering._scope_catalog_documents("届出の補正は", settings, {"doc-a"}) == []
+
+    assert len(calls) == 1
+    assert list(answering._ARTICLE_DOCUMENT_CACHE.values()) == [[]]
+    assert reported == []
+    answering._ARTICLE_DOCUMENT_CACHE.clear()
+
+
+def _refine_leads(*, document_id, chunk_set_id, sections, settings):
+    return {}
+
+
+def test_refine_failure_does_not_cache_the_first_stage_result():
+    """2 段目の LLM が一時的に失敗したら 1 段目の条で続けるが、その結果は cache せず、次の回で 2 段目を呼び直す（#3285）。"""
+    stages = []
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        refine = "candidates" in json.loads(prompt)
+        stages.append("refine" if refine else "select")
+        if refine and stages.count("refine") == 1:
+            raise RuntimeError("provider unavailable")
+        return _articles([6]) if refine else _articles([4])
+
+    settings = get_settings(environ={}, dotenv_path=None)
+    reported, refine_failed = [], []
+    answering._ARTICLE_SELECTION_CACHE.clear()
+
+    selected, failed = _select_with(parse, settings, [NESTED], leads=_refine_leads, reported=reported, refine_failed=refine_failed)
+    assert [a.section_id for a in selected] == ["n4"] and failed == []
+    assert refine_failed == [["架空法.json"]]
+    assert answering._ARTICLE_SELECTION_CACHE == {}
+
+    selected, failed = _select_with(parse, settings, [NESTED], leads=_refine_leads, reported=reported, refine_failed=refine_failed)
+    assert [a.section_id for a in selected] == ["n4", "n6"] and failed == []
+    assert refine_failed[-1] == []
+    assert stages == ["select", "refine", "select", "refine"]
+    assert reported == ["article_refine"]
+    # 成功した結果は cache し、3 回目は呼ばない。
+    _select_with(parse, settings, [NESTED], leads=_refine_leads, reported=reported)
+    assert len(stages) == 4
+    answering._ARTICLE_SELECTION_CACHE.clear()
+
+
+def test_refine_failure_is_reported_on_every_attempt():
+    """2 段目の失敗が続けば、回ごとに失敗を記録する（#3285）。2 段目で足す条が無い（[]）ときは cache する。"""
+
+    def broken(system, prompt, settings, schema, **kwargs):
+        if "candidates" in json.loads(prompt):
+            raise RuntimeError("provider unavailable")
+        return _articles([4])
+
+    settings = get_settings(environ={}, dotenv_path=None)
+    reported = []
+    answering._ARTICLE_SELECTION_CACHE.clear()
+    for _ in range(2):
+        selected, _ = _select_with(broken, settings, [NESTED], leads=_refine_leads, reported=reported)
+        assert [a.section_id for a in selected] == ["n4"]
+    assert reported == ["article_refine", "article_refine"]
+
+    stages = []
+
+    def nothing_to_add(system, prompt, settings, schema, **kwargs):
+        refine = "candidates" in json.loads(prompt)
+        stages.append(refine)
+        return _articles([]) if refine else _articles([4])
+
+    answering._ARTICLE_SELECTION_CACHE.clear()
+    for _ in range(2):
+        selected, _ = _select_with(nothing_to_add, settings, [NESTED], leads=_refine_leads, reported=reported)
+        assert [a.section_id for a in selected] == ["n4"]
+    assert stages == [False, True]
+    assert reported == ["article_refine", "article_refine"]
+    answering._ARTICLE_SELECTION_CACHE.clear()
+
+
+def _catalog_step(parse, *, scope_documents):
+    """`_catalog_article_children` を 1 回動かし、工程「条の選択」の記録と失敗の記録を返す。"""
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.generation.execution_record import _structured_steps
+
+    def unused(*args, **kwargs):
+        raise AssertionError("呼ばない")
+
+    reported = []
+    dependencies = AnswerDependencies(
+        search=unused,
+        check_ready=unused,
+        rerank=unused,
+        parse_images=unused,
+        parse_text=parse,
+        article_catalogs=lambda *, document_ids, limit, settings: [CATALOG],
+        article_chunks=lambda *, articles, settings: [],
+        article_documents=(lambda *, settings: scope_documents) if scope_documents else None,
+        report_degraded=lambda kind, exc: reported.append(kind),
+    )
+    ranked = [answering._stored_chunk_answer_record(_stored("hit", "架空規程.json"))]
+    settings = get_settings(environ={}, dotenv_path=None)
+    answering._ARTICLE_SELECTION_CACHE.clear()
+    answering._ARTICLE_DOCUMENT_CACHE.clear()
+    steps = []
+    token = _structured_steps.set(steps)
+    try:
+        with bind_dependencies(dependencies):
+            children, loaded = answering._catalog_article_children("届出の補正は", ranked, settings)
+    finally:
+        _structured_steps.reset(token)
+    answering._ARTICLE_SELECTION_CACHE.clear()
+    answering._ARTICLE_DOCUMENT_CACHE.clear()
+    assert [record.chunk_uid for record in children] == ["hit"] and loaded == []
+    step = next(step for step in steps if step["name"] == "条の選択")
+    return step, reported
+
+
+def test_catalog_step_tells_a_selection_failure_apart_from_no_match():
+    """条を 1 つも選べなかったとき、選択の LLM の失敗は「条の選択に失敗」、選ぶ条が無いときは「該当なし」にする（#3285）。"""
+
+    def scope_broken(system, prompt, settings, schema, **kwargs):
+        if "documents" in json.loads(prompt):
+            raise RuntimeError("provider unavailable")
+        return _articles([])
+
+    step, reported = _catalog_step(scope_broken, scope_documents=[("doc-g", "架空手続通則.json")])
+    assert step["status"] == "条の選択に失敗"
+    assert reported == ["article_document_selection"]
+    assert any("文書の選択に失敗" in line for line in step["details"]["lines"])
+    assert "provider unavailable" not in json.dumps(step, ensure_ascii=False)
+
+    step, reported = _catalog_step(lambda *args, **kwargs: _articles([]), scope_documents=None)
+    assert step["status"] == "該当なし"
+    assert reported == []
