@@ -2514,9 +2514,11 @@ async def import_classifier_model(
 @router.post("/classifier/models/import", response_model=ApiResponse[ClassifierModelImportData])
 async def import_classifier_model_legacy(
     file: Annotated[UploadFile, File()],
-    activate: Annotated[bool, Form()] = True,
+    # 送られない bool の form は False（FastAPI 0.147 から）。`activate=true` を送ったときだけ
+    # 受理する。
+    activate: Annotated[bool, Form()] = False,
 ) -> ApiResponse[ClassifierModelImportData]:
-    """旧複数形 URL。単一モデルとして置き換える場合のみ受理する。"""
+    """旧複数形 URL。単一モデルとして置き換える場合（`activate=true`）のみ受理する。"""
     if not activate:
         raise HTTPException(
             status_code=422,

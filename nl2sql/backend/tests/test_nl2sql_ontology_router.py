@@ -2045,6 +2045,12 @@ async def test_http_ontology_build_replay_race_discards_uploads_not_used_by_retu
         response = await client.post(
             "/api/nl2sql/profiles/sales/ontology-build",
             headers={"Idempotency-Key": "test-ontology-build-replay-race"},
+            # 画面と同じく 3 つの工程の指定を送る（送らない bool の form は False）。
+            data={
+                "run_schema_naming": "true",
+                "run_qa_extraction": "true",
+                "run_text_extraction": "true",
+            },
             files=[("source_files", ("rules.md", "# 受注ルール\n".encode(), "text/markdown"))],
         )
 
