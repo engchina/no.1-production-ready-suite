@@ -1505,7 +1505,18 @@ def _scope_decisions(plan: Any, label: str) -> list[Any]:
     return list(unique.values())
 
 
-def _request_plan_errors(draft: GroundedDraft) -> list[str]:
+def _attachment_label(label: str, spans: Sequence[dict]) -> bool:
+    """会話の添付から選んだ根拠の表示 ID か（利用者が明示した入力。#3228）。
+
+    添付は質問の対象そのもの（利用者が答えに使うよう渡した表・文書）なので、資料の別の操作を混ぜないための
+    対象の照合（direct / linked / unrelated）に掛けない。添付の行と資料の規則を組み合わせる計算では、両者の関係を
+    明記した原文が無いため、照合に掛けると linked の原文が無いとして説明がすべて外れていた。
+    """
+    named = _label_spans(label, spans)
+    return bool(named) and all(span.get("conversation_attachment") for span in named)
+
+
+def _request_plan_errors(draft: GroundedDraft, spans: Sequence[dict] = ()) -> list[str]:
     """計画と説明の構造の不整合を列挙する。旧形式の応答は追加の欄を要求しない。"""
     errors = []
     if "request_coverage" in draft.model_fields_set and not draft.request_coverage and any(item.kind != "gap" for item in draft.items):
@@ -1514,6 +1525,8 @@ def _request_plan_errors(draft: GroundedDraft) -> list[str]:
         if "evidence_scope" not in plan.model_fields_set:
             continue
         for label in plan.evidence_ids:
+            if _attachment_label(label, spans):
+                continue
             scopes = _scope_decisions(plan, label)
             if len(scopes) != 1:
                 errors.append(f"{plan.request_id}: {label} の対象の照合は1件必要です。")
@@ -1535,14 +1548,19 @@ def _item_request_plans(item: GroundedItem, draft: GroundedDraft) -> list[Reques
 
 
 def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, spans: Sequence[dict]) -> bool:
-    """要求の根拠計画を最終説明にも適用する。計画の無い旧応答は従来の原文照合を使う。"""
+    """要求の根拠計画を最終説明にも適用する。計画の無い旧応答は従来の原文照合を使う。
+
+    会話の添付の根拠（#3228）は、計画に載っていなくても計画の外にしない（利用者が明示した入力）。
+    """
+    if span.get("conversation_attachment"):
+        return False
     plans = _item_request_plans(item, draft)
     if not plans:
         return bool(draft.request_coverage) or "request_coverage" in draft.model_fields_set
     labels: set[str] = set()
     for plan in plans:
         for label in plan.evidence_ids:
-            if "evidence_scope" not in plan.model_fields_set:
+            if "evidence_scope" not in plan.model_fields_set or _attachment_label(label, spans):
                 labels.add(label)
                 continue
             scopes = _scope_decisions(plan, label)
@@ -1564,8 +1582,27 @@ def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, 
     return str(span["evidence_id"]) not in allowed
 
 
+def _plan_marks_unrelated(item: GroundedItem, span: dict, draft: GroundedDraft, spans: Sequence[dict]) -> bool:
+    """説明の小問の根拠計画が、この根拠を unrelated（別の対象・独立した操作）と判断したか。
+
+    同じ根拠への判断が食い違っても（unrelated と linked など）、unrelated の判断が 1 つでもあれば外す側に倒す。
+    """
+    for plan in _item_request_plans(item, draft):
+        for scope in plan.evidence_scope:
+            if scope.relation == "unrelated" and any(
+                candidate["evidence_id"] == span["evidence_id"] for candidate in _label_spans(scope.evidence_id, spans)
+            ):
+                return True
+    return False
+
+
 def verify(
-    question: str, draft: GroundedDraft, spans: Sequence[dict], *, guide_sources: Sequence[str] = ()
+    question: str,
+    draft: GroundedDraft,
+    spans: Sequence[dict],
+    *,
+    guide_sources: Sequence[str] = (),
+    plan_unsettled: Sequence[str] = (),
 ) -> tuple[list[CheckedItem], list[dict]]:
     """原文照合と規則の検査で段落の印を付ける。必須根拠と確定操作の欠落は原文で補う。
 
@@ -1574,6 +1611,10 @@ def verify(
     警告を付ける（#2738）。複数の文書の item を混ぜた回答では、制限・禁止の規則をその文書の業務の条件付きに
     する (#1012)。引用は原文の span と照合して原文の範囲を残し、説明と根拠の語を比べる検査は ``check_view`` の
     形で行う (#1350)。
+
+    ``plan_unsettled`` は、作り直しても残った要求の根拠計画の不整合（#3228）。計画が決まらなかったので、
+    計画の外の説明を外さずに本文に残して ``unassessed`` の印を付ける（根拠と矛盾した説明ではない。#2738）。
+    計画がはっきり unrelated と判断した根拠の説明は、今までどおり外す。
     """
     checked: list[CheckedItem] = []
     dropped: list[dict] = []
@@ -1657,26 +1698,33 @@ def verify(
                 entry["kept"] = True
             dropped.append(entry)
             continue
+        scope_unsettled = False
         if _outside_request_plan(item, span, draft, spans):
+            scope_unsettled = bool(plan_unsettled) and not _plan_marks_unrelated(item, span, draft, spans)
             dropped.append(
                 {
                     "index": index,
                     "evidence_id": span["evidence_id"],
                     "text": item.text,
                     "quote": quote,
-                    "reason": "要求の根拠計画にない説明",
+                    "reason": "要求の根拠計画で対象を照合できなかった説明" if scope_unsettled else "要求の根拠計画にない説明",
                     "ignored": True,
                     "scope_excluded": True,
+                    **({"kept": True} if scope_unsettled else {}),
                 }
             )
-            continue
+            if not scope_unsettled:
+                continue
         view = views.get(id(span)) or check_view(span)
-        entry = CheckedItem(
+        candidate = CheckedItem(
             _normalized(item.model_copy(update={"evidence_id": span["evidence_id"], "quote": quote}), view),
             span,
             quote_match=match.get("kind", "exact"),
             draft_index=index,
         )
+        if scope_unsettled:
+            candidate.mark("unassessed", "質問の対象と根拠の対応を確かめられなかった")
+        entry = candidate
         check_item = _check_item(entry.item)
         for check in ITEM_CHECKS:
             reason = check(scoped_question, check_item, view)
@@ -1817,11 +1865,16 @@ def _mark_check(entry: CheckedItem, name: str, reason: str, *, code: str = "item
     entry.mark(code, f"{name}：{reason}" + (f"。{note}" if note else ""), reason=reason)
 
 
+def _label_spans(label: str, spans: Sequence[dict]) -> list[dict]:
+    """表示 ID・根拠 ID・出典 ID・別名のどれかが label の根拠。"""
+    if not label:
+        return []
+    return [s for s in spans if label in {s["evidence_id"], s.get("label"), s.get("source_id"), *s.get("source_aliases", ())}]
+
+
 def _named_spans(item: GroundedItem, spans: Sequence[dict]) -> list[dict]:
     """item の evidence_id が指す根拠（表示 ID・根拠 ID・出典 ID・別名のどれか）。"""
-    if not item.evidence_id:
-        return []
-    return [s for s in spans if item.evidence_id in {s["evidence_id"], s.get("label"), s.get("source_id"), *s.get("source_aliases", ())}]
+    return _label_spans(item.evidence_id, spans)
 
 
 def _unmatched_item(item: GroundedItem, index: int, spans: Sequence[dict], match: dict, reason: str) -> CheckedItem | None:
@@ -5004,7 +5057,7 @@ def run_round(
     if scope_plan is not None:
         draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
     generation_calls = 1 + int(scope_plan is not None)
-    plan_errors = _request_plan_errors(draft)
+    plan_errors = _request_plan_errors(draft, spans)
     if plan_errors:
         # 構造の不整合だけを一度直す。回答の生成後の意味の監査や、無制限の是正にはしない。
         repair_prompt = (
@@ -5034,14 +5087,22 @@ def run_round(
     draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
     timing["generation_calls"] = generation_calls
+    # 作り直しても残った不整合（#3228）。計画が決まらない説明は外さずに印を付けて残す（verify）。
+    plan_unsettled = _request_plan_errors(draft, spans) if plan_errors else []
     if plan_errors:
         timing["request_plan_errors"] = plan_errors
+    if plan_unsettled:
+        timing["request_plan_unsettled"] = plan_unsettled
     if image_fallback:
         timing["image_fallback"] = image_fallback
     if generation_usage := usage_delta(usage_before):
         timing["generation_usage"] = generation_usage
     checked, dropped = verify(
-        question, draft, spans, guide_sources=[source for _step_id, _title, sources in guide_steps for source in sources]
+        question,
+        draft,
+        spans,
+        guide_sources=[source for _step_id, _title, sources in guide_steps for source in sources],
+        plan_unsettled=plan_unsettled,
     )
     for entry in dropped:
         ref = _evidence_ref(entry["evidence_id"], spans)
