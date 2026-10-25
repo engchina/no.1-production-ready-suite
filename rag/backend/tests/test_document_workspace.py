@@ -18,7 +18,11 @@ from app.config import Settings, get_settings
 from app.main import app
 from app.rag.document_cleanup import retry_due_document_cleanups
 from app.rag.request_context import current_audit_request_context
-from app.rag.source_profile import EPUB_UPLOAD_REJECTED_MESSAGE, HEIC_UPLOAD_REJECTED_MESSAGE
+from app.rag.source_profile import (
+    AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE,
+    EPUB_UPLOAD_REJECTED_MESSAGE,
+    HEIC_UPLOAD_REJECTED_MESSAGE,
+)
 from app.schemas.document import (
     DocumentChunkView,
     DocumentDetail,
@@ -1084,50 +1088,6 @@ def test_document_upload_has_no_ingestion_mode_and_never_enqueues() -> None:
     assert jobs.json()["data"]["items"] == []
 
 
-def test_document_upload_audio_profile_is_reported_without_enqueue() -> None:
-    """未対応 audio は upload 時に source profile を返し、job は作らない。"""
-    resp = client.post(
-        "/api/documents/upload",
-        files={"file": ("voice.mp3", b"ID3", "audio/mpeg")},
-    )
-
-    assert resp.status_code == 200
-    body = resp.json()["data"]
-    assert body["ingestion_started"] is False
-    assert body["source_profile"]["modality"] == "audio"
-    assert body["source_profile"]["parser_profile"] == "unsupported_audio"
-    assert body["source_profile"]["unsupported_reason"] == "audio_transcription_not_configured"
-    assert "unsupported_audio" in body["source_profile"]["quality_warnings"]
-    assert "ingestion_job" not in body
-
-    enqueue = client.post(f"/api/documents/{body['id']}/ingestion-jobs")
-    assert enqueue.status_code == 200
-    job = enqueue.json()["data"]
-    assert job["status"] == "SKIPPED"
-    assert job["skip_reason"] == "audio_transcription_not_configured"
-
-    detail = client.get(f"/api/documents/{body['id']}")
-    assert detail.status_code == 200
-    assert detail.json()["data"]["status"] == "UPLOADED"
-
-
-def test_document_upload_reports_common_audio_mime_variant_without_enqueue() -> None:
-    """M4A などの一般的な音声 MIME も 415 ではなく skipped reason を返す。"""
-    resp = client.post(
-        "/api/documents/upload",
-        files={"file": ("meeting.m4a", b"m4a bytes", "audio/mp4")},
-    )
-
-    assert resp.status_code == 200
-    body = resp.json()["data"]
-    assert body["ingestion_started"] is False
-    assert body["source_profile"]["modality"] == "audio"
-    assert body["source_profile"]["parser_profile"] == "unsupported_audio"
-    assert body["source_profile"]["unsupported_reason"] == "audio_transcription_not_configured"
-    assert "unsupported_audio" in body["source_profile"]["quality_warnings"]
-    assert "ingestion_job" not in body
-
-
 def test_document_upload_rejects_unknown_octet_stream_before_storage() -> None:
     """application/octet-stream でも拡張子から未知の binary は保存前に 415 にする。"""
     resp = client.post(
@@ -1137,20 +1097,6 @@ def test_document_upload_rejects_unknown_octet_stream_before_storage() -> None:
 
     assert resp.status_code == 415
     assert resp.json()["error_messages"] == ["対応していないファイル形式です。"]
-
-
-def test_document_upload_accepts_recognized_octet_stream_for_explicit_skip() -> None:
-    """MIME が欠落した M4A は audio と判定し、明示的な skipped reason を返す。"""
-    resp = client.post(
-        "/api/documents/upload",
-        files={"file": ("meeting.m4a", b"m4a bytes", "application/octet-stream")},
-    )
-
-    assert resp.status_code == 200
-    body = resp.json()["data"]
-    assert body["source_profile"]["modality"] == "audio"
-    assert body["source_profile"]["parser_profile"] == "unsupported_audio"
-    assert "ingestion_job" not in body
 
 
 def test_document_upload_reports_unsupported_outlook_msg_without_enqueue() -> None:
@@ -1878,24 +1824,6 @@ def test_document_ingestion_job_endpoint_clears_previous_outputs_on_force_reinge
     assert segments.json()["data"][0]["progress_unit"] == "source"
 
 
-def test_document_ingestion_job_endpoint_skips_unsupported_audio() -> None:
-    """未対応 audio の手動 job 投入も skipped 履歴だけ残す。"""
-    document_id = _upload("voice.mp3", b"ID3", "audio/mpeg")
-
-    resp = client.post(f"/api/documents/{document_id}/ingestion-jobs")
-
-    assert resp.status_code == 200
-    job = resp.json()["data"]
-    assert job["status"] == "SKIPPED"
-    assert job["parser_profile"] == "unsupported_audio"
-    assert job["skip_reason"] == "audio_transcription_not_configured"
-    assert "unsupported_audio" in job["quality_warnings"]
-
-    detail = client.get(f"/api/documents/{document_id}")
-    assert detail.status_code == 200
-    assert detail.json()["data"]["status"] == "UPLOADED"
-
-
 def test_document_ingestion_job_endpoint_skips_unsupported_outlook_msg() -> None:
     """未対応 Outlook MSG の手動 job 投入も skipped 履歴だけ残す。"""
     document_id = _upload(
@@ -2001,16 +1929,31 @@ def test_document_upload_accepts_macro_enabled_office() -> None:
         ("photo.HEIF", "application/octet-stream", HEIC_UPLOAD_REJECTED_MESSAGE),
         ("photo.bin", "image/heif-sequence", HEIC_UPLOAD_REJECTED_MESSAGE),
         ("book.epub", "application/epub+zip", EPUB_UPLOAD_REJECTED_MESSAGE),
+        ("voice.mp3", "audio/mpeg", AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE),
+        ("meeting.m4a", "application/octet-stream", AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE),
+        ("record.ogg", "application/ogg", AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE),
+        ("clip.mp4", "video/mp4", AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE),
+        ("clip.bin", "video/quicktime", AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE),
     ],
-    ids=["heic", "heif-octet-stream", "heif-mime", "epub"],
+    ids=[
+        "heic",
+        "heif-octet-stream",
+        "heif-mime",
+        "epub",
+        "mp3",
+        "m4a-octet-stream",
+        "ogg-application",
+        "mp4-video",
+        "video-mime",
+    ],
 )
-def test_document_upload_rejects_heic_and_epub_with_conversion_guide(
+def test_document_upload_rejects_unsupported_formats_with_guide(
     fake_document_dependencies: FakeWorkspaceOracle,
     file_name: str,
     content_type: str,
     expected: str,
 ) -> None:
-    """HEIC / HEIF・EPUB は保存せずに 415 で変換の方法を返す(pi-heif・pandoc を入れない。#3351)。"""
+    """HEIC / HEIF・EPUB(#3351)と音声・動画(#3369)は、保存せずに 415 で変換の方法を返す。"""
     resp = client.post(
         "/api/documents/upload",
         files={"file": (file_name, b"\x00\x00\x00\x18ftypheic", content_type)},

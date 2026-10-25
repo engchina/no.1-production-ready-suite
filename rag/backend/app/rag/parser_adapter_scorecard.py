@@ -338,11 +338,7 @@ def _source_route_reason_codes(
 ) -> tuple[str, ...]:
     reason_codes: list[str] = []
     if not candidate_order:
-        reason_codes.append(
-            "audio_transcription_not_configured"
-            if source_kind == "audio"
-            else "local_parser_preferred_for_source"
-        )
+        reason_codes.append("local_parser_preferred_for_source")
     if runtime.adapter_backend == "local":
         reason_codes.append("local_backend_selected")
     elif attempted_order:
@@ -365,9 +361,6 @@ def _source_route_warning_codes(
     adapter_by_backend: Mapping[str, ParserAdapterRuntimeStatus],
 ) -> tuple[str, ...]:
     warning_codes: list[str] = []
-    if source_kind == "audio":
-        warning_codes.append("unsupported_audio")
-        warning_codes.append("audio_transcription_not_configured")
     if runtime.adapter_backend in adapter_by_backend and candidate_order and not attempted_order:
         warning_codes.append(f"{runtime.adapter_backend}_adapter_source_unsupported")
     for backend in candidate_order:

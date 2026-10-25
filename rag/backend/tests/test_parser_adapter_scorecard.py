@@ -239,7 +239,7 @@ def test_source_routes_follow_selected_adapter_support(
     runtime = parser_adapter_runtime_settings(settings)
     routes = build_parser_adapter_source_routes(
         runtime,
-        source_kinds=["pdf", "image", "office", "html", "email", "audio", "markdown"],
+        source_kinds=["pdf", "image", "office", "html", "email", "markdown"],
     )
     by_kind = {route.source_kind: route for route in routes}
 
@@ -260,11 +260,6 @@ def test_source_routes_follow_selected_adapter_support(
     assert by_kind["email"].candidate_order == ("unstructured",)
     assert by_kind["email"].attempted_order == ("unstructured",)
     assert by_kind["email"].selected_backend == "unstructured"
-    assert by_kind["audio"].candidate_order == ()
-    assert by_kind["audio"].attempted_order == ()
-    assert by_kind["audio"].selected_backend == "local"
-    assert "audio_transcription_not_configured" in by_kind["audio"].reason_codes
-    assert "unsupported_audio" in by_kind["audio"].warning_codes
     assert by_kind["text"].candidate_order == ()
     assert by_kind["text"].attempted_order == ()
     assert by_kind["text"].selected_backend == "local"

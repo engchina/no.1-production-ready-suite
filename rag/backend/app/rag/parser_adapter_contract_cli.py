@@ -51,7 +51,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--source-kind",
         action="append",
-        choices=["pdf", "image", "office", "html", "email", "text", "audio"],
+        choices=["pdf", "image", "office", "html", "email", "text"],
         help="対象 source kind。複数指定可。未指定なら主要 source kind。",
     )
     parser.add_argument(

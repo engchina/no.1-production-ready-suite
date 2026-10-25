@@ -110,7 +110,6 @@ REQUIRED_FILE_PROCESSING_SCENARIOS = frozenset(
         "corrupted_file_partial_failure",
         "legacy_office_unsupported",
         "tiff_image_unsupported",
-        "audio_unsupported",
     }
 )
 REQUIRED_FILE_PROCESSING_SOURCE_KINDS = frozenset(
@@ -120,7 +119,6 @@ REQUIRED_FILE_PROCESSING_SOURCE_KINDS = frozenset(
         "office",
         "html",
         "email",
-        "audio",
         "text",
     }
 )
@@ -264,7 +262,6 @@ REQUIRED_FILE_PROCESSING_SCENARIO_CHECKS: Mapping[str, frozenset[str]] = {
     "tiff_image_unsupported": frozenset(
         {"unsupported_reason", "safe_error", "parser_warning_taxonomy"}
     ),
-    "audio_unsupported": frozenset({"unsupported_reason", "safe_error", "parser_warning_taxonomy"}),
     "duplicate_file_canonical_kb": frozenset(
         {
             "canonical_alias",
@@ -319,7 +316,6 @@ _SUPPORTED_MODALITIES = frozenset(
         "html",
         "email",
         "office",
-        "audio",
     }
 )
 _OPTIONAL_FIXTURE_FIELDS = ("duplicate_fixture",)
@@ -337,7 +333,6 @@ _FIXTURE_EXTENSIONS_BY_MODALITY = {
     "html": frozenset({".html", ".htm", ".xhtml"}),
     "email": frozenset({".eml", ".msg"}),
     "office": frozenset({".docx", ".pptx", ".xlsx", ".doc", ".ppt", ".xls"}),
-    "audio": frozenset({".mp3", ".wav", ".m4a", ".flac", ".ogg"}),
 }
 _STAGING_ONLY_CHECKS = frozenset(
     {
@@ -361,7 +356,6 @@ _KNOWN_FILE_PROCESSING_WARNING_CODES = frozenset(
     }
 )
 _WARNING_CODE_BY_UNSUPPORTED_REASON = {
-    "audio_transcription_not_configured": "unsupported_audio",
     "outlook_msg_not_supported": "unsupported_outlook_msg",
     "tiff_image_not_supported": "unsupported_tiff_image",
     "legacy_office_binary_not_supported": "unsupported_legacy_office_binary",

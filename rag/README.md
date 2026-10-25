@@ -43,7 +43,7 @@ CPU の parser(docling / unstructured / structured_records_jsonl / xml_tree_json
 構造化レコードの JSONL(前処理 CSV→JSONL・Excel→JSONL・Word→JSONL の成果物)は、使用エンジンで選んだときだけ `structured_records_jsonl` で
 記録の単位に解析し、固定分割で 1 記録 1 chunk にする(#2457)。
 XML ツリー JSON(`.json`)は、文書解析の既定か処理レシピの使用エンジンで選んだときだけ `xml_tree_json` で解析する(#2042)。
-音声の文字起こしは backend が OCI AI Speech で行う(parser のサービスは使わない)。
+音声・動画は取り込まない(アップロードの画面と API の 415 で止める。#3369)。
 既定の解析エンジンは **Docling**(#286)。Docling は **PDF と画像だけ**を解析し、それ以外(テキスト・HTML・Office・メール など)は
 取込を始める前に止めて、処理レシピで Unstructured(または Office→PDF)を選ぶよう案内する(自動では振り分けない)。
 Unstructured の解析サービスは既定では配備しない。形式ごとの取り込み方は [docs/deployment.md](./docs/deployment.md) の
