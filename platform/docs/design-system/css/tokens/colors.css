@@ -27,7 +27,9 @@
 :root {
   --font-sans: "Noto Sans JP", "Noto Sans SC", "Noto Sans TC", "Noto Sans HK", "Roboto", system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   /* 本文の書体（--font-sans）は、日本語の字形を優先して Noto Sans JP を先頭に置き、JP に無い簡体字・繁体字・
-     香港の字だけを Noto Sans SC → Noto Sans TC → Noto Sans HK で補う（3 製品とも @fontsource で自前ホストする。#3292）。 */
+     香港の字だけを Noto Sans SC → Noto Sans TC → Noto Sans HK で補う（3 製品とも @fontsource で自前ホストする。#3292）。
+     アプリ（packages/ui の tokens）の SC・TC・HK は可変書体の書体名（"Noto Sans SC Variable" など。#3328）。
+     モックは Google Fonts の書体名（fonts.css）のまま。 */
   --font-mono: "Google Sans Code", "Noto Sans JP", "Noto Sans SC", "Noto Sans TC", "Noto Sans HK", "Roboto", monospace;
 
   /* ── 面 (surface) ──────────────────────────────────────────────────────
