@@ -269,10 +269,10 @@ PyMuPDF）を削除した。スキャンの PDF は既定の解析エンジン D
 #3345 で外した外部の GPU の解析エンジン MinerU の連携（文書解析の使用エンジン・処理レシピの選択肢・外部接続・`RAG_PARSER_MINERU_*`）
 を戻した（利用者の判断。2026-10-26）。あわせて、管理者が「取込・検索・回答設定 › 文書解析」で MinerU のライセンス（MinerU Open
 Source License）の主な条件を読み、「MinerU のライセンスの条件を確認した」を確かめて保存するまで、MinerU を選べず、取込でも呼ばない
-ようにした（下の「許可（ライセンス）の確認」）。表の変更（migration）は無い。
+ようにした（確認・取り消しは system_admin だけ。`.env` では書けない。下の「許可（ライセンス）の確認」）。表の変更（migration）は無い。
 
 - MinerU を使わない環境は何もしなくてよい。
-- MinerU を使う環境は、更新の後に管理者が文書解析の画面でライセンスの全文を確かめてから確認を保存する。確認するまで、MinerU を
+- MinerU を使う環境は、更新の後に system_admin が文書解析の画面でライセンスの全文を確かめてから確認を保存する。確認するまで、MinerU を
   選んだ文書の取込は「MinerU を使う前に、管理者が…確認してください。」で止まる。確認した人と日時は `parser-settings.json` に残る。
 
 ## 既存環境の更新手順（#3226 処理の経過を共通の span の表に書く）
@@ -1890,7 +1890,7 @@ uv run python -m app.rag.file_processing_staging_cli \
     | MinerU | MinerU Open Source License（Apache-2.0 に追加の条件） | `opendatalab/MinerU2.5-Pro-2605-1.2B` は apache-2.0。旧版の `MinerU2.5-2509-1.2B` は agpl-3.0 なので使わない |
 
     MinerU の追加の条件（MinerU の [`LICENSE.md`](https://github.com/opendatalab/MinerU/blob/master/LICENSE.md)。公式のリポジトリは <https://github.com/opendatalab/MinerU>）: (1) 利用者とその関連会社の合算で、月間アクティブユーザーが 1 億を超えるか、月の売上が 2,000 万米ドルを超える場合は、MinerU Team から別途の商用ライセンスが要る。(2) MinerU を使って第三者にオンラインサービスを提供する場合は、画面か公開ドキュメントの目立つ場所に MinerU を使っていると明示する。(3) (1)・(2) を満たさないと、許可は通知なしに自動で終わる。企業の利用者は (1) の基準を超えやすいので、商用ライセンスの要否を先に確かめる。**利用の前に、ライセンスの全文を確認する**（ここは主な条件の抜粋で、法的な助言ではない）。
-  - **利用の前の確認（#3359）**: 管理者が「取込・検索・回答設定 › 文書解析」に出る MinerU のライセンスの主な条件と公式のリンクを読み、「MinerU のライセンスの条件を確認した」を確かめて保存するまで、MinerU を使用エンジンにも処理レシピの解析エンジンにも選べない（backend も `PATCH /api/settings/parser-adapters`・`PUT /api/documents/{document_id}/recipes/{recipe_id}` を 422 で拒否し、取込でも MinerU を呼ばずに止める）。確認した人（表示名）と日時は `parser-settings.json` の `mineru_license_acknowledged_by` / `mineru_license_acknowledged_at` に保存する（DB の表は使わない）。使用エンジンが MinerU の間は確認を外せない。#3345 で一度外した MinerU の連携は #3359 で戻した（外部の HTTP API だけを呼び、`rag_parser_core` の中で MinerU を import・実行しない）。
+  - **利用の前の確認（#3359）**: システム管理者（system_admin）が「取込・検索・回答設定 › 文書解析」に出る MinerU のライセンスの主な条件と公式のリンクを読み、「MinerU のライセンスの条件を確認した」を確かめて保存するまで、MinerU を使用エンジンにも処理レシピの解析エンジンにも選べない（backend も `PATCH /api/settings/parser-adapters`・`PUT /api/documents/{document_id}/recipes/{recipe_id}` を 422 で拒否し、取込でも MinerU を呼ばずに止める）。確認した人（表示名）と日時は `parser-settings.json` の `mineru_license_acknowledged_by` / `mineru_license_acknowledged_at` に保存する（DB の表は使わない）。確認は組織としての判断なので、確認・取り消しは system_admin だけができ（ほかの利用者が変えようとすると 403。checkbox は理由を添えて操作できない）、環境変数・`.env` では書けない（同じ名前の変数を置いても効かない）。確認の後は、文書解析の設定の権限を持つ利用者も MinerU を選べる。使用エンジンが MinerU の間は確認を外せない。#3345 で一度外した MinerU の連携は #3359 で戻した（外部の HTTP API だけを呼び、`rag_parser_core` の中で MinerU を import・実行しない）。
   - MinerU の公式の remote 解析（mineru.net）は、文書が環境の外へ出るため推奨しない（接続先は自前で運用する API サーバーにする）。自前の API サーバーでも、MinerU の文書ライブラリ（`mineru` コマンドの doclib）の利用状況の送信は既定で有効なので、使う場合は `mineru telemetry disable` で止める。
 - `GET /api/documents/{document_id}/recipes/{recipe_id}/extraction-export?format=json|markdown|html|chunks`: レシピの保存済み extraction を JSON / Markdown / escaped HTML / chunk view として返す API。`chunks` は embedding を含めず、HTML は原本 HTML を実行せず escaped review source として返す。`download=true` を付けると同じ本文を `Content-Disposition: attachment`（ファイル名は `<文書名>_レシピ<N>.md|.html|.json`、chunk は `<文書名>_レシピ<N>_chunks.json`）で返す（#561）。文書の詳細の「抽出エクスポート」（Markdown / HTML / JSON のダウンロード・コピー）と「Chunk / Citation」（chunk の JSON のダウンロード）、CI artifact、parser adapter 比較の確認に使う。原本再解析や外部 parser の直接呼び出しは行わない。
   - `tables[].cells` がある表は safe `<table>` として再構成し、`data-table-id` / row / col / bbox lineage を保持する。cells がない旧 extraction は escaped `<pre>` に fallback する。

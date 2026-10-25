@@ -58,8 +58,8 @@ GPU の OCR(mineru / dots_ocr)は外部で運用する API を「取込・検索
 2. MinerU を使って第三者にオンラインサービスを提供するときは、サービスの画面か公開の文書の目立つ所に MinerU を使っていることを明示する。
 3. 1・2 を満たさないと、ライセンスは通知なしに自動で終わる。旧モデルの `MinerU2.5-2509-1.2B` は AGPL-3.0 なので、`MinerU2.5-Pro-2605-1.2B`(Apache-2.0)を使う。
 
-管理者が「文書解析」の画面で「MinerU のライセンスの条件を確認した」を確かめて保存するまで、MinerU は使用エンジンにも処理レシピにも選べない
-(backend も拒否する)。公式の remote 解析(mineru.net)は使わず、自前の API サーバーでは `mineru telemetry disable` で利用状況の送信を止める
+システム管理者(system_admin)が「文書解析」の画面で「MinerU のライセンスの条件を確認した」を確かめて保存するまで、MinerU は使用エンジンにも
+処理レシピにも選べない(backend も拒否する)。確認・取り消しは system_admin だけができ、環境変数・`.env` では書けない。公式の remote 解析(mineru.net)は使わず、自前の API サーバーでは `mineru telemetry disable` で利用状況の送信を止める
 (詳細は [docs/deployment.md](./docs/deployment.md) の「許可（ライセンス）の確認」)。
 Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 詳細は [services/parsers/README.md](./services/parsers/README.md) と
