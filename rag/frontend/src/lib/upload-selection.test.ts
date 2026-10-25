@@ -24,6 +24,13 @@ describe("uploadFileProblem", () => {
       expect(uploadFileProblem(file(name, 5), 10)).toBeNull();
     }
   });
+
+  // #3369
+  it("音声・動画は取り込まない形式として案内する理由で止める", () => {
+    for (const name of ["voice.mp3", "VOICE.WAV", "record.ogg", "meeting.m4a", "clip.mp4", "clip.mov", "clip.webm"]) {
+      expect(uploadFileProblem(file(name, 5), 10)).toBe("audioVideo");
+    }
+  });
 });
 
 describe("mergeUploadSelection", () => {

@@ -758,18 +758,6 @@ class Settings(
             "application/rtf",
             "application/x-rtf",
             "text/rtf",
-            "audio/aac",
-            "audio/flac",
-            "audio/mp3",
-            "audio/mpeg",
-            "audio/mp4",
-            "audio/ogg",
-            "audio/wave",
-            "audio/wav",
-            "audio/x-flac",
-            "audio/x-m4a",
-            "audio/x-wav",
-            "application/ogg",
             "application/octet-stream",
         ]
     )
@@ -898,7 +886,7 @@ class Settings(
             "process isolation 時、進捗を出す段(解析のページ・図・表の説明)の途中で job の"
             "進捗(rag_ingestion_jobs.progress_json)がこの秒数変わらなければ止める(#2003)。"
             "進捗を出さない 1 回の呼び出し(解析サービス・Document Understanding・"
-            "AI Speech・Vision の LLM。再試行を含む)の最長より長くする(起動時に検証する)。"
+            "Vision の LLM。再試行を含む)の最長より長くする(起動時に検証する)。"
         ),
     )
 
@@ -2254,12 +2242,6 @@ class Settings(
     rag_parser_dots_ocr_api_key: str = Field(default="", repr=False)
     rag_parser_dots_ocr_dpi: int = Field(default=200, ge=72, le=600)
     rag_parser_dots_ocr_pdf_workers: int = Field(default=4, ge=1, le=16)
-    rag_parser_asr_enabled: bool = Field(
-        default=True,
-        description=(
-            "音声/動画の文字起こし(OCI AI Speech)を有効化する。OFF にすると音声は未対応として扱う。"
-        ),
-    )
     rag_parser_oci_document_understanding_service_url: str = Field(
         default="http://127.0.0.1:18028",
         description=(
@@ -2432,46 +2414,6 @@ class Settings(
         gt=0,
         le=3600.0,
         description="DU processor job 完了待ちの上限(秒)。超過時は安全に縮退する。",
-    )
-    # --- OCI AI Speech(音声文字起こし。空欄はローカル faster-whisper へ縮退)---
-    oci_speech_compartment_id: str = Field(
-        default="",
-        description="OCI AI Speech の compartment OCID。空欄時は oci_compartment_id を使う。",
-    )
-    oci_speech_namespace: str = Field(
-        default="",
-        description="Speech 入出力 Object Storage の namespace。空欄は object_storage_namespace。",
-    )
-    oci_speech_input_bucket: str = Field(
-        default="",
-        description="Speech 入力 bucket。空欄は object_storage_bucket。",
-    )
-    oci_speech_output_bucket: str = Field(
-        default="",
-        description="Speech 出力 bucket。空欄は入力 bucket と同じ。",
-    )
-    oci_speech_input_prefix: str = Field(
-        default="speech/input",
-        description="Speech 入力 object の key prefix。",
-    )
-    oci_speech_output_prefix: str = Field(
-        default="speech/output",
-        description="Speech 出力 JSON の key prefix。",
-    )
-    oci_speech_language: str = Field(
-        default="ja",
-        description="文字起こしの言語コード(既定 日本語)。",
-    )
-    oci_speech_poll_interval_seconds: float = Field(
-        default=5.0,
-        gt=0,
-        description="Speech transcription job の状態 poll 間隔(秒)。",
-    )
-    oci_speech_timeout_seconds: float = Field(
-        default=900.0,
-        gt=0,
-        le=7200.0,
-        description="Speech job 完了待ちの上限(秒)。超過時はローカル faster-whisper へ縮退。",
     )
     rag_segment_checkpoint_enabled: bool = Field(
         default=True,
@@ -2706,7 +2648,6 @@ class Settings(
             "oci_document_understanding_timeout_seconds": (
                 self.oci_document_understanding_timeout_seconds
             ),
-            "oci_speech_timeout_seconds": self.oci_speech_timeout_seconds,
             "oci_enterprise_ai_timeout_seconds": (
                 self.oci_enterprise_ai_timeout_seconds * (self.oci_enterprise_ai_max_retries + 1)
             ),

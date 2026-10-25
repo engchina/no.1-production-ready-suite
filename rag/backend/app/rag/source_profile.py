@@ -12,8 +12,9 @@ LARGE_FILE_WARNING_BYTES = 50 * 1024 * 1024
 
 # アップロードで受け付けない形式と、利用者に示す変換の方法(#3351)。解析に要る依存
 # (HEIC / HEIF は pi-heif の libheif・EPUB は pandoc)をライセンスの理由で入れないため、
-# 保存せずに止める。画面の案内(frontend の upload-selection.ts の REJECTED_UPLOAD_FORMATS と
-# i18n.ts)と同じ形式・文言にする(tests/test_upload_format_contract.py で照合する)。
+# 保存せずに止める。音声・動画は取り込まない形式で、同じく保存せずに止める(#3369)。
+# 画面の案内(frontend の upload-selection.ts の REJECTED_UPLOAD_FORMATS と i18n.ts)と
+# 同じ形式・文言にする(tests/test_upload_format_contract.py で照合する)。
 HEIC_UPLOAD_REJECTED_MESSAGE = (
     "HEIC / HEIF の画像は対応していません。JPEG / PNG に変換してからアップロードしてください"
     "（iPhone は「設定 › カメラ › フォーマット › 互換性優先」で JPEG で保存できます）。"
@@ -21,10 +22,42 @@ HEIC_UPLOAD_REJECTED_MESSAGE = (
 EPUB_UPLOAD_REJECTED_MESSAGE = (
     "EPUB の電子書籍は対応していません。PDF に変換してからアップロードしてください。"
 )
+AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE = (
+    "音声・動画のファイル（MP3・WAV・OGG・MP4 など）は対応していません。"
+    "内容をテキストに書き起こしてからアップロードしてください。"
+)
+# 音声・動画の代表の拡張子。MIME type は audio/* と video/* をまとめて止める。
+AUDIO_VIDEO_UPLOAD_EXTENSIONS = (
+    ".aac",
+    ".aif",
+    ".aiff",
+    ".amr",
+    ".flac",
+    ".m4a",
+    ".mp3",
+    ".oga",
+    ".ogg",
+    ".opus",
+    ".wav",
+    ".weba",
+    ".wma",
+    ".3gp",
+    ".avi",
+    ".m4v",
+    ".mkv",
+    ".mov",
+    ".mp4",
+    ".mpeg",
+    ".mpg",
+    ".ogv",
+    ".webm",
+    ".wmv",
+)
 REJECTED_UPLOAD_EXTENSIONS: dict[str, str] = {
     ".heic": HEIC_UPLOAD_REJECTED_MESSAGE,
     ".heif": HEIC_UPLOAD_REJECTED_MESSAGE,
     ".epub": EPUB_UPLOAD_REJECTED_MESSAGE,
+    **dict.fromkeys(AUDIO_VIDEO_UPLOAD_EXTENSIONS, AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE),
 }
 REJECTED_UPLOAD_MEDIA_TYPES: dict[str, str] = {
     "image/heic": HEIC_UPLOAD_REJECTED_MESSAGE,
@@ -33,6 +66,12 @@ REJECTED_UPLOAD_MEDIA_TYPES: dict[str, str] = {
     "image/heif-sequence": HEIC_UPLOAD_REJECTED_MESSAGE,
     "image/x-heic": HEIC_UPLOAD_REJECTED_MESSAGE,
     "application/epub+zip": EPUB_UPLOAD_REJECTED_MESSAGE,
+    # Ogg のコンテナ(音声・動画)。
+    "application/ogg": AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE,
+}
+REJECTED_UPLOAD_MEDIA_TYPE_PREFIXES: dict[str, str] = {
+    "audio/": AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE,
+    "video/": AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE,
 }
 
 TEXT_MEDIA_TYPES = {
@@ -90,15 +129,6 @@ TIFF_IMAGE_EXTENSIONS = {
 TIFF_IMAGE_MEDIA_TYPES = {
     "image/tif",
     "image/tiff",
-}
-
-AUDIO_EXTENSIONS = {
-    ".aac",
-    ".flac",
-    ".m4a",
-    ".mp3",
-    ".ogg",
-    ".wav",
 }
 
 OFFICE_EXTENSIONS = {
@@ -273,8 +303,6 @@ def _source_modality(content_type: str, extension: str | None) -> SourceModality
         or extension in {".eml", ".msg"}
     ):
         return SourceModality.EMAIL
-    if content_type.startswith("audio/") or extension in AUDIO_EXTENSIONS:
-        return SourceModality.AUDIO
     # RTF は text/rtf でも送られるので、テキストより先に Office として判定する。
     if _is_odt_rtf(extension=extension, content_type=content_type):
         return SourceModality.OFFICE
@@ -327,8 +355,6 @@ def _parser_profile(
         if _is_odt_rtf(extension=extension, content_type=content_type):
             return "unsupported_odt_rtf"
         return "enterprise_ai_generic"
-    if modality == SourceModality.AUDIO:
-        return "unsupported_audio"
     return "enterprise_ai_generic"
 
 
@@ -365,8 +391,6 @@ def _parser_backend(
         _is_legacy_office_binary(extension=extension, content_type=content_type)
         or _is_odt_rtf(extension=extension, content_type=content_type)
     ):
-        return "unsupported"
-    if modality == SourceModality.AUDIO:
         return "unsupported"
     return "enterprise_ai"
 
@@ -435,8 +459,6 @@ def _unsupported_reason(
         content_type=content_type,
     ):
         return "odt_rtf_not_supported"
-    if modality == SourceModality.AUDIO:
-        return "audio_transcription_not_configured"
     if modality == SourceModality.UNKNOWN:
         return "unknown_file_type"
     return None
@@ -463,8 +485,6 @@ def _quality_warnings(
         warnings.append("content_type_extension_mismatch")
     if file_size_bytes >= LARGE_FILE_WARNING_BYTES:
         warnings.append("large_file")
-    if modality == SourceModality.AUDIO:
-        warnings.append("unsupported_audio")
     if modality == SourceModality.EMAIL and _is_outlook_msg(
         extension=extension,
         content_type=content_type,
@@ -539,11 +559,17 @@ def _is_odt_rtf(*, extension: str | None, content_type: str) -> bool:
 
 
 def rejected_upload_format_message(file_name: str, content_type: str | None) -> str | None:
-    """受け付けない形式(HEIC / HEIF・EPUB)なら、変換の方法を添えた文言を返す(#3351)。"""
+    """受け付けない形式(HEIC / HEIF・EPUB・音声・動画)なら、変換の方法を添えた文言を返す。"""
     extension = PurePath(file_name).suffix.lower()
     if extension in REJECTED_UPLOAD_EXTENSIONS:
         return REJECTED_UPLOAD_EXTENSIONS[extension]
-    return REJECTED_UPLOAD_MEDIA_TYPES.get(_normalized_content_type(content_type))
+    media_type = _normalized_content_type(content_type)
+    if media_type in REJECTED_UPLOAD_MEDIA_TYPES:
+        return REJECTED_UPLOAD_MEDIA_TYPES[media_type]
+    for prefix, message in REJECTED_UPLOAD_MEDIA_TYPE_PREFIXES.items():
+        if media_type.startswith(prefix):
+            return message
+    return None
 
 
 def _is_outlook_msg(*, extension: str | None, content_type: str) -> bool:

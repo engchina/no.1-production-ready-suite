@@ -57,7 +57,6 @@ HIGH_RISK_WARNING_CODES = {
     "low_extraction_confidence",
     "unknown_modality",
     "content_type_missing",
-    "unsupported_audio",
     "unsupported_outlook_msg",
     "unsupported_tiff_image",
     "unsupported_legacy_office_binary",
