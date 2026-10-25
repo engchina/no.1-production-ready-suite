@@ -226,11 +226,16 @@ def test_only_answered_runs_can_be_rated_and_the_rater_is_recorded(seeded_runs: 
     del seeded_runs
     running = client.put("/api/runs/feedback-774-running/feedback", json={"rating": "helpful"})
     assert running.status_code == 409
-    # system_admin（local のローカル利用者）は、ほかの利用者の回答にも評価を付けられ、評価した
-    # 利用者が残る（#1928。ほかの利用者の Run の 404 は test_security_scope.py）。
+    # 評価は Run の持ち主だけ。system_admin（local のローカル利用者）はほかの利用者の回答を
+    # 読めるが、評価は付けられない（403。#3244。ほかの利用者の Run の 404 は
+    # test_security_scope.py）。
     other = client.put("/api/runs/feedback-774-other/feedback", json={"rating": "helpful"})
-    assert other.status_code == 200, other.text
-    feedback = other.json()["data"]["feedback"]
+    assert other.status_code == 403, other.text
+    assert runtime_repository.get_run("feedback-774-other").feedback is None
+    # 自分の回答の評価には、評価した利用者が残る。
+    own = client.put("/api/runs/feedback-774-done/feedback", json={"rating": "helpful"})
+    assert own.status_code == 200, own.text
+    feedback = own.json()["data"]["feedback"]
     assert (feedback["rating"], feedback["user_uuid"]) == ("helpful", LOCAL_DEBUG_USER_UUID)
     missing = client.put("/api/runs/run-missing-774/feedback", json={"rating": "helpful"})
     assert missing.status_code == 404

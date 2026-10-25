@@ -52,7 +52,7 @@
 
 - ナビは **AI 活用** → **Agent 構築** → **改善・運用** → セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。既定の入口はチャット。Tools・ツール権限をナビに出さない。
 - 画面・ナビの文言に「Control Plane」「Runtime」のような基盤の用語を使わない（Run → 「実行」、Skill → 「スキル」、組み込み Runtime → 「実行環境」。識別子・URL・権限コードは変えない）。
-- 「AI 活用」は system_admin は全員、それ以外は自分の Run・会話だけ（ほかの利用者の Run は 404）。承認・再開・Agent 自身の確認への回答は、実行した人と system_admin だけ。
+- 「AI 活用」は system_admin は全員、それ以外は自分の Run・会話だけ（ほかの利用者の Run は 404）。system_admin が他の利用者の会話・Run にできるのは閲覧と運用の操作（停止・削除・承認の判断・再開）だけで、続きの質問・確認への答え・評価・名前の変更は持ち主だけ（403。#3244）。承認・再開は、実行した人と system_admin だけ。
 - lint は `frontend/eslint.config.js` が `../../platform/docs/design-system/adherence.oxlintrc.json` を import する。Playwright は `desktop` と `mobile-375` の 2 project。
 
 ## API

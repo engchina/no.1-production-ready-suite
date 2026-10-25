@@ -1249,6 +1249,15 @@ function runViewerOf(state: MockApiState, run: Json): Json {
   };
 }
 
+/** system_admin でも他の利用者の会話・Run に内容を足す操作は 403（backend の `OTHERS_CONTENT_FORBIDDEN_MESSAGE`。#3244）。 */
+const OTHERS_CONTENT_FORBIDDEN_MESSAGE =
+  "他の利用者の会話・実行には、続きの質問・実行・回答・評価を追加できません。閲覧・停止・削除はできます。調べ直すときは自分の会話で質問してください。";
+
+/** Run の持ち主（会話の持ち主。会話の無い Run は実行した人）が見ている利用者か（#3244）。 */
+function ownsRunContent(state: MockApiState, run: Json): boolean {
+  return isViewer(state, run.thread_owner_user_uuid ?? run.created_by_user_uuid ?? "local");
+}
+
 /** 実行履歴の一覧の行（backend の `run_summary`。#1897）。 */
 function runSummaryOf(run: Json): Json {
   const pending = ((run.approvals as Json[] | undefined) ?? []).filter((item) => item.status === "pending");
@@ -1748,11 +1757,12 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     if (threadId && threadRuns.length === 0) {
       throw new HttpError(404, "会話が見つかりません。");
     }
-    // 会話の持ち主（mock の "local" は本人とみなす）。他の利用者の会話を続けられるのは system_admin だけで、
-    // Run は操作した system_admin として実行する（会話の持ち主は変えない。#1928）。
+    // 会話の持ち主（mock の "local" は本人とみなす）。続けられるのは持ち主だけ。他の利用者の会話は 404、
+    // system_admin は見えるので 403（#3244）。
     const threadOwner = String(threadRuns[0]?.thread_owner_user_uuid ?? threadRuns[0]?.created_by_user_uuid ?? "local");
     const ownThread = ["", "local", currentUser?.user_uuid].includes(threadOwner);
-    if (threadId && !ownThread && !currentUser?.is_system_admin) {
+    if (threadId && !ownThread) {
+      if (currentUser?.is_system_admin) throw new HttpError(403, OTHERS_CONTENT_FORBIDDEN_MESSAGE);
       throw new HttpError(404, "会話が見つかりません。");
     }
     // 会話は始めた Run の種類（下書き / 公開中の版）に固定する（backend と同じ。#2515）。
@@ -1788,7 +1798,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         // 使った版（backend の metadata.agent_version。下書きは "draft"）。
         ...(body.draft ? { agent_version: "draft" } : {}),
       },
-      created_by_user_uuid: ownThread ? "local" : (currentUser?.user_uuid ?? "local"),
+      created_by_user_uuid: "local",
       thread_id: threadId ?? `thread_${String(state.runs.length + 1).padStart(32, "0")}`,
       thread_owner_user_uuid: threadId ? threadOwner : "local",
       // 質問に添付したファイル（#2517）。backend と同じく名前と種類を Run に残す（添付の API は spec が mock する）。
@@ -1892,6 +1902,10 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     const runs = state.runs.filter((run) => run.thread_id === second);
     if (runs.length === 0) throw new HttpError(404, "会話が見つかりません。");
     if (method === "PATCH") {
+      // 名前の変更は会話の持ち主だけ（system_admin でも 403。#3244）。削除は運用の操作としてできる。
+      if (!isViewer(state, runs[0].thread_owner_user_uuid ?? runs[0].created_by_user_uuid)) {
+        throw new HttpError(403, OTHERS_CONTENT_FORBIDDEN_MESSAGE);
+      }
       const title = String(body.title ?? "").trim();
       if (!title || title.length > 80) throw new HttpError(422, "会話名を入力してください。");
       runs[0].metadata = { ...((runs[0].metadata as Json | undefined) ?? {}), thread_title: title };
@@ -2028,6 +2042,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     // 回答前の確認（#1839）。backend の `decide_confirmation` と同じ結果の形。mock の Run は答えですぐ完了する。
     if (method === "POST" && at("runs", "*", "confirmations", "*")) {
+      // 答え・スキップは Run の持ち主だけ（system_admin でも 403。やめるは運用の操作。#3244）。
+      if (body.action !== "cancel" && !ownsRunContent(state, run)) throw new HttpError(403, OTHERS_CONTENT_FORBIDDEN_MESSAGE);
       return decideConfirmation(state, run, segments[3], body);
     }
     if (method === "POST" && at("runs", "*", "resume")) {
@@ -2057,6 +2073,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return run;
     }
     if (method === "PUT" && at("runs", "*", "feedback")) {
+      // 評価は Run の持ち主だけ（system_admin でも 403。#3244）。
+      if (!ownsRunContent(state, run)) throw new HttpError(403, OTHERS_CONTENT_FORBIDDEN_MESSAGE);
       if (run.status !== "completed") throw new HttpError(409, "回答が出た Run にだけフィードバックを付けられます。");
       const helpful = body.rating === "helpful";
       if (!helpful && !body.reason) throw new HttpError(422, "役に立たなかった理由を選んでください。");
