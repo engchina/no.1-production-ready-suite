@@ -227,6 +227,8 @@ def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     `isolated_local_state` が Oracle 接続設定を初期化した後に実値を再適用するため、
     autouse より後に動く本 fixture で上書きしている。
     """
+    from dataclasses import replace
+
     from app.config import get_settings
     from app.rag.request_context import (
         NO_ACCESS_AUDIT_REQUEST_CONTEXT,
@@ -248,10 +250,17 @@ def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     # （テストの既定値を上書きして CI と違う経路を通るため。AI は決定論スタブに差し替える。#483）。
     _oracle_test_db.apply_real_oracle_settings(settings)
     _ai_stubs.patch_ai_clients(monkeypatch)
-    context = audit_request_context_from_headers(
-        TEST_REQUEST_HEADERS,
-        request_id="pytest-oracle-integration",
-        settings=settings,
+    # local の全権限の利用者と同じく、全員の会話・保存済みの回答を扱う（利用者の分からない
+    # context は会話・回答の記録が 0 件になるため、明示する。#3250）。header の dict は大文字の
+    # 名前なので、利用者・tenant の hash は付かない（今までどおり）。
+    context = replace(
+        audit_request_context_from_headers(
+            TEST_REQUEST_HEADERS,
+            request_id="pytest-oracle-integration",
+            settings=settings,
+        ),
+        answer_records_unrestricted=True,
+        all_users_visible=True,
     )
 
     def current_or_default_context() -> AuditRequestContext:
