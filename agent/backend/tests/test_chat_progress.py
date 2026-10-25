@@ -668,11 +668,11 @@ def test_span_details_are_saved_together_in_the_background(
         return original(background=background)
 
     monkeypatch.setattr(repository, "_persist_locked", counting)
-    with operation_trace(
-        "agent.execute",
-        operation_id=run.id,
-        listener=lambda update: repository.record_builtin_span(run.id, update),
-    ):
+
+    def listener(update: SpanUpdate) -> None:
+        repository.record_builtin_span(run.id, update)
+
+    with operation_trace("agent.execute", operation_id=run.id, listener=listener):
         for index in range(5):
             details = chat_progress_details(fields=[("ツール", f"synthetic_{index}")])
             with observed_span("gen_ai.execute_tool", display=SpanDisplay(details=details)):
