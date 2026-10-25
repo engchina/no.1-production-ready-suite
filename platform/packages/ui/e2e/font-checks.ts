@@ -2,6 +2,12 @@
  * 3 製品の e2e が共通に使う、自前ホストの書体の検査（#3292）。
  *
  * - `FONT_SANS_PREFIX` / `FONT_MONO_FAMILY`: 共有 tokens の `--font-sans` / `--font-mono` の計算値（先頭・全体）
+ * - `JAPANESE_FONT`: Noto Sans JP（主の CSS）。可変書体（`@fontsource-variable`）で、CSS の書体名は `Noto Sans JP Variable`、
+ *   Chromium が描画に使った書体の名前は `Noto Sans JP` で始まる（#3333）。`loadJapaneseFonts` が各太さを読み込み、読み込んだ
+ *   face の太さの範囲がその太さを含む（合成の太字にならない）かを `faceCoversWeight` で確かめる。`renderedJapaneseFonts` は
+ *   合成の日本語の字を各太さの本文（`--font-sans`）と等幅（`code`）で描き、Chromium が実際に使った書体を CDP で返す
+ *   （可変書体の書体の名前は太さによらず既定の instance の名前。例: `Noto Sans JP Thin`）。`japaneseInkByWeight` は各太さで
+ *   描いた字の墨の量を返す（太さごとに別の字形なら、太いほど多い。近い太さの face で代わりに描くと同じ量になる）
  * - `CJK_FALLBACK_SAMPLES`: Noto Sans JP に無く、Noto Sans SC・TC・HK のそれぞれだけにある合成の字。SC・TC・HK は
  *   可変書体（`@fontsource-variable`）で、CSS の書体名（`family`）は `Noto Sans SC Variable` など、Chromium が描画に
  *   使った書体の名前（`renderedFamily`）は `Noto Sans SC` で始まる（#3328）
@@ -19,11 +25,22 @@
  */
 
 /** 本文の書体（`--font-sans`）の計算値の先頭。日本語の字形を優先し、JP に無い字だけを SC → TC → HK で補う。 */
-export const FONT_SANS_PREFIX = '"Noto Sans JP", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", Roboto,';
+export const FONT_SANS_PREFIX =
+  '"Noto Sans JP Variable", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", Roboto,';
 
 /** 等幅書体（`--font-mono`）の計算値。Google Sans Code に無い字は本文と同じ順で補う。 */
 export const FONT_MONO_FAMILY =
-  '"Google Sans Code", "Noto Sans JP", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", Roboto, monospace';
+  '"Google Sans Code", "Noto Sans JP Variable", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", Roboto, monospace';
+
+/** 共有 tokens の太さ（`--font-weight-regular` / `medium` / `semibold` / `bold`）。 */
+export const UI_FONT_WEIGHTS = [400, 500, 600, 700] as const;
+
+/**
+ * Noto Sans JP（主の CSS）。`family` は CSS の書体名、`renderedFamily` は Chromium が描画に使った書体の名前の先頭。
+ * `text` は Noto Sans JP にある合成の字（漢字・ひらがな・カタカナ。業務の内容ではない）。空白を入れない（等幅では空白だけが
+ * Google Sans Code で描かれる）。
+ */
+export const JAPANESE_FONT = { family: "Noto Sans JP Variable", renderedFamily: "Noto Sans JP", text: "表示の確認ひらがなカタカナ" } as const;
 
 /**
  * Noto Sans JP に無い合成の字（業務の内容ではなく、字の収録の違いだけで選ぶ）。
@@ -241,4 +258,114 @@ export async function renderedCjkFallbackFonts(
     await page.evaluate(() => document.querySelector("[data-cjk-font-samples]")?.remove(), undefined);
   }
   return result;
+}
+
+/** 日本語の書体の 1 つの太さを読み込んだ結果。`weights` は読み込んだ face の太さの範囲（`FontFace.weight`。例: `100 900`）。 */
+export interface LoadedJapaneseFont {
+  weight: number;
+  count: number;
+  weights: string[];
+}
+
+/** face の太さの範囲（`400` / `100 900`）が `weight` を含むか。含まない太さは Chromium が合成の太字・細字で出す。 */
+export function faceCoversWeight(range: string, weight: number): boolean {
+  const [low, high = low] = range.trim().split(/\s+/u).map(Number);
+  return low !== undefined && high !== undefined && low <= weight && weight <= high;
+}
+
+/** Noto Sans JP の各太さを合成の字で読み込む（unicode-range の slice のうち、その字の分だけを取る）。 */
+export async function loadJapaneseFonts(page: EvaluatePage, weights: readonly number[]): Promise<LoadedJapaneseFont[]> {
+  return page.evaluate(
+    async ({ font, weights }) => {
+      const loaded: { weight: number; count: number; weights: string[] }[] = [];
+      for (const weight of weights) {
+        const faces = (await document.fonts.load(`${weight} 14px "${font.family}"`, font.text)).filter(
+          (face) => face.status === "loaded"
+        );
+        loaded.push({ weight, count: faces.length, weights: faces.map((face) => face.weight) });
+      }
+      return loaded;
+    },
+    { font: { ...JAPANESE_FONT }, weights: [...weights] }
+  );
+}
+
+/** 合成の日本語の字を描いたときに Chromium が使った書体（`${太さ}-sans` / `${太さ}-mono`）。 */
+export type RenderedJapaneseFonts = Record<string, { familyName: string; isCustomFont: boolean }[]>;
+
+/**
+ * 合成の日本語の字を各太さの本文の書体（`body` を継承する `span`）と等幅（`code`。Google Sans Code に無い字は JP で補う）で描き、
+ * 実際に使った書体の名前を返す。描いた要素は返す前に消す。
+ */
+export async function renderedJapaneseFonts(
+  page: EvaluatePage,
+  cdp: CdpSessionLike,
+  weights: readonly number[]
+): Promise<RenderedJapaneseFonts> {
+  await page.evaluate(
+    async ({ text, weights }) => {
+      const host = document.createElement("div");
+      host.setAttribute("data-jp-font-samples", "");
+      for (const weight of weights) {
+        for (const kind of ["sans", "mono"] as const) {
+          const node = document.createElement(kind === "sans" ? "span" : "code");
+          node.setAttribute("data-jp-font-sample", `${weight}-${kind}`);
+          node.style.fontWeight = String(weight);
+          node.textContent = text;
+          host.append(node);
+        }
+      }
+      document.body.append(host);
+      await document.fonts.ready;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    },
+    { text: JAPANESE_FONT.text, weights: [...weights] }
+  );
+  const send = cdp.send.bind(cdp) as unknown as (
+    method: string,
+    params?: Record<string, unknown>
+  ) => Promise<{ root?: { nodeId: number }; nodeId?: number; fonts?: { familyName: string; isCustomFont: boolean }[] }>;
+  const result: RenderedJapaneseFonts = {};
+  try {
+    await send("DOM.enable");
+    await send("CSS.enable");
+    const { root } = await send("DOM.getDocument");
+    for (const weight of weights) {
+      for (const kind of ["sans", "mono"] as const) {
+        const key = `${weight}-${kind}`;
+        const { nodeId } = await send("DOM.querySelector", { nodeId: root?.nodeId, selector: `[data-jp-font-sample="${key}"]` });
+        const { fonts } = await send("CSS.getPlatformFontsForNode", { nodeId });
+        result[key] = (fonts ?? []).map(({ familyName, isCustomFont }) => ({ familyName, isCustomFont }));
+      }
+    }
+  } finally {
+    await page.evaluate(() => document.querySelector("[data-jp-font-samples]")?.remove(), undefined);
+  }
+  return result;
+}
+
+/**
+ * 合成の日本語の字を、各太さの Noto Sans JP で canvas に描いた墨の量（alpha の合計）。`loadJapaneseFonts` の後に呼ぶ。
+ * 太さごとに本物の字形で描けば太いほど多くなり、face に無い太さを近い太さの face で代わりに描くと同じ量になる。
+ */
+export async function japaneseInkByWeight(page: EvaluatePage, weights: readonly number[]): Promise<{ weight: number; ink: number }[]> {
+  return page.evaluate(
+    ({ font, weights }) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 640;
+      canvas.height = 64;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("canvas の 2d context がありません");
+      return weights.map((weight) => {
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.font = `${weight} 40px "${font.family}"`;
+        context.fillText(font.text, 0, 48);
+        const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+        let ink = 0;
+        for (let index = 3; index < data.length; index += 4) ink += data[index] ?? 0;
+        return { weight, ink };
+      });
+    },
+    { font: { ...JAPANESE_FONT }, weights: [...weights] }
+  );
 }

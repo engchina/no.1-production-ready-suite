@@ -6,15 +6,21 @@ import {
   DEFERRED_CJK_FAMILIES,
   FONT_MONO_FAMILY,
   FONT_SANS_PREFIX,
+  JAPANESE_FONT,
+  UI_FONT_WEIGHTS,
+  faceCoversWeight,
   firstRenderFontFaces,
+  japaneseInkByWeight,
   initialStylesheetFontFaces,
   loadCjkFallbackFonts,
+  loadJapaneseFonts,
   recordFirstRenderFontFaces,
   renderedCjkFallbackFonts,
+  renderedJapaneseFonts,
 } from "../../../platform/packages/ui/e2e/font-checks";
 
-/** Noto Sans JP と同じ太さ（src/fonts.css・src/fonts-cjk.css）。 */
-const WEIGHTS = [400, 500, 700] as const;
+/** 共有 tokens の太さ（400 / 500 / 600 / 700）。JP・SC・TC・HK は可変書体で、どの太さも本物の字形で出す。 */
+const WEIGHTS = UI_FONT_WEIGHTS;
 
 /** 等幅書体（--font-mono）が Google Sans Code で、code / .font-mono に効くことを確かめる。 */
 async function checkMonoFont(page: Page) {
@@ -41,21 +47,54 @@ async function checkMonoFont(page: Page) {
   }
 }
 
-// 書体は @fontsource の woff2 を同一 origin で配信し、外部フォント CDN に依存しない（#75）。
-test("Noto Sans JP と等幅書体 Google Sans Code を自前ホストで適用する", async ({ page }) => {
+/**
+ * Noto Sans JP（可変書体）を各太さで読み込み、読み込んだ face の太さの範囲がその太さを含む（合成の太字にならない）こと、
+ * 合成の日本語の字を本文と等幅で描いたときに Chromium が自前ホストの Noto Sans JP を使うことを確かめる（#3333）。
+ */
+async function checkJapaneseFont(page: Page) {
+  for (const font of await loadJapaneseFonts(page, WEIGHTS)) {
+    expect(font.count, `${JAPANESE_FONT.family} ${font.weight}`).toBeGreaterThan(0);
+    expect(font.weights.every((range) => faceCoversWeight(range, font.weight)), `${font.weight}: ${font.weights.join(", ")}`).toBe(true);
+  }
+  // 太さごとに別の字形（太いほど墨が多い）。近い太さの face で代わりに描くと同じ量になる。
+  const ink = await japaneseInkByWeight(page, WEIGHTS);
+  for (let index = 1; index < ink.length; index += 1) {
+    expect(ink[index]!.ink, JSON.stringify(ink)).toBeGreaterThan(ink[index - 1]!.ink);
+  }
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const rendered = await renderedJapaneseFonts(page, cdp, WEIGHTS);
+    for (const [key, fonts] of Object.entries(rendered)) {
+      expect(fonts.length, key).toBeGreaterThan(0);
+      expect(
+        fonts.every((font) => font.familyName.startsWith(JAPANESE_FONT.renderedFamily) && font.isCustomFont),
+        `${key}: ${JSON.stringify(fonts)}`
+      ).toBe(true);
+    }
+  } finally {
+    await cdp.detach();
+  }
+}
+
+/** Noto Sans JP（各太さを本物の字形で）と等幅書体 Google Sans Code を自前ホストで適用する。 */
+async function checkSelfHostedFonts(page: Page) {
   const external: string[] = [];
   page.on("request", (request) => {
     if (/fonts\.(googleapis|gstatic)\.com|fonts\.bunny\.net/u.test(request.url())) external.push(request.url());
   });
   await page.goto("/");
   await page.evaluate(() => document.fonts.ready);
-  const noto = await page.evaluate(async () =>
-    (await document.fonts.load("400 14px 'Noto Sans JP'", "業務 Agent")).length > 0
-  );
-  expect(noto, "Noto Sans JP 400").toBe(true);
-  expect(await page.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain("Noto Sans JP");
+  await checkJapaneseFont(page);
+  const bodyFont = await page.evaluate(() => getComputedStyle(document.body).fontFamily);
+  expect(bodyFont.slice(0, FONT_SANS_PREFIX.length)).toBe(FONT_SANS_PREFIX);
   await checkMonoFont(page);
   expect(external, "外部フォント CDN への通信").toEqual([]);
+}
+
+// 書体は @fontsource の woff2 を同一 origin で配信し、外部フォント CDN に依存しない（#75）。
+// Noto Sans JP は可変書体（1 つの face が太さ 100〜900 を持つ。#3333）。
+test("Noto Sans JP と等幅書体 Google Sans Code を自前ホストで適用する", async ({ page }) => {
+  await checkSelfHostedFonts(page);
 });
 
 /**
@@ -71,10 +110,10 @@ async function checkDeferredCjkFallbackFonts(page: Page) {
   await page.goto("/");
   // 最初の描画の時点の CSS（dev の <style> を含む）と、index.html が読む CSS（build の成果物）に SC・TC・HK は無い。
   const firstRender = await firstRenderFontFaces(page);
-  expect(firstRender.families).toContain("Noto Sans JP");
+  expect(firstRender.families).toContain(JAPANESE_FONT.family);
   const initial = await initialStylesheetFontFaces(page);
   // dev サーバの index.html は CSS の <link> を持たない（preview・本番だけ主の CSS を確かめられる）。
-  if (initial.hrefs.length > 0) expect(initial.families).toContain("Noto Sans JP");
+  if (initial.hrefs.length > 0) expect(initial.families).toContain(JAPANESE_FONT.family);
   for (const family of DEFERRED_CJK_FAMILIES) {
     expect(firstRender.families, `最初の描画の CSS に ${family}`).not.toContain(family);
     expect(initial.families, `index.html の CSS に ${family}`).not.toContain(family);
@@ -112,5 +151,9 @@ test.describe("375px", () => {
 
   test("JP に無い字を最初の描画の後に読む Noto Sans SC・TC・HK で補う（375px）", async ({ page }) => {
     await checkDeferredCjkFallbackFonts(page);
+  });
+
+  test("Noto Sans JP と等幅書体 Google Sans Code を自前ホストで適用する（375px）", async ({ page }) => {
+    await checkSelfHostedFonts(page);
   });
 });
