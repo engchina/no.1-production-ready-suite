@@ -866,6 +866,12 @@ def test_generate_records_the_generation_and_check_as_span_tree(
     service = _catalog_service(_FakeAdapter(), ai)
     data = service.generate_db_admin_chat_sql("合成の質問", operation_id="turn-1")
     assert data.trace_id and data.trace_dropped_spans == 0
+    # 同期の要求なので、応答の前に表へ書く（画面は応答の直後にターンの処理の経過を読む）。
+    assert {row["name"] for row in trace_table.db.spans(trace_id=data.trace_id)} >= {
+        "nl2sql.db_admin_chat",
+        "nl2sql.generate_sql",
+        "nl2sql.safety_check",
+    }
     steps = _progress_steps(data, trace_table, turn_id="turn-1")
     rows = trace_table.db.spans(trace_id=data.trace_id)
     assert {row["operation_id"] for row in rows} == {"turn-1"}

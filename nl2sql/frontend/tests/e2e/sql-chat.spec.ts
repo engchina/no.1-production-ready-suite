@@ -2321,6 +2321,28 @@ test("処理の経過は span の木で、段の中のモデルの呼び出し�
   await page.screenshot({ path: testInfo.outputPath("sql-chat-span-tree.png"), fullPage: true });
 });
 
+test("終わったジョブの span が読んだ後に書かれても、読み直して処理の経過を出す (#3226)", async ({ page, context }) => {
+  const state = await setup(page);
+  state.turns.push({ job_id: "chat-1", question: "合成データの件数", status: "done", created_at: now, steps: [],
+    result: { generated_sql: "SELECT 1 FROM DUAL", original_question: "合成データの件数", explanation: "合成の応答です。", safety: { is_safe: true, safety_checked: true, referenced_tables: [], referenced_columns: [] } } });
+  // worker の書き手は span をまとめて後から書く: 最初の読み出しの時点では表にまだ span が無い（終端だけ）。
+  let reads = 0;
+  await context.route(/\/api\/nl2sql\/jobs\/chat-1\/trace/, (route) => {
+    reads += 1;
+    // 開発の build は StrictMode で最初の読み出しが 2 回になるので、2 回目までは span の無い応答にする。
+    if (reads > 2) return route.fallback();
+    return route.fulfill({ json: { data: { events: [
+      { schema_version: 1, seq: 1, target_id: "chat-1", attempt: 0, emitted_at: now, type: "terminal", status: "done" },
+    ], dropped_spans: 0 } } });
+  });
+  await page.goto("/chat?profile_id=sales&conversation_id=chat-1");
+  // 読み直しを終えるまで古い形式の案内を出さない。
+  await expect.poll(() => reads).toBeGreaterThan(0);
+  await expect(page.getByTestId("sql-chat-progress-legacy")).toHaveCount(0);
+  await expect(page.getByTestId("sql-chat-progress-summary")).toHaveText(/^処理の経過（6 ステップ・/);
+  expect(reads).toBeGreaterThan(2);
+});
+
 test("書けなかった span がある記録は、処理の経過の中に一部だけの記録と出す (#3226)", async ({ page }) => {
   const state = await setup(page);
   state.turns.push({ job_id: "chat-1", question: "合成データの件数", status: "done", created_at: now, steps: [],

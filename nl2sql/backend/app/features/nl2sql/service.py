@@ -488,6 +488,7 @@ from .tabular_files import (
 from .trace_spans import (
     TraceTerminal,
     combined_listener,
+    flush_trace_spans,
     read_trace_progress,
     span_details_of,
     trace_links,
@@ -17997,6 +17998,9 @@ class Nl2SqlService:
                     details=_db_admin_chat_check_details(plan, plan_warnings, bool(repaired_sql)),
                 )
         trace_id = summary.telemetry_trace_id or ""
+        # 同期の要求なので、応答の前に span を書いておく（画面は応答の直後にターンの処理の
+        # 経過を読む）。
+        flush_trace_spans()
         with details_lock:
             details = dict(span_details)
         return DbAdminChatGenerateData(

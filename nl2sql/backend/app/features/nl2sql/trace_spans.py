@@ -165,6 +165,17 @@ def trace_span_dropped(trace_id: str) -> int:
     return store.writer.dropped(trace_id)
 
 
+def flush_trace_spans() -> None:
+    """待っている span をすぐ書く。
+
+    同期の要求の終わりに呼ぶ（画面は応答の直後に記録の処理の経過を読む）。
+    """
+
+    store = current_trace_span_store()
+    if store is not None:
+        store.writer.flush()
+
+
 def combined_listener(
     *listeners: SpanListener | None,
 ) -> SpanListener | None:
@@ -278,6 +289,7 @@ __all__ = [
     "TraceTerminal",
     "combined_listener",
     "current_trace_span_store",
+    "flush_trace_spans",
     "install_trace_span_store",
     "read_trace_progress",
     "reset_trace_span_store",
