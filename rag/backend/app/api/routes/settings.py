@@ -6,6 +6,7 @@ import logging
 import re
 import stat
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -90,8 +91,11 @@ from app.rag.graph_adapter import (
 )
 from app.rag.mineru_license import (
     MINERU_BACKEND,
+    MINERU_LICENSE_ADMIN_ONLY_MESSAGE,
     MINERU_LICENSE_REQUIRED_MESSAGE,
     mineru_license_acknowledged,
+    mineru_license_acknowledgement,
+    set_mineru_license_acknowledgement,
     settings_use_mineru,
 )
 from app.rag.oracle_schema import vector_index_reindex_sql
@@ -383,14 +387,17 @@ async def update_parser_adapter_settings(
     - 「解析後の処理」（Vision・項目抽出・章節木。#528）は backend/.env。ほかのプロセスは
       `.env` の更新時刻の変化で読み直す（#466）。
     - MinerU は、ライセンスの条件の確認（`mineru_license_acknowledged`）が無ければ有効にも
-      選択にもできない（422。#3359）。確認した人・日時は parser-settings.json に保存する。
+      選択にもできない（422。#3359）。確認・取り消しは system_admin だけ（403）。確認した人・
+      日時は parser-settings.json に保存する（環境変数・`.env` では書けない）。
     """
     settings = get_settings()
     post_parse_updates = _post_parse_settings_updates(payload)
     parser_fields = payload.model_fields_set - set(POST_PARSE_SETTING_FIELDS)
-    actor = _principal_display_name(request)
+    license_actor = _mineru_license_actor(request)
+    actor = license_actor.display_name
     if parser_fields:
-        # 「解析後の処理」の .env を書く前に、MinerU の確認の不足で止める（途中まで保存しない）。
+        # 「解析後の処理」の .env を書く前に、MinerU の確認の権限と不足で止める。
+        _raise_if_mineru_license_change_forbidden(settings, payload, license_actor)
         _raise_if_mineru_license_missing(
             settings, _parser_adapter_settings_candidate(settings, payload, actor=actor), payload
         )
@@ -405,6 +412,7 @@ async def update_parser_adapter_settings(
         try:
             with PARSER_SETTINGS_STORE.lock(settings):
                 PARSER_SETTINGS_STORE.reload_if_changed(settings)
+                _raise_if_mineru_license_change_forbidden(settings, payload, license_actor)
                 candidate = _parser_adapter_settings_candidate(settings, payload, actor=actor)
                 _raise_if_mineru_license_missing(settings, candidate, payload)
                 PARSER_SETTINGS_STORE.save(candidate)
@@ -1261,36 +1269,62 @@ def _parser_adapter_backend_source_matrix(
     )
 
 
-def _principal_display_name(request: Request) -> str:
-    """操作した利用者の表示名（MinerU のライセンスの確認の記録に使う。#3359）。"""
+@dataclass(frozen=True)
+class _MineruLicenseActor:
+    """MinerU のライセンスの確認を保存する利用者（#3359）。"""
+
+    display_name: str
+    is_system_admin: bool
+
+
+def _mineru_license_actor(request: Request) -> _MineruLicenseActor:
+    """操作した利用者。認証の情報を引けなければ system_admin とみなさない。"""
     try:
-        return current_principal(request).display_name or ""
-    except Exception:  # noqa: BLE001 - 認証の無い開発の構成（local）では名前を記録しない
-        return ""
+        principal = current_principal(request)
+    except Exception:  # noqa: BLE001 - 引けなければ確認を変えさせない（403）
+        return _MineruLicenseActor(display_name="", is_system_admin=False)
+    return _MineruLicenseActor(
+        display_name=principal.display_name or "",
+        is_system_admin=bool(principal.is_system_admin),
+    )
 
 
-def _mineru_license_updates(
+def _raise_if_mineru_license_change_forbidden(
     base: Settings,
+    payload: ParserAdapterSettingsUpdate,
+    actor: _MineruLicenseActor,
+) -> None:
+    """MinerU のライセンスの確認・取り消しは system_admin だけ（組織としての判断。#3359）。
+
+    今の状態と同じ値（画面が毎回送る値）は変更ではないので、ほかの利用者の保存も止めない。
+    """
+    requested = payload.mineru_license_acknowledged
+    if requested is None or requested == mineru_license_acknowledged(base):
+        return
+    if not actor.is_system_admin:
+        raise HTTPException(status_code=403, detail=MINERU_LICENSE_ADMIN_ONLY_MESSAGE)
+
+
+def _apply_mineru_license_update(
+    base: Settings,
+    candidate: Settings,
     payload: ParserAdapterSettingsUpdate,
     *,
     actor: str,
-) -> dict[str, object]:
-    """MinerU のライセンスの確認の記録の更新（#3359）。確認済みなら最初の記録を保つ。"""
+) -> None:
+    """MinerU のライセンスの確認の記録を候補へ置く（#3359）。確認済みなら最初の記録を保つ。"""
     if payload.mineru_license_acknowledged is None:
-        return {}
+        return
     if not payload.mineru_license_acknowledged:
-        return {
-            "rag_parser_mineru_license_acknowledged_by": "",
-            "rag_parser_mineru_license_acknowledged_at": "",
-        }
+        set_mineru_license_acknowledgement(candidate, by="", at="")
+        return
     if mineru_license_acknowledged(base):
-        return {}
-    return {
-        "rag_parser_mineru_license_acknowledged_by": actor[:256],
-        "rag_parser_mineru_license_acknowledged_at": datetime.now(UTC).isoformat(
-            timespec="seconds"
-        ),
-    }
+        return
+    set_mineru_license_acknowledgement(
+        candidate,
+        by=actor[:256],
+        at=datetime.now(UTC).isoformat(timespec="seconds"),
+    )
 
 
 def _raise_if_mineru_license_missing(
@@ -1316,12 +1350,11 @@ def _raise_if_mineru_license_missing(
 
 
 def _mineru_license_data(settings: Settings) -> MineruLicenseAcknowledgementData:
-    if not mineru_license_acknowledged(settings):
+    by, at = mineru_license_acknowledgement(settings)
+    if not at:
         return MineruLicenseAcknowledgementData(acknowledged=False)
     return MineruLicenseAcknowledgementData(
-        acknowledged=True,
-        acknowledged_by=settings.rag_parser_mineru_license_acknowledged_by.strip() or None,
-        acknowledged_at=settings.rag_parser_mineru_license_acknowledged_at.strip(),
+        acknowledged=True, acknowledged_by=by or None, acknowledged_at=at
     )
 
 
@@ -1333,7 +1366,6 @@ def _parser_adapter_settings_candidate(
 ) -> Settings:
     """parser adapter 更新 payload から保存候補 settings を作る。"""
     updates: dict[str, object] = {
-        **_mineru_license_updates(base, payload, actor=actor),
         # 省略したときは今の解析エンジンのまま（「解析後の処理」だけの保存。#528）。
         "rag_parser_adapter_backend": payload.adapter_backend or base.rag_parser_adapter_backend,
         "rag_parser_docling_enabled": _optional_bool(
@@ -1372,7 +1404,9 @@ def _parser_adapter_settings_candidate(
             update=connection.api_key,
             clear=connection.clear_api_key,
         )
-    return base.model_copy(update=updates)
+    candidate = base.model_copy(update=updates)
+    _apply_mineru_license_update(base, candidate, payload, actor=actor)
+    return candidate
 
 
 def _optional_bool(value: bool | None, fallback: bool) -> bool:

@@ -1,7 +1,8 @@
 """MinerU のライセンスの条件の確認（#3359）のテスト。
 
-管理者が「文書解析」で条件を確認するまで、MinerU を有効にも選択にもできず（設定・レシピの保存は
-422）、取込でも MinerU を呼ばない。確認した人・日時は parser-settings.json に保存する。
+system_admin が「文書解析」で条件を確認するまで、MinerU を有効にも選択にもできず（設定・レシピの
+保存は 422）、取込でも MinerU を呼ばない。確認・取り消しは system_admin だけ（ほかは 403）。確認した
+人・日時は parser-settings.json に保存し、環境変数・`.env` では書けない。
 """
 
 from __future__ import annotations
@@ -13,16 +14,33 @@ from typing import Any
 import pytest
 from pytest import MonkeyPatch
 
+from app.api.routes import settings as settings_routes
 from app.clients.external_parser import ExternalParserCallError, ExternalParserClient
 from app.clients.parser_service import ParserServiceClient, ParserServiceUnavailableError
 from app.config import PARSER_SETTINGS_STORE, Settings, get_settings
 from app.main import app
-from app.rag.mineru_license import MINERU_LICENSE_REQUIRED_MESSAGE
+from app.rag.mineru_license import (
+    MINERU_LICENSE_ADMIN_ONLY_MESSAGE,
+    MINERU_LICENSE_REQUIRED_MESSAGE,
+    mineru_license_acknowledged,
+    mineru_license_acknowledgement,
+    set_mineru_license_acknowledgement,
+)
 from app.schemas.document import SourceModality, SourceProfile
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
 ACKNOWLEDGED_AT = "2026-10-26T00:00:00+00:00"
+
+
+def _as_actor(monkeypatch: MonkeyPatch, name: str, *, system_admin: bool) -> None:
+    monkeypatch.setattr(
+        settings_routes,
+        "_mineru_license_actor",
+        lambda _request: settings_routes._MineruLicenseActor(
+            display_name=name, is_system_admin=system_admin
+        ),
+    )
 
 
 def _persisted_parser(settings: Settings) -> dict[str, Any]:
@@ -77,9 +95,7 @@ def test_enabling_mineru_with_license_acknowledgement_records_who_and_when(
     monkeypatch: MonkeyPatch,
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(
-        "app.api.routes.settings._principal_display_name", lambda _request: "管理者 A"
-    )
+    _as_actor(monkeypatch, "管理者 A", system_admin=True)
 
     response = client.patch(
         "/api/settings/parser-adapters",
@@ -102,9 +118,7 @@ def test_enabling_mineru_with_license_acknowledgement_records_who_and_when(
     assert persisted["mineru_license_acknowledged_at"] == license_data["acknowledged_at"]
 
     # 確認済みのまま保存し直しても、最初の確認の記録を保つ。
-    monkeypatch.setattr(
-        "app.api.routes.settings._principal_display_name", lambda _request: "管理者 B"
-    )
+    _as_actor(monkeypatch, "管理者 B", system_admin=True)
     again = client.patch(
         "/api/settings/parser-adapters",
         json={"adapter_backend": "mineru", "mineru_license_acknowledged": True},
@@ -130,7 +144,7 @@ def test_withdrawing_acknowledgement_while_mineru_is_used_is_rejected(
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "mineru")
     monkeypatch.setattr(settings, "rag_parser_mineru_enabled", True)
-    monkeypatch.setattr(settings, "rag_parser_mineru_license_acknowledged_at", ACKNOWLEDGED_AT)
+    set_mineru_license_acknowledgement(settings, by="管理者 A", at=ACKNOWLEDGED_AT)
 
     response = client.patch(
         "/api/settings/parser-adapters",
@@ -138,7 +152,7 @@ def test_withdrawing_acknowledgement_while_mineru_is_used_is_rejected(
     )
 
     assert response.status_code == 422
-    assert settings.rag_parser_mineru_license_acknowledged_at == ACKNOWLEDGED_AT
+    assert mineru_license_acknowledgement(settings) == ("管理者 A", ACKNOWLEDGED_AT)
 
 
 def test_withdrawing_acknowledgement_after_switching_away_from_mineru(
@@ -147,7 +161,7 @@ def test_withdrawing_acknowledgement_after_switching_away_from_mineru(
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "mineru")
     monkeypatch.setattr(settings, "rag_parser_mineru_enabled", True)
-    monkeypatch.setattr(settings, "rag_parser_mineru_license_acknowledged_at", ACKNOWLEDGED_AT)
+    set_mineru_license_acknowledgement(settings, by="管理者 A", at=ACKNOWLEDGED_AT)
 
     response = client.patch(
         "/api/settings/parser-adapters",
@@ -197,11 +211,11 @@ def test_recipe_gate_allows_mineru_after_acknowledgement(monkeypatch: MonkeyPatc
 
     settings = get_settings()
     config = DocumentProcessingConfig(parser_adapter_backend="mineru")
-    monkeypatch.setattr(settings, "rag_parser_mineru_license_acknowledged_at", ACKNOWLEDGED_AT)
+    set_mineru_license_acknowledgement(settings, by="管理者 A", at=ACKNOWLEDGED_AT)
 
     _raise_if_recipe_selects_mineru_without_license(config)
     # MinerU を選ばないレシピは確認に関係なく保存できる。
-    monkeypatch.setattr(settings, "rag_parser_mineru_license_acknowledged_at", "")
+    set_mineru_license_acknowledgement(settings, by="", at="")
     _raise_if_recipe_selects_mineru_without_license(
         DocumentProcessingConfig(parser_adapter_backend="docling")
     )
@@ -225,3 +239,101 @@ def test_ingestion_stops_with_license_message_without_acknowledgement() -> None:
 
     assert exc_info.value.reason == "license_unacknowledged"
     assert str(exc_info.value).startswith(MINERU_LICENSE_REQUIRED_MESSAGE)
+
+
+def test_acknowledgement_cannot_be_set_from_environment(
+    monkeypatch: MonkeyPatch, tmp_path: Any
+) -> None:
+    """確認は画面の保存だけで書く。同じ名前の環境変数・`.env` は効かない（利用者の判断）。"""
+    for name in (
+        "RAG_PARSER_MINERU_LICENSE_ACKNOWLEDGED_AT",
+        "RAG_PARSER_MINERU_LICENSE_ACKNOWLEDGED_BY",
+        "RAG_PARSER_MINERU_LICENSE_ACKNOWLEDGED",
+    ):
+        monkeypatch.setenv(name, ACKNOWLEDGED_AT)
+    settings = Settings(rag_parser_mineru_api_host="https://mineru.example.com")
+
+    assert mineru_license_acknowledged(settings) is False
+    assert "rag_parser_mineru_license_acknowledged_at" not in Settings.model_fields
+    assert "rag_parser_mineru_license_acknowledged_by" not in Settings.model_fields
+    with pytest.raises(ExternalParserCallError):
+        ExternalParserClient(settings).parse("mineru", b"%PDF", _profile(), "application/pdf")
+    response = client.get("/api/settings/parser-adapters")
+    assert response.json()["data"]["mineru_license"]["acknowledged"] is False
+
+
+def test_acknowledgement_is_read_back_from_parser_settings_file(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    _as_actor(monkeypatch, "管理者 A", system_admin=True)
+    saved = client.patch(
+        "/api/settings/parser-adapters",
+        json={"adapter_backend": "docling", "mineru_license_acknowledged": True},
+    )
+    assert saved.status_code == 200
+
+    set_mineru_license_acknowledgement(settings, by="", at="")
+    PARSER_SETTINGS_STORE.load(settings)
+
+    by, at = mineru_license_acknowledgement(settings)
+    assert by == "管理者 A"
+    assert at == saved.json()["data"]["mineru_license"]["acknowledged_at"]
+
+
+@pytest.mark.parametrize("acknowledged_before", [False, True], ids=["set", "withdraw"])
+def test_non_system_admin_cannot_change_acknowledgement(
+    monkeypatch: MonkeyPatch, acknowledged_before: bool
+) -> None:
+    settings = get_settings()
+    if acknowledged_before:
+        set_mineru_license_acknowledgement(settings, by="管理者 A", at=ACKNOWLEDGED_AT)
+    _as_actor(monkeypatch, "利用者 B", system_admin=False)
+
+    response = client.patch(
+        "/api/settings/parser-adapters",
+        json={
+            "adapter_backend": "docling",
+            "mineru_enabled": False,
+            "mineru_license_acknowledged": not acknowledged_before,
+        },
+    )
+
+    assert response.status_code == 403
+    assert MINERU_LICENSE_ADMIN_ONLY_MESSAGE in response.text
+    assert mineru_license_acknowledged(settings) is acknowledged_before
+    assert not PARSER_SETTINGS_STORE.path(settings).exists()
+
+
+def test_non_system_admin_can_use_mineru_after_acknowledgement(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """確認の後は、文書解析の設定の権限を持つほかの利用者も MinerU を選べる。"""
+    settings = get_settings()
+    set_mineru_license_acknowledgement(settings, by="管理者 A", at=ACKNOWLEDGED_AT)
+    _as_actor(monkeypatch, "利用者 B", system_admin=False)
+
+    response = client.patch(
+        "/api/settings/parser-adapters",
+        json={
+            "adapter_backend": "mineru",
+            "mineru_enabled": True,
+            "mineru_license_acknowledged": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["mineru_license"]["acknowledged_by"] == "管理者 A"
+
+
+def test_non_system_admin_without_acknowledgement_still_gets_422_for_mineru(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    _as_actor(monkeypatch, "利用者 B", system_admin=False)
+
+    response = client.patch(
+        "/api/settings/parser-adapters",
+        json={"adapter_backend": "mineru", "mineru_license_acknowledged": False},
+    )
+
+    assert response.status_code == 422

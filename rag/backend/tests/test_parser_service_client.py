@@ -19,6 +19,7 @@ from app.clients.parser_service import (
     supported_formats_label,
 )
 from app.config import Settings
+from app.rag.mineru_license import set_mineru_license_acknowledgement
 from app.schemas.document import SourceModality, SourceProfile
 
 
@@ -135,12 +136,9 @@ def test_runner_fail_fast_raises_when_service_unreachable(
 
 
 def test_runner_fail_fast_raises_when_external_parser_is_unconfigured() -> None:
-    client = ParserServiceClient(
-        Settings(
-            rag_parser_mineru_api_host="",
-            rag_parser_mineru_license_acknowledged_at="2026-10-26T00:00:00+00:00",
-        )
-    )
+    settings = Settings(rag_parser_mineru_api_host="")
+    set_mineru_license_acknowledgement(settings, by="", at="2026-10-26T00:00:00+00:00")
+    client = ParserServiceClient(settings)
 
     with pytest.raises(ParserServiceUnavailableError) as exc_info:
         client.runner(

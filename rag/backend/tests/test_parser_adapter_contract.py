@@ -12,6 +12,7 @@ from rag_parser_core.result import ParserRegistryResult
 from app.config import Settings
 from app.rag import parser_adapter_contract as parser_adapter_contract_module
 from app.rag import parser_adapter_contract_cli, parser_adapter_readiness
+from app.rag.mineru_license import set_mineru_license_acknowledgement
 from app.rag.parser_adapter_contract import (
     ParserAdapterCompatibilityCase,
     ParserAdapterCompatibilityMatrix,
@@ -302,14 +303,15 @@ def test_compatibility_matrix_mineru_unconfigured_connection_is_missing(
         lambda *_args: (False, None, None),
     )
     monkeypatch.setattr(parser_registry, "_module_available", lambda name: name == "mineru")
+    settings = Settings(
+        rag_parser_adapter_backend="mineru",
+        rag_parser_mineru_enabled=True,
+        rag_parser_mineru_api_host="",
+    )
+    set_mineru_license_acknowledgement(settings, by="", at="2026-10-26T00:00:00+00:00")
 
     matrix = run_parser_adapter_compatibility_matrix(
-        Settings(
-            rag_parser_adapter_backend="mineru",
-            rag_parser_mineru_enabled=True,
-            rag_parser_mineru_api_host="",
-            rag_parser_mineru_license_acknowledged_at="2026-10-26T00:00:00+00:00",
-        ),
+        settings,
         fixture_root=fixture_root,
         fixture_specs=(
             ParserAdapterFixtureSpec(

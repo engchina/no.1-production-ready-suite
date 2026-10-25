@@ -21,6 +21,7 @@ from app.clients.external_parser import (
     _RenderedPage,
 )
 from app.config import Settings
+from app.rag.mineru_license import set_mineru_license_acknowledgement
 from app.schemas.document import SourceModality, SourceProfile
 
 
@@ -200,13 +201,14 @@ def _mineru_handler(
 
 
 def _mineru_settings(**overrides: object) -> Settings:
-    return Settings(
+    settings = Settings(
         rag_parser_mineru_api_host=f"{_MINERU_HOST}/",
         rag_parser_mineru_api_key="mineru-secret",
-        # 管理者が MinerU のライセンスの条件を確認済み（#3359）。
-        rag_parser_mineru_license_acknowledged_at="2026-10-26T00:00:00+00:00",
         **overrides,  # type: ignore[arg-type]
     )
+    # system_admin が MinerU のライセンスの条件を確認済み（#3359）。
+    set_mineru_license_acknowledgement(settings, by="", at="2026-10-26T00:00:00+00:00")
+    return settings
 
 
 def test_mineru_v1_parses_middle_json_with_page_bbox_table_and_auth(

@@ -72,7 +72,14 @@ from pr_system_settings.model import (
 )
 from pr_system_settings.model import enterprise_ai_seed as enterprise_ai_seed
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    PrivateAttr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from rag_parser_core.sheet_records import ExcelOptions
 from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
@@ -419,6 +426,12 @@ class Settings(
 
     # 環境変数名は属性名から決める（共通の属性は `PLATFORM_*`、それ以外は `RAG_*`。#211）。
     model_config = product_settings_config(prefix="RAG_", backend_dir=BACKEND_ROOT)
+
+    # MinerU のライセンスの条件の確認（確認した人の表示名, UTC の ISO 8601 の日時。#3359）。
+    # 環境変数・`.env` では書けないよう、Settings の項目にせず private にする。書けるのは
+    # 「文書解析」画面（system_admin）の保存だけで、parser-settings.json から読む
+    # （app.rag.mineru_license）。model_copy は private の値も写す。
+    _mineru_license_acknowledgement: tuple[str, str] = PrivateAttr(default=("", ""))
 
     @classmethod
     def settings_customise_sources(
@@ -2256,16 +2269,6 @@ class Settings(
         default="", description="MinerU 4.x の V1 API（/v1/parse/jobs）の base URL。"
     )
     rag_parser_mineru_api_key: str = Field(default="", repr=False)
-    # MinerU のライセンスの条件の確認（#3359）。「文書解析」画面で管理者が確認すると
-    # parser-settings.json に保存する。空の間は MinerU を有効・選択・実行できない。
-    rag_parser_mineru_license_acknowledged_by: str = Field(
-        default="",
-        description="MinerU のライセンスの条件を確認した管理者の表示名(画面の確認で保存する)。",
-    )
-    rag_parser_mineru_license_acknowledged_at: str = Field(
-        default="",
-        description="MinerU のライセンスの条件を確認した日時(UTC の ISO 8601。画面で保存する)。",
-    )
     # MinerU 4.0 は解析の方式（pipeline / vlm / hybrid）を品質の tier にまとめた（#1329）。
     # OCR の言語は MinerU の API サーバーの起動時の設定で、V1 の request には無い。
     rag_parser_mineru_tier: MineruTier = Field(
@@ -2946,7 +2949,13 @@ def resolve_model_settings_file(path_value: str) -> Path:
     return (PLATFORM_ENV_FILE.parent / path).resolve()
 
 
-_PARSER_ADAPTER_FIELDS = tuple(_PersistedParserAdapterSettings.model_fields)
+# MinerU のライセンスの確認（#3359）は Settings の項目ではなく private の値に読み書きする。
+_MINERU_LICENSE_FIELDS = ("mineru_license_acknowledged_by", "mineru_license_acknowledged_at")
+_PARSER_ADAPTER_FIELDS = tuple(
+    name
+    for name in _PersistedParserAdapterSettings.model_fields
+    if name not in _MINERU_LICENSE_FIELDS
+)
 # parser の API key（JSON に書かず、RAG の backend/.env に保存する。#106 / #211）。
 PARSER_SECRET_ATTRS = ("rag_parser_mineru_api_key", "rag_parser_dots_ocr_api_key")
 
@@ -2970,10 +2979,20 @@ def _load_parser_adapters(settings: Settings, raw: Mapping[str, Any]) -> None:
     parser = _PersistedParserAdapterSettings.model_validate(raw)
     for name in _PARSER_ADAPTER_FIELDS:
         setattr(settings, f"rag_parser_{name}", getattr(parser, name))
+    settings._mineru_license_acknowledgement = (
+        parser.mineru_license_acknowledged_by,
+        parser.mineru_license_acknowledged_at,
+    )
 
 
 def _dump_parser_adapters(settings: Settings) -> dict[str, Any]:
-    return {name: getattr(settings, f"rag_parser_{name}") for name in _PARSER_ADAPTER_FIELDS}
+    document: dict[str, Any] = {
+        name: getattr(settings, f"rag_parser_{name}") for name in _PARSER_ADAPTER_FIELDS
+    }
+    by, at = settings._mineru_license_acknowledgement
+    document["mineru_license_acknowledged_by"] = by
+    document["mineru_license_acknowledged_at"] = at
+    return document
 
 
 # モデル設定の読み書きは3製品共通（platform の pr_system_settings。#103）。

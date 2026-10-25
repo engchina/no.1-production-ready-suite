@@ -302,6 +302,8 @@ def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     """mutable runtime settings をテスト既定値へ戻す。"""
+    from app.rag.mineru_license import set_mineru_license_acknowledgement
+
     settings.upload_storage_backend = "local"
     settings.object_storage_namespace = ""
     settings.object_storage_bucket = ""
@@ -342,9 +344,8 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.rag_parser_docling_enabled = False
     settings.rag_parser_unstructured_enabled = True
     settings.rag_parser_mineru_enabled = False
-    # MinerU のライセンスの条件の確認（#3359）は未確認から始める。
-    settings.rag_parser_mineru_license_acknowledged_by = ""
-    settings.rag_parser_mineru_license_acknowledged_at = ""
+    # MinerU のライセンスの条件の確認（#3359）は未確認から始める（private の値）。
+    set_mineru_license_acknowledgement(settings, by="", at="")
     settings.rag_parser_dots_ocr_enabled = False
     settings.oci_genai_embedding_model = "cohere.embed-v4.0"
     settings.oci_genai_embedding_dim = 1536
