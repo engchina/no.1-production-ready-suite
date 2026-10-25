@@ -56,6 +56,15 @@ describe("formatChatProgressDuration", () => {
 });
 
 describe("ChatProgress", () => {
+  it("一部だけの記録は、開いた中身の段の一覧の後ろに案内を出す（#3226）", () => {
+    const steps: ChatProgressStep[] = [{ id: "s1", label: "合成の工程", status: "done", startedAt: 0, finishedAt: 1000 }];
+    render(<ChatProgress steps={steps} partial testId="progress" />);
+    act(() => q("progress-summary")?.click());
+    expect(q("progress-partial")?.textContent).toBe("一部の処理だけを記録しています。");
+    render(<ChatProgress steps={steps} testId="progress" />);
+    expect(q("progress-partial")).toBeNull();
+  });
+
   it("段階が無いときは何も出さない", () => {
     expect(renderToStaticMarkup(<ChatProgress steps={[]} />)).toBe("");
   });

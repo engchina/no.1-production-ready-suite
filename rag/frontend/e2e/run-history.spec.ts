@@ -680,15 +680,16 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
 
     await page.goto(`/history/${partial.run_id}`);
     await page.getByTestId("run-history-timeline-summary").click();
-    await page.getByTestId("run-history-process-details").click();
-    await expect(page.getByTestId("run-history-trace-partial")).toHaveText("一部の処理だけを記録しています。");
+    await expect(page.getByTestId("run-history-timeline-partial")).toHaveText("一部の処理だけを記録しています。");
     // 画面は実行の id で読む（任意の trace id を渡さない）。
     expect(trace.requests).toContain(partial.run_id);
     await expectNoPageOverflow(page);
 
     await page.goto(`/history/${legacy.run_id}`);
+    // 終わった直後の記録と区別できないので、書き終わりを待つ読み直し（共通の hook。およそ 3 秒）の後に出る。
     await expect(page.getByTestId("run-history-timeline-empty")).toHaveText(
-      "この実行は古い形式の記録のため、処理の経過を表示できません。"
+      "この実行は古い形式の記録のため、処理の経過を表示できません。",
+      { timeout: 10_000 }
     );
     await expect(page.getByTestId("run-history-timeline-summary")).toHaveCount(0);
     await expectNoPageOverflow(page);

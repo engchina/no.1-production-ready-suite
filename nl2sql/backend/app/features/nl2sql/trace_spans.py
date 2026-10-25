@@ -23,8 +23,8 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from opentelemetry import trace
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from pr_backend_core.chat_progress import parse_chat_progress_events
+from pr_backend_core.observability.mcp_trace import traceparent_links
 from pr_backend_core.observability.trace_store import (
     ConnectionFactory,
     TraceSpanOwner,
@@ -198,16 +198,9 @@ def trace_links(carrier: Mapping[str, str]) -> list[trace.Link]:
     """要求の span context を span link にする（表の親子にはしない。形の違う値は捨てる）。
 
     画面の要求で作ったジョブは、ブラウザが送った traceparent を親にせず新しい trace で実行し、
-    要求との関係は export する trace の span link にだけ残す（共通の `mcp_server_trace` と同じ扱い）
-    。
+    要求との関係は export する trace の span link にだけ残す（共通の `traceparent_links`）。
     """
-
-    traceparent = validated_trace_context(carrier).get("traceparent")
-    if not traceparent:
-        return []
-    extracted = TraceContextTextMapPropagator().extract({"traceparent": traceparent})
-    span_context = trace.get_current_span(extracted).get_span_context()
-    return [trace.Link(span_context)] if span_context.is_valid else []
+    return traceparent_links(validated_trace_context(carrier).get("traceparent"))
 
 
 def span_details_of(update: SpanUpdate) -> dict[str, Any] | None:

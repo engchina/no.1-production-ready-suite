@@ -45,7 +45,6 @@ import { profileRecordDisplayLabel } from "../profileDisplay";
 import type { HistoryItem } from "../types";
 import { useNl2SqlTraceProgress } from "../useTraceProgress";
 import { ProgressLegacyNotice } from "./ProgressLegacyNotice";
-import { ProgressPartialNotice } from "./ProgressPartialNotice";
 
 /*
  * 実行履歴の全幅の詳細（`?id=<run_id>`。#1955。UX 契約 run-history.md「詳細」）。
@@ -121,13 +120,9 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
 
   // 処理の詳細（#2325）: 呼び出し元・生成した SQL・エンジンの試行を、処理の経過のタイムラインの後ろに既定で閉じて置く
   // （3 製品の実行の詳細とチャットの処理の経過で同じ名前・部品・位置）。
-  // 書けなかった span がある記録は、処理の詳細の先頭に一部だけの記録の案内を出す（共通の部品が trace の記録の
-  // 欠けを出す位置と同じ。#3226 の案 A）。
-  const partialNotice = progress.partial && timelineSteps.length > 0;
   const processDetails =
-    partialNotice || showGeneratedSql || engineErrors.length > 0 || callerFacts.length > 0 ? (
+    showGeneratedSql || engineErrors.length > 0 || callerFacts.length > 0 ? (
       <>
-        {partialNotice ? <ProgressPartialNotice testId="history-detail-timeline-partial" /> : null}
         {callerFacts.length > 0 ? <RunFactList facts={callerFacts} testId="history-detail-caller" /> : null}
         {showGeneratedSql ? (
           <div className="grid min-w-0 gap-1">
@@ -199,13 +194,9 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
               traceId={progress.traceId}
               title={t("history.detail.timeline")}
               steps={progress.legacy ? [] : timelineSteps}
-              empty={
-                progress.partial ? (
-                  <ProgressPartialNotice testId="history-detail-timeline-partial" />
-                ) : progress.legacy ? (
-                  <ProgressLegacyNotice testId="history-detail-timeline-legacy" />
-                ) : undefined
-              }
+              empty={progress.legacy && !progress.partial ? <ProgressLegacyNotice testId="history-detail-timeline-legacy" /> : undefined}
+              // 表に書けなかった span がある（#3226。3 製品共通の案内を段の一覧の後ろに出す）。
+              partial={progress.partial}
               labels={{ stepStatus: CHAT_PROGRESS_LABELS.status }}
               totalDurationMs={item.elapsed_ms ?? null}
               processDetailsProps={{ title: t("history.detail.technical"), testId: "history-detail-technical", summaryTestId: "history-detail-process-details" }}

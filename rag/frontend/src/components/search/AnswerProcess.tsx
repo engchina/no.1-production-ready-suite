@@ -96,12 +96,6 @@ export function AnswerProcess({
       {details}
     </RunProcessDetails>
   ) : null;
-  const partialNote =
-    partial && rows.length > 0 ? (
-      <p className="text-xs text-fg-muted" data-testid={testId ? `${testId}-partial` : undefined}>
-        {traceLabels.partial}
-      </p>
-    ) : null;
   return (
     <section
       className={className}
@@ -116,14 +110,9 @@ export function AnswerProcess({
           elapsedMs={elapsedMs}
           reconnecting={reconnecting}
           progressKey={progressKey}
-          footer={
-            partialNote || detailsDisclosure ? (
-              <>
-                {partialNote}
-                {detailsDisclosure}
-              </>
-            ) : null
-          }
+          // 表に書けなかった span がある（#3226。3 製品共通の案内を段の一覧の後ろに出す）。
+          partial={partial}
+          footer={detailsDisclosure}
           testId={testId}
         />
       ) : (
