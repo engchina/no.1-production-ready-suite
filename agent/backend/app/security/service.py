@@ -239,7 +239,7 @@ def get_security_service() -> SecurityService:
 
     RAG / NL2SQL と同じく、local でも production でも Oracle の `PLATFORM_*` / `AGENT_ROLE_*`
     （共通 `.env` の `PLATFORM_ORACLE_*`）を使う（#750）。local はログインを省略するだけで、
-    ユーザー管理・ロール管理・権限管理と、MCP のサービス利用者の解決は同じ DB を読む。
+    ユーザー管理・ロール管理・権限管理は同じ DB を読む。
     """
     global _SERVICE
     if _SERVICE is None:
