@@ -513,6 +513,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "cell_range": None,
                 "start": 12,
                 "end": 19,
+                "header_range": None,
             },
             {
                 "chunk_id": "chunk-4",
@@ -526,6 +527,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "cell_range": None,
                 "start": 33,
                 "end": 38,
+                "header_range": None,
             },
         ],
         "section_complete": True,
@@ -551,6 +553,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "cell_range": None,
                 "start": 12,
                 "end": 19,
+                "header_range": None,
             },
             {
                 "chunk_id": "chunk-4",
@@ -564,6 +567,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "cell_range": None,
                 "start": 20,
                 "end": 25,
+                "header_range": None,
             },
         ],
         "next_cursor": None,
