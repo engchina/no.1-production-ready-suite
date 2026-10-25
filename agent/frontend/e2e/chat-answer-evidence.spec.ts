@@ -533,7 +533,7 @@ test("実行の詳細の回答も同じ節で出し、根拠の塊は RAG と同
 // #3252: 保存した根拠は見る人の今の権限で確かめ直し、見られない根拠は backend が中身を返さず数（`withheld_evidence_count`）
 // だけを返す。画面は RAG と同じ共通の行「権限の無い根拠 N 件」を折りたたみに出し、「AI に渡した N 件」に含める。
 for (const viewport of VIEWPORTS) {
-  test(`今の権限で見られない根拠は数と理由だけを出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  test(`今の権限で見られない根拠は数と理由だけを出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     seedRun(mockApi);
     const run = mockApi.state.runs.find((item) => item.id === RUN_ID)!;
@@ -551,10 +551,10 @@ for (const viewport of VIEWPORTS) {
     await expect(withheld).toContainText("抜粋・資料名・原文は表示しません");
     await expect(citations.getByTestId("evidence-card")).toHaveCount(3);
     await expectNoHorizontalOverflow(page);
-    await page.screenshot({ path: `../../tmp/3252/agent-chat-withheld-${viewport.name}-${testInfo.project.name}.png`, fullPage: true });
 
     // 実行の詳細の「回答の根拠」も同じ。見られる根拠が 1 件も無くても、数の行だけを出す。
-    const items = run.artifacts.find((item) => item.kind === "answer_evidence")!.content;
+    const artifacts = run.artifacts as { kind: string; content: Record<string, unknown> }[];
+    const items = artifacts.find((item) => item.kind === "answer_evidence")!.content;
     Object.assign(items, { items: [], passed: 0, cited: 0, markers: [], passages: [] });
     Object.assign(run, { withheld_evidence_count: 3 });
     await page.goto(`/runs?id=${RUN_ID}`);
@@ -566,7 +566,6 @@ for (const viewport of VIEWPORTS) {
     await expect(section.getByTestId("evidence-withheld")).toContainText("権限の無い根拠 3 件");
     await expect(section.getByTestId("evidence-card")).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
-    await page.screenshot({ path: `../../tmp/3252/agent-run-withheld-${viewport.name}-${testInfo.project.name}.png`, fullPage: true });
   });
 }
 

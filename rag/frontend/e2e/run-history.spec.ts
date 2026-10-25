@@ -703,7 +703,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
 test.describe("実行履歴の詳細の権限の無い根拠（#3252）", { tag: "@responsive" }, () => {
   test("今の権限で見られない根拠は数と理由だけを出し、抜粋・資料名を出さない。見られる根拠が無くても数を出す", async ({
     page,
-  }, testInfo) => {
+  }) => {
     await mockLocalAuth(page);
     await mockRuns(page, [
       run(1, { withheld_evidence_count: 2 }),
@@ -725,7 +725,6 @@ test.describe("実行履歴の詳細の権限の無い根拠（#3252）", { tag:
     await expect(page.getByTestId("run-history-citations")).toContainText("受注マニュアル.pdf");
     expect(await findIconTextMisalignment(page, { root: '[data-testid="evidence-withheld"]' })).toEqual([]);
     await expectNoPageOverflow(page);
-    await page.screenshot({ path: `../../tmp/3252/rag-run-history-withheld-${testInfo.project.name}.png`, fullPage: true });
 
     // 見られる根拠が無い回答も、折りたたみに数だけを出す（「根拠はありません」にしない）。
     await page.goto("/history/run-3");
