@@ -251,7 +251,10 @@ def _failed_stage(stages: Iterable[Mapping[str, object]]) -> str | None:
 
 
 async def _purge_if_due(store: _RunStore, settings: Settings) -> None:
-    """保持期間（回答の記録と同じ `rag_answer_record_retention_days`）を過ぎた実行を消す。"""
+    """保持期間（回答の記録と同じ `rag_answer_record_retention_days`）を過ぎた実行を消す。
+
+    0（既定）は無期限で、消さない（#3235）。
+    """
     global _last_purge_at
     retention_days = settings.rag_answer_record_retention_days
     if retention_days <= 0:

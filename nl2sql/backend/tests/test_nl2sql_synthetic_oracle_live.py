@@ -124,12 +124,13 @@ def test_oracle_persistence_roundtrip_and_conflict_rollback() -> None:
         at = datetime.now(UTC)
         old = (at - timedelta(days=3)).isoformat()
         cutoff = (at - timedelta(hours=24)).isoformat()
-        for name, status, finished, context in [
-            ("expired", "completed", old, "test"),
-            ("boundary", "failed", cutoff, "test"),
-            ("recent-finish", "partial", at.isoformat(), "test"),
-            ("unknown", "unknown", None, "test"),
-            ("other", "no_data", old, "other"),
+        staging = {"APP.T": {"name": "APP.NL2SQL_SP_FIXTURE", "checksum": "digest", "count": 1}}
+        for name, status, finished, context, stage in [
+            ("expired", "completed", old, "test", staging),
+            ("boundary", "failed", cutoff, "test", {}),
+            ("recent-finish", "partial", at.isoformat(), "test", {}),
+            ("unknown", "unknown", None, "test", staging),
+            ("other", "no_data", old, "other", staging),
         ]:
             store.create(
                 value.model_copy(
@@ -140,24 +141,17 @@ def test_oracle_persistence_roundtrip_and_conflict_rollback() -> None:
                         "created_at": old,
                         "finished_at": finished,
                         "context_id": context,
+                        "staging": stage,
                     }
                 )
             )
-        with connection() as conn, conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO NL2SQL_SYNTHETIC_LOCKS (CONTEXT_ID,TARGET_NAME,RUN_ID) "
-                "VALUES ('test','APP.EXPIRED_FIXTURE','expired')"
-            )
-            conn.commit()
-        assert store.purge_expired("test", "test", at=at) == 1
-        assert store.get("expired") is None
-        assert store.by_key("test", "test", "expired") is None
-        for name in ["boundary", "recent-finish", "unknown", "other"]:
+        # 生成の記録は期間で消さない（#3235）。後始末の対象は一時表の管理情報が残る終端の記録だけ。
+        for name in ["expired", "boundary", "recent-finish", "unknown", "other"]:
             assert store.get(name) is not None
-        assert store.purge_expired("test", at=at + timedelta(microseconds=1)) == 1
-        with connection() as conn, conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM NL2SQL_SYNTHETIC_LOCKS")
-            assert cur.fetchone()[0] == 0
+        assert store.by_key("test", "test", "expired") is not None
+        assert [run.run_id for run in store.list_cleanup_candidates("test")] == ["expired"]
+        assert store.get("expired").review_expired(at)
+        assert not store.get("boundary").review_expired(at)
     finally:
         with adapter.connection() as conn, conn.cursor() as cur:
             for name in reversed(created):

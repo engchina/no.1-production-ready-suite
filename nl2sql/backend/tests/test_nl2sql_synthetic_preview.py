@@ -127,11 +127,32 @@ def test_discard_retries_cleanup_without_purging_receipt(service: Any, monkeypat
     old = service.store.get(run.run_id)
     old.finished_at = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
     service.store.save(old)
-    assert service.store.purge_expired(service.context) == 0
     cleanup.side_effect = None
     service.tick()
-    assert service.store.get(run.run_id) is None
+    # 一時表だけを片付け、生成の記録は残す（#3235）。
+    kept = service.store.get(run.run_id)
+    assert kept is not None and kept.staging == {} and kept.review_status == "discarded"
+    assert service.store.list_cleanup_candidates(service.context) == []
     service.adapter.generate_synthetic_data.assert_not_called()
+
+
+def test_review_window_expiry_keeps_record_read_only(service: Any, monkeypatch: Any) -> None:
+    """確認用データの期間（24 時間）を過ぎた記録は残し、適用・破棄だけを断る（#3235）。"""
+    run = ready(service, finished_at=(datetime.now(UTC) - timedelta(hours=25)).isoformat())
+    insert = Mock()
+    monkeypatch.setattr(service.preview, "apply", insert)
+    for kwargs in (
+        {"confirmation": "APP.T", "previews": {"APP.T": "digest"}},
+        {"discard": True},
+    ):
+        with pytest.raises(HTTPException) as error:
+            service.review(run.run_id, actor(), **kwargs)
+        assert error.value.status_code == 409
+        assert "24時間" in error.value.detail
+    insert.assert_not_called()
+    kept = service.get(run.run_id, actor())
+    assert kept.public()["review_expired"] is True
+    assert [item.run_id for item in service.list(actor())] == [run.run_id]
 
 
 def test_fk_order_and_cycle_rejection() -> None:

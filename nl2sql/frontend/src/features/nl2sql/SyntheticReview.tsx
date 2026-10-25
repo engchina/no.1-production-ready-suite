@@ -14,7 +14,7 @@ import { apiPost } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
 import { formatDateTime } from "@/lib/format";
-import { runFinished, type SyntheticRun } from "./syntheticRuns";
+import { reviewExpired, runFinished, type SyntheticRun } from "./syntheticRuns";
 
 export function SyntheticReview({ run, previews, stale, onUpdated }: {
   run: SyntheticRun; previews: Record<string, string>; stale: boolean;
@@ -42,7 +42,9 @@ export function SyntheticReview({ run, previews, stale, onUpdated }: {
   useResetExecutionConsent(() => setConfirmation(""), scope);
   const expected = run.targets.length === 1 ? run.targets[0].table_name : "ADMIN_EXECUTE";
   const allViewed = run.targets.every(target => Boolean(previews[target.table_name]));
-  const canApply = run.review_status === "ready" && run.status === "completed";
+  const expired = reviewExpired(run);
+  const canApply = run.review_status === "ready" && run.status === "completed" && !expired;
+  const canDiscard = runFinished(run) && !expired;
   const apply = async (discard: boolean) => {
     if (pending || stale || !active) return;
     const requestScope = scopeRef.current;
@@ -72,7 +74,7 @@ export function SyntheticReview({ run, previews, stale, onUpdated }: {
       {run.applied_at && ` ${formatDateTime(run.applied_at)}`}
     </Banner>
     {!['applied', 'discarded'].includes(run.review_status ?? '') && <>
-      <p className="text-sm text-fg-muted">{t("syntheticPreview.retention")}</p>
+      <p className="text-sm text-fg-muted">{t(expired ? "syntheticPreview.expired" : "syntheticPreview.retention")}</p>
       {canApply && <>
         <p className="text-sm">{t("syntheticPreview.viewed", { count: run.targets.filter(target => previews[target.table_name]).length, total: run.targets.length })}</p>
         <ExecutionConfirmationField value={confirmation} onChange={setConfirmation}
@@ -81,12 +83,12 @@ export function SyntheticReview({ run, previews, stale, onUpdated }: {
       </>}
       {run.status === "partial" && <Banner severity="warning">{t("syntheticPreview.partial")}</Banner>}
       {/* 適用と破棄は同じ確認データへの二者択一。1 つの操作行の反対の端に置き、隣り合わせない（破棄は確認語が不要なので確認語欄の外）。 */}
-      {(canApply || runFinished(run)) && (
+      {(canApply || canDiscard) && (
         <div className="flex flex-col gap-2 border-t border-border pt-3 sm:flex-row sm:items-center" data-testid="synthetic-review-actions">
           {canApply && (
             <Button type="button" size="lg" icon={Check} className="w-full sm:w-auto" disabled={pending || stale || !allViewed || confirmation.trim() !== expected} loading={pending && pendingAction === "apply"} onClick={() => void apply(false)}>{t("syntheticPreview.apply")}</Button>
           )}
-          {runFinished(run) && (
+          {canDiscard && (
             <Button type="button" size="lg" variant="ghost" tone="danger" icon={Trash2} className="w-full sm:ml-auto sm:w-auto" disabled={pending || stale} loading={pending && pendingAction === "discard"} onClick={() => void apply(true)}>{t("syntheticPreview.discard")}</Button>
           )}
         </div>

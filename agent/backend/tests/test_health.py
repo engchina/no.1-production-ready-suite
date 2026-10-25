@@ -2534,6 +2534,43 @@ def test_oracle_projection_retention_removes_old_projection_rows() -> None:
     )
 
 
+def test_oracle_projection_keeps_old_rows_by_default() -> None:
+    """Run の projection の保持日数の既定は 0（無期限）で、古い Run を消さない（#3235）。"""
+    store = _FakeOracleStore()
+
+    def connect() -> _FakeOracleConnection:
+        return _FakeOracleConnection(store)
+
+    assert Settings().agent_runtime_projection_retention_days == 0
+    repository = AgentRuntimeOracleNormalizedRepository(
+        projection_retention_days=Settings().agent_runtime_projection_retention_days,
+        projection_write_mode="incremental",
+        connect_factory=connect,
+    )
+    _seed_run(repository, "default retention keeps rows")
+    old = datetime.now(UTC) - timedelta(days=3650)
+    store.rows_by_table.setdefault("AGENT_RUNTIME_RUNS", []).append(
+        {
+            "run_id": "run_old",
+            "agent_id": "default",
+            "status": "completed",
+            "goal": "old run",
+            "metadata_json": "{}",
+            "pending_tool_calls_json": "[]",
+            "created_at": old,
+            "updated_at": old,
+        }
+    )
+
+    _seed_run(repository, "default retention saves again")
+
+    assert any(row["run_id"] == "run_old" for row in store.rows_by_table["AGENT_RUNTIME_RUNS"])
+    assert not any(
+        "NUMTODSINTERVAL(:RETENTION_DAYS, 'DAY')" in statement
+        for statement in store.executed_statements
+    )
+
+
 def test_global_tool_call_audit_uses_oracle_projection(monkeypatch: MonkeyPatch) -> None:
     store = _FakeOracleStore()
 
