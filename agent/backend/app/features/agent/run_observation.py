@@ -302,10 +302,8 @@ def observe_run(run: RunState) -> RunObservationData:
     calls: list[ObservedToolCallItem] = []
     evidence: list[ObservedEvidenceItem] = []
     seen: dict[tuple[str, str], int] = {}
-    tool_steps = [step for step in run.steps if step.tool_call is not None]
-    for index, step in enumerate(tool_steps):
-        call = step.tool_call
-        assert call is not None
+    tool_steps = [(step, step.tool_call) for step in run.steps if step.tool_call is not None]
+    for index, (step, call) in enumerate(tool_steps):
         tool = mcp_base_tool_name(call.name)
         rag = call.name.startswith(_RAG_PREFIX)
         nl2sql = call.name.startswith(_NL2SQL_PREFIX)
