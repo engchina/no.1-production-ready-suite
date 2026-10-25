@@ -2753,6 +2753,9 @@ test("ユーザー管理は一覧 + 詳細（狭い一覧・広い詳細）で�
   await expect(usersLayout).toBeVisible();
 
   await adminUserRow.locator("td").first().click();
+  // 選択が切り替わるまで待つ。待たずに「編集」を押すと、前に選んだ利用者の編集を開く（#3233）。
+  await expect(page).toHaveURL(/[?&]user=admin-user/u);
+  await expect(adminUserRow).toHaveAttribute("data-selected", "true");
   await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集" }).click();
   expect(await topLevelPanelStyle(page, "edit", "security-users")).toEqual(formStyle);
   // 既存の割り当てを持つユーザーの編集でも、システム管理者のロールは選択肢に出さない（#1792）。
