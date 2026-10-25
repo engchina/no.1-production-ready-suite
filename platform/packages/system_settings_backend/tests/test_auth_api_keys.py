@@ -199,6 +199,26 @@ def test_self_service_lists_and_revokes_only_own_keys() -> None:
     assert service.list_api_keys(admin, all_users=True) == []
 
 
+def test_api_key_names_follow_the_viewer_visibility() -> None:
+    """実行履歴の「MCP（キーの名前）」: system_admin は全員、それ以外は自分のキーだけ（#3348）。"""
+    service, store = _service()
+    alice = _user(service, store, "alice", "menu.search")
+    bob = _user(service, store, "bob", "menu.search")
+    admin = _admin(service)
+    alice_key, _ = _create(service, alice, name="alice のキー")
+    bob_key, _ = _create(service, bob, name="bob のキー")
+    wanted = [alice_key.key_id, bob_key.key_id, "missing", ""]
+    assert service.api_key_names(alice, wanted) == {alice_key.key_id: "alice のキー"}
+    assert service.api_key_names(admin, wanted) == {
+        alice_key.key_id: "alice のキー",
+        bob_key.key_id: "bob のキー",
+    }
+    assert service.api_key_names(alice, []) == {}
+    # 削除したキーは名前を返さない。
+    service.revoke_api_key(alice_key.key_id, actor=alice)
+    assert service.api_key_names(admin, wanted) == {bob_key.key_id: "bob のキー"}
+
+
 def test_each_user_can_hold_a_limited_number_of_keys() -> None:
     service, store = _service()
     user = _user(service, store, "searcher", "menu.search")
