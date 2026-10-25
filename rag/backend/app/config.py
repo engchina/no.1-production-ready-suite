@@ -723,6 +723,11 @@ class Settings(
             "text/markdown",
             "text/csv",
             "text/tab-separated-values",
+            # reStructuredText・Org(プレーンテキストとして読む。#3351)。
+            "text/x-rst",
+            "text/prs.fallenstein.rst",
+            "text/org",
+            "text/x-org",
             "text/html",
             "application/xhtml+xml",
             "application/json",
@@ -730,6 +735,8 @@ class Settings(
             "application/jsonlines",
             "application/ndjson",
             "application/xml",
+            # .xml は text/xml でも送られる(#3360)。
+            "text/xml",
             "application/csv",
             "application/x-ndjson",
             "message/rfc822",
@@ -746,6 +753,11 @@ class Settings(
             "application/vnd.ms-word.document.macroEnabled.12",
             "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
             "application/vnd.ms-excel.sheet.macroEnabled.12",
+            # ODT・RTF(ファイル準備の Office→PDF で PDF にしてから読む。#3351)。
+            "application/vnd.oasis.opendocument.text",
+            "application/rtf",
+            "application/x-rtf",
+            "text/rtf",
             "audio/aac",
             "audio/flac",
             "audio/mp3",

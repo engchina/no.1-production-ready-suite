@@ -1112,38 +1112,25 @@ def test_policy_instructions_leave_tool_owned_clarifications_to_the_tools() -> N
     assert "options を空にして、自由入力で聞いてください" in exposed
 
 
-def test_confirmation_before_any_tool_is_sent_back_to_the_tools_first(
+def test_confirmation_before_any_tool_asks_with_free_text_only(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    """ツールを呼ぶ前の確認は中断せず、先にツールで調べさせる（NL2SQL の確認がカードになる）。"""
+    """ツールを呼ぶ前の確認も中断して聞き、モデルが作った選択肢は外して自由入力にする。
+
+    中断せずに「先にツールで調べる」を返すと、モデルは確認を出したと取り違える（#3352）。
+    選択肢はツールの結果で確かめられないので外す（#1917）。
+    """
     monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
-    query = {"question": GOAL, "profile_id": PROFILE}
     model = _script(
         monkeypatch,
         _ask("call-early"),
-        [function_call("nl2sql__nl2sql_query", query, call_id="call-1")],
-        [assistant_message("どの日付の列で期間を絞りますか？")],
+        [assistant_message("今年度の売上は 1,200 です。")],
     )
     run = _run()
-    seen = _tool_output(model, 1, "call-early")
-    assert seen["status"] == "consult_tools_first"
-    assert "nl2sql_query" in seen["instruction"]
-    # Agent 自身の期間の確認は出ず、NL2SQL の確認事項がカードになる（期間を重ねて聞かない）。
-    [confirmation] = run.confirmations
-    assert confirmation.source == "nl2sql"
-    assert run.status == RunStatus.COMPLETED
-
-
-def test_confirmation_without_tools_twice_asks_with_free_text_only(
-    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
-) -> None:
-    """差し戻しの後もツールを呼ばずに確認したら、モデルが作った選択肢を外して自由入力で聞く。"""
-    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
-    _script(monkeypatch, _ask("call-early"), _ask("call-again"))
-    run = _run()
     assert run.status == RunStatus.WAITING_CONFIRMATION
+    assert len(model.calls) == 1
     [confirmation] = run.confirmations
-    assert confirmation.call_id == "call-again"
+    assert (confirmation.source, confirmation.call_id) == ("agent", "call-early")
     assert confirmation.items[0].prompt == "どの期間の売上を見ますか？"
     assert confirmation.items[0].options == []
 
@@ -1601,3 +1588,188 @@ def test_rag_evidence_tools_get_the_run_goal_as_original_question(
     )
     _run("受注を取り消す手順は？")
     assert mcp.calls_of("rag_search")[-1]["arguments"]["original_question"] == "モデルが付けた質問"
+
+
+# ---- 確認のツールの呼び出しは確認待ちにする（#3352） --------------------------------------------
+
+_RAG_WITH_CONDITIONS = {"query": "資料 概要", "conditions": {"screen": "請求"}}
+
+
+def test_confirmation_after_the_grounding_retry_waits_for_the_user(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """ツールを呼ばずに答えて差し戻された後の確認も、Run を確認待ちにして問いを出す（#3352）。
+
+    ツールを呼ぶ前の確認を中断せずにモデルへ返すと、モデルは確認を出したと取り違え、ツールを
+    呼んだ後に「確認の答えを待っている」だけの本文で完了した。
+    """
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
+    model = _script(
+        monkeypatch,
+        [assistant_message("対象の資料を教えてください。")],
+        _ask("call-ask", question="どの資料の概要ですか？"),
+        [function_call("rag__rag_search", _RAG_WITH_CONDITIONS, call_id="call-rag")],
+        [assistant_message("（上記の確認質問に対するご回答をお待ちしております。）")],
+    )
+    run = _run("この資料の概要を教えてください")
+    assert run.status == RunStatus.WAITING_CONFIRMATION
+    [confirmation] = run.confirmations
+    assert (confirmation.source, confirmation.call_id, confirmation.status) == (
+        "agent",
+        "call-ask",
+        "pending",
+    )
+    assert confirmation.items[0].prompt == "どの資料の概要ですか？"
+    # ツールの結果から作っていない選択肢は出さない（自由入力で聞く。#1917）。
+    assert confirmation.items[0].options == []
+    # 確認を待つ間は、次のモデルの呼び出し・ツールの呼び出しをしない。
+    assert len(model.calls) == 2
+    assert mcp.calls_of("rag_search") == []
+    assert not any(item.kind == "answer" for item in run.artifacts)
+
+
+def _mcp_call(client: TestClient, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    response = client.post(
+        "/api/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        },
+    )
+    assert response.status_code == 200, response.text
+    structured: dict[str, Any] = response.json()["result"]["structuredContent"]
+    return structured
+
+
+def test_mcp_chat_returns_the_confirmation_after_the_grounding_retry(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """MCP の agent_chat も、差し戻しの後の確認を confirmation で返し、答えで続ける（#3352）。"""
+    from app.features.agent import mcp_server
+
+    monkeypatch.setattr(mcp_server, "wait_poll_seconds", 0.01)
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
+    _script(
+        monkeypatch,
+        [assistant_message("対象の資料を教えてください。")],
+        _ask("call-ask", question="どの資料の概要ですか？", options=[]),
+        [function_call("rag__rag_search", _RAG_WITH_CONDITIONS, call_id="call-rag")],
+        [assistant_message("請求の資料の概要です。")],
+    )
+    client = TestClient(app)
+    asked = _mcp_call(
+        client, "agent_chat", {"agent_id": AGENT_ID, "question": "この資料の概要を教えてください"}
+    )
+    assert asked["status"] == "waiting_confirmation"
+    assert asked["answer"] in {None, ""}
+    confirmation = asked["confirmation"]
+    assert confirmation["source"] == "agent"
+    [item] = confirmation["items"]
+    assert (item["prompt"], item["options"]) == ("どの資料の概要ですか？", [])
+
+    answered = _mcp_call(
+        client,
+        "agent_answer_confirmation",
+        {
+            "run_id": asked["run_id"],
+            "confirmation_id": confirmation["id"],
+            "answers": [{"item_id": item["id"], "other_text": "請求の資料"}],
+        },
+    )
+    assert (answered["status"], answered["answer"]) == ("completed", "請求の資料の概要です。")
+    assert answered["confirmation"] is None
+    assert len(mcp.calls_of("rag_search")) == 1
+
+
+def test_confirmation_alone_waits_and_resumes(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """確認だけの応答: 確認待ちにし、答えで同じ Run を再開して続きを答える（#3352）。"""
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
+    model = _script(
+        monkeypatch,
+        [function_call("rag__rag_search", _RAG_WITH_CONDITIONS, call_id="call-rag")],
+        _ask("call-ask", question="どの資料の概要ですか？", options=[]),
+        [assistant_message("請求の資料の概要です。")],
+    )
+    run = _run("この資料の概要を教えてください")
+    assert run.status == RunStatus.WAITING_CONFIRMATION
+    [confirmation] = run.confirmations
+    assert confirmation.call_id == "call-ask"
+    assert len(model.calls) == 2
+
+    runtime_repository.decide_confirmation(
+        run.id,
+        confirmation.id,
+        action="answer",
+        answers=[ConfirmationAnswer(item_id="item_1", other_text="請求の資料")],
+    )
+    resumed = _resume(run.id)
+    assert resumed.status == RunStatus.COMPLETED
+    seen = _tool_output(model, 2, "call-ask")
+    assert (seen["status"], seen["other_text"]) == ("answered", "請求の資料")
+
+
+@pytest.mark.parametrize("consulted", [False, True], ids=["before-tools", "after-tools"])
+def test_confirmation_holds_the_other_tool_calls_of_the_same_turn(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, consulted: bool
+) -> None:
+    """確認と同じ応答のほかのツールは、確認の答えを待つ間は実行しない（#3352）。
+
+    答えて再開すると、モデルは実行しなかったことを結果で知り、答えを見て呼び直せる。承認の要る
+    ツールも承認を求めない（確認の答えの後に呼び直したときに求める）。
+    """
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
+    monkeypatch.setattr(
+        builtin_runtime,
+        "_active_policy",
+        lambda: ToolPolicy(allow={"rag__rag_search"}, ask={"nl2sql__nl2sql_query"}),
+    )
+    query = {"question": GOAL, "profile_id": PROFILE, "requirement_session_id": "qs-1"}
+    first = (
+        [[function_call("rag__rag_search", _RAG_WITH_CONDITIONS, call_id="call-rag-0")]]
+        if consulted
+        else []
+    )
+    model = _script(
+        monkeypatch,
+        *first,
+        [
+            *_ask("call-ask", options=[]),
+            function_call("rag__rag_search", _RAG_WITH_CONDITIONS, call_id="call-rag"),
+            function_call("nl2sql__nl2sql_query", query, call_id="call-sql"),
+        ],
+        [function_call("rag__rag_search", _RAG_WITH_CONDITIONS, call_id="call-rag-2")],
+        [assistant_message("今年度の売上の資料の説明です。")],
+    )
+    run = _run()
+    assert run.status == RunStatus.WAITING_CONFIRMATION
+    assert [item.source for item in run.confirmations] == ["agent"]
+    assert run.approvals == []
+    assert len(mcp.calls_of("rag_search")) == (1 if consulted else 0)
+    assert mcp.calls_of("nl2sql_query") == []
+    # 実行しなかった呼び出しは step を作らない（処理の経過には実行しなかったツールの行を残す）。
+    assert not any(
+        step.tool_call is not None and step.tool_call.trace_id in {"call-rag", "call-sql"}
+        for step in run.steps
+    )
+
+    [confirmation] = run.confirmations
+    runtime_repository.decide_confirmation(
+        run.id,
+        confirmation.id,
+        action="answer",
+        answers=[ConfirmationAnswer(item_id="item_1", other_text="今年度")],
+    )
+    resumed = _resume(run.id)
+    assert resumed.status == RunStatus.COMPLETED
+    turn = 2 if consulted else 1
+    for call_id in ("call-rag", "call-sql"):
+        held = _tool_output(model, turn, call_id)
+        assert held["error_code"] == builtin_runtime.CONFIRMATION_PENDING_CODE
+    assert _tool_output(model, turn, "call-ask")["status"] == "answered"
+    # 答えの後にモデルが呼び直したツールは実行する。
+    assert len(mcp.calls_of("rag_search")) == (2 if consulted else 1)
+    assert mcp.calls_of("nl2sql_query") == []
