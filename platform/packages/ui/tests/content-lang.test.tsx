@@ -17,6 +17,7 @@ import {
   MarkdownText,
   normalizeContentLang,
   resolveContentLang,
+  type AnswerPassageRecords,
   type EvidenceListItem,
 } from "../src";
 import { SIMPLIFIED_ONLY_HAN, TRADITIONAL_ONLY_HAN } from "../src/lib/han-script-sets";
@@ -118,7 +119,7 @@ describe("共有の部品は利用者の内容に lang を付ける", () => {
     expect(langOf(html(<MarkdownText text={ZH_HANS} />), "[data-markdown-text]")).toBe("zh-Hans");
     expect(langOf(html(<MarkdownText text={ZH_HANS} lang={null} />), "[data-markdown-text]")).toBeNull();
     expect(langOf(html(<MarkdownText text={JA} lang="zh-TW" />), "[data-markdown-text]")).toBe("zh-Hant");
-    expect(langOf(html(<ExcerptContent text={ZH_HANT} testId="excerpt" />), '[data-testid="excerpt"]')).toBe("zh-Hant");
+    expect(langOf(html(<ExcerptContent text={ZH_HANT} testId="excerpt" />), '[data-testid="excerpt"] p')).toBe("zh-Hant");
   });
 
   it("判定できない本文には lang を付けない（画面の言語のまま）", () => {
@@ -141,12 +142,15 @@ describe("共有の部品は利用者の内容に lang を付ける", () => {
         ]}
       />
     );
-    expect(langOf(host, '[data-testid="answer-text"]')).toBe("zh-Hans");
+    // 段落・項目の文に付ける（入れ物には付けない。#3349）。
+    expect(langOf(host, '[data-testid="answer-text"]')).toBeNull();
+    expect(langOf(host, '[data-testid="answer-text"] > p')).toBe("zh-Hans");
+    expect(langOf(host, "li span")).toBe("zh-Hans");
   });
 
   it("節に分けない回答の本文（AnswerPlainText）", () => {
-    expect(langOf(html(<AnswerPlainText text={ZH_HANT} testId="plain" />), '[data-testid="plain"]')).toBe("zh-Hant");
-    expect(langOf(html(<AnswerPlainText text={ZH_HANT} lang={null} testId="plain" />), '[data-testid="plain"]')).toBeNull();
+    expect(langOf(html(<AnswerPlainText text={ZH_HANT} testId="plain" />), '[data-testid="plain"] [lang]')).toBe("zh-Hant");
+    expect(langOf(html(<AnswerPlainText text={ZH_HANT} lang={null} testId="plain" />), '[data-testid="plain"] [lang]')).toBeNull();
   });
 
   it("根拠の抜粋（EvidenceCard）は item.lang か本文から判定する", () => {
@@ -168,8 +172,126 @@ describe("共有の部品は利用者の内容に lang を付ける", () => {
     await act(async () => {
       root.render(<DocumentPreview kind="text" fileName="a.txt" loadText={async () => ZH_HANT} textKey="a" />);
     });
-    expect(langOf(host, '[data-testid="preview-text"]')).toBe("zh-Hant");
+    expect(langOf(host, '[data-testid="preview-text-body"]')).toBe("zh-Hant");
+    // 領域（読み上げの名前を持つ要素）には付けない（#3349）。
+    expect(langOf(host, '[data-testid="preview-text"]')).toBeNull();
     await act(async () => root.unmount());
     host.remove();
+  });
+});
+
+/** 要素から最も近い `lang`（無ければ null。画面の言語 `<html lang>` を継承する）。 */
+const nearestLang = (element: Element | null | undefined) => element?.closest("[lang]")?.getAttribute("lang") ?? null;
+
+function byText(host: HTMLElement, text: string): Element {
+  const found = [...host.querySelectorAll("*")].filter((element) => element.textContent === text);
+  // 同じ文字を持つ要素のうち、最も内側の要素。
+  const inner = found.find((element) => ![...element.children].some((child) => child.textContent === text));
+  if (!inner) throw new Error(`見つかりません: ${text}`);
+  return inner;
+}
+
+describe("部品・製品の文言は内容の lang を継承しない（#3349）", () => {
+  const passages: AnswerPassageRecords = {
+    marks: [{ text: ZH_HANS, state: "unverified", reasons: [{ code: "unsupported", label: "合成の理由", detail: "" }] }],
+    removed: [{ text: ZH_HANT, reasons: [{ code: "contradicted", label: "合成の除いた理由", detail: "" }] }],
+    warnings: [],
+  };
+
+  it("AnswerSections の見出し・根拠の行・ボタン・extra・決まった文言は画面の言語、内容は回答の言語", () => {
+    const entries = Array.from({ length: 12 }, (_, index) => ({
+      key: `e${index}`,
+      content: `${ZH_HANS}${index}`,
+      citations: [{ key: `c${index}`, label: `根拠：合成の資料${index} p.1` }],
+      extra: index === 0 ? <span>章節の原文を開く</span> : undefined,
+    }));
+    const host = html(
+      <AnswerSections
+        blocks={[
+          { kind: "paragraph", key: "p", content: ZH_HANS, citations: [{ key: "c", label: "根拠：合成の資料 p.2" }] },
+          { kind: "paragraph", key: "fixed", content: "資料の記載を以下に示します。", lang: null },
+          { kind: "content", key: "t", content: <div>{ZH_HANT}</div> },
+          {
+            kind: "section",
+            key: "s",
+            title: "資料により確認できた事項",
+            collapsible: true,
+            entries: [{ key: "note", content: "以下は合成の説明です。", muted: true, lang: null }, ...entries],
+          },
+          { kind: "section", key: "zh", title: "这些示例说明了什么", entries: [{ key: "z", content: ZH_HANS }] },
+        ]}
+        passages={passages}
+      />
+    );
+    // 内容は回答の言語。
+    expect(nearestLang(byText(host, ZH_HANS))).toBe("zh-Hans");
+    expect(nearestLang(byText(host, `${ZH_HANS}0`))).toBe("zh-Hans");
+    expect(nearestLang(byText(host, ZH_HANT))).toBe("zh-Hans");
+    // 部品・製品の文言は lang を継承しない（画面の言語）。
+    for (const text of [
+      "根拠：合成の資料 p.2",
+      "根拠：合成の資料0 p.1",
+      "資料により確認できた事項",
+      "資料の記載を以下に示します。",
+      "以下は合成の説明です。",
+      "章節の原文を開く",
+      "すべて表示（全 12 件）",
+      "確認が必要な点",
+      "根拠と矛盾し除いた内容",
+      "合成の除いた理由",
+    ]) {
+      // 付けないか、見出しの文字から判定した日本語（画面の言語と同じ）。
+      expect([null, "ja"], text).toContain(nearestLang(byText(host, text)));
+    }
+    // 回答の見出しは見出しの文字の言語。
+    expect(nearestLang(byText(host, "这些示例说明了什么"))).toBe("zh-Hans");
+    // 印の付いた段落の引用・外した段落の引用は回答の言語、印のボタンは画面の言語。
+    const marked = host.querySelector('[data-testid="answer-marked-passage"]');
+    expect(nearestLang(marked?.querySelector("[lang]"))).toBe("zh-Hans");
+    expect(nearestLang(host.querySelector('[data-testid="answer-passage-mark-toggle"]'))).toBeNull();
+    expect(nearestLang(host.querySelector('[data-testid="answer-removed-passage"] [lang]'))).toBe("zh-Hans");
+  });
+
+  it("AnswerPlainText の後ろに置くもの（生成中のカーソルなど）は画面の言語", () => {
+    const host = html(
+      <AnswerPlainText text={ZH_HANS} testId="plain">
+        <span>生成中</span>
+      </AnswerPlainText>
+    );
+    expect(nearestLang(byText(host, ZH_HANS))).toBe("zh-Hans");
+    expect(nearestLang(byText(host, "生成中"))).toBeNull();
+  });
+
+  it("MarkdownText のリンクの読み上げの補足は画面の言語", () => {
+    document.documentElement.lang = "ja";
+    const host = html(<MarkdownText text={`${ZH_HANS} [示例](https://example.com/)`} />);
+    expect(nearestLang(host.querySelector("a"))).toBe("zh-Hans");
+    expect(nearestLang(byText(host, "（新しいタブで開きます）"))).toBe("ja");
+  });
+
+  it("ExcerptContent の表のセルは内容の言語、表の読み上げの名前は画面の言語", () => {
+    const table = `<table><tr><th>列一</th><th>列二</th></tr><tr><td>这是值</td><td>说明</td></tr></table>`;
+    const host = html(<ExcerptContent text={`${ZH_HANS}
+${table}`} tableLabel="抜粋の表" testId="excerpt" />);
+    expect(nearestLang(host.querySelector('[data-testid="excerpt"] p'))).toBe("zh-Hans");
+    expect(nearestLang(byText(host, "这是值"))).toBe("zh-Hans");
+    expect(nearestLang(byText(host, "列一"))).toBe("zh-Hans");
+    expect(nearestLang(host.querySelector('[aria-label="抜粋の表"]'))).toBeNull();
+  });
+
+  it("EvidenceCard の抜粋は内容の言語、ファイル名などの項目は画面の言語", () => {
+    const host = html(
+      <ul>
+        <EvidenceCard item={evidence({ fileName: "合成の資料.txt" })} index={0} />
+      </ul>
+    );
+    expect(nearestLang(host.querySelector('[data-testid="citation-text"]'))).toBe("zh-Hans");
+    expect(nearestLang(byText(host, "合成の資料.txt"))).toBeNull();
+  });
+
+  it("ChatTurn の送った人・失敗の文言は質問の言語を継承しない", () => {
+    const host = html(<ChatTurn question={ZH_HANS} questionStatus="failed" failedLabel="送信に失敗しました" />);
+    expect(nearestLang(byText(host, ZH_HANS))).toBe("zh-Hans");
+    expect(nearestLang(byText(host, "送信に失敗しました"))).toBeNull();
   });
 });

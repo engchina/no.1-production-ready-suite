@@ -100,6 +100,17 @@ export function normalizeContentLang(value: string): string | undefined {
 }
 
 /**
+ * 画面の文言（部品・製品の文言）の言語。`<html lang>` の値（無ければ `ja`）。
+ *
+ * 共有の部品は内容の `lang` を内容だけを包む要素に付け、画面の文言はそれを継承しない所に置く（#3349）。内容の要素の
+ * 中に置くしかない部品の文言（リンクの中の読み上げの補足など）にだけ、この値の `lang` を付ける。
+ */
+export function uiTextLang(): string {
+  const lang = typeof document === "undefined" ? "" : document.documentElement.lang.trim();
+  return lang || "ja";
+}
+
+/**
  * 内容の要素に付ける `lang` を決める。`lang` が文字列（取込で分かっている言語）ならそれを使い、`null` なら付けない、
  * 渡さなければ（`undefined`）本文から {@link detectContentLang} で判定する。`zh`（文字の種類が分からない）は本文の
  * 判定が中国語ならその値、そうでなければ `zh` のまま。
