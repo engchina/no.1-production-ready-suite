@@ -813,7 +813,7 @@ for (const viewport of [
       .locator('[data-config-field="parser_adapter_backend"]');
     // 未確認の間は MinerU を選択肢に出さず、管理者の確認が要ることを示す（#3359）。
     await expect(parserRow).toContainText(
-      "管理者が「取込・検索・回答設定 › 文書解析」で MinerU のライセンスの条件を確認する必要があります"
+      "システム管理者が「取込・検索・回答設定 › 文書解析」で MinerU のライセンスの条件を確認する必要があります"
     );
     await panel.getByRole("combobox", { name: "文書解析" }).click();
     await expect(page.getByRole("option", { name: "Docling" })).toBeVisible();

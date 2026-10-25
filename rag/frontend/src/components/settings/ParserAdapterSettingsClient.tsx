@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 
 import { ApiErrorState } from "@/components/StateViews";
+import { useAuth } from "@/components/security/AuthProvider";
 import {
   SERVICE_PROFILE_ORDER,
   ServiceProfileBadge,
@@ -313,6 +314,10 @@ function OverviewCard({
     () => backendOptionsFromSettings(settings),
     [settings]
   );
+  // MinerU のライセンスの条件の確認・取り消しは system_admin だけ（#3359）。
+  const canAcknowledgeMineruLicense = useAuth().user?.is_system_admin === true;
+  const mineruLicenseLocked =
+    form.mineru_license_acknowledged && form.adapter_backend === "mineru";
   // CPU → OCI → GPU の順（サービス管理の節と同じ。#2042）。1 つの 2 列の grid に並べ、
   // 375px の 1 列でも同じ順にする（Docling・Unstructured / 構造化レコード JSONL・XML ツリー JSON /
   // OCI Document Understanding / MinerU・Dots.OCR。#2457）。
@@ -478,11 +483,12 @@ function OverviewCard({
             acknowledge={{
               id: "settings-parser-mineru-license-acknowledged",
               checked: form.mineru_license_acknowledged,
+              // 確認・取り消しは system_admin だけ（組織としての判断。backend は 403）。
               // 使用エンジンが MinerU の間は確認を外せない（backend も 422 で拒否する）。
-              disabled:
-                saving || (form.mineru_license_acknowledged && form.adapter_backend === "mineru"),
-              note:
-                form.mineru_license_acknowledged && form.adapter_backend === "mineru"
+              disabled: saving || !canAcknowledgeMineruLicense || mineruLicenseLocked,
+              note: !canAcknowledgeMineruLicense
+                ? t("mineruLicense.adminOnly")
+                : mineruLicenseLocked
                   ? t("mineruLicense.withdrawLocked")
                   : null,
               onChange: onMineruLicenseChange,

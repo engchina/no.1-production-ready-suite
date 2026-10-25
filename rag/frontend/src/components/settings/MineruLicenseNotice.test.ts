@@ -59,7 +59,7 @@ describe("MinerU のライセンスの案内", () => {
     const html = render({ acknowledgement: UNACKNOWLEDGED });
 
     expect(html).not.toContain('type="checkbox"');
-    expect(html).toContain("管理者が「取込・検索・回答設定 › 文書解析」で");
+    expect(html).toContain("システム管理者が「取込・検索・回答設定 › 文書解析」で");
   });
 
   it("確認済みなら確認した人を出す", () => {

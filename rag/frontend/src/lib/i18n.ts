@@ -234,10 +234,12 @@ export const ja = {
   "mineruLicense.acknowledgedAt": "確認済み（{at}）",
   "mineruLicense.withdrawLocked":
     "MinerU を使用エンジンにしている間は、確認を外せません。先に別の使用エンジンを選んでください。",
+  "mineruLicense.adminOnly":
+    "MinerU のライセンスの条件の確認と取り消しは、システム管理者だけができます。",
   "mineruLicense.selectBlocked":
     "MinerU を選ぶには、先に下の「MinerU のライセンスの条件を確認した」を確かめてください。",
   "mineruLicense.recipeUnacknowledged":
-    "MinerU を選ぶには、管理者が「取込・検索・回答設定 › 文書解析」で MinerU のライセンスの条件を確認する必要があります。",
+    "MinerU を選ぶには、システム管理者が「取込・検索・回答設定 › 文書解析」で MinerU のライセンスの条件を確認する必要があります。",
   "settings.parserAdapters.backend.dots_ocr.description": "外部 Dots.OCR API を使用",
   "settings.parserAdapters.backend.oci_document_understanding": "OCI Document Understanding",
   "settings.parserAdapters.backend.oci_document_understanding.description":

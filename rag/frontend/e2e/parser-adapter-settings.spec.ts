@@ -1,6 +1,6 @@
 import { mockFeaturePrompts, verifyFeaturePrompt } from "./_feature-prompt-helpers";
 import { expect, test, type Page } from "./fixtures/test";
-import { expectNoPageOverflow, mockLocalAuth, openSidebarNav } from "./_helpers";
+import { expectNoPageOverflow, mockAuthUser, mockLocalAuth, openSidebarNav } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
@@ -1059,6 +1059,25 @@ for (const viewport of [
     await acknowledge.check();
     await expect(mineruBackend).toBeEnabled();
     await expect(page.getByText("未保存の変更があります。")).toBeVisible();
+    await expectNoPageOverflow(page);
+  });
+
+  test(`MinerU のライセンスの確認はシステム管理者だけができる (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    // 文書解析の設定の権限はあるが system_admin ではない利用者（#3359）。
+    await mockAuthUser(page, { permissions: ["menu.settings_parser_adapters"] });
+    await mockParserAdapters(page);
+    await page.goto("/settings/parser-adapters");
+
+    const notice = page.getByTestId("mineru-license-notice");
+    await expect(notice).toContainText("MinerU Open Source License");
+    const acknowledge = notice.getByRole("checkbox", { name: "MinerU のライセンスの条件を確認した" });
+    await expect(acknowledge).not.toBeChecked();
+    await expect(acknowledge).toBeDisabled();
+    await expect(notice).toContainText(
+      "MinerU のライセンスの条件の確認と取り消しは、システム管理者だけができます。"
+    );
+    await expect(page.getByRole("radio", { name: /MinerU/ })).toBeDisabled();
     await expectNoPageOverflow(page);
   });
 
