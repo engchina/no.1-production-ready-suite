@@ -150,6 +150,8 @@ export function RunDetail({
   const outputs = userOutputArtifacts(run.artifacts);
   const internalRecords = internalRecordArtifacts(run.artifacts);
   const evidence = runAnswerEvidence(run.artifacts);
+  // 保存した根拠のうち、今の権限で見られない根拠の数（#3252）。
+  const withheldEvidence = run.withheld_evidence_count ?? 0;
   const validationContent =
     [...run.artifacts].reverse().find((artifact) => artifact.kind === ANSWER_VALIDATION_KIND)?.content ?? null;
   // 段落の印・外した段落・回答全体の注意（#2738）。記録の無い過去の Run は null（今までの表示のまま）。
@@ -346,11 +348,16 @@ export function RunDetail({
         }
         evidence={
           <>
-            {answers.length && evidence ? (
+            {answers.length && (evidence || withheldEvidence) ? (
               // 回答の根拠は RAG の実行の詳細と同じく別の Section（チャットと同じ「AI に渡した N 件 ／ 回答で引用
               // M 件」の折りたたみ。#2328・#2707）。
               <RunDetailSection title={t("run.section.evidence")} testId="run-evidence-section">
-                <AnswerEvidenceBlock runId={run.id} evidence={evidence} idPrefix={`run-${run.id}`} />
+                <AnswerEvidenceBlock
+                  runId={run.id}
+                  evidence={evidence}
+                  withheldCount={withheldEvidence}
+                  idPrefix={`run-${run.id}`}
+                />
               </RunDetailSection>
             ) : null}
             {run.approvals.length ? <ApprovalsSection run={run} /> : null}

@@ -448,6 +448,8 @@ function RunDetailView({ run }: { run: RunDetail }) {
   const statusLabels = runStatusLabels();
   const traceLabels = useTraceDetailsLabels();
   const succeeded = run.status === "success";
+  // 保存した根拠のうち、今の権限で見られない根拠の数（#3252）。
+  const withheld = run.withheld_evidence_count ?? 0;
   // 失敗は 3 製品共通の失敗のカード（チャットと同じ 1 文目・次の操作。#2342）。
   const failure = runFailure(run);
 
@@ -603,20 +605,23 @@ function RunDetailView({ run }: { run: RunDetail }) {
             }
             testId="run-history-evidence"
           >
-            {run.citations.length && run.answer_generated ? (
+            {(run.citations.length || withheld) && run.answer_generated ? (
               // チャットと同じ部品（「AI に渡した N 件 ／ 回答で引用 M 件」の折りたたみ・一定の高さの中のスクロール）。
+              // 今の権限で見られない根拠は数だけ（#3252）。
               <AnswerCitations
                 citations={run.citations}
                 idPrefix={`run-${run.run_id}`}
                 listTestId="run-history-citations"
                 cardProps={{ preview: canPreview }}
+                withheldCount={withheld}
               />
-            ) : run.citations.length ? (
+            ) : run.citations.length || withheld ? (
               <CitationList
                 citations={run.citations}
                 idPrefix={`run-${run.run_id}`}
                 listTestId="run-history-citations"
                 cardProps={{ preview: canPreview }}
+                withheldCount={withheld}
               />
             ) : (
               <p className="text-sm text-fg-muted">{t("history.result.noCitations")}</p>

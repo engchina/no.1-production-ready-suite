@@ -195,6 +195,14 @@ from app.features.agent.evaluation_excel import (
     parse_cases_xlsx,
     template_xlsx,
 )
+from app.features.agent.evidence_access import (
+    rag_document_ids,
+    unreadable_documents,
+    withheld_count,
+    withhold_artifacts,
+    withhold_events,
+    withhold_run,
+)
 from app.features.agent.feedback import (
     FEEDBACK_PAGE_SIZE,
     FEEDBACK_PAGE_SIZE_MAX,
@@ -2110,11 +2118,12 @@ async def get_thread(thread_id: str, request: Request) -> ApiResponse[ThreadView
         run.id: run.created_by_user_uuid for run in thread.runs if run.created_by_user_uuid != owner
     }
     names = await _run_people_names(thread.runs)
+    views = await _evidence_checked_views(request, thread.runs, names)
     return ApiResponse(
         data=ThreadView(
             thread_id=thread.thread_id,
             agent_id=thread.agent_id,
-            runs=[RunView.of(run, _run_viewer(request, run, names)) for run in thread.runs],
+            runs=views,
             owner_user_uuid=owner,
             owned=owner == viewer,
             actor_display_name=names.get(owner or "", "") if all_users else "",
@@ -2427,7 +2436,8 @@ async def get_run(
     """
     run = _readable_run(request, run_id)
     names = await _run_people_names([run])
-    return ApiResponse(data=RunView.of(run, _run_viewer(request, run, names)))
+    [view] = await _evidence_checked_views(request, [run], names)
+    return ApiResponse(data=view)
 
 
 @router.get("/runs/{run_id}/audit", response_model=ApiResponse[RunAuditData])
@@ -3082,12 +3092,13 @@ async def list_run_artifacts(
     request: Request,
     _: None = Depends(require_viewer),
 ) -> ApiResponse[ArtifactsData]:
-    _readable_run(request, run_id)
+    run = _readable_run(request, run_id)
     try:
         artifacts = await run_in_threadpool(runtime_repository.list_artifacts, run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
-    return ApiResponse(data=ArtifactsData(artifacts=artifacts))
+    unreadable = await _unreadable_evidence(request, [run], artifacts)
+    return ApiResponse(data=ArtifactsData(artifacts=withhold_artifacts(artifacts, unreadable)))
 
 
 @router.get("/runs/{run_id}/artifacts/{artifact_id}", response_model=ApiResponse[Artifact])
@@ -3097,13 +3108,14 @@ async def get_run_artifact(
     request: Request,
     _: None = Depends(require_viewer),
 ) -> ApiResponse[Artifact]:
-    _readable_run(request, run_id)
+    run = _readable_run(request, run_id)
     try:
-        return ApiResponse(
-            data=await run_in_threadpool(runtime_repository.get_artifact, run_id, artifact_id)
-        )
+        artifact = await run_in_threadpool(runtime_repository.get_artifact, run_id, artifact_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="成果物が見つかりません。") from exc
+    unreadable = await _unreadable_evidence(request, [run], [artifact])
+    [checked] = withhold_artifacts([artifact], unreadable)
+    return ApiResponse(data=checked)
 
 
 @router.get("/runs/{run_id}/figure-url", response_model=ApiResponse[RunFigureUrlData])
@@ -3201,13 +3213,18 @@ async def stream_run_events(
     after_event_id: str | None = Query(default=None),
     _: None = Depends(require_viewer),
 ) -> Response:
-    _readable_run(request, run_id)
+    run = _readable_run(request, run_id)
     try:
         events = await run_in_threadpool(
             runtime_repository.iter_events, run_id, after_event_id=after_event_id, follow=follow
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
+    if not follow:
+        # 保存したイベントのツールの結果も、見る人の今の権限で確かめ直す（#3252）。実行中の
+        # 購読（follow）は、見る人が今見ている実行の結果なので確かめない。
+        unreadable = await _unreadable_evidence(request, [run], await _evidence_artifacts(run))
+        events = withhold_events(events, unreadable)
     # 中継（Nginx）の buffering と cache を切る header は、共通の進み具合の SSE と同じ（#1597）。
     if not follow:
         return Response(
@@ -3218,6 +3235,62 @@ async def stream_run_events(
     return StreamingResponse(
         _sse_events(events), media_type="text/event-stream", headers=CHAT_PROGRESS_SSE_HEADERS
     )
+
+
+async def _evidence_artifacts(run: RunState) -> list[Artifact]:
+    """中身を読み込んだ根拠の成果物（中身が別の保存先にある成果物は読み込む）。"""
+    return [
+        await run_in_threadpool(runtime_repository.get_artifact, run.id, artifact.id)
+        if artifact.content_ref is not None
+        else artifact
+        for artifact in run.artifacts
+        if artifact.kind in EVIDENCE_ARTIFACT_KINDS
+    ]
+
+
+async def _unreadable_evidence(
+    request: Request, runs: list[RunState], artifacts: list[Artifact]
+) -> frozenset[str]:
+    """Run の RAG の根拠の文書のうち、見ている利用者が今見られない文書（#3252）。
+
+    画面を見ている利用者として RAG に確かめる（Run の利用者の権限は借りない）。根拠の無い Run は
+    RAG を呼ばない。
+    """
+    document_ids = rag_document_ids(runs, artifacts)
+    if not runs or not document_ids:
+        return frozenset()
+    viewer = _run_creator_user_uuid(request)
+    if not viewer:
+        return frozenset(document_ids)
+    return await run_in_threadpool(unreadable_documents, runs[0], viewer, document_ids)
+
+
+async def _evidence_checked_views(
+    request: Request, runs: list[RunState], names: Mapping[str, str]
+) -> list[RunView]:
+    """画面に返す Run（保存した根拠を見る人の今の権限で確かめ直し、見られない根拠は数だけ）。"""
+    loaded = {run.id: await _evidence_artifacts(run) for run in runs}
+    unreadable = await _unreadable_evidence(
+        request, runs, [artifact for items in loaded.values() for artifact in items]
+    )
+    views: list[RunView] = []
+    for run in runs:
+        viewer = _run_viewer(request, run, names)
+        viewer.withheld_evidence_count = withheld_count(run, unreadable, loaded[run.id])
+        views.append(RunView.of(withhold_run(run, unreadable), viewer))
+    return views
+
+
+async def _evidence_checked_run(request: Request, run: RunState) -> RunState:
+    """保存した根拠を見る人の今の権限で確かめ直した Run（MCP の `agent_get_run`。#3252）。"""
+    unreadable = await _unreadable_evidence(request, [run], await _evidence_artifacts(run))
+    if not unreadable:
+        return run
+    loaded = {item.id: item for item in await _evidence_artifacts(run)}
+    hydrated = run.model_copy(
+        update={"artifacts": [loaded.get(item.id, item) for item in run.artifacts]}
+    )
+    return withhold_run(hydrated, unreadable)
 
 
 def _readable_run(request: Request, run_id: str) -> RunState:

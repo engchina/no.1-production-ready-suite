@@ -593,6 +593,8 @@ def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
                 }
             ],
             [answer_record],
+            # 保存した根拠の文書を、見る人の今の範囲で確かめ直す（#3252）。
+            [{"document_id": "doc-1"}],
             [
                 {
                     "feedback_id": "fb-1",

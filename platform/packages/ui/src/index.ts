@@ -369,6 +369,7 @@ export {
   EvidenceList,
   EvidenceSourceSheet,
   EvidenceSourceButton,
+  EvidenceWithheldNote,
   evidenceCountLabel,
   useEvidenceSource,
   type EvidenceSourceSheetProps,
@@ -889,6 +890,7 @@ export {
 } from "./store/toast-store";
 
 export { diagnosticTimestamp, logBrowserDiagnostic, type BrowserDiagnostic } from "./lib/diagnostic-log";
+export { loadStylesAfterFirstRender, type DeferredStylesOptions } from "./lib/deferred-styles";
 
 // 原文のプレビュー（ページの画像のビューア・bbox の強調。RAG と Agent の根拠のパネル・RAG の文書の詳細。#2389）
 export * from "./lib/bbox";

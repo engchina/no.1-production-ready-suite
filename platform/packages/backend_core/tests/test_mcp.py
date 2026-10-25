@@ -165,6 +165,40 @@ def test_tools_list_shows_only_permitted_tools_with_schema() -> None:
     assert len(_rpc(_client({"a", "b"}), "tools/list")["result"]["tools"]) == 1
 
 
+def test_unlisted_tool_is_hidden_from_list_but_callable_with_the_same_permissions() -> None:
+    """`listed=False` の内部のツールは一覧に出さず、名前で呼べる（権限は同じに確かめる。#3252）。"""
+    server = McpServer(
+        name="test-server",
+        version="1",
+        tools=[
+            McpTool(
+                name="internal_echo",
+                description="内部の確かめ",
+                input_model=_EchoInput,
+                handler=_echo,
+                permissions=(frozenset({"menu.search"}),),
+                listed=False,
+            ),
+        ],
+    )
+    app = FastAPI()
+    granted: set[str] = {"menu.search"}
+
+    @app.post("/mcp")
+    async def mcp(request: Request) -> Response:
+        return await mcp_http_response(
+            request, server, has_any_permission=lambda group: bool(group & granted)
+        )
+
+    client = TestClient(app)
+    assert _rpc(client, "tools/list")["result"]["tools"] == []
+    result = _call(client, "内部", name="internal_echo")
+    assert result["structuredContent"] == {"echoed": "内部"}
+    granted.clear()
+    forbidden = _call(client, "内部", name="internal_echo")
+    assert forbidden["structuredContent"]["error_code"] == TOOL_FORBIDDEN_CODE
+
+
 def test_tools_call_returns_structured_content() -> None:
     result = _call(_client({"menu.search"}), "こんにちは")
     assert result["isError"] is False

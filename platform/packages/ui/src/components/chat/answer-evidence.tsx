@@ -1,4 +1,4 @@
-import { BookOpen, ExternalLink, FileText, History, Layers, LocateFixed, type LucideIcon } from "lucide-react";
+import { BookOpen, ExternalLink, FileText, History, Layers, LocateFixed, Lock, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { excerptPlainText } from "../../lib/excerpt-text";
@@ -10,6 +10,7 @@ import { Banner } from "../ui/banner";
 import { Button } from "../ui/button";
 import { Disclosure } from "../ui/disclosure";
 import { SideSheet } from "../ui/side-sheet";
+import { TEXT_ICON_SIZE } from "../ui/text-icon";
 
 /**
  * 回答の根拠（AI に渡した箇所の一覧。RAG のチャット・RAG 検索・Agent のチャットで共通。#2328）。
@@ -90,6 +91,13 @@ export interface EvidenceLabels {
   reference: (count: number) => string;
   /** 例:「まとまりで参照 2 件」（回答がまとまりだけを参照した箇所。#2710）。 */
   context: (count: number) => string;
+  /**
+   * 例:「権限の無い根拠 2 件」。保存した根拠のうち、見ている利用者が今の権限で見られない根拠の数（抜粋・資料名は
+   * 出さない。#3252）。
+   */
+  withheld: (count: number) => string;
+  /** 見られない根拠の数の行の補足（なぜ中身を出さないか）。 */
+  withheldNote: string;
   separator: string;
   /** 回答で引用した箇所のバッジ。 */
   usedBadge: string;
@@ -136,6 +144,8 @@ export function evidenceLabels(overrides: Partial<EvidenceLabels> = {}): Evidenc
     confirmed: (count) => `うち該当確認済み ${count} 件`,
     reference: (count) => `参考 ${count} 件`,
     context: (count) => `まとまりで参照 ${count} 件`,
+    withheld: (count) => `権限の無い根拠 ${count} 件`,
+    withheldNote: "今の権限では見られない（または削除された）資料の根拠です。抜粋・資料名・原文は表示しません。",
     separator: " ／ ",
     usedBadge: "回答で引用",
     referenceBadge: "参考",
@@ -174,8 +184,11 @@ type CountItem = Pick<EvidenceListItem, "usedInAnswer" | "answerUse" | "usedAsCo
 export function evidenceCountLabel(
   items: readonly CountItem[],
   labels: EvidenceLabels = DEFAULT_EVIDENCE_LABELS,
+  withheldCount = 0,
 ): string {
-  const parts = [labels.count(items.length)];
+  // 権限の無い根拠も AI に渡した根拠なので「AI に渡した N 件」に含め、内訳の最後に数だけを出す（#3252）。
+  const withheld = Math.max(0, Math.trunc(withheldCount));
+  const parts = [labels.count(items.length + withheld)];
   if (items.some((item) => item.usedInAnswer !== null)) {
     const used = items.filter((item) => item.usedInAnswer === true);
     const confirmed = used.filter((item) => item.answerUse === "confirmed").length;
@@ -186,7 +199,39 @@ export function evidenceCountLabel(
     const context = items.filter((item) => item.usedInAnswer !== true && item.usedAsContext === true).length;
     if (context) parts.push(labels.context(context));
   }
+  if (withheld) parts.push(labels.withheld(withheld));
   return parts.join(labels.separator);
+}
+
+/**
+ * 保存した根拠のうち、見ている利用者が今の権限で見られない根拠の数の行（3 製品で同じ。#3252）。
+ * 中身（抜粋・資料名・原文）は出さず、数と理由だけを出す。0 件なら何も出さない。注意を引く色にせず（利用者の
+ * 誤りではない）、鍵のアイコンと文で示す。
+ */
+export function EvidenceWithheldNote({
+  count,
+  labels = DEFAULT_EVIDENCE_LABELS,
+  className,
+  "data-testid": testId = "evidence-withheld",
+}: {
+  count: number;
+  labels?: EvidenceLabels;
+  className?: string;
+  "data-testid"?: string;
+}) {
+  const withheld = Math.max(0, Math.trunc(count));
+  if (!withheld) return null;
+  return (
+    <p className={cn("flex min-w-0 items-start gap-2 text-sm text-fg-muted", className)} data-testid={testId}>
+      <span className="pr-icon-line shrink-0">
+        <Lock size={TEXT_ICON_SIZE.sm} aria-hidden="true" />
+      </span>
+      <span className="min-w-0 [overflow-wrap:anywhere]">
+        <span className="font-medium text-fg">{labels.withheld(withheld)}</span>
+        <span className="block text-xs">{labels.withheldNote}</span>
+      </span>
+    </p>
+  );
 }
 
 /**
@@ -636,6 +681,8 @@ export function EvidenceList({
 
 export interface AnswerEvidenceProps extends Omit<EvidenceListProps, "testId"> {
   listTestId?: string;
+  /** 保存した根拠のうち、見ている利用者が今の権限で見られない根拠の数（{@link EvidenceWithheldNote}。#3252）。 */
+  withheldCount?: number;
   /** 開閉の受控（根拠の行から根拠を開くとき）。 */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -659,27 +706,33 @@ export function AnswerEvidence({
   open,
   onOpenChange,
   className,
+  withheldCount = 0,
   testId = "answer-citations",
 }: AnswerEvidenceProps) {
-  if (!items.length) return null;
+  if (!items.length && withheldCount <= 0) return null;
   return (
     <Disclosure
       variant="plain"
-      summary={evidenceCountLabel(items, labels)}
+      summary={evidenceCountLabel(items, labels, withheldCount)}
       className={cn(className)}
       open={open}
       onOpenChange={onOpenChange}
       data-testid={testId}
     >
-      <EvidenceList
-        items={items}
-        labels={labels}
-        onOpenSource={onOpenSource}
-        renderActions={renderActions}
-        renderExtra={renderExtra}
-        idPrefix={idPrefix}
-        testId={listTestId}
-      />
+      <div className="flex min-w-0 flex-col gap-2">
+        <EvidenceWithheldNote count={withheldCount} labels={labels} />
+        {items.length ? (
+          <EvidenceList
+            items={items}
+            labels={labels}
+            onOpenSource={onOpenSource}
+            renderActions={renderActions}
+            renderExtra={renderExtra}
+            idPrefix={idPrefix}
+            testId={listTestId}
+          />
+        ) : null}
+      </div>
     </Disclosure>
   );
 }

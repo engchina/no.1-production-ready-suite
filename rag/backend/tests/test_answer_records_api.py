@@ -29,6 +29,11 @@ class FakeAnswerOracle:
         self.list_calls: list[dict[str, Any]] = []
         self.count_calls: list[dict[str, Any]] = []
         self.evaluations: dict[str, dict[str, Any]] = {}
+        # 見る人が今見られない文書（保存した引用の確かめ直し。#3252）。既定はすべて見られる。
+        self.unreadable_documents: set[str] = set()
+
+    async def accessible_document_ids(self, document_ids: list[str]) -> set[str]:
+        return {item for item in document_ids if item not in self.unreadable_documents}
 
     async def list_answer_records(self, **kwargs: Any) -> list[dict[str, Any]]:
         self.list_calls.append(kwargs)

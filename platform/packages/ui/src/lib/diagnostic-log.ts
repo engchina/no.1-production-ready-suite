@@ -1,6 +1,6 @@
 /** ブラウザの診断も JST JSON Lines。業務本文・Error.message / stack は出力しない。 */
 export interface BrowserDiagnostic {
-  event: "card_render_failed" | "unsaved_changes_blocker_missing";
+  event: "card_render_failed" | "unsaved_changes_blocker_missing" | "deferred_styles_failed";
   serviceName: "production-ready-rag" | "production-ready-nl2sql" | "production-ready-agent" | "production-ready-platform";
   requestId?: string;
   error?: unknown;
@@ -9,6 +9,7 @@ export interface BrowserDiagnostic {
 const MESSAGES = {
   card_render_failed: "カードの描画に失敗しました",
   unsaved_changes_blocker_missing: "未保存の変更を確認する blocker が配置されていません",
+  deferred_styles_failed: "最初の描画の後に読む CSS の読み込みに失敗しました",
 } as const;
 const REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 const ERROR_TYPES = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "ApiError"]);
