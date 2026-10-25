@@ -12,6 +12,10 @@ import pytest
 SUITE = Path(__file__).resolve().parents[3]
 
 
+# start-frontend.sh が探す CA bundle の場所（Debian / Ubuntu、RHEL / Oracle Linux の順）。
+_SYSTEM_CA_BUNDLES = ("/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt")
+
+
 def _executable(path: Path, text: str) -> None:
     path.write_text("#!/usr/bin/env bash\nset -eu\n" + text, encoding="utf-8")
     path.chmod(0o755)
@@ -250,14 +254,15 @@ def test_frontend_uses_system_ca_and_preserves_explicit_ca(
     for name in ("index.js", "index.d.ts", "tokens.css"):
         (ui / "dist" / name).touch()
     (scripts.parent / "frontend").mkdir()
-    expected = "/etc/ssl/certs/ca-certificates.crt"
+    # 明示が無いときは、この OS で読める最初の CA bundle（無ければ未設定）。
+    expected = next((path for path in _SYSTEM_CA_BUNDLES if os.access(path, os.R_OK)), "")
     env.pop("NODE_EXTRA_CA_CERTS", None)
     if custom_ca:
         expected = str(platform / "custom-ca.pem")
         env["NODE_EXTRA_CA_CERTS"] = expected
     _executable(
         Path(env["TEST_DIR"]) / "bin" / "npm",
-        'printf "%s\\n" "$NODE_EXTRA_CA_CERTS" >> "$TEST_EVENTS"\n',
+        'printf "%s\\n" "${NODE_EXTRA_CA_CERTS:-}" >> "$TEST_EVENTS"\n',
     )
     result = subprocess.run(
         ["bash", str(scripts / "start-frontend.sh")],
