@@ -355,22 +355,24 @@ def test_external_gpu_parser_connection_defaults() -> None:
     """外部 GPU parser は未接続を既定とし、旧 service URL を読まない。"""
     settings = Settings()
 
+    assert settings.rag_parser_mineru_api_host == ""
     assert settings.rag_parser_dots_ocr_api_host == ""
+    assert settings.rag_parser_mineru_tier == "basic"
+    assert settings.rag_parser_mineru_job_timeout_seconds == 1800.0
     assert settings.rag_parser_dots_ocr_model == "rednote-hilab/dots.mocr"
+
+    assert Settings(rag_parser_mineru_tier="advanced").rag_parser_mineru_tier == "advanced"
+    # 3.x の解析の方式（pipeline 等）は 4.0 の tier ではない（#1329）。
+    with pytest.raises(ValidationError):
+        Settings(rag_parser_mineru_tier="pipeline")
 
 
 def test_legacy_gpu_service_url_is_not_migrated(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RAG_PARSER_DOTS_OCR_SERVICE_URL", "http://legacy-dots:8000/parse")
+    monkeypatch.setenv("RAG_PARSER_MINERU_SERVICE_URL", "http://legacy-mineru:8000/parse")
 
     settings = Settings(_env_file=None)
 
-    assert settings.rag_parser_dots_ocr_api_host == ""
-
-
-def test_removed_mineru_engine_is_rejected() -> None:
-    """MinerU の連携は削除した(#3345)。未リリースのため旧い保存値は読み替えず、検証のエラー。"""
-    with pytest.raises(ValidationError):
-        Settings(rag_parser_adapter_backend="mineru")
+    assert settings.rag_parser_mineru_api_host == ""
 
 
 def test_enterprise_ai_timeout_defaults_to_pdf_friendly_value() -> None:
@@ -472,12 +474,12 @@ def test_ingestion_job_stall_timeout_default_starts_with_deployed_parser_timeout
     [
         ({"ingestion_job_stall_timeout_seconds": 1800.0}, "PLATFORM_OCI_ENTERPRISE_AI"),
         (
-            {"rag_parser_service_timeout_seconds": 3600.0},
-            "RAG_PARSER_SERVICE_TIMEOUT_SECONDS",
+            {"rag_parser_mineru_job_timeout_seconds": 7200.0},
+            "RAG_PARSER_MINERU_JOB_TIMEOUT_SECONDS",
         ),
         ({"oci_speech_timeout_seconds": 7200.0}, "RAG_OCI_SPEECH_TIMEOUT_SECONDS"),
     ],
-    ids=["stall-too-short", "parser-service-longer", "speech-longer"],
+    ids=["stall-too-short", "mineru-longer", "speech-longer"],
 )
 def test_ingestion_job_stall_timeout_rejects_shorter_than_silent_call(
     overrides: dict[str, float], setting_name: str
@@ -507,6 +509,7 @@ def test_parser_adapter_default_is_docling(monkeypatch: pytest.MonkeyPatch) -> N
         "RAG_PARSER_ADAPTER_BACKEND",
         "RAG_PARSER_DOCLING_ENABLED",
         "RAG_PARSER_UNSTRUCTURED_ENABLED",
+        "RAG_PARSER_MINERU_ENABLED",
         "RAG_PARSER_DOTS_OCR_ENABLED",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -516,6 +519,7 @@ def test_parser_adapter_default_is_docling(monkeypatch: pytest.MonkeyPatch) -> N
     assert settings.rag_parser_adapter_backend == "docling"
     assert settings.rag_parser_docling_enabled is True
     assert settings.rag_parser_unstructured_enabled is False
+    assert settings.rag_parser_mineru_enabled is False
     assert settings.rag_parser_dots_ocr_enabled is False
     # auto(旧既定)は既定 docling へ。local_partition は baseline 値 local へ。
     # local は正規化せず baseline 値として残す(runtime は ingestion で既定エンジンへマップ)。

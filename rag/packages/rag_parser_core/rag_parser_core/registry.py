@@ -624,6 +624,7 @@ def parse_with_registry(
     adapter_backend: str = "local",
     docling_enabled: bool = False,
     unstructured_enabled: bool = False,
+    mineru_enabled: bool = False,
     dots_ocr_enabled: bool = False,
     external_adapter_runner: ExternalAdapterRunner | None = None,
 ) -> ParserRegistryResult:
@@ -685,6 +686,7 @@ def parse_with_registry(
         content_type=content_type,
         docling_enabled=docling_enabled,
         unstructured_enabled=unstructured_enabled,
+        mineru_enabled=mineru_enabled,
         dots_ocr_enabled=dots_ocr_enabled,
     )
     adapter_fallback_used = bool(adapter_warnings)
@@ -694,6 +696,7 @@ def parse_with_registry(
         content_type=content_type,
         docling_enabled=docling_enabled,
         unstructured_enabled=unstructured_enabled,
+        mineru_enabled=mineru_enabled,
         dots_ocr_enabled=dots_ocr_enabled,
     ):
         runner = external_adapter_runner or _default_external_adapter_runner
@@ -769,6 +772,7 @@ def _requested_external_adapters(
     content_type: str,
     docling_enabled: bool,
     unstructured_enabled: bool,
+    mineru_enabled: bool,
     dots_ocr_enabled: bool,
 ) -> tuple[str, ...]:
     normalized = adapter_backend.strip().casefold()
@@ -777,6 +781,7 @@ def _requested_external_adapters(
             normalized,
             docling_enabled=docling_enabled,
             unstructured_enabled=unstructured_enabled,
+            mineru_enabled=mineru_enabled,
             dots_ocr_enabled=dots_ocr_enabled,
         ) and _external_adapter_supports_source(
             normalized,
@@ -795,6 +800,7 @@ def _external_adapter_disabled_warnings(
     content_type: str,
     docling_enabled: bool,
     unstructured_enabled: bool,
+    mineru_enabled: bool,
     dots_ocr_enabled: bool,
 ) -> tuple[str, ...]:
     normalized = adapter_backend.strip().casefold()
@@ -804,6 +810,7 @@ def _external_adapter_disabled_warnings(
         normalized,
         docling_enabled=docling_enabled,
         unstructured_enabled=unstructured_enabled,
+        mineru_enabled=mineru_enabled,
         dots_ocr_enabled=dots_ocr_enabled,
     ):
         if _external_adapter_supports_source(
@@ -869,11 +876,13 @@ def _external_adapter_flag_enabled(
     *,
     docling_enabled: bool,
     unstructured_enabled: bool,
+    mineru_enabled: bool,
     dots_ocr_enabled: bool,
 ) -> bool:
     return {
         "docling": docling_enabled,
         "unstructured": unstructured_enabled,
+        "mineru": mineru_enabled,
         "dots_ocr": dots_ocr_enabled,
     }.get(backend, False)
 

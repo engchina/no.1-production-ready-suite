@@ -220,6 +220,7 @@ export type ParserAdapterBackend =
   | "unstructured"
   | "structured_records_jsonl"
   | "xml_tree_json"
+  | "mineru"
   | "dots_ocr"
   | "oci_document_understanding";
 export type ParserServiceBackendName = "oci_document_understanding";
@@ -228,9 +229,11 @@ export type ParserAdapterBackendName =
   | "unstructured"
   | "structured_records_jsonl"
   | "xml_tree_json"
+  | "mineru"
   | "dots_ocr";
-export type ExternalParserBackendName = "dots_ocr";
-export type ExternalParserProtocol = "openai_chat_completions";
+export type ExternalParserBackendName = "mineru" | "dots_ocr";
+export type ExternalParserProtocol =
+  "mineru_v1" | "openai_chat_completions";
 export type ExternalParserConnectionStatus =
   | "available"
   | "unconfigured"
@@ -1018,6 +1021,7 @@ export interface KnowledgeBaseIngestionConfig {
   parser_adapter_backend: ParserAdapterBackend | null;
   parser_docling_enabled: boolean | null;
   parser_unstructured_enabled: boolean | null;
+  parser_mineru_enabled: boolean | null;
   parser_dots_ocr_enabled: boolean | null;
   parser_structured_records_jsonl_enabled?: boolean | null;
   parser_xml_tree_json_enabled?: boolean | null;
@@ -2252,6 +2256,7 @@ export interface ParserAdapterSettingsUpdate {
   adapter_backend?: ParserAdapterBackend;
   docling_enabled?: boolean;
   unstructured_enabled?: boolean;
+  mineru_enabled?: boolean;
   dots_ocr_enabled?: boolean;
   structured_records_jsonl_enabled?: boolean;
   xml_tree_json_enabled?: boolean;

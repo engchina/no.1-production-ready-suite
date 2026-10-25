@@ -49,7 +49,7 @@ class ServiceCatalogEntry:
     - ``port``: ``127.0.0.1`` で listen するポート(本番・開発で共通)。URL 設定の既定値と一致させる。
     - ``execution_policy``: 停止時・未使用時の runtime 契約。UI/API で fallback 境界を明示する。
     - ``model_cache_path``: モデル DL を行うサービスのキャッシュ親(実行ユーザーの ``~/.cache``)。
-      HF・docling など tool 別キャッシュをまとめて含めるため ``huggingface`` ではなく
+      HF・docling・mineru など tool 別キャッシュをまとめて含めるため ``huggingface`` ではなく
       ``.cache`` 親を指す。None のサービスはモデル DL なし。
     """
 

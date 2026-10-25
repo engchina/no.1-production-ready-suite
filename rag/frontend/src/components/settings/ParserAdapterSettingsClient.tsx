@@ -73,6 +73,7 @@ type ParserAdapterForm = {
   adapter_backend: ParserAdapterBackend;
   docling_enabled: boolean;
   unstructured_enabled: boolean;
+  mineru_enabled: boolean;
   dots_ocr_enabled: boolean;
   structured_records_jsonl_enabled: boolean;
   xml_tree_json_enabled: boolean;
@@ -90,7 +91,7 @@ type ParserAdapterFlagField = Exclude<
 >;
 type ConnectionFieldErrors = Record<string, string>;
 
-const EXTERNAL_BACKENDS: ExternalParserBackendName[] = ["dots_ocr"];
+const EXTERNAL_BACKENDS: ExternalParserBackendName[] = ["mineru", "dots_ocr"];
 
 /** 外部 GPU 接続の欄の上限（backend の ExternalParserConnectionUpdate の max_length と同じ。#976）。 */
 const EXTERNAL_CONNECTION_MAX_LENGTH = { endpoint: 2048, model: 512, apiKey: 4096 } as const;
@@ -100,6 +101,7 @@ const ADAPTER_FLAG_FIELDS: Record<ParserAdapterBackendName, ParserAdapterFlagFie
   unstructured: "unstructured_enabled",
   structured_records_jsonl: "structured_records_jsonl_enabled",
   xml_tree_json: "xml_tree_json_enabled",
+  mineru: "mineru_enabled",
   dots_ocr: "dots_ocr_enabled",
 };
 
@@ -296,7 +298,7 @@ function OverviewCard({
   );
   // CPU → OCI → GPU の順（サービス管理の節と同じ。#2042）。1 つの 2 列の grid に並べ、
   // 375px の 1 列でも同じ順にする（Docling・Unstructured / 構造化レコード JSONL・XML ツリー JSON /
-  // OCI Document Understanding / Dots.OCR。#2457）。
+  // OCI Document Understanding / MinerU・Dots.OCR。#2457）。
   const orderedBackends = useMemo(
     () =>
       SERVICE_PROFILE_ORDER.flatMap((profile) =>
@@ -542,9 +544,10 @@ function ExternalConnectionCard({
     await statusQuery.refetch();
     setElapsedMs(Date.now() - startedAt);
   };
+  const modelSupported = backend !== "mineru";
   const dirty =
     value.endpoint.trim() !== (connection?.endpoint ?? "") ||
-    value.model.trim() !== (connection?.model ?? "") ||
+    (modelSupported && value.model.trim() !== (connection?.model ?? "")) ||
     Boolean(value.api_key) ||
     value.clear_api_key;
   const endpointError = errors[`${backend}.endpoint`];
@@ -560,7 +563,7 @@ function ExternalConnectionCard({
         <div>
           <h4 className="text-sm font-semibold text-fg">{backendLabel(backend)}</h4>
           <p className="mt-0.5 break-all text-xs text-fg-muted">
-            {CONNECTION_PROTOCOL_LABEL}
+            {connectionProtocolLabel(connection?.protocol ?? externalProtocol(backend))}
           </p>
         </div>
         <ConnectionConfiguredBadge configured={Boolean(connection?.configured)} />
@@ -574,7 +577,7 @@ function ExternalConnectionCard({
           type="url"
           maxLength={EXTERNAL_CONNECTION_MAX_LENGTH.endpoint}
           value={value.endpoint}
-          placeholder={EXTERNAL_ENDPOINT_PLACEHOLDER}
+          placeholder={externalEndpointPlaceholder(backend)}
           error={endpointError}
           disabled={saving}
           onChange={(endpoint) => onChange({ endpoint })}
@@ -584,12 +587,12 @@ function ExternalConnectionCard({
           label={t("settings.parserAdapters.connection.model")}
           width="md"
           maxLength={EXTERNAL_CONNECTION_MAX_LENGTH.model}
-          value={value.model}
-          placeholder="model-id"
+          value={modelSupported ? value.model : t("settings.parserAdapters.connection.nativeModel")}
+          placeholder={modelSupported ? "model-id" : undefined}
           // Endpoint を入力したときだけ Model が要る（validateConnections と同じ条件。#531）
-          required={Boolean(value.endpoint.trim())}
+          required={modelSupported && Boolean(value.endpoint.trim())}
           error={modelError}
-          disabled={saving}
+          disabled={saving || !modelSupported}
           onChange={(model) => onChange({ model })}
         />
         <ConnectionTextField
@@ -804,11 +807,13 @@ function adapterLabel(adapter: ParserAdapterBackendName) {
   if (adapter === "structured_records_jsonl")
     return t("settings.parserAdapters.backend.structured_records_jsonl");
   if (adapter === "xml_tree_json") return t("settings.parserAdapters.backend.xml_tree_json");
+  if (adapter === "mineru") return "MinerU";
   return "Dots.OCR";
 }
 
 function backendLabel(backend: ParserAdapterBackend) {
   if (backend === "local") return t("settings.parserAdapters.backend.local");
+  if (backend === "mineru") return "MinerU";
   if (backend === "dots_ocr") return "Dots.OCR";
   if (backend === "oci_document_understanding")
     return t("settings.parserAdapters.backend.oci_document_understanding");
@@ -834,7 +839,7 @@ function serviceIdForBackend(backend: ParserAdapterBackend): string | null {
 }
 
 function serviceProfileForBackend(backend: ParserAdapterBackend): ServiceProfile | null {
-  if (backend === "dots_ocr") return "gpu";
+  if (backend === "mineru" || backend === "dots_ocr") return "gpu";
   if (isServiceBackend(backend)) return "oci";
   if (isAdapterBackend(backend)) return "cpu";
   return null;
@@ -861,6 +866,7 @@ function formFromSettings(settings: ParserAdapterSettingsData): ParserAdapterFor
     adapter_backend: settings.adapter_backend,
     docling_enabled: enabledByBackend.get("docling") ?? false,
     unstructured_enabled: enabledByBackend.get("unstructured") ?? false,
+    mineru_enabled: enabledByBackend.get("mineru") ?? false,
     dots_ocr_enabled: enabledByBackend.get("dots_ocr") ?? false,
     structured_records_jsonl_enabled: enabledByBackend.get("structured_records_jsonl") ?? false,
     xml_tree_json_enabled: enabledByBackend.get("xml_tree_json") ?? false,
@@ -903,6 +909,7 @@ function serializeForm(form: ParserAdapterForm) {
     adapter_backend: form.adapter_backend,
     docling_enabled: form.docling_enabled,
     unstructured_enabled: form.unstructured_enabled,
+    mineru_enabled: form.mineru_enabled,
     dots_ocr_enabled: form.dots_ocr_enabled,
     structured_records_jsonl_enabled: form.structured_records_jsonl_enabled,
     xml_tree_json_enabled: form.xml_tree_json_enabled,
@@ -915,6 +922,7 @@ function parserSettingsUpdate(form: ParserAdapterForm): ParserAdapterSettingsUpd
     adapter_backend: form.adapter_backend,
     docling_enabled: form.docling_enabled,
     unstructured_enabled: form.unstructured_enabled,
+    mineru_enabled: form.mineru_enabled,
     dots_ocr_enabled: form.dots_ocr_enabled,
     structured_records_jsonl_enabled: form.structured_records_jsonl_enabled,
     xml_tree_json_enabled: form.xml_tree_json_enabled,
@@ -923,7 +931,7 @@ function parserSettingsUpdate(form: ParserAdapterForm): ParserAdapterSettingsUpd
       return {
         backend,
         endpoint: connection.endpoint.trim(),
-        model: connection.model.trim(),
+        ...(backend === "mineru" ? {} : { model: connection.model.trim() }),
         ...(connection.api_key ? { api_key: connection.api_key } : {}),
         ...(connection.clear_api_key ? { clear_api_key: true } : {}),
       };
@@ -955,7 +963,7 @@ function validateConnections(form: ParserAdapterForm): ConnectionFieldErrors {
         errors[`${backend}.endpoint`] = t("settings.parserAdapters.connection.invalidEndpoint");
       }
     }
-    if (endpoint && !connection.model.trim()) {
+    if (endpoint && backend !== "mineru" && !connection.model.trim()) {
       errors[`${backend}.model`] = t("settings.parserAdapters.connection.modelRequired");
     }
   }
@@ -967,9 +975,17 @@ function focusConnectionError(key: string) {
   document.getElementById(`external-parser-${backend}-${field}`)?.focus();
 }
 
-// 外部 GPU 接続は OpenAI 互換 API だけ（Dots.OCR）。
-const CONNECTION_PROTOCOL_LABEL = "OpenAI /v1/chat/completions";
-const EXTERNAL_ENDPOINT_PLACEHOLDER = "https://api.example.com/v1";
+function externalProtocol(backend: ExternalParserBackendName) {
+  return backend === "mineru" ? "mineru_v1" : "openai_chat_completions";
+}
+
+function connectionProtocolLabel(protocol: string) {
+  return protocol === "mineru_v1" ? "MinerU /v1/parse/jobs" : "OpenAI /v1/chat/completions";
+}
+
+function externalEndpointPlaceholder(backend: ExternalParserBackendName) {
+  return backend === "mineru" ? "https://parser.example.com" : "https://api.example.com/v1";
+}
 
 function defaultExternalModel(backend: ExternalParserBackendName) {
   if (backend === "dots_ocr") return "rednote-hilab/dots.mocr";

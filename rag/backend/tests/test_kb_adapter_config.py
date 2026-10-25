@@ -79,6 +79,7 @@ def test_external_parser_backend_enables_feature_flag() -> None:
     """外部 parser backend を選ぶと対応 feature flag が有効になる。"""
     for backend, flag_field in (
         ("unstructured", "rag_parser_unstructured_enabled"),
+        ("mineru", "rag_parser_mineru_enabled"),
         ("dots_ocr", "rag_parser_dots_ocr_enabled"),
     ):
         # グローバル既定が無効でも backend 選択で有効化されることを確かめる。

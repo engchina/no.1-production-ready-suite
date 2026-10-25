@@ -48,9 +48,8 @@ XML ツリー JSON(`.json`)は、文書解析の既定か処理レシピの使�
 取込を始める前に止めて、処理レシピで Unstructured(または Office→PDF)を選ぶよう案内する(自動では振り分けない)。
 Unstructured の解析サービスは既定では配備しない。形式ごとの取り込み方は [docs/deployment.md](./docs/deployment.md) の
 「既定の解析エンジン（Docling）で扱える形式と、それ以外の形式の取り込み方」を参照。
-GPU の OCR(dots_ocr)は外部で運用する API を「取込・検索・回答設定 › 文書解析」で指定する。
-Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。MinerU の連携は、許可(MinerU Open Source License)が
-企業の規模で商用の利用に条件を付けるため削除した(#3345)。
+GPU の OCR(mineru / dots_ocr)は外部で運用する API を「取込・検索・回答設定 › 文書解析」で指定する。
+Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 詳細は [services/parsers/README.md](./services/parsers/README.md) と
 [AGENTS.md](./AGENTS.md) の「Parser マイクロサービス」節を参照。
 
@@ -116,6 +115,14 @@ MCP サーバーの名前は `rag` にします（組み込みのスキル（[sk
 - [検索・回答の能力の一覧（必須 / 任意と縮退）](./docs/answer-capability-inventory.md)
 - [デプロイメント](./docs/deployment.md)
 - [参考 RAG プロジェクト](./docs/reference-rag-projects.md)
+
+## TODO
+
+- [ ] **実際の MinerU 4.x の API サーバーでの確認（未実施）**: #1329 の V1 API（`/v1/uploads` → `/v1/parse/jobs` → `/v1/files`）と
+  #1334 の Middle JSON からの親子階層（small-to-big）の分割は、記録した応答のスタブでだけ確かめている。GPU の MinerU 4.x
+  （`mineru-kit api-server`）を用意できたら、tier ごと（`flash` / `basic` / `standard` / `advanced`）に PDF・画像・Office の文書を
+  取り込み、解析の待ち・取り消し・結果の取得（302 の転送）・見出しの階層・頁と bbox・要素の定位子を確かめる
+  （手順は [docs/deployment.md](./docs/deployment.md)「既存環境の更新手順（#1329 MinerU 4.0 の V1 API）」）。
 
 ## シークレット混入防止(gitleaks)
 

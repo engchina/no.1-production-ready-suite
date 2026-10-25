@@ -41,6 +41,7 @@ function config(): DocumentProcessingConfig {
     parser_adapter_backend: null,
     parser_docling_enabled: null,
     parser_unstructured_enabled: null,
+    parser_mineru_enabled: null,
     parser_dots_ocr_enabled: null,
     chunking_strategy: null,
     chunk_size: 800,
@@ -342,9 +343,10 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
     "構造化レコード JSONL",
     "XML ツリー JSON",
     "OCI Document Understanding",
+    "MinerU",
     "Dots.OCR",
   ]);
-  await page.getByRole("option", { name: "Dots.OCR" }).click();
+  await page.getByRole("option", { name: "MinerU" }).click();
   // Vision は解析エンジンに関係なくレシピで選べる。「図表 VLM 要約」は Vision に統合した(#497)。
   await expect(panel.getByText("図表 VLM 要約")).toHaveCount(0);
   // 概要(読み取り専用)にも同じ見出しがあるので、編集欄(説明付き)に絞る。
@@ -359,7 +361,7 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
 
   await expect(page.getByText(/この文書の処理設定を保存しました/)).toBeVisible();
   expect(state.saved()).toMatchObject({
-    parser_adapter_backend: "dots_ocr",
+    parser_adapter_backend: "mineru",
     vision_enabled: true,
     chunk_size: 800,
   });
@@ -767,11 +769,11 @@ test("保存失敗時は編集値を保持する", async ({ page }) => {
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
   await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
   await panel.getByRole("combobox", { name: "文書解析" }).click();
-  await page.getByRole("option", { name: "Dots.OCR" }).click();
+  await page.getByRole("option", { name: "MinerU" }).click();
   await panel.getByRole("button", { name: "構築設定を保存" }).click();
 
   await expect(panel).toContainText("取込ジョブの実行中は設定を変更できません");
-  await expect(panel.getByRole("combobox", { name: "文書解析" })).toContainText("Dots.OCR");
+  await expect(panel.getByRole("combobox", { name: "文書解析" })).toContainText("MinerU");
 });
 
 for (const viewport of [
@@ -797,7 +799,7 @@ for (const viewport of [
       await panel.getByRole("button", { name: "処理設定を編集" }).click();
       await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
       await panel.getByRole("combobox", { name: "文書解析" }).click();
-      await page.getByRole("option", { name: "Dots.OCR" }).click();
+      await page.getByRole("option", { name: "MinerU" }).click();
       await panel.getByRole("button", { name: "構築設定を保存" }).click();
       await expect(page.getByText(/この文書の処理設定を保存しました/)).toBeVisible();
       await expect(panel.getByText(conflict)).toHaveCount(0);
@@ -1246,7 +1248,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`Docling 以外の解析結果で親子階層（small-to-big）を選ぶと、構造認識で分割したことを示す (${viewport.name})`, async ({
+  test(`Docling・MinerU 以外の解析結果で親子階層（small-to-big）を選ぶと、構造認識で分割したことを示す (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -1269,7 +1271,7 @@ for (const viewport of [
     // 失敗させず構造認識で分割し、その事実と親子で分割する方法を Chunk 一覧の上に出す(#300)。
     const notice = page.getByRole("status").filter({ hasText: "構造認識で分割しました" });
     await expect(notice).toBeVisible();
-    await expect(notice).toContainText("文書解析を Docling にして再解析");
+    await expect(notice).toContainText("文書解析を Docling か MinerU にして再解析");
     await expect(page.getByText("経費申請は部門長の承認後、経理部が確認します。")).toBeVisible();
     await expectNoPageOverflow(page);
   });

@@ -83,6 +83,31 @@ def test_ocr_engine_without_entry_point_falls_back(monkeypatch: pytest.MonkeyPat
     assert [w.partition(":")[0] for w in result.warnings] == ["dots_ocr_adapter_failed"]
 
 
+def test_mineru_is_not_run_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MinerU は外部の HTTP API だけで呼び、package の中では import・実行しない(#3359)。"""
+    calls: list[str] = []
+
+    def parse_document(path: str) -> str:
+        calls.append(path)
+        return "# 本文"
+
+    fake = types.ModuleType("mineru")
+    setattr(fake, "parse_document", parse_document)
+    monkeypatch.setitem(sys.modules, "mineru", fake)
+
+    result = _external_adapter_result(
+        "mineru",
+        source_bytes=b"%PDF-1.4 scanned",
+        source_profile=_pdf_profile(),
+        content_type="application/pdf",
+    )
+
+    assert calls == []
+    assert result.extraction is None
+    assert result.fallback_used is True
+    assert result.warnings == ("mineru_adapter_unsupported",)
+
+
 def test_dots_ocr_vllm_parser_reads_generated_markdown(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

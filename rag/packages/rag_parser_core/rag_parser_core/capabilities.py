@@ -117,6 +117,12 @@ ADAPTER_CAPABILITIES: Mapping[str, ParserBackendCapability] = {
         extensions=frozenset({".json"}),
         content_types=frozenset({"application/json"}),
     ),
+    "mineru": ParserBackendCapability(
+        modalities=frozenset({SourceModality.PDF, SourceModality.IMAGE, SourceModality.OFFICE}),
+        extensions=frozenset({".pdf"}) | _IMAGE_EXTENSIONS | _OPENXML_EXTENSIONS,
+        content_types=frozenset({"application/pdf"}) | _OPENXML_CONTENT_TYPES,
+        content_type_prefixes=frozenset({"image/"}),
+    ),
     # 外部 API は画像入力。backend が PDF をページ画像へ変換して順序を維持する。
     "dots_ocr": _PDF_AND_IMAGE,
     "oci_document_understanding": _PDF_AND_IMAGE,

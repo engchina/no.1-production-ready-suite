@@ -441,8 +441,8 @@ describe("resolveIngestionParserDisplay", () => {
       segments: [
         {
           status: "RUNNING",
-          parser_backend: "dots_ocr",
-          parser_profile: "dots_ocr",
+          parser_backend: "mineru",
+          parser_profile: "mineru",
         },
       ],
       extractionBackend: null,
@@ -451,8 +451,8 @@ describe("resolveIngestionParserDisplay", () => {
     });
 
     expect(display).toEqual({
-      backend: "dots_ocr",
-      profile: "dots_ocr",
+      backend: "mineru",
+      profile: "mineru",
       source: "segment",
     });
   });

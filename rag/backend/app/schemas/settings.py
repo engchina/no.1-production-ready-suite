@@ -114,10 +114,11 @@ ParserAdapterBackendName = Literal[
     "unstructured",
     "structured_records_jsonl",
     "xml_tree_json",
+    "mineru",
     "dots_ocr",
 ]
-ExternalParserBackendName = Literal["dots_ocr"]
-ExternalParserProtocol = Literal["openai_chat_completions"]
+ExternalParserBackendName = Literal["mineru", "dots_ocr"]
+ExternalParserProtocol = Literal["mineru_v1", "openai_chat_completions"]
 ExternalParserConnectionStatus = Literal[
     "available", "unconfigured", "unreachable", "model_missing", "invalid_response"
 ]
@@ -125,6 +126,7 @@ ParserAdapterScoreBackendName = Literal[
     "local",
     "docling",
     "unstructured",
+    "mineru",
     "dots_ocr",
 ]
 ParserAdapterStatus = Literal["active", "available", "disabled", "ignored", "missing"]
@@ -436,10 +438,11 @@ class ParserAdapterSettingsUpdate(BaseModel):
     adapter_backend: ParserAdapterBackend | None = None
     docling_enabled: bool | None = None
     unstructured_enabled: bool | None = None
+    mineru_enabled: bool | None = None
     dots_ocr_enabled: bool | None = None
     structured_records_jsonl_enabled: bool | None = None
     xml_tree_json_enabled: bool | None = None
-    connections: list[ExternalParserConnectionUpdate] = Field(default_factory=list, max_length=1)
+    connections: list[ExternalParserConnectionUpdate] = Field(default_factory=list, max_length=2)
     vision_enabled: bool | None = None
     heading_level_inference_enabled: bool | None = None
     field_extraction_enabled: bool | None = None

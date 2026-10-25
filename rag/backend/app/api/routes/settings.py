@@ -1257,6 +1257,10 @@ def _parser_adapter_settings_candidate(
             payload.unstructured_enabled,
             base.rag_parser_unstructured_enabled,
         ),
+        "rag_parser_mineru_enabled": _optional_bool(
+            payload.mineru_enabled,
+            base.rag_parser_mineru_enabled,
+        ),
         "rag_parser_structured_records_jsonl_enabled": _optional_bool(
             payload.structured_records_jsonl_enabled,
             base.rag_parser_structured_records_jsonl_enabled,

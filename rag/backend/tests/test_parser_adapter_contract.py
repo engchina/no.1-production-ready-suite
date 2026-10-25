@@ -288,7 +288,7 @@ def test_compatibility_matrix_uses_parser_service_runner_for_dots_ocr(
     assert matrix.cases[0].status == "passed"
 
 
-def test_compatibility_matrix_dots_ocr_unconfigured_connection_is_missing(
+def test_compatibility_matrix_mineru_unconfigured_connection_is_missing(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -301,18 +301,18 @@ def test_compatibility_matrix_dots_ocr_unconfigured_connection_is_missing(
         "_package_info",
         lambda *_args: (False, None, None),
     )
-    monkeypatch.setattr(parser_registry, "_module_available", lambda name: name == "dots_ocr")
+    monkeypatch.setattr(parser_registry, "_module_available", lambda name: name == "mineru")
     monkeypatch.setattr(
         parser_registry,
-        "_run_dots_ocr",
+        "_run_mineru",
         lambda _path: (_ for _ in ()).throw(AssertionError("in-process OCR must not run")),
     )
 
     matrix = run_parser_adapter_compatibility_matrix(
         Settings(
-            rag_parser_adapter_backend="dots_ocr",
-            rag_parser_dots_ocr_enabled=True,
-            rag_parser_dots_ocr_api_host="",
+            rag_parser_adapter_backend="mineru",
+            rag_parser_mineru_enabled=True,
+            rag_parser_mineru_api_host="",
         ),
         fixture_root=fixture_root,
         fixture_specs=(
@@ -322,7 +322,7 @@ def test_compatibility_matrix_dots_ocr_unconfigured_connection_is_missing(
                 content_type="application/pdf",
             ),
         ),
-        backends=["dots_ocr"],
+        backends=["mineru"],
     )
 
     case = matrix.cases[0]

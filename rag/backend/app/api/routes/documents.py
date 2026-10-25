@@ -247,6 +247,7 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
         "parser_adapter_backend",
         "parser_docling_enabled",
         "parser_unstructured_enabled",
+        "parser_mineru_enabled",
         "parser_dots_ocr_enabled",
         "parser_structured_records_jsonl_enabled",
         "parser_xml_tree_json_enabled",

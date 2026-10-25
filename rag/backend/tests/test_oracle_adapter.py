@@ -2067,7 +2067,7 @@ async def test_upsert_extraction_artifact_preserves_existing_payload_when_omitte
         document_id="doc-1",
         extraction_recipe_id="ex-1",
         source_sha256="a" * 64,
-        recipe_subset={"rag_parser_adapter_backend": "dots_ocr"},
+        recipe_subset={"rag_parser_adapter_backend": "mineru"},
         extraction=None,
         status="materialized",
     )
@@ -2081,7 +2081,7 @@ async def test_upsert_extraction_artifact_preserves_existing_payload_when_omitte
     assert "t.extraction_json" not in matched_update
     assert call.parameters["extraction_json"] is None
     assert json.loads(cast(str, call.parameters["recipe_subset"])) == {
-        "rag_parser_adapter_backend": "dots_ocr"
+        "rag_parser_adapter_backend": "mineru"
     }
     assert (
         call.input_sizes["extraction_json"]

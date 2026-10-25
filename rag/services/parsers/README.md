@@ -42,7 +42,7 @@ scripts/rag-services.sh run parser-docling # systemd の無い環境で前面に
 OS のコマンド: unstructured は poppler-utils / tesseract-ocr(jpn)を使う。docling のモデルは venv を作った後に
 `docling-tools models download` で実行ユーザーの `~/.cache` へ取得する(スクリプトが行う)。
 
-Dots.OCR はこのリポジトリでは構築・起動しない。
+MinerU、Dots.OCR はこのリポジトリでは構築・起動しない。
 「取込・検索・回答設定 › 文書解析」で、外部運用済み API の Endpoint / Model / API key を設定する。
 
 > 依存(`rag-parser-core` path 依存)を変更したら、各 pyproject の `uv lock` を再生成すること
