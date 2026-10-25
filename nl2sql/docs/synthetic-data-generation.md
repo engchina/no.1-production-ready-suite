@@ -89,7 +89,7 @@ pytest は受理、認可、再起動、CAS、部分/0/null 件、API の隔離�
 Playwright は desktop / mobile-375 で再読込、状態、通知、空結果、参照上限、既存操作を検証する。
 `NL2SQL_SYNTHETIC_LIVE_TEST=1 uv run pytest tests/test_nl2sql_synthetic_oracle_live.py`
 は独立した一時メタデータ表を作成・削除し、実 Oracle の CLOB/JSON、CAS、同表の独立受理、
-受付キー競合の rollback、旧 lock の互換 cleanup を検証する。
+受付キー競合の rollback、旧 lock の互換 cleanup、後始末の対象の読み出し（`list_cleanup_candidates`）を検証する（CI の Oracle integration の Free で実行する）。ADB だけにある `DBA_LOAD_OPERATIONS` を読む `capture_session` は `NL2SQL_SYNTHETIC_ADB_LIVE_TEST=1` のときだけ確かめる。
 このテストは業務表・生成プロシージャを変更/実行しない。
 
 ## 生成番号と引数拒否の追跡

@@ -1,4 +1,9 @@
-"""明示 opt-in: 一時メタデータ表のみで Oracle CAS/rollback/CLOB 契約を検証する。"""
+"""明示 opt-in: 一時メタデータ表のみで Oracle CAS/rollback/CLOB 契約を検証する。
+
+保存の往復は Oracle AI Database Free でも動くので、CI の Oracle integration で実行する。
+ADB だけにある DBA_LOAD_OPERATIONS を読む `capture_session` は、別の opt-in
+（NL2SQL_SYNTHETIC_ADB_LIVE_TEST）で確かめる。
+"""
 
 import os
 from collections.abc import Iterator
@@ -18,10 +23,7 @@ from app.features.settings.system_schema import split_migration_sql
 from app.settings import Settings
 
 
-@pytest.mark.skipif(
-    os.environ.get("NL2SQL_SYNTHETIC_LIVE_TEST") != "1", reason="isolated Oracle opt-in"
-)
-def test_oracle_persistence_roundtrip_and_conflict_rollback() -> None:
+def _live_adapter() -> OracleNl2SqlAdapter:
     # conftest の APP 上書きを使わず、ローカル接続設定を明示的に読込む。
     from dotenv import dotenv_values
 
@@ -34,8 +36,22 @@ def test_oracle_persistence_roundtrip_and_conflict_rollback() -> None:
         and key.removeprefix("PLATFORM_").lower() in Settings.model_fields
         and value is not None
     }
-    settings = Settings(_env_file=None, **connection_settings)
-    adapter = OracleNl2SqlAdapter(settings)
+    return OracleNl2SqlAdapter(Settings(_env_file=None, **connection_settings))
+
+
+@pytest.mark.skipif(
+    os.environ.get("NL2SQL_SYNTHETIC_ADB_LIVE_TEST") != "1", reason="isolated ADB opt-in"
+)
+def test_capture_session_reads_adb_load_operations() -> None:
+    with _live_adapter().connection() as conn:
+        assert capture_session(conn)["sid"] > 0
+
+
+@pytest.mark.skipif(
+    os.environ.get("NL2SQL_SYNTHETIC_LIVE_TEST") != "1", reason="isolated Oracle opt-in"
+)
+def test_oracle_persistence_roundtrip_and_conflict_rollback() -> None:
+    adapter = _live_adapter()
     prefix = "NL2SQL_T" + uuid4().hex[:8].upper()
 
     def remap(sql: Any) -> Any:
@@ -76,7 +92,6 @@ def test_oracle_persistence_roundtrip_and_conflict_rollback() -> None:
     created = []
     try:
         with adapter.connection() as conn, conn.cursor() as cur:
-            assert capture_session(conn)["sid"] > 0
             for sql in split_migration_sql(ddl.read_text()):
                 cur.execute(remap(sql))
                 if sql.startswith("CREATE TABLE"):
