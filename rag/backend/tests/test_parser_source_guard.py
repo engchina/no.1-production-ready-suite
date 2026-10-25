@@ -193,6 +193,7 @@ _XLS = "application/vnd.ms-excel"
 _DOCM = "application/vnd.ms-word.document.macroEnabled.12"
 _PPTM = "application/vnd.ms-powerpoint.presentation.macroEnabled.12"
 _XLSM = "application/vnd.ms-excel.sheet.macroEnabled.12"
+_ODT = "application/vnd.oasis.opendocument.text"
 
 
 def _preprocess(profile: str, **update: Any) -> Settings:
@@ -210,6 +211,9 @@ def _preprocess(profile: str, **update: Any) -> Settings:
         ("macro.docm", _DOCM, "macro_enabled_office_not_supported"),
         ("macro.pptm", _PPTM, "macro_enabled_office_not_supported"),
         ("macro.xlsm", _XLSM, "macro_enabled_office_not_supported"),
+        ("memo.odt", _ODT, "odt_rtf_not_supported"),
+        ("memo.rtf", "text/rtf", "odt_rtf_not_supported"),
+        ("memo.rtf", "application/rtf", "odt_rtf_not_supported"),
     ],
 )
 def test_office_needing_conversion_is_blocked_without_converting_preprocess(
@@ -230,7 +234,16 @@ def test_office_needing_conversion_is_blocked_without_converting_preprocess(
 
 @pytest.mark.parametrize(
     ("file_name", "content_type"),
-    [("old.doc", _WORD), ("old.ppt", _PPT), ("macro.docm", _DOCM), ("macro.pptm", _PPTM)],
+    [
+        ("old.doc", _WORD),
+        ("old.ppt", _PPT),
+        ("macro.docm", _DOCM),
+        ("macro.pptm", _PPTM),
+        ("memo.odt", _ODT),
+        ("memo.rtf", "text/rtf"),
+        ("memo", _ODT),
+        ("memo", "application/rtf"),
+    ],
 )
 def test_office_to_pdf_converts_word_and_powerpoint(file_name: str, content_type: str) -> None:
     profile = _profile(file_name, content_type)
@@ -286,6 +299,17 @@ def test_excel_to_jsonl_does_not_convert_word() -> None:
     jsonl = _preprocess("excel_to_jsonl", rag_parser_adapter_backend="structured_records_jsonl")
     block = parser_source_block(jsonl, profile)
     assert block is not None and block.code == "office_conversion_required"
+
+
+@pytest.mark.parametrize("preprocess", ["word_to_jsonl", "excel_to_jsonl"])
+def test_only_office_to_pdf_converts_odt_rtf(preprocess: str) -> None:
+    """ODT・RTF は Office→PDF だけが変換する(pandoc を入れない。#3351)。"""
+    settings = _preprocess(preprocess, rag_parser_adapter_backend="structured_records_jsonl")
+    for profile in (_profile("memo.odt", _ODT), _profile("memo.rtf", "text/rtf")):
+        block = parser_source_block(settings, profile)
+        assert block is not None and block.code == "office_conversion_required"
+        assert "「Office→PDF」" in block.message
+        assert "ODT・RTF" in block.message
 
 
 def test_converted_source_profile_drops_original_format_reason() -> None:

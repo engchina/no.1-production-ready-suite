@@ -208,7 +208,6 @@ export const ja = {
   "settings.parserAdapters.backend.local.description": "旧 in-process 解析。既定の Docling へ正規化",
   "settings.parserAdapters.backend.docling.description": "既定の解析エンジン。PDF と画像を解析",
   "settings.parserAdapters.backend.unstructured.description": "テキスト・HTML・Office・メールなども受ける汎用の解析。選んだ場合だけ使用",
-  "settings.parserAdapters.backend.mineru.description": "外部 MinerU API を使用",
   "settings.parserAdapters.backend.dots_ocr.description": "外部 Dots.OCR API を使用",
   "settings.parserAdapters.backend.oci_document_understanding": "OCI Document Understanding",
   "settings.parserAdapters.backend.oci_document_understanding.description":
@@ -231,7 +230,6 @@ export const ja = {
   "settings.parserAdapters.connection.endpoint": "Endpoint",
   "settings.parserAdapters.connection.model": "Model",
   "settings.parserAdapters.connection.apiKey": "API key",
-  "settings.parserAdapters.connection.nativeModel": "接続先の MinerU 設定を使用",
   "settings.parserAdapters.connection.apiKeyRetained": "設定済み（空欄なら保持）",
   "settings.parserAdapters.connection.clearApiKey": "保存済み API key を削除",
   "settings.parserAdapters.connection.configured": "設定済み",
@@ -1457,7 +1455,7 @@ export const ja = {
     "章節→文→文字の順に固定長で分割(LangChain 風)",
   "settings.chunking.strategy.small_to_big": "親子階層（small-to-big）",
   "settings.chunking.strategy.small_to_big.description":
-    "Docling・MinerU の解析結果から見出し・表・図を保ったまま子を切り出して索引し、親の節を回答文脈に使う（文書解析が Docling か MinerU の PDF・画像だけ。それ以外の文書は構造認識で分割します。既定）",
+    "Docling の解析結果から見出し・表・図を保ったまま子を切り出して索引し、親の節を回答文脈に使う（文書解析が Docling の PDF・画像だけ。それ以外の文書は構造認識で分割します。既定）",
   "settings.chunking.strategy.markdown_heading": "見出し単位",
   "settings.chunking.strategy.markdown_heading.description":
     "見出しを境界にまとめ、長大な章節だけ見出し内で再分割",
@@ -2591,6 +2589,11 @@ export const ja = {
   "upload.dropzoneHint":
     "複数ファイルをまとめて選択できます（最大 {size} / ファイル）。選んだファイルは下の一覧で確かめてから送ります。音声は保存のみで取込はスキップされます。",
   "upload.dropzoneFormats": "対応形式: {formats}",
+  "upload.dropzoneUnsupported":
+    "HEIC / HEIF の画像と EPUB は対応していません。画像は JPEG / PNG、EPUB は PDF に変換してからアップロードしてください（iPhone は「設定 › カメラ › フォーマット › 互換性優先」で JPEG で保存できます）。",
+  "upload.rejected.heicImage":
+    "HEIC / HEIF の画像は対応していません。JPEG / PNG に変換してからアップロードしてください（iPhone は「設定 › カメラ › フォーマット › 互換性優先」で JPEG で保存できます）。",
+  "upload.rejected.epubBook": "EPUB の電子書籍は対応していません。PDF に変換してからアップロードしてください。",
   "upload.uploading": "{count} 件のファイルをアップロードしています",
   "upload.progress.aria": "送信の進み具合",
   "upload.progress.sent": "送信済み {sent} / {total}（{percent}%）",
@@ -2622,6 +2625,8 @@ export const ja = {
   "upload.selection.problem.unsupported": "対応していない形式",
   "upload.selection.problem.tooLarge": "上限を超えるサイズ",
   "upload.selection.problem.empty": "空のファイル",
+  "upload.selection.problem.heicImage": "HEIC / HEIF は対応していません",
+  "upload.selection.problem.epubBook": "EPUB は対応していません",
   "upload.batch.title": "アップロード結果",
   "upload.batch.total": "選択したファイル",
   "upload.batch.uploaded": "保存済み",
@@ -2710,6 +2715,7 @@ export const ja = {
   "sourceProfile.parser.tiffImage": "TIFF 画像未対応",
   "sourceProfile.parser.legacyOffice": "旧 Office(要変換)",
   "sourceProfile.parser.macroOffice": "マクロ付き Office(要変換)",
+  "sourceProfile.parser.odtRtf": "ODT・RTF(要変換)",
   "sourceProfile.parser.generic": "汎用解析",
   "sourceProfile.warning.duplicate": "同一内容の文書が既に登録されています。",
   "sourceProfile.warning.contentTypeMissing": "MIME type が未確定です。拡張子と原本を確認してください。",
@@ -2726,6 +2732,8 @@ export const ja = {
     "旧形式の Office は変換が必要です（文書レシピのファイル準備で変換を選択）。",
   "sourceProfile.warning.unsupportedMacroOffice":
     "マクロ付きの Office は変換が必要です（文書レシピのファイル準備で変換を選択。マクロは実行しません）。",
+  "sourceProfile.warning.unsupportedOdtRtf":
+    "ODT・RTF は変換が必要です（文書レシピのファイル準備で Office→PDF を選択）。",
   "sourceProfile.warning.parserFallback": "一部の解析で fallback が使われました。",
   "sourceProfile.warning.officeFallback": "Office のローカル解析に失敗したため fallback します。",
   "sourceProfile.warning.officeSegmentFailed": "Office の一部 segment 解析に失敗しました。",
@@ -2743,6 +2751,8 @@ export const ja = {
     "旧形式の Office は変換が必要です（文書レシピのファイル準備で変換を選択）。",
   "sourceProfile.unsupported.macroOfficeNotSupported":
     "マクロ付きの Office は変換が必要です（文書レシピのファイル準備で変換を選択。マクロは実行しません）。",
+  "sourceProfile.unsupported.odtRtfNotSupported":
+    "ODT・RTF は変換が必要です（文書レシピのファイル準備で Office→PDF を選択）。",
   "sourceProfile.unsupported.unknownFileType": "対応する parser を判定できないファイル形式です。",
 
   "flow.jobs.title": "工程ごとの実行状況",
@@ -3095,7 +3105,7 @@ export const ja = {
   "flow.chunks.listLabel": "chunk の一覧（{count} 件）。一覧の中で縦にスクロールできます。",
   "flow.chunks.smallToBigFallbackTitle": "構造認識で分割しました",
   "flow.chunks.smallToBigFallback":
-    "親子階層（small-to-big）を選んでいますが、この文書の解析結果は Docling・MinerU のレイアウトではないため、構造認識で分割しました。親子で分割するには、文書解析を Docling か MinerU にして再解析し、Chunk を作り直してください。",
+    "親子階層（small-to-big）を選んでいますが、この文書の解析結果は Docling のレイアウトではないため、構造認識で分割しました。親子で分割するには、文書解析を Docling にして再解析し、Chunk を作り直してください。",
   "flow.chunks.loadError": "chunk を取得できません",
   "flow.chunks.loadErrorHint": "索引状態を確認して再読み込みしてください。",
   "flow.chunks.noElements": "element 未紐付け",
@@ -4253,6 +4263,7 @@ export const ja = {
   "evaluation.ingestionQuality.warning.unsupportedTiffImage": "TIFF 画像未対応",
   "evaluation.ingestionQuality.warning.unsupportedLegacyOffice": "旧 Office(要変換)",
   "evaluation.ingestionQuality.warning.unsupportedMacroOffice": "マクロ付き Office(要変換)",
+  "evaluation.ingestionQuality.warning.unsupportedOdtRtf": "ODT・RTF(要変換)",
   "evaluation.ingestionQuality.parser.legacy": "旧形式",
   "evaluation.thresholdFailures": "閾値未達",
   "evaluation.cases": "ケース別結果",

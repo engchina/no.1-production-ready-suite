@@ -4,10 +4,36 @@ import mimetypes
 from pathlib import PurePath
 
 from charset_normalizer import from_bytes
+from rag_parser_core.source import PLAIN_TEXT_MARKUP_EXTENSIONS, is_plain_text_markup
 
 from app.schemas.document import SourceModality, SourcePreviewKind, SourceProfile
 
 LARGE_FILE_WARNING_BYTES = 50 * 1024 * 1024
+
+# アップロードで受け付けない形式と、利用者に示す変換の方法(#3351)。解析に要る依存
+# (HEIC / HEIF は pi-heif の libheif・EPUB は pandoc)をライセンスの理由で入れないため、
+# 保存せずに止める。画面の案内(frontend の upload-selection.ts の REJECTED_UPLOAD_FORMATS と
+# i18n.ts)と同じ形式・文言にする(tests/test_upload_format_contract.py で照合する)。
+HEIC_UPLOAD_REJECTED_MESSAGE = (
+    "HEIC / HEIF の画像は対応していません。JPEG / PNG に変換してからアップロードしてください"
+    "（iPhone は「設定 › カメラ › フォーマット › 互換性優先」で JPEG で保存できます）。"
+)
+EPUB_UPLOAD_REJECTED_MESSAGE = (
+    "EPUB の電子書籍は対応していません。PDF に変換してからアップロードしてください。"
+)
+REJECTED_UPLOAD_EXTENSIONS: dict[str, str] = {
+    ".heic": HEIC_UPLOAD_REJECTED_MESSAGE,
+    ".heif": HEIC_UPLOAD_REJECTED_MESSAGE,
+    ".epub": EPUB_UPLOAD_REJECTED_MESSAGE,
+}
+REJECTED_UPLOAD_MEDIA_TYPES: dict[str, str] = {
+    "image/heic": HEIC_UPLOAD_REJECTED_MESSAGE,
+    "image/heif": HEIC_UPLOAD_REJECTED_MESSAGE,
+    "image/heic-sequence": HEIC_UPLOAD_REJECTED_MESSAGE,
+    "image/heif-sequence": HEIC_UPLOAD_REJECTED_MESSAGE,
+    "image/x-heic": HEIC_UPLOAD_REJECTED_MESSAGE,
+    "application/epub+zip": EPUB_UPLOAD_REJECTED_MESSAGE,
+}
 
 TEXT_MEDIA_TYPES = {
     "application/json",
@@ -27,6 +53,8 @@ TEXT_EXTENSIONS = {
     ".ndjson",
     ".tsv",
     ".txt",
+    # reStructuredText・Org はプレーンテキストとして読む(#3351)。
+    *PLAIN_TEXT_MARKUP_EXTENSIONS,
 }
 
 HTML_MEDIA_TYPES = {
@@ -109,6 +137,20 @@ MACRO_OFFICE_MEDIA_TYPES = {
     "application/vnd.ms-word.document.macroenabled.12",
     "application/vnd.ms-powerpoint.presentation.macroenabled.12",
     "application/vnd.ms-excel.sheet.macroenabled.12",
+}
+
+# ODT・RTF。原本のままでは解析せず、ファイル準備の Office→PDF で PDF にしてから読む(#3351。
+# unstructured は pandoc で読むが、pandoc は GPL のため入れない)。
+ODT_RTF_EXTENSIONS = {
+    ".odt",
+    ".rtf",
+}
+
+ODT_RTF_MEDIA_TYPES = {
+    "application/vnd.oasis.opendocument.text",
+    "application/rtf",
+    "application/x-rtf",
+    "text/rtf",
 }
 
 OPENXML_OFFICE_EXTENSIONS = {
@@ -233,7 +275,14 @@ def _source_modality(content_type: str, extension: str | None) -> SourceModality
         return SourceModality.EMAIL
     if content_type.startswith("audio/") or extension in AUDIO_EXTENSIONS:
         return SourceModality.AUDIO
-    if _is_text_media_type(content_type) or extension in TEXT_EXTENSIONS:
+    # RTF は text/rtf でも送られるので、テキストより先に Office として判定する。
+    if _is_odt_rtf(extension=extension, content_type=content_type):
+        return SourceModality.OFFICE
+    if (
+        _is_text_media_type(content_type)
+        or extension in TEXT_EXTENSIONS
+        or is_plain_text_markup(extension, content_type)
+    ):
         return SourceModality.TEXT
     if extension in OFFICE_EXTENSIONS or content_type in {
         "application/msword",
@@ -275,6 +324,8 @@ def _parser_profile(
             return "local_office_structure"
         if _is_legacy_office_binary(extension=extension, content_type=content_type):
             return "unsupported_legacy_office_binary"
+        if _is_odt_rtf(extension=extension, content_type=content_type):
+            return "unsupported_odt_rtf"
         return "enterprise_ai_generic"
     if modality == SourceModality.AUDIO:
         return "unsupported_audio"
@@ -310,9 +361,9 @@ def _parser_backend(
         content_type=content_type,
     ):
         return "local_partition"
-    if modality == SourceModality.OFFICE and _is_legacy_office_binary(
-        extension=extension,
-        content_type=content_type,
+    if modality == SourceModality.OFFICE and (
+        _is_legacy_office_binary(extension=extension, content_type=content_type)
+        or _is_odt_rtf(extension=extension, content_type=content_type)
     ):
         return "unsupported"
     if modality == SourceModality.AUDIO:
@@ -342,9 +393,11 @@ def _preview_kind(
             return SourcePreviewKind.UNSUPPORTED
         return SourcePreviewKind.EMAIL
     if modality == SourceModality.OFFICE:
-        if _is_legacy_office_binary(
-            extension=extension, content_type=content_type
-        ) or _is_macro_office(extension=extension, content_type=content_type):
+        if (
+            _is_legacy_office_binary(extension=extension, content_type=content_type)
+            or _is_macro_office(extension=extension, content_type=content_type)
+            or _is_odt_rtf(extension=extension, content_type=content_type)
+        ):
             return SourcePreviewKind.UNSUPPORTED
         return SourcePreviewKind.OFFICE
     return SourcePreviewKind.UNSUPPORTED
@@ -377,6 +430,11 @@ def _unsupported_reason(
         content_type=content_type,
     ):
         return "macro_enabled_office_not_supported"
+    if modality == SourceModality.OFFICE and _is_odt_rtf(
+        extension=extension,
+        content_type=content_type,
+    ):
+        return "odt_rtf_not_supported"
     if modality == SourceModality.AUDIO:
         return "audio_transcription_not_configured"
     if modality == SourceModality.UNKNOWN:
@@ -427,6 +485,11 @@ def _quality_warnings(
         content_type=content_type,
     ):
         warnings.append("unsupported_macro_enabled_office")
+    if modality == SourceModality.OFFICE and _is_odt_rtf(
+        extension=extension,
+        content_type=content_type,
+    ):
+        warnings.append("unsupported_odt_rtf")
     if modality == SourceModality.UNKNOWN:
         warnings.append("unknown_modality")
     return warnings
@@ -468,6 +531,19 @@ def _is_legacy_office_binary(*, extension: str | None, content_type: str) -> boo
 def _is_macro_office(*, extension: str | None, content_type: str) -> bool:
     """マクロ付きの OpenXML の Office（.docm / .xlsm / .pptm）か判定する。"""
     return extension in MACRO_OFFICE_EXTENSIONS or content_type in MACRO_OFFICE_MEDIA_TYPES
+
+
+def _is_odt_rtf(*, extension: str | None, content_type: str) -> bool:
+    """ファイル準備の Office→PDF で PDF にしてから読む ODT・RTF か判定する(#3351)。"""
+    return extension in ODT_RTF_EXTENSIONS or content_type in ODT_RTF_MEDIA_TYPES
+
+
+def rejected_upload_format_message(file_name: str, content_type: str | None) -> str | None:
+    """受け付けない形式(HEIC / HEIF・EPUB)なら、変換の方法を添えた文言を返す(#3351)。"""
+    extension = PurePath(file_name).suffix.lower()
+    if extension in REJECTED_UPLOAD_EXTENSIONS:
+        return REJECTED_UPLOAD_EXTENSIONS[extension]
+    return REJECTED_UPLOAD_MEDIA_TYPES.get(_normalized_content_type(content_type))
 
 
 def _is_outlook_msg(*, extension: str | None, content_type: str) -> bool:

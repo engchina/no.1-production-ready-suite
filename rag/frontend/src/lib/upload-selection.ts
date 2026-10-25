@@ -13,6 +13,8 @@ export const ACCEPTED_UPLOAD_TYPES = [
   ".txt",
   ".md",
   ".markdown",
+  ".rst",
+  ".org",
   ".csv",
   ".tsv",
   ".json",
@@ -33,6 +35,8 @@ export const ACCEPTED_UPLOAD_TYPES = [
   ".xls",
   ".xlsx",
   ".xlsm",
+  ".odt",
+  ".rtf",
   ".aac",
   ".flac",
   ".m4a",
@@ -51,6 +55,10 @@ export const ACCEPTED_UPLOAD_TYPES = [
   "text/markdown",
   "text/csv",
   "text/tab-separated-values",
+  "text/x-rst",
+  "text/prs.fallenstein.rst",
+  "text/org",
+  "text/x-org",
   "text/html",
   "application/xhtml+xml",
   "application/json",
@@ -58,6 +66,7 @@ export const ACCEPTED_UPLOAD_TYPES = [
   "application/jsonlines",
   "application/ndjson",
   "application/xml",
+  "text/xml",
   "application/csv",
   "application/x-ndjson",
   "message/rfc822",
@@ -73,6 +82,10 @@ export const ACCEPTED_UPLOAD_TYPES = [
   "application/vnd.ms-word.document.macroEnabled.12",
   "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
   "application/vnd.ms-excel.sheet.macroEnabled.12",
+  "application/vnd.oasis.opendocument.text",
+  "application/rtf",
+  "application/x-rtf",
+  "text/rtf",
   "audio/aac",
   "audio/flac",
   "audio/mp3",
@@ -96,7 +109,24 @@ export const ACCEPTED_UPLOAD_EXTENSION_LABELS = [...ACCEPTED_EXTENSIONS].map((ex
   ext.slice(1).toUpperCase()
 );
 
-export type UploadFileProblem = "unsupported" | "tooLarge" | "empty";
+/**
+ * 受け付けない形式のうち、変換の方法を案内する形式（#3351）。解析に要る依存（HEIC / HEIF は pi-heif の
+ * libheif・EPUB は pandoc）をライセンスの理由で入れないため、送らずに止める。backend の
+ * `app.rag.source_profile.REJECTED_UPLOAD_EXTENSIONS` と同じ拡張子（backend のテストで照合する）。
+ */
+export const REJECTED_UPLOAD_FORMATS = {
+  ".heic": "heicImage",
+  ".heif": "heicImage",
+  ".epub": "epubBook",
+} as const;
+
+export type RejectedUploadFormat = (typeof REJECTED_UPLOAD_FORMATS)[keyof typeof REJECTED_UPLOAD_FORMATS];
+
+export type UploadFileProblem = "unsupported" | "tooLarge" | "empty" | RejectedUploadFormat;
+
+function isRejectedUploadExtension(extension: string): extension is keyof typeof REJECTED_UPLOAD_FORMATS {
+  return Object.hasOwn(REJECTED_UPLOAD_FORMATS, extension);
+}
 
 /** 送れないファイルの理由。送れるなら null。ドロップしたファイルは `accept` を通らないので、ここで確かめる。 */
 export function uploadFileProblem(
@@ -105,6 +135,7 @@ export function uploadFileProblem(
 ): UploadFileProblem | null {
   const dot = file.name.lastIndexOf(".");
   const extension = dot >= 0 ? file.name.slice(dot).toLowerCase() : "";
+  if (isRejectedUploadExtension(extension)) return REJECTED_UPLOAD_FORMATS[extension];
   if (!ACCEPTED_EXTENSIONS.has(extension)) return "unsupported";
   if (file.size === 0) return "empty";
   if (file.size > maxUploadBytes) return "tooLarge";

@@ -3,6 +3,8 @@
 parse の **前** に Word・PowerPoint の文書(.doc/.docx/.docm/.ppt/.pptx/.pptm/.odt/.odp/.rtf)を
 LibreOffice headless で PDF へ変換する前処理マイクロサービス。
 
+- ODT・RTF(.odt/.rtf)は原本のままでは解析しない形式としてアップロードでき、このサービスで PDF にしてから読む
+  (Unstructured は pandoc で読むが、pandoc は GPL のため入れない。#3351)。
 - Excel(.xls/.xlsx/.xlsm/.ods)は変換しない(`office_to_pdf_spreadsheet_not_supported`)。Excel は前処理
   `excel_to_jsonl` で読む(#2470)。
 - マクロは実行しない。変換ごとに一時ディレクトリに LibreOffice の利用者のプロファイルを作り、マクロの実行を
