@@ -29,6 +29,15 @@ function isAtBottom(element: HTMLElement, threshold: number) {
 }
 
 /**
+ * 末尾を追っている間はブラウザの scroll anchoring を止める（#3245）。見えている範囲より上の内容が伸びると、
+ * anchoring が `scrollTop` を動かして `scroll` を出し、利用者が動かしていないのに「末尾を見ていない」になって
+ * 追うのをやめていた。上を読んでいる間は anchoring を戻し、読んでいる位置がずれないようにする。
+ */
+function setFollowingBottom(element: HTMLElement | null, following: boolean) {
+  if (element) element.style.overflowAnchor = following ? "none" : "";
+}
+
+/**
  * チャットの会話の欄の自動スクロール（3 製品共通。UX 契約 page-archetypes.md §6、#1161）。
  *
  * - 末尾を見ている間は、新しい内容（回答の受信・処理の段階）に合わせて末尾へ追う。末尾へ動かした後、利用者が
@@ -49,6 +58,9 @@ export function useChatAutoScroll({
   const atBottomRef = useRef(true);
   // 末尾へ動かした後、利用者が会話の欄を操作するまでは、描いた後の高さの変化にも末尾を追う。
   const followResizeRef = useRef(true);
+  // この hook が最後に動かした位置。`scroll` は非同期に届くので、自分で動かした scroll が高さの伸びた後に届くと
+  // 「末尾を見ていない」と測ってしまう（#3245）。その scroll では末尾を追うのをやめない。
+  const pinnedTopRef = useRef<number | null>(null);
   const [showLatest, setShowLatest] = useState(false);
 
   const logRef = useCallback((next: HTMLDivElement | null) => {
@@ -61,6 +73,8 @@ export function useChatAutoScroll({
     atBottomRef.current = true;
     followResizeRef.current = true;
     setShowLatest(false);
+    setFollowingBottom(target, true);
+    if (target) pinnedTopRef.current = Math.max(0, target.scrollHeight - target.clientHeight);
     target?.scrollTo({ top: target.scrollHeight, behavior });
   }, []);
 
@@ -68,9 +82,20 @@ export function useChatAutoScroll({
   useLayoutEffect(() => {
     if (!element) return;
     const onScroll = () => {
+      const pinnedTop = pinnedTopRef.current;
+      if (followResizeRef.current && pinnedTop !== null && Math.abs(element.scrollTop - pinnedTop) <= 1) {
+        // この hook が動かした scroll（利用者は操作していない）。届くまでに伸びていたら、末尾へ動かし直す。
+        if (!isAtBottom(element, threshold)) {
+          pinnedTopRef.current = Math.max(0, element.scrollHeight - element.clientHeight);
+          element.scrollTo({ top: element.scrollHeight });
+        }
+        return;
+      }
+      pinnedTopRef.current = null;
       const atBottom = isAtBottom(element, threshold);
       atBottomRef.current = atBottom;
       if (atBottom) setShowLatest(false);
+      else setFollowingBottom(element, false);
     };
     element.addEventListener("scroll", onScroll, { passive: true });
     return () => element.removeEventListener("scroll", onScroll);
@@ -82,6 +107,7 @@ export function useChatAutoScroll({
     if (!enabled || !element || typeof ResizeObserver === "undefined") return;
     const resizeObserver = new ResizeObserver(() => {
       if (followResizeRef.current && atBottomRef.current) {
+        pinnedTopRef.current = Math.max(0, element.scrollHeight - element.clientHeight);
         element.scrollTo({ top: element.scrollHeight });
       }
     });
@@ -94,12 +120,15 @@ export function useChatAutoScroll({
     mutationObserver.observe(element, { childList: true });
     const onInteract = () => {
       followResizeRef.current = false;
+      pinnedTopRef.current = null;
+      setFollowingBottom(element, false);
     };
     const interactions = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
     for (const type of interactions) element.addEventListener(type, onInteract, { passive: true });
     return () => {
       resizeObserver.disconnect();
       mutationObserver.disconnect();
+      setFollowingBottom(element, false);
       for (const type of interactions) element.removeEventListener(type, onInteract);
     };
   }, [enabled, element]);

@@ -145,6 +145,31 @@ describe("useChatAutoScroll", () => {
     expect(log!.scrollTop).toBe(1000);
   });
 
+  it("自分で末尾へ動かした scroll が高さの伸びた後に届いても、末尾を追うのをやめない (#3245)", () => {
+    render(1, "c1");
+    expect(log!.scrollTop).toBe(600);
+    // 内容が伸びた後に、前に末尾へ動かしたときの scroll が届く（scroll は非同期。scrollTop は動かしたときのまま）。
+    contentHeight = 1443;
+    act(() => log!.dispatchEvent(new Event("scroll")));
+    expect(log!.scrollTop).toBe(1043);
+    expect(api.showLatest).toBe(false);
+    // その後の高さの変化にも追う。
+    contentHeight = 1500;
+    resize();
+    expect(log!.scrollTop).toBe(1100);
+  });
+
+  it("末尾を追っている間はブラウザの scroll anchoring を止め、利用者が操作したら戻す (#3245)", () => {
+    render(1, "c1");
+    expect(log!.style.overflowAnchor).toBe("none");
+    act(() => log!.dispatchEvent(new Event("pointerdown")));
+    expect(log!.style.overflowAnchor).toBe("");
+    act(() => api.scrollToLatest());
+    expect(log!.style.overflowAnchor).toBe("none");
+    userScrollTo(100);
+    expect(log!.style.overflowAnchor).toBe("");
+  });
+
   it("上を読んでいる間は、高さが変わっても引き戻さない (#2479)", () => {
     render(1, "c1");
     userScrollTo(100);
