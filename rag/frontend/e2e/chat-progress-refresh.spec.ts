@@ -1,6 +1,12 @@
 import { expect, type Page, test } from "./fixtures/test";
 
-import { ragSpan, spanProgressRecorder, type ChatProgressEventJson } from "./_chat-progress";
+import {
+  installTraceRecorder,
+  ragSpan,
+  spanProgressRecorder,
+  traceSse,
+  type ChatProgressEventJson,
+} from "./_chat-progress";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
 
 /**
@@ -11,8 +17,9 @@ import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAns
  * 再起動の後）ときは保存済みの会話（作成中の回答）に引き継ぎ、会話の取り直しで完了に変わる。ページを読み込み
  * 直しても作成中の回答は「作成中」で出る。停止は取消の API で止める。
  *
- * 処理の段階は 3 製品共通の段階のイベント（#1359）で、回答の trace の span の開始・終了（#3226）。作成中の今のターンは回答の配信の `chat_progress` で、保存済みの
- * 作成中の回答は段階の SSE（`GET .../messages/{回答の id}/progress/stream`。保存済みの記録を読み直す）で受け取る。
+ * 処理の段階は回答の trace の span の開始・終了で、共通の span の表にある（#3226 の案 A）。作成中の今のターンも保存済みの
+ * 作成中の回答も、画面は回答の trace の API（`GET .../messages/{回答の id}/trace`）を読み直す。配信の mock は chunk を
+ * 送った時点までの span を trace の API で返す（`traceSse` / `installTraceRecorder`）。
  *
  * `page.route` の fulfill は本文を一度に返すため、画面の fetch を init script で差し替えて、SSE を時間をおいて
  * 流す・途中で閉じる・閉じずに止める（answer-progress.spec.ts と同じ方式）。質問の id は画面が決めるので、
@@ -101,8 +108,9 @@ const CANCELLED_PROGRESS = [
   ...spanProgressRecorder("a1").terminal("cancelled").map((event) => ({ ...event, seq: STREAMING_PROGRESS.length + 1 })),
 ];
 
+/** 配信の chunk を送ったときに表へ書いた span（回答の trace の API が返す。配信の event の連番は使わない）。 */
 function progressEvents(events: ChatProgressEventJson[]): string {
-  return events.map((event) => runEvent("chat_progress", { model_id: "m1", message_id: "a1", event })).join("");
+  return traceSse(events);
 }
 
 type ReplyState = "streaming" | "complete" | "cancelled";
@@ -120,8 +128,6 @@ function reply(userId: string, state: ReplyState) {
     status: state === "complete" ? "COMPLETE" : state === "cancelled" ? "CANCELLED" : "STREAMING",
     reply_to_message_id: userId,
     created_at: new Date(Date.now() - 4_000).toISOString(),
-    progress:
-      state === "streaming" ? STREAMING_PROGRESS : state === "complete" ? COMPLETE_PROGRESS : CANCELLED_PROGRESS,
   };
 }
 
@@ -162,8 +168,10 @@ const restChunks: TimedChunk[] = [
 ];
 
 async function mockStream(page: Page, scenario: StreamScenario): Promise<void> {
+  await installTraceRecorder(page);
   await page.addInitScript((value: StreamScenario) => {
     const win = window as unknown as {
+      __ragTraceRecord: (text: string) => string;
       __clientMessageId?: string;
       __resumeRequests: { path: string; lastEventId: string | null }[];
     };
@@ -183,7 +191,8 @@ async function mockStream(page: Page, scenario: StreamScenario): Promise<void> {
           for (const chunk of chunks) {
             if (chunk.afterMs) await new Promise((resolve) => setTimeout(resolve, chunk.afterMs));
             if (signal?.aborted) return;
-            controller.enqueue(encoder.encode(chunk.text.replaceAll("__USER_ID__", win.__clientMessageId ?? "u1")));
+            const text = chunk.text.replaceAll("__USER_ID__", win.__clientMessageId ?? "u1");
+            controller.enqueue(encoder.encode(win.__ragTraceRecord(text)));
           }
           if (end === "close") controller.close();
         },
@@ -224,13 +233,13 @@ interface ChatState {
   conversationFails: boolean;
   /** 最初から会話に質問がある（再読込のテスト）。 */
   existingUserId: string | null;
-  /** 段階の SSE だけが先に届ける段階（会話の取得より新しい記録）。 */
+  /** trace の API だけが先に返す段階（会話の取得より新しい記録。別の worker が表に書いた span）。 */
   streamAhead: ChatProgressEventJson[];
-  /** 段階の SSE・polling の要求（path と続きの位置）。 */
-  progressRequests: { path: string; since: number }[];
+  /** 回答の trace の API の要求（path）。 */
+  progressRequests: { path: string }[];
 }
 
-/** 保存済みの段階の記録（段階の SSE・polling が読み直す）。 */
+/** 表の span の段（回答の trace の API が読み直す）。 */
 function savedProgress(state: ChatState): ChatProgressEventJson[] {
   if (state.reply === "streaming") return [...STREAMING_PROGRESS, ...state.streamAhead];
   if (state.reply === "complete") return COMPLETE_PROGRESS;
@@ -273,34 +282,11 @@ async function mockChatPage(page: Page, scenario: StreamScenario | null, initial
       await route.fulfill({ json: { data: { cancelled: true }, error_messages: [], warning_messages: [] } });
       return;
     }
-    const url = new URL(request.url());
-    if (/\/messages\/a1\/progress(\/stream)?$/.test(path)) {
-      // 段階の SSE と polling（保存済みの記録から `since` / `Last-Event-ID` より後を返す。#1359）。
-      const since = Math.max(Number(url.searchParams.get("since") ?? 0), Number(request.headers()["last-event-id"] ?? 0));
-      state.progressRequests.push({ path, since });
-      const events = savedProgress(state);
-      const lastSeq = events.at(-1)?.seq ?? 0;
-      const terminal = events.some((event) => event.type === "terminal");
-      const after = events.filter((event) => event.seq > since);
-      if (path.endsWith("/stream")) {
-        if (terminal && since >= lastSeq) {
-          await route.fulfill({ status: 204 });
-          return;
-        }
-        // fulfill は本文を一度に返して閉じるので、ブラウザは `retry:` の後に続きから張り直す（続けて切れたら
-        // 画面の hook が polling に縮退する）。
-        const body =
-          "retry: 300\n\n" +
-          after.map((event) => `id: ${event.seq}\nevent: chat_progress\ndata: ${JSON.stringify(event)}\n\n`).join("");
-        await route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body });
-        return;
-      }
+    if (/\/messages\/a1\/trace$/.test(path)) {
+      // 回答の trace の API（共通の span の表の snapshot。記録の状態の終端を含む。#3226）。
+      state.progressRequests.push({ path });
       await route.fulfill({
-        json: {
-          data: { target_id: "a1", attempt: 0, events: after, last_seq: lastSeq, terminal },
-          error_messages: [],
-          warning_messages: [],
-        },
+        json: { data: { events: savedProgress(state), dropped_spans: null }, error_messages: [], warning_messages: [] },
       });
       return;
     }
@@ -446,9 +432,9 @@ for (const colorScheme of ["light", "dark"] as const) {
         await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("文書の検索", {
           timeout: 10_000,
         });
-        // 段階の SSE（使えなければ polling）は保存済みの記録を読み直して届ける（別の worker の記録。#1359）。会話の
-        // 取得がまだ前の段階でも、新しい段階を出し、会話の取り直しで前の段階に戻さない。
-        await expect.poll(() => state.progressRequests.some((item) => item.path.endsWith("/progress/stream"))).toBe(true);
+        // 回答の trace の API は表の span を読み直して届ける（別の worker が書いた span。#3226）。会話の取得が
+        // まだ前の段階でも、新しい段階を出し、会話の取り直しで前の段階に戻さない。
+        await expect.poll(() => state.progressRequests.some((item) => item.path.endsWith("/messages/a1/trace"))).toBe(true);
         state.streamAhead = reranking;
         await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("検索結果の並べ替え", {
           timeout: 10_000,

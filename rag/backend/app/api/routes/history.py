@@ -13,7 +13,6 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pr_backend_core.api import DEFAULT_PAGE_LIMIT, OffsetParams, offset_params, paginate
-from pr_backend_core.chat_progress import parse_chat_progress_events
 from pr_system_settings.auth.visibility import DEFAULT_RUN_EXECUTOR_FILTER, RunExecutorFilter
 from starlette.concurrency import run_in_threadpool
 
@@ -21,6 +20,7 @@ from app.api.routes.search import _stored_citation_rows
 from app.clients.oracle import OracleClient
 from app.clients.oracle_run_history import RunHistoryStore, owner_user_uuids
 from app.rag.request_context import current_audit_request_context
+from app.rag.trace_store import TraceSnapshot, run_trace_snapshot
 from app.schemas.common import ApiResponse, Page
 from app.schemas.history import RunDetail, RunStatus, RunSummary, RunSurface
 from app.schemas.search import RetrievedChunk
@@ -106,21 +106,12 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
     stages: dict[str, Any] = raw_stages if isinstance(raw_stages, dict) else {}
     detail: dict[str, Any] = {
         **{key: value for key, value in fields.items() if not key.endswith("_json")},
-        "trace_summary": stages.get("trace_summary"),
-        # 処理の経過（実行の trace の span のイベント。#3226）。チャットは会話の回答の
-        # 記録（終端まで記録したイベント）を優先する。
-        "progress_events": parse_chat_progress_events(stages.get("progress_events")),
         "error_code": _text_or_none(stages.get("error_code")),
         "storage_failures": [
             item for item in stages.get("storage_failures") or [] if isinstance(item, dict)
         ],
         "citations": _citations(row.get("citations_json")),
     }
-    if row.get("conversation_id") and row.get("message_id"):
-        message = await oracle.get_chat_message(str(row["conversation_id"]), str(row["message_id"]))
-        saved = parse_chat_progress_events(message.progress) if message is not None else []
-        if saved:
-            detail["progress_events"] = saved
     if detail["answer_generated"]:
         # 回答・引用・診断は回答の記録が正本（保持期間で消えていれば出さない）。
         record = await oracle.get_answer_record(run_id)
@@ -133,6 +124,19 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
             detail["answer_diagnostics"] = diagnostics if isinstance(diagnostics, dict) else None
     detail["feedback"] = await store.list_run_feedback(run_id)
     return ApiResponse(data=RunDetail.model_validate(detail))
+
+
+@router.get("/runs/{run_id}/trace", response_model=ApiResponse[TraceSnapshot])
+async def get_run_trace(run_id: str) -> ApiResponse[TraceSnapshot]:
+    """実行の処理の経過（共通の span の表の snapshot。#3226）。
+
+    実行の詳細と同じ見え方で実行を開き（範囲の外は 404）、その実行の trace id で表を読む。
+    """
+    oracle = OracleClient()
+    row = await RunHistoryStore(oracle).get_run(run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE)
+    return ApiResponse(data=await run_trace_snapshot(oracle, row))
 
 
 async def _conversation_owner_fields(row: dict[str, Any]) -> dict[str, Any]:

@@ -22,10 +22,6 @@ import {
   Skeleton,
   StatusBadge,
   RunStopButton,
-  chatProgressStepsFromEvents,
-  chatProgressTraceIdOf,
-  useTraceDetailsLabels,
-  type ChatProgressEvent,
   type ChatProgressStep,
 } from "@production-ready/ui";
 import {
@@ -53,7 +49,7 @@ import {
   type SearchDiagnostics,
 } from "@/lib/api";
 import { streamSearch } from "@/lib/search-stream";
-import { CHAT_PROGRESS_DEFINITIONS } from "@/lib/chat-progress";
+import { useRagTraceProgress } from "@/lib/trace-progress";
 import { isSubmitEnter } from "@/lib/keyboard";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
@@ -100,8 +96,8 @@ interface SearchRun {
   startedAtIso: string;
   endedAtMs: number | null;
   traceId: string | null;
-  /** 処理の経過のイベント（回答の trace の span の開始・終了と終端。#3226）。 */
-  progressEvents: ChatProgressEvent[];
+  /** 実行の id（配信の `run`。処理の経過を実行の trace の API で読む。#3226）。届くまでは null。 */
+  runId: string | null;
 }
 
 /**
@@ -135,7 +131,6 @@ export function SearchClient() {
   // 「回答に未反映の関連章節」の行から章節の原文を開くリンクは、文書の詳細を開ける利用者だけ（#2040・#303）。
   const canOpenSections = canOpenDocumentDetail(useAuth().hasPermission);
   // span の段の名前（段の名前・技術の span の名前）は root の文言で付ける（#3226）。
-  const traceLabels = useTraceDetailsLabels();
   // 入力中の質問・検索・回答プロファイル・詳細条件は、ページを行き来しても再読込しても残す（workspace-state.md）。
   // 回答・引用などの結果は保存せず、戻っただけで検索を送り直さない。
   const [query, setQuery] = useWorkspaceState("search.query", "");
@@ -280,7 +275,7 @@ export function SearchClient() {
       startedAtIso: new Date(startedAtMs).toISOString(),
       endedAtMs: null,
       traceId: null,
-      progressEvents: [],
+      runId: null,
     });
 
     try {
@@ -321,10 +316,8 @@ export function SearchClient() {
           ...(Object.keys(request.filters).length ? { filters: request.filters } : {}),
         },
         {
-          onChatProgress: (event) =>
-            setRun((current) =>
-              current ? { ...current, progressEvents: [...current.progressEvents, event] } : current
-            ),
+          onRun: ({ trace_id }) =>
+            setRun((current) => (current && current.runId === null ? { ...current, runId: trace_id } : current)),
           onMetadata: (m) => {
             setMeta({
               trace_id: m.trace_id,
@@ -418,15 +411,16 @@ export function SearchClient() {
   const answerMode = run?.generateAnswer ?? false;
   const isStreaming = phase === "streaming";
   const feedbackSnapshot = buildFeedbackContentSnapshot(submittedQuery, answer, citations);
-  // 処理の経過の行（回答の trace の span の木。チャットと同じ共通の組み立て。#3226）。画面で止めた・失敗した実行は
-  // 終端のイベントが届かないので、実行中の行を止めた・失敗した状態にする。
-  const processSteps = run
-    ? searchProcessSteps(
-        chatProgressStepsFromEvents(run.progressEvents, CHAT_PROGRESS_DEFINITIONS, undefined, { traceLabels }),
-        phase
-      )
-    : [];
-  const processTraceId = run ? chatProgressTraceIdOf(run.progressEvents) : undefined;
+  // 処理の経過の行（共通の span の表の snapshot を実行の trace の API で読む。チャットと同じ共通の組み立て。#3226）。
+  // 実行中は読み直し、終わったら 1 回だけ読む。画面で止めた・失敗した実行は記録の終端が無いことがあるので、実行中の
+  // 行を止めた・失敗した状態にする。
+  const trace = useRagTraceProgress({
+    key: run?.runId ?? null,
+    active: phase === "streaming",
+    fetchSnapshot: (signal) => api.getSearchRunTrace(run?.runId ?? "", signal),
+  });
+  const processSteps = run ? searchProcessSteps(trace.steps, phase) : [];
+  const processTraceId = run ? trace.traceId : undefined;
   // 処理の経過（#2096。チャットと同じ AnswerProcess）。実行中も終わった後も回答・検索結果の上の同じ場所に 1 つ出す
   // （作成中の「N ステップ完了」が終わると「処理の経過」になり、完了したら一覧を閉じる。末尾に出し直さない。
   // #2115 / #2118）。「処理の詳細」（処理の経過の中の末尾。#2325）は回答の記録の詳細でチャットと同じ。
@@ -446,6 +440,7 @@ export function SearchClient() {
         running ? undefined : (meta?.elapsed_ms ?? (run.endedAtMs != null ? run.endedAtMs - run.startedAtMs : null))
       }
       traceId={running ? undefined : processTraceId}
+      partial={trace.partial}
       diagnostics={running ? undefined : meta?.diagnostics?.answer}
       showNotices={!answerMode}
       showAutoFieldFilter={false}

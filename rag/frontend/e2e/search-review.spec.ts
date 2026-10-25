@@ -1,6 +1,14 @@
 import {timelineSnapshot, timelineTypography} from "../../../platform/packages/ui/e2e/timeline-snapshot";
 import { expect, type Page, type Route, test } from "./fixtures/test";
-import { ragSpan, savedSpanProgress, SPAN_TRACE_ID, spanStepId } from "./_chat-progress";
+import {
+  installTraceRecorder,
+  mockTraceApi,
+  ragSpan,
+  savedSpanProgress,
+  SPAN_TRACE_ID,
+  spanStepId,
+  type ChatProgressEventJson,
+} from "./_chat-progress";
 
 import {
   enableSearchAnswer,
@@ -42,6 +50,8 @@ const VIEWS = [
 ];
 
 test.beforeEach(async ({ page }) => {
+  // 配信の中の span の記録の印（`__trace`）を、実行の trace の API が返す（#3226）。
+  await installTraceRecorder(page);
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await mockSearchPage(page);
@@ -722,9 +732,15 @@ test("FAQ の提示対象が無いときは質問を止めず検索する", { ta
   await expect(page.getByText("類似する承認済み FAQ があります")).toHaveCount(0);
 });
 
-/** 処理の経過の span のイベントを SSE の `chat_progress` にする（#3226）。 */
-function progressSse(events: unknown[]): [string, unknown][] {
-  return events.map((event): [string, unknown] => ["chat_progress", { event }]);
+/**
+ * 検索の配信の最初の実行の id（`run`）と、表へ書いた span の記録の印（実行の trace の API が返す。#3226）。
+ * 実行の id は span のイベントの対象（`target_id`）。
+ */
+function progressSse(events: ChatProgressEventJson[]): [string, unknown][] {
+  return [
+    ["run", { trace_id: events[0]?.target_id ?? "" }],
+    ...events.map((event): [string, unknown] => ["__trace", event]),
+  ];
 }
 
 test("RAG 検索の処理の経過は span の木で、2 つ目の「トレースの詳細」は出さない", { tag: "@responsive" }, async ({ page }, testInfo) => {
@@ -792,6 +808,8 @@ for (const scenario of [
     await selectSearchAnswerProfile(page, VIEWS[0].name);
     await search(page, "合成データを確認");
     await expect(page.getByText("合成の回答です。", { exact: true })).toBeVisible();
+    // 処理の経過は実行の trace の API で読む（回答の本文の後に届くことがある。#3226）。段が出てから開閉を決める。
+    await expect(page.getByTestId("search-run-progress-summary")).toContainText("1 ステップ");
     const row = page.getByTestId(`search-run-progress-step-${spanStepId("guardrail")}`);
     if (!(await row.isVisible())) await page.getByTestId("search-run-progress-summary").click();
     await expect(row).toHaveAttribute("data-status", scenario.status);
@@ -845,9 +863,11 @@ test("RAG 検索と履歴の工程の内容・階層・状態・時間が一致�
     citation_count: 0, answer_outcome: "insufficient_evidence", search_answer_profile_id: "bv-1", search_answer_profile_name: "プロファイル A",
     run_id: "synthetic-parity", surface: "search", question: "合成の質問", status: "success", answer_generated: true,
     created_at: "2026-10-23T00:00:01.001Z", elapsed_ms: 1001, executed_by_me: true, executor_display_name: "利用者 A",
-    progress_events, feedback: [], citations: [], answer: "合成の回答です。", answer_available: true,
+    feedback: [], citations: [], answer: "合成の回答です。", answer_available: true,
     answer_diagnostics: null, conversation_owner_display_name: null, owned_by_me: null,
   })));
+  // 実行の trace の API は RAG 検索の画面と同じ span を返す（#3226）。
+  await mockTraceApi(page, { "synthetic-parity": progress_events });
   await page.goto("/history/synthetic-parity");
   await page.getByTestId("run-history-timeline-summary").click();
   expect(await timelineSnapshot(page.getByTestId("run-history-timeline"))).toEqual(live);

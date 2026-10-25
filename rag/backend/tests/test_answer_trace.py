@@ -1,25 +1,28 @@
-"""回答の処理の経過（trace の span のイベント。#1359 / #3226）の記録のテスト。
+"""回答の処理の経過（共通の span の表。#3226 の案 A）の記録のテスト。
 
-回答の pipeline と同じ span（実行の全体・パイプラインの段・回答フローの工程）の知らせを
-`ChatProgressTracker` が段のイベントにすること（親子・表示用のデータ・状態）、回答の thread からの
-知らせの順、完了・失敗・停止・中断の終端を、記録したイベントで確かめる。
+回答の pipeline と同じ span（実行の全体・パイプラインの段・回答フローの工程）の知らせが、処理の
+経過の段（親子・表示用のデータ・状態・工程の詳細）になること、`AnswerTrace` が表の書き手へ渡し、
+製品の記録に置く値（trace id・工程の詳細・書けなかった数）を集めること、回答の thread からの知らせ
+をループで知らせることを確かめる。実 DB は使わない。
 """
 
+from __future__ import annotations
+
 import asyncio
+import contextlib
 import logging
 import threading
+from collections.abc import Iterator
 
 import pytest
-from pr_backend_core.chat_progress import (
-    ChatProgressStepEvent,
-    ChatProgressTerminalEvent,
-    fold_chat_progress_events,
-)
+from pr_backend_core.chat_progress import ChatProgressStepEvent
+from pr_backend_core.observability.trace_store import TraceSpanWriter
 
-from app.rag.chat_answer_runs import close_saved_chat_progress
-from app.rag.chat_progress import ChatProgressTracker
+from app.rag import trace_store
 from app.rag.span_display import ANSWER_STEP_KIND
+from app.rag.trace_store import AnswerTrace
 from tests.span_progress_support import (
+    RecordingTrace,
     answer_step,
     answer_trace,
     pipeline_stage,
@@ -30,15 +33,10 @@ from tests.span_progress_support import (
 MESSAGE_ID = "a" * 32
 
 
-def _statuses(tracker: ChatProgressTracker) -> list[str]:
-    fold = fold_chat_progress_events(tracker.events)
-    return [step.status for step in fold.step_list()]
-
-
 async def test_records_root_stage_and_answer_steps_as_a_span_tree() -> None:
     """実行の全体・パイプラインの段・回答フローの工程を、親子つきの段として記録する。"""
-    tracker = ChatProgressTracker(MESSAGE_ID, model_id="m1")
-    with answer_trace(tracker.span_listener()):
+    tracker = RecordingTrace(MESSAGE_ID, model_id="m1")
+    with answer_trace(tracker):
         await pipeline_stage("history_rewrite")
 
         async def answer() -> None:
@@ -49,7 +47,6 @@ async def test_records_root_stage_and_answer_steps_as_a_span_tree() -> None:
 
         await pipeline_stage("answer", answer())
         await pipeline_stage("answer_guardrail")
-    tracker.finish()
 
     assert span_rows(tracker.events) == [
         # 始まった順（包む段の後に中の工程）。
@@ -70,34 +67,32 @@ async def test_records_root_stage_and_answer_steps_as_a_span_tree() -> None:
     assert by_name["rag.history_rewrite"].parent_id == root.step_id
     # 段の値に深さ（depth）を入れない（入れ子は親子で決まる）。
     assert "depth" not in (by_name["Rerank"].params or {})
-    assert isinstance(tracker.events[-1], ChatProgressTerminalEvent)
-    assert tracker.terminal == "done"
+    # 製品の記録に置く trace id は root の span の trace id。
+    assert tracker.trace_id == root.trace_id
 
 
 async def test_span_start_is_running_until_it_finishes() -> None:
     """開始した span は実行中の段になり、終わると所要時間つきの完了になる（実行中も届く）。"""
-    tracker = ChatProgressTracker(MESSAGE_ID)
-    seen: list[tuple[str, str]] = []
-    tracker.attach(
-        lambda event: (
-            seen.append(
-                (str(event.params.get("name") if event.params else event.name), event.status)
-            )
+    tracker = RecordingTrace(MESSAGE_ID)
+
+    def seen() -> list[tuple[str, str]]:
+        return [
+            (str((event.params or {}).get("name") or event.name), event.status)
+            for event in span_steps(tracker.events)
             if isinstance(event, ChatProgressStepEvent) and not event.root
-            else None
-        )
-    )
-    with answer_trace(tracker.span_listener()), answer_step("文書検索"):
-        assert seen == [("文書検索", "running")]
-    assert seen[-1] == ("文書検索", "done")
+        ]
+
+    with answer_trace(tracker), answer_step("文書検索"):
+        assert seen() == [("文書検索", "running")]
+    assert seen()[-1] == ("文書検索", "done")
     event = span_steps(tracker.events)[-1]
     assert event.started_at is not None and event.finished_at is not None
 
 
 async def test_answer_step_display_has_llm_calls_note_and_details() -> None:
     """回答フローの工程の span に、LLM の回数・結果の説明・工程の詳細を付ける。"""
-    tracker = ChatProgressTracker(MESSAGE_ID)
-    with answer_trace(tracker.span_listener()), answer_step("根拠確認") as step:
+    tracker = RecordingTrace(MESSAGE_ID)
+    with answer_trace(tracker), answer_step("根拠確認") as step:
         step.result("該当なし")
         step.status = "該当なし"
         step.field("検索文", "合成の検索文")
@@ -113,8 +108,8 @@ async def test_answer_step_display_has_llm_calls_note_and_details() -> None:
 
 async def test_pipeline_step_details_and_failure_summary_are_attached() -> None:
     """パイプラインの段の成功の詳細と、失敗の要約・エラーの種類を span の詳細にする。"""
-    tracker = ChatProgressTracker(MESSAGE_ID)
-    with answer_trace(tracker.span_listener()):
+    tracker = RecordingTrace(MESSAGE_ID)
+    with answer_trace(tracker):
         await pipeline_stage(
             "history_rewrite",
             result="書き換えた質問",
@@ -138,84 +133,101 @@ async def test_pipeline_step_details_and_failure_summary_are_attached() -> None:
 
 async def test_failed_answer_step_is_failed_with_summary_line() -> None:
     """例外で止まった回答フローの工程は失敗の段になり、詳細の先頭に要約を足す。"""
-    tracker = ChatProgressTracker(MESSAGE_ID)
+    tracker = RecordingTrace(MESSAGE_ID)
     with (
-        answer_trace(tracker.span_listener()),
+        answer_trace(tracker),
         pytest.raises(ValueError),
         answer_step("文書検索"),
     ):
         raise ValueError("合成の失敗")
-    tracker.fail()
     step = next(e for e in span_steps(tracker.events) if not e.root)
     assert step.status == "failed"
     assert step.details is not None
     assert step.details.lines[0] == "この工程でエラーが発生しました。"
-    assert tracker.terminal == "failed"
 
 
-async def test_thread_spans_are_recorded_in_order_on_the_loop() -> None:
-    """回答の thread の span の知らせは、ループの中で届いた順に記録する。"""
-    tracker = ChatProgressTracker(MESSAGE_ID)
-    recorded_on: set[int] = set()
-    tracker.attach(lambda _event: recorded_on.add(threading.get_ident()))
+async def test_thread_spans_notify_changes_on_the_loop() -> None:
+    """回答の thread の span の知らせは、ループの中で変更を知らせる（作成中の記録の保存の予約）。"""
+    notified_on: list[int] = []
+    tracker = AnswerTrace(MESSAGE_ID, owner_user_uuid=None)
+    tracker.attach(on_change=lambda: notified_on.append(threading.get_ident()))
     loop_thread = threading.get_ident()
 
     def work() -> None:
-        with answer_step("質問の理解"):
-            pass
-        with answer_step("文書検索"):
-            pass
+        with answer_step("根拠確認") as step:
+            step.field("検索文", "合成の検索文")
 
-    with answer_trace(tracker.span_listener()):
+    with answer_trace(tracker):
         await asyncio.to_thread(work)
         await asyncio.sleep(0)
-    assert recorded_on == {loop_thread}
-    assert [row[2] for row in span_rows(tracker.events)] == ["質問の理解", "文書検索"]
-    assert [event.seq for event in tracker.events] == list(range(1, tracker.last_seq + 1))
+    # root の trace id が分かった（ループの thread）・工程の詳細が増えた（回答の thread → ループ）。
+    assert notified_on and set(notified_on) == {loop_thread}
+    record = tracker.record()
+    assert record["trace_id"] == tracker.trace_id
+    assert len(record["span_details"]) == 1
+    (details,) = record["span_details"].values()
+    assert {"label": "検索文", "value": "合成の検索文"} in details["fields"]
+    assert record["trace_dropped_spans"] == 0
 
 
-@pytest.mark.parametrize(
-    ("status", "running_status"),
-    [("cancelled", "skipped"), ("failed", "failed")],
-    ids=["stop", "interrupt"],
-)
-async def test_close_records_stop_and_interrupt_terminal(status: str, running_status: str) -> None:
-    """停止（cancelled）・中断（failed）の終端。実行中の段は終端に合わせ、終端の後は記録しない。"""
-    tracker = ChatProgressTracker(MESSAGE_ID)
-    with answer_trace(tracker.span_listener()), answer_step("文書検索"):
-        tracker.close(status)  # type: ignore[arg-type]
-        assert tracker.terminal == status
-        last_seq = tracker.last_seq
-    # 終端の後の span の終了・完了・もう一度の停止は記録しない。
-    tracker.finish()
-    tracker.close("failed")
-    assert tracker.last_seq == last_seq
-    assert set(_statuses(tracker)) == {running_status}
+class _FakeConnection:
+    def __init__(self, rows: dict[tuple[str, str], dict[str, object]]) -> None:
+        self.rows = rows
 
+    def cursor(self) -> _FakeConnection:
+        return self
 
-async def test_resumes_from_saved_events() -> None:
-    """保存済みのイベントから作り直すと、続きの番号で記録する。"""
-    first = ChatProgressTracker(MESSAGE_ID)
-    with answer_trace(first.span_listener()), answer_step("文書検索"):
+    def executemany(self, _sql: str, rows: list[dict[str, object]]) -> None:
+        for row in rows:
+            self.rows[(str(row["trace_id"]), str(row["span_id"]))] = dict(row)
+
+    def commit(self) -> None:
         pass
-    resumed = ChatProgressTracker(MESSAGE_ID, events=first.events)
-    assert resumed.last_seq == first.last_seq
-    resumed.close("failed")
-    assert [event.seq for event in resumed.events] == list(range(1, resumed.last_seq + 1))
 
 
-async def test_close_saved_progress_continues_numbering() -> None:
-    """別のプロセスの停止・中断の後始末は、保存済みのイベントの続きで終端を記録する。"""
-    tracker = ChatProgressTracker(MESSAGE_ID)
-    with answer_trace(tracker.span_listener()), answer_step("文書検索"):
-        saved = tracker.dump()
-    closed = close_saved_chat_progress(saved, message_id=MESSAGE_ID, status="cancelled")
-    assert closed[: len(saved)] == saved
-    assert closed[-1]["type"] == "terminal"
-    assert closed[-1]["status"] == "cancelled"
-    assert [event["seq"] for event in closed] == list(range(1, len(closed) + 1))
-    # 既に終端なら変えない。
-    assert close_saved_chat_progress(closed, message_id=MESSAGE_ID, status="failed") == closed
+async def test_writes_spans_to_shared_table_without_step_details() -> None:
+    """span は実行した利用者を持ち主にして表に書き、工程の詳細（検索文など）は表に入れない。"""
+    rows: dict[tuple[str, str], dict[str, object]] = {}
+
+    @contextlib.contextmanager
+    def connect() -> Iterator[_FakeConnection]:
+        yield _FakeConnection(rows)
+
+    writer = TraceSpanWriter(connect)
+    previous = trace_store.set_trace_span_writer(writer)
+    try:
+        tracker = AnswerTrace(MESSAGE_ID, owner_user_uuid="user-a")
+        with answer_trace(tracker), answer_step("根拠確認") as step:
+            step.field("検索文", "合成の検索文")
+        writer.flush()
+    finally:
+        trace_store.set_trace_span_writer(previous)
+    assert {row["owner_user_uuid"] for row in rows.values()} == {"user-a"}
+    assert {row["operation_id"] for row in rows.values()} == {MESSAGE_ID}
+    assert {row["product"] for row in rows.values()} == {"rag"}
+    assert sum(1 for row in rows.values() if row["is_root"]) == 1
+    assert all("合成の検索文" not in str(row) for row in rows.values())
+    # 詳細は製品の記録に置く。
+    assert "合成の検索文" in str(tracker.record()["span_details"])
+
+
+async def test_no_owner_does_not_write_to_table() -> None:
+    """利用者の分からない実行（品質評価など）は表に書かない（持ち主の列は必須）。"""
+    rows: dict[tuple[str, str], dict[str, object]] = {}
+
+    @contextlib.contextmanager
+    def connect() -> Iterator[_FakeConnection]:
+        yield _FakeConnection(rows)
+
+    writer = TraceSpanWriter(connect)
+    previous = trace_store.set_trace_span_writer(writer)
+    try:
+        with answer_trace(AnswerTrace(MESSAGE_ID, owner_user_uuid=None)), answer_step("文書検索"):
+            pass
+        writer.flush()
+    finally:
+        trace_store.set_trace_span_writer(previous)
+    assert rows == {}
 
 
 async def test_logs_end_of_product_steps_with_duration_and_request_id(
@@ -226,15 +238,14 @@ async def test_logs_end_of_product_steps_with_duration_and_request_id(
 
     token = request_id_var.set("req-3226")
     try:
-        with caplog.at_level(logging.INFO, logger="app.rag.chat_progress"):
-            tracker = ChatProgressTracker(MESSAGE_ID, model_id="m1")
-            tracker.trace_id = "trace-1"
-            with answer_trace(tracker.span_listener()), answer_step("文書検索"):
+        with caplog.at_level(logging.INFO, logger="app.rag.trace_store"):
+            tracker = RecordingTrace(MESSAGE_ID, model_id="m1")
+            tracker.run_id = "trace-1"
+            with answer_trace(tracker), answer_step("文書検索"):
                 pass
-            tracker.finish()
     finally:
         request_id_var.reset(token)
-    records = [record for record in caplog.records if record.name == "app.rag.chat_progress"]
+    records = [record for record in caplog.records if record.name == "app.rag.trace_store"]
     # root（実行の全体）は出さない。
     assert len(records) == 1
     finished = records[0]

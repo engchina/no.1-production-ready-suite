@@ -9,7 +9,7 @@ file)配下に置く。メッセージ送信は既存 RAG パイプラインを
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,19 +18,12 @@ from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import StreamingResponse
 from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
 from pr_backend_core.chat_history_window import (
     ChatHistoryPage,
     chat_history_cutoff,
     chat_history_days,
-)
-from pr_backend_core.chat_progress import (
-    ChatProgressEvent,
-    ChatProgressPage,
-    chat_progress_page,
-    chat_progress_sse_response,
-    parse_chat_progress_events,
 )
 from pr_backend_core.logging import safe_exception_fields
 from pr_system_settings.chat_attachments import ChatAttachmentReference
@@ -62,16 +55,13 @@ from app.rag.answer_notice import current_answer_notice
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
 from app.rag.chat_answer_runs import (
     CHAT_ANSWER_CANCELLED_MESSAGE,
-    CHAT_ANSWER_HEARTBEAT_SECONDS,
     CHAT_ANSWER_INTERRUPTED_MESSAGE,
     CHAT_ANSWER_TIMEOUT_MARGIN_SECONDS,
     ChatAnswerLimitError,
     ChatAnswerRun,
-    chat_progress_closer,
     get_chat_answer_run_service,
 )
 from app.rag.chat_attachments import attach_to_conversation, delete_conversation_attachments
-from app.rag.chat_progress import ChatProgressTracker
 from app.rag.document_sections_service import current_section_pages
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import elapsed_ms, new_trace_id
@@ -79,8 +69,6 @@ from app.rag.pipeline import ChatTurn, RagPipeline, storage_failure
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import (
     current_audit_request_context,
-    reset_audit_request_context,
-    set_audit_request_context,
 )
 from app.rag.run_history import RunRecorder
 from app.rag.search_answer_profile_knowledge import (
@@ -96,6 +84,7 @@ from app.rag.support_guide_runtime import (
     guide_clarification_record,
     resolve_guide_clarification,
 )
+from app.rag.trace_store import AnswerTrace, TraceSnapshot, TraceTerminal, trace_snapshot
 from app.schemas.chat import (
     ChatAnswerCancelResult,
     ChatClarificationRecord,
@@ -218,7 +207,6 @@ def _to_chat_message(
         status=MessageStatus(message.status),
         reply_to_message_id=message.reply_to_message_id,
         created_at=message.created_at,
-        progress=_saved_progress_events(message),
         clarification=_saved_clarification(message),
         # 回答に付けた注意書き（終わった回答だけ。#2405）。
         notice=message.answer_notice if message.status == "COMPLETE" else None,
@@ -290,13 +278,6 @@ def _guide_user_context(messages: list[StoredMessage]) -> list[str]:
                     lines.append(f"確認の質問: {entry.prompt}\n利用者の答え: {'、'.join(values)}")
         contexts.append("\n".join(lines))
     return contexts
-
-
-def _saved_progress_events(message: StoredMessage) -> list[ChatProgressEvent] | None:
-    """保存した処理の段階のイベント（#1359）。旧形式（段階の snapshot）・形の違う要素は捨てる。"""
-    if message.progress is None:
-        return None
-    return parse_chat_progress_events(message.progress)
 
 
 @router.get("/models", response_model=ApiResponse[list[dict[str, str]]])
@@ -792,19 +773,19 @@ async def _generate_chat_answer(
     message_id: str,
     *,
     lease_owner: str,
-    tracker: ChatProgressTracker | None = None,
+    trace: AnswerTrace | None = None,
 ) -> tuple[StoredMessage, SearchResponse]:
     """1 モデル分の回答を生成し、作成中の ASSISTANT メッセージに最終の状態を書く(#1175)。
 
-    生成は回答生成の上限（`rag_answer_timeout_seconds`。#375）で打ち切る。時間切れは
-    最後の工程を持つ `AnswerTimeoutError` になる。
-    失敗したら ERROR を保存してから例外をそのまま送出する。保存は作成中（STREAMING）の行だけに
-    当たる（利用者の停止・中断の後は書かない）。処理の段階（`tracker`）は回答の trace の span を
-    記録し（#3226）、終端（完了・失敗）まで記録して一緒に保存する。
+    生成は回答生成の上限（`rag_answer_timeout_seconds`。#375）で打ち切る。時間切れは最後の工程を持
+    つ `AnswerTimeoutError` になる。失敗したら ERROR を保存してから例外をそのまま送出する。保存は
+    作成中（STREAMING）の行だけに当たる（利用者の停止・中断の後は書かない）。処理の経過（`trace`）
+    は回答の span を共通の span の表に書き（#3226）、表を引く trace id と工程の詳細をメッセージに
+    一緒に保存する。
     """
     trace_id = new_trace_id()
-    if tracker is not None:
-        tracker.trace_id = trace_id
+    if trace is not None:
+        trace.run_id = trace_id
     # 実行履歴（#1890）。会話と回答のメッセージに結び付け、比較の列ごとに 1 件残す。
     run_recorder = RunRecorder(
         surface="chat",
@@ -813,8 +794,8 @@ async def _generate_chat_answer(
         conversation_id=turn.conversation_id,
         message_id=message_id,
         model_id=model_id or None,
-        # 実行履歴の詳細の処理の経過（会話の回答の記録と同じイベント。#3226）。
-        progress_source=tracker.dump if tracker is not None else None,
+        # 実行履歴の詳細の処理の経過（会話の回答と同じ trace。#3226）。
+        trace_source=trace.record if trace is not None else None,
     )
     started_at = perf_counter()
     try:
@@ -840,13 +821,11 @@ async def _generate_chat_answer(
                 progress_callback=progress_tracker,
                 history=turn.history,
                 query_guardrail_result=turn.query_guardrail,
-                # 処理の経過は回答の trace の span（#3226）。
-                span_listener=tracker.span_listener() if tracker is not None else None,
+                # 処理の経過は回答の span（共通の span の表。#3226）。
+                trace=trace,
             ),
             turn.settings,
         )
-        if tracker is not None:
-            tracker.finish()
         assistant = StoredMessage(
             id=message_id,
             conversation_id=turn.conversation_id,
@@ -861,15 +840,13 @@ async def _generate_chat_answer(
             status="COMPLETE",
             elapsed_ms=result.elapsed_ms,
             created_at=datetime.now(UTC),
-            progress=tracker.dump() if tracker is not None else None,
+            progress=trace.record() if trace is not None else None,
             # 回答の注意書き（#2405）。本文（会話の履歴に使う）とは別の列に保存する。
             answer_notice=result.notice,
             # 段落の印（#2738）。列には保存せず、回答の記録（diagnostics_json）から読み直す。
             passage_record=passage_mark_record(result.diagnostics.answer),
         )
     except Exception as exc:
-        if tracker is not None:
-            tracker.fail()
         await run_recorder.record(
             run_id=trace_id,
             question=run_recorder.question,
@@ -892,7 +869,7 @@ async def _generate_chat_answer(
                     trace_id=trace_id,
                     status="ERROR",
                     created_at=datetime.now(UTC),
-                    progress=tracker.dump() if tracker is not None else None,
+                    progress=trace.record() if trace is not None else None,
                 ),
                 lease_owner=lease_owner,
             )
@@ -922,7 +899,7 @@ async def _generate_chat_answer(
                     status="ERROR",
                     elapsed_ms=result.elapsed_ms,
                     created_at=datetime.now(UTC),
-                    progress=tracker.dump() if tracker is not None else None,
+                    progress=trace.record() if trace is not None else None,
                 ),
                 lease_owner=lease_owner,
             )
@@ -947,8 +924,9 @@ async def _start_answer_run(
 ) -> ChatAnswerRun:
     """作成中の ASSISTANT メッセージを保存し、回答の作成を接続から切り離した task で始める(#1175)。
 
-    最初に `start` の event（保存済みの質問・比較の列・列ごとの作成中のメッセージ）を記録し、
-    続けて列ごとの処理の段階の最初のイベント（待機中の段階。#1359）を記録する。
+    `start` の event（保存済みの質問・比較の列・列ごとの作成中のメッセージ）を記録する。処理の経過
+    は回答の配信では送らず、画面が回答ごとの trace の API（共通の span の表の snapshot。#3226）で
+    読む。
     """
     service = get_chat_answer_run_service()
     context = current_audit_request_context()
@@ -959,15 +937,15 @@ async def _start_answer_run(
         user_id_hash=context.user_id_hash,
         store=oracle,
     )
-    # 利用者向けの処理の段階（3 製品共通の段階のイベント。対象は作成中のメッセージ。#1359）。
-    trackers: dict[str, ChatProgressTracker] = {}
+    # 処理の経過（共通の span の表に書く回答の span。対象は作成中のメッセージ。#3226）。
+    traces: dict[str, AnswerTrace] = {}
     try:
         for column in columns:
             model_id = column["model_id"]
-            tracker = ChatProgressTracker(uuid4().hex, model_id=model_id)
+            trace = AnswerTrace(uuid4().hex, owner_user_uuid=context.user_uuid, model_id=model_id)
             placeholder = await oracle.append_message(
                 StoredMessage(
-                    id=tracker.message_id,
+                    id=trace.message_id,
                     conversation_id=turn.conversation_id,
                     reply_to_message_id=turn.user_message.id,
                     role="ASSISTANT",
@@ -975,13 +953,13 @@ async def _start_answer_run(
                     content="",
                     status="STREAMING",
                     created_at=datetime.now(UTC),
-                    progress=tracker.dump(),
+                    progress=trace.record(),
                     lease_owner=service.worker_id,
                 )
             )
             run.message_ids[model_id] = placeholder.id
-            run.progress[placeholder.id] = tracker
-            trackers[model_id] = tracker
+            run.progress[placeholder.id] = trace
+            traces[model_id] = trace
     except Exception:
         service.discard(run)
         raise
@@ -1000,15 +978,9 @@ async def _start_answer_run(
             ],
         },
     )
-    # 保存した最初の段階（待機中）を送り、これより後の段階は記録するたびに送る。
-    for tracker in trackers.values():
-        sink = _progress_publisher(run, tracker)
-        for event in tracker.events:
-            sink(event)
-        tracker.attach(sink)
 
     async def execute(current: ChatAnswerRun) -> None:
-        await _answer_turn(current, oracle, turn, columns, trackers, service.worker_id)
+        await _answer_turn(current, oracle, turn, columns, traces, service.worker_id)
 
     service.start(
         run,
@@ -1019,30 +991,12 @@ async def _start_answer_run(
     return run
 
 
-def _progress_publisher(
-    run: ChatAnswerRun, tracker: ChatProgressTracker
-) -> Callable[[ChatProgressEvent], None]:
-    """段階のイベントを回答の配信（SSE の `chat_progress`）で送る（#1359）。"""
-
-    def publish(event: ChatProgressEvent) -> None:
-        run.publish(
-            "chat_progress",
-            {
-                "model_id": tracker.model_id,
-                "message_id": tracker.message_id,
-                "event": event.model_dump(mode="json", exclude_none=True),
-            },
-        )
-
-    return publish
-
-
 async def _answer_turn(
     run: ChatAnswerRun,
     oracle: OracleClient,
     turn: PreparedChatTurn,
     columns: list[dict[str, str]],
-    trackers: dict[str, ChatProgressTracker],
+    traces: dict[str, AnswerTrace],
     lease_owner: str,
 ) -> None:
     """各モデルへ fan-out して回答を作り、event を記録する（購読の有無に関係なく最後まで進む）。"""
@@ -1050,36 +1004,36 @@ async def _answer_turn(
     async def run_model(column: dict[str, str]) -> None:
         model_id = column["model_id"]
         message_id = run.message_ids[model_id]
-        tracker = trackers[model_id]
-        persisted_seq = tracker.last_seq
+        trace = traces[model_id]
+        persisted_version = trace.version
         persist_task: asyncio.Task[None] | None = None
 
         async def persist_progress() -> None:
-            # 段階を保存する（再読込・別の worker から作成中の段階を見せる。#1175 / #1359）。
-            # 保存は補助。span の知らせが続いても書き込みは 1 つずつにし、書いている間に増えた分は
-            # 書き終わってからまとめて書く（古い一覧で新しい一覧を上書きしない）。
-            nonlocal persisted_seq
-            while tracker.terminal is None and tracker.last_seq > persisted_seq:
-                seq = tracker.last_seq
+            # 処理の経過の記録（trace id・工程の詳細）を保存する（画面は記録の trace id で span の
+            # 表を読み、開いた段の詳細を記録から足す。再読込・別の worker からも作成中の段階を見せ
+            # る）。保存は補助。知らせが続いても書き込みは 1 つずつにし、書いている間に増えた分は
+            # 書き終わってからまとめて書く（古い記録で新しい記録を上書きしない）。
+            nonlocal persisted_version
+            while message_id not in run.closed_message_ids and trace.version > persisted_version:
+                version = trace.version
                 try:
                     await oracle.update_chat_message_progress(
-                        message_id, lease_owner=lease_owner, progress=tracker.dump()
+                        message_id, lease_owner=lease_owner, progress=trace.record()
                     )
-                except Exception as exc:  # noqa: BLE001 - 段階の保存に失敗しても作成は続ける
+                except Exception as exc:  # noqa: BLE001 - 記録の保存に失敗しても作成は続ける
                     logger.warning(
                         "chat_answer_progress_save_failed",
                         extra={"run_id": run.run_id, "error_type": type(exc).__name__},
                     )
                     return
-                persisted_seq = seq
+                persisted_version = version
 
         def schedule_persist() -> None:
-            # 段階のイベントは記録したときに回答の配信へ送っている（`_progress_publisher`）。
             nonlocal persist_task
             if persist_task is None or persist_task.done():
                 persist_task = asyncio.get_running_loop().create_task(persist_progress())
 
-        tracker.attach(on_change=schedule_persist)
+        trace.attach(on_change=schedule_persist)
         try:
             assistant, result = await _generate_chat_answer(
                 oracle,
@@ -1087,11 +1041,11 @@ async def _answer_turn(
                 model_id,
                 message_id,
                 lease_owner=lease_owner,
-                tracker=tracker,
+                trace=trace,
             )
         except Exception as exc:
             run.mark_closed(message_id)
-            # SSE では例外を error event へ落とす（段階は失敗の終端まで記録して送った後）。
+            # SSE では例外を error event へ落とす（処理の経過の終端はメッセージの状態で出す）。
             failure = describe_answer_failure(exc, STREAM_ERROR_MESSAGE)
             run.publish(
                 "error",
@@ -1099,7 +1053,7 @@ async def _answer_turn(
                     "model_id": model_id,
                     "message_id": message_id,
                     # 画面の「詳細」に出す（保存した ERROR の回答も trace_id を持つ。#2023）。
-                    "trace_id": tracker.trace_id,
+                    "trace_id": trace.run_id,
                     **({"reason": failure.reason} if failure.reason else {}),
                     "message": _chat_error_message(exc),
                     "error_type": failure.error_type if failure.incomplete else type(exc).__name__,
@@ -1245,8 +1199,6 @@ async def cancel_message_answer(
                     message.id,
                     status="CANCELLED",
                     content=CHAT_ANSWER_CANCELLED_MESSAGE,
-                    # 処理の段階も停止の終端にする（保存済みの記録の続き。#1359）。
-                    finalize_progress=chat_progress_closer(message.id, "cancelled"),
                 )
                 or cancelled
             )
@@ -1256,10 +1208,10 @@ async def cancel_message_answer(
 async def _close_interrupted_answers(oracle: OracleClient, messages: list[StoredMessage]) -> bool:
     """作成していたプロセスが止まった作成中の回答を、中断の失敗にする(#1175)。
 
-    このプロセスで作成中のものは除く。このプロセスが作っていたのに動いていないもの（task が
-    後始末の前に終わった）と、heartbeat が途絶えたもの（別のプロセスの停止・再起動）だけを、
-    DB の時刻で判定して閉じる（永遠に作成中にしない）。処理の段階も失敗の終端にする（#1359）。
-    閉じたら True。
+    このプロセスで作成中のものは除く。このプロセスが作っていたのに動いていないもの（task が後始末
+    の前に終わった）と、heartbeat が途絶えたもの（別のプロセスの停止・再起動）だけを、DB の時刻で
+    判定して閉じる（永遠に作成中にしない）。処理の経過の終端はメッセージの状態で出す。閉じたら
+    True。
     """
     service = get_chat_answer_run_service()
     closed = False
@@ -1276,7 +1228,6 @@ async def _close_interrupted_answers(oracle: OracleClient, messages: list[Stored
                     content=CHAT_ANSWER_INTERRUPTED_MESSAGE,
                     lease_owner=service.worker_id,
                     stale_seconds=service.stale_seconds,
-                    finalize_progress=chat_progress_closer(message.id, "failed"),
                 )
                 or closed
             )
@@ -1287,8 +1238,8 @@ async def _close_interrupted_answers(oracle: OracleClient, messages: list[Stored
     return closed
 
 
-# --------------------------------------------------------------------------- #
-# 回答の処理の段階の polling / SSE（3 製品共通の `pr_backend_core.chat_progress`。#1359）
+# --------------------------------------------------------------------------- # 回答の処理の経過（
+# 共通の span の表の snapshot。#3226）
 # --------------------------------------------------------------------------- #
 
 
@@ -1307,18 +1258,6 @@ async def _load_answer_message(
     return message
 
 
-def _answer_progress_page(message: StoredMessage, *, since: int) -> ChatProgressPage:
-    """回答の保存済みの段階のイベント（`since` より後）。
-
-    作成中でない回答は、終端のイベントが無くても（旧形式・段階を保存していない回答）終わったものと
-    して返す（配信を閉じる）。
-    """
-    page = chat_progress_page(message.id, _saved_progress_events(message) or [], since=since)
-    if message.status != "STREAMING" and not page.terminal:
-        return page.model_copy(update={"terminal": True})
-    return page
-
-
 async def _close_if_interrupted(oracle: OracleClient, message: StoredMessage) -> StoredMessage:
     """作成していたプロセスが止まった作成中の回答なら中断の失敗にして、読み直した回答を返す。"""
     if message.status != "STREAMING":
@@ -1329,68 +1268,34 @@ async def _close_if_interrupted(oracle: OracleClient, message: StoredMessage) ->
     return reloaded if reloaded is not None else message
 
 
-@router.get(
-    "/conversations/{conversation_id}/messages/{assistant_message_id}/progress",
-    response_model=ApiResponse[ChatProgressPage],
-)
-async def get_answer_progress(
-    conversation_id: str,
-    assistant_message_id: str,
-    since: int = Query(default=0, ge=0),
-) -> ApiResponse[ChatProgressPage]:
-    """回答（`assistant_message_id`）の処理の段階のイベントのうち、`since` より後を返す（polling）。
+_MESSAGE_TERMINAL: dict[str, TraceTerminal] = {
+    "COMPLETE": "done",
+    "ERROR": "failed",
+    "CANCELLED": "cancelled",
+}
 
-    保存済みの記録（`progress_json`）から返すので、別の worker が作成している回答・再読込の後でも
-    段階が届く。作成していたプロセスが止まった回答は、中断の失敗（終端）にしてから返す。
+
+@router.get(
+    "/conversations/{conversation_id}/messages/{assistant_message_id}/trace",
+    response_model=ApiResponse[TraceSnapshot],
+)
+async def get_answer_trace(
+    conversation_id: str, assistant_message_id: str
+) -> ApiResponse[TraceSnapshot]:
+    """回答（`assistant_message_id`）の処理の経過（共通の span の表の snapshot）を返す。
+
+    会話を開ける利用者だけ（会話の取得と同じ判定。他人の会話は 404）。回答のメッセージに保存した
+    trace id で表を読み、開いた段の詳細はメッセージの記録から足す。終端はメッセージの状態（正本）。
+    画面は作成中の間、読み直す。作成していたプロセスが止まった回答は、中断の失敗にしてから返す。
     """
     settings = get_settings()
     _require_chat_enabled(settings)
     oracle = OracleClient()
     message = await _load_answer_message(oracle, conversation_id, assistant_message_id)
     message = await _close_if_interrupted(oracle, message)
-    return ApiResponse(data=_answer_progress_page(message, since=since))
-
-
-@router.get("/conversations/{conversation_id}/messages/{assistant_message_id}/progress/stream")
-async def stream_answer_progress(
-    conversation_id: str,
-    assistant_message_id: str,
-    since: int | None = Query(default=None, ge=0),
-    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
-) -> Response:
-    """回答の処理の段階のイベントを SSE で送る（`id:` は `seq`）。
-
-    `Last-Event-ID` / `since` の続きから送る。1 秒ごとに保存済みの記録を読み直して送る（別の
-    worker が作成していても届く）。終端を送ったら閉じ、終わった回答を続きから求められたら 204。
-    作成していたプロセスの停止は heartbeat の間隔ごとに確かめ、止まっていれば中断の失敗（終端）に
-    する。
-    """
-    settings = get_settings()
-    _require_chat_enabled(settings)
-    oracle = OracleClient()
-    await _load_answer_message(oracle, conversation_id, assistant_message_id)
-    # 配信の途中の読み直しは要求の文脈（利用者・対象範囲）の外で動くので、取り出して渡す。
-    context = current_audit_request_context()
-    loop = asyncio.get_running_loop()
-    checked_at: float | None = None
-
-    async def fetch(cursor: int) -> ChatProgressPage | None:
-        nonlocal checked_at
-        token = set_audit_request_context(context)
-        try:
-            message = await oracle.get_chat_message(conversation_id, assistant_message_id)
-            if message is None or message.role != "ASSISTANT":
-                return None
-            now = loop.time()
-            if checked_at is None or now - checked_at >= CHAT_ANSWER_HEARTBEAT_SECONDS:
-                checked_at = now
-                message = await _close_if_interrupted(oracle, message)
-            return _answer_progress_page(message, since=cursor)
-        finally:
-            reset_audit_request_context(token)
-
-    return await chat_progress_sse_response(
-        fetch,
-        since=since,
-        last_event_id=last_event_id,
+    snapshot = await trace_snapshot(
+        message.progress,
+        target_id=message.id,
+        terminal=_MESSAGE_TERMINAL.get(message.status),
     )
+    return ApiResponse(data=snapshot)

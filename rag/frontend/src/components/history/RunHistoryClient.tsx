@@ -32,6 +32,7 @@ import {
   RunDetailLayout,
   RunDetailSection,
   RunDetailSkeleton,
+  Skeleton,
   RunFactList,
   type RunExecutorFilter,
   type RunFact,
@@ -69,6 +70,7 @@ import { failedStageLabel, processFailureLabels, runFailure, storageFailureNotic
 import { MENU_PERMISSIONS } from "@/lib/permissions";
 import { useListTotal, useRunHistory, useRunHistoryDetail } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
+import { useRagTraceProgress } from "@/lib/trace-progress";
 import { useWorkspaceState } from "@/lib/workspace-state";
 
 import {
@@ -480,13 +482,23 @@ function RunDetailView({ run }: { run: RunDetail }) {
   if (failure) technicalFacts.push(...processFailureFacts({ ...failure, failedStep: null }, processFailureLabels()));
   const storageNotice = storageFailureNotice(run.storage_failures, run.run_id);
 
-  // 処理の経過は実行の trace の span の木（#3226）。段の名前は root の文言で付ける。
-  const timeline = runTimeline(run, { traceLabels });
+  // 処理の経過は共通の span の表の snapshot（実行の trace の API。#3226）。終わった実行なので 1 回だけ読む。
+  const trace = useRagTraceProgress({
+    key: run.run_id,
+    active: false,
+    fetchSnapshot: (signal) => api.getRunTrace(run.run_id, signal),
+  });
+  const timeline = runTimeline(trace);
   // 処理の詳細（#2325）: 回答の記録の詳細と技術的な識別子を、処理の経過のタイムラインの後ろに 1 か所で畳む。
   // チャット・RAG 検索の処理の経過の「処理の詳細」と同じ名前・同じ部品（`RunProcessDetails`）・同じ位置。
   const processDetails =
-    run.answer_diagnostics || technicalFacts.length ? (
+    run.answer_diagnostics || technicalFacts.length || trace.partial ? (
       <>
+        {trace.partial ? (
+          <p className="text-xs text-fg-muted" data-testid="run-history-trace-partial">
+            {traceLabels.partial}
+          </p>
+        ) : null}
         {run.answer_diagnostics ? <AnswerDetailsPanel diagnostics={run.answer_diagnostics} /> : null}
         {technicalFacts.length ? <RunFactList facts={technicalFacts} /> : null}
       </>
@@ -571,9 +583,13 @@ function RunDetailView({ run }: { run: RunDetail }) {
           steps={timeline.steps}
           totalDurationMs={run.elapsed_ms}
           empty={
-            <p className="text-sm text-fg-muted" data-testid="run-history-timeline-empty">
-              {timeline.legacy ? traceLabels.legacy : t("history.process.empty")}
-            </p>
+            trace.loaded || trace.failed ? (
+              <p className="text-sm text-fg-muted" data-testid="run-history-timeline-empty">
+                {timeline.legacy ? traceLabels.legacy : t("history.process.empty")}
+              </p>
+            ) : (
+              <Skeleton className="h-5 w-full" data-testid="run-history-timeline-loading" />
+            )
           }
           processDetailsProps={{ title: t("answer.process.details"), testId: "run-history-technical", summaryTestId: "run-history-process-details" }}
               processDetails={processDetails}

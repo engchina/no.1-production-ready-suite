@@ -1,7 +1,8 @@
 /**
  * RAG 検索の SSE ストリーミングクライアント（POST /api/search/stream）。
- * バックエンドは chat_progress(複数) / stage(複数) / metadata / delta(複数) / citations / done のイベントを送る。
- * 処理の経過は `chat_progress`（回答の trace の span のイベント。3 製品共通の契約。#3226）、`stage` は工程の開始・
+ * バックエンドは run / stage(複数) / metadata / delta(複数) / citations / done のイベントを送る。
+ * `run` は最初に送る実行の id（trace_id）。処理の経過は配信では送らず、画面が実行の trace の API
+ * （`GET /api/search/runs/{trace_id}/trace`。共通の span の表の snapshot。#3226）で読む。`stage` は工程の開始・
  * 終了だけ（状態の 1 行に使う）。
  * stream を始めた後の失敗（timeout・回答形式の検証の失敗・内部エラー）は `error` event で届く。
  */
@@ -18,7 +19,6 @@ import {
   type SearchRequestBody,
 } from "./api";
 import { t } from "./i18n";
-import { parseChatProgressEvent, type ChatProgressEvent } from "@production-ready/ui";
 
 export interface SearchStageEvent {
   occurred_at_ms?: number;
@@ -30,8 +30,8 @@ export interface SearchStageEvent {
 
 export interface SearchStreamHandlers {
   onStage?: (stage: SearchStageEvent) => void;
-  /** 処理の経過のイベント（span の開始・終了と終端。#3226）。形の違うイベントは渡さない。 */
-  onChatProgress?: (event: ChatProgressEvent) => void;
+  /** 実行の id（trace_id。処理の経過を実行の trace の API で読む。#3226）。最初に 1 回届く。 */
+  onRun?: (run: { trace_id: string }) => void;
   onMetadata?: (meta: {
     trace_id: string;
     elapsed_ms: number;
@@ -202,9 +202,9 @@ function dispatchEvent(block: string, handlers: SearchStreamHandlers): StreamOut
     case "stage":
       handlers.onStage?.(payload as SearchStageEvent);
       break;
-    case "chat_progress": {
-      const progress = parseChatProgressEvent((payload as { event?: unknown } | null)?.event);
-      if (progress) handlers.onChatProgress?.(progress);
+    case "run": {
+      const traceId = (payload as { trace_id?: unknown } | null)?.trace_id;
+      if (typeof traceId === "string" && traceId) handlers.onRun?.({ trace_id: traceId });
       break;
     }
     case "metadata":

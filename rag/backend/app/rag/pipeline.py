@@ -23,11 +23,9 @@ from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.tracing import (
     ObservedSpan,
     SpanDisplay,
-    SpanListener,
     finish_operation_trace,
     observed_span,
     operation_trace,
-    snapshot_operation_trace,
 )
 from rag_engine.resources.deadline import current_deadline
 from rag_engine.resources.tracing import CallObservation, bind_trace_observer
@@ -79,6 +77,7 @@ from app.rag.support_guide_runtime import (
     apply_guide_to_diagnostics,
     guide_short_circuit_outcome,
 )
+from app.rag.trace_store import AnswerTrace, operation_trace_parent
 from app.schemas.common import JsonValue
 from app.schemas.search import (
     ExtractionFieldCondition,
@@ -304,6 +303,8 @@ class RagPipeline:
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら回答を作らない検索だけに
         # 使い、質問に応じた推論の LLM（抽出項目の条件の読み取り・質問拡張など）を呼ばない。
         self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
+        # 処理の経過の記録（`run(trace=...)`。回答の記録に trace id と工程の詳細を残す。#3226）。
+        self._trace: AnswerTrace | None = None
 
     async def run(
         self,
@@ -314,47 +315,43 @@ class RagPipeline:
         *,
         history: Sequence[ChatTurn] | None = None,
         query_guardrail_result: GuardrailResult | None = None,
-        span_listener: SpanListener | None = None,
+        trace: AnswerTrace | None = None,
     ) -> SearchResponse:
         """RAG 検索を実行する。
 
-        検索・回答プロファイルの言語資源の上書きがあれば、この要求の間だけ束ねる(#2181)。
-        ``span_listener`` は span の開始・表示用のデータの変更・終了を受け取る(画面の処理の経過。
-        #3226)。回答の thread の span は thread から呼ぶ。
+        検索・回答プロファイルの言語資源の上書きがあれば、この要求の間だけ束ねる(#2181)。``trace``
+        は処理の経過の記録(#3226)。span の開始・表示用のデータの変更・終了を共通の span の表へ書き、
+        工程の詳細を集める(回答の thread の span は thread から知らせる)。実行の全体の span は新し
+        い trace に置く(画面・外部の traceparent を親にしない。サービストークンの MCP の要求の中だ
+        け Agent の trace を続ける。`operation_trace_parent`)。
         """
         overrides = self._settings.rag_language_pack_overrides
         trace_id = trace_id or new_trace_id()
-        trace_summary = None
-        try:
-            with (
-                operation_trace(
-                    "rag.answer" if request.generate_answer else "rag.search",
-                    operation_id=trace_id,
-                    listener=span_listener,
-                ) as trace_summary,
-                bind_trace_observer(_observe_engine_call),
-                bind_pack(resolve(current_pack(), overrides)) if overrides else nullcontext(),
-            ):
-                response = await self._run(
-                    request,
-                    trace_id,
-                    progress_callback,
-                    token_callback,
-                    history=history,
-                    query_guardrail_result=query_guardrail_result,
-                )
-                response.diagnostics.trace_summary = finish_operation_trace(trace_id)
-                if (
-                    response.diagnostics.answer is not None
-                    and response.diagnostics.trace_summary is not None
-                ):
-                    response.diagnostics.answer["trace_summary"] = (
-                        response.diagnostics.trace_summary.model_dump(mode="json")
-                    )
-                return response
-        finally:
-            if self._run_recorder is not None and trace_summary is not None:
-                self._run_recorder.trace_summary = trace_summary.model_copy(deep=True)
+        if trace is not None:
+            trace.run_id = trace_id
+        self._trace = trace
+        with (
+            operation_trace_parent() as links,
+            operation_trace(
+                "rag.answer" if request.generate_answer else "rag.search",
+                operation_id=trace_id,
+                listener=trace.listener() if trace is not None else None,
+                links=links,
+            ),
+            bind_trace_observer(_observe_engine_call),
+            bind_pack(resolve(current_pack(), overrides)) if overrides else nullcontext(),
+        ):
+            response = await self._run(
+                request,
+                trace_id,
+                progress_callback,
+                token_callback,
+                history=history,
+                query_guardrail_result=query_guardrail_result,
+            )
+            # 実行を確定する(root の span を閉じる。実行履歴に残す実行は記録のときに閉じている)。
+            finish_operation_trace(trace_id)
+            return response
 
     async def _run(
         self,
@@ -829,7 +826,6 @@ class RagPipeline:
         warn_if_large_answer_record(
             trace_id=trace_id, citations=stored, evaluation_input=evaluation_input
         )
-        summary = snapshot_operation_trace()
         await self._oracle.save_answer_record(
             {
                 "trace_id": trace_id,
@@ -842,7 +838,8 @@ class RagPipeline:
                 "citations": stored,
                 "diagnostics": {
                     **dict(diagnostics),
-                    **({"trace_summary": summary.model_dump(mode="json")} if summary else {}),
+                    # 処理の経過の記録(共通の span の表の trace id と工程の詳細。#3226)。
+                    **({"trace": self._trace.record()} if self._trace is not None else {}),
                 },
                 "evaluation_input": evaluation_input,
                 "answer_notice": answer_notice,

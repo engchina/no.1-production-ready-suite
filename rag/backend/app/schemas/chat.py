@@ -8,7 +8,6 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pr_backend_core.chat_progress import ChatProgressEvent
 from pr_system_settings.chat_attachments import ChatAttachmentReference
 from pydantic import BaseModel, Field, field_validator
 
@@ -76,9 +75,6 @@ class ChatMessage(BaseModel):
     status: MessageStatus = MessageStatus.COMPLETE
     reply_to_message_id: str | None = None
     created_at: datetime
-    # 回答の処理の段階のイベント（3 製品共通の契約 `pr_backend_core.chat_progress`。#1359）。
-    # 作成中（STREAMING）は記録の途中、終わった後は終端まで。段階を保存していないメッセージは None。
-    progress: list[ChatProgressEvent] | None = None
     # 回答に付けた注意書き（ASSISTANT の回答だけ。#2405）。確認の質問・失敗・停止・この機能より前の
     # 回答は None。会話の履歴としてモデルに渡す本文（content）には含めない。
     notice: str | None = None

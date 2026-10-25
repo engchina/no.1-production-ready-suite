@@ -147,12 +147,10 @@ describe("streamChatMessage", () => {
       vi.fn().mockResolvedValue(new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }))
     );
     const onActivity = vi.fn();
-    const onChatProgress = vi.fn();
-    const outcome = await streamChatMessage("c1", { content: "質問" }, { onActivity, onChatProgress });
+    const outcome = await streamChatMessage("c1", { content: "質問" }, { onActivity });
     expect(outcome).toEqual({ completed: true });
-    // 応答の受け取り（1 回）と、届いたバイトごと。
+    // 応答の受け取り（1 回）と、届いたバイトごと（知らない event も途絶えの判定のバイトに数える）。
     expect(onActivity.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(onChatProgress).toHaveBeenCalledTimes(1);
   });
 
   it("非 2xx は ApiError を投げる", async () => {

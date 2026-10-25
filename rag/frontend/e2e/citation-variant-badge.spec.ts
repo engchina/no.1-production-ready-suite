@@ -1,6 +1,6 @@
 import { expect, test } from "./fixtures/test";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
-import { ragSpan, savedSpanProgress } from "./_chat-progress";
+import { installTraceRecorder, ragSpan, savedSpanProgress, traceSse } from "./_chat-progress";
 
 const searchAnswerProfile = {
   id: "bv-1",
@@ -50,7 +50,9 @@ function searchStreamBody(chunkId: string, extraMetadata: Record<string, unknown
     { terminal: "done", base: "2026-01-01T00:00:00Z" }
   );
   return [
-    ...progress.map((event) => `event: chat_progress\ndata: ${JSON.stringify({ event })}\n\n`),
+    // 実行の id と、表へ書いた span の記録の印（実行の trace の API が返す。#3226）。
+    `event: run\ndata: ${JSON.stringify({ trace_id: "trace-1" })}\n\n`,
+    traceSse(progress),
     `event: metadata\ndata: ${JSON.stringify({
       trace_id: "trace-1",
       elapsed_ms: 12,
@@ -72,6 +74,7 @@ function searchStreamBody(chunkId: string, extraMetadata: Record<string, unknown
 test("引用カードに variant(chunk_set)バッジが出る", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
+  await installTraceRecorder(page);
   await page.route("**/api/search-answer-profiles**", (route) =>
     route.fulfill({
       json: {
@@ -217,6 +220,7 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
 test("旧版の文書の根拠には、引用カードに旧版の印を出す（#1248）", async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
+  await installTraceRecorder(page);
   await page.route("**/api/search-answer-profiles**", (route) =>
     route.fulfill({
       json: {

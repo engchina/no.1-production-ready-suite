@@ -32,7 +32,7 @@ class RecordingPipeline:
         trace_id: str | None = None,
         progress_callback: object | None = None,
         token_callback: object | None = None,
-        span_listener: object | None = None,
+        trace: object | None = None,
     ) -> SearchResponse:
         _ = progress_callback, token_callback
         assert trace_id

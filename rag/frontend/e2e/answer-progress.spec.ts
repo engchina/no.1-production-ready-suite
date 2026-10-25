@@ -7,14 +7,24 @@ import {
   mockLocalAuth,
   selectSearchAnswerProfile,
 } from "./_helpers";
-import { ragSpan, spanProgressRecorder, spanStartMark, spanStepId, type SpanSpec } from "./_chat-progress";
+import {
+  installTraceRecorder,
+  ragSpan,
+  spanProgressRecorder,
+  spanStartMark,
+  spanStepId,
+  traceSse,
+  type SpanSpec,
+} from "./_chat-progress";
 import { expectProgressTimerMonotonic, startProgressTimerSampler } from "./_progress-timer";
 
 /**
  * 回答生成の進捗（今の工程と経過時間）と時間切れの表示（#375）。
  *
  * `page.route` の fulfill は本文を一度に返すため、SSE の event を時間をおいて届けるよう、
- * 画面の fetch を init script で差し替えて ReadableStream で少しずつ流す。
+ * 画面の fetch を init script で差し替えて ReadableStream で少しずつ流す。処理の経過（span）は配信では届かず、
+ * 画面が trace の API で読み直す（#3226）。mock は配信の chunk を送った時点までの span を trace の API で返す
+ * （`traceSse` / `installTraceRecorder`）。
  */
 
 interface TimedChunk {
@@ -55,12 +65,12 @@ const citation = {
 };
 
 /**
- * RAG 検索の処理の経過（span のイベント。#3226）を SSE の `chat_progress` で送る。時刻は配信した時刻に置き換える
- * （mockStreams）。
+ * RAG 検索の処理の経過（span のイベント。#3226）を、配信の chunk を送ったときに表へ書いたものとして記録する
+ * （trace の API が返す）。時刻は配信した時刻に置き換える（mockStreams）。
  */
 function searchProgressStream(traceId: string) {
   const recorder = spanProgressRecorder(traceId, () => "__NOW__", spanStartMark);
-  const send = (events: unknown[]) => events.map((event) => sse("chat_progress", { event })).join("");
+  const send = traceSse;
   return {
     start: (key: string, spec: SpanSpec) => send(recorder.start(key, spec)),
     finish: (...args: Parameters<typeof recorder.finish>) => send(recorder.finish(...args)),
@@ -78,6 +88,8 @@ const slowSearchStream: TimedChunk[] = [
   {
     afterMs: 0,
     text: [
+      // 最初に実行の id（処理の経過は実行の trace の API で読む）。
+      sse("run", { trace_id: "trace-1" }),
       slowSearch.start("root", ragSpan.root()),
       slowSearch.start("answer", ragSpan.stage("answer")),
       slowSearch.start("understand", ragSpan.step("質問の理解")),
@@ -133,6 +145,7 @@ const retrievalOnlySearchStream: TimedChunk[] = [
   {
     afterMs: 0,
     text: [
+      sse("run", { trace_id: "trace-1" }),
       retrievalSearch.start("root", ragSpan.root(false)),
       retrievalSearch.start("retrieval", ragSpan.stage("retrieval")),
       retrievalSearch.start("search", ragSpan.step("文書検索", "retrieval")),
@@ -163,6 +176,7 @@ const timedOutSearchStream: TimedChunk[] = [
   {
     afterMs: 0,
     text: [
+      sse("run", { trace_id: "trace-1" }),
       timedOutSearch.start("root", ragSpan.root()),
       timedOutSearch.start("answer", ragSpan.stage("answer")),
       timedOutSearch.start("search", ragSpan.step("文書検索")),
@@ -191,7 +205,11 @@ const incompleteSearch = searchProgressStream("trace-incomplete");
 const incompleteSearchStream: TimedChunk[] = [
   {
     afterMs: 0,
-    text: [incompleteSearch.start("root", ragSpan.root()), incompleteSearch.start("answer", ragSpan.stage("answer"))].join(""),
+    text: [
+      sse("run", { trace_id: "trace-incomplete" }),
+      incompleteSearch.start("root", ragSpan.root()),
+      incompleteSearch.start("answer", ragSpan.stage("answer")),
+    ].join(""),
   },
   {
     afterMs: 300,
@@ -213,9 +231,11 @@ const incompleteSearchStream: TimedChunk[] = [
 ];
 
 async function mockStreams(page: Page, scenarios: StreamScenarios): Promise<void> {
+  await installTraceRecorder(page);
   await page.addInitScript((scenarioMap: StreamScenarios) => {
     const w = window as unknown as {
       __sseRequests: Array<{ key: string; body: unknown }>;
+      __ragTraceRecord: (text: string) => string;
     };
     w.__sseRequests = [];
     const originalFetch = window.fetch.bind(window);
@@ -250,7 +270,8 @@ async function mockStreams(page: Page, scenarios: StreamScenarios): Promise<void
             const text = chunk.text
               .replaceAll("__NOW__", sentAt)
               .replace(/__START_([A-Za-z0-9-]+)__/g, (_mark, key: string) => (startMarks[key] ??= sentAt));
-            controller.enqueue(encoder.encode(text));
+            // span は表へ書いたもの（trace の API が返す）として記録し、配信からは外す（#3226）。
+            controller.enqueue(encoder.encode(w.__ragTraceRecord(text)));
           }
           controller.close();
         },
@@ -516,13 +537,12 @@ async function screenshotBothThemes(page: Page, path: (theme: string) => string)
 }
 
 /**
- * 処理の経過のイベント（span のイベント。#1359 / #3226）を回答の配信（`chat_progress`）で送る。回答（`messageId`）
- * ごとに番号を続ける。時刻は配信した時刻に置き換える（mockStreams）。
+ * 回答（`messageId`）の処理の経過（span のイベント。#3226）を、配信の chunk を送ったときに表へ書いたものとして
+ * 記録する（回答の trace の API が返す）。時刻は配信した時刻に置き換える（mockStreams）。
  */
 function chatProgressStream(messageId: string) {
   const recorder = spanProgressRecorder(messageId, () => "__NOW__", spanStartMark);
-  const send = (events: unknown[]) =>
-    events.map((event) => sse("chat_progress", { model_id: "m1", message_id: messageId, event })).join("");
+  const send = traceSse;
   return {
     start: (key: string, spec: SpanSpec) => send(recorder.start(key, spec)),
     finish: (...args: Parameters<typeof recorder.finish>) => send(recorder.finish(...args)),
@@ -540,7 +560,7 @@ const timedOutChatStream: TimedChunk[] = [
       sse("start", {
         conversation_id: "conv-1",
         user_message: userMessage,
-        columns: [{ model_id: "m1", label: "MODEL 1" }],
+        columns: [{ model_id: "m1", label: "MODEL 1", message_id: "a1" }],
       }),
       timedOutProgress.start("root", ragSpan.root()),
       timedOutProgress.start("rewrite", ragSpan.stage("history_rewrite")),
@@ -584,7 +604,7 @@ const okChatStream: TimedChunk[] = [
       sse("start", {
         conversation_id: "conv-1",
         user_message: retryUserMessage,
-        columns: [{ model_id: "m1", label: "MODEL 1" }],
+        columns: [{ model_id: "m1", label: "MODEL 1", message_id: "a2" }],
       }),
       okProgress.start("root", ragSpan.root()),
       okProgress.start("rewrite", ragSpan.stage("history_rewrite")),
@@ -729,8 +749,10 @@ for (const viewport of [
     );
     await progress.scrollIntoViewIfNeeded();
     await screenshotBothThemes(page, (theme) => `test-results/answer-progress-chat-failed-${viewport.name}-${theme}.png`);
-    // 会話を取り直すと保存した失敗の回答に置き換わる（段階は保存しない）。
-    await expect(progress).toHaveCount(0);
+    // 会話を取り直すと保存した失敗の回答に置き換わり、処理の経過は表の span（回答の trace の API）から同じ失敗で
+    // 出し直す（#3226）。
+    await expect(page.getByTestId("chat-live-turn")).toHaveCount(0, { timeout: 5_000 });
+    await expect(progress).toHaveAttribute("data-chat-progress-state", "failed");
     await expect(error).toBeVisible();
     await error.scrollIntoViewIfNeeded();
     await page.screenshot({
@@ -742,10 +764,16 @@ for (const viewport of [
     await error.getByRole("button", { name: "もう一度送信" }).click();
     await expect(page.getByText(okReply.content).first()).toBeVisible({ timeout: 5_000 });
     // 完了した回答の上（作成中の「N ステップ完了」の場所のまま）に「処理の経過」を閉じて残す（#1146 / #2115 / #2118）。
-    const summary = page.getByTestId("chat-answer-progress-summary");
+    // 失敗した前の回答（a1）も、表の span から処理の経過（失敗）を出したまま残る（#3226）。
+    const okAnswer = page.locator("#message-a2");
+    const summary = okAnswer.getByTestId("chat-answer-progress-summary");
     await expect(summary).toContainText("処理の経過（4 ステップ・");
+    await expect(page.locator("#message-a1").getByTestId("chat-answer-progress")).toHaveAttribute(
+      "data-chat-progress-state",
+      "failed"
+    );
     await summary.click();
-    await expect(page.getByTestId(`chat-answer-progress-step-${spanStepId("search")}`)).toContainText(
+    await expect(okAnswer.getByTestId(`chat-answer-progress-step-${spanStepId("search")}`)).toContainText(
       "根拠 1 件 · LLM 1 回"
     );
     const answerBox = await page.getByText(okReply.content).first().boundingBox();

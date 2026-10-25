@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page, test } from "./fixtures/test";
-import { ragSpan, savedSpanProgress, SPAN_TRACE_ID } from "./_chat-progress";
+import { mockTraceApi, ragSpan, savedSpanProgress, SPAN_TRACE_ID, traceSnapshotJson } from "./_chat-progress";
 import {
   apiEnvelope,
   expectNoPageOverflow,
@@ -106,10 +106,11 @@ function detail(row: RunRow) {
     answer_available: row.answer_generated,
     citations: [CITATION],
     answer_diagnostics: row.answer_generated ? { outcome: "answered", confidence: "high", execution_steps: [] } : null,
-    // 処理の経過は実行の trace の span のイベント（#3226）。回答を作った実行は回答の段の中に工程の span、
-    // 回答を作らない検索は検索の段。
+    // 処理の経過は実行の trace の API が返す span の段（共通の span の表。#3226。実行の詳細の応答には入れない）。
+    // 回答を作った実行は回答の段の中に工程の span、回答を作らない検索は検索の段。
+    // 対象は実行（trace の API は実行の id を対象にする）。
     progress_events: savedSpanProgress(
-      row.message_id ?? row.run_id,
+      row.run_id,
       row.answer_generated
         ? [
             { key: "root", spec: ragSpan.root(), at: [0, 1.2] },
@@ -174,12 +175,24 @@ async function mockRuns(page: Page, rows: RunRow[], { gated = false } = {}) {
   const requests: URLSearchParams[] = [];
   await page.route("**/api/history/runs**", async (route) => {
     const url = new URL(route.request().url());
+    const traceMatch = url.pathname.match(/^\/api\/history\/runs\/([^/]+)\/trace$/);
+    if (traceMatch) {
+      // 実行の trace の API（共通の span の表の snapshot。#3226）。
+      const found = rows.find((item) => item.run_id === decodeURIComponent(traceMatch[1]));
+      await route.fulfill(
+        found
+          ? { json: traceSnapshotJson(detail(found).progress_events) }
+          : { status: 404, json: { data: null, error_messages: ["実行が見つかりません。"], warning_messages: [] } }
+      );
+      return;
+    }
     const detailMatch = url.pathname.match(/^\/api\/history\/runs\/(.+)$/);
     if (detailMatch) {
       const found = rows.find((item) => item.run_id === decodeURIComponent(detailMatch[1]));
+      const { progress_events: _trace, ...body } = found ? detail(found) : { progress_events: null };
       await route.fulfill(
         found
-          ? { json: apiEnvelope(detail(found)) }
+          ? { json: apiEnvelope(body) }
           : {
               status: 404,
               json: { data: null, error_messages: ["実行が見つかりません。"], warning_messages: [] },
@@ -646,6 +659,39 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await page.goto("/history/run-3");
     await expect(summary.locator('[data-run-fact="owner"] dd')).toHaveText("ボブ");
     await expect(page.getByTestId("run-history-open-chat")).toHaveCount(0);
+  });
+});
+
+test.describe("実行履歴の処理の経過（共通の span の表。#3226）", { tag: "@responsive" }, () => {
+  test("書けなかった span がある実行は「一部の処理だけを記録しています。」、古い形式の記録は古い形式の案内を出す", async ({
+    page,
+  }) => {
+    await mockLocalAuth(page);
+    const partial = run(1);
+    const legacy = run(2);
+    await mockRuns(page, [partial, legacy]);
+    // 実行の trace の API（mockRuns の route より後に登録して先に当てる）。古い形式の記録は終端だけを返す。
+    const trace = await mockTraceApi(page, {
+      [partial.run_id]: { events: detail(partial).progress_events, droppedSpans: 2 },
+      [legacy.run_id]: [
+        { schema_version: 1, seq: 1, target_id: legacy.run_id, attempt: 0, emitted_at: "2026-10-15T00:00:01Z", type: "terminal", status: "done" },
+      ],
+    });
+
+    await page.goto(`/history/${partial.run_id}`);
+    await page.getByTestId("run-history-timeline-summary").click();
+    await page.getByTestId("run-history-process-details").click();
+    await expect(page.getByTestId("run-history-trace-partial")).toHaveText("一部の処理だけを記録しています。");
+    // 画面は実行の id で読む（任意の trace id を渡さない）。
+    expect(trace.requests).toContain(partial.run_id);
+    await expectNoPageOverflow(page);
+
+    await page.goto(`/history/${legacy.run_id}`);
+    await expect(page.getByTestId("run-history-timeline-empty")).toHaveText(
+      "この実行は古い形式の記録のため、処理の経過を表示できません。"
+    );
+    await expect(page.getByTestId("run-history-timeline-summary")).toHaveCount(0);
+    await expectNoPageOverflow(page);
   });
 });
 

@@ -27,6 +27,7 @@ isolate_env_files_for_tests("RAG_")
 if TYPE_CHECKING:
     from app.config import Settings
     from app.rag.request_context import AuditRequestContext
+    from tests.trace_store_support import FakeTraceDb
 
 # プロセスの終了時（pytest の後始末と、ほかの atexit の処理の後）に、残っているオブジェクトを GC の
 # 対象から外す。Python の終了処理の GC が、アプリとテストで作った大量のオブジェクトをたどって
@@ -195,6 +196,14 @@ def _skip_or_fail_oracle(reason: str) -> None:
     if os.environ.get("RAG_TEST_REQUIRE_ORACLE") == "1":
         pytest.fail(f"RAG_TEST_REQUIRE_ORACLE=1 のため失敗にします: {reason}", pytrace=False)
     pytest.skip(reason)
+
+
+@pytest.fixture
+def trace_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeTraceDb]:
+    """共通の span の表の fake（書き手と読み出しの接続。#3226。実 DB は使わない）。"""
+    from tests.trace_store_support import install_trace_db
+
+    yield from install_trace_db(monkeypatch)
 
 
 @pytest.fixture

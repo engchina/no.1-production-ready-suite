@@ -2,17 +2,14 @@
  * チャットメッセージの SSE ストリーミングクライアント
  * （POST /api/chat/conversations/{id}/messages/stream、再購読は GET .../messages/{質問の id}/stream）。
  *
- * バックエンドは start → (stage / chat_progress / delta / metadata / citations / done)×モデル → all_done を送る。
+ * バックエンドは start → (stage / delta / metadata / citations / done)×モデル → all_done を送る。
  * event の無い間は heartbeat（`: keepalive` のコメント）を送る（#1160）。
- * `chat_progress` は処理の段階のイベント（3 製品共通の契約。#1359）を、記録するたびに 1 件ずつ送る
- * （data は `{model_id, message_id, event}`。`event` は未検証の入力として `parseChatProgressEvent` を通す）。
+ * 処理の経過は配信では送らない。画面は回答ごとの trace の API（共通の span の表の snapshot。#3226）で読む。
  * マルチモデル比較では各イベントに model_id が付き、フロントがカラムへ振り分ける。
  *
  * 回答の作成は接続から切り離されている（#1175）。接続が切れても backend は作成を続けるので、画面は最後に
  * 受け取った event の連番（`id:`）から `resumeChatStream` で続きを購読し直す。
  */
-
-import { parseChatProgressEvent, type ChatProgressEvent } from "@production-ready/ui";
 
 import { appPath } from "./base-path";
 import { t } from "./i18n";
@@ -44,8 +41,6 @@ export interface ChatStreamHandlers {
     outcome: "started" | "success" | "error" | "cancelled" | "skipped";
     elapsed_ms: number;
   }) => void;
-  /** 処理の段階のイベント（#1359）。`messageId` は作成中の回答のメッセージ（イベントの対象）。 */
-  onChatProgress?: (payload: { model_id: string; message_id: string; event: ChatProgressEvent }) => void;
   onDelta?: (modelId: string, text: string) => void;
   onMetadata?: (payload: {
     model_id: string;
@@ -80,7 +75,7 @@ export interface ChatStreamHandlers {
   onAllDone?: () => void;
   /**
    * 配信のバイト（event・heartbeat のコメント）を受け取るたびに呼ぶ（#1160）。画面は、これが一定時間
-   * 届かなければ配信が途絶えたとみなし、保存済みの会話を取り直す（`useChatProgressTracker` の `touch()`）。
+   * 届かなければ配信が途絶えたとみなし、接続を張り直す。
    */
   onActivity?: () => void;
   /** event の連番（`id:`）を受け取ったときに呼ぶ。再購読はこの次から（#1175）。 */
@@ -101,17 +96,6 @@ export function newChatClientMessageId(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
-}
-
-/**
- * 回答（ASSISTANT のメッセージ）の処理の段階の SSE の URL（配信の base を含む。#1359）。保存済みの記録を読み直して
- * 送るので、別の worker が作成している回答・再読込の後でも段階が届く。`since` は `useChatProgressStream` が付ける。
- */
-export function chatAnswerProgressStreamUrl(conversationId: string, messageId: string): string {
-  return appPath(
-    `/api/chat/conversations/${encodeURIComponent(conversationId)}` +
-      `/messages/${encodeURIComponent(messageId)}/progress/stream`
-  );
 }
 
 /** 回答の作成は続いているが、この接続では続きを購読できない（別の worker・再起動の後。#1175）。 */
@@ -284,17 +268,6 @@ function dispatchEvent(block: string, handlers: ChatStreamHandlers): string | nu
     case "stage":
       handlers.onStage?.(payload as Parameters<NonNullable<ChatStreamHandlers["onStage"]>>[0]);
       break;
-    case "chat_progress": {
-      const progress = parseChatProgressEvent(payload.event);
-      if (progress) {
-        handlers.onChatProgress?.({
-          model_id: String(payload.model_id ?? ""),
-          message_id: String(payload.message_id ?? progress.target_id),
-          event: progress,
-        });
-      }
-      break;
-    }
     case "delta":
       handlers.onDelta?.(String(payload.model_id ?? ""), String(payload.text ?? ""));
       break;

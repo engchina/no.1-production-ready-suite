@@ -205,6 +205,19 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `RAG_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#3226 処理の経過を共通の span の表に書く）
+
+処理の経過（チャット・RAG 検索・実行の詳細）の span を、3 製品共通の span の表（`PLATFORM_TRACE_SPANS`）に書いて読む
+ようにした。表はシステムテーブルの初期化が作る（共通の DDL。**共用の ADB に作る前に利用者の確認が要る**）。
+
+1. システムテーブルを更新する（`system_schema_cli initialize`。新しい表と索引だけで、データを消さない）。更新するまで、
+   span の書き込みは失敗してログ（`trace_span_write_failed`）に出し、処理の経過は空になる（回答・検索は止まらない）。
+2. backend と frontend を同時に更新して再起動する（回答の配信の SSE の `chat_progress` と、段階の polling / SSE
+   （`.../messages/{回答の id}/progress[/stream]`）を外した。画面は記録ごとの trace の API を読み直す）。
+3. 更新の前に保存した回答・実行の処理の経過（段のイベントの一覧）は読まない。その記録は「古い形式の記録のため、処理の
+   経過を表示できません。」を出す（回答・引用は変わらない）。
+4. 保存期限は共通の `PLATFORM_TRACE_RETENTION_DAYS`（既定 0 = 無期限。量の目安は `platform/.env.example`）。
+
 ## 既存環境の更新手順（#3235 実行の記録の既定の保存期間を無期限にする）
 
 回答の記録（`rag_answer_records`）・チャットと RAG 検索の実行履歴（`rag_run_history`）・質問履歴（`rag_query_history`）・品質評価の job（`rag_evaluation_jobs`）は、既定で無期限に保存し、自動では削除しない。
@@ -1438,8 +1451,8 @@ schema の変更は無い。表示の本文・embedding は変えない。
    流れる間は既定の location でも購読できる。
 
 - 作成はリクエストを受けた backend のプロセスの中で動く。Gunicorn の worker が複数のとき、再購読が別の worker に届くと
-  404 になり、画面は保存済みの会話の取り直し（2 秒ごと）に切り替えて完了を待つ。処理の段階は段階の SSE
-  （`GET .../messages/{回答の id}/progress/stream`。保存済みの記録を読み直す。#1359）で受け取る。
+  404 になり、画面は保存済みの会話の取り直し（2 秒ごと）に切り替えて完了を待つ。処理の段階は回答の trace の API
+  （`GET .../messages/{回答の id}/trace`。共通の span の表を読み直す。#3226）で受け取る。
 - backend の停止・再起動では、そのプロセスで作成中の回答を「中断しました」の失敗として保存する。保存できずに残った
   作成中の回答も、会話を開いたときに heartbeat の途絶え（60 秒）で失敗にし、画面は「再送信」を出す。
 

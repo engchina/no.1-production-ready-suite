@@ -1,10 +1,11 @@
 """実行履歴（チャット・RAG 検索の 1 回の実行。#1890）の記録。
 
 チャットと RAG 検索の画面の実行（回答を作った・作らなかった・安全チェックで止めた・失敗した）を、
-`RunRecorder` が 1 行の要約として `rag_run_history` に残す。回答を作った実行の回答・引用・診断は
-回答の記録（`rag_answer_records`）が正本で、ここには一覧の絞り込みと詳細の「処理の経過」に使う値だけを
-持つ。詳細の「処理の経過」は実行の trace の span のイベント
-（`stages_json.progress_events`。#3226）。記録は補助なので、失敗しても検索・回答は止めない。
+`RunRecorder` が 1 行の要約として `rag_run_history` に残す。回答を作った実行の回答・引用・診断は回
+答の記録（`rag_answer_records`）が正本で、ここには一覧の絞り込みと詳細の「処理の経過」に使う値だけ
+を持つ。詳細の「処理の経過」は共通の span の表の実行の trace で、ここには表を引く trace id と工程
+の詳細（`stages_json.trace`。`app.rag.trace_store.TraceRecord`。#3226）だけを持つ。記録は補助なの
+で、失敗しても検索・回答は止めない。
 
 記録しない実行: 根拠の検索だけ（`retrieval_only`。ナレッジベースの検索テスト・レシピの検索比較）、
 業務ガイドの下書きで試した回答、品質評価、MCP（Agent が呼ぶ `rag_search`。Agent の実行履歴に残る）。
@@ -20,7 +21,7 @@ from time import monotonic
 from typing import Any, Literal, Protocol, cast
 
 from pr_backend_core.logging import safe_error_code, safe_exception_fields
-from pr_backend_core.observability.tracing import TraceSummary, finish_operation_trace
+from pr_backend_core.observability.tracing import finish_operation_trace
 
 from app.config import Settings
 from app.rag.stored_answer import stored_citations
@@ -89,9 +90,9 @@ def answer_verification(diagnostics: Mapping[str, Any] | None) -> RunVerificatio
 class RunRecorder:
     """1 回の実行の記録。終わったときに 1 行を保存する。
 
-    処理の経過は `progress_source`（実行の span のイベントの JSON を返す関数。#3226）から
-    保存する。止まった段（`error_stage`）は pipeline の段の知らせ（`observe`）の最後の失敗から
-    決める。
+    処理の経過は `trace_source`（共通の span の表の trace id と工程の詳細を返す関数。#3226）から保
+    存する（実行を確定した後に呼ぶので、書けなかった span の数も入る）。止まった段（`error_stage`）
+    は pipeline の段の知らせ（`observe`）の最後の失敗から決める。
     """
 
     surface: RunSurface
@@ -100,12 +101,11 @@ class RunRecorder:
     conversation_id: str | None = None
     message_id: str | None = None
     model_id: str | None = None
-    progress_source: Callable[[], list[dict[str, Any]]] | None = None
+    trace_source: Callable[[], dict[str, Any]] | None = None
     # 終わった段（止まった段を決める。保存しない）。
     stages: list[dict[str, object]] = field(default_factory=list)
     # 安全チェックの後の質問（pipeline が受け取った時点で入れる。失敗の記録に使う）。
     question: str | None = None
-    trace_summary: TraceSummary | None = None
     # 最後に保存した記録（後から保存の失敗を足して保存し直す。#2342）。
     _last_record: dict[str, object] | None = field(default=None, repr=False)
 
@@ -149,7 +149,7 @@ class RunRecorder:
             error_stage = _failed_stage(self.stages)
         error_code = safe_error_code(error) if error is not None else None
         failures = list(storage_failures)
-        summary = finish_operation_trace(
+        finish_operation_trace(
             run_id,
             status=(
                 "cancelled"
@@ -159,7 +159,6 @@ class RunRecorder:
                 else "done"
             ),
         )
-        summary = summary or self.trace_summary
         record: dict[str, object] = {
             "run_id": run_id,
             "surface": self.surface,
@@ -183,9 +182,8 @@ class RunRecorder:
             "conversation_id": self.conversation_id,
             "message_id": self.message_id,
             "stages": {
-                # 詳細の処理の経過（実行の trace の span のイベント。#3226）。
-                "progress_events": self._progress_events(),
-                **({"trace_summary": summary.model_dump(mode="json")} if summary else {}),
+                # 詳細の処理の経過（共通の span の表の trace id と工程の詳細。#3226）。
+                **({"trace": trace} if (trace := self._trace_record()) is not None else {}),
                 # 失敗のエラーコードと保存できなかった記録（処理の段と一緒に持つ。#2342）。
                 **({"error_code": str(error_code)} if error_code is not None else {}),
                 **(
@@ -200,14 +198,14 @@ class RunRecorder:
         self._last_record = record
         await self._save(record)
 
-    def _progress_events(self) -> list[dict[str, Any]]:
-        if self.progress_source is None:
-            return []
+    def _trace_record(self) -> dict[str, Any] | None:
+        if self.trace_source is None:
+            return None
         try:
-            return self.progress_source()
+            return self.trace_source()
         except Exception as exc:  # noqa: BLE001 - 処理の経過は補助。実行の記録は残す。
-            logger.warning("run history progress dump failed", extra=safe_exception_fields(exc))
-            return []
+            logger.warning("run history trace record failed", extra=safe_exception_fields(exc))
+            return None
 
     async def add_storage_failure(self, failure: StorageFailure) -> None:
         """保存した実行に、後から分かった保存の失敗（会話の回答の保存など）を足して保存し直す（#2342）。"""

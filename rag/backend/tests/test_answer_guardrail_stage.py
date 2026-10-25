@@ -13,10 +13,10 @@ from pr_backend_core.observability.tracing import (
 
 from app.clients.oci_guardrails import GuardrailInspection
 from app.config import Settings
-from app.rag.chat_progress import ChatProgressTracker
 from app.rag.guardrails import GuardrailPolicy
 from app.rag.pipeline import SearchStageProgress, _observe_stage, guardrail_stage_outcome
 from app.rag.step_details import answer_guardrail_details
+from tests.span_progress_support import RecordingTrace
 
 
 @pytest.mark.parametrize(
@@ -48,7 +48,7 @@ async def test_inspection_outcome_reaches_progress_chat_and_trace(
         Client(),
     )
     events: list[SearchStageProgress] = []
-    tracker = ChatProgressTracker("a" * 32, model_id="synthetic")
+    tracker = RecordingTrace(model_id="synthetic")
 
     async def capture(event: SearchStageProgress) -> None:
         events.append(event)
@@ -56,7 +56,7 @@ async def test_inspection_outcome_reaches_progress_chat_and_trace(
     configure_tracing(TracingSettings(), service_name="synthetic")
     try:
         with operation_trace(
-            "task", operation_id="synthetic", listener=tracker.span_listener()
+            "task", operation_id="synthetic", listener=tracker.listener()
         ) as summary:
             result = await _observe_stage(
                 "synthetic",
