@@ -132,11 +132,11 @@ def validated_links(links: ScreenLinks, catalog: dict[str, list[str]]) -> list[t
 
 def link_screens(
     question: str, catalog: dict[str, list[str]], parse_text: Callable[..., ScreenLinks], settings: Any
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str]] | None:
     """質問から操作すべき画面を目録で選ぶ。
 
-    LLM の呼び出しに失敗したら空（検索は従来どおり続ける）。失敗は「該当なし」と分けるため、
-    呼び出し元の診断に残す（#3259）。
+    選べなかったときは空のリスト、LLM の呼び出しに失敗したときは None を返す（検索はどちらも続ける）。
+    失敗は「該当なし」と分けるため、呼び出し元の診断に残し（#3259）、呼び出し元は失敗を cache しない（#3278）。
     """
     if not catalog:
         return []
@@ -146,7 +146,7 @@ def link_screens(
         return validated_links(parse_text(LINK_SYSTEM_PROMPT, prompt, settings, ScreenLinks), catalog)
     except Exception as exc:  # noqa: BLE001 - 画面の選択は補助。選ばずに検索を続ける。
         report_degraded("screen_link", exc)
-        return []
+        return None
 
 
 def screen_candidates(

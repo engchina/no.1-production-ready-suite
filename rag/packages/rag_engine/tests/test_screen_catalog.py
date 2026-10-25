@@ -95,7 +95,8 @@ def test_link_failures_leave_retrieval_unchanged():
     def broken(*args, **kwargs):
         raise RuntimeError("provider unavailable")
 
-    assert link_screens("帳票の印字を変えたい。", build_screen_catalog(POOL), broken, settings=None) == []
+    # 失敗は None（「該当なし」の [] と分ける。#3278）。目録が空なら LLM を呼ばずに [] を返す。
+    assert link_screens("帳票の印字を変えたい。", build_screen_catalog(POOL), broken, settings=None) is None
     assert link_screens("帳票の印字を変えたい。", {}, broken, settings=None) == []
 
 
@@ -119,7 +120,7 @@ def test_link_failure_is_reported_as_degraded_not_as_no_match():
     with bind_dependencies(dependencies):
         assert link_screens("帳票の印字を変えたい。", build_screen_catalog(POOL), no_match, settings=None) == []
         assert reported == []
-        assert link_screens("帳票の印字を変えたい。", build_screen_catalog(POOL), broken, settings=None) == []
+        assert link_screens("帳票の印字を変えたい。", build_screen_catalog(POOL), broken, settings=None) is None
     assert reported == [("screen_link", "RuntimeError")]
 
 
@@ -220,3 +221,93 @@ def test_linked_screen_children_reads_catalog_and_chunks_from_injected_dependenc
     assert [record.chunk_uid for record in added] == ["s1"]
     assert [record.chunk_uid for record in expansion] == ["s1", f"{screen[0]}:p"]
     assert calls == [("catalog",), ("chunks", [screen], {"h1"})]
+
+
+def _screen_link_dependencies(parse_text, reported, screen):
+    """目録と画面の chunk を注入し、選択の LLM（parse_text）と失敗の記録（reported）を差し替えた依存。"""
+
+    def unused(*args, **kwargs):
+        raise AssertionError("呼ばない")
+
+    return AnswerDependencies(
+        search=unused,
+        check_ready=unused,
+        rerank=unused,
+        parse_images=unused,
+        parse_text=parse_text,
+        screen_catalog=lambda *, settings: {screen[0]: [screen[1]]},
+        screen_chunks=lambda *, links, existing, settings: [_stored("s1", screen[0], ["架空管理", screen[1]])],
+        report_degraded=lambda kind, exc: reported.append(kind),
+    )
+
+
+def test_screen_link_failure_is_not_cached_and_the_next_answer_selects_again():
+    """選択の LLM が一時的に失敗しても cache に残さず、同じ質問・同じ目録の次の回答で選び直す（#3278）。"""
+    from rag_engine.generation import answering
+
+    screen = ("架空管理.pdf", "（２）伝票印刷設定")
+    calls = []
+
+    def flaky(system, prompt, settings, schema, **kwargs):
+        calls.append(prompt)
+        if len(calls) == 1:
+            raise RuntimeError("provider unavailable")
+        return ScreenLinks(candidates=[LinkedScreen(document=screen[0], screen=screen[1])])
+
+    reported = []
+    pool = [_stored("h1", "別文書.pdf", ["（１）受注入力"])]
+    ranked = [answering._stored_chunk_answer_record(pool[0])]
+    answering._SCREEN_LINK_CACHE.clear()
+
+    with bind_dependencies(_screen_link_dependencies(flaky, reported, screen)):
+        first = answering._linked_screen_children("印字されない", pool, ranked, settings=None)
+        assert first == ([], [], [])
+        assert answering._SCREEN_LINK_CACHE == {}
+        added, links, _ = answering._linked_screen_children("印字されない", pool, ranked, settings=None)
+
+    assert len(calls) == 2
+    assert links == [screen]
+    assert [record.chunk_uid for record in added] == ["s1"]
+    assert reported == ["screen_link"]
+
+
+def test_screen_link_failure_is_reported_on_every_attempt():
+    """失敗が続けば、回答ごとに失敗を記録する（最初の 1 回だけにしない。#3278）。"""
+    from rag_engine.generation import answering
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("provider unavailable")
+
+    reported = []
+    pool = [_stored("h1", "別文書.pdf", ["（１）受注入力"])]
+    answering._SCREEN_LINK_CACHE.clear()
+
+    with bind_dependencies(_screen_link_dependencies(broken, reported, ("架空管理.pdf", "（２）伝票印刷設定"))):
+        for _ in range(2):
+            assert answering._linked_screen_children("印字されない", pool, [], settings=None) == ([], [], [])
+
+    assert reported == ["screen_link", "screen_link"]
+
+
+def test_screen_link_with_no_match_is_cached_and_not_asked_again():
+    """選択に成功して画面が無かった（[]）ときは cache し、同じ質問・同じ目録では LLM を呼び直さない。"""
+    from rag_engine.generation import answering
+
+    calls = []
+
+    def no_match(system, prompt, settings, schema, **kwargs):
+        calls.append(prompt)
+        return ScreenLinks(candidates=[])
+
+    reported = []
+    pool = [_stored("h1", "別文書.pdf", ["（１）受注入力"])]
+    answering._SCREEN_LINK_CACHE.clear()
+
+    with bind_dependencies(_screen_link_dependencies(no_match, reported, ("架空管理.pdf", "（２）伝票印刷設定"))):
+        for _ in range(2):
+            assert answering._linked_screen_children("印字されない", pool, [], settings=None) == ([], [], [])
+
+    assert len(calls) == 1
+    assert list(answering._SCREEN_LINK_CACHE.values()) == [[]]
+    assert reported == []
+    answering._SCREEN_LINK_CACHE.clear()
