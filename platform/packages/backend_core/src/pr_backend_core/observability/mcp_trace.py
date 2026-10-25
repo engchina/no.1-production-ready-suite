@@ -64,6 +64,8 @@ def mcp_server_trace(
     trusted: bool,
     traceparent: str | None,
     listener: SpanListener | None = None,
+    method: str | None = None,
+    tool_name: str | None = None,
 ) -> Iterator[TraceSummary]:
     """MCP の要求を server の span（`mcp.server`）の中で処理する。
 
@@ -71,7 +73,14 @@ def mcp_server_trace(
     trace を始め、来た span context は span link にだけ残す。`listener` は共通の span
     の表への書き込み
     （`TraceSpanWriter.listener(...)`）で、server の span は実行の全体の span として表に入る。
+    `method`・`tool_name` は OpenTelemetry の MCP の semantic conventions の `mcp.method.name`・
+    `gen_ai.tool.name`（#3272。引数・結果は入れない）。
     """
+    attributes: dict[str, object] = {}
+    if method:
+        attributes["mcp.method.name"] = method
+    if tool_name:
+        attributes["gen_ai.tool.name"] = tool_name
     parent = traceparent if trusted else None
     linked = _span_context(traceparent) if traceparent and not trusted else None
     carrier_context = _PROPAGATOR.extract({"traceparent": parent}) if parent else context.Context()
@@ -81,6 +90,7 @@ def mcp_server_trace(
         with operation_trace(
             MCP_SERVER_SPAN,
             operation_id=operation_id,
+            attributes=attributes,
             listener=listener,
             kind="server",
             links=[trace.Link(linked)] if linked is not None else (),

@@ -334,6 +334,31 @@ describe("span の段（#3226）", () => {
     expect(chatProgressHasSpans(events)).toBe(true);
   });
 
+  // #3272: 1 回のツールの呼び出しの MCP の手続き（initialize・通知・tools/list）は行にせず、tools/call だけを出す。
+  it("MCP の手続きの span は行にせず、tools/call の行に呼んだツールを添える", () => {
+    seq = 0;
+    const events: ChatProgressEvent[] = [
+      span("r", undefined, "agent.execute", "done", { root: true }),
+      span("t", "r", "gen_ai.execute_tool", "done", { attributes: { "gen_ai.tool.name": "tool_a" } }),
+      span("i", "t", "mcp.request", "done", { attributes: { "mcp.method.name": "initialize" } }),
+      span("n", "t", "mcp.request", "done", { attributes: { "mcp.method.name": "notifications/initialized" } }),
+      span("l", "t", "mcp.request", "done", { attributes: { "mcp.method.name": "tools/list" } }),
+      span("c", "t", "mcp.request", "done", { attributes: { "mcp.method.name": "tools/call", "gen_ai.tool.name": "tool_a" } }),
+      span("s", "c", "mcp.server", "done", { root: true, attributes: { "mcp.method.name": "tools/call" } }),
+      span("g", "s", "gen_ai.chat", "done", { attributes: { "gen_ai.request.model": "m" } }),
+      // method の無い古い記録は今までどおり出す。
+      span("o", "t", "mcp.request", "done"),
+    ];
+    const steps = chatProgressStepsFromEvents(events, {}, "t");
+    expect(steps.map((step) => [step.label, step.level ?? 0])).toEqual([
+      ["ツールの実行 · tool_a", 0],
+      ["MCP の呼び出し · tool_a", 1],
+      ["モデルの呼び出し · m", 2],
+      ["MCP の呼び出し", 1],
+    ]);
+    expect(steps[1].details?.fields).toContainEqual({ label: "mcp.method.name", value: "tools/call", mono: true });
+  });
+
   it("実行中の span は実行中の行として出し、古い形式の段だけの記録は span の記録としない", () => {
     seq = 0;
     const running = chatProgressStepsFromEvents([span("r", undefined, "op", "running", { root: true }), span("x", "r", "gen_ai.chat", "running", { attributes: { "gen_ai.request.model": "m" } })], {}, "t");

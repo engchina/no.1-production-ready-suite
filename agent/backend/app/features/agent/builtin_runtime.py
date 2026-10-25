@@ -63,6 +63,7 @@ from pr_backend_core.chat_history import (
     build_chat_history,
 )
 from pr_backend_core.observability.genai import record_genai_usage
+from pr_backend_core.observability.mcp_trace import traceparent_links
 from pr_backend_core.observability.request_context import bind_log_context
 from pr_backend_core.observability.tracing import (
     ObservedSpan,
@@ -3282,9 +3283,16 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
         if started is None:
             return
         run, agent = started
+        # 最初の区間は新しい trace（`trace_context` は空）で、受け付けた要求の span は span link に
+        # だけ残す（#3272。外部の要求の traceparent を Run の trace の親にしない）。
         with (
             attach_trace_context(run.trace_context),
-            operation_trace("agent.execute", operation_id=run.id, listener=_progress_listener(run)),
+            operation_trace(
+                "agent.execute",
+                operation_id=run.id,
+                listener=_progress_listener(run),
+                links=traceparent_links(run.trace_link_context.get("traceparent")),
+            ),
         ):
             execution = run_claim.bind_execution(run.id, run.metadata)
             # 公開中の版に固定したスキルで動く（#1855）。

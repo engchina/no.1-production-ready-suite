@@ -373,7 +373,12 @@ def test_mcp_trace_context_trusts_only_service_tokens() -> None:
     writer = TraceSpanWriter(db.connect)
     owner = TraceSpanOwner(product="rag", operation_id="mcp-a", owner_user_uuid="user-a")
     with mcp_server_trace(
-        operation_id="mcp-a", trusted=True, traceparent=incoming, listener=writer.listener(owner)
+        operation_id="mcp-a",
+        trusted=True,
+        traceparent=incoming,
+        listener=writer.listener(owner),
+        method="tools/call",
+        tool_name="tool_a",
     ) as trusted:
         assert mcp_trace_meta()["traceparent"].split("-")[1] == caller_trace
     with mcp_server_trace(operation_id="mcp-b", trusted=False, traceparent=incoming) as external:
@@ -383,6 +388,12 @@ def test_mcp_trace_context_trusts_only_service_tokens() -> None:
     server_row = next(iter(db.rows.values()))
     assert server_row["parent_span_id"] == caller_span and server_row["span_kind"] == "server"
     assert server_row["is_root"] == 1
+    # OpenTelemetry の MCP の semantic conventions の method とツールの名前（#3272）。
+    attributes = json.loads(server_row["attributes_json"])
+    assert (attributes["mcp.method.name"], attributes["gen_ai.tool.name"]) == (
+        "tools/call",
+        "tool_a",
+    )
     assert external.telemetry_trace_id != caller_trace
     assert shutdown_tracing()
     exported = {span.context.trace_id: span for span in exporter.get_finished_spans()}

@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -425,7 +426,7 @@ async def test_service_token_mcp_call_continues_the_agent_trace(
 ) -> None:
     """サービストークンの要求は `params._meta.traceparent` を親にし、中の検索も同じ trace へ。"""
     agent_trace, agent_span, traceparent = _agent_traceparent()
-    message = {"params": {"_meta": {"traceparent": traceparent}}}
+    message = {"params": {"name": "rag_search", "_meta": {"traceparent": traceparent}}}
     with mcp_request_trace(_request(trusted=True), message):
         search = AnswerTrace("rag-run-1", owner_user_uuid="user-sub")
         with operation_trace_parent() as links:
@@ -441,6 +442,12 @@ async def test_service_token_mcp_call_continues_the_agent_trace(
     assert server["parent_span_id"] == agent_span
     assert server["span_kind"] == "server"
     assert (server["operation_id"], server["owner_user_uuid"]) == ("req-mcp-1", "user-sub")
+    # OpenTelemetry の MCP の semantic conventions の method と呼んだツール（#3272）。
+    attributes = json.loads(server["attributes_json"])
+    assert (attributes["mcp.method.name"], attributes["gen_ai.tool.name"]) == (
+        "tools/call",
+        "rag_search",
+    )
     assert inner["parent_span_id"] == server["span_id"]
     assert inner["operation_id"] == "rag-run-1"
 
