@@ -388,7 +388,7 @@ def test_run_from_an_external_request_starts_a_new_trace(monkeypatch: MonkeyPatc
     `mcp_trace` の規則）。root の span は親を持たない。"""
     _script(monkeypatch, [assistant_message("合成の回答。")])
     links: list[Any] = []
-    original = builtin_runtime.operation_trace
+    original = operation_trace
 
     @contextmanager
     def recording(name: str, **kwargs: Any) -> Iterator[Any]:
