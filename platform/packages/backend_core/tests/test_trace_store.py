@@ -17,6 +17,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from pr_backend_core.chat_progress import chat_progress_details
 from pr_backend_core.config.tracing import TracingSettings
+from pr_backend_core.observability import trace_store
 from pr_backend_core.observability.mcp_trace import (
     incoming_mcp_traceparent,
     mcp_server_trace,
@@ -244,6 +245,17 @@ def test_fetch_filters_by_owner_unless_system_admin() -> None:
     assert ":viewer" not in admin[1] and "viewer" not in admin[2]
     assert spans[0].root and spans[0].display_params == {"name": "x"}
     assert spans[0].started_at.tzinfo is not None
+    # 時刻は UTC の TIMESTAMP にして読む（名前つきの時間帯は thin mode で読めない。#3241）。
+    assert "SYS_EXTRACT_UTC(STARTED_AT) AS STARTED_AT" in own[1]
+    assert "SYS_EXTRACT_UTC(FINISHED_AT) AS FINISHED_AT" in own[1]
+
+
+def test_sql_writes_utc_offset_not_named_time_zone() -> None:
+    # 地域名の時間帯（'UTC'）で書くと、python-oracledb の thin mode が値を読めない
+    # （DPY-3022。#3241）。
+    for sql in (trace_store._MERGE_SQL, trace_store._PURGE_SQL):
+        assert "'UTC'" not in sql
+        assert "'+00:00'" in sql
 
 
 def _stored(span_id: str, parent: str | None, **extra: Any) -> StoredTraceSpan:
