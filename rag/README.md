@@ -112,6 +112,7 @@ MCP サーバーの名前は `rag` にします（組み込みのスキル（[sk
 - [RAG アーキテクチャ](./docs/rag-architecture.md)
 - [AIDB Memory Engineering](./docs/aidb-memory-engineering.md)
 - [評価・観測性・ガードレール](./docs/evaluation-observability-guardrails.md)
+- [検索・回答の能力の一覧（必須 / 任意と縮退）](./docs/answer-capability-inventory.md)
 - [デプロイメント](./docs/deployment.md)
 - [参考 RAG プロジェクト](./docs/reference-rag-projects.md)
 
