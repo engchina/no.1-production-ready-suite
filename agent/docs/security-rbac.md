@@ -153,7 +153,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
   - 既存のデータ: #3244 より前に system_admin が持ち主の会話で続けた往復は消さない。会話の詳細は持ち主以外が送った往復に送った人の表示名（`ThreadData.sender_display_names`。Run の ID → 表示名）を返し、画面は質問の吹き出しの上に「〈名前〉 が送信」を出す（共有 UI の `ChatTurn` の `questionSender`）。持ち主はその往復も評価できる（自分の会話の内容）。
   - 画面: system_admin が他の利用者の会話（`ThreadData.owned=false`）を開くと、入力欄の代わりに閲覧だけの案内（3 製品共通の `ChatReadOnlyNotice`。info の Banner「他の利用者の会話です（閲覧のみ）」。文は `OTHERS_CONTENT_FORBIDDEN_MESSAGE` と同じ）を出し、回答の作成中・承認待ちなら案内の中に「停止」を置く。回答前の確認のカード・確認の取り消しの操作・評価・「自分で質問し直す」は出さない。承認の判断のボタンと会話の削除は出す。#1954 の送る前の案内（「この会話の持ち主にも…」）は外した。会話の履歴の行の「名前の変更」は出さない（共有 UI の `useChatHistoryActions` の `canRename`。削除は出す）。
   - 会話の添付（`/api/chat-attachments`。platform の共通の API）: 会話の添付の一覧は閲覧なので返し、会話への添付（`POST` の `conversation_id`）は内容を足す操作なので 403（持ち主の分からない会話も 403）。
-  - 外部の MCP（API キー）も同じ: キーの持ち主が system_admin なら他の利用者の Run を読め（`agent_get_run`）、止められる（`agent_cancel_run`。運用の操作。#3240）が、会話の続き（`agent_chat` の `thread_id`）と確認への答え（`agent_answer_confirmation`）は 403 の `OTHERS_CONTENT_FORBIDDEN`。キーの業務 Agent の範囲（`resource_scopes["agent"]`）と回数の上限はそのままかかる。
+  - 外部の MCP（API キー）も同じ: キーの持ち主が system_admin なら他の利用者の Run を読め（`agent_get_run`・`agent_get_run_observation`）、止められる（`agent_cancel_run`。運用の操作。#3240）が、会話の続き（`agent_chat` の `thread_id`）と確認への答え（`agent_answer_confirmation`）は 403 の `OTHERS_CONTENT_FORBIDDEN`。キーの業務 Agent の範囲（`resource_scopes["agent"]`）と回数の上限はそのままかかる。
 - チャット: 一般の利用者は自分の会話だけを見て続ける（他人の会話の詳細・送信・操作は 404）。system_admin の会話の一覧は利用者の表示名・`owned` を返す。
 - 規則の外（「改善・運用」）: フィードバック（`GET /feedback*`・管理者の評価 `PUT /runs/{id}/admin-review`）・品質評価のケースへの追加（`GET /runs/{id}/evaluation-case`）・利用状況・監査ログ（`GET /audit/tool-calls*`・`/observability/events`）は、従来どおり権限と業務 Agent の範囲で判定する。
 
@@ -161,9 +161,9 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 
 Run は RAG から受け取った根拠（ツールの結果・`tool.completed` のイベント・成果物「検索の根拠」「回答の根拠」）を保存している。出すたびに、**画面を見ている利用者の今の権限**で確かめ直す（OWASP API1: 物を読むたびにその時点の権限で認可する。権限を外したら次に読むときから効く）。
 
-- 対象の入口: `GET /runs/{id}`・`GET /threads/{id}`（会話の各 Run）・`GET /runs/{id}/events`（`follow` の無い保存したイベント）・`GET /runs/{id}/artifacts`・`/artifacts/{artifact_id}`・MCP の `agent_get_run`（`sources`）。実行中の購読（`events?follow=true`）と、実行の直後の応答（`agent_chat`）は、見る人が今実行した結果なので確かめない。
+- 対象の入口: `GET /runs/{id}`・`GET /threads/{id}`（会話の各 Run）・`GET /runs/{id}/events`（`follow` の無い保存したイベント）・`GET /runs/{id}/artifacts`・`/artifacts/{artifact_id}`・MCP の `agent_get_run`（`sources`）・`agent_get_run_observation`（`evidence`・`tool_calls[].evidence_count`。Run の状態・呼ばれた時期に関わらず毎回）。実行中の購読（`events?follow=true`）と、実行の直後の応答（`agent_chat`）は、見る人が今実行した結果なので確かめない。
 - 確かめ方: Agent の backend が組み込みの接続 `rag` の内部のツール `rag_readable_documents`（`tools/list` に出さない。モデルには渡らない）を、`sub` = 見る人・claim `purpose=evidence_access` のサービストークンで呼び、根拠の文書のうち今見られる文書を受け取る（図・原文の URL と同じく Run の利用者の権限を借りない。system_admin が見るときは system_admin の権限）。根拠の無い Run と、見えない Run（404）では RAG を呼ばない。仕組みは `features/agent/evidence_access.py`。
-- 見られない文書の根拠は、抜粋・場所・文書名・参考情報の原文（`references` の `quote`）を出さず、応答の `withheld_evidence_count`（`RunViewer`。MCP の `agent_get_run` は出力の `withheld_evidence_count`）に数だけを返す。画面は回答の根拠の折りたたみに「権限の無い根拠 N 件」（共有 UI の `EvidenceWithheldNote`。RAG と同じ）を出す。見られない文書 1 つを読んだツールの結果（`rag_read_source` など）は `{"evidence_withheld": true}` にする。保存した Run は変えない（応答の写しだけ）。
+- 見られない文書の根拠は、抜粋・場所・文書名・参考情報の原文（`references` の `quote`）を出さず、応答の `withheld_evidence_count`（`RunViewer`。MCP の `agent_get_run` / `agent_get_run_observation` は出力の `withheld_evidence_count`）に数だけを返す。画面は回答の根拠の折りたたみに「権限の無い根拠 N 件」（共有 UI の `EvidenceWithheldNote`。RAG と同じ）を出す。見られない文書 1 つを読んだツールの結果（`rag_read_source` など）は `{"evidence_withheld": true}` にする。保存した Run は変えない（応答の写しだけ）。
 - 確かめられないとき（`rag` の接続が無い・サービストークンでない・RAG の失敗）は、RAG の根拠をすべて見られないものとして扱う（fail closed。ログ `agent_evidence_access_check_failed`）。会話の添付の根拠（`attachment:`）は RAG の文書ではないので確かめない。
 - **既知の限界**: 回答の本文は保存した文のまま出す（その資料から作った文で、本文から該当の部分は消せない）。
 - 入口 × 主体 × 範囲の行列は `tests/test_evidence_read_authz.py`（RAG は `rag/backend/tests/test_evidence_read_authz.py`）。
@@ -187,7 +187,7 @@ Run は RAG から受け取った根拠（ツールの結果・`tool.completed` 
 - 外部 Runtime からの呼出し（Binding の MCP）は #754 で削除しました（実行は組み込み Runtime）。
 - 外部の MCP クライアント → Agent（#1874）: `POST /api/mcp` を共通の API キー（`Authorization: Bearer prak_…`。
   表 `PLATFORM_API_KEYS`、使える製品に `agent`）で呼びます。キーを発行した利用者として、画面と同じ capability
-  （`agent_list` / `agent_get_run` は `agent.runs.view` / `agent.runs.operate` / `agent.admin`、`agent_chat` /
+  （`agent_list` / `agent_get_run` / `agent_get_run_observation` は `agent.runs.view` / `agent.runs.operate` / `agent.admin`、`agent_chat` /
   `agent_answer_confirmation` / `agent_cancel_run` は `agent.runs.operate` / `agent.admin`）と対象範囲（使える業務 Agent）で判定し、キーに
   業務 Agent の範囲（`resource_scopes["agent"]`）があればさらに絞ります（範囲の外は 403 の `AGENT_OUT_OF_KEY_SCOPE`）。
   Run と会話は画面と同じ規則（§4.1）で、自分が実行した Run・自分の会話だけを読み、続け、答えられます（他人の Run は

@@ -144,8 +144,14 @@ def _step(run_id: str, tool: str, output: dict[str, Any]) -> RunStep:
     )
 
 
-def _seed_evidence_run(people: People, *, agent_id: str | None = None) -> RunState:
-    """RAG の根拠（見られる文書 a と、後で見られなくなる文書 b）を保存した、持ち主の Run。"""
+def _seed_evidence_run(
+    people: People, *, agent_id: str | None = None, created_by: str | None = None
+) -> RunState:
+    """RAG の根拠（見られる文書 a と、後で見られなくなる文書 b）を保存した、持ち主の Run。
+
+    `created_by` は Run を実行した利用者（既定は持ち主。system_admin が持ち主の会話で実行した Run の
+    行に使う。会話の持ち主は常に持ち主）。
+    """
     run_id = f"run3252-{uuid4().hex[:8]}"
     search_output = {"evidence": [_evidence(READABLE), _evidence(HIDDEN)]}
     read_output = {"document_id": HIDDEN, "chunk_id": f"{HIDDEN}:c1", "text": HIDDEN_TEXT}
@@ -155,7 +161,8 @@ def _seed_evidence_run(people: People, *, agent_id: str | None = None) -> RunSta
         agent_id=agent_id or people.agent_id,
         runtime_id="builtin",
         status=RunStatus.COMPLETED,
-        created_by_user_uuid=people.owner,
+        created_by_user_uuid=created_by or people.owner,
+        thread_owner_user_uuid=people.owner,
         thread_id=f"thread-{run_id}",
         steps=[
             _step(run_id, "rag_search", search_output),
@@ -498,6 +505,150 @@ def test_mcp_agent_get_run_needs_the_run_capability(people: People, rag: FakePro
     )
     assert created.status_code == 200, created.text
     result = _mcp_get_run(created.json()["data"]["token"], run.id)
+    assert result["structuredContent"]["error_code"] == "MCP_TOOL_FORBIDDEN"
+    assert rag.calls_of("rag_readable_documents") == []
+
+
+def _mcp_observation(token: str, run_id: str) -> dict[str, Any]:
+    response = client.post(
+        "/api/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "agent_get_run_observation", "arguments": {"run_id": run_id}},
+        },
+        headers={"authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200, response.text
+    result: dict[str, Any] = response.json()["result"]
+    return result
+
+
+# MCP の agent_get_run_observation（#3240）: 主体・実行した人・キーの範囲 → (エラーの code,
+# 出す根拠の文書, 権限の無い根拠の数)。読める人は agent_get_run と同じ（ID は権限ではない）。
+OBSERVATION_MATRIX = [
+    ("owner", None, set(), None, None, [READABLE, HIDDEN], 0),
+    ("owner", None, {HIDDEN}, None, None, [READABLE], 1),
+    # 会話の持ち主は、system_admin が持ち主の会話で実行した Run も読める（#3244）。
+    ("owner", "system_admin", set(), None, None, [READABLE, HIDDEN], 0),
+    ("other", None, set(), None, "RUN_NOT_FOUND", None, None),
+    # system_admin は閲覧できる。根拠は system_admin の今の権限で確かめる（Run の利用者ではない）。
+    ("system_admin", None, set(), None, None, [READABLE, HIDDEN], 0),
+    ("system_admin", None, {HIDDEN}, None, None, [READABLE], 1),
+    ("owner", None, set(), "other_agent", "AGENT_OUT_OF_KEY_SCOPE", None, None),
+]
+OBSERVATION_IDS = [
+    "owner",
+    "owner-kb-removed",
+    "thread-owner",
+    "other",
+    "system_admin",
+    "system_admin-no-scope",
+    "out-of-key-scope",
+]
+
+
+@pytest.mark.parametrize(
+    ("principal", "runner", "unreadable", "key_scope", "error_code", "documents", "withheld"),
+    OBSERVATION_MATRIX,
+    ids=OBSERVATION_IDS,
+)
+def test_mcp_run_observation_rechecks_evidence_by_principal(
+    people: People,
+    rag: FakeProductMcp,
+    principal: str,
+    runner: str | None,
+    unreadable: set[str],
+    key_scope: str | None,
+    error_code: str | None,
+    documents: list[str] | None,
+    withheld: int | None,
+) -> None:
+    """観測の根拠は、呼ぶたびにキーの持ち主の今の権限で確かめ直す（#3252・#3240）。"""
+    run = _seed_evidence_run(people, created_by=people.admin if runner else None)
+    rag.unreadable_documents = unreadable
+    scopes = {"resource_scopes": {"agent": [people.other_agent_id]}} if key_scope else {}
+    result = _mcp_observation(_api_key(people, principal, **scopes), run.id)
+    output = result["structuredContent"]
+    if error_code is not None:
+        assert result["isError"] is True
+        assert output["error_code"] == error_code
+        assert rag.calls_of("rag_readable_documents") == []
+        return
+    assert documents is not None
+    # 根拠のツールの 2 件と、読み取りのツールで読んだ文書 b の chunk（同じ chunk なので 1 件）。
+    assert [item["document_id"] for item in output["evidence"]] == documents
+    assert (output["evidence_total"], output["withheld_evidence_count"]) == (
+        len(documents),
+        withheld,
+    )
+    assert [call["evidence_count"] for call in output["tool_calls"]] == [
+        len(documents),
+        1 - (withheld or 0),
+    ]
+    text = json.dumps(result, ensure_ascii=False)
+    assert BASIS_CANARY not in text
+    if withheld:
+        assert HIDDEN_TEXT not in text and f"{HIDDEN}.pdf" not in text and HIDDEN not in text
+    viewer = people.admin if principal == "system_admin" else people.owner
+    calls = rag.calls_of("rag_readable_documents")
+    assert calls and {call["claims"]["sub"] for call in calls} == {viewer}
+    assert {call["claims"]["purpose"] for call in calls} == {"evidence_access"}
+
+
+def test_mcp_run_observation_withholds_all_evidence_when_access_cannot_be_checked(
+    people: People, rag: FakeProductMcp
+) -> None:
+    """RAG で確かめられないとき、観測の根拠も全件を伏せて数だけを返す（fail closed）。"""
+    run = _seed_evidence_run(people)
+    tool = rag.servers["rag"].tools["rag_readable_documents"]
+    rag.servers["rag"].tools["rag_readable_documents"] = tool.__class__(
+        name=tool.name,
+        description=tool.description,
+        input_model=tool.input_model,
+        handler=_failing_check,
+        listed=False,
+    )
+    output = _mcp_observation(_api_key(people, "owner"), run.id)["structuredContent"]
+    assert (output["evidence"], output["evidence_total"], output["withheld_evidence_count"]) == (
+        [],
+        0,
+        2,
+    )
+    assert [call["evidence_count"] for call in output["tool_calls"]] == [0, 0]
+    assert f"{READABLE} の合成の抜粋" not in json.dumps(output, ensure_ascii=False)
+
+
+def test_mcp_run_observation_withholds_all_evidence_without_a_rag_connection(
+    people: People, monkeypatch: MonkeyPatch
+) -> None:
+    """RAG の接続が無く確かめられないときも、すべて伏せる（fail closed）。"""
+    from app.features.agent import evidence_access
+    from app.features.agent.rag_figures import RunFigureUrlError
+
+    def unavailable(*_args: Any) -> Any:
+        raise RunFigureUrlError(503, "RAG の接続がありません。")
+
+    monkeypatch.setattr(evidence_access, "_rag_service_client", unavailable)
+    run = _seed_evidence_run(people)
+    output = _mcp_observation(_api_key(people, "owner"), run.id)["structuredContent"]
+    assert (output["evidence"], output["withheld_evidence_count"]) == ([], 2)
+
+
+def test_mcp_run_observation_needs_the_run_capability(people: People, rag: FakeProductMcp) -> None:
+    """Run を読む capability の無い利用者のキーは、観測も読めない（MCP_TOOL_FORBIDDEN）。"""
+    run = _seed_evidence_run(people)
+    user = people.auth.user_with_permissions(
+        f"no-runs-{uuid4().hex[:8]}", [APPROVALS_DECIDE], agent_ids=[people.agent_id]
+    )
+    created = client.post(
+        "/api/account/api-keys",
+        json={"name": "外部のクライアント", "products": ["agent"]},
+        headers=login(user.login_user_id),
+    )
+    assert created.status_code == 200, created.text
+    result = _mcp_observation(created.json()["data"]["token"], run.id)
     assert result["structuredContent"]["error_code"] == "MCP_TOOL_FORBIDDEN"
     assert rag.calls_of("rag_readable_documents") == []
 

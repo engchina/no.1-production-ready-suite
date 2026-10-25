@@ -515,7 +515,9 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
 - ツール: `agent_list`（公開中の版の名前・説明・スキル）、`agent_chat`（`POST /runs` と同じ規則で Run を作る。下書きは
   使えない。`thread_id` で同じ会話を続ける）、`agent_get_run`（読める Run の状態・回答・RAG の根拠・回答前の確認・使った
   ツール）、`agent_answer_confirmation`（`decide_confirmation` と同じ。`answer` / `skip`。「確認をやめる」は出さない）、
-  `agent_cancel_run`（`POST /runs/{id}/cancel` と同じ判定と取消。冪等で、終わった Run は `result` で返す。#3240）。
+  `agent_cancel_run`（`POST /runs/{id}/cancel` と同じ判定と取消。冪等で、終わった Run は `result` で返す。#3240）、
+  `agent_get_run_observation`（評価・監査の観測。`agent_get_run` と同じ人が読め、Run の保存した記録から根拠の全件と場所・
+  ツールの呼び出しの経過・利用量を返す。根拠は呼ぶたびに今の権限で確かめ直す。#3240。詳細は docs/agents/mcp.md）。
   回答は `wait_seconds` まで待ち（既定 50 秒・30 秒、最大 300 秒。in-process でもこのプロセスの Run を待つだけで、
   dispatcher の構成でも保存先を読み直して待つ）、終わらなければ `in_progress=true` を返す。
 - MCP の Run の印は `metadata.source=mcp` とキーの ID・名前（`api_key_id` / `api_key_name`。予約の key）。回答前の確認の

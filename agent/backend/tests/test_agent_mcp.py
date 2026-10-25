@@ -50,6 +50,7 @@ TOOLS = {
     "agent_get_run",
     "agent_answer_confirmation",
     "agent_cancel_run",
+    "agent_get_run_observation",
     "agent_skill_export",
 }
 ASK_ARGUMENTS = {
@@ -362,7 +363,12 @@ def test_api_key_needs_the_agent_product_and_the_owner_permissions(
     viewer = _issue_key(session)
     tools = _rpc("tools/list", headers=_bearer(viewer["token"])).json()["result"]["tools"]
     # 閲覧だけの利用者には質問・答えのツールを出さず、呼んでも権限なし。
-    assert {tool["name"] for tool in tools} == {"agent_list", "agent_get_run", "agent_skill_export"}
+    assert {tool["name"] for tool in tools} == {
+        "agent_list",
+        "agent_get_run",
+        "agent_get_run_observation",
+        "agent_skill_export",
+    }
     denied = _call("agent_chat", {"agent_id": AGENT_ID, "question": "q"}, _bearer(viewer["token"]))
     assert denied["structuredContent"]["error_code"] == "MCP_TOOL_FORBIDDEN"
 
