@@ -59,6 +59,8 @@ interface RunRow {
   withheld_evidence_count?: number;
   /** 詳細だけの項目（RAG 検索の件数と絞り込み。「RAG 検索で開く」が画面に戻す。#3309）。 */
   search_conditions?: { top_k: number | null; filters: Record<string, string> } | null;
+  /** 詳細だけの項目（回答の本文。既定は 1 文）。 */
+  answer?: string | null;
 }
 
 function run(index: number, overrides: Partial<RunRow> = {}): RunRow {
@@ -108,7 +110,7 @@ function detail(row: RunRow) {
           : null,
     owned_by_me: row.owned_by_me !== undefined ? row.owned_by_me : row.conversation_id ? true : null,
     error_type: row.error_type !== undefined ? row.error_type : row.status === "error" ? "TimeoutError" : null,
-    answer: row.answer_generated ? "受注番号を入力して登録します。" : null,
+    answer: row.answer !== undefined ? row.answer : row.answer_generated ? "受注番号を入力して登録します。" : null,
     answer_available: row.answer_generated,
     citations: row.citations ?? [CITATION],
     withheld_evidence_count: row.withheld_evidence_count ?? 0,
@@ -459,6 +461,52 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await mockRuns(page, []);
     await page.goto("/history");
     await expect(page.getByText("実行はまだありません")).toBeVisible();
+    await expectNoPageOverflow(page);
+  });
+
+  test("詳細: 長いファイル名の根拠の行は名前を省略して頁は残し、回答のカードが横にはみ出さない（#3353）", async ({ page }, testInfo) => {
+    await mockLocalAuth(page);
+    const longName = "合成の文書_長いファイル名の例_第03版_項目の一覧と確認の方法_2026年度_改訂.pdf";
+    const answer = [
+      "合成の手続きは 2 段階です。",
+      "",
+      "資料により確認できた事項",
+      "",
+      "・対象の行の終了日を入力します。",
+      `根拠：${longName} p.12`,
+      "・新しい開始日の行を追加します。",
+      `根拠：${longName} p.13`,
+    ].join("\n");
+    const citation = { ...CITATION, file_name: longName, metadata: { page: 12 } };
+    await mockRuns(page, [run(1, { answer, citations: [citation] })]);
+
+    await page.goto("/history/run-1");
+    const card = page.getByTestId("run-history-answer");
+    const link = card.getByTestId("answer-citation-link").first();
+    await expect(link).toBeVisible();
+    // 全文は読み上げの名前に残す（省略しても何の根拠か分かる。省略したときは全文の Tooltip も出す）。
+    await expect(link).toHaveAccessibleName(new RegExp(`${longName} p\\.12`));
+    // 根拠の行はカードの幅に収め、長い名前は末尾を省略する（本文は折り返す）。
+    const metrics = await card.evaluate((element) => {
+      const cardBox = element.getBoundingClientRect();
+      const button = element.querySelector<HTMLElement>('[data-testid="answer-citation-link"]')!;
+      const label = button.querySelector<HTMLElement>("span") ?? button;
+      return {
+        cardOverflow: element.scrollWidth - element.clientWidth,
+        buttonRight: button.getBoundingClientRect().right - cardBox.right,
+        truncated: label.scrollWidth > label.clientWidth,
+      };
+    });
+    expect(metrics.cardOverflow).toBeLessThanOrEqual(1);
+    expect(metrics.buttonRight).toBeLessThanOrEqual(1);
+    // 頁は省略しない（名前だけを省略する）。
+    await expect(link.locator(":scope > span").last()).toHaveText("p.12");
+    await expect(link.locator(":scope > span").last()).toBeInViewport({ ratio: 1 });
+    if (isNarrow(page)) {
+      expect(metrics.truncated).toBe(true);
+      await expect(link).toHaveAttribute("data-truncated", "true");
+    }
+    await card.screenshot({ path: testInfo.outputPath("answer-long-citations.png") });
     await expectNoPageOverflow(page);
   });
 

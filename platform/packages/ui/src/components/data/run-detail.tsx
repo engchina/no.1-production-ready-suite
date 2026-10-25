@@ -304,7 +304,7 @@ export function RunDetailSection({
         open={open}
         onOpenChange={onOpenChange}
         className="bg-surface shadow-[var(--shadow-card)]"
-        contentClassName="grid min-w-0 gap-3 border-t border-border p-5"
+        contentClassName="grid min-w-0 grid-cols-1 gap-3 border-t border-border p-5"
         data-run-detail-section=""
         data-testid={testId}
       >
@@ -325,7 +325,7 @@ export function RunDetailSection({
         </div>
         {actions ? <div className="min-w-0">{actions}</div> : null}
       </CardHeader>
-      <CardContent className="grid min-w-0 gap-3">{children}</CardContent>
+      <CardContent className="grid min-w-0 grid-cols-1 gap-3">{children}</CardContent>
     </Card>
   );
 }
@@ -383,7 +383,7 @@ export function RunProcessDetails({
       defaultOpen={defaultOpen}
       summaryProps={{ "data-testid": summaryTestId }}
       summaryClassName="text-fg-muted"
-      contentClassName="grid min-w-0 gap-3"
+      contentClassName="grid min-w-0 grid-cols-1 gap-3"
       className={className}
       data-run-process-details=""
       data-testid={testId}
@@ -848,7 +848,7 @@ export function RunTimelineSection({
           defaultOpen={defaultOpen}
           summaryClassName={failed ? "text-danger-fg [&>span:first-child]:text-danger-fg" : undefined}
           summaryProps={{ "data-testid": testId ? `${testId}-summary` : undefined, "data-run-progress-summary": "" }}
-          contentClassName="grid min-w-0 gap-3 pt-2"
+          contentClassName="grid min-w-0 grid-cols-1 gap-3 pt-2"
           data-run-timeline-section=""
         >
           <RunTimeline steps={steps} totalDurationMs={totalDurationMs} showSummary={false} labels={labelsInput} />
@@ -971,7 +971,7 @@ export function TraceDetails({ summary }: { summary: unknown }) {
     ? summary.filter(segment => segment && typeof segment === "object" && !Array.isArray(segment)).slice(0, 1000)
     : [summary];
   return <Disclosure variant="plain" size="sm" summary={labels.title} open={open} onOpenChange={setOpen} summaryProps={{ "data-testid": "trace-details-toggle" }}>
-    {open ? <div className="grid min-w-0 gap-3" data-testid="trace-details">
+    {open ? <div className="grid min-w-0 grid-cols-1 gap-3" data-testid="trace-details">
       {segments.length === 0 ? <p className="text-xs text-fg-muted">{labels.empty}</p> : null}
       {segments.length === 1 ? <TraceSegmentContent summary={segments[0]} labels={labels} /> : segments.map((segment, index) => <div key={segment && typeof segment === "object" && "root_span_id" in segment && typeof segment.root_span_id === "string" ? segment.root_span_id : index}>
         <TraceSegmentDetails summary={segment} labels={labels} title={labels.segment(index + 1, segments.length)} defaultOpen={index === segments.length - 1} />

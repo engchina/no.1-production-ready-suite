@@ -142,6 +142,7 @@ export function StructuredAnswer({
       refs.push({
         key: chunkId,
         label,
+        location: found.entry.citationLocation || undefined,
         ariaLabel: EVIDENCE_LABELS.citationOpen(label),
         onOpen: () => source.open(found.index),
       });
