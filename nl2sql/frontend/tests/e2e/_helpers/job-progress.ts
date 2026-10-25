@@ -1,10 +1,16 @@
+import type { BrowserContext, Route } from "@playwright/test";
+
 /**
- * e2e の mock のジョブの処理の経過のイベント（`progress_events`。3 製品共通の契約。#1359・#3226）。
+ * e2e の mock の処理の経過（3 製品共通の契約。#1359・#3226 の案 A）。
  *
- * 処理の経過は実行の trace（span の木）の投影。backend（`_record_job_progress_span`）と同じく、実行の全体の span
- * （root。画面は行にしない）の下に、始まった工程の span（`kind` が工程の id・`name` が span の名前）を始まった順に
- * 開始（running）→ 終了（done / failed / skipped）で記録し、最後に終端を出す。始まっていない工程の span は無い。
- * 後の状態のイベントは前の状態のイベントの続き（同じ番号は同じ内容）になるので、polling の応答ごとに作り直してよい。
+ * 処理の経過は実行の trace（span の木）の投影。backend と同じく、実行の全体の span（root。画面は行にしない）の下に、
+ * 始まった工程の span（`kind` が工程の id・`name` が span の名前）を始まった順に開始（running）→ 終了（done /
+ * failed / skipped）で作り、最後に終端を出す。始まっていない工程の span は無い。
+ *
+ * backend は span を共通の span の表に書き、画面は記録ごとの API（`.../trace`）で span の表の snapshot（span ごとに
+ * 最新の状態 1 件と終端）を読む。mock の span の表（`recordMockTrace`）は記録の ID ごとに snapshot を持ち、
+ * `routeMockTraces`（e2e の fixture が context ごとに入れる）が API に答える。mock の記録の応答を作るときに
+ * `withJobProgress` などで span の表へ書く（応答の前に書くので、画面が読むときには入っている）。
  */
 
 export const JOB_PROGRESS_STEPS = [
@@ -153,6 +159,76 @@ export function jobProgressEvents(jobId: string, spec: JobProgressSpec): Record<
   return events;
 }
 
+/** span のイベントの一覧を、span の表の snapshot（span ごとに最新の状態 1 件と終端。番号は一覧の中）にする。 */
+export function traceSnapshot(events: readonly Record<string, unknown>[]): Record<string, unknown>[] {
+  const spans = new Map<string, Record<string, unknown>>();
+  let terminal: Record<string, unknown> | undefined;
+  for (const event of events) {
+    if (event.type === "terminal") terminal = event;
+    else if (typeof event.step_id === "string") {
+      spans.delete(event.step_id);
+      spans.set(event.step_id, event);
+    }
+  }
+  const started = [...spans.values()].sort((a, b) =>
+    String(a.started_at ?? "").localeCompare(String(b.started_at ?? "")),
+  );
+  return [...started, ...(terminal ? [terminal] : [])].map((event, index) => ({ ...event, seq: index + 1 }));
+}
+
+interface MockTrace {
+  events: Record<string, unknown>[];
+  droppedSpans: number;
+  /** テストが直接書いた span（worker が書いた span の代わり）。記録の応答（`withJobProgress`）で上書きしない。 */
+  pinned: boolean;
+}
+
+/** mock の span の表（記録の ID → snapshot）。test ごとに fixture が空にする。 */
+const mockTraces = new Map<string, MockTrace>();
+
+export function resetMockTraces(): void {
+  mockTraces.clear();
+}
+
+/**
+ * 記録（ジョブ・実行履歴の行・DB 管理チャットのターン）の span を mock の span の表に書く。`pinned` はテストが worker の
+ * 代わりに書く span（記録の応答を待たずに表に入る span。記録の応答では上書きしない）。
+ */
+export function recordMockTrace(
+  targetId: string,
+  events: readonly Record<string, unknown>[],
+  { droppedSpans = 0, pinned = false }: { droppedSpans?: number; pinned?: boolean } = {},
+): void {
+  mockTraces.set(targetId, { events: traceSnapshot(events), droppedSpans, pinned });
+}
+
+const TRACE_ROUTE =
+  /\/api\/nl2sql\/(?:jobs\/([^/?]+)|history\/([^/?]+)|db-admin-chat\/conversations\/[^/?]+\/turns\/([^/?]+))\/trace(?:\?|$)/;
+
+async function fulfillMockTrace(route: Route): Promise<void> {
+  const match = TRACE_ROUTE.exec(new URL(route.request().url()).pathname);
+  const id = decodeURIComponent(match?.[1] ?? match?.[2] ?? match?.[3] ?? "");
+  const trace = mockTraces.get(id);
+  // span の無い終わった記録（実行履歴の行・DB 管理チャットのターン）は、backend と同じく終端だけ（古い形式）。
+  const legacy = [{ schema_version: 1, seq: 1, target_id: id, attempt: 0, emitted_at: "2026-01-01T00:00:00Z", type: "terminal", status: "done" }];
+  const events = trace?.events ?? (match?.[1] ? [] : legacy);
+  await route.fulfill({ json: { data: { events, dropped_spans: trace?.droppedSpans ?? 0 } } });
+}
+
+/**
+ * 処理の経過の API（`/jobs/{id}/trace`・`/history/{id}/trace`・`/db-admin-chat/.../turns/{id}/trace`）に mock の
+ * span の表から答える。spec の page の route は先に当たるので、e2e の fixture が page の route を包み、処理の経過の
+ * 要求（`isTraceRequest`）は `route.fallback()` でここへ回す。
+ */
+export async function routeMockTraces(context: BrowserContext): Promise<void> {
+  await context.route(TRACE_ROUTE, fulfillMockTrace);
+}
+
+/** 処理の経過の API の要求か（広い pattern の mock の route で `route.fallback()` する）。 */
+export function isTraceRequest(route: Route): boolean {
+  return TRACE_ROUTE.test(new URL(route.request().url()).pathname);
+}
+
 /** 完了したジョブ（すべての工程が完了）のイベント。 */
 export function doneJobProgressEvents(jobId: string, at: string): Record<string, unknown>[] {
   return jobProgressEvents(jobId, {
@@ -271,10 +347,25 @@ export function turnProgressEvents(mock: object): Record<string, unknown>[] {
   });
 }
 
-/** mock の会話のターンに処理の経過のイベントを足す（テストが自分で書いたイベントはそのまま）。 */
+/**
+ * mock のジョブ（会話のターン・SQL 生成のジョブ）の span を mock の span の表に書き、応答の記録を返す（テストが
+ * 自分で書いたイベント `progress_events` はそのまま書く）。応答には trace id だけを入れる（backend と同じ）。
+ */
 export function withJobProgress<T extends object>(turn: T): T {
   const mock = turn as unknown as MockTurn;
-  return mock.progress_events ? turn : { ...turn, progress_events: turnProgressEvents(turn) };
+  const events = Array.isArray(mock.progress_events)
+    ? (mock.progress_events as Record<string, unknown>[])
+    : turnProgressEvents(turn);
+  if (!mockTraces.get(mock.job_id)?.pinned) recordMockTrace(mock.job_id, events);
+  const { progress_events: _events, ...rest } = turn as T & { progress_events?: unknown };
+  return { ...rest, trace_id: events.length > 0 ? jobProgressTraceId(mock.job_id) : "" } as unknown as T;
+}
+
+/** mock の記録（実行履歴の行・DB 管理チャットのターン）の `progress_events` を span の表に書き、応答から外す。 */
+export function withRecordedTrace<T extends object>(id: string, record: T): T {
+  const { progress_events: events, ...rest } = record as T & { progress_events?: unknown };
+  if (Array.isArray(events)) recordMockTrace(id, events as Record<string, unknown>[]);
+  return rest as unknown as T;
 }
 
 interface MockStatementPlan {

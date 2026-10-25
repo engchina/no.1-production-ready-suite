@@ -1,5 +1,5 @@
 import {timelineSnapshot, timelineTypography} from "../../../../platform/packages/ui/e2e/timeline-snapshot";
-import {jobProgressEvents, jobProgressTraceId, withJobProgress, type JobProgressStep} from "./_helpers/job-progress";
+import {jobProgressEvents, jobProgressTraceId, withJobProgress, withRecordedTrace, type JobProgressStep} from "./_helpers/job-progress";
 import { mockTabularPreview } from "./_helpers/tabular-preview";
 import { readFile } from "node:fs/promises";
 import { draftKey, WORKSPACE_DRAFT_PREFIX } from "../../src/lib/workspace-drafts";
@@ -721,12 +721,17 @@ const classifierTrainingExamples = Array.from({ length: 27 }, (_, index) => {
   };
 });
 
-/** ジョブの応答（`job_id`・`status`・`steps`）に、mock の backend が記録する処理の経過の span のイベントを足す（#3226）。 */
+/**
+ * ジョブの応答（`job_id`・`status`・`steps`）の処理の経過の span を、mock の backend と同じく mock の span の表に書く
+ * （#3226 の案 A。画面は `.../trace` で読む）。実行履歴の行（`id` と `progress_events`）も行の ID で書く。
+ */
 function withMockJobProgress(data: JsonValue): JsonValue {
   if (!data || typeof data !== "object" || Array.isArray(data)) return data;
   const record = data as Record<string, unknown>;
   const isJob = typeof record.job_id === "string" && typeof record.status === "string" && Array.isArray(record.steps);
-  return isJob && !("progress_events" in record) ? withJobProgress(record) : data;
+  if (isJob) return withJobProgress(record) as JsonValue;
+  if (typeof record.id === "string" && "progress_events" in record) return withRecordedTrace(record.id, record) as JsonValue;
+  return data;
 }
 
 function fulfillJson(route: Route, data: JsonValue) {

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { confirmChatRequirement, mockChatRequirement } from "./_helpers/chat-requirement";
-import { turnProgressEvents, withJobProgress } from "./_helpers/job-progress";
+import { withJobProgress } from "./_helpers/job-progress";
 
 // #1160: チャットの回答の作成中に、処理の経過と回答が自動で更新されなくなる不具合の回帰テスト。
 // 2 回目の質問のジョブを、段階が進む・取り直しが失敗する・DB の状態の確認が応答しない、の各条件で追い、
@@ -153,8 +153,6 @@ async function setup(page: Page): Promise<State> {
           status: "pending",
           created_at: createdAt,
           steps: [],
-          // 作成時は span が無い（backend の start_job と同じ。worker が受け取るまで開始待ちの仮の行。#3226）。
-          progress_events: turnProgressEvents({ job_id: "chat-2", status: "pending", created_at: createdAt }),
         },
       },
     });

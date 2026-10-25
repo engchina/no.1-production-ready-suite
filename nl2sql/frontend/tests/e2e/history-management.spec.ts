@@ -4,7 +4,7 @@ import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { chooseSelectFieldOption } from "./_helpers/select-field";
-import { jobProgressEvents } from "./_helpers/job-progress";
+import { jobProgressEvents, withRecordedTrace } from "./_helpers/job-progress";
 import {
   findClippedPlaceholders,
   findIconTextMisalignment,
@@ -213,7 +213,8 @@ async function mockHistory(page: Page, options: MockOptions = {}) {
     const detail = /\/api\/nl2sql\/history\/([^/?]+)$/.exec(url.pathname);
     if (detail) {
       const item = items.find((entry) => entry.id === decodeURIComponent(detail[1]));
-      return item ? fulfillJson(route, item) : fulfillJson(route, "実行履歴が見つかりません。", 404);
+      // 処理の経過（span）は mock の span の表に書き、行の処理の経過の API が返す（#3226 の案 A）。
+      return item ? fulfillJson(route, withRecordedTrace(item.id, item)) : fulfillJson(route, "実行履歴が見つかりません。", 404);
     }
     options.requests?.push(url);
     if (options.gate) await options.gate;

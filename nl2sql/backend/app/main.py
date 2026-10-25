@@ -43,6 +43,7 @@ from app.features.nl2sql.service import (
     nl2sql_service,
 )
 from app.features.nl2sql.synthetic_service import worker_loop
+from app.features.nl2sql.trace_spans import start_trace_span_store, stop_trace_span_store
 from app.features.settings.errors import DatabaseWalletOperationError
 from app.readiness import readiness_checks
 from app.security.permissions import UNCLASSIFIED_PERMISSION, permission_for_route
@@ -89,6 +90,9 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         runtime_settings = get_settings()
         if runtime_settings.local_debug_enabled:
             logger.warning("local_debug_auth_bypass_enabled")
+        # 処理の経過の span の書き手（#3226 の案 A）。thread は起動の後に作る（DB には触れない。
+        # 書けなければ数えて捨て、主の処理は止めない）。
+        start_trace_span_store()
         synthetic_stop = threading.Event()
         if runtime_settings.nl2sql_synthetic_worker_mode == "inprocess":
             threading.Thread(target=worker_loop, args=(synthetic_stop,), daemon=True).start()
@@ -102,6 +106,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             await run_in_threadpool(ontology_publish_service.shutdown)
             await run_in_threadpool(shutdown_validation_jobs, ontology_runtime)
             await run_in_threadpool(nl2sql_service.shutdown_select_ai_db_profile_refresh_jobs)
+            # 待っている span を書いてから pool を閉じる。
+            await run_in_threadpool(stop_trace_span_store)
             close_oracle_pools()
 
 

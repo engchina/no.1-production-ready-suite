@@ -16,7 +16,6 @@ from uuid import UUID
 from pr_backend_core import CursorPage, Page
 from pr_backend_core.chat_history_window import ChatHistoryPage
 from pr_backend_core.chat_progress import ChatProgressEvent
-from pr_backend_core.observability.tracing import TraceSummary
 from pr_system_settings.chat_attachments import ChatAttachmentReference
 from pr_system_settings.model import (
     DEFAULT_ENTERPRISE_AI_SEED,
@@ -1178,8 +1177,11 @@ class DbAdminChatGenerateData(BaseModel):
     model: str = ""
     warnings: list[str] = Field(default_factory=list)
     timing: TimingEnvelope
-    # 生成の処理の経過（生成と SQL の確認の span の木。#3226）。
-    progress_events: list[ChatProgressEvent] = Field(default_factory=list)
+    # 生成の処理の経過（#3226 の案 A）: span は共通の span の表にあり、ここは trace id・書けなかった
+    # span の数・工程の詳細（span id → 詳細。表には入れない内容）だけ。
+    trace_id: str = ""
+    trace_dropped_spans: int = 0
+    span_details: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class DbAdminChatTurnExecuteRequest(AdminExecutionConfirmation):
@@ -1357,8 +1359,12 @@ class DbAdminChatTurn(BaseModel):
     sender_display_name: str | None = None
     # 回答の注意書き（システム設定の文。#2405）。モデルに渡す会話の履歴には入れない。
     notice: str | None = None
-    # 生成したときの処理の経過（span の木。#3226）。実行（利用者が後から押す操作）は足さない。
-    progress_events: list[ChatProgressEvent] = Field(default_factory=list)
+    # 生成したときの処理の経過（#3226 の案 A）。span は共通の span の表にあり、ターンには trace id・
+    # 書けなかった span の数・工程の詳細（span id → 詳細）だけを置く。画面は
+    # `GET .../turns/{turn_id}/trace` で読む。実行（利用者が後から押す操作）は足さない。
+    trace_id: str = ""
+    trace_dropped_spans: int = 0
+    span_details: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class DbAdminChatSummary(BaseModel):
@@ -1909,9 +1915,6 @@ class JobCreateData(BaseModel):
     status: JobStatus
     created_at: str
     steps: list[JobStepData] = Field(default_factory=list)
-    # 作成時の処理の段階のイベント（開始待ちと 5 段階。#1359）。画面は会話を取り直す前から
-    # 段階を出す。
-    progress_events: list[ChatProgressEvent] = Field(default_factory=list)
 
 
 class SqlChatExecutionSummary(BaseModel):
@@ -1964,8 +1967,11 @@ class SqlChatExecuteData(BaseModel):
 class JobData(BaseModel):
     """非同期 job status response."""
 
-    trace_summary: TraceSummary | None = None
-    trace_segments: list[TraceSummary] = Field(default_factory=list)
+    # 処理の経過（#3226 の案 A）: span は共通の span の表にあり、画面は `GET /jobs/{job_id}/trace`
+    # で読む。ここは trace id と、書けなかった span の数（1 以上なら「一部の処理だけを記録して
+    # います」）。
+    trace_id: str = ""
+    trace_dropped_spans: int = 0
 
     business_release_id: str = ""
     # チャットの質問に添付したファイル（#2517。名前・種類・大きさ）。
@@ -2009,10 +2015,6 @@ class JobData(BaseModel):
     attempt: int = 0
     # チャットのターンの SQL を最後に実行したときの要約（行は持たない。#1154）。
     last_execution: SqlChatExecutionSummary | None = None
-    # 処理の段階のイベント（3 製品共通の契約。#1359）。チャットの段階（`ChatProgress`）はこれを
-    # 積んで出す。差分は `GET /jobs/{job_id}/progress`（polling）・`/progress/stream`（SSE）。
-    # SQL 生成の画面の工程の表示は `steps` のまま。
-    progress_events: list[ChatProgressEvent] = Field(default_factory=list)
     # 会話の持ち主以外（system_admin）が送ったターンの送り手（応答には出さない。表示名の解決に
     # 使う。#1928）。持ち主が送ったターン・会話の外のジョブは None。
     sender_user_uuid: str | None = Field(default=None, exclude=True)
@@ -2060,15 +2062,29 @@ class SqlChatData(BaseModel):
     turns: list[JobData]
 
 
+class TraceProgressData(BaseModel):
+    """記録（ジョブ・実行履歴・DB 管理チャットのターン）の処理の経過（#3226 の案 A）。
+
+    共通の span の表の snapshot（span ごとに最新の状態 1 件と、記録が終わっていれば終端）。`seq` は
+    この一覧の中の番号。`dropped_spans` は書けなかった span の数（1 以上なら一部だけの記録）。
+    """
+
+    events: list[ChatProgressEvent] = Field(default_factory=list)
+    dropped_spans: int = 0
+
+
 class HistoryItem(BaseModel):
     """実行履歴。"""
 
-    progress_events: list[ChatProgressEvent] = Field(default_factory=list)
-
     generation_only: bool = False
 
-    trace_summary: TraceSummary | None = None
-    trace_segments: list[TraceSummary] = Field(default_factory=list)
+    # 処理の経過（#3226 の案 A）: 実行したジョブ（span の `OPERATION_ID`）・trace id・書けなかった
+    # span の数・工程の詳細（span id → 詳細。表には入れない内容）。画面は
+    # `GET /history/{history_id}/trace` で読む（一覧・詳細の応答には工程の詳細を入れない）。
+    job_id: str = ""
+    trace_id: str = ""
+    trace_dropped_spans: int = 0
+    span_details: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     business_release_id: str = ""
     id: str

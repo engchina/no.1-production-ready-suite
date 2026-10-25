@@ -15,8 +15,11 @@ import {
 import {
   CHAT_PROGRESS_STEP_DEFINITIONS,
   chatJobElapsedMs,
-  chatProgressIsLegacy,
   chatQueueProgressSteps,
+  dbAdminChatTurnTracePath,
+  historyTracePath,
+  jobTracePath,
+  parseTraceProgressResponse,
   chatSubmitProgressSteps,
   NL2SQL_TRACE_DETAILS_LABELS,
   chatStageName,
@@ -277,16 +280,30 @@ test("DB 管理チャットの SQL の確認は安全性の確認と同じ名前
   assert.equal(single({ statements: 1, read_only: 0, change: 0, blocked: 1 }), "実行できない文です");
 });
 
-test("span の無い記録は古い形式（終端だけの記録は古い形式ではない）", () => {
+test("span の無い記録（段だけのイベント）は span の記録ではない", () => {
   const legacy: ChatProgressEvent[] = [
     { schema_version: 1, seq: 1, target_id: "j1", attempt: 0, emitted_at: created, type: "step", step_id: "prepare_context", status: "done" },
     { schema_version: 1, seq: 2, target_id: "j1", attempt: 0, emitted_at: created, type: "terminal", status: "done" },
   ];
   assert.equal(chatProgressHasSpans(legacy), false);
-  assert.equal(chatProgressIsLegacy(legacy), true);
-  assert.equal(chatProgressIsLegacy([]), true);
-  assert.equal(chatProgressIsLegacy(legacy.slice(1)), false);
-  assert.equal(chatProgressIsLegacy(events({ queue: { status: "done" } }, "done")), false);
+  assert.equal(chatProgressHasSpans(events({ queue: { status: "done" } }, "done")), true);
+});
+
+test("処理の経過の API は記録ごと（#3226 の案 A）で、応答のイベントと書けなかった span の数を読む", () => {
+  assert.equal(jobTracePath("job/1"), "/api/nl2sql/jobs/job%2F1/trace");
+  assert.equal(historyTracePath("h 1"), "/api/nl2sql/history/h%201/trace");
+  assert.equal(
+    dbAdminChatTurnTracePath("c1", "t1"),
+    "/api/nl2sql/db-admin-chat/conversations/c1/turns/t1/trace",
+  );
+  const snapshot = events({ queue: { status: "done" } }, "done");
+  assert.deepEqual(parseTraceProgressResponse({ events: snapshot, dropped_spans: 2 }), {
+    events: snapshot,
+    droppedSpans: 2,
+  });
+  // 形の違う値は空・0 にする（未検証の入力）。
+  assert.deepEqual(parseTraceProgressResponse({ events: "x", dropped_spans: -1 }), { events: [], droppedSpans: 0 });
+  assert.deepEqual(parseTraceProgressResponse(null), { events: [], droppedSpans: 0 });
 });
 
 test("全体の所要時間はジョブの作成から終了まで（終わっていなければ出さない）", () => {

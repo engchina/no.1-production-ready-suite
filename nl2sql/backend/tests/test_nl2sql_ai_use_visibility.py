@@ -135,7 +135,7 @@ def test_chat_detail_and_operations_hide_other_users_chats(chats: dict[str, str]
         lambda: router.rename_sql_chat(other, SqlChatUpdateRequest(title="x"), _http(ALICE)),
         lambda: router.delete_sql_chat(other, _http(ALICE)),
         lambda: router.get_job(other, _http(ALICE)),
-        lambda: router.get_job_progress(other, _http(ALICE)),
+        lambda: router.get_job_trace(other, _http(ALICE)),
         lambda: router.cancel_job(other, _http(ALICE)),
         lambda: router.execute_chat_turn(other, _http(ALICE)),
         lambda: router.take_chat_execution_result(other, _http(ALICE)),
@@ -265,7 +265,7 @@ def test_system_admin_cancels_answers_and_rates_other_users_chat(
     created = router.create_job(_chat_turn("多い順にして", alice_chat), _http(ADMIN)).data
     assert created is not None
     pending = created.job_id
-    assert router.get_job_progress(pending, _http(ALICE)).data is not None
+    assert router.get_job_trace(pending, _http(ALICE)).data is not None
     hidden: tuple[Callable[[], object], ...] = (
         lambda: router.get_job(pending, _http(BOB)),
         lambda: router.cancel_job(pending, _http(BOB)),

@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Check, ListChecks, Play, RefreshCw, Sparkles } from "lucide-react";
 import {
   ApiErrorBanner,
@@ -21,9 +21,9 @@ import {
   StatusBadge,
   TimedLoadingState,
   useChatAutoScroll,
+  useTraceDetailsLabels,
   useChatHistoryActions,
   useChatHistoryPanel,
-  useTraceDetailsLabels,
   withOptimisticChatStatus,
   type OptimisticChatMessage,
 } from "@production-ready/ui";
@@ -39,8 +39,9 @@ import { t } from "@/lib/i18n";
 import { randomUuid } from "@/lib/randomUuid";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 
-import { CHAT_PROGRESS_LABELS } from "./chatProgress";
+import { CHAT_PROGRESS_LABELS, dbAdminChatTurnTracePath, parseTraceProgressResponse } from "./chatProgress";
 import { ProgressLegacyNotice } from "./components/ProgressLegacyNotice";
+import { ProgressPartialNotice } from "./components/ProgressPartialNotice";
 import {
   Nl2SqlChatComposer,
   Nl2SqlChatHistoryList,
@@ -62,9 +63,9 @@ import {
   dbAdminChatConfirmed,
   dbAdminChatExecutionFromOutcome,
   dbAdminChatGenerateStep,
-  dbAdminChatProgress,
   dbAdminChatSavedExecutions,
   dbAdminChatStatementKind,
+  dbAdminChatTraceProgress,
   dbAdminExecutionSucceeded,
   type DbAdminChatExecution,
   type DbAdminChatRunAll,
@@ -147,11 +148,15 @@ export function DbAdminChatPage() {
   const conversation = useQuery({
     queryKey: [...chatKey, conversationId],
     enabled: active && Boolean(conversationId),
-    queryFn: ({ signal }) =>
-      apiGet<DbAdminChatData>(conversationPath(conversationId), {
+    queryFn: async ({ signal }) => {
+      const data = await apiGet<DbAdminChatData>(conversationPath(conversationId), {
         signal,
         timeoutMs: API_TIMEOUT_MS.interactiveDetail,
-      }),
+      });
+      // ターンの処理の経過も一緒に読み、会話を 1 回で描く（#3226 の案 A。読めなければ経過を出さない）。
+      await prefetchDbAdminChatTurnTraces(queryClient, conversationId, data.turns);
+      return data;
+    },
   });
   const turns = useMemo(() => conversation.data?.turns ?? [], [conversation.data]);
   // 開いている会話が他の利用者の物か（system_admin だけが開ける。#1928・#1954）。
@@ -481,6 +486,37 @@ function useDbAdminChatExecutions(turn: DbAdminChatTurnData) {
   return { executions, update };
 }
 
+/** ターンの処理の経過の cache の key（ターンの span は生成の後に変わらない。会話の取り直しで無効にしない）。 */
+function dbAdminChatTraceKey(conversationId: string, turnId: string) {
+  return ["nl2sql", "db-admin-chat-trace", conversationId, turnId] as const;
+}
+
+async function fetchDbAdminChatTurnTrace(conversationId: string, turnId: string, signal?: AbortSignal) {
+  return parseTraceProgressResponse(
+    await apiGet<unknown>(dbAdminChatTurnTracePath(conversationId, turnId), {
+      signal,
+      timeoutMs: API_TIMEOUT_MS.interactiveDetail,
+    }),
+  );
+}
+
+/** 会話のターンの処理の経過を読んでおく（読めなかったターンは経過を出さない。会話の表示は止めない）。 */
+async function prefetchDbAdminChatTurnTraces(
+  queryClient: QueryClient,
+  conversationId: string,
+  turns: readonly DbAdminChatTurnData[],
+) {
+  await Promise.all(
+    turns.map((turn) =>
+      queryClient.prefetchQuery({
+        queryKey: dbAdminChatTraceKey(conversationId, turn.turn_id),
+        staleTime: Number.POSITIVE_INFINITY,
+        queryFn: ({ signal }) => fetchDbAdminChatTurnTrace(conversationId, turn.turn_id, signal),
+      }),
+    ),
+  );
+}
+
 /**
  * 1 往復の回答（生成した SQL の文ごとの分類・実行・結果、「すべて実行」、失敗の分析）。
  * 文ごとの区画は SQL Developer などのワークシートと同じく、番号・分類・SQL・コピー・「実行」・その文の結果（#2333）。
@@ -498,8 +534,22 @@ function DbAdminChatTurn({
 }) {
   const queryClient = useQueryClient();
   const { plan } = turn;
+  // 生成したときの span の木（#3226 の案 A）。span は共通の span の表にあり、ターンの処理の経過の API で 1 回読む
+  // （生成は同期の要求なので、表示するときには終わっていて変わらない）。会話を開くときに会話と一緒に読んでおき
+  // （`prefetchDbAdminChatTurnTraces`）、ターンを 1 回で描く（ターンごとに後から高さが変わると、会話の欄が末尾から
+  // ずれる）。
   const traceLabels = useTraceDetailsLabels();
-  const progress = useMemo(() => dbAdminChatProgress(turn, traceLabels), [turn, traceLabels]);
+  const trace = useQuery({
+    queryKey: dbAdminChatTraceKey(conversationId, turn.turn_id),
+    enabled: Boolean(conversationId),
+    staleTime: Number.POSITIVE_INFINITY,
+    queryFn: ({ signal }) => fetchDbAdminChatTurnTrace(conversationId, turn.turn_id, signal),
+  });
+  const progress = useMemo(() => dbAdminChatTraceProgress(turn.turn_id, trace.data, traceLabels), [
+    turn.turn_id,
+    trace.data,
+    traceLabels,
+  ]);
   const [runAllConfirmation, setRunAllConfirmation] = useState("");
   const { executions, update } = useDbAdminChatExecutions(turn);
   const refreshSchemaReadModels = useCallback(() => {
@@ -617,6 +667,7 @@ function DbAdminChatTurn({
             steps={progress.steps}
             traceId={progress.traceId}
             labels={CHAT_PROGRESS_LABELS}
+            footer={progress.partial ? <ProgressPartialNotice testId={`${TEST_ID}-progress-partial`} /> : undefined}
             testId={`${TEST_ID}-progress`}
           />
         )}

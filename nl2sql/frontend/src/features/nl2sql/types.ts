@@ -1,4 +1,3 @@
-import type { ChatProgressEvent } from "@production-ready/ui";
 import type { ChatAttachmentApiReference } from "@production-ready/ui";
 
 import type { OntologyGraph } from "./ontology/types";
@@ -649,13 +648,16 @@ export interface JobCreateData {
   status: JobStatus;
   created_at: string;
   steps: JobStepData[];
-  /** 作成時の処理の段階のイベント（開始待ちと 5 段階。#1359）。未検証の入力なので `parseChatProgressEvents` を通す。 */
-  progress_events?: ChatProgressEvent[];
 }
 
 export interface JobData {
-  trace_segments?: unknown[];
-  trace_summary?: unknown;
+  /**
+   * 処理の経過の trace id（#3226 の案 A）。span は共通の span の表にあり、処理の経過は
+   * `GET /api/nl2sql/jobs/{job_id}/trace` で読む。worker が受け取る前は空。
+   */
+  trace_id?: string;
+  /** 書けなかった span の数（1 以上なら「一部の処理だけを記録しています」）。 */
+  trace_dropped_spans?: number;
   job_id: string;
   /** チャットの質問に添付したファイル（#2517）。 */
   attachments?: ChatAttachmentApiReference[];
@@ -696,11 +698,6 @@ export interface JobData {
   attempt?: number;
   /** チャットのターンの SQL を最後に実行したときの要約（行は保存しない。#1154）。 */
   last_execution?: SqlChatExecutionSummary | null;
-  /**
-   * 処理の段階のイベント（3 製品共通の契約。#1359）。チャットの段階（`ChatProgress`）はこれを積んで出す。
-   * API の応答は未検証の入力なので `parseChatProgressEvents` を通す。
-   */
-  progress_events?: ChatProgressEvent[];
   /**
    * 会話の持ち主以外（system_admin）が送ったターンの送り手の表示名（#1928）。持ち主が送ったターンは
    * null（または無し）、表示名を引けない利用者（削除済みなど）は空。
@@ -749,9 +746,10 @@ export interface SqlChatExecuteData {
 }
 
 export interface HistoryItem {
-  progress_events?: ChatProgressEvent[];
-  trace_segments?: unknown[];
-  trace_summary?: unknown;
+  /** 実行したジョブと処理の経過の trace id（#3226 の案 A。処理の経過は `GET /api/nl2sql/history/{id}/trace`）。 */
+  job_id?: string;
+  trace_id?: string;
+  trace_dropped_spans?: number;
   generation_only?: boolean;
   id: string;
   question: string;
@@ -1433,8 +1431,12 @@ export interface DbAdminChatTurn {
   sender_display_name?: string | null;
   /** 回答の注意書き（システム設定の文。#2405）。この機能より前のターンは null / 未指定。 */
   notice?: string | null;
-  /** 生成したときの処理の経過（生成と SQL の確認の span の木。#3226）。古いターンには無い。 */
-  progress_events?: unknown;
+  /**
+   * 生成したときの処理の経過の trace id（#3226 の案 A）。span は共通の span の表にあり、処理の経過は
+   * `GET .../turns/{turn_id}/trace` で読む。古いターンには無い。
+   */
+  trace_id?: string;
+  trace_dropped_spans?: number;
 }
 
 /** DB 管理チャットの会話（#2319。チャットの会話と同じ見え方の項目）。 */

@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 import pytest
 from pr_backend_core.chat_progress import fold_chat_progress_events
+from trace_span_fake import TraceTable, trace_table  # noqa: F401 - fixture
 
 from app.features.nl2sql.db_admin_chat import (
     forbidden_statement_error,
@@ -42,6 +43,7 @@ from app.features.nl2sql.service import (
     _split_sql_statements,
 )
 from app.features.nl2sql.store import MemoryNl2SqlStore
+from app.features.nl2sql.trace_spans import read_trace_progress
 from app.security.request_actor import actor_scope
 
 
@@ -835,24 +837,41 @@ def test_generate_returns_plan_without_executing() -> None:
     assert "前の質問" in call["context"]
 
 
-def _progress_steps(events: list[Any]) -> dict[str, Any]:
+def _progress_steps(data: Any, table: TraceTable, *, turn_id: str) -> dict[str, Any]:
+    """生成の処理の経過（span の表から読む。工程の詳細は生成の結果から足す）。"""
+    table.flush()
+    events = read_trace_progress(
+        target_id=turn_id,
+        operation_id=turn_id,
+        trace_id=data.trace_id,
+        owner_user_uuid="",
+        viewer_is_admin=True,
+        terminal="done",
+        details=data.span_details,
+    ).events
     fold = fold_chat_progress_events(events)
     return {step.kind: step for step in fold.step_list() if not (step.span or {}).get("root")}
 
 
-def test_generate_records_the_generation_and_check_as_span_tree() -> None:
-    """処理の経過は生成と SQL の確認の span の木（#3226）。ターンの ID を対象に記録して返す。"""
+def test_generate_records_the_generation_and_check_as_span_tree(
+    trace_table: TraceTable,  # noqa: F811
+) -> None:
+    """処理の経過は生成と SQL の確認の span の木（#3226 の案 A）。
+
+    ターンの ID の span として表に書く。
+    """
     ai = _FakeEnterpriseAi(
         [{"sql": "SELECT QTY FROM APP.ITEM_STOCK; DROP TABLESPACE TS1", "explanation": ""}]
     )
     service = _catalog_service(_FakeAdapter(), ai)
     data = service.generate_db_admin_chat_sql("合成の質問", operation_id="turn-1")
-    events = data.progress_events
-    assert {event.target_id for event in events} == {"turn-1"}
-    assert [event.seq for event in events] == list(range(1, len(events) + 1))
-    fold = fold_chat_progress_events(events)
-    assert fold.terminal == "done"
-    steps = _progress_steps(events)
+    assert data.trace_id and data.trace_dropped_spans == 0
+    steps = _progress_steps(data, trace_table, turn_id="turn-1")
+    rows = trace_table.db.spans(trace_id=data.trace_id)
+    assert {row["operation_id"] for row in rows} == {"turn-1"}
+    assert {row["product"] for row in rows} == {"nl2sql"}
+    # 工程の詳細（生成した SQL）は表に入れない（ターンに置く）。
+    assert "ITEM_STOCK" not in str(rows)
     assert list(steps) == ["generate_sql", "db_admin_check"]
     generate, check = steps["generate_sql"], steps["db_admin_check"]
     assert generate.status == "done" and generate.params == {"engine": "enterprise_ai_direct"}
@@ -865,15 +884,17 @@ def test_generate_records_the_generation_and_check_as_span_tree() -> None:
     fields = {field.label: field.value for field in check.details.fields}
     assert fields["文の数"] == "2" and fields["実行できない文"] == "#2"
     # 2 つの段は同じ実行の全体（root）の子。
-    [root] = [step for step in fold.step_list() if (step.span or {}).get("root")]
-    assert {step.span["parent_id"] for step in steps.values() if step.span} == {root.step_id}
+    [root] = [row for row in rows if row["is_root"]]
+    assert {step.span["parent_id"] for step in steps.values() if step.span} == {root["span_id"]}
 
 
-def test_generate_fails_the_check_when_every_statement_is_blocked() -> None:
+def test_generate_fails_the_check_when_every_statement_is_blocked(
+    trace_table: TraceTable,  # noqa: F811
+) -> None:
     ai = _FakeEnterpriseAi([{"sql": "DROP TABLESPACE TS1", "explanation": ""}])
     service = _catalog_service(_FakeAdapter(), ai)
-    data = service.generate_db_admin_chat_sql("合成の質問")
-    check = _progress_steps(data.progress_events)["db_admin_check"]
+    data = service.generate_db_admin_chat_sql("合成の質問", operation_id="turn-2")
+    check = _progress_steps(data, trace_table, turn_id="turn-2")["db_admin_check"]
     assert check.status == "failed"
     assert check.params == {"statements": 1, "read_only": 0, "change": 0, "blocked": 1}
 

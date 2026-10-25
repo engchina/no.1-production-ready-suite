@@ -8,12 +8,19 @@ import {
   dbAdminChatConfirmed,
   dbAdminChatExecutionFromOutcome,
   dbAdminChatGenerateStep,
-  dbAdminChatProgress,
   dbAdminChatSavedExecutions,
   dbAdminChatStatementKind,
+  dbAdminChatTraceProgress,
   dbAdminExecutionSucceeded,
   dbAdminFailureText,
 } from "../src/features/nl2sql/dbAdminChat.ts";
+import { CHAT_PROGRESS_STEP_DEFINITIONS } from "../src/features/nl2sql/chatProgress.ts";
+import {
+  chatProgressHasSpans,
+  chatProgressStepsFromEvents,
+  chatProgressTraceIdOf,
+  parseChatProgressEvents,
+} from "@production-ready/ui";
 import type {
   DbAdminChatExecuteData,
   DbAdminChatPlan,
@@ -117,48 +124,70 @@ test("「すべて実行」は SELECT だけなら確認語なし、変える文
   assert.equal(dbAdminChatCanRunAll(plan([]), ""), false);
 });
 
-/** backend が生成のときに記録する span の木（生成 → SQL の確認。合成の値。#3226）。 */
-function generationEvents(checkStatus: "done" | "failed"): unknown[] {
+/**
+ * ターンの処理の経過の API が返す span の表の snapshot（生成 → SQL の確認。span ごとに 1 件と終端。合成の値。
+ * #3226 の案 A）。
+ */
+function generationSnapshot(checkStatus: "done" | "failed"): unknown[] {
   const root = "0".repeat(16);
   const traceId = "c".repeat(32);
   const event = (seq: number, value: Record<string, unknown>) => ({
     schema_version: 1, seq, target_id: "turn-1", attempt: 0, emitted_at: "2026-10-23T00:00:04Z", type: "step",
     trace_id: traceId, started_at: "2026-10-23T00:00:01Z", ...value,
   });
-  const generate = { step_id: "1".padStart(16, "0"), kind: "generate_sql", name: "nl2sql.generate_sql", parent_id: root, params: { engine: "enterprise_ai_direct" } };
-  const check = { step_id: "2".padStart(16, "0"), kind: "db_admin_check", name: "nl2sql.safety_check", parent_id: root, params: { statements: 2, read_only: 1, change: 0, blocked: 1 } };
   return [
-    event(1, { step_id: root, name: "nl2sql.db_admin_chat", root: true, status: "running" }),
-    event(2, { ...generate, status: "running" }),
-    event(3, { ...generate, status: "done", finished_at: "2026-10-23T00:00:03Z" }),
-    event(4, { ...check, status: "running" }),
-    event(5, { ...check, status: checkStatus, finished_at: "2026-10-23T00:00:04Z" }),
-    event(6, { step_id: root, name: "nl2sql.db_admin_chat", root: true, status: "done", finished_at: "2026-10-23T00:00:04Z" }),
-    { schema_version: 1, seq: 7, target_id: "turn-1", attempt: 0, emitted_at: "2026-10-23T00:00:04Z", type: "terminal", status: "done" },
+    event(1, { step_id: root, name: "nl2sql.db_admin_chat", root: true, status: "done", finished_at: "2026-10-23T00:00:04Z" }),
+    event(2, {
+      step_id: "1".padStart(16, "0"), kind: "generate_sql", name: "nl2sql.generate_sql", parent_id: root,
+      params: { engine: "enterprise_ai_direct" }, status: "done", finished_at: "2026-10-23T00:00:03Z",
+    }),
+    event(3, {
+      step_id: "2".padStart(16, "0"), kind: "db_admin_check", name: "nl2sql.safety_check", parent_id: root,
+      params: { statements: 2, read_only: 1, change: 0, blocked: 1 }, status: checkStatus,
+      finished_at: "2026-10-23T00:00:04Z",
+    }),
+    { schema_version: 1, seq: 4, target_id: "turn-1", attempt: 0, emitted_at: "2026-10-23T00:00:04Z", type: "terminal", status: "done" },
   ];
 }
 
-test("処理の経過は生成のときに記録した span の木（生成 → SQL の確認。実行の段を足さない。#3226）", () => {
-  const progress = dbAdminChatProgress({ turn_id: "turn-1", progress_events: generationEvents("done") });
-  assert.equal(progress.legacy, false);
-  assert.equal(progress.traceId, "c".repeat(32));
+function generationSteps(checkStatus: "done" | "failed") {
+  const events = parseChatProgressEvents(generationSnapshot(checkStatus));
+  return { steps: chatProgressStepsFromEvents(events, CHAT_PROGRESS_STEP_DEFINITIONS, "turn-1"), events };
+}
+
+test("処理の経過は生成のときの span の木（生成 → SQL の確認。実行の段を足さない。#3226）", () => {
+  const { steps, events } = generationSteps("done");
+  assert.equal(chatProgressHasSpans(events), true);
+  assert.equal(chatProgressTraceIdOf(events), "c".repeat(32));
   assert.deepEqual(
-    progress.steps.map((step) => [step.label, step.status]),
+    steps.map((step) => [step.label, step.status]),
     [
       ["SQL を生成しました", "done"],
       ["SQL の安全性を確認しました", "done"],
     ],
   );
-  assert.equal(progress.steps[0]?.detail, "Enterprise AI");
+  assert.equal(steps[0]?.detail, "Enterprise AI");
   // 止める文があっても、ほかの文は実行できる（backend が段を完了にする）。補足は文の分類ごとの数。
-  assert.equal(progress.steps[1]?.detail, "読み取り専用 1・実行できない 1");
-  assert.equal(progress.steps.some((step) => step.label.includes("実行")), false);
-  const allBlocked = dbAdminChatProgress({ turn_id: "turn-1", progress_events: generationEvents("failed") });
-  assert.equal(allBlocked.steps[1]?.status, "failed");
+  assert.equal(steps[1]?.detail, "読み取り専用 1・実行できない 1");
+  assert.equal(steps.some((step) => step.label.includes("実行")), false);
+  assert.equal(generationSteps("failed").steps[1]?.status, "failed");
 });
 
-test("span の無い古いターンは古い形式、送信中は生成の仮の行", () => {
-  assert.equal(dbAdminChatProgress({ turn_id: "turn-old" }).legacy, true);
+test("ターンの処理の経過: span の無い古いターンは古い形式、書けなかった span があれば一部だけの記録", () => {
+  const legacy = [{ schema_version: 1, seq: 1, target_id: "turn-old", attempt: 0, emitted_at: "2026-10-23T00:00:04Z", type: "terminal", status: "done" }];
+  assert.equal(dbAdminChatTraceProgress("turn-old", { events: legacy, droppedSpans: 0 }).legacy, true);
+  const partial = dbAdminChatTraceProgress("turn-old", { events: legacy, droppedSpans: 3 });
+  assert.equal(partial.legacy, false);
+  assert.equal(partial.partial, true);
+  // まだ読めていないターンは何も出さない（古い形式とも出さない）。
+  assert.deepEqual(dbAdminChatTraceProgress("turn-1", undefined), { steps: [], legacy: false, partial: false });
+  const done = dbAdminChatTraceProgress("turn-1", { events: generationSnapshot("done"), droppedSpans: 0 });
+  assert.equal(done.legacy, false);
+  assert.equal(done.traceId, "c".repeat(32));
+  assert.equal(done.steps.length, 2);
+});
+
+test("送信中は生成の仮の行", () => {
   const pending = dbAdminChatGenerateStep("running", 1_000);
   assert.equal(pending.status, "running");
   assert.equal(pending.label, "SQL を生成しています");

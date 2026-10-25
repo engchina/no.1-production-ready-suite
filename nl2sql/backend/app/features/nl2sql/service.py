@@ -51,24 +51,15 @@ from pr_backend_core.chat_history import (
 )
 from pr_backend_core.chat_history_window import chat_history_cutoff, within_chat_history
 from pr_backend_core.chat_progress import (
-    ChatProgressPage,
     ChatProgressParamValue,
-    ChatProgressRecorder,
     ChatProgressStepDetails,
-    ChatProgressStepEvent,
-    ChatProgressTerminalEvent,
     chat_progress_details,
-    chat_progress_page,
-    dump_chat_progress_events,
-    parse_chat_progress_events,
 )
 from pr_backend_core.observability.request_context import bind_log_context
 from pr_backend_core.observability.tracing import (
     SpanDisplay,
     SpanListener,
     SpanUpdate,
-    TraceSummary,
-    append_trace_segment,
     attach_trace_context,
     capture_trace_context,
     finish_operation_trace,
@@ -428,6 +419,7 @@ from .models import (
     SyntheticDataOperationData,
     SyntheticDataResultsData,
     TimingEnvelope,
+    TraceProgressData,
 )
 from .object_identity import (
     OracleObjectIdentity,
@@ -492,6 +484,15 @@ from .tabular_files import (
     read_workbook_sheets,
     select_workbook_sheet,
     validate_tabular_text_signature,
+)
+from .trace_spans import (
+    TraceTerminal,
+    combined_listener,
+    read_trace_progress,
+    span_details_of,
+    trace_links,
+    trace_span_dropped,
+    trace_span_listener,
 )
 
 logger = logging.getLogger(__name__)
@@ -3975,20 +3976,24 @@ class StoredJob:
     conversation_owner_user_uuid: str = ""
     # 実行のきっかけ（MCP の入口が決める。画面のジョブは空。実行履歴の行に残す。#1986）。
     origin: JobOrigin = field(default_factory=JobOrigin)
-    # 処理の段階のイベント（3 製品共通の契約。#1359）。記録は `_record_job_progress` だけで行う。
-    progress_events: list[ChatProgressStepEvent | ChatProgressTerminalEvent] = field(
-        default_factory=list
-    )
+    # worker の実行の trace の親（MCP の入口の span。サービストークンの要求なら Agent の span の
+    # 下）。画面の要求のジョブは空で、worker が新しい trace を始める（#3226）。
     trace_context: dict[str, str] = field(default_factory=dict)
-    trace_summary: TraceSummary | None = None
-    trace_segments: list[TraceSummary] = field(default_factory=list)
+    # 画面の要求の span context（新しい trace の root に span link として結ぶ。表の親子にしない）。
+    trace_link_context: dict[str, str] = field(default_factory=dict)
+    # 処理の経過（#3226 の案 A）: span は共通の span の表にあり、ジョブには実行の trace id・
+    # 書けなかった span の数（実行を確定するときに保存）・工程の詳細（span id → 詳細。表には
+    # 入れない内容）を置く。
+    trace_id: str = ""
+    trace_dropped_spans: int = 0
+    span_details: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
-class JobProgressData:
-    """ジョブの処理の段階のイベント（polling の応答）と、route がアクセスを判定する値。"""
+class JobTraceData:
+    """ジョブの処理の経過（span の表の snapshot）と、route がアクセスを判定する値。"""
 
-    page: ChatProgressPage
+    trace: TraceProgressData
     profile_id: str
     chat: bool
 
@@ -4056,48 +4061,64 @@ def _job_progress_attempt(job: StoredJob) -> int:
     return max(0, job.attempt - 1)
 
 
-def _job_progress_recorder(job: StoredJob) -> ChatProgressRecorder:
-    """保存済みのイベントから記録を作り直す（別の worker が引き継いでも続きの番号から記録する）。
+def _job_trace_terminal(job: StoredJob) -> TraceTerminal | None:
+    """処理の経過の終端（正本はジョブの状態。SQL の遮断・実行の失敗は失敗、停止は停止）。"""
 
-    試行が増えていれば（引き継いだ実行）、記録は段階の一覧を空にして新しい試行を始める。
+    if job.status == JobStatus.DONE:
+        return "done"
+    if job.status == JobStatus.ERROR:
+        return "cancelled" if job.error_code == JOB_CANCELLED_ERROR_CODE else "failed"
+    return None
+
+
+def _job_trace_dropped(job: StoredJob) -> int:
+    """書けなかった span の数（この process の書き手の数と、保存済みの数の大きい方）。"""
+
+    return max(job.trace_dropped_spans, trace_span_dropped(job.trace_id))
+
+
+_TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _trace_id_of(value: object) -> str:
+    """保存した trace id（形の違う値は捨てる）。"""
+
+    return value if isinstance(value, str) and _TRACE_ID_RE.fullmatch(value) else ""
+
+
+def _non_negative_int(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return 0
+    try:
+        return max(0, int(value))
+    except ValueError:
+        return 0
+
+
+def _span_details_of(value: object) -> dict[str, dict[str, Any]]:
+    """保存した工程の詳細（span id → 詳細）。
+
+    形の違う要素は捨てる。中身は読むときに共通の規則で検証する。
     """
 
-    return ChatProgressRecorder(
-        job.job_id, attempt=_job_progress_attempt(job), events=job.progress_events
-    )
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        str(key): dict(item)
+        for key, item in value.items()
+        if isinstance(key, str) and isinstance(item, Mapping)
+    }
 
 
-def _record_job_progress_span(job: StoredJob, update: SpanUpdate) -> bool:
-    """span の開始・表示用のデータの変更・終了を、ジョブの処理の経過に記録する（#3226）。
+def _record_job_span_details(job: StoredJob, update: SpanUpdate) -> None:
+    """span の工程の詳細をジョブに置く。
 
-    呼ぶ側はジョブの lock の中で呼ぶ。記録したかを返す。終端の後の span（実行の全体の終了など）は
-    記録しない。保存は呼ぶ側の続く保存に任せる（結果の整形は結果の保存まで実行中のまま。#1176）。
+    呼ぶ側はジョブの lock の中で呼ぶ。保存は続く保存に任せる。
     """
 
-    recorder = _job_progress_recorder(job)
-    if recorder.terminal is not None or recorder.record_span(update) is None:
-        return False
-    job.progress_events = recorder.events
-    return True
-
-
-def _record_job_progress_finished(job: StoredJob, *, failed: bool, at: str | None) -> None:
-    """完了: 処理の経過を終端にする（SQL の遮断・実行の失敗は失敗）。
-
-    この記録は保存する完了の snapshot に入れる（結果の整形の終了も同じ保存で出る。#1176）。
-    """
-
-    recorder = _job_progress_recorder(job)
-    recorder.complete("failed" if failed else "done", at=_parse_job_time(at))
-    job.progress_events = recorder.events
-
-
-def _record_job_progress_failed(job: StoredJob, *, cancelled: bool) -> None:
-    """失敗・停止: 処理の経過を終端にする（実行中の span は失敗、停止なら未実行）。"""
-
-    recorder = _job_progress_recorder(job)
-    recorder.complete("cancelled" if cancelled else "failed", at=_parse_job_time(job.finished_at))
-    job.progress_events = recorder.events
+    details = span_details_of(update)
+    if details is not None:
+        job.span_details[update.span_id] = details
 
 
 def _job_progress_tables_params(tables: Sequence[str]) -> JobProgressParams | None:
@@ -5691,7 +5712,9 @@ class Nl2SqlService:
 
     def _persist_job(self, job_id: str) -> None:
         with self._lock:
-            job = replace(self._jobs[job_id])
+            # 工程の詳細は span の listener が lock の中で足すので、lock の中で写しを取る（#3226）。
+            current = self._jobs[job_id]
+            job = replace(current, span_details=dict(current.span_details))
         self._persist_job_snapshot(job)
 
     def _snapshot_locked(self) -> dict[str, Any]:
@@ -5719,29 +5742,19 @@ class Nl2SqlService:
         }
 
     def _job_to_snapshot(self, job: StoredJob) -> dict[str, Any]:
-        if job.status in {JobStatus.DONE, JobStatus.ERROR}:
-            summary = finish_operation_trace(
-                job.job_id,
-                status=(
-                    "cancelled"
-                    if job.error_code == JOB_CANCELLED_ERROR_CODE
-                    else "failed"
-                    if job.status == JobStatus.ERROR
-                    else "done"
-                ),
-            )
-            if summary is not None:
-                job.trace_summary = summary
-                job.trace_segments = append_trace_segment(
-                    job.trace_segments, summary, limit=get_settings().trace_ui_max_segments
-                )
+        terminal = _job_trace_terminal(job)
+        if terminal is not None:
+            # 実行の全体の span を記録の終端で閉じる（実行中の process の中だけ。別の実行の記録には
+            # 触れない）。書けなかった span の数はこの確定の保存に入れる（#3226 の案 A）。
+            finish_operation_trace(job.job_id, status=terminal)
+            job.trace_dropped_spans = _job_trace_dropped(job)
         return {
             "job_id": job.job_id,
             "trace_context": validated_trace_context(job.trace_context),
-            "trace_segments": [item.model_dump(mode="json") for item in job.trace_segments],
-            "trace_summary": job.trace_summary.model_dump(mode="json")
-            if job.trace_summary
-            else None,
+            "trace_link_context": validated_trace_context(job.trace_link_context),
+            "trace_id": job.trace_id,
+            "trace_dropped_spans": job.trace_dropped_spans,
+            "span_details": job.span_details,
             "conversation_id": job.conversation_id,
             "chat_root": "1"
             if job.request.is_chat_turn and not job.request.previous_job_id and not job.chat_deleted
@@ -5775,7 +5788,6 @@ class Nl2SqlService:
             "heartbeat_at": job.heartbeat_at,
             "lease_expires_at": job.lease_expires_at,
             "attempt": job.attempt,
-            "progress_events": dump_chat_progress_events(job.progress_events),
             # 他 worker / 再起動後の読込側が「更新が途絶えた in-flight job」を判定する基準。
             "updated_at": _utc_now(),
         }
@@ -5813,7 +5825,6 @@ class Nl2SqlService:
             job.steps[failure_index] = job.steps[failure_index].model_copy(
                 update={"status": JobStepStatus.ERROR, "finished_at": job.finished_at}
             )
-        _record_job_progress_failed(job, cancelled=False)
 
     @staticmethod
     def _job_lease_expired(job: StoredJob) -> bool:
@@ -5899,16 +5910,10 @@ class Nl2SqlService:
         return StoredJob(
             job_id=str(data["job_id"]),
             trace_context=validated_trace_context(data.get("trace_context")),
-            trace_segments=[
-                TraceSummary.model_validate(item)
-                for item in data.get("trace_segments", [])
-                if isinstance(item, dict)
-            ]
-            if isinstance(data.get("trace_segments", []), list)
-            else [],
-            trace_summary=TraceSummary.model_validate(data["trace_summary"])
-            if isinstance(data.get("trace_summary"), dict)
-            else None,
+            trace_link_context=validated_trace_context(data.get("trace_link_context")),
+            trace_id=_trace_id_of(data.get("trace_id")),
+            trace_dropped_spans=_non_negative_int(data.get("trace_dropped_spans")),
+            span_details=_span_details_of(data.get("span_details")),
             conversation_id=str(data.get("conversation_id") or ""),
             request=JobCreateRequest.model_validate(
                 data["request"], context={STORED_JOB_REQUEST_CONTEXT: True}
@@ -5943,8 +5948,6 @@ class Nl2SqlService:
                 if data.get("last_execution")
                 else None
             ),
-            # 形の違う記録（#1359 より前のジョブには無い）は捨てる。
-            progress_events=parse_chat_progress_events(data.get("progress_events")),
             chat_title=str(data.get("chat_title") or ""),
             chat_deleted=_coerce_bool(data.get("chat_deleted", False)),
             conversation_owner_user_uuid=str(data.get("conversation_owner_user_uuid") or ""),
@@ -8634,8 +8637,8 @@ class Nl2SqlService:
     ) -> None:
         """job の段階（`steps`）を進めて保存する。
 
-        処理の経過（`progress_events`）は段の span が記録する（#3226）。終わった段の span の
-        記録もこの保存で出る（`_record_job_progress_span`）。実行所有権は保存（`_persist_job` の
+        処理の経過は段の span が共通の span の表に書く（#3226 の案 A。この保存を待たない）。工程の
+        詳細（`span_details`）はこの保存で出る。実行所有権は保存（`_persist_job` の
         fence 付きの更新）で確かめる。保存の前に読み直さない（stage ごとの往復を減らす。#830）。
         """
 
@@ -8773,9 +8776,16 @@ class Nl2SqlService:
         # 確定にはオントロジーの runtime の lock と DB の読み取りが要り、その lock は別の処理
         # （オントロジーの同期・前のジョブの結果の整形など）が DB I/O の間も持つことがある。投入の
         # 要求の中で待つと、job ID を返せないまま画面の上限（120 秒）を超える。
+        # 要求の span context。MCP の入口（`mcp_server_trace`。サービストークンの要求は Agent の
+        # span の下、API キーの要求は新しい trace）のジョブはその下で実行する。画面の要求の
+        # ジョブは、ブラウザが送った traceparent を表の親子に使わないよう新しい trace にし、
+        # span link で結ぶ（#3226）。
+        request_context = capture_trace_context()
+        from_mcp = origin is not None and bool(origin.run_source)
         job = StoredJob(
             job_id=job_id,
-            trace_context=capture_trace_context(),
+            trace_context=request_context if from_mcp else {},
+            trace_link_context={} if from_mcp else request_context,
             request=request,
             conversation_id=conversation_id,
             business_release_pending=request.use_ontology_context,
@@ -8795,7 +8805,6 @@ class Nl2SqlService:
             status=job.status,
             created_at=job.created_at,
             steps=[step.model_copy() for step in job.steps],
-            progress_events=list(job.progress_events),
         )
         dispatched = self._wake_nl2sql_job_if_needed(job)
         # 投入の受付（job ID）。worker の claim（`nl2sql_job_claimed`）・段階のログと job_id で
@@ -8879,7 +8888,6 @@ class Nl2SqlService:
             status=existing.status,
             created_at=existing.created_at,
             steps=[step.model_copy() for step in existing.steps],
-            progress_events=list(existing.progress_events),
         )
 
     @staticmethod
@@ -9207,18 +9215,18 @@ class Nl2SqlService:
             job, actor_user_uuid=actor_user_uuid, actor_can_manage=actor_can_manage
         )
 
-    def get_job_progress(
+    def get_job_trace(
         self,
         job_id: str,
         *,
-        since: int = 0,
         actor_user_uuid: str = "",
         actor_can_manage: bool = False,
-    ) -> JobProgressData | None:
-        """ジョブの処理の段階のイベントのうち `since` より後（polling・SSE の読み直し。#1359）。
+    ) -> JobTraceData | None:
+        """ジョブの処理の経過（共通の span の表の snapshot。#3226 の案 A）。
 
-        アクセスの判定は `get_job` と同じ。永続の job の文書を読むので、別の worker・別の
-        プロセスが記録していても届く。worker を起こさない（SSE は 1 秒ごとに読み直す）。
+        アクセスの判定は `get_job` と同じ（本人か system_admin。会話の持ち主はその会話のターンも）。
+        span は別の process（worker）・別の製品が書いていても、実行中から読める。最終の状態は
+        ジョブの状態（正本）で決める。worker を起こさない（画面は実行中に 1 秒ごとに読み直す）。
         """
 
         job = self._load_job_record(job_id)
@@ -9230,14 +9238,27 @@ class Nl2SqlService:
             actor_can_manage=actor_can_manage,
         )
         with self._lock:
-            events = list(job.progress_events)
+            terminal = _job_trace_terminal(job)
+            trace_id = job.trace_id
+            owner = job.actor_user_uuid
+            details = dict(job.span_details)
+            dropped = job.trace_dropped_spans
+            # trace id の無い終わった実行は、worker が始めていれば span の記録より前の形式。
+            legacy = job.started_at is not None
             profile_id = job.request.profile_id or "default"
             chat = job.request.is_chat_turn
-        return JobProgressData(
-            page=chat_progress_page(job_id, events, since=since),
-            profile_id=profile_id,
-            chat=chat,
+        progress = read_trace_progress(
+            target_id=job_id,
+            operation_id=job_id,
+            trace_id=trace_id,
+            owner_user_uuid=owner,
+            viewer_is_admin=actor_can_manage,
+            terminal=terminal,
+            details=details,
+            dropped_spans=dropped,
+            legacy=legacy,
         )
+        return JobTraceData(trace=progress, profile_id=profile_id, chat=chat)
 
     def _job_data_for_actor(
         self,
@@ -9255,8 +9276,8 @@ class Nl2SqlService:
         with self._lock:
             return JobData(
                 job_id=job.job_id,
-                trace_summary=job.trace_summary,
-                trace_segments=job.trace_segments,
+                trace_id=job.trace_id,
+                trace_dropped_spans=job.trace_dropped_spans,
                 business_release_id=job.business_release_id,
                 attachments=list(job.request.attachments),
                 status=job.status,
@@ -9289,7 +9310,6 @@ class Nl2SqlService:
                 steps=job.steps,
                 attempt=job.attempt,
                 last_execution=job.last_execution,
-                progress_events=list(job.progress_events),
             )
 
     def _chat_conversation_turns(
@@ -10901,6 +10921,27 @@ class Nl2SqlService:
         if not history_id.strip():
             return None
         return self._history_by_id(history_id)
+
+    def history_trace(self, item: HistoryItem, *, viewer_is_admin: bool) -> TraceProgressData:
+        """実行履歴の行の処理の経過（実行したジョブの span。#3226 の案 A）。
+
+        呼ぶ側が行の見え方（実行した人・会話の持ち主・system_admin）を判定した後に呼ぶ。行は終わった
+        実行なので、表で実行中のままの span は行の結果（遮断・実行の失敗は失敗）で閉じる。trace id
+        の
+        無い行（span の記録より前の形式・もう一度実行の行）は古い形式。
+        """
+
+        return read_trace_progress(
+            target_id=item.id,
+            operation_id=item.job_id,
+            trace_id=item.trace_id if item.job_id else "",
+            owner_user_uuid=item.actor_user_uuid,
+            viewer_is_admin=viewer_is_admin,
+            terminal="done" if item.safety_is_safe else "failed",
+            details=item.span_details,
+            dropped_spans=item.trace_dropped_spans,
+            legacy=True,
+        )
 
     def record_ontology_history(
         self,
@@ -17887,12 +17928,14 @@ class Nl2SqlService:
         history: Sequence[DbAdminChatHistoryTurn] = (),
         *,
         operation_id: str = "",
+        actor_user_uuid: str = "",
     ) -> DbAdminChatGenerateData:
         """質問から Oracle の SQL を作る（実行も保存もしない）。DB 全体が対象。
 
         `history` は同じ会話の前の往復（保存したターンから作る。#2319）。処理の経過は生成と
-        SQL の確認の span の木（#3226）で、`operation_id`（ターンの ID）を対象に記録して返す
-        （同期の要求なので、実行中は画面の送信中の表示だけ）。
+        SQL の確認の span の木（#3226 の案 A）で、`operation_id`（ターンの ID）の span として共通の
+        span の表に書き、trace id・書けなかった span の数・工程の詳細（span id → 詳細）を返す
+        （同期の要求なので、実行中は画面の送信中の表示だけ。保存したターンから読む）。
         """
 
         self._require_db_admin_chat_permission()
@@ -17901,15 +17944,27 @@ class Nl2SqlService:
         if not self._enterprise_ai_client.is_configured():
             raise DbAdminChatGenerationError(_DB_ADMIN_CHAT_MODEL_UNAVAILABLE, status_code=409)
         target_id = operation_id or str(uuid.uuid4())
-        recorder = ChatProgressRecorder(target_id)
-        recorder_lock = threading.Lock()
+        span_details: dict[str, dict[str, Any]] = {}
+        details_lock = threading.Lock()
 
-        def listen(update: SpanUpdate) -> None:
+        def keep_details(update: SpanUpdate) -> None:
             # 生成の中の thread からも知らされる。
-            with recorder_lock:
-                recorder.record_span(update)
+            details = span_details_of(update)
+            if details is not None:
+                with details_lock:
+                    span_details[update.span_id] = details
 
-        with operation_trace("nl2sql.db_admin_chat", operation_id=target_id, listener=listen):
+        listener = combined_listener(
+            # span の持ち主は送った人（読むときの見え方と同じ。無ければ要求の利用者）。
+            trace_span_listener(
+                operation_id=target_id,
+                owner_user_uuid=actor_user_uuid or current_actor_context().user_uuid,
+            ),
+            keep_details,
+        )
+        with operation_trace(
+            "nl2sql.db_admin_chat", operation_id=target_id, listener=listener
+        ) as summary:
             with observed_span(
                 "nl2sql.generate_sql",
                 attributes={"pr.stage": "generate_sql"},
@@ -17941,9 +17996,9 @@ class Nl2SqlService:
                     params=_db_admin_chat_check_params(plan),
                     details=_db_admin_chat_check_details(plan, plan_warnings, bool(repaired_sql)),
                 )
-        with recorder_lock:
-            recorder.complete("done")
-            progress_events = recorder.events
+        trace_id = summary.telemetry_trace_id or ""
+        with details_lock:
+            details = dict(span_details)
         return DbAdminChatGenerateData(
             question=question,
             explanation=generated.explanation.strip(),
@@ -17952,7 +18007,9 @@ class Nl2SqlService:
             model=self._enterprise_ai_client.model_id(),
             warnings=[*generated.warnings, *plan_warnings],
             timing=self._timing(created_at, started, "db_admin_chat_generate"),
-            progress_events=progress_events,
+            trace_id=trace_id,
+            trace_dropped_spans=trace_span_dropped(trace_id),
+            span_details=details,
         )
 
     def _generate_db_admin_chat_output(
@@ -18242,7 +18299,9 @@ class Nl2SqlService:
             for turn in turns[-_DB_ADMIN_CHAT_HISTORY_LIMIT:]
         ]
         sent_at = _utc_now()
-        generated = self.generate_db_admin_chat_sql(request.question, history, operation_id=turn_id)
+        generated = self.generate_db_admin_chat_sql(
+            request.question, history, operation_id=turn_id, actor_user_uuid=actor
+        )
         if keep_result is not None and not keep_result():
             logger.info(
                 "nl2sql_db_admin_chat_generation_discarded",
@@ -18262,7 +18321,9 @@ class Nl2SqlService:
             sender_user_uuid=None if owner == actor else actor,
             # 回答の注意書き（#2405）。SQL を作った後に、回答とは別の項目として付ける。
             notice=current_answer_notice(),
-            progress_events=generated.progress_events,
+            trace_id=generated.trace_id,
+            trace_dropped_spans=generated.trace_dropped_spans,
+            span_details=generated.span_details,
         )
         if conversation is None:
             store.create_conversation(
@@ -18275,6 +18336,29 @@ class Nl2SqlService:
         if saved is None:  # pragma: no cover - 直前に保存した会話が読めないのは DB の異常
             raise LookupError(conversation_id)
         return DbAdminChatSendData(conversation=saved, turn=turn)
+
+    def db_admin_chat_turn_trace(
+        self, conversation_id: str, turn_id: str, *, actor: str, all_users: bool
+    ) -> TraceProgressData:
+        """DB 管理チャットのターンの処理の経過（生成のときの span。#3226 の案 A）。
+
+        見え方は会話と同じ（system_admin は全員、それ以外は本人の会話だけ）。span の持ち主はターンを
+        送った人（持ち主以外の system_admin が送ったターンは送り手）。
+        生成は終わっているので終端は完了。
+        """
+
+        turn = self._db_admin_chat_turn(conversation_id, turn_id, actor=actor, all_users=all_users)
+        return read_trace_progress(
+            target_id=turn.turn_id,
+            operation_id=turn.turn_id,
+            trace_id=turn.trace_id,
+            owner_user_uuid=turn.sender_user_uuid or actor,
+            viewer_is_admin=all_users,
+            terminal="done",
+            details=turn.span_details,
+            dropped_spans=turn.trace_dropped_spans,
+            legacy=True,
+        )
 
     def _db_admin_chat_turn(
         self, conversation_id: str, turn_id: str, *, actor: str, all_users: bool
@@ -23162,17 +23246,22 @@ class Nl2SqlService:
             job = self._jobs.get(job_id)
             return bool(job is not None and job.cancel_requested)
 
-    def _job_progress_listener(self, job_id: str) -> SpanListener:
-        """実行の span を、ジョブの処理の経過に記録する listener（#3226）。
+    def _job_progress_listener(
+        self, job_id: str, *, owner_user_uuid: str, attempt: int
+    ) -> SpanListener | None:
+        """実行の span の listener（#3226 の案 A）。
 
-        span は worker の thread のほか、生成の中の thread からも知らされる。記録はジョブの lock の
-        中で行い、実行所有権を失った（別の worker が引き継いだ）ジョブには記録しない。保存は
-        段の切り替え（`_transition_job_steps`。次の段の span の中で呼ぶので、前の段の終わり・段の
-        中の span・次の段の開始が 1 回の保存で出る）と、完了・失敗の保存が行う（保存の往復を
-        増やさない。#904）。
+        span は共通の span の表に書く（書き手の queue に積むだけで、DB もジョブの保存も待たない。
+        段の中の span も実行中から画面に出る）。工程の詳細（表に入れない内容）はジョブの lock の中で
+        ジョブに置き、続く保存（段の切り替え・完了・失敗。保存の往復は増やさない。#904）で出す。
+        実行所有権を失った（別の worker が引き継いだ）ジョブには置かない。span は worker の thread
+        の
+        ほか、生成の中の thread からも知らされる。
         """
 
-        def listen(update: SpanUpdate) -> None:
+        def keep_details(update: SpanUpdate) -> None:
+            if update.display is None or update.display.details is None:
+                return
             with self._lock:
                 job = self._jobs.get(job_id)
                 if job is None or (
@@ -23180,15 +23269,26 @@ class Nl2SqlService:
                     and job.execution_owner != self._job_execution_owner(job)
                 ):
                     return
-                _record_job_progress_span(job, update)
+                _record_job_span_details(job, update)
 
-        return listen
+        return combined_listener(
+            trace_span_listener(
+                operation_id=job_id, owner_user_uuid=owner_user_uuid, attempt=attempt
+            ),
+            keep_details,
+        )
 
     def _run_job_safely(self, job_id: str) -> None:
         with self._lock:
             pending_trace = self._jobs.get(job_id)
             carrier = pending_trace.trace_context if pending_trace is not None else {}
+            link_carrier = pending_trace.trace_link_context if pending_trace is not None else {}
             trace_attempt = pending_trace.attempt if pending_trace is not None else 0
+            owner = pending_trace.actor_user_uuid if pending_trace is not None else ""
+            if pending_trace is not None and pending_trace.attempt > 1:
+                # 引き継いだ実行（2 回目以降の claim）は span の木を作り直す（前の試行の詳細を
+                # 残さない）。
+                pending_trace.span_details = {}
         with (
             bind_log_context(job_id=job_id),
             attach_trace_context(carrier),
@@ -23196,9 +23296,19 @@ class Nl2SqlService:
                 "nl2sql.execute",
                 operation_id=job_id,
                 attributes={"pr.attempt": trace_attempt},
-                listener=self._job_progress_listener(job_id),
-            ),
+                listener=self._job_progress_listener(
+                    job_id,
+                    owner_user_uuid=owner,
+                    attempt=max(0, trace_attempt - 1),
+                ),
+                links=trace_links(link_carrier),
+            ) as summary,
         ):
+            with self._lock:
+                running = self._jobs.get(job_id)
+                if running is not None and summary.telemetry_trace_id:
+                    # 画面は記録の trace id で span の表を読む（最初の保存で出る）。
+                    running.trace_id = summary.telemetry_trace_id
             self._run_job_attempt_safely(job_id)
 
     def _run_job_attempt_safely(self, job_id: str) -> None:
@@ -23268,9 +23378,6 @@ class Nl2SqlService:
                     job.steps[failure_index] = job.steps[failure_index].model_copy(
                         update={"status": JobStepStatus.ERROR, "finished_at": job.finished_at}
                     )
-                _record_job_progress_failed(
-                    job, cancelled=job.error_code == JOB_CANCELLED_ERROR_CODE
-                )
                 request = job.request
             logger.exception(
                 "nl2sql_job_failed",
@@ -23637,7 +23744,6 @@ class Nl2SqlService:
             with self._lock:
                 job = self._execution_job_locked(job_id)
                 job.status = JobStatus.RUNNING
-                job.trace_summary = None
                 job.timing = TimingEnvelope(created_at=job.created_at, started_at=job.started_at)
                 if job.attempt > 1:
                     # lease の切れたジョブを引き継いだ実行（2 回目以降の attempt）は、段階を
@@ -24044,15 +24150,21 @@ class Nl2SqlService:
             if execution_error is not None
             else None
         )
-        trace_summary = finish_operation_trace(
+        # 実行の全体の span を閉じる（最終の状態の正本はジョブの状態。#3226 の案 A）。書けなかった
+        # span の数と工程の詳細は、ジョブと実行履歴の行の両方に残す（実行履歴の詳細も同じ span を
+        # 読む）。
+        finish_operation_trace(
             job_id, status="done" if final_status == JobStatus.DONE else "failed"
         )
-        trace_segments = append_trace_segment(
-            job.trace_segments, trace_summary, limit=get_settings().trace_ui_max_segments
-        )
+        with self._lock:
+            trace_id = job.trace_id
+            trace_dropped = _job_trace_dropped(job)
+            span_details = dict(job.span_details)
         history_item = HistoryItem(
-            trace_segments=trace_segments,
-            trace_summary=trace_summary,
+            job_id=job_id,
+            trace_id=trace_id,
+            trace_dropped_spans=trace_dropped,
+            span_details=span_details,
             generation_only=request.generation_only,
             business_release_id=business_release_id,
             id=history_id,
@@ -24121,8 +24233,8 @@ class Nl2SqlService:
             result = result.model_copy(update={"notice": current_answer_notice()})
         published = replace(
             job,
-            trace_summary=trace_summary,
-            trace_segments=trace_segments,
+            trace_dropped_spans=trace_dropped,
+            span_details=span_details,
             steps=final_steps,
             status=final_status,
             error_message=final_error_message,
@@ -24137,15 +24249,6 @@ class Nl2SqlService:
             worker_id="",
             heartbeat_at=None,
             lease_expires_at=None,
-        )
-        with self._lock:
-            # 処理の段階の終端は完了の snapshot と同じ保存で記録する（保存までは結果の整形が
-            # 実行中。#1176 / #1359）。
-            _record_job_progress_finished(
-                published, failed=final_status != JobStatus.DONE, at=finished
-            )
-        history_item = history_item.model_copy(
-            update={"progress_events": list(published.progress_events)}
         )
         persistence_warning: str | None = None
         self._raise_if_job_cancelled(job_id)
@@ -24166,8 +24269,7 @@ class Nl2SqlService:
             )
         with self._lock:
             job = self._execution_job_locked(job_id)
-            job.trace_summary = trace_summary
-            job.trace_segments = trace_segments
+            job.trace_dropped_spans = published.trace_dropped_spans
             job.steps = final_steps
             job.status = final_status
             job.error_message = final_error_message
@@ -24179,7 +24281,6 @@ class Nl2SqlService:
             job.finished_at = finished
             job.elapsed_ms = timing.elapsed_ms
             job.timing = timing
-            job.progress_events = published.progress_events
             self._clear_job_worker_state_locked(job)
             self._history.append(history_item)
             self._prune_history_locked()

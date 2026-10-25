@@ -738,40 +738,49 @@ def test_enterprise_ai_temporary_failure_keeps_retry_guidance(
 def test_worker_trace_survives_snapshot_and_does_not_invent_execution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """worker の span は共通の span の表に入り、画面の要求の trace を親にしない（#3226 の案 A）。"""
+
     from pr_backend_core.config.tracing import TracingSettings
     from pr_backend_core.observability.tracing import (
         configure_tracing,
         observed_span,
         shutdown_tracing,
     )
+    from trace_span_fake import FakeTraceSpanDb
+
+    from app.features.nl2sql.trace_spans import install_trace_span_store, reset_trace_span_store
 
     monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
     repository = _repository()
     owner = _worker(repository)
     configure_tracing(TracingSettings(), service_name="synthetic")
+    db = FakeTraceSpanDb()
+    store = install_trace_span_store(db.connect, start=False)
     try:
-        with observed_span("http.request", kind="server"):
+        with observed_span("http.request", kind="server") as http:
+            request_trace_id = f"{http.span.get_span_context().trace_id:032x}"
             created = owner.start_job(
                 _request().model_copy(update={"generation_only": True}),
                 actor_user_uuid="user-1",
                 actor_is_system_admin=True,
             )
         assert owner.run_next_nl2sql_job(job_id=created.job_id, worker_id="synthetic")
+        store.writer.flush()
         observer = _worker(repository)
         job = observer.get_job(created.job_id, actor_user_uuid="user-1")
-        assert job is not None and job.status == JobStatus.DONE
-        summary = job.trace_summary
-        assert summary is not None
-        names = [span.operation_name for span in summary.spans]
+        assert job is not None and job.status == JobStatus.DONE and job.trace_id
+        rows = db.spans(trace_id=job.trace_id)
+        names = [row["name"] for row in rows]
         assert "nl2sql.generate_sql" in names
         # 実行しない SQL の実行の段は、未実行（所要時間 0）の span で残す（#3226）。
-        [execute] = [span for span in summary.spans if span.operation_name == "nl2sql.execute_sql"]
-        assert execute.status == "skipped" and execute.duration_ms == 0
-        root = next(span for span in summary.spans if span.span_id == summary.root_span_id)
-        assert root.parent_span_id is not None
-        assert all(span.parent_span_id == root.span_id for span in summary.spans if span != root)
-        assert summary.completeness == "complete"
+        [execute] = [row for row in rows if row["name"] == "nl2sql.execute_sql"]
+        assert execute["status"] == "skipped" and execute["started_at"] == execute["finished_at"]
+        # 画面の要求（ブラウザの traceparent）は親にせず、新しい trace にする（span link だけ）。
+        [root] = [row for row in rows if row["is_root"]]
+        assert root["parent_span_id"] is None and job.trace_id != request_trace_id
+        assert all(row["parent_span_id"] == root["span_id"] for row in rows if row is not root)
         with pytest.raises(PermissionError):
             observer.get_job(created.job_id, actor_user_uuid="user-2")
     finally:
+        reset_trace_span_store()
         shutdown_tracing()

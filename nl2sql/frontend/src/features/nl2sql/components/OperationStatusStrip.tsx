@@ -1,28 +1,16 @@
 import { CircleStop, Database } from "lucide-react";
 import type { ReactNode } from "react";
 
-import {
-  ChatProgress,
-  chatProgressStepsFromEvents,
-  chatProgressTraceIdOf,
-  parseChatProgressEvents,
-  useTraceDetailsLabels,
-  Button,
-  Banner,
-  FormStatus,
-} from "@production-ready/ui";
+import { ChatProgress, Button, Banner, FormStatus } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
-import {
-  CHAT_PROGRESS_LABELS,
-  CHAT_PROGRESS_STEP_DEFINITIONS,
-  chatProgressIsLegacy,
-  chatQueueProgressSteps,
-} from "../chatProgress";
+import { CHAT_PROGRESS_LABELS, chatQueueProgressSteps, jobTracePath } from "../chatProgress";
 import type { JobData } from "../types";
+import { useNl2SqlTraceProgress } from "../useTraceProgress";
 import { GeneratedSqlSummary } from "./GeneratedSqlPanel";
 import { JobFailureBody } from "./JobFailureBody";
 import { ProgressLegacyNotice } from "./ProgressLegacyNotice";
+import { ProgressPartialNotice } from "./ProgressPartialNotice";
 
 export function OperationStatusStrip({
   job,
@@ -67,18 +55,20 @@ export function OperationStatusStrip({
   const active = job?.status === "pending" || job?.status === "running";
   const finalElapsed =
     job?.elapsed_ms ?? job?.result?.timing.elapsed_ms ?? job?.timing?.elapsed_ms;
-  const traceLabels = useTraceDetailsLabels();
+  // 処理の経過は実行の span の木（#3226 の案 A）。span は worker が共通の span の表に書き、実行中はジョブの処理の
+  // 経過の API（span の表の snapshot）を読み直す（段の中の span も実行中に出る）。worker が受け取るまでは開始待ちの
+  // 仮の行、span の無い古い形式の記録は案内の文を出す。
+  const progress = useNl2SqlTraceProgress({
+    targetId: job?.job_id ?? "",
+    path: job ? jobTracePath(job.job_id) : null,
+    active,
+  });
   if (!job) return null;
 
-  // 処理の経過は backend が記録した span の木（#3226）。worker が受け取るまでは開始待ちの仮の行、span の無い
-  // 古い形式の記録は案内の文を出す。
-  const events = parseChatProgressEvents(job.progress_events);
-  const recordedSteps = chatProgressStepsFromEvents(events, CHAT_PROGRESS_STEP_DEFINITIONS, job.job_id, {
-    traceLabels,
-  });
-  const queuePlaceholder = recordedSteps.length === 0 && active;
-  const steps = queuePlaceholder ? chatQueueProgressSteps(job.created_at) : recordedSteps;
-  const legacy = !active && chatProgressIsLegacy(events);
+  const queuePlaceholder = progress.steps.length === 0 && active;
+  const steps = queuePlaceholder ? chatQueueProgressSteps(job.created_at) : progress.steps;
+  const legacy = !active && progress.legacy;
+  const progressKey = `${job.job_id}#${job.attempt ?? 0}`;
   // プレビュー経路: execute/format 未実行(skipped)。「完了」ではなく確認を促す文言に差し替える。
   const warningMessage = job.warning_message?.trim();
   const errorMessage = job.status === "error" ? job.error_message?.trim() : "";
@@ -98,13 +88,15 @@ export function OperationStatusStrip({
         active={active}
         activityIndicator={!cancelRequesting}
         // 仮の行から span の木に替わったら一覧を作り直す（仮の行を残さない）。
-        progressKey={queuePlaceholder ? `${job.job_id}:queue` : job.job_id}
+        progressKey={queuePlaceholder ? `${progressKey}:queue` : progressKey}
         startedAt={startedAtMs}
         elapsedMs={finalElapsed}
         cancelled={cancelled}
-        traceId={chatProgressTraceIdOf(events)}
+        reconnecting={active && progress.failed}
+        traceId={progress.traceId}
         testId="nl2sql-job"
         labels={CHAT_PROGRESS_LABELS}
+        footer={progress.partial ? <ProgressPartialNotice testId="nl2sql-job-progress-partial" /> : undefined}
         steps={steps}
       />
     )}

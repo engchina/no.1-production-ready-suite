@@ -16,6 +16,7 @@ from fastapi import HTTPException, Request
 from pr_backend_core.api import OffsetParams
 from pr_system_settings.auth.domain import SYSTEM_ADMIN_ROLE_CODE, UserIdentity
 from test_nl2sql_db_admin_chat import _catalog_service, _FakeAdapter, _FakeEnterpriseAi
+from trace_span_fake import TraceTable, trace_table  # noqa: F401 - fixture
 
 from app.features.nl2sql import router
 from app.features.nl2sql.models import (
@@ -104,6 +105,7 @@ def _send(principal: Any, question: str, conversation_id: str = "", turn_id: str
 
 def test_first_question_starts_a_conversation_and_is_reopened(
     setup: tuple[Nl2SqlService, _FakeAdapter, _FakeEnterpriseAi],
+    trace_table: TraceTable,  # noqa: F811
 ) -> None:
     _service, adapter, ai = setup
     ai.responses.append(_answer("SELECT QTY FROM APP.ITEM_STOCK", "在庫の数量です"))
@@ -129,10 +131,22 @@ def test_first_question_starts_a_conversation_and_is_reopened(
     assert turn.explanation == "在庫の数量です"
     assert turn.statement_executions == [] and turn.last_run_all is None
     assert turn.sender_user_uuid is None
-    # 生成したときの処理の経過（span の木。#3226）を、応答と開き直した会話の両方に残す。
-    assert turn.progress_events == sent.turn.progress_events
-    assert {event.target_id for event in turn.progress_events} == {turn_id}
-    assert turn.progress_events[-1].type == "terminal"
+    # 生成したときの処理の経過（#3226 の案 A）: ターンには trace id を残し、span の表から読む。
+    # 工程の詳細は処理の経過の API だけが返す（会話の応答には入れない）。
+    assert turn.trace_id and turn.trace_id == sent.turn.trace_id
+    assert turn.span_details == {}
+    trace_table.flush()
+    progress = router.get_db_admin_chat_turn_trace(turn_id, turn_id, _http(ALICE)).data
+    assert progress is not None
+    assert {event.target_id for event in progress.events} == {turn_id}
+    assert progress.events[-1].type == "terminal"
+    steps = [event for event in progress.events if event.type == "step" and event.kind]
+    assert [event.kind for event in steps] == ["generate_sql", "db_admin_check"]
+    assert all(event.details is not None for event in steps)
+    # 他の利用者の会話のターンは 404。
+    with pytest.raises(HTTPException) as missing:
+        router.get_db_admin_chat_turn_trace(turn_id, turn_id, _http(BOB))
+    assert missing.value.status_code == 404
 
 
 def test_resend_with_the_same_turn_id_does_not_generate_twice(

@@ -1,5 +1,5 @@
 import {chatProgressStepsFromEvents, parseChatProgressEvents, chatProgressTimelineStep} from "@production-ready/ui";
-import {CHAT_PROGRESS_STEP_DEFINITIONS} from "../src/features/nl2sql/chatProgress.ts";
+import {CHAT_PROGRESS_STEP_DEFINITIONS, historyTracePath} from "../src/features/nl2sql/chatProgress.ts";
 // 実行履歴（#1955）の取得条件と、行 → 共通の実行履歴の形への写し。
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -17,7 +17,6 @@ import {
   historyOwner,
   historyRequestUrl,
   historyRunStatus,
-  historyTimeline,
   normalizeHistoryFilters,
 } from "../src/features/nl2sql/historyManagementState.ts";
 import type { HistoryItem } from "../src/features/nl2sql/types.ts";
@@ -165,28 +164,11 @@ function spanEvents(): unknown[] {
 }
 
 test("実行の詳細の処理の経過はチャットと同じ span の木（#3226）", () => {
+  // 行の処理の経過の API（span の表の snapshot）を、チャットと同じ工程の定義で行にする。
   const events = parseChatProgressEvents(spanEvents());
-  const timeline = historyTimeline({ ...base, progress_events: events });
-  const actual = chatProgressStepsFromEvents(events, CHAT_PROGRESS_STEP_DEFINITIONS).map(chatProgressTimelineStep);
-  assert.deepEqual(timeline.steps, actual);
+  const rows = chatProgressStepsFromEvents(events, CHAT_PROGRESS_STEP_DEFINITIONS).map(chatProgressTimelineStep);
   // 実行の全体は行にせず、段の中の span（モデルの呼び出し）は段の下に入れ子。
-  assert.deepEqual(timeline.steps.map((row) => [row.status, row.level ?? 0]), [["done", 0], ["done", 1], ["skipped", 0]]);
-  assert.equal(timeline.steps[0].label, "SQL を生成しました");
-  assert.equal(timeline.traceId, TRACE_ID);
-  assert.equal(timeline.legacy, false);
-});
-
-test("span の無い古い形式の記録は再構成せず、古い形式として扱う（#3226）", () => {
-  // 工程の秒だけの記録（`stage_timings`）からは工程を作らない。
-  const timed = historyTimeline({ ...base, stage_timings: [{ stage: "prepare_context", elapsed_ms: 20 }] });
-  assert.deepEqual(timed.steps, []);
-  assert.equal(timed.legacy, true);
-  // 段だけのイベント（span の無い記録）も出さない。
-  const staged = historyTimeline({
-    ...base,
-    progress_events: parseChatProgressEvents([{ schema_version: 1, target_id: "synthetic", seq: 1, attempt: 0,
-      type: "step", step_id: "safety_check", kind: "safety_check", status: "skipped", emitted_at: "2026-10-23T00:00:02Z" }]),
-  });
-  assert.equal(staged.legacy, true);
-  assert.equal(staged.traceId, undefined);
+  assert.deepEqual(rows.map((row) => [row.status, row.level ?? 0]), [["done", 0], ["done", 1], ["skipped", 0]]);
+  assert.equal(rows[0].label, "SQL を生成しました");
+  assert.equal(historyTracePath(base.id), "/api/nl2sql/history/h1/trace");
 });

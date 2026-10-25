@@ -17,6 +17,7 @@ import pytest
 from openpyxl import Workbook  # type: ignore[import-untyped]
 from pr_backend_core.chat_progress import fold_chat_progress_events
 from test_nl2sql_job_runtime import _FakeEnterpriseAiClient, _repository, _request, _worker
+from trace_span_fake import TraceTable, trace_table  # noqa: F401 - fixture
 
 from app.features.mcp.tools import _job_result
 from app.features.nl2sql.models import (
@@ -254,10 +255,15 @@ def _step_status(job: JobData, stage: str) -> JobStepStatus:
     return next(step.status for step in job.steps if step.stage == stage)
 
 
-def _progress(job: JobData, kind: str) -> tuple[str, dict[str, Any]]:
-    """処理の経過の工程の span（`kind` が段階の id。#3226）の状態と補足の値。"""
+def _progress(
+    service: Nl2SqlService, table: TraceTable, job: JobData, kind: str
+) -> tuple[str, dict[str, Any]]:
+    """処理の経過の工程の span（`kind` が段階の id。#3226 の案 A）の状態と補足の値。"""
 
-    fold = fold_chat_progress_events(job.progress_events)
+    table.flush()
+    progress = service.get_job_trace(job.job_id, actor_user_uuid="user-1")
+    assert progress is not None
+    fold = fold_chat_progress_events(progress.trace.events)
     [step] = [item for item in fold.step_list() if item.kind == kind]
     return step.status, dict(step.params or {})
 
@@ -266,7 +272,10 @@ def _progress(job: JobData, kind: str) -> tuple[str, dict[str, Any]]:
 @pytest.mark.parametrize("engine", _SELECT_AI_ENGINES, ids=_engine_id)
 @pytest.mark.parametrize("chat", [False, True], ids=["sql-generation", "chat"])
 def test_select_ai_job_records_the_safety_check_as_skipped(
-    monkeypatch: pytest.MonkeyPatch, engine: Nl2SqlEngine, chat: bool
+    monkeypatch: pytest.MonkeyPatch,
+    engine: Nl2SqlEngine,
+    chat: bool,
+    trace_table: TraceTable,  # noqa: F811
 ) -> None:
     service = _worker(_repository())
     _generated_by(service, monkeypatch, engine, _DANGEROUS_SQL)
@@ -280,7 +289,7 @@ def test_select_ai_job_records_the_safety_check_as_skipped(
     assert job.result.safety.is_safe is True
     assert job.result.safety.safety_checked is False
     # 処理の段階のイベント: 省略の印と参照した表（画面が「省略」と表を出す）。
-    assert _progress(job, "safety_check") == (
+    assert _progress(service, trace_table, job, "safety_check") == (
         "skipped",
         {"tables": "APP.ORDERS", "table_count": 1, "safety_check_skipped": True},
     )
@@ -358,14 +367,19 @@ def test_enterprise_ai_direct_job_still_blocks_dangerous_sql() -> None:
 
 
 @pytest.mark.usefixtures("worker_mode")
-def test_enterprise_ai_direct_job_records_the_safety_check_as_done() -> None:
+def test_enterprise_ai_direct_job_records_the_safety_check_as_done(
+    trace_table: TraceTable,  # noqa: F811
+) -> None:
     service = _worker(_repository())
 
     job = _run(service, _request())
 
     assert job.status == JobStatus.DONE, job.error_message
     assert _step_status(job, "safety_check") == JobStepStatus.DONE
-    assert _progress(job, "safety_check") == ("done", {"tables": "APP.ORDERS", "table_count": 1})
+    assert _progress(service, trace_table, job, "safety_check") == (
+        "done",
+        {"tables": "APP.ORDERS", "table_count": 1},
+    )
 
 
 # --- 品質評価の Excel の欄 -----------------------------------------------------------------

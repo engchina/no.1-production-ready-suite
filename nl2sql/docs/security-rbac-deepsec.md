@@ -160,7 +160,7 @@ system_admin は他の利用者のデータに、本人と同じすべての操�
 | チャット | `GET /nl2sql/chats/{id}` のターン | 本人の会話のすべてのターン（system_admin が送ったターンを含む） | 同じ。持ち主以外が送ったターンには `sender_display_name`（共通の表示名。引けない利用者は空、持ち主のターンは null）を付け、画面は質問の吹き出しの上に「〈名前〉 が送信」と出す（送り手の UUID は出さない） |
 | チャット | `POST /nl2sql/jobs`（続き）・`POST /jobs/{id}/execute` | 本人の会話（他人は 404） | 全員の会話（#1928）。ジョブ・実行の actor は送った system_admin で、権限・業務プロファイル・SQL の実行の接続（#904 の system_admin 用の接続）・実行履歴の利用者も system_admin。会話の持ち主は変えない（持ち主も system_admin が送ったターンの後に続けられ、そのターンの SQL を自分の接続で実行できる） |
 | チャット | `POST /jobs/{id}/execution-result`（ジョブの中で実行した結果の行） | 本人が送ったターン（ほかは 404） | 同じ。行は送った人の権限と接続で取ったものなので、送った人だけが受け取る（ほかの人は 404 で、「もう一度実行」で自分の権限と接続で実行する。受け取らない人の要求で送った人の行を消さない） |
-| チャット・SQL 生成 | `GET /nl2sql/jobs/{id}`・`/progress`・`/progress/stream`・`POST /jobs/{id}/cancel` | 本人の job（他人は 404） | 全員の job（チャットの job を含む） |
+| チャット・SQL 生成 | `GET /nl2sql/jobs/{id}`・`/trace`・`POST /jobs/{id}/cancel` | 本人の job（他人は 404） | 全員の job（チャットの job を含む） |
 | SQL 生成 | `POST /nl2sql/feedback`（実行結果の評価） | 本人の履歴（他人・持ち主の無い履歴は 404） | 全員の履歴。評価した人を `feedback_actor_user_uuid` に残す（実行履歴の利用者 `actor_user_uuid` は変えない） |
 | SQL 生成・チャット | `/nl2sql/query-sessions/*`（回答前の確認） | 本人の session（他人・持ち主の無い session は 404） | 全員の session。他の利用者の会話の続きで始めた確認は system_admin の session で、会話の前のターンを読める |
 | 実行履歴 | `GET /nl2sql/history`・`GET /nl2sql/history/{history_id}`（詳細。見えない行は 404。#1955） | 本人が実行した行と、本人の会話で他の人（system_admin）が実行した行（#1954）。SQL 生成・SQL 直接実行など会話の無い実行は実行した人だけ | 全員の行。ログイン ID（`actor_login_user_id`・`actor_display_name`）は system_admin の応答だけ |

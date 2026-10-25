@@ -1,14 +1,12 @@
 // NL2SQL の処理の経過の工程の定義（#1145 / #1359 / #3226）。
 //
-// 処理の経過は実行の trace（span の木）の投影で、backend が span のイベント（3 製品共通の契約。`progress_events`）
-// として記録する（開始待ち・準備・生成・安全性の確認・実行・結果の整形と、その中のモデルの呼び出しなど）。画面は
-// イベントを共有の `useChatProgressStream` / `chatProgressStepsFromEvents` で木にし、ここは工程の span（`kind`）の
-// 名前（i18n）と補足（生成方法・参照した表・行数）を付けるだけにする。状態と時刻は span の実測。
+// 処理の経過は実行の trace（span の木）の投影（#3226 の案 A）。span は共通の span の表にあり（開始待ち・準備・生成・
+// 安全性の確認・実行・結果の整形と、その中のモデルの呼び出しなど）、画面は記録ごとの API（`.../trace`。span の表の
+// snapshot）を共有の `useTraceProgressSnapshot` で読んで木にする。ここは工程の span（`kind`）の名前（i18n）と
+// 補足（生成方法・参照した表・行数）を付けるだけにする。状態と時刻は span の実測。
 import {
-  chatProgressHasSpans,
   chatProgressLabelState,
   createTraceDetailsLabels,
-  type ChatProgressEvent,
   type ChatProgressLabels,
   type ChatProgressLabelState,
   type ChatProgressParams,
@@ -220,14 +218,31 @@ export function chatQueueProgressSteps(createdAt: string | null | undefined): Ch
   return [step];
 }
 
-/**
- * 古い形式の記録か（#3226）: span の記録が無く、段だけのイベントか記録そのものが無い。処理の経過の位置に
- * 古い形式の案内（`TraceDetailsLabels.legacy`）を出す。終端だけの記録（worker が受け取る前に止まった）は古い形式では
- * ない（処理の経過を出さない）。
- */
-export function chatProgressIsLegacy(events: readonly ChatProgressEvent[]): boolean {
-  if (chatProgressHasSpans(events)) return false;
-  return events.length === 0 || events.some((event) => event.type === "step");
+/** ジョブの処理の経過の API（#3226 の案 A。span の表の snapshot）。 */
+export const jobTracePath = (jobId: string) => `/api/nl2sql/jobs/${encodeURIComponent(jobId)}/trace`;
+
+/** 実行履歴の行の処理の経過の API。 */
+export const historyTracePath = (historyId: string) =>
+  `/api/nl2sql/history/${encodeURIComponent(historyId)}/trace`;
+
+/** DB 管理チャットのターンの処理の経過の API。 */
+export const dbAdminChatTurnTracePath = (conversationId: string, turnId: string) =>
+  `/api/nl2sql/db-admin-chat/conversations/${encodeURIComponent(conversationId)}/turns/${encodeURIComponent(turnId)}/trace`;
+
+/** 処理の経過の API の応答（未検証の入力）。イベントは共有の検証（`parseChatProgressEvents`）に渡す。 */
+export interface TraceProgressResponse {
+  events: unknown;
+  /** 書けなかった span の数（1 以上なら「一部の処理だけを記録しています」）。 */
+  droppedSpans: number;
+}
+
+export function parseTraceProgressResponse(value: unknown): TraceProgressResponse {
+  const source = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const dropped = source.dropped_spans;
+  return {
+    events: Array.isArray(source.events) ? source.events : [],
+    droppedSpans: typeof dropped === "number" && Number.isInteger(dropped) && dropped > 0 ? dropped : 0,
+  };
 }
 
 /** 完了後の全体の所要時間（ジョブの作成から終了まで）。段階の時刻が無い古いジョブにも出す。 */
