@@ -35,7 +35,7 @@
 #     path / file: で入れる platform の package の pyproject.toml / package.json の依存を書き写しているため、
 #     platform の manifest を変えると 3 製品の lock がずれて `uv sync --locked` / `npm ci` が失敗する。
 #     manifest の範囲を超える更新は Issue を立て、3 製品の lock と同じ PR で上げる。
-#   - services/*（11 個の pyproject.toml。自前の Dockerfile は #356 で削除し、docker ecosystem は対象にしない）は、CI がテストする
+#   - services/*（10 個の pyproject.toml。自前の Dockerfile は #356 で削除し、docker ecosystem は対象にしない）は、CI がテストする
 #     外部 parser（rag/services/parsers/docling。ci.yml の RAG / Parser docling。#1512。#1513）と、テストのある
 #     前処理・パイプラインのサービス（ci.yml の Lint / services & scripts がテストする。#1525・#1534）を対象にする。
 #     テストの無いサービスと rag/packages/* は含めない（理由は該当の entry の注記）。テストを足してから対象に加える。
@@ -174,7 +174,6 @@ updates:
       - /rag/services/preprocess/excel_to_jsonl
       - /rag/services/preprocess/word_to_jsonl
       - /rag/services/preprocess/office_to_pdf
-      - /rag/services/preprocess/pii_redact
     schedule:
       interval: weekly
       day: monday
@@ -208,13 +207,6 @@ updates:
       # 版の範囲は rag_parser_core / rag_pipeline_core の service の extra が決める（<24）。
       - dependency-name: gunicorn
         update-types: ["version-update:semver-major"]
-      # presidio-anonymizer 2.2.363 は cryptography<47、2.2.364 は cryptography<49 を要求し、pii_redact の lock の
-      # cryptography を 50.0.0 から脆弱性のある版（PYSEC-2026-3552/3553/3554）へ下げる（#1545。#1541 の pip-audit が失敗）。
-      # presidio-analyzer は同じ版で出る一式なので、同じ版を外す。cryptography の上限を緩めた次の版は、そのまま更新される。
-      - dependency-name: presidio-anonymizer
-        versions: ["2.2.363", "2.2.364"]
-      - dependency-name: presidio-analyzer
-        versions: ["2.2.363", "2.2.364"]
 
   # 3 製品の frontend（PR はディレクトリごと）。monthly（#1588）: lock の変更は e2e の全件になる
   # （platform/scripts/e2e_impact.py が package-lock.json を全体に効くファイルとして扱う）ため、月 1 回にまとめる。

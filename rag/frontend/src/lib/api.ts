@@ -2303,8 +2303,7 @@ export type PreprocessProfileName =
   | "office_to_pdf"
   | "csv_to_jsonl"
   | "excel_to_jsonl"
-  | "word_to_jsonl"
-  | "pii_redact";
+  | "word_to_jsonl";
 
 export interface PreprocessProfileStatusData {
   name: PreprocessProfileName;

@@ -1,14 +1,13 @@
 # 前処理(Preprocess)動作確認サンプル
 
-サービス管理画面に並ぶ前処理マイクロサービスのうち 4 つを、実入力で確認するためのサンプルファイル。
-各サービスの `convert()` を実依存込みで叩く(LibreOffice / openpyxl / Presidio)。
+サービス管理画面に並ぶ前処理マイクロサービスのうち 3 つを、実入力で確認するためのサンプルファイル。
+各サービスの `convert()` を実依存込みで叩く(LibreOffice / openpyxl)。
 
 | サンプル | サービス (slug) | 機能 |
 |---|---|---|
 | `document.docx` | `preprocess-office-to-pdf` | Office → PDF |
 | `table.csv` | `preprocess-csv-to-jsonl` | CSV → 構造化レコード JSONL |
 | `table.xlsx` | `preprocess-excel-to-jsonl` | Excel → 構造化レコード JSONL |
-| `pii.txt` | `preprocess-pii-redact` | PII マスク(EMAIL / PHONE / URL / カード番号) |
 
 ## 実行方法
 
@@ -28,10 +27,9 @@ PY
 ```
 
 `preprocess_profile`(第3引数)は各サービスの slug 末尾と一致させる:
-`office_to_pdf` / `csv_to_jsonl` / `excel_to_jsonl` / `pii_redact`。
+`office_to_pdf` / `csv_to_jsonl` / `excel_to_jsonl`。
 プロファイルが一致しない・依存欠如・変換失敗時は `ConvertOutcome.passthrough`(`converted=False`)へ縮退する。
 
 ### 注意
 
 - `office_to_pdf` は `source_profile.extension`(例 `.docx`)で入力 suffix を決める。`SourceProfile` を渡すか、既定では `.docx` 扱い。
-- `pii_redact` は初回実行時に spaCy 日本語モデル(`ja_core_news_lg`, 約530MB)を取得する。
