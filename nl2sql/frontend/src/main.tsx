@@ -22,6 +22,20 @@ import "@fontsource/noto-sans-jp/400.css";
 import "@fontsource/noto-sans-jp/500.css";
 import "@fontsource/noto-sans-jp/600.css";
 import "@fontsource/noto-sans-jp/700.css";
+// Noto Sans JP に無い簡体字・繁体字・香港の字だけを SC → TC → HK の順で補う（--font-sans / --font-mono の JP の後ろ。#3292）。
+// <weight>.css は unicode-range で分けた face の集まりで、画面に出た字を含む分だけを読み込む。
+import "@fontsource/noto-sans-sc/400.css";
+import "@fontsource/noto-sans-sc/500.css";
+import "@fontsource/noto-sans-sc/600.css";
+import "@fontsource/noto-sans-sc/700.css";
+import "@fontsource/noto-sans-tc/400.css";
+import "@fontsource/noto-sans-tc/500.css";
+import "@fontsource/noto-sans-tc/600.css";
+import "@fontsource/noto-sans-tc/700.css";
+import "@fontsource/noto-sans-hk/400.css";
+import "@fontsource/noto-sans-hk/500.css";
+import "@fontsource/noto-sans-hk/600.css";
+import "@fontsource/noto-sans-hk/700.css";
 import "@fontsource/roboto/400.css";
 import "@fontsource/roboto/500.css";
 import "@fontsource/roboto/600.css";
