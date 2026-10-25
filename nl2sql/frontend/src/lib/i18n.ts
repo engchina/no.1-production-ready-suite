@@ -2731,6 +2731,8 @@ const nl2sqlJa = {
   "history.subtitle": "SQL の生成と実行の記録を、状態・SQL・処理の経過で確かめます。",
   "history.action.openChat": "会話を開く",
   "history.action.openChatLabel": "この実行の会話をチャットで開く",
+  "history.action.openQuery": "SQL 生成で開く",
+  "history.action.openQueryLabel": "この実行の質問と条件を SQL 生成の画面に入れて開く",
   "history.action.clearFilters": "条件をクリア",
   "history.action.copySql": "SQL をコピー",
   "history.copied": "SQL をコピーしました。",

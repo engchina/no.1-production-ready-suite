@@ -2237,6 +2237,26 @@ toast.error(apiErrorMessage(error, t("…failed")));
 
 ---
 
+## OpenRunInputAction — **新規**（#3309）
+
+実行の詳細の概要の見出しの右に置く「〜で開く」（UX 契約 run-history.md「詳細」）。会話の無い 1 回ごとの実行（RAG 検索・
+NL2SQL の SQL 生成）を、元の画面に質問と条件を入れて開く。開いた画面は実行しない。
+
+```tsx
+<OpenRunInputAction
+  href={inputHref}                   // 無ければ描かない（本人の実行でない・画面の権限が無い）
+  linkComponent={Link}
+  labels={{ label: t("…openSearch"), ariaLabel: t("…openSearchLabel") }}  // 文言は製品が渡す（必須）
+  testId="…-open-search"
+/>
+```
+
+- 見た目は `ButtonLink`（secondary）+ `SquarePen`。`OpenConversationAction` と同じ位置・同じ寸法で、1 つの実行にはどちらか 1 つだけを出す。
+- 出すかどうか（URL）は製品が決める: RAG `runSearchHref`（`run-history-view.ts`）・NL2SQL `historySqlGenerationHref`（`historyManagementState.ts`）。URL の初期値は RAG `search-prefill.ts`・NL2SQL `queryPrefillState.ts`。
+- 単体テストは `packages/ui/tests/open-run-input-action.test.tsx`。
+
+---
+
 ## ProcessFailureNotice / processFailureDetails / processFailureFacts / failedStepName — **新規**（#2342）
 
 処理（チャットの回答・SQL の生成と実行・Run・文の実行）の失敗を、3 製品で同じ形に出す失敗のカード（UX 契約

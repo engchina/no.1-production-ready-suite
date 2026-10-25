@@ -20,6 +20,7 @@ import {
   processFailureFacts,
   ButtonLink,
   OpenConversationAction,
+  OpenRunInputAction,
   type DataTableColumn,
   DEFAULT_PAGE_SIZE,
   DataTable,
@@ -81,6 +82,7 @@ import {
   runExecutorParam,
   runOutcomeView,
   runProfileLabel,
+  runSearchHref,
   runStartedAt,
   runStatusLabels,
   runStatusParam,
@@ -444,6 +446,8 @@ function RunDetailView({ run }: { run: RunDetail }) {
           conversation_id: run.conversation_id,
         }).toString()}`
       : null;
+  // 「RAG 検索で開く」（#3309）: 本人の RAG 検索の実行を、質問と条件を入れて RAG 検索の画面に開く（検索はしない）。
+  const searchHref = runSearchHref(run, { canOpenSearch: hasPermission(MENU_PERMISSIONS.search) });
   const verification = runVerificationView(run.verification);
   const statusLabels = runStatusLabels();
   const traceLabels = useTraceDetailsLabels();
@@ -540,13 +544,22 @@ function RunDetailView({ run }: { run: RunDetail }) {
             ) : null
           }
           actions={
-            // 「会話を開く」は 3 製品共通の部品（チャットでない実行は出さない。#2343）。
-            <OpenConversationAction
-              href={chatHref}
-              linkComponent={Link}
-              labels={{ label: t("history.detail.openChat"), ariaLabel: t("history.detail.openChatLabel") }}
-              testId="run-history-open-chat"
-            />
+            // 「会話を開く」（チャット。#2343）と「RAG 検索で開く」（RAG 検索。#3309）は 3 製品共通の部品で、
+            // 実行のきっかけでどちらか 1 つだけが出る。
+            <>
+              <OpenConversationAction
+                href={chatHref}
+                linkComponent={Link}
+                labels={{ label: t("history.detail.openChat"), ariaLabel: t("history.detail.openChatLabel") }}
+                testId="run-history-open-chat"
+              />
+              <OpenRunInputAction
+                href={searchHref}
+                linkComponent={Link}
+                labels={{ label: t("history.detail.openSearch"), ariaLabel: t("history.detail.openSearchLabel") }}
+                testId="run-history-open-search"
+              />
+            </>
           }
         />
       }

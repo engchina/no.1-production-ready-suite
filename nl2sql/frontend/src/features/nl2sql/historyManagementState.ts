@@ -14,6 +14,7 @@ import {
 
 import { t } from "../../lib/i18n";
 import { APP_ROUTES } from "../../lib/routes";
+import { querySqlGenerationUrl } from "./queryPrefillState";
 import type { HistoryItem } from "./types";
 
 /** NL2SQL が写せる共通の状態（完了 = 安全性の判定を通過、ブロック = 実行を止めた）。失敗は記録しない。 */
@@ -176,4 +177,19 @@ export function historyConversationHref(
   if (!canOpenChat || historyKind(item) !== "chat" || !item.session_id) return null;
   if (!seesAllUsers && item.owned_by_me !== true) return null;
   return `${APP_ROUTES.chat}?${new URLSearchParams({ profile_id: item.profile_id, conversation_id: item.session_id }).toString()}`;
+}
+
+/**
+ * 実行の詳細の「SQL 生成で開く」の URL（#3309。run-history.md「詳細」）。SQL 生成の画面の実行（`kind` が query）を、
+ * 質問・業務プロファイル・生成の方式を入れて SQL 生成の画面に開く（SQL の生成と実行はしない）。出すのは実行した本人で、
+ * SQL 生成の画面の権限があるときだけ（system_admin でも他の人の実行には出さない。#3244）。チャット・MCP・品質評価の
+ * 実行は null（チャットは「会話を開く」）。
+ */
+export function historySqlGenerationHref(
+  item: HistoryItem,
+  { canOpenQuery }: { canOpenQuery: boolean }
+): string | null {
+  if (!canOpenQuery || historyKind(item) !== "query" || item.executed_by_me !== true) return null;
+  if (!item.question.trim()) return null;
+  return querySqlGenerationUrl(item, APP_ROUTES.query);
 }

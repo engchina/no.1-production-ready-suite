@@ -32,7 +32,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { CategorySelectFields } from "@/components/documents/CategorySelectFields";
 import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
@@ -77,6 +77,17 @@ import {
   isExtractionFieldFilterRows,
   parseExtractionFieldFilterValue,
 } from "./extraction-field-filters";
+import {
+  CLASSIFICATION_FILTER_KEYS,
+  type ClassificationFilterValues,
+  DEFAULT_TOP_K,
+  EMPTY_CLASSIFICATION_FILTERS,
+  hasSearchPrefillParams,
+  SEARCH_PREFILL_KEYS,
+  searchPrefillFromParams,
+  TOP_K_OPTIONS,
+  type TopKOption,
+} from "./search-prefill";
 
 type Phase = "idle" | "streaming" | "done" | "cancelled" | "error";
 
@@ -115,9 +126,6 @@ interface SearchRequestSnapshot {
   excludedAutoFields: string[];
 }
 
-const TOP_K_OPTIONS = ["5", "10", "20", "50"] as const;
-const DEFAULT_TOP_K = "20";
-type TopKOption = (typeof TOP_K_OPTIONS)[number];
 const TOP_K_SELECT_OPTIONS = TOP_K_OPTIONS.map((option) => ({
   value: option,
   label: option,
@@ -133,7 +141,11 @@ export function SearchClient() {
   // span の段の名前（段の名前・技術の span の名前）は root の文言で付ける（#3226）。
   // 入力中の質問・検索・回答プロファイル・詳細条件は、ページを行き来しても再読込しても残す（workspace-state.md）。
   // 回答・引用などの結果は保存せず、戻っただけで検索を送り直さない。
-  const [query, setQuery] = useWorkspaceState("search.query", "");
+  // 実行の詳細の「RAG 検索で開く」（#3309）は URL で質問と条件を渡す。開いたときに一度だけ入力欄と条件へ入れ
+  // （保存値より優先し、URL に無い条件は既定に戻す）、URL から外す。検索はしない（利用者が「検索」を押す）。
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [prefill] = useState(() => searchPrefillFromParams(searchParams));
+  const [query, setQuery] = useWorkspaceState("search.query", "", undefined, prefill?.question);
   const [submittedQuery, setSubmittedQuery] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [answer, setAnswer] = useState("");
@@ -144,27 +156,59 @@ export function SearchClient() {
   const [classification, setClassification] = useWorkspaceState<ClassificationFilterValues>(
     "search.classification",
     EMPTY_CLASSIFICATION_FILTERS,
-    isClassificationFilterValues
+    isClassificationFilterValues,
+    prefill?.classification
   );
-  const [classificationOpen, setClassificationOpen] = useState(false);
+  const [classificationOpen, setClassificationOpen] = useState(() =>
+    Boolean(prefill && Object.values(prefill.classification).some((value) => value))
+  );
   // 抽出項目の値の条件（#549）。行は作業状態に残し、項目の型は選んだ検索・回答プロファイルの KB の定義から引く。
   const [extractionRows, setExtractionRows] = useWorkspaceState<ExtractionFieldFilterRow[]>(
     "search.extractionFields",
     [],
-    isExtractionFieldFilterRows
+    isExtractionFieldFilterRows,
+    prefill?.extractionRows
   );
-  const [extractionOpen, setExtractionOpen] = useState(false);
-  const [topK, setTopK] = useWorkspaceState<TopKOption>("search.topK", DEFAULT_TOP_K, isOneOf(TOP_K_OPTIONS));
-  const [advancedOpen, setAdvancedOpen] = useWorkspaceState("search.advancedOpen", false);
+  const [extractionOpen, setExtractionOpen] = useState(() => Boolean(prefill?.extractionRows.length));
+  const [topK, setTopK] = useWorkspaceState<TopKOption>(
+    "search.topK",
+    DEFAULT_TOP_K,
+    isOneOf(TOP_K_OPTIONS),
+    prefill?.topK
+  );
+  // URL で条件を入れたときは詳細条件を開き、入った条件を見せる。
+  const [advancedOpen, setAdvancedOpen] = useWorkspaceState(
+    "search.advancedOpen",
+    false,
+    undefined,
+    prefill
+      ? prefill.topK !== DEFAULT_TOP_K ||
+          prefill.extractionRows.length > 0 ||
+          Object.values(prefill.classification).some((value) => value)
+      : undefined
+  );
   // 回答の生成は既定でオフ（検索結果までを表示する。#649）。選んだ値は作業状態に残す。
-  const [generateAnswer, setGenerateAnswer] = useWorkspaceState("search.generateAnswer", false);
+  const [generateAnswer, setGenerateAnswer] = useWorkspaceState(
+    "search.generateAnswer",
+    false,
+    undefined,
+    prefill?.generateAnswer
+  );
   const [appliedFilters, setAppliedFilters] = useState<Record<string, string>>({});
   // 対象の検索・回答プロファイルは 1 つ（#635）。チャットと同じく ID を 1 つだけ作業状態に残す。
   const [searchAnswerProfileId, setSearchAnswerProfileId] = useWorkspaceState<string | null>(
     "search.searchAnswerProfileId",
     null,
-    isNullableString
+    isNullableString,
+    prefill ? prefill.searchAnswerProfileId : undefined
   );
+  // URL の初期値は一度だけ入れ、URL から外す（再読込・戻るで作業状態の値を上書きしない）。
+  useEffect(() => {
+    if (!hasSearchPrefillParams(searchParams)) return;
+    const remaining = new URLSearchParams(searchParams);
+    SEARCH_PREFILL_KEYS.forEach((key) => remaining.delete(key));
+    setSearchParams(remaining, { replace: true });
+  }, [searchParams, setSearchParams]);
   const [scopeError, setScopeError] = useState("");
   const [run, setRun] = useState<SearchRun | null>(null);
   // 表示中の回答を生成したときの検索・回答プロファイル。回答・引用の評価はこの検索・回答プロファイルへ送る。
@@ -1046,16 +1090,6 @@ function buildSearchFilters({
   if (extractionFields) filters[EXTRACTION_FIELD_FILTER_KEY] = extractionFields;
   return filters;
 }
-
-/** 文書の分類（完全一致）と有効期間の基準日。backend の検索 filters のキーと同じ名前。 */
-const CLASSIFICATION_FILTER_KEYS = ["large_category", "middle_category", "small_category", "as_of"] as const;
-type ClassificationFilterValues = Record<(typeof CLASSIFICATION_FILTER_KEYS)[number], string>;
-const EMPTY_CLASSIFICATION_FILTERS: ClassificationFilterValues = {
-  large_category: "",
-  middle_category: "",
-  small_category: "",
-  as_of: "",
-};
 
 /** 質問の候補は分類だけで絞る（基準日は候補に関係しない）。 */
 function classificationSuggestionFilters(values: ClassificationFilterValues): Record<string, string> {

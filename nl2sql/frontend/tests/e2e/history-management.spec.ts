@@ -364,11 +364,23 @@ test("実行の詳細はチャットの往復だけ「会話を開く」を出�
   await expect(openChat).toHaveAttribute("href", /\/chat\?profile_id=finance&conversation_id=conversation-finance-1$/);
   await expect(page.getByRole("button", { name: "この質問で再実行" })).toHaveCount(0);
 
-  // SQL 生成の画面の実行は、開く元の会話が無いので出さない。
+  // チャットの実行に「SQL 生成で開く」は出さない（どちらか 1 つ。#3309）。
+  await expect(page.getByTestId("history-detail-open-query")).toHaveCount(0);
+
+  // SQL 生成の画面の実行は、開く元の会話が無いので「会話を開く」は出さず、本人の実行は「SQL 生成で開く」（#3309）。
   await page.getByRole("button", { name: "実行履歴の一覧へ戻る" }).click();
   await titleLink(page, "請求金額を確認").click();
   await expect(page.getByTestId("history-detail-summary")).toBeVisible();
   await expect(page.getByTestId("history-detail-open-chat")).toHaveCount(0);
+  await expect(page.getByTestId("history-detail-open-query")).toHaveAttribute(
+    "href",
+    /\/query\?question=%E8%AB%8B%E6%B1%82%E9%87%91%E9%A1%8D%E3%82%92%E7%A2%BA%E8%AA%8D&engine=select_ai&profile_id=default$/
+  );
+  // SQL 生成の画面の権限が無ければ出さない。
+  permissions = ["menu.history", "menu.chat"];
+  await page.reload();
+  await expect(page.getByTestId("history-detail-summary")).toBeVisible();
+  await expect(page.getByTestId("history-detail-open-query")).toHaveCount(0);
 });
 
 test("検索・状態・種類・期間の絞り込みはサーバーへ渡し、0 件なら条件のクリアを案内する", { tag: "@responsive" }, async ({ page }, testInfo) => {

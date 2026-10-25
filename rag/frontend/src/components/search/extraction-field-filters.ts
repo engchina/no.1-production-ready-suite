@@ -114,6 +114,32 @@ export function extractionFieldFilterValue(conditions: readonly ExtractionFieldC
   return conditions.length ? JSON.stringify(conditions) : "";
 }
 
+/**
+ * 条件（`filters.extraction_fields`）を編集の行に戻す（実行の詳細の「RAG 検索で開く」。#3309）。
+ * 同じ項目の以上・以下は 1 行の範囲にまとめる。形の違う条件は捨て、行は画面の上限まで。
+ */
+export function extractionFieldFilterRowsFromConditions(
+  conditions: readonly unknown[]
+): ExtractionFieldFilterRow[] {
+  const rows: ExtractionFieldFilterRow[] = [];
+  for (const item of conditions) {
+    if (typeof item !== "object" || item === null) continue;
+    const { name, op, value } = item as Record<string, unknown>;
+    if (typeof name !== "string" || !name || typeof value !== "string") continue;
+    if (op !== "eq" && op !== "gte" && op !== "lte") continue;
+    let row = op === "eq" ? undefined : rows.find((current) => current.name === name && !current.value);
+    if (!row) {
+      if (rows.length >= MAX_EXTRACTION_FIELD_FILTER_ROWS) continue;
+      row = { ...newExtractionFieldFilterRow(), name };
+      rows.push(row);
+    }
+    if (op === "eq") row.value = value;
+    else if (op === "gte") row.min = value;
+    else row.max = value;
+  }
+  return rows;
+}
+
 /** 条件の表示（「金額 ≥ 100000」など）。検索の適用中の条件と、質問から読み取った条件（#652）で使う。 */
 export function extractionFieldConditionLabel(condition: ExtractionFieldCondition): string {
   const value =

@@ -17,8 +17,10 @@ import {
   historyOwner,
   historyRequestUrl,
   historyRunStatus,
+  historySqlGenerationHref,
   normalizeHistoryFilters,
 } from "../src/features/nl2sql/historyManagementState.ts";
+import { prefillFromSearchParams } from "../src/features/nl2sql/queryPrefillState.ts";
 import type { HistoryItem } from "../src/features/nl2sql/types.ts";
 
 const base: HistoryItem = {
@@ -144,6 +146,32 @@ test("「会話を開く」はチャットの往復だけ、会話を見られ�
     historyConversationHref({ ...chat, owned_by_me: false }, { seesAllUsers: true, canOpenChat: true }),
     "/chat?profile_id=sales&conversation_id=conv-1"
   );
+});
+
+test("「SQL 生成で開く」は本人の SQL 生成の実行だけ、質問と条件を入れた SQL 生成の URL にする (#3309)", () => {
+  const query: HistoryItem = { ...base, question: "合成の質問 A", kind: "query", executed_by_me: true };
+  const canOpen = { canOpenQuery: true };
+  const href = historySqlGenerationHref(query, canOpen);
+  assert.equal(href, "/query?question=%E5%90%88%E6%88%90%E3%81%AE%E8%B3%AA%E5%95%8F+A&engine=select_ai&profile_id=sales");
+  // 画面が URL から読む値と同じ（質問は書き換えない）。
+  assert.deepEqual(prefillFromSearchParams(new URLSearchParams(href?.split("?")[1])), {
+    question: "合成の質問 A",
+    engine: "select_ai",
+    profileId: "sales",
+  });
+  // 画面で選べない方式は入れない（業務プロファイルの既定に任せる）。
+  assert.equal(
+    historySqlGenerationHref({ ...query, engine: "auto" as HistoryItem["engine"] }, canOpen),
+    "/query?question=%E5%90%88%E6%88%90%E3%81%AE%E8%B3%AA%E5%95%8F+A&profile_id=sales"
+  );
+  // 他の人の実行（system_admin が見る）・権限が無い・チャット・MCP・品質評価・古い応答は出さない。
+  assert.equal(historySqlGenerationHref({ ...query, executed_by_me: false }, canOpen), null);
+  assert.equal(historySqlGenerationHref({ ...query, executed_by_me: undefined }, canOpen), null);
+  assert.equal(historySqlGenerationHref(query, { canOpenQuery: false }), null);
+  for (const kind of ["chat", "mcp", "evaluation"] as const) {
+    assert.equal(historySqlGenerationHref({ ...query, kind, session_id: "conv-1" }, canOpen), null);
+  }
+  assert.equal(historySqlGenerationHref({ ...query, question: " " }, canOpen), null);
 });
 
 const TRACE_ID = "b".repeat(32);

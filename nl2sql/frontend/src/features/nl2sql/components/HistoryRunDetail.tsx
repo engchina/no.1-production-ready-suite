@@ -11,6 +11,7 @@ import {
   ContentActionBar,
   EmptyState,
   OpenConversationAction,
+  OpenRunInputAction,
   PageBody,
   PageHeader,
   RunDetailLayout,
@@ -39,6 +40,7 @@ import {
   historyKindDisplay,
   historyOwner,
   historyRunStatus,
+  historySqlGenerationHref,
 } from "../historyManagementState";
 import { engineLabel } from "../labels";
 import { profileRecordDisplayLabel } from "../profileDisplay";
@@ -76,6 +78,8 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
     seesAllUsers: user?.is_system_admin === true,
     canOpenChat: canOpenRoute(APP_ROUTES.chat, hasPermission),
   });
+  // 「SQL 生成で開く」（#3309）: 本人の SQL 生成の実行を、質問と条件を入れて SQL 生成の画面に開く（実行はしない）。
+  const queryHref = historySqlGenerationHref(item, { canOpenQuery: canOpenRoute(APP_ROUTES.query, hasPermission) });
   const status = historyRunStatus(item);
   const sql = item.executable_sql || item.generated_sql;
   // 処理の経過は実行したジョブの span の木（チャット・SQL 生成と同じ記録・工程の定義。#3226 の案 A）。span は共通の
@@ -167,12 +171,22 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
             runId={item.id}
             extraFacts={extraFacts}
             actions={
-              <OpenConversationAction
-                href={chatHref}
-                linkComponent={Link}
-                labels={{ label: t("history.action.openChat"), ariaLabel: t("history.action.openChatLabel") }}
-                testId="history-detail-open-chat"
-              />
+              // 「会話を開く」（チャット。#2343）と「SQL 生成で開く」（SQL 生成。#3309）は 3 製品共通の部品で、
+              // 実行のきっかけでどちらか 1 つだけが出る。
+              <>
+                <OpenConversationAction
+                  href={chatHref}
+                  linkComponent={Link}
+                  labels={{ label: t("history.action.openChat"), ariaLabel: t("history.action.openChatLabel") }}
+                  testId="history-detail-open-chat"
+                />
+                <OpenRunInputAction
+                  href={queryHref}
+                  linkComponent={Link}
+                  labels={{ label: t("history.action.openQuery"), ariaLabel: t("history.action.openQueryLabel") }}
+                  testId="history-detail-open-query"
+                />
+              </>
             }
             alert={
               status === "blocked" ? (

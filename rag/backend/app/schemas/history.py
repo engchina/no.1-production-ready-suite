@@ -60,6 +60,17 @@ class RunFeedback(BaseModel):
     created_at: datetime
 
 
+class RunSearchConditions(BaseModel):
+    """RAG 検索の実行の条件（件数・画面の絞り込み。#3309）。
+
+    実行の詳細の「RAG 検索で開く」が画面に戻す。
+    """
+
+    top_k: int | None = None
+    # 文書の分類・基準日・抽出項目の値（`filters` のキー → 値。画面が送れる条件だけ）。
+    filters: dict[str, str] = Field(default_factory=dict)
+
+
 class RunDetail(RunSummary):
     """実行の詳細（質問の全文・回答・根拠・回答の診断・処理の段・フィードバック）。"""
 
@@ -82,3 +93,5 @@ class RunDetail(RunSummary):
     citations: list[RetrievedChunk] = Field(default_factory=list)
     answer_diagnostics: dict[str, JsonValue] | None = None
     feedback: list[RunFeedback] = Field(default_factory=list)
+    # RAG 検索の実行の条件（#3309）。チャットの実行と、この機能より前の記録は None。
+    search_conditions: RunSearchConditions | None = None
