@@ -1,5 +1,5 @@
 import {timelineSnapshot, timelineTypography} from "../../../../platform/packages/ui/e2e/timeline-snapshot";
-import {jobProgressEvents, type JobProgressStep} from "./_helpers/job-progress";
+import {jobProgressEvents, jobProgressTraceId, withJobProgress, type JobProgressStep} from "./_helpers/job-progress";
 import { mockTabularPreview } from "./_helpers/tabular-preview";
 import { readFile } from "node:fs/promises";
 import { draftKey, WORKSPACE_DRAFT_PREFIX } from "../../src/lib/workspace-drafts";
@@ -499,7 +499,8 @@ async function expectOnlyNeutralConfirmationFieldInDialog(dialog: Locator) {
 type JsonValue = Record<string, unknown> | unknown[];
 
 interface MockApiState {
-  traceSummary?: unknown;
+  /** 完了したジョブの処理の経過（span のイベント）。省略時は `steps` から mock の backend が作る。 */
+  progressEvents?: unknown[];
   previewPayload: Record<string, unknown> | null;
   executePayload: Record<string, unknown> | null;
   jobPayload: Record<string, unknown> | null;
@@ -720,11 +721,19 @@ const classifierTrainingExamples = Array.from({ length: 27 }, (_, index) => {
   };
 });
 
+/** ジョブの応答（`job_id`・`status`・`steps`）に、mock の backend が記録する処理の経過の span のイベントを足す（#3226）。 */
+function withMockJobProgress(data: JsonValue): JsonValue {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return data;
+  const record = data as Record<string, unknown>;
+  const isJob = typeof record.job_id === "string" && typeof record.status === "string" && Array.isArray(record.steps);
+  return isJob && !("progress_events" in record) ? withJobProgress(record) : data;
+}
+
 function fulfillJson(route: Route, data: JsonValue) {
   return route.fulfill({
     status: 200,
     contentType: "application/json",
-    body: JSON.stringify({ data }),
+    body: JSON.stringify({ data: withMockJobProgress(data) }),
   });
 }
 
@@ -2712,7 +2721,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     const engine = String(state.jobPayload?.engine ?? "select_ai");
     return fulfillJson(route, {
       job_id: "job-default-001",
-      trace_summary: state.traceSummary,
+      ...(state.progressEvents ? { progress_events: state.progressEvents } : {}),
       status: "done",
       created_at: "2026-06-21T10:00:00.000Z",
       started_at: "2026-06-21T10:00:00.000Z",
@@ -5937,6 +5946,46 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
     elapsed_ms: 170,
     stage_timings: stageTimings,
   };
+  // 処理の経過は span のイベント（#3226）。工程の span の時刻は工程の所要時間を順に積む。
+  const at = (ms: number) => new Date(Date.parse(finishedTiming.started_at) + ms).toISOString();
+  let offset = 0;
+  const spanTimes = Object.fromEntries(
+    stageTimings.map((item) => {
+      const range = { startedAt: at(offset), finishedAt: at(offset + item.elapsed_ms) };
+      offset += item.elapsed_ms;
+      return [item.stage, range];
+    })
+  );
+  const stageDetails: Record<string, Record<string, unknown>> = {
+    prepare_context: { fields: [{ label: "生成に使った質問", value: questionText }] },
+    safety_check: { fields: [{ label: "結果", value: "安全" }, { label: "参照した表", value: "INVOICES", mono: true }, { label: "参照した列", value: "CUSTOMER_NAME, TOTAL_AMOUNT", mono: true }] },
+  };
+  const runningEvents = jobProgressEvents("job-step-001", {
+    at: createdAt,
+    steps: {
+      queue: { status: "done", startedAt: createdAt, finishedAt: finishedTiming.started_at },
+      prepare_context: { status: "done", ...spanTimes.prepare_context, details: stageDetails.prepare_context },
+      generate_sql: { status: "running", startedAt: spanTimes.generate_sql.startedAt, params: { engine: "select_ai" } },
+    },
+  });
+  const doneEvents = jobProgressEvents("job-step-001", {
+    at: finishedTiming.finished_at,
+    terminal: "done",
+    steps: {
+      queue: { status: "done", startedAt: createdAt, finishedAt: finishedTiming.started_at },
+      ...Object.fromEntries(
+        stageTimings.map((item) => [
+          item.stage,
+          {
+            status: "done",
+            ...spanTimes[item.stage],
+            ...(item.stage === "generate_sql" ? { params: { engine: "select_ai" } } : {}),
+            ...(stageDetails[item.stage] ? { details: stageDetails[item.stage] } : {}),
+          },
+        ])
+      ),
+    },
+  });
   let jobPayload: Record<string, unknown> | null = null;
   let finishJob!: () => void;
   const terminalGate = new Promise<void>((resolve) => {
@@ -5956,6 +6005,7 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
         { stage: "execute_sql", status: "pending", elapsed_ms: null },
         { stage: "format_results", status: "pending", elapsed_ms: null },
       ],
+      progress_events: runningEvents,
     });
   });
   await page.route("**/api/nl2sql/jobs/job-step-001", async (route) => {
@@ -5969,6 +6019,7 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
       elapsed_ms: finishedTiming.elapsed_ms,
       error_message: null,
       steps: stageTimings.map((item) => ({ ...item, status: "done" })),
+      progress_events: doneEvents,
       timing: finishedTiming,
       result: {
         history_id: "hist-run-001",
@@ -6010,10 +6061,11 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
     await expect(progress).toBeVisible();
     await expect(progress).toHaveAttribute("data-job-status", "running");
     await expect(prepare).toHaveAttribute("data-status", "done");
-    await expect(prepare).toContainText("質問と実行条件を準備");
+    await expect(prepare).toContainText("質問と対象の表を準備しました");
+    // 実行中の span の行（#3226）。
     await expect(generate).toHaveAttribute("data-status", "running");
     await expect(generate).toHaveAttribute("aria-current", "step");
-    await expect(generate).toContainText("SQL を生成");
+    await expect(generate).toContainText("SQL を生成しています");
     await expect(progress.getByRole("timer")).toHaveAccessibleName(/経過時間 \d{2}:\d{2}/);
     await expect(progress.getByRole("timer")).toHaveAttribute("aria-live", "off");
     const runningIcon = generate.locator("svg.animate-spin");
@@ -13077,7 +13129,7 @@ for (const uuidAvailable of [false, true]) {
     await page.getByRole("tab", { name: "合成データ生成" }).click();
     const workspace = page.locator("#data-management-panel-synthetic");
     const panel = page.getByTestId("synthetic-run-panel");
-    await expect(panel).toContainText("確認用データと履歴は生成終了から24時間保持します。");
+    await expect(panel).toContainText("確認用データは生成終了から24時間保持し、期限後に破棄します。生成記録は履歴に残ります。");
     await workspace.getByRole("button", { name: "テーブル一覧を取得" }).click();
     await workspace.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
     await workspace.getByLabel("実行確認語").fill("APP.INVOICES");
@@ -17866,37 +17918,49 @@ test("synthetic manual refresh discards feedback after switching history", async
   await expect(panel.getByText(/生成状況に変更はありません/)).toBeVisible();
 });
 
-test("synthetic history keeps the last 24 hours after completion and preserves unfinished runs", async ({ page }, testInfo) => {
+test("synthetic history keeps finished runs after the review window and reads expired previews only", async ({ page }, testInfo) => {
+  // #3235: 生成の記録は期間で消さない。24 時間を過ぎるのは確認用データ（表示・適用・破棄）だけ。
   await mockNl2SqlApi(page);
   const at = Date.now();
   const old = new Date(at - 3 * 24 * 60 * 60_000).toISOString();
   const recent = syntheticRunFixture("completed");
-  const expired = { ...recent, run_id: "expired-run", created_at: old, finished_at: old };
+  const expired = { ...recent, run_id: "expired-run", created_at: old, finished_at: old, review_expired: true };
+  const expiredPreview = { ...expired, run_id: "expired-preview", preview: true, review_status: "ready" };
   const longRun = { ...recent, run_id: "recent-finish", created_at: old };
   const active = { ...syntheticRunFixture("unknown"), run_id: "old-unknown", created_at: old };
-  let runs = [recent, expired, longRun, active];
+  const runs = [recent, expired, expiredPreview, longRun, active];
+  let resultRequests = 0;
   await page.route("**/api/nl2sql/synthetic-data/runs", (route) => fulfillJson(route, runs));
-  await page.route("**/api/nl2sql/synthetic-data/runs/expired-run", (route) => route.fulfill({ status: 404, body: "expired" }));
+  await page.route("**/api/nl2sql/synthetic-data/runs/missing-run", (route) => route.fulfill({ status: 404, body: "missing" }));
+  await page.route("**/api/nl2sql/synthetic-data/runs/expired-preview/results**", (route) => { resultRequests += 1; return route.fulfill({ status: 409, body: "expired" }); });
   await page.goto("/data-management?synthetic_run=run-001");
   const panel = page.getByTestId("synthetic-run-panel");
   const history = panel.getByRole("combobox", { name: "生成履歴", exact: true });
   const historyOptions = await openSelectFieldOptions(history);
-  await expect(historyOptions).toHaveCount(3);
-  await expect(historyOptions.and(page.locator('[data-value="expired-run"]'))).toHaveCount(0);
+  await expect(historyOptions).toHaveCount(5);
+  await expect(historyOptions.and(page.locator('[data-value="expired-run"]'))).toHaveCount(1);
   await expect(historyOptions.and(page.locator('[data-value="recent-finish"]'))).toHaveCount(1);
   await expect(historyOptions.and(page.locator('[data-value="old-unknown"]'))).toHaveCount(1);
   await closeSelectFieldOptions(history);
-  await expect(panel).toContainText("履歴は処理終了から24時間保存します");
+  await expect(panel).toContainText("生成記録は削除せずに履歴に残します");
   await chooseSelectFieldOption(history, "old-unknown");
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成結果を確認できていません");
-  await chooseSelectFieldOption(history, "recent-finish");
+  await chooseSelectFieldOption(history, "expired-run");
+  await expect(panel.getByTestId("synthetic-run-reference")).toContainText("expired-run");
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
+  // 確認用データの期間を過ぎた確認の記録は読めるが、表示・適用・破棄はできない。
+  await chooseSelectFieldOption(history, "expired-preview");
+  const review = page.getByTestId("synthetic-review");
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("確認用データの保持期間を過ぎました（未適用）");
+  await expect(review).toContainText("確認用データの保持期間（生成終了から24時間）を過ぎたため");
+  await expect(review.getByRole("button", { name: "確認したデータを適用", exact: true })).toHaveCount(0);
+  await expect(review.getByRole("button", { name: "確認用データを破棄", exact: true })).toHaveCount(0);
+  expect(resultRequests).toBe(0);
   await history.scrollIntoViewIfNeeded();
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: testInfo.outputPath("synthetic-history-retention.png") });
-  // 保存済みの期限切れ ID を開いても、別の run を黙って選択しない。
-  runs = [recent, longRun, active];
-  await page.goto("/data-management?synthetic_run=expired-run");
+  // 開けない ID（別の利用者・別の DB の記録など）を開いても、別の run を黙って選択しない。
+  await page.goto("/data-management?synthetic_run=missing-run");
   await expectSelectFieldValue(history, "");
   await expect(panel.getByTestId("synthetic-run-reference")).toHaveCount(0);
 });
@@ -20013,6 +20077,23 @@ test("Select AI の SQL は安全性の確認の工程を「省略」と出す�
     elapsed_ms: 200,
     error_message: null,
     steps,
+    // Select AI の SQL で省略した安全性の確認は、未実行の span と省略の印（#1523・#3226）。
+    progress_events: jobProgressEvents("job-skip-001", {
+      at: "2026-10-12T10:00:00.200Z",
+      terminal: "done",
+      steps: {
+        queue: "done",
+        prepare_context: "done",
+        generate_sql: { status: "done", params: { engine: "select_ai" } },
+        safety_check: {
+          status: "skipped",
+          params: { tables: "INVOICES", table_count: 1, safety_check_skipped: true },
+          details: { fields: [{ label: "結果", value: "確認を省略" }, { label: "参照した表", value: "INVOICES", mono: true }] },
+        },
+        execute_sql: { status: "done", params: { rows: 1 } },
+        format_results: "done",
+      },
+    }),
     timing,
     result: {
       history_id: "hist-skip-001",
@@ -20048,11 +20129,10 @@ test("Select AI の SQL は安全性の確認の工程を「省略」と出す�
   await page.getByTestId("nl2sql-job-summary").click();
   const safetyStep = page.getByTestId("nl2sql-job-step-safety_check");
   await expect(safetyStep).toHaveAttribute("data-status", "skipped");
-  // 状態は色だけでなく「省略」の文字で示す（「未実行」ではない）。
-  await expect(safetyStep).toContainText("スキップ");
-  await expect(safetyStep.getByRole("button").first()).not.toContainText("未実行");
+  // 状態は色だけでなく文字で示し、省略の理由を添える（チャットと同じ工程の定義）。
+  await expect(safetyStep).toContainText("未実行");
+  await expect(safetyStep).toContainText("Select AI が生成した SELECT 文のため省略しました");
   await safetyStep.getByRole("button").first().click();
-  await expect(safetyStep).toContainText("Select AI が生成した SELECT 文のため");
   await expect(safetyStep).toContainText("INVOICES");
   await expect(page.getByTestId("nl2sql-job-step-execute_sql")).toHaveAttribute(
     "data-status",
@@ -20140,26 +20220,34 @@ test("新規テーブル取込は編集した型を再プレビューしてか�
   expect(api.importTabularPayload?.column_types).toEqual({ ID: "VARCHAR2(1000 CHAR)" });
 });
 
-test("実測 trace の親子関係を SQL 生成で開ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const { syntheticTraceSummary, captureTraceLayouts } = await import("../../../../platform/packages/ui/e2e/trace-fixture");
+test("SQL 生成の処理の経過は span の木で、段の中のモデルの呼び出しを入れ子で出し、Trace ID を処理の詳細に出す (#3226)", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const api = await mockNl2SqlApi(page);
-  api.traceSummary = syntheticTraceSummary;
+  api.progressEvents = jobProgressEvents("job-default-001", { at: "2026-06-21T10:00:00.050Z", terminal: "done", steps: {
+    queue: "done",
+    prepare_context: "done",
+    generate_sql: { status: "done", params: { engine: "select_ai" }, children: [{ name: "gen_ai.chat", status: "done", attributes: { "gen_ai.request.model": "synthetic-model" } }] },
+    safety_check: "done",
+    execute_sql: { status: "done", params: { rows: 1 } },
+    format_results: "done",
+  } });
   await page.goto("/query");
   await fillQuestionWhenReady(page, "合成データの件数");
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "done");
+  await expect(page.getByTestId("nl2sql-job-summary")).toHaveText(/^処理の経過（7 ステップ・/);
   await page.getByTestId("nl2sql-job-summary").click();
+  const progress = page.getByTestId("nl2sql-job");
+  await expect(progress.getByTestId("nl2sql-job-step-generate_sql.1")).toContainText("モデルの呼び出し");
+  await expect(progress.locator('[data-level="1"]')).toContainText("synthetic-model");
+  // 「トレースの詳細」の 2 つ目の表示は無い。Trace ID は処理の詳細に出す。
+  await expect(page.getByText("トレースの詳細")).toHaveCount(0);
+  await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);
   const details = page.locator("[data-run-process-details]");
   await expect(details).not.toHaveAttribute("open", "");
   await details.locator(":scope > summary").click();
-  await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
-  await expect(page.getByTestId("trace-details")).toHaveCount(0);
-  await details.getByTestId("trace-details-toggle").click();
-  await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
-  await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
-  await expect(page.getByTestId("trace-details")).toContainText("2.0 秒");
+  await expect(details.locator("[data-trace-id-row]")).toContainText(`Trace ID: ${jobProgressTraceId("job-default-001")}`);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await captureTraceLayouts(page, testInfo, "sql-generate-trace");
+  await page.screenshot({ path: testInfo.outputPath("sql-generate-span-tree.png"), fullPage: true });
 });
 
 for (const scenario of ["正常", "プレビュー", "安全性の確認の省略", "安全性の確認で停止", "取消"] as const) {
@@ -20224,10 +20312,11 @@ for (const scenario of ["正常", "プレビュー", "安全性の確認の省�
   });
 }
 
-test("SQL 生成は最初の取得が終わる前から作成応答の開始待ちイベントを表示する", {tag: "@responsive"}, async ({page}, testInfo) => {
+test("SQL 生成は最初の取得が終わる前から開始待ちを表示する", {tag: "@responsive"}, async ({page}, testInfo) => {
   await mockNl2SqlApi(page);
   const at = new Date().toISOString();
-  const events = jobProgressEvents("synthetic-queue", {at, steps: {queue: "running"}});
+  // worker が受け取るまで span は無い（backend の start_job と同じ）。画面は開始待ちの仮の行を出す（#3226）。
+  const events: unknown[] = [];
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {release = resolve;});
   await page.route("**/api/nl2sql/jobs", (route) => fulfillJson(route, {job_id: "synthetic-queue", status: "pending", created_at: at, steps: [], progress_events: events}));

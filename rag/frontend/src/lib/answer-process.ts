@@ -1,26 +1,12 @@
 /**
- * 回答（チャット・RAG 検索）の「処理の経過」の工程の行（#2096）。
+ * 回答（チャット・RAG 検索・実行の詳細）の「処理の経過」の工程の名前と計測値（#2096 / #3226）。
  *
- * 3 製品共通の `ChatProgress` に渡す 1 工程 = 1 行を、次の 2 つから同じ規則で作る。
- *
- * - チャット: backend の段階のイベント（`app/rag/chat_progress.py`。種類 `answer_step` の値に工程名 `name` と
- *   入れ子の深さ `depth`、回答ができたら LLM の回数 `llm_calls` と結果の説明 `note`）。`lib/chat-progress.ts` の
- *   段階の定義がここの関数で名前・計測値・字下げを付ける。
- * - RAG 検索: SSE の工程のイベント（`stage`。`answer_step:<工程名>` と回答フローの外の工程）。入れ子の深さは
- *   開始と終了の順から決め、完了の後は回答の記録（`execution_steps`）の LLM の回数・結果の説明を足す。
- *
- * 全体を包む工程（`answer` / `retrieval`）は、中の工程を行にするので出さない。工程の名前は
- * `answerStepDisplayName` で利用者向けの名前にする。
+ * 処理の経過は回答の trace（span の木）の投影で、行は共通の `labelChatProgressSteps` が span のイベントから作る。
+ * ここは工程の名前（backend の工程名 → 利用者向けの名前）・段の名前（`pr.stage`）・計測値（LLM の回数・結果の
+ * 説明）を持ち、`lib/chat-progress.ts` の工程の定義と root の `TraceDetailsLabelsProvider` が使う。
  */
-import {
-  createTraceDetailsLabels,
-  type ChatProgressStep,
-  type ChatProgressStepStatus,
-  type TraceDetailsLabels,
-  type TraceSpanLabelInput,
-} from "@production-ready/ui";
+import { createTraceDetailsLabels, type TraceDetailsLabels } from "@production-ready/ui";
 
-import { parseRunStepDetails, type AnswerDiagnostics } from "./answer-diagnostics";
 import { formatNumber } from "./format";
 import { t, type I18nKey } from "./i18n";
 
@@ -44,8 +30,6 @@ export const ANSWER_STEP_KIND = "answer_step";
 
 /** 回答の記録の工程の状態のうち、結果の説明ではないもの（完了・例外で中断・中止。失敗は状態で示す）。 */
 const PLAIN_STEP_STATUSES = new Set(["", "complete", "completed", "done", "ok", "エラーで中断", "中止"]);
-/** 回答の記録の工程の状態のうち、工程の失敗（#2056 と同じ）。 */
-const FAILED_STEP_STATUSES = new Set(["エラーで中断", "中止"]);
 
 /**
  * backend の工程名（`rag_engine.generation.answering` の `_execution_step`）→ 利用者向けの名前（i18n）。
@@ -79,37 +63,37 @@ const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
 
 const STEP_ATTEMPT = /（(\d+)回目）$/;
 
+/** 回答エンジンの工程の利用者向けの名前。知らない工程名は undefined。 */
+function knownAnswerStepName(value: string): string | undefined {
+  if (Object.prototype.hasOwnProperty.call(ANSWER_STEP_NAME, value)) return t(ANSWER_STEP_NAME[value]);
+  const attempt = STEP_ATTEMPT.exec(value);
+  const base = attempt ? value.slice(0, attempt.index) : value;
+  if (!attempt || !Object.prototype.hasOwnProperty.call(ANSWER_STEP_NAME, base)) return undefined;
+  return t("answer.step.attempt", { name: t(ANSWER_STEP_NAME[base]), count: Number(attempt[1]) });
+}
+
 /** 工程の利用者向けの名前（backend の工程名から。知らない工程名はそのまま）。 */
 export function answerStepDisplayName(name: string): string {
   const value = name.trim();
   if (!value) return t("search.stage.processing");
-  if (Object.prototype.hasOwnProperty.call(ANSWER_STEP_NAME, value)) return t(ANSWER_STEP_NAME[value]);
-  const attempt = STEP_ATTEMPT.exec(value);
-  const base = attempt ? value.slice(0, attempt.index) : value;
-  if (!attempt || !Object.prototype.hasOwnProperty.call(ANSWER_STEP_NAME, base)) return value;
-  return t("answer.step.attempt", { name: t(ANSWER_STEP_NAME[base]), count: Number(attempt[1]) });
+  return knownAnswerStepName(value) ?? value;
 }
 
 /**
- * 「トレースの詳細」の span の名前を、処理の経過の行と同じ名前にする（#3214）。
- *
- * 回答エンジンの工程の span（`rag.engine.stage`）は工程名（属性 `pr.stage`）から `answerStepDisplayName` で、
- * パイプラインの段の span（`rag.<段>`）は処理の経過の段の名前にする。root（`rag.answer` / `rag.search`）は
- * 部品の既定の「実行の全体」にし、中の同名の段（`rag.answer`）と分ける。知らない span は部品の既定の名前にする。
+ * 段の利用者向けの名前（#3219 / #3226）。処理の経過の段の span（属性 `pr.stage`）の名前に使う。
+ * パイプラインの段（全体を包む `answer` / `retrieval` を含む）と回答エンジンの工程名を引き、知らない段は undefined
+ * （処理の経過も trace も段の名前をそのまま出す）。
  */
-export function ragTraceSpanLabel({ operationName, stage, root }: TraceSpanLabelInput): string | undefined {
-  if (root || !stage) return undefined;
-  if (operationName === "rag.engine.stage") return answerStepDisplayName(stage);
-  if (operationName !== `rag.${stage}`) return undefined;
-  if (stage === "answer") return t("search.stage.answer");
-  if (stage === "retrieval") return t("search.stage.retrieval");
-  return Object.prototype.hasOwnProperty.call(PIPELINE_STEP_LABEL, stage) ? t(PIPELINE_STEP_LABEL[stage]) : undefined;
+export function answerStageName(stage: string): string | undefined {
+  const value = stage.trim();
+  if (value === "answer") return t("search.stage.answer");
+  if (value === "retrieval") return t("search.stage.retrieval");
+  if (Object.prototype.hasOwnProperty.call(PIPELINE_STEP_LABEL, value)) return t(PIPELINE_STEP_LABEL[value]);
+  return knownAnswerStepName(value);
 }
 
-/** RAG の「トレースの詳細」の文言（span の名前は処理の経過と同じ）。 */
-export function ragTraceDetailsLabels(): TraceDetailsLabels {
-  return createTraceDetailsLabels(t, { spanLabel: ragTraceSpanLabel });
-}
+/** RAG の span の名前の文言（root の `TraceDetailsLabelsProvider` で全画面に渡す。段の名前は工程の行と同じ）。 */
+export const RAG_TRACE_DETAILS_LABELS: TraceDetailsLabels = createTraceDetailsLabels(t, { stageName: answerStageName });
 
 /**
  * 右の列の計測値（結果の説明・LLM の回数）。無ければ undefined。送り直しで API への送信（`llmSends`）が呼び出しより
@@ -140,145 +124,4 @@ export function llmCallsLabel(
   return sends && sends > calls
     ? t(`${prefix}.llmCallsWithSends`, { count: formatNumber(calls), sends: formatNumber(sends) })
     : t(`${prefix}.llmCalls`, { count: formatNumber(calls) });
-}
-
-/** 工程のイベントの種類（行にしない工程は null）。 */
-function stageKind(stage: string, includeWrapper = false): string | null {
-  if (includeWrapper && (stage === "retrieval" || stage === "answer")) return stage;
-  if (stage.startsWith(ANSWER_STEP_STAGE_PREFIX)) {
-    return stage.slice(ANSWER_STEP_STAGE_PREFIX.length).trim() ? ANSWER_STEP_KIND : null;
-  }
-  return Object.prototype.hasOwnProperty.call(PIPELINE_STEP_LABEL, stage) ? stage : null;
-}
-
-/** 工程の名前（行の名前）。 */
-function stageLabel(stage: string, kind: string): string {
-  if (kind === "retrieval") return t("search.stage.retrieval");
-  if (kind === "answer") return t("search.stage.answer");
-  if (kind === ANSWER_STEP_KIND) return answerStepDisplayName(stage.slice(ANSWER_STEP_STAGE_PREFIX.length));
-  return t(PIPELINE_STEP_LABEL[kind]);
-}
-
-/** SSE の工程のイベント（RAG 検索。受け取った時刻を足したもの）。 */
-export interface AnswerStageRecord {
-  stage: string;
-  outcome: "started" | "success" | "error" | "cancelled" | "skipped";
-  elapsed_ms: number;
-  /** 終わった工程の詳細（backend の共有の詳細の形。工程が終わったときに届く。#2341 / #2373）。 */
-  details?: unknown;
-  /** 工程の属性（回答フローの工程が終わったときの `llm_calls`・`status`。#2373）。 */
-  attributes?: Record<string, unknown>;
-  /** 画面が受け取った時刻（epoch ms。実行中の工程の経過時間の起点）。 */
-  receivedAtMs?: number;
-}
-
-/** 終わり方（実行中の工程を何にするか）。null は処理中。 */
-export type AnswerProcessTerminal = "done" | "failed" | "cancelled" | null;
-
-const TERMINAL_RUNNING_STATUS: Record<Exclude<AnswerProcessTerminal, null>, ChatProgressStepStatus> = {
-  done: "done",
-  failed: "failed",
-  cancelled: "skipped",
-};
-
-interface StageRow extends ChatProgressStep {
-  /** 回答の記録と対応させる工程名（回答フローの工程だけ）。 */
-  stepName?: string;
-}
-
-/**
- * RAG 検索の工程のイベントから、処理の経過の行を作る。終端（`terminal`）の後は実行中の工程を終わらせ、
- * 回答の記録の工程（`executionSteps`）があれば名前の順に対応させて計測値・失敗を足す。
- */
-export function answerProcessStepsFromStages(
-  stages: readonly AnswerStageRecord[],
-  {
-    terminal = null,
-    executionSteps = [],
-  }: { terminal?: AnswerProcessTerminal; executionSteps?: AnswerDiagnostics["steps"] } = {}
-): ChatProgressStep[] {
-  const includeWrapper = !stages.some((event) => event.stage.startsWith(ANSWER_STEP_STAGE_PREFIX));
-  const rows: StageRow[] = [];
-  const open: { stage: string; index: number }[] = [];
-  for (const event of stages) {
-    const kind = stageKind(event.stage, includeWrapper);
-    if (kind === null) continue;
-    if (event.outcome === "started") {
-      const depth = kind === ANSWER_STEP_KIND ? open.filter((item) => stageKind(item.stage) === ANSWER_STEP_KIND).length : 0;
-      const row: StageRow = { id: `s${rows.length + 1}`, label: stageLabel(event.stage, kind), status: "running" };
-      if (event.receivedAtMs !== undefined) row.startedAt = new Date(event.receivedAtMs).toISOString();
-      if (depth > 0) row.level = depth;
-      if (kind === ANSWER_STEP_KIND) row.stepName = event.stage.slice(ANSWER_STEP_STAGE_PREFIX.length).trim();
-      open.push({ stage: event.stage, index: rows.length });
-      rows.push(row);
-      continue;
-    }
-    let position = -1;
-    for (let index = open.length - 1; index >= 0; index -= 1) {
-      if (open[index].stage === event.stage) {
-        position = index;
-        break;
-      }
-    }
-    if (position < 0) continue;
-    const [{ index }] = open.splice(position, 1);
-    const row = rows[index];
-    if (event.outcome === "cancelled") {
-      // 中断（停止・時間切れ）は終端で決める。
-      continue;
-    }
-    row.status = event.outcome === "skipped" ? "skipped" : event.outcome === "success" ? "done" : "failed";
-    if (Number.isFinite(event.elapsed_ms)) row.durationMs = Math.max(0, event.elapsed_ms);
-    if (event.receivedAtMs !== undefined) row.finishedAt = new Date(event.receivedAtMs).toISOString();
-    // 終わった工程の詳細と計測値は、工程が終わったときのイベントで届く（回答の完了を待たずに段を開ける。#2341 / #2373）。
-    const stageDetails = parseRunStepDetails(event.details);
-    if (stageDetails) row.details = stageDetails;
-    if (row.stepName !== undefined && event.attributes) {
-      const calls = event.attributes.llm_calls;
-      const sends = event.attributes.llm_sends;
-      const note = typeof event.attributes.status === "string" ? event.attributes.status : null;
-      const meta = answerStepMeta({
-        llmCalls: typeof calls === "number" ? calls : null,
-        llmSends: typeof sends === "number" ? sends : null,
-        note,
-      });
-      if (meta) row.meta = meta;
-      if (note && FAILED_STEP_STATUSES.has(note.trim())) row.status = "failed";
-    }
-  }
-  if (terminal !== null) {
-    for (const row of rows) {
-      if (row.status === "running" || row.status === "pending") row.status = TERMINAL_RUNNING_STATUS[terminal];
-    }
-  }
-  // 回答の記録の工程を名前の順に対応させる（同じ名前の 2 回目は次の記録）。
-  let cursor = 0;
-  for (const row of rows) {
-    if (row.stepName === undefined) continue;
-    let match = -1;
-    for (let index = cursor; index < executionSteps.length; index += 1) {
-      if (executionSteps[index].name === row.stepName) {
-        match = index;
-        break;
-      }
-    }
-    if (match < 0) continue;
-    cursor = match + 1;
-    const record = executionSteps[match];
-    const meta = answerStepMeta({ llmCalls: record.llmCalls, llmSends: record.llmSends, note: record.status });
-    if (meta) row.meta = meta;
-    if (FAILED_STEP_STATUSES.has(record.status.trim())) row.status = "failed";
-    // 工程の詳細（見出しと値・行。段を開いて見る。#2294 / #2341）。
-    if (record.details) row.details = record.details;
-  }
-  return rows.map((row) => {
-    const step: ChatProgressStep = { id: row.id, label: row.label, status: row.status };
-    if (row.startedAt) step.startedAt = row.startedAt;
-    if (row.finishedAt) step.finishedAt = row.finishedAt;
-    if (row.durationMs != null) step.durationMs = row.durationMs;
-    if (row.meta) step.meta = row.meta;
-    if (row.level) step.level = row.level;
-    if (row.details) step.details = row.details;
-    return step;
-  });
 }

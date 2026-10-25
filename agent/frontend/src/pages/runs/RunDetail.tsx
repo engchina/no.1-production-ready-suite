@@ -1,9 +1,8 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Check, FileText, GitBranch, PlayCircle, RefreshCw, Server, ShieldAlert } from "lucide-react";
 import {
-  createTraceDetailsLabels,
   AnswerPassageBadges,
   AnswerNotice,
   Banner,
@@ -25,8 +24,10 @@ import {
   RunTimelineSection,
   SqlSafetyBadge,
   StatusBadge,
+  chatProgressTraceIdOf,
   formatRunDateTime,
   runStepDetailsJson,
+  useTraceDetailsLabels,
   type EntityAction,
   type RunEventLogItem,
   type StatusVariant,
@@ -37,7 +38,6 @@ import {
   type RunAuditData,
   type RunEvent,
   type RunState,
-  type RunStep,
   type RunSummary as RunSummaryData,
   type ToolAuditRecord,
 } from "@/lib/api";
@@ -49,7 +49,6 @@ import { OutcomeBadge } from "@/components/chat/AnswerReview";
 import { AnswerBody, ResultTable } from "@/components/chat/ResultTables";
 import { AddToEvaluationCase, useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
 import { ANSWER_KIND, ANSWER_VALIDATION_KIND, answerOutcome, runAnswerPassages } from "@/lib/answer-review";
-import { dataScopeNotes } from "@/lib/data-scope";
 import { formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { processFailureLabels, runFailure } from "@/lib/process-failure";
@@ -64,6 +63,7 @@ import {
   runDurationMs,
   runConversationHref,
   runFinishedAt,
+  runProgressIsLegacy,
   runStatusLabel,
   runTimelineSteps,
 } from "@/lib/run-history";
@@ -157,7 +157,10 @@ export function RunDetail({
   const passages = runAnswerPassages(run.artifacts);
   const latestAnswer = answers.at(-1);
   const outcome = latestAnswer ? answerOutcome(latestAnswer.content) : null;
-  const timelineSteps = runTimelineSteps(run, (step) => stepDetails(step), toolProgressTable);
+  // 処理の経過は Run の trace（span の木。#3226）の投影で、チャットと同じ記録・名前にする。
+  const traceLabels = useTraceDetailsLabels();
+  const timelineSteps = runTimelineSteps(run, toolProgressTable, { traceLabels });
+  const legacyProgress = runProgressIsLegacy(run);
   const failure = runFailure(run, timelineSteps, "detail");
   const usage = run.usage;
 
@@ -289,14 +292,23 @@ export function RunDetail({
         }
         timeline={
           <RunTimelineSection
-            traceLabels={createTraceDetailsLabels(t)}
-          traceSummary={run.trace_segments && run.trace_segments.length > 1 ? run.trace_segments : run.trace_summary}
+            // 「処理の詳細」には Trace ID だけを出す（処理の経過と同じ記録を 2 回出さない。#3226）。
+            traceId={chatProgressTraceIdOf(run.progress_events ?? [])}
             key={run.id}
             title={t("run.section.timeline")}
             steps={timelineSteps}
             totalDurationMs={runDurationMs(run)}
             labels={labels}
-            empty={<EmptyState title={t("run.timeline.noSteps")} />}
+            empty={
+              legacyProgress ? (
+                // span の無い古い形式の記録（空白にしない。#3226）。
+                <div data-testid="run-timeline-legacy">
+                  <EmptyState title={traceLabels.legacy} />
+                </div>
+              ) : (
+                <EmptyState title={t("run.timeline.noSteps")} />
+              )
+            }
             testId="run-timeline-section"
             // 処理の詳細（識別子・イベントの記録・ストリームの接続）は、処理の経過のタイムラインの後ろに既定で閉じて置く
             // （3 製品の実行の詳細とチャットの処理の経過で同じ名前・部品・位置。#2325）。
@@ -384,40 +396,6 @@ export function RunDetail({
 
 function isAnswerArtifact(artifact: Artifact): boolean {
   return artifact.kind === ANSWER_KIND && typeof (artifact.content.text ?? artifact.content.answer) === "string";
-}
-
-/** 処理の経過のツールの段を開いて見る中身（データの範囲・エラー・結果）。無ければ開閉を付けない。 */
-function stepDetails(step: RunStep): ReactNode {
-  const notes = dataScopeNotes(step.tool_call?.data_scope);
-  const error = step.tool_result?.error;
-  const output = step.tool_result?.output;
-  const name = step.tool_call?.name;
-  if (!name && !notes.length && !error && !output) return undefined;
-  return (
-    <>
-      {/* 段の名前は表示名（MCP の title）のことがあるので、調べる用にツールの内部名を出す（#2324）。 */}
-      {name ? (
-        <p className="text-xs text-fg-muted" data-testid={`run-step-tool-${step.id}`}>
-          {t("chat.progress.details.tool")}: <span className="break-all font-mono text-fg">{name}</span>
-        </p>
-      ) : null}
-      {/* データの範囲を当てた記録（使ったプロファイルと補完・上書き・拒否・絞り込み。#1378）。 */}
-      {notes.map((note) => (
-        <p key={note} className="text-xs text-fg-muted" data-testid={`run-step-data-scope-${step.id}`}>
-          {note}
-        </p>
-      ))}
-      {error ? <p className="text-xs text-danger-fg">{error}</p> : null}
-      {output ? (
-        <ToolOutput
-          output={output}
-          table={stepResultTable(step)}
-          name={t("resultTable.toolName", { tool: step.tool_call?.name ?? step.kind })}
-          testId={`run-step-table-${step.id}`}
-        />
-      ) : null}
-    </>
-  );
 }
 
 /** 承認の記録（ツール・状態・判断した人と日時）。承認待ちの判断は概要の操作から行う。 */

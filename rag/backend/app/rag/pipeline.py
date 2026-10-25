@@ -21,6 +21,9 @@ from pr_backend_core.chat_history import (
 from pr_backend_core.logging import safe_error_code, safe_exception_fields
 from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.tracing import (
+    ObservedSpan,
+    SpanDisplay,
+    SpanListener,
     finish_operation_trace,
     observed_span,
     operation_trace,
@@ -55,10 +58,19 @@ from app.rag.observability import (
 )
 from app.rag.query_history import record_query_history
 from app.rag.run_history import RunRecorder
+from app.rag.span_display import (
+    ANSWER_STEP_FAILED_STATUS,
+    ANSWER_STEP_KIND,
+    PIPELINE_STEP_KINDS,
+    answer_step_details,
+    answer_step_params,
+    failure_details,
+)
 from app.rag.step_details import (
     answer_guardrail_details,
     field_filter_details,
     history_rewrite_details,
+    step_details_model,
 )
 from app.rag.stored_answer import stored_citations, warn_if_large_answer_record
 from app.rag.support_guide_evidence import with_evidence_conditions
@@ -94,16 +106,16 @@ HISTORY_REWRITE_SYSTEM_PROMPT = (
 
 @dataclass(frozen=True)
 class SearchStageProgress:
-    """SSE / diagnostics 用の低機密 stage progress event。"""
+    """工程の開始・終了の低機密の知らせ（時間切れの工程・MCP の進み具合・失敗の工程に使う）。
+
+    画面の処理の経過は工程の span（表示用のデータを付けた trace。#3226）で、この知らせは使わない。
+    """
 
     trace_id: str
     stage: str
     outcome: str
     elapsed_ms: float
     attributes: Mapping[str, object]
-    # 終わった工程の詳細（処理の経過の段を開いて見る。共有の詳細の形 fields / lines。#2341）。
-    # 会話を踏まえた質問の書き換え・検索条件の読み取り・回答の安全チェックが成功のときに付ける。
-    details: Mapping[str, object] | None = None
     occurred_at_ms: float = field(default_factory=lambda: time() * 1000)
 
 
@@ -174,18 +186,46 @@ def _engine_cancelled() -> bool:
     return bool(deadline is not None and deadline.cancelled)
 
 
+class _EngineStageObservation:
+    """回答フローの工程の span の観測。工程の表示用のデータを span に付ける（#3226）。"""
+
+    def __init__(self, span: ObservedSpan) -> None:
+        self._span = span
+        self._values: dict[str, object] = {}
+
+    def usage(self, value: object) -> None:
+        pass
+
+    def display(
+        self,
+        kind: str | None = None,
+        params: Mapping[str, object] | None = None,
+        details: Mapping[str, object] | None = None,
+    ) -> None:
+        self._values.update(params or {})
+        failed = self._values.get("status") == ANSWER_STEP_FAILED_STATUS
+        self._span.set_display(
+            kind=kind,
+            params=answer_step_params(self._values),
+            details=(
+                answer_step_details(details, failed=failed)
+                if details is not None or failed
+                else None
+            ),
+        )
+
+
 @contextmanager
 def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation]:
     if operation == "stage":
+        # 工程の span は開いたときから工程の種類と工程名を持つ（実行中の行の名前。#3226）。
         with observed_span(
-            "rag.engine.stage", attributes={"pr.stage": model}, cancellation_check=_engine_cancelled
-        ):
-
-            class StageObservation:
-                def usage(self, value: object) -> None:
-                    pass
-
-            yield StageObservation()
+            "rag.engine.stage",
+            attributes={"pr.stage": model},
+            cancellation_check=_engine_cancelled,
+            display=SpanDisplay(kind=ANSWER_STEP_KIND, params={"name": model}),
+        ) as stage_span:
+            yield _EngineStageObservation(stage_span)
         return
     with observed_span(
         f"gen_ai.{operation}",
@@ -201,6 +241,14 @@ def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation
         class Observation:
             def usage(self, value: object) -> None:
                 record_genai_usage(span, value)
+
+            def display(
+                self,
+                kind: str | None = None,
+                params: Mapping[str, object] | None = None,
+                details: Mapping[str, object] | None = None,
+            ) -> None:
+                pass
 
         yield Observation()
 
@@ -266,10 +314,13 @@ class RagPipeline:
         *,
         history: Sequence[ChatTurn] | None = None,
         query_guardrail_result: GuardrailResult | None = None,
+        span_listener: SpanListener | None = None,
     ) -> SearchResponse:
         """RAG 検索を実行する。
 
         検索・回答プロファイルの言語資源の上書きがあれば、この要求の間だけ束ねる(#2181)。
+        ``span_listener`` は span の開始・表示用のデータの変更・終了を受け取る(画面の処理の経過。
+        #3226)。回答の thread の span は thread から呼ぶ。
         """
         overrides = self._settings.rag_language_pack_overrides
         trace_id = trace_id or new_trace_id()
@@ -277,7 +328,9 @@ class RagPipeline:
         try:
             with (
                 operation_trace(
-                    "rag.answer" if request.generate_answer else "rag.search", operation_id=trace_id
+                    "rag.answer" if request.generate_answer else "rag.search",
+                    operation_id=trace_id,
+                    listener=span_listener,
                 ) as trace_summary,
                 bind_trace_observer(_observe_engine_call),
                 bind_pack(resolve(current_pack(), overrides)) if overrides else nullcontext(),
@@ -507,9 +560,8 @@ class RagPipeline:
         async def emit_step(
             name: str, outcome: str, elapsed: float, record: Mapping[str, Any]
         ) -> None:
-            # 終わった工程の詳細を進捗の詳細に、LLM の回数・結果の説明を属性に入れる
-            # （実行中から段を開ける。#2373）。
-            details = record.get("details")
+            # 工程の知らせ（時間切れの工程・MCP の進み具合）。工程の詳細は
+            # 工程の span に付く（#3226）。
             await _emit_stage_progress(
                 progress_callback,
                 trace_id=trace_id,
@@ -517,7 +569,6 @@ class RagPipeline:
                 outcome=outcome,
                 elapsed=elapsed,
                 attributes={key: record[key] for key in ("llm_calls", "status") if key in record},
-                details=details if isinstance(details, Mapping) and details else None,
             )
 
         # 回答エンジンは検索と回答の生成（LLM）を中で行う。
@@ -920,8 +971,16 @@ async def _observe_stage[T](
 
     stage の中で実行した SQL の回数・行数・LOB の読み取りの回数・時間を span の属性に足す
     (``db_*``。SQL を実行しなかった stage には足さない。#1490)。
+
+    工程の span には表示用のデータ(回答フローの外の工程は種類、終わった工程の詳細、
+    失敗の要約)を付け、画面の処理の経過にする(#3226)。
     """
-    with observed_span(f"rag.{stage}", attributes={"pr.stage": stage}) as span:
+    kind = stage if stage in PIPELINE_STEP_KINDS else None
+    with observed_span(
+        f"rag.{stage}",
+        attributes={"pr.stage": stage},
+        display=SpanDisplay(kind=kind) if kind is not None else None,
+    ) as span:
         started_at = perf_counter()
         base_attributes = dict(attributes or {})
         await _emit_stage_progress(
@@ -967,6 +1026,8 @@ async def _observe_stage[T](
                 # 工程の失敗の詳細には安全なコードだけを出す（#2342）。
                 error_attributes["error_code"] = error_code
             record_rag_stage(SEARCH_METRIC_MODE, stage, "error", elapsed)
+            # 失敗した工程の詳細(短い要約とエラーの種類・コード。例外の本文は入れない。#2342)。
+            span.set_display(details=failure_details(kind, error_attributes))
             record_trace_span(
                 trace_id=trace_id,
                 span_name=stage,
@@ -997,13 +1058,15 @@ async def _observe_stage[T](
             seconds=elapsed,
             attributes=base_attributes,
         )
-        details: Mapping[str, object] | None = None
-        if result_details is not None and progress_callback is not None:
+        if result_details is not None:
             # 詳細は処理の経過の補助。作れなくても工程は成功のまま続ける。
             try:
-                details = result_details(result)
+                details = step_details_model(result_details(result))
             except Exception as exc:
                 logger.warning("stage details failed", extra={**safe_exception_fields(exc)})
+            else:
+                if details is not None:
+                    span.set_display(details=details)
         await _emit_stage_progress(
             progress_callback,
             trace_id=trace_id,
@@ -1011,7 +1074,6 @@ async def _observe_stage[T](
             outcome=outcome,
             elapsed=elapsed,
             attributes=base_attributes,
-            details=details,
         )
         return result
 
@@ -1024,7 +1086,6 @@ async def _emit_stage_progress(
     outcome: str,
     elapsed: float,
     attributes: Mapping[str, object],
-    details: Mapping[str, object] | None = None,
 ) -> None:
     if progress_callback is None:
         return
@@ -1035,6 +1096,5 @@ async def _emit_stage_progress(
             outcome=outcome,
             elapsed_ms=round(elapsed * 1000, 3),
             attributes=dict(attributes),
-            details=details,
         )
     )

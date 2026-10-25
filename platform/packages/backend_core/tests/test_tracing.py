@@ -367,3 +367,81 @@ def test_trace_schema_matches_published_contract() -> None:
 
     contract = Path(__file__).resolve().parents[3] / "contracts/trace/trace-summary.schema.json"
     assert json.loads(contract.read_text()) == TraceSummary.model_json_schema()
+
+
+def test_span_updates_stream_display_without_exporting_it() -> None:
+    """span の開始・表示用のデータ・終了を流し、表示用のデータは export しない（#3226）。"""
+    from datetime import UTC, datetime, timedelta
+
+    from pr_backend_core.chat_progress import chat_progress_details
+    from pr_backend_core.observability.tracing import SpanDisplay, SpanUpdate, record_span
+
+    exporter = InMemorySpanExporter()
+    configure_tracing(TracingSettings(), service_name="synthetic", exporter=exporter)
+    updates: list[SpanUpdate] = []
+    with operation_trace(
+        "task", operation_id="operation-a", listener=updates.append, display=SpanDisplay(kind="run")
+    ) as summary:
+        with observed_span("stage", attributes={"pr.stage": "first"}) as span:
+            span.set_display(
+                kind="first",
+                params={"count": 2},
+                details=chat_progress_details(fields=[("条件", "synthetic-detail")]),
+            )
+            span.set_display(params={"note": "完了"})
+        now = datetime.now(UTC)
+        record_span("wait", started_at=now - timedelta(seconds=2), finished_at=now)
+    root_id = summary.root_span_id
+    assert updates[0].root and updates[0].status == "running" and updates[0].span_id == root_id
+    stage = [update for update in updates if update.operation_name == "stage"]
+    assert [update.status for update in stage] == ["running", "running", "running", "done"]
+    assert stage[-1].display is not None
+    assert stage[-1].display.kind == "first"
+    assert stage[-1].display.params == {"count": 2, "note": "完了"}
+    assert stage[-1].parent_span_id == root_id and not stage[-1].root
+    wait = next(update for update in updates if update.operation_name == "wait")
+    assert wait.status == "done" and wait.finished_at is not None
+    assert abs((wait.finished_at - wait.started_at).total_seconds() - 2) < 0.01
+    assert updates[-1].span_id == root_id and updates[-1].status == "done"
+    recorded = {span.operation_name: span for span in summary.spans}
+    assert recorded["stage"].display is not None
+    assert recorded["stage"].display.details is not None
+    assert recorded["task"].display == SpanDisplay(kind="run")
+    assert shutdown_tracing()
+    exported = exporter.get_finished_spans()
+    assert {span.name for span in exported} == {"task", "stage", "wait"}
+    assert all("synthetic-detail" not in str(span.attributes) for span in exported)
+
+
+def test_ui_record_does_not_depend_on_export_settings() -> None:
+    """export が無効・未設定でも、表示用の記録と span のイベントは作る（#3226）。"""
+    for configure in (False, True):
+        if configure:
+            configure_tracing(TracingSettings(trace_enabled=False), service_name="synthetic")
+        updates: list[object] = []
+        with (
+            operation_trace("task", operation_id="operation-a", listener=updates.append) as summary,
+            observed_span("llm"),
+        ):
+            pass
+        assert summary.completeness == "complete"
+        assert not summary.sampled
+        assert {span.operation_name for span in summary.spans} == {"task", "llm"}
+        assert len(updates) == 4
+        shutdown_tracing()
+
+
+def test_span_updates_are_bounded_and_listener_failure_does_not_stop_work() -> None:
+    configure_tracing(TracingSettings(trace_ui_max_spans=2), service_name="synthetic")
+    seen: list[str] = []
+
+    def listener(update: object) -> None:
+        seen.append(getattr(update, "operation_name", ""))
+        raise RuntimeError("synthetic")
+
+    with operation_trace("task", operation_id="operation-a", listener=listener):
+        for _ in range(5):
+            with observed_span("llm"):
+                pass
+    # root と 1 つ目の span だけ（開始と終了）を知らせ、上限を超えた span は知らせない。
+    assert seen == ["task", "llm", "llm", "task"]

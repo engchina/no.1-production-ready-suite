@@ -764,7 +764,9 @@ def test_worker_trace_survives_snapshot_and_does_not_invent_execution(
         assert summary is not None
         names = [span.operation_name for span in summary.spans]
         assert "nl2sql.generate_sql" in names
-        assert "nl2sql.execute_sql" not in names
+        # 実行しない SQL の実行の段は、未実行（所要時間 0）の span で残す（#3226）。
+        [execute] = [span for span in summary.spans if span.operation_name == "nl2sql.execute_sql"]
+        assert execute.status == "skipped" and execute.duration_ms == 0
         root = next(span for span in summary.spans if span.span_id == summary.root_span_id)
         assert root.parent_span_id is not None
         assert all(span.parent_span_id == root.span_id for span in summary.spans if span != root)

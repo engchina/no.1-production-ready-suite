@@ -24,6 +24,8 @@ import { DbObjectName } from "./components/DbObjectName";
 export interface SyntheticRun {
   preview?: boolean;
   review_status?: "pending" | "ready" | "applied" | "discarded";
+  /** 確認用データの保持期間（生成終了から 24 時間）を過ぎたか（backend の判定）。過ぎた記録は閲覧だけ。 */
+  review_expired?: boolean;
   applied_at?: string | null;
   run_id: string;
   status: "pending" | "running" | "verifying" | "completed" | "partial" | "failed" | "no_data" | "unknown";
@@ -37,9 +39,10 @@ export interface SyntheticRun {
   failure_phase?: "validation" | null;
 }
 export const runFinished = (run: SyntheticRun) => ["completed", "partial", "failed", "no_data"].includes(run.status);
-export const historyExpired = (run: SyntheticRun) => runFinished(run) && Date.parse(run.finished_at ?? run.created_at) < Date.now() - 24 * 60 * 60_000;
+// 生成の記録は期間で消さない（#3235）。期間を過ぎるのは確認用データ（適用・破棄・表示ができる期間）だけ。
+export const reviewExpired = (run: SyntheticRun) => runFinished(run) && run.review_expired === true;
 export const runLabel = (run: SyntheticRun) => run.preview && run.status === "completed" && run.review_status !== "applied"
-  ? t(run.review_status === "discarded" ? "syntheticPreview.discarded" : "syntheticPreview.ready") : t(`syntheticRun.status.${run.status}`);
+  ? t(run.review_status === "discarded" ? "syntheticPreview.discarded" : reviewExpired(run) ? "syntheticPreview.expiredStatus" : "syntheticPreview.ready") : t(`syntheticRun.status.${run.status}`);
 
 export function useSyntheticRuns({ poll = false, enabled = true } = {}) {
   const { user, hasPermission } = useAuth();
@@ -85,7 +88,6 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
   run: SyntheticRun | null; runs: SyntheticRun[]; onSelect: (id: string) => void;
   error: boolean; submitting?: boolean; onRefresh: () => Promise<SyntheticRun | null>;
 }) {
-  const history = runs.filter((item) => !historyExpired(item));
   const [refresh, setRefresh] = useState<{ scope: string; pending: boolean; failed: boolean; message: string } | null>(null);
   const scope = `${run?.run_id ?? ""}:${submitting}`;
   const refreshSequence = useRef(0);
@@ -168,13 +170,13 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
       {run.finished_at && <p className="text-sm text-fg-muted">{t("syntheticRun.finishedAt", { time: formatDateTime(run.finished_at) })}</p>}
     </>}
     {runs.some((item) => !runFinished(item)) && <p className="text-sm text-fg-muted">{t("syntheticRun.independentRuns")}</p>}
-    {history.length > 0 && <SelectField
+    {runs.length > 0 && <SelectField
       id="synthetic-run-history"
       label={t("syntheticRun.history")}
       disabled={submitting}
       value={run?.run_id ?? ""}
       placeholder={t("syntheticRun.selectHistory")}
-      options={history.map((r) => ({ value: r.run_id, label: `${formatDateTime(r.created_at)} · ${runLabel(r)} · ${r.targets.map((target) => target.table_name).join(", ")} · ${r.run_id.slice(0, 8)}` }))}
+      options={runs.map((r) => ({ value: r.run_id, label: `${formatDateTime(r.created_at)} · ${runLabel(r)} · ${r.targets.map((target) => target.table_name).join(", ")} · ${r.run_id.slice(0, 8)}` }))}
       onValueChange={onSelect}
       // 生成履歴（日時・種類・対象の表・ID）は長い値の選択（lg。#1891）。
       width="lg"

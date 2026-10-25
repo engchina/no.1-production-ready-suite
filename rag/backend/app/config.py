@@ -1712,11 +1712,12 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, TracingSettings, 
         ),
     )
     rag_answer_record_retention_days: int = Field(
-        default=90,
+        default=0,
         ge=0,
         le=3650,
         description=(
-            "回答の記録の保持日数。0 は無期限。回答保存時と設定変更時に期限切れを削除する。"
+            "回答の記録と実行履歴の保持日数。既定の 0 は無期限で、自動では削除しない(#3235)。"
+            "正の値にすると、回答保存時と設定変更時に期限切れを削除する。"
         ),
     )
     rag_query_history_enabled: bool = Field(
@@ -1726,7 +1727,15 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, TracingSettings, 
             "(rag_poc の QUERY_HISTORY_ENABLED と同じく既定は無効)。"
         ),
     )
-    rag_query_history_retention_days: int = Field(default=90, ge=0, le=3650)
+    rag_query_history_retention_days: int = Field(
+        default=0,
+        ge=0,
+        le=3650,
+        description=(
+            "質問履歴の保持日数。既定の 0 は無期限で、自動では削除しない(#3235)。"
+            "正の値にすると、記録時と設定変更時に期限切れを削除し、候補にも使わない。"
+        ),
+    )
     rag_query_history_min_count: int = Field(default=3, ge=1, le=1000)
     rag_query_history_suggestion_limit: int = Field(default=5, ge=1, le=20)
     rag_support_guide_max_published_revisions: int = Field(

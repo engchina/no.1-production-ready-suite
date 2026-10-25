@@ -3,14 +3,14 @@ import type { Page } from "@playwright/test";
 
 import { findIconTextMisalignment } from "../../../platform/packages/ui/e2e/layout-checks";
 
-import { ProgressLog } from "./fixtures/chat-progress-events";
+import { ProgressLog, SYNTHETIC_MODEL, SYNTHETIC_TRACE_ID } from "./fixtures/chat-progress-events";
 import { expect, test, type MockApi } from "./fixtures/mock-api";
 import { expectProgressTimerMonotonic, startProgressTimerSampler } from "./fixtures/progress-timer";
 import { expectSpinnerStable } from "./fixtures/spinner-stability";
 
-// #1147: チャットの回答の場所に、Run の処理の段階（考えている・ツールの呼び出し・承認待ち・回答の作成）を
-// 共有の ChatProgress（3 製品共通。#1145）で出す。段階は backend が記録したイベント（#1359）で、実行中は SSE で受け取り、
-// 承認待ちの間も途絶えずに進むことを確かめる。
+// #1147: チャットの回答の場所に、Run の処理の経過を共有の ChatProgress（3 製品共通。#1145）で出す。処理の経過は Run の
+// trace（span の木。#3226）の投影で、backend が記録した span のイベント（#1359）を実行中は SSE で受け取り、承認待ちの
+// 間も途絶えずに進むことを確かめる。「トレースの詳細」の 2 つ目の表示は無く、「処理の詳細」には Trace ID だけを出す。
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
@@ -19,6 +19,7 @@ const VIEWPORTS = [
 
 const THREAD_ID = `thread_${"b".repeat(32)}`;
 const RUN_ID = "run-progress";
+const MODEL_CALL = `モデルの呼び出し · ${SYNTHETIC_MODEL}`;
 
 function iso(offsetMs: number): string {
   return new Date(Date.now() + offsetMs).toISOString();
@@ -35,9 +36,20 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(overflow).toBeLessThanOrEqual(0);
 }
 
+/** Trace ID の文字列が折り返しても、コピーのボタンは同じ行に置く（#3219）。 */
+async function expectTraceIdRowOnOneLine(page: Page) {
+  const sameRow = await page.evaluate(() =>
+    [...document.querySelectorAll("[data-trace-id-row]")].every((row) => {
+      const [text, button] = [row.querySelector("span"), row.querySelector("button")].map((el) => el?.getBoundingClientRect());
+      return text != null && button != null && button.top < text.bottom && text.top < button.bottom;
+    })
+  );
+  expect(sameRow).toBe(true);
+}
+
 function seedRunningRun(mockApi: MockApi) {
   const startedAt = iso(-3_000);
-  const progress = new ProgressLog(RUN_ID).step("plan", "running", { startedAt });
+  const progress = new ProgressLog(RUN_ID, undefined, startedAt).step("chat-1", "running", { startedAt });
   mockApi.state.runs.push({
     id: RUN_ID,
     goal: "契約の更新条件を調べて",
@@ -87,9 +99,9 @@ function toolStep(id: string, name: string, status: string, extra: Record<string
 for (const viewport of VIEWPORTS) {
   test(`終わったツールの段は、段の終わりのイベントの詳細で、後の段の実行中から開ける（#2373） (${viewport.name})`, async ({ page, mockApi }) => {
     const { progress: log } = seedRunningRun(mockApi);
-    // Run の step はまだ取り直していない（steps は空）。詳細は段のイベントだけで届く。
+    // Run の step はまだ取り直していない（steps は空）。詳細は span のイベントだけで届く。
     log
-      .step("plan", "done")
+      .step("chat-1", "done", { kind: "plan" })
       .step("tool:rag__rag_search", "running", { params: { tool: "rag__rag_search", title: "ナレッジベースの検索" } })
       .step("tool:rag__rag_search", "done", {
         details: {
@@ -97,26 +109,30 @@ for (const viewport of VIEWPORTS) {
           code: [{ label: "引数", language: "json", text: JSON.stringify({ query: "合成の語" }, null, 2) }],
         },
       })
-      .step("respond", "running");
+      .step("chat-2", "running");
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/chat");
     await openThread(page);
 
     const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
     const current = turn.getByTestId("chat-progress-current");
-    await expect(current).toHaveAttribute("data-step-id", "respond");
+    await expect(current).toHaveAttribute("data-step-id", "chat-2");
+    // 呼び出し中のモデルは、種類が決まるまで共通の名前（モデル名つき）で出す。
+    await expect(current).toContainText(MODEL_CALL);
     const toggle = turn.getByTestId("chat-progress-step-tool:rag__rag_search-toggle");
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
     const details = turn.getByTestId("chat-progress-step-tool:rag__rag_search-details");
     await expect(details.locator("dd").first()).toHaveText("rag__rag_search");
     await expect(details.getByLabel("引数")).toContainText("合成の語");
+    // 製品の詳細の後ろに span の技術の値（Span name）が付く。
+    await expect(details).toContainText("gen_ai.execute_tool");
     // 後の段は実行中のまま。
-    await expect(current).toHaveAttribute("data-step-id", "respond");
+    await expect(current).toHaveAttribute("data-step-id", "chat-2");
     await expectNoHorizontalOverflow(page);
   });
 
-  test(`処理の経過のツールの段は表示名で出し、開くと内部名と引数・結果の JSON を出す（詳細の無い段は開かない。#2294 / #2324） (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+  test(`処理の経過のツールの段は表示名で出し、開くと内部名と引数・結果の JSON を出す（#2294 / #2324） (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
     const { run, progress: log } = seedRunningRun(mockApi);
     run.status = "completed";
     run.steps = [
@@ -129,13 +145,15 @@ for (const viewport of VIEWPORTS) {
         },
       }),
     ];
-    // ツールの表示名（MCP の title）は backend が params の title に入れる（#2324）。
+    // ツールの表示名（MCP の title）は backend が params の title に、Run の step の id を run_step に入れる（#2324・#3226）。
     log
-      .step("plan", "done")
-      .step("tool:rag__rag_search", "running", { params: { tool: "rag__rag_search", title: "ナレッジベースの検索" } })
+      .step("chat-1", "done", { kind: "plan" })
+      .step("tool:rag__rag_search", "running", {
+        params: { tool: "rag__rag_search", title: "ナレッジベースの検索", run_step: "step-search" },
+      })
       .step("tool:rag__rag_search", "done")
-      .step("respond", "running")
-      .step("respond", "done")
+      .step("chat-2", "running")
+      .step("chat-2", "done", { kind: "respond" })
       .terminal("done");
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/chat");
@@ -149,8 +167,9 @@ for (const viewport of VIEWPORTS) {
     await expect(turn.getByTestId("chat-progress-step-tool:rag__rag_search")).toContainText(
       "「ナレッジベースの検索」を実行しました"
     );
-    // 詳細のある段（ツール）だけに開閉のボタン。既定で閉じる。
-    await expect(turn.getByTestId("chat-progress-step-plan-toggle")).toHaveCount(0);
+    await expect(turn.getByTestId("chat-progress-step-chat-1")).toContainText("進め方を決めました");
+    await expect(turn.getByTestId("chat-progress-step-chat-2")).toContainText("回答を作りました");
+    // 開閉のボタンは既定で閉じる。
     const toggle = turn.getByTestId("chat-progress-step-tool:rag__rag_search-toggle");
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await expect(turn.getByTestId("chat-progress-step-tool:rag__rag_search-details")).toBeHidden();
@@ -162,8 +181,15 @@ for (const viewport of VIEWPORTS) {
     // 段の名前は表示名なので、調べる用の内部名を詳細の先頭に出す。
     await expect(details.locator("dt").first()).toHaveText("ツール");
     await expect(details.locator("dd").first()).toHaveText("rag__rag_search");
+    // 引数と結果は、span と結んだ Run の step の記録（取り直した結果）で出す。
     await expect(details.getByLabel("引数")).toContainText('"query": "契約"');
     await expect(details.getByLabel("結果")).toContainText("合成の回答 A");
+    // 「処理の詳細」には Trace ID を出し、「トレースの詳細」の 2 つ目の表示は無い（#3226）。
+    const processDetails = turn.getByTestId("chat-progress-details");
+    await processDetails.click();
+    await expect(turn.locator("[data-trace-id-row]")).toContainText(SYNTHETIC_TRACE_ID);
+    await expect(turn.getByTestId("trace-details-toggle")).toHaveCount(0);
+    await expectTraceIdRowOnOneLine(page);
     // 文字の横のアイコン（状態・開閉の印）は、文字の 1 行目の中心にそろえる（#2371）。
     expect(await findIconTextMisalignment(page, { root: `[data-testid="chat-turn-${RUN_ID}"]` })).toEqual([]);
     await expectNoHorizontalOverflow(page);
@@ -173,7 +199,7 @@ for (const viewport of VIEWPORTS) {
   });
 
   for (const theme of ["light", "dark"] as const) {
-    test(`回答の作成中は今の段階を 1 行で出し、ツール・承認待ち・完了へ進む (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+    test(`回答の作成中は実行中の span を今の行で出し、ツール・承認待ち・完了へ進む (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
       const { run, progress: log } = seedRunningRun(mockApi);
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await useTheme(page, theme);
@@ -185,10 +211,10 @@ for (const viewport of VIEWPORTS) {
       const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
       const progress = turn.getByTestId("chat-progress");
       const current = turn.getByTestId("chat-progress-current");
-      // 1. モデルが考えている。
+      // 1. モデルを呼び出している（実行中の span）。
       await expect(progress).toHaveAttribute("data-chat-progress-state", "running");
-      await expect(current).toHaveAttribute("data-step-id", "plan");
-      await expect(current).toContainText("考えています");
+      await expect(current).toHaveAttribute("data-step-id", "chat-1");
+      await expect(current).toContainText(MODEL_CALL);
       await expect(turn.getByTestId("chat-progress-timer")).toBeVisible();
       // 動くスピナーは今の段階の 1 つだけ。回転しても見た目の重心も箱・行も動かない（#1180）。
       await expect(turn.locator("svg.animate-spin:visible")).toHaveCount(1);
@@ -196,20 +222,23 @@ for (const viewport of VIEWPORTS) {
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`progress-plan-${viewport.name}-${theme}.png`) });
 
-      // 2. ツールを呼んでいる（取り直しで進む）。完了した段階は畳んだ見出しに数える。
+      // 2. ツールを呼んでいる（SSE で span が増える）。終わったモデルの呼び出しは「進め方を決めました」。
       run.steps = [toolStep("step-search", "rag__rag_search", "running", { completed_at: null })];
-      log.step("plan", "done").step("tool:rag__rag_search", "running", { params: { tool: "rag__rag_search" } });
+      log
+        .step("chat-1", "done", { kind: "plan" })
+        .step("tool:rag__rag_search", "running", { params: { tool: "rag__rag_search", run_step: "step-search" } });
       await expect(current).toHaveAttribute("data-step-id", "tool:rag__rag_search");
       await expect(current).toContainText("処理を実行しています");
       await expect(turn.getByTestId("chat-progress-running")).toContainText("処理中（1 ステップ完了）");
       await page.screenshot({ path: testInfo.outputPath(`progress-tool-${viewport.name}-${theme}.png`) });
 
-      // 3. 承認待ち。段階は承認待ちで、承認の Banner も出る。
+      // 3. 承認待ち。実行の区間は閉じ、待ちの行は出さない（今の行の名前と承認の Banner で示す）。
       run.status = "waiting_approval";
       run.steps = [
         toolStep("step-search", "rag__rag_search", "completed"),
         toolStep("step-exec", "nl2sql__execute", "waiting_approval", { approval_id: "approval-progress" }),
       ];
+      const requestedAt = iso(-500);
       run.approvals = [
         {
           id: "approval-progress",
@@ -218,49 +247,54 @@ for (const viewport of VIEWPORTS) {
           tool_call: { name: "nl2sql__execute", arguments: { sql: "select 1" } },
           status: "pending",
           reason: "承認が必要です。",
-          created_at: iso(-500),
+          created_at: requestedAt,
         },
       ];
-      // backend の記録と同じ: ツールの後に回答の作成を始め、承認を求めたら進め方の検討の完了に変える。
       log
         .step("tool:rag__rag_search", "done")
-        .step("respond", "running")
-        .step("respond", "done", { kind: "plan" })
-        .step("approval_wait", "running", { params: { tools: "nl2sql__execute" } })
-        .step("tool:nl2sql__execute", "pending", { params: { tool: "nl2sql__execute" } });
-      await expect(current).toHaveAttribute("data-step-id", "approval_wait");
-      await expect(current).toContainText("承認を待っています（nl2sql__execute）");
+        .step("chat-2", "running")
+        .step("chat-2", "done", { kind: "plan" })
+        .pause();
+      await expect(current).toHaveAttribute("data-step-id", "");
+      await expect(current).toContainText("承認を待っています");
       await expect(turn.getByRole("button", { name: "承認して実行" })).toBeVisible();
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`progress-approval-${viewport.name}-${theme}.png`) });
-      // 考えている・ツール・承認待ちの段階を通る間、経過時間は減らない（段階ごとに 0 に戻さない）。
-      // 段階のイベントは SSE ですぐ届くので、記録（100ms ごと）が承認待ちを 1 回は拾うまで待ってから確かめる。
+      // 考えている・ツール・承認待ちを通る間、経過時間は減らない（段階ごとに 0 に戻さない）。承認待ちの今の行は
+      // span ではない（id が空）。記録（100ms ごと）が承認待ちを 1 回は拾うまで待ってから確かめる。
       await expect
         .poll(() =>
           page.evaluate(() =>
             ((window as unknown as { __progressTimerSamples?: string[] }).__progressTimerSamples ?? []).some((sample) =>
-              sample.startsWith("approval_wait|")
+              sample.startsWith("|")
             )
           )
         )
         .toBe(true);
       await expectProgressTimerMonotonic(page, 3);
 
-      // 4. 承認後に実行して完了。回答の上に「処理の経過」を閉じて出す（実行中は開く。#2096 / #2121）。承認待ちの間も段階の配信
-      // （SSE）は続くので、開き直さなくても終端が届き、会話を取り直して回答を出す（#1359）。
+      // 4. 承認後に再開して完了。待った区間は再開の区間の span で残る（#3226）。回答の上に「処理の経過」を閉じて
+      // 出す（実行中は開く。#2096 / #2121）。承認待ちの間も配信（SSE）は続くので、開き直さなくても終端が届き、会話を
+      // 取り直して回答を出す（#1359）。
       run.status = "completed";
       run.steps = [
         toolStep("step-search", "rag__rag_search", "completed"),
         toolStep("step-exec", "nl2sql__execute", "completed", { approval_id: "approval-progress" }),
       ];
-      run.approvals = [{ ...(run.approvals as Record<string, unknown>[])[0], status: "approved", decided_at: iso(-200) }];
+      const decidedAt = iso(-200);
+      run.approvals = [{ ...(run.approvals as Record<string, unknown>[])[0], status: "approved", decided_at: decidedAt }];
       run.artifacts = [{ id: "answer-progress", kind: "answer", name: "回答", content: { text: "契約は 1 年ごとに更新します。" } }];
       log
-        .step("approval_wait", "done")
-        .step("tool:nl2sql__execute", "running")
+        .resume()
+        .step("approval_wait", "done", {
+          params: { tools: "nl2sql__execute", round: 1 },
+          startedAt: requestedAt,
+          finishedAt: decidedAt,
+        })
+        .step("tool:nl2sql__execute", "running", { params: { tool: "nl2sql__execute", run_step: "step-exec" } })
         .step("tool:nl2sql__execute", "done")
-        .step("respond#2", "running")
-        .step("respond#2", "done")
+        .step("chat-3", "running")
+        .step("chat-3", "done", { kind: "respond" })
         .terminal("done");
       run.events = [
         ...(run.events as Record<string, unknown>[]),
@@ -271,7 +305,7 @@ for (const viewport of VIEWPORTS) {
       const summary = turn.getByTestId("chat-progress-summary");
       await expect(summary).toContainText("処理の経過（6 ステップ・");
       // 完了したら一覧を閉じ（#2121。RAG と同じ）、押すと開く。
-      await expect(turn.getByTestId("chat-progress-step-respond#2")).toBeHidden();
+      await expect(turn.getByTestId("chat-progress-step-chat-3")).toBeHidden();
       await expect(turn.getByText("契約は 1 年ごとに更新します。")).toBeVisible();
       // 処理の経過は回答の本文より上。使ったツールは処理の経過のツールの段で見る（一覧を重ねて出さない。#2324）。
       await expect(turn.getByText(/使ったツール/)).toHaveCount(0);
@@ -281,16 +315,22 @@ for (const viewport of VIEWPORTS) {
       ]);
       expect(summaryBox!.y).toBeLessThan(answerBox!.y);
       await summary.click();
-      await expect(turn.getByTestId("chat-progress-step-respond#2")).toBeVisible();
+      await expect(turn.getByTestId("chat-progress-step-chat-3")).toBeVisible();
       // 開いた一覧は実行の詳細と同じ RunTimeline（時間の線つき。狭い置き場所は線を隠し、所要時間の文字だけ。#2265）。
       const bars = progress.locator("[data-run-timeline-bar]");
       await expect(bars).toHaveCount(6);
       if (viewport.width >= 1280) await expect(bars.first()).toBeVisible();
       else await expect(bars.first()).toBeHidden();
+      // 承認の待ちは、待ったツールの名前と一緒に、承認の後のツールの前に出る（入れ子にしない）。
+      const approval = turn.getByTestId("chat-progress-step-approval_wait");
+      await expect(approval).toContainText("承認の判断を受け取りました");
+      await expect(approval).toContainText("nl2sql__execute");
+      expect((await approval.getAttribute("data-level")) ?? "0").toBe("0");
       await expect(turn.getByTestId("chat-progress-step-tool:nl2sql__execute")).toContainText("処理を実行しました");
-      await expect(turn.getByTestId("chat-progress-step-respond#2")).toHaveAttribute("data-status", "done");
-      // 回答の作成の後にツールを呼んだ段階は、進め方の検討の完了として残る（#1358）。
-      await expect(turn.getByTestId("chat-progress-step-respond")).toContainText("進め方を決めました");
+      await expect(turn.getByTestId("chat-progress-step-chat-3")).toHaveAttribute("data-status", "done");
+      await expect(turn.getByTestId("chat-progress-step-chat-3")).toContainText("回答を作りました");
+      // ツールを求めたモデルの呼び出しは、進め方の検討として残る。
+      await expect(turn.getByTestId("chat-progress-step-chat-2")).toContainText("進め方を決めました");
       // 終端が届いたら、承認待ちの後も会話を取り直して回答を出す（開き直さない）。
       expect(mockApi.requests.some((request) => request.path === `/api/runs/${RUN_ID}/progress/stream`)).toBe(true);
       await expectNoHorizontalOverflow(page);
@@ -302,11 +342,11 @@ for (const viewport of VIEWPORTS) {
       run.status = "failed";
       run.steps = [toolStep("step-search", "rag__rag_search", "completed")];
       log
-        .step("plan", "done")
-        .step("tool:rag__rag_search", "running", { params: { tool: "rag__rag_search" } })
+        .step("chat-1", "done", { kind: "plan" })
+        .step("tool:rag__rag_search", "running", { params: { tool: "rag__rag_search", run_step: "step-search" } })
         .step("tool:rag__rag_search", "done")
-        .step("respond", "running")
-        .step("respond", "failed")
+        .step("chat-2", "running")
+        .step("chat-2", "failed")
         .terminal("failed");
       run.events = [
         ...(run.events as Record<string, unknown>[]),
@@ -320,12 +360,12 @@ for (const viewport of VIEWPORTS) {
       const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
       await expect(turn.getByTestId("chat-progress")).toHaveAttribute("data-chat-progress-state", "failed");
       // 失敗があれば最初から開いて出す。
-      const failed = turn.getByTestId("chat-progress-step-respond");
+      const failed = turn.getByTestId("chat-progress-step-chat-2");
       await expect(failed).toBeVisible();
       await expect(failed).toHaveAttribute("data-status", "failed");
-      await expect(failed).toContainText("回答を作れませんでした");
+      await expect(failed).toContainText(MODEL_CALL);
       await expect(failed).toContainText("失敗");
-      // 原因は段階ではなく、回答の場所の Banner に出す。
+      // 原因は段階ではなく、回答の場所の失敗のカードに出す。
       await expect(turn.getByText("モデルの呼び出しに失敗しました（APIError）。")).toBeVisible();
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`progress-failed-${viewport.name}-${theme}.png`) });
@@ -334,19 +374,19 @@ for (const viewport of VIEWPORTS) {
 }
 
 test("チャットと履歴の工程の内容・階層・状態・時間が一致する", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
-  const {syntheticTraceSummary, captureTraceLayouts} = await import("../../../platform/packages/ui/e2e/trace-fixture");
   const {run} = seedRunningRun(mockApi);
-  run.trace_summary = syntheticTraceSummary;
   const start = "2026-10-23T00:00:00.000Z";
   const end = "2026-10-23T00:00:02.000Z";
   run.created_at = start;
   run.updated_at = end;
   run.status = "completed";
   run.steps = [toolStep("synthetic-step", "synthetic_tool", "completed", {tool_result: {name: "synthetic_tool", success: true, output: {value: 1}, duration_ms: 777}})];
-  run.progress_events = new ProgressLog(RUN_ID, () => end)
-    .step("plan", "done", {startedAt: start, finishedAt: end})
-    .step("tool:synthetic_tool", "done", {startedAt: start, finishedAt: end, params: {tool: "synthetic_tool"}})
-    .step("respond", "done", {startedAt: start, finishedAt: end}).terminal("done").events;
+  run.progress_events = new ProgressLog(RUN_ID, () => end, start)
+    .step("chat-1", "done", {startedAt: start, finishedAt: end, kind: "plan"})
+    .step("tool:synthetic_tool", "running", {startedAt: start, params: {tool: "synthetic_tool", run_step: "synthetic-step"}})
+    .step("mcp-1", "done", {startedAt: start, finishedAt: end, parent: "tool:synthetic_tool"})
+    .step("tool:synthetic_tool", "done", {finishedAt: end})
+    .step("chat-2", "done", {startedAt: start, finishedAt: end, kind: "respond"}).terminal("done").events;
   run.events = [{id: "end", run_id: RUN_ID, type: "run.completed", message: "", payload: {}, created_at: end}];
   await page.goto("/chat");
   await openThread(page);
@@ -356,7 +396,8 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   expect(liveTypography.steps.length).toBeGreaterThan(0);
   expect(liveTypography.steps.every(style => style?.fontSize === "12px" && style.fontFamily.includes("Noto Sans JP"))).toBe(true);
   expect(liveTypography.summary?.fontSize).toBe("12px");
-  expect(live).toHaveLength(3);
+  // span の木: ツールの中の MCP の呼び出しは 1 段下げる（実行の全体の span は行にしない）。
+  expect(live.map((row) => row.level)).toEqual([0, 0, 1, 0]);
   await page.screenshot({path: testInfo.outputPath("chat-process.png")});
   await page.goto(`/runs?id=${RUN_ID}`);
   await expect(page.getByTestId("run-summary")).toBeVisible();
@@ -365,14 +406,39 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   expect(await timelineSnapshot(page.getByTestId("run-timeline-section"))).toEqual(live);
   expect(await timelineTypography(page.getByTestId("run-timeline-section"))).toEqual(liveTypography);
   await expectNoHorizontalOverflow(page);
+  // 「処理の詳細」には Trace ID を出し、「トレースの詳細」は無い（処理の経過と同じ記録を 2 回出さない。#3226）。
   const details = page.locator("[data-run-process-details]");
   await expect(details).not.toHaveAttribute("open", "");
   await details.locator(":scope > summary").click();
-  await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
+  await expect(details.locator("[data-trace-id-row]")).toContainText(SYNTHETIC_TRACE_ID);
+  await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);
   await expect(page.getByTestId("trace-details")).toHaveCount(0);
-  await details.getByTestId("trace-details-toggle").click();
-  await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
-  await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
-  await captureTraceLayouts(page, testInfo, "history-trace");
+  await expectTraceIdRowOnOneLine(page);
   await page.getByTestId("run-timeline-section").screenshot({path: testInfo.outputPath("history-process.png")});
+});
+
+test("span の無い古い形式の記録は、処理の経過の位置に古い形式の案内を出す", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
+  const {run} = seedRunningRun(mockApi);
+  run.status = "completed";
+  // #3226 の前の段のイベント（span の名前が無い）。
+  run.progress_events = [
+    {schema_version: 1, type: "step", seq: 1, target_id: RUN_ID, attempt: 0, emitted_at: iso(-1_000), step_id: "plan", status: "done"},
+    {schema_version: 1, type: "terminal", seq: 2, target_id: RUN_ID, attempt: 0, emitted_at: iso(-1_000), status: "done"},
+  ];
+  run.artifacts = [{ id: "answer-legacy", kind: "answer", name: "回答", content: { text: "合成の回答です。" } }];
+  run.events = [{id: "end", run_id: RUN_ID, type: "run.completed", message: "", payload: {}, created_at: iso(0)}];
+  await page.goto("/chat");
+  await openThread(page);
+  const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+  await expect(turn.getByText("合成の回答です。")).toBeVisible();
+  await expect(turn.getByTestId("chat-progress-legacy")).toHaveText("この実行は古い形式の記録のため、処理の経過を表示できません。");
+  await expect(turn.getByTestId("chat-progress")).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({path: testInfo.outputPath("chat-legacy.png")});
+
+  await page.goto(`/runs?id=${RUN_ID}`);
+  await expect(page.getByTestId("run-summary")).toBeVisible();
+  await expect(page.getByTestId("run-timeline-legacy")).toContainText("この実行は古い形式の記録のため、処理の経過を表示できません。");
+  await expectNoHorizontalOverflow(page);
+  await page.getByTestId("run-timeline-section").screenshot({path: testInfo.outputPath("history-legacy.png")});
 });

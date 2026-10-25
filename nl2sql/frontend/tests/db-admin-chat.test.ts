@@ -7,12 +7,12 @@ import {
   dbAdminChatCanRunStatement,
   dbAdminChatConfirmed,
   dbAdminChatExecutionFromOutcome,
-  dbAdminChatProgressSteps,
+  dbAdminChatGenerateStep,
+  dbAdminChatProgress,
   dbAdminChatSavedExecutions,
   dbAdminChatStatementKind,
   dbAdminExecutionSucceeded,
   dbAdminFailureText,
-  planCheckDetail,
 } from "../src/features/nl2sql/dbAdminChat.ts";
 import type {
   DbAdminChatExecuteData,
@@ -117,35 +117,52 @@ test("「すべて実行」は SELECT だけなら確認語なし、変える文
   assert.equal(dbAdminChatCanRunAll(plan([]), ""), false);
 });
 
-test("SQL の確認の段は文の分類ごとの数を出し、止める文があってもほかの文が実行できれば失敗にしない", () => {
-  assert.equal(planCheckDetail(SELECTS), "読み取り専用 2");
-  assert.equal(planCheckDetail(WITH_BLOCKED), "読み取り専用 1・実行できない 1");
-  assert.equal(planCheckDetail(plan([statement(1, "DELETE FROM T1")])), "確認語 ADMIN_EXECUTE が必要");
-  const steps = dbAdminChatProgressSteps({ sentAtMs: 1_000, generatedAtMs: 2_000, plan: WITH_BLOCKED });
-  assert.equal(steps[1]?.status, "done");
-  const allBlocked = dbAdminChatProgressSteps({
-    sentAtMs: 1_000,
-    generatedAtMs: 2_000,
-    plan: plan([WITH_BLOCKED.statements[1]!]),
+/** backend が生成のときに記録する span の木（生成 → SQL の確認。合成の値。#3226）。 */
+function generationEvents(checkStatus: "done" | "failed"): unknown[] {
+  const root = "0".repeat(16);
+  const traceId = "c".repeat(32);
+  const event = (seq: number, value: Record<string, unknown>) => ({
+    schema_version: 1, seq, target_id: "turn-1", attempt: 0, emitted_at: "2026-10-23T00:00:04Z", type: "step",
+    trace_id: traceId, started_at: "2026-10-23T00:00:01Z", ...value,
   });
-  assert.equal(allBlocked[1]?.status, "failed");
-  const empty = dbAdminChatProgressSteps({ sentAtMs: 1_000, generatedAtMs: 2_000, plan: plan([]) });
-  assert.equal(empty.length, 1);
-});
+  const generate = { step_id: "1".padStart(16, "0"), kind: "generate_sql", name: "nl2sql.generate_sql", parent_id: root, params: { engine: "enterprise_ai_direct" } };
+  const check = { step_id: "2".padStart(16, "0"), kind: "db_admin_check", name: "nl2sql.safety_check", parent_id: root, params: { statements: 2, read_only: 1, change: 0, blocked: 1 } };
+  return [
+    event(1, { step_id: root, name: "nl2sql.db_admin_chat", root: true, status: "running" }),
+    event(2, { ...generate, status: "running" }),
+    event(3, { ...generate, status: "done", finished_at: "2026-10-23T00:00:03Z" }),
+    event(4, { ...check, status: "running" }),
+    event(5, { ...check, status: checkStatus, finished_at: "2026-10-23T00:00:04Z" }),
+    event(6, { step_id: root, name: "nl2sql.db_admin_chat", root: true, status: "done", finished_at: "2026-10-23T00:00:04Z" }),
+    { schema_version: 1, seq: 7, target_id: "turn-1", attempt: 0, emitted_at: "2026-10-23T00:00:04Z", type: "terminal", status: "done" },
+  ];
+}
 
-test("処理の経過は生成・SQL の確認の段階をチャットと同じ名前で出し、実行の段を足さない", () => {
-  const steps = dbAdminChatProgressSteps({ sentAtMs: 1_000, generatedAtMs: 4_000, plan: SELECTS });
+test("処理の経過は生成のときに記録した span の木（生成 → SQL の確認。実行の段を足さない。#3226）", () => {
+  const progress = dbAdminChatProgress({ turn_id: "turn-1", progress_events: generationEvents("done") });
+  assert.equal(progress.legacy, false);
+  assert.equal(progress.traceId, "c".repeat(32));
   assert.deepEqual(
-    steps.map((step) => [step.id, step.status]),
+    progress.steps.map((step) => [step.label, step.status]),
     [
-      ["generate_sql", "done"],
-      ["safety_check", "done"],
+      ["SQL を生成しました", "done"],
+      ["SQL の安全性を確認しました", "done"],
     ],
   );
-  assert.equal(steps[0]?.label, "SQL を生成しました");
-  // 実行（「実行」「もう一度実行」「すべて実行」）は文の区画に出し、生成したときの経過は変えない。
-  assert.equal(steps.some((step) => step.id === "execute_sql"), false);
-  assert.equal(steps.at(-1)?.finishedAt, new Date(4_000).toISOString());
+  assert.equal(progress.steps[0]?.detail, "Enterprise AI");
+  // 止める文があっても、ほかの文は実行できる（backend が段を完了にする）。補足は文の分類ごとの数。
+  assert.equal(progress.steps[1]?.detail, "読み取り専用 1・実行できない 1");
+  assert.equal(progress.steps.some((step) => step.label.includes("実行")), false);
+  const allBlocked = dbAdminChatProgress({ turn_id: "turn-1", progress_events: generationEvents("failed") });
+  assert.equal(allBlocked.steps[1]?.status, "failed");
+});
+
+test("span の無い古いターンは古い形式、送信中は生成の仮の行", () => {
+  assert.equal(dbAdminChatProgress({ turn_id: "turn-old" }).legacy, true);
+  const pending = dbAdminChatGenerateStep("running", 1_000);
+  assert.equal(pending.status, "running");
+  assert.equal(pending.label, "SQL を生成しています");
+  assert.equal(pending.startedAt, new Date(1_000).toISOString());
 });
 
 test("失敗の内容を AI のエラー分析に渡す形にする", () => {

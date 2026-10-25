@@ -4764,28 +4764,6 @@ export interface RunSummary {
   executor_display_name: string;
 }
 
-export interface RunStage {
-  stage: string;
-  outcome: string;
-  elapsed_ms: number | null;
-  /** 段の詳細（共有の詳細の形 `{ fields, lines, truncated }`。回答の安全チェックの結果など。#2341）。 */
-  details?: unknown;
-}
-
-export interface RunStep {
-  name: string;
-  status: string;
-  elapsed_seconds: number | null;
-  llm_calls: number | null;
-  /** API への実際の送信の回数（送り直しで llm_calls より多いときだけ。#2966）。 */
-  llm_sends?: number | null;
-  /**
-   * この工程だけの詳細（共有の詳細の形 `{ fields, lines, truncated }`。選んだ条・検索文・件数など。段を開いて
-   * 見る。#2294 / #2341）。#2294 の記録は行の配列、古い記録には無い。`parseRunStepDetails` で読む。
-   */
-  details?: unknown;
-}
-
 export interface RunFeedback {
   feedback_id: string;
   target_type: "answer" | "citation";
@@ -4822,10 +4800,11 @@ export interface RunDetail extends RunSummary {
   answer_notice?: string | null;
   citations: RetrievedChunk[];
   answer_diagnostics: Record<string, JsonValue> | null;
+  /**
+   * 処理の経過（実行の trace の span のイベント。#3226）。span の無い古い記録は空か段だけのイベントで、画面は古い
+   * 形式の案内を出す。
+   */
   progress_events?: import("@production-ready/ui").ChatProgressEvent[];
-  stage_events?: import("./answer-process").AnswerStageRecord[];
-  stages: RunStage[];
-  steps: RunStep[];
   feedback: RunFeedback[];
 }
 

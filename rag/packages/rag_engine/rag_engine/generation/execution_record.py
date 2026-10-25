@@ -251,22 +251,41 @@ def _execution_step(name: str, purpose: str = ""):
         step._keep_field("目的", purpose)
     _notify_step(name, "started", 0.0)
     failed = False
-    try:
-        with observe_call("stage", name):
-            yield step
-    except Exception:
-        failed = True
-        step.status = "エラーで中断"
-        raise
-    finally:
-        _step_depth.reset(depth_token)
-        elapsed = monotonic() - start
+    llm_calls = 0
+    usage: dict[str, Any] = {}
+    sends: dict[str, int] = {}
+
+    def measure() -> None:
+        nonlocal llm_calls, usage, sends
         llm_calls = llm_call_count.get() - llm_before
         usage = usage_delta(usage_before)
         # LLM の API への実際の送信の回数（未完了・停滞・暴走の送り直しを含む）。``llm_calls`` は呼び出しの回数で、
         # 送り直しを数えないので、送信が多いときだけ両方を示す（#2966）。
         llm_sends = int(usage.get("calls", 0) or 0)
         sends = {"llm_sends": llm_sends} if llm_sends > llm_calls else {}
+
+    try:
+        with observe_call("stage", name) as observation:
+            # 工程の span の表示用のデータ（種類と工程名。#3226）。終わったときに LLM の回数・結果の説明・詳細を足す。
+            observation.display("answer_step", {"name": name})
+            try:
+                yield step
+            except Exception:
+                failed = True
+                step.status = "エラーで中断"
+                raise
+            finally:
+                measure()
+                observation.display(
+                    "answer_step",
+                    {"llm_calls": llm_calls, **sends, "status": step.status or "complete"},
+                    step.structured_details() or None,
+                )
+    finally:
+        _step_depth.reset(depth_token)
+        elapsed = monotonic() - start
+        # 工程の span を開けなかったときも計測値をそろえる（span の中で測った値と同じ）。
+        measure()
         # 終わった工程の詳細・LLM の回数・結果の説明を、終わったときの通知で渡す（回答の完了を待たない。#2373）。
         _notify_step(
             name,

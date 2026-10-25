@@ -1,10 +1,13 @@
 import type { Page } from "@playwright/test";
 
-import { ProgressLog } from "./fixtures/chat-progress-events";
+import { ProgressLog, SYNTHETIC_MODEL, SYNTHETIC_TRACE_ID } from "./fixtures/chat-progress-events";
 import { expect, test, type MockApi } from "./fixtures/mock-api";
 
-// #1160: チャットの回答の作成中に、処理の段階の配信（#1359。SSE の `/progress/stream` と polling の `/progress`）が
+// #1160: チャットの回答の作成中に、処理の経過の配信（#1359。SSE の `/progress/stream` と polling の `/progress`）が
 // 応答しない・失敗し続けても、画面を止めない。「接続を確認しています」を出して取り直し、完了・失敗の終端まで追う。
+// 処理の経過は Run の trace（span の木。#3226）の投影。
+
+const MODEL_CALL = `モデルの呼び出し · ${SYNTHETIC_MODEL}`;
 
 const THREAD_ID = `thread_${"c".repeat(32)}`;
 const RUN_ID = "run-refresh";
@@ -21,7 +24,7 @@ async function useTheme(page: Page, theme: "light" | "dark") {
 
 function seedRunningRun(mockApi: MockApi) {
   const startedAt = iso(-3_000);
-  const progress = new ProgressLog(RUN_ID).step("plan", "running", { startedAt });
+  const progress = new ProgressLog(RUN_ID, undefined, startedAt).step("chat-1", "running", { startedAt });
   mockApi.state.runs.push({
     id: RUN_ID,
     goal: "契約の更新条件を調べて",
@@ -47,7 +50,7 @@ function seedRunningRun(mockApi: MockApi) {
 
 function complete(run: Record<string, unknown>, progress: ProgressLog) {
   run.status = "completed";
-  progress.step("plan", "done").step("respond", "done").terminal("done");
+  progress.step("chat-1", "done", { kind: "respond" }).terminal("done");
   run.artifacts = [{ id: "answer-refresh", kind: "answer", name: "回答", content: { text: "契約は 1 年ごとに更新します。" } }];
   run.events = [
     ...(run.events as Record<string, unknown>[]),
@@ -101,7 +104,7 @@ for (const theme of ["light", "dark"] as const) {
 
     const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
     const current = turn.getByTestId("chat-progress-current");
-    await expect(current).toContainText("考えています");
+    await expect(current).toContainText(MODEL_CALL);
     // 応答を止める（SSE の張り直し・途絶えの後の SSE の張り直し・取り直しの 3 回）。修正前（#1160）は 1 回目の取得を
     // 待ったまま取り直しが止まった。
     control.hang = 3;
@@ -134,11 +137,11 @@ for (const theme of ["light", "dark"] as const) {
     await openThread(page);
 
     const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
-    await expect(turn.getByTestId("chat-progress-current")).toContainText("考えています");
+    await expect(turn.getByTestId("chat-progress-current")).toContainText(MODEL_CALL);
     control.fail = 6;
     await expect.poll(() => control.fail, { timeout: 60_000 }).toBe(0);
     run.status = "failed";
-    progress.step("plan", "failed").terminal("failed");
+    progress.step("chat-1", "failed").terminal("failed");
     run.events = [
       ...(run.events as Record<string, unknown>[]),
       { id: "ev-failed", run_id: RUN_ID, type: "runtime.failed", message: "モデルの呼び出しに失敗しました（APIError）。", payload: {}, created_at: iso(0) },
@@ -151,29 +154,32 @@ for (const theme of ["light", "dark"] as const) {
   });
 }
 
-// trace と進捗の開閉は、実際の会話の API と画面を通して確かめる。
-test("実測 trace の親子関係を会話で開ける", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
-  const { syntheticTraceSummary, syntheticChatSpanLabel, captureTraceLayouts } = await import("../../../platform/packages/ui/e2e/trace-fixture");
+// 処理の経過（span の木）の名前と Trace ID は、実際の会話の API と画面を通して確かめる（#3226）。
+test("処理の経過は span の木を日本語の名前で出し、処理の詳細に Trace ID を出す", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
   const { run, progress } = seedRunningRun(mockApi);
+  progress
+    .step("chat-1", "done", { kind: "plan" })
+    .step("tool:synthetic_tool", "running")
+    .step("mcp-1", "done", { parent: "tool:synthetic_tool" })
+    .step("tool:synthetic_tool", "done")
+    .step("chat-2", "running");
   complete(run, progress);
-  run.trace_summary = syntheticTraceSummary;
   await page.goto("/chat");
   await openThread(page);
   await page.getByTestId("chat-progress-summary").click();
+  const list = page.getByTestId("chat-progress");
+  // 実行の全体（root）は行にせず、技術の span は日本語の名前にする（#3219）。英語の span の名前は開いた詳細の
+  // Span name だけ。
+  await expect(list.getByTestId("chat-progress-step-mcp-1")).toContainText("MCP の呼び出し");
+  await expect(list.getByText("実行の全体")).toHaveCount(0);
+  await expect(list.locator("[data-run-timeline-label]").filter({ hasText: /gen_ai\.|mcp\.|agent\.execute/ })).toHaveCount(0);
   const details = page.locator("[data-run-process-details]");
   await expect(details).not.toHaveAttribute("open", "");
   await details.locator(":scope > summary").click();
-  await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
-  await expect(page.getByTestId("trace-details")).toHaveCount(0);
-  await details.getByTestId("trace-details-toggle").click();
-  await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
-  const trace = page.getByTestId("trace-details");
-  // root は「実行の全体」、gen_ai の呼び出しはモデル名つきの名前にする（#3214）。
-  await expect(trace).toContainText("実行の全体");
-  await expect(trace).toContainText(syntheticChatSpanLabel);
-  await expect(trace).toContainText("gen_ai.execute_tool");
-  await expect(trace).toContainText("2.0 秒");
+  await expect(details.locator("[data-trace-id-row]")).toContainText(SYNTHETIC_TRACE_ID);
+  // 「トレースの詳細」の 2 つ目の表示は無い。
+  await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);
   await expect(page.locator("body")).not.toHaveText(/private-payload/);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await captureTraceLayouts(page, testInfo, "agent-trace");
+  await page.screenshot({ path: testInfo.outputPath("agent-trace-progress.png"), fullPage: true });
 });

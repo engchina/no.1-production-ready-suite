@@ -1,6 +1,7 @@
 """検索 API の HTTP 境界テスト。"""
 
 import asyncio
+import json
 import logging
 from typing import Any, cast
 
@@ -14,8 +15,8 @@ from app.main import app
 from app.rag.answer_timeout import answer_timeout_message
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
-from app.rag.pipeline import SearchStageProgress
 from app.schemas.search import SearchRequest, SearchResponse
+from tests.span_progress_support import answer_trace, pipeline_stage
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -36,7 +37,7 @@ def test_search_api_returns_504_when_pipeline_times_out(
     assert body["data"] is None
     # どの工程で時間切れになったか（最後に始まった工程）と、再試行の案内を返す（#375）。
     assert body["error_messages"] == [answer_timeout_message("answer", 0.05)]
-    assert "根拠の検索と回答の生成" in body["error_messages"][0]
+    assert "質問の読み取りから回答の作成まで" in body["error_messages"][0]
     assert "もう一度送信してください" in body["error_messages"][0]
 
     audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
@@ -64,10 +65,30 @@ def test_stream_search_api_emits_error_event_when_pipeline_times_out(
     assert response.headers["content-type"].startswith("text/event-stream")
     assert "event: error" in response.text
     assert answer_timeout_message("answer", 0.05) in response.text
-    # 進捗は時間切れの前に届き、error event は工程と TimeoutError を持つ（画面は 504 相当にする）。
-    assert '"stage": "answer", "outcome": "started"' in response.text
+    # 処理の経過（span のイベント。#3226）は時間切れの前に届き、error event は工程と
+    # TimeoutError を持つ（画面は 504 相当にする）。
+    progress = _chat_progress_events(response.text)
+    running = [event for event in progress if event.get("status") == "running"]
+    assert [event["name"] for event in running] == ["rag.answer", "rag.answer"]
+    assert running[0]["root"] is True
+    # 時間切れの後は実行中の段を残さず、失敗の終端を error の前に送る。
+    assert progress[-1]["type"] == "terminal"
+    assert progress[-1]["status"] == "failed"
+    assert response.text.rindex("event: chat_progress") < response.text.index("event: error")
     assert '"error_type": "TimeoutError"' in response.text
     assert '"stage": "answer"}' in response.text
+
+
+def _chat_progress_events(text: str) -> list[dict[str, Any]]:
+    """SSE の本文の `chat_progress` のイベント（処理の経過）を順に取り出す。"""
+    events: list[dict[str, Any]] = []
+    for block in text.split("\n\n"):
+        lines = block.strip().splitlines()
+        if "event: chat_progress" not in lines:
+            continue
+        data = "".join(line.removeprefix("data: ") for line in lines if line.startswith("data: "))
+        events.append(json.loads(data)["event"])
+    return events
 
 
 @pytest.mark.parametrize("path", ["/api/search", "/api/search/stream"])
@@ -399,21 +420,16 @@ class SlowPipeline:
         trace_id: str | None = None,
         progress_callback: Any | None = None,
         token_callback: object | None = None,
+        span_listener: Any | None = None,
     ) -> SearchResponse:
         _ = token_callback
         assert trace_id
         assert progress_callback is not None
-        # 回答フロー（LLM）の途中で時間切れになる。
-        await progress_callback(
-            SearchStageProgress(
-                trace_id=trace_id,
-                stage="answer",
-                outcome="started",
-                elapsed_ms=0.0,
-                attributes={},
+        # 回答フロー（LLM）の途中で時間切れになる（処理の経過は実行中の段の span。#3226）。
+        with answer_trace(span_listener, trace_id=trace_id):
+            await pipeline_stage(
+                "answer", asyncio.sleep(1), trace_id=trace_id, progress_callback=progress_callback
             )
-        )
-        await asyncio.sleep(1)
         raise AssertionError("timeout 前に完了しない")
 
 
@@ -429,6 +445,7 @@ class RealtimeStreamingPipeline:
         trace_id: str | None = None,
         progress_callback: object | None = None,
         token_callback: Any | None = None,
+        span_listener: Any | None = None,
     ) -> SearchResponse:
         _ = progress_callback
         assert trace_id
@@ -459,6 +476,7 @@ class RealtimeMaskingPipeline:
         trace_id: str | None = None,
         progress_callback: object | None = None,
         token_callback: Any | None = None,
+        span_listener: Any | None = None,
     ) -> SearchResponse:
         _ = progress_callback
         assert trace_id
@@ -487,6 +505,7 @@ class AuditingPipeline:
         trace_id: str | None = None,
         progress_callback: object | None = None,
         token_callback: object | None = None,
+        span_listener: Any | None = None,
     ) -> SearchResponse:
         _ = progress_callback, token_callback
         assert trace_id

@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { RouterProvider, createBrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import { ConfirmProvider, Toaster, initTheme } from "@production-ready/ui";
+import { ConfirmProvider, Toaster, TraceDetailsLabelsProvider, createTraceDetailsLabels, initTheme } from "@production-ready/ui";
 import {
   UnsavedChangesBlocker,
   useConfirmNavigationKey,
@@ -28,6 +28,8 @@ if (!root) {
 }
 
 const queryClient = new QueryClient();
+
+const TRACE_DETAILS_LABELS = createTraceDetailsLabels(t);
 
 /**
  * 共有 ConfirmProvider に Agent の文言を渡し、ルートが変わったら開いている確認をキャンセルする
@@ -54,7 +56,10 @@ const router = createBrowserRouter([
       <AppConfirmProvider>
         {/* ブラウザの戻る/進むの blocker はアプリで 1 つ。各画面のガードはここへ未保存を登録する（#586）。 */}
         <UnsavedChangesBlocker />
-        <App />
+        {/* 「トレースの詳細」の文言は全画面で同じ（#3219）。Agent の span は段（`pr.stage`）を持たないので、共通の名前だけを使う。 */}
+        <TraceDetailsLabelsProvider labels={TRACE_DETAILS_LABELS}>
+          <App />
+        </TraceDetailsLabelsProvider>
         <Toaster dismissLabel={t("common.dismiss")} regionLabel={t("common.notifications")} />
       </AppConfirmProvider>
     ),

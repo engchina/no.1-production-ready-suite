@@ -1,5 +1,6 @@
 import {timelineSnapshot, timelineTypography} from "../../../platform/packages/ui/e2e/timeline-snapshot";
 import { expect, type Page, type Route, test } from "./fixtures/test";
+import { ragSpan, savedSpanProgress, SPAN_TRACE_ID, spanStepId } from "./_chat-progress";
 
 import {
   enableSearchAnswer,
@@ -721,29 +722,43 @@ test("FAQ の提示対象が無いときは質問を止めず検索する", { ta
   await expect(page.getByText("類似する承認済み FAQ があります")).toHaveCount(0);
 });
 
-test("実測 trace の親子関係を RAG 検索で開ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const { syntheticTraceSummary, captureTraceLayouts } = await import("../../../platform/packages/ui/e2e/trace-fixture");
+/** 処理の経過の span のイベントを SSE の `chat_progress` にする（#3226）。 */
+function progressSse(events: unknown[]): [string, unknown][] {
+  return events.map((event): [string, unknown] => ["chat_progress", { event }]);
+}
+
+test("RAG 検索の処理の経過は span の木で、2 つ目の「トレースの詳細」は出さない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const progress = savedSpanProgress(
+    "synthetic-a",
+    [
+      { key: "root", spec: ragSpan.root(), at: [0, 2] },
+      { key: "filter", spec: ragSpan.stage("field_filter"), at: [0, 2] },
+      { key: "chat", spec: ragSpan.technical("gen_ai.chat", "filter", { "gen_ai.request.model": "synthetic-model" }), at: [0, 2] },
+    ],
+    { terminal: "done", base: "2026-01-01T00:00:00Z" }
+  );
   await page.route("**/api/search/stream", route => fulfillStream(route, sse([
-    ["stage", { trace_id: "synthetic-a", stage: "field_filter", outcome: "started", elapsed_ms: 0, attributes: {} }],
-    ["stage", { trace_id: "synthetic-a", stage: "field_filter", outcome: "success", elapsed_ms: 2000, attributes: {} }],
-    ["metadata", { trace_id: "synthetic-a", elapsed_ms: 2000, guardrail_warnings: [], diagnostics: { trace_summary: syntheticTraceSummary, answer: { outcome: "answered" } } }],
+    ...progressSse(progress),
+    ["metadata", { trace_id: "synthetic-a", elapsed_ms: 2000, guardrail_warnings: [], diagnostics: { answer: { outcome: "answered" } } }],
     ["delta", { text: "合成の回答です。" }], ["citations", []], ["done", { trace_id: "synthetic-a" }],
   ])));
   await page.goto("/search");
   await selectSearchAnswerProfile(page, VIEWS[0].name);
   await search(page, "合成データを確認");
   await page.getByTestId("search-run-progress-summary").click();
+  const process = page.getByTestId("search-run-progress");
+  // 段の名前と技術の span の日本語の名前・モデル名。入れ子は span の親子（root は行にしない）。
+  await expect(process.locator("[data-run-timeline-label]")).toHaveText(["検索条件の読み取り", "モデルの呼び出し · synthetic-model"]);
+  await expect(process.locator("[data-run-timeline-step]").nth(1)).toHaveAttribute("data-level", "1");
+  await expect(process.locator("[data-run-timeline-step]").nth(1)).toContainText("2.0 秒");
   const details = page.locator("[data-run-process-details]");
   await expect(details).not.toHaveAttribute("open", "");
   await details.locator(":scope > summary").click();
-  await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
+  await expect(details.locator("[data-trace-id-row]")).toContainText(`Trace ID: ${SPAN_TRACE_ID}`);
+  await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);
   await expect(page.getByTestId("trace-details")).toHaveCount(0);
-  await details.getByTestId("trace-details-toggle").click();
-  await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
-  await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
-  await expect(page.getByTestId("trace-details")).toContainText("2.0 秒");
   await expectNoPageOverflow(page);
-  await captureTraceLayouts(page, testInfo, "rag-search-trace");
+  await page.screenshot({ path: testInfo.outputPath("rag-search-span-tree.png"), fullPage: true });
 });
 
 
@@ -754,9 +769,22 @@ for (const scenario of [
   { name: "検査不能", outcome: "error", status: "failed", verdict: "安全検査を完了できず、回答を止めました", enabled: true },
 ]) {
   test(`出力の安全チェックの実施結果を区別する: ${scenario.name}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    // 検査の段の span の状態と詳細（#3226）。
+    const progress = savedSpanProgress(
+      "synthetic-guardrail",
+      [
+        { key: "root", spec: ragSpan.root() },
+        {
+          key: "guardrail",
+          spec: ragSpan.stage("answer_guardrail"),
+          status: scenario.status as "done" | "failed" | "skipped",
+          details: { fields: [{ label: "結果", value: scenario.verdict }] },
+        },
+      ],
+      { terminal: "done" }
+    );
     await page.route("**/api/search/stream", route => fulfillStream(route, sse([
-      ["stage", { trace_id: "synthetic-guardrail", stage: "answer_guardrail", outcome: "started", elapsed_ms: 0, attributes: {} }],
-      ["stage", { trace_id: "synthetic-guardrail", stage: "answer_guardrail", outcome: scenario.outcome, elapsed_ms: 1, attributes: {}, details: { fields: [{ label: "結果", value: scenario.verdict }] } }],
+      ...progressSse(progress),
       ["metadata", { trace_id: "synthetic-guardrail", elapsed_ms: 2, guardrail_warnings: [], diagnostics: { guardrails_output_enabled: scenario.enabled, answer: { outcome: "answered" } } }],
       ["delta", { text: "合成の回答です。" }], ["citations", []], ["done", { trace_id: "synthetic-guardrail" }],
     ])));
@@ -764,7 +792,7 @@ for (const scenario of [
     await selectSearchAnswerProfile(page, VIEWS[0].name);
     await search(page, "合成データを確認");
     await expect(page.getByText("合成の回答です。", { exact: true })).toBeVisible();
-    const row = page.getByTestId("search-run-progress-step-s1");
+    const row = page.getByTestId(`search-run-progress-step-${spanStepId("guardrail")}`);
     if (!(await row.isVisible())) await page.getByTestId("search-run-progress-summary").click();
     await expect(row).toHaveAttribute("data-status", scenario.status);
     const toggle = row.getByRole("button").first();
@@ -778,19 +806,26 @@ for (const scenario of [
 }
 
 test("RAG 検索と履歴の工程の内容・階層・状態・時間が一致する", {tag: "@responsive"}, async ({page}, testInfo) => {
-  const at = Date.parse("2026-10-23T00:00:00Z");
-  const stage_events = [
-    {stage: "answer_step:回答生成フロー", outcome: "started", elapsed_ms: 0, receivedAtMs: at},
-    {stage: "answer_step:文書検索", outcome: "started", elapsed_ms: 0, receivedAtMs: at + 100},
-    {stage: "answer_step:Rerank", outcome: "started", elapsed_ms: 0, receivedAtMs: at + 200},
-    {stage: "answer_step:Rerank", outcome: "success", elapsed_ms: 200, receivedAtMs: at + 400},
-    {stage: "answer_step:文書検索", outcome: "success", elapsed_ms: 400, receivedAtMs: at + 500},
-    {stage: "answer_step:回答生成フロー", outcome: "success", elapsed_ms: 1000, receivedAtMs: at + 1000, attributes: {status: "根拠不足で終了", llm_calls: 1}},
-    {stage: "answer_guardrail", outcome: "started", elapsed_ms: 0, receivedAtMs: at + 1000},
-    {stage: "answer_guardrail", outcome: "skipped", elapsed_ms: 1, receivedAtMs: at + 1001, details: {fields: [{label: "結果", value: "無効のため省略"}]}},
-  ];
+  // 工程の span の親子（回答生成フロー > 文書検索 > Rerank）と回答の安全チェック（#3226）。
+  const progress_events = savedSpanProgress(
+    "synthetic-parity",
+    [
+      { key: "root", spec: ragSpan.root(), at: [0, 1.001] },
+      { key: "flow", spec: ragSpan.step("回答生成フロー", "root"), at: [0, 1], params: { note: "根拠不足で終了", llm_calls: 1 } },
+      { key: "search", spec: ragSpan.step("文書検索", "flow"), at: [0.1, 0.5] },
+      { key: "rerank", spec: ragSpan.step("Rerank", "search"), at: [0.2, 0.4] },
+      {
+        key: "guardrail",
+        spec: ragSpan.stage("answer_guardrail"),
+        at: [1, 1.001],
+        status: "skipped",
+        details: { fields: [{ label: "結果", value: "無効のため省略" }] },
+      },
+    ],
+    { terminal: "done", base: "2026-10-23T00:00:00Z" }
+  );
   await page.route("**/api/search/stream", (route) => fulfillStream(route, sse([
-    ...stage_events.map((event): [string, unknown] => ["stage", {...event, trace_id: "synthetic-parity", occurred_at_ms: event.receivedAtMs, attributes: event.attributes ?? {}}]),
+    ...progressSse(progress_events),
     ["metadata", {trace_id: "synthetic-parity", elapsed_ms: 1001, guardrail_warnings: [], diagnostics: {answer: {outcome: "insufficient_evidence"}}}],
     ["delta", {text: "合成の回答です。"}], ["citations", []], ["done", {trace_id: "synthetic-parity"}],
   ])));
@@ -810,7 +845,7 @@ test("RAG 検索と履歴の工程の内容・階層・状態・時間が一致�
     citation_count: 0, answer_outcome: "insufficient_evidence", search_answer_profile_id: "bv-1", search_answer_profile_name: "プロファイル A",
     run_id: "synthetic-parity", surface: "search", question: "合成の質問", status: "success", answer_generated: true,
     created_at: "2026-10-23T00:00:01.001Z", elapsed_ms: 1001, executed_by_me: true, executor_display_name: "利用者 A",
-    stages: [], stage_events, steps: [], feedback: [], citations: [], answer: "合成の回答です。", answer_available: true,
+    progress_events, feedback: [], citations: [], answer: "合成の回答です。", answer_available: true,
     answer_diagnostics: null, conversation_owner_display_name: null, owned_by_me: null,
   })));
   await page.goto("/history/synthetic-parity");

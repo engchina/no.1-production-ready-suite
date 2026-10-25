@@ -3,27 +3,26 @@
  *
  * - 状態は共通の 7 つ（`@production-ready/ui` の `RunStatus`）に写す（run-history.md「状態の写し方」）。
  *   RAG は `success` → 完了、`blocked`（安全チェック）→ ブロック（文言は「安全チェックで停止」）、`error` → 失敗。
- * - 処理の経過は、保存したチャットのイベントか検索の開始・終了イベントを操作画面と同じ関数で写す。
- *   終了の記録だけの旧データは、記録の無い階層を推測しない。
+ * - 処理の経過は実行の trace の span のイベントを、チャット・RAG 検索と同じ関数で木にする（#3226）。span の無い
+ *   古い形式の記録は行を作らず、古い形式の案内を出す。
  */
 import {
   formatRunDuration,
+  chatProgressHasSpans,
   chatProgressTimelineStep,
   chatProgressStepsFromEvents,
+  chatProgressTraceIdOf,
   parseChatProgressEvents,
+  type ChatProgressLabelOptions,
   type RunExecutorFilter as SharedRunExecutorFilter,
   type RunStatus as SharedRunStatus,
   type RunStatusFilter as SharedRunStatusFilter,
   type RunStatusLabels,
-  type RunStepDetails,
   type RunTimelineStep,
-  type RunTimelineStepStatus,
   type StatusVariant,
 } from "@production-ready/ui";
 
-import { outcomeBadge, parseRunStepDetails, type AnswerOutcome } from "@/lib/answer-diagnostics";
-import { answerStepDisplayName, answerStepMeta, answerProcessStepsFromStages } from "@/lib/answer-process";
-import { ANSWER_STEP_STAGE_PREFIX, answerStageLabel } from "@/lib/answer-progress";
+import { outcomeBadge, type AnswerOutcome } from "@/lib/answer-diagnostics";
 import type {
   RunDetail,
   RunExecutorFilter,
@@ -159,138 +158,29 @@ export function runStartedAt(run: Pick<RunSummary, "created_at" | "elapsed_ms">)
   return new Date(finished - run.elapsed_ms).toISOString();
 }
 
-/** 段の結果（success / error / cancelled）・工程の状態 → 処理の経過の状態。止めた段は「停止」（`skipped` の文言を上書き）。 */
-export function runStepStatus(outcome: string): RunTimelineStepStatus {
-  const value = outcome.toLowerCase();
-  if (value.includes("cancel") || value.includes("skip")) return "skipped";
-  if (value === "success" || value === "completed" || value === "done" || value === "ok" || value === "") return "done";
-  return "failed";
+/** 処理の経過（実行の trace の span の木。#3226）。行と trace id と、span の無い古い形式の記録か。 */
+export interface RunTimelineView {
+  steps: RunTimelineStep[];
+  traceId?: string;
+  /** span の無い古い形式の記録（段だけのイベント・記録なし）。処理の経過の位置に案内を出す。 */
+  legacy: boolean;
 }
 
-// 回答の記録の工程（`execution_steps`）の状態のうち、工程が失敗したもの（#2056）。
-// rag_engine は終わった工程を `complete`、例外で止まった工程を「エラーで中断」、検索が使えず止めた工程を
-// 「中止」にし、ほかは結果の説明（「該当なし」「省略」など）を入れる。進捗の段（`answer_step:`）の結果と
-// 同じく、説明つきで終わった工程は完了として出す（「該当なし」を失敗にしない）。
-const FAILED_ANSWER_STEP_STATUSES = new Set(["エラーで中断", "中止"]);
-
-/** 回答の記録の工程の状態 → 処理の経過の状態。 */
-export function answerStepStatus(status: string | null | undefined): RunTimelineStepStatus {
-  const value = (status ?? "").trim();
-  if (FAILED_ANSWER_STEP_STATUSES.has(value)) return "failed";
-  if (value === "complete" || value === "") return "done";
-  // 英語の結果（`error` など）は段と同じに読み、それ以外の説明は完了として出す。
-  return /^[a-z_]+$/i.test(value) ? runStepStatus(value) : "done";
-}
-
-/** 処理の経過の行（段と、回答フローの中の工程）。 */
-export function runTimelineSteps(
-  run: Pick<RunDetail, "stages" | "steps" | "stage_events" | "progress_events" | "created_at" | "elapsed_ms"> &
-    Partial<Pick<RunDetail, "status" | "error_type">>
-): RunTimelineStep[] {
+/**
+ * 処理の経過の行（実行の trace の span の木。チャット・RAG 検索の処理の経過と同じ関数で作る。#3226）。
+ * 段だけの古い形式の記録は行にせず、古い形式として返す（段の再構成はしない）。
+ */
+export function runTimeline(
+  run: Pick<RunDetail, "progress_events">,
+  options: ChatProgressLabelOptions = {}
+): RunTimelineView {
   const events = parseChatProgressEvents(run.progress_events);
-  if (events.length) return chatProgressStepsFromEvents(events, CHAT_PROGRESS_DEFINITIONS).map(chatProgressTimelineStep);
-  if (run.stage_events?.length) {
-    return answerProcessStepsFromStages(run.stage_events, {
-      terminal: run.error_type === "CancelledError" ? "cancelled" : run.status === "error" ? "failed" : "done",
-      executionSteps: run.steps.map((step) => ({
-        name: step.name,
-        status: step.status,
-        elapsedSeconds: step.elapsed_seconds,
-        llmCalls: step.llm_calls ?? 0,
-        llmSends: step.llm_sends ?? undefined,
-        details: parseRunStepDetails(step.details) ?? undefined,
-      })),
-    }).map(chatProgressTimelineStep);
-  }
-  const llmCalls = new Map(run.steps.map((step) => [step.name, step.llm_calls ?? 0]));
-  const llmSends = new Map(run.steps.map((step) => [step.name, step.llm_sends ?? 0]));
-  // 工程の詳細（見出しと値・行。段を開いて見る。#2294 / #2341）。同じ名前の工程は記録の順に対応させる。
-  // 旧い記録の行の配列は行として読む。
-  const detailsQueue = new Map<string, (RunStepDetails | undefined)[]>();
-  for (const step of run.steps) {
-    const queue = detailsQueue.get(step.name) ?? [];
-    queue.push(parseRunStepDetails(step.details));
-    detailsQueue.set(step.name, queue);
-  }
-  const detailsFor = (name: string): RunStepDetails | undefined => detailsQueue.get(name)?.shift();
-  const topLevel = run.stages.filter((stage) => !stage.stage.startsWith(ANSWER_STEP_STAGE_PREFIX));
-  // 回答フローの中の工程: 進捗の `answer_step:` の段（チャット・流した RAG 検索）か、無ければ回答の記録の工程。
-  const nestedStages = run.stages.filter((stage) => stage.stage.startsWith(ANSWER_STEP_STAGE_PREFIX));
-  const children =
-    nestedStages.length > 0
-      ? nestedStages.map((stage) => {
-          const name = stage.stage.slice(ANSWER_STEP_STAGE_PREFIX.length).trim();
-          return {
-            label: answerStageLabel(stage.stage),
-            status: runStepStatus(stage.outcome),
-            durationMs: stage.elapsed_ms,
-            detail: answerStepMeta({
-              llmCalls: llmCalls.get(name),
-              llmSends: llmSends.get(name),
-              note: run.steps.find((step) => step.name === name)?.status,
-            }),
-            // 回答の記録が無い（失敗した）実行は、工程が終わったときの段の詳細を出す（#2373）。
-            details: detailsFor(name) ?? parseRunStepDetails(stage.details),
-          };
-        })
-      : run.steps.map((step) => ({
-          label: step.name ? answerStepDisplayName(step.name) : t("history.notRecorded"),
-          status: answerStepStatus(step.status),
-          durationMs: step.elapsed_seconds == null ? null : step.elapsed_seconds * 1000,
-          detail: answerStepMeta({ llmCalls: step.llm_calls, llmSends: step.llm_sends, note: step.status }),
-          details: detailsFor(step.name),
-        }));
-
-  // 段は順に並び、時刻は記録していないので所要時間から位置を作る（工程は「根拠の検索と回答の生成」の段の始まりから）。
-  const origin = Date.parse(runStartedAt(run));
-  const base = Number.isNaN(origin) ? 0 : origin;
-  const iso = (ms: number) => new Date(ms).toISOString();
-  const rows: RunTimelineStep[] = [];
-  let cursor = base;
-  const parentIndex = topLevel.findIndex((stage) => stage.stage === "answer" || stage.stage === "retrieval");
-  const placeChildren = (start: number) => {
-    let childCursor = start;
-    children.forEach((child, index) => {
-      const duration = child.durationMs;
-      const timed = duration != null && Number.isFinite(duration);
-      rows.push({
-        id: `step-${index}`,
-        label: child.label,
-        status: child.status,
-        durationMs: timed ? duration : null,
-        startedAt: timed ? iso(childCursor) : null,
-        finishedAt: timed ? iso(childCursor + duration) : null,
-        detail: child.detail,
-        ...(child.details ? { details: child.details } : {}),
-        level: 0,
-      });
-      if (timed) childCursor += duration;
-    });
+  if (!chatProgressHasSpans(events)) return { steps: [], legacy: true };
+  return {
+    steps: chatProgressStepsFromEvents(events, CHAT_PROGRESS_DEFINITIONS, undefined, options).map(chatProgressTimelineStep),
+    traceId: chatProgressTraceIdOf(events),
+    legacy: false,
   };
-  topLevel.forEach((stage, index) => {
-    const duration = stage.elapsed_ms;
-    const timed = duration != null && Number.isFinite(duration);
-    // 段の詳細（書き換えた質問・読み取った条件・回答の安全チェックの結果。#2341）。
-    const stageDetails = parseRunStepDetails(stage.details);
-    if (index === parentIndex && children.length > 0) {
-      placeChildren(cursor);
-      if (timed) cursor += duration;
-      return;
-    }
-    rows.push({
-      id: `stage-${index}`,
-      label: answerStageLabel(stage.stage),
-      status: runStepStatus(stage.outcome),
-      durationMs: timed ? duration : null,
-      startedAt: timed ? iso(cursor) : null,
-      finishedAt: timed ? iso(cursor + duration) : null,
-      ...(stageDetails ? { details: stageDetails } : {}),
-    });
-
-    if (timed) cursor += duration;
-  });
-  if (parentIndex < 0) placeChildren(base);
-  return rows;
 }
 
 /** 所要時間（ミリ秒）の表記（共通の書式。「1.2 秒」「2 分 5 秒」、記録なしは「—」）。 */

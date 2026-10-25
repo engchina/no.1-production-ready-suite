@@ -14,7 +14,7 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from pr_system_settings.auth.migrations import apply_platform_auth_schema
+from pr_system_settings.auth.migrations import TRACE_SPAN_TABLES, apply_platform_auth_schema
 from pr_system_settings.auth.store import PLATFORM_AUTH_TABLES, OracleAuthStore
 from pr_system_settings.chat_attachments import CHAT_ATTACHMENT_TABLES
 from pr_system_settings.system_schema import (
@@ -164,7 +164,11 @@ MANAGED_TABLES: tuple[str, ...] = (
 # 3 製品共通の認証テーブル（platform の `apply_platform_auth_schema` が作る）。RAG の初期化は
 # 先にこれを作るが、管理対象ではないため全再作成でも削除しない（#214）。会話の添付の表も
 # 同じ（#2517）。
-PRESERVED_TABLES: tuple[str, ...] = (*PLATFORM_AUTH_TABLES, *CHAT_ATTACHMENT_TABLES)
+PRESERVED_TABLES: tuple[str, ...] = (
+    *PLATFORM_AUTH_TABLES,
+    *CHAT_ATTACHMENT_TABLES,
+    *TRACE_SPAN_TABLES,
+)
 
 MANAGED_INDEXES: tuple[str, ...] = (
     "RAG_SUPPORT_GUIDES_PROFILE_IDX",

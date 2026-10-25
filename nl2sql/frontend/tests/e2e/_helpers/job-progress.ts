@@ -1,9 +1,10 @@
 /**
- * e2e の mock のジョブの処理の段階のイベント（`progress_events`。3 製品共通の契約。#1359）。
+ * e2e の mock のジョブの処理の経過のイベント（`progress_events`。3 製品共通の契約。#1359・#3226）。
  *
- * backend（`_record_job_progress`）と同じ順に記録する: 開始待ちと 5 段階を待機中で出し、前の段階から順に
- * 実行中 → 完了・失敗・未実行にし、最後に終端を出す。後の状態のイベントは前の状態のイベントの続き（同じ番号は
- * 同じ内容）になるので、polling の応答ごとに作り直してよい。
+ * 処理の経過は実行の trace（span の木）の投影。backend（`_record_job_progress_span`）と同じく、実行の全体の span
+ * （root。画面は行にしない）の下に、始まった工程の span（`kind` が工程の id・`name` が span の名前）を始まった順に
+ * 開始（running）→ 終了（done / failed / skipped）で記録し、最後に終端を出す。始まっていない工程の span は無い。
+ * 後の状態のイベントは前の状態のイベントの続き（同じ番号は同じ内容）になるので、polling の応答ごとに作り直してよい。
  */
 
 export const JOB_PROGRESS_STEPS = [
@@ -19,27 +20,51 @@ export type JobProgressStep = (typeof JOB_PROGRESS_STEPS)[number];
 type StepStatus = "pending" | "running" | "done" | "failed" | "skipped";
 type Params = Record<string, string | number | boolean>;
 
+/** 工程の span の中の span（モデルの呼び出しなど。工程の定義の無い技術の span）。 */
+export interface JobProgressChildSpec {
+  name: string;
+  status: Exclude<StepStatus, "pending">;
+  attributes?: Params;
+}
+
 export interface JobProgressStepSpec {
   status: StepStatus;
   startedAt?: string;
   finishedAt?: string;
+  /** 補足の値。`stopped: true` は停止で終わった span（未実行と停止の印）。 */
   params?: Params;
   /** 終わった段階に付ける、段を開いて見る詳細（#2294。backend の `ChatProgressStepDetails` と同じ形）。 */
   details?: Record<string, unknown>;
+  /** 工程の span の中の span。 */
+  children?: JobProgressChildSpec[];
 }
 
 export interface JobProgressSpec {
-  /** 段階の状態（書かない段階は待機中）。 */
+  /** 工程の状態（書かない・待機中の工程は始まっていないので span が無い）。 */
   steps: Partial<Record<JobProgressStep, StepStatus | JobProgressStepSpec>>;
   terminal?: "done" | "failed" | "cancelled";
-  /** 時刻を書かない段階の開始・終了の時刻。 */
+  /** 時刻を書かない工程の開始・終了の時刻。 */
   at: string;
   attempt?: number;
 }
 
-/** 段階の状態からイベントの一覧を作る。 */
+/** mock の trace id（ジョブ ID から決める。合成の値）。 */
+export function jobProgressTraceId(jobId: string): string {
+  let hash = 0;
+  for (const char of jobId) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return hash.toString(16).padStart(8, "0").repeat(4);
+}
+
+function spanId(index: number): string {
+  return (index + 1).toString(16).padStart(16, "0");
+}
+
+const ROOT_SPAN_ID = spanId(0);
+
+/** 工程の状態から span のイベントの一覧を作る。 */
 export function jobProgressEvents(jobId: string, spec: JobProgressSpec): Record<string, unknown>[] {
   const events: Record<string, unknown>[] = [];
+  const traceId = jobProgressTraceId(jobId);
   const push = (event: Record<string, unknown>) =>
     events.push({
       schema_version: 1,
@@ -49,36 +74,86 @@ export function jobProgressEvents(jobId: string, spec: JobProgressSpec): Record<
       emitted_at: spec.at,
       ...event,
     });
-  for (const step of JOB_PROGRESS_STEPS) push({ type: "step", step_id: step, status: "pending" });
-  for (const step of JOB_PROGRESS_STEPS) {
-    const raw = spec.steps[step];
-    if (!raw) continue;
-    const state: JobProgressStepSpec = typeof raw === "string" ? { status: raw } : raw;
-    if (state.status === "pending") continue;
-    const params = state.params ? { params: state.params } : {};
-    // 始まらずに未実行になった段階（終端の後ろの段階）には時刻を付けない。
-    if (state.status === "skipped" && !state.startedAt && !state.params?.stopped) {
-      push({ type: "step", step_id: step, status: "skipped", ...params });
-      continue;
-    }
-    const startedAt = state.startedAt ?? spec.at;
-    push({ type: "step", step_id: step, status: "running", started_at: startedAt, ...params });
-    if (state.status === "running") continue;
-    push({
+  const span = (
+    id: string,
+    name: string,
+    parentId: string | null,
+    state: { status: Exclude<StepStatus, "pending">; startedAt: string; finishedAt: string; kind?: string; params?: Params; details?: Record<string, unknown>; attributes?: Params; root?: boolean }
+  ) => {
+    const { stopped, ...params } = state.params ?? {};
+    const base = {
       type: "step",
-      step_id: step,
+      step_id: id,
+      ...(state.kind ? { kind: state.kind } : {}),
+      name,
+      ...(parentId ? { parent_id: parentId } : {}),
+      ...(state.root ? { root: true } : {}),
+      trace_id: traceId,
+      started_at: state.startedAt,
+      ...(Object.keys(params).length > 0 ? { params } : {}),
+      ...(state.attributes ? { attributes: state.attributes } : {}),
+    };
+    push({ ...base, status: "running" });
+    if (state.status === "running") return;
+    push({
+      ...base,
       status: state.status,
-      started_at: startedAt,
-      finished_at: state.finishedAt ?? spec.at,
-      ...params,
+      finished_at: state.finishedAt,
       ...(state.details ? { details: state.details } : {}),
+      ...(stopped === true ? { cancelled: true } : {}),
+    });
+  };
+  const started = JOB_PROGRESS_STEPS.flatMap((step) => {
+    const raw = spec.steps[step];
+    if (!raw) return [];
+    const state: JobProgressStepSpec = typeof raw === "string" ? { status: raw } : raw;
+    return state.status === "pending" ? [] : [[step, state] as const];
+  });
+  if (started.length === 0 && !spec.terminal) return events;
+  const rootStarted = started[0]?.[1].startedAt ?? spec.at;
+  push({ type: "step", step_id: ROOT_SPAN_ID, name: "nl2sql.execute", root: true, trace_id: traceId, status: "running", started_at: rootStarted });
+  for (const [step, state] of started) {
+    // mock の span の id は工程の id（画面の行の `data-step-id`・test id で引ける。実の id は不透明な 16 桁）。
+    const id: string = step;
+    const startedAt = state.startedAt ?? spec.at;
+    const finishedAt = state.finishedAt ?? spec.at;
+    const status = state.status as Exclude<StepStatus, "pending">;
+    // 子の span は親の開始の後・親の終了の前に記録する。
+    const children = state.children ?? [];
+    const childIds = children.map((_, index) => `${step}.${index + 1}`);
+    const { stopped, ...params } = state.params ?? {};
+    const base = {
+      type: "step",
+      step_id: id,
+      kind: step,
+      name: `nl2sql.${step}`,
+      parent_id: ROOT_SPAN_ID,
+      trace_id: traceId,
+      started_at: startedAt,
+      ...(Object.keys(params).length > 0 ? { params } : {}),
+    };
+    push({ ...base, status: "running" });
+    children.forEach((child, index) =>
+      span(childIds[index]!, child.name, id, { status: child.status, startedAt, finishedAt, attributes: child.attributes })
+    );
+    if (status === "running") continue;
+    push({
+      ...base,
+      status,
+      finished_at: finishedAt,
+      ...(state.details ? { details: state.details } : {}),
+      ...(stopped === true ? { cancelled: true } : {}),
     });
   }
-  if (spec.terminal) push({ type: "terminal", status: spec.terminal });
+  if (spec.terminal) {
+    const rootStatus = spec.terminal === "done" ? "done" : spec.terminal === "failed" ? "failed" : "skipped";
+    push({ type: "step", step_id: ROOT_SPAN_ID, name: "nl2sql.execute", root: true, trace_id: traceId, status: rootStatus, started_at: rootStarted, finished_at: spec.at });
+    push({ type: "terminal", status: spec.terminal });
+  }
   return events;
 }
 
-/** 完了したジョブ（すべての段階が完了）のイベント。 */
+/** 完了したジョブ（すべての工程が完了）のイベント。 */
 export function doneJobProgressEvents(jobId: string, at: string): Record<string, unknown>[] {
   return jobProgressEvents(jobId, {
     at,
@@ -118,7 +193,6 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 function jobStageStatus(turn: MockTurn, step: MockStep | undefined, index: number, reported: number): StepStatus {
-  if (turn.status === "pending") return "pending";
   if (step) return step.status === "error" ? "failed" : (step.status as StepStatus);
   if (turn.status === "done") return "done";
   // 段階の無いジョブ（古い mock）は、最初の段階を今の段階にする。
@@ -127,29 +201,26 @@ function jobStageStatus(turn: MockTurn, step: MockStep | undefined, index: numbe
 }
 
 /**
- * mock のジョブ（状態・`steps`）から、backend が記録するのと同じ処理の段階のイベントを作る（mock の backend）。
+ * mock のジョブ（状態・`steps`）から、backend が記録するのと同じ span のイベントを作る（mock の backend）。
  *
- * - 開始待ち: 待機中のジョブは実行中、worker が始めたら完了。始める前の失敗は失敗、停止は未実行と停止の印。
- * - 段階: `steps` の状態（`error` は失敗）。書かれていない段階は、完了したジョブなら完了、それ以外は待機中。
- * - 終端のジョブは実行中の段階を失敗（停止なら停止の印を付けて未実行）、待機中の段階を未実行にする。
- * - 終端でないのに実行中・待機中の段階が無ければ、最後の段階を実行中にする（backend は保存まで実行中）。
+ * - 待機中のジョブ（worker が受け取る前）は span が無い（画面は開始待ちの仮の行を出す）。
+ * - 開始待ち: worker が始めたら作成から開始までの終わった span。
+ * - 工程: `steps` の状態（`error` は失敗）。書かれていない工程は、完了したジョブなら完了、それ以外は始まっていない。
+ * - 終端のジョブは実行中の工程を失敗（停止なら停止で未実行）にする。始まっていない工程は span が無い。
+ * - 終端でないのに実行中の工程が無ければ、最後の工程を実行中にする（backend は結果の保存まで実行中）。
  * - 補足の値: 生成方法、参照した表（安全性の確認の完了）、取得した行数（実行の完了）。
  */
 export function turnProgressEvents(mock: object): Record<string, unknown>[] {
   const turn = mock as MockTurn;
   const at = turn.created_at;
+  if (turn.status === "pending") return [];
   const terminal = turn.status === "done" || turn.status === "error";
   const cancelled = turn.error_code === "JOB_CANCELLED";
   const reported = new Map(((turn.steps ?? []) as MockStep[]).map((step) => [step.stage, step] as const));
   const steps: Partial<Record<JobProgressStep, JobProgressStepSpec>> = {};
-  steps.queue =
-    turn.status === "pending"
-      ? { status: "running", startedAt: at }
-      : turn.started_at || turn.status !== "error"
-        ? { status: "done", startedAt: at, finishedAt: turn.started_at ?? at }
-        : cancelled
-          ? { status: "skipped", startedAt: at, params: { stopped: true } }
-          : { status: "failed", startedAt: at };
+  if (turn.started_at || turn.status !== "error") {
+    steps.queue = { status: "done", startedAt: at, finishedAt: turn.started_at ?? at };
+  }
   const lastDone = JOB_STAGES.reduce(
     (last, stage, index) => (reported.get(stage)?.status === "done" ? index : last),
     -1,
@@ -159,6 +230,7 @@ export function turnProgressEvents(mock: object): Record<string, unknown>[] {
     let status = jobStageStatus(turn, step, index, reported.size);
     // 後の段階が完了していれば、前の段階も完了している。
     if (index < lastDone && (status === "pending" || status === "running")) status = "done";
+    if (status === "pending") return;
     const params: Params = {};
     if (stage === "generate_sql" && typeof turn.engine === "string") params.engine = turn.engine;
     if (stage === "safety_check" && status === "done") {
@@ -177,17 +249,19 @@ export function turnProgressEvents(mock: object): Record<string, unknown>[] {
         params.stopped = true;
         status = "skipped";
       } else status = "failed";
-    } else if (terminal && status === "pending") status = "skipped";
+    }
     const started = step?.started_at ?? at;
     steps[stage] = {
       status,
-      startedAt: status === "skipped" && !params.stopped ? undefined : started,
+      startedAt: started,
       finishedAt: step?.finished_at ?? turn.finished_at ?? at,
       params: Object.keys(params).length > 0 ? params : undefined,
     };
   });
-  const current = Object.values(steps).some((step) => step?.status === "running" || step?.status === "pending");
-  if (!terminal && !current && steps.format_results) steps.format_results = { ...steps.format_results, status: "running" };
+  const current = Object.values(steps).some((step) => step?.status === "running");
+  if (!terminal && !current) {
+    steps.format_results = { ...(steps.format_results ?? { startedAt: at }), status: "running" };
+  }
   const attempt = typeof turn.attempt === "number" ? Math.max(0, turn.attempt - 1) : 0;
   return jobProgressEvents(turn.job_id, {
     at,
@@ -197,8 +271,50 @@ export function turnProgressEvents(mock: object): Record<string, unknown>[] {
   });
 }
 
-/** mock の会話のターンに処理の段階のイベントを足す（テストが自分で書いたイベントはそのまま）。 */
+/** mock の会話のターンに処理の経過のイベントを足す（テストが自分で書いたイベントはそのまま）。 */
 export function withJobProgress<T extends object>(turn: T): T {
   const mock = turn as unknown as MockTurn;
   return mock.progress_events ? turn : { ...turn, progress_events: turnProgressEvents(turn) };
+}
+
+interface MockStatementPlan {
+  blocked_reason?: string;
+  select_only?: boolean;
+  requires_confirmation?: boolean;
+  confirmation_target?: string;
+}
+
+/**
+ * DB 管理チャットのターンの処理の経過（backend の `generate_db_admin_chat_sql` と同じ span の木。#3226）: 実行の全体の
+ * 下に生成（`generate_sql`）と SQL の確認（`db_admin_check`。補足は文の分類ごとの数）。すべての文が止める文なら確認は失敗。
+ */
+export function dbAdminChatProgressEvents(
+  turnId: string,
+  plan: { statements: MockStatementPlan[] },
+  { createdAt, generatedAt }: { createdAt: string; generatedAt: string },
+): Record<string, unknown>[] {
+  const events: Record<string, unknown>[] = [];
+  const traceId = jobProgressTraceId(turnId);
+  const push = (event: Record<string, unknown>) =>
+    events.push({ schema_version: 1, seq: events.length + 1, target_id: turnId, attempt: 0, emitted_at: generatedAt, type: "step", trace_id: traceId, ...event });
+  const statements = plan.statements;
+  const blocked = statements.filter((item) => item.blocked_reason).length;
+  const params: Params = {
+    statements: statements.length,
+    read_only: statements.filter((item) => !item.blocked_reason && item.select_only).length,
+    change: statements.filter((item) => !item.blocked_reason && !item.select_only).length,
+    blocked,
+  };
+  if (statements.length === 1 && statements[0]?.requires_confirmation) params.confirmation_target = statements[0].confirmation_target ?? "";
+  const root = { step_id: ROOT_SPAN_ID, name: "nl2sql.db_admin_chat", root: true, started_at: createdAt };
+  const generate = { step_id: spanId(1), kind: "generate_sql", name: "nl2sql.generate_sql", parent_id: ROOT_SPAN_ID, started_at: createdAt, params: { engine: "enterprise_ai_direct" } };
+  const check = { step_id: spanId(2), kind: "db_admin_check", name: "nl2sql.safety_check", parent_id: ROOT_SPAN_ID, started_at: generatedAt, params };
+  push({ ...root, status: "running" });
+  push({ ...generate, status: "running" });
+  push({ ...generate, status: "done", finished_at: generatedAt });
+  push({ ...check, status: "running" });
+  push({ ...check, status: statements.length > 0 && blocked === statements.length ? "failed" : "done", finished_at: generatedAt });
+  push({ ...root, status: "done", finished_at: generatedAt });
+  events.push({ schema_version: 1, seq: events.length + 1, target_id: turnId, attempt: 0, emitted_at: generatedAt, type: "terminal", status: "done" });
+  return events;
 }

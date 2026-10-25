@@ -27,6 +27,12 @@ i18n の名前）で付ける。`detail` は短い補足だけ（件数・回数
 段を開いて見る詳細（`details`。#2294）は `ChatProgressStepDetails`（見出しと値・行・SQL や
 JSON の箱）で送る。上限を超えた分は切って `truncated` を付け、秘密らしい値（password・token・
 API キー・Bearer・URL の資格情報）は伏せる（`ChatProgressStepDetails` の検証で必ず通る）。
+
+**段は span（#3226）**: 処理の経過は trace（span の木）の投影で、段のイベントは span の開始・
+表示用のデータの変更・終了を表す（`ChatProgressRecorder.record_span`。`step_id` は span の id、
+`parent_id` は親の span、`name` は span の名前、`root` は実行の全体の span）。画面は親子から入れ子を
+作り、`kind`（工程の種類）があれば製品の定義で、無ければ共通の規則（技術の span の名前）で
+名前を付ける。
 """
 
 from __future__ import annotations
@@ -36,11 +42,11 @@ import contextlib
 import json
 import re
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Annotated, Any, Final, Literal
+from typing import Annotated, Any, Final, Literal, Protocol
 
 from pydantic import (
     BaseModel,
@@ -365,6 +371,22 @@ class ChatProgressStepEvent(_EventBase):
         default=None,
         description="段を開いて見る詳細（見出しと値・行・SQL や JSON。上限で切り、秘密を伏せる）。",
     )
+    name: str | None = Field(
+        default=None, max_length=128, description="span の名前（段が span のとき。#3226）。"
+    )
+    parent_id: str | None = Field(
+        default=None, max_length=_ID_MAX, description="親の span の id（入れ子を作る）。"
+    )
+    root: bool | None = Field(default=None, description="実行の全体の span。")
+    trace_id: str | None = Field(
+        default=None, pattern="^[0-9a-f]{32}$", description="span の trace id。"
+    )
+    attributes: dict[str, ChatProgressParamValue] | None = Field(
+        default=None, description="span の安全な属性（モデル・ツール・利用量・試行）。"
+    )
+    cancelled: bool | None = Field(
+        default=None, description="停止で終わった span（状態は skipped）。"
+    )
 
 
 class ChatProgressTerminalEvent(_EventBase):
@@ -441,6 +463,7 @@ class ChatProgressStepState:
     detail: str | None = None
     params: dict[str, ChatProgressParamValue] | None = None
     details: ChatProgressStepDetails | None = None
+    span: dict[str, Any] | None = None
 
 
 @dataclass
@@ -509,8 +532,17 @@ def apply_chat_progress_event(
         detail=event.detail,
         params=event.params,
         details=event.details,
+        span=_span_fields(event),
     )
     return True
+
+
+_SPAN_FIELDS = ("name", "parent_id", "root", "trace_id", "attributes", "cancelled")
+
+
+def _span_fields(event: ChatProgressStepEvent) -> dict[str, Any] | None:
+    values = {key: getattr(event, key) for key in _SPAN_FIELDS if getattr(event, key) is not None}
+    return values or None
 
 
 # ---------------------------------------------------------------------------
@@ -518,6 +550,42 @@ def apply_chat_progress_event(
 # ---------------------------------------------------------------------------
 
 type ChatProgressSink = Callable[[ChatProgressStepEvent | ChatProgressTerminalEvent], None]
+
+
+class ChatProgressSpanDisplay(Protocol):
+    """span の表示用のデータ（`tracing.SpanDisplay`）。"""
+
+    @property
+    def kind(self) -> str | None: ...
+    @property
+    def params(self) -> dict[str, ChatProgressParamValue] | None: ...
+    @property
+    def details(self) -> ChatProgressStepDetails | None: ...
+
+
+class ChatProgressSpanUpdate(Protocol):
+    """span の知らせ（`tracing.SpanUpdate`。循環 import を避けて形だけを決める）。"""
+
+    @property
+    def span_id(self) -> str: ...
+    @property
+    def parent_span_id(self) -> str | None: ...
+    @property
+    def trace_id(self) -> str: ...
+    @property
+    def operation_name(self) -> str: ...
+    @property
+    def status(self) -> Literal["running", "done", "failed", "cancelled", "skipped"]: ...
+    @property
+    def started_at(self) -> datetime: ...
+    @property
+    def finished_at(self) -> datetime | None: ...
+    @property
+    def root(self) -> bool: ...
+    @property
+    def attributes(self) -> Mapping[str, ChatProgressParamValue]: ...
+    @property
+    def display(self) -> ChatProgressSpanDisplay | None: ...
 
 
 class Unchanged(Enum):
@@ -718,6 +786,34 @@ class ChatProgressRecorder:
             details=details,
         )
 
+    def record_span(self, update: ChatProgressSpanUpdate) -> ChatProgressStepEvent | None:
+        """span の開始・表示用のデータの変更・終了を段として記録する（#3226）。
+
+        `update` は `pr_backend_core.observability.tracing.SpanUpdate`（span の id・親・名前・状態・
+        時刻・安全な属性・表示用のデータ）。停止は `skipped` に `cancelled` を付ける。
+        """
+        display = update.display
+        status: ChatProgressStepStatus = (
+            "skipped" if update.status == "cancelled" else update.status
+        )
+        return self._record_step(
+            update.span_id,
+            status=status,
+            kind=display.kind if display is not None else None,
+            started_at=update.started_at,
+            finished_at=update.finished_at,
+            params=display.params if display is not None else None,
+            details=display.details if display is not None else None,
+            span={
+                "name": update.operation_name,
+                "parent_id": update.parent_span_id,
+                "root": True if update.root else None,
+                "trace_id": update.trace_id,
+                "attributes": dict(update.attributes) or None,
+                "cancelled": True if update.status == "cancelled" else None,
+            },
+        )
+
     def complete(
         self, status: ChatProgressTerminalStatus = "done", *, at: datetime | None = None
     ) -> ChatProgressTerminalEvent | None:
@@ -729,7 +825,16 @@ class ChatProgressRecorder:
             "done" if status == "done" else "failed" if status == "failed" else "skipped"
         )
         for step in list(self._fold.steps.values()):
-            if step.status == "running":
+            if step.status == "running" and step.span is not None and status == "cancelled":
+                # 停止で終わった span は「停止」と出す（スキップと分ける。#3226）。
+                self._record_step(
+                    step.step_id,
+                    status="skipped",
+                    started_at=step.started_at,
+                    finished_at=finished_at,
+                    span={**step.span, "cancelled": True},
+                )
+            elif step.status == "running":
                 self.finish(step.step_id, running_status, at=finished_at)
             elif step.status == "pending":
                 self.finish(step.step_id, "skipped", at=finished_at)
@@ -754,10 +859,12 @@ class ChatProgressRecorder:
         detail: str | None | Unchanged = UNCHANGED,
         params: dict[str, ChatProgressParamValue] | None | Unchanged = UNCHANGED,
         details: ChatProgressStepDetails | None | Unchanged = UNCHANGED,
+        span: dict[str, Any] | None | Unchanged = UNCHANGED,
     ) -> ChatProgressStepEvent | None:
         before = self._fold.steps.get(step_id)
         if before is not None and STATUS_RANK[status] < STATUS_RANK[before.status]:
             return None
+        span_values = (before.span if before else None) if span is UNCHANGED else span
         resolved_kind = kind or (before.kind if before else None) or step_id
         event = ChatProgressStepEvent(
             seq=self._seq + 1,
@@ -776,6 +883,7 @@ class ChatProgressRecorder:
             detail=(before.detail if before else None) if detail is UNCHANGED else detail,
             params=(before.params if before else None) if params is UNCHANGED else params,
             details=(before.details if before else None) if details is UNCHANGED else details,
+            **{key: value for key, value in (span_values or {}).items() if value is not None},
         )
         if before is not None and _same_step(before, event):
             return None
@@ -799,6 +907,7 @@ def _same_step(before: ChatProgressStepState, event: ChatProgressStepEvent) -> b
         and before.detail == event.detail
         and before.params == event.params
         and before.details == event.details
+        and before.span == _span_fields(event)
     )
 
 
@@ -991,6 +1100,8 @@ __all__ = [
     "Unchanged",
     "ChatProgressRecorder",
     "ChatProgressSink",
+    "ChatProgressSpanDisplay",
+    "ChatProgressSpanUpdate",
     "ChatProgressDetailCode",
     "ChatProgressDetailField",
     "ChatProgressStepDetails",

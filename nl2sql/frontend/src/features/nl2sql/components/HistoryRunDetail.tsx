@@ -1,5 +1,5 @@
-import { CHAT_PROGRESS_LABELS, nl2sqlTraceDetailsLabels } from "../chatProgress";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { CHAT_PROGRESS_LABELS } from "../chatProgress";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -22,8 +22,8 @@ import {
   StatusBadge,
   TimedLoadingState,
   toast,
+  useTraceDetailsLabels,
   type RunFact,
-  type RunTimelineStep,
 } from "@production-ready/ui";
 import { useAuth } from "@/features/security/AuthProvider";
 import { canOpenRoute } from "@/features/security/route-permissions";
@@ -39,11 +39,12 @@ import {
   historyKindDisplay,
   historyOwner,
   historyRunStatus,
-  historyTimelineSteps,
+  historyTimeline,
 } from "../historyManagementState";
 import { engineLabel } from "../labels";
 import { profileRecordDisplayLabel } from "../profileDisplay";
 import type { HistoryItem } from "../types";
+import { ProgressLegacyNotice } from "./ProgressLegacyNotice";
 
 /*
  * 実行履歴の全幅の詳細（`?id=<run_id>`。#1955。UX 契約 run-history.md「詳細」）。
@@ -67,23 +68,6 @@ function SqlBlock({ sql, label, testId }: { sql: string; label: string; testId: 
   );
 }
 
-function timelineSteps(item: HistoryItem): RunTimelineStep[] {
-  // 段の記録は所要時間だけなので、処理の始まりからの位置を時刻にして線を描く（文字の所要時間は記録の値）。
-  const origin = Date.parse(item.created_at) || 0;
-  const at = (ms: number) => new Date(origin + ms).toISOString();
-  return historyTimelineSteps(item).map((step) => ({
-    id: step.id,
-    label: step.label,
-    status: step.status,
-    startedAt: step.startedAt === undefined ? at(step.offsetMs) : step.startedAt,
-    finishedAt: step.finishedAt === undefined ? at(step.offsetMs + Math.max(0, step.durationMs ?? 0)) : step.finishedAt,
-    detail: step.detail,
-    durationMs: step.durationMs,
-    level: step.level,
-    details: step.details,
-  }));
-}
-
 function HistoryRunView({ item }: { item: HistoryItem }) {
   const { hasPermission, user } = useAuth();
   // 「会話を開く」（3 製品共通。チャットの往復だけ。会話を見られる人〔system_admin か持ち主〕で、チャットを開ける
@@ -94,7 +78,8 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
   });
   const status = historyRunStatus(item);
   const sql = item.executable_sql || item.generated_sql;
-  const steps = timelineSteps(item);
+  const traceLabels = useTraceDetailsLabels();
+  const timeline = useMemo(() => historyTimeline(item, traceLabels), [item, traceLabels]);
   const executed = !item.generation_only && item.safety_is_safe;
 
   const extraFacts: RunFact[] = [
@@ -200,12 +185,13 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
           />
         }
         timeline={
-          steps.length > 0 || processDetails ? (
+          timeline.steps.length > 0 || timeline.legacy || processDetails ? (
+            // 処理の経過は実行の span の木（#3226）。span の無い古い形式の記録は案内の文を出す。
             <RunTimelineSection
-            traceLabels={nl2sqlTraceDetailsLabels()}
-          traceSummary={item.trace_segments && item.trace_segments.length > 1 ? item.trace_segments : item.trace_summary}
+              traceId={timeline.traceId}
               title={t("history.detail.timeline")}
-              steps={steps}
+              steps={timeline.steps}
+              empty={timeline.legacy ? <ProgressLegacyNotice testId="history-detail-timeline-legacy" /> : undefined}
               labels={{ stepStatus: CHAT_PROGRESS_LABELS.status }}
               totalDurationMs={item.elapsed_ms ?? null}
               processDetailsProps={{ title: t("history.detail.technical"), testId: "history-detail-technical", summaryTestId: "history-detail-process-details" }}

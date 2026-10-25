@@ -3,7 +3,8 @@
 チャットと RAG 検索の画面の実行（回答を作った・作らなかった・安全チェックで止めた・失敗した）を、
 `RunRecorder` が 1 行の要約として `rag_run_history` に残す。回答を作った実行の回答・引用・診断は
 回答の記録（`rag_answer_records`）が正本で、ここには一覧の絞り込みと詳細の「処理の経過」に使う値だけを
-持つ。記録は補助なので、失敗しても検索・回答は止めない。
+持つ。詳細の「処理の経過」は実行の trace の span のイベント
+（`stages_json.progress_events`。#3226）。記録は補助なので、失敗しても検索・回答は止めない。
 
 記録しない実行: 根拠の検索だけ（`retrieval_only`。ナレッジベースの検索テスト・レシピの検索比較）、
 業務ガイドの下書きで試した回答、品質評価、MCP（Agent が呼ぶ `rag_search`。Agent の実行履歴に残る）。
@@ -15,14 +16,13 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from time import monotonic, time
+from time import monotonic
 from typing import Any, Literal, Protocol, cast
 
 from pr_backend_core.logging import safe_error_code, safe_exception_fields
 from pr_backend_core.observability.tracing import TraceSummary, finish_operation_trace
 
 from app.config import Settings
-from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_citations
 from app.schemas.search import RetrievedChunk, StorageFailure
 
@@ -43,12 +43,6 @@ class _StageProgress(Protocol):
 
     @property
     def outcome(self) -> str: ...
-
-    @property
-    def elapsed_ms(self) -> float: ...
-
-    @property
-    def details(self) -> Mapping[str, object] | None: ...
 
 
 type _ProgressCallback = Callable[[Any], Awaitable[None]]
@@ -91,38 +85,14 @@ def answer_verification(diagnostics: Mapping[str, Any] | None) -> RunVerificatio
     return "partial"
 
 
-def _answer_steps(diagnostics: Mapping[str, Any] | None) -> list[dict[str, object]]:
-    """回答フローの各工程（名前・状態・秒・LLM の回数・詳細）。既存の記録（execution_steps）。
-
-    詳細（``details``。見出しと値・行。選んだ条・検索文・件数など）は共有の詳細の形で上限まで切った
-    値を残す（実行の詳細の処理の経過で段を開いて見る。回答の記録の保存期間が過ぎても見えるよう、
-    実行の記録にも持つ。#2294 / #2341）。
-    """
-    steps = diagnostics.get("execution_steps") if diagnostics else None
-    result: list[dict[str, object]] = []
-    for step in steps if isinstance(steps, list) else []:
-        if not isinstance(step, Mapping):
-            continue
-        result.append(
-            {
-                "name": str(step.get("name") or ""),
-                "status": str(step.get("status") or ""),
-                "elapsed_seconds": step.get("elapsed_seconds"),
-                "llm_calls": step.get("llm_calls"),
-                "llm_sends": step.get("llm_sends"),
-                **(
-                    {"details": details}
-                    if (details := step_details_payload(step.get("details")))
-                    else {}
-                ),
-            }
-        )
-    return result
-
-
 @dataclass
 class RunRecorder:
-    """1 回の実行の記録。pipeline の段（`observe`）を集め、終わったときに 1 行を保存する。"""
+    """1 回の実行の記録。終わったときに 1 行を保存する。
+
+    処理の経過は `progress_source`（実行の span のイベントの JSON を返す関数。#3226）から
+    保存する。止まった段（`error_stage`）は pipeline の段の知らせ（`observe`）の最後の失敗から
+    決める。
+    """
 
     surface: RunSurface
     settings: Settings
@@ -130,8 +100,9 @@ class RunRecorder:
     conversation_id: str | None = None
     message_id: str | None = None
     model_id: str | None = None
+    progress_source: Callable[[], list[dict[str, Any]]] | None = None
+    # 終わった段（止まった段を決める。保存しない）。
     stages: list[dict[str, object]] = field(default_factory=list)
-    stage_events: list[dict[str, object]] = field(default_factory=list)
     # 安全チェックの後の質問（pipeline が受け取った時点で入れる。失敗の記録に使う）。
     question: str | None = None
     trace_summary: TraceSummary | None = None
@@ -139,34 +110,14 @@ class RunRecorder:
     _last_record: dict[str, object] | None = field(default=None, repr=False)
 
     def observe(self, callback: _ProgressCallback | None) -> _ProgressCallback:
-        """段の進捗の callback を包み、終わった段（成功・失敗・停止）と時間を集める。"""
+        """段の進捗の callback を包み、終わった段（成功・失敗・停止）を集める。
+
+        集めた段は止まった段（`error_stage`）に使い、保存しない。
+        """
 
         async def collect(progress: _StageProgress) -> None:
-            self.stage_events.append(
-                {
-                    "stage": progress.stage,
-                    "outcome": progress.outcome,
-                    "elapsed_ms": progress.elapsed_ms,
-                    "receivedAtMs": getattr(progress, "occurred_at_ms", None) or time() * 1000,
-                    "details": step_details_payload(getattr(progress, "details", None)),
-                    "attributes": {
-                        key: value
-                        for key, value in (getattr(progress, "attributes", {}) or {}).items()
-                        if key in {"llm_calls", "llm_sends", "status", "error_type", "error_code"}
-                    },
-                }
-            )
             if progress.outcome != "started":
-                details = step_details_payload(getattr(progress, "details", None))
-                self.stages.append(
-                    {
-                        "stage": progress.stage,
-                        "outcome": progress.outcome,
-                        "elapsed_ms": progress.elapsed_ms,
-                        # パイプラインの工程の詳細（書き換えた質問・安全チェックなど。#2341）。
-                        **({"details": details} if details else {}),
-                    }
-                )
+                self.stages.append({"stage": progress.stage, "outcome": progress.outcome})
             if callback is not None:
                 await callback(progress)
 
@@ -232,10 +183,9 @@ class RunRecorder:
             "conversation_id": self.conversation_id,
             "message_id": self.message_id,
             "stages": {
-                "stages": list(self.stages),
-                "stage_events": list(self.stage_events),
+                # 詳細の処理の経過（実行の trace の span のイベント。#3226）。
+                "progress_events": self._progress_events(),
                 **({"trace_summary": summary.model_dump(mode="json")} if summary else {}),
-                "steps": _answer_steps(answer_diagnostics),
                 # 失敗のエラーコードと保存できなかった記録（処理の段と一緒に持つ。#2342）。
                 **({"error_code": str(error_code)} if error_code is not None else {}),
                 **(
@@ -249,6 +199,15 @@ class RunRecorder:
         }
         self._last_record = record
         await self._save(record)
+
+    def _progress_events(self) -> list[dict[str, Any]]:
+        if self.progress_source is None:
+            return []
+        try:
+            return self.progress_source()
+        except Exception as exc:  # noqa: BLE001 - 処理の経過は補助。実行の記録は残す。
+            logger.warning("run history progress dump failed", extra=safe_exception_fields(exc))
+            return []
 
     async def add_storage_failure(self, failure: StorageFailure) -> None:
         """保存した実行に、後から分かった保存の失敗（会話の回答の保存など）を足して保存し直す（#2342）。"""
@@ -292,7 +251,10 @@ def _failed_stage(stages: Iterable[Mapping[str, object]]) -> str | None:
 
 
 async def _purge_if_due(store: _RunStore, settings: Settings) -> None:
-    """保持期間（回答の記録と同じ `rag_answer_record_retention_days`）を過ぎた実行を消す。"""
+    """保持期間（回答の記録と同じ `rag_answer_record_retention_days`）を過ぎた実行を消す。
+
+    0（既定）は無期限で、消さない（#3235）。
+    """
     global _last_purge_at
     retention_days = settings.rag_answer_record_retention_days
     if retention_days <= 0:

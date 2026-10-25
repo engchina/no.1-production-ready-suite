@@ -29,7 +29,9 @@ export function chatJobFailure(
   turn: Pick<JobData, "job_id" | "error_message" | "error_code" | "error_detail" | "finished_at">,
   steps: readonly ChatProgressStep[]
 ): ProcessFailure {
-  const step = failedStepName(steps);
+  // 処理の経過は span の木（#3226）。段の中の span（モデルの呼び出しなど）が失敗しても、止まった段は工程の段の名前
+  // （最上位の行）で示す。最上位に失敗が無ければ、失敗した span の名前。
+  const step = failedStepName(steps.filter((item) => !item.level)) ?? failedStepName(steps);
   return {
     summary: step ? t("failure.summaryAt", { step }) : t("failure.summary"),
     cause: turn.error_message,

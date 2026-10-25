@@ -491,9 +491,11 @@ export {
   CHAT_PROGRESS_SSE_HEARTBEAT_EVENT,
   CHAT_PROGRESS_STEP_STATUSES,
   CHAT_PROGRESS_TERMINAL_STATUSES,
+  chatProgressHasSpans,
   chatProgressLabelState,
   chatProgressStepsFromEvents,
   chatProgressTerminalOf,
+  chatProgressTraceIdOf,
   createChatProgressEventsState,
   labelChatProgressSteps,
   parseChatProgressEvent,
@@ -502,8 +504,10 @@ export {
   parseChatProgressStepDetails,
   reduceChatProgressEvents,
   type ChatProgressEvent,
+  type ChatProgressEventSpan,
   type ChatProgressEventStep,
   type ChatProgressEventsInput,
+  type ChatProgressLabelOptions,
   type ChatProgressEventsState,
   type ChatProgressLabelState,
   type ChatProgressPage,
@@ -889,6 +893,13 @@ export {
 } from "./components/document-preview/document-preview";
 
 export { TraceDetails } from "./components/data/trace-details";
-export { traceTimeline } from "./lib/trace-tree";
+export { traceSpanDisplayName, traceSpanFields, traceTimeline } from "./lib/trace-tree";
 
-export { TRACE_DETAILS_JA, createTraceDetailsLabels, type TraceDetailsLabels, type TraceSpanLabel, type TraceSpanLabelInput } from "./lib/trace-labels";
+export { TRACE_DETAILS_JA, createTraceDetailsLabels, type TraceDetailsLabels, type TraceSpanNames, type TraceSpanStatus, type TraceStageName } from "./lib/trace-labels";
+export { TraceDetailsLabelsProvider, useTraceDetailsLabels } from "./components/data/trace-labels-provider";
+export {
+  TRACE_SNAPSHOT_INTERVAL_MS,
+  useTraceProgressSnapshot,
+  type TraceProgressSnapshot,
+  type TraceProgressSnapshotOptions,
+} from "./components/feedback/trace-progress-snapshot";

@@ -1,5 +1,6 @@
 import { expect, test } from "./fixtures/test";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
+import { ragSpan, savedSpanProgress } from "./_chat-progress";
 
 const searchAnswerProfile = {
   id: "bv-1",
@@ -37,19 +38,19 @@ function searchStreamBody(chunkId: string, extraMetadata: Record<string, unknown
       ...extraMetadata,
     },
   };
-  const stage = (name: string, outcome: string, elapsed_ms: number) =>
-    `event: stage\ndata: ${JSON.stringify({
-      trace_id: "trace-1",
-      stage: name,
-      outcome,
-      elapsed_ms,
-      attributes: {},
-    })}\n\n`;
+  // 処理の経過は span のイベント（#3226）。
+  // 文書検索は 42 ms（1 秒未満も秒で書く）。
+  const progress = savedSpanProgress(
+    "trace-1",
+    [
+      { key: "root", spec: ragSpan.root(), at: [0, 0.06] },
+      { key: "answer", spec: ragSpan.stage("answer"), at: [0, 0.06] },
+      { key: "search", spec: ragSpan.step("文書検索"), at: [0, 0.042] },
+    ],
+    { terminal: "done", base: "2026-01-01T00:00:00Z" }
+  );
   return [
-    stage("answer", "started", 0),
-    stage("answer_step:文書検索", "started", 0),
-    stage("answer_step:文書検索", "success", 42),
-    stage("answer", "success", 60),
+    ...progress.map((event) => `event: chat_progress\ndata: ${JSON.stringify({ event })}\n\n`),
     `event: metadata\ndata: ${JSON.stringify({
       trace_id: "trace-1",
       elapsed_ms: 12,

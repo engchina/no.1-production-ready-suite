@@ -67,7 +67,12 @@ def _pipeline(flow: _Flow) -> type:
             pass
 
         async def run(
-            self, request: SearchRequest, *, trace_id: str, progress_callback: Any
+            self,
+            request: SearchRequest,
+            *,
+            trace_id: str,
+            progress_callback: Any,
+            span_listener: Any = None,
         ) -> Any:
             await progress_callback(
                 SearchStageProgress(

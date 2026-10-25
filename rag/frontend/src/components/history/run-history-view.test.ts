@@ -1,9 +1,7 @@
-import {chatProgressStepsFromEvents, chatProgressTimelineStep, parseChatProgressEvents} from "@production-ready/ui";
-import {CHAT_PROGRESS_DEFINITIONS} from "@/lib/chat-progress";
-import {answerProcessStepsFromStages, type AnswerStageRecord} from "@/lib/answer-process";
+import { chatProgressStepsFromEvents, chatProgressTimelineStep, parseChatProgressEvents } from "@production-ready/ui";
 import { describe, expect, it } from "vitest";
 
-import type { RunStage, RunStep } from "@/lib/api";
+import { CHAT_PROGRESS_DEFINITIONS } from "@/lib/chat-progress";
 
 import {
   formatRunElapsed,
@@ -16,9 +14,7 @@ import {
   runStartedAt,
   runStatusLabels,
   runStatusParam,
-  answerStepStatus,
-  runStepStatus,
-  runTimelineSteps,
+  runTimeline,
   runVerificationView,
   RUN_STATUS_OPTIONS,
   toRunStatus,
@@ -115,131 +111,44 @@ describe("実行履歴の表示の対応表", () => {
       runConversationOwner({ ...base, conversation_owner_display_name: null, executed_by_me: true, owned_by_me: null })
     ).toBeNull();
   });
-
-  it("段の結果を処理の経過の状態にする", () => {
-    expect(runStepStatus("success")).toBe("done");
-    expect(runStepStatus("completed")).toBe("done");
-    expect(runStepStatus("error")).toBe("failed");
-    expect(runStepStatus("cancelled")).toBe("skipped");
-  });
-
-  it("処理の経過: 旧記録は外側の工程を重複させず、未知の階層を補わない", () => {
-    const stages: RunStage[] = [
-      { stage: "history_rewrite", outcome: "success", elapsed_ms: 1000 },
-      { stage: "answer_step:質問の理解", outcome: "success", elapsed_ms: 500 },
-      { stage: "answer_step:文書検索", outcome: "error", elapsed_ms: 300 },
-      { stage: "answer", outcome: "error", elapsed_ms: 900 },
-    ];
-    const steps: RunStep[] = [{ name: "質問の理解", status: "completed", elapsed_seconds: 0.5, llm_calls: 2 }];
-    const rows = runTimelineSteps({ stages, steps, created_at: "2026-10-15T09:00:01.900Z", elapsed_ms: 1900 });
-    expect(rows.map((row) => [row.label, row.level ?? 0, row.status])).toEqual([
-      ["会話を踏まえた質問の書き換え", 0, "done"],
-      ["質問の条件の読み取り", 0, "done"],
-      ["文書の検索", 0, "failed"],
-    ]);
-    // 工程は親の段の始まり（1 秒後）から順に置く。
-    expect(rows[1].startedAt).toBe("2026-10-15T09:00:01.000Z");
-    expect(rows[2].startedAt).toBe("2026-10-15T09:00:01.500Z");
-    expect(rows[1].detail).toBe("LLM 2 回");
-  });
-
-  it("回答の記録の工程の状態を処理の経過の状態にする", () => {
-    // rag_engine は終わった工程を complete、結果の説明つきの工程を日本語の説明にする。
-    expect(answerStepStatus("complete")).toBe("done");
-    expect(answerStepStatus("該当なし")).toBe("done");
-    expect(answerStepStatus("未実行: 候補なし")).toBe("done");
-    expect(answerStepStatus("")).toBe("done");
-    expect(answerStepStatus(null)).toBe("done");
-    expect(answerStepStatus("エラーで中断")).toBe("failed");
-    expect(answerStepStatus("中止")).toBe("failed");
-    expect(answerStepStatus("error")).toBe("failed");
-    expect(answerStepStatus("cancelled")).toBe("skipped");
-  });
-
-  it("処理の経過: 進捗の工程が無ければ回答の記録の工程を使う", () => {
-    const rows = runTimelineSteps({
-      stages: [{ stage: "answer", outcome: "success", elapsed_ms: 1000 }],
-      steps: [
-        { name: "質問の理解", status: "complete", elapsed_seconds: 0.3, llm_calls: 1 },
-        { name: "文書検索", status: "complete", elapsed_seconds: null, llm_calls: 0 },
-        { name: "画面の選択", status: "該当なし", elapsed_seconds: 0.1, llm_calls: 1 },
-      ],
-      created_at: "2026-10-15T09:00:01Z",
-      elapsed_ms: 1000,
-    });
-    expect(rows.map((row) => [row.label, row.status])).toEqual([
-      ["質問の条件の読み取り", "done"],
-      ["文書の検索", "done"],
-      ["関係する画面の選択", "done"],
-    ]);
-    expect(rows[1]).toMatchObject({ level: 0, durationMs: null, startedAt: null });
-  });
-
-  it("処理の経過: 工程と段の詳細を段を開いて見る詳細にする（同じ名前は記録の順。旧い行の配列も読む）", () => {
-    const rows = runTimelineSteps({
-      stages: [
-        { stage: "answer_step:文書検索", outcome: "success", elapsed_ms: 300 },
-        { stage: "answer_step:文書検索", outcome: "success", elapsed_ms: 200 },
-        { stage: "answer_step:質問の理解", outcome: "success", elapsed_ms: 100 },
-        { stage: "answer", outcome: "success", elapsed_ms: 900 },
-        // 回答の安全チェックの段の詳細（#2341）。
-        {
-          stage: "answer_guardrail",
-          outcome: "success",
-          elapsed_ms: 20,
-          details: { fields: [{ label: "結果", value: "問題なし" }] },
-        },
-      ],
-      steps: [
-        // 旧い記録（#2294）は行の配列。
-        { name: "文書検索", status: "complete", elapsed_seconds: 0.3, llm_calls: 0, details: ["検索文: 2 本"] },
-        {
-          name: "文書検索",
-          status: "complete",
-          elapsed_seconds: 0.2,
-          llm_calls: 0,
-          details: { fields: [{ label: "検索の候補", value: "4 件（2 文書）" }], lines: ["1. 文書 A"], truncated: true },
-        },
-        { name: "質問の理解", status: "complete", elapsed_seconds: 0.1, llm_calls: 1, details: null },
-      ],
-      created_at: "2026-10-15T09:00:01Z",
-      elapsed_ms: 900,
-    });
-    expect(rows.map((row) => row.details)).toEqual([
-      { lines: ["検索文: 2 本"] },
-      { fields: [{ label: "検索の候補", value: "4 件（2 文書）" }], lines: ["1. 文書 A"], truncated: true },
-      undefined,
-      { fields: [{ label: "結果", value: "問題なし" }] },
-    ]);
-  });
 });
 
-it("保存したチャットのイベントは内容・階層・補足・状態・時間を変えずに履歴へ写す", () => {
-  const events = parseChatProgressEvents([0, 1, 2].map((depth) => ({
-    schema_version: 1, target_id: "synthetic", seq: depth + 1, attempt: 0,
-    emitted_at: "2026-10-23T00:00:02Z", type: "step", step_id: `s${depth}`, kind: "answer_step", status: "done",
-    started_at: "2026-10-23T00:00:00Z", finished_at: "2026-10-23T00:00:02Z",
-    params: {name: "回答生成フロー", depth, note: "根拠不足で終了", llm_calls: depth + 1, llm_sends: depth + 2},
-    details: {fields: [{label: "結果", value: "合成の結果"}]},
-  })));
-  const actual = runTimelineSteps({progress_events: events, stages: [], steps: [], created_at: "2026-10-23T00:00:02Z", elapsed_ms: 2000});
-  expect(actual).toEqual(chatProgressStepsFromEvents(events, CHAT_PROGRESS_DEFINITIONS).map(chatProgressTimelineStep));
-  expect(actual.map((row) => row.level ?? 0)).toEqual([0,1,2]);
-  expect(actual[0].detail).toContain("根拠不足で終了");
-});
-it("検索の開始・終了イベントは検索画面と同じ順序と入れ子で履歴へ写す", () => {
-  const stage_events: AnswerStageRecord[] = [
-    {stage: "answer", outcome: "started", elapsed_ms: 0},
-    {stage: "answer_step:回答生成フロー", outcome: "started", elapsed_ms: 0},
-    {stage: "answer_step:文書検索", outcome: "started", elapsed_ms: 0},
-    {stage: "answer_step:文書検索", outcome: "success", elapsed_ms: 100},
-    {stage: "answer_step:回答生成フロー", outcome: "success", elapsed_ms: 300, attributes: {status: "根拠不足で終了", llm_calls: 1}},
-    {stage: "answer", outcome: "success", elapsed_ms: 300},
-    {stage: "answer_guardrail", outcome: "started", elapsed_ms: 0},
-    {stage: "answer_guardrail", outcome: "skipped", elapsed_ms: 1, details: {fields: [{label: "結果", value: "無効のため省略"}]}},
+const TRACE_ID = "c".repeat(32);
+
+/** span のイベント（backend の `ChatProgressRecorder.record_span` と同じ形）。 */
+function spanEvent(seq: number, id: string, fields: Record<string, unknown>) {
+  return {
+    schema_version: 1, target_id: "synthetic", seq, attempt: 0, emitted_at: "2026-10-23T00:00:02Z",
+    type: "step", step_id: id.repeat(16), kind: id.repeat(16), status: "done",
+    started_at: "2026-10-23T00:00:00Z", finished_at: "2026-10-23T00:00:02Z", trace_id: TRACE_ID, ...fields,
+  };
+}
+
+it("処理の経過は実行の trace の span のイベントを、操作画面と同じ関数で木にする（Issue 3226）", () => {
+  const raw = [
+    spanEvent(1, "1", { name: "rag.answer", root: true }),
+    spanEvent(2, "2", { name: "rag.answer", parent_id: "1".repeat(16), attributes: { "pr.stage": "answer" } }),
+    spanEvent(3, "3", {
+      name: "rag.engine.stage", parent_id: "2".repeat(16), kind: "answer_step",
+      params: { name: "回答生成フロー", note: "根拠不足で終了", llm_calls: 1, llm_sends: 2 },
+      details: { fields: [{ label: "結果", value: "合成の結果" }] },
+    }),
+    spanEvent(4, "4", { name: "rag.answer_guardrail", parent_id: "1".repeat(16), kind: "answer_guardrail", status: "skipped" }),
   ];
-  const rows = runTimelineSteps({stage_events, stages: [], steps: [], created_at: "2026-10-23T00:00:02Z", elapsed_ms: 301});
-  expect(rows).toEqual(answerProcessStepsFromStages(stage_events, {terminal: "done"}).map(chatProgressTimelineStep));
-  expect(rows.map((row) => row.level ?? 0)).toEqual([0,1,0]);
-  expect(rows.map((row) => row.status)).toEqual(["done","done","skipped"]);
+  const events = parseChatProgressEvents(raw);
+  const actual = runTimeline({ progress_events: events });
+  expect(actual.legacy).toBe(false);
+  expect(actual.traceId).toBe(TRACE_ID);
+  expect(actual.steps).toEqual(chatProgressStepsFromEvents(events, CHAT_PROGRESS_DEFINITIONS).map(chatProgressTimelineStep));
+  expect(actual.steps.map((row) => [row.level ?? 0, row.status])).toEqual([[0, "done"], [1, "done"], [0, "skipped"]]);
+  expect(actual.steps[1].detail).toContain("根拠不足で終了");
+});
+
+it("span の無い古い形式の記録（段だけのイベント・記録なし）は行を作らず古い形式にする", () => {
+  const legacy = parseChatProgressEvents([
+    { schema_version: 1, target_id: "synthetic", seq: 1, attempt: 0, emitted_at: "2026-10-23T00:00:02Z",
+      type: "step", step_id: "s1", kind: "answer_step", status: "done", params: { name: "文書検索", depth: 0 } },
+  ]);
+  expect(runTimeline({ progress_events: legacy })).toEqual({ steps: [], legacy: true });
+  expect(runTimeline({ progress_events: [] })).toEqual({ steps: [], legacy: true });
 });

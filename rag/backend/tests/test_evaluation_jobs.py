@@ -202,6 +202,29 @@ async def test_finished_job_cannot_be_cancelled(
         await service.cancel(submitted.job_id)
 
 
+async def test_finished_jobs_are_kept_without_retention(owner: AuditRequestContext) -> None:
+    """終わった品質評価の job は既定で無期限に残す（自動では消さない。#3235）。"""
+    now = [datetime(2026, 1, 1, tzinfo=UTC)]
+    store = MemoryEvaluationJobStore(clock=lambda: now[0])
+    service = EvaluationJobService(store, heartbeat_seconds=0.01)
+    first = await service.submit(
+        kind="run", total_cases=0, time_limit_seconds=3600, executor=ControlledExecutor([])
+    )
+    await service.wait_for(first.job_id)
+    now[0] += timedelta(days=3650)
+
+    second = await service.submit(
+        kind="run", total_cases=0, time_limit_seconds=3600, executor=ControlledExecutor([])
+    )
+    await service.wait_for(second.job_id)
+
+    assert evaluation_jobs.EVALUATION_JOB_RETENTION_DAYS == 0
+    assert (await service.get(first.job_id)).status == "SUCCEEDED"
+    assert await store.purge(retention_days=0) == 0
+    # 保持日数を決めたときは、終わった job を期限で消す。
+    assert await store.purge(retention_days=1) == 1
+
+
 async def test_job_failure_hides_exception_text(
     service: EvaluationJobService, owner: AuditRequestContext
 ) -> None:
@@ -375,7 +398,9 @@ async def test_job_records_timed_out_case_with_stage_and_continues(
     assert slow.status == "error"
     assert slow.error_type == "TimeoutError"
     assert slow.error_stage == "answer"
-    assert slow.error_message is not None and "根拠の検索と回答の生成" in slow.error_message
+    assert (
+        slow.error_message is not None and "質問の読み取りから回答の作成まで" in slow.error_message
+    )
     assert fast.status == "success"
 
 
@@ -638,6 +663,29 @@ def _oracle_store(connection: _FakeConnection) -> OracleEvaluationJobStore:
 
 def _normalized(statement: str) -> str:
     return " ".join(statement.split())
+
+
+async def test_oracle_purges_issue_no_sql_without_retention() -> None:
+    """保持日数 0（無期限）の削除は SQL を流さない（実行の記録を消さない。#3235）。"""
+    from app.clients.oracle_run_history import RunHistoryStore
+
+    connection = _FakeConnection(rowcount=5)
+    store = _oracle_store(connection)
+    client = OracleClient(
+        settings=get_settings(),
+        pool=cast(OraclePoolProtocol, _FakePool(connection)),
+        db_call_runner=_run_inline,
+    )
+
+    assert await store.purge(retention_days=0) == 0
+    assert await client.purge_answer_records(0) == 0
+    assert await client.purge_query_history(0) == 0
+    assert await RunHistoryStore(client).purge_runs(0) == 0
+    assert connection.calls == []
+
+    assert await store.purge(retention_days=7) == 5
+    assert "DELETE FROM rag_evaluation_jobs" in _normalized(connection.calls[0].statement)
+    assert connection.calls[0].parameters == {"retention_days": 7}
 
 
 async def test_oracle_store_writes_only_under_own_lease() -> None:

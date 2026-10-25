@@ -1,4 +1,9 @@
-"""明示 opt-in: 一時メタデータ表のみで Oracle CAS/rollback/CLOB 契約を検証する。"""
+"""明示 opt-in: 一時メタデータ表のみで Oracle CAS/rollback/CLOB 契約を検証する。
+
+保存の往復は Oracle AI Database Free でも動くので、CI の Oracle integration で実行する。
+ADB だけにある DBA_LOAD_OPERATIONS を読む `capture_session` は、別の opt-in
+（NL2SQL_SYNTHETIC_ADB_LIVE_TEST）で確かめる。
+"""
 
 import os
 from collections.abc import Iterator
@@ -18,10 +23,7 @@ from app.features.settings.system_schema import split_migration_sql
 from app.settings import Settings
 
 
-@pytest.mark.skipif(
-    os.environ.get("NL2SQL_SYNTHETIC_LIVE_TEST") != "1", reason="isolated Oracle opt-in"
-)
-def test_oracle_persistence_roundtrip_and_conflict_rollback() -> None:
+def _live_adapter() -> OracleNl2SqlAdapter:
     # conftest の APP 上書きを使わず、ローカル接続設定を明示的に読込む。
     from dotenv import dotenv_values
 
@@ -34,8 +36,22 @@ def test_oracle_persistence_roundtrip_and_conflict_rollback() -> None:
         and key.removeprefix("PLATFORM_").lower() in Settings.model_fields
         and value is not None
     }
-    settings = Settings(_env_file=None, **connection_settings)
-    adapter = OracleNl2SqlAdapter(settings)
+    return OracleNl2SqlAdapter(Settings(_env_file=None, **connection_settings))
+
+
+@pytest.mark.skipif(
+    os.environ.get("NL2SQL_SYNTHETIC_ADB_LIVE_TEST") != "1", reason="isolated ADB opt-in"
+)
+def test_capture_session_reads_adb_load_operations() -> None:
+    with _live_adapter().connection() as conn:
+        assert capture_session(conn)["sid"] > 0
+
+
+@pytest.mark.skipif(
+    os.environ.get("NL2SQL_SYNTHETIC_LIVE_TEST") != "1", reason="isolated Oracle opt-in"
+)
+def test_oracle_persistence_roundtrip_and_conflict_rollback() -> None:
+    adapter = _live_adapter()
     prefix = "NL2SQL_T" + uuid4().hex[:8].upper()
 
     def remap(sql: Any) -> Any:
@@ -76,7 +92,6 @@ def test_oracle_persistence_roundtrip_and_conflict_rollback() -> None:
     created = []
     try:
         with adapter.connection() as conn, conn.cursor() as cur:
-            assert capture_session(conn)["sid"] > 0
             for sql in split_migration_sql(ddl.read_text()):
                 cur.execute(remap(sql))
                 if sql.startswith("CREATE TABLE"):
@@ -124,12 +139,13 @@ def test_oracle_persistence_roundtrip_and_conflict_rollback() -> None:
         at = datetime.now(UTC)
         old = (at - timedelta(days=3)).isoformat()
         cutoff = (at - timedelta(hours=24)).isoformat()
-        for name, status, finished, context in [
-            ("expired", "completed", old, "test"),
-            ("boundary", "failed", cutoff, "test"),
-            ("recent-finish", "partial", at.isoformat(), "test"),
-            ("unknown", "unknown", None, "test"),
-            ("other", "no_data", old, "other"),
+        staging = {"APP.T": {"name": "APP.NL2SQL_SP_FIXTURE", "checksum": "digest", "count": 1}}
+        for name, status, finished, context, stage in [
+            ("expired", "completed", old, "test", staging),
+            ("boundary", "failed", cutoff, "test", {}),
+            ("recent-finish", "partial", at.isoformat(), "test", {}),
+            ("unknown", "unknown", None, "test", staging),
+            ("other", "no_data", old, "other", staging),
         ]:
             store.create(
                 value.model_copy(
@@ -140,24 +156,17 @@ def test_oracle_persistence_roundtrip_and_conflict_rollback() -> None:
                         "created_at": old,
                         "finished_at": finished,
                         "context_id": context,
+                        "staging": stage,
                     }
                 )
             )
-        with connection() as conn, conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO NL2SQL_SYNTHETIC_LOCKS (CONTEXT_ID,TARGET_NAME,RUN_ID) "
-                "VALUES ('test','APP.EXPIRED_FIXTURE','expired')"
-            )
-            conn.commit()
-        assert store.purge_expired("test", "test", at=at) == 1
-        assert store.get("expired") is None
-        assert store.by_key("test", "test", "expired") is None
-        for name in ["boundary", "recent-finish", "unknown", "other"]:
+        # 生成の記録は期間で消さない（#3235）。後始末の対象は一時表の管理情報が残る終端の記録だけ。
+        for name in ["expired", "boundary", "recent-finish", "unknown", "other"]:
             assert store.get(name) is not None
-        assert store.purge_expired("test", at=at + timedelta(microseconds=1)) == 1
-        with connection() as conn, conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM NL2SQL_SYNTHETIC_LOCKS")
-            assert cur.fetchone()[0] == 0
+        assert store.by_key("test", "test", "expired") is not None
+        assert [run.run_id for run in store.list_cleanup_candidates("test")] == ["expired"]
+        assert store.get("expired").review_expired(at)
+        assert not store.get("boundary").review_expired(at)
     finally:
         with adapter.connection() as conn, conn.cursor() as cur:
             for name in reversed(created):

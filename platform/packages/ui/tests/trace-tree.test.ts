@@ -29,25 +29,36 @@ describe("安全な trace の表示", () => {
     expect(traceTimeline(null).steps).toEqual([]);
   });
 });
-describe("span の表示名", () => {
+describe("span の表示名（#3219。3 製品の 9 画面で共通の規則）", () => {
   const stage = (id: string, parent: string | undefined, operation_name: string, attributes: Record<string, unknown> = {}) => ({ ...span(id, parent), operation_name, attributes });
   const summary = { completeness: "complete", root_span_id: "1".repeat(16), spans: [
-    stage("1", undefined, "op.answer"),
+    stage("1", undefined, "op.answer", { "pr.attempt": 2 }),
     stage("2", "1", "op.answer", { "pr.stage": "answer" }),
     stage("3", "2", "op.engine.stage", { "pr.stage": "工程 A" }),
     stage("4", "3", "gen_ai.chat", { "gen_ai.request.model": "model-x" }),
     stage("5", "3", "gen_ai.execute_tool", { "gen_ai.tool.name": "tool_y", "gen_ai.request.model": "model-x" }),
+    stage("6", "5", "mcp.request", { "pr.attempt": 3 }),
+    stage("7", "3", "gen_ai.embeddings", { "gen_ai.request.model": "embed-x" }),
+    stage("8", "3", "gen_ai.rerank", { "gen_ai.request.model": "rerank-x" }),
+    stage("9", "3", "gen_ai.invoke_agent", { "gen_ai.request.model": "model-x" }),
+    stage("a", "3", "oracle.select_ai"),
+    stage("b", "3", "custom.operation"),
   ] };
-  it("既定は root を実行の全体、gen_ai をモデル名・ツール名つきにする", () => {
+  it("既定は root・段・技術の span を日本語にし、対象と試行の回数を添える", () => {
     const steps = traceTimeline(summary).steps;
-    expect(steps.map(s => s.label)).toEqual(["実行の全体", "op.answer", "op.engine.stage", "gen_ai.chat · model-x", "gen_ai.execute_tool · tool_y"]);
+    expect(steps.map(s => s.label)).toEqual([
+      "実行の全体（2 回目）", "answer", "工程 A", "モデルの呼び出し · model-x", "ツールの実行 · tool_y", "MCP の呼び出し（3 回目）",
+      "埋め込みの作成 · embed-x", "並べ替え（rerank） · rerank-x", "AI の呼び出し · model-x", "Select AI の呼び出し", "custom.operation",
+    ]);
   });
-  it("製品の名前を優先し、詳細に技術の名前と段を残す", () => {
+  it("段は製品の段の名前（処理の経過と同じ関数）を使い、詳細に元の span の名前と段を残す", () => {
+    const seen: [string, string][] = [];
     const labels = createTraceDetailsLabels(key => TRACE_DETAILS_JA[key], {
-      spanLabel: ({ operationName, stage: name, root }) => root ? undefined : operationName === "op.engine.stage" ? `表示 ${name}` : name === "answer" ? "回答の段" : null,
+      stageName: (name, status) => { seen.push([name, status]); return name === "answer" ? "回答の段" : name === "工程 A" ? "表示 工程 A" : undefined; },
     });
     const steps = traceTimeline(summary, labels).steps;
-    expect(steps.map(s => s.label).slice(0, 3)).toEqual(["実行の全体", "回答の段", "表示 工程 A"]);
+    expect(steps.map(s => s.label).slice(0, 3)).toEqual(["実行の全体（2 回目）", "回答の段", "表示 工程 A"]);
+    expect(seen).toEqual([["answer", "done"], ["工程 A", "done"]]);
     const fields = steps[2].details?.fields ?? [];
     expect(fields).toContainEqual({ label: "Span name", value: "op.engine.stage", mono: true });
     expect(fields).toContainEqual({ label: "pr.stage", value: "工程 A", mono: true });

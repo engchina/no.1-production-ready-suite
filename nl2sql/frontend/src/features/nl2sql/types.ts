@@ -1433,6 +1433,8 @@ export interface DbAdminChatTurn {
   sender_display_name?: string | null;
   /** 回答の注意書き（システム設定の文。#2405）。この機能より前のターンは null / 未指定。 */
   notice?: string | null;
+  /** 生成したときの処理の経過（生成と SQL の確認の span の木。#3226）。古いターンには無い。 */
+  progress_events?: unknown;
 }
 
 /** DB 管理チャットの会話（#2319。チャットの会話と同じ見え方の項目）。 */

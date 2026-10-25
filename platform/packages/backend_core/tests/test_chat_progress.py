@@ -515,3 +515,56 @@ def test_step_details_are_bounded_and_secrets_are_masked() -> None:
     assert len(long_code.code[0].text) == DETAILS_CODE_MAX + 1
     assert long_code.truncated is True
     assert chat_progress_details() is None
+
+
+def test_record_span_turns_trace_into_progress_events() -> None:
+    """span の開始・変更・終了を段のイベントにし、終端まで同じ記録で流す（#3226）。"""
+    import asyncio
+
+    import pytest
+
+    from pr_backend_core.chat_progress import ChatProgressRecorder, chat_progress_details
+    from pr_backend_core.observability.tracing import observed_span, operation_trace
+
+    recorder = ChatProgressRecorder("target-a")
+    with operation_trace("task", operation_id="target-a", listener=recorder.record_span) as summary:
+        with observed_span("stage") as stage:
+            stage.set_display(
+                kind="first", params={"count": 1}, details=chat_progress_details(lines=["行"])
+            )
+        with pytest.raises(asyncio.CancelledError), observed_span("stopped"):
+            raise asyncio.CancelledError
+    recorder.complete("done")
+    steps = {step.step_id: step for step in recorder.steps()}
+    root = steps[summary.root_span_id or ""]
+    assert root.span is not None and root.span["root"] is True and root.status == "done"
+    first = next(step for step in steps.values() if step.span and step.span["name"] == "stage")
+    assert first.kind == "first" and first.params == {"count": 1}
+    assert first.details is not None and first.details.lines == ["行"]
+    assert first.span is not None and first.span["parent_id"] == summary.root_span_id
+    stopped = next(step for step in steps.values() if step.span and step.span["name"] == "stopped")
+    assert stopped.status == "skipped" and stopped.span is not None
+    assert stopped.span["cancelled"] is True
+    # 保存した JSON から読み直しても span の項目が残る。
+    from pr_backend_core.chat_progress import dump_chat_progress_events, parse_chat_progress_events
+
+    events = parse_chat_progress_events(dump_chat_progress_events(recorder.events))
+    assert any(getattr(event, "parent_id", None) == summary.root_span_id for event in events)
+    assert events[-1].type == "terminal"
+
+
+def test_complete_cancelled_marks_running_spans_as_cancelled() -> None:
+    """停止の終端は、開いていた span の段を「停止」（skipped と cancelled）で閉じる（#3226）。"""
+    from pr_backend_core.chat_progress import ChatProgressRecorder
+    from pr_backend_core.observability.tracing import observed_span, operation_trace
+
+    recorder = ChatProgressRecorder("target-b")
+    with (
+        operation_trace("task", operation_id="target-b", listener=recorder.record_span),
+        observed_span("stage", finish_on_exit=False),
+    ):
+        recorder.complete("cancelled")
+    stage = next(step for step in recorder.steps() if step.span and step.span["name"] == "stage")
+    assert stage.status == "skipped"
+    assert stage.span is not None and stage.span["cancelled"] is True
+    assert recorder.terminal == "cancelled"

@@ -3710,7 +3710,9 @@ class OracleClient:
         return rows
 
     async def purge_query_history(self, retention_days: int) -> int:
-        """保持期間を過ぎた質問履歴を削除し、削除件数を返す。"""
+        """保持期間を過ぎた質問履歴を削除し、削除件数を返す（0 以下は無期限で削除しない）。"""
+        if retention_days <= 0:
+            return 0
 
         # ponytail: created_at 単独 index なしの全走査。履歴が大量になったら index を足す。
         def operation(connection: OracleConnectionProtocol) -> int:
@@ -3804,7 +3806,9 @@ class OracleClient:
         return await self._run_transaction(operation)
 
     async def purge_answer_records(self, retention_days: int) -> int:
-        """保持期間を過ぎた回答を削除し、削除件数を返す。"""
+        """保持期間を過ぎた回答を削除し、削除件数を返す（0 以下は無期限で削除しない）。"""
+        if retention_days <= 0:
+            return 0
 
         # ponytail: created_at 単独 index なしの全走査。記録が大量になったら index を足す。
         def operation(connection: OracleConnectionProtocol) -> int:
@@ -6411,7 +6415,9 @@ class OracleClient:
         return int(cast(int, row.get("running_count") or 0)) if row else 0
 
     async def purge_evaluation_jobs(self, *, retention_days: int) -> int:
-        """保持期間を過ぎた、終わった品質評価の job を消す（結果は評価 artifact に残る）。"""
+        """保持期間を過ぎた、終わった品質評価の job を消す（0 以下は無期限で消さない）。"""
+        if retention_days <= 0:
+            return 0
 
         def operation(connection: OracleConnectionProtocol) -> int:
             return _execute_count(

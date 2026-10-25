@@ -4,42 +4,25 @@ import type { ReactNode } from "react";
 import {
   ChatProgress,
   chatProgressStepsFromEvents,
+  chatProgressTraceIdOf,
   parseChatProgressEvents,
+  useTraceDetailsLabels,
   Button,
   Banner,
   FormStatus,
 } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
-import { CHAT_PROGRESS_LABELS, CHAT_PROGRESS_STEP_DEFINITIONS, nl2sqlTraceDetailsLabels } from "../chatProgress";
-import { normalizeNl2SqlJobSteps } from "../jobProgressState";
-import type { JobData, JobStepData } from "../types";
+import {
+  CHAT_PROGRESS_LABELS,
+  CHAT_PROGRESS_STEP_DEFINITIONS,
+  chatProgressIsLegacy,
+  chatQueueProgressSteps,
+} from "../chatProgress";
+import type { JobData } from "../types";
 import { GeneratedSqlSummary } from "./GeneratedSqlPanel";
 import { JobFailureBody } from "./JobFailureBody";
-import { QuestionText } from "./QuestionText";
-
-/** Select AI / Select AI Agent の SQL で省略した安全性の確認（#1523）。 */
-function isSafetyCheckSkipped(job: JobData, step: JobStepData) {
-  return (
-    step.stage === "safety_check" &&
-    step.status === "skipped" &&
-    job.result?.safety.safety_checked === false
-  );
-}
-
-function jobStepDescription(job: JobData, step: JobStepData) {
-  return isSafetyCheckSkipped(job, step)
-    ? t("nl2sql.progress.safety_check.safetyCheckSkippedDescription")
-    : stepDescription(step.stage);
-}
-
-function stepLabel(stage: string) {
-  return t(`nl2sql.progress.${stage}.label`);
-}
-
-function stepDescription(stage: string) {
-  return t(`nl2sql.progress.${stage}.description`);
-}
+import { ProgressLegacyNotice } from "./ProgressLegacyNotice";
 
 export function OperationStatusStrip({
   job,
@@ -84,13 +67,18 @@ export function OperationStatusStrip({
   const active = job?.status === "pending" || job?.status === "running";
   const finalElapsed =
     job?.elapsed_ms ?? job?.result?.timing.elapsed_ms ?? job?.timing?.elapsed_ms;
+  const traceLabels = useTraceDetailsLabels();
   if (!job) return null;
 
-  const steps = normalizeNl2SqlJobSteps(job);
-  // 保存したイベントを優先し、古い steps は互換用に読む。
-  const recordedSteps = chatProgressStepsFromEvents(
-    parseChatProgressEvents(job.progress_events), CHAT_PROGRESS_STEP_DEFINITIONS, job.job_id
-  );
+  // 処理の経過は backend が記録した span の木（#3226）。worker が受け取るまでは開始待ちの仮の行、span の無い
+  // 古い形式の記録は案内の文を出す。
+  const events = parseChatProgressEvents(job.progress_events);
+  const recordedSteps = chatProgressStepsFromEvents(events, CHAT_PROGRESS_STEP_DEFINITIONS, job.job_id, {
+    traceLabels,
+  });
+  const queuePlaceholder = recordedSteps.length === 0 && active;
+  const steps = queuePlaceholder ? chatQueueProgressSteps(job.created_at) : recordedSteps;
+  const legacy = !active && chatProgressIsLegacy(events);
   // プレビュー経路: execute/format 未実行(skipped)。「完了」ではなく確認を促す文言に差し替える。
   const warningMessage = job.warning_message?.trim();
   const errorMessage = job.status === "error" ? job.error_message?.trim() : "";
@@ -101,60 +89,25 @@ export function OperationStatusStrip({
 
   return (
     <div data-testid="nl2sql-job-progress" data-job-status={job.status}>
-    <ChatProgress
-      active={active}
-      activityIndicator={!cancelRequesting}
-      progressKey={job.job_id}
-      startedAt={startedAtMs}
-      elapsedMs={finalElapsed}
-      cancelled={cancelled}
-      traceLabels={nl2sqlTraceDetailsLabels()}
-          traceSummary={job.trace_segments && job.trace_segments.length > 1 ? job.trace_segments : job.trace_summary}
-      testId="nl2sql-job"
-      labels={recordedSteps.length ? CHAT_PROGRESS_LABELS : undefined}
-      steps={recordedSteps.length ? recordedSteps : steps.map((step) => ({
-        id: step.stage,
-        label: stepLabel(step.stage),
-        detail: jobStepDescription(job, step),
-        status: step.status === "error" ? "failed" as const : step.status,
-        durationMs: step.elapsed_ms,
-        children: (
-          <>
-            {step.stage === "prepare_context" && job.result && (
-              <dl className="mt-2 grid gap-2 border-l border-border pl-3 text-xs">
-                <div className="grid gap-0.5">
-                  <dt className="font-medium text-fg-muted">{t("nl2sql.result.rewritten")}</dt>
-                  <dd className="leading-5 text-fg">
-                    <QuestionText
-                      value={job.result.rewritten_question || "-"}
-                      variant="compact"
-                      maxLines={2}
-                      className="text-fg"
-                    />
-                  </dd>
-                </div>
-              </dl>
-            )}
-            {step.stage === "safety_check" && job.result && (
-              <dl className="mt-2 grid gap-2 border-l border-border pl-3 text-xs">
-                <div className="grid gap-0.5">
-                  <dt className="font-medium text-fg-muted">{t("nl2sql.result.tables")}</dt>
-                  <dd className="break-words font-mono leading-5 text-fg">
-                    {job.result.safety.referenced_tables.join(", ") || "-"}
-                  </dd>
-                </div>
-                <div className="grid gap-0.5">
-                  <dt className="font-medium text-fg-muted">{t("nl2sql.result.columns")}</dt>
-                  <dd className="break-words font-mono leading-5 text-fg">
-                    {job.result.safety.referenced_columns.join(", ") || "-"}
-                  </dd>
-                </div>
-              </dl>
-            )}
-          </>
-        ),
-      }))}
-    />
+    {legacy ? (
+      <div className="mx-4 my-3">
+        <ProgressLegacyNotice testId="nl2sql-job-progress-legacy" />
+      </div>
+    ) : (
+      <ChatProgress
+        active={active}
+        activityIndicator={!cancelRequesting}
+        // 仮の行から span の木に替わったら一覧を作り直す（仮の行を残さない）。
+        progressKey={queuePlaceholder ? `${job.job_id}:queue` : job.job_id}
+        startedAt={startedAtMs}
+        elapsedMs={finalElapsed}
+        cancelled={cancelled}
+        traceId={chatProgressTraceIdOf(events)}
+        testId="nl2sql-job"
+        labels={CHAT_PROGRESS_LABELS}
+        steps={steps}
+      />
+    )}
         <>
           {active && onCancelJob && (
             <div className="mx-4 mb-4 flex flex-wrap items-center justify-end gap-x-3 gap-y-2">

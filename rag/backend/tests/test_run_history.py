@@ -25,6 +25,7 @@ from app.clients.oracle_run_history import RunHistoryStore, run_history_list_whe
 from app.config import Settings, get_settings
 from app.main import app
 from app.rag import run_history as run_history_module
+from app.rag.chat_progress import ChatProgressTracker
 from app.rag.guardrails import GuardrailResult
 from app.rag.pipeline import RagPipeline
 from app.rag.request_context import (
@@ -127,8 +128,10 @@ def test_answer_verification_without_diagnostics() -> None:
 # ---- 記録 ----
 
 
-async def test_recorder_saves_summary_stages_and_purges_once() -> None:
+async def test_recorder_saves_summary_progress_events_and_purges_once() -> None:
+    """実行の要約と、詳細の処理の経過（実行の trace の span のイベント。#3226）を保存する。"""
     store = RecordingStore()
+    progress = [{"type": "step", "seq": 1, "step_id": "0" * 16, "name": "rag.answer"}]
     recorder = RunRecorder(
         surface="chat",
         settings=Settings(rag_answer_record_retention_days=30),
@@ -136,32 +139,16 @@ async def test_recorder_saves_summary_stages_and_purges_once() -> None:
         conversation_id="conv-1",
         message_id="msg-1",
         model_id="model-a",
+        progress_source=lambda: progress,
     )
     callback = recorder.observe(None)
 
     class Progress:
-        def __init__(
-            self,
-            stage: str,
-            outcome: str,
-            elapsed_ms: float,
-            details: dict[str, object] | None = None,
-        ) -> None:
-            self.stage, self.outcome, self.elapsed_ms = stage, outcome, elapsed_ms
-            self.details = details
+        def __init__(self, stage: str, outcome: str) -> None:
+            self.stage, self.outcome, self.elapsed_ms = stage, outcome, 0.0
 
-    await callback(Progress("answer", "started", 0.0))
-    await callback(Progress("answer", "success", 1200.0))
-    # パイプラインの工程の詳細も段に残す（#2341）。
-    await callback(Progress("answer_guardrail", "started", 0.0))
-    await callback(
-        Progress(
-            "answer_guardrail",
-            "success",
-            30.0,
-            {"fields": [{"label": "結果", "value": "問題なし"}]},
-        )
-    )
+    await callback(Progress("answer", "started"))
+    await callback(Progress("answer", "success"))
     await recorder.record(
         run_id="trace-1",
         question="受注の登録方法は？",
@@ -174,27 +161,7 @@ async def test_recorder_saves_summary_stages_and_purges_once() -> None:
             "confidence": "high",
             "needs_human_review": False,
             "envelope": {"requests": [{"status": "addressed"}]},
-            "execution_steps": [
-                # 旧い記録の行の list（#2294）は行として読む。
-                {
-                    "name": "文書検索",
-                    "status": "ok",
-                    "elapsed_seconds": 0.4,
-                    "llm_calls": 0,
-                    "details": ["検索文: 2 本"],
-                },
-                # 工程の詳細（見出しと値・行）は実行の記録にも残す。秘密らしい値は伏せる（#2341）。
-                {
-                    "name": "Rerank",
-                    "status": "complete",
-                    "elapsed_seconds": 0.1,
-                    "llm_calls": 0,
-                    "details": {
-                        "fields": [{"label": "並べ替える候補", "value": "3 件"}],
-                        "lines": ["1. 0.940 文書 A", "token=abc"],
-                    },
-                },
-            ],
+            "execution_steps": [{"name": "文書検索", "status": "complete"}],
         },
     )
     await recorder.record(
@@ -216,47 +183,31 @@ async def test_recorder_saves_summary_stages_and_purges_once() -> None:
     assert first["confidence"] == "high"
     # 回答を作った実行の根拠は回答の記録にあるので、ここには持たない。
     assert first["citations"] is None
-    stored_stages = dict(first["stages"])
-    events = stored_stages.pop("stage_events")
-    assert [event["outcome"] for event in events] == ["started", "success", "started", "success"]
-    assert events[-1]["details"]["fields"][0]["value"] == "問題なし"
-    assert stored_stages == {
-        "stages": [
-            {"stage": "answer", "outcome": "success", "elapsed_ms": 1200.0},
-            {
-                "stage": "answer_guardrail",
-                "outcome": "success",
-                "elapsed_ms": 30.0,
-                "details": {"fields": [{"label": "結果", "value": "問題なし"}]},
-            },
-        ],
-        "steps": [
-            {
-                "name": "文書検索",
-                "status": "ok",
-                "elapsed_seconds": 0.4,
-                "llm_calls": 0,
-                "llm_sends": None,
-                "details": {"lines": ["検索文: 2 本"]},
-            },
-            {
-                "name": "Rerank",
-                "status": "complete",
-                "elapsed_seconds": 0.1,
-                "llm_calls": 0,
-                "llm_sends": None,
-                "details": {
-                    "fields": [{"label": "並べ替える候補", "value": "3 件"}],
-                    "lines": ["1. 0.940 文書 A", "token=***"],
-                },
-            },
-        ],
-    }
+    # 処理の経過は span のイベントだけ（段・工程の秒の古い形式の記録は持たない）。
+    assert first["stages"] == {"progress_events": progress}
     assert blocked["status"] == "blocked"
     assert blocked["question"] is None
     assert blocked["verification"] is None
     # 期限切れの削除はプロセスごとに間隔を空けて 1 回。
     assert store.purged == [30]
+
+
+async def test_recorder_keeps_runs_by_default() -> None:
+    """既定の保持日数は 0（無期限）で、実行履歴を自動では削除しない（#3235）。"""
+    store = RecordingStore()
+    recorder = RunRecorder(surface="search", settings=Settings(), store=store)
+
+    await recorder.record(
+        run_id="trace-1",
+        question="q",
+        search_answer_profile_id=None,
+        answer_generated=False,
+        status="success",
+        elapsed_ms=1.0,
+    )
+
+    assert len(store.records) == 1
+    assert store.purged == []
 
 
 async def test_recorder_failure_does_not_raise(caplog: pytest.LogCaptureFixture) -> None:
@@ -287,30 +238,37 @@ async def test_pipeline_records_search_answer_and_blocked_runs(monkeypatch: Monk
 
     store = RecordingStore()
 
-    def pipeline() -> RagPipeline:
-        return RagPipeline(
+    async def run(request: SearchRequest, **kwargs: Any) -> None:
+        # 実行履歴の詳細の処理の経過は、実行の trace の span のイベント（#3226）。
+        tracker = ChatProgressTracker("t" * 32)
+        recorder = RunRecorder(
+            surface="search", settings=Settings(), store=store, progress_source=tracker.dump
+        )
+        await RagPipeline(
             genai=FakeGenAi(),  # type: ignore[arg-type]
             oracle=AnswerOracle(),  # type: ignore[arg-type]
             settings=Settings(),
-            run_recorder=RunRecorder(surface="search", settings=Settings(), store=store),
-        )
+            run_recorder=recorder,
+        ).run(request, span_listener=tracker.span_listener(), **kwargs)
 
-    await pipeline().run(
+    await run(
         SearchRequest(
             query="受注の登録方法は？", search_answer_profile_id="bv-1", generate_answer=False
         )
     )
-    await pipeline().run(SearchRequest(query="受注の登録方法は？", search_answer_profile_id="bv-1"))
-    await pipeline().run(
+    await run(SearchRequest(query="受注の登録方法は？", search_answer_profile_id="bv-1"))
+    await run(
         SearchRequest(query="止める質問", search_answer_profile_id="bv-1"),
         query_guardrail_result=GuardrailResult(
             allowed=False, sanitized_text="止める質問", findings=[]
         ),
     )
     # 根拠の検索だけ（ナレッジベースの検索テスト・レシピの検索比較）は残さない。
-    await pipeline().run(
-        SearchRequest(query="受注", search_answer_profile_id="bv-1", retrieval_only=True)
-    )
+    await run(SearchRequest(query="受注", search_answer_profile_id="bv-1", retrieval_only=True))
+
+    def span_names(record: Mapping[str, Any]) -> set[str]:
+        events = record["stages"]["progress_events"]
+        return {str(event.get("name")) for event in events if event.get("type") == "step"}
 
     search_only, answered, blocked = store.records
     assert search_only["status"] == "success"
@@ -318,11 +276,17 @@ async def test_pipeline_records_search_answer_and_blocked_runs(monkeypatch: Monk
     assert search_only["question"] == "受注の登録方法は？"
     assert search_only["verification"] is None
     assert search_only["citation_count"] == len(search_only["citations"]) > 0
-    assert [stage["stage"] for stage in search_only["stages"]["stages"]] == ["retrieval"]
+    assert {"rag.search", "rag.retrieval"} <= span_names(search_only)
     assert answered["answer_generated"] is True
     assert answered["citations"] is None
     assert answered["verification"] in {"verified", "partial", "unverified"}
-    assert "answer" in [stage["stage"] for stage in answered["stages"]["stages"]]
+    assert {"rag.answer", "rag.engine.stage"} <= span_names(answered)
+    engine_steps = [
+        event
+        for event in answered["stages"]["progress_events"]
+        if event.get("kind") == "answer_step"
+    ]
+    assert engine_steps and all((event.get("params") or {}).get("name") for event in engine_steps)
     assert blocked["status"] == "blocked"
     assert blocked["question"] is None
 
@@ -585,10 +549,12 @@ def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
             "attempt": 0,
             "emitted_at": "2026-10-23T00:00:01Z",
             "type": "step",
-            "step_id": "s1",
+            "step_id": "a" * 16,
             "kind": "answer_step",
             "status": "done",
-            "params": {"name": "文書検索", "depth": 1},
+            "params": {"name": "文書検索"},
+            "name": "rag.engine.stage",
+            "parent_id": "b" * 16,
         }
     ]
 
@@ -606,8 +572,8 @@ def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
     monkeypatch.setattr(OracleClient, "get_chat_message", saved_message)
     # 回答を作った自分の実行は、回答の記録から回答・根拠・診断を読む。
     stages = {
-        "stages": [{"stage": "answer", "outcome": "success", "elapsed_ms": 900.0}],
-        "steps": [{"name": "文書検索", "status": "ok", "elapsed_seconds": 0.3, "llm_calls": 0}],
+        # 実行の記録の処理の経過（会話の回答の記録があればそちらを優先する。#3226）。
+        "progress_events": [{**saved_progress[0], "params": {"name": "使わない記録"}}],
         # 保存できなかった記録（#2342）。
         "storage_failures": [
             {"step": "chat_message_save", "error_type": "DatabaseError", "error_code": "ORA-40441"}
@@ -670,9 +636,11 @@ def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
     assert data["answer_available"] is True
     assert data["citations"][0]["chunk_id"] == "doc-1:c1"
     assert data["answer_diagnostics"]["outcome"] == "answered"
-    assert data["progress_events"][0]["params"] == {"name": "文書検索", "depth": 1}
-    assert data["stages"][0]["stage"] == "answer"
-    assert data["steps"][0]["name"] == "文書検索"
+    assert data["progress_events"][0]["params"] == {"name": "文書検索"}
+    assert data["progress_events"][0]["name"] == "rag.engine.stage"
+    assert data["progress_events"][0]["parent_id"] == "b" * 16
+    # 段・工程の秒の古い形式の項目は返さない。
+    assert not {"stages", "steps", "stage_events"} & set(data)
     assert data["feedback"][0]["feedback_id"] == "fb-1"
     assert data["verification"] == "verified"
     assert data["error_code"] is None
@@ -763,7 +731,7 @@ async def test_save_run_takes_the_owner_from_the_context() -> None:
                 "surface": "search",
                 "status": "success",
                 "question": "q",
-                "stages": {"stages": [], "steps": []},
+                "stages": {"progress_events": []},
                 "citations": [],
                 # 呼び出し側の値は使わない。
                 "user_uuid": "spoofed",

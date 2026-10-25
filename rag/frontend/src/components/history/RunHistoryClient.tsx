@@ -50,6 +50,7 @@ import {
   Card,
   formatRunDateTime,
   useActionPending,
+  useTraceDetailsLabels,
 } from "@production-ready/ui";
 import { ExternalLink, RefreshCw } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
@@ -59,7 +60,6 @@ import { ApiErrorState, EmptyState } from "@/components/StateViews";
 import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
 import { AnswerText } from "@/components/search/AnswerText";
 import { AnswerCitations, CitationList } from "@/components/search/CitationList";
-import { ragTraceDetailsLabels } from "@/lib/answer-process";
 import { api, type RunDetail, type RunFeedback, type RunSummary } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -83,7 +83,7 @@ import {
   runStatusLabels,
   runStatusParam,
   runSurfaceLabel,
-  runTimelineSteps,
+  runTimeline,
   runVerificationView,
   toRunStatus,
   type RunSurfaceFilter,
@@ -444,6 +444,7 @@ function RunDetailView({ run }: { run: RunDetail }) {
       : null;
   const verification = runVerificationView(run.verification);
   const statusLabels = runStatusLabels();
+  const traceLabels = useTraceDetailsLabels();
   const succeeded = run.status === "success";
   // 失敗は 3 製品共通の失敗のカード（チャットと同じ 1 文目・次の操作。#2342）。
   const failure = runFailure(run);
@@ -479,7 +480,8 @@ function RunDetailView({ run }: { run: RunDetail }) {
   if (failure) technicalFacts.push(...processFailureFacts({ ...failure, failedStep: null }, processFailureLabels()));
   const storageNotice = storageFailureNotice(run.storage_failures, run.run_id);
 
-  const timelineSteps = runTimelineSteps(run);
+  // 処理の経過は実行の trace の span の木（#3226）。段の名前は root の文言で付ける。
+  const timeline = runTimeline(run, { traceLabels });
   // 処理の詳細（#2325）: 回答の記録の詳細と技術的な識別子を、処理の経過のタイムラインの後ろに 1 か所で畳む。
   // チャット・RAG 検索の処理の経過の「処理の詳細」と同じ名前・同じ部品（`RunProcessDetails`）・同じ位置。
   const processDetails =
@@ -564,12 +566,15 @@ function RunDetailView({ run }: { run: RunDetail }) {
       }
       timeline={
         <RunTimelineSection
-            traceLabels={ragTraceDetailsLabels()}
-          traceSummary={run.trace_summary}
+          traceId={timeline.traceId}
           title={t("history.process.title")}
-          steps={timelineSteps}
+          steps={timeline.steps}
           totalDurationMs={run.elapsed_ms}
-          empty={<p className="text-sm text-fg-muted">{t("history.process.empty")}</p>}
+          empty={
+            <p className="text-sm text-fg-muted" data-testid="run-history-timeline-empty">
+              {timeline.legacy ? traceLabels.legacy : t("history.process.empty")}
+            </p>
+          }
           processDetailsProps={{ title: t("answer.process.details"), testId: "run-history-technical", summaryTestId: "run-history-process-details" }}
               processDetails={processDetails}
           testId="run-history-timeline"

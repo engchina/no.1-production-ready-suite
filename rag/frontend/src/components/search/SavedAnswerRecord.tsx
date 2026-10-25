@@ -1,6 +1,5 @@
-import { TraceDetails, AnswerFooter, FormStatus, Skeleton, TimedLoadingState } from "@production-ready/ui";
+import { AnswerFooter, FormStatus, Skeleton, TimedLoadingState } from "@production-ready/ui";
 
-import { ragTraceDetailsLabels } from "@/lib/answer-process";
 import { ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -90,8 +89,10 @@ export function SavedAnswerRecord({
         }
       />
 
-      {/* 根拠（引用の一覧）を先、回答の記録の詳細を後に並べる（#1417。page-archetypes.md §6.1）。 */}
-      <TraceDetails labels={ragTraceDetailsLabels()} summary={record.answer_diagnostics?.trace_summary} />
+      {/*
+        根拠（引用の一覧）を先、回答の記録の詳細を後に並べる（#1417。page-archetypes.md §6.1）。実測の trace は
+        処理の経過（span の木）に 1 つだけ出すので、ここには出さない（#3226）。
+      */}
       <AnswerDetailsPanel
         diagnostics={record.answer_diagnostics}
         title={detailsTitle}
