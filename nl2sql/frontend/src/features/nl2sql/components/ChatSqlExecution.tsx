@@ -182,14 +182,17 @@ export function formatLastExecutedAt(executedAt: string): string {
 
 export function ChatLastExecutionText({
   summary,
+  readOnly,
   testId,
 }: {
   summary: Parameters<typeof lastExecutionText>[0] & { executed_at: string };
+  /** 他の利用者の会話を見ている（「もう一度実行」を案内しない。#3244）。 */
+  readOnly?: boolean;
   testId: string;
 }) {
   return (
     <p className="text-sm text-fg-muted" data-testid={testId}>
-      {lastExecutionText(summary, executedAtFormatter.format(new Date(summary.executed_at)))}
+      {lastExecutionText(summary, executedAtFormatter.format(new Date(summary.executed_at)), { readOnly })}
     </p>
   );
 }
@@ -210,10 +213,13 @@ export function ChatSqlExecutionResult({
   turn,
   execution,
   canOpenDirectSql,
+  readOnly,
 }: {
   turn: JobData;
   execution: ChatSqlExecution;
   canOpenDirectSql: boolean;
+  /** 他の利用者の会話を見ている（system_admin。実行は持ち主だけ。#3244）。 */
+  readOnly?: boolean;
 }) {
   const { data, running, receiving, error } = execution;
   const sql = turn.result?.generated_sql ?? "";
@@ -287,7 +293,7 @@ export function ChatSqlExecutionResult({
         />
       ) : null}
       {!running && !receiving && !error && !data && lastExecution ? (
-        <ChatLastExecutionText summary={lastExecution} testId="sql-chat-last-execution" />
+        <ChatLastExecutionText summary={lastExecution} readOnly={readOnly} testId="sql-chat-last-execution" />
       ) : null}
     </section>
   );

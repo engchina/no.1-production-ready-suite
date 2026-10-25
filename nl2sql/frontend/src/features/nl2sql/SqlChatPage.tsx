@@ -74,6 +74,7 @@ import {
   Nl2SqlChatLayout,
   Nl2SqlChatPage,
   Nl2SqlPendingTurn,
+  Nl2SqlReadOnlyComposer,
   normalizeHistoryOffset,
   SQL_BLOCK_LABELS,
 } from "./components/ChatScaffold";
@@ -364,8 +365,9 @@ export function SqlChatPage() {
   const refreshConversation = () =>
     refetchConversation({ cancelRefetch: true, throwOnError: false });
   const turns = conversation.data?.turns ?? [];
-  // 開いている会話が他の利用者の物か（system_admin だけが開ける。backend の `owned`。#1928・#1954）。
-  const ownerSeesNotice =
+  // 開いている会話が他の利用者の物か（system_admin だけが開ける。backend の `owned`）。続きの質問・実行・
+  // 名前の変更は持ち主だけなので、入力欄と「実行」を出さず閲覧だけの案内にする（停止・削除は出す。#3244）。
+  const readOnly =
     seesAllUsers && Boolean(conversationId) && conversation.data?.conversation.owned === false;
   const latest = turns.at(-1);
   const generating = turns.some(inFlight);
@@ -764,99 +766,121 @@ export function SqlChatPage() {
           autoScroll={autoScroll}
           testIdPrefix="sql-chat"
           composer={
-            <>
-              {/* 入力欄の領域（設定の行・入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。
-                  業務プロファイルの一覧の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
-                  会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
-              <Nl2SqlChatComposer
-                id="sql-chat-composer"
-                value={draft}
-                onValueChange={setDraft}
-                onSubmit={submit}
-                onStop={() => {
-                  // 要件の検査の最中は、確認を中止する（質問は入力欄に戻す。#1442）。
-                  if (requirementFlow.running) {
-                    requirementFlow.cancel();
-                    return;
-                  }
-                  if (!stop.isPending && !conversation.isError) stop.mutate();
-                }}
-                running={generating || requirementFlow.running}
-                textareaRef={composerRef}
-                submitBlocked={blocked}
-                disabled={profilesLoading}
-                sendTestId="sql-chat-send"
-                // system_admin が他の利用者の会話で入力するとき、持ち主にも回答と途中の結果が見えることを
-                // 送る前に示す（新しい会話・自分の会話では出さない。#1954）。
-                notice={ownerSeesNotice ? t("chat.composer.ownerSeesNotice") : undefined}
-                options={
-                  // 生成方法（#890）。RAG のチャットの「回答するモデル」と同じく、入力欄の直上の行に
-                  // 「ラベル・説明のアイコン・選択」を並べる。ラベルは隣の文言で読めるので欄のラベルは読み上げだけにする。
-                  // 選んだ生成方法の説明は常設せず、ラベルの横の info アイコンから出し、選択欄にも説明として結び付ける（#901）。
-                  <ChatComposerOption
-                    label={t("chat.engine")}
-                    labelDecorative
-                    info={{
-                      label: t("chat.engine.infoLabel"),
-                      content: engineOption.description,
-                      contentId: engineDescriptionId,
-                      contentTestId: "sql-chat-engine-description",
-                      testId: "sql-chat-engine-info",
-                    }}
-                    testId="sql-chat-engine-row"
-                  >
-                    <SelectField
-                      id="sql-chat-engine"
-                      label={t("chat.engine")}
-                      labelHidden
-                      value={engine}
-                      size="sm"
-                      width="sm"
-                      disabled={busy || generating || profilesLoading}
-                      onValueChange={setEngine}
-                      describedBy={engineDescriptionId}
-                      options={CHAT_ENGINES.map(({ value, label }) => ({
-                        value,
-                        label,
-                      }))}
-                    />
-                  </ChatComposerOption>
+            readOnly ? (
+              <Nl2SqlReadOnlyComposer
+                stop={
+                  generating
+                    ? {
+                        onStop: () => {
+                          if (!stop.isPending && !conversation.isError) stop.mutate();
+                        },
+                        stopping: stop.isPending,
+                      }
+                    : undefined
                 }
-                // 会話の添付（#2517。運用設定で有効なときだけ）。
-                attachments={chatAttachments.composer}
                 footer={
-                  <>
-                    {attachmentEngineMismatch ? (
-                      <p className="text-sm text-fg-muted" data-testid="sql-chat-attachment-engine">
-                        {t("chat.attachments.engineNotice")}
-                      </p>
-                    ) : null}
-                    {selectAiCredentialBlocked ? (
-                      <SelectAiCredentialPrecondition
-                        id="sql-chat-credential-precondition"
-                        testId="sql-chat-credential-precondition"
-                        operation={t("selectAiCredential.precondition.operation.generate")}
-        action={t("chat.send")}
-        credentialName={selectAiCredential.credentialName}
-                        canOpenSettings={selectAiCredential.canOpenSettings}
-                        rechecking={selectAiCredential.rechecking}
-                        onRecheck={() => void selectAiCredential.recheck()}
-                      />
-                    ) : null}
-                    {stop.isError ? (
-                      <ApiErrorBanner
-                        error={stop.error}
-                        fallback={t("chat.stopFailed")}
-                        testId="sql-chat-stop-error"
-                      />
-                    ) : null}
-                    {turns.length >= 50 ? (
-                      <Banner severity="info">{t("chat.limit")}</Banner>
-                    ) : null}
-                  </>
+                  stop.isError ? (
+                    <ApiErrorBanner
+                      error={stop.error}
+                      fallback={t("chat.stopFailed")}
+                      testId="sql-chat-stop-error"
+                    />
+                  ) : null
                 }
+                testIdPrefix="sql-chat"
               />
-            </>
+            ) : (
+              <>
+                {/* 入力欄の領域（設定の行・入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。
+                    業務プロファイルの一覧の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
+                    会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
+                <Nl2SqlChatComposer
+                  id="sql-chat-composer"
+                  value={draft}
+                  onValueChange={setDraft}
+                  onSubmit={submit}
+                  onStop={() => {
+                    // 要件の検査の最中は、確認を中止する（質問は入力欄に戻す。#1442）。
+                    if (requirementFlow.running) {
+                      requirementFlow.cancel();
+                      return;
+                    }
+                    if (!stop.isPending && !conversation.isError) stop.mutate();
+                  }}
+                  running={generating || requirementFlow.running}
+                  textareaRef={composerRef}
+                  submitBlocked={blocked}
+                  disabled={profilesLoading}
+                  sendTestId="sql-chat-send"
+                  options={
+                    // 生成方法（#890）。RAG のチャットの「回答するモデル」と同じく、入力欄の直上の行に
+                    // 「ラベル・説明のアイコン・選択」を並べる。ラベルは隣の文言で読めるので欄のラベルは読み上げだけにする。
+                    // 選んだ生成方法の説明は常設せず、ラベルの横の info アイコンから出し、選択欄にも説明として結び付ける（#901）。
+                    <ChatComposerOption
+                      label={t("chat.engine")}
+                      labelDecorative
+                      info={{
+                        label: t("chat.engine.infoLabel"),
+                        content: engineOption.description,
+                        contentId: engineDescriptionId,
+                        contentTestId: "sql-chat-engine-description",
+                        testId: "sql-chat-engine-info",
+                      }}
+                      testId="sql-chat-engine-row"
+                    >
+                      <SelectField
+                        id="sql-chat-engine"
+                        label={t("chat.engine")}
+                        labelHidden
+                        value={engine}
+                        size="sm"
+                        width="sm"
+                        disabled={busy || generating || profilesLoading}
+                        onValueChange={setEngine}
+                        describedBy={engineDescriptionId}
+                        options={CHAT_ENGINES.map(({ value, label }) => ({
+                          value,
+                          label,
+                        }))}
+                      />
+                    </ChatComposerOption>
+                  }
+                  // 会話の添付（#2517。運用設定で有効なときだけ）。
+                  attachments={chatAttachments.composer}
+                  footer={
+                    <>
+                      {attachmentEngineMismatch ? (
+                        <p className="text-sm text-fg-muted" data-testid="sql-chat-attachment-engine">
+                          {t("chat.attachments.engineNotice")}
+                        </p>
+                      ) : null}
+                      {selectAiCredentialBlocked ? (
+                        <SelectAiCredentialPrecondition
+                          id="sql-chat-credential-precondition"
+                          testId="sql-chat-credential-precondition"
+                          operation={t("selectAiCredential.precondition.operation.generate")}
+          action={t("chat.send")}
+          credentialName={selectAiCredential.credentialName}
+                          canOpenSettings={selectAiCredential.canOpenSettings}
+                          rechecking={selectAiCredential.rechecking}
+                          onRecheck={() => void selectAiCredential.recheck()}
+                        />
+                      ) : null}
+                      {stop.isError ? (
+                        <ApiErrorBanner
+                          error={stop.error}
+                          fallback={t("chat.stopFailed")}
+                          testId="sql-chat-stop-error"
+                        />
+                      ) : null}
+                      {turns.length >= 50 ? (
+                        <Banner severity="info">{t("chat.limit")}</Banner>
+                      ) : null}
+                    </>
+                  }
+                />
+              </>
+            )
           }
         >
           {conversationLoading ? (
@@ -904,6 +928,7 @@ export function SqlChatPage() {
               turn={turn}
               canExecuteSql={canExecuteSql}
               canOpenDirectSql={canOpenDirectSql}
+              readOnly={readOnly}
               sentAtMs={sentAtByJob[turn.job_id]}
               tracking={active}
               receivedAt={conversation.dataUpdatedAt}
@@ -936,6 +961,7 @@ function SqlChatTurn({
   turn,
   canExecuteSql,
   canOpenDirectSql,
+  readOnly,
   sentAtMs,
   tracking,
   receivedAt,
@@ -944,6 +970,8 @@ function SqlChatTurn({
   turn: JobData;
   canExecuteSql: boolean;
   canOpenDirectSql: boolean;
+  /** 他の利用者の会話を見ている（system_admin）。「実行」を出さない（実行は持ち主だけ。#3244）。 */
+  readOnly: boolean;
   /** この画面で送信した時刻（処理の経過の経過時間の起点。#1176）。開き直した会話には無い。 */
   sentAtMs?: number;
   /** 画面が表示されている（keep-alive で隠れていない）。 */
@@ -991,9 +1019,10 @@ function SqlChatTurn({
   const legacyProgress = !running && progress.legacy;
   // 送信のジョブが実行まで行い（#1176）、結果の行はここで 1 回だけ受け取る。「もう一度実行」は明示の
   // 操作（#1154）。安全検査を通った生成 SQL だけを実行できる。
+  // 他の利用者の会話（readOnly）の行は実行した人だけが受け取るので、受け取りに行かない（#3244）。
   const execution = useChatSqlExecution(
     turn.job_id,
-    turn.status === "done" && canExecuteSql
+    turn.status === "done" && canExecuteSql && !readOnly
       ? turn.last_execution?.result_expires_at
       : null,
   );
@@ -1091,7 +1120,7 @@ function SqlChatTurn({
                   />
                 }
                 actions={
-                  executable && canExecuteSql ? (
+                  executable && canExecuteSql && !readOnly ? (
                     // 吹き出しの中の操作なので secondary。実行中はラベルを変えず、アイコンがスピナーになる。
                     <Button
                       type="button"
@@ -1110,7 +1139,7 @@ function SqlChatTurn({
               {result.explanation ? (
                 <MessageText text={result.explanation} />
               ) : null}
-              {executable && !canExecuteSql ? (
+              {executable && !canExecuteSql && !readOnly ? (
                 <p className="text-xs text-fg-muted">
                   {t("chat.execute.permissionRequired")}
                 </p>
@@ -1120,6 +1149,7 @@ function SqlChatTurn({
                   turn={turn}
                   execution={execution}
                   canOpenDirectSql={canOpenDirectSql}
+                  readOnly={readOnly}
                 />
               ) : null}
               {/* 回答の注意書きは SQL と結果の後（3 製品共通の AnswerNotice。#2405）。 */}
