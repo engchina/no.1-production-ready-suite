@@ -51,7 +51,7 @@ RAG（非構造化データ）・NL2SQL（構造化データ）・Agent（業務
 |---|---|
 | `agent_list` | 使える業務 Agent（ID・名前・説明・使うスキル）。質問に合う業務 Agent を選ぶ |
 | `agent_chat` | 業務 Agent に質問する（`thread_id` で会話を続ける）。`wait_seconds`（既定 50 秒、最大 300 秒）まで回答を待ち、終わらなければ `in_progress=true` と `run_id` を返す |
-| `agent_get_run` | Run の状態・回答・根拠（`sources`）・段落の印（`passage_marks`・`removed_passages`・`answer_warnings`。#2738）・回答前の確認（`confirmation`）・使ったツール。まだ終わっていなければ `wait_seconds`（既定 30 秒）まで待つ |
+| `agent_get_run` | Run の状態・回答の対応（`outcome`。RAG の `rag_search` と同じ語彙。完了した Run だけ）・回答・根拠（`sources`。RAG の `document_id` / `chunk_id` と引用の印 `cited`。今の権限で見られない根拠は除いて数を `withheld_evidence_count` に。#3240）・段落の印（`passage_marks`・`removed_passages`・`answer_warnings`。#2738）・回答前の確認（`confirmation`）・使ったツール。まだ終わっていなければ `wait_seconds`（既定 30 秒）まで待つ。出力は `agent_chat` / `agent_answer_confirmation` と同じ形（`schema_version` 3） |
 | `agent_answer_confirmation` | 回答前の確認に答える（`action=answer` で確認事項ごとに選択肢の ID か自由入力）か、確認せずに回答させる（`action=skip`） |
 | `agent_skill_export` | 使える業務 Agent が使うスキルを Agent Skills の形（`SKILL.md` と `references/` のファイル）で返す。`name` のフォルダに置くと外部の Agent でも使える |
 
