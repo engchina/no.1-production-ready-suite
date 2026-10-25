@@ -3,14 +3,15 @@
 from datetime import UTC, datetime
 
 import pytest
+from pr_system_settings.auth.visibility import OTHERS_CONTENT_FORBIDDEN_MESSAGE
 from pydantic import ValidationError
 
 from app.api.routes import feedback as feedback_route
 from app.main import app
-from app.rag.request_context import current_audit_request_context
+from app.rag.request_context import current_audit_request_context, user_id_hash_for
 from app.schemas.feedback import FeedbackRequest
 from tests.security_support import enable_production_auth, login
-from tests.support import AsgiTestClient
+from tests.support import TEST_USER_ID, AsgiTestClient
 
 client = AsgiTestClient(app)
 
@@ -284,6 +285,8 @@ def test_submit_feedback_resolves_chat_content_server_side(
     fake = FakeFeedbackClient()
     fake.message_context = {
         "message_id": "message-1",
+        # 評価するのは会話の持ち主（呼んだ利用者。#3244）。
+        "conversation_user_id_hash": user_id_hash_for(TEST_USER_ID),
         "question_text": "質問",
         "answer_text": "回答",
         "citations": [],
@@ -306,6 +309,59 @@ def test_submit_feedback_resolves_chat_content_server_side(
     assert response.status_code == 200
     assert fake.message_lookup == ("message-1", "trace-1")
     assert fake.saved_details[0] == {**fake.message_context, "comment_text": None}
+
+
+def test_only_the_conversation_owner_rates_chat_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """チャットの回答を評価できるのは会話の持ち主だけ（system_admin でも 403。#3244）。"""
+    fake = FakeFeedbackClient()
+    monkeypatch.setattr(feedback_route, "OracleClient", lambda: fake)
+    caller = user_id_hash_for(TEST_USER_ID)
+    body = {
+        "trace_id": "trace-1",
+        "search_answer_profile_id": "bv-1",
+        "target_type": "answer",
+        "source_surface": "chat",
+        "rating": "helpful",
+    }
+    context = {
+        "message_id": "message-1",
+        "question_text": "質問",
+        "answer_text": "回答",
+        "citations": [],
+        "content_source": "chat_message",
+    }
+
+    # 他の利用者の会話の回答（メッセージ ID あり・なし）は 403 で、何も保存しない。
+    fake.message_context = {**context, "conversation_user_id_hash": "other-owner-hash"}
+    refused = client.post("/api/feedback", json={**body, "message_id": "message-1"})
+    assert refused.status_code == 403, refused.text
+    assert refused.json()["error_messages"] == [OTHERS_CONTENT_FORBIDDEN_MESSAGE]
+    fake.chat_answer_owner = "other-owner-hash"
+    assert client.post("/api/feedback", json=body).status_code == 403
+    assert fake.saved == []
+
+    # 自分の会話の回答は今どおり保存し、持ち主の hash は評価の記録に入れない。
+    fake.message_context = {**context, "conversation_user_id_hash": caller}
+    own = client.post("/api/feedback", json={**body, "message_id": "message-1"})
+    assert own.status_code == 200, own.text
+    saved = fake.saved_details[0]
+    assert saved is not None and saved["message_id"] == "message-1"
+    assert "conversation_user_id_hash" not in saved
+    fake.chat_answer_owner = caller
+    assert client.post("/api/feedback", json=body).status_code == 200
+    # 会話に無い trace（RAG 検索など）は持ち主で絞らない。
+    fake.chat_answer_owner = None
+    assert client.post("/api/feedback", json=body).status_code == 200
+    assert len(fake.saved) == 3
+    # 持ち主の分からない古い会話の回答には誰も評価を足せない（メッセージ ID あり・なし）。
+    fake.chat_answer_owner = ""
+    assert client.post("/api/feedback", json=body).status_code == 403
+    fake.message_context = {**context, "conversation_user_id_hash": None}
+    ownerless = client.post("/api/feedback", json={**body, "message_id": "message-1"})
+    assert ownerless.status_code == 403
+    assert len(fake.saved) == 3
 
 
 def test_submit_feedback_rejects_unknown_search_answer_profile(
@@ -554,6 +610,8 @@ class FakeFeedbackClient:
         ] = ([], 0, [], [])
         self.message_context: dict[str, object] | None = None
         self.message_lookup: tuple[str, str] | None = None
+        # trace の回答の会話の持ち主（メッセージ ID の無いチャットの評価。#3244）。
+        self.chat_answer_owner: str | None = None
         self.detail: dict[str, object] | None = None
 
     async def get_search_answer_profile(self, search_answer_profile_id: str) -> object | None:
@@ -577,6 +635,9 @@ class FakeFeedbackClient:
     ) -> dict[str, object] | None:
         self.message_lookup = (message_id, trace_id)
         return self.message_context
+
+    async def get_chat_answer_owner_hash(self, trace_id: str) -> str | None:
+        return self.chat_answer_owner
 
     async def list_current_feedback(self, trace_id: str) -> list[dict[str, object]]:
         self.current_trace = trace_id

@@ -4346,7 +4346,7 @@ class OracleClient:
                 WHERE conversation_id = :conversation_id
                   AND {access_sql}
                 """,
-                    # system_admin は他の利用者の会話にも発話を足せる（利用者は送った人。#1928）。
+                    # 発話を足せるのは会話の持ち主だけ（route が確かめる。#3244）。
                     access_sql=_oracle_conversation_access_predicate_sql(),
                 ),
                 _with_conversation_access_bind(
@@ -5762,6 +5762,7 @@ class OracleClient:
                 """
                 SELECT
                     assistant.message_id,
+                    c.user_id_hash AS conversation_user_id_hash,
                     user_message.content AS question_text,
                     assistant.content AS answer_text,
                     assistant.citations_json
@@ -5776,7 +5777,7 @@ class OracleClient:
                   AND assistant.role = 'ASSISTANT'
                   AND {access_sql}
                 """,
-                # system_admin は他の利用者の回答も評価できる（評価の利用者は評価した人。#1928）。
+                # 見える会話の回答を引く（評価は持ち主だけ。呼ぶ側が持ち主で確かめる。#3244）。
                 access_sql=_oracle_conversation_access_predicate_sql(alias="c"),
             ),
             _with_conversation_access_bind({"message_id": message_id, "trace_id": trace_id}),
@@ -5785,11 +5786,41 @@ class OracleClient:
             return None
         return {
             "message_id": row.get("message_id"),
+            "conversation_user_id_hash": row.get("conversation_user_id_hash"),
             "question_text": row.get("question_text"),
             "answer_text": row.get("answer_text"),
             "citations": _json_object_list(row.get("citations_json")),
             "content_source": "chat_message",
         }
+
+    async def get_chat_answer_owner_hash(self, trace_id: str) -> str | None:
+        """trace の回答があるチャットの会話の持ち主（`user_id_hash`）。見える会話に無ければ None。
+
+        持ち主の分からない古い会話（`user_id_hash` が NULL）は空文字。
+
+        メッセージ ID の無いチャットの評価も、持ち主だけに送らせるために使う（#3244）。
+        """
+        row = await self._fetch_one(
+            _render_sql(
+                """
+                SELECT c.user_id_hash
+                FROM rag_messages m
+                JOIN rag_conversations c
+                  ON c.conversation_id = m.conversation_id
+                WHERE m.trace_id = :trace_id
+                  AND m.role = 'ASSISTANT'
+                  AND {access_sql}
+                FETCH FIRST 1 ROWS ONLY
+                """,
+                access_sql=_oracle_conversation_access_predicate_sql(alias="c"),
+            ),
+            _with_conversation_access_bind({"trace_id": trace_id}),
+        )
+        if row is None:
+            return None
+        # 持ち主の分からない古い会話は空（誰も評価を足せない。会話に無い trace の None と分ける）。
+        owner = row.get("user_id_hash")
+        return owner if isinstance(owner, str) and owner else ""
 
     async def list_feedback_dashboard_rows(
         self,
@@ -13476,8 +13507,8 @@ def _oracle_conversation_access_predicate_sql(*, alias: str | None = None) -> st
     """会話を tenant と、認証時は作成ユーザーへ閉じる。
 
     利用できる検索・回答プロファイルが制限されているときは、その検索・回答プロファイルの会話だけにする（#214）。
-    system_admin（`all_users_visible`。#1889）は全員の会話を見て、本人と同じ操作（発話の追加・
-    回答の評価など）をする（#1928）。
+    system_admin（`all_users_visible`。#1889）は全員の会話を見て、運用の操作（停止・削除）をする。
+    発話の追加・名前の変更・回答の評価は持ち主だけで、route が先に 403 にする（#3244）。
     """
     predicates = [_oracle_tenant_predicate(alias=alias)]
     context = current_audit_request_context()

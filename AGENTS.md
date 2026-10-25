@@ -104,5 +104,5 @@
 詳細は [docs/agents/shared-features.md](./docs/agents/shared-features.md) と [docs/agents/naming.md](./docs/agents/naming.md)。
 
 - **3 製品で同じ機能は platform に 1 セットだけ置く**（システム設定・ユーザー / ロール管理・API キー・アカウントの画面）。サイドナビの下部の並びと名前、ナビのアイコン、権限管理のメニューの一覧（左のナビが正本）は 3 製品でそろえる。
-- **「AI 活用」の下の機能は、system_admin は全員のデータ、それ以外は自分のデータだけ**を扱う（backend で絞り、他人のデータは 404）。system_admin は他の利用者のデータにも本人と同じすべての操作ができ、操作した本人の権限で実行して actor を記録する。
+- **「AI 活用」の下の機能は、system_admin は全員のデータ、それ以外は自分のデータだけ**を扱う（backend で絞り、他人のデータは 404）。system_admin が他の利用者のデータにできるのは閲覧と運用の操作（停止・削除・承認の判断）だけで、続きの質問・実行・回答・評価は持ち主だけ（#3244）。
 - 共通の設定は `platform/.env`（`PLATFORM_`）、製品だけの設定は製品の `backend/.env`（`RAG_` / `NL2SQL_` / `AGENT_`）。表などの DB object の名前は、共通が `PLATFORM_`、製品固有が `RAG_` / `NL2SQL_` / `AGENT_` で始める。名前を変えるときは旧名との互換を持たない。

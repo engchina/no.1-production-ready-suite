@@ -330,46 +330,39 @@ async def attachment_evidence(
     return [attachment_chunk(unit, score) for unit, score in selected]
 
 
-def _conversation_owner_uuid(principal: Any, conversation: StoredConversation) -> str:
-    """会話の持ち主の利用者の UUID（会話は利用者を hash でしか持たない）。
-
-    自分の会話なら自分。system_admin がほかの利用者の会話で添付したときは、利用者の一覧から hash が
-    一致する利用者を探す（見つからなければ操作した人）。
-    """
-    from app.rag.request_context import user_id_hash_for
-
-    user_uuid = str(principal.user_uuid)
-    owner_hash = conversation.user_id_hash
-    if owner_hash is None or user_id_hash_for(user_uuid) == owner_hash:
-        return user_uuid
-    from app.security.user_names import user_uuid_by_hash
-
-    return user_uuid_by_hash(owner_hash) or user_uuid
-
-
 def attach_to_conversation(
     principal: Any, attachment_ids: Sequence[str], conversation: StoredConversation
 ) -> list[ChatAttachmentReference]:
-    """質問の添付を会話に結び付け、質問に残す参照を返す（会話の権限は呼ぶ側が確かめる）。"""
+    """質問の添付を会話に結び付け、質問に残す参照を返す。
+
+    会話の権限（見えるか・持ち主だけが送れるか。#3244）は呼ぶ側が確かめるので、添付の持ち主は
+    送った人（= 会話の持ち主）。
+    """
     return chat_attachment_service().attach_to_conversation(
         principal,
         attachment_ids,
         conversation_id=conversation.id,
-        owner_user_uuid=_conversation_owner_uuid(principal, conversation),
+        owner_user_uuid=str(principal.user_uuid),
     )
 
 
 def conversation_owner_for_attachments(principal: Any, conversation_id: str) -> str:
-    """添付の API の会話の持ち主（見えない会話は 404。threadpool から呼ぶ）。"""
+    """添付の API の会話の持ち主の UUID（見えない会話は 404。threadpool から呼ぶ）。
+
+    会話は利用者を hash でしか持たないので、持ち主の UUID は呼んだ利用者の会話のときだけ分かる。
+    他の利用者の会話・持ち主の分からない会話は空文字を返し、platform の添付の API が添付（内容を
+    足す操作）を 403 にする（system_admin でも。#3244）。添付の一覧は閲覧なので見える会話なら返す。
+    """
     from anyio import from_thread
     from fastapi import HTTPException
 
     from app.clients.oracle import OracleClient
+    from app.rag.request_context import caller_owns
 
     conversation = from_thread.run(OracleClient().get_conversation, conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="会話が見つかりません。")
-    return _conversation_owner_uuid(principal, conversation)
+    return str(principal.user_uuid) if caller_owns(conversation.user_id_hash) else ""
 
 
 def delete_conversation_attachments(conversation_id: str) -> None:

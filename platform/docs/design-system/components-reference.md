@@ -3103,7 +3103,7 @@ function submit() {
 | 状態は `data-status`（`sending` / `sent` / `failed` / `stopped`）に出す | e2e で状態を確かめる |
 | 仮の ID は `crypto.randomUUID` を使わず時刻と連番で作る | http の IP 直打ちなど安全でない文脈で `randomUUID` が無い |
 | `withOptimisticChatStatus(m, "sending")` は送信の時刻を数え直す。失敗・停止は送信の時刻を保つ | 再送信の経過時間を 0 から出す |
-| 会話の持ち主以外（system_admin。#1928）が送った質問は `senderLabel`（`ChatTurn` は `questionSender`）に「〈名前〉 が送信」を渡し、吹き出しの上に `UserRound`（14px）付きの `text-xs text-fg-muted` の文で出す（`data-chat-sender`）。持ち主が送った質問には渡さない | 同じ会話に別の人の質問が混ざることを、色ではなく文で分かるようにする。持ち主だけの会話は今までと同じ見た目 |
+| 会話の持ち主以外（#3244 より前の system_admin。#1928）が送った質問は `senderLabel`（`ChatTurn` は `questionSender`）に「〈名前〉 が送信」を渡し、吹き出しの上に `UserRound`（14px）付きの `text-xs text-fg-muted` の文で出す（`data-chat-sender`）。持ち主が送った質問には渡さない | 同じ会話に別の人の質問が混ざることを、色ではなく文で分かるようにする。持ち主だけの会話は今までと同じ見た目 |
 
 - 単体テストは `packages/ui/tests/chat-message.test.tsx`。
 - 実ブラウザは RAG `e2e/chat.spec.ts`・NL2SQL `tests/e2e/sql-chat.spec.ts`・Agent `e2e/chat.spec.ts` の「#907」のテスト（応答を遅らせて、送信の直後に質問と作成中の表示が出ること、新しい会話・続きの会話、失敗 → 再送信、停止。desktop / 375px、ライト / ダーク）。
@@ -3463,8 +3463,6 @@ import { ChatComposer, ChatComposerOption } from "@production-ready/ui";
       <SelectField id="engine" label={t("chat.engine")} labelHidden size="sm" width="sm" … />
     </ChatComposerOption>
   }
-  notice={foreignConversation ? t("chat.composer.ownerSeesNotice") : undefined}
-                                      // system_admin が他の利用者の会話で送るときだけ（#1954）
   footer={stopError ? <ApiErrorBanner error={stopError} fallback={t("chat.stopFailed")} /> : null}
 />
 ```
@@ -3477,10 +3475,40 @@ import { ChatComposer, ChatComposerOption } from "@production-ready/ui";
 | 入力欄の名前は「質問」に 3 製品でそろえ、画面には出さない（placeholder で目的を示す） | 製品ごとに「メッセージを入力…」「クエリ」「質問」と違っていた。目的は会話の領域から分かる |
 | 設定の行は「名前・info アイコン・選択」。説明は常設しない | 入力欄の上を説明の文で埋めない（#901） |
 | 停止の失敗などの通知は `footer`（入力欄の下）に出す | 起点の操作（送信 / 停止のボタン）の直下（messaging.md §10） |
-| 送る前の案内は `notice`（翻訳済みの文）。入力欄の直上に `Eye`（14px）付きの `text-xs text-fg-muted` の 1 行で出し、入力欄の `aria-describedby` に結ぶ（`data-chat-composer-notice`）。3 製品とも、system_admin が他の利用者の会話を開いているときだけ「この会話の持ち主にも、回答と途中の結果が見えます」を渡す（#1954） | 送る前に、誰に見えるかを知らせる（送った後では取り消せない）。Banner にすると入力欄の上が重くなり、毎回の送信で目障りになるので、設定の行と同じ小さな文にする。色だけに頼らず文とアイコンで示す |
+| 閲覧だけの会話（system_admin が開いた他の利用者の会話）では、この部品を置かず `ChatReadOnlyNotice` を置く（#3244。#1954 の送る前の案内 `notice` は外した） | 他の利用者の会話には送れない（backend も 403）。送れない入力欄を無効にして残さない |
 
 - 単体テストは `packages/ui/tests/chat-composer.test.tsx`。
 - 使う所: RAG（設定の行は「回答するモデル」の `ToggleChip`）、NL2SQL（「生成方法」の `SelectField`、上限 10,000 文字）、Agent（設定の行なし）。
+
+## ChatReadOnlyNotice — **新規**（#3244）
+
+閲覧だけの会話の、入力欄の代わりの案内（3 製品共通）。system_admin が他の利用者の会話を開いたとき、`ChatLayout` の `composer` に `ChatComposer` の代わりに渡す。
+
+```tsx
+import { ChatReadOnlyNotice } from "@production-ready/ui";
+
+composer={
+  readOnly ? (
+    <ChatReadOnlyNotice
+      onStop={running ? stop : undefined}   // 回答の作成中・処理中・承認待ちだけ「停止」を出す
+      stopping={cancel.isPending}
+      footer={cancel.error ? <ApiErrorBanner error={cancel.error} fallback={t("chat.stopFailed")} /> : null}
+      testIdPrefix="chat-read-only"          // 既定。案内は `-notice`、停止は `-stop`（NL2SQL は `sql-chat-read-only` など）
+    />
+  ) : (
+    <ChatComposer … />
+  )
+}
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| info の `Banner` に見出し「他の利用者の会話です（閲覧のみ）」と本文（`OTHERS_CONTENT_FORBIDDEN_MESSAGE` と同じ文。`DEFAULT_CHAT_READ_ONLY_NOTICE_LABELS`）。3 製品は既定の文を使う（`labels` で上書きできる） | 3 製品で同じ機能の文と見た目をそろえる。画面の案内と API の 403 の文を同じ意味にする |
+| 入力欄・送信を無効にして残さず、案内に置き換える | 読み取り専用を無効の入力欄で表さない（送れそうに見える・読み上げが「無効」になる） |
+| 停止は運用の操作なので、作成中の回答・処理中の実行があるときだけ案内の中に `secondary`・sm の「停止」（`Square`。要求中は `loading`）を置く。停止の失敗は `footer` | 起点の操作の直下に結果を出す（messaging.md §10）。停止できる物が無いのにボタンを出さない |
+| 削除・承認の判断は案内に置かない（会話の履歴の行・往復の中のまま） | 運用の操作は今の場所で行う。名前の変更は `useChatHistoryActions` の `canRename` で行ごとに隠す |
+
+- 単体テストは `packages/ui/tests/chat-read-only-notice.test.tsx`。e2e は RAG `e2e/chat-visibility.spec.ts`・NL2SQL `tests/e2e/sql-chat-visibility.spec.ts` / `db-admin-chat.spec.ts`・Agent `e2e/ai-use-visibility.spec.ts`（desktop と 375px）。
 
 ## ChatHistoryList — **新規**（#1161）
 
@@ -3524,11 +3552,13 @@ const historyActions = useChatHistoryActions({
   onBeforeDelete: (item) => { if (item.id === activeId) stopSendingAndClearSelection(); }, // RAG（送信中でも消せる）
   onDeleted: (item) => { if (item.id === activeId) startNewConversation(); },             // Agent・NL2SQL（作成中は 409）
   disabled: busy,
+  canRename: (item) => !othersIds.has(item.id),   // 他の利用者の会話（system_admin が見る）は名前を変えられない（#3244）
 });
 ```
 
 | 決めたこと | 理由 |
 |---|---|
+| `canRename` が false の行は「名前の変更」を出さず（欄も開かない）、「削除」だけを出す。3 製品とも、他の利用者の会話（`owned=false`）の行で false を返す（#3244） | 名前の変更は持ち主だけ（backend も 403）。削除は運用の操作として system_admin もできる |
 | 名前の変更は行をその場の `TextField`（`maxLength` 80・`required`・ラベルは隠す）にし、Enter で保存・Esc で取り消し。空の名前は保存せず欄の下に「会話名を入力してください。」、保存の失敗も欄の下に API の文を出して欄へフォーカスを戻す | 一覧の位置を保ったまま直せる。入力の誤りは欄の直下（messaging.md §10） |
 | 削除は確認のダイアログ（danger・scrim では閉じない）を通し、結果は Toast。失敗は API の文を Toast | 取り消せない操作（buttons.md §5.1）。会話の一覧は残るので Toast で足りる |
 | 文言は `DEFAULT_CHAT_HISTORY_ACTION_LABELS`（RAG の文を正本にした）。確認の説明は「「{title}」を会話の履歴から削除します。削除した会話は開くことも続けることもできません。この操作は取り消せません。」 | 3 製品で同じ機能の文をそろえる（AGENTS.md「言語」）。Agent の Run・NL2SQL のジョブは監査のため残るので、「メッセージをすべて削除」とは書かない |

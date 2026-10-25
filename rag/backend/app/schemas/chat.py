@@ -80,7 +80,8 @@ class ChatMessage(BaseModel):
     notice: str | None = None
     # 回答前に確認した内容（USER のメッセージだけ。確認しなかった質問は None。#1839）。
     clarification: ChatClarificationRecord | None = None
-    # 会話の持ち主が送った質問か。system_admin が他の利用者の会話で送った質問は false（#1928）。
+    # 会話の持ち主が送った質問か。#3244 より前に system_admin が他の利用者の会話で送った質問は
+    # false（今は持ち主しか送れない）。
     sent_by_owner: bool = True
     # 持ち主以外が送った質問の、送った人の表示名（#1928・#1696。引けない利用者は空）。
     sender_display_name: str = ""
@@ -110,7 +111,8 @@ class ConversationSummary(BaseModel):
     created_at: datetime
     updated_at: datetime
     # 見ている利用者の会話か。system_admin が他の利用者の会話を見るときは false（画面は会話の
-    # 履歴に利用者の表示名を添える。操作は本人と同じにできる。#1889・#1928）。
+    # 履歴に利用者の表示名を添え、入力欄・名前の変更・評価を出さない。閲覧・停止・削除だけ。
+    # #1889・#3244）。
     owned: bool = True
     # system_admin の一覧・詳細だけに付く利用者の表示名（#1889・#1696。引けない利用者は空）。
     actor_display_name: str = ""

@@ -1,7 +1,8 @@
 """持ち主の無い SQL 履歴・query session を、管理の権限の無い利用者に操作させない（#1126）。
 
 ジョブ（`_assert_job_actor_access`）と同じく、認証済みで管理の権限の無い利用者には、
-持ち主が自分と一致しない行（持ち主が空の行を含む）を拒否する。
+持ち主が自分と一致しない行（持ち主が空の行を含む）を拒否する。評価・確認への回答のように内容を
+足す操作は、system_admin でも持ち主だけ（持ち主の無い行には誰も足せない。#3244）。
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from fastapi import HTTPException, Request
 from app.features.nl2sql import ontology_router
 from app.features.nl2sql import router as nl2sql_router
 from app.features.nl2sql.models import FeedbackRating, HistoryItem, Nl2SqlEngine
-from app.features.nl2sql.service import Nl2SqlService
+from app.features.nl2sql.service import Nl2SqlService, OthersContentForbiddenError
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.security.domain import SYSTEM_ADMIN_ROLE_CODE, Principal
 
@@ -77,16 +78,22 @@ def test_feedback_keeps_owner_manager_and_auth_disabled_access() -> None:
     owned.clear_feedback("history-1", actor_user_uuid="user-b")
 
     ownerless = _service("")
-    manager = ownerless.save_feedback(
-        "history-1",
-        FeedbackRating.GOOD,
-        "管理者",
-        actor_user_uuid="manager",
-        actor_can_manage=True,
-        allowed_profile_ids={"default"},
-    )
-    assert manager.saved is True
+    # 評価は実行した本人だけ（#3244）。見える system_admin も持ち主の無い行・他人の行は 403。
+    for owner in ("", "user-a"):
+        with pytest.raises(OthersContentForbiddenError):
+            _service(owner).save_feedback(
+                "history-1",
+                FeedbackRating.GOOD,
+                "管理者",
+                actor_user_uuid="manager",
+                actor_can_manage=True,
+                allowed_profile_ids={"default"},
+            )
     # 認証を無効にしたとき（actor が空）は制約しない。
+    unauthenticated = ownerless.save_feedback(
+        "history-1", FeedbackRating.GOOD, "", actor_user_uuid="", actor_can_manage=True
+    )
+    assert unauthenticated.saved is True
     ownerless.clear_feedback("history-1", actor_user_uuid="")
 
 
@@ -124,6 +131,41 @@ def test_query_session_keeps_owner_admin_and_auth_disabled_access() -> None:
         is ownerless
     )
     assert ontology_router._ensure_query_session_access(ownerless, _request(None)) is ownerless  # noqa: SLF001
+
+
+def test_query_session_answers_are_owner_only_even_for_system_admin() -> None:
+    """確認への回答・反映など session に内容を足す操作は持ち主だけ（#3244）。
+
+    system_admin は他の利用者の session・持ち主の無い session を見られるが、足すのは 403。
+    """
+    admin = _request(_principal("admin", admin=True))
+    for owner in ("user-a", ""):
+        data = _session_data(owner)
+        assert ontology_router._ensure_query_session_access(data, admin) is data  # noqa: SLF001
+        with pytest.raises(HTTPException) as denied:
+            ontology_router._ensure_query_session_access(data, admin, adding=True)  # noqa: SLF001
+        assert denied.value.status_code == 403
+    owned = _session_data("user-b")
+    assert (
+        ontology_router._ensure_query_session_access(  # noqa: SLF001
+            owned, _request(_principal("user-b")), adding=True
+        )
+        is owned
+    )
+    mine = _session_data("admin")
+    assert ontology_router._ensure_query_session_access(mine, admin, adding=True) is mine  # noqa: SLF001
+    # 見えない他の利用者の session は、足す操作でも 404（存在を漏らさない）。
+    with pytest.raises(HTTPException) as hidden:
+        ontology_router._ensure_query_session_access(  # noqa: SLF001
+            _session_data("user-a"), _request(_principal("user-b")), adding=True
+        )
+    assert hidden.value.status_code == 404
+    # 認証を無効にしたときは制約しない。
+    ownerless = _session_data("")
+    assert (
+        ontology_router._ensure_query_session_access(ownerless, _request(None), adding=True)  # noqa: SLF001
+        is ownerless
+    )
 
 
 class _QualityEvaluationService:

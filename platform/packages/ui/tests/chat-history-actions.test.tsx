@@ -123,6 +123,14 @@ describe("useChatHistoryActions", () => {
     expect(host.querySelector("input")).toBeNull();
   });
 
+  it("canRename が false の行は名前の変更を出さず、削除だけを出す（他の利用者の会話。#3244）", () => {
+    render({ canRename: (item) => item.id !== "c2" });
+    expect(() => button(DEFAULT_CHAT_HISTORY_ACTION_LABELS.rename("売上の推移"))).not.toThrow();
+    expect(() => button(DEFAULT_CHAT_HISTORY_ACTION_LABELS.rename("在庫の一覧"))).toThrow();
+    expect(() => button(DEFAULT_CHAT_HISTORY_ACTION_LABELS.delete("在庫の一覧"))).not.toThrow();
+    expect(host.querySelector("input")).toBeNull();
+  });
+
   it("名前を保存できなければ欄を残して理由を出し、Esc で取り消せる", async () => {
     render({ onRename: async () => Promise.reject(new Error("会話が見つかりません。")) });
     act(() => button(DEFAULT_CHAT_HISTORY_ACTION_LABELS.rename("在庫の一覧")).click());

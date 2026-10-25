@@ -201,6 +201,21 @@ def current_audit_request_context() -> AuditRequestContext:
     return _AUDIT_REQUEST_CONTEXT.get() or AuditRequestContext()
 
 
+def caller_owns(owner_user_id_hash: str | None) -> bool:
+    """呼んだ利用者が、`owner_user_id_hash` の会話の持ち主か（#3244）。
+
+    会話に新しい内容（続きの質問・添付・名前の変更・評価）を足せるのは持ち主だけで、platform の
+    `can_add_user_content` と同じ規則にする: 持ち主の分からない会話（`user_id_hash` が NULL の
+    古い行）には誰も足せない。利用者の分からない context（`user_id_hash` が None）は `/api` の
+    認証の dependency を通らない呼び出しだけで（local・本番とも `/api` は必ず利用者の hash を
+    持つ）、会話の条件でも持ち主で絞らないので、本人の会話とみなす。
+    """
+    caller = current_audit_request_context().user_id_hash
+    if caller is None:
+        return True
+    return bool(owner_user_id_hash) and owner_user_id_hash == caller
+
+
 def user_id_hash_for(user_id: str, settings: Settings | None = None) -> str | None:
     """利用者の ID（UUID・local の利用者）から、保存に使う `user_id_hash` を作る。
 

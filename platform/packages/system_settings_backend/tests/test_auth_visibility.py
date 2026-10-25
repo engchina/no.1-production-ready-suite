@@ -9,10 +9,12 @@ from pr_system_settings.auth.domain import (
     Principal,
 )
 from pr_system_settings.auth.visibility import (
+    OTHERS_CONTENT_FORBIDDEN_STATUS,
     OWNER_NOT_FOUND_STATUS,
     RUN_EXECUTOR_FILTERS,
     can_access_run,
     can_access_user_data,
+    can_add_user_content,
     can_view_all_users_data,
     owner_filter_user_uuid,
     run_executor_matches,
@@ -88,3 +90,19 @@ def test_run_executor_filter() -> None:
     assert run_executor_matches(ALICE, "admin", "others")
     assert run_executor_matches(ALICE, None, "others")
     assert not run_executor_matches(ALICE, "alice", "others")
+
+
+def test_only_the_owner_adds_content_even_for_system_admin() -> None:
+    # system_admin は他の利用者のデータを見て運用の操作はできるが、新しい実行・内容は
+    # 足せない（#3244）。
+    for principal in (ADMIN, LOCAL):
+        assert can_access_user_data(principal, "alice")
+        assert not can_add_user_content(principal, "alice")
+        assert can_add_user_content(principal, principal.user_uuid)
+    assert can_add_user_content(ALICE, "alice")
+    assert not can_add_user_content(ALICE, "bob")
+    # 持ち主の分からないデータ・利用者の無い要求には誰も足せない。
+    assert not can_add_user_content(ADMIN, None)
+    assert not can_add_user_content(ADMIN, " ")
+    assert not can_add_user_content(None, "alice")
+    assert OTHERS_CONTENT_FORBIDDEN_STATUS == 403

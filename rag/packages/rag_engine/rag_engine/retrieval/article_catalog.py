@@ -23,6 +23,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from rag_engine.dependencies import report_degraded
+
 # 候補の record の metadata に付ける印（選んだ順・文書・目録の行）。
 ARTICLE_CATALOG_KEY = "article_catalog"
 
@@ -256,11 +258,13 @@ def refine_articles(
     limit: int,
     candidate_limit: int,
     terms: Sequence[CatalogTerm] = (),
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str]] | None:
     """条の選択の 2 段目: 選んだ条と同じ章の条を本文の書き出しつきで見せ、足りない論点の条を足させる。
 
     条の名前が質問の語から遠い条（重なったときの扱い・特例など）は、目録の行（名前）だけでは選ばれにくい。
     選んだ条の章に絞って書き出しを見せる（粗い選択から細かい選択へ）。足した条（(section_id, 目録の行)）だけを返す。
+    足す条が無ければ空のリスト、LLM の呼び出しに失敗したら None を返す（失敗は「足す条が無い」と分けて診断に残し、
+    呼び出し元は 1 段目の条で続けて、その結果を cache しない。#3285）。
     """
     if not chosen or limit <= 0 or candidate_limit <= 0:
         return []
@@ -276,12 +280,16 @@ def refine_articles(
         title = titles[index]
         lead = str(leads.get(catalog.section_ids[index]) or "").strip()
         candidates[index] = f"{title}｜{lead}" if lead else catalog.lines[index].strip()
-    selection = parse_text(
-        ARTICLE_REFINE_SYSTEM_PROMPT,
-        refine_prompt(question, catalog, picked, candidates, limit=limit, terms=terms),
-        settings,
-        ArticleIssueSelection,
-    )
+    try:
+        selection = parse_text(
+            ARTICLE_REFINE_SYSTEM_PROMPT,
+            refine_prompt(question, catalog, picked, candidates, limit=limit, terms=terms),
+            settings,
+            ArticleIssueSelection,
+        )
+    except Exception as exc:  # noqa: BLE001 - 2 段目は補助。1 段目の条で続ける。
+        report_degraded("article_refine", exc)
+        return None
     added: list[tuple[str, str]] = []
     for index in selection.ordered_lines():
         if index not in candidates:
@@ -306,11 +314,12 @@ def select_documents(
     settings: Any,
     *,
     limit: int,
-) -> list[str]:
+) -> list[str] | None:
     """検索の範囲の条で構成された文書（(document_id, 文書名) の列）から、根拠の条がありそうな文書を選ぶ。
 
-    検索の候補に出ない文書（手続の一般的な規則を定める文書など）の条も目録で選べるようにする。LLM の呼び出しに
-    失敗したら空。一覧に無い番号・重複は捨てる。
+    検索の候補に出ない文書（手続の一般的な規則を定める文書など）の条も目録で選べるようにする。一覧に無い番号・
+    重複は捨てる。選べなかったときは空のリスト、LLM の呼び出しに失敗したときは None を返す（どちらも候補の文書
+    だけで続ける）。失敗は「選ぶ文書が無い」と分けて診断に残し、呼び出し元は失敗を cache しない（#3285）。
     """
     if not documents or limit <= 0:
         return []
@@ -318,8 +327,9 @@ def select_documents(
         selection = parse_text(
             ARTICLE_DOCUMENT_SELECTION_SYSTEM_PROMPT, document_prompt(question, documents, limit=limit), settings, ArticleSelection
         )
-    except Exception:  # noqa: BLE001 - 文書の選択は補助。候補の文書だけで続ける。
-        return []
+    except Exception as exc:  # noqa: BLE001 - 文書の選択は補助。候補の文書だけで続ける。
+        report_degraded("article_document_selection", exc)
+        return None
     chosen: list[str] = []
     for index in selection.lines:
         if 0 <= index < len(documents) and documents[index][0] not in chosen:

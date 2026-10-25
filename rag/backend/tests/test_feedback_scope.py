@@ -225,6 +225,45 @@ async def test_detail_is_not_limited_for_system_admin() -> None:
     assert "feedback_owner_user_id_hash" not in pool.connection.calls[0].statement
 
 
+@pytest.mark.anyio
+async def test_chat_answer_owner_is_read_for_the_owner_check() -> None:
+    """チャットの回答の評価は会話の持ち主だけなので、見える会話の持ち主を返す（#3244）。"""
+    message_row: dict[str, object] = {
+        "message_id": "message-1",
+        "conversation_user_id_hash": "owner-hash",
+        "question_text": "質問",
+        "answer_text": "回答",
+        "citations_json": "[]",
+    }
+    pool = FakeOraclePool(
+        execute_results=[
+            [message_row],
+            [{"user_id_hash": "owner-hash"}],
+            [{"user_id_hash": None}],
+            [],
+        ]
+    )
+    token = set_audit_request_context(
+        AuditRequestContext(
+            request_id="feedback-owner-test", user_id_hash="admin-hash", all_users_visible=True
+        )
+    )
+    try:
+        oracle = _client(pool)
+        context = await oracle.get_feedback_message_context("message-1", "trace-1")
+        assert await oracle.get_chat_answer_owner_hash("trace-1") == "owner-hash"
+        # 持ち主の分からない古い会話は空（会話に無い trace の None と分ける）。
+        assert await oracle.get_chat_answer_owner_hash("trace-ownerless") == ""
+        assert await oracle.get_chat_answer_owner_hash("trace-missing") is None
+    finally:
+        reset_audit_request_context(token)
+    assert context is not None and context["conversation_user_id_hash"] == "owner-hash"
+    message_call, owner_call, _, _ = pool.connection.calls
+    assert "c.user_id_hash AS conversation_user_id_hash" in message_call.statement
+    assert "m.trace_id = :trace_id" in owner_call.statement
+    assert owner_call.parameters["trace_id"] == "trace-1"
+
+
 # ---------------------------------------------------------------------------
 # API（production の共通認証）
 # ---------------------------------------------------------------------------

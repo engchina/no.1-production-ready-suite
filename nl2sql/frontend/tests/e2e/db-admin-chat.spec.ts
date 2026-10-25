@@ -681,8 +681,8 @@ test("会話の名前の変更と削除はチャットと同じ操作ででき�
   await expect(page.getByText("質問を入力して会話を始めます")).toBeVisible();
 });
 
-test("system_admin が見る他の利用者の会話には、日時に利用者の名前を添え、入力欄の上に案内を出す", { tag: "@responsive" }, async ({ page }) => {
-  await setup(page, {
+test("system_admin が見る他の利用者の会話は、日時に利用者の名前を添え、閲覧と削除だけにする（#3244）", { tag: "@responsive" }, async ({ page }) => {
+  const mock = await setup(page, {
     conversations: [
       savedConversation(
         "conversation-x",
@@ -697,7 +697,24 @@ test("system_admin が見る他の利用者の会話には、日時に利用者�
   await expect(page.getByTestId("db-admin-chat-history").getByText("利用者 B", { exact: false })).toBeVisible();
   await page.getByTestId("db-admin-chat-history").getByText("会話 X", { exact: true }).click();
   await expect(page.getByTestId("db-admin-chat-turn")).toHaveCount(1);
-  await expect(page.getByText("この会話の持ち主にも、回答と途中の結果が見えます")).toBeVisible();
+  // 続きの質問・実行・名前の変更は持ち主だけ: 入力欄と「実行」を出さず、閲覧だけの案内を出す。
+  const readOnly = page.getByTestId("db-admin-chat-read-only-notice");
+  await expect(readOnly).toContainText("他の利用者の会話・実行には、続きの質問・実行・回答・評価を追加できません。");
+  await expect(readOnly).toBeInViewport();
+  await expect(page.getByRole("textbox", { name: "質問", exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("db-admin-chat-send")).toHaveCount(0);
+  await expect(page.getByTestId("db-admin-chat-execute")).toHaveCount(0);
+  await expect(page.getByTestId("db-admin-chat-sql")).toBeVisible();
+  // 履歴の行は名前の変更を出さず、削除だけを出す。
+  const toggle = historyToggle(page);
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  const history = page.getByTestId("db-admin-chat-history");
+  await expect(history.getByRole("button", { name: "「会話 X」の名前を変更" })).toHaveCount(0);
+  await history.getByRole("button", { name: "「会話 X」を削除" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "削除", exact: true }).click();
+  await expect(history.getByText("会話はまだありません")).toBeVisible();
+  expect(mock.conversations).toHaveLength(0);
+  await expectNoHorizontalOverflow(page);
 });
 
 test("SELECT 以外は実行確認語を入れたときだけ実行し、失敗は AI の分析で直した SQL を確認からやり直す", { tag: "@responsive" }, async ({ page }) => {
