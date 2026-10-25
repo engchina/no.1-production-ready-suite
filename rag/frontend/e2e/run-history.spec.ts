@@ -491,7 +491,10 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
       const cardBox = element.getBoundingClientRect();
       const button = element.querySelector<HTMLElement>('[data-testid="answer-citation-link"]')!;
       const label = button.querySelector<HTMLElement>("span") ?? button;
+      const location = button.querySelector<HTMLElement>(":scope > span:last-child") ?? button;
+      const locationBox = location.getBoundingClientRect();
       return {
+        locationVisible: locationBox.width > 0 && locationBox.right <= cardBox.right + 1 && location.scrollWidth <= location.clientWidth + 1,
         cardOverflow: element.scrollWidth - element.clientWidth,
         buttonRight: button.getBoundingClientRect().right - cardBox.right,
         truncated: label.scrollWidth > label.clientWidth,
@@ -499,9 +502,9 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     });
     expect(metrics.cardOverflow).toBeLessThanOrEqual(1);
     expect(metrics.buttonRight).toBeLessThanOrEqual(1);
+    expect(metrics.locationVisible).toBe(true);
     // 頁は省略しない（名前だけを省略する）。
     await expect(link.locator(":scope > span").last()).toHaveText("p.12");
-    await expect(link.locator(":scope > span").last()).toBeInViewport({ ratio: 1 });
     if (isNarrow(page)) {
       expect(metrics.truncated).toBe(true);
       await expect(link).toHaveAttribute("data-truncated", "true");
