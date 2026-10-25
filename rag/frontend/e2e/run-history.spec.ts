@@ -53,6 +53,9 @@ interface RunRow {
   error_type?: string | null;
   error_code?: string | null;
   storage_failures?: { step: string; error_type: string; error_code: string | null }[];
+  /** 詳細だけの項目（見えている根拠と、今の権限で見られない根拠の数。#3252）。 */
+  citations?: (typeof CITATION)[];
+  withheld_evidence_count?: number;
 }
 
 function run(index: number, overrides: Partial<RunRow> = {}): RunRow {
@@ -104,7 +107,8 @@ function detail(row: RunRow) {
     error_type: row.error_type !== undefined ? row.error_type : row.status === "error" ? "TimeoutError" : null,
     answer: row.answer_generated ? "受注番号を入力して登録します。" : null,
     answer_available: row.answer_generated,
-    citations: [CITATION],
+    citations: row.citations ?? [CITATION],
+    withheld_evidence_count: row.withheld_evidence_count ?? 0,
     answer_diagnostics: row.answer_generated ? { outcome: "answered", confidence: "high", execution_steps: [] } : null,
     // 処理の経過は実行の trace の API が返す span の段（共通の span の表。#3226。実行の詳細の応答には入れない）。
     // 回答を作った実行は回答の段の中に工程の span、回答を作らない検索は検索の段。
@@ -692,6 +696,46 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
       { timeout: 10_000 }
     );
     await expect(page.getByTestId("run-history-timeline-summary")).toHaveCount(0);
+    await expectNoPageOverflow(page);
+  });
+});
+
+test.describe("実行履歴の詳細の権限の無い根拠（#3252）", { tag: "@responsive" }, () => {
+  test("今の権限で見られない根拠は数と理由だけを出し、抜粋・資料名を出さない。見られる根拠が無くても数を出す", async ({
+    page,
+  }, testInfo) => {
+    await mockLocalAuth(page);
+    await mockRuns(page, [
+      run(1, { withheld_evidence_count: 2 }),
+      run(3, { citations: [], withheld_evidence_count: 1 }),
+      run(2, { citations: [], withheld_evidence_count: 1 }),
+    ]);
+
+    await page.goto("/history/run-1");
+    const evidence = page.getByTestId("run-history-evidence");
+    const summary = evidence.locator("summary");
+    await expect(summary).toContainText("AI に渡した 3 件");
+    await expect(summary).toContainText("権限の無い根拠 2 件");
+    await summary.click();
+    const withheld = evidence.getByTestId("evidence-withheld");
+    await expect(withheld).toContainText("権限の無い根拠 2 件");
+    await expect(withheld).toContainText("抜粋・資料名・原文は表示しません");
+    // 見られる根拠は今どおりカードで出す。
+    await expect(evidence.getByTestId("evidence-card")).toHaveCount(1);
+    await expect(page.getByTestId("run-history-citations")).toContainText("受注マニュアル.pdf");
+    expect(await findIconTextMisalignment(page, { root: '[data-testid="evidence-withheld"]' })).toEqual([]);
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: `../../tmp/3252/rag-run-history-withheld-${testInfo.project.name}.png`, fullPage: true });
+
+    // 見られる根拠が無い回答も、折りたたみに数だけを出す（「根拠はありません」にしない）。
+    await page.goto("/history/run-3");
+    await expect(evidence.locator("summary")).toContainText("AI に渡した 1 件 ／ 権限の無い根拠 1 件");
+    await expect(page.getByText("根拠はありません")).toHaveCount(0);
+
+    // 回答を作らない検索の結果も、数の行を一覧の上に出す。
+    await page.goto("/history/run-2");
+    await expect(evidence.getByTestId("evidence-withheld")).toContainText("権限の無い根拠 1 件");
+    await expect(evidence.getByTestId("evidence-card")).toHaveCount(0);
     await expectNoPageOverflow(page);
   });
 });

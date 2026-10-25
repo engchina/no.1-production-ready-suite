@@ -10,6 +10,7 @@ import { Banner } from "../ui/banner";
 import { Button } from "../ui/button";
 import { Disclosure } from "../ui/disclosure";
 import { SideSheet } from "../ui/side-sheet";
+import { TEXT_ICON_SIZE } from "../ui/text-icon";
 
 /**
  * 回答の根拠（AI に渡した箇所の一覧。RAG のチャット・RAG 検索・Agent のチャットで共通。#2328）。
@@ -222,8 +223,10 @@ export function EvidenceWithheldNote({
   if (!withheld) return null;
   return (
     <p className={cn("flex min-w-0 items-start gap-2 text-sm text-fg-muted", className)} data-testid={testId}>
-      <Lock className="mt-0.5 shrink-0" size={14} aria-hidden="true" />
-      <span className="min-w-0">
+      <span className="pr-icon-line shrink-0">
+        <Lock size={TEXT_ICON_SIZE.sm} aria-hidden="true" />
+      </span>
+      <span className="min-w-0 [overflow-wrap:anywhere]">
         <span className="font-medium text-fg">{labels.withheld(withheld)}</span>
         <span className="block text-xs">{labels.withheldNote}</span>
       </span>

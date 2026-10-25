@@ -530,6 +530,46 @@ test("実行の詳細の回答も同じ節で出し、根拠の塊は RAG と同
   await expect(page.getByTestId("run-artifacts-section")).toHaveCount(0);
 });
 
+// #3252: 保存した根拠は見る人の今の権限で確かめ直し、見られない根拠は backend が中身を返さず数（`withheld_evidence_count`）
+// だけを返す。画面は RAG と同じ共通の行「権限の無い根拠 N 件」を折りたたみに出し、「AI に渡した N 件」に含める。
+for (const viewport of VIEWPORTS) {
+  test(`今の権限で見られない根拠は数と理由だけを出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    seedRun(mockApi);
+    const run = mockApi.state.runs.find((item) => item.id === RUN_ID)!;
+    Object.assign(run, { withheld_evidence_count: 2 });
+
+    await page.goto("/chat");
+    await openThread(page);
+    const citations = page.getByTestId(`chat-turn-${RUN_ID}`).getByTestId("answer-citations");
+    await expect(citations.locator("summary")).toHaveText(
+      "AI に渡した 5 件 ／ 回答で引用 2 件 ／ うち該当確認済み 1 件 ／ 権限の無い根拠 2 件"
+    );
+    await citations.locator("summary").click();
+    const withheld = citations.getByTestId("evidence-withheld");
+    await expect(withheld).toContainText("権限の無い根拠 2 件");
+    await expect(withheld).toContainText("抜粋・資料名・原文は表示しません");
+    await expect(citations.getByTestId("evidence-card")).toHaveCount(3);
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: `../../tmp/3252/agent-chat-withheld-${viewport.name}-${testInfo.project.name}.png`, fullPage: true });
+
+    // 実行の詳細の「回答の根拠」も同じ。見られる根拠が 1 件も無くても、数の行だけを出す。
+    const items = run.artifacts.find((item) => item.kind === "answer_evidence")!.content;
+    Object.assign(items, { items: [], passed: 0, cited: 0, markers: [], passages: [] });
+    Object.assign(run, { withheld_evidence_count: 3 });
+    await page.goto(`/runs?id=${RUN_ID}`);
+    const section = page.getByTestId("run-evidence-section");
+    await expect(section.getByTestId("answer-citations").locator("summary")).toHaveText(
+      "AI に渡した 3 件 ／ 権限の無い根拠 3 件"
+    );
+    await section.getByTestId("answer-citations").locator("summary").click();
+    await expect(section.getByTestId("evidence-withheld")).toContainText("権限の無い根拠 3 件");
+    await expect(section.getByTestId("evidence-card")).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: `../../tmp/3252/agent-run-withheld-${viewport.name}-${testInfo.project.name}.png`, fullPage: true });
+  });
+}
+
 // #2707: 最終の検証が時間切れ・失敗した回答（`answer_validation` が unvalidated）。backend は決定的な照合で根拠を結び付け
 // （`binding: "text"`）、画面は「資料により確認できた事項」を作らず、RAG と同じ「参考情報」（説明の文・根拠の原文・
 // 「根拠：文書 p.N」）を出す。根拠に結び付いた平文の出典の行と、中身が無くなった見出しは本文に出さない。
