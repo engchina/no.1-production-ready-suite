@@ -82,7 +82,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 33,
+            "default": 34,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -692,7 +692,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 33,
+            "default": 34,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -862,7 +862,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 33,
+            "default": 34,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1061,6 +1061,25 @@
       },
       "outputSchema": {
         "$defs": {
+          "ExcerptRange": {
+            "description": "本文の中の範囲（文字の位置。[start, end)）。",
+            "properties": {
+              "start": {
+                "title": "Start",
+                "type": "integer"
+              },
+              "end": {
+                "title": "End",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "title": "ExcerptRange",
+            "type": "object"
+          },
           "ReadDocumentChunk": {
             "description": "返した本文に含まれる chunk（根拠として引用するときの場所）。",
             "properties": {
@@ -1172,6 +1191,18 @@
                 "description": "返した本文の中の終了の位置（文字数）。",
                 "title": "End",
                 "type": "integer"
+              },
+              "header_range": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ExcerptRange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "表の chunk を途中から読んだとき、本文の先頭に付けた見出しの行の位置（chunk の本文の中の文字の [start, end)）。無ければ null。"
               }
             },
             "required": [
@@ -1185,7 +1216,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 33,
+            "default": 34,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1355,6 +1386,25 @@
       },
       "outputSchema": {
         "$defs": {
+          "ExcerptRange": {
+            "description": "本文の中の範囲（文字の位置。[start, end)）。",
+            "properties": {
+              "start": {
+                "title": "Start",
+                "type": "integer"
+              },
+              "end": {
+                "title": "End",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "title": "ExcerptRange",
+            "type": "object"
+          },
           "OutlineSection": {
             "description": "文書の 1 つの章節（章節ナビゲーションの章節。#1438）。",
             "properties": {
@@ -1552,6 +1602,18 @@
                 "description": "返した本文の中の終了の位置（文字数）。",
                 "title": "End",
                 "type": "integer"
+              },
+              "header_range": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ExcerptRange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "表の chunk を途中から読んだとき、本文の先頭に付けた見出しの行の位置（chunk の本文の中の文字の [start, end)）。無ければ null。"
               }
             },
             "required": [
@@ -1565,7 +1627,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 33,
+            "default": 34,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1698,14 +1760,14 @@
           },
           "offset": {
             "default": 0,
-            "description": "本文の読み始めの位置（文字数）。",
+            "description": "本文の読み始めの位置（文字数。続きは前の結果か根拠の next_offset）。",
             "minimum": 0,
             "title": "Offset",
             "type": "integer"
           },
           "max_chars": {
             "default": 8000,
-            "description": "返す本文の最大文字数。",
+            "description": "返す本文の最大文字数（表の続きに付ける見出しの行を含む）。",
             "maximum": 20000,
             "minimum": 1,
             "title": "Max Chars",
@@ -2252,11 +2314,30 @@
             ],
             "title": "EvidenceTableCell",
             "type": "object"
+          },
+          "ExcerptRange": {
+            "description": "本文の中の範囲（文字の位置。[start, end)）。",
+            "properties": {
+              "start": {
+                "title": "Start",
+                "type": "integer"
+              },
+              "end": {
+                "title": "End",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "title": "ExcerptRange",
+            "type": "object"
           }
         },
         "properties": {
           "schema_version": {
-            "default": 33,
+            "default": 34,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2383,7 +2464,7 @@
             "$ref": "#/$defs/EvidenceLocator"
           },
           "text": {
-            "description": "offset から最大 max_chars 文字の本文。",
+            "description": "offset から max_chars 文字に入る最後の文・段落（表は行）の境界までの本文（1 つの文・行だけで超えるときはその途中まで）。表を途中から読むときは、先頭に見出しの行（header_range）を付ける。",
             "title": "Text",
             "type": "string"
           },
@@ -2410,8 +2491,20 @@
               }
             ],
             "default": null,
-            "description": "続きを読むときの offset。",
+            "description": "続きを読むときの offset（text の本文の終わりの位置。続きが無ければ null）。",
             "title": "Next Offset"
+          },
+          "header_range": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ExcerptRange"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "text の先頭に付けた表の見出しの行の、本文の中の位置（文字の [start, end)）。text の見出しの後ろが offset からの本文。無ければ null。"
           },
           "parent_text": {
             "anyOf": [
@@ -2423,7 +2516,7 @@
               }
             ],
             "default": null,
-            "description": "親の本文（前後の文脈。最大 max_chars 文字）。",
+            "description": "親の本文（前後の文脈。先頭から max_chars 文字に入る文・段落の境界まで）。",
             "title": "Parent Text"
           },
           "parent_truncated": {
@@ -2493,7 +2586,7 @@
       "outputSchema": {
         "properties": {
           "schema_version": {
-            "default": 33,
+            "default": 34,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2627,7 +2720,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 33,
+            "default": 34,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3852,7 +3945,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 33,
+            "default": 34,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -5259,7 +5352,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 33,
+            "default": 34,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -5990,7 +6083,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 33,
+            "default": 34,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

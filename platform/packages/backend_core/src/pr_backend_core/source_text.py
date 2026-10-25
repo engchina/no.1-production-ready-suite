@@ -6,6 +6,10 @@
   1 件だけが 1 件の上限を超えるときだけ切る: 質問に当たった部分を中心にした範囲を選び、本文は文・
   段落の境界、表は見出しの行を残して行の境界で切る（`excerpt_source_text`）。切った範囲
   （`excerpt_range`）と続きの位置（`next_offset`）を返し、読み取りのツールで続きを読めるようにする。
+- **続きの読み取り**（RAG の `rag_read_source` / `rag_read_section` / `rag_read_document`）:
+  位置（`offset`）から順に、文字数の上限に入る最後の文・段落（表は行）の境界まで返す
+  （`read_source_window`）。続きの位置は返した範囲の終わりちょうどで、繰り返すと隙間も重なりも無く
+  全文になる。表の続きは先頭に見出しの行を付け、その範囲（`header_range`）を返す（#3344）。
 - **観測**（評価・監査）: 生成に渡した本文そのもの（切らない）。件数と 1 ページの合計の予算で
   ページに分け、1 件だけで予算を超える件は本文を省く（`page_source_texts`）。
 
@@ -178,6 +182,52 @@ def excerpt_source_text(
     return _excerpt(text, window)
 
 
+def read_source_window(
+    text: str, *, offset: int = 0, max_chars: int, kind: SourceTextKind = "text"
+) -> SourceText:
+    """``offset`` から順に読む窓（続きの読み取り。見出しの行を含めて ``max_chars`` 文字まで）。
+
+    上限に入る最後の文・段落の境界（表は行の境界）で切る。1 つの単位だけで上限を超えるときだけ、
+    細かい単位（読点・空白）、最後に字で切る。``excerpt_range`` は ``[offset, 終わり)``、
+    ``next_offset`` はその終わり（続きが無ければ None）なので、``next_offset`` を渡して読み続けると
+    隙間も重なりも無く全文になる。表の続き（``offset`` が見出しの後ろ）は本文の先頭に見出しの行を
+    付けて ``header_range`` に示す（見出しが上限の半分を超える表は付けない。抜粋と同じ）。
+    """
+    if offset < 0:
+        raise ValueError("offset は 0 以上にしてください。")
+    if max_chars < 1:
+        raise ValueError("max_chars は 1 以上にしてください。")
+    length = len(text)
+    start = min(offset, length)
+    header: TextRange | None = None
+    budget = max_chars
+    if start >= length:
+        end = start
+    elif kind == "table" and (layout := _table_layout(text)) is not None:
+        head, rows = layout
+        if start < head.end:
+            units = [*_units(text, start, head.end, _SENTENCE_END), *rows]
+        else:
+            units = [TextRange(max(row.start, start), row.end) for row in rows if row.end > start]
+            if start > 0 and 0 < head.end - head.start <= max_chars // 2:
+                header = head
+                budget = max_chars - (head.end - head.start)
+        end = _greedy_end(units, budget, text=text, level=-1)
+    else:
+        end = _forward_end(text, start, length, budget, level=0)
+    prefix = text[header.start : header.end] if header is not None else ""
+    body = prefix + text[start:end]
+    return SourceText(
+        text=body,
+        text_length=length,
+        truncated=start > 0 or end < length,
+        excerpt_range=TextRange(start, end),
+        header_range=header,
+        next_offset=end if end < length else None,
+        tokens=estimate_input_tokens(body),
+    )
+
+
 def fit_source_texts(
     items: Sequence[SourceTextItem],
     *,
@@ -314,6 +364,37 @@ def _units(text: str, start: int, end: int, pattern: re.Pattern[str]) -> list[Te
     if cursor < end:
         units.append(TextRange(cursor, end))
     return units
+
+
+def _forward_end(text: str, start: int, end: int, budget: int, *, level: int) -> int:
+    """``[start, end)`` を先頭から読み、``budget`` 字に入る最後の単位の境界（続きの読み取り）。
+
+    ``level`` は分ける単位（0 は文・段落、1 は読点・空白、2 以上は字）。
+    """
+    if end - start <= budget:
+        return end
+    if level >= 2:
+        return start + budget
+    units = _units(text, start, end, (_SENTENCE_END, _CLAUSE_END)[level])
+    return _greedy_end(units, budget, text=text, level=level)
+
+
+def _greedy_end(units: list[TextRange], budget: int, *, text: str, level: int) -> int:
+    """隙間の無い単位を先頭から ``budget`` 字に入るだけ足した終わり。
+
+    先頭の単位だけで超えるときは、その単位を 1 段細かく分けて読む（``level`` は単位の段。
+    表の行は -1）。
+    """
+    origin = units[0].start
+    cut = origin
+    for unit in units:
+        if unit.end - origin > budget:
+            break
+        cut = unit.end
+    if cut > origin:
+        return cut
+    first = units[0]
+    return _forward_end(text, first.start, first.end, budget, level=level + 1)
 
 
 def _window(
