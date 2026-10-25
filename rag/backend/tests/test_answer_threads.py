@@ -7,6 +7,10 @@ timeout の例外を出す。実際の HTTP の timeout と同じ振る舞い）
 処理（LLM の失敗の再試行の判定が初回に import する OCI SDK など）は、CI の並列（`-n auto`）の
 負荷の下では数秒かかることがある。import は先に済ませ（`_warm_retry_imports`）、待ちの上限は
 「遅い LLM 1 回」より短い範囲で十分に長くとる（期限で縮まらなければ失敗する）。
+
+打ち切りの試験は、壁時計の所要時間でも判定しない（#3297）。LLM を止めておき（`release` まで
+返さない）、LLM を呼んだことを確かめてから打ち切り、打ち切りの後に LLM の呼び出しが増えないことと
+thread が終わることを、呼び出しの回数と event で確かめる。
 """
 
 from __future__ import annotations
@@ -50,10 +54,16 @@ assert _THREAD_EXIT_WAIT_SECONDS < _SLOW_LLM_SECONDS
 
 
 class _SlowLlm:
-    """遅い LLM。呼び出しごとに timeout と再試行の設定を記録し、timeout だけ待って失敗する。"""
+    """遅い LLM。呼び出しごとに timeout と再試行の設定を記録し、timeout だけ待って失敗する。
 
-    def __init__(self) -> None:
+    `release` を渡すと、試験が `release` を立てるまで返らない（1 回の timeout は hang の guard）。
+    """
+
+    def __init__(self, release: threading.Event | None = None) -> None:
         self.calls: list[dict[str, Any]] = []
+        # 最初の呼び出しで立つ（回答の thread が LLM を待ち始めた）。
+        self.called = threading.Event()
+        self.release = release
         self._lock = threading.Lock()
 
     def client(self, options: dict[str, Any] | None = None) -> Any:
@@ -63,8 +73,12 @@ class _SlowLlm:
             def parse(self, **kwargs: Any) -> Any:
                 with owner._lock:
                     owner.calls.append(dict(options or {}))
+                owner.called.set()
                 timeout = float((options or {}).get("timeout", _SLOW_LLM_SECONDS))
-                time.sleep(min(timeout, _SLOW_LLM_SECONDS))
+                if owner.release is None:
+                    time.sleep(min(timeout, _SLOW_LLM_SECONDS))
+                else:
+                    owner.release.wait(min(timeout, _SLOW_LLM_SECONDS))
                 raise TimeoutError("LLM の応答が timeout しました。")
 
         class _Client:
@@ -124,6 +138,35 @@ async def _wait_thread_exit(finished: threading.Event) -> bool:
     return await asyncio.to_thread(finished.wait, _THREAD_EXIT_WAIT_SECONDS)
 
 
+async def _wait_llm_called(llm: _SlowLlm) -> None:
+    """回答の thread が LLM を呼ぶまで、event loop を止めずに待つ（上限は hang の guard）。"""
+    give_up = time.monotonic() + _THREAD_EXIT_WAIT_SECONDS
+    while not llm.called.is_set():
+        assert time.monotonic() < give_up, "回答の thread が LLM を呼ばない"
+        await asyncio.sleep(0.01)
+
+
+def _record_answer_budgets(
+    monkeypatch: pytest.MonkeyPatch, timeout_seconds: float
+) -> list[asyncio.Timeout]:
+    """`run_answer_with_timeout` の打ち切り（`asyncio.timeout`）を記録する。
+
+    試験は記録した打ち切りの期限を今にして（`reschedule`）、壁時計の上限を待たずに打ち切る。
+    同じ秒数の `asyncio.timeout` だけを記録する。
+    """
+    budgets: list[asyncio.Timeout] = []
+    original = asyncio.timeout
+
+    def timeout(delay: float | None) -> asyncio.Timeout:
+        budget = original(delay)
+        if delay == timeout_seconds:
+            budgets.append(budget)
+        return budget
+
+    monkeypatch.setattr(asyncio, "timeout", timeout)
+    return budgets
+
+
 @pytest.fixture
 def short_grace(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(answer_threads, "ANSWER_DEADLINE_GRACE_SECONDS", 0.05)
@@ -140,36 +183,48 @@ async def small_default_executor() -> Any:
 
 
 async def test_timeout_stops_llm_calls_in_answer_thread(
-    short_grace: None, small_default_executor: Any
+    short_grace: None, small_default_executor: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    llm = _SlowLlm()
+    """打ち切ると、待つ側は回答の thread を待たずに返り、thread は次の LLM を呼ばずに終わる。
+
+    所要時間では判定しない（#3297）。打ち切りの上限は長くとり、LLM を呼んだことと既定の
+    executor の処理が返ったことを確かめてから、打ち切りの期限を今にする。
+    """
+    timeout_seconds = 20.0
+    budgets = _record_answer_budgets(monkeypatch, timeout_seconds)
+    release = threading.Event()
+    llm = _SlowLlm(release)
     finished = threading.Event()
-    db_elapsed: list[float] = []
+    db_results: list[str] = []
 
     async def operation(_tracker: Any) -> str:
         task = asyncio.create_task(run_answer_in_thread(_answer_flow, llm, finished))
-        await asyncio.sleep(0.05)
+        await _wait_llm_called(llm)
         # 回答の thread が LLM を待っている間も、既定の executor の処理（DB の呼び出しの
-        # 代わり）は返る。
-        started = time.monotonic()
-        assert await asyncio.to_thread(lambda: "db") == "db"
-        db_elapsed.append(time.monotonic() - started)
+        # 代わり。executor は 1 本）は返る。回答の thread が既定の executor を使っていれば、
+        # LLM を止めている間は返らず、打ち切りの前にここを通らない。
+        db_results.append(await asyncio.to_thread(lambda: "db"))
+        [budget] = budgets
+        budget.reschedule(asyncio.get_running_loop().time())
         return await task
 
-    started = time.monotonic()
     with pytest.raises(AnswerTimeoutError) as raised:
-        await run_answer_with_timeout(operation, Settings(), timeout_seconds=0.3)
-    assert raised.value.timeout_seconds == 0.3
-    assert time.monotonic() - started < 1.0
-    assert db_elapsed and db_elapsed[0] < 0.5
+        await run_answer_with_timeout(operation, Settings(), timeout_seconds=timeout_seconds)
+    assert raised.value.timeout_seconds == timeout_seconds
+    assert db_results == ["db"]
+    # 待つ側は LLM の応答（回答の thread）を待たずに返った。
+    assert not finished.is_set()
+    assert len(llm.calls) == 1
 
-    # 打ち切った後、回答の thread は LLM 1 回の timeout（600 秒）を待たずに終わる。
+    # LLM が（timeout の失敗で）返った後、回答の thread は終わる。
+    release.set()
     assert await _wait_thread_exit(finished)
-    # 呼んだ LLM は 1 回だけで、残りの工程・再試行で LLM を呼ばない。
+    # 呼んだ LLM は 1 回だけで、残りの工程・再試行で LLM を呼ばない。1 回の timeout は
+    # 期限の残り（LLM 1 回の timeout の設定の 600 秒ではない）。
     assert len(llm.calls) == 1
     [options] = llm.calls
     assert options["max_retries"] == 0
-    assert options["timeout"] <= 0.3 + answer_threads.ANSWER_DEADLINE_GRACE_SECONDS
+    assert options["timeout"] <= timeout_seconds + answer_threads.ANSWER_DEADLINE_GRACE_SECONDS
 
 
 async def test_wait_for_cancel_stops_answer_thread(short_grace: None) -> None:
@@ -188,18 +243,19 @@ async def test_cancelled_task_stops_answer_thread() -> None:
 
     時刻の期限の無い文脈（取り消しだけを伝える期限）でも止まる。
     """
-    llm = _SlowLlm()
+    release = threading.Event()
+    llm = _SlowLlm(release)
     finished = threading.Event()
 
-    # 期限が無いと LLM 1 回の timeout（600 秒）になるため、1 回の応答を短くする。
-    slow = mock.patch(f"{__name__}._SLOW_LLM_SECONDS", 0.3)
-    with slow:
-        task = asyncio.create_task(run_answer_in_thread(_answer_flow, llm, finished))
-        await asyncio.sleep(0.05)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert await _wait_thread_exit(finished)
+    task = asyncio.create_task(run_answer_in_thread(_answer_flow, llm, finished))
+    await _wait_llm_called(llm)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not finished.is_set()
+    # 期限が無いと LLM 1 回の timeout（600 秒）になるため、LLM の応答は試験が返す。
+    release.set()
+    assert await _wait_thread_exit(finished)
     assert len(llm.calls) == 1
     assert llm.calls[0]["max_retries"] == 0
 

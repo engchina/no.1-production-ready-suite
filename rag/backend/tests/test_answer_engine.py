@@ -16,6 +16,7 @@ from rag_engine.models.llm import (
 )
 
 import app.rag.answer_engine as answer_engine_module
+from app.clients.section_map_store import SECTION_CHUNKS_TABLE
 from app.config import EnterpriseAiConfiguredModel, Settings
 from app.rag.answer_engine import AnswerEngine
 from app.rag.stored_answer import STORED_CITATION_METADATA_KEYS
@@ -72,6 +73,24 @@ class FakeOracle:
         # 検索範囲の文書に保存済みの大分類(#553)。
         self.large_categories: list[str] = []
         self.large_category_calls: list[dict[str, str]] = []
+        # 画面で編集した回答生成のプロンプト({key: content})。既定は未編集。
+        self.prompt_overrides: dict[str, str] = {}
+
+    async def answer_prompt_overrides(self) -> dict[str, str]:
+        return dict(self.prompt_overrides)
+
+    # 章節の拡張(#1436)が読む章節と chunk の対応(#1438)。この代役の文書は対応の行を持たず、
+    # chunk を ID では読まない(`retrievable_chunk` は None)ので、対応の作り直しもせず、章節で
+    # 広げずに回答を続ける。章節の拡張を確かめる試験は `tests/test_section_expansion_answer.py`。
+    async def _fetch_one(
+        self, statement: str, binds: Mapping[str, object] | None = None
+    ) -> dict[str, object] | None:
+        if SECTION_CHUNKS_TABLE in statement:
+            return None
+        raise AssertionError("FakeOracle は章節の対応のほかの SQL を読まない")
+
+    async def retrievable_chunk(self, document_id: str, chunk_id: str) -> RetrievedChunk | None:
+        return None
 
     async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
         self.large_category_calls.append(dict(filters))
@@ -3071,7 +3090,7 @@ async def test_answer_diagnostics_record_profile_and_prompt_versions(
     response = await pipeline.run(SearchRequest(query="受注の登録方法は？"))
     answer = response.diagnostics.answer
     assert answer is not None
-    # FakeOracle は編集したプロンプトを読めないので、既定のプロンプトの版になる。
+    # FakeOracle のプロンプトは未編集なので、既定のプロンプトの版になる。
     assert answer["provenance"] == {
         "prompt_version": answer_prompt_version({}),
         "search_answer_profile": revision,
