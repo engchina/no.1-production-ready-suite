@@ -50,7 +50,6 @@ locals {
       "preprocess-csv-to-jsonl",
       "preprocess-excel-to-jsonl",
       "preprocess-word-to-jsonl",
-      "preprocess-pii-redact",
       "parser-docling",
     ],
     var.rag_enable_parser_unstructured ? ["parser-unstructured"] : [],
