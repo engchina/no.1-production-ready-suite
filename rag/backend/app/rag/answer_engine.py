@@ -34,7 +34,6 @@ import logging
 import math
 import re
 import tempfile
-import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
@@ -91,6 +90,7 @@ from app.rag.cross_references import (
     split_section_path,
     title_key,
 )
+from app.rag.degraded_steps import DegradedSteps
 from app.rag.derived_evidence import (
     derived_kind,
     derived_source_chunks,
@@ -372,27 +372,17 @@ class _SearchState:
     derived_sources: dict[tuple[str, tuple[tuple[str, str], ...]], list[str]] = field(
         default_factory=dict
     )
-    # 失敗して空のまま続けた補助の処理(#3259)。(処理の種類, 例外の型の名前) → {kind, count,
-    # exc_type}。「当たらなかった」と「読めなかった」を診断で分ける。例外の文・SQL・本文・識別子は
-    # 入れない(ログの exc_info だけに残す)。rag_engine の thread からも記録するので lock で守る。
-    degraded: dict[tuple[str, str], dict[str, object]] = field(default_factory=dict)
-    _degraded_lock: threading.Lock = field(
-        default_factory=threading.Lock, repr=False, compare=False
-    )
+    # 失敗して空のまま続けた補助の処理(#3259。``DegradedSteps``)。回答エンジンの前の段の失敗も
+    # 同じ記録に入る(#3286)。
+    degraded: DegradedSteps = field(default_factory=DegradedSteps, repr=False, compare=False)
 
     def record_degraded(self, kind: str, exc: BaseException) -> None:
         """補助の処理 ``kind`` が ``exc`` で失敗し、空のまま続けたことを数える(#3259)。"""
-        exc_type = type(exc).__name__
-        with self._degraded_lock:
-            entry = self.degraded.setdefault(
-                (kind, exc_type), {"kind": kind, "count": 0, "exc_type": exc_type}
-            )
-            entry["count"] = cast(int, entry["count"]) + 1
+        self.degraded.record_degraded(kind, exc)
 
     def degraded_steps(self) -> list[dict[str, object]]:
         """失敗した補助の処理の記録(最初に失敗した順)。"""
-        with self._degraded_lock:
-            return [dict(entry) for entry in self.degraded.values()]
+        return self.degraded.steps()
 
     @property
     def auto_field_relaxed(self) -> bool:
@@ -718,6 +708,7 @@ class AnswerEngine:
         graph_store: GraphExpansionStore | None = None,
         attachment_chunks: Sequence[RetrievedChunk] = (),
         caller_queries: Sequence[str] | None = None,
+        degraded: DegradedSteps | None = None,
     ) -> None:
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら、回答を作らない検索で、
         # 質問に応じた推論の LLM / VLM（検索戦略の判定・質問拡張・条の目録の選択・画面目録の連携・
@@ -756,6 +747,10 @@ class AnswerEngine:
         # 利用者が確認の質問で選んだ条件と対象範囲(#717)。範囲での絞り込みは request.filters の
         # page_ranges が行い、ここでは回答の前提・検索に足す語・回答の末尾の表示に使う。
         self._scope = scope
+        # 回答エンジンの前の段(会話の履歴での書き換え・抽出項目の条件・会話の添付)が失敗して
+        # 縮退した記録(#3286)。回答の中の補助の処理の失敗も同じ記録に足し、回答の診断の
+        # degraded_steps に出す。
+        self._degraded = degraded
 
     async def run(
         self, request: SearchRequest, *, step_callback: StepCallback | None = None
@@ -774,7 +769,10 @@ class AnswerEngine:
         requested = request
         # 基準日を 1 回の回答で 1 回だけ決め、主検索と拡張の検索で同じ日を使う(#2602)。
         request = _with_effective_as_of(request)
-        state = _SearchState(requested_as_of=requested.filters.get(AS_OF_FILTER_KEY, ""))
+        state = _SearchState(
+            requested_as_of=requested.filters.get(AS_OF_FILTER_KEY, ""),
+            degraded=self._degraded if self._degraded is not None else DegradedSteps(),
+        )
         try:
             overrides = await self._oracle.answer_prompt_overrides()
         except Exception as exc:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で回答を続ける。
@@ -829,7 +827,8 @@ class AnswerEngine:
                     outcome, answer=f"{outcome.answer}\n\n（対象: {self._scope.label}）"
                 )
         outcome.diagnostics["models"] = self._models_used(
-            vision=getattr(result, "image_prompt_mode", "") == "vision_attachments"
+            vision=getattr(result, "image_prompt_mode", "") == "vision_attachments",
+            rerank_failed=state.degraded.failed("rerank"),
         )
         # 回答を作ったプロンプトの版（編集した内容とコードのプロンプト。#1276）。
         outcome.diagnostics.setdefault("provenance", {})["prompt_version"] = answer_prompt_version(
@@ -1019,6 +1018,8 @@ class AnswerEngine:
         models = self._models_used()
         models["embedding"] = ""
         models["rerank"] = ""
+        # 回答エンジンの前の段(会話の履歴での書き換え・抽出項目の条件)の縮退(#3286)。
+        degraded = self._degraded.steps() if self._degraded is not None else []
         return AnswerOutcome(
             answer=f"{answer}\n\n（出典: 承認済み FAQ「{faq_question}」）",
             citations=[],
@@ -1034,17 +1035,21 @@ class AnswerEngine:
                 "execution_steps": [
                     {"name": name, "status": "complete", "elapsed_seconds": elapsed, **metrics}
                 ],
+                **({"degraded_steps": degraded} if degraded else {}),
             },
             # 回答の安全チェックが照合する根拠は、選んだ FAQ だけ。
             context_text=f"類似問: {faq_question}\n承認済みの回答: {faq_answer}",
         )
 
-    def _models_used(self, *, vision: bool = False) -> dict[str, Any]:
+    def _models_used(self, *, vision: bool = False, rerank_failed: bool = False) -> dict[str, Any]:
         """回答フローで使ったモデル(画面に出す。#649)。
 
         LLM(既定のテキストモデル。比較の列ではその列のモデル)は質問の理解・拡張と回答の生成に使う。
         根拠の原画像を添付して答えたときは、その回答を既定の Vision モデルで作る(``vision``)。
-        rerank は無効なら空。
+        rerank は実際に並べたときだけモデル名を出す: 無効・未設定(モデルか compartment が無い。
+        rag_engine はこのとき rerank を実行しない)なら空。rerank が失敗して取得の順で続けたとき
+        (``rerank_failed``)も空にし、rerank で並べたように見せない(失敗は degraded_steps の
+        ``rerank`` に出る。#3286)。
         """
         settings = self._settings
         labels = {
@@ -1059,7 +1064,13 @@ class AnswerEngine:
             "llm": model(self._answer_model_id or enterprise_ai_default_model_id(settings)),
             "vision": model(enterprise_ai_vision_model_id(settings)) if vision else None,
             "embedding": settings.oci_genai_embedding_model,
-            "rerank": settings.oci_genai_rerank_model if settings.rag_rerank_enabled else "",
+            "rerank": (
+                settings.oci_genai_rerank_model
+                if settings.rag_rerank_enabled
+                and settings.oci_compartment_id.strip()
+                and not rerank_failed
+                else ""
+            ),
         }
 
     async def retrieve(self, request: SearchRequest) -> list[RetrievedChunk]:
