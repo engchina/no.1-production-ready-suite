@@ -9,14 +9,22 @@
 from __future__ import annotations
 
 import contextlib
+import threading
 from collections.abc import Iterator
+from copy import deepcopy
 from typing import Any
 
 import anyio
 import pytest
 from agents import FunctionTool
 from agents.testing import ScriptedModel, assistant_message, function_call
-from mcp_support import FakeProductMcp, Nl2SqlQueryIn, RagSearchIn, fake_product_mcp
+from mcp_support import (
+    DEFAULT_OUTPUTS,
+    FakeProductMcp,
+    Nl2SqlQueryIn,
+    RagSearchIn,
+    fake_product_mcp,
+)
 from pydantic import ConfigDict, ValidationError
 from pytest import MonkeyPatch
 from security_support import ProductionAuth, client, enable_production_auth, login
@@ -935,3 +943,81 @@ def test_model_arguments_do_not_change_the_token_subject_or_scope(
     assert search["arguments"]["profile_ids"] == ["profile-hr"]
     assert search["claims"]["sub"] == USER_UUID
     assert search["claims"]["profile_ids"] == ["bv-sales"]
+
+
+def test_concurrent_runs_of_different_users_keep_their_own_subject_and_scope(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """別の利用者の 2 つの Run を並行で動かしても、各 Run のツールのトークンの `sub` と
+    `profile_ids` は、その Run の利用者と業務 Agent の範囲のまま（#3251）。
+
+    呼び先の中で 2 つの呼び出しが同時にいる状態を作り（threadpool の経路）、交差しないことを見る。
+    """
+    other_agent_id = f"{AGENT_ID}-other"
+    users = {
+        AGENT_ID: ("aaaaaaaa-3251-0000-0000-000000000001", ["bv-a"]),
+        other_agent_id: ("bbbbbbbb-3251-0000-0000-000000000002", ["bv-b1", "bv-b2"]),
+    }
+    _agent(rag=_scope("bv-a"))
+    runtime_repository.create_agent(
+        AgentProfile(
+            id=other_agent_id,
+            name="範囲の Agent（別）",
+            skill_ids=[SKILL_ID],
+            data_scopes={"rag": _scope("bv-b1", "bv-b2", default="bv-b1")},
+        )
+    )
+    barrier = threading.Barrier(2, timeout=10)
+
+    def search(_argument: Any) -> dict[str, Any]:
+        # 2 つの呼び出しが同時に呼び先の中にいる状態を作る（片方だけなら timeout で失敗する）。
+        barrier.wait()
+        return deepcopy(DEFAULT_OUTPUTS["rag_search"])
+
+    mcp.outputs["rag_search"] = search
+    _script(monkeypatch)  # モデルの接続の設定と、最後の検証を外す
+    # Run ごとに別の台本のモデル（同じモデルを 2 つの Run で共有しない）。
+    monkeypatch.setattr(
+        builtin_runtime,
+        "model_factory",
+        lambda _target: ScriptedModel(
+            [
+                [function_call("rag__rag_search", {"query": "契約"}, call_id="call-1")],
+                [assistant_message("契約は第 5 条です。")],
+            ]
+        ),
+    )
+    run_ids = {
+        agent_id: runtime_repository.create_builtin_run(
+            RunCreateRequest(goal="契約を調べて", agent_id=agent_id, draft=True),
+            created_by_user_uuid=user_uuid,
+        ).id
+        for agent_id, (user_uuid, _profiles) in users.items()
+    }
+
+    async def run_both() -> None:
+        async with anyio.create_task_group() as group:
+            for run_id in run_ids.values():
+                group.start_soon(builtin_runtime.execute_run, run_id)
+
+    try:
+        anyio.run(run_both)
+        for run_id in run_ids.values():
+            run = runtime_repository.get_run(run_id)
+            assert run.status == RunStatus.COMPLETED, run.events[-1].message
+        calls = mcp.calls_of("rag_search")
+        assert len(calls) == 2
+        by_run = {call["claims"]["run_id"]: call["claims"] for call in calls}
+        for agent_id, (user_uuid, profiles) in users.items():
+            claims = by_run[run_ids[agent_id]]
+            assert claims["sub"] == user_uuid
+            assert claims["agent_id"] == agent_id
+            assert claims["profile_ids"] == profiles
+    finally:
+        repository: Any = runtime_repository
+        with repository._lock:  # noqa: SLF001 - テストの後始末
+            other = repository._runs.pop(run_ids[other_agent_id], None)
+            for approval in other.approvals if other is not None else []:
+                repository._approvals.pop(approval.id, None)
+        with contextlib.suppress(KeyError, ValueError):
+            runtime_repository.delete_agent(other_agent_id)

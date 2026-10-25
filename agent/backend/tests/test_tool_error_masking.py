@@ -210,7 +210,9 @@ def test_error_paths_mask_markers_in_text_and_nested_details(error: Exception) -
     _register(_failing(error))
     try:
         result = tool_registry.invoke(
-            ToolCall(name=TOOL, arguments={"key": "k"}), policy=ToolPolicy(allow={TOOL})
+            ToolCall(name=TOOL, arguments={"key": "k"}),
+            policy=ToolPolicy(allow={TOOL}),
+            context=ToolInvocationContext(),
         )
     finally:
         tool_registry._definitions.pop(TOOL, None)  # noqa: SLF001
@@ -237,7 +239,9 @@ def test_success_output_masking_is_unchanged() -> None:
     _register(ok)
     try:
         result = tool_registry.invoke(
-            ToolCall(name=TOOL, arguments={"key": "k"}), policy=ToolPolicy(allow={TOOL})
+            ToolCall(name=TOOL, arguments={"key": "k"}),
+            policy=ToolPolicy(allow={TOOL}),
+            context=ToolInvocationContext(),
         )
     finally:
         tool_registry._definitions.pop(TOOL, None)  # noqa: SLF001
@@ -253,7 +257,9 @@ def test_argument_errors_and_flags_are_kept() -> None:
     _register(_failing(AssertionError("呼ばれない")))
     try:
         invalid = tool_registry.invoke(
-            ToolCall(name=TOOL, arguments={"key": 1}), policy=ToolPolicy(allow={TOOL})
+            ToolCall(name=TOOL, arguments={"key": 1}),
+            policy=ToolPolicy(allow={TOOL}),
+            context=ToolInvocationContext(),
         )
     finally:
         tool_registry._definitions.pop(TOOL, None)  # noqa: SLF001

@@ -1375,9 +1375,6 @@ const agentJa = {
   "settings.productMcp.authStatus": "サービス間認証の状態",
   "settings.productMcp.secret": "署名鍵（PLATFORM_SERVICE_TOKEN_SECRET）",
   "settings.productMcp.secretHint": "3 製品の共通 .env に同じ値（32 文字以上）を設定します。未設定のあいだ、呼び出しは失敗します。",
-  "settings.productMcp.serviceUser": "サービス利用者（AGENT_MCP_SERVICE_USER_LOGIN_ID）",
-  "settings.productMcp.serviceUserHint":
-    "実行の利用者がいない呼び出しで使うログインユーザー ID です。未設定ならその呼び出しだけ失敗します。",
   "settings.timeout": "タイムアウト秒",
   "settings.mcpDiscovery.tool": "ツール",
   "settings.mcpDiscovery.descriptionColumn": "説明",

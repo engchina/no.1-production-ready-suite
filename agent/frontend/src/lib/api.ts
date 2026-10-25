@@ -1023,8 +1023,6 @@ export interface McpConnectionSettings {
   session_configured: boolean;
   /** 共通 .env の PLATFORM_SERVICE_TOKEN_SECRET が 32 文字以上あるか（値は返らない）。 */
   service_token_configured: boolean;
-  /** AGENT_MCP_SERVICE_USER_LOGIN_ID があるか（Run の利用者がいない呼び出しで使う）。 */
-  service_user_configured: boolean;
   /** ツールの注釈（readOnlyHint）を既定の判定に使うか（#1832。標準の接続は常に true）。 */
   trust_tool_annotations?: boolean;
 }

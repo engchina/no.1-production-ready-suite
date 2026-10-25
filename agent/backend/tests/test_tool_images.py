@@ -280,7 +280,9 @@ def test_registry_keeps_images_out_of_the_serialized_result() -> None:
         handle,
     )
     try:
-        result = tool_registry.invoke(ToolCall(name=name, arguments={}), policy=ToolPolicy())
+        result = tool_registry.invoke(
+            ToolCall(name=name, arguments={}), policy=ToolPolicy(), context=ToolInvocationContext()
+        )
     finally:
         tool_registry._definitions.pop(name, None)  # noqa: SLF001
         tool_registry._handlers.pop(name, None)  # noqa: SLF001

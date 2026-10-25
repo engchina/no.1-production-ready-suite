@@ -347,6 +347,7 @@ def test_registered_tool_contract_is_checked_by_the_registry(calls: _Calls) -> N
     result = tool_registry.invoke(
         ToolCall(name=READ, arguments={"count": "1"}),
         policy=ToolPolicy(allow={READ}),
+        context=ToolInvocationContext(),
     )
     assert result.success is False
     assert result.error_code == INVALID_ARGUMENTS_CODE

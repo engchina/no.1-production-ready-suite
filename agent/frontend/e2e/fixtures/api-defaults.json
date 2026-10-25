@@ -502,8 +502,7 @@
         "api_key_configured": false,
         "oauth_configured": false,
         "session_configured": false,
-        "service_token_configured": false,
-        "service_user_configured": false
+        "service_token_configured": false
       },
       {
         "server_id": "rag",
@@ -519,8 +518,7 @@
         "api_key_configured": false,
         "oauth_configured": false,
         "session_configured": false,
-        "service_token_configured": false,
-        "service_user_configured": false
+        "service_token_configured": false
       }
     ]
   }

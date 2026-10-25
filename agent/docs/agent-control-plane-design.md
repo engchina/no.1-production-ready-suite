@@ -369,11 +369,12 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   Run を作った利用者として呼ぶ。再実行（replay）の Run は、再実行を指示した利用者になる。単発の
   `POST /tools/invoke` と画面の「ツールを取得」（`GET /settings/mcp-connections/{id}/tools`）は、ログイン中の利用者として呼ぶ。
 - **token**（サービストークンの接続）: 呼び出しごとに `issue_service_token(PLATFORM_SERVICE_TOKEN_SECRET, subject=<Run の利用者 or
-  サービス利用者>, audience=<接続の audience>, issuer="agent", claims={"run_id", "agent_id", "run_source"})`（HS256、60 秒）を
+  ログイン中の利用者>, audience=<接続の audience>, issuer="agent", claims={"run_id", "agent_id", "run_source"})`（HS256、60 秒）を
   作り、`Authorization: Bearer` で送る。`run_source` は Run のきっかけ（`run_facts.run_source`。品質評価の Run は
   `evaluation`）で、呼び先（NL2SQL）の実行履歴が品質評価の実行を既定で隠すために使う（見え方だけ。#1986）。署名鍵は 3 製品の共通 `.env` で同じ値にする（32 文字以上。未設定なら
-  `mcp.service_token_not_configured`）。サービス利用者の login ID → `user_uuid` は共通認証の store で解決し、
-  プロセス内にキャッシュする。
+  `mcp.service_token_not_configured`）。利用者の無い呼び出しは別の主体に置き換えず `mcp.user_required` で失敗する
+  （#3251。confused deputy を防ぐ）。サービスの主体で呼んでよい入口は無く、将来要るなら `sub` を替えず、呼び先に見える
+  別の主体（RFC 8693 の `act` など）として足す。
 - **MCP の手順**: 呼び出しごとに `initialize`（`2025-06-18`）→ `notifications/initialized` → `tools/call`。
   応答の `Mcp-Session-Id` を以降の request に付け、`Accept: application/json, text/event-stream` と
   `MCP-Protocol-Version` を送る。結果は `structuredContent`（無ければ text の `content`）、`isError: true` は
@@ -477,8 +478,8 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   ジョブの完了は `AGENT_NL2SQL_JOB_WAIT_SECONDS` まで待つ。SQL の生成の方式は業務プロファイルの既定の生成方式〔#1524〕で、既定の SQL の生成〔Select AI の 1 回〕と実行は NL2SQL の DB の呼び出しの
   上限〔120 秒〕で打ち切られる。#1430）は接続 `rag` / `nl2sql` の初期値（タイムアウト秒の上限は 900 秒。SDK の function tool の
   timeout は、接続の timeout〔`nl2sql` はジョブを待つ分を足した値〕の 2 倍）。`backend/.env.example` は両方の値を明示する（#1430）。画面で保存済みの接続はその値のまま（#1425 より前に保存した `rag` の 60 秒は、
-  画面の「MCP 接続」で 630 秒に直す）。画面の「MCP 接続」で URL・タイムアウトを変更でき（保存先に残り、.env の値より優先する。#764）、署名鍵と
-  サービス利用者は設定済みかどうかだけを表示する。旧「外部 MCP」の単一の設定（`AGENT_EXTERNAL_MCP_BASE_URL` 等）・
+  画面の「MCP 接続」で 630 秒に直す）。画面の「MCP 接続」で URL・タイムアウトを変更でき（保存先に残り、.env の値より優先する。#764）、署名鍵は
+  設定済みかどうかだけを表示する。旧「外部 MCP」の単一の設定（`AGENT_EXTERNAL_MCP_BASE_URL` 等）・
   既定のサーバー・NL2SQL の既定取得件数（`AGENT_EXTERNAL_NL2SQL_DEFAULT_LIMIT`）は #757 で削除した。
 - **RAG の図の根拠を画面で開く（#1311）**: 画面の「図を開く」は #2462 で削除した（図は原文のプレビューの強調で確かめる）。
   backend の `GET /api/runs/{run_id}/figure-url`（実行の詳細と同じ権限・対象範囲）が、
