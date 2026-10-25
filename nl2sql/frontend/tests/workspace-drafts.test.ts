@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { bindWorkspaceOwner, clearWorkspaceDrafts, draftKey, readDraft, writeDraft, WORKSPACE_DRAFT_TTL_MS, type DraftStorage } from "../src/lib/workspace-drafts";
+import { bindWorkspaceOwner, clearWorkspaceDrafts, draftKey, draftValueOnScopeChange, readDraft, writeDraft, WORKSPACE_DRAFT_TTL_MS, type DraftCarryOver, type DraftStorage } from "../src/lib/workspace-drafts";
 class Storage implements DraftStorage {
   data = new Map<string, string>();
   get length() { return this.data.size; }
@@ -37,4 +37,28 @@ test("壊れた値・型の違う値・巨大な草稿・書込失敗を安全�
   assert.equal(writeDraft(storage, "alice", key, "x".repeat(200_001)), false);
   storage.setItem = () => { throw new Error("quota exceeded"); };
   assert.equal(writeDraft(storage, "alice", key, "SQL"), false);
+});
+test("置き場所が変わった render は新しい草稿を読み、carryOver が認めた field の変化だけ値を引き継ぐ（#3357）", () => {
+  const scope = { owner: "alice", context: "db1", page: "/query", field: "question:" };
+  const next = { ...scope, field: "question:p1" };
+  const calls: unknown[] = [];
+  // SQL 生成の画面と同じ規則: 未確定のプロファイルの入力を、新しいプロファイルの草稿が空のときだけ引き継ぐ。
+  const carry: DraftCarryOver<string> = (change) => {
+    calls.push(change);
+    return change.from === "question:" && Boolean(change.value.trim()) && !change.stored.trim();
+  };
+  assert.equal(draftValueOnScopeChange(scope, next, "合成の質問", "", carry), "合成の質問");
+  assert.deepEqual(calls, [{ from: "question:", to: "question:p1", value: "合成の質問", stored: "" }]);
+  // 新しい field の草稿があれば、それを読む。
+  assert.equal(draftValueOnScopeChange(scope, next, "合成の質問", "残っていた草稿", carry), "残っていた草稿");
+  // 確定したプロファイルどうしの切り替えは引き継がない。
+  assert.equal(draftValueOnScopeChange({ ...scope, field: "question:p1" }, { ...scope, field: "question:p2" }, "p1 の質問", "", carry), "");
+  // carryOver の無い草稿は、今までどおり新しい草稿を読む。
+  assert.equal(draftValueOnScopeChange(scope, next, "合成の質問", ""), "");
+  // 利用者・DB・画面が変わったら、field が変わっても引き継がない（判定も呼ばない）。
+  calls.length = 0;
+  for (const other of [{ owner: "bob" }, { context: "db2" }, { page: "/chat" }]) {
+    assert.equal(draftValueOnScopeChange(scope, { ...next, ...other }, "合成の質問", "", carry), "");
+  }
+  assert.equal(calls.length, 0);
 });
