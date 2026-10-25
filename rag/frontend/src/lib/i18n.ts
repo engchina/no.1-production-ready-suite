@@ -1569,9 +1569,6 @@ export const ja = {
   "settings.preprocess.profile.office_to_pdf": "Office→PDF",
   "settings.preprocess.profile.office_to_pdf.description":
     "Word・PowerPoint の文書(旧形式の .doc・.ppt、マクロ付きの .docm・.pptm を含む)を PDF にしてから解析します。マクロは実行しません。PDF にした文書はブラウザーでプレビューできます。Excel は「Excel→JSONL」を使います。",
-  "settings.preprocess.profile.pdf_to_page_images": "PDF を画像として読み直す",
-  "settings.preprocess.profile.pdf_to_page_images.description":
-    "PDF の各ページを画像にして、画像から文字を読み取り直します。文字化けする PDF や、文字を選択・コピーできない PDF に使います。",
   "settings.preprocess.profile.csv_to_jsonl": "CSV→JSONL",
   "settings.preprocess.profile.csv_to_jsonl.description":
     "CSV の 1 行を、見出しの列名と値の組の 1 件の記録(JSONL)にしてから解析します。元の行の位置を保ちます。文書解析は「構造化レコード JSONL」を使います。",
@@ -1697,7 +1694,6 @@ export const ja = {
   "settings.services.failure.fallback":
     "サービスのログと状態を確認してから、もう一度実行してください。",
   "settings.services.item.preprocessOfficeToPdf": "Office→PDF",
-  "settings.services.item.preprocessPdfToPageImages": "PDF を画像として読み直す",
   "settings.services.item.preprocessCsvToJsonl": "CSV→JSONL",
   "settings.services.item.preprocessExcelToJsonl": "Excel→JSONL",
   "settings.services.item.preprocessWordToJsonl": "Word→JSONL",

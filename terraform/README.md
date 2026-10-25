@@ -284,6 +284,7 @@ RAG は NL2SQL / Agent と同じく、Docker を使わずネイティブ（uv �
   Marker の parser（`parser-marker`）と入力 `rag_enable_parser_marker` は削除しました（#270）。
   OCI Generative AI（Vision）の parser（`parser-oci-genai-vision`）と GPU の ASR の parser（`parser-asr`）、前処理の
   スキャン画像の補正（`preprocess-image-enhance`）と URL→Markdown（`preprocess-url-to-markdown`）は削除しました（#2042）。
+  前処理の「PDF を画像として読み直す」（`preprocess-pdf-to-page-images`）も削除しました（#3347。スキャンの PDF は Docling が OCR で読みます）。
   `rag_enable_oci_cloud_parsers` は OCI Document Understanding の parser だけを配備します。既存の Compute は
   `sudo platform/deploy/suite-update.sh` の再配備で `parser-structured-records-jsonl`（起動します）と `parser-xml-tree-json`（起動はしません）の unit が入り、削除したサービスの unit は止めて消されます
   （以前の stack が書いた `/u01/aipoc/props/rag_services.txt` も今の一覧に書き戻します）。

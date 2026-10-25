@@ -38,6 +38,8 @@ export interface StructuredEntry {
   muted?: boolean;
   /** Markdown として読まない文（根拠の原文・決まった説明の文）。 */
   plain?: boolean;
+  /** 画面の決まった説明の文（回答の言語ではなく画面の言語で描く。#3349）。 */
+  uiText?: boolean;
 }
 
 export type StructuredBlock =
@@ -315,7 +317,7 @@ function referenceSection(evidence: AnswerEvidenceData, titles: AnswerStructureT
     title: titles.reference,
     ordered: false,
     entries: [
-      { key: "reference-note", text: titles.referenceNote, chunkIds: [], muted: true, plain: true },
+      { key: "reference-note", text: titles.referenceNote, chunkIds: [], muted: true, plain: true, uiText: true },
       ...evidence.references.map((reference, index) => ({
         key: `reference-${index}`,
         text: `「${reference.quote}」`,

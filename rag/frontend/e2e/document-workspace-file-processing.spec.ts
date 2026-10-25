@@ -3236,9 +3236,9 @@ function documentDetail(
       options.preparedArtifact || options.brokenPreparedArtifact
         ? {
             derivation_id: "prepared-1",
-            profile: options.brokenPreparedArtifact ? "pdf_to_page_images" : "text_normalize",
+            profile: options.brokenPreparedArtifact ? "office_to_pdf" : "text_normalize",
             converted: true,
-            converter_name: options.brokenPreparedArtifact ? "pdf_to_page_images" : "text_normalize",
+            converter_name: options.brokenPreparedArtifact ? "office_to_pdf" : "text_normalize",
             converter_version: "v1",
             source_content_type: contentType,
             source_sha256: "a".repeat(64),

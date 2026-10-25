@@ -86,7 +86,6 @@ DATABASE_INITIALIZATION_READY=false
 # 残っていても読み飛ばす（その unit は configure_systemd が止めて消す）。
 ALLOWED_RAG_SERVICES=(
   preprocess-office-to-pdf
-  preprocess-pdf-to-page-images
   preprocess-csv-to-jsonl
   preprocess-excel-to-jsonl
   preprocess-word-to-jsonl
@@ -278,9 +277,6 @@ service_os_packages() {
     preprocess-word-to-jsonl)
       # .doc を .docx にするだけなので Writer だけでよい（#2457）。
       printf '%s\n' libreoffice-core libreoffice-writer
-      ;;
-    preprocess-pdf-to-page-images)
-      printf '%s\n' google-noto-sans-cjk-ttc-fonts google-noto-serif-cjk-ttc-fonts
       ;;
     parser-unstructured)
       printf '%s\n' poppler-utils tesseract tesseract-langpack-eng tesseract-langpack-jpn

@@ -912,7 +912,7 @@ async def test_preprocess_canonical_persist_failure_surfaces_as_error() -> None:
         settings=Settings(
             rag_parser_adapter_backend="local",
             rag_preprocess_enabled=True,
-            rag_preprocess_profile="pdf_to_page_images",
+            rag_preprocess_profile="office_to_pdf",
         ),
     )
     pipeline._preprocess = cast(Any, _StubConvertingPreprocess())
@@ -992,7 +992,7 @@ async def test_preprocess_artifact_save_not_persisted_surfaces_as_error() -> Non
     )
     derivation = SourceDerivation(
         derivation_id="d1",
-        preprocess_profile="pdf_to_page_images",
+        preprocess_profile="office_to_pdf",
         converted=True,
         derived_object_path="local://artifacts/canonical/doc-x/t/canonical.pdf",
         derived_content_type="application/pdf",

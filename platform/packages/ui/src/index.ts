@@ -62,6 +62,7 @@ export {
   detectContentLang,
   normalizeContentLang,
   resolveContentLang,
+  uiTextLang,
   type ContentLang,
 } from "./lib/content-lang";
 export {
@@ -758,7 +759,12 @@ export {
   RunFactList,
   runTimelineBars,
   resolveRunDetailLabels,
+  formatRunCancellation,
   DEFAULT_RUN_DETAIL_LABELS,
+  DEFAULT_RUN_CANCELLATION_LABELS,
+  type RunCancellation,
+  type RunCancellationLabels,
+  type RunCancellationVia,
   type RunDetailLabels,
   type RunDetailLabelsInput,
   type RunFact,

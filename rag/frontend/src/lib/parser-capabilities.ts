@@ -9,7 +9,6 @@ import { t, type I18nKey } from "@/lib/i18n";
 // 未知の組合せは「判定しない」(null)へ倒し、誤警告を出さない。
 const PREPROCESS_MODALITY_TRANSFORMS: Record<string, { from: string; to: string }> = {
   office_to_pdf: { from: "office", to: "pdf" },
-  pdf_to_page_images: { from: "pdf", to: "image" },
   excel_to_jsonl: { from: "office", to: "text" },
   word_to_jsonl: { from: "office", to: "text" },
 };

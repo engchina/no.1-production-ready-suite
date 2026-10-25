@@ -667,6 +667,64 @@ for (const viewport of [
   });
 }
 
+// 中国語の回答の中の画面の文言（節の見出し・「根拠：」の行）は、回答の lang を継承せず日本語の字形で描く（#3349）。
+// 回答エンジンの書式（見出し・「・」の項目・「根拠：」の行）の合成の回答。
+const zhSectionTitle = "資料により確認できた事項";
+const zhSectionItem = "这个示例项目说明骨、直、角三个字的字形。";
+const zhStructuredAnswer = [
+  "这是一个用于测试的示例回答。",
+  zhSectionTitle,
+  `・${zhSectionItem}`,
+  "根拠：示例资料.txt",
+].join("\n");
+const zhStructuredMessages = [
+  { ...userMessage, message_id: "u-zh-s", content: zhQuestion },
+  {
+    ...assistantMessage,
+    message_id: "a-zh-s",
+    reply_to_message_id: "u-zh-s",
+    content: zhStructuredAnswer,
+    citations: [{ ...citationChunk, chunk_id: "ch-zh-s", text: zhExcerpt, file_name: "示例资料.txt" }],
+  },
+];
+
+for (const viewport of [
+  { name: "desktop", width: 1280 },
+  { name: "mobile", width: 375 },
+]) {
+  test(`中国語の回答の中の節の見出し・根拠の行は日本語の字形、回答の文は中国語の字形で描く（#3349） (${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await openPersistedConversation(page, viewport.width, zhStructuredMessages);
+
+    const answer = page.getByTestId("answer-text").filter({ hasText: zhSectionItem });
+    await expect(answer).toBeVisible();
+    const title = answer.getByRole("heading", { name: zhSectionTitle });
+    const item = answer.getByText(zhSectionItem, { exact: true });
+    const citation = answer.getByTestId("answer-citation-link").filter({ hasText: "根拠：示例资料.txt" });
+    await expect(title).toBeVisible();
+    await expect(citation).toBeVisible();
+    const nearestLang = (target: Locator) =>
+      target.evaluate((element) => element.closest("[lang]")?.getAttribute("lang") ?? null);
+    // 回答の文は回答の言語、画面の文言は画面の言語（最も近い lang が ja）。
+    expect(await nearestLang(item)).toBe("zh-Hans");
+    expect(await nearestLang(title)).toBe("ja");
+    expect(await nearestLang(citation)).toBe("ja");
+
+    const titleFonts = await renderedFontsOf(page, title, "Noto Sans JP Variable", zhSectionTitle);
+    expect(titleFonts.length).toBeGreaterThan(0);
+    expect(titleFonts.every((family) => family.startsWith("Noto Sans JP")), titleFonts.join(", ")).toBe(true);
+    const itemFonts = await renderedFontsOf(page, item, "Noto Sans SC Variable", zhSectionItem);
+    expect(itemFonts.length).toBeGreaterThan(0);
+    expect(itemFonts.every((family) => family.startsWith("Noto Sans SC")), itemFonts.join(", ")).toBe(true);
+    // 根拠の行の「根拠」（JP にある字）は JP の字形（JP に無い字だけが SC で補われる）。
+    const citationFonts = await renderedFontsOf(page, citation, "Noto Sans JP Variable", "根拠");
+    expect(citationFonts[0] ?? "", citationFonts.join(", ")).toMatch(/^Noto Sans JP/);
+
+    await expectNoPageOverflow(page);
+    await answer.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`chat-content-lang-chrome-${viewport.name}.png`) });
+  });
+}
+
 const longJapaneseAnswer =
   "テストデータの根拠によると、申請前に担当者と承認者を確認し、必要な資料をそろえて期限までに提出してください。";
 
