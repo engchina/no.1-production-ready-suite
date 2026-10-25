@@ -212,7 +212,7 @@ def test_users_other_than_system_admin_get_404_for_every_run_operation(people: P
     requests = [
         ("get", f"/api/runs/{run_id}", None),
         ("get", f"/api/runs/{run_id}/artifacts", None),
-        ("get", f"/api/runs/{run_id}/progress", None),
+        ("get", f"/api/runs/{run_id}/trace", None),
         ("put", f"/api/runs/{run_id}/feedback", {"rating": "helpful"}),
         ("post", f"/api/runs/{run_id}/replay", None),
         ("post", f"/api/runs/{queued.id}/cancel", None),

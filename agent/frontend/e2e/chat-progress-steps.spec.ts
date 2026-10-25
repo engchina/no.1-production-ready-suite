@@ -1,7 +1,7 @@
 /**
  * チャットの処理の経過（3 製品共通の ChatProgressStep。#1147）の、Agent の工程の定義の確認（#1359）。
  *
- * 処理の経過は Run の trace（span の木。#3226）の投影で、backend が記録した span のイベント（`progress_events`）で
+ * 処理の経過は Run の trace（span の木。#3226）の投影で、共通の span の表の snapshot（`GET /api/runs/{id}/trace`）で
  * 届く。画面は span の親子から木にし、工程の span の種類（`kind`）から i18n の名前と補足を付けるので、backend と同じ
  * 形のイベントから名前を付けた一覧を確かめる。画面を開かずに Playwright の test で関数を確かめる。
  */

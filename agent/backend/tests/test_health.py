@@ -2830,8 +2830,11 @@ def test_mcp_connection_oauth_client_credentials_adds_bearer_and_caches_token(
     assert gateway_calls[0]["headers"]["Authorization"] == "Bearer oauth-access-token"
     assert gateway_calls[1]["headers"]["Authorization"] == "Bearer oauth-access-token"
     assert gateway_calls[0]["headers"]["Mcp-Session-Id"] == "session-oauth-1"
-    # 旧 gateway の server_id は params に入れない（標準の MCP）。
-    assert gateway_calls[0]["json"]["params"] == {"name": "lookup_customer", "arguments": {}}
+    # 旧 gateway の server_id は params に入れない（標準の MCP）。trace の `_meta` は入れる
+    # （#3226）。
+    params = dict(gateway_calls[0]["json"]["params"])
+    assert set(params.pop("_meta")) == {"traceparent"}
+    assert params == {"name": "lookup_customer", "arguments": {}}
 
 
 def test_mcp_connection_list_tools_accepts_streamable_http_chunks(

@@ -13,10 +13,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from pr_backend_core.chat_progress import ChatProgressTerminalEvent
 from pytest import MonkeyPatch
 
 from app.features.agent import control_plane_store, runtime, storage_bootstrap
+from app.features.agent.chat_progress import run_progress_terminal
 from app.features.agent.runtime import (
     INTERRUPTED_ERROR_CODE,
     INTERRUPTED_MESSAGE,
@@ -138,10 +138,8 @@ def test_running_and_queued_runs_before_the_start_fail_and_are_saved(tmp_path: P
     # 途中の step も終わらせる（画面に実行中の step を残さない）。
     assert [step.status for step in running.steps] == [StepStatus.FAILED]
     assert running.steps[0].completed_at is not None
-    # チャットの処理の段階も失敗で終わる（#1359）。
-    terminal = running.progress_events[-1]
-    assert isinstance(terminal, ChatProgressTerminalEvent)
-    assert terminal.status == "failed"
+    # チャットの処理の経過も失敗で終わる（終端は Run の状態が正本。#1359・#3226）。
+    assert run_progress_terminal(running) == "failed"
     assert _failure_event_payload(reloaded.get_run("run_queued"))["previous_status"] == "queued"
     # 承認待ちは保存した SDK の状態から再開できるので残す。
     waiting = reloaded.get_run("run_waiting")

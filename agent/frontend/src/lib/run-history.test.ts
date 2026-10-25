@@ -133,22 +133,25 @@ const toolStep = (id: string, name: string, extra: Partial<RunState["steps"][num
     ...extra,
   }) as RunState["steps"][number];
 
+/** 共通の span の表の snapshot（`GET /api/runs/{id}/trace` の events。#3226 の案 A）。 */
+const SPAN_EVENTS = parseChatProgressEvents([
+  span(1, "a000000000000001", "agent.execute", { root: true }),
+  span(2, "a000000000000002", "gen_ai.chat", { parent_id: "a000000000000001", kind: "plan" }),
+  span(3, "a000000000000003", "gen_ai.execute_tool", {
+    parent_id: "a000000000000001",
+    kind: "tool",
+    params: { tool: "rag__rag_search", title: "ナレッジベースの検索", run_step: "s1" },
+    attributes: { "gen_ai.tool.name": "rag__rag_search" },
+  }),
+  span(4, "a000000000000004", "mcp.request", { parent_id: "a000000000000003" }),
+  span(5, "a000000000000005", "gen_ai.chat", { parent_id: "a000000000000001", kind: "respond" }),
+  { schema_version: 1, seq: 6, attempt: 0, target_id: "run-1", emitted_at: NOW, type: "terminal", status: "done" },
+]);
+
 function spanRun(overrides: Partial<RunState> = {}): RunState {
-  const events = parseChatProgressEvents([
-    span(1, "a000000000000001", "agent.execute", { root: true }),
-    span(2, "a000000000000002", "gen_ai.chat", { parent_id: "a000000000000001", kind: "plan" }),
-    span(3, "a000000000000003", "gen_ai.execute_tool", {
-      parent_id: "a000000000000001",
-      kind: "tool",
-      params: { tool: "rag__rag_search", title: "ナレッジベースの検索", run_step: "s1" },
-      attributes: { "gen_ai.tool.name": "rag__rag_search" },
-    }),
-    span(4, "a000000000000004", "mcp.request", { parent_id: "a000000000000003" }),
-    span(5, "a000000000000005", "gen_ai.chat", { parent_id: "a000000000000001", kind: "respond" }),
-    { schema_version: 1, seq: 6, attempt: 0, target_id: "run-1", emitted_at: NOW, type: "terminal", status: "done" },
-  ]);
   return run({
-    progress_events: events,
+    trace_store: true,
+    trace_id: TRACE,
     steps: [
       toolStep("s1", "rag__rag_search", {
         tool_call: {
@@ -165,7 +168,7 @@ function spanRun(overrides: Partial<RunState> = {}): RunState {
 
 describe("処理の経過（span の木。Issue 3226）", () => {
   it("span のイベントを木の順に並べ、実行の全体の span は行にせず、工程の種類で名前を付ける", () => {
-    const steps = runTimelineSteps(spanRun());
+    const steps = runTimelineSteps(spanRun(), SPAN_EVENTS);
     expect(steps.map((step) => [step.label, step.level ?? 0])).toEqual([
       ["進め方を決めました", 0],
       ["「ナレッジベースの検索」を実行しました", 0],
@@ -173,13 +176,13 @@ describe("処理の経過（span の木。Issue 3226）", () => {
       ["回答を作りました", 0],
     ]);
     expect(steps.map((step) => step.id)).not.toContain("a000000000000001");
-    expect(chatProgressTraceIdOf(spanRun().progress_events ?? [])).toBe(TRACE);
+    expect(chatProgressTraceIdOf(SPAN_EVENTS)).toBe(TRACE);
   });
 
   it("ツールの行は Run の step と結び、データの範囲の記録・引数と結果・表の結果を中身にする", () => {
     const state = spanRun();
-    expect(progressRunSteps(state.progress_events ?? [], state.steps).get("a000000000000003")?.id).toBe("s1");
-    const tool = runTimelineSteps(state, (step) => `表:${step.id}`)[1];
+    expect(progressRunSteps(SPAN_EVENTS, state.steps).get("a000000000000003")?.id).toBe("s1");
+    const tool = runTimelineSteps(state, SPAN_EVENTS, (step) => `表:${step.id}`)[1];
     expect(tool.children).toBe("表:s1");
     const fields = tool.details?.fields ?? [];
     // 内部名を先頭に出し（#2324）、共通の技術の値（Span name）を後ろに足す。
@@ -220,40 +223,38 @@ describe("処理の経過（span の木。Issue 3226）", () => {
         params: { tool: "write", rejected: true },
       }),
     ]);
-    const steps = runTimelineSteps(run({ progress_events: events }));
+    const steps = runTimelineSteps(run({ trace_store: true }), events);
     expect(steps.map((step) => [step.label, step.detail, step.status])).toEqual([
       ["承認の判断を受け取りました", "記録の登録", "done"],
       ["処理の実行", "承認されませんでした", "skipped"],
     ]);
   });
 
-  it("span の無い古い形式の記録は古い形式として扱い、行を作らない", () => {
-    const legacy = run({
-      progress_events: parseChatProgressEvents([
-        { schema_version: 1, seq: 1, attempt: 0, target_id: "run-1", emitted_at: NOW, type: "step", step_id: "plan", status: "done" },
-      ]),
-      steps: [toolStep("s1", "rag__rag_search")],
-    });
-    expect(runProgressIsLegacy(legacy)).toBe(true);
-    expect(runTimelineSteps(legacy)).toEqual([]);
-    // 記録の無い終わった Run（#1359 の前）も古い形式。実行中・受け付けただけ・終端だけの Run は古い形式ではない。
-    expect(runProgressIsLegacy(run({ status: "completed", progress_events: [] }))).toBe(true);
-    expect(runProgressIsLegacy(run({ status: "running", progress_events: [] }))).toBe(false);
+  it("共通の span の表に書く前の終わった Run は古い形式として扱い、span の無い記録は行を作らない", () => {
+    // 表に書く前の Run（`trace_store` が無い）が終わっていれば古い形式（画面は古い形式の案内）。
+    expect(runProgressIsLegacy(run({ status: "completed" }))).toBe(true);
+    expect(runProgressIsLegacy(run({ status: "failed", trace_store: false }))).toBe(true);
+    // 実行中・受け付けただけの Run と、表に書く Run（開始の前に停止した Run を含む）は古い形式ではない。
+    expect(runProgressIsLegacy(run({ status: "running" }))).toBe(false);
     expect(runProgressIsLegacy(run({ status: "queued" }))).toBe(false);
-    const terminalOnly = parseChatProgressEvents([
-      { schema_version: 1, seq: 1, attempt: 0, target_id: "run-1", emitted_at: NOW, type: "terminal", status: "cancelled" },
-    ]);
-    expect(runProgressIsLegacy(run({ status: "cancelled", progress_events: terminalOnly }))).toBe(false);
+    expect(runProgressIsLegacy(run({ status: "cancelled", trace_store: true }))).toBe(false);
     expect(runProgressIsLegacy(spanRun())).toBe(false);
+    // span の名前の無い段だけのイベント（#3226 の前の形）は行にしない。
+    const stepsOnly = parseChatProgressEvents([
+      { schema_version: 1, seq: 1, attempt: 0, target_id: "run-1", emitted_at: NOW, type: "step", step_id: "plan", status: "done" },
+    ]);
+    expect(runTimelineSteps(spanRun(), stepsOnly)).toEqual([]);
+    expect(runTimelineSteps(spanRun(), [])).toEqual([]);
   });
 
   it("チャットの処理の経過（イベント → 名前）と実行の詳細の行は同じ", () => {
     const state = spanRun();
     const live = runProgressSteps(
       state,
-      chatProgressStepsFromEvents(state.progress_events ?? [], agentProgressDefinitions(state.steps), state.id)
+      SPAN_EVENTS,
+      chatProgressStepsFromEvents(SPAN_EVENTS, agentProgressDefinitions(state.steps), state.id)
     );
-    expect(runTimelineSteps(state)).toEqual(live.map(chatProgressTimelineStep));
+    expect(runTimelineSteps(state, SPAN_EVENTS)).toEqual(live.map(chatProgressTimelineStep));
   });
 
   it("長い結果は先頭だけにして省略の印を付け、ツールの呼び出しでなければ詳細を付けない", () => {

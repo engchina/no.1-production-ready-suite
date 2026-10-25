@@ -9,8 +9,9 @@ import { expectProgressTimerMonotonic, startProgressTimerSampler } from "./fixtu
 import { expectSpinnerStable } from "./fixtures/spinner-stability";
 
 // #1147: チャットの回答の場所に、Run の処理の経過を共有の ChatProgress（3 製品共通。#1145）で出す。処理の経過は Run の
-// trace（span の木。#3226）の投影で、backend が記録した span のイベント（#1359）を実行中は SSE で受け取り、承認待ちの
-// 間も途絶えずに進むことを確かめる。「トレースの詳細」の 2 つ目の表示は無く、「処理の詳細」には Trace ID だけを出す。
+// trace（span の木。#3226）の投影で、共通の span の表の snapshot（`GET /api/runs/{id}/trace`。案 A）を実行中は読み直し、
+// 承認待ちの間も途絶えずに進むことを確かめる。「トレースの詳細」の 2 つ目の表示は無く、「処理の詳細」には Trace ID だけを
+// 出す。
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
@@ -222,7 +223,7 @@ for (const viewport of VIEWPORTS) {
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`progress-plan-${viewport.name}-${theme}.png`) });
 
-      // 2. ツールを呼んでいる（SSE で span が増える）。終わったモデルの呼び出しは「進め方を決めました」。
+      // 2. ツールを呼んでいる（読み直しで span が増える）。終わったモデルの呼び出しは「進め方を決めました」。
       run.steps = [toolStep("step-search", "rag__rag_search", "running", { completed_at: null })];
       log
         .step("chat-1", "done", { kind: "plan" })
@@ -274,7 +275,7 @@ for (const viewport of VIEWPORTS) {
       await expectProgressTimerMonotonic(page, 3);
 
       // 4. 承認後に再開して完了。待った区間は再開の区間の span で残る（#3226）。回答の上に「処理の経過」を閉じて
-      // 出す（実行中は開く。#2096 / #2121）。承認待ちの間も配信（SSE）は続くので、開き直さなくても終端が届き、会話を
+      // 出す（実行中は開く。#2096 / #2121）。承認待ちの間も読み直しは続くので、開き直さなくても終端が届き、会話を
       // 取り直して回答を出す（#1359）。
       run.status = "completed";
       run.steps = [
@@ -332,7 +333,7 @@ for (const viewport of VIEWPORTS) {
       // ツールを求めたモデルの呼び出しは、進め方の検討として残る。
       await expect(turn.getByTestId("chat-progress-step-chat-2")).toContainText("進め方を決めました");
       // 終端が届いたら、承認待ちの後も会話を取り直して回答を出す（開き直さない）。
-      expect(mockApi.requests.some((request) => request.path === `/api/runs/${RUN_ID}/progress/stream`)).toBe(true);
+      expect(mockApi.requests.some((request) => request.path === `/api/runs/${RUN_ID}/trace`)).toBe(true);
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`progress-done-${viewport.name}-${theme}.png`) });
     });
@@ -417,14 +418,13 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   await page.getByTestId("run-timeline-section").screenshot({path: testInfo.outputPath("history-process.png")});
 });
 
-test("span の無い古い形式の記録は、処理の経過の位置に古い形式の案内を出す", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
+test("共通の span の表に書く前の古い形式の記録は、処理の経過の位置に古い形式の案内を出す", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
   const {run} = seedRunningRun(mockApi);
   run.status = "completed";
-  // #3226 の前の段のイベント（span の名前が無い）。
-  run.progress_events = [
-    {schema_version: 1, type: "step", seq: 1, target_id: RUN_ID, attempt: 0, emitted_at: iso(-1_000), step_id: "plan", status: "done"},
-    {schema_version: 1, type: "terminal", seq: 2, target_id: RUN_ID, attempt: 0, emitted_at: iso(-1_000), status: "done"},
-  ];
+  // #3226 の案 A の前の Run（span を表に書いていない）。処理の経過は読まない。
+  run.trace_store = false;
+  run.trace_id = null;
+  run.progress_events = [];
   run.artifacts = [{ id: "answer-legacy", kind: "answer", name: "回答", content: { text: "合成の回答です。" } }];
   run.events = [{id: "end", run_id: RUN_ID, type: "run.completed", message: "", payload: {}, created_at: iso(0)}];
   await page.goto("/chat");
@@ -440,5 +440,32 @@ test("span の無い古い形式の記録は、処理の経過の位置に古い
   await expect(page.getByTestId("run-summary")).toBeVisible();
   await expect(page.getByTestId("run-timeline-legacy")).toContainText("この実行は古い形式の記録のため、処理の経過を表示できません。");
   await expectNoHorizontalOverflow(page);
+  expect(mockApi.requests.some((request) => request.path === `/api/runs/${RUN_ID}/trace`)).toBe(false);
   await page.getByTestId("run-timeline-section").screenshot({path: testInfo.outputPath("history-legacy.png")});
+});
+
+test("共通の span の表に書けなかった span がある実行は、一部だけの記録の案内を出す", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
+  const {run, progress} = seedRunningRun(mockApi);
+  progress.step("chat-1", "done", {kind: "respond"});
+  run.status = "completed";
+  // backend が実行を確定したときに残した、表に書けなかった span の数（#3226 の案 A）。
+  run.trace_dropped_spans = 2;
+  run.artifacts = [{ id: "answer-partial", kind: "answer", name: "回答", content: { text: "合成の回答です。" } }];
+  run.events = [{id: "end", run_id: RUN_ID, type: "run.completed", message: "", payload: {}, created_at: iso(0)}];
+  await page.goto("/chat");
+  await openThread(page);
+  const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+  await expect(turn.getByText("合成の回答です。")).toBeVisible();
+  // 書けた span の経過は出し、全部ではないことを経過の直下に出す。
+  await expect(turn.getByTestId("chat-progress")).toHaveAttribute("data-chat-progress-state", "done");
+  await expect(turn.getByTestId("chat-progress-partial")).toHaveText("一部の処理だけを記録しています。");
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({path: testInfo.outputPath("chat-partial.png")});
+
+  await page.goto(`/runs?id=${RUN_ID}`);
+  await expect(page.getByTestId("run-summary")).toBeVisible();
+  await expect(page.getByTestId("run-timeline-section-summary")).toBeVisible();
+  await expect(page.getByTestId("run-timeline-partial")).toHaveText("一部の処理だけを記録しています。");
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({path: testInfo.outputPath("history-partial.png"), fullPage: true});
 });

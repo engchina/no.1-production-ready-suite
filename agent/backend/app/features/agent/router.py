@@ -31,7 +31,6 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     File,
-    Header,
     HTTPException,
     Query,
     Request,
@@ -52,12 +51,7 @@ from pr_backend_core.chat_history_window import (
     chat_history_days,
     within_chat_history,
 )
-from pr_backend_core.chat_progress import (
-    CHAT_PROGRESS_SSE_HEADERS,
-    ChatProgressPage,
-    chat_progress_page,
-    chat_progress_sse_response,
-)
+from pr_backend_core.chat_progress import CHAT_PROGRESS_SSE_HEADERS
 from pr_backend_core.logging import safe_exception_fields
 from pr_system_settings.answer_notice import build_answer_notice_router
 from pr_system_settings.auth.visibility import (
@@ -131,6 +125,7 @@ from app.features.agent.automations import (
 )
 from app.features.agent.automations import fire as fire_automation
 from app.features.agent.chat_attachments import chat_attachment_service
+from app.features.agent.chat_progress import run_trace_events
 from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
 from app.features.agent.confirmation import (
     SOURCE_AGENT,
@@ -307,6 +302,7 @@ from app.features.agent.tools import (
     mcp_tool_definition,
     tool_registry,
 )
+from app.features.agent.trace_spans import trace_spans
 from app.features.agent.usage import (
     DEFAULT_TIMEZONE,
     USAGE_PERIOD_DAYS,
@@ -358,6 +354,7 @@ DRAFT_RUN_FORBIDDEN_MESSAGE = (
 )
 AGENT_FORBIDDEN_MESSAGE = "この業務 Agent を利用する権限がありません。"
 RUN_NOT_FOUND_MESSAGE = "実行が見つかりません。"
+RUN_TRACE_UNAVAILABLE_MESSAGE = "処理の経過を読み込めませんでした。時間をおいて再度お試しください。"
 APPROVAL_NOT_FOUND_MESSAGE = "承認の依頼が見つかりません。"
 
 PASSPHRASE_CONFIG_KEYS = frozenset({"pass_phrase", "passphrase", "key_password"})
@@ -3224,46 +3221,65 @@ def _readable_run(request: Request, run_id: str) -> RunState:
     return run
 
 
-@router.get("/runs/{run_id}/progress", response_model=ApiResponse[ChatProgressPage])
-async def get_run_progress(
+class RunTraceData(BaseModel):
+    """Run の処理の経過（共通の span の表の snapshot。#3226 の案 A）。"""
+
+    target_id: str
+    # 実行の全体の span の trace id（受け付けただけの Run・開始の前に終わった Run は無し）。
+    trace_id: str | None = None
+    # 処理の経過のイベント（span の段と、終わった Run の終端。3 製品共通の形）。
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    # 表に書けなかった span の数（1 以上なら画面は「一部の処理だけを記録しています。」）。
+    dropped_spans: int = 0
+
+
+def _run_trace_viewer(request: Request, run: RunState) -> str | None:
+    """表の span を絞る利用者（None は全員の span。system_admin）。
+
+    Run の判定（`_readable_run`）を通った後に呼ぶ。system_admin 以外は、Run を実行した利用者が
+    持ち主の span だけ（Run の span と、呼び先の MCP のサービストークンの `sub` の span）。会話の
+    持ち主が system_admin の実行した Run を開いたときも、その Run の span だけを読む（ほかの利用者が
+    同じ trace に書いた span は出さない）。
+    """
+    if _sees_all_users(request):
+        return None
+    return run.created_by_user_uuid or ""
+
+
+@router.get("/runs/{run_id}/trace", response_model=ApiResponse[RunTraceData])
+async def get_run_trace(
     run_id: str,
     request: Request,
-    since: Annotated[int, Query(ge=0)] = 0,
     _: None = Depends(require_viewer),
-) -> ApiResponse[ChatProgressPage]:
-    """チャットの処理の段階のイベント（`since` より後。3 製品共通の契約。#1359）。
+) -> ApiResponse[RunTraceData]:
+    """Run の処理の経過（共通の span の表の snapshot。3 製品共通の形。#3226 の案 A）。
 
-    SSE（`/progress/stream`）が使えないときの polling と、途絶え・番号の飛びの取り直しに使う。
+    Run を今の判定で開き（ほかの利用者の Run は 404）、その Run の trace id だけで表を読む。最終の
+    状態は Run の状態（正本）で、表で実行中のままの span は Run の終端に合わせて閉じる。工程の詳細
+    （ツールの引数と結果など）は Run から足す。画面は実行中に読み直す
+    （`useTraceProgressSnapshot`）。
     """
     run = await run_in_threadpool(_readable_run, request, run_id)
-    return ApiResponse(data=chat_progress_page(run.id, run.progress_events, since=since))
-
-
-@router.get("/runs/{run_id}/progress/stream")
-async def stream_run_progress(
-    run_id: str,
-    request: Request,
-    since: Annotated[int | None, Query(ge=0)] = None,
-    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
-    _: None = Depends(require_viewer),
-) -> Response:
-    """チャットの処理の段階のイベントの SSE（3 製品共通の契約。#1359）。
-
-    `id:` は記録の番号で、ブラウザは `Last-Event-ID`（最初は `since`）で続きから受け取る。
-    保存先の Run を 1 秒ごとに読み直して送るので、承認待ちの間も heartbeat で途絶えず、
-    runtime-dispatcher が実行していても今の polling と同じ一貫性で届く。終わった Run を続きから
-    求めたら 204。
-    """
-    await run_in_threadpool(_readable_run, request, run_id)
-
-    async def fetch(cursor: int) -> ChatProgressPage | None:
+    spans: list[Any] = []
+    if run.trace_id is not None:
         try:
-            run = await run_in_threadpool(runtime_repository.get_run, run_id)
-        except KeyError:
-            return None
-        return chat_progress_page(run.id, run.progress_events, since=cursor)
-
-    return await chat_progress_sse_response(fetch, since=since, last_event_id=last_event_id)
+            spans = await run_in_threadpool(
+                trace_spans.fetch, run.trace_id, viewer_user_uuid=_run_trace_viewer(request, run)
+            )
+        except Exception as exc:
+            logger.warning(
+                "agent_run_trace_read_failed",
+                extra={"run_id": run.id, **safe_exception_fields(exc)},
+            )
+            raise HTTPException(status_code=503, detail=RUN_TRACE_UNAVAILABLE_MESSAGE) from exc
+    return ApiResponse(
+        data=RunTraceData(
+            target_id=run.id,
+            trace_id=run.trace_id,
+            events=run_trace_events(run, spans),
+            dropped_spans=run.trace_dropped_spans,
+        )
+    )
 
 
 @router.post("/runs/{run_id}/cancel", response_model=ApiResponse[RunState])

@@ -757,16 +757,25 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 `DELETE /threads/{thread_id}`（#1817。作った利用者だけ）。削除は Run を監査・フィードバック・評価・利用量のために残し、会話からの参照
 （`thread_id`）だけを外す（元の会話は `metadata.deleted_thread_id`）。回答の作成中・承認待ちの Run がある会話は 409。
 回答の処理の経過（画面の `ChatProgress` と実行の詳細の処理の経過。#1359）は Run の trace（span の木）の投影で（#3226）、
-3 製品共通の追記型のイベント（`pr_backend_core.chat_progress`）で配る。組み込み Runtime の実行の区間（`agent.execute` /
-`agent.resume`）の `operation_trace(listener=...)` が span の開始・表示用のデータの変更・終了を知らせ、repository が Run の
-lock の中で `RunState.progress_events` に記録する（`record_builtin_span`。checkpoint の snapshot に入るので保存先に関係なく
-残る）。工程の span は表示用のデータ（`SpanDisplay`）で種類を持つ: モデルの呼び出し（`gen_ai.chat`）は応答がツールを求めたら
+span は共通の span の表（`PLATFORM_TRACE_SPANS`。案 A）にある。組み込み Runtime の実行の区間（`agent.execute` /
+`agent.resume`）の `operation_trace(listener=...)` が span の開始・表示用のデータの変更・終了を知らせ、process の書き手
+（`features/agent/trace_spans.py`。保存先が Oracle なら共通の `TraceSpanWriter` を API の lifespan と runtime dispatcher の
+起動の後に始め、終了で止める。memory / file の保存先は同じ形の span を process の中に持つ）が、Run を実行した利用者を持ち主に
+して表に書く。主の処理は queue に積むだけで DB を待たない。表に入れないものだけを Run に残す（Run の lock の中。
+`record_builtin_span`）: 実行の全体の span の `trace_id`、工程の詳細 `span_details`（span id → ツールの内部名・引数と結果）、
+記録した待ちの回 `trace_wait_rounds`、実行の区切りを確定したときに書けなかった span の数 `trace_dropped_spans`。終わった Run・
+置き換わった実行の知らせ（停止の後に終わった span）は表に書かず、表で実行中のまま残った span は Run の終端に合わせて閉じる。
+工程の span は表示用のデータ（`SpanDisplay`）で種類を持つ: モデルの呼び出し（`gen_ai.chat`）は応答がツールを求めたら
 `plan`、最終の回答なら `respond`（呼び出しの後に決める）、ツールの呼び出し（`gen_ai.execute_tool`）は `tool`（実行しなかった
 ツール〔却下・方針で拒否・上限・引数の誤り〕も `skipped` で残す）、承認・回答前の確認の待ちは、待ちが終わって再開した区間で
 終わった区間の span（`agent.approval_wait` / `agent.confirmation_wait`）にする（待っている間は見出しの状態とカードで示す）。
-終わりは Run が終わったときの完了・失敗・停止の終端。画面は会話の取得に入っている記録に加えて、実行中は
-`GET /runs/{run_id}/progress/stream`（SSE。`Last-Event-ID` / `since` の続きから。承認待ちの間も heartbeat）で受け取り、
-使えなければ `GET /runs/{run_id}/progress?since=` の polling に縮退する（共通の `useChatProgressStream`）。
+再開の区間は同じ trace の、前の区間の子。最終の状態（完了・失敗・停止）は Run の状態が正本。画面は
+`GET /runs/{run_id}/trace`（Run を今の判定で開き、その Run の trace id だけで表を読む。system_admin は同じ trace の全員の span、
+それ以外は Run を実行した利用者の span。工程の詳細は Run から足し、Run の終端のイベントで閉じる）を共通の
+`useTraceProgressSnapshot` で読み、実行中は読み直す。書けなかった span があれば「一部の処理だけを記録しています。」、表に書く
+前の Run（`trace_store` が無い）は古い形式の案内を出す。MCP の呼び出し（`mcp.request`）は traceparent を HTTP header と
+JSON-RPC の `params._meta` の両方で送り、呼び先（RAG / NL2SQL）がサービストークンの要求の traceparent を親にすると、呼び先の
+span（持ち主はサービストークンの `sub` = Run の利用者）が Agent の木の `mcp.request` の下に出る。
 支援タスクの状態（#1243）: 組み込み Runtime は Run の終わり（承認待ちで止めるときも）に、ツールの呼び出しから
 支援タスクの状態を成果物（`kind="support_task"`・「支援タスクの状態」、`schema_version` 1）に残す。項目は会話・持ち主・
 目的（会話の最初の質問）、分かっている条件（`rag_search` に渡した `conditions` と出力の `guide.known_conditions`。

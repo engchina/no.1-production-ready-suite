@@ -33,6 +33,7 @@ from mcp_support import (
 from pr_backend_core.chat_progress import ChatProgressStepEvent
 from pydantic import ValidationError
 from pytest import MonkeyPatch
+from trace_support import run_progress_events
 
 from app.features.agent import builtin_runtime, router
 from app.features.agent.builtin_runtime import ModelTarget
@@ -426,7 +427,9 @@ def test_agent_confirmation_waits_and_the_answer_resumes_the_same_run(
     assert [option.label for option in confirmation.items[0].options] == ["今月", "今年度"]
     assert run.approvals == []
     # 待っている間は処理の経過に待ちの行を出さない（見出しの状態とカードで示す。#3226）。
-    assert not any(getattr(event, "kind", None) == "confirmation" for event in run.progress_events)
+    assert not any(
+        getattr(event, "kind", None) == "confirmation" for event in run_progress_events(run)
+    )
 
     outcome = runtime_repository.decide_confirmation(
         run.id,
@@ -444,7 +447,7 @@ def test_agent_confirmation_waits_and_the_answer_resumes_the_same_run(
     # ツールの呼び出しは処理の経過に出さない。
     waits = [
         event
-        for event in resumed.progress_events
+        for event in run_progress_events(resumed)
         if isinstance(event, ChatProgressStepEvent) and event.name == "agent.confirmation_wait"
     ]
     assert [(event.kind, event.status, event.params) for event in waits] == [
@@ -452,7 +455,7 @@ def test_agent_confirmation_waits_and_the_answer_resumes_the_same_run(
     ]
     assert not any(
         (getattr(event, "params", None) or {}).get("tool") == CONFIRMATION_TOOL
-        for event in resumed.progress_events
+        for event in run_progress_events(resumed)
     )
     # 確認のツールの呼び出しも step（監査）に残る。
     assert any(
