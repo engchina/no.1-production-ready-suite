@@ -11,7 +11,6 @@ import unicodedata
 from collections.abc import Callable, Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
-from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -32,13 +31,15 @@ from rag_engine.chunking import (
     DocumentChunk,
     load_latest_or_source_chunk_run,
 )
-from rag_engine.config import RRF_K, Settings
+from rag_engine.config import DEFAULT_TIMEZONE, RRF_K, Settings
 from rag_engine.knowledge.classification import (
     DEFAULT_CATEGORY_VALUE,
     LARGE_CATEGORIES,
     MIDDLE_CATEGORIES,
     ClassificationFilter,
+    business_today,
     classification_filter_from_values,
+    with_effective_as_of,
 )
 from rag_engine.knowledge.domain_keywords import load_domain_keywords
 from rag_engine.models.storage import (
@@ -790,7 +791,7 @@ def check_adb_hybrid_search_ready(
                 _adb_embedding_dimensions(settings),
                 preferred_engine_ids,
                 retrieval_scope=retrieval_scope,
-                classification_filter=classification_filter,
+                classification_filter=with_effective_as_of(classification_filter, business_today(settings.timezone)),
             )
             legacy_documents = _legacy_schema_document_count(connection, chunk_run_id, retrieval_scope=retrieval_scope)
     except Exception as exc:
@@ -830,7 +831,8 @@ def search_adb_hybrid_chunks(
         return HybridSearchResult(child_chunks=[], all_chunks=[])
     preferred_engine_ids = tuple(preferred_engine_ids)
     scope = normalize_retrieval_scope(retrieval_scope)
-    category_filter = classification_filter or classification_filter_from_values()
+    # 基準日はこの検索の初めに 1 回だけ決める(#3249。未指定なら設定の時間帯の今日)。
+    category_filter = with_effective_as_of(classification_filter or classification_filter_from_values(), business_today(settings.timezone))
 
     try:
         adb_settings = _connection_settings(settings)
@@ -2365,11 +2367,13 @@ def _classification_filter_sql(
 ) -> tuple[str, dict[str, str]]:
     """分類と有効期間の WHERE 句を返す。
 
-    有効期間は as_of（未指定なら今日）で常に絞り、検索と同じ query で pre-filter する。
+    有効期間は as_of で常に絞り、検索と同じ query で pre-filter する。as_of は検索の入口
+    （``search_adb_hybrid_chunks`` / ``check_adb_hybrid_search_ready``）が決めて渡す。直接呼ばれて未指定のときは
+    既定の時間帯（``DEFAULT_TIMEZONE``）の今日にする（OS の時間帯は使わない。#3249）。
     effective_from / effective_to が無い chunk は無界として除外しない。終了日は排他的。
     ISO 日付は文字列比較で時系列順になるため、JSON_VALUE の文字列をそのまま比較する。
     """
-    as_of = (classification_filter.as_of if classification_filter is not None else "") or date.today().isoformat()
+    as_of = with_effective_as_of(classification_filter, business_today(DEFAULT_TIMEZONE)).as_of
     clauses = [
         f"COALESCE(JSON_VALUE({alias}.metadata_json, '$.document.effective_from'), :as_of) <= :as_of",
         f"COALESCE(JSON_VALUE({alias}.metadata_json, '$.document.effective_to'), :as_of_open_end) > :as_of",

@@ -5,7 +5,6 @@ import json
 import re
 import unittest
 from dataclasses import replace
-from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -36,8 +35,8 @@ from rag_engine.chunking import (
     ChunkingResult,
     DocumentChunk,
 )
-from rag_engine.config import get_settings
-from rag_engine.knowledge.classification import classification_filter_from_values
+from rag_engine.config import DEFAULT_TIMEZONE, get_settings
+from rag_engine.knowledge.classification import business_today, classification_filter_from_values
 from rag_engine.retrieval.inquiry_conditions import FILE_DATA_PROFILE, InquiryMetadataFilter, parse_inquiry_conditions
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
 
@@ -556,13 +555,13 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertEqual(binds["classification_small_category"], "倉庫連携")
 
     def test_filter_sql_always_limits_to_effective_window_as_of(self):
-        # 日付未設定の chunk は除外せず、as_of は空なら今日、指定日は文字列比較で終了日を排他にする (#893)。
+        # 日付未設定の chunk は除外せず、as_of は空なら既定の時間帯の今日 (#3249)、指定日は文字列比較で終了日を排他にする (#893)。
         sql, binds = _classification_filter_sql("c", classification_filter_from_values(as_of="2026-04-01"))
         self.assertIn("COALESCE(JSON_VALUE(c.metadata_json, '$.document.effective_from'), :as_of) <= :as_of", sql)
         self.assertIn("COALESCE(JSON_VALUE(c.metadata_json, '$.document.effective_to'), :as_of_open_end) > :as_of", sql)
         self.assertNotIn("classification", sql)
         self.assertEqual(binds, {"as_of": "2026-04-01", "as_of_open_end": "9999-12-31"})
-        self.assertEqual(_classification_filter_sql("c", None)[1]["as_of"], date.today().isoformat())
+        self.assertEqual(_classification_filter_sql("c", None)[1]["as_of"], business_today(DEFAULT_TIMEZONE).isoformat())
         with self.assertRaises(ValueError):
             classification_filter_from_values(as_of="2026/04/01")
 

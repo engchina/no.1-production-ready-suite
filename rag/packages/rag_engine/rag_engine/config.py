@@ -31,6 +31,8 @@ DEFAULT_CHICAGO_REGION = "us-chicago-1"
 DEFAULT_OSAKA_REGION = "ap-osaka-1"
 DEFAULT_OCI_CONFIG_FILE = "~/.oci/config"
 DEFAULT_OCI_PROFILE = "DEFAULT"
+# 「今日」(検索の基準日の既定)を決める時間帯(#3249)。backend の共通の設定 `PLATFORM_TIMEZONE` の既定と同じ。
+DEFAULT_TIMEZONE = "Asia/Tokyo"
 OCI_INFERENCE_ENDPOINT_TEMPLATE = "https://inference.generativeai.{region}.oci.oraclecloud.com"
 DEFAULT_OCI_VISION_ENDPOINT = OCI_INFERENCE_ENDPOINT_TEMPLATE.format(region=DEFAULT_CHICAGO_REGION)
 OPENAI_RESPONSES_LLM_API_MODE = "openai_responses"
@@ -414,6 +416,8 @@ class Settings:
     # 根拠で条件が決まったときの業務ガイドの手順の計画（#2689）。backend が決まり方ごとに前もって作る。
     # (決まった条件の (id, 値) の列, 残る手順の (id, 必須か) の列, 業務ガイドのルールの id, そのルールの本文)。
     evidence_plans: tuple[tuple[tuple[tuple[str, str], ...], tuple[tuple[str, bool], ...], str, str], ...] = ()
+    # 「今日」(検索の基準日の既定)を決める IANA の時間帯(#3249。`PLATFORM_TIMEZONE`)。OS の時間帯は使わない。
+    timezone: str = DEFAULT_TIMEZONE
 
     @property
     def vision_model(self) -> str:
@@ -649,6 +653,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         default_vision_llm=default_vision_llm,
         default_answer_llm=default_answer_llm,
         answer_images_enabled=_env_bool(env, "RAG_ENGINE_ANSWER_IMAGES", False),
+        timezone=env.get("PLATFORM_TIMEZONE", "").strip() or DEFAULT_TIMEZONE,
     )
 
     if "adb_settings" not in overrides and all(env.get(key) for key in ("ADB_OCID", "ADB_WALLET_PASSWORD", "ADB_DB_PASSWORD")):

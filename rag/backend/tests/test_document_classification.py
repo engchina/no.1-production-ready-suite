@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from app.api.routes import documents as documents_route
 from app.clients.oracle import OracleClient, _classification_where, _oracle_retrieval_where
+from app.config import settings_today
 from app.main import app
 from app.rag.classification_normalization import normalize_document_classifications
 from app.schemas.classification import category_label, normalize_category_value
@@ -183,11 +184,14 @@ def test_retrieval_where_filters_classification_by_label_and_effective_period() 
 
 
 def test_retrieval_where_always_applies_effective_period_with_today() -> None:
-    """基準日を指定しなくても、期間外の文書は今日を基準に除外する(rag_poc と同じ)。"""
+    """基準日を指定しなくても、期間外の文書は今日を基準に除外する(rag_poc と同じ)。
+
+    今日は共通の設定の時間帯の今日(OS の時間帯の ``date.today()`` ではない。#3249)。
+    """
     sql, binds = _oracle_retrieval_where({})
 
     assert "'$.effective_to'), '9999-12-31') > :filter_as_of" in sql
-    assert binds["filter_as_of"] == date.today().isoformat()
+    assert binds["filter_as_of"] == settings_today().isoformat()
 
 
 class FakeDocumentOracle:
@@ -262,8 +266,8 @@ async def test_classification_is_saved_and_filters_documents_on_real_oracle() ->
     assert saved.classification is not None
     assert saved.classification.large_category == "経理"
 
-    async def matches(filters: dict[str, str]) -> bool:
-        clauses, binds = _classification_where(filters)
+    async def matches(filters: dict[str, str], *, effective_period: bool = True) -> bool:
+        clauses, binds = _classification_where(filters, effective_period=effective_period)
         row = await oracle._fetch_one(  # noqa: SLF001 - 述語を実 DB で評価する
             "SELECT COUNT(*) AS count_value FROM rag_documents d "
             "WHERE d.document_id = :document_id AND " + " AND ".join(clauses),
@@ -278,6 +282,8 @@ async def test_classification_is_saved_and_filters_documents_on_real_oracle() ->
     assert not await matches({"as_of": "2026-03-31"})
     # 終了日は排他的。
     assert not await matches({"as_of": "2027-04-01"})
+    # ID で読む入口は有効期間で絞らない(#3249)。期間の外の基準日でも分類の条件だけで一致する。
+    assert await matches({"large_category": "経理", "as_of": "2027-04-01"}, effective_period=False)
 
     cleared = await oracle.save_document_classification(document.id, DocumentClassification())
     assert cleared.classification is None
