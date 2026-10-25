@@ -287,7 +287,7 @@ function FullPageRouteLoadingFallback() {
 
 function RouteLoadingFallback() {
   return (
-    <PageLoadingState wide label={t("app.route.loading")} operationKey="route-loading" testId="route-loading" />
+    <PageLoadingState label={t("app.route.loading")} operationKey="route-loading" testId="route-loading" />
   );
 }
 

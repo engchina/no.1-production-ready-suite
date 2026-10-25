@@ -1348,6 +1348,7 @@ QA に事前共有してください。**96点あります。**
 | 159 | **チャットの処理の経過で、実行中の段階が始まった時点で開始順の位置に出て、その場で状態だけが変わる。今の段階を包む実行中の親の工程も、開始順の位置に回さない実行中の印（`CirclePlay`）で出る**（#2840。`ChatProgress`、`RunTimeline` の `spinRunning`） | 実行中は「終わった段階」と「最も内側の実行中の段階 1 行」だけを出し、実行中の親の工程は出なかった。入れ子の工程（親の中の子）では子だけが字下げされた行で出て、親が終わると親の行が子の上に差し込まれ、一覧が入れ替わって見えた → 始まった段階（実行中・終わった段階）を開始順に 1 本で並べ、今の段階の行（スピナー・経過時間）をその位置に置く。一度出た行は消えず、位置も変わらない。動くスピナーは今の段階の 1 つだけ（§3.7）。「N ステップ完了」の数・`<testId>-current` の行・終端後の一覧は変えない | GitHub Actions の steps・AG-UI の STEP_STARTED / STEP_FINISHED と同じく、段階は始まった位置で状態だけを変える（行を動かさない） |
 | 160 | **3 製品のチャットで、system_admin が他の利用者の会話を開くと、入力欄の代わりに閲覧だけの案内が出て、会話の履歴の行の「名前の変更」が出なくなる**（#3244。`ChatReadOnlyNotice`・`useChatHistoryActions` の `canRename`。`ChatComposer` の `notice` を削除） | 入力欄の直上に「この会話の持ち主にも、回答と途中の結果が見えます」（#1954）を出して送れた。行の「名前の変更」も出た → 入力欄の代わりに info の `Banner`（見出し「他の利用者の会話です（閲覧のみ）」・本文は backend の 403 の文と同じ）を出し、回答の作成中・処理中なら案内の中に「停止」を置く。会話の履歴の行は「削除」だけ。自分の会話・新しい会話は今までどおり | system_admin が他の利用者のデータにできるのは閲覧と運用の操作だけ（利用者の判断。#1928 を置き換え）。system_admin の権限で作った内容が持ち主の会話に入るのを防ぐ。3 製品で同じ部品・同じ文にする |
 | 161 | **Noto Sans JP に無い簡体字・繁体字・香港の字が、端末の書体ではなく自前ホストの Noto Sans SC → TC → HK で描かれる**（#3292。`--font-sans` / `--font-mono`） | `"Noto Sans JP", "Roboto", …`（JP に無い字は端末の書体に任せ、字形がそろわない・豆腐になる）→ `"Noto Sans JP", "Noto Sans SC", "Noto Sans TC", "Noto Sans HK", "Roboto", …`（等幅も Google Sans Code → JP の後ろに同じ順） | JP の字形を優先したまま、中国語の資料・質問・回答の字を端末によらずそろえる。JP にある字の見た目は変わらない |
+| 162 | **DB の状態の確認・ログインの確認・NL2SQL の公開ルートの読み込み中の表示が、画面と同じ全幅で出る**（#3311。`PageLoadingState`） | 本文の最大幅（1440px）の中央寄せで出て、読み込み後に全幅の画面へ広がり左右の端がずれた → 常に `PageBody wide` で出し、読み込み後の画面と同じ幅にする | 3 製品の画面はすべて全幅。Skeleton は読み込み後の配置を先に取り、読み込みの前後で配置を動かさない |
 
 確認カードの質問見出しは、青い外枠を表示しない。読み上げのための自動フォーカスと操作部品のキーボードフォーカス表示は維持する（#3118）。
 
@@ -1429,6 +1430,7 @@ QA に事前共有してください。**96点あります。**
 | `ProcessFailureNotice` / `processFailureDetails` / `processFailureFacts` / `failedStepName`（#2342） | **新規 export。** 3 製品のチャットの回答・SQL の生成と実行・Run・DB 管理チャットの文の失敗と実行の詳細の失敗を、同じ失敗のカード（何が起きたか〔止まった段〕→ 原因 → 原因の平易な説明 → 次の操作 → 畳める「詳細」）で出す。RAG のチャットの失敗は本文 + トレース ID だけから、NL2SQL のチャットの失敗は SQL の下から処理の経過の直下へ、Agent のチャットの失敗は回答の下から処理の経過の直下へ移る。DB 管理チャットの文の実行の失敗は警告の帯・エラー概要・詳細ログの 3 か所から 1 枚のカードになる。`ChatProgressStep` に名詞の名前 `name` を足し、`RunTimeline` / `ChatProgress` は失敗の後に実行しなかった段を「未実行」と文字で出す（UX 契約 messaging.md §9.1） |
 | `PageHeader` / `ObjectActionBar` / `FormActionBar`（#582） | 「その他の操作」のボタンとメニューの読み上げ名が「その他の操作（<操作のグループの名前>）」になる（見た目の文言は同じ）。`getByRole("button", { name: "その他の操作", exact: true })` の E2E は一致しなくなるので、`exact` を外すか `data-testid`（`page-actions-more` / `<testId>-more` / `form-actions-more`）で探す。`PageHeader` の lg 未満は、メニューに入るのが 1 つだけなら畳まない |
 | `EvidenceListItem` / `evidenceCountLabel` / `EvidenceSourceSheet`（#2710） | `EvidenceListItem.usedAsContext`（任意）を追加。回答がまとまり（親）だけを参照した箇所は「回答で引用」に数えず、カードに neutral の「まとまりで参照」（`Layers`）のバッジ、件数の末尾に「まとまりで参照 N 件」を出す。`EvidenceLabels` に `context` / `contextBadge` を追加。`EvidenceSourceSheet` に `notice`（任意。要約の上の info の `Banner`）を追加し、RAG は本文の根拠の行が指す箇所を確定できないとき「この根拠の行の位置は確定していません」と候補の数を出して原文を強調しない。渡さなければ見た目は変わらない |
+| `PageLoadingState`（#3311） | `wide` プロップを削除。常に全幅（`PageBody wide`）で出す |
 
 ---
 

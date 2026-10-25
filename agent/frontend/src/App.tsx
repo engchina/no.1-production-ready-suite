@@ -254,7 +254,7 @@ function AuthorizedLayout() {
 /** 画面のコードを読んでいる間（UX 契約 messaging.md §3.7 の placement="page"。白い画面にしない）。 */
 function RouteLoadingFallback() {
   return (
-    <PageLoadingState wide label={t("app.route.loading")} operationKey="route-loading" testId="route-loading" />
+    <PageLoadingState label={t("app.route.loading")} operationKey="route-loading" testId="route-loading" />
   );
 }
 

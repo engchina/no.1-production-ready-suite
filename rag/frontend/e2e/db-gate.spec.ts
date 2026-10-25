@@ -175,6 +175,31 @@ test("状態の確認中は経過時間付きの読み込み表示を出す", as
   await expect(page.getByRole("heading", { name: "データベースに接続できません" })).toBeVisible();
 });
 
+test("広い画面でも、確認中の表示は画面と同じ全幅で出す（読み込み後に広がらない。#3311）", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await routeAuth(page);
+  let release: () => void = () => undefined;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/ready/database", async (route) => {
+    await released;
+    await route.fulfill({ json: dbStatus("unreachable") });
+  });
+
+  await page.goto("/file-list");
+
+  const loading = page.getByTestId("database-gate-loading");
+  await expect(loading).toBeVisible();
+  // 本文の最大幅（1440px）で絞らず、main の幅から左右のガターだけを引いた幅になる。
+  const main = await page.locator("main").first().boundingBox();
+  const box = await loading.boundingBox();
+  expect(box!.width).toBeGreaterThan(1440);
+  expect(box!.width).toBeGreaterThanOrEqual(main!.width - 80);
+  release();
+  await expect(loading).toHaveCount(0);
+});
+
 test("確認が 10 秒を超えて遅延の案内が出ても、読み込みのカードとスピナーは動かない（#902）", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await page.clock.install();
   await routeAuth(page);
