@@ -3,13 +3,29 @@ import { FileText, Upload, X } from "lucide-react";
 
 import { t, type I18nKey } from "@/lib/i18n";
 import { formatByteSize, totalUploadBytes } from "@/lib/upload-requests";
-import { uploadFileProblem, type UploadFileProblem } from "@/lib/upload-selection";
+import {
+  uploadFileProblem,
+  type RejectedUploadFormat,
+  type UploadFileProblem,
+} from "@/lib/upload-selection";
 
 const PROBLEM_LABEL: Record<UploadFileProblem, I18nKey> = {
   unsupported: "upload.selection.problem.unsupported",
   tooLarge: "upload.selection.problem.tooLarge",
   empty: "upload.selection.problem.empty",
+  heicImage: "upload.selection.problem.heicImage",
+  epubBook: "upload.selection.problem.epubBook",
 };
+
+/** 受け付けない形式の変換の方法（API の 415 の文言と同じ。#3351）。 */
+const REJECTED_FORMAT_GUIDE: Record<RejectedUploadFormat, I18nKey> = {
+  heicImage: "upload.rejected.heicImage",
+  epubBook: "upload.rejected.epubBook",
+};
+
+function rejectedFormatGuide(problem: UploadFileProblem | null): I18nKey | null {
+  return problem === "heicImage" || problem === "epubBook" ? REJECTED_FORMAT_GUIDE[problem] : null;
+}
 
 /**
  * 送る前に選んだファイルの一覧（#701）。選ぶだけでは送らず、ここで見直してから「アップロードを開始」する。
@@ -77,6 +93,11 @@ export function UploadSelectionList({
                     label={t(PROBLEM_LABEL[problem])}
                     className="mt-1"
                   />
+                ) : null}
+                {rejectedFormatGuide(problem) ? (
+                  <p className="mt-1 text-xs text-fg-muted" data-testid="upload-selection-guide">
+                    {t(rejectedFormatGuide(problem) as I18nKey)}
+                  </p>
                 ) : null}
               </div>
             </div>

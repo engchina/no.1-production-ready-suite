@@ -68,7 +68,9 @@ ADAPTER_CAPABILITIES: Mapping[str, ParserBackendCapability] = {
     ),
     "unstructured": ParserBackendCapability(
         # 汎用 partition。UNKNOWN も受ける(従来挙動)。判定は modality だけで決まるため、
-        # extensions は UI の拡張子表示用の代表列挙(unstructured[all-docs] の対応形式)。
+        # extensions は UI の拡張子表示用の代表列挙(parser のサービスに入れる extra の対応形式)。
+        # .rst / .org はプレーンテキストとして読む。pandoc・pi-heif を入れないため、EPUB・ODT・
+        # RTF・HEIC / HEIF は読まない(ODT / RTF はファイル準備の Office→PDF で PDF にする。#3351)。
         modalities=frozenset(
             {
                 SourceModality.PDF,
@@ -87,6 +89,8 @@ ADAPTER_CAPABILITIES: Mapping[str, ParserBackendCapability] = {
                     ".txt",
                     ".md",
                     ".markdown",
+                    ".rst",
+                    ".org",
                     ".csv",
                     ".tsv",
                     ".json",
@@ -116,12 +120,6 @@ ADAPTER_CAPABILITIES: Mapping[str, ParserBackendCapability] = {
         modalities=frozenset(),
         extensions=frozenset({".json"}),
         content_types=frozenset({"application/json"}),
-    ),
-    "mineru": ParserBackendCapability(
-        modalities=frozenset({SourceModality.PDF, SourceModality.IMAGE, SourceModality.OFFICE}),
-        extensions=frozenset({".pdf"}) | _IMAGE_EXTENSIONS | _OPENXML_EXTENSIONS,
-        content_types=frozenset({"application/pdf"}) | _OPENXML_CONTENT_TYPES,
-        content_type_prefixes=frozenset({"image/"}),
     ),
     # 外部 API は画像入力。backend が PDF をページ画像へ変換して順序を維持する。
     "dots_ocr": _PDF_AND_IMAGE,

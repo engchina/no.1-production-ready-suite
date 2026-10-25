@@ -74,7 +74,6 @@ _SERVICE_LABELS: dict[str, str] = {
     "unstructured": "Unstructured",
     "structured_records_jsonl": "構造化レコード JSONL",
     "xml_tree_json": "XML ツリー JSON",
-    "mineru": "MinerU",
     "dots_ocr": "Dots.OCR",
     "oci_document_understanding": "OCI Document Understanding",
 }
@@ -608,7 +607,7 @@ def _service_unavailable_message(
             "外部接続のモデル ID を確認し、接続テストを再実行してください。"
         )
     if reason == "adapter_source_unsupported":
-        # 外部 API のエンジン(MinerU / Dots.OCR)も呼び出し前の形式判定で止まるため、
+        # 外部 API のエンジン(Dots.OCR)も呼び出し前の形式判定で止まるため、
         # 接続エラーの文言にせず対応形式を案内する。
         formats = supported_formats_label(backend)
         formats_suffix = f"（対応形式: {formats}）" if formats else ""

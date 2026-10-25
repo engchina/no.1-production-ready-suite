@@ -99,7 +99,7 @@ def test_health_reports_degraded_when_runtime_health_fails() -> None:
         raise ConnectionError("vllm refused")
 
     app = create_parse_app(
-        backend="mineru",
+        backend="dots_ocr",
         import_name="pydantic",
         distribution_names=("pydantic",),
         runtime_health=fail_runtime,
@@ -107,7 +107,7 @@ def test_health_reports_degraded_when_runtime_health_fails() -> None:
     payload = TestClient(app).get("/health").json()
 
     assert payload["status"] == "degraded"
-    assert payload["backend"] == "mineru"
+    assert payload["backend"] == "dots_ocr"
     assert payload["package_version"] is not None
 
 

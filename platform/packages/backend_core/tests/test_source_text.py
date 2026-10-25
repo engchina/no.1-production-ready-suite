@@ -1,4 +1,4 @@
-"""検索の結果と観測の本文の大きさの規則（#3321）。内容はすべて合成。"""
+"""検索の結果・続きの読み取り・観測の本文の大きさの規則（#3321・#3344）。内容はすべて合成。"""
 
 import random
 import re
@@ -9,12 +9,15 @@ from pr_backend_core.source_text import (
     SOURCE_TEXT_ITEM_MAX_TOKENS,
     SOURCE_TEXT_PAGE_BUDGET_TOKENS,
     SOURCE_TEXT_RESPONSE_BUDGET_TOKENS,
+    SourceText,
     SourceTextItem,
+    SourceTextKind,
     TextRange,
     excerpt_source_text,
     fit_source_texts,
     page_source_texts,
     query_terms,
+    read_source_window,
 )
 from pr_backend_core.token_estimate import estimate_input_tokens
 
@@ -243,3 +246,146 @@ def test_page_respects_the_limit() -> None:
 def test_page_rejects_invalid_ranges(offset: int, limit: int) -> None:
     with pytest.raises(ValueError):
         page_source_texts([], offset=offset, limit=limit)
+
+
+# ---------------------------------------------------------------------------
+# 続きの読み取り（read_source_window。#3344）
+# ---------------------------------------------------------------------------
+
+
+def _read_all(text: str, max_chars: int, kind: SourceTextKind = "text") -> list[SourceText]:
+    pieces = []
+    offset: int | None = 0
+    while offset is not None:
+        piece = read_source_window(text, offset=offset, max_chars=max_chars, kind=kind)
+        assert piece.excerpt_range is not None and piece.excerpt_range.start == offset
+        assert len(piece.text) <= max_chars
+        pieces.append(piece)
+        offset = piece.next_offset
+    return pieces
+
+
+def _body(text: str, piece: SourceText) -> str:
+    assert piece.excerpt_range is not None
+    return text[piece.excerpt_range.start : piece.excerpt_range.end]
+
+
+def test_window_within_the_limit_returns_the_rest_whole() -> None:
+    text, _ = _sentences(5)
+    piece = read_source_window(text, max_chars=len(text))
+    assert (piece.text, piece.truncated, piece.next_offset) == (text, False, None)
+    assert piece.excerpt_range == TextRange(0, len(text))
+    rest = read_source_window(text, offset=10, max_chars=len(text))
+    assert (rest.text, rest.truncated, rest.next_offset) == (text[10:], True, None)
+    end = read_source_window(text, offset=len(text) + 5, max_chars=10)
+    assert (end.text, end.next_offset, end.excerpt_range) == (
+        "",
+        None,
+        TextRange(len(text), len(text)),
+    )
+
+
+def test_window_ends_at_the_last_sentence_boundary_and_reconstructs_the_text() -> None:
+    text, parts = _sentences(60)
+    pieces = _read_all(text, max_chars=100)
+    assert len(pieces) > 5
+    # 隙間も重なりも無く全文になる。
+    assert "".join(piece.text for piece in pieces) == text
+    for piece in pieces:
+        # 文の途中で始まらず、文の途中で終わらない（1 文は上限より短い）。
+        assert piece.text.startswith("段落") and piece.text.endswith("。")
+        assert all(part in parts for part in re.findall(r"段落[^。]*。", piece.text))
+    # 上限に入る最後の境界まで入れる（次の文を足すと上限を超える）。
+    first = pieces[0]
+    following = parts[len(re.findall(r"段落[^。]*。", first.text))]
+    assert len(first.text) + len(following) > 100
+
+
+def test_window_keeps_paragraphs_and_mixed_cjk_text() -> None:
+    paragraphs = [
+        "第一の段落は合成の説明です。続く文もあります。",
+        "Second paragraph is synthetic. It has two sentences.",
+        "第三段落为合成的中文说明。还有一句！",
+        "四つ目の段落（括弧の中で終わる。）",
+    ]
+    text = "\n\n".join(paragraphs * 5)
+    # どの文も上限より短い（1 文で超えるときの切り方は次のテスト）。
+    for max_chars in (35, 45, 70, 200):
+        pieces = _read_all(text, max_chars=max_chars)
+        assert "".join(piece.text for piece in pieces) == text
+        for piece in pieces[:-1]:
+            # 文・段落の境界（句点・感嘆符・ピリオドと空白・改行）で終わる。
+            assert re.search(r"(。|！|）|\.\s*|\n)$", piece.text), (max_chars, piece.text)
+
+
+def test_window_falls_back_to_clauses_and_characters_for_a_long_sentence() -> None:
+    clause = "合成の値を順に確かめ、"
+    text = clause * 30 + "終わり。" + "区切りの無い長い合成の文字列" * 20
+    pieces = _read_all(text, max_chars=50)
+    assert "".join(piece.text for piece in pieces) == text
+    # 読点で切れる文は読点の後ろで切る。
+    assert pieces[0].text.endswith("、")
+    # 区切りの無い部分だけ字で切り、上限ちょうどまで入れる。
+    tail = [piece for piece in pieces if "、" not in piece.text and "。" not in piece.text]
+    assert tail and all(len(piece.text) == 50 for piece in tail[:-1])
+
+
+def test_window_of_an_html_table_repeats_the_header_rows() -> None:
+    text = _html_table(120, marker_row=-1)
+    header_end = text.index("<tr><td>")
+    pieces = _read_all(text, max_chars=400, kind="table")
+    assert len(pieces) > 3
+    # 本文の範囲をつなぐと全文になる。
+    assert "".join(_body(text, piece) for piece in pieces) == text
+    assert pieces[0].header_range is None and pieces[0].text.startswith(text[:header_end])
+    for piece in pieces[1:]:
+        # 続きの窓は見出しの行で始まり、行の境界で始まって行の境界で終わる。
+        assert piece.header_range == TextRange(0, header_end)
+        assert piece.text.startswith(text[:header_end])
+        rows = piece.text[header_end:]
+        assert rows.startswith("<tr>")
+        assert rows == _body(text, piece)
+    for piece in pieces[:-1]:
+        assert piece.text.endswith("</tr>")
+
+
+def test_window_of_a_line_table_repeats_the_column_headers() -> None:
+    header = "表の題: 合成の表\n列見出し: 列A | 列B | 列C\n"
+    rows = [f"行 {index}: 値{index} | 合成 | {index}" for index in range(200)]
+    text = header + "\n".join(rows)
+    pieces = _read_all(text, max_chars=300, kind="table")
+    assert "".join(_body(text, piece) for piece in pieces) == text
+    for piece in pieces[1:]:
+        assert piece.header_range == TextRange(0, len(header))
+        lines = piece.text[len(header) :].rstrip("\n").split("\n")
+        assert all(line in rows for line in lines)
+
+
+def test_window_of_a_table_with_a_huge_header_does_not_repeat_it() -> None:
+    header = "<tr>" + "".join(f"<th>見出し{index}</th>" for index in range(60)) + "</tr>"
+    text = "<table>" + header + "<tr><td>合成の値</td></tr>" * 80 + "</table>"
+    pieces = _read_all(text, max_chars=200, kind="table")
+    assert "".join(piece.text for piece in pieces) == text
+    assert all(piece.header_range is None for piece in pieces)
+
+
+def test_window_from_an_arbitrary_offset_is_exact() -> None:
+    rng = random.Random(3344)
+    alphabet = ["合", "成", "の", "値", "a", "b", " ", "。", "、", "\n", "|", "1", "."]
+    for _ in range(40):
+        text = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 2000)))
+        kinds: tuple[SourceTextKind, ...] = ("text", "table")
+        for kind in kinds:
+            max_chars = rng.randint(1, 300)
+            offset = rng.randint(0, len(text))
+            pieces = _read_all(text, max_chars=max_chars, kind=kind)
+            assert "".join(_body(text, piece) for piece in pieces) == text
+            piece = read_source_window(text, offset=offset, max_chars=max_chars, kind=kind)
+            assert piece.excerpt_range is not None and piece.excerpt_range.start == offset
+            assert len(piece.text) <= max_chars
+
+
+@pytest.mark.parametrize(("offset", "max_chars"), [(-1, 10), (0, 0)])
+def test_window_rejects_invalid_ranges(offset: int, max_chars: int) -> None:
+    with pytest.raises(ValueError):
+        read_source_window("合成", offset=offset, max_chars=max_chars)

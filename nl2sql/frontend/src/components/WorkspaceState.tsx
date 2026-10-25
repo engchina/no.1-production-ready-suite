@@ -5,7 +5,7 @@ import { create } from "zustand";
 import { Banner, useListDetailSplit, useUrlSelection, type UrlSelection, DISPLAY_DATE_TIME_SECONDS, formatDisplayDateTime } from "@production-ready/ui";
 import { useAuth } from "@/features/security/AuthProvider";
 import { t } from "@/lib/i18n";
-import { draftKey, readDraft, writeDraft } from "@/lib/workspace-drafts";
+import { draftKey, draftValueOnScopeChange, readDraft, writeDraft, type DraftCarryOver, type DraftScope } from "@/lib/workspace-drafts";
 import { FILL_HEIGHT_ROUTES } from "@/lib/routes";
 
 const WorkspaceContext = createContext("legacy");
@@ -48,21 +48,36 @@ export function useResetExecutionConsent(reset: () => void, signature: string) {
   useEffect(() => { latest.current(); }, [active, signature]);
 }
 
-export function useWorkspaceState<T>(field: string, initial: T): [T, Dispatch<SetStateAction<T>>] {
+export interface WorkspaceStateOptions<T> {
+  /**
+   * field が変わった render で、変わる前の値を新しい field へ引き継ぐか（#3357）。利用者・DB・画面が変わったときは
+   * 呼ばない。判定はその render の最新の値で行うので、field の変わる render と同じ render で起きた入力も失わない。
+   */
+  carryOver?: DraftCarryOver<T>;
+}
+
+export function useWorkspaceState<T>(
+  field: string,
+  initial: T,
+  options: WorkspaceStateOptions<T> = {}
+): [T, Dispatch<SetStateAction<T>>] {
   const { user } = useAuth();
   const context = useContext(WorkspaceContext);
   const activity = useContext(ActivityContext);
   const { pathname } = useLocation();
   const owner = user?.user_uuid ?? "";
-  const key = draftKey(owner, context, activity.page || pathname, field);
+  const page = activity.page || pathname;
+  const key = draftKey(owner, context, page, field);
   const mark = useDraftFailures((state) => state.mark);
   const read = () => { try { return readDraft(window.sessionStorage, key, initial); } catch { return initial; } };
   const [value, setValue] = useState<T>(read);
-  // key が変わった render で、その key の草稿を読み直す（前回の key は state で持ち、render 中に ref を読まない）。
-  const [previousKey, setPreviousKey] = useState(key);
-  if (previousKey !== key) {
-    setPreviousKey(key);
-    setValue(read());
+  // key が変わった render で、その key の草稿を読み直す（前回の置き場所は state で持ち、render 中に ref を読まない）。
+  // 引き継ぎ（`carryOver`）は、この render の最新の値で判定する（#3357）。
+  const [previous, setPrevious] = useState<DraftScope & { key: string }>({ key, owner, context, page, field });
+  if (previous.key !== key) {
+    const next = { owner, context, page, field };
+    setPrevious({ key, ...next });
+    setValue(draftValueOnScopeChange(previous, next, value, read(), options.carryOver));
   }
   useEffect(() => {
     let saved = false;
