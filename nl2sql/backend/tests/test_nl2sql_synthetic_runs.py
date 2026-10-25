@@ -570,12 +570,14 @@ def test_worker_runs_same_table_requests_independently_without_replaying_claims(
 
 
 @pytest.mark.parametrize("status", ["completed", "partial", "failed", "no_data"])
-def test_history_retention_boundary_and_active_context_isolation(status: Any) -> None:
+def test_review_window_boundary_keeps_history_and_isolates_context(status: Any) -> None:
+    """生成の記録は期間で消さず（#3235）、確認用データの期間（24 時間）だけを判定する。"""
     from datetime import timedelta
 
     at = datetime.now(UTC)
     old = (at - timedelta(days=3)).isoformat()
     cutoff = (at - timedelta(hours=24)).isoformat()
+    staging = {"APP.T": {"name": "APP.NL2SQL_SP_FIXTURE", "checksum": "digest", "count": 1}}
     store = SyntheticStore()
     values = [
         run(
@@ -584,6 +586,7 @@ def test_history_retention_boundary_and_active_context_isolation(status: Any) ->
             status=status,
             created_at=old,
             finished_at=old,
+            staging=staging,
         ),
         run(
             run_id="boundary",
@@ -601,26 +604,34 @@ def test_history_retention_boundary_and_active_context_isolation(status: Any) ->
         ),
         run(run_id="legacy", idempotency_key="legacy", status=status, created_at=old),
         run(run_id="other-actor", actor_id="other", status=status, created_at=old),
-        run(run_id="other-db", context_id="other", status=status, created_at=old),
+        run(run_id="other-db", context_id="other", status=status, created_at=old, staging=staging),
         *[
-            run(run_id=s, idempotency_key=s, status=s, created_at=old)
+            run(run_id=s, idempotency_key=s, status=s, created_at=old, staging=staging)
             for s in ["pending", "running", "verifying", "unknown"]
         ],
     ]
     for value in values:
         store.create(value)
-    assert store.purge_expired("db", "owner", at=at) == 2
-    assert store.get("expired") is None
-    assert store.by_key("owner", "db", "expired") is None
-    assert store.get("legacy") is None
-    for value in values[1:]:
-        if value.run_id != "legacy":
-            assert store.get(value.run_id) == value
-    assert store.purge_expired("db", "owner", at=at) == 0
-    assert store.purge_expired("db", "owner", at=at + timedelta(microseconds=1)) == 1
+    for value in values:
+        assert store.get(value.run_id) == value
+    assert store.by_key("owner", "db", "expired") == values[0]
+    assert {item.run_id for item in store.list("db", "owner")} >= {
+        "expired",
+        "boundary",
+        "recent-finish",
+        "legacy",
+    }
+    assert values[0].review_expired(at)
+    assert values[3].review_expired(at)
+    assert not values[1].review_expired(at)
+    assert values[1].review_expired(at + timedelta(microseconds=1))
+    assert not values[2].review_expired(at)
+    assert not any(value.review_expired(at) for value in values[6:])
+    # 後始末の対象は、一時表の管理情報が残る終端の記録だけ（実行中・別の DB は含めない）。
+    assert [item.run_id for item in store.list_cleanup_candidates("db")] == ["expired"]
 
 
-def test_service_hides_expired_history_and_worker_cleans_without_browser(
+def test_service_keeps_expired_history_after_worker_tick(
     service: SyntheticService,
 ) -> None:
     from datetime import timedelta
@@ -628,14 +639,11 @@ def test_service_hides_expired_history_and_worker_cleans_without_browser(
     old = (datetime.now(UTC) - timedelta(days=2)).isoformat()
     value = run(context_id=service.context, status="completed", created_at=old, finished_at=old)
     service.store.create(value)
-    with pytest.raises(HTTPException) as exc:
-        service.get(value.run_id, actor())
-    assert exc.value.status_code == 404
-    assert service.list(actor()) == []
-    assert service.store.get(value.run_id) is None
-    service.store.create(value)
+    kept = service.get(value.run_id, actor())
+    assert kept.public()["review_expired"] is True
+    assert [item.run_id for item in service.list(actor())] == [value.run_id]
     service.tick()
-    assert service.store.get(value.run_id) is None
+    assert service.store.get(value.run_id) == value
     service.adapter.generate_synthetic_data.assert_not_called()  # type: ignore[attr-defined]
 
 

@@ -56,6 +56,8 @@ _JSON_MAX = 4000
 _DISPLAY_KIND_MAX = 64
 _STATUS_RANK = {"running": 0, "done": 1, "failed": 1, "cancelled": 1, "skipped": 1}
 
+# 時刻は UTC の offset（'+00:00'）で書く。地域名（'UTC'）の時間帯で書くと、python-oracledb の thin
+# mode がその値を読めない（DPY-3022。#3241）。
 _MERGE_SQL = """
 MERGE INTO PLATFORM_TRACE_SPANS t
 USING (SELECT :trace_id AS TRACE_ID, :span_id AS SPAN_ID FROM DUAL) s
@@ -64,7 +66,7 @@ WHEN MATCHED THEN UPDATE SET
   t.PARENT_SPAN_ID = :parent_span_id,
   t.STATUS = :status,
   t.FINISHED_AT = CASE WHEN :finished_at IS NULL THEN NULL
-    ELSE FROM_TZ(CAST(:finished_at AS TIMESTAMP), 'UTC') END,
+    ELSE FROM_TZ(CAST(:finished_at AS TIMESTAMP), '+00:00') END,
   t.DISPLAY_KIND = :display_kind,
   t.DISPLAY_PARAMS_JSON = :display_params_json,
   t.ATTRIBUTES_JSON = :attributes_json,
@@ -75,21 +77,26 @@ WHEN NOT MATCHED THEN INSERT (
   ATTRIBUTES_JSON, UPDATED_AT
 ) VALUES (
   :trace_id, :span_id, :parent_span_id, :product, :operation_id, :attempt, :is_root,
-  :owner_user_uuid, :name, :span_kind, :status, FROM_TZ(CAST(:started_at AS TIMESTAMP), 'UTC'),
-  CASE WHEN :finished_at IS NULL THEN NULL ELSE FROM_TZ(CAST(:finished_at AS TIMESTAMP), 'UTC') END,
+  :owner_user_uuid, :name, :span_kind, :status,
+  FROM_TZ(CAST(:started_at AS TIMESTAMP), '+00:00'),
+  CASE WHEN :finished_at IS NULL THEN NULL
+    ELSE FROM_TZ(CAST(:finished_at AS TIMESTAMP), '+00:00') END,
   :display_kind, :display_params_json, :attributes_json, SYSTIMESTAMP
 )
 """
 
 _PURGE_SQL = (
     "DELETE FROM PLATFORM_TRACE_SPANS "
-    "WHERE STARTED_AT < FROM_TZ(CAST(:cutoff AS TIMESTAMP), 'UTC') AND ROWNUM <= :batch"
+    "WHERE STARTED_AT < FROM_TZ(CAST(:cutoff AS TIMESTAMP), '+00:00') AND ROWNUM <= :batch"
 )
 
-# 表の名前と列は固定の文字列（値はすべて bind。SQL の文字列に値を組み込まない）。
+# 表の名前と列は固定の文字列（値はすべて bind。SQL の文字列に値を組み込まない）。時刻は
+# `SYS_EXTRACT_UTC` で UTC の TIMESTAMP にして読む（時間帯の形に関わらず thin mode で読める。
+# #3241）。
 _SELECT_SQL = (
     "SELECT TRACE_ID, SPAN_ID, PARENT_SPAN_ID, PRODUCT, OPERATION_ID, ATTEMPT, IS_ROOT, "
-    "OWNER_USER_UUID, NAME, SPAN_KIND, STATUS, STARTED_AT, FINISHED_AT, DISPLAY_KIND, "
+    "OWNER_USER_UUID, NAME, SPAN_KIND, STATUS, SYS_EXTRACT_UTC(STARTED_AT) AS STARTED_AT, "
+    "SYS_EXTRACT_UTC(FINISHED_AT) AS FINISHED_AT, DISPLAY_KIND, "
     "DISPLAY_PARAMS_JSON, ATTRIBUTES_JSON FROM PLATFORM_TRACE_SPANS WHERE TRACE_ID = :trace_id"
 )
 

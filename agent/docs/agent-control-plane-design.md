@@ -716,7 +716,7 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
   ページングする。列は migration 012 / 014（`DATA_TOOL_CALLS`。#1834）で足す（データは消さない）。既存の Run の事実の新しい列は起動時の backfill が
   Runtime repository の Run から書く（Run の snapshot を整理した古い事実は空のままで、シグナルにならない）。migration 012 の
   前のテーブルには、シグナルの列を除いた MERGE（`LEGACY_MERGE_SQL`。014 の前は `MERGE_SQL_012`）で利用状況・フィードバックの事実を書き続ける。
-- 品質評価（#776）の job は件数（旧 50 件）ではなく期間（終わった job を 365 日。安全のため 2,000 件まで）で残し、
+- 品質評価（#776）の job は、終わった job も自動では消さずに残し（#3235。以前は 365 日・2,000 件、その前は 50 件で消していた）、
   `GET /api/evaluations` を `offset` / `limit` でページングする。前回との比較は残っている全 job から探す。
 - 品質評価の 1 ケースの上限時間（Run の実行。判定は別。#1432）は `AGENT_EVALUATION_CASE_TIMEOUT_SECONDS`（秒。86400 秒まで）。
   既定の 0 は自動で、接続 `rag` の待ち時間（画面で保存した値。既定 630 秒）×（Run の RAG の予算 `AGENT_MAX_RAG_CALLS_PER_RUN`

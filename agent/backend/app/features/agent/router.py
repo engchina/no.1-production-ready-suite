@@ -2877,7 +2877,7 @@ async def list_evaluations(
     paging: Annotated[OffsetParams, Depends(_evaluation_jobs_paging)],
     set_id: str | None = Query(default=None, max_length=100),
 ) -> ApiResponse[EvaluationJobsData]:
-    """評価の履歴（新しい順のページ。利用できる業務 Agent の評価だけ。保持は 365 日。#794）。"""
+    """評価の履歴（新しい順のページ。利用できる業務 Agent の評価だけ。無期限。#3235）。"""
     return ApiResponse(
         data=evaluation_store.page(
             set_id=set_id or None,

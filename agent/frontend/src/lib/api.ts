@@ -2064,7 +2064,7 @@ export const agentApi = {
   /** 評価を始める（`agent_id` を省くと評価セットの業務 Agent。#1845）。 */
   createEvaluation: (payload: { set_id: string; agent_version?: EvaluationTarget; agent_id?: string }) =>
     request<EvaluationJob>("/api/evaluations", { method: "POST", body: JSON.stringify(payload) }),
-  /** 評価の履歴（新しい順のページ。終わった評価は 365 日残る。#794）。 */
+  /** 評価の履歴（新しい順のページ。終わった評価は削除せずに残る。#794・#3235）。 */
   listEvaluations: (page: { offset: number; limit: number }) =>
     request<EvaluationJobsPage>(
       `/api/evaluations?${new URLSearchParams({ offset: String(page.offset), limit: String(page.limit) }).toString()}`

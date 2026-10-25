@@ -38,7 +38,7 @@ import {
   isFilterActive,
 } from "@production-ready/ui";
 
-import { SyntheticRunPanel, useSyntheticRuns, historyExpired, type SyntheticRun } from "../syntheticRuns";
+import { SyntheticRunPanel, useSyntheticRuns, reviewExpired, type SyntheticRun } from "../syntheticRuns";
 import { SelectAiCredentialPrecondition } from "../components/SelectAiCredentialPrecondition";
 import { useSelectAiCredentialReadiness } from "../useSelectAiCredentialReadiness";
 import { SyntheticReview } from "../SyntheticReview";
@@ -222,7 +222,8 @@ export function DataManagementPage() {
     retry: false,
   });
   const candidateRun = listedRun ?? (requestedRunId ? historicalRun.data : null) ?? null;
-  const selectedRun = candidateRun && !historyExpired(candidateRun) ? candidateRun : null;
+  // 生成の記録は期間で消さないので、確認用データの期間を過ぎた記録も選んで読める（#3235）。
+  const selectedRun = candidateRun;
   const [syntheticQueryTime, setSyntheticQueryTime] = useState("");
   const resultRequest = useRef(0);
   const [resultGeneratedRows, setResultGeneratedRows] = useState<number | null>(null);
@@ -440,7 +441,7 @@ export function DataManagementPage() {
   const syntheticResultError = syntheticErrorOperation === "results" ? syntheticError : "";
   const syntheticWorkspaceError = syntheticErrorOperation === "results" ? "" : syntheticError;
   const canLoadSyntheticDataResults = Boolean(
-    (!selectedRun?.preview || ["ready", "applied"].includes(selectedRun.review_status ?? "")) &&
+    (!selectedRun?.preview || (["ready", "applied"].includes(selectedRun.review_status ?? "") && !reviewExpired(selectedRun))) &&
     (selectedRun ? selectedRun.targets.some((target) => target.table_name === syntheticResultTable) : syntheticAvailableTables.includes(syntheticResultTable)) && syntheticResultLimit !== null && !syntheticLoading
   );
   const canClearSyntheticDataResults = Boolean(
@@ -951,7 +952,6 @@ export function DataManagementPage() {
 
   const syntheticProgress = (
     <>
-      {candidateRun && historyExpired(candidateRun) && <Banner severity="info">{t("syntheticRun.expired")}</Banner>}
       <SyntheticRunPanel
         run={selectedRun}
         runs={selectedRun && !listedRun ? [selectedRun, ...syntheticRuns.data ?? []] : syntheticRuns.data ?? []}

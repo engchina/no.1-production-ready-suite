@@ -93,7 +93,22 @@ async def test_record_normalizes_question_keeps_classification_and_purges() -> N
     assert record["question"] == "経費の 承認者は？"
     assert record["normalized_question"] == "経費の承認者は?"
     assert record["classification_filter"] == {"large_category": "経理"}
-    assert store.purged == [90]
+    # 既定の保持日数は 0（無期限）で、質問履歴を自動では削除しない（#3235）。
+    assert ENABLED.rag_query_history_retention_days == 0
+    assert store.purged == []
+
+
+async def test_record_purges_expired_history_when_retention_is_set() -> None:
+    store = HistoryStore()
+
+    await _record(
+        store,
+        "経費の承認者は？",
+        Settings(rag_query_history_enabled=True, rag_query_history_retention_days=30),
+    )
+
+    assert len(store.records) == 1
+    assert store.purged == [30]
 
 
 async def test_record_failure_does_not_raise() -> None:

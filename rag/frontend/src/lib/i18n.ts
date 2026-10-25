@@ -3930,7 +3930,7 @@ export const ja = {
     "回答に成功した質問を検索・回答プロファイルごとに保存し、よく聞かれている質問を RAG 検索の入力欄の下に候補として出します。質問の本文を保存するため、既定では無効です。",
   "settings.queryHistory.enabled": "質問を保存して候補に使う",
   "settings.queryHistory.enabledHint":
-    "安全チェックでマスクした後の質問を保存します。無効にしても保存済みの履歴は保存期間まで残ります。",
+    "安全チェックでマスクした後の質問を保存します。無効にしても保存済みの履歴は残ります（保存期間を決めたときは、その期間まで）。",
   "settings.queryHistory.retention": "履歴の保存期間",
   "settings.queryHistory.minCount": "候補にする最小回数",
   "settings.queryHistory.minCountHint": "同じ質問がこの回数以上聞かれたときだけ候補にします。",
@@ -3953,7 +3953,7 @@ export const ja = {
   "search.querySuggestions.count": "{count} 回聞かれています",
   "settings.answerRecords.title": "回答の記録の保存期間",
   "settings.answerRecords.description":
-    "回答した質問・回答・根拠・実行記録と、チャット・RAG 検索の実行履歴を保存する期間です。期限を過ぎた記録は、次の回答の保存時とこの設定の保存時に削除します。",
+    "回答した質問・回答・根拠・実行記録と、チャット・RAG 検索の実行履歴を保存する期間です。既定は無期限で、自動では削除しません。期間を決めたときは、期限を過ぎた記録を次の回答の保存時とこの設定の保存時に削除します。",
   "settings.answering.title": "回答の検索と生成",
   "settings.answering.description":
     "すべての検索・回答プロファイルと、プロファイルを指定しない呼び出しで使う全体設定です。各機能は実行時に最初に呼ばれる順で並べています。",
