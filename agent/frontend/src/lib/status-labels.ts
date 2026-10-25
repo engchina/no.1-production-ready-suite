@@ -83,6 +83,8 @@ const EVENT_TYPE: Record<string, StatusEntry> = {
   "runtime.dispatch_claimed": { label: "status.event.started", variant: "info" },
   "runtime.event": { label: "status.event.progress", variant: "info" },
   "runtime.failed": { label: "status.event.failed", variant: "danger" },
+  // ツールの呼び出しの開始（回答前の確認のツールも含む。#3352。「不明」にしない）。
+  "step.started": { label: "status.event.started", variant: "info" },
   "tool.completed": { label: "status.event.completed", variant: "success" },
   "tool.failed": { label: "status.event.failed", variant: "danger" },
   "tool.unhandled_error": { label: "status.event.failed", variant: "danger" },
@@ -96,6 +98,7 @@ const EVENT_CATEGORY: Record<string, I18nKey> = {
   run: "status.eventCategory.run",
   runtime: "status.eventCategory.runtime",
   tool: "status.eventCategory.tool",
+  step: "status.eventCategory.tool",
   approval: "status.eventCategory.approval",
   artifact: "status.eventCategory.artifact",
 };
