@@ -153,7 +153,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
   - 既存のデータ: #3244 より前に system_admin が持ち主の会話で続けた往復は消さない。会話の詳細は持ち主以外が送った往復に送った人の表示名（`ThreadData.sender_display_names`。Run の ID → 表示名）を返し、画面は質問の吹き出しの上に「〈名前〉 が送信」を出す（共有 UI の `ChatTurn` の `questionSender`）。持ち主はその往復も評価できる（自分の会話の内容）。
   - 画面: system_admin が他の利用者の会話（`ThreadData.owned=false`）を開くと、入力欄の代わりに閲覧だけの案内（3 製品共通の `ChatReadOnlyNotice`。info の Banner「他の利用者の会話です（閲覧のみ）」。文は `OTHERS_CONTENT_FORBIDDEN_MESSAGE` と同じ）を出し、回答の作成中・承認待ちなら案内の中に「停止」を置く。回答前の確認のカード・確認の取り消しの操作・評価・「自分で質問し直す」は出さない。承認の判断のボタンと会話の削除は出す。#1954 の送る前の案内（「この会話の持ち主にも…」）は外した。会話の履歴の行の「名前の変更」は出さない（共有 UI の `useChatHistoryActions` の `canRename`。削除は出す）。
   - 会話の添付（`/api/chat-attachments`。platform の共通の API）: 会話の添付の一覧は閲覧なので返し、会話への添付（`POST` の `conversation_id`）は内容を足す操作なので 403（持ち主の分からない会話も 403）。
-  - 外部の MCP（API キー）も同じ: キーの持ち主が system_admin なら他の利用者の Run を読める（`agent_get_run`）が、会話の続き（`agent_chat` の `thread_id`）と確認への答え（`agent_answer_confirmation`）は 403 の `OTHERS_CONTENT_FORBIDDEN`。キーの業務 Agent の範囲（`resource_scopes["agent"]`）と回数の上限はそのままかかる。
+  - 外部の MCP（API キー）も同じ: キーの持ち主が system_admin なら他の利用者の Run を読め（`agent_get_run`）、止められる（`agent_cancel_run`。運用の操作。#3240）が、会話の続き（`agent_chat` の `thread_id`）と確認への答え（`agent_answer_confirmation`）は 403 の `OTHERS_CONTENT_FORBIDDEN`。キーの業務 Agent の範囲（`resource_scopes["agent"]`）と回数の上限はそのままかかる。
 - チャット: 一般の利用者は自分の会話だけを見て続ける（他人の会話の詳細・送信・操作は 404）。system_admin の会話の一覧は利用者の表示名・`owned` を返す。
 - 規則の外（「改善・運用」）: フィードバック（`GET /feedback*`・管理者の評価 `PUT /runs/{id}/admin-review`）・品質評価のケースへの追加（`GET /runs/{id}/evaluation-case`）・利用状況・監査ログ（`GET /audit/tool-calls*`・`/observability/events`）は、従来どおり権限と業務 Agent の範囲で判定する。
 
@@ -188,7 +188,7 @@ Run は RAG から受け取った根拠（ツールの結果・`tool.completed` 
 - 外部の MCP クライアント → Agent（#1874）: `POST /api/mcp` を共通の API キー（`Authorization: Bearer prak_…`。
   表 `PLATFORM_API_KEYS`、使える製品に `agent`）で呼びます。キーを発行した利用者として、画面と同じ capability
   （`agent_list` / `agent_get_run` は `agent.runs.view` / `agent.runs.operate` / `agent.admin`、`agent_chat` /
-  `agent_answer_confirmation` は `agent.runs.operate` / `agent.admin`）と対象範囲（使える業務 Agent）で判定し、キーに
+  `agent_answer_confirmation` / `agent_cancel_run` は `agent.runs.operate` / `agent.admin`）と対象範囲（使える業務 Agent）で判定し、キーに
   業務 Agent の範囲（`resource_scopes["agent"]`）があればさらに絞ります（範囲の外は 403 の `AGENT_OUT_OF_KEY_SCOPE`）。
   Run と会話は画面と同じ規則（§4.1）で、自分が実行した Run・自分の会話だけを読み、続け、答えられます（他人の Run は
   `RUN_NOT_FOUND`、他人の会話は `THREAD_NOT_FOUND`）。キーの持ち主が system_admin なら全員の Run を読めますが、他の利用者の

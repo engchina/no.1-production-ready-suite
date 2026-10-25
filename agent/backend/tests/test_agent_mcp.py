@@ -20,11 +20,16 @@ from security_support import ProductionAuth, client, enable_production_auth, log
 from app.features.agent import builtin_runtime, mcp_server
 from app.features.agent.answer_validation import combine_validations, validation_content
 from app.features.agent.builtin_runtime import ModelTarget
-from app.features.agent.confirmation import CONFIRMATION_TOOL
+from app.features.agent.confirmation import (
+    CONFIRMATION_TOOL,
+    ConfirmationRequest,
+    item_from_arguments,
+)
 from app.features.agent.runtime import (
     AgentProfile,
     Artifact,
     RunCreateRequest,
+    RunEventType,
     RunState,
     RunStatus,
     RunStep,
@@ -43,6 +48,7 @@ TOOLS = {
     "agent_chat",
     "agent_get_run",
     "agent_answer_confirmation",
+    "agent_cancel_run",
     "agent_skill_export",
 }
 ASK_ARGUMENTS = {
@@ -153,6 +159,14 @@ def test_tools_list_and_chat_answers_with_the_agent(monkeypatch: MonkeyPatch, ag
     assert tools["agent_skill_export"]["annotations"]["readOnlyHint"] is True
     assert tools["agent_chat"]["annotations"]["readOnlyHint"] is False
     assert tools["agent_answer_confirmation"]["annotations"]["readOnlyHint"] is False
+    # 取消は書き込み・破壊的・冪等（#3240）。ほかのツールは readOnlyHint だけ。
+    assert tools["agent_cancel_run"]["annotations"] == {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+    assert tools["agent_chat"]["annotations"] == {"readOnlyHint": False}
     assert all("outputSchema" in tool for tool in tools.values())
 
     listed = _call("agent_list", {})["structuredContent"]["agents"]
@@ -180,6 +194,7 @@ def test_chat_returns_the_run_when_the_answer_is_not_ready(agents: None) -> None
     assert structured["status"] in {"queued", "running"}
     assert structured["in_progress"] is True
     assert "agent_get_run" in structured["message"]
+    assert "agent_cancel_run" in structured["message"]
 
     missing = _call("agent_chat", {"agent_id": "no-such-agent", "question": "q"})
     assert missing["isError"] is True
@@ -666,3 +681,154 @@ def test_chat_returns_the_outcome_of_the_completed_run(
     [answer] = [item for item in stored.artifacts if item.kind == "answer"]
     assert output["outcome"] == answer.content["outcome"]["value"]
     assert output["outcome"] in {"answered", "conditional", "insufficient_evidence"}
+
+
+# ---- 取消（agent_cancel_run。#3240）-----------------------------------------------------
+
+
+def _queued() -> RunState:
+    return runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="合成の質問", agent_id=AGENT_ID)
+    )
+
+
+def _running() -> RunState:
+    run = _queued()
+    assert runtime_repository.begin_builtin_run(run.id) is not None
+    return runtime_repository.get_run(run.id)
+
+
+def _waiting_approval() -> RunState:
+    run = _running()
+    return runtime_repository.request_builtin_approvals(
+        run.id, [ToolCall(name="nl2sql__nl2sql_query", arguments={}, trace_id="c1")], state="{}"
+    )
+
+
+def _waiting_confirmation() -> RunState:
+    run = _running()
+    request = ConfirmationRequest(
+        source="agent", call_id="call-ask", items=[item_from_arguments(ASK_ARGUMENTS)]
+    )
+    return runtime_repository.request_builtin_approvals(
+        run.id, [], state="{}", confirmations=[request]
+    )
+
+
+def _cancel_event(run_id: str) -> dict[str, Any]:
+    [event] = [
+        item
+        for item in runtime_repository.get_run(run_id).events
+        if item.type == RunEventType.RUN_CANCELLED
+    ]
+    return event.payload
+
+
+@pytest.mark.parametrize(
+    "make",
+    [_queued, _running, _waiting_confirmation, _waiting_approval],
+    ids=["queued", "running", "waiting_confirmation", "waiting_approval"],
+)
+def test_cancel_run_cancels_an_unfinished_run_once(agents: None, make: Any) -> None:
+    del agents
+    run = make()
+    first = _call("agent_cancel_run", {"run_id": run.id})
+    assert first["isError"] is False
+    assert first["structuredContent"] == {
+        "schema_version": 1,
+        "run_id": run.id,
+        "status": "cancelled",
+        "result": "cancelled",
+        "message": "実行を取り消しました。",
+    }
+    stored = runtime_repository.get_run(run.id)
+    # 承認・回答前の確認の待ちも閉じる。
+    assert all(item.status == "cancelled" for item in stored.approvals)
+    assert all(item.status == "cancelled" for item in stored.confirmations)
+    # 入口（MCP）を残す。local はキーが無いのでキーの ID は付かない。
+    payload = _cancel_event(run.id)
+    assert payload["via"] == "mcp" and "api_key_id" not in payload
+    # 冪等: 2 回目はエラーにせず already_cancelled（イベントも増やさない）。
+    again = _call("agent_cancel_run", {"run_id": run.id})
+    assert again["isError"] is False
+    assert (again["structuredContent"]["result"], again["structuredContent"]["status"]) == (
+        "already_cancelled",
+        "cancelled",
+    )
+    assert _cancel_event(run.id) == payload
+
+
+@pytest.mark.parametrize("status", [RunStatus.COMPLETED, RunStatus.FAILED], ids=str)
+def test_cancel_run_leaves_a_finished_run_as_it_is(agents: None, status: RunStatus) -> None:
+    del agents
+    run = _running()
+    if status == RunStatus.COMPLETED:
+        runtime_repository.complete_builtin_run(run.id, "合成の回答")
+    else:
+        runtime_repository.fail_builtin_run(run.id, code="runtime.failed", detail="合成の失敗")
+    output = _call("agent_cancel_run", {"run_id": run.id})
+    assert output["isError"] is False
+    assert (output["structuredContent"]["result"], output["structuredContent"]["status"]) == (
+        "already_finished",
+        status.value,
+    )
+    assert "agent_get_run" in output["structuredContent"]["message"]
+    assert runtime_repository.get_run(run.id).status == status
+    # 画面の REST は今どおり 409。
+    rest = client.post(f"/api/runs/{run.id}/cancel")
+    assert rest.status_code == 409, rest.text
+
+
+def test_cancel_run_keeps_the_result_when_the_run_completes_first(
+    agents: None, monkeypatch: MonkeyPatch
+) -> None:
+    """取消と完了が重なり完了が先に決まったら、完了を残して already_finished（#911）。"""
+    del agents
+    run = _running()
+    original = runtime_repository.cancel_run
+
+    def complete_then_cancel(run_id: str, **kwargs: Any) -> RunState:
+        runtime_repository.complete_builtin_run(run_id, "合成の回答")
+        return original(run_id, **kwargs)
+
+    monkeypatch.setattr(runtime_repository, "cancel_run", complete_then_cancel)
+    output = _call("agent_cancel_run", {"run_id": run.id})["structuredContent"]
+    assert (output["result"], output["status"]) == ("already_finished", "completed")
+    assert runtime_repository.get_run(run.id).status == RunStatus.COMPLETED
+
+
+def test_cancel_run_with_an_api_key_records_the_key_and_ignores_the_run_budget(
+    monkeypatch: MonkeyPatch, auth: ProductionAuth, agents: None
+) -> None:
+    """取消は Run を作らないので Run の数の上限に数えない。イベントに操作した人とキーを残す。"""
+    del agents
+    monkeypatch.setattr(get_settings(), "app_api_key_runs_per_day", 1)
+    auth.user_with_permissions("mcp3240-cancel", [RUNS_OPERATE], agent_ids=[AGENT_ID])
+    key = _issue_key(login("mcp3240-cancel"))
+    headers = _bearer(key["token"])
+    chat = {"agent_id": AGENT_ID, "question": "q", "wait_seconds": 0}
+    created = _call("agent_chat", chat, headers)["structuredContent"]
+    limited = _call("agent_chat", chat, headers)["structuredContent"]
+    assert limited["error_code"] == "API_KEY_RUN_LIMIT"
+    output = _call("agent_cancel_run", {"run_id": created["run_id"]}, headers)
+    assert output["structuredContent"]["result"] == "cancelled", output
+    payload = _cancel_event(created["run_id"])
+    assert (payload["cancelled_by"], payload["via"], payload["api_key_id"]) == (
+        "mcp3240-cancel",
+        "mcp",
+        key["key"]["id"],
+    )
+
+    # 閲覧だけの利用者のキーには出さず、呼んでも権限なし。
+    auth.user_with_permissions("mcp3240-viewer", [RUNS_VIEW], agent_ids=[AGENT_ID])
+    viewer = _bearer(_issue_key(login("mcp3240-viewer"))["token"])
+    denied = _call("agent_cancel_run", {"run_id": created["run_id"]}, viewer)
+    assert denied["structuredContent"]["error_code"] == "MCP_TOOL_FORBIDDEN"
+    # キーの業務 Agent の範囲の外の Run は 403。
+    scoped = _bearer(
+        _issue_key(login("mcp3240-cancel"), resource_scopes={"agent": [OTHER_AGENT_ID]})["token"]
+    )
+    outside = _call("agent_cancel_run", {"run_id": created["run_id"]}, scoped)
+    assert outside["structuredContent"]["error_code"] == "AGENT_OUT_OF_KEY_SCOPE"
+    missing = _call("agent_cancel_run", {"run_id": "run_missing"}, headers)
+    assert missing["structuredContent"]["error_code"] == "RUN_NOT_FOUND"

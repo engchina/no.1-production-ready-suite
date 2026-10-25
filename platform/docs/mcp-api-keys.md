@@ -3,7 +3,7 @@
 RAG（非構造化データ）・NL2SQL（構造化データ）・Agent（業務 Agent へのチャット）は、標準の MCP（Streamable HTTP の `POST /api/mcp`。`initialize` / `tools/list` / `tools/call`）を公開している。Claude Code・Codex・Cursor などの外部の MCP クライアントは、利用者が自分で発行した **API キー** で接続する（#1805・#1874）。
 
 - RAG / NL2SQL: 資料の検索・業務データの照会のツール（契約は `platform/contracts/mcp/rag-tools.json` / `nl2sql-tools.json`）。
-- Agent: 業務 Agent を「専門家」として呼ぶチャットのツール（`agent_list` / `agent_chat` / `agent_get_run` / `agent_answer_confirmation` / `agent_skill_export`。契約は `platform/contracts/mcp/agent-tools.json`）。下の「Agent のツール」。
+- Agent: 業務 Agent を「専門家」として呼ぶチャットのツール（`agent_list` / `agent_chat` / `agent_get_run` / `agent_answer_confirmation` / `agent_cancel_run` / `agent_skill_export`。契約は `platform/contracts/mcp/agent-tools.json`）。下の「Agent のツール」。
 
 ## 接続先
 
@@ -53,6 +53,7 @@ RAG（非構造化データ）・NL2SQL（構造化データ）・Agent（業務
 | `agent_chat` | 業務 Agent に質問する（`thread_id` で会話を続ける）。`wait_seconds`（既定 50 秒、最大 300 秒）まで回答を待ち、終わらなければ `in_progress=true` と `run_id` を返す |
 | `agent_get_run` | Run の状態・回答の対応（`outcome`。RAG の `rag_search` と同じ語彙。完了した Run だけ）・回答・根拠（`sources`。RAG の `document_id` / `chunk_id` と引用の印 `cited`。今の権限で見られない根拠は除いて数を `withheld_evidence_count` に。#3240）・段落の印（`passage_marks`・`removed_passages`・`answer_warnings`。#2738）・回答前の確認（`confirmation`）・使ったツール。まだ終わっていなければ `wait_seconds`（既定 30 秒）まで待つ。出力は `agent_chat` / `agent_answer_confirmation` と同じ形（`schema_version` 3） |
 | `agent_answer_confirmation` | 回答前の確認に答える（`action=answer` で確認事項ごとに選択肢の ID か自由入力）か、確認せずに回答させる（`action=skip`） |
+| `agent_cancel_run` | 実行（`run_id`）を止める（承認・回答前の確認の待ちも閉じる）。冪等で、終わった Run はエラーにせず `result`（`cancelled` / `already_cancelled` / `already_finished`）と取消の後の `status` を返す。止められるのは画面の取消と同じ人（実行した利用者・会話の持ち主・system_admin）。Run を作らないので直近 24 時間の Run の数に数えない（#3240） |
 | `agent_skill_export` | 使える業務 Agent が使うスキルを Agent Skills の形（`SKILL.md` と `references/` のファイル）で返す。`name` のフォルダに置くと外部の Agent でも使える |
 
 - 業務 Agent は画面のチャットと同じく、公開中の版で RAG / NL2SQL などを調べて答える。会話（`thread_id`）は画面のチャットの会話と同じで、作った利用者だけが続けられる。
