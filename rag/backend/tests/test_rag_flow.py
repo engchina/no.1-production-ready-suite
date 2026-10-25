@@ -16,6 +16,7 @@ from app.clients.oracle import OracleClient
 from app.clients.parser_service import ParserServiceClient
 from app.config import Settings, get_settings
 from app.main import app
+from app.rag import ingestion as ingestion_module
 from app.rag.ingestion import INGESTION_INTERNAL_ERROR_MESSAGE, IngestionPipeline
 from app.rag.navigation import build_navigation_tree
 from app.schemas.document import FileStatus, SourceModality, SourceProfile
@@ -292,11 +293,24 @@ async def test_ingestion_records_trace_spans_without_payload_text(
     assert indexing_attributes["vector_count"] == indexing_attributes["chunk_count"]
 
 
+def _allow_roadmap_parser_backends(monkeypatch: MonkeyPatch) -> None:
+    """準備中(ロードマップ)の解析エンジンの判定を外す(#3374)。
+
+    残している service 系の経路のテスト用。
+    """
+    monkeypatch.setattr(ingestion_module, "is_roadmap_parser_adapter_backend", lambda _value: False)
+
+
 @pytest.mark.usefixtures("single_pass_ingestion")
 async def test_ingestion_passes_source_parser_profile_to_extraction_strategy(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """service 系の解析エンジン(Document Understanding)の呼び出しと品質レポートの解析エンジン。"""
+    """service 系の解析エンジン(Document Understanding)の呼び出しと品質レポートの解析エンジン。
+
+    OCI Document Understanding は準備中(ロードマップ。#3374)で取込が止めるが、service 系の
+    経路の実装は残すため、準備中の判定を外して経路を確かめる。
+    """
+    _allow_roadmap_parser_backends(monkeypatch)
     monkeypatch.setattr(get_settings(), "rag_parser_adapter_backend", "oci_document_understanding")
     captured: dict[str, str] = {}
 
@@ -1308,8 +1322,10 @@ def test_ingest_fails_job_when_vlm_parser_service_fails(
     """OCI の解析サービスの timeout・未到達は FAILED job とレシピ ERROR にする。
 
     抽出は parser マイクロサービス(oci_document_understanding)が行う。backend は失敗を別経路へ
-    縮退させず、理由付きの利用者向けエラーで取込を止める。
+    縮退させず、理由付きの利用者向けエラーで取込を止める。準備中(ロードマップ。#3374)の判定は外して、
+    残している service 系の経路を確かめる。
     """
+    _allow_roadmap_parser_backends(monkeypatch)
     monkeypatch.setattr(get_settings(), "rag_parser_adapter_backend", "oci_document_understanding")
     monkeypatch.setattr(
         ParserServiceClient, "service_url", lambda self, backend: "http://parser.invalid"

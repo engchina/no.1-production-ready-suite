@@ -13,6 +13,7 @@ import {
   CardTitle,
   FormStatus,
   ProcessingIndicator,
+  RoadmapBadge,
   RowActionMenu,
   Skeleton,
   StatusBadge,
@@ -30,6 +31,7 @@ import { Fragment, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  CalendarClock,
   CheckCircle2,
   CircleDashed,
   CircleSlash,
@@ -121,6 +123,11 @@ export function servicePrimaryAction(status: DisplayRuntimeStatus): "start" | "s
   return status === "running" || status === "degraded" || status === "starting" ? "stop" : "start";
 }
 
+/** 準備中（ロードマップ）で、まだ使えないサービスか（#3374）。灰色にし、状態を問い合わせず、操作を出さない。 */
+export function isRoadmapService(service: Pick<ServiceCatalogItemData, "availability">): boolean {
+  return service.availability === "roadmap";
+}
+
 /** 再起動を出す状態（unit が動いているときだけ。停止中は「起動」を使う）。 */
 export function serviceCanRestart(status: DisplayRuntimeStatus): boolean {
   return status === "running" || status === "degraded" || status === "starting";
@@ -150,7 +157,11 @@ const SERVICE_PROCESSING_LABEL_KEYS = {
 /** ファイル準備・文書解析などの工程のサービスの稼働可視化・起動/停止を行う設定画面。 */
 export function ServicesManagementClient() {
   const query = useServiceCatalog();
-  const serviceIds = query.data?.services.map((service) => service.service_id) ?? [];
+  // 準備中（ロードマップ）のサービスは配備しないので、状態を問い合わせない（#3374）。
+  const serviceIds =
+    query.data?.services
+      .filter((service) => !isRoadmapService(service))
+      .map((service) => service.service_id) ?? [];
   const statusQueries = useServiceStatusQueries(serviceIds);
   const control = useControlService();
   const confirm = useConfirm();
@@ -197,8 +208,11 @@ export function ServicesManagementClient() {
   const data = query.data;
   if (!data) return null;
 
-  const displayServices = data.services.map<DisplayServiceData>((service, index) => {
-    const statusQuery = statusQueries[index];
+  const displayServices = data.services.map<DisplayServiceData>((service) => {
+    if (isRoadmapService(service)) {
+      return { ...service, status: "roadmap", statusReady: true };
+    }
+    const statusQuery = statusQueries[serviceIds.indexOf(service.service_id)];
     const statusData = statusQuery?.data;
     if (statusData) {
       return {
@@ -524,6 +538,7 @@ function ServiceRow({
   onAct: (service: DisplayServiceData, action: ServiceControlAction) => void;
   onToggleLogs: (service: DisplayServiceData) => void;
 }) {
+  if (isRoadmapService(service)) return <RoadmapServiceRow service={service} />;
   const stopped = service.status === "stopped";
   const statusLoading = service.status === "loading";
   const statusError = service.status === "error";
@@ -644,6 +659,35 @@ function ServiceRow({
       {logsOpen ? (
         <ServiceLogPanel id={logsPanelId} service={service} logsQuery={logsQuery} />
       ) : null}
+    </li>
+  );
+}
+
+/**
+ * 準備中（ロードマップ）のサービスの行（#3374）。名前を灰色にし、共有の `RoadmapBadge` と理由を出して、
+ * 起動・停止・ログの操作を出さない（隠さずに、まだ使えないことを伝える）。
+ */
+function RoadmapServiceRow({ service }: { service: DisplayServiceData }) {
+  const hintId = `service-roadmap-hint-${service.service_id}`;
+  return (
+    <li
+      className="py-3"
+      data-testid={`service-row-${service.service_id}`}
+      data-availability="roadmap"
+      aria-describedby={hintId}
+    >
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-fg-disabled">{serviceLabel(service)}</p>
+          <p className="font-mono text-xs text-fg-muted">{service.service_id}</p>
+          <p id={hintId} className="mt-1 text-xs leading-relaxed text-fg-muted">
+            {t("settings.services.roadmapHint")}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <RoadmapBadge label={t("settings.services.status.roadmap")} />
+        </div>
+      </div>
     </li>
   );
 }
@@ -834,6 +878,7 @@ export const SERVICE_STATUS_BADGE: Record<
   stopped: { variant: "neutral", icon: CircleSlash },
   not_installed: { variant: "neutral", icon: CircleDashed },
   unconfigured: { variant: "neutral", icon: MinusCircle },
+  roadmap: { variant: "neutral", icon: CalendarClock },
   loading: { variant: "neutral", icon: Hourglass },
   error: { variant: "danger", icon: AlertTriangle },
 };

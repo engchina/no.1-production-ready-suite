@@ -9,6 +9,46 @@ test.beforeEach(async ({ page }) => {
 });
 
 for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`準備中（ロードマップ）の OCI Document Understanding は灰色で選べない (${viewport.name})`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const serviceRequests: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/api/services/parser-oci-document-understanding/")) {
+        serviceRequests.push(request.url());
+      }
+    });
+    await mockParserAdapters(page);
+
+    await page.goto("/settings/parser-adapters");
+
+    const radio = page.getByRole("radio", { name: /OCI Document Understanding/ });
+    await expect(radio).toBeDisabled();
+    await expect(radio).toHaveAttribute("data-availability", "roadmap");
+    // 理由はカードの文で読み上げる（aria-describedby）。
+    await expect(radio).toHaveAccessibleDescription("準備中（ロードマップ）のため、まだ選べません。");
+    const card = page.locator('label[for="settings-parser-backend-oci_document_understanding"]');
+    await expect(card.locator("[data-roadmap-badge]")).toHaveText("準備中（ロードマップ）");
+    await expect(card).toContainText("準備中（ロードマップ）のため、まだ選べません。");
+    // 押しても選ばれず、保存できる変更にならない。
+    await card.click({ force: true });
+    await expect(radio).not.toBeChecked();
+    await expect(page.getByRole("radio", { name: /Docling.*既定の解析エンジン/ })).toBeChecked();
+    expect(serviceRequests).toEqual([]);
+    await expectNoHorizontalOverflow(page);
+    await card.scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: testInfo.outputPath(`parser-roadmap-${viewport.name}.png`),
+      fullPage: true,
+    });
+  });
+}
+
+for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapseSidebar: false },
   { name: "mobile", width: 375, height: 812, collapseSidebar: true },
 ]) {
@@ -124,10 +164,11 @@ for (const viewport of [
     await expect(page.getByText("原本種別ごとの実行順")).toHaveCount(0);
     await expect(page.getByText("未導入", { exact: true })).toHaveCount(0);
     await expect(page.getByText("パッケージ未導入", { exact: true })).toHaveCount(0);
-    await expect(
-      page.getByRole("radio", { name: /OCI Document Understanding/ })
-    ).toBeVisible();
-    await expect(page.getByText("未設定", { exact: true }).first()).toBeVisible();
+    // OCI Document Understanding は準備中（ロードマップ。#3374）。灰色のカードで選べず、未設定の印も出さない。
+    const roadmapRadio = page.getByRole("radio", { name: /OCI Document Understanding/ });
+    await expect(roadmapRadio).toBeVisible();
+    await expect(roadmapRadio).toBeDisabled();
+    await expect(page.getByText("未設定", { exact: true })).toHaveCount(0);
 
     // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
     const navLink = (await openSidebarNav(page)).getByRole("link", { name: "文書解析" });
@@ -1085,9 +1126,11 @@ function parserAdapterEnvelope(data: object) {
       service_backends: [
         {
           backend: "oci_document_understanding",
+          // 準備中（ロードマップ。#3374）。backend は選択中・未設定の警告にしない。
+          availability: "roadmap",
           selected: false,
           configured: false,
-          warning_code: "oci_document_understanding_unconfigured",
+          warning_code: null,
         },
       ],
       capabilities: [
@@ -1177,7 +1220,6 @@ async function mockParserServiceStatuses(page: Page) {
     "parser-unstructured": "degraded",
     "parser-structured-records-jsonl": "running",
     "parser-xml-tree-json": "running",
-    "parser-oci-document-understanding": "unconfigured",
   };
   await page.route("**/api/services/*/status", async (route) => {
     const serviceId = decodeURIComponent(

@@ -156,6 +156,7 @@ from app.schemas.document import (
     DocumentPreviewPage,
     DocumentPreviewPages,
     DocumentProcessingConfig,
+    DocumentProcessingConfigInput,
     DocumentRecipeCreateRequest,
     DocumentRecipeDeleteResult,
     DocumentRecipeStep,
@@ -1312,9 +1313,9 @@ async def create_document_recipe(
 
 @router.put("/{document_id}/recipes/{recipe_id}", response_model=ApiResponse[DocumentRecipeView])
 async def update_document_recipe(
-    document_id: str, recipe_id: str, request: DocumentProcessingConfig
+    document_id: str, recipe_id: str, request: DocumentProcessingConfigInput
 ) -> ApiResponse[DocumentRecipeView]:
-    """選択レシピの明示設定を保存する。"""
+    """選択レシピの明示設定を保存する(準備中の解析エンジンは 422。#3374)。"""
     try:
         _merge_document_processing_config(request)
     except KbAdapterConfigError as exc:

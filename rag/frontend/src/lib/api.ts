@@ -2191,6 +2191,8 @@ export interface ParserAdapterBackendSourceMatrixData {
 
 export interface ParserServiceBackendData {
   backend: ParserServiceBackendName;
+  /** roadmap = 準備中（ロードマップ）で、まだ選べない（#3374）。省略は available。 */
+  availability?: ServiceAvailability;
   selected: boolean;
   configured: boolean;
   warning_code: string | null;
@@ -2337,8 +2339,12 @@ export type ServiceRuntimeStatus =
   | "failed"
   | "stopped"
   | "not_installed"
-  | "unconfigured";
+  | "unconfigured"
+  // 準備中（ロードマップ）のサービス。配備しないので問い合わせない（#3374。エラーではない）。
+  | "roadmap";
 export type ServiceExecutionPolicy = "selected_adapter" | "default_adapter";
+// available = 使える、roadmap = 準備中（ロードマップ）。roadmap は配備・起動しない（#3374）。
+export type ServiceAvailability = "available" | "roadmap";
 // 起動 = systemctl enable --now、停止 = systemctl disable --now、再起動 = systemctl restart。
 export type ServiceAction = "start" | "stop" | "restart";
 
@@ -2357,6 +2363,8 @@ export interface ServiceCatalogItemData {
   configured: boolean;
   /** 起動/停止・ログに使う systemd の unit 名。 */
   systemd_unit: string;
+  /** roadmap = 準備中（ロードマップ）で、灰色にして操作を出さない（#3374）。省略は available。 */
+  availability?: ServiceAvailability;
   model_cache: ServiceModelCacheData | null;
 }
 
