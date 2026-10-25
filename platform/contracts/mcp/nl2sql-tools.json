@@ -27,6 +27,12 @@
       },
       "outputSchema": {
         "properties": {
+          "schema_version": {
+            "default": 1,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "requirement_session_id": {
             "title": "Requirement Session Id",
             "type": "string"
@@ -295,6 +301,12 @@
         },
         "description": "契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。",
         "properties": {
+          "schema_version": {
+            "default": 1,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "job_id": {
             "anyOf": [
               {
@@ -585,6 +597,12 @@
           }
         },
         "properties": {
+          "schema_version": {
+            "default": 1,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "profiles": {
             "items": {
               "$ref": "#/$defs/ProfileItem"
@@ -942,6 +960,12 @@
         },
         "description": "契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。",
         "properties": {
+          "schema_version": {
+            "default": 1,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "job_id": {
             "anyOf": [
               {
@@ -1252,6 +1276,12 @@
           }
         },
         "properties": {
+          "schema_version": {
+            "default": 1,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "recommended_profile_id": {
             "anyOf": [
               {

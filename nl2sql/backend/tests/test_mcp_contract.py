@@ -16,7 +16,7 @@ from typing import cast
 
 from fastapi import Request
 
-from app.features.mcp.tools import _INSTRUCTIONS, build_mcp_server
+from app.features.mcp.tools import _INSTRUCTIONS, MCP_OUTPUT_SCHEMA_VERSION, build_mcp_server
 
 CONTRACT = Path(__file__).resolve().parents[3] / "platform/contracts/mcp/nl2sql-tools.json"
 
@@ -37,6 +37,16 @@ def test_nl2sql_mcp_tools_match_platform_contract() -> None:
         "MCP ツールの定義が契約と違います。"
         "意図した変更なら UPDATE_MCP_CONTRACT=1 で契約を更新してください。"
     )
+
+
+def test_every_tool_output_has_schema_version() -> None:
+    """3 製品の MCP の出力の外枠をそろえ、どのツールの出力も形の版を持つ（#3240）。"""
+    server = build_mcp_server(cast(Request, None))
+    versions = {
+        tool.name: tool.descriptor()["outputSchema"]["properties"]["schema_version"]["default"]
+        for tool in server.tools.values()
+    }
+    assert versions == dict.fromkeys(server.tools, MCP_OUTPUT_SCHEMA_VERSION)
 
 
 _ISSUE_REF = re.compile(r"#\d{3,}")
