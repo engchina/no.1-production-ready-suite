@@ -23,7 +23,8 @@ afterEach(() => {
   container.remove();
 });
 
-const AT = "2026-10-15T09:12:05";
+// 東京（既定の表示の時間帯）の 2026-10-15 09:12:05。
+const AT = "2026-10-15T00:12:05Z";
 
 function items(): RunEventLogItem[] {
   return [

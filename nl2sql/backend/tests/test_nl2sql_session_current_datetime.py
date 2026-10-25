@@ -7,7 +7,7 @@ SELECT の session の時間帯を設定の時間帯にする（`OracleNl2SqlAda
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -74,6 +74,10 @@ def test_rewrite_is_idempotent() -> None:
     assert use_session_current_datetime(once) == once
 
 
+# 生成の本体は差し替えるため、業務プロファイル・対象は使わない。
+_UNUSED = cast(Any, None)
+
+
 def _generated(sql: str) -> GeneratedSql:
     return GeneratedSql(
         engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
@@ -93,10 +97,10 @@ def test_generated_sql_uses_session_current_datetime(monkeypatch: pytest.MonkeyP
     generated = service._generate_sql(  # noqa: SLF001
         Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
         "q",
+        _UNUSED,
+        _UNUSED,
         None,
-        None,
-        None,
-        [],  # type: ignore[arg-type]
+        [],
     )
 
     # 画面・履歴・実行の SQL は同じ（置き換えた後の SQL）。
@@ -114,10 +118,10 @@ def test_generated_sql_without_db_clock_is_unchanged(monkeypatch: pytest.MonkeyP
     generated = service._generate_sql(  # noqa: SLF001
         Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
         "q",
+        _UNUSED,
+        _UNUSED,
         None,
-        None,
-        None,
-        [],  # type: ignore[arg-type]
+        [],
     )
 
     assert generated.generated_sql == original.generated_sql
