@@ -23,6 +23,7 @@ from trace_span_fake import TraceTable, trace_table  # noqa: F401 - fixture
 
 from app.features.mcp.router import traced_mcp_server
 from app.features.nl2sql.models import RUN_SOURCE_MCP, JobOrigin, JobStatus
+from app.features.nl2sql.trace_spans import STAGE_DISPLAY_NAMES
 from app.settings import get_settings
 
 _AGENT_TRACE = "4bf92f3577b34da6a3ce929d0e0e4736"
@@ -158,3 +159,15 @@ def test_job_from_the_mcp_call_runs_under_the_server_span(
     assert progress is not None
     names = {event.name for event in progress.trace.events if event.type == "step"}
     assert "mcp.server" not in names and "nl2sql.execute" in names
+    # 工程の span は NL2SQL の画面と同じ工程の名前（名詞）を `display_name` に持つ（#3272。別の
+    # 製品の画面〔Agent の実行の詳細〕が出す）。工程でない span には付けない。
+    named: dict[str, str | None] = {}
+    for row in rows:
+        if row["operation_id"] != job_id:
+            continue
+        stage = json.loads(row["attributes_json"] or "{}").get("pr.stage")
+        display_name = json.loads(row["display_params_json"] or "{}").get("display_name")
+        named[str(stage)] = display_name
+    assert named["None"] is None
+    stages = {stage: name for stage, name in named.items() if stage != "None"}
+    assert stages and stages == {stage: STAGE_DISPLAY_NAMES[stage] for stage in stages}

@@ -4163,7 +4163,7 @@ export const ja = {
   "feedback.detail.citationCount": "AI に渡した件数",
   "feedback.detail.guardrail": "安全チェック",
   "feedback.detail.fingerprint": "設定 fingerprint",
-  // 工程の名前は backend の時間切れの文言（app/rag/answer_timeout.py）と揃える（#375）。
+  // 工程の名前は backend の時間切れの文言（app/rag/span_display.py の ANSWER_STAGE_LABELS）と揃える（#375）。
   "search.stage.processing": "処理中",
   "search.stage.historyRewrite": "会話を踏まえた質問の書き換え",
   "search.stage.fieldFilter": "検索条件の読み取り",

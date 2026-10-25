@@ -1434,7 +1434,7 @@ export function ChatSkeleton({ turns = 2, className, testId }: ChatSkeletonProps
 - `DataTable` の `loading` の行・`LoadingState` の棒も同じ `SKELETON_CLASS` を使います。`DataTable` の `loading` は、`loadingRows` を省略すると `visibleRows` の行数（無ければ 3 行）の Skeleton で高さを予約します。
 - 同じ取得の経過時間は 1 か所だけに出します。2 つの領域が同じ取得を待つときは、片方は形だけ（`TableSkeleton` を `TimedLoadingState` で包まない）にします。
 - **位置と幅は全画面で 1 つ**です（#2510）。影響を受ける領域の先頭に、領域と同じ幅の行で出し、その下を内容の形の Skeleton で覆います。画面の中央に浮かせる・内容の幅のカードにする・ページの上に重ねる・見出しの文言を差し替える・右寄せのバッジにする、はしません。
-  - ページ全体が使えない初期処理（認証の確認・DB の状態の確認・画面のコードの読み込み）は `PageLoadingState`（`PageBody` の先頭の行 + 本文の形の Skeleton。`AppShell` の外では `<main className="min-h-screen bg-canvas">` で包む）。
+  - ページ全体が使えない初期処理（認証の確認・DB の状態の確認・画面のコードの読み込み）は `PageLoadingState`（全幅の `PageBody` の先頭の行 + 本文の形の Skeleton。画面と同じく常に全幅で、`wide` は渡さない。#3311。`AppShell` の外では `<main className="min-h-screen bg-canvas">` で包む）。
   - 汎用の行の形は `LoadingState`（`label` 必須。行 + 棒の Skeleton）。検索つきの選択欄の取得中は、一覧の先頭に同じ形の行を出します（部品が持つ）。
   - スクロールする表示領域（`PreviewViewer` のページ）は、高さ 0 の `sticky` の中に全幅の行を置き、スクロールしても先頭に残し、内容の位置と高さを動かしません。
 

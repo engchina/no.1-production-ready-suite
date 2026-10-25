@@ -10,60 +10,18 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from collections.abc import Awaitable, Callable
 
 from app.config import Settings
 from app.rag.answer_engine import ANSWER_STEP_STAGE_PREFIX
 from app.rag.answer_threads import answer_deadline
 from app.rag.pipeline import SearchStageProgress, SearchStageProgressCallback
-
-# 進捗の工程（SSE の `stage`）の利用者向けの名前。時間切れの文言（ERROR として保存する回答・
-# SSE の error event・MCP の 504）に使う。画面の進捗の表示名は frontend の i18n
-# （`search.stage.*`。`src/lib/answer-progress.ts`）と同じ名前にする。
-ANSWER_STAGE_LABELS: dict[str, str] = {
-    # 検索だけ(KB の検索テスト・レシピの検索比較。#593)
-    "retrieval": "検索",
-    "history_rewrite": "会話を踏まえた質問の書き換え",
-    "field_filter": "検索条件の読み取り",
-    "answer": "質問の読み取りから回答の作成まで",
-    # 回答側の安全チェック(#1146)
-    "answer_guardrail": "回答の安全チェック",
-    # 回答の記録・会話の回答の保存(#2342)
-    "answer_record_save": "回答の記録の保存",
-    "chat_message_save": "会話への回答の保存",
-}
-# 回答フローの工程名（`rag_engine` の `_execution_step`）→ 利用者向けの名前（#2096）。画面の
-# `frontend/src/lib/answer-process.ts` の `answerStepDisplayName`（i18n の `answer.step.*`）と
-# 同じ名前にする（frontend の `answer-process.test.ts` が照合する）。工程名はログ・記録の識別に
-# 使うので変えない。
-ANSWER_STEP_DISPLAY_NAMES: dict[str, str] = {
-    "質問の理解": "質問の条件の読み取り",
-    "用語・ルールの確認": "用語・ルールの確認",
-    "検索の準備確認": "検索の準備の確認",
-    "質問拡張戦略": "質問の言い換え",
-    "検索文と検索語の確定": "検索文と検索語の決定",
-    "回答生成フロー": "根拠の検索と回答の作成",
-    "検索語の再確定（書き換え後）": "検索語の決め直し",
-    "文書検索": "文書の検索",
-    "Rerank": "検索結果の並べ替え",
-    "文書の選択": "文書の絞り込み",
-    "文書の選択の解除": "文書の絞り込みの解除",
-    "根拠確認": "根拠の確認",
-    "根拠確認の結論": "根拠の確認の結論",
-    "補正検索の準備": "探し直しの準備",
-    "文脈の追加": "前後の文脈の追加",
-    "画面の選択": "関係する画面の選択",
-    "章節の拡張": "関係する章節の追加",
-    "要求ごとの根拠の確認": "要求ごとの根拠の確認",
-    "回答に使う画像の確認": "回答に使う画像の確認",
-    "回答文の生成と根拠確認": "回答の作成と根拠の確認",
-    "是正": "回答の手直し",
-    "是正の打ち切り": "回答の手直しの打ち切り",
-}
-_STEP_ATTEMPT = re.compile(r"（(\d+)回目）$")
-ANSWER_STAGE_BEFORE_START_LABEL = "検索の準備"
-ANSWER_STAGE_UNKNOWN_LABEL = "処理"
+from app.rag.span_display import (
+    ANSWER_STAGE_BEFORE_START_LABEL,
+    ANSWER_STAGE_LABELS,
+    ANSWER_STAGE_UNKNOWN_LABEL,
+    answer_step_display_name,
+)
 
 
 def answer_stage_label(stage: str | None) -> str:
@@ -74,20 +32,6 @@ def answer_stage_label(stage: str | None) -> str:
     if stage.startswith(ANSWER_STEP_STAGE_PREFIX):
         return answer_step_display_name(stage.removeprefix(ANSWER_STEP_STAGE_PREFIX))
     return ANSWER_STAGE_LABELS.get(stage, ANSWER_STAGE_UNKNOWN_LABEL)
-
-
-def answer_step_display_name(name: str) -> str:
-    """回答フローの工程名の利用者向けの名前（回数つきは「文書の検索（2 回目）」の形）。"""
-    value = name.strip()
-    if not value:
-        return ANSWER_STAGE_UNKNOWN_LABEL
-    if value in ANSWER_STEP_DISPLAY_NAMES:
-        return ANSWER_STEP_DISPLAY_NAMES[value]
-    attempt = _STEP_ATTEMPT.search(value)
-    base = value[: attempt.start()] if attempt else value
-    if attempt is None or base not in ANSWER_STEP_DISPLAY_NAMES:
-        return value
-    return f"{ANSWER_STEP_DISPLAY_NAMES[base]}（{attempt.group(1)} 回目）"
 
 
 def format_timeout_limit(seconds: float) -> str:

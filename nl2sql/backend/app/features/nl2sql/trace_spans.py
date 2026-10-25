@@ -52,6 +52,25 @@ ANONYMOUS_TRACE_OWNER = "anonymous"
 type TraceTerminal = Literal["done", "failed", "cancelled"]
 type SpanDetails = dict[str, dict[str, Any]]
 
+# 工程（span の属性 `pr.stage`）の利用者向けの名前（名詞。#3272）。共通の span の表の書き手が span
+# の名前の値 `display_name` に書き、別の製品の画面（Agent の実行の詳細）は NL2SQL の工程の定義を
+# 持たずにこの名前を出す。NL2SQL の画面の工程の名前（frontend の i18n の
+# `chat.progress.<工程>.idle`）と同じにする（frontend の `sql-chat-progress.test.ts` が照合する）。
+STAGE_DISPLAY_NAMES: dict[str, str] = {
+    "queue": "処理の開始",
+    "prepare_context": "質問と対象の表の準備",
+    "generate_sql": "SQL の生成",
+    "safety_check": "SQL の安全性の確認",
+    "execute_sql": "SQL の実行",
+    "format_results": "結果のまとめ",
+}
+
+
+def span_display_name(update: SpanUpdate) -> str | None:
+    """NL2SQL の span の利用者向けの名前（工程の span だけ。技術の span・知らない段は None）。"""
+    stage = update.attributes.get("pr.stage")
+    return STAGE_DISPLAY_NAMES.get(stage) if isinstance(stage, str) else None
+
 
 class TraceSpanReadError(RuntimeError):
     """span の表を読めなかった（DB の一時的な障害など）。画面は前の内容を残して読み直す。"""
@@ -90,6 +109,7 @@ def install_trace_span_store(
             batch_size=settings.trace_store_batch_size,
             queue_size=settings.trace_store_queue_size,
             retention_days=settings.trace_retention_days,
+            display_name=span_display_name,
         ),
         connection_factory=connection_factory,
     )

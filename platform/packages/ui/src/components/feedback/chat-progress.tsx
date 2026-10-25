@@ -6,7 +6,7 @@ import { operationTimestampMs } from "../../lib/operation-timing";
 import { cn } from "../../lib/utils";
 import { RunProcessDetails } from "../data/run-detail";
 import { useTraceDetailsLabels } from "../data/trace-labels-provider";
-import { RunTimeline, runTimelineStepIndent, type RunTimelineStep } from "../data/run-detail";
+import { RunTimeline, RunTimelineProduct, runTimelineStepIndent, type RunTimelineStep } from "../data/run-detail";
 import { hasRunStepDetails, type RunStepDetails } from "../data/run-step-details";
 import { Disclosure } from "../ui/disclosure";
 import { TEXT_ICON_SIZE } from "../ui/text-icon";
@@ -52,6 +52,8 @@ export interface ChatProgressStep {
   meta?: string;
   /** 入れ子の深さ（0 が最上位。1 以上は字下げする。親の工程の中の工程。最大 3 段まで字下げ）。 */
   level?: number;
+  /** 別の製品の処理の行の製品名（製品の境目の行だけ。例「RAG」。#3272）。名前の前に控えめに出す。 */
+  product?: string;
   /**
    * 段を開いて見る詳細（見出しと値・行・SQL や JSON の箱。#2294）。中身があれば一覧の行に開閉のボタンが付き、
    * 既定で閉じる。実行の詳細の `RunTimelineStep.details` と同じ形。
@@ -270,6 +272,7 @@ export function chatProgressTimelineStep(step: ChatProgressStep): RunTimelineSte
   if (typeof step.durationMs === "number" && Number.isFinite(step.durationMs)) result.durationMs = Math.max(0, step.durationMs);
   if (detail) result.detail = detail;
   if (step.level) result.level = step.level;
+  if (step.product) result.product = step.product;
   if (hasRunStepDetails(step.details)) result.details = step.details;
   if (step.children != null) result.children = step.children;
   return result;
@@ -435,6 +438,7 @@ function CurrentStepRow({
             {activityIndicator ? <Spinner size={TEXT_ICON_SIZE.xs} className="text-accent-fg" /> : <Clock3 size={TEXT_ICON_SIZE.xs} className="text-fg-muted" aria-hidden />}
           </span>
           <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+            {step?.product ? <RunTimelineProduct product={step.product} /> : null}
             <span className="font-medium text-fg" data-run-timeline-label="">{label}</span>
             {detail ? <span className="text-fg-muted">{`（${detail}）`}</span> : null}
             <span className="sr-only">{` ${labels.status.running}`}</span>
