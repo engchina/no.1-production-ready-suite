@@ -299,6 +299,49 @@ def test_cancel_from_other_worker_reaches_owner_at_stage_boundary() -> None:
     assert seen.error_code == JOB_CANCELLED_ERROR_CODE
 
 
+def test_cancel_job_records_first_requester_and_reports_repeated_requests() -> None:
+    """MCP の取消（#3318）: 要求のドキュメントに操作した人と入口を残し、2 回目は上書きしない。
+
+    2 回目の要求は別のプロセス（job の文書を読み直した手元の job は印を持たない）でも、
+    要求のドキュメントから「要求済み」と分かる。
+    """
+    repository = _repository()
+    blocking = _BlockingEnterpriseAiClient(_GENERATED)
+    owner = _worker(repository, blocking)
+    observer = _worker(repository)
+    created = owner.start_job(_request(), actor_user_uuid="user-1", actor_is_system_admin=True)
+    assert blocking.entered.wait(timeout=10)
+
+    first = observer.cancel_job(
+        created.job_id,
+        actor_user_uuid="user-1",
+        via={"via": "mcp", "agent_run_id": "run-1", "ignored": "x"},
+    )
+    assert first is not None
+    assert (first.job.status, first.already_requested) == (JobStatus.RUNNING, False)
+    document = repository.get_document("job_cancel_requests", created.job_id)
+    assert document is not None
+    assert (document["actor_user_uuid"], document["via"], document["agent_run_id"]) == (
+        "user-1",
+        "mcp",
+        "run-1",
+    )
+    assert "ignored" not in document
+
+    second = _worker(repository).cancel_job(
+        created.job_id, actor_user_uuid="admin-1", actor_can_manage=True, via={"via": "mcp"}
+    )
+    assert second is not None
+    assert second.already_requested is True
+    kept = repository.get_document("job_cancel_requests", created.job_id)
+    assert kept is not None
+    assert kept["actor_user_uuid"] == "user-1"
+
+    blocking.release.set()
+    finished = _wait_terminal(owner, created.job_id)
+    assert (finished.status, finished.error_code) == (JobStatus.ERROR, JOB_CANCELLED_ERROR_CODE)
+
+
 def test_cancel_of_unknown_job_returns_none() -> None:
     service = _worker(_repository())
 

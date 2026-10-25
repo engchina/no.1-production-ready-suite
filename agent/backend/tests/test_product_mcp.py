@@ -175,9 +175,10 @@ def test_fake_product_mcp_follows_the_input_contracts() -> None:
             assert set(schema.get("required", [])) == set(contract[name].get("required", [])), name
             assert set(schema["properties"]) <= set(contract[name]["properties"]), name
             checked += 1
-    # + nl2sql_list_profiles / nl2sql_recommend_profile / nl2sql_cancel_requirement（#1441）と、
-    # 画面が保存した根拠を確かめ直す内部のツール rag_readable_documents（#3252）。
-    assert checked == len(READ_ONLY) + 4
+    # + nl2sql_list_profiles / nl2sql_recommend_profile / nl2sql_cancel_requirement（#1441）・
+    # nl2sql_cancel_job（#3318）と、画面が保存した根拠を確かめ直す内部のツール
+    # rag_readable_documents（#3252）。
+    assert checked == len(READ_ONLY) + 5
 
 
 def test_fake_nl2sql_outputs_carry_the_contract_schema_version() -> None:
@@ -186,7 +187,7 @@ def test_fake_nl2sql_outputs_carry_the_contract_schema_version() -> None:
     for tool in contract["tools"]:
         output = DEFAULT_OUTPUTS[tool["name"]]
         if callable(output):
-            output = output(SimpleNamespace(requirement_session_id="qs-1"))
+            output = output(SimpleNamespace(requirement_session_id="qs-1", job_id="job-1"))
         version = tool["outputSchema"]["properties"]["schema_version"]["default"]
         assert output["schema_version"] == version, tool["name"]
 

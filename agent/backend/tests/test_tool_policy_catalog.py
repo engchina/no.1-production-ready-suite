@@ -83,7 +83,7 @@ def test_lists_mcp_connection_tools_with_the_default_decision(
         "configured": True,
         # 標準の接続はツールの注釈を常に使う（#1832）。
         "trust_tool_annotations": True,
-        "tool_count": 5,
+        "tool_count": 6,
         "error": None,
     }
 

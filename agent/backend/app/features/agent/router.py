@@ -1678,6 +1678,24 @@ def _schedule_builtin_run(run: RunState) -> None:
     task.add_done_callback(_builtin_tasks.discard)
 
 
+def _schedule_nl2sql_job_cancel(before: RunStatus, run: RunState) -> None:
+    """取り消した Run が始めた、まだ終わっていない NL2SQL のジョブを止める（#3318）。
+
+    実行中（running）だった Run は、実行している側が Run の終わりに止める（取消の後に届いた
+    `nl2sql_query` の結果のジョブも分かる。`builtin_runtime.execute_run`）。ここで扱うのは、
+    実行している側の無い Run（承認・回答前の確認の待ち、再開の待ち）だけ。
+    """
+    if (
+        before == RunStatus.RUNNING
+        or run.status != RunStatus.CANCELLED
+        or run.runtime_id != BUILTIN_RUNTIME_ID
+    ):
+        return
+    task = asyncio.get_running_loop().create_task(builtin_runtime.cancel_run_nl2sql_jobs(run.id))
+    _builtin_tasks.add(task)
+    task.add_done_callback(_builtin_tasks.discard)
+
+
 # 実行履歴・承認の一覧のページング（`limit` / `offset`。上限を超えると 422。#1266・#1897）。
 _runs_paging = offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100)
 _approvals_paging = offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100)
@@ -3389,13 +3407,13 @@ async def cancel_run(
                     "message": "この実行はすでに終了しているため、取り消せません。",
                 },
             )
-        return ApiResponse(
-            data=await run_in_threadpool(
-                runtime_repository.cancel_run, run_id, cancelled_by=_actor_login_id(request)
-            )
+        cancelled = await run_in_threadpool(
+            runtime_repository.cancel_run, run_id, cancelled_by=_actor_login_id(request)
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
+    _schedule_nl2sql_job_cancel(run.status, cancelled)
+    return ApiResponse(data=cancelled)
 
 
 @router.post(

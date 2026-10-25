@@ -46,6 +46,7 @@ from app.features.agent.clarification_cancel import (
 )
 from app.features.agent.confirmation import CONFIRMATION_TOOL as AGENT_CONFIRMATION_TOOL
 from app.features.agent.guide_steps import guide_plan, guide_step_states, guide_steps_next_step
+from app.features.agent.job_cancel import RUN_CANCEL_TRACE_PREFIX
 from app.features.agent.tools import MCP_TOOL_SEPARATOR, mcp_base_tool_name
 
 if TYPE_CHECKING:
@@ -220,7 +221,9 @@ def _executed(step: RunStep) -> bool:
         return False
     if mcp_base_tool_name(step.tool_call.name) in _UNCOUNTED_TOOLS:
         return False
-    if (step.tool_call.trace_id or "").startswith((GUIDE_CHECK_TRACE_PREFIX, CANCEL_TRACE_PREFIX)):
+    if (step.tool_call.trace_id or "").startswith(
+        (GUIDE_CHECK_TRACE_PREFIX, CANCEL_TRACE_PREFIX, RUN_CANCEL_TRACE_PREFIX)
+    ):
         return False
     return step.tool_result.error_code not in {_DRY_RUN_CODE, BUDGET_EXCEEDED_CODE}
 
