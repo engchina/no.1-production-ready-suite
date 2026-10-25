@@ -1,23 +1,24 @@
 """親子階層（small-to-big）(rag_poc の Small-to-Big 親子分割)を backend の Chunk へ写す。
 
-docling サービスの解析が ``parser_artifacts["layout_records"]`` に保持した LayoutRecord から
-``rag_engine.chunking.build_small_to_big_chunks`` で親子チャンクを作り、子だけを索引単位として返す。
-親の本文と ID は子の metadata(``chunk_group_id`` / ``parent_text``)に保持し、既存の
-group sibling 展開と回答文脈で使う。Oracle Text と embedding には rag_poc の search_text を使う。
-文書の 1 ページ目の本文(回答の「文書の背景」)は先頭の chunk にだけ載せ、保存のときに chunk set
-へ 1 つだけ移す(#557。検索用 text には入れない)。
+親は回答の文脈に渡す大きい単位、子は検索に当てる小さい単位(LangChain の ParentDocumentRetriever・
+LlamaIndex の階層の分割と同じ考え方)。子だけを索引単位として返し、親の本文と ID は子の metadata
+(``chunk_group_id`` / ``parent_text``)に保持して、既存の group sibling 展開と回答文脈で使う。
+親子の作り方は抽出の形で選ぶ(解析エンジンの名前では選ばない。#3377):
 
-Excel の前処理(``excel_to_jsonl``)の行の記録(``rag_parser_core.sheet_records``)は、layout_records が
-無くても親子で分割する(#1349): 子は 1 記録(表の 1 行・手順書の 1 手順)= 1 chunk、親は同じシート
-(手順書は同じ章)の続く記録を ``parent_target_chars`` / ``parent_max_children`` まで
-まとめた表の一部。
-検索は行の子で当て、回答の文脈には親(表の一部)の本文を渡す。表頭より上の行(前書き)は記録と
-混ぜず、単独の子(親は自分)にする。
-
-文書解析が Docling 以外で layout_records も行の記録もない文書は、失敗させずに
-「構造認識」(structure_aware)で分割する(#300)。縮退したことは chunk の metadata
-(``chunk_strategy_requested`` / ``chunk_strategy_fallback_reason``)に残し、分割プレビューと
-Chunk 一覧で利用者に示す。
+- 解析の ``parser_artifacts["layout_records"]``(Docling の LayoutRecord)があれば、
+  ``rag_engine.chunking.build_small_to_big_chunks`` で親子チャンクを作る。Oracle Text と embedding
+  には rag_poc の search_text を使う。文書の 1 ページ目の本文(回答の「文書の背景」)は先頭の chunk
+  にだけ載せ、保存のときに chunk set へ 1 つだけ移す(#557。検索用 text には入れない)。
+- Excel の前処理(``excel_to_jsonl``)の行の記録(``rag_parser_core.sheet_records``)は、子は 1 記録
+  (表の 1 行・手順書の 1 手順)= 1 chunk、親は同じシート(手順書は同じ章)の続く記録を
+  ``parent_target_chars`` / ``parent_max_children`` までまとめた表の一部(#1349)。表頭より上の行
+  (前書き)は記録と混ぜず、単独の子(親は自分)にする。
+- XML ツリー JSON は、段落を子・番号つきの単位を親にする(#2024)。
+- それ以外のすべての抽出(Markdown・テキスト・Unstructured・OCI の解析・Office など)は、抽出の構造
+  から親子を作る(``build_structure_parent_child_chunks``)。子は構造認識と同じ要素の分割を子の目標
+  文字数で行い(表は表の子の目標。列見出しを繰り返す)、構造化レコード JSONL の記録の境界がある抽出は
+  1 記録 = 1 子にする(#2457)。親は続く子を、文書を分ける最初の見出しの段(節)をまたがず、親の
+  文字数・子の数・頁の上限の中でまとめる。
 """
 
 from __future__ import annotations
@@ -26,10 +27,11 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from rag_parser_core.extraction import StructuredExtraction, is_derived_content
 from rag_parser_core.sheet_records import SHEET_RECORD_CONTENT_KIND
+from rag_parser_core.structured_records import has_record_boundaries
 from rag_parser_core.xml_tree_json import is_xml_tree_json_extraction
 from rag_pipeline_core.chunking import (
     FIGURE_TEXT_SOURCE_KEY,
@@ -38,6 +40,7 @@ from rag_pipeline_core.chunking import (
     Chunk,
     chunk_derived_elements,
     chunk_extraction,
+    chunk_extraction_with_strategy,
     without_derived_elements,
 )
 
@@ -59,12 +62,11 @@ ENGINE_SEARCH_TEXT_KEY = "engine_search_text"
 # 載せる metadata key(#557)。chunk ごとに同じ本文(最大 8000 文字)を持たせないよう、先頭の
 # chunk にだけ載せる。保存では chunk の行から外し、chunk set に 1 つだけ保存する。
 FIRST_PAGE_CONTEXT_KEY = "first_page_context_json"
-# layout_records がない文書で親子階層（small-to-big）の代わりに使う分割方式(#300)。
-SMALL_TO_BIG_FALLBACK_STRATEGY = "structure_aware"
-# 縮退時に chunk metadata へ残す key と理由。chunk_strategy には実際に使った方式が入る。
-CHUNK_STRATEGY_REQUESTED_KEY = "chunk_strategy_requested"
-CHUNK_STRATEGY_FALLBACK_REASON_KEY = "chunk_strategy_fallback_reason"
-LAYOUT_MISSING_REASON = "layout_missing"
+# 親子を作った入力(取込の trace の ``chunk_parent_source``)。
+PARENT_SOURCE_LAYOUT = "layout_records"
+PARENT_SOURCE_SHEET_RECORDS = "sheet_records"
+PARENT_SOURCE_XML_TREE = "xml_tree_units"
+PARENT_SOURCE_STRUCTURE = "extraction_structure"
 # 行の記録の抽出(``sheet_records_extraction``)が parser_artifacts に刻む版の key。
 SHEET_RECORDS_ARTIFACT_KEY = "sheet_records_format_version"
 # 行の記録の子に、親(表の一部)のシートの場所を残す key。回答の文脈の親の出典に使う(#1349)。
@@ -78,17 +80,6 @@ def layout_source_parser(engine: str) -> str:
     """親子階層の chunk の source_parser。record の engine(解析エンジン)が分かる値にする。"""
     name = (engine or "docling").strip().casefold() or "docling"
     return LAYOUT_SOURCE_PARSER if name == "docling" else f"{name}_layout"
-
-
-class LayoutRecordsMissingError(ValueError):
-    """親子階層の分割に必要なレイアウト(Docling の LayoutRecord)が抽出結果にない。
-
-    取込と分割プレビューは ``has_layout_records`` で先に判定して構造認識へ縮退するため、
-    通常は起きない(``build_parent_child_chunks`` を直接呼んだときの防御)。起きた場合も
-    利用者へ表示してよい文言にする(``safe_for_user``)。
-    """
-
-    safe_for_user = True
 
 
 def has_layout_records(extraction: StructuredExtraction) -> bool:
@@ -110,36 +101,15 @@ def has_xml_tree_units(extraction: StructuredExtraction) -> bool:
     )
 
 
-def small_to_big_fallback_needed(strategy: str, extraction: StructuredExtraction) -> bool:
-    """親子階層（small-to-big）を選び、構造認識で分割する（縮退する）ときに真。
-
-    layout_records も行の記録も無い抽出が対象。行の記録（Excel の前処理）は layout_records が
-    無くても親子で分割する（#1349）。
-    """
-    return (
-        strategy == SMALL_TO_BIG_STRATEGY
-        and not has_layout_records(extraction)
-        and not has_sheet_records(extraction)
-        and not has_xml_tree_units(extraction)
-    )
-
-
-def mark_small_to_big_fallback(chunks: list[Chunk]) -> list[Chunk]:
-    """構造認識で縮退した chunk に、選ばれていた方式と縮退の理由を残す。
-
-    ``chunk_strategy`` は分割に実際に使った方式(structure_aware)のまま変えない。
-    """
-    return [
-        replace(
-            chunk,
-            metadata={
-                **chunk.metadata,
-                CHUNK_STRATEGY_REQUESTED_KEY: SMALL_TO_BIG_STRATEGY,
-                CHUNK_STRATEGY_FALLBACK_REASON_KEY: LAYOUT_MISSING_REASON,
-            },
-        )
-        for chunk in chunks
-    ]
+def small_to_big_parent_source(extraction: StructuredExtraction) -> str:
+    """親子階層の親子をどの入力から作るか(``build_parent_child_chunks`` の振り分けと同じ順)。"""
+    if has_layout_records(extraction):
+        return PARENT_SOURCE_LAYOUT
+    if has_xml_tree_units(extraction):
+        return PARENT_SOURCE_XML_TREE
+    if has_sheet_records(extraction):
+        return PARENT_SOURCE_SHEET_RECORDS
+    return PARENT_SOURCE_STRUCTURE
 
 
 def small_to_big_chunking_config(params: SmallToBigParams | None = None) -> ChunkingConfig:
@@ -167,9 +137,10 @@ def build_parent_child_chunks(
     params: SmallToBigParams | None = None,
     diagnostics: dict[str, int] | None = None,
 ) -> list[Chunk]:
-    """layout_records から親子分割し、子チャンクを索引用 Chunk として返す。
+    """抽出を親子に分割し、子チャンクを索引用 Chunk として返す。
 
     ``params`` は文書分割の設定(親子階層（small-to-big）の 5 項目)。None は rag_poc の既定値。
+    入力の振り分けは ``small_to_big_parent_source``(どの解析の結果でも親子にする。#3377)。
     """
     # oracle client からも search_text 判定で import されるため、分割実装は使用時に読む。
     from rag_engine.chunking.builder import build_small_to_big_chunks
@@ -196,20 +167,14 @@ def build_parent_child_chunks(
                 strategy=SMALL_TO_BIG_STRATEGY,
             ),
         ]
-    layout = extraction.parser_artifacts.get(LAYOUT_ARTIFACT)
-    if (not isinstance(layout, Mapping) or not layout.get("records")) and has_xml_tree_units(
-        extraction
-    ):
+    source = small_to_big_parent_source(extraction)
+    if source == PARENT_SOURCE_XML_TREE:
         return build_xml_tree_parent_child_chunks(extraction, params=params)
-    if (not isinstance(layout, Mapping) or not layout.get("records")) and has_sheet_records(
-        extraction
-    ):
+    if source == PARENT_SOURCE_SHEET_RECORDS:
         return build_sheet_parent_child_chunks(extraction, params=params)
-    if not isinstance(layout, Mapping) or not layout.get("records"):
-        raise LayoutRecordsMissingError(
-            "親子階層（small-to-big）には Docling の解析結果が必要です。"
-            "文書解析を Docling にして再解析するか、別の分割方式を選んでください。"
-        )
+    if source == PARENT_SOURCE_STRUCTURE:
+        return build_structure_parent_child_chunks(extraction, params=params)
+    layout = cast("Mapping[str, Any]", extraction.parser_artifacts[LAYOUT_ARTIFACT])
     records = [dict(record) for record in _items(layout.get("records")) if isinstance(record, dict)]
     pages = [dict(page) for page in _items(layout.get("pages")) if isinstance(page, dict)]
     engines = sorted({str(record.get("engine") or "docling") for record in records})
@@ -249,6 +214,205 @@ def build_parent_child_chunks(
             first_page, ensure_ascii=False
         )
     return backend_chunks
+
+
+def build_structure_parent_child_chunks(
+    extraction: StructuredExtraction,
+    *,
+    params: SmallToBigParams | None = None,
+) -> list[Chunk]:
+    """抽出の構造(見出しの階層・要素の順・頁)から親子に分割する(#3377)。
+
+    解析エンジンを問わない汎用の親子。子は構造認識と同じ要素の分割(同じ節・同じ種類の要素だけを
+    つなぎ、表は他の要素と結合しない)を ``child_target_chars`` で、表は ``table_child_target_chars``
+    で行のまとまりに分ける(列見出しを繰り返す)。子どうしは重ねない。構造化レコード JSONL の記録の
+    境界がある抽出は 1 記録 = 1 子にする(#2457)。要素が無く本文だけの抽出は、本文の見出しと文の
+    境目で子に分ける。
+
+    親は続く子を、節(文書を分ける最初の見出しの段。``_section_unit_depth``)をまたがず、本文の合計が
+    ``parent_target_chars`` 以下・``parent_max_children`` 件以下・``parent_max_pages`` 頁以下になる
+    までまとめる。節より上の段だけの子(文書の題・前書き)は、続く節の先頭の親に入れる。見出しの無い
+    文書は順と大きさだけでまとめる。親の本文は子の本文をつないだもので、子の metadata
+    (``parent_text``)に持たせ、回答の文脈で親を復元する。
+    """
+    from app.rag.chunking_strategy import SmallToBigParams
+
+    resolved = params or SmallToBigParams()
+    if has_record_boundaries(extraction):
+        children = chunk_extraction_with_strategy(extraction, strategy="fixed_delimiter")
+    else:
+        children = chunk_extraction(
+            extraction,
+            chunk_size=resolved.child_target_chars,
+            overlap=0,
+            table_chunk_size=resolved.table_child_target_chars,
+        )
+    children = _attach_headings(children)
+    depth = _section_unit_depth(children)
+    groups: list[list[Chunk]] = []
+    for chunk in children:
+        current = groups[-1] if groups else None
+        if current is not None and _joins_structure_parent(current, chunk, resolved, depth):
+            current.append(chunk)
+        else:
+            groups.append([chunk])
+    result: list[Chunk] = []
+    for group in groups:
+        parent_text = "\n\n".join(chunk.text for chunk in group)
+        parent_id = _structure_parent_id(group, parent_text)
+        for part_index, chunk in enumerate(group, start=1):
+            result.append(
+                replace(
+                    chunk,
+                    index=len(result),
+                    metadata={
+                        **chunk.metadata,
+                        "chunk_strategy": SMALL_TO_BIG_STRATEGY,
+                        "parent_chunk_id": parent_id,
+                        "chunk_group_id": parent_id,
+                        "chunk_group_kind": SMALL_TO_BIG_PARENT_GROUP_KIND,
+                        "chunk_part_index": part_index,
+                        "chunk_part_count": len(group),
+                        "parent_text": parent_text,
+                        "engine_chunk_seq": len(result),
+                    },
+                )
+            )
+    return result
+
+
+def _section_parts(chunk: Chunk) -> tuple[str, ...]:
+    """子の見出しの階層(``section_path`` は「 > 」でつないだ文字列)。"""
+    return tuple(
+        part.strip()
+        for part in str(chunk.metadata.get("section_path") or "").split(" > ")
+        if part.strip()
+    )
+
+
+def _is_heading_only(chunk: Chunk) -> bool:
+    return chunk.metadata.get("element_kinds") == "title"
+
+
+def _extends_section(heading: Chunk, chunk: Chunk) -> bool:
+    """``chunk`` が ``heading`` の見出しの下(同じ節か、その下の節)にあるか。"""
+    path = _section_parts(heading)
+    return bool(path) and _section_parts(chunk)[: len(path)] == path
+
+
+def _attach_headings(children: list[Chunk]) -> list[Chunk]:
+    """見出しだけの子を、その見出しの下の最初の本文の子の先頭に付ける。
+
+    構造認識の要素の分割は、見出しと続く本文が子の目標を超えると見出しだけの子を作る。見出しだけの
+    子は検索に当てる単位にならないので、Docling の親子と同じく見出しを本文の子に含める。表・記録の
+    子(本文を行として読む)と、下に本文の無い見出しには付けずにそのまま残す。
+    """
+    result: list[Chunk] = []
+    pending: list[Chunk] = []
+    for chunk in children:
+        if _is_heading_only(chunk):
+            if pending and not _extends_section(pending[-1], chunk):
+                result.extend(pending)
+                pending = []
+            pending.append(chunk)
+            continue
+        attachable = chunk.metadata.get("content_kind") not in {"table", SHEET_RECORD_CONTENT_KIND}
+        if pending and attachable and _extends_section(pending[-1], chunk):
+            chunk = _with_heading_prefix(pending, chunk)
+        else:
+            result.extend(pending)
+        pending = []
+        result.append(chunk)
+    result.extend(pending)
+    return [replace(chunk, index=index) for index, chunk in enumerate(result)]
+
+
+def _with_heading_prefix(headings: list[Chunk], chunk: Chunk) -> Chunk:
+    text = "\n".join([*(heading.text for heading in headings), chunk.text])
+    element_ids = [
+        element_id
+        for item in (*headings, chunk)
+        for element_id in str(item.metadata.get("element_ids") or "").split(",")
+        if element_id
+    ]
+    kinds = {
+        kind
+        for item in (*headings, chunk)
+        for kind in str(item.metadata.get("element_kinds") or "").split(",")
+        if kind
+    }
+    return replace(
+        chunk,
+        text=text,
+        start_offset=headings[0].start_offset,
+        metadata={
+            **chunk.metadata,
+            "element_ids": ",".join(dict.fromkeys(element_ids)),
+            "element_kinds": ",".join(sorted(kinds)),
+            "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "text_chars": len(text),
+        },
+    )
+
+
+def _section_unit_depth(children: list[Chunk]) -> int:
+    """親がまたがない節の段(文書を 2 つ以上に分ける最初の見出しの段)。見出しが無ければ 0。
+
+    文書の題(H1)が 1 つだけで、その下の H2 で章を分ける文書は 2、題が無く H2 で分ける文書は 1。
+    """
+    paths = [path for chunk in children if (path := _section_parts(chunk))]
+    if not paths:
+        return 0
+    deepest = max(len(path) for path in paths)
+    for depth in range(1, deepest + 1):
+        if len({path[:depth] for path in paths if len(path) >= depth}) > 1:
+            return depth
+    return deepest
+
+
+def _page_bounds(chunk: Chunk) -> tuple[int, int] | None:
+    start = chunk.metadata.get("page_start") or chunk.metadata.get("page_number")
+    end = chunk.metadata.get("page_end") or start
+    if not isinstance(start, int) or not isinstance(end, int) or start <= 0:
+        return None
+    return start, max(start, end)
+
+
+def _joins_structure_parent(
+    group: list[Chunk], chunk: Chunk, params: SmallToBigParams, depth: int
+) -> bool:
+    """続く子を同じ親にまとめるか(同じ節で、親の上限の中に収まる)。"""
+    if len(group) >= params.parent_max_children:
+        return False
+    joined = sum(len(item.text) for item in group) + 2 * len(group) + len(chunk.text)
+    if joined > params.parent_target_chars:
+        return False
+    pages = [bounds for item in (*group, chunk) if (bounds := _page_bounds(item))]
+    if pages and (
+        max(end for _, end in pages) - min(start for start, _ in pages) + 1
+        > params.parent_max_pages
+    ):
+        return False
+    previous = _section_parts(group[-1])[:depth]
+    current = _section_parts(chunk)[:depth]
+    if previous == current:
+        return True
+    # 節より上の段だけの子(文書の題・前書き)は、続く節の先頭に付ける。
+    return (
+        all(len(_section_parts(item)) < depth for item in group)
+        and current[: len(previous)] == previous
+    )
+
+
+def _structure_parent_id(group: list[Chunk], parent_text: str) -> str:
+    payload = {
+        "group_kind": SMALL_TO_BIG_PARENT_GROUP_KIND,
+        "element_ids": [chunk.metadata.get("element_ids") for chunk in group],
+        "offsets": [[chunk.start_offset, chunk.end_offset] for chunk in group],
+        "text_sha256": hashlib.sha256(parent_text.encode("utf-8")).hexdigest(),
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:32]
 
 
 def build_sheet_parent_child_chunks(

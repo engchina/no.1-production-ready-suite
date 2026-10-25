@@ -24,7 +24,7 @@ from app.rag.answer_engine import _xml_tree_location_labels
 from app.rag.chunking_small_to_big import (
     build_parent_child_chunks,
     has_xml_tree_units,
-    small_to_big_fallback_needed,
+    small_to_big_parent_source,
 )
 from app.rag.ingestion import IngestionPipeline
 from app.rag.parser_source_guard import parser_source_block
@@ -196,7 +196,7 @@ def _extraction() -> Any:
 def test_small_to_big_uses_units_as_parents_and_paragraphs_as_children() -> None:
     extraction = _extraction()
     assert has_xml_tree_units(extraction)
-    assert not small_to_big_fallback_needed("small_to_big", extraction)
+    assert small_to_big_parent_source(extraction) == "xml_tree_units"
     chunks = build_parent_child_chunks(extraction, source_name="sample.json")
     by_label = {chunk.metadata["xml_tree_citation_label_arabic"]: chunk for chunk in chunks}
     first = by_label[f"{TITLE} 第7条第1項"]

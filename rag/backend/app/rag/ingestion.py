@@ -80,13 +80,10 @@ from app.config import (
 from app.rag.audit import record_rag_ingestion_audit
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
 from app.rag.chunking_small_to_big import (
-    LAYOUT_MISSING_REASON,
-    SMALL_TO_BIG_FALLBACK_STRATEGY,
     SMALL_TO_BIG_STRATEGY,
     build_parent_child_chunks,
     engine_search_text,
-    mark_small_to_big_fallback,
-    small_to_big_fallback_needed,
+    small_to_big_parent_source,
 )
 from app.rag.chunking_strategy import resolve_chunking_params
 from app.rag.cross_references import annotate_cross_references, apply_reference_search_context
@@ -2138,46 +2135,31 @@ class IngestionPipeline:
             raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
         await _raise_if_cancelled(cancel_checker)
         chunking_params = resolve_chunking_params(self._settings)
-        # 親子階層（small-to-big）は Docling の解析結果(layout_records)を入力にする。
-        # それがない文書は失敗させず構造認識で分割し、縮退したことを chunk metadata と trace に
-        # 残す(#300)。
-        small_to_big_fallback = small_to_big_fallback_needed(chunking_params.strategy, extraction)
+        # 親子階層（small-to-big）は、どの解析の結果でも親子に分割する(#3377)。親子を作った入力
+        # (Docling のレイアウト・行の記録・XML ツリー JSON・抽出の構造)は trace に残す。
         is_small_to_big = chunking_params.strategy == SMALL_TO_BIG_STRATEGY
-        effective_strategy = (
-            SMALL_TO_BIG_FALLBACK_STRATEGY if small_to_big_fallback else chunking_params.strategy
-        )
-        if small_to_big_fallback:
-            logger.info(
-                "small_to_big_fallback",
-                extra={"trace_id": trace_id, "effective_chunk_strategy": effective_strategy},
-            )
-
-        def _run_standard_chunking() -> list[Chunk]:
-            try:
-                return chunk_extraction_with_strategy(
-                    extraction,
-                    strategy=effective_strategy,
-                    chunk_size=chunking_params.chunk_size,
-                    overlap=chunking_params.overlap,
-                    min_chars=chunking_params.min_chars,
-                    delimiter=chunking_params.delimiter,
-                )
-            except RecordBoundaryError as exc:
-                raise IngestionUserError(record_boundary_failure_message(exc)) from exc
 
         def _run_chunking() -> list[Chunk]:
             diagnostics: dict[str, int] = {}
-            if small_to_big_fallback:
-                result = mark_small_to_big_fallback(_run_standard_chunking())
-            elif is_small_to_big:
-                result = build_parent_child_chunks(
-                    extraction,
-                    source_name=source_name,
-                    params=chunking_params.small_to_big,
-                    diagnostics=diagnostics,
-                )
-            else:
-                result = _run_standard_chunking()
+            try:
+                if is_small_to_big:
+                    result = build_parent_child_chunks(
+                        extraction,
+                        source_name=source_name,
+                        params=chunking_params.small_to_big,
+                        diagnostics=diagnostics,
+                    )
+                else:
+                    result = chunk_extraction_with_strategy(
+                        extraction,
+                        strategy=chunking_params.strategy,
+                        chunk_size=chunking_params.chunk_size,
+                        overlap=chunking_params.overlap,
+                        min_chars=chunking_params.min_chars,
+                        delimiter=chunking_params.delimiter,
+                    )
+            except RecordBoundaryError as exc:
+                raise IngestionUserError(record_boundary_failure_message(exc)) from exc
             if not result:
                 # 空の結果は分割段階の失敗として記録し、本文を含めず除去理由の件数を示す。
                 boilerplate_count = diagnostics.get("excluded_page_boilerplate_count", 0)
@@ -2185,7 +2167,7 @@ class IngestionPipeline:
                     f"ページ定型文の除外: {boilerplate_count} 件、"
                     f"装飾の除外: {diagnostics.get('excluded_decorative_count', 0)} 件、"
                     f"空の要素: {diagnostics.get('empty_record_count', 0)} 件。"
-                    if is_small_to_big and not small_to_big_fallback
+                    if diagnostics
                     else "分割と除外処理の後に索引対象が残りませんでした。"
                 )
                 raise IngestionUserError(
@@ -2205,12 +2187,12 @@ class IngestionPipeline:
                 "chunk_parent_max_pages": chunking_params.small_to_big.parent_max_pages,
                 "chunk_parent_max_children": chunking_params.small_to_big.parent_max_children,
             }
-            if is_small_to_big and not small_to_big_fallback
+            if is_small_to_big
             else {}
         )
-        fallback_attributes: dict[str, str] = (
-            {"chunk_strategy_fallback_reason": LAYOUT_MISSING_REASON}
-            if small_to_big_fallback
+        parent_source_attributes: dict[str, str] = (
+            {"chunk_parent_source": small_to_big_parent_source(extraction)}
+            if is_small_to_big
             else {}
         )
         chunks = await _observe_cpu_ingestion_stage(
@@ -2220,8 +2202,8 @@ class IngestionPipeline:
             attributes={
                 "chunk_profile": "structure_v1",
                 "chunk_strategy": chunking_params.strategy,
-                "effective_chunk_strategy": effective_strategy,
-                **fallback_attributes,
+                "effective_chunk_strategy": chunking_params.strategy,
+                **parent_source_attributes,
                 "chunk_size": chunking_params.chunk_size,
                 "chunk_overlap": chunking_params.overlap,
                 "chunk_min_chars": chunking_params.min_chars,

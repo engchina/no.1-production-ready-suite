@@ -27,7 +27,7 @@ from app.rag.chunking import CHUNKING_STRATEGIES
 ChunkingStrategyName = ChunkingStrategy
 SMALL_TO_BIG_STRATEGY_NAME: ChunkingStrategyName = "small_to_big"
 # 既定は親子階層（small-to-big）(#594)。回答が親子の文脈(親本文・表の行グループ・根拠の元の要素)を
-# 前提にするため。解析結果が Docling でない文書は取込時に構造認識へ縮退する。
+# 前提にするため。どの解析の結果でも親子に分割する(#3377)。
 DEFAULT_CHUNKING_STRATEGY: ChunkingStrategyName = SMALL_TO_BIG_STRATEGY_NAME
 # 画面の並び順。親子階層（small-to-big）は、削除した「親子階層」があった位置(3 番目)に置く(#271)。
 CHUNKING_STRATEGY_ORDER: tuple[ChunkingStrategyName, ...] = (
@@ -61,7 +61,7 @@ CHUNKING_STRATEGY_SPECS: dict[ChunkingStrategyName, ChunkingStrategySpec] = {
         origin="langchain_recursive_character",
         recommended_for=("text", "markdown"),
     ),
-    # rag_poc の Small-to-Big 親子分割。Docling の解析結果が必要。
+    # rag_poc の Small-to-Big 親子分割。どの解析の結果でも使える(#3377)。
     "small_to_big": ChunkingStrategySpec(
         name="small_to_big",
         origin="small_to_big",
