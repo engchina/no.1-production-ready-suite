@@ -341,7 +341,12 @@ _EVIDENCE = {
     "locator": _LOCATOR,
     "excerpt": "契約条項",
     "truncated": False,
+    "text_omitted": False,
     "text_length": 4,
+    # 本文の範囲と続きの位置（#3321）。
+    "excerpt_range": {"start": 0, "end": 4},
+    "header_range": None,
+    "next_offset": None,
     "used_in_answer": True,
     "role": "retrieved_anchor",
     "score": 0.9,

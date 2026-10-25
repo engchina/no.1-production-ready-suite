@@ -449,7 +449,7 @@ def test_mcp_agent_get_run_rechecks_sources(
         assert rag.calls_of("rag_readable_documents") == []
         return
     assert documents is not None
-    assert output["schema_version"] == 3
+    assert output["schema_version"] == mcp_server.RUN_OUTPUT_SCHEMA_VERSION
     assert output["outcome"] == "answered"
     assert [item["document_id"] for item in output["sources"]] == documents
     assert [item["chunk_id"] for item in output["sources"]] == [f"{doc}:c1" for doc in documents]

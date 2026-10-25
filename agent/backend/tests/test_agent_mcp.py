@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 from agents.testing import ScriptedModel, assistant_message, function_call
+from pr_backend_core.token_estimate import estimate_input_tokens
 from pr_system_settings.auth.api_keys import api_key_rate_limiter
 from pytest import MonkeyPatch
 from security_support import ProductionAuth, client, enable_production_auth, login
@@ -565,7 +566,7 @@ def test_run_output_returns_the_passage_marks_of_the_validation() -> None:
 
     output = mcp_server.run_output(run).model_dump()
 
-    assert output["schema_version"] == 3
+    assert output["schema_version"] == mcp_server.RUN_OUTPUT_SCHEMA_VERSION
     assert output["answer"].startswith(f"{kept}\n\n{unverified}\n\n**根拠と矛盾し除いた内容**")
     assert output["passage_marks"] == [
         {
@@ -632,7 +633,7 @@ def test_run_output_v3_returns_the_outcome_and_the_rag_ids_of_the_sources() -> N
         outcome={"schema_version": 1, "value": "conditional", "basis": "basis-canary"},
     )
     output = mcp_server.run_output(run).model_dump()
-    assert output["schema_version"] == 3
+    assert output["schema_version"] == mcp_server.RUN_OUTPUT_SCHEMA_VERSION == 4
     assert (output["outcome"], output["withheld_evidence_count"]) == ("conditional", 0)
     # 引用した根拠だけ。会話の添付の根拠は RAG の文書ではないので ID を出さない。
     assert [
@@ -640,13 +641,91 @@ def test_run_output_v3_returns_the_outcome_and_the_rag_ids_of_the_sources() -> N
     ] == [("doc-x", "doc-x:c1", True), (None, None, True)]
     # 判断の道筋（basis）は出さない。
     assert "basis-canary" not in json.dumps(output, ensure_ascii=False)
-    # 抜粋の長さは変えない（400 文字）。
     assert output["sources"][0]["excerpt"] == "合成の抜粋"
 
     # 引用の無い回答は、AI に渡した根拠をすべて cited=false で出す。
     uncited = _evidence_run([_item("doc-x", "doc-x:c1", cited=False)])
     [source] = mcp_server.run_output(uncited).sources
     assert (source.document_id, source.chunk_id, source.cited) == ("doc-x", "doc-x:c1", False)
+
+
+def _text_item(chunk_id: str, text: str, **fields: Any) -> dict[str, Any]:
+    return {**_item(f"doc-{chunk_id}", chunk_id, cited=True), "excerpt": text, **fields}
+
+
+def test_run_output_sources_return_full_texts_within_the_response_budget() -> None:
+    """根拠は全文を根拠の順に応答の予算へ入れ、入らない根拠は本文を省く（RAG と同じ。#3321）。"""
+    texts = ["合成の本文。" * 500 if index != 6 else "短い合成の本文。" for index in range(10)]
+    run = _evidence_run([_text_item(f"c{index}", text) for index, text in enumerate(texts)])
+    output = mcp_server.run_output(run).model_dump()
+    sources = output["sources"]
+    assert [source["chunk_id"] for source in sources] == [f"c{index}" for index in range(10)]
+    omitted = [source["text_omitted"] for source in sources]
+    first = omitted.index(True)
+    # 先頭の根拠から入れ、入らない根拠の後ろでも小さな根拠は入れる（400 文字で切らない）。
+    assert first >= 1 and not any(omitted[:first]) and omitted[6] is False
+    for source, text in zip(sources, texts, strict=True):
+        assert source["text_length"] == len(text) and source["truncated"] is False
+        if source["text_omitted"]:
+            assert (source["excerpt"], source["excerpt_range"]) == ("", None)
+        else:
+            assert source["excerpt"] == text
+            assert source["excerpt_range"] == {"start": 0, "end": len(text)}
+    assert output["sources_text_omitted"] == sum(omitted)
+    payload = json.dumps(output, ensure_ascii=False, separators=(",", ":"))
+    assert estimate_input_tokens(payload) <= mcp_server.SOURCE_TEXT_BUDGET_TOKENS
+
+
+def test_run_output_sources_keep_what_rag_omitted_or_truncated() -> None:
+    """RAG が本文を省いた・切った根拠は、その印と chunk の中の位置をそのまま返す。"""
+    run = _evidence_run(
+        [
+            _text_item("c-omitted", "", text_omitted=True, text_length=9000),
+            _text_item(
+                "c-cut",
+                "合成の一部。",
+                truncated=True,
+                text_length=9000,
+                excerpt_range={"start": 4000, "end": 4006},
+                next_offset=4006,
+            ),
+        ]
+    )
+    omitted, cut = mcp_server.run_output(run).sources
+    assert (omitted.text_omitted, omitted.excerpt, omitted.text_length) == (True, "", 9000)
+    assert (omitted.document_id, omitted.chunk_id) == ("doc-c-omitted", "c-omitted")
+    assert (cut.truncated, cut.excerpt, cut.text_length, cut.next_offset) == (
+        True,
+        "合成の一部。",
+        9000,
+        4006,
+    )
+    assert cut.excerpt_range is not None and (cut.excerpt_range.start, cut.excerpt_range.end) == (
+        4000,
+        4006,
+    )
+
+
+def test_run_output_cuts_an_oversize_table_source_at_row_boundaries() -> None:
+    """1 件の上限を超える表の根拠は、質問に当たる行を中心に見出しの行を残して行の境界で切る。"""
+    header = "<table><tr><th>列A</th><th>列B</th></tr>"
+    rows = "".join(
+        f"<tr><td>行{index}</td><td>{'目印の値' if index == 900 else '合成の値'}</td></tr>"
+        for index in range(1200)
+    )
+    table = header + rows + "</table>"
+    run = _evidence_run([_text_item("t1", table, evidence_type="table")]).model_copy(
+        update={"goal": "目印の値は？"}
+    )
+    [source] = mcp_server.run_output(run).sources
+    assert source.truncated and not source.text_omitted
+    assert estimate_input_tokens(source.excerpt) <= mcp_server.SOURCE_TEXT_ITEM_MAX_TOKENS
+    assert source.excerpt.startswith(header)
+    body = source.excerpt[len(header) :]
+    assert body.startswith("<tr>") and body.endswith("</tr>") and "目印の値" in body
+    assert source.header_range is not None and source.header_range.end == len(header)
+    assert source.excerpt_range is not None and source.next_offset == source.excerpt_range.end
+    assert table[source.excerpt_range.start : source.excerpt_range.end] == body
 
 
 @pytest.mark.parametrize(

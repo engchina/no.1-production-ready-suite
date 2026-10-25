@@ -102,6 +102,12 @@ _COPIED_FIELDS = (
     "file_name",
     "excerpt",
     "truncated",
+    # 本文を省いた・切った範囲（#3321。公開の MCP の sources が chunk の中の位置を返す）。
+    "text_omitted",
+    "text_length",
+    "excerpt_range",
+    "header_range",
+    "next_offset",
     "locator",
     "role",
     "content_kind",
