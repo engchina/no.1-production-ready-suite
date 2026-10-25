@@ -717,6 +717,34 @@ def test_chunks_read_by_the_agent_count_as_evidence() -> None:
     }
 
 
+def test_omitted_or_truncated_evidence_uses_the_text_read_later() -> None:
+    # 応答の予算で本文を省いた根拠・切った根拠（#3321）は、同じ Run で読んだ本文で照合する。
+    omitted = {**_evidence("doc-1", "c-1", ""), "text_omitted": True}
+    truncated = {**_evidence("doc-2", "c-2", "前の部分。"), "truncated": True, "next_offset": 5}
+    run = _run(
+        "run_" + "2" * 32,
+        answer="合成の回答。",
+        steps=[
+            _step("rag_retrieve_evidence", {"evidence": [omitted, truncated]}),
+            _step("rag_read_source", {"document_id": "doc-1", "chunk_id": "c-1", "text": "全文。"}),
+            _step(
+                "rag_read_source", {"document_id": "doc-2", "chunk_id": "c-2", "text": "後の部分。"}
+            ),
+            # 既に見た本文は重ねない。
+            _step(
+                "rag_read_source", {"document_id": "doc-2", "chunk_id": "c-2", "text": "後の部分。"}
+            ),
+        ],
+    )
+
+    citations = evidence_citations(run)
+
+    assert [(item.chunk_id, item.text) for item in citations] == [
+        ("c-1", "全文。"),
+        ("c-2", "前の部分。\n後の部分。"),
+    ]
+
+
 def test_read_chunk_citations_keep_the_sheet_location_and_are_traceable() -> None:
     """rag_read_document・rag_read_section で読んだ chunk の引用に表計算の場所を残す（#1471）。
 

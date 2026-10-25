@@ -13,8 +13,9 @@
   3 製品の呼び出しは `enterprise_ai_reasoning`（送る値の解釈はここだけ。none は送らない）で
   モデルから引き、Responses API の `reasoning: {"effort": ...}` を送る
 - 登録モデルごとに入力の上限 `max_input_tokens`（tokens）を持つ（#1437。既定 128000）。
-  回答の根拠などの入力の予算は `input_token_budget` で token の数として決める（値の解釈と
-  token の見積もり `estimate_input_tokens` はここだけ。3 製品はこれを使う）
+  回答の根拠などの入力の予算は `input_token_budget` で token の数として決める（値の解釈は
+  ここだけ。token の見積もり `estimate_input_tokens` の実体は `pr_backend_core.token_estimate`。
+  3 製品はこれを使う）
 - 登録モデルごとに出力の上限 `max_output_tokens`（tokens）を持つ（#1719。既定 32768。
   入力の上限以下）。
   入力の上限は prompt と応答の合計（context）で、出力の上限はその中の応答の分（推論のあるモデルは
@@ -52,6 +53,9 @@ from uuid import uuid4
 from dotenv import dotenv_values
 from fastapi import APIRouter, HTTPException, params
 from pr_backend_core.schemas import ApiResponse
+
+# 入力 token の見積もりは backend_core の 1 つ（検索の結果の本文の予算と共有する。#3321）。
+from pr_backend_core.token_estimate import estimate_input_tokens as estimate_input_tokens
 from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 
 from .enterprise_ai_errors import (
@@ -847,18 +851,6 @@ def input_token_budget(max_input_tokens: object, percent: object) -> int:
         share = 50
     share = max(1, min(100, share))
     return max(1, limit * share // 100)
-
-
-def estimate_input_tokens(text: str) -> int:
-    """本文の入力 token の見積もり（#1437。3 製品で共通の 1 つ）。
-
-    モデルごとの tokenizer を持たないため、多めに見積もる: ASCII は 4 字で 1 token、それ以外
-    （かな・漢字など）は 1 字で 1 token。見積もりは文字数を超えないので、文字の予算を token の
-    予算以下にすれば token も予算を超えない。
-    """
-    value = text or ""
-    ascii_count = sum(1 for char in value if ord(char) < 0x80)
-    return (len(value) - ascii_count) + (ascii_count + 3) // 4
 
 
 def max_output_tokens_to_use(value: object) -> int:

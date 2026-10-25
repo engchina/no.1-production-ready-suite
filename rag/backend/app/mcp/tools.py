@@ -53,6 +53,14 @@ from pr_backend_core.mcp import (
     McpToolError,
     McpToolResult,
 )
+from pr_backend_core.source_text import (
+    SOURCE_TEXT_ITEM_MAX_TOKENS,
+    SOURCE_TEXT_RESPONSE_BUDGET_TOKENS,
+    SourceText,
+    SourceTextItem,
+    fit_source_texts,
+)
+from pr_backend_core.token_estimate import estimate_input_tokens
 from pydantic import (
     AfterValidator,
     BaseModel,
@@ -255,9 +263,15 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     書くようにした（#2998）。
 # 31: rag_validate_answer の claims に、段落の表の対応の取り違えを表の正しい値に直した文
 #     （revised_text。support_check は table_corrected）を足した（#3005）。
-MCP_OUTPUT_SCHEMA_VERSION = 31
-# 根拠の抜粋の長さ（続きは rag_read_source で読む）。
-EVIDENCE_EXCERPT_MAX_CHARS = 1000
+# 32: 根拠の excerpt を先頭 1000 文字から、既定で全文にした。応答の根拠の合計に予算を置いて順位の
+#     順に入れ、入らない根拠は本文を省く（text_omitted。省いた数は evidence_text_omitted）。1 件の
+#     上限を超える根拠だけ、質問に当たる部分を中心に文・段落（表は見出しの行を残して行）の境界で
+#     切り、範囲（excerpt_range・header_range）と続きの位置（next_offset）を足した（#3321）。
+MCP_OUTPUT_SCHEMA_VERSION = 32
+# 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
+# 値と決め方は pr_backend_core.source_text。#3321）。
+EVIDENCE_TEXT_ITEM_MAX_TOKENS = SOURCE_TEXT_ITEM_MAX_TOKENS
+EVIDENCE_TEXT_BUDGET_TOKENS = SOURCE_TEXT_RESPONSE_BUDGET_TOKENS
 EVIDENCE_LIMIT_DEFAULT = 12
 EVIDENCE_LIMIT_MAX = 50
 # rag_retrieve_evidence（回答を作らない根拠の収集）の既定の件数。検索する件数（SearchRequest の
@@ -1331,6 +1345,13 @@ class EvidenceSection(BaseModel):
     parent_chars: int | None = Field(default=None, description="親の章節の本文の文字数。")
 
 
+class ExcerptRange(BaseModel):
+    """本文の中の範囲（文字の位置。[start, end)）。"""
+
+    start: int
+    end: int
+
+
 class RagEvidence(BaseModel):
     """検索・回答の根拠 1 件。"""
 
@@ -1355,9 +1376,37 @@ class RagEvidence(BaseModel):
         ),
     )
     locator: EvidenceLocator
-    excerpt: str = Field(description=f"本文の先頭（最大 {EVIDENCE_EXCERPT_MAX_CHARS} 文字）。")
-    truncated: bool = Field(description="excerpt が本文の一部だけか。")
+    excerpt: str = Field(
+        description=(
+            "本文（既定は全文）。応答の根拠の合計の予算（token の見積もり "
+            f"{EVIDENCE_TEXT_BUDGET_TOKENS}）に順位の順で入れ、入らない根拠は空（text_omitted）。"
+            f"1 件で {EVIDENCE_TEXT_ITEM_MAX_TOKENS} を超える根拠は、質問に当たる部分を中心に"
+            "文・段落（表は行）の境界で切った一部（truncated）。"
+        )
+    )
+    truncated: bool = Field(description="excerpt が本文の一部だけか（範囲は excerpt_range）。")
+    text_omitted: bool = Field(
+        default=False,
+        description="応答の予算に入らず excerpt を空にしたか（本文は rag_read_source で読む）。",
+    )
     text_length: int = Field(description="本文の文字数。")
+    excerpt_range: ExcerptRange | None = Field(
+        default=None,
+        description="excerpt の本文の位置（文字の [start, end)）。text_omitted なら null。",
+    )
+    header_range: ExcerptRange | None = Field(
+        default=None,
+        description=(
+            "切った表で excerpt の先頭に付けた見出しの行の位置（excerpt_range と続かないとき"
+            "だけ）。無ければ null。"
+        ),
+    )
+    next_offset: int | None = Field(
+        default=None,
+        description=(
+            "excerpt の後ろの続きを読むときの rag_read_source の offset（続きが無ければ null）。"
+        ),
+    )
     used_in_answer: bool = Field(
         description="回答で引用した箇所か（AI に渡した箇所のうち、回答の本文に示したもの）。"
     )
@@ -1645,6 +1694,9 @@ class SearchOutput(VersionedOutput):
         )
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
+    evidence_text_omitted: int = Field(
+        default=0, description="応答の予算に入らず本文を省いた根拠（text_omitted）の数。"
+    )
     older_versions: list[OlderVersion] = Field(
         default_factory=list, description=OLDER_VERSIONS_DESCRIPTION
     )
@@ -1836,6 +1888,9 @@ class RetrieveEvidenceOutput(VersionedOutput):
         )
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
+    evidence_text_omitted: int = Field(
+        default=0, description="応答の予算に入らず本文を省いた根拠（text_omitted）の数。"
+    )
     older_versions: list[OlderVersion] = Field(
         default_factory=list, description=OLDER_VERSIONS_DESCRIPTION
     )
@@ -2254,6 +2309,7 @@ def _evidence(
     chunk: RetrievedChunk,
     sections: dict[str, tuple[SectionNode, SectionNode | None]] | None = None,
 ) -> RagEvidence:
+    """根拠 1 件（本文は空。`_fit_evidence` が予算に入れて埋める）。"""
     metadata = dict(chunk.metadata)
     return RagEvidence(
         evidence_id=chunk.chunk_id,
@@ -2266,8 +2322,8 @@ def _evidence(
         evidence_type=_evidence_type(metadata),
         image_ref=_image_ref(chunk, metadata, figure_region(metadata)),
         locator=_locator(metadata),
-        excerpt=chunk.text[:EVIDENCE_EXCERPT_MAX_CHARS],
-        truncated=len(chunk.text) > EVIDENCE_EXCERPT_MAX_CHARS,
+        excerpt="",
+        truncated=False,
         text_length=len(chunk.text),
         used_in_answer=metadata.get("evidence_model_used") is True,
         answer_use=_answer_use(metadata),
@@ -2287,6 +2343,68 @@ def _evidence(
         reference_label=_metadata_str(metadata, REFERENCE_LABEL_KEY),
         section=_evidence_section((sections or {}).get(chunk.chunk_id)),
     )
+
+
+def _excerpt_range(value: object) -> ExcerptRange | None:
+    start, end = getattr(value, "start", None), getattr(value, "end", None)
+    if not isinstance(start, int) or not isinstance(end, int):
+        return None
+    return ExcerptRange(start=start, end=end)
+
+
+def _with_text(evidence: RagEvidence, piece: SourceText) -> RagEvidence:
+    return evidence.model_copy(
+        update={
+            "excerpt": piece.text,
+            "truncated": piece.truncated,
+            "text_omitted": piece.text_omitted,
+            "text_length": piece.text_length,
+            "excerpt_range": _excerpt_range(piece.excerpt_range),
+            "header_range": _excerpt_range(piece.header_range),
+            "next_offset": piece.next_offset,
+        }
+    )
+
+
+def _output_tokens(output: BaseModel) -> int:
+    """出力の token の見積もり（MCP が返す JSON の形）。"""
+    return estimate_input_tokens(output.model_dump_json())
+
+
+def _json_overhead_tokens(text: str) -> int:
+    """本文を JSON の文字列にしたときに増える分（エスケープ）と、一覧の区切りの token。"""
+    escaped = json.dumps(text, ensure_ascii=False)[1:-1]
+    return estimate_input_tokens(escaped) - estimate_input_tokens(text) + 1
+
+
+def _fit_evidence(
+    chunks: Sequence[RetrievedChunk],
+    sections: dict[str, tuple[SectionNode, SectionNode | None]] | None,
+    *,
+    queries: Sequence[str | None],
+    reserved_tokens: int,
+) -> tuple[list[RagEvidence], int]:
+    """根拠の本文を応答の予算に入れる（#3321）。根拠と、本文を省いた数を返す。
+
+    予算は応答の全体（`reserved_tokens` は根拠の外の項目の分）。根拠の本文の外の項目（ID・場所・
+    章節など）は省いた根拠にも残るので、先に引いてから本文を順位の順に入れる。
+    """
+    evidence = [_evidence(chunk, sections) for chunk in chunks]
+    fitted = fit_source_texts(
+        [
+            SourceTextItem(
+                text=chunk.text,
+                kind="table" if item.evidence_type == "table" else "text",
+                fixed_tokens=_output_tokens(item) + _json_overhead_tokens(chunk.text),
+            )
+            for chunk, item in zip(chunks, evidence, strict=True)
+        ],
+        budget_tokens=EVIDENCE_TEXT_BUDGET_TOKENS - reserved_tokens,
+        item_max_tokens=EVIDENCE_TEXT_ITEM_MAX_TOKENS,
+        queries=queries,
+    )
+    filled = [_with_text(item, piece) for item, piece in zip(evidence, fitted, strict=True)]
+    return filled, sum(1 for piece in fitted if piece.text_omitted)
 
 
 def _is_catalog_article(chunk: RetrievedChunk) -> bool:
@@ -2617,11 +2735,8 @@ def retrieve_evidence_limit(arguments: RetrieveEvidenceInput) -> int:
     return min(max(arguments.evidence_limit, arguments.top_k), EVIDENCE_LIMIT_MAX)
 
 
-def _answer_fields(
-    result: SearchResponse,
-    evidence_limit: int,
-    sections: dict[str, tuple[SectionNode, SectionNode | None]] | None = None,
-) -> dict[str, Any]:
+def _answer_fields(result: SearchResponse, evidence_limit: int) -> dict[str, Any]:
+    """rag_search の出力の項目（根拠の本文は予算に入れてから足すので evidence は空）。"""
     # 回答に使った根拠を先に、検索で当たった chunk、前後の文脈の順にする（#1348）。
     ordered = mcp_evidence_order(result.citations, evidence_limit)
     answer = _answer_diagnostics(result)
@@ -2659,7 +2774,7 @@ def _answer_fields(
         **passage_mark_record(
             answer if any(key in answer for key in PASSAGE_MARK_RECORD_KEYS) else envelope
         ),
-        "evidence": [_evidence(chunk, sections) for chunk in ordered[:evidence_limit]],
+        "evidence": [],
         "evidence_omitted": max(0, len(ordered) - evidence_limit),
         "provenance": _provenance(answer.get("provenance")),
     }
@@ -4194,12 +4309,23 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         result = await _run_search(request, scope=scope)
         citations = await _with_extraction_recipe_ids(None, list(result.citations))
         result = result.model_copy(update={"citations": citations})
-        returned = mcp_evidence_order(citations, arguments.evidence_limit)
-        sections = await _chunk_sections(returned[: arguments.evidence_limit])
-        return SearchOutput(
-            **_answer_fields(result, arguments.evidence_limit, sections),
+        returned = mcp_evidence_order(citations, arguments.evidence_limit)[
+            : arguments.evidence_limit
+        ]
+        sections = await _chunk_sections(returned)
+        output = SearchOutput(
+            **_answer_fields(result, arguments.evidence_limit),
             older_versions=await _older_versions(arguments, request, citations),
             notice=result.notice if called_with_api_key(http_request) else None,
+        )
+        evidence, text_omitted = _fit_evidence(
+            returned,
+            sections,
+            queries=[arguments.query, arguments.original_question],
+            reserved_tokens=_output_tokens(output),
+        )
+        return output.model_copy(
+            update={"evidence": evidence, "evidence_text_omitted": text_omitted}
         )
 
     async def lookup_guides(arguments: LookupGuidesInput) -> LookupGuidesOutput:
@@ -4302,14 +4428,23 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             ),
         ]
         sections = await _chunk_sections(citations)
-        return RetrieveEvidenceOutput(
+        output = RetrieveEvidenceOutput(
             trace_id=result.trace_id,
             guardrail_warnings=list(result.guardrail_warnings),
-            evidence=[_evidence(chunk, sections) for chunk in citations],
+            evidence=[],
             evidence_omitted=max(0, len(hits) - limit),
             older_versions=await _older_versions(arguments, request, result.citations),
             profile_knowledge=knowledge,
             **echo,
+        )
+        evidence, text_omitted = _fit_evidence(
+            citations,
+            sections,
+            queries=[arguments.query, arguments.original_question, *arguments.queries],
+            reserved_tokens=_output_tokens(output),
+        )
+        return output.model_copy(
+            update={"evidence": evidence, "evidence_text_omitted": text_omitted}
         )
 
     async def read(arguments: ReadSourceInput) -> ReadSourceOutput | McpToolResult:
@@ -4483,8 +4618,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 title="根拠の本文の読み取り",
                 description=(
                     "rag_search の根拠（document_id と chunk_id）の本文の続きと親の本文を読みます。"
-                    "根拠の excerpt が切り詰められている（truncated）とき・前後の文脈が要るときに"
-                    "使います。"
+                    "根拠の本文が省かれた（text_omitted）・切られた（truncated）とき・前後の文脈が"
+                    "要るときに使います。"
                     "検索と同じ利用範囲の根拠だけを読めます。include_image=true で、図の根拠の"
                     "元の画像の領域を画像（content の image）で返します。"
                 ),

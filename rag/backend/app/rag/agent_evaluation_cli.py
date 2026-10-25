@@ -19,7 +19,8 @@ Agent の回答の組み立て:
 - 回答: Run の成果物 `answer` の本文（最終の検証 `answer_validation` の後の本文）。
 - 引用: その Run の `rag_search` / `rag_retrieve_evidence` が返した根拠と、`rag_read_source` /
   `rag_read_document` / `rag_read_section` で読んだ chunk（出てきた順・重複なし。#1345・#1438）。
-  本文は MCP の `excerpt`（最大 1000 文字）なので、必要な根拠の照合は抜粋の範囲で行う。
+  本文は MCP の `excerpt`（既定は全文）。応答の予算で本文を省いた根拠・1 件の上限で切った根拠を
+  同じ Run で読み取りのツールが読んだら、読んだ本文を足す（Agent が見た本文で照合する。#3321）。
 - 対応（outcome）: Run の成果物 `answer` の `outcome.value`（Agent の Control Plane が最終の
   回答に決定的に付けた対応。RAG の AnswerEnvelope と同じ語彙。#1305。
   `outcome_source=agent_answer`）。
@@ -318,7 +319,7 @@ def evidence_citations(run: Mapping[str, Any]) -> list[RetrievedChunk]:
     """その Run の RAG の根拠のツールが返した根拠と、読み取りのツールで読んだ chunk（出てきた順・
     重複なし。#1345）。"""
     citations: list[RetrievedChunk] = []
-    seen: set[tuple[str, str]] = set()
+    seen: dict[tuple[str, str], int] = {}
     for tool, output in _tool_results(run, EVIDENCE_TOOLS | READ_EVIDENCE_TOOLS):
         items = (
             _records(output.get("evidence"))
@@ -328,9 +329,18 @@ def evidence_citations(run: Mapping[str, Any]) -> list[RetrievedChunk]:
         for item in items:
             document_id = str(item.get("document_id") or "")
             chunk_id = str(item.get("chunk_id") or item.get("evidence_id") or "")
-            if not document_id or not chunk_id or (document_id, chunk_id) in seen:
+            if not document_id or not chunk_id:
                 continue
-            seen.add((document_id, chunk_id))
+            text = str(item.get("excerpt") or "")
+            if (document_id, chunk_id) in seen:
+                # 同じ chunk を後で読んだ本文は、まだ無い本文だけ足す（順は先に出た位置のまま）。
+                index = seen[(document_id, chunk_id)]
+                known = citations[index].text
+                if text and text not in known:
+                    joined = f"{known}\n{text}" if known else text
+                    citations[index] = citations[index].model_copy(update={"text": joined})
+                continue
+            seen[(document_id, chunk_id)] = len(citations)
             locator = item.get("locator")
             metadata: dict[str, Any] = dict(locator) if isinstance(locator, Mapping) else {}
             score = item.get("score")
@@ -338,7 +348,7 @@ def evidence_citations(run: Mapping[str, Any]) -> list[RetrievedChunk]:
                 RetrievedChunk(
                     document_id=document_id,
                     chunk_id=chunk_id,
-                    text=str(item.get("excerpt") or ""),
+                    text=text,
                     score=float(score) if isinstance(score, int | float) else 0.0,
                     file_name=str(item["file_name"]) if item.get("file_name") else None,
                     metadata=metadata,

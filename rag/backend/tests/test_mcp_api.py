@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pr_backend_core.token_estimate import estimate_input_tokens
 from pr_system_settings.auth.service_token import issue_service_token
 from pytest import MonkeyPatch
 
@@ -779,9 +780,13 @@ def test_search_maps_evidence_and_uses_token_user_context(
         # 要素の ID の無い chunk は定位子を持たない（#1330）。
         "element_locator": None,
     }
-    assert len(evidence["excerpt"]) == 1000
-    assert evidence["truncated"] is True
+    # 1 件の上限より短い本文は全文を返す（#3321）。
+    assert evidence["excerpt"] == "長" * 1500
+    assert (evidence["truncated"], evidence["text_omitted"]) == (False, False)
     assert evidence["text_length"] == 1500
+    assert evidence["excerpt_range"] == {"start": 0, "end": 1500}
+    assert (evidence["header_range"], evidence["next_offset"]) == (None, None)
+    assert body["evidence_text_omitted"] == 0
     assert evidence["used_in_answer"] is True
     assert evidence["role"] == "retrieved_anchor"
     assert (evidence["score"], evidence["rerank_score"]) == (0.5, 0.9)
@@ -887,6 +892,124 @@ def test_retrieve_evidence_skips_answer_generation(
     # 検索の権限が無ければ使えない。
     chatter = auth.user_with_permissions("chatter", ["menu.chat"])
     denied = _call("rag_retrieve_evidence", {"query": "規程"}, _token(chatter.user_uuid))
+    assert denied["isError"] is True
+
+
+def test_retrieve_evidence_fits_full_texts_to_the_response_budget_in_rank_order(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """根拠は全文を順位の順に応答の予算へ入れ、入らない根拠は本文を省く（#3321）。"""
+    texts = ["合成の本文。" * 500 if index != 6 else "短い合成の本文。" for index in range(10)]
+
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
+        return SearchResponse(
+            answer="",
+            citations=[
+                _chunk(f"c{index}", text=text, used=False, evidence_role="retrieved_anchor")
+                for index, text in enumerate(texts)
+            ],
+            trace_id="trace-b",
+            guardrail_warnings=[],
+            elapsed_ms=1.0,
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call(
+        "rag_retrieve_evidence",
+        {"query": "合成の本文", "evidence_limit": 10},
+        _token(user.user_uuid),
+    )["structuredContent"]
+    evidence = body["evidence"]
+    assert [item["chunk_id"] for item in evidence] == [f"c{index}" for index in range(10)]
+    omitted = [item["text_omitted"] for item in evidence]
+    # 順位の高い根拠から入れ、入らない根拠の後ろでも小さな根拠（c6）は入れる。
+    first_omitted = omitted.index(True)
+    assert first_omitted >= 1 and not any(omitted[:first_omitted])
+    assert omitted[6] is False and evidence[6]["excerpt"] == "短い合成の本文。"
+    for item, text in zip(evidence, texts, strict=True):
+        assert item["truncated"] is False
+        assert item["text_length"] == len(text)
+        if item["text_omitted"]:
+            assert (item["excerpt"], item["excerpt_range"], item["next_offset"]) == ("", None, None)
+        else:
+            assert item["excerpt"] == text
+    assert body["evidence_text_omitted"] == sum(omitted)
+    # 応答の全体（LLM に渡す JSON）が予算に収まる。
+    payload = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+    assert estimate_input_tokens(payload) <= mcp_tools.EVIDENCE_TEXT_BUDGET_TOKENS
+
+
+def _table_rows(rows: int, marker_row: int) -> str:
+    header = "<tr><th>列A</th><th>列B</th></tr>"
+    body = "".join(
+        f"<tr><td>行{index}</td><td>{'目印の値' if index == marker_row else '合成の値'}</td></tr>"
+        for index in range(rows)
+    )
+    return f"<table>{header}{body}</table>"
+
+
+def test_oversize_table_evidence_keeps_the_header_and_is_read_on(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch, source_oracle: type[_SourceOracle]
+) -> None:
+    """1 件の上限を超える表だけ、当たった行を中心に見出しの行を残して行の境界で切る（#3321）。"""
+    table = _table_rows(1200, marker_row=900)
+    source_oracle.visible[("d1", "t1")] = _chunk("t1", text=table, content_kind="table")
+
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
+        return SearchResponse(
+            answer="",
+            citations=[_chunk("t1", text=table, used=False, content_kind="table")],
+            trace_id="trace-t",
+            guardrail_warnings=[],
+            elapsed_ms=1.0,
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+    body = _call("rag_retrieve_evidence", {"query": "目印の値"}, headers)["structuredContent"]
+    evidence = body["evidence"][0]
+    assert evidence["evidence_type"] == "table"
+    assert (evidence["truncated"], evidence["text_omitted"]) == (True, False)
+    assert evidence["text_length"] == len(table)
+    assert estimate_input_tokens(evidence["excerpt"]) <= mcp_tools.EVIDENCE_TEXT_ITEM_MAX_TOKENS
+    header_end = table.index("<tr><td>")
+    assert evidence["header_range"] == {"start": 0, "end": header_end}
+    assert evidence["excerpt"].startswith(table[:header_end])
+    rows = evidence["excerpt"][header_end:]
+    # 行の途中で切らず、当たった行を含む。
+    assert rows.startswith("<tr>") and rows.endswith("</tr>") and "目印の値" in rows
+    start, end = evidence["excerpt_range"]["start"], evidence["excerpt_range"]["end"]
+    assert table[start:end] == rows and evidence["next_offset"] == end
+
+    # 続きは rag_read_source の offset に next_offset を渡して読む。
+    rest = _call(
+        "rag_read_source",
+        {"document_id": "d1", "chunk_id": "t1", "offset": end, "max_chars": 20000},
+        headers,
+    )["structuredContent"]
+    assert rest["text"] == table[end:] and rest["truncated"] is False
+
+
+def test_omitted_evidence_text_is_read_with_read_source(
+    auth: ProductionAuth, source_oracle: type[_SourceOracle]
+) -> None:
+    """本文を省いた根拠（text_omitted）も、検索と同じ範囲で rag_read_source が全文を読む。"""
+    text = "合成の本文。" * 1000
+    source_oracle.visible[("d1", "c-big")] = _chunk("c-big", text=text)
+    user = auth.user_with_permissions("searcher", ["menu.search"], knowledge_base_ids=["kb-1"])
+    body = _call(
+        "rag_read_source",
+        {"document_id": "d1", "chunk_id": "c-big", "max_chars": 20000},
+        _token(user.user_uuid),
+    )["structuredContent"]
+    assert (body["text"], body["truncated"], body["text_length"]) == (text, False, len(text))
+    # 読めない利用者には読ませない（検索と同じ範囲）。
+    chatter = auth.user_with_permissions("chatter", ["menu.chat"])
+    denied = _call(
+        "rag_read_source", {"document_id": "d1", "chunk_id": "c-big"}, _token(chatter.user_uuid)
+    )
     assert denied["isError"] is True
 
 
