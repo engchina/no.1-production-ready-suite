@@ -907,6 +907,46 @@ def _create_mcp_run(goal: str) -> str:
     return run.id
 
 
+def test_mcp_tool_after_approval_uses_the_run_creator_token(
+    monkeypatch: MonkeyPatch, mcp_agent: Any
+) -> None:
+    """承認後の再実行の MCP のトークンの `sub` は、承認者ではなく Run の利用者（#233・#3251）。"""
+    approver_uuid = "99999999-3251-0000-0000-000000000009"
+    _script(
+        monkeypatch,
+        [
+            function_call(
+                "nl2sql__nl2sql_cancel_requirement",
+                {"requirement_session_id": "qs-1"},
+                call_id="call-cancel",
+            )
+        ],
+        [assistant_message("確認を取り消しました。")],
+    )
+    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
+    run_id = _create_mcp_run("確認を取り消して")
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    waiting = runtime_repository.get_run(run_id)
+    assert waiting.status == RunStatus.WAITING_APPROVAL, waiting.events[-1].message
+    assert mcp_agent.calls_of("nl2sql_cancel_requirement") == []
+    [approval] = waiting.approvals
+    runtime_repository.decide_approval(
+        approval.id, ApprovalDecisionRequest(approved=True, decided_by=approver_uuid)
+    )
+    anyio.run(builtin_runtime.resume_run, run_id)
+
+    # 承認したツールが呼び先に届いたこと（その後の回答の確かめはこのテストの対象外）。
+    run = runtime_repository.get_run(run_id)
+    [step] = [item for item in run.steps if item.approval_id == approval.id]
+    assert step.status == "completed"
+    [call] = mcp_agent.calls_of("nl2sql_cancel_requirement")
+    assert call["claims"]["sub"] == USER_UUID
+    assert call["claims"]["sub"] != approver_uuid
+    assert call["claims"]["run_id"] == run_id
+
+
 def test_mcp_connection_tools_are_given_to_the_model(
     monkeypatch: MonkeyPatch, mcp_agent: Any
 ) -> None:

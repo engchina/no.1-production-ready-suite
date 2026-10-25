@@ -32,7 +32,7 @@ docs/
 状態ビュー・通知機構をまとめ、同一の見た目・操作・アクセシビリティを共有する。
 
 技術スタック: **Vite (library mode) + React 19 + TypeScript + Tailwind v4 + shadcn/ui 流コンポーネント**。
-日本語第一(`Noto Sans JP` / `Roboto` / system-ui、本文 14px)。
+日本語第一(`Noto Sans JP` / `Noto Sans SC` / `Noto Sans TC` / `Noto Sans HK` / `Roboto` / system-ui、本文 14px。JP に無い字だけを SC → TC → HK で補う)。
 
 ## 構成
 

@@ -31,6 +31,7 @@ from typing import Any
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import range_class, text_patterns
 
+from rag_engine.dependencies import report_degraded
 from rag_engine.knowledge.domain_keywords import extract_domain_keywords
 from rag_engine.retrieval.character_forms import SYMBOL_FOLD, fold_text
 from rag_engine.retrieval.definition_evidence import definition_labels
@@ -535,12 +536,18 @@ def normalize_text_search_tokenizer_config(
 
 
 def _sudachi_available(config: TextSearchTokenizerConfig) -> bool:
-    return _sudachi_ready(config.sudachi_dict_type, config.sudachi_config_path)
+    return _sudachi_failure(config.sudachi_dict_type, config.sudachi_config_path) is None
+
+
+def sudachi_unavailable(config: TextSearchTokenizerConfig | None = None) -> BaseException | None:
+    """Sudachi を使えないときの例外（使えれば None）。回答の診断に縮退を残すために使う（#3286）。"""
+    cfg = normalize_text_search_tokenizer_config(config)
+    return _sudachi_failure(cfg.sudachi_dict_type, cfg.sudachi_config_path)
 
 
 @functools.lru_cache(maxsize=16)
-def _sudachi_ready(dict_type: str, config_path: str) -> bool:
-    """Sudachi と辞書が使えるか（process ごとに 1 回だけ確かめる）。"""
+def _sudachi_failure(dict_type: str, config_path: str) -> BaseException | None:
+    """Sudachi と辞書を使えないときの例外（process ごとに 1 回だけ確かめる。使えれば None）。"""
     try:
         _get_sudachi_tokenizer(dict_type, config_path)
         _sudachi_split_mode("C")
@@ -549,8 +556,9 @@ def _sudachi_ready(dict_type: str, config_path: str) -> bool:
             "Sudachi を使えないため、全文検索の語は文字種の区切りだけで作ります (%s)",
             type(exc).__name__,
         )
-        return False
-    return True
+        # cache に残すので、traceback（呼び出し元の frame）は持たない。
+        return exc.with_traceback(None)
+    return None
 
 
 def _content_terms(
@@ -563,8 +571,10 @@ def _content_terms(
         try:
             stopwords = _sudachi_stopwords(config.sudachi_dict_type, config.sudachi_config_path, _vocabulary().stopwords)
             primary = _sudachi_tokens(text, config)
-        except Exception:  # noqa: BLE001 - 解析できない入力は文字種の区切りで続ける
+        except Exception as exc:  # noqa: BLE001 - 解析できない入力は文字種の区切りで続ける
             logger.warning("Sudachi の分割に失敗したため、文字種の区切りで続けます", exc_info=True)
+            # 回答の中で分割したときは、呼び出し元の診断に残す（#3286）。
+            report_degraded("text_search_tokenizer", exc)
         else:
             terms = [(token, _TIER_PRIMARY) for token in primary]
             terms.extend((token, _TIER_SUPPLEMENT) for token in _okurigana_free_forms(primary))

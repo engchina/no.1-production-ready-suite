@@ -573,7 +573,6 @@ test.describe("Agent Runtime settings", () => {
       oauth_configured: false,
       session_configured: false,
       service_token_configured: false,
-      service_user_configured: false,
       trust_tool_annotations: false,
     });
     // 一覧は md 以上で表、md 未満でカードを出し（もう一方は CSS で隠す。#823）、どちらの幅でも判定のバッジは
@@ -661,7 +660,6 @@ test.describe("Agent Runtime settings", () => {
       oauth_configured: false,
       session_configured: false,
       service_token_configured: false,
-      service_user_configured: false,
     });
     await page.route("**/api/settings/mcp-connections/crm/tools", (route) =>
       route.fulfill({
@@ -704,8 +702,10 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.locator("#mcp-server-auth-mode")).toBeDisabled();
     await expect(page.locator("#mcp-server-api-key")).toHaveCount(0);
     const authStatus = page.getByRole("list", { name: "サービス間認証の状態" });
-    await expect(authStatus.getByRole("listitem")).toHaveCount(2);
-    await expect(authStatus).toContainText("AGENT_MCP_SERVICE_USER_LOGIN_ID");
+    // 状態は署名鍵だけ（利用者の無い呼び出しを置き換えるサービス利用者の設定は無い。#3251）。
+    await expect(authStatus.getByRole("listitem")).toHaveCount(1);
+    await expect(authStatus).toContainText("PLATFORM_SERVICE_TOKEN_SECRET");
+    await expect(authStatus).not.toContainText("AGENT_MCP_SERVICE_USER_LOGIN_ID");
     await expect(page.locator("#mcp-server-timeout")).toHaveValue("60");
     // RAG / NL2SQL は削除できない（対象の操作が無い）。
     await expect(page.getByTestId("mcp-server-object-actions").getByRole("button")).toHaveCount(0);
@@ -727,7 +727,6 @@ test.describe("Agent Runtime settings", () => {
       base_url: "http://nl2sql-host/api/mcp",
       configured: true,
       service_token_configured: true,
-      service_user_configured: true,
     });
     await page.goto("/settings/mcp-connections?id=nl2sql");
     await expect(page.getByRole("heading", { name: "データ問い合わせ（NL2SQL）", level: 1 })).toBeVisible();
@@ -735,7 +734,7 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByText("この接続はまだ使えません")).toHaveCount(0);
     await expect(
       page.getByRole("list", { name: "サービス間認証の状態" }).getByText("設定済み")
-    ).toHaveCount(2);
+    ).toHaveCount(1);
 
     await page.setViewportSize({ width: 375, height: 812 });
     await expect(page.locator("#mcp-server-base-url")).toBeVisible();
@@ -749,7 +748,6 @@ test.describe("Agent Runtime settings", () => {
       base_url_locked: true,
       configured: true,
       service_token_configured: true,
-      service_user_configured: true,
     });
     for (const viewport of [
       { name: "desktop", width: 1280, height: 800 },

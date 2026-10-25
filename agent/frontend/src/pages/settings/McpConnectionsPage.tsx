@@ -113,14 +113,6 @@ function McpServiceTokenStatus({ connection }: { connection: McpConnectionSettin
       label: t("settings.productMcp.secret"),
       hint: t("settings.productMcp.secretHint"),
       configured: connection.service_token_configured,
-      missingVariant: "warning" as const,
-    },
-    {
-      id: "service-user",
-      label: t("settings.productMcp.serviceUser"),
-      hint: t("settings.productMcp.serviceUserHint"),
-      configured: connection.service_user_configured,
-      missingVariant: "neutral" as const,
     },
   ];
   return (
@@ -133,7 +125,7 @@ function McpServiceTokenStatus({ connection }: { connection: McpConnectionSettin
           </div>
           <StatusBadge
             className="shrink-0 self-start"
-            variant={row.configured ? "success" : row.missingVariant}
+            variant={row.configured ? "success" : "warning"}
             label={row.configured ? t("common.configured") : t("common.notConfigured")}
           />
         </li>

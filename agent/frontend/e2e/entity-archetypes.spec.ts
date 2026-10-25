@@ -152,7 +152,6 @@ for (const viewport of VIEWPORTS) {
         oauth_configured: false,
         session_configured: false,
         service_token_configured: false,
-        service_user_configured: false,
       });
       await page.goto("/settings/mcp-connections");
       const table = page.getByRole("table", { name: "MCP 接続" });

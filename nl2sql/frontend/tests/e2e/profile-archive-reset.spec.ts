@@ -1,4 +1,5 @@
-import { expectLocalUiFonts } from "./_helpers/local-fonts";
+import { FONT_SANS_PREFIX } from "../../../../platform/packages/ui/e2e/font-checks";
+import { expectLocalCjkFallbackFonts, expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { expectCompactSortHeaders } from "./_helpers/sort-header";
@@ -511,7 +512,7 @@ test("ローカルフォントで全体と並べ替え列名を描画しキー�
     expect(font.loaded).toBe(true);
   }
   const bodyFont = await page.locator("body").evaluate((node) => getComputedStyle(node).fontFamily);
-  expect(bodyFont).toMatch(/^"Noto Sans JP", Roboto,/);
+  expect(bodyFont.slice(0, FONT_SANS_PREFIX.length)).toBe(FONT_SANS_PREFIX);
   await expect(grid.locator("th[aria-sort] > button").first()).toHaveCSS("font-family", bodyFont);
   for (const count of await grid.locator("tbody td:nth-child(2), tbody td:nth-child(3)").all()) {
     await expect(count).toHaveCSS("font-family", bodyFont);
@@ -536,7 +537,12 @@ test("ローカルフォントで全体と並べ替え列名を描画しキー�
   } finally {
     await cdp.detach();
   }
+  // Noto Sans JP に無い字（合成の例）は Noto Sans SC → TC → HK で補う（#3292）。
+  await expectLocalCjkFallbackFonts(page);
   expect(fontResponses.some(({ url }) => url.includes("noto-sans-jp"))).toBe(true);
+  for (const family of ["noto-sans-sc", "noto-sans-tc", "noto-sans-hk"]) {
+    expect(fontResponses.some(({ url }) => url.includes(family)), family).toBe(true);
+  }
   expect(fontResponses.some(({ url }) => url.includes("roboto"))).toBe(true);
   expect(fontResponses.every(({ url, ok }) => new URL(url).origin === origin && ok)).toBe(true);
   expect(externalRequests).toEqual([]);

@@ -429,10 +429,8 @@ class McpConnectionSettings(BaseModel):
     api_key_configured: bool = False
     oauth_configured: bool = False
     session_configured: bool = False
-    # サービストークン: 共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET と、利用者のいない呼び出しの
-    # AGENT_MCP_SERVICE_USER_LOGIN_ID（値は返さない）。
+    # サービストークン: 共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET（値は返さない）。
     service_token_configured: bool = False
-    service_user_configured: bool = False
     # ツールの注釈（readOnlyHint）を既定の判定に使うか（#1832。標準の接続は常に True）。
     trust_tool_annotations: bool = False
 
@@ -4256,7 +4254,6 @@ def _mcp_connection_settings(config: McpConnectionConfig) -> McpConnectionSettin
         oauth_configured=oauth_configured,
         session_configured=bool(config.session_id),
         service_token_configured=service_token_configured,
-        service_user_configured=bool(settings.agent_mcp_service_user_login_id.strip()),
         trust_tool_annotations=config.annotations_trusted(),
     )
 

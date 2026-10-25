@@ -579,8 +579,7 @@ def test_local_mode_uses_all_permissions_without_login() -> None:
 def test_local_mode_uses_oracle_security_store(monkeypatch: MonkeyPatch) -> None:
     """local でもユーザー・ロールは Oracle の PLATFORM_*（RAG / NL2SQL と同じ。#750）。
 
-    InMemory にすると、ユーザー管理・ロール管理・権限管理が空になり、MCP のサービス利用者も
-    見つからない。
+    InMemory にすると、ユーザー管理・ロール管理・権限管理が空になる。
     """
     from app.security import service as security_service
     from app.security.store import OracleSecurityStore

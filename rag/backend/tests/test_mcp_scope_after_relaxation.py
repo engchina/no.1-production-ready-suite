@@ -151,7 +151,7 @@ def _install(monkeypatch: MonkeyPatch, oracle: Any, genai: Any) -> None:
     monkeypatch.setattr(mcp_tools, "evidence_sections", no_sections)
 
     async def read_auto_fields(
-        self: RagPipeline, request: SearchRequest
+        self: RagPipeline, request: SearchRequest, **kwargs: Any
     ) -> list[ExtractionFieldCondition]:
         # 質問から読み取った(自動の)項目の条件。1 つは呼び出し元の手の条件と同じ項目で別の値。
         return [AUTO_SAME_FIELD, AUTO_FIELD]

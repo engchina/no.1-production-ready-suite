@@ -65,7 +65,6 @@ test.describe("MCP 接続の URL の資格情報", () => {
       oauth_configured: false,
       session_configured: false,
       service_token_configured: false,
-      service_user_configured: false,
     });
 
     await page.goto("/settings/mcp-connections");

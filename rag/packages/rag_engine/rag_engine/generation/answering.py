@@ -40,6 +40,7 @@ from rag_engine.dependencies import (
     injected_prefetch_search,
     parse_multimodal_response,
     parse_text_response,
+    report_degraded,
     rerank_text_with_scores,
     search_adb_hybrid_chunks,
 )
@@ -273,6 +274,7 @@ from rag_engine.retrieval.text_search_tokenizer import (
     TextSearchTokenizerConfig,
     build_oracle_text_query,
     normalize_text_search_tokenizer_config,
+    sudachi_unavailable,
     text_search_tokenizer_name,
     tokenize_text_search_query,
     tokenize_text_search_query_with_trace,
@@ -448,7 +450,9 @@ def _best_rerank_ranks(
     for query in queries:
         try:
             extra = rerank_text_with_scores(query, documents, settings, top_n=len(documents))
-        except Exception:  # noqa: BLE001 - 追加の検索文の失敗は原質問の順位で補う
+        except Exception as exc:  # noqa: BLE001 - 追加の検索文の失敗は原質問の順位で補う
+            # 飛ばした検索文を、呼び出し元の診断に残す（「検索文 N 本」の数だけでは分からない。#3286）。
+            report_degraded("rerank_extra_query", exc)
             continue
         used += 1
         for rank in extra:
@@ -509,7 +513,9 @@ def _rerank_records(
     documents = [_rerank_document(record) for record in rerankable_candidates]
     try:
         reranked = _best_rerank_ranks(question, extra_queries, documents, settings, step)
-    except Exception:
+    except Exception as exc:
+        # 取得の順で続けたことを、呼び出し元の診断に残す（工程の文言だけでは縮退が分からない。#3286）。
+        report_degraded("rerank", exc)
         step.status = "失敗・取得順を保持"
         step.add("並べ替えに失敗したため、取得順の根拠を使います。")
         return list(records)
@@ -1114,6 +1120,8 @@ def build_crag_answer_context(
                     max_candidates=max_records,
                 )
             except Exception as exc:
+                # 判定を飛ばして取得済みの根拠で生成へ進んだことを、呼び出し元の診断に残す（#3286）。
+                report_degraded("crag_grade", exc)
                 attempt = CragRetrievalAttempt(
                     attempt=attempt_number,
                     query=active_query.strip(),
@@ -3609,8 +3617,10 @@ def _original_question_children(
     options.update(retrieval_queries=[original], vector_only_queries=(original,))
     try:
         result = search_adb_hybrid_chunks(inquiry_conditions=inquiry_conditions, **options)
-    except Exception:
+    except Exception as exc:
         logger.warning("article catalog original question search failed", exc_info=True)
+        # 元の質問の候補を足さずに続けたことを、呼び出し元の診断に残す（#3286）。
+        report_degraded("article_original_question", exc)
         return []
     return [_stored_chunk_answer_record(chunk) for chunk in result.child_chunks]
 
@@ -4065,8 +4075,11 @@ def answer_question_result(
             settings.runtime_knowledge_path,
         )
         if runtime_knowledge.error:
+            # 詳細の行は例外の型の名前だけ（例外の文は path などを含みうる。#3284）。
             step.add(f"読込エラー: {runtime_knowledge.error}")
             step.status = "補助情報なしで続行"
+            if runtime_knowledge.failure is not None:
+                report_degraded("runtime_knowledge", runtime_knowledge.failure)
         else:
             step.result(runtime_knowledge_status(runtime_knowledge))
             # 登録の数と、一致した用語の別名・ルールを見出しと値で示す（#2341）。
@@ -4229,6 +4242,9 @@ def answer_question_result(
             query_variants=_text_search_variants(retrieval_queries, expansion),
         )
         text_search_info = replace(text_search_info, domain_keyword_expansion=keyword_trace)
+        if (tokenizer_failure := sudachi_unavailable(_question_text_search_tokenizer_config(settings))) is not None:
+            # 全文検索の語を文字種の区切りだけで作ったことを、回答ごとに 1 回だけ診断に残す（#3286）。
+            report_degraded("text_search_tokenizer", tokenizer_failure)
         sources = {_dedupe_query_key(normalized_question): "原質問"}
         if runtime_knowledge.expanded_question != runtime_knowledge.original_question:
             sources.setdefault(_dedupe_query_key(runtime_knowledge.expanded_question), "用語・ルール")

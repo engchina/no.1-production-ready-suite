@@ -1103,7 +1103,6 @@ function mcpConnection(payload: Json, current?: Json): Json {
     oauth_configured: false,
     session_configured: false,
     service_token_configured: false,
-    service_user_configured: false,
     ...current,
     ...payload,
   };
@@ -1132,7 +1131,6 @@ function mcpConnection(payload: Json, current?: Json): Json {
     oauth_configured: oauthConfigured,
     session_configured: Boolean(payload.session_id) || Boolean(current?.session_configured),
     service_token_configured: Boolean(merged.service_token_configured),
-    service_user_configured: Boolean(merged.service_user_configured),
     // 標準の接続（RAG / NL2SQL）は注釈を常に使う。ほかは接続ごと（既定はオフ。#1875）。
     trust_tool_annotations: merged.source === "builtin" || merged.trust_tool_annotations === true,
   };

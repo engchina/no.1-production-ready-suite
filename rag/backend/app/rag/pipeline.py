@@ -40,6 +40,7 @@ from app.rag.answer_engine import ANSWER_ENGINE, AnswerEngine, AnswerScope, answ
 from app.rag.answer_notice import AnswerNoticeSource, compose_rag_answer_notice
 from app.rag.answer_route import answer_route
 from app.rag.audit import AuditOutcome, record_rag_search_audit
+from app.rag.degraded_steps import DegradedSteps, ReportDegraded, not_recorded
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
 from app.rag.field_filter_reader import read_field_conditions
@@ -500,11 +501,16 @@ class RagPipeline:
             request = request.model_copy(update={"query": query_guardrail.sanitized_text})
         original_query = request.query
         rewritten_query = ""
+        # 回答エンジンの前の段(書き換え・抽出項目の条件・添付)の縮退。回答エンジンへ渡し、回答の
+        # 診断の degraded_steps に回答の中の補助の処理と同じ形で出す(#3286)。
+        degraded = DegradedSteps()
         if history and self._settings.rag_history_rewrite_enabled:
             rewritten_query = await _observe_stage(
                 trace_id,
                 "history_rewrite",
-                self._safe_rewritten_query(original_query, history),
+                self._safe_rewritten_query(
+                    original_query, history, report_degraded=degraded.record_degraded
+                ),
                 progress_callback=stage_callback,
                 result_details=lambda rewritten: history_rewrite_details(rewritten, history),
             )
@@ -527,7 +533,7 @@ class RagPipeline:
             auto_field_conditions = await _observe_stage(
                 trace_id,
                 "field_filter",
-                self._read_field_conditions(request),
+                self._read_field_conditions(request, report_degraded=degraded.record_degraded),
                 progress_callback=stage_callback,
                 result_details=field_filter_details,
             )
@@ -540,6 +546,7 @@ class RagPipeline:
                 request.query,
                 self._attachment_conversation_id,
                 rerank=self._genai.rerank if self._settings.rag_rerank_enabled else None,
+                report_degraded=degraded.record_degraded,
             )
         engine = AnswerEngine(
             self._settings,
@@ -552,6 +559,7 @@ class RagPipeline:
             scope=self._scope,
             attachment_chunks=attachment_chunks,
             caller_queries=caller_queries,
+            degraded=degraded,
         )
 
         async def emit_step(
@@ -872,12 +880,14 @@ class RagPipeline:
         return checked
 
     async def _read_field_conditions(
-        self, request: SearchRequest
+        self, request: SearchRequest, *, report_degraded: ReportDegraded = not_recorded
     ) -> list[ExtractionFieldCondition]:
         """検索・回答プロファイルの KB の抽出項目の定義で、質問から条件を読み取る(#652)。
 
         定義は検索の絞り込みの項目と同じ(利用者が使える有効な KB の定義の和集合。KB に無ければ
         全体の既定)。定義が無い・読めないときは LLM を呼ばずに空(条件なしで検索を続ける)。
+        読めなかったとき・読み取りの LLM が失敗したときは ``report_degraded`` に残す(定義が無い
+        ときと分ける。#3286)。
         """
         try:
             view = await self._oracle.get_search_answer_profile(
@@ -892,6 +902,7 @@ class RagPipeline:
             )
         except Exception as exc:  # 読み取りは補助。条件なしで検索を続ける。
             logger.warning("field definitions load failed", extra={**safe_exception_fields(exc)})
+            report_degraded("field_filter", exc)
             return []
         if not field_sets:
             return []
@@ -902,15 +913,25 @@ class RagPipeline:
             for definition in resolve_field_definitions(field_sets, load_field_schema().fields)
             if definition.name.casefold() not in excluded
         ]
-        return await read_field_conditions(request.query, field_defs, self._llm)
+        return await read_field_conditions(
+            request.query, field_defs, self._llm, report_degraded=report_degraded
+        )
 
-    async def _safe_rewritten_query(self, query: str, history: Sequence[ChatTurn]) -> str:
+    async def _safe_rewritten_query(
+        self,
+        query: str,
+        history: Sequence[ChatTurn],
+        *,
+        report_degraded: ReportDegraded = not_recorded,
+    ) -> str:
         """履歴で書き換えた質問を、元の質問と同じ安全チェックに通してから返す。
 
         書き換えは未信頼の履歴を読んだ LLM の出力なので、そのまま検索・回答へ使わない。
         拒否されたら空文字(元の質問で続ける)、許可されたらマスク後の質問を返す。
         """
-        rewritten = await self._rewrite_query_with_history(query, history)
+        rewritten = await self._rewrite_query_with_history(
+            query, history, report_degraded=report_degraded
+        )
         if not rewritten:
             return ""
         checked = await asyncio.to_thread(self._guardrails.validate_query, rewritten)
@@ -922,10 +943,17 @@ class RagPipeline:
             return ""
         return "" if checked.sanitized_text == query.strip() else checked.sanitized_text
 
-    async def _rewrite_query_with_history(self, query: str, history: Sequence[ChatTurn]) -> str:
+    async def _rewrite_query_with_history(
+        self,
+        query: str,
+        history: Sequence[ChatTurn],
+        *,
+        report_degraded: ReportDegraded = not_recorded,
+    ) -> str:
         """会話履歴を踏まえ、最新の質問を単独で意味の通る質問へ書き換える。
 
-        書き換え不要・失敗・不自然な応答(空・長すぎる)は空文字を返し、元の質問で続ける。
+        書き換え不要・失敗・不自然な応答(空・長すぎる)は空文字を返し、元の質問で続ける。LLM の
+        失敗は ``report_degraded`` に残す(書き換えが要らなかったときと分ける。#3286)。
         """
         history_text = _format_chat_history(
             history, ChatHistoryBudget.from_settings(self._settings)
@@ -938,6 +966,7 @@ class RagPipeline:
             )
         except Exception as exc:  # 書き換えは補助。元の質問で回答を続ける。
             logger.warning("history rewrite failed", extra={**safe_exception_fields(exc)})
+            report_degraded("history_rewrite", exc)
             return ""
         rewritten = text.strip().strip("「」\"'").strip()
         rewritten = rewritten.splitlines()[0].strip() if rewritten else ""
