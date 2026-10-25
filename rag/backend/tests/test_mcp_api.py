@@ -1091,13 +1091,14 @@ def test_oversize_table_evidence_keeps_the_header_and_is_read_on(
     start, end = evidence["excerpt_range"]["start"], evidence["excerpt_range"]["end"]
     assert table[start:end] == rows and evidence["next_offset"] == end
 
-    # 続きは rag_read_source の offset に next_offset を渡して読む。
+    # 続きは rag_read_source の offset に next_offset を渡して読む（表の続きは見出しの行を付ける）。
     rest = _call(
         "rag_read_source",
         {"document_id": "d1", "chunk_id": "t1", "offset": end, "max_chars": 20000},
         headers,
     )["structuredContent"]
-    assert rest["text"] == table[end:] and rest["truncated"] is False
+    assert rest["text"] == table[:header_end] + table[end:] and rest["truncated"] is False
+    assert rest["header_range"] == {"start": 0, "end": header_end}
 
 
 def test_omitted_evidence_text_is_read_with_read_source(
@@ -1773,6 +1774,75 @@ def test_read_source_returns_full_text_in_windows(
     assert source_oracle.contexts[-1].allowed_knowledge_base_ids == frozenset({"kb-1"})
 
 
+def _read_source_all(
+    chunk_id: str, max_chars: int, headers: dict[str, str]
+) -> list[dict[str, Any]]:
+    windows: list[dict[str, Any]] = []
+    offset: int | None = 0
+    while offset is not None:
+        result = _call(
+            "rag_read_source",
+            {"document_id": "d1", "chunk_id": chunk_id, "offset": offset, "max_chars": max_chars},
+            headers,
+        )
+        assert result["isError"] is False, result
+        body = result["structuredContent"]
+        assert body["offset"] == offset and len(body["text"]) <= max_chars
+        windows.append(body)
+        offset = body["next_offset"]
+    return windows
+
+
+def _window_body(window: dict[str, Any]) -> str:
+    """続きの窓の本文（表の続きは先頭に付けた見出しの行を除く）。"""
+    header = window["header_range"]
+    text: str = window["text"]
+    return text[header["end"] - header["start"] :] if header else text
+
+
+def test_read_source_continues_at_sentence_boundaries_without_gaps(
+    auth: ProductionAuth, source_oracle: type[_SourceOracle]
+) -> None:
+    """続きの窓は文・段落の境界で切れ、next_offset で続けると全文になる（CJK と英文。#3344）。"""
+    sentences = [
+        f"段落{index}の合成の本文は手順{index}を説明します。"
+        if index % 3
+        else f"Synthetic sentence {index} ends here. "
+        for index in range(40)
+    ]
+    text = "\n".join(sentences)
+    source_oracle.visible[("d1", "c-long")] = _chunk("c-long", text=text)
+    user = auth.user_with_permissions("searcher", ["menu.search"], knowledge_base_ids=["kb-1"])
+    windows = _read_source_all("c-long", 60, _token(user.user_uuid))
+    assert len(windows) > 5
+    assert "".join(window["text"] for window in windows) == text
+    for window in windows[:-1]:
+        # 文の途中で終わらない（どの文も上限より短い）。
+        assert window["text"].rstrip(" \n").endswith(("。", ".")), window["text"]
+        assert window["truncated"] is True and window["header_range"] is None
+    assert (windows[-1]["truncated"], windows[-1]["next_offset"]) == (False, None)
+
+
+def test_read_source_table_continuation_repeats_the_header_rows(
+    auth: ProductionAuth, source_oracle: type[_SourceOracle]
+) -> None:
+    """表の続きの窓は行の境界で切れ、先頭に見出しの行（header_range）を付ける（#3344）。"""
+    table = _table_rows(80, marker_row=-1)
+    header_end = table.index("<tr><td>")
+    source_oracle.visible[("d1", "t-long")] = _chunk("t-long", text=table, content_kind="table")
+    user = auth.user_with_permissions("searcher", ["menu.search"], knowledge_base_ids=["kb-1"])
+    windows = _read_source_all("t-long", 400, _token(user.user_uuid))
+    assert len(windows) > 3
+    assert "".join(_window_body(window) for window in windows) == table
+    assert windows[0]["header_range"] is None
+    for window in windows[1:]:
+        assert window["header_range"] == {"start": 0, "end": header_end}
+        assert window["text"].startswith(table[:header_end])
+        assert _window_body(window).startswith("<tr>")
+    for window in windows[:-1]:
+        assert window["text"].endswith("</tr>")
+
+
 def test_read_source_distinguishes_missing_and_stale(
     auth: ProductionAuth, source_oracle: type[_SourceOracle]
 ) -> None:
@@ -2215,6 +2285,44 @@ def test_read_document_reads_whole_document_in_order_without_gaps(
     assert all(len(page["text"]) <= 14 for page in pages)
 
 
+def test_read_document_cuts_a_long_chunk_at_boundaries(
+    auth: ProductionAuth, document_oracle: type[_DocumentOracle]
+) -> None:
+    """上限に入らない最初の chunk は文の境界（表は行の境界と見出しの行）で切る（#3344）。"""
+    table = "表の題: 合成の表\n列見出し: 列A | 列B\n" + "\n".join(
+        f"行{index}: 値{index} | 合成" for index in range(30)
+    )
+    header_end = table.index("行0")
+    document_oracle.chunks = [
+        _doc_chunk(0, "総則の合成の本文。" * 12, "規程 > 第1章 総則", 1),
+        _doc_chunk(1, table, "規程 > 第1章 総則", 1, content_kind="table"),
+    ]
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+    pages = _read_all({"document_id": "d1", "max_chars": 80}, headers)
+    texts = [page["text"].replace("--- p.1 ---\n", "") for page in pages]
+    sentence_pages = [text for text in texts if text.startswith("総則")]
+    assert len(sentence_pages) > 1 and all(text.endswith("。") for text in sentence_pages)
+    table_chunks = [
+        (page, chunk)
+        for page in pages
+        for chunk in page["chunks"]
+        if chunk["chunk_id"] == "d1:cs-1:1"
+    ]
+    assert len(table_chunks) > 1
+    assert table_chunks[0][1]["header_range"] is None
+    body = ""
+    for page, chunk in table_chunks:
+        piece = page["text"][chunk["start"] : chunk["end"]]
+        if chunk["header_range"] is not None:
+            assert chunk["header_range"] == {"start": 0, "end": header_end}
+            assert piece.startswith(table[:header_end])
+            piece = piece[header_end:]
+        body += piece
+    # 見出しの行を除くと、表の本文を重複も欠けも無く読み切る。
+    assert body == table
+
+
 def test_read_document_skips_derived_chunks(
     auth: ProductionAuth, document_oracle: type[_DocumentOracle]
 ) -> None:
@@ -2442,7 +2550,8 @@ def test_cursor_is_short_and_errors_say_how_to_fix(
     headers = _token(user.user_uuid)
     first = _read_section({"document_id": "d1", "section_id": "s2", "max_chars": 10}, headers)
     cursor = first["next_cursor"]
-    assert cursor == "cs-1:s2:0:10"
+    # 上限に入る最後の文の境界（「申請の本文。」の後ろ）の位置（#3344）。
+    assert cursor == "cs-1:s2:0:6"
     document_cursor = _call("rag_read_document", {"document_id": "d1", "max_chars": 5}, headers)[
         "structuredContent"
     ]["next_cursor"]

@@ -139,13 +139,14 @@ _LABELLED_PREFIXES = (
 DocumentFormat = Literal["paged", "slides", "sheet", "text", "unknown"]
 _FORMAT_BY_EXTENSION: dict[str, DocumentFormat] = {
     **dict.fromkeys((".pdf", ".docx", ".doc", ".rtf", ".odt"), "paged"),
-    **dict.fromkeys(
-        (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".heic"), "paged"
-    ),
+    **dict.fromkeys((".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp"), "paged"),
     **dict.fromkeys((".pptx", ".ppt", ".odp"), "slides"),
     **dict.fromkeys((".xlsx", ".xlsm", ".xls", ".ods", ".csv", ".tsv"), "sheet"),
     **dict.fromkeys(
-        (".md", ".markdown", ".txt", ".text", ".html", ".htm", ".eml", ".msg", ".json", ".xml"),
+        (
+            *(".md", ".markdown", ".rst", ".org", ".txt", ".text"),
+            *(".html", ".htm", ".eml", ".msg", ".json", ".xml"),
+        ),
         "text",
     ),
 }

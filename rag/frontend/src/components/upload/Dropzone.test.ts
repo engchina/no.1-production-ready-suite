@@ -63,6 +63,26 @@ describe("Dropzone accepted upload types", () => {
     );
   });
 
+  it("advertises formats read without pandoc and hides formats whose parsers are not installed", () => {
+    // pandoc・pi-heif を入れないため（#3351）。
+    expect(accepted).toEqual(
+      expect.arrayContaining([
+        ".rst",
+        ".org",
+        ".odt",
+        ".rtf",
+        "text/x-rst",
+        "text/org",
+        "application/vnd.oasis.opendocument.text",
+        "application/rtf",
+        "text/rtf",
+      ])
+    );
+    for (const item of [".heic", ".heif", ".epub", "image/heic", "image/heif", "application/epub+zip"]) {
+      expect(accepted).not.toContain(item);
+    }
+  });
+
   it("keeps semantic HTML MIME variants aligned with SourceProfile", () => {
     expect(accepted).toEqual(expect.arrayContaining([".xhtml", "application/xhtml+xml"]));
   });

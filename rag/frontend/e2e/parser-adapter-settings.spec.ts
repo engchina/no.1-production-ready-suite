@@ -36,9 +36,19 @@ for (const viewport of [
     await expect(
       page.getByRole("radio", { name: /Unstructured.*選んだ場合だけ使用/ })
     ).toBeVisible();
-    await expect(page.getByRole("radio", { name: /MinerU.*GPU.*未設定/ })).toBeVisible();
+    // 対応形式の拡張子に .rst / .org を出し、読まない形式（.heic / .epub など）は出さない（#3351）。
+    const unstructuredCard = page.locator('label[for="settings-parser-backend-unstructured"]');
+    await expect(unstructuredCard).toContainText(".org");
+    await expect(unstructuredCard).toContainText(".rst");
+    await expect(unstructuredCard).not.toContainText(".heic");
+    await expect(unstructuredCard).not.toContainText(".epub");
+    await page.screenshot({
+      path: test.info().outputPath(`parser-settings-${viewport.name}.png`),
+      fullPage: true,
+    });
     await expect(page.getByRole("radio", { name: /Dots\.OCR.*GPU.*設定済み/ })).toBeVisible();
-    // Marker / Unlimited-OCR / GLM-OCR は #270 で削除した。選択肢に出さない。
+    // Marker / Unlimited-OCR / GLM-OCR は #270、MinerU は #3345 で削除した。選択肢に出さない。
+    await expect(page.getByRole("radio", { name: /MinerU/ })).toHaveCount(0);
     await expect(page.getByRole("radio", { name: /Marker|Unlimited-OCR|GLM-OCR/ })).toHaveCount(0);
     // OCI Generative AI (Vision) は削除した（#2042）。
     await expect(page.getByRole("radio", { name: /OCI Generative AI/ })).toHaveCount(0);
@@ -73,16 +83,15 @@ for (const viewport of [
     ).map((text) => text.replace(/\s+/g, " ").trim());
     // 並びは CPU → OCI → GPU（#2042）。CPU は Docling → Unstructured → 構造化レコード JSONL →
     // XML ツリー JSON（#2457）。
-    expect(engineNames).toHaveLength(7);
+    expect(engineNames).toHaveLength(6);
     expect(engineNames[0]).toContain("Docling");
     expect(engineNames[1]).toContain("Unstructured");
     expect(engineNames[2]).toContain("構造化レコード JSONL");
     expect(engineNames[3]).toContain("XML ツリー JSON");
     expect(engineNames[4]).toContain("OCI Document Understanding");
-    expect(engineNames[5]).toContain("MinerU");
-    expect(engineNames[6]).toContain("Dots.OCR");
+    expect(engineNames[5]).toContain("Dots.OCR");
     // desktop は 2 列（1 行目 Docling・Unstructured / 2 行目 構造化レコード JSONL・XML ツリー JSON /
-    // 3 行目 OCI Document Understanding・MinerU / 4 行目 Dots.OCR）、375px は 1 列で同じ順。
+    // 3 行目 OCI Document Understanding・Dots.OCR）、375px は 1 列で同じ順。
     const cardBoxes = await page
       .locator('label[for^="settings-parser-backend-"]')
       .evaluateAll((elements) =>
@@ -91,7 +100,7 @@ for (const viewport of [
           return { x: Math.round(box.left), y: Math.round(box.top) };
         })
       );
-    expect(cardBoxes).toHaveLength(7);
+    expect(cardBoxes).toHaveLength(6);
     if (viewport.name === "desktop") {
       for (const row of [0, 2, 4]) {
         expect(cardBoxes[row].y).toBe(cardBoxes[row + 1].y);
@@ -99,8 +108,7 @@ for (const viewport of [
       }
       expect(cardBoxes[0].y).toBeLessThan(cardBoxes[2].y);
       expect(cardBoxes[2].y).toBeLessThan(cardBoxes[4].y);
-      expect(cardBoxes[4].y).toBeLessThan(cardBoxes[6].y);
-      expect(cardBoxes[6].x).toBe(cardBoxes[0].x);
+      expect(cardBoxes[4].x).toBe(cardBoxes[0].x);
     } else {
       for (let index = 1; index < cardBoxes.length; index += 1) {
         expect(cardBoxes[index].x).toBe(cardBoxes[0].x);
@@ -108,9 +116,9 @@ for (const viewport of [
       }
     }
     await expect(page.getByText("外部 GPU 解析エンジンの接続")).toBeVisible();
-    await expect(page.getByLabel("Endpoint")).toHaveCount(2);
-    await expect(page.getByLabel("Model")).toHaveCount(2);
-    await expect(page.getByLabel("API key", { exact: true })).toHaveCount(2);
+    await expect(page.getByLabel("Endpoint")).toHaveCount(1);
+    await expect(page.getByLabel("Model")).toHaveCount(1);
+    await expect(page.getByLabel("API key", { exact: true })).toHaveCount(1);
     await expect(page.getByText("運用診断", { exact: true })).toHaveCount(0);
     await expect(page.getByText("解析方式の稼働状況")).toHaveCount(0);
     await expect(page.getByText("原本種別ごとの実行順")).toHaveCount(0);
@@ -165,7 +173,6 @@ async function mockParserAdaptersWithPostParse(
       adapters: [
         { ...disabledAdapter("docling"), enabled: true, selected: true, installed: true, status: "active" },
         disabledAdapter("unstructured"),
-        disabledAdapter("mineru"),
         disabledAdapter("dots_ocr"),
       ],
     });
@@ -680,14 +687,13 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
       savedPayload = route.request().postDataJSON();
       await route.fulfill({
         json: parserAdapterEnvelope({
-          adapter_backend: "mineru",
-          effective_order: ["mineru"],
+          adapter_backend: "dots_ocr",
+          effective_order: ["dots_ocr"],
           config_source: "runtime",
           adapters: [
             disabledAdapter("docling"),
             disabledAdapter("unstructured"),
-            { ...disabledAdapter("mineru"), enabled: true, selected: true, status: "active" },
-            disabledAdapter("dots_ocr"),
+            { ...disabledAdapter("dots_ocr"), enabled: true, selected: true, status: "active" },
           ],
         }),
       });
@@ -701,7 +707,6 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
         adapters: [
           disabledAdapter("docling"),
           disabledAdapter("unstructured"),
-          disabledAdapter("mineru"),
           disabledAdapter("dots_ocr"),
         ],
       }),
@@ -710,15 +715,15 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
 
   await page.goto("/settings/parser-adapters");
 
-  // local は廃止。既定の Docling で解析する旨を出し、microservice エンジン(MinerU)を選択する。
+  // local は廃止。既定の Docling で解析する旨を出し、外部 API のエンジン(Dots.OCR)を選択する。
   await expect(page.getByRole("radio", { name: /^Local/ })).toHaveCount(0);
   await expect(page.getByText(/未選択時は既定の Docling で解析します/)).toBeVisible();
-  const mineruBackend = page.getByRole("radio", { name: /MinerU/ });
-  await mineruBackend.focus();
-  await expect(mineruBackend).toBeFocused();
+  const dotsBackend = page.getByRole("radio", { name: /Dots\.OCR/ });
+  await dotsBackend.focus();
+  await expect(dotsBackend).toBeFocused();
   // 本物のラジオは Space（または矢印キー）で選ぶ（#469）。
   await page.keyboard.press("Space");
-  await expect(mineruBackend).toBeChecked();
+  await expect(dotsBackend).toBeChecked();
 
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
 
@@ -726,17 +731,16 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
 
   await expect(page.getByText("文書解析の設定を保存しました。")).toBeVisible();
   expect(savedPayload).toEqual({
-    adapter_backend: "mineru",
+    adapter_backend: "dots_ocr",
     docling_enabled: false,
     unstructured_enabled: false,
-    mineru_enabled: true,
-    dots_ocr_enabled: false,
+    dots_ocr_enabled: true,
     structured_records_jsonl_enabled: false,
     xml_tree_json_enabled: false,
     connections: defaultConnections().map((connection) => ({
       backend: connection.backend,
       endpoint: connection.endpoint,
-      ...(connection.backend === "mineru" ? {} : { model: connection.model }),
+      model: connection.model,
     })),
   });
   await expectNoHorizontalOverflow(page);
@@ -756,7 +760,6 @@ test("XML ツリー JSON は使用エンジンとして選んで保存する（i
             { ...disabledAdapter("docling"), enabled: true, status: "ignored" },
             disabledAdapter("unstructured"),
             { ...disabledAdapter("xml_tree_json"), enabled: true, selected: true, status: "active" },
-            disabledAdapter("mineru"),
             disabledAdapter("dots_ocr"),
           ],
         }),
@@ -772,7 +775,6 @@ test("XML ツリー JSON は使用エンジンとして選んで保存する（i
           { ...disabledAdapter("docling"), enabled: true, selected: true, status: "active" },
           disabledAdapter("unstructured"),
           disabledAdapter("xml_tree_json"),
-          disabledAdapter("mineru"),
           disabledAdapter("dots_ocr"),
         ],
       }),
@@ -814,7 +816,6 @@ test("構造化レコード JSONL は使用エンジンとして選んで保存�
         }
       : disabledAdapter("structured_records_jsonl"),
     disabledAdapter("xml_tree_json"),
-    disabledAdapter("mineru"),
     disabledAdapter("dots_ocr"),
   ];
   await page.route("**/api/settings/parser-adapters", async (route) => {
@@ -886,10 +887,7 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
         return {
           ...connection,
           endpoint: String(update.endpoint ?? connection.endpoint),
-          model:
-            connection.backend === "mineru"
-              ? null
-              : String(update.model ?? connection.model ?? ""),
+          model: String(update.model ?? connection.model ?? ""),
           api_key_configured: update.clear_api_key ? false : connection.api_key_configured,
           configured: Boolean(update.endpoint),
         };
@@ -904,7 +902,6 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
         adapters: [
           disabledAdapter("docling"),
           disabledAdapter("unstructured"),
-          disabledAdapter("mineru"),
           { ...disabledAdapter("dots_ocr"), enabled: true, selected: true, status: "active" },
         ],
       }),
@@ -1061,19 +1058,6 @@ async function mockParserAdapters(page: Page, extra: object = {}) {
               warning_code: null,
             },
             {
-              backend: "mineru",
-              package_name: "external_api",
-              import_name: "external_api",
-              distribution_name: "mineru_v1",
-              install_package: "外部 MinerU API",
-              enabled: false,
-              selected: false,
-              installed: false,
-              status: "disabled",
-              version: null,
-              warning_code: null,
-            },
-            {
               backend: "dots_ocr",
               package_name: "external_api",
               import_name: "external_api",
@@ -1108,6 +1092,13 @@ function parserAdapterEnvelope(data: object) {
       ],
       capabilities: [
         { backend: "docling", modalities: ["pdf", "image"], extensions: [".pdf", ".png"] },
+        // Unstructured の代表の拡張子（rag_parser_core.capabilities の一部。#3351 で .rst / .org を足し、
+        // pandoc・pi-heif を入れないため HEIC / EPUB / ODT / RTF は出さない）。
+        {
+          backend: "unstructured",
+          modalities: ["pdf", "image", "text", "html", "email", "office"],
+          extensions: [".pdf", ".txt", ".md", ".rst", ".org", ".csv", ".html", ".eml", ".png", ".docx"],
+        },
         { backend: "structured_records_jsonl", modalities: [], extensions: [".jsonl"] },
         { backend: "xml_tree_json", modalities: [], extensions: [".json"] },
       ],
@@ -1134,7 +1125,7 @@ function defaultSourceRoutes() {
   return [
     {
       source_kind: "pdf",
-      candidate_order: ["docling", "unstructured", "mineru", "dots_ocr"],
+      candidate_order: ["docling", "unstructured"],
       attempted_order: ["docling", "unstructured"],
       active_order: ["docling"],
       selected_backend: "docling",
@@ -1143,7 +1134,7 @@ function defaultSourceRoutes() {
     },
     {
       source_kind: "image",
-      candidate_order: ["unstructured", "docling", "dots_ocr", "mineru"],
+      candidate_order: ["unstructured", "docling", "dots_ocr"],
       attempted_order: ["docling"],
       active_order: ["docling"],
       selected_backend: "docling",
@@ -1224,7 +1215,7 @@ async function mockExternalParserStatuses(page: Page) {
         data: {
           backend,
           status: "available",
-          version: backend === "mineru" ? "3.4.0" : "served-model",
+          version: "served-model",
           warning_code: null,
         },
         error_messages: [],
@@ -1236,14 +1227,6 @@ async function mockExternalParserStatuses(page: Page) {
 
 function defaultConnections() {
   return [
-    {
-      backend: "mineru",
-      protocol: "mineru_v1",
-      endpoint: "",
-      model: null,
-      api_key_configured: false,
-      configured: false,
-    },
     {
       backend: "dots_ocr",
       protocol: "openai_chat_completions",
@@ -1266,10 +1249,9 @@ function disabledAdapter(
     | "unstructured"
     | "structured_records_jsonl"
     | "xml_tree_json"
-    | "mineru"
     | "dots_ocr"
 ) {
-  const external = backend === "mineru" || backend === "dots_ocr";
+  const external = backend === "dots_ocr";
   return {
     backend,
     package_name: external ? "external_api" : backend,
@@ -1280,8 +1262,6 @@ function disabledAdapter(
         ? "unstructured[all-docs]==0.18.32"
         : backend === "xml_tree_json" || backend === "structured_records_jsonl"
           ? "rag-parser-core"
-          : backend === "mineru"
-          ? "外部 MinerU API"
           : backend === "dots_ocr"
             ? "外部 Dots.OCR API"
             : "docling==2.103.0",
@@ -1316,7 +1296,6 @@ for (const viewport of [
       adapters: [
         { ...disabledAdapter("docling"), enabled: true, selected: true, installed: true, status: "active" },
         disabledAdapter("unstructured"),
-        disabledAdapter("mineru"),
         disabledAdapter("dots_ocr"),
       ],
     };
@@ -1343,7 +1322,6 @@ for (const viewport of [
             adapters: [
               { ...disabledAdapter("docling"), enabled: true, installed: true, status: "active" },
               disabledAdapter("unstructured"),
-              disabledAdapter("mineru"),
               { ...disabledAdapter("dots_ocr"), enabled: true, selected: true, status: "active" },
             ],
           }),

@@ -15,6 +15,7 @@ const PARSER_PROFILE_KEYS: Record<string, I18nKey> = {
   unsupported_tiff_image: "sourceProfile.parser.tiffImage",
   unsupported_legacy_office_binary: "sourceProfile.parser.legacyOffice",
   unsupported_macro_enabled_office: "sourceProfile.parser.macroOffice",
+  unsupported_odt_rtf: "sourceProfile.parser.odtRtf",
   enterprise_ai_generic: "sourceProfile.parser.generic",
   legacy: "evaluation.ingestionQuality.parser.legacy",
 };
@@ -22,7 +23,6 @@ const PARSER_PROFILE_KEYS: Record<string, I18nKey> = {
 const PARSER_BACKEND_ALIASES: Record<string, string> = {
   docling_adapter: "docling",
   unstructured_adapter: "unstructured",
-  mineru_adapter: "mineru",
   dots_ocr_adapter: "dots_ocr",
 };
 
@@ -31,7 +31,6 @@ const PARSER_BACKEND_LABELS: Record<string, string> = {
   unstructured: "Unstructured",
   structured_records_jsonl: "構造化レコード JSONL",
   xml_tree_json: "XML ツリー JSON",
-  mineru: "MinerU",
   dots_ocr: "Dots.OCR",
   oci_document_understanding: "OCI Document Understanding",
   enterprise_ai: "OCI Enterprise AI",
@@ -50,6 +49,7 @@ const SOURCE_WARNING_KEYS: Record<string, I18nKey> = {
   unsupported_tiff_image: "sourceProfile.warning.unsupportedTiffImage",
   unsupported_legacy_office_binary: "sourceProfile.warning.unsupportedLegacyOffice",
   unsupported_macro_enabled_office: "sourceProfile.warning.unsupportedMacroOffice",
+  unsupported_odt_rtf: "sourceProfile.warning.unsupportedOdtRtf",
   parser_fallback_used: "sourceProfile.warning.parserFallback",
   office_local_parse_failed: "sourceProfile.warning.officeFallback",
   office_segment_parse_failed: "sourceProfile.warning.officeSegmentFailed",
@@ -64,6 +64,7 @@ const UNSUPPORTED_REASON_KEYS: Record<string, I18nKey> = {
   tiff_image_not_supported: "sourceProfile.unsupported.tiffImageNotSupported",
   legacy_office_binary_not_supported: "sourceProfile.unsupported.legacyOfficeNotSupported",
   macro_enabled_office_not_supported: "sourceProfile.unsupported.macroOfficeNotSupported",
+  odt_rtf_not_supported: "sourceProfile.unsupported.odtRtfNotSupported",
   unknown_file_type: "sourceProfile.unsupported.unknownFileType",
 };
 
@@ -87,6 +88,7 @@ const EVALUATION_WARNING_KEYS: Record<string, I18nKey> = {
   unsupported_tiff_image: "evaluation.ingestionQuality.warning.unsupportedTiffImage",
   unsupported_legacy_office_binary: "evaluation.ingestionQuality.warning.unsupportedLegacyOffice",
   unsupported_macro_enabled_office: "evaluation.ingestionQuality.warning.unsupportedMacroOffice",
+  unsupported_odt_rtf: "evaluation.ingestionQuality.warning.unsupportedOdtRtf",
 };
 
 export function parserProfileKey(profile: string): I18nKey {

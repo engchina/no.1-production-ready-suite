@@ -1244,17 +1244,96 @@ def test_parser_registry_unsupported_explicit_adapter_skips_simple_text(
         data,
         source_profile=profile,
         content_type=profile.content_type,
-        adapter_backend="mineru",
+        adapter_backend="dots_ocr",
         docling_enabled=True,
         unstructured_enabled=True,
-        mineru_enabled=True,
+        dots_ocr_enabled=True,
     )
 
     assert result.parser_backend == "local_partition"
     assert result.fallback_used is True
-    assert result.warnings == ("mineru_adapter_source_unsupported",)
+    assert result.warnings == ("dots_ocr_adapter_source_unsupported",)
     assert result.extraction is not None
     assert result.extraction.parser_artifacts["chunk_template"] == "markdown_by_heading"
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type"),
+    [("guide.rst", "text/x-rst"), ("notes.org", "text/org")],
+    ids=["rst", "org"],
+)
+def test_parser_registry_unstructured_reads_rst_org_as_plain_text(
+    monkeypatch: pytest.MonkeyPatch, file_name: str, content_type: str
+) -> None:
+    """.rst / .org は pandoc(入れない)へ回さず、プレーンテキストとして渡す(#3351)。"""
+    unstructured_module = ModuleType("unstructured")
+    unstructured_module.__dict__["__version__"] = "9.9.0"
+    partition_module = ModuleType("unstructured.partition.auto")
+    calls: list[dict[str, object]] = []
+
+    def partition(**kwargs: object) -> list[object]:
+        calls.append(kwargs)
+        return [SimpleNamespace(text="Body", category="NarrativeText", metadata=None)]
+
+    partition_module.__dict__["partition"] = partition
+    monkeypatch.setitem(sys.modules, "unstructured", unstructured_module)
+    monkeypatch.setitem(sys.modules, "unstructured.partition", ModuleType("unstructured.partition"))
+    monkeypatch.setitem(sys.modules, "unstructured.partition.auto", partition_module)
+    data = b"Title\n=====\n\nBody\n"
+    profile = build_source_profile(
+        original_file_name=file_name,
+        sanitized_file_name=file_name,
+        content_type=content_type,
+        file_size_bytes=len(data),
+        content_sha256="3" * 64,
+        data=data,
+    )
+    assert profile.modality == SourceModality.TEXT
+
+    result = parse_with_registry(
+        data,
+        source_profile=profile,
+        content_type=profile.content_type,
+        adapter_backend="unstructured",
+        docling_enabled=False,
+        unstructured_enabled=True,
+    )
+
+    assert result.parser_backend == "unstructured"
+    assert result.extraction is not None
+    assert [str(call["filename"]).rsplit(".", 1)[-1] for call in calls] == ["txt"]
+    assert calls[0]["content_type"] == "text/plain"
+    # unstructured の PDF・画像の解析が import する pi_heif は、入れなくても import できる。
+    assert hasattr(sys.modules["pi_heif"], "register_heif_opener")
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type"),
+    [("memo.odt", "application/vnd.oasis.opendocument.text"), ("memo.rtf", "text/rtf")],
+    ids=["odt", "rtf"],
+)
+def test_parser_registry_does_not_parse_odt_rtf_original(file_name: str, content_type: str) -> None:
+    """ODT・RTF は原本のままでは解析しない(Office→PDF で PDF にしてから読む。#3351)。"""
+    profile = build_source_profile(
+        original_file_name=file_name,
+        sanitized_file_name=file_name,
+        content_type=content_type,
+        file_size_bytes=4,
+        content_sha256="4" * 64,
+    )
+
+    result = parse_with_registry(
+        b"{\\rtf1}",
+        source_profile=profile,
+        content_type=profile.content_type,
+        adapter_backend="unstructured",
+        unstructured_enabled=True,
+    )
+
+    assert result.parser_backend == "unsupported"
+    assert result.extraction is None
+    assert result.unsupported_reason == "odt_rtf_not_supported"
+    assert result.warnings == ("unsupported_odt_rtf",)
 
 
 def test_parser_registry_explicit_unstructured_routes_email(
@@ -1415,13 +1494,13 @@ def test_image_adapter_without_bbox_gets_full_frame_source_asset(
     assert asset.metadata["bbox_unit"] == "ratio"
 
 
-def test_parser_registry_explicit_mineru_rejects_html_source(
+def test_parser_registry_explicit_dots_ocr_rejects_html_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """実装済み MinerU adapter が扱えない source は warning を残して local fallback する。"""
+    """Dots.OCR adapter が扱えない source は warning を残して local fallback する。"""
 
     def fail_if_checked(name: str) -> bool:
-        raise AssertionError(f"unsupported mineru source should not import adapter: {name}")
+        raise AssertionError(f"unsupported dots_ocr source should not import adapter: {name}")
 
     monkeypatch.setattr("rag_parser_core.registry._module_available", fail_if_checked)
     data = b"<h1>Title</h1><p>Body</p>"
@@ -1438,13 +1517,13 @@ def test_parser_registry_explicit_mineru_rejects_html_source(
         data,
         source_profile=profile,
         content_type=profile.content_type,
-        adapter_backend="mineru",
-        mineru_enabled=True,
+        adapter_backend="dots_ocr",
+        dots_ocr_enabled=True,
     )
 
     assert result.parser_backend == "local_partition"
     assert result.fallback_used is True
-    assert "mineru_adapter_source_unsupported" in result.warnings
+    assert "dots_ocr_adapter_source_unsupported" in result.warnings
     assert result.extraction is not None
     assert result.extraction.parser_artifacts["chunk_template"] == "html_semantic"
 
@@ -3259,10 +3338,9 @@ _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         # unstructured: 汎用(メール含む)
         ("unstructured", "mail.eml", "message/rfc822", True),
         ("unstructured", "doc.pdf", "application/pdf", True),
-        # mineru: PDF・画像・Office(HTML 不可)
-        ("mineru", "sheet.xlsx", _XLSX_MIME, True),
-        ("mineru", "page.html", "text/html", False),
-        # 外部 GPU OCR は backend 側で PDF をページ画像化する。
+        # 外部 GPU OCR は backend 側で PDF をページ画像化する(Office・HTML 不可)。
+        ("dots_ocr", "sheet.xlsx", _XLSX_MIME, False),
+        ("dots_ocr", "page.html", "text/html", False),
         ("dots_ocr", "scan.png", "image/png", True),
         ("dots_ocr", "doc.pdf", "application/pdf", True),
         # XML ツリー JSON: JSON だけ(#2042。対応する形かは解析で判定する)

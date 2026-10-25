@@ -18,6 +18,7 @@ describe("source profile labels", () => {
     expect(t(parserProfileKey("unsupported_tiff_image"))).toBe("TIFF 画像未対応");
     expect(t(parserProfileKey("unsupported_legacy_office_binary"))).toBe("旧 Office(要変換)");
     expect(t(parserProfileKey("unsupported_macro_enabled_office"))).toBe("マクロ付き Office(要変換)");
+    expect(t(parserProfileKey("unsupported_odt_rtf"))).toBe("ODT・RTF(要変換)");
   });
 
   it("unsupported warnings avoid falling back to generic copy", () => {
@@ -34,6 +35,8 @@ describe("source profile labels", () => {
       "旧形式の Office は変換が必要です（文書レシピのファイル準備で変換を選択）。"
     );
     expect(unsupportedReasonLabel("outlook_msg_not_supported")).toContain("EML");
+    // ODT・RTF は Office→PDF で PDF にしてから読む（#3351）。
+    expect(unsupportedReasonLabel("odt_rtf_not_supported")).toContain("Office→PDF");
     expect(unsupportedReasonLabel("custom_reason")).toBe("custom_reason");
   });
 
@@ -49,6 +52,7 @@ describe("source profile labels", () => {
   it("evaluation quality labels share the same unsupported warning mapping", () => {
     expect(qualityCodeLabel("unsupported_tiff_image")).toBe("TIFF 画像未対応");
     expect(qualityCodeLabel("unsupported_legacy_office_binary")).toBe("旧 Office(要変換)");
+    expect(qualityCodeLabel("unsupported_odt_rtf")).toBe("ODT・RTF(要変換)");
   });
 
   it("evaluation quality labels expose segment artifact cache misses in Japanese", () => {
@@ -60,15 +64,15 @@ describe("source profile labels", () => {
   it("parser backend labels hide external adapter implementation names", () => {
     expect(parserBackendLabel("dots_ocr_adapter")).toBe("Dots.OCR");
     expect(isSameParserBackend("dots_ocr_adapter", "dots_ocr")).toBe(true);
-    expect(parserBackendLabel("mineru_adapter")).toBe("MinerU");
-    expect(isSameParserBackend("mineru_adapter", "mineru")).toBe(true);
   });
 
   it("削除済みの解析エンジン名は過去の解析結果でも生の値のまま表示する", () => {
-    // Marker / Unlimited-OCR / GLM-OCR は #270 で削除した。過去の解析結果に残る名前は壊さず表示する。
+    // Marker / Unlimited-OCR / GLM-OCR は #270、MinerU は #3345 で削除した。過去の解析結果に残る名前は
+    // 壊さず表示する。
     expect(parserBackendLabel("marker_adapter")).toBe("marker_adapter");
     expect(parserBackendLabel("unlimited_ocr_adapter")).toBe("unlimited_ocr_adapter");
     expect(parserBackendLabel("glm_ocr")).toBe("glm_ocr");
+    expect(parserBackendLabel("mineru_adapter")).toBe("mineru_adapter");
   });
 });
 

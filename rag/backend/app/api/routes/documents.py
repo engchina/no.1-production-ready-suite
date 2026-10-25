@@ -117,7 +117,7 @@ from app.rag.section_rules import (
     extraction_sections,
     load_section_rules,
 )
-from app.rag.source_profile import build_source_profile
+from app.rag.source_profile import build_source_profile, rejected_upload_format_message
 from app.rag.variant_keys import (
     compute_chunk_set_id,
     compute_document_recipe_extraction_id,
@@ -247,7 +247,6 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
         "parser_adapter_backend",
         "parser_docling_enabled",
         "parser_unstructured_enabled",
-        "parser_mineru_enabled",
         "parser_dots_ocr_enabled",
         "parser_structured_records_jsonl_enabled",
         "parser_xml_tree_json_enabled",
@@ -429,6 +428,10 @@ async def _store_uploaded_document(
     content_type = _normalized_content_type(file.content_type)
     original_file_name = file.filename or "document.bin"
     file_name = _safe_display_filename(original_file_name)
+    rejected_message = rejected_upload_format_message(file_name, content_type)
+    if rejected_message is not None:
+        # HEIC / HEIF・EPUB は解析の依存を入れないため、保存せずに変換の方法を返す(#3351)。
+        raise HTTPException(status_code=415, detail=rejected_message)
     if not _is_allowed_upload_content_type(
         content_type,
         sanitized_file_name=file_name,

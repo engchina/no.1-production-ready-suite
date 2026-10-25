@@ -634,3 +634,50 @@ test("マクロ付きの Office はアップロードでき、ファイル準備
   await page.screenshot({ path: testInfo.outputPath("office-conversion-notice.png"), fullPage: true });
   await expectNoPageOverflow(page);
 });
+
+test(
+  "HEIC / HEIF・EPUB は送る前に変換の方法を示して送らず、対応形式の案内にも未対応と出す（#3351）",
+  { tag: "@responsive" },
+  async ({ page }, testInfo) => {
+    await mockLocalAuth(page);
+    await mockUploadPage(page);
+    const requests: string[] = [];
+    // 送れるファイルが 1 件なので、単体のアップロードの API で送る。
+    await page.route("**/api/documents/upload", async (route) => {
+      const body = route.request().postData() ?? "";
+      requests.push(...[...body.matchAll(/filename="([^"]+)"/g)].map((match) => match[1]));
+      await route.fulfill({ json: apiEnvelope(uploadResult("memo.odt")) });
+    });
+
+    await page.goto("/upload");
+    // 対応形式の一覧に ODT・RST を出し、HEIC / HEIF・EPUB は未対応と変換の方法を出す。
+    const formats = page.getByText(/^対応形式: /);
+    await expect(formats).toContainText("ODT");
+    await expect(formats).toContainText("RST");
+    await expect(formats).not.toContainText("HEIC");
+    await expect(formats).not.toContainText("EPUB");
+    await expect(page.getByTestId("upload-dropzone-unsupported")).toContainText(
+      "HEIC / HEIF の画像と EPUB は対応していません"
+    );
+
+    await page.locator('input[type="file"]').setInputFiles([
+      { name: "photo.HEIC", mimeType: "image/heic", buffer: Buffer.alloc(6, 1) },
+      { name: "book.epub", mimeType: "application/epub+zip", buffer: Buffer.alloc(6, 1) },
+      { name: "memo.odt", mimeType: "application/vnd.oasis.opendocument.text", buffer: Buffer.alloc(6, 1) },
+    ]);
+    const selection = page.getByTestId("upload-selection");
+    const heic = selection.getByRole("listitem").filter({ hasText: "photo.HEIC" });
+    await expect(heic).toContainText("HEIC / HEIF は対応していません");
+    await expect(heic.getByTestId("upload-selection-guide")).toContainText("JPEG / PNG に変換して");
+    await expect(heic.getByTestId("upload-selection-guide")).toContainText("互換性優先");
+    const epub = selection.getByRole("listitem").filter({ hasText: "book.epub" });
+    await expect(epub).toContainText("EPUB は対応していません");
+    await expect(epub.getByTestId("upload-selection-guide")).toContainText("PDF に変換して");
+    await expect(selection).toContainText("送れない 2 件は送りません。");
+    await page.screenshot({ path: testInfo.outputPath("upload-rejected-formats.png"), fullPage: true });
+    await expectNoPageOverflow(page);
+
+    await page.getByRole("button", { name: "アップロードを開始（1 件）" }).click();
+    await expect.poll(() => requests).toEqual(["memo.odt"]);
+  }
+);

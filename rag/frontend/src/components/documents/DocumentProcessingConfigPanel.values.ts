@@ -39,7 +39,6 @@ export const PARSER_VALUES = [
   "structured_records_jsonl",
   "xml_tree_json",
   "oci_document_understanding",
-  "mineru",
   "dots_ocr",
 ] as const;
 export const PARSER_OPTIONS: SelectFieldOption<ParserAdapterBackend>[] = PARSER_VALUES.map(

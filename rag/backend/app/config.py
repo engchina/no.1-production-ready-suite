@@ -107,7 +107,6 @@ ParserAdapterBackend = Literal[
     # XML ツリー JSON(tag / attr / children の木の JSON)を要素の階層のまま解析する(#2024)。
     # Docling・Unstructured と同じく、使用エンジンで選んだときだけ使う(#2042)。
     "xml_tree_json",
-    "mineru",
     "dots_ocr",
     # service 系 backend。oci_document_understanding は OCI Document Understanding の
     # 非同期 processor job で OCR/表抽出する(parser-oci-document-understanding へ委譲する)。
@@ -215,7 +214,7 @@ INGESTION_JOB_SUBPROCESS_TIMEOUT_MAX_SECONDS = 604800.0
 # 取込 job の停滞の時間の既定（秒。#2003）。進捗を出さない 1 回の呼び出し（再試行を含む）の最長
 # より長くする: 解析サービスは配備の unit の 1230 秒 × 5 回 + 待ち = 約 6170 秒（timeout も
 # 再試行する）、Vision の LLM は共通の設定（PLATFORM_OCI_ENTERPRISE_AI_*）で選べる最長が
-# 600 秒 × 6 回 = 3600 秒、MinerU の job は既定 1800 秒。これらより長い 2 時間にする。
+# 600 秒 × 6 回 = 3600 秒。これらより長い 2 時間にする。
 INGESTION_JOB_STALL_TIMEOUT_DEFAULT_SECONDS = 7200.0
 CHUNK_CHILD_TARGET_CHARS_DEFAULT = 1000
 CHUNK_CHILD_TARGET_CHARS_MIN = 300
@@ -254,7 +253,6 @@ AnswerFlow = Literal["crag", "standard_rag"]
 # 回答の LLM の用途ごとの推論(思考)の量(#1499)。model はモデルの登録値(共通のモデル設定)のまま、
 # none は送らない、low / medium / high はその値を送る(platform の推論の量の選択肢と同じ)。
 ReasoningEffortOverride = Literal["model", "none", "low", "medium", "high"]
-MineruTier = Literal["flash", "basic", "standard", "advanced"]
 VectorIndexProfile = Literal[
     "balanced",
     "accurate",
@@ -327,11 +325,9 @@ class _PersistedParserAdapterSettings(BaseModel):
     adapter_backend: ParserAdapterBackend = DEFAULT_PARSER_ADAPTER_BACKEND
     docling_enabled: bool = True
     unstructured_enabled: bool = False
-    mineru_enabled: bool = False
     dots_ocr_enabled: bool = False
     structured_records_jsonl_enabled: bool = False
     xml_tree_json_enabled: bool = False
-    mineru_api_host: str = Field(default="", max_length=2048)
     dots_ocr_api_host: str = Field(default="", max_length=2048)
     dots_ocr_model: str = Field(default="rednote-hilab/dots.mocr", max_length=512)
 
@@ -725,6 +721,11 @@ class Settings(
             "text/markdown",
             "text/csv",
             "text/tab-separated-values",
+            # reStructuredText・Org(プレーンテキストとして読む。#3351)。
+            "text/x-rst",
+            "text/prs.fallenstein.rst",
+            "text/org",
+            "text/x-org",
             "text/html",
             "application/xhtml+xml",
             "application/json",
@@ -732,6 +733,8 @@ class Settings(
             "application/jsonlines",
             "application/ndjson",
             "application/xml",
+            # .xml は text/xml でも送られる(#3360)。
+            "text/xml",
             "application/csv",
             "application/x-ndjson",
             "message/rfc822",
@@ -748,6 +751,11 @@ class Settings(
             "application/vnd.ms-word.document.macroEnabled.12",
             "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
             "application/vnd.ms-excel.sheet.macroEnabled.12",
+            # ODT・RTF(ファイル準備の Office→PDF で PDF にしてから読む。#3351)。
+            "application/vnd.oasis.opendocument.text",
+            "application/rtf",
+            "application/x-rtf",
+            "text/rtf",
             "audio/aac",
             "audio/flac",
             "audio/mp3",
@@ -887,7 +895,7 @@ class Settings(
         description=(
             "process isolation 時、進捗を出す段(解析のページ・図・表の説明)の途中で job の"
             "進捗(rag_ingestion_jobs.progress_json)がこの秒数変わらなければ止める(#2003)。"
-            "進捗を出さない 1 回の呼び出し(解析サービス・MinerU・Document Understanding・"
+            "進捗を出さない 1 回の呼び出し(解析サービス・Document Understanding・"
             "AI Speech・Vision の LLM。再試行を含む)の最長より長くする(起動時に検証する)。"
         ),
     )
@@ -2180,10 +2188,6 @@ class Settings(
             "(画面で Unstructured を選ぶと有効になる)。選択時は parser-unstructured の起動が前提。"
         ),
     )
-    rag_parser_mineru_enabled: bool = Field(
-        default=False,
-        description="外部 MinerU native API adapter を feature flag で有効化する。",
-    )
     rag_parser_dots_ocr_enabled: bool = Field(
         default=False,
         description="外部 Dots.OCR OpenAI 互換 API adapter を feature flag で有効化する。",
@@ -2230,28 +2234,6 @@ class Settings(
     )
     # GPU OCR は外部で運用済みの native API を呼ぶ。旧 *_SERVICE_URL(/parse wrapper)
     # は読まず、誤った protocol への自動移行を避ける。
-    rag_parser_mineru_api_host: str = Field(
-        default="", description="MinerU 4.x の V1 API（/v1/parse/jobs）の base URL。"
-    )
-    rag_parser_mineru_api_key: str = Field(default="", repr=False)
-    # MinerU 4.0 は解析の方式（pipeline / vlm / hybrid）を品質の tier にまとめた（#1329）。
-    # OCR の言語は MinerU の API サーバーの起動時の設定で、V1 の request には無い。
-    rag_parser_mineru_tier: MineruTier = Field(
-        default="basic",
-        description=(
-            "MinerU の解析の品質（flash / basic / standard / advanced）。basic は小さな"
-            "モデルで CPU でも動く（3.x の pipeline 相当）。"
-            "PDF・画像以外は MinerU が flash だけを持つ。"
-        ),
-    )
-    rag_parser_mineru_job_timeout_seconds: float = Field(
-        default=1800.0,
-        gt=0,
-        le=86400,
-        description=(
-            "MinerU の parse job を終了まで待つ上限（秒）。超えたら job を取り消して縮退する。"
-        ),
-    )
     rag_parser_dots_ocr_api_host: str = Field(
         default="", description="Dots.OCR OpenAI 互換 API の base URL。"
     )
@@ -2710,7 +2692,6 @@ class Settings(
                 + self.rag_http_service_retry_max_delay_seconds
                 * max(self.rag_http_service_retry_attempts - 1, 0)
             ),
-            "rag_parser_mineru_job_timeout_seconds": self.rag_parser_mineru_job_timeout_seconds,
             "oci_document_understanding_timeout_seconds": (
                 self.oci_document_understanding_timeout_seconds
             ),
@@ -2916,7 +2897,7 @@ def resolve_model_settings_file(path_value: str) -> Path:
 
 _PARSER_ADAPTER_FIELDS = tuple(_PersistedParserAdapterSettings.model_fields)
 # parser の API key（JSON に書かず、RAG の backend/.env に保存する。#106 / #211）。
-PARSER_SECRET_ATTRS = ("rag_parser_mineru_api_key", "rag_parser_dots_ocr_api_key")
+PARSER_SECRET_ATTRS = ("rag_parser_dots_ocr_api_key",)
 
 
 def resolve_language_pack_file(settings: Settings) -> Path:

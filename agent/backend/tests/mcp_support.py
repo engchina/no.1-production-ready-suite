@@ -400,7 +400,9 @@ _EVIDENCE = {
 # 32: 根拠の excerpt を既定で全文にし、応答の予算で本文を省いた根拠（text_omitted）と、1 件の上限で
 # 切った範囲（excerpt_range・header_range・next_offset）を足した（#3321）。
 # 33: 根拠の locator に表の 1 行のセルの座標（table_row・table_cells）を足した（#3262）。
-RAG_OUTPUT_SCHEMA_VERSION = 33
+# 34: 読み取りのツールの本文を文・段落（表は行）の境界で切り、表の続きに付けた見出しの行の位置
+# （header_range）を足した（#3344）。
+RAG_OUTPUT_SCHEMA_VERSION = 34
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {
@@ -511,6 +513,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "cell_range": None,
                 "start": 12,
                 "end": 19,
+                "header_range": None,
             },
             {
                 "chunk_id": "chunk-4",
@@ -524,6 +527,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "cell_range": None,
                 "start": 33,
                 "end": 38,
+                "header_range": None,
             },
         ],
         "section_complete": True,
@@ -549,6 +553,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "cell_range": None,
                 "start": 12,
                 "end": 19,
+                "header_range": None,
             },
             {
                 "chunk_id": "chunk-4",
@@ -562,6 +567,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "cell_range": None,
                 "start": 20,
                 "end": 25,
+                "header_range": None,
             },
         ],
         "next_cursor": None,
