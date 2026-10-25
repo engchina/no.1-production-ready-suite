@@ -14,6 +14,7 @@ import {
   RunHistoryToolbar,
   RunStatusBadge,
   RunSummary,
+  formatRunCancellation,
   RunTimeline,
   TraceDetails,
   RunTimelineSection,
@@ -324,6 +325,59 @@ describe("RunSummary", () => {
     expect(container.querySelector("[data-run-status]")).toBeNull();
     expect(container.querySelector("[data-run-summary-heading]")?.textContent).toBe("概要");
     expect(container.textContent).not.toContain("合成の追加バッジ");
+  });
+});
+
+describe("取消の事実（#3348）", () => {
+  it("取り消した人と入口を 3 製品で同じ形にする", () => {
+    expect(formatRunCancellation({ via: "screen", actor: { name: "管理者" } })).toBe("管理者 · 画面");
+    expect(formatRunCancellation({ via: "mcp", actor: { name: "管理者" }, apiKeyName: "合成のキー" })).toBe(
+      "管理者 · MCP（合成のキー）"
+    );
+    // 見られないキー・削除済みのキーは名前を渡さない（「MCP」だけ）。
+    expect(formatRunCancellation({ via: "mcp", actor: { name: "管理者" }, apiKeyName: " " })).toBe("管理者 · MCP");
+    expect(formatRunCancellation({ via: "agentRun", actor: { name: "利用者 A", isSelf: true } })).toBe(
+      "自分 · Agent の実行から"
+    );
+    expect(formatRunCancellation({ via: "system", actor: { name: "無視する" } })).toBe("システム");
+    expect(formatRunCancellation({ via: "screen" })).toBe("画面");
+    expect(
+      formatRunCancellation(
+        { via: "mcp", actor: { name: "x", isSelf: true }, apiKeyName: "k" },
+        { self: "me", mcpKey: (name) => `MCP [${name}]`, separator: " / " }
+      )
+    ).toBe("me / MCP [k]");
+  });
+
+  it("概要は取り消した実行だけに「取消」を会話の持ち主の後に出す", () => {
+    render(
+      <RunSummary
+        status="cancelled"
+        question="合成の質問"
+        startedAt="2026-10-15T00:12:05.000Z"
+        executor={{ name: "利用者 A" }}
+        cancellation={{ via: "mcp", actor: { name: "管理者" }, apiKeyName: "合成のキー" }}
+        target={{ label: "業務プロファイル", value: "プロファイル A" }}
+        runId="run-1"
+      />
+    );
+    const facts = Array.from(container.querySelectorAll("[data-run-fact]")).map((node) => node.getAttribute("data-run-fact"));
+    expect(facts).toEqual(["startedAt", "duration", "executor", "cancellation", "target", "runId"]);
+    expect(container.querySelector("[data-run-fact='cancellation'] dt")?.textContent).toBe("取消");
+    expect(container.querySelector("[data-run-fact='cancellation'] dd")?.textContent).toBe("管理者 · MCP（合成のキー）");
+
+    render(
+      <RunSummary
+        status="cancelled"
+        question="合成の質問"
+        startedAt="2026-10-15T00:12:05.000Z"
+        cancellation={{ via: "screen", actor: { name: "x", isSelf: true } }}
+        runId="run-1"
+        labels={{ self: "本人", facts: { cancellation: "Cancelled" }, cancellation: { screen: "UI" } }}
+      />
+    );
+    expect(container.querySelector("[data-run-fact='cancellation'] dt")?.textContent).toBe("Cancelled");
+    expect(container.querySelector("[data-run-fact='cancellation'] dd")?.textContent).toBe("本人 · UI");
   });
 });
 

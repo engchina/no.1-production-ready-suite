@@ -8,7 +8,9 @@ import {
   DEFAULT_HISTORY_FILTERS,
   DEFAULT_HISTORY_KIND,
   HISTORY_KIND_FILTERS,
+  HISTORY_RUN_STATUSES,
   hasActiveHistoryFilters,
+  historyCancellation,
   historyConversationHref,
   historyDetailPath,
   historyExecutor,
@@ -20,6 +22,7 @@ import {
   historySqlGenerationHref,
   normalizeHistoryFilters,
 } from "../src/features/nl2sql/historyManagementState.ts";
+import { formatRunCancellation } from "@production-ready/ui";
 import { prefillFromSearchParams } from "../src/features/nl2sql/queryPrefillState.ts";
 import type { HistoryItem } from "../src/features/nl2sql/types.ts";
 
@@ -199,4 +202,31 @@ test("実行の詳細の処理の経過はチャットと同じ span の木（#3
   assert.deepEqual(rows.map((row) => [row.status, row.level ?? 0]), [["done", 0], ["done", 1], ["skipped", 0]]);
   assert.equal(rows[0].label, "SQL を生成しました");
   assert.equal(historyTracePath(base.id), "/api/nl2sql/history/h1/trace");
+});
+
+test("停止の行は状態「停止」と、取り消した人と入口の「取消」に写す（#3348）", () => {
+  assert.deepEqual(HISTORY_RUN_STATUSES, ["succeeded", "blocked", "cancelled"]);
+  const cancelled = (cancellation: HistoryItem["cancellation"]): HistoryItem => ({
+    ...base,
+    generated_sql: "",
+    executable_sql: "",
+    run_status: "cancelled",
+    cancellation,
+  });
+  const view = (item: HistoryItem) => {
+    const value = historyCancellation(item);
+    return value ? formatRunCancellation(value) : null;
+  };
+  const recorded = { actor_recorded: true, actor_display_name: "管理者", by_me: false, api_key_name: "" };
+  assert.equal(historyRunStatus(cancelled(null)), "cancelled");
+  // 停止の行は安全性の判定（safety_is_safe）を持たない。
+  assert.equal(historyRunStatus({ ...cancelled(null), safety_is_safe: false }), "cancelled");
+  assert.equal(view(cancelled({ ...recorded, via: "mcp", api_key_name: "合成のキー" })), "管理者 · MCP（合成のキー）");
+  assert.equal(view(cancelled({ ...recorded, via: "mcp" })), "管理者 · MCP");
+  assert.equal(view(cancelled({ ...recorded, via: "agent_run", by_me: true })), "自分 · Agent の実行から");
+  assert.equal(view(cancelled({ ...recorded, via: "screen", actor_display_name: "" })), "削除済みのユーザー · 画面");
+  assert.equal(view(cancelled({ ...recorded, via: "screen", actor_recorded: false, actor_display_name: "" })), "画面");
+  // 停止でない行・記録の無い行は「取消」を出さない。
+  assert.equal(view({ ...base, cancellation: { ...recorded, via: "screen" } }), null);
+  assert.equal(view(cancelled(null)), null);
 });

@@ -24,6 +24,7 @@ import {
   RunTimelineSection,
   SqlSafetyBadge,
   StatusBadge,
+  formatRunCancellation,
   formatRunDateTime,
   runStepDetailsJson,
   useTraceDetailsLabels,
@@ -60,6 +61,7 @@ import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerE
 import {
   agentRunDetailLabels,
   commonRunStatus,
+  runCancellation,
   runDurationMs,
   runConversationHref,
   runFinishedAt,
@@ -167,6 +169,11 @@ export function RunDetail({
   const legacyProgress = progress.legacy;
   const failure = runFailure(run, timelineSteps, "detail");
   const usage = run.usage;
+  // 取り消した人と入口（#3348）。概要の「取消」と、イベントの記録の取消の行に同じ文を出す。
+  const cancellation = runCancellation(run);
+  const cancellationText = cancellation
+    ? formatRunCancellation(cancellation, { ...labels.cancellation, self: labels.self })
+    : null;
 
   return (
     <section className="min-w-0" aria-label={t("run.detail")}>
@@ -194,6 +201,7 @@ export function RunDetail({
             kind={runSourceLabelOf(run.metadata)}
             executor={{ name: executorName, isSelf: executedByMe }}
             owner={showOwner ? { name: ownerName, isSelf: run.owned_by_me === true } : null}
+            cancellation={cancellation}
             target={{ label: t("run.fact.agent"), value: agentName }}
             model={usage?.model || null}
             usage={usage ? { tokens: usage.total_tokens } : null}
@@ -339,7 +347,7 @@ export function RunDetail({
                   <div className="grid min-w-0 gap-2">
                     <h3 className="text-sm font-medium text-fg">{t("run.timeline")}</h3>
                     <p className="text-xs text-fg-muted">{t("run.timelineDescription")}</p>
-                    <EventLog events={run.events} />
+                    <EventLog events={run.events} cancellationText={cancellationText} />
                   </div>
                   <RunStreamControls sseState={sseState} />
                 </>
@@ -471,10 +479,10 @@ function RunProgressIndicator({ run }: { run: RunState }) {
 }
 
 /** イベントの記録（技術的な詳細。モデルが呼んだツールと承認の判断を時系列で。共通の `RunEventLog`。#2386）。 */
-function EventLog({ events }: { events: RunEvent[] }) {
+function EventLog({ events, cancellationText }: { events: RunEvent[]; cancellationText: string | null }) {
   return (
     <RunEventLog
-      items={events.map(runEventItem)}
+      items={events.map((event) => runEventItem(event, cancellationText))}
       labels={{
         title: t("run.timeline"),
         filter: t("run.events.filter"),
@@ -504,7 +512,7 @@ function eventCategory(type: string): { id: string; label: string } {
  * Run のイベントを 1 行の形に写す。行は要約（ツール名・イベントの文）と状態のバッジ・処理時間だけにし、
  * イベントの種類のコード・時刻・ステップ・承認・成果物の ID・payload は行を開いた詳細に置く。
  */
-function runEventItem(event: RunEvent): RunEventLogItem {
+function runEventItem(event: RunEvent, cancellationText: string | null = null): RunEventLogItem {
   const view = eventTypeView(event.type);
   const payload = event.payload ?? {};
   const base = {
@@ -607,6 +615,11 @@ function runEventItem(event: RunEvent): RunEventLogItem {
   return {
     ...base,
     title: event.message,
+    // 取消の行は、取り消した人と入口を添える（概要の「取消」と同じ文。#3348）。
+    summary:
+      event.type === "run.cancelled" && cancellationText
+        ? t("run.events.cancelledBy", { value: cancellationText })
+        : undefined,
     icon: GitBranch,
     details: { fields: fields([]) },
     defaultOpen: failed,
