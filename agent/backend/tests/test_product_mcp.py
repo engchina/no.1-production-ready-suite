@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Literal
 
 import httpx
@@ -177,6 +178,17 @@ def test_fake_product_mcp_follows_the_input_contracts() -> None:
     # + nl2sql_list_profiles / nl2sql_recommend_profile / nl2sql_cancel_requirement（#1441）と、
     # 画面が保存した根拠を確かめ直す内部のツール rag_readable_documents（#3252）。
     assert checked == len(READ_ONLY) + 4
+
+
+def test_fake_nl2sql_outputs_carry_the_contract_schema_version() -> None:
+    """fake の NL2SQL の出力は契約と同じ形の版を持つ（#3240）。"""
+    contract = json.loads((CONTRACTS / "nl2sql-tools.json").read_text(encoding="utf-8"))
+    for tool in contract["tools"]:
+        output = DEFAULT_OUTPUTS[tool["name"]]
+        if callable(output):
+            output = output(SimpleNamespace(requirement_session_id="qs-1"))
+        version = tool["outputSchema"]["properties"]["schema_version"]["default"]
+        assert output["schema_version"] == version, tool["name"]
 
 
 # ---------------------------------------------------------------------------

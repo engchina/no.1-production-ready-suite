@@ -108,6 +108,9 @@ from app.security.permissions import (
 from app.settings import get_settings
 
 SERVER_NAME = "production-ready-nl2sql"
+# ツールの出力の版（出力の形を変えたら上げる。3 製品の MCP の出力の外枠をそろえる）。
+# 1: すべてのツールの出力に schema_version を足した（#3240）。
+MCP_OUTPUT_SCHEMA_VERSION = 1
 # 業務プロファイルを自動で 1 つに決められなかった nl2sql_query のエラー（#2355）。
 PROFILE_NOT_SELECTED_CODE = "NL2SQL_PROFILE_NOT_SELECTED"
 # そのエラーの message に示す推薦の候補の数。
@@ -342,6 +345,14 @@ class GetJobInput(_Input):
     )
 
 
+class VersionedOutput(BaseModel):
+    """ツールの出力の共通部分（出力の形の版）。"""
+
+    schema_version: int = Field(
+        default=MCP_OUTPUT_SCHEMA_VERSION, description="出力の形の版（変わったら上がる）。"
+    )
+
+
 class ProfileItem(BaseModel):
     id: str
     name: str
@@ -349,7 +360,7 @@ class ProfileItem(BaseModel):
     description: str
 
 
-class ListProfilesOutput(BaseModel):
+class ListProfilesOutput(VersionedOutput):
     profiles: list[ProfileItem]
 
 
@@ -360,7 +371,7 @@ class RecommendationCandidate(BaseModel):
     score: float | None = None
 
 
-class RecommendProfileOutput(BaseModel):
+class RecommendProfileOutput(VersionedOutput):
     recommended_profile_id: str | None
     rewritten_question: str | None
     candidates: list[RecommendationCandidate]
@@ -430,7 +441,7 @@ class RequirementOutput(BaseModel):
     message: str = ""
 
 
-class CancelRequirementOutput(BaseModel):
+class CancelRequirementOutput(VersionedOutput):
     requirement_session_id: str
     status: str = Field(description="cancelled（閉じた）/ closed（もう閉じていた）")
 
@@ -448,7 +459,7 @@ class AutoSelectedProfile(BaseModel):
     )
 
 
-class Nl2SqlJobResult(BaseModel):
+class Nl2SqlJobResult(VersionedOutput):
     """契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。"""
 
     # SQL の生成前の確認で止めた（needs_clarification / unanswerable）ときはジョブを作らない

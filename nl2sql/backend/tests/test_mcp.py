@@ -532,9 +532,10 @@ def test_list_profiles_returns_only_allowed_profiles(
     is_error, content = _structured(_run(_call("nl2sql_list_profiles", {}), token=token))
     assert is_error is False
     assert content == {
+        "schema_version": mcp_tools.MCP_OUTPUT_SCHEMA_VERSION,
         "profiles": [
             {"id": "sales", "name": "売上", "category": "営業", "description": "売上の分析"}
-        ]
+        ],
     }
     is_error, content = _structured(
         _run(_call("nl2sql_list_profiles", {"limit": 101}), token=token)
@@ -555,6 +556,7 @@ def test_recommend_profile_respects_scope_and_threshold(
     is_error, content = _structured(_run(call, token=_token(sales_user.user_uuid)))
     assert is_error is False
     assert content == {
+        "schema_version": mcp_tools.MCP_OUTPUT_SCHEMA_VERSION,
         "recommended_profile_id": "sales",
         "rewritten_question": "営業部の今月の売上",
         "candidates": [{"id": "sales", "name": "売上", "reason": "売上", "score": 0.9}],
@@ -728,6 +730,7 @@ def test_profile_scope_claim_limits_query_list_and_recommend(
         )
     )
     assert recommended == {
+        "schema_version": mcp_tools.MCP_OUTPUT_SCHEMA_VERSION,
         "recommended_profile_id": None,
         "rewritten_question": None,
         "candidates": [],
@@ -821,6 +824,7 @@ def test_query_passes_row_limit_and_actor_and_returns_result(
     assert actor_user_uuid == user.user_uuid
     assert actor_is_system_admin is False
     assert content == {
+        "schema_version": mcp_tools.MCP_OUTPUT_SCHEMA_VERSION,
         "job_id": content["job_id"],
         "status": "done",
         "profile_id": "sales",

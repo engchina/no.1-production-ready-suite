@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 import app.features.nl2sql.ontology_router as ontology_router_module
+from app.features.mcp.tools import MCP_OUTPUT_SCHEMA_VERSION
 from app.features.nl2sql.models import (
     AllowedObjects,
     Nl2SqlProfile,
@@ -2484,7 +2485,11 @@ def test_mcp_cancel_requirement_closes_session_and_rejects_answers(
     is_error, cancelled = _mcp("nl2sql_cancel_requirement", {"requirement_session_id": session_id})
     assert (is_error, cancelled) == (
         False,
-        {"requirement_session_id": session_id, "status": "cancelled"},
+        {
+            "schema_version": MCP_OUTPUT_SCHEMA_VERSION,
+            "requirement_session_id": session_id,
+            "status": "cancelled",
+        },
     )
     runtime = ontology_router_module.ontology_runtime
     assert runtime.get_session(session_id).session.status == QuerySessionStatus.CANCELLED
