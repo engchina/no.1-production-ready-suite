@@ -26,6 +26,7 @@ import httpx
 import pytest
 from agents.testing import ScriptedModel, assistant_message, function_call
 from pytest import MonkeyPatch
+from security_support import client
 
 from app.features.agent import builtin_runtime, call_abort, tools
 from app.features.agent.builtin_runtime import ModelTarget
@@ -287,6 +288,39 @@ def test_cancel_cuts_the_in_flight_mcp_call(
     # 呼び先の応答（WAIT_SECONDS 秒の待ち）を待たずに戻る。
     assert monotonic() - started < WAIT_SECONDS / 2
     assert slow_mcp.calls == 1
+    _assert_aborted(run_id, model, agent_tools, call_abort.REASON_RUN_CANCELLED)
+
+
+def test_mcp_agent_cancel_run_cuts_the_in_flight_mcp_call(
+    monkeypatch: MonkeyPatch, slow_mcp: _SlowMcp, agent_tools: list[str]
+) -> None:
+    """外部の MCP の取消（agent_cancel_run。#3240）も、画面の取消と同じく送信中の読み取りを切る。"""
+    model = _script(monkeypatch)
+    run_id = _create_run()
+    results: list[dict[str, Any]] = []
+
+    def cancel_when_sent() -> None:
+        assert slow_mcp.received.wait(WAIT_SECONDS)
+        response = client.post(
+            "/api/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "agent_cancel_run", "arguments": {"run_id": run_id}},
+            },
+        )
+        results.append(response.json()["result"]["structuredContent"])
+
+    canceller = threading.Thread(target=cancel_when_sent)
+    canceller.start()
+    started = monotonic()
+    anyio.run(builtin_runtime.execute_run, run_id)
+    canceller.join(WAIT_SECONDS)
+
+    assert slow_mcp.disconnected.wait(WAIT_SECONDS)
+    assert monotonic() - started < WAIT_SECONDS / 2
+    assert [item["result"] for item in results] == ["cancelled"]
     _assert_aborted(run_id, model, agent_tools, call_abort.REASON_RUN_CANCELLED)
 
 

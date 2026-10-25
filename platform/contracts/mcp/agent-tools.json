@@ -493,6 +493,74 @@
       }
     },
     {
+      "name": "agent_cancel_run",
+      "title": "実行の取り消し",
+      "description": "agent_chat の run_id の実行を止める（回答前の確認の待ちも閉じる）。利用者が止めると言ったとき、回答を待たないと決めたときに使う。",
+      "inputSchema": {
+        "properties": {
+          "run_id": {
+            "description": "agent_chat の run_id",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "AgentCancelRunInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "outputSchema": {
+        "properties": {
+          "schema_version": {
+            "default": 1,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "description": "取消の後の Run の状態。",
+            "title": "Status",
+            "type": "string"
+          },
+          "result": {
+            "description": "cancelled=取り消した / already_cancelled=すでに取り消されていた / already_finished=終わっていたため変えていない（status が completed / failed）。",
+            "enum": [
+              "cancelled",
+              "already_cancelled",
+              "already_finished"
+            ],
+            "title": "Result",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "status",
+          "result",
+          "message"
+        ],
+        "title": "CancelRunOutput",
+        "type": "object"
+      }
+    },
+    {
       "name": "agent_chat",
       "title": "業務 Agent への質問",
       "description": "業務 Agent に質問し、回答（根拠つき）を返す。業務 Agent は社内の資料（RAG）・業務データ（NL2SQL）などを調べて答える。thread_id を渡すと同じ会話の続きとして答える。回答の前に確認が要るときは confirmation を返す。wait_seconds までに終わらなければ in_progress=true と run_id を返す（agent_get_run で読む）。承認の要る操作は行わない。",

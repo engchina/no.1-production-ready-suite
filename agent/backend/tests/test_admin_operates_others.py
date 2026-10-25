@@ -664,3 +664,64 @@ def test_mcp_key_of_system_admin_does_not_continue_another_users_chat(
     assert hidden_thread["error_code"] == "THREAD_NOT_FOUND"
     hidden = _tool(bob_key, "agent_get_run", {"run_id": first_id, "wait_seconds": 0})
     assert hidden["error_code"] == "RUN_NOT_FOUND"
+
+
+# 外部の MCP の取消（agent_cancel_run。#3240）: 止める人 × 実行した人 → 結果。画面の取消と同じ人
+# （実行した利用者・会話の持ち主・system_admin）だけが止められ、ほかの利用者は「無い」として扱う。
+CANCEL_MATRIX = [
+    ("alice", "alice", "cancelled"),
+    # 会話の持ち主は、system_admin が持ち主の会話で実行した Run も止められる。
+    ("alice", "admin", "cancelled"),
+    # system_admin は他の利用者の Run も止められる（運用の操作。#3244）。
+    ("admin", "alice", "cancelled"),
+    ("bob", "alice", "RUN_NOT_FOUND"),
+]
+
+
+@pytest.mark.parametrize(
+    ("canceller", "runner", "expected"),
+    CANCEL_MATRIX,
+    ids=["runner", "thread-owner", "system_admin", "other-user"],
+)
+def test_mcp_cancel_run_is_allowed_to_the_same_people_as_the_screen(
+    monkeypatch: MonkeyPatch, people: People, canceller: str, runner: str, expected: str
+) -> None:
+    monkeypatch.setattr(mcp_server, "wait_poll_seconds", 0.01)
+    logins = {"alice": people.alice_login, "bob": people.bob_login, "admin": people.admin_login}
+    users = {"alice": people.alice, "admin": people.admin}
+    first = _ask(login(people.alice_login), people.agent_id, "合成の質問")
+    thread_id = first.json()["data"]["thread_id"]
+    # 会話の持ち主（alice）の会話の、まだ始まっていない Run。
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="合成の続き", agent_id=people.agent_id, thread_id=thread_id),
+        created_by_user_uuid=users[runner],
+        all_users=True,
+    )
+    response = client.post(
+        "/api/account/api-keys",
+        json={"name": "外部のクライアント", "products": ["agent"]},
+        headers=login(logins[canceller]),
+    )
+    assert response.status_code == 200, response.text
+    key = response.json()["data"]
+    output = _tool(key["token"], "agent_cancel_run", {"run_id": run.id})
+    stored = runtime_repository.get_run(run.id)
+    if expected == "RUN_NOT_FOUND":
+        assert (output["error_code"], output["status"]) == ("RUN_NOT_FOUND", 404)
+        assert stored.status == RunStatus.QUEUED
+        return
+    assert (output["result"], output["status"]) == (expected, "cancelled")
+    # 操作した人と入口（MCP・キーの ID）を残し、Run と会話の持ち主は変えない。
+    [event] = [item for item in stored.events if item.type == RunEventType.RUN_CANCELLED]
+    assert event.payload["cancelled_by"] == logins[canceller]
+    assert (event.payload["via"], event.payload["api_key_id"]) == ("mcp", key["key"]["id"])
+    assert stored.created_by_user_uuid == users[runner]
+    assert runtime_repository.get_thread(thread_id, user_uuid=people.alice) is not None
+    if canceller == "admin":
+        # 止められても、他の利用者の会話の続きは system_admin でも 403 のまま。
+        refused = _tool(
+            key["token"],
+            "agent_chat",
+            {"agent_id": people.agent_id, "question": "合成", "thread_id": thread_id},
+        )
+        assert (refused["error_code"], refused["status"]) == ("OTHERS_CONTENT_FORBIDDEN", 403)
