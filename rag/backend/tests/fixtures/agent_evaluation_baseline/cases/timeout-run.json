@@ -21,29 +21,7 @@
     {
       "observation": "timeout",
       "elapsed_ms": 2000.0,
-      "run": {
-        "id": "run-timeout-run-0",
-        "status": "running",
-        "thread_id": "thread-timeout-run",
-        "steps": [],
-        "artifacts": [
-          {
-            "kind": "answer",
-            "content": {
-              "text": ""
-            }
-          },
-          {
-            "kind": "answer_validation",
-            "content": {
-              "status": "completed"
-            }
-          }
-        ],
-        "usage": {
-          "requests": 2
-        }
-      }
+      "run_id": "run-timeout-run-0"
     }
   ],
   "expected": {
@@ -90,7 +68,7 @@
           "case_id": "timeout-run",
           "turn": 0,
           "run_id": "run-timeout-run-0",
-          "thread_id": "thread-timeout-run",
+          "thread_id": "thread_f0fe8e2b136544171316a3787537bebc",
           "status": "timeout",
           "elapsed_ms": 2000.0,
           "outcome": null,
@@ -98,13 +76,18 @@
           "validation_status": null,
           "model_requests": null,
           "tool_calls": {},
-          "superseded_searches": 0
+          "superseded_searches": 0,
+          "agent_version": null,
+          "skipped_approval_tools": [],
+          "withheld_evidence_count": 0,
+          "evidence_text_omitted": 0,
+          "cancel_result": "cancelled"
         }
       ],
-      "run_requests": [
+      "chat_requests": [
         {
           "agent_id": "agent-baseline",
-          "goal": "合成の質問: timeout-run"
+          "question": "合成の質問: timeout-run"
         }
       ],
       "cancelled_run_ids": [

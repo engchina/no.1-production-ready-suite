@@ -3,36 +3,41 @@
 handoff §14.3 の D（Agent が RAG の根拠の道具・業務ガイド・最終の検証を編成する経路）を、
 A（業務ガイドなし）・C（業務ガイドあり）と同じ評価セット・同じ採点で比べるための道具。
 
-- Agent は公開の HTTP API（`POST /api/runs`・`GET /api/runs/{id}`）だけで呼ぶ。Agent のコードは
-  import しない（製品間はコードで依存しない。AGENTS.md）。
+- Agent は公開の MCP（`POST /api/mcp`。契約は `platform/contracts/mcp/agent-tools.json`）
+  だけで、利用者が発行した API キー（`Authorization: Bearer prak_…`。使える製品に `agent`）で
+  呼ぶ（#3240）。使うツールは `agent_chat`・`agent_get_run`・`agent_get_run_observation`・
+  `agent_cancel_run` だけで、Agent の画面の API・Run の内部の記録・Agent のコードには依存しない
+  （製品間はコードで依存しない。AGENTS.md）。業務 Agent は公開済みのものを ID で指定する
+  （作成・公開の MCP のツールは持たない）。
 - 採点は RAG の評価ランナーと同じ関数（`app.rag.evaluation.score_case_answers` と
   `summarize_case_results`）で行う。この CLI は RAG の backend にあり、同じ製品の採点を直接使う
-  （採点の API を足したり、採点を複製したりしない）。Agent の Run から、RAG の検索・回答の応答と
-  同じ形（`SearchResponse`）を組み立てて渡す。
-- 複数往復のケース（`turns`）は、返答を同じ会話（`thread_id`）の次の Run として送る。
+  （採点の API を足したり、採点を複製したりしない）。Agent の Run の公開の出力から、RAG の
+  検索・回答の応答と同じ形（`SearchResponse`）を組み立てて渡す。
+- 複数往復のケース（`turns`）は、返答を同じ会話（`thread_id`）の次の `agent_chat` として送る。
 - ケースの既知の条件（`conditions`）は、Agent に構造化して渡す口が無いため、最初の質問の後ろに
   「既知の条件」の文として足す（`--guides` を渡すと条件の名前で書く）。往復の返答は、返答の文に
   条件が書いてあるため、文だけを送る（条件を読み取って `rag_search` に渡すのは Agent の仕事）。
 
-Agent の回答の組み立て:
+Agent の回答の組み立て（公開の出力の項目）:
 
-- 回答: Run の成果物 `answer` の本文（最終の検証 `answer_validation` の後の本文）。
-- 引用: その Run の `rag_search` / `rag_retrieve_evidence` が返した根拠と、`rag_read_source` /
-  `rag_read_document` / `rag_read_section` で読んだ chunk（出てきた順・重複なし。#1345・#1438）。
-  本文は MCP の `excerpt`（既定は全文）。応答の予算で本文を省いた根拠・1 件の上限で切った根拠を
-  同じ Run で読み取りのツールが読んだら、読んだ本文を足す（Agent が見た本文で照合する。#3321）。
-- 対応（outcome）: Run の成果物 `answer` の `outcome.value`（Agent の Control Plane が最終の
-  回答に決定的に付けた対応。RAG の AnswerEnvelope と同じ語彙。#1305。
-  `outcome_source=agent_answer`）。
-  対応を持たない成果物（#1305 より前の Agent）は、その Run の最後の `rag_search` の `outcome`
-  （`outcome_source=agent_rag_search`）。`rag_search` も呼ばなかった Run だけ、回答の最後の行
-  （最終の検証が足す定型の注記を除く）が問い（？）なら確認の質問、それ以外は RAG の評価と同じ
-  推定（拒答の文か）にする（`outcome_source=inferred`。推定は補助で、結果の
-  `agent.outcome_sources` に件数を残す）。
+- 回答: `agent_get_run` の `answer`（最終の検証の後の本文）。
+- 引用: `agent_get_run_observation` の `evidence[]`（Run の RAG の根拠のツールが返した根拠と、
+  読み取りのツールで読んだ chunk の全件。初めて現れた順 `rank`・重複なし。同じ chunk を後で
+  読んだ本文はつないである）。`next_cursor` をたどって全件を読む。場所は `locator`（RAG の
+  `EvidenceLocator` と同じ名前）。
+- 対応（outcome）: `agent_get_run` の `outcome`（Agent が最終の回答に決定的に付けた対応。
+  RAG の AnswerEnvelope と同じ語彙。#1305。`outcome_source=agent_answer`）。対応の無い完了の
+  Run（#1305 より前の Agent の Run）だけ、回答の最後の行（最終の検証が足す定型の注記を除く）が
+  問い（？）なら確認の質問、それ以外は RAG の評価と同じ推定（拒答の文か）にする
+  （`outcome_source=inferred`。推定は補助で、結果の `agent.outcome_sources` に件数を残す）。
+- 承認の要るツールを呼ばなかった Run（MCP の Run は承認の要るツールを呼ばない。
+  `skipped_approval_tools`・`tool_calls[].status=approval_skipped`）は、必要な操作をしていない
+  回答なのでケースの失敗にする（#3240 の Q7。承認待ちで止まった Run と同じ扱い）。
+- 時間内に終わらない Run は `agent_cancel_run` で取り消し、結果（`result`）を Run の記録に残す。
 
+    export RAG_EVALUATION_AGENT_API_KEY=prak_...   # 使える製品に agent を含むキー
     uv run python -m app.rag.agent_evaluation_cli run /tmp/business-support.resolved.json \\
-        --agent-api-base-url http://127.0.0.1:8020 --create-agent \\
-        --search-answer-profile-id <C の検索・回答プロファイル> \\
+        --agent-mcp-url http://127.0.0.1:8020/api/mcp --agent-id <公開済みの業務 Agent> \\
         --guides ../evaluation/business-support/support-guides.json \\
         --output /tmp/business-support.agent.json
     uv run python -m app.rag.agent_evaluation_cli summarize \\
@@ -43,7 +48,10 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import itertools
 import json
+import math
+import os
 import statistics
 import sys
 import time
@@ -58,6 +66,7 @@ from pydantic import ValidationError
 from app.rag.evaluation import case_error_result, score_case_answers, summarize_case_results
 from app.rag.evaluation_handling import EVALUATION_OUTCOMES
 from app.schemas.evaluation import (
+    EVALUATION_METRICS_VERSION,
     EvaluationCase,
     EvaluationCaseResult,
     EvaluationMetrics,
@@ -65,41 +74,37 @@ from app.schemas.evaluation import (
 )
 from app.schemas.search import RetrievedChunk, SearchDiagnostics, SearchResponse
 
-DEFAULT_AGENT_API_BASE_URL = "http://localhost:8020"
+DEFAULT_AGENT_MCP_URL = "http://localhost:8020/api/mcp"
+# API キーを読む環境変数（キーを引数に書かない。シェルの履歴・プロセスの一覧に残さない）。
+DEFAULT_API_KEY_ENV = "RAG_EVALUATION_AGENT_API_KEY"
+MCP_PROTOCOL_VERSION = "2025-06-18"
 # 1 Run の終わりを待つ上限（秒）。rag_search は 1 回 50〜110 秒、最終の検証が 20 秒前後かかる。
 DEFAULT_RUN_TIMEOUT_SECONDS = 900.0
-DEFAULT_POLL_INTERVAL_SECONDS = 3.0
 REQUEST_TIMEOUT_SECONDS = 60.0
-BUSINESS_SUPPORT_SKILL_ID = "business-rag-research"
-SETTLED_STATUSES = frozenset({"completed", "failed", "cancelled", "waiting_approval"})
+# `agent_chat` / `agent_get_run` の `wait_seconds` の上限（契約の maximum）。長く待たせて呼び出しの
+# 回数を減らす（API キーの 1 分あたりの呼び出しの上限に収める）。
+MAX_WAIT_SECONDS = 300
+# 観測の根拠を 1 回に読む件数（契約の maximum）と、たどるページの上限（壊れた next_cursor で
+# 回り続けない）。
+OBSERVATION_PAGE_LIMIT = 100
+MAX_OBSERVATION_PAGES = 1000
+# 読める出力の形の版（契約 agent-tools.json の schema_version。知らない版は採点しない）。
+RUN_OUTPUT_SCHEMA_VERSION = 4
+OBSERVATION_SCHEMA_VERSION = 1
+CANCEL_SCHEMA_VERSION = 1
+# Agent の経路の採点の版。RAG の六指標の版に、Agent の経路の規則の版を足す（agent_v1 は段 1 の
+# 画面の API と Run の内部の記録で採点した版。agent_v2 は公開の MCP の出力だけで採点し、承認の要る
+# ツールを呼ばなかった Run をケースの失敗にする。#3240）。
+AGENT_EVALUATION_METRICS_VERSION = f"{EVALUATION_METRICS_VERSION}+agent_v2"
 RAG_SEARCH = "rag_search"
 EVIDENCE_TOOLS = frozenset({RAG_SEARCH, "rag_retrieve_evidence"})
-# 本文を読むツール（#1330・#1332）。多段の質問では段の事実を読んで確かめるため、読んだ chunk も
-# 根拠に数える（Agent の最終の検証と同じ。#1345）。
-RAG_READ_SOURCE = "rag_read_source"
-RAG_READ_DOCUMENT = "rag_read_document"
-# 章節を読み切るツール（#1438。出力の chunks の形は rag_read_document と同じ）。
-RAG_READ_SECTION = "rag_read_section"
-READ_EVIDENCE_TOOLS = frozenset({RAG_READ_SOURCE, RAG_READ_DOCUMENT, RAG_READ_SECTION})
-# 読み取りのツールの chunk の場所の項目（MCP の ReadDocumentChunk。表計算のシート・行・
-# セル範囲は #1471）。
-READ_CHUNK_LOCATION_KEYS = (
-    "element_locator",
-    "section_path",
-    "page_start",
-    "page_end",
-    "sheet_name",
-    "row_start",
-    "row_end",
-    "cell_range",
-)
 MCP_TOOL_SEPARATOR = "__"
-# Agent の組み込みの MCP 接続（RAG）の ID。モデルが呼ぶツールの名前は `<接続>__<ツール>`
-# （Agent #757）。指示にはこの名前を書く（素の名前だと存在しないツールを呼ぶ。#1303）。
-RAG_MCP_CONNECTION = "rag"
 OUTCOME_SOURCE_ANSWER = "agent_answer"
-OUTCOME_SOURCE_TOOL = "agent_rag_search"
 OUTCOME_SOURCE_INFERRED = "inferred"
+APPROVAL_SKIPPED = "approval_skipped"
+# 終わった（in_progress=false）が完了でない Run のうち、取り消して閉じる状態（回答前の確認の待ちを
+# 残さない）。承認待ちは画面で判断されうるので取り消さない。
+CANCEL_WHEN_SETTLED = frozenset({"waiting_confirmation"})
 _QUESTION_ENDINGS = ("？", "?")
 # Agent の最終の検証が回答の末尾に足す定型の注記（推定で最後の行を見るときに除く。#1305）。
 _AGENT_NOTICES = frozenset(
@@ -108,11 +113,12 @@ _AGENT_NOTICES = frozenset(
         "この回答は資料の根拠を使っておらず、資料と照らし合わせて確かめていません。",
     }
 )
-
-
-def agent_tool_name(tool_name: str) -> str:
-    """Agent のモデルが呼ぶ RAG のツールの名前（`rag__rag_search` など。#1303）。"""
-    return f"{RAG_MCP_CONNECTION}{MCP_TOOL_SEPARATOR}{tool_name}"
+_ERROR_MESSAGES = {
+    "timeout": "Agent の Run が {timeout:g} 秒以内に終わりませんでした。",
+    "waiting_approval": "Agent の Run が承認待ちで止まりました。",
+    "waiting_confirmation": "Agent の Run が回答前の確認で止まりました。",
+    APPROVAL_SKIPPED: "Agent の Run が承認の要るツール（{tools}）を呼ばずに終わりました。",
+}
 
 
 class AgentEvaluationError(RuntimeError):
@@ -124,7 +130,6 @@ class AgentTurn:
     """1 回の Run の回答を、RAG の検索・回答の応答の形にしたもの。"""
 
     response: SearchResponse
-    run: Mapping[str, Any]
     outcome_source: str
     elapsed_ms: float
 
@@ -147,6 +152,16 @@ class RunRecord:
     # 旧版も含めて検索した（`include_superseded: true` の）根拠のツールの成功した
     # 呼び出しの数（#1392）。
     superseded_searches: int = 0
+    # 使った業務 Agent の公開の版（対象構成の記録。#3240）。
+    agent_version: int | None = None
+    # 承認が要るため呼ばなかったツール（#3240 の Q7）。
+    skipped_approval_tools: list[str] = field(default_factory=list)
+    # 見る人の今の権限で見られないため観測から除かれた根拠の数（採点に入らない。#3252）。
+    withheld_evidence_count: int = 0
+    # 1 件でページの予算を超えるため本文を省かれた根拠の数（本文の条件を照合できない）。
+    evidence_text_omitted: int = 0
+    # 時間内に終わらず取り消したときの `agent_cancel_run` の結果（cancelled / already_* ）。
+    cancel_result: str | None = None
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -162,10 +177,15 @@ class RunRecord:
             "model_requests": self.model_requests,
             "tool_calls": dict(self.tool_calls),
             "superseded_searches": self.superseded_searches,
+            "agent_version": self.agent_version,
+            "skipped_approval_tools": list(self.skipped_approval_tools),
+            "withheld_evidence_count": self.withheld_evidence_count,
+            "evidence_text_omitted": self.evidence_text_omitted,
+            "cancel_result": self.cancel_result,
         }
 
 
-# ---- Run から回答を組み立てる ---------------------------------------------------------------
+# ---- 公開の出力から回答を組み立てる ---------------------------------------------------------
 
 
 def base_tool_name(name: str) -> str:
@@ -177,60 +197,32 @@ def _records(value: object) -> list[Mapping[str, Any]]:
     return [item for item in value if isinstance(item, Mapping)] if isinstance(value, list) else []
 
 
-def _tool_results(
-    run: Mapping[str, Any], tools: frozenset[str]
-) -> list[tuple[str, Mapping[str, Any]]]:
-    """成功したツールの呼び出しの（素のツールの名前, 出力）（呼んだ順）。"""
-    results: list[tuple[str, Mapping[str, Any]]] = []
-    for step in _records(run.get("steps")):
-        call = step.get("tool_call")
-        result = step.get("tool_result")
-        if not isinstance(call, Mapping) or not isinstance(result, Mapping):
-            continue
-        tool = base_tool_name(str(call.get("name") or ""))
-        if tool not in tools:
-            continue
-        output = result.get("output")
-        if result.get("success") and isinstance(output, Mapping):
-            results.append((tool, output))
-    return results
+def _int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def _tool_outputs(run: Mapping[str, Any], tools: frozenset[str]) -> list[Mapping[str, Any]]:
-    """成功したツールの呼び出しの出力（呼んだ順）。"""
-    return [output for _tool, output in _tool_results(run, tools)]
-
-
-def tool_call_counts(run: Mapping[str, Any]) -> dict[str, int]:
+def tool_call_counts(observation: Mapping[str, Any]) -> dict[str, int]:
+    """ツールごとの呼び出しの数（失敗・承認で呼ばなかった呼び出しを含む）。"""
     counts: dict[str, int] = {}
-    for step in _records(run.get("steps")):
-        call = step.get("tool_call")
-        if isinstance(call, Mapping) and call.get("name"):
+    for call in _records(observation.get("tool_calls")):
+        if call.get("name"):
             name = base_tool_name(str(call["name"]))
             counts[name] = counts.get(name, 0) + 1
     return counts
 
 
-def superseded_search_count(run: Mapping[str, Any]) -> int:
+def superseded_search_count(observation: Mapping[str, Any]) -> int:
     """旧版も含めて検索した（`include_superseded: true`）根拠のツールの成功した呼び出しの数。
 
     #1392。失敗した呼び出しと、根拠のツール以外（本文を読むツールなど）は数えない。
     """
-    count = 0
-    for step in _records(run.get("steps")):
-        call = step.get("tool_call")
-        result = step.get("tool_result")
-        if not isinstance(call, Mapping) or not isinstance(result, Mapping):
-            continue
-        arguments = call.get("arguments")
-        if (
-            base_tool_name(str(call.get("name") or "")) in EVIDENCE_TOOLS
-            and result.get("success")
-            and isinstance(arguments, Mapping)
-            and arguments.get("include_superseded") is True
-        ):
-            count += 1
-    return count
+    return sum(
+        1
+        for call in _records(observation.get("tool_calls"))
+        if base_tool_name(str(call.get("name") or "")) in EVIDENCE_TOOLS
+        and call.get("status") == "completed"
+        and call.get("include_superseded") is True
+    )
 
 
 def superseded_case_summary(
@@ -250,110 +242,62 @@ def superseded_case_summary(
     }
 
 
-def _artifact(run: Mapping[str, Any], kind: str) -> Mapping[str, Any] | None:
-    for artifact in reversed(_records(run.get("artifacts"))):
-        content = artifact.get("content")
-        if artifact.get("kind") == kind and isinstance(content, Mapping):
-            return content
-    return None
-
-
-def answer_text(run: Mapping[str, Any]) -> str:
-    content = _artifact(run, "answer")
-    text = content.get("text") if content else None
-    return text if isinstance(text, str) else ""
-
-
 def answer_outcome(run: Mapping[str, Any]) -> str | None:
-    """成果物 `answer` の対応（`outcome.value`。#1305）。無い・語彙に無ければ None。"""
-    content = _artifact(run, "answer")
-    outcome = content.get("outcome") if content else None
-    value = outcome.get("value") if isinstance(outcome, Mapping) else None
+    """`agent_get_run` の対応（`outcome`。#1305）。無い・語彙に無ければ None。"""
+    value = run.get("outcome")
     return value if isinstance(value, str) and value in EVALUATION_OUTCOMES else None
 
 
-def validation_status(run: Mapping[str, Any]) -> str | None:
-    content = _artifact(run, "answer_validation")
-    status = content.get("status") if content else None
-    return status if isinstance(status, str) else None
+def skipped_approval_tools(run: Mapping[str, Any], observation: Mapping[str, Any]) -> list[str]:
+    """承認が要るため呼ばなかったツール（`skipped_approval_tools` と観測の `approval_skipped`）。"""
+    names: list[str] = []
+    listed = run.get("skipped_approval_tools")
+    observed = [
+        call.get("name")
+        for call in _records(observation.get("tool_calls"))
+        if call.get("status") == APPROVAL_SKIPPED
+    ]
+    for name in [*(listed if isinstance(listed, list) else []), *observed]:
+        if isinstance(name, str) and name and name not in names:
+            names.append(name)
+    return names
 
 
-def _read_items(tool: str, output: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """本文を読むツールの出力を、根拠の項目（document_id・chunk_id・excerpt・locator）にする。"""
-    document_id = output.get("document_id")
-    file_name = output.get("file_name")
-    if tool == RAG_READ_SOURCE:
-        return [
-            {
-                "document_id": document_id,
-                "chunk_id": output.get("chunk_id"),
-                "excerpt": output.get("text"),
-                "file_name": file_name,
-                "locator": output.get("locator"),
-            }
-        ]
-    text = output.get("text")
-    text = text if isinstance(text, str) else ""
-    items: list[dict[str, Any]] = []
-    for chunk in _records(output.get("chunks")):
-        start, end = chunk.get("start"), chunk.get("end")
-        excerpt = text[start:end] if isinstance(start, int) and isinstance(end, int) else ""
-        items.append(
-            {
-                "document_id": document_id,
-                "chunk_id": chunk.get("chunk_id"),
-                "excerpt": excerpt,
-                "file_name": file_name,
-                # chunk の場所の項目をそのまま写す（表計算のシート・行・セル範囲を含む。#1471）。
-                "locator": {
-                    key: chunk[key]
-                    for key in READ_CHUNK_LOCATION_KEYS
-                    if chunk.get(key) is not None
-                },
-            }
-        )
-    return items
+def _locator_metadata(value: object) -> dict[str, Any]:
+    """根拠の場所（RAG の `EvidenceLocator` と同じ名前）。値の無い項目は入れない。"""
+    if not isinstance(value, Mapping):
+        return {}
+    return {key: item for key, item in value.items() if item is not None}
 
 
-def evidence_citations(run: Mapping[str, Any]) -> list[RetrievedChunk]:
-    """その Run の RAG の根拠のツールが返した根拠と、読み取りのツールで読んだ chunk（出てきた順・
-    重複なし。#1345）。"""
+def evidence_citations(observation: Mapping[str, Any]) -> list[RetrievedChunk]:
+    """観測の根拠（Run の RAG の根拠のツールと読み取りのツールの根拠。`rank` の順・重複なし）。
+
+    重複の除去と、同じ chunk を後で読んだ本文をつなぐのは Agent の観測が済ませている。文書と
+    chunk の ID の無い根拠は数えない（照合も重複の除去もできない）。
+    """
     citations: list[RetrievedChunk] = []
-    seen: dict[tuple[str, str], int] = {}
-    for tool, output in _tool_results(run, EVIDENCE_TOOLS | READ_EVIDENCE_TOOLS):
-        items = (
-            _records(output.get("evidence"))
-            if tool in EVIDENCE_TOOLS
-            else _read_items(tool, output)
-        )
-        for item in items:
-            document_id = str(item.get("document_id") or "")
-            chunk_id = str(item.get("chunk_id") or item.get("evidence_id") or "")
-            if not document_id or not chunk_id:
-                continue
-            text = str(item.get("excerpt") or "")
-            if (document_id, chunk_id) in seen:
-                # 同じ chunk を後で読んだ本文は、まだ無い本文だけ足す（順は先に出た位置のまま）。
-                index = seen[(document_id, chunk_id)]
-                known = citations[index].text
-                if text and text not in known:
-                    joined = f"{known}\n{text}" if known else text
-                    citations[index] = citations[index].model_copy(update={"text": joined})
-                continue
-            seen[(document_id, chunk_id)] = len(citations)
-            locator = item.get("locator")
-            metadata: dict[str, Any] = dict(locator) if isinstance(locator, Mapping) else {}
-            score = item.get("score")
-            citations.append(
-                RetrievedChunk(
-                    document_id=document_id,
-                    chunk_id=chunk_id,
-                    text=text,
-                    score=float(score) if isinstance(score, int | float) else 0.0,
-                    file_name=str(item["file_name"]) if item.get("file_name") else None,
-                    metadata=metadata,
-                )
+    seen: set[tuple[str, str]] = set()
+    items = sorted(
+        _records(observation.get("evidence")), key=lambda item: _int(item.get("rank")) or 0
+    )
+    for item in items:
+        document_id = str(item.get("document_id") or "")
+        chunk_id = str(item.get("chunk_id") or "")
+        if not document_id or not chunk_id or (document_id, chunk_id) in seen:
+            continue
+        seen.add((document_id, chunk_id))
+        citations.append(
+            RetrievedChunk(
+                document_id=document_id,
+                chunk_id=chunk_id,
+                text=str(item.get("text") or ""),
+                # 観測はスコアを出さない（採点は順位で数え、スコアを使わない）。
+                score=0.0,
+                file_name=str(item["file_name"]) if item.get("file_name") else None,
+                metadata=_locator_metadata(item.get("locator")),
             )
+        )
     return citations
 
 
@@ -366,48 +310,46 @@ def _asks_question(answer: str) -> bool:
     return bool(lines) and lines[-1].endswith(_QUESTION_ENDINGS)
 
 
-def agent_turn(run: Mapping[str, Any], *, elapsed_ms: float) -> AgentTurn:
-    """完了した Run を、RAG の評価が採点する応答（`SearchResponse`）にする。"""
-    answer = answer_text(run)
-    searches = _tool_outputs(run, frozenset({RAG_SEARCH}))
-    last = searches[-1] if searches else None
+def _usage_requests(observation: Mapping[str, Any]) -> int | None:
+    usage = observation.get("usage")
+    return _int(usage.get("requests")) if isinstance(usage, Mapping) else None
+
+
+def _validation_status(observation: Mapping[str, Any]) -> str | None:
+    status = observation.get("validation_status")
+    return status if isinstance(status, str) else None
+
+
+def agent_turn(
+    run: Mapping[str, Any], observation: Mapping[str, Any], *, elapsed_ms: float
+) -> AgentTurn:
+    """完了した Run の公開の出力（`agent_get_run` と観測）を、RAG の評価が採点する応答にする。"""
+    answer = run.get("answer")
+    answer = answer if isinstance(answer, str) else ""
     details: dict[str, Any] = {}
     outcome_source = OUTCOME_SOURCE_INFERRED
     recorded = answer_outcome(run)
     if recorded is not None:
         details["outcome"] = recorded
         outcome_source = OUTCOME_SOURCE_ANSWER
-    elif last is not None and isinstance(last.get("outcome"), str) and last.get("outcome"):
-        details["outcome"] = last["outcome"]
-        outcome_source = OUTCOME_SOURCE_TOOL
     elif _asks_question(answer):
         details["outcome"] = "needs_clarification"
-    if last is not None and outcome_source != OUTCOME_SOURCE_INFERRED:
-        # 確認の質問で聞いた条件（聞き直しの採点）は、確認の質問を返したときだけ
-        # rag_search の問いを使う（Agent が問いを返していない回答で聞き直しを数えない）。
-        if details["outcome"] == "needs_clarification":
-            details["clarifications"] = list(_records(last.get("clarifications")))
-        if last.get("insufficient_reason"):
-            details["insufficient_reason"] = last["insufficient_reason"]
-    usage = run.get("usage")
     details["agent"] = {
-        "run_id": run.get("id"),
+        "run_id": run.get("run_id"),
         "status": run.get("status"),
-        "validation_status": validation_status(run),
+        "validation_status": _validation_status(observation),
         "outcome_source": outcome_source,
-        "tool_calls": tool_call_counts(run),
-        "model_requests": usage.get("requests") if isinstance(usage, Mapping) else None,
+        "tool_calls": tool_call_counts(observation),
+        "model_requests": _usage_requests(observation),
     }
     response = SearchResponse(
         answer=answer,
-        citations=evidence_citations(run),
-        trace_id=str(run.get("id") or ""),
+        citations=evidence_citations(observation),
+        trace_id=str(run.get("run_id") or ""),
         elapsed_ms=elapsed_ms,
         diagnostics=SearchDiagnostics(answer=details),
     )
-    return AgentTurn(
-        response=response, run=run, outcome_source=outcome_source, elapsed_ms=elapsed_ms
-    )
+    return AgentTurn(response=response, outcome_source=outcome_source, elapsed_ms=elapsed_ms)
 
 
 def _with_outcome_sources(
@@ -438,94 +380,168 @@ def condition_labels(guides: Mapping[str, Any]) -> dict[str, str]:
     return labels
 
 
-# ---- Agent の API ------------------------------------------------------------------------
+# ---- Agent の公開の MCP ------------------------------------------------------------------
 
 
-class AgentApi:
-    """Agent の公開の HTTP API。HTTP の client と待ち方を差し替えられる（テスト用）。"""
+class AgentMcp:
+    """Agent の公開の MCP（Streamable HTTP の `POST`。JSON-RPC の `tools/call`）。
+
+    HTTP の client と時計を差し替えられる（テスト用）。待ちは MCP の `wait_seconds` に任せる
+    （サーバーが終わるまで待って返すので、こちらで間隔を置いて読み直さない）。
+    """
 
     def __init__(
         self,
         client: httpx.Client,
-        api_base_url: str,
+        mcp_url: str,
         *,
-        poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
-        sleep: Callable[[float], None] = time.sleep,
+        api_key: str,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._client = client
-        self._api = api_base_url.rstrip("/") + "/api"
-        self._interval = poll_interval_seconds
-        self._sleep = sleep
+        self._url = mcp_url
+        self._headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+            "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+        }
         self._clock = clock
+        self._ids = itertools.count(1)
+        self._initialized = False
 
-    def _data(self, response: httpx.Response) -> Any:
+    def _post(self, method: str, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        response = self._client.post(
+            self._url,
+            json={"jsonrpc": "2.0", "id": next(self._ids), "method": method, "params": params},
+            headers=self._headers,
+        )
         if response.status_code >= 400:
             raise AgentEvaluationError(
-                f"{response.request.method} {response.request.url.path} が失敗しました"
-                f"（HTTP {response.status_code}）: {response.text[:300]}"
+                f"Agent の MCP（{method}）が失敗しました（HTTP {response.status_code}）: "
+                f"{response.text[:300]}"
             )
-        return response.json().get("data")
+        try:
+            message = response.json()
+        except ValueError as error:
+            raise AgentEvaluationError(
+                f"Agent の MCP（{method}）の応答が JSON ではありません。"
+            ) from error
+        if not isinstance(message, Mapping):
+            raise AgentEvaluationError(f"Agent の MCP（{method}）の応答の形が読めません。")
+        failure = message.get("error")
+        if isinstance(failure, Mapping):
+            raise AgentEvaluationError(
+                f"Agent の MCP（{method}）がエラーを返しました: {str(failure.get('message'))[:300]}"
+            )
+        result = message.get("result")
+        if not isinstance(result, Mapping):
+            raise AgentEvaluationError(f"Agent の MCP（{method}）の応答に result がありません。")
+        return result
 
-    def create_agent(self, *, name: str, search_answer_profile_id: str | None) -> str:
-        """業務支援のスキルを持つ業務 Agent を作って公開し、ID を返す。"""
-        instructions = (
-            "あなたは業務の手順・規則の問い合わせに答える業務支援の担当です。"
-            "資料と業務ガイドの根拠だけで答え、根拠の無いことは推測で補わない。"
+    def _initialize(self) -> None:
+        if self._initialized:
+            return
+        self._post(
+            "initialize",
+            {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "rag-agent-evaluation", "version": "1"},
+            },
         )
-        if search_answer_profile_id:
-            profile_tools = "・".join(
-                agent_tool_name(name)
-                for name in (RAG_SEARCH, "rag_retrieve_evidence", "rag_lookup_guides")
-            )
-            instructions += (
-                f"RAG のツール（{profile_tools}）には、"
-                f"search_answer_profile_id に「{search_answer_profile_id}」を必ず渡す。"
-            )
-        created = self._data(
-            self._client.post(
-                f"{self._api}/agents",
-                json={
-                    "name": name,
-                    "description": "業務支援の評価（D: Agent の経路）のための業務 Agent（評価用）",
-                    "instructions": instructions,
-                    "skill_ids": [BUSINESS_SUPPORT_SKILL_ID],
-                },
-            )
-        )
-        agent_id = str(created["id"])
-        self._data(
-            self._client.post(
-                f"{self._api}/agents/{agent_id}/publish", json={"note": "業務支援の評価"}
-            )
-        )
-        return agent_id
+        self._initialized = True
 
-    def create_run(self, *, agent_id: str, goal: str, thread_id: str | None) -> Mapping[str, Any]:
-        payload: dict[str, Any] = {"agent_id": agent_id, "goal": goal}
+    def call(
+        self, tool: str, arguments: Mapping[str, Any], *, schema_version: int
+    ) -> Mapping[str, Any]:
+        """ツールを呼び、構造化の出力（`structuredContent`）を返す。ツールのエラーは失敗にする。"""
+        self._initialize()
+        result = self._post("tools/call", {"name": tool, "arguments": dict(arguments)})
+        content = result.get("structuredContent")
+        if result.get("isError") is True:
+            code = content.get("error_code") if isinstance(content, Mapping) else None
+            message = content.get("message") if isinstance(content, Mapping) else None
+            raise AgentEvaluationError(
+                f"Agent の MCP のツール {tool} がエラーを返しました"
+                f"（{code or 'error'}）: {str(message or '')[:300]}"
+            )
+        if not isinstance(content, Mapping):
+            raise AgentEvaluationError(
+                f"Agent の MCP のツール {tool} の出力に structuredContent がありません。"
+            )
+        version = content.get("schema_version")
+        if version != schema_version:
+            # 知らない形の出力を推測で読まない（「評価不能」にする）。
+            raise AgentEvaluationError(
+                f"Agent の MCP のツール {tool} の出力の版（schema_version={version}）に対応して"
+                f"いません（対応は {schema_version}）。"
+            )
+        return content
+
+    def _wait_seconds(self, deadline: float) -> int:
+        return max(1, min(MAX_WAIT_SECONDS, math.ceil(deadline - self._clock())))
+
+    def chat(
+        self, *, agent_id: str, question: str, thread_id: str | None, deadline: float
+    ) -> Mapping[str, Any]:
+        arguments: dict[str, Any] = {
+            "agent_id": agent_id,
+            "question": question,
+            "wait_seconds": self._wait_seconds(deadline),
+        }
         if thread_id:
-            payload["thread_id"] = thread_id
-        data: Mapping[str, Any] = self._data(self._client.post(f"{self._api}/runs", json=payload))
-        return data
+            arguments["thread_id"] = thread_id
+        return self.call("agent_chat", arguments, schema_version=RUN_OUTPUT_SCHEMA_VERSION)
 
-    def get_run(self, run_id: str) -> Mapping[str, Any]:
-        data: Mapping[str, Any] = self._data(self._client.get(f"{self._api}/runs/{run_id}"))
-        return data
+    def get_run(self, run_id: str, *, deadline: float) -> Mapping[str, Any]:
+        return self.call(
+            "agent_get_run",
+            {"run_id": run_id, "wait_seconds": self._wait_seconds(deadline)},
+            schema_version=RUN_OUTPUT_SCHEMA_VERSION,
+        )
 
-    def cancel_run(self, run_id: str) -> None:
-        with contextlib.suppress(httpx.HTTPError):
-            self._client.post(f"{self._api}/runs/{run_id}/cancel", json={})
-
-    def wait_run(self, run_id: str, timeout_seconds: float) -> Mapping[str, Any] | None:
-        """Run が終わる（完了・失敗・取消・承認待ち）まで待つ。時間内に終わらなければ None。"""
-        deadline = self._clock() + timeout_seconds
-        while True:
-            run = self.get_run(run_id)
-            if str(run.get("status")) in SETTLED_STATUSES:
-                return run
+    def wait_run(self, run: Mapping[str, Any], *, deadline: float) -> Mapping[str, Any] | None:
+        """Run が終わる（`in_progress=false`）まで読む。期限までに終わらなければ None。"""
+        while run.get("in_progress") is True:
             if self._clock() >= deadline:
                 return None
-            self._sleep(self._interval)
+            run = self.get_run(str(run["run_id"]), deadline=deadline)
+        return run
+
+    def observation(self, run_id: str) -> dict[str, Any]:
+        """Run の観測。根拠は `next_cursor` をたどって全件を 1 つにまとめる。"""
+        cursor: str | None = None
+        merged: dict[str, Any] | None = None
+        for _page in range(MAX_OBSERVATION_PAGES):
+            arguments: dict[str, Any] = {"run_id": run_id, "limit": OBSERVATION_PAGE_LIMIT}
+            if cursor is not None:
+                arguments["cursor"] = cursor
+            page = self.call(
+                "agent_get_run_observation", arguments, schema_version=OBSERVATION_SCHEMA_VERSION
+            )
+            evidence = _records(page.get("evidence"))
+            if merged is None:
+                merged = {**page, "evidence": list(evidence)}
+            else:
+                merged["evidence"].extend(evidence)
+            next_cursor = page.get("next_cursor")
+            if not isinstance(next_cursor, str) or not next_cursor:
+                merged["next_cursor"] = None
+                return merged
+            cursor = next_cursor
+        raise AgentEvaluationError(
+            f"Agent の観測の根拠が {MAX_OBSERVATION_PAGES} ページで終わりませんでした。"
+        )
+
+    def cancel_run(self, run_id: str) -> str | None:
+        """Run を取り消す（冪等）。結果（`result`）を返し、取り消せなかった失敗は None。"""
+        with contextlib.suppress(AgentEvaluationError, httpx.HTTPError):
+            output = self.call(
+                "agent_cancel_run", {"run_id": run_id}, schema_version=CANCEL_SCHEMA_VERSION
+            )
+            result = output.get("result")
+            return result if isinstance(result, str) else None
+        return None
 
 
 # ---- 評価 ------------------------------------------------------------------------------
@@ -552,26 +568,72 @@ def _case_turns(
     return turns
 
 
+def _record_observation(record: RunRecord, observation: Mapping[str, Any]) -> None:
+    record.validation_status = _validation_status(observation)
+    record.model_requests = _usage_requests(observation)
+    record.tool_calls = tool_call_counts(observation)
+    record.superseded_searches = superseded_search_count(observation)
+    record.agent_version = _int(observation.get("agent_version"))
+    record.withheld_evidence_count = _int(observation.get("withheld_evidence_count")) or 0
+    record.evidence_text_omitted = sum(
+        1 for item in _records(observation.get("evidence")) if item.get("text_omitted") is True
+    )
+
+
+def _turn_error(
+    case: EvaluationCase,
+    records: Sequence[RunRecord],
+    *,
+    run_id: str,
+    kind: str,
+    index: int,
+    run_timeout_seconds: float,
+) -> CaseOutcome:
+    """往復の失敗をケースの失敗にする（それまでの往復は採点しない。時間は往復の和）。"""
+    template = _ERROR_MESSAGES.get(kind, "Agent の Run が {status} で終わりました。")
+    message = template.format(
+        timeout=run_timeout_seconds,
+        status=kind,
+        tools="・".join(records[-1].skipped_approval_tools),
+    )
+    result = case_error_result(
+        case,
+        trace_id=run_id,
+        elapsed_ms=round(sum(item.elapsed_ms for item in records), 3),
+        error_type=f"AgentRun{kind.title().replace('_', '')}",
+        error_message=message + " run_id で Agent の実行履歴を確認してください。",
+        error_stage=f"turn_{index}",
+    )
+    return CaseOutcome(result=result, runs=list(records))
+
+
 def evaluate_case(
-    api: AgentApi,
+    api: AgentMcp,
     case: EvaluationCase,
     *,
     agent_id: str,
     labels: Mapping[str, str],
     run_timeout_seconds: float,
     clock: Callable[[], float] = time.monotonic,
+    api_clock: Callable[[], float] = time.monotonic,
 ) -> CaseOutcome:
-    """1 ケースの最初の質問と返答を同じ会話の Run として流し、RAG の評価と同じ採点にかける。"""
+    """1 ケースの最初の質問と返答を同じ会話の Run として流し、RAG の評価と同じ採点にかける。
+
+    `clock` は往復の時間を測る時計、`api_clock` は Run の待ちの期限の時計（テストで差し替える）。
+    """
     thread_id: str | None = None
     answers: list[tuple[SearchResponse, Mapping[str, str]]] = []
     sources: list[str] = []
     records: list[RunRecord] = []
-    for index, (goal, conditions) in enumerate(_case_turns(case, labels)):
+    for index, (question, conditions) in enumerate(_case_turns(case, labels)):
         started = clock()
-        created = api.create_run(agent_id=agent_id, goal=goal, thread_id=thread_id)
-        run_id = str(created["id"])
+        deadline = api_clock() + run_timeout_seconds
+        created = api.chat(
+            agent_id=agent_id, question=question, thread_id=thread_id, deadline=deadline
+        )
+        run_id = str(created["run_id"])
         thread_id = str(created.get("thread_id") or "") or thread_id
-        run = api.wait_run(run_id, run_timeout_seconds)
+        run = api.wait_run(created, deadline=deadline)
         elapsed = (clock() - started) * 1000
         status = "timeout" if run is None else str(run.get("status"))
         record = RunRecord(
@@ -583,32 +645,34 @@ def evaluate_case(
             elapsed_ms=elapsed,
         )
         records.append(record)
+        if run is None or status in CANCEL_WHEN_SETTLED:
+            record.cancel_result = api.cancel_run(run_id)
         if run is None or status != "completed":
-            if run is None:
-                api.cancel_run(run_id)
-            message = {
-                "timeout": f"Agent の Run が {run_timeout_seconds:g} 秒以内に終わりませんでした。",
-                "waiting_approval": "Agent の Run が承認待ちで止まりました。",
-            }.get(status, f"Agent の Run が {status} で終わりました。")
-            result = case_error_result(
+            return _turn_error(
                 case,
-                trace_id=run_id,
-                elapsed_ms=round(sum(item.elapsed_ms for item in records), 3),
-                error_type=f"AgentRun{status.title().replace('_', '')}",
-                error_message=message + " run_id で Agent の実行履歴を確認してください。",
-                error_stage=f"turn_{index}",
+                records,
+                run_id=run_id,
+                kind=status,
+                index=index,
+                run_timeout_seconds=run_timeout_seconds,
             )
-            return CaseOutcome(result=result, runs=records)
-        turn = agent_turn(run, elapsed_ms=elapsed)
+        observation = api.observation(run_id)
+        _record_observation(record, observation)
+        record.skipped_approval_tools = skipped_approval_tools(run, observation)
+        if record.skipped_approval_tools:
+            # 承認の要るツールを飛ばして答えた Run は、必要な操作をしていない（#3240 の Q7）。
+            return _turn_error(
+                case,
+                records,
+                run_id=run_id,
+                kind=APPROVAL_SKIPPED,
+                index=index,
+                run_timeout_seconds=run_timeout_seconds,
+            )
+        turn = agent_turn(run, observation, elapsed_ms=elapsed)
         outcome = (turn.response.diagnostics.answer or {}).get("outcome")
         record.outcome = outcome if isinstance(outcome, str) else None
         record.outcome_source = turn.outcome_source
-        record.validation_status = validation_status(run)
-        usage = run.get("usage")
-        requests = usage.get("requests") if isinstance(usage, Mapping) else None
-        record.model_requests = requests if isinstance(requests, int) else None
-        record.tool_calls = tool_call_counts(run)
-        record.superseded_searches = superseded_search_count(run)
         answers.append((turn.response, conditions))
         sources.append(turn.outcome_source)
     result = score_case_answers(case, answers)
@@ -616,7 +680,7 @@ def evaluate_case(
 
 
 def evaluate(
-    api: AgentApi,
+    api: AgentMcp,
     request: EvaluationRunRequest,
     *,
     agent_id: str,
@@ -624,6 +688,7 @@ def evaluate(
     run_timeout_seconds: float,
     log: Callable[[str], None] = print,
     clock: Callable[[], float] = time.monotonic,
+    api_clock: Callable[[], float] = time.monotonic,
 ) -> tuple[EvaluationMetrics, list[RunRecord]]:
     results: list[EvaluationCaseResult] = []
     records: list[RunRecord] = []
@@ -636,6 +701,7 @@ def evaluate(
                 labels=labels,
                 run_timeout_seconds=run_timeout_seconds,
                 clock=clock,
+                api_clock=api_clock,
             )
         except (AgentEvaluationError, httpx.HTTPError) as error:
             # Run を作れない・読めないケースは失敗として記録して続ける。
@@ -657,11 +723,12 @@ def evaluate(
             f"source={outcome.result.outcome_source} "
             f"handling={outcome.result.response_decision_accuracy}"
         )
-    return summarize_case_results(results, thresholds=request.thresholds), records
+    metrics = summarize_case_results(results, thresholds=request.thresholds)
+    return metrics.model_copy(update={"metrics_version": AGENT_EVALUATION_METRICS_VERSION}), records
 
 
 def outcome_source_counts(records: Sequence[RunRecord]) -> dict[str, int]:
-    """完了した Run の対応の出所ごとの数（agent_answer / agent_rag_search / inferred）。"""
+    """完了した Run の対応の出所ごとの数（agent_answer / inferred）。"""
     counts: dict[str, int] = {}
     for record in records:
         if record.outcome_source:
@@ -868,23 +935,21 @@ def _build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="評価セットを Agent の Run として流して採点する")
     run.add_argument("golden_set", type=Path, help="文書の参照を置き換えた評価セット")
-    run.add_argument("--agent-api-base-url", default=DEFAULT_AGENT_API_BASE_URL)
-    target = run.add_mutually_exclusive_group(required=True)
-    target.add_argument("--agent-id", help="使う業務 Agent（公開済み・業務支援のスキル）")
-    target.add_argument(
-        "--create-agent",
-        action="store_true",
-        help="業務支援のスキル（business-rag-research）を持つ業務 Agent を作って公開する",
+    run.add_argument(
+        "--agent-mcp-url", default=DEFAULT_AGENT_MCP_URL, help="Agent の MCP（POST /api/mcp）"
     )
     run.add_argument(
-        "--search-answer-profile-id",
-        help="--create-agent で、RAG のツールに渡す検索・回答プロファイル（C と同じもの）",
+        "--agent-id", required=True, help="使う業務 Agent（公開済み。agent_list の id）"
+    )
+    run.add_argument(
+        "--api-key-env",
+        default=DEFAULT_API_KEY_ENV,
+        help=f"Agent の MCP を呼ぶ API キーを読む環境変数（既定 {DEFAULT_API_KEY_ENV}）",
     )
     run.add_argument("--guides", type=Path, help="既知の条件の名前に使う業務ガイド")
     run.add_argument("--case", action="append", default=[], help="流すケースの id（複数可）")
     run.add_argument("--split", choices=["dev", "holdout"], help="流す区分")
     run.add_argument("--run-timeout", type=float, default=DEFAULT_RUN_TIMEOUT_SECONDS)
-    run.add_argument("--poll-interval", type=float, default=DEFAULT_POLL_INTERVAL_SECONDS)
     run.add_argument("--output", type=Path, required=True, help="結果（JSON）の出力先")
     summarize = commands.add_parser("summarize", help="評価の結果を比べる表を出す")
     summarize.add_argument("results", nargs="+", help="<名前>=<結果の JSON>（例: A=a.json）")
@@ -905,6 +970,16 @@ def _select_cases(
             "流すケースがありません（--case / --split を確かめてください）。"
         )
     return request.model_copy(update={"cases": cases})
+
+
+def _api_key(name: str) -> str:
+    key = os.environ.get(name, "").strip()
+    if not key:
+        raise AgentEvaluationError(
+            f"環境変数 {name} に Agent の MCP の API キー（使える製品に agent を含むキー）を"
+            "設定してください。"
+        )
+    return key
 
 
 def _run_command(args: argparse.Namespace) -> int:
@@ -928,19 +1003,16 @@ def _run_command(args: argparse.Namespace) -> int:
     labels = (
         condition_labels(json.loads(args.guides.read_text(encoding="utf-8"))) if args.guides else {}
     )
+    api_key = _api_key(args.api_key_env)
+    # Run の待ちは MCP の wait_seconds（最大 300 秒）なので、HTTP の timeout はそれより長くする。
     with httpx.Client(
-        headers={"Accept": "application/json"}, timeout=REQUEST_TIMEOUT_SECONDS, trust_env=False
+        timeout=MAX_WAIT_SECONDS + REQUEST_TIMEOUT_SECONDS, trust_env=False
     ) as client:
-        api = AgentApi(client, args.agent_api_base_url, poll_interval_seconds=args.poll_interval)
-        agent_id = args.agent_id or api.create_agent(
-            name=f"業務支援の評価 {time.strftime('%Y%m%d-%H%M%S')}",
-            search_answer_profile_id=args.search_answer_profile_id,
-        )
-        print(f"agent {agent_id}", file=sys.stderr)
+        api = AgentMcp(client, args.agent_mcp_url, api_key=api_key)
         metrics, records = evaluate(
             api,
             request,
-            agent_id=agent_id,
+            agent_id=args.agent_id,
             labels=labels,
             run_timeout_seconds=args.run_timeout,
             log=lambda line: print(line, file=sys.stderr),
@@ -949,8 +1021,11 @@ def _run_command(args: argparse.Namespace) -> int:
     payload = {
         "data": data,
         "agent": {
-            "agent_id": agent_id,
-            "search_answer_profile_id": args.search_answer_profile_id,
+            "agent_id": args.agent_id,
+            # 対象構成の記録（Run に使った業務 Agent の公開の版。#3240）。
+            "agent_versions": sorted(
+                {record.agent_version for record in records if record.agent_version is not None}
+            ),
             "runs": [record.as_json() for record in records],
             # 対応の出所ごとの Run の数（推定 inferred が残っていないかを確かめる。#1305）。
             "outcome_sources": outcome_source_counts(records),

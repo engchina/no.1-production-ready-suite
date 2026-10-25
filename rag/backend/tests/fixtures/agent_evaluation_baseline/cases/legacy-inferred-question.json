@@ -1,6 +1,6 @@
 {
   "id": "legacy-inferred-question",
-  "description": "成果物の outcome も rag_search も無い旧形式。最終の検証が足した定型の注記を除いた最後の行が問いなので needs_clarification と推定する（outcome_source=inferred）。期待（answered）と違い、正解の文書も引用に無い。",
+  "description": "成果物の outcome も rag_search も無い旧形式（公開の outcome は null）。最終の検証が足した定型の注記を除いた最後の行が問いなので needs_clarification と推定する（outcome_source=inferred）。期待（answered）と違い、正解の文書も引用に無い。",
   "covers": [
     "legacy:no_answer_outcome",
     "outcome:inferred_question",
@@ -24,57 +24,7 @@
     {
       "observation": "completed",
       "elapsed_ms": 1250.0,
-      "run": {
-        "id": "run-legacy-inferred-question-0",
-        "status": "completed",
-        "thread_id": "thread-legacy-inferred-question",
-        "steps": [
-          {
-            "status": "completed",
-            "tool_call": {
-              "name": "rag__rag_retrieve_evidence",
-              "arguments": {}
-            },
-            "tool_result": {
-              "name": "rag_retrieve_evidence",
-              "success": true,
-              "output": {
-                "evidence": [
-                  {
-                    "evidence_id": "c-e1",
-                    "document_id": "doc-e",
-                    "chunk_id": "c-e1",
-                    "file_name": "doc-e.pdf",
-                    "excerpt": "方法 1 と方法 2 がある。",
-                    "score": 0.8,
-                    "locator": {
-                      "page_start": 2,
-                      "page_end": 2
-                    }
-                  }
-                ]
-              }
-            }
-          }
-        ],
-        "artifacts": [
-          {
-            "kind": "answer",
-            "content": {
-              "text": "資料には 2 つの方法があります。\nどちらの方法を使いますか？\n\nこの回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。"
-            }
-          },
-          {
-            "kind": "answer_validation",
-            "content": {
-              "status": "completed"
-            }
-          }
-        ],
-        "usage": {
-          "requests": 2
-        }
-      }
+      "run_id": "run-legacy-inferred-question-0"
     }
   ],
   "expected": {
@@ -136,7 +86,7 @@
           "case_id": "legacy-inferred-question",
           "turn": 0,
           "run_id": "run-legacy-inferred-question-0",
-          "thread_id": "thread-legacy-inferred-question",
+          "thread_id": "thread_dc16e6d5d33bb78719d0dbdfe06bfe2b",
           "status": "completed",
           "elapsed_ms": 1250.0,
           "outcome": "needs_clarification",
@@ -146,13 +96,18 @@
           "tool_calls": {
             "rag_retrieve_evidence": 1
           },
-          "superseded_searches": 0
+          "superseded_searches": 0,
+          "agent_version": null,
+          "skipped_approval_tools": [],
+          "withheld_evidence_count": 0,
+          "evidence_text_omitted": 0,
+          "cancel_result": null
         }
       ],
-      "run_requests": [
+      "chat_requests": [
         {
           "agent_id": "agent-baseline",
-          "goal": "合成の質問 4: 処理 V の方法は？"
+          "question": "合成の質問 4: 処理 V の方法は？"
         }
       ],
       "cancelled_run_ids": []

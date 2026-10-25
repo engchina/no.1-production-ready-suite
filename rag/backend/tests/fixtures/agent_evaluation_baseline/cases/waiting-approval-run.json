@@ -20,29 +20,7 @@
     {
       "observation": "waiting_approval",
       "elapsed_ms": 1250.0,
-      "run": {
-        "id": "run-waiting-approval-run-0",
-        "status": "waiting_approval",
-        "thread_id": "thread-waiting-approval-run",
-        "steps": [],
-        "artifacts": [
-          {
-            "kind": "answer",
-            "content": {
-              "text": ""
-            }
-          },
-          {
-            "kind": "answer_validation",
-            "content": {
-              "status": "completed"
-            }
-          }
-        ],
-        "usage": {
-          "requests": 2
-        }
-      }
+      "run_id": "run-waiting-approval-run-0"
     }
   ],
   "expected": {
@@ -89,7 +67,7 @@
           "case_id": "waiting-approval-run",
           "turn": 0,
           "run_id": "run-waiting-approval-run-0",
-          "thread_id": "thread-waiting-approval-run",
+          "thread_id": "thread_a8ae0fc16c603e12f9e9be7df489b972",
           "status": "waiting_approval",
           "elapsed_ms": 1250.0,
           "outcome": null,
@@ -97,13 +75,18 @@
           "validation_status": null,
           "model_requests": null,
           "tool_calls": {},
-          "superseded_searches": 0
+          "superseded_searches": 0,
+          "agent_version": null,
+          "skipped_approval_tools": [],
+          "withheld_evidence_count": 0,
+          "evidence_text_omitted": 0,
+          "cancel_result": null
         }
       ],
-      "run_requests": [
+      "chat_requests": [
         {
           "agent_id": "agent-baseline",
-          "goal": "合成の質問: waiting-approval-run"
+          "question": "合成の質問: waiting-approval-run"
         }
       ],
       "cancelled_run_ids": []

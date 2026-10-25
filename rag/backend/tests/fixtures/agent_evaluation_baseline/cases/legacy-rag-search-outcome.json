@@ -1,10 +1,9 @@
 {
   "id": "legacy-rag-search-outcome",
-  "description": "成果物に outcome の無い旧形式（#1305 より前）。最後の rag_search の outcome（conditional）とinsufficient_reason を使う。根拠は HTML の表の同じ行の中で照合する。",
+  "description": "成果物に outcome の無い旧形式（#1305 より前）。公開の MCP の outcome は null で、rag_search の outcome（conditional）・insufficient_reason は公開しないため、回答の文から推定する（answered。#3240 の段 2 で conditional から変わった）。根拠は HTML の表の同じ行の中で照合する。",
   "covers": [
     "legacy:no_answer_outcome",
-    "outcome:agent_rag_search",
-    "insufficient_reason",
+    "outcome:inferred_answered",
     "required_evidence:table_row"
   ],
   "case": {
@@ -31,60 +30,7 @@
     {
       "observation": "completed",
       "elapsed_ms": 750.0,
-      "run": {
-        "id": "run-legacy-rag-search-outcome-0",
-        "status": "completed",
-        "thread_id": "thread-legacy-rag-search-outcome",
-        "steps": [
-          {
-            "status": "completed",
-            "tool_call": {
-              "name": "rag__rag_search",
-              "arguments": {}
-            },
-            "tool_result": {
-              "name": "rag_search",
-              "success": true,
-              "output": {
-                "outcome": "conditional",
-                "insufficient_reason": "今の値は資料に無い。",
-                "clarifications": [],
-                "evidence": [
-                  {
-                    "evidence_id": "c-d1",
-                    "document_id": "doc-d",
-                    "chunk_id": "c-d1",
-                    "file_name": "doc-d.pdf",
-                    "excerpt": "<p>設定の一覧</p><table><tr><td>項目 Z</td><td>既定値 15</td></tr><tr><td>項目 W</td><td>既定値 20</td></tr></table>",
-                    "score": 0.8,
-                    "locator": {
-                      "page_start": 1,
-                      "page_end": 1
-                    }
-                  }
-                ]
-              }
-            }
-          }
-        ],
-        "artifacts": [
-          {
-            "kind": "answer",
-            "content": {
-              "text": "項目 Z の既定値は 15 です。今の値は環境で確かめてください。"
-            }
-          },
-          {
-            "kind": "answer_validation",
-            "content": {
-              "status": "completed"
-            }
-          }
-        ],
-        "usage": {
-          "requests": 2
-        }
-      }
+      "run_id": "run-legacy-rag-search-outcome-0"
     }
   ],
   "expected": {
@@ -113,8 +59,8 @@
         "answer",
         "hold"
       ],
-      "observed_outcome": "conditional",
-      "outcome_source": "agent_rag_search",
+      "observed_outcome": "answered",
+      "outcome_source": "inferred",
       "missing_evidence": [],
       "turn_results": [],
       "answer_evaluation": null,
@@ -128,13 +74,11 @@
       "trace_id": "run-legacy-rag-search-outcome-0",
       "turn_trace_ids": [],
       "diagnostics_answer": {
-        "outcome": "conditional",
-        "insufficient_reason": "今の値は資料に無い。",
         "agent": {
           "run_id": "run-legacy-rag-search-outcome-0",
           "status": "completed",
           "validation_status": "completed",
-          "outcome_source": "agent_rag_search",
+          "outcome_source": "inferred",
           "tool_calls": {
             "rag_search": 1
           },
@@ -147,23 +91,28 @@
           "case_id": "legacy-rag-search-outcome",
           "turn": 0,
           "run_id": "run-legacy-rag-search-outcome-0",
-          "thread_id": "thread-legacy-rag-search-outcome",
+          "thread_id": "thread_c614321f6e08aa846369039c13777b4e",
           "status": "completed",
           "elapsed_ms": 750.0,
-          "outcome": "conditional",
-          "outcome_source": "agent_rag_search",
+          "outcome": null,
+          "outcome_source": "inferred",
           "validation_status": "completed",
           "model_requests": 2,
           "tool_calls": {
             "rag_search": 1
           },
-          "superseded_searches": 0
+          "superseded_searches": 0,
+          "agent_version": null,
+          "skipped_approval_tools": [],
+          "withheld_evidence_count": 0,
+          "evidence_text_omitted": 0,
+          "cancel_result": null
         }
       ],
-      "run_requests": [
+      "chat_requests": [
         {
           "agent_id": "agent-baseline",
-          "goal": "合成の質問 3: 項目 Z の今の値は？"
+          "question": "合成の質問 3: 項目 Z の今の値は？"
         }
       ],
       "cancelled_run_ids": []

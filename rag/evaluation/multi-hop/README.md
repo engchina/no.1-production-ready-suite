@@ -282,19 +282,22 @@ done
 D は、同じナレッジベースを参照する検索・回答プロファイルを使う業務 Agent（スキル `business-rag-research`）の Run です。
 この評価セットには業務ガイドが無いため（`evaluation_corpus_cli --guides` は業務ガイドの無いファイルを受け付けない）、
 画面の「検索・回答プロファイル」で、取り込んだナレッジベース（`/tmp/multi-hop.resolved.json` の
-`knowledge_base_ids`）だけを参照するプロファイルを作って公開し、その ID を渡します。
+`knowledge_base_ids`）だけを参照するプロファイルを作って公開し、そのプロファイルをデータの範囲にした業務 Agent を
+Agent の画面で作って公開しておきます（評価の CLI は業務 Agent を作らない。#3240）。
 
 ```bash
 cd rag/backend
+export RAG_EVALUATION_AGENT_API_KEY=prak_...   # 使える製品に agent を含む API キー
 uv run python -m app.rag.agent_evaluation_cli run /tmp/multi-hop.resolved.json --split dev \
-  --agent-api-base-url http://127.0.0.1:8020 --create-agent \
-  --search-answer-profile-id <同じナレッジベースを参照するプロファイル> --output /tmp/multi-hop.d.json
+  --agent-mcp-url http://127.0.0.1:8020/api/mcp --agent-id <公開済みの業務 Agent> \
+  --output /tmp/multi-hop.d.json
 # 比べる表（種類別・段の数別・区分ごとの種類別の根拠の連鎖の完全率の行を含む）
 uv run python -m app.rag.agent_evaluation_cli summarize A=/tmp/multi-hop.a.json D=/tmp/multi-hop.d.json
 ```
 
-- D の引用は、その Run の `rag_search` / `rag_retrieve_evidence` が返した根拠で、本文は MCP の抜粋（最大 1000 文字）
-  です。必要な根拠はその範囲で照合します（業務支援の評価と同じ）。
+- D の引用は、公開の Agent MCP の観測（`agent_get_run_observation` の `evidence[]`）の根拠で、その Run の
+  `rag_search` / `rag_retrieve_evidence` が返した根拠と読み取りのツールで読んだ chunk の全件です。本文は生成に渡した
+  本文そのものなので、必要な根拠はその本文で照合します（業務支援の評価と同じ）。
 - 文書の構成・続きを読む MCP のツール（#1332）がある Agent では、ツールの有る / 無いの 2 回を流して D と D' として
   比べます。
 

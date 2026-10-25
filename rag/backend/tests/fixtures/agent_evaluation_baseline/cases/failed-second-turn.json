@@ -36,63 +36,12 @@
     {
       "observation": "completed",
       "elapsed_ms": 1000.0,
-      "run": {
-        "id": "run-failed-second-turn-0",
-        "status": "completed",
-        "thread_id": "thread-failed-second-turn",
-        "steps": [],
-        "artifacts": [
-          {
-            "kind": "answer",
-            "content": {
-              "text": "対象の区分はどれですか？",
-              "outcome": {
-                "schema_version": 1,
-                "value": "needs_clarification",
-                "basis": "clarification_question",
-                "rag_outcome": null,
-                "signals": []
-              }
-            }
-          },
-          {
-            "kind": "answer_validation",
-            "content": {
-              "status": "completed"
-            }
-          }
-        ],
-        "usage": {
-          "requests": 2
-        }
-      }
+      "run_id": "run-failed-second-turn-0"
     },
     {
       "observation": "failed",
       "elapsed_ms": 500.0,
-      "run": {
-        "id": "run-failed-second-turn-1",
-        "status": "failed",
-        "thread_id": "thread-failed-second-turn",
-        "steps": [],
-        "artifacts": [
-          {
-            "kind": "answer",
-            "content": {
-              "text": ""
-            }
-          },
-          {
-            "kind": "answer_validation",
-            "content": {
-              "status": "completed"
-            }
-          }
-        ],
-        "usage": {
-          "requests": 2
-        }
-      }
+      "run_id": "run-failed-second-turn-1"
     }
   ],
   "expected": {
@@ -140,7 +89,7 @@
           "case_id": "failed-second-turn",
           "turn": 0,
           "run_id": "run-failed-second-turn-0",
-          "thread_id": "thread-failed-second-turn",
+          "thread_id": "thread_69538a51893803f39c04b43521089184",
           "status": "completed",
           "elapsed_ms": 1000.0,
           "outcome": "needs_clarification",
@@ -148,13 +97,18 @@
           "validation_status": "completed",
           "model_requests": 2,
           "tool_calls": {},
-          "superseded_searches": 0
+          "superseded_searches": 0,
+          "agent_version": null,
+          "skipped_approval_tools": [],
+          "withheld_evidence_count": 0,
+          "evidence_text_omitted": 0,
+          "cancel_result": null
         },
         {
           "case_id": "failed-second-turn",
           "turn": 1,
           "run_id": "run-failed-second-turn-1",
-          "thread_id": "thread-failed-second-turn",
+          "thread_id": "thread_69538a51893803f39c04b43521089184",
           "status": "failed",
           "elapsed_ms": 500.0,
           "outcome": null,
@@ -162,18 +116,23 @@
           "validation_status": null,
           "model_requests": null,
           "tool_calls": {},
-          "superseded_searches": 0
+          "superseded_searches": 0,
+          "agent_version": null,
+          "skipped_approval_tools": [],
+          "withheld_evidence_count": 0,
+          "evidence_text_omitted": 0,
+          "cancel_result": null
         }
       ],
-      "run_requests": [
+      "chat_requests": [
         {
           "agent_id": "agent-baseline",
-          "goal": "合成の質問 11: 設定 S の手順は？"
+          "question": "合成の質問 11: 設定 S の手順は？"
         },
         {
           "agent_id": "agent-baseline",
-          "goal": "区分 Q です。",
-          "thread_id": "thread-failed-second-turn"
+          "question": "区分 Q です。",
+          "thread_id": "thread_69538a51893803f39c04b43521089184"
         }
       ],
       "cancelled_run_ids": []

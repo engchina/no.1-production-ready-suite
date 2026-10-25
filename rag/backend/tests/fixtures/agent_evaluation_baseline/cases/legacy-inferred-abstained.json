@@ -1,6 +1,6 @@
 {
   "id": "legacy-inferred-abstained",
-  "description": "成果物の outcome もツールの呼び出しも無い旧形式。引用の無い回答は RAG の評価と同じく拒答（insufficient_evidence）と推定する。正解の文書の無いケースは検索の指標の対象外。",
+  "description": "成果物の outcome もツールの呼び出しも無い旧形式（公開の outcome は null）。引用の無い回答は RAG の評価と同じく拒答（insufficient_evidence）と推定する。正解の文書の無いケースは検索の指標の対象外。",
   "covers": [
     "legacy:no_answer_outcome",
     "outcome:inferred_abstained",
@@ -20,29 +20,7 @@
     {
       "observation": "completed",
       "elapsed_ms": 500.0,
-      "run": {
-        "id": "run-legacy-inferred-abstained-0",
-        "status": "completed",
-        "thread_id": "thread-legacy-inferred-abstained",
-        "steps": [],
-        "artifacts": [
-          {
-            "kind": "answer",
-            "content": {
-              "text": "資料からは答えられません。"
-            }
-          },
-          {
-            "kind": "answer_validation",
-            "content": {
-              "status": "completed"
-            }
-          }
-        ],
-        "usage": {
-          "requests": 1
-        }
-      }
+      "run_id": "run-legacy-inferred-abstained-0"
     }
   ],
   "expected": {
@@ -94,7 +72,7 @@
           "case_id": "legacy-inferred-abstained",
           "turn": 0,
           "run_id": "run-legacy-inferred-abstained-0",
-          "thread_id": "thread-legacy-inferred-abstained",
+          "thread_id": "thread_4230d9441156be20c8b4e1d2b79b79cb",
           "status": "completed",
           "elapsed_ms": 500.0,
           "outcome": null,
@@ -102,13 +80,18 @@
           "validation_status": "completed",
           "model_requests": 1,
           "tool_calls": {},
-          "superseded_searches": 0
+          "superseded_searches": 0,
+          "agent_version": null,
+          "skipped_approval_tools": [],
+          "withheld_evidence_count": 0,
+          "evidence_text_omitted": 0,
+          "cancel_result": null
         }
       ],
-      "run_requests": [
+      "chat_requests": [
         {
           "agent_id": "agent-baseline",
-          "goal": "合成の質問 5: 資料に無い項目 U の値は？"
+          "question": "合成の質問 5: 資料に無い項目 U の値は？"
         }
       ],
       "cancelled_run_ids": []

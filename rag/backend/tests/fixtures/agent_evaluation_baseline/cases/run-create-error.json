@@ -1,6 +1,6 @@
 {
   "id": "run-create-error",
-  "description": "Run の作成（POST /api/runs）が HTTP 503。ケースの失敗（AgentEvaluationError）として記録して次へ進む（trace_id は空、時間は 0、Run の記録なし）。",
+  "description": "Run の作成（agent_chat）が HTTP 503。ケースの失敗（AgentEvaluationError）として記録して次へ進む（trace_id は空、時間は 0、Run の記録なし）。",
   "covers": [
     "status:api_error",
     "case_error"
@@ -56,12 +56,12 @@
       "trace_id": "",
       "turn_trace_ids": [],
       "diagnostics_answer": null,
-      "error_message": "POST /api/runs が失敗しました（HTTP 503）: synthetic failure",
+      "error_message": "Agent の MCP（tools/call）が失敗しました（HTTP 503）: synthetic failure",
       "runs": [],
-      "run_requests": [
+      "chat_requests": [
         {
           "agent_id": "agent-baseline",
-          "goal": "合成の質問 12"
+          "question": "合成の質問 12"
         }
       ],
       "cancelled_run_ids": []
