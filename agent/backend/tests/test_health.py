@@ -2129,11 +2129,11 @@ def test_trace_exporter_retry_worker_flushes_due_events(monkeypatch: MonkeyPatch
             assert trace_export_retry_worker_running() is True
             # 上限は時刻で決める（CI の並列の負荷で worker の周期が遅れても待てるように。#3246）。
             # worker は送る前に queue から取り出すので、queue が空でも送り終えたとは限らない。
-            # 送れたこと（成功の時刻）と queue が空なことの両方を待つ。
+            # このテストの 2 回目の送信（再送の成功）と queue が空なことの両方を待つ（成功の時刻は
+            # process で共通で、前のテストの値が残るので使わない）。
             deadline = time.monotonic() + 10.0
             while time.monotonic() < deadline:
-                status = trace_exporter_status()
-                if status.last_success_at is not None and status.retry_queue_size == 0:
+                if len(calls) >= 2 and trace_exporter_status().retry_queue_size == 0:
                     return
                 await anyio.sleep(0.02)
             raise AssertionError("trace exporter retry worker did not flush queued event")
