@@ -3492,7 +3492,7 @@ export const ja = {
   "chat.sessions.error": "会話一覧を読み込めませんでした。",
   "chat.sessions.pagination": "会話一覧のページ切替",
   "chat.messages.empty": "質問を入力して会話を始めます",
-  // 会話の持ち主以外（system_admin）が送った質問の送った人（#1928）。
+  // 会話の持ち主以外（#3244 より前の system_admin）が送った質問の送った人。
   "chat.messages.sender": "{name} が送信",
   "chat.messages.emptyHint": "同じ会話の中では、前の質問と回答を踏まえて答えます。",
   "chat.messages.error": "会話を読み込めませんでした。",
@@ -3500,8 +3500,10 @@ export const ja = {
   "chat.composer.placeholder": "質問を入力（Enter で送信、Shift+Enter で改行）",
   "chat.composer.send": "送信",
   "chat.composer.stop": "停止",
-  // system_admin が他の利用者の会話で送る前の案内（#1954）。
-  "chat.composer.ownerSeesNotice": "この会話の持ち主にも、回答と途中の結果が見えます",
+  // system_admin が他の利用者の会話を開いたときの、入力欄の代わりの閲覧だけの案内（#3244。backend の
+  // OTHERS_CONTENT_FORBIDDEN_MESSAGE と同じ意味）。
+  "chat.othersConversation.readOnly":
+    "他の利用者の会話には、続きの質問・回答・評価を追加できません。閲覧・停止・削除はできます。調べ直すときは自分の会話で質問してください。",
   "chat.error.send": "メッセージの送信に失敗しました。",
   "chat.error.model": "エラーが発生しました。",
   "chat.error.retry": "もう一度送信",

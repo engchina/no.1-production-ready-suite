@@ -22,7 +22,7 @@ from app.features.nl2sql.models import (
     QueryResults,
     SafetyReport,
 )
-from app.features.nl2sql.service import Nl2SqlService
+from app.features.nl2sql.service import Nl2SqlService, OthersContentForbiddenError
 from app.settings import get_settings
 
 
@@ -121,10 +121,15 @@ def test_chat_list_pages_with_offset_and_total(chat: ChatFixture) -> None:
 def test_chat_rejects_other_user_and_profile_changes(chat: ChatFixture) -> None:
     service, repository, _ = chat
     first = run(service, request())
-    # 続きは会話の持ち主と system_admin だけ（一般の利用者は他の利用者の会話を続けない。#1928）。
+    # 続きは会話の持ち主だけ（#3244）。見えない一般の利用者は PermissionError（404）、見える
+    # system_admin は OthersContentForbiddenError（403）。
     with pytest.raises(PermissionError):
         service.start_job(
             request("続き", first.job_id), actor_user_uuid="other", actor_is_system_admin=False
+        )
+    with pytest.raises(OthersContentForbiddenError):
+        service.start_job(
+            request("続き", first.job_id), actor_user_uuid="admin", actor_is_system_admin=True
         )
     with pytest.raises(PermissionError):
         service.get_sql_chat(first.job_id, actor="other")

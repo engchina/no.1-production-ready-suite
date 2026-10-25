@@ -50,6 +50,14 @@ test("会話を開き直したときは前回の実行の要約と「もう一�
   );
   assert.match(lastExecutionText({ ...summary, has_more: true }, "10/5 14:03"), /先頭の 1,200 行を取得（さらに行があります）/u);
   assert.match(lastExecutionText({ ...summary, status: "error" }, "10/5 14:03"), /失敗しました/u);
+  // 他の利用者の会話を見ているとき（実行は持ち主だけ。#3244）は「もう一度実行」を案内しない。
+  assert.equal(
+    lastExecutionText(summary, "10/5 14:03", { readOnly: true }),
+    "前回の実行（10/5 14:03）: 1,200 行・5 列。結果の行は保存していません。",
+  );
+  for (const variant of [{ ...summary, has_more: true }, { ...summary, status: "error" as const }]) {
+    assert.doesNotMatch(lastExecutionText(variant, "10/5 14:03", { readOnly: true }), /もう一度実行/u);
+  }
 });
 
 test("CSV のファイル名と「SELECT SQL を実行」への受け渡し（URL に SQL を載せない）", () => {

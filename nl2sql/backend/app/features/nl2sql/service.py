@@ -69,7 +69,11 @@ from pr_backend_core.observability.tracing import (
     validated_trace_context,
 )
 from pr_backend_core.oracle_errors import oracle_error_codes
-from pr_system_settings.auth.visibility import DEFAULT_RUN_EXECUTOR_FILTER, RunExecutorFilter
+from pr_system_settings.auth.visibility import (
+    DEFAULT_RUN_EXECUTOR_FILTER,
+    OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+    RunExecutorFilter,
+)
 from pydantic import BaseModel, ValidationError
 from pydantic import Field as PydanticField
 
@@ -3924,6 +3928,18 @@ class SimilarHistoryCandidate:
 
 class ChatConversationBusyError(ValueError):
     """SQL の生成中のターンがある会話は、名前の変更・削除をしない（#1817）。"""
+
+
+class OthersContentForbiddenError(Exception):
+    """system_admin が他の利用者の会話・実行に、新しい実行・内容を足そうとした（#3244）。
+
+    続きの質問・SQL の実行・回答前の確認への回答・評価・名前の変更は持ち主だけ。見えるデータなので
+    404 にせず 403（`OTHERS_CONTENT_FORBIDDEN_STATUS`）にする。404 にする `PermissionError` と
+    混ざらないよう、`PermissionError` / `ValueError` を継承しない。
+    """
+
+    def __init__(self) -> None:
+        super().__init__(OTHERS_CONTENT_FORBIDDEN_MESSAGE)
 
 
 # 会話の名前の上限（RAG・Agent の会話名と同じ。#1817）。
@@ -8738,12 +8754,15 @@ class Nl2SqlService:
         if request.is_chat_turn:
             if not actor_user_uuid:
                 raise PermissionError("会話には認証済みの利用者が必要です。")
-            # system_admin は他の利用者の会話も続けられる（#1928）。ジョブの actor は送った
-            # system_admin 自身（権限・業務プロファイル・SQL の実行の接続〔#904〕も送った人で
-            # 決める）。
+            # 会話を続けられるのは持ち主だけ（#3244）。system_admin は他の利用者の会話を見られるが、
+            # 続きは 403（`OthersContentForbiddenError`）。ジョブの actor・権限・業務プロファイル・
+            # SQL の実行の接続（#904）は送った人で決める。
             parent = self._chat_parent(request, actor_user_uuid, all_users=actor_is_system_admin)
             known: dict[str, StoredJob] = {}
             if parent:
+                self._assert_chat_owner_adds(
+                    parent, actor_user_uuid, can_view_all=actor_is_system_admin
+                )
                 # 会話のジョブは 1 回の問い合わせでまとめて読み、ターンごとに読み直さない（#904）。
                 turn_ids, known = self._chat_conversation_turns(
                     parent.conversation_id, actor_user_uuid
@@ -8905,7 +8924,8 @@ class Nl2SqlService:
         できないため同様に拒否する(旧実装はこのケースを素通ししていた)。
         """
         # `actor_can_manage` は「AI 活用」の画面では system_admin だけ（#1889）。system_admin は
-        # 他の利用者のジョブ（チャットのターンを含む）にも本人と同じ操作ができる（#1928）。
+        # 他の利用者のジョブを見て止められる（閲覧と運用の操作。内容を足す操作は持ち主だけで、
+        # `_assert_chat_owner_adds` などが別に確かめる。#3244）。
         if actor_can_manage or not actor_user_uuid:
             return
         if job.actor_user_uuid != actor_user_uuid:
@@ -8920,8 +8940,9 @@ class Nl2SqlService:
     ) -> None:
         """job の行レベルアクセス（`_assert_job_actor_access` に会話の持ち主を足す。#1928）。
 
-        system_admin が他の利用者の会話に送ったターンの actor は system_admin なので、会話の
-        持ち主（会話の最初のターンの actor）にも、その会話のターンの参照・停止・SQL の実行を許す。
+        #3244 より前に system_admin が他の利用者の会話に送ったターンの actor は system_admin
+        なので、会話の持ち主（会話の最初のターンの actor）にも、その会話のターンの参照・停止・
+        SQL の実行を許す。
         """
         try:
             self._assert_job_actor_access(
@@ -8930,6 +8951,30 @@ class Nl2SqlService:
         except PermissionError:
             if not self._is_chat_conversation_owner(job, actor_user_uuid):
                 raise
+
+    def _assert_chat_owner_adds(
+        self,
+        job: StoredJob,
+        actor_user_uuid: str,
+        *,
+        can_view_all: bool,
+        known: Mapping[str, StoredJob] | None = None,
+    ) -> None:
+        """会話に新しいターン・実行を足せるのは会話の持ち主だけ（#3244）。
+
+        `job` は会話のターン（続ける前のターン・実行するターン）。見られることは呼び出し側が先に
+        確かめる（他人の見えない会話は `PermissionError` で 404）。持ち主でない system_admin
+        （`can_view_all`）は `OthersContentForbiddenError`（403）。持ち主を読めない古い会話は、
+        今までどおりターンを送った本人だけが続けられる。
+        """
+        if not actor_user_uuid:
+            raise PermissionError("会話には認証済みの利用者が必要です。")
+        owner = job.conversation_owner_user_uuid or self._chat_conversation_owner(job, known)
+        if owner == actor_user_uuid or (not owner and job.actor_user_uuid == actor_user_uuid):
+            return
+        if can_view_all:
+            raise OthersContentForbiddenError()
+        raise PermissionError("他の利用者の会話には追加できません。")
 
     def _chat_conversation_owner(
         self, job: StoredJob, known: Mapping[str, StoredJob] | None = None
@@ -9374,9 +9419,11 @@ class Nl2SqlService:
         known: Mapping[str, StoredJob] | None = None,
         all_users: bool = False,
     ) -> StoredJob | None:
-        """続ける前のターン。会話の持ち主と system_admin（`all_users`。#1928）だけが続けられる。
+        """続ける前のターン（会話の持ち主と system_admin〔`all_users`〕が読める。#1889）。
 
-        前のターンの actor が持ち主でない（system_admin が送った）ときも、会話の持ち主は続けられる。
+        前のターンの actor が持ち主でない（#3244 より前に system_admin が送った）ときも、会話の
+        持ち主は読める。新しいターンを足せるか（持ち主だけ）は `_assert_chat_owner_adds` が
+        確かめる。
         """
         if not request.previous_job_id:
             return None
@@ -9392,7 +9439,7 @@ class Nl2SqlService:
             and parent.actor_user_uuid != actor
             and not self._is_chat_conversation_owner(parent, actor, known)
         ):
-            raise PermissionError("他の利用者の会話は継続できません。")
+            raise PermissionError("他の利用者の会話は参照できません。")
         if parent.chat_deleted:
             raise ValueError("前の会話が見つかりません。新しい会話を始めてください。")
         if not parent.request.is_chat_turn or not parent.conversation_id:
@@ -9459,6 +9506,11 @@ class Nl2SqlService:
         from .chat_attachments import attachment_owner_principal, chat_attachment_service
 
         parent = self._chat_parent(request, actor_user_uuid, all_users=actor_is_system_admin)
+        if parent is not None:
+            # 確認は会話の続きの一部なので、続けられる持ち主だけ（#3244）。
+            self._assert_chat_owner_adds(
+                parent, actor_user_uuid, can_view_all=actor_is_system_admin
+            )
         conversation_id = parent.conversation_id if parent else None
         if not request.attachment_ids:
             return attachment_context(conversation_id, request.question)
@@ -9480,8 +9532,9 @@ class Nl2SqlService:
     ) -> list[dict[str, str]]:
         """チャットの回答前の確認に渡す、同じ会話の前のターン（#1442）。
 
-        SQL の生成と同じ規則（会話の持ち主か system_admin〔#1928〕・同じ業務プロファイル・前の
-        ターンが終わっている）で読む。
+        SQL の生成と同じ規則（会話を続けられるのは持ち主だけ〔#3244。system_admin でも他の利用者の
+        会話は `OthersContentForbiddenError`〕・同じ業務プロファイル・前のターンが終わっている）で
+        読む。
         """
         if not actor_user_uuid:
             raise PermissionError("会話には認証済みの利用者が必要です。")
@@ -9492,6 +9545,10 @@ class Nl2SqlService:
             previous_job_id=previous_job_id,
         )
         parent = self._chat_parent(request, actor_user_uuid, all_users=actor_is_system_admin)
+        if parent is not None:
+            self._assert_chat_owner_adds(
+                parent, actor_user_uuid, can_view_all=actor_is_system_admin
+            )
         conversation_id = parent.conversation_id if parent else ""
         return self._chat_history_turns(
             request,
@@ -9658,14 +9715,18 @@ class Nl2SqlService:
     ) -> SqlChatSummary:
         """会話の名前を変える（#1817）。名前は会話の最初のジョブに置く。
 
-        本人の会話だけ。`all_users`（system_admin。#1889）なら全員の会話。
+        本人の会話だけ（#3244。`all_users`〔system_admin〕が他の利用者の会話を変えるのは
+        `OthersContentForbiddenError`）。
 
-        - 会話が無い・消した会話: `LookupError`、他の利用者の会話: `PermissionError`
+        - 会話が無い・消した会話: `LookupError`、見えない他の利用者の会話: `PermissionError`
         - 最初の SQL の生成中: `ChatConversationBusyError`（実行中のジョブの記録を上書きしない）
         """
         root = self._sql_chat_root(conversation_id, actor=actor, all_users=all_users)
         if root is None:
             raise LookupError(conversation_id)
+        if root.actor_user_uuid != actor:
+            # 名前の変更は持ち主だけ（#3244。system_admin は見て削除できるが、名前は変えない）。
+            raise OthersContentForbiddenError()
         if root.status in {JobStatus.PENDING, JobStatus.RUNNING}:
             raise ChatConversationBusyError(conversation_id)
         with self._lock:
@@ -9787,9 +9848,10 @@ class Nl2SqlService:
         結果の行は保存しない。ターンのジョブには件数・列数などの要約だけを残し、会話を開き直した画面は
         「もう一度実行」を出す。
 
-        - 扱えないターン: `PermissionError`（会話の持ち主・ターンを送った人・system_admin〔#1928〕
-          だけが実行できる。実行は要求した利用者〔`actor_user_uuid`〕の権限と接続で行い、会話の
-          持ち主の権限・接続を借りない）
+        - 見えないターン: `PermissionError`（会話の持ち主・ターンを送った人・system_admin が
+          見られる）
+        - 見えるが持ち主でない（system_admin）: `OthersContentForbiddenError`（実行は会話の持ち主
+          だけ。#3244。実行は要求した利用者〔`actor_user_uuid`〕の権限と接続〔#904〕で行う）
         - ターンが無い: `LookupError`
         - チャットのターンでない・生成が終わっていない・生成の安全検査を通っていない: `ValueError`
         """
@@ -9804,6 +9866,8 @@ class Nl2SqlService:
         )
         if not job.request.is_chat_turn:
             raise ValueError("チャットで生成した SQL だけを実行できます。")
+        # 実行は会話に実行の結果を足すので、会話の持ち主だけ（#3244。system_admin でも 403）。
+        self._assert_chat_owner_adds(job, actor_user_uuid, can_view_all=actor_is_system_admin)
         result = job.result
         if result is not None and not result.safety.is_safe:
             # 安全検査で遮断したターン（DML など）はジョブが ERROR で終わる。
@@ -11026,9 +11090,11 @@ class Nl2SqlService:
             current.profile_id, allowed_profile_ids
         ):
             raise ProfileScopePermissionError(current.profile_id)
-        # 持ち主の無い行（認証無効の期間・旧 snapshot）も、ジョブと同じく管理の権限が無ければ
-        # 拒否する（#1126。`_assert_job_actor_access`）。
-        if not actor_can_manage and actor_user_uuid and current.actor_user_uuid != actor_user_uuid:
+        # 評価できるのは実行した本人だけ（#3244）。持ち主の無い行（認証無効の期間・旧 snapshot）も
+        # 本人の物とみなさない（#1126）。見える他人の行（system_admin）は 403、見えない行は 404。
+        if actor_user_uuid and current.actor_user_uuid != actor_user_uuid:
+            if actor_can_manage:
+                raise OthersContentForbiddenError()
             raise PermissionError(history_id)
         updated = self._patch_history_item(
             current,
@@ -11036,7 +11102,7 @@ class Nl2SqlService:
                 "feedback_rating": rating,
                 "feedback_comment": comment.strip(),
                 "feedback_updated_at": _utc_now(),
-                # 評価した利用者（実行した本人か system_admin。#1928）。
+                # 評価した利用者（実行した本人。#3244。認証無効の期間は空）。
                 "feedback_actor_user_uuid": actor_user_uuid,
             },
         )
@@ -18090,7 +18156,10 @@ class Nl2SqlService:
     ) -> DbAdminChatAnalyzeData:
         """保存した失敗を分析し、すでに失敗した SQL へ戻る修正は返さない。"""
         self._require_db_admin_chat_permission()
-        turn = self._db_admin_chat_turn(conversation_id, turn_id, actor=actor, all_users=all_users)
+        # 分析は直した SQL への置き換えの前段なので、置き換えと同じく持ち主だけ（#3244）。
+        turn = self._db_admin_chat_turn(
+            conversation_id, turn_id, actor=actor, all_users=all_users, owner_only=True
+        )
         statement = next(
             (s for s in turn.plan.statements if s.index == request.statement_index), None
         )
@@ -18181,7 +18250,8 @@ class Nl2SqlService:
     # ---- DB 管理チャットの会話の履歴（#2319）----
     # 見え方は「AI 活用」と同じ: `all_users`（system_admin）は全員の会話、それ以外は本人の会話
     # だけ（他人の会話は PermissionError、無い会話は LookupError。router はどちらも 404）。
-    # system_admin が他の利用者の会話で操作しても、実行は操作した本人（actor）で持ち主は変えない。
+    # system_admin が他の利用者の会話にできるのは閲覧と削除だけで、続きの質問・実行・SQL の
+    # 置き換え・エラーの分析・名前の変更は持ち主だけ（`OthersContentForbiddenError`。#3244）。
 
     def _db_admin_chat_conversation(
         self, conversation_id: str, *, actor: str, all_users: bool
@@ -18193,6 +18263,17 @@ class Nl2SqlService:
             raise LookupError(conversation_id)
         if not all_users and conversation.actor_user_uuid != actor:
             raise PermissionError("他の利用者の会話は参照できません。")
+        return conversation
+
+    def _db_admin_chat_owned_conversation(
+        self, conversation_id: str, *, actor: str, all_users: bool
+    ) -> DbAdminChatSummary:
+        """内容を足す・変える操作の会話（見られることを確かめ、持ち主でなければ 403。#3244）。"""
+        conversation = self._db_admin_chat_conversation(
+            conversation_id, actor=actor, all_users=all_users
+        )
+        if conversation.actor_user_uuid != actor:
+            raise OthersContentForbiddenError()
         return conversation
 
     def list_db_admin_chats(
@@ -18239,7 +18320,7 @@ class Nl2SqlService:
         self, conversation_id: str, *, actor: str, all_users: bool, title: str
     ) -> DbAdminChatSummary:
         self._require_db_admin_chat_permission()
-        self._db_admin_chat_conversation(conversation_id, actor=actor, all_users=all_users)
+        self._db_admin_chat_owned_conversation(conversation_id, actor=actor, all_users=all_users)
         renamed = self._db_admin_chat_store.rename_conversation(
             conversation_id, title.strip()[:SQL_CHAT_TITLE_MAX_LENGTH]
         )
@@ -18281,7 +18362,7 @@ class Nl2SqlService:
         conversation = store.get_conversation(conversation_id)
         turns: list[DbAdminChatTurn] = []
         if conversation is not None:
-            conversation = self._db_admin_chat_conversation(
+            conversation = self._db_admin_chat_owned_conversation(
                 conversation_id, actor=actor, all_users=all_users
             )
             turns = store.list_turns(conversation_id)
@@ -18365,9 +18446,21 @@ class Nl2SqlService:
         )
 
     def _db_admin_chat_turn(
-        self, conversation_id: str, turn_id: str, *, actor: str, all_users: bool
+        self,
+        conversation_id: str,
+        turn_id: str,
+        *,
+        actor: str,
+        all_users: bool,
+        owner_only: bool = False,
     ) -> DbAdminChatTurn:
-        self._db_admin_chat_conversation(conversation_id, actor=actor, all_users=all_users)
+        """会話のターン。`owner_only` は内容を足す・変える操作（持ち主だけ。#3244）。"""
+        if owner_only:
+            self._db_admin_chat_owned_conversation(
+                conversation_id, actor=actor, all_users=all_users
+            )
+        else:
+            self._db_admin_chat_conversation(conversation_id, actor=actor, all_users=all_users)
         turn = self._db_admin_chat_store.get_turn(conversation_id, turn_id)
         if turn is None:
             raise LookupError(turn_id)
@@ -18384,7 +18477,11 @@ class Nl2SqlService:
 
         self._require_db_admin_chat_permission()
         turn = self._db_admin_chat_turn(
-            request.conversation_id, request.turn_id, actor=actor, all_users=all_users
+            request.conversation_id,
+            request.turn_id,
+            actor=actor,
+            all_users=all_users,
+            owner_only=True,
         )
         if not turn.plan.statements:
             raise ValueError("このターンには実行する SQL がありません。")
@@ -18873,7 +18970,9 @@ class Nl2SqlService:
         """
 
         self._require_db_admin_chat_permission()
-        turn = self._db_admin_chat_turn(conversation_id, turn_id, actor=actor, all_users=all_users)
+        turn = self._db_admin_chat_turn(
+            conversation_id, turn_id, actor=actor, all_users=all_users, owner_only=True
+        )
         corrected = _strip_sql_code_fence(sql)
         if statement_index is not None:
             current = [item.sql for item in turn.plan.statements]
@@ -23834,7 +23933,7 @@ class Nl2SqlService:
                     request,
                     job.actor_user_uuid,
                     conversation_id=job.conversation_id,
-                    # system_admin が他の利用者の会話に送ったターン（#1928）。
+                    # 会話の前のターンを読む（足せるかは投入のときに確かめた。#3244）。
                     all_users=job.actor_is_system_admin,
                 ),
                 engine=request.engine,

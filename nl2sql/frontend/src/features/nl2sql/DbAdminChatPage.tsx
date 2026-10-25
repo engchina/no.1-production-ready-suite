@@ -43,6 +43,7 @@ import { CHAT_PROGRESS_LABELS, dbAdminChatTurnTracePath, parseTraceProgressRespo
 import { ProgressLegacyNotice } from "./components/ProgressLegacyNotice";
 import {
   Nl2SqlChatComposer,
+  Nl2SqlReadOnlyComposer,
   Nl2SqlChatHistoryList,
   Nl2SqlChatLayout,
   Nl2SqlChatPage,
@@ -158,8 +159,9 @@ export function DbAdminChatPage() {
     },
   });
   const turns = useMemo(() => conversation.data?.turns ?? [], [conversation.data]);
-  // 開いている会話が他の利用者の物か（system_admin だけが開ける。#1928・#1954）。
-  const ownerSeesNotice =
+  // 開いている会話が他の利用者の物か（system_admin だけが開ける）。続きの質問・実行・SQL の置き換え・
+  // 名前の変更は持ち主だけなので、入力欄と実行の操作を出さず閲覧だけの案内にする（削除は出す。#3244）。
+  const readOnly =
     seesAllUsers && Boolean(conversationId) && conversation.data?.conversation.owned === false;
   const conversationLoading = Boolean(conversationId) && conversation.isPending && !pending;
   const atLimit = turns.length >= DB_ADMIN_CHAT_TURN_LIMIT;
@@ -329,20 +331,23 @@ export function DbAdminChatPage() {
         autoScroll={autoScroll}
         testIdPrefix={TEST_ID}
         composer={
-          <Nl2SqlChatComposer
-            id={`${TEST_ID}-composer`}
-            value={draft}
-            onValueChange={setDraft}
-            onSubmit={submit}
-            onStop={() => abortRef.current?.abort()}
-            running={generating}
-            textareaRef={composerRef}
-            submitBlocked={blocked}
-            sendTestId={`${TEST_ID}-send`}
-            // system_admin が他の利用者の会話で入力するとき、持ち主にも見えることを送る前に示す（#1954）。
-            notice={ownerSeesNotice ? t("chat.composer.ownerSeesNotice") : undefined}
-            footer={atLimit ? <Banner severity="info">{t("chat.limit")}</Banner> : null}
-          />
+          readOnly ? (
+            // 生成は送った人の画面の要求（同期）なので、見ている人の停止は無い。
+            <Nl2SqlReadOnlyComposer testIdPrefix={TEST_ID} />
+          ) : (
+            <Nl2SqlChatComposer
+              id={`${TEST_ID}-composer`}
+              value={draft}
+              onValueChange={setDraft}
+              onSubmit={submit}
+              onStop={() => abortRef.current?.abort()}
+              running={generating}
+              textareaRef={composerRef}
+              submitBlocked={blocked}
+              sendTestId={`${TEST_ID}-send`}
+              footer={atLimit ? <Banner severity="info">{t("chat.limit")}</Banner> : null}
+            />
+          )
         }
       >
         {conversationLoading ? (
@@ -381,6 +386,7 @@ export function DbAdminChatPage() {
             key={`${turn.turn_id}:${turn.revision}`}
             conversationId={conversationId}
             turn={turn}
+            readOnly={readOnly}
             onReplaceTurn={replaceTurn}
             onExecuted={refreshConversation}
           />
@@ -523,11 +529,14 @@ async function prefetchDbAdminChatTurnTraces(
 function DbAdminChatTurn({
   conversationId,
   turn,
+  readOnly,
   onReplaceTurn,
   onExecuted,
 }: {
   conversationId: string;
   turn: DbAdminChatTurnData;
+  /** 他の利用者の会話を見ている（system_admin）。実行・分析・置き換えを出さない（持ち主だけ。#3244）。 */
+  readOnly: boolean;
   onReplaceTurn: (turn: DbAdminChatTurnData) => void;
   onExecuted: () => void;
 }) {
@@ -693,7 +702,7 @@ function DbAdminChatTurn({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="min-w-0 text-sm text-fg-muted">{t("dbAdminChat.runAll.hint", { count: total })}</p>
               {/* 確認語の要る「すべて実行」のボタンは確認語の欄の横に出す。 */}
-              {plan.requires_confirmation && !plan.blocked ? null : runAllButton}
+              {readOnly || (plan.requires_confirmation && !plan.blocked) ? null : runAllButton}
             </div>
             {plan.blocked ? (
               // 止める文を黙って飛ばさない: 「すべて実行」は押せず、理由をボタンの直下に出す。
@@ -701,7 +710,7 @@ function DbAdminChatTurn({
                 {t("dbAdminChat.runAll.blocked", { statements: dbAdminChatBlockedStatementLabels(plan) })}
               </p>
             ) : null}
-            {plan.requires_confirmation && !plan.blocked ? (
+            {plan.requires_confirmation && !plan.blocked && !readOnly ? (
               <>
                 <Banner severity="warning">
                   <p>{t("dbAdminChat.runAll.transaction")}</p>
@@ -732,6 +741,7 @@ function DbAdminChatTurn({
             total={total}
             execution={executions.statements[statement.index] ?? null}
             busy={running}
+            readOnly={readOnly}
             onRun={(confirmation) =>
               void execute({ mode: "statement", statement_index: statement.index }, confirmation)
             }
@@ -831,6 +841,7 @@ function DbAdminChatStatement({
   total,
   execution,
   busy,
+  readOnly,
   onRun,
   onReplaceTurn,
 }: {
@@ -841,6 +852,8 @@ function DbAdminChatStatement({
   execution: DbAdminChatExecution | null;
   /** このターンのどれかの実行の途中（同時に 2 つを実行しない）。 */
   busy: boolean;
+  /** 他の利用者の会話を見ている（実行・分析を出さない。#3244）。 */
+  readOnly: boolean;
   onRun: (confirmation: string) => void;
   onReplaceTurn: (turn: DbAdminChatTurnData) => void;
 }) {
@@ -921,7 +934,7 @@ function DbAdminChatStatement({
         onCopyError={setCopyError}
         badges={<StatementBadges statement={statement} total={total} />}
         // SELECT は SQL の横の「実行」で実行する（チャットと同じ位置）。確認語の要る文は確認語の欄の横。
-        actions={!blocked && !statement.requires_confirmation ? executeButton : null}
+        actions={!blocked && !statement.requires_confirmation && !readOnly ? executeButton : null}
       />
       {blocked ? (
         <Banner severity="danger" title={t("dbAdminChat.blocked.title")}>
@@ -937,17 +950,19 @@ function DbAdminChatStatement({
             <p>{t("dbAdminChat.warning.mutation")}</p>
             {statement.implicit_commit ? <p className="mt-1">{t("dbAdminChat.warning.implicitCommit")}</p> : null}
           </Banner>
-          <ExecutionConfirmationField
-            id={`${TEST_ID}-confirmation-${turn.turn_id}-${statement.index}`}
-            value={confirmation}
-            onChange={setConfirmation}
-            confirmed={dbAdminChatConfirmed(statement, confirmation)}
-            expectedLabel={statement.confirmation_target}
-            placeholder={statement.confirmation_target}
-            helper={t("dbAdminChat.confirmation.helper", { target: statement.confirmation_target })}
-            disabled={running}
-            actions={executeButton}
-          />
+          {readOnly ? null : (
+            <ExecutionConfirmationField
+              id={`${TEST_ID}-confirmation-${turn.turn_id}-${statement.index}`}
+              value={confirmation}
+              onChange={setConfirmation}
+              confirmed={dbAdminChatConfirmed(statement, confirmation)}
+              expectedLabel={statement.confirmation_target}
+              placeholder={statement.confirmation_target}
+              helper={t("dbAdminChat.confirmation.helper", { target: statement.confirmation_target })}
+              disabled={running}
+              actions={executeButton}
+            />
+          )}
         </>
       ) : null}
       {execution ? (
@@ -1000,6 +1015,7 @@ function DbAdminChatStatement({
                 column_count: savedSelect.column_count ?? 0,
                 has_more: savedSelect.has_more,
               }}
+              readOnly={readOnly}
               testId={`${TEST_ID}-last-execution`}
             />
           ) : null}
@@ -1009,7 +1025,7 @@ function DbAdminChatStatement({
           ) : null}
         </section>
       ) : null}
-      {(failed || unknownColumns) && !running ? (
+      {(failed || unknownColumns) && !running && !readOnly ? (
         <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"

@@ -17,6 +17,10 @@ from pr_backend_core.api.validation import (
     validation_error_messages,
 )
 from pr_backend_core.observability.tracing import tracing_lifecycle
+from pr_system_settings.auth.visibility import (
+    OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+    OTHERS_CONTENT_FORBIDDEN_STATUS,
+)
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
@@ -39,6 +43,7 @@ from app.features.nl2sql.service import (
     Nl2SqlPersistenceUnavailable,
     Nl2SqlRepositoryOperationFailed,
     Nl2SqlService,
+    OthersContentForbiddenError,
     SchemaCatalogEmptyError,
     nl2sql_service,
 )
@@ -150,6 +155,20 @@ async def schema_catalog_empty_handler(
         status_code=400,
         detail=str(exc),
         code=SCHEMA_CATALOG_EMPTY_ERROR_CODE,
+    )
+
+
+@app.exception_handler(OthersContentForbiddenError)
+async def others_content_forbidden_handler(
+    request: Request,
+    exc: OthersContentForbiddenError,
+) -> JSONResponse:
+    """他の利用者の会話・実行に内容を足そうとした system_admin（#3244）。route が 403 に変え損ねた
+    経路も、500 にせず同じ 403 にする。"""
+    return api_problem_response(
+        request,
+        status_code=OTHERS_CONTENT_FORBIDDEN_STATUS,
+        detail=OTHERS_CONTENT_FORBIDDEN_MESSAGE,
     )
 
 

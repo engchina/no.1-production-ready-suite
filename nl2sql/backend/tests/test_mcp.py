@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 import pytest
 from pr_system_settings.auth.service_token import issue_service_token
+from pr_system_settings.auth.visibility import OTHERS_CONTENT_FORBIDDEN_MESSAGE
 
 from app.features.mcp import tools as mcp_tools
 from app.features.nl2sql import ontology_router
@@ -1040,7 +1041,7 @@ def test_get_job_hides_other_users_jobs(users: _Users, fake_service: _FakeNl2Sql
     )
     assert (is_error, content["job_id"]) == (False, job_id)
 
-    # 利用者が system_admin なら、画面の「AI 活用」と同じく全員のジョブを扱える（#1928）。
+    # 利用者が system_admin なら、画面の「AI 活用」と同じく全員のジョブを見られる（#1889）。
     is_error, content = _structured(
         _run(
             _call("nl2sql_get_job", {"job_id": job_id}),
@@ -1050,10 +1051,14 @@ def test_get_job_hides_other_users_jobs(users: _Users, fake_service: _FakeNl2Sql
     assert (is_error, content["job_id"]) == (False, job_id)
 
 
-def test_requirement_session_is_own_or_system_admin(
+def test_requirement_session_is_continued_by_owner_and_closed_by_system_admin(
     users: _Users, fake_service: _FakeNl2SqlService
 ) -> None:
-    """SQL の生成前の確認の session も、本人か system_admin だけが扱える（#1928）。"""
+    """SQL の生成前の確認の session を続けられるのは本人だけ（#3244）。
+
+    他の利用者は存在を漏らさない 404、system_admin は見えるので 403。閉じる（取り消す）のは
+    運用の操作なので system_admin もできる。
+    """
     owner = users.create("mcp.req.owner", permissions={"menu.query"}, allowed_profile_ids={"sales"})
     other = users.create("mcp.req.other", permissions={"menu.query"}, allowed_profile_ids={"sales"})
     _structured(
@@ -1066,10 +1071,22 @@ def test_requirement_session_is_own_or_system_admin(
     assert isinstance(runtime, _ReadyRequirementRuntime)
     (session_id,) = runtime.sessions
     cancel = _call("nl2sql_cancel_requirement", {"requirement_session_id": session_id})
+    admin_token = _token(users.system_admin().user_uuid)
 
+    for arguments in (
+        {"question": "売上", "profile_id": "sales", "requirement_session_id": session_id},
+        # profile_id を省くと確認の業務プロファイルを読む（同じ判定）。
+        {"question": "売上", "requirement_session_id": session_id},
+    ):
+        continued = _call("nl2sql_query", arguments)
+        is_error, content = _structured(_run(continued, token=_token(other.user_uuid)))
+        assert (is_error, content["status"]) == (True, 404)
+        is_error, content = _structured(_run(continued, token=admin_token))
+        assert (is_error, content["status"]) == (True, 403)
+        assert content["message"] == OTHERS_CONTENT_FORBIDDEN_MESSAGE
     is_error, content = _structured(_run(cancel, token=_token(other.user_uuid)))
     assert (is_error, content["status"]) == (True, 404)
-    is_error, content = _structured(_run(cancel, token=_token(users.system_admin().user_uuid)))
+    is_error, content = _structured(_run(cancel, token=admin_token))
     assert (is_error, content["status"]) == (False, "closed")
 
 

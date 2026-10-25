@@ -680,8 +680,11 @@ const agentJa = {
   "chat.threads.ownerMissing": "（削除済みのユーザー）",
   // 会話の持ち主以外（system_admin）が送った質問の、送った人（#1928）。
   "chat.sender": "{name} が送信",
-  // system_admin が他の利用者の会話を開いているときの、送る前の案内（#1954）。
-  "chat.composer.ownerSeesNotice": "この会話の持ち主にも、回答と途中の結果が見えます",
+  // system_admin が他の利用者の会話を開いているときの、閲覧だけの案内（入力欄の代わり。#3244）。backend の
+  // `OTHERS_CONTENT_FORBIDDEN_MESSAGE` と同じ意味。
+  "chat.readOnly.title": "他の利用者の会話です（閲覧のみ）",
+  "chat.readOnly.message":
+    "他の利用者の会話・実行には、続きの質問・実行・回答・評価を追加できません。閲覧・停止・削除はできます。調べ直すときは自分の会話で質問してください。",
   // 持ち主が操作できない待ち（system_admin が実行した Run。#1954）と、自分の権限で質問し直す操作。
   "chat.waitingForExecutorHint":
     "この実行はシステム管理者の権限で動いているため、承認・回答はシステム管理者だけができます。待たずに進めるなら、この実行を止めて、同じ質問をあなたの権限で送り直せます。",

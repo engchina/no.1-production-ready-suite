@@ -274,8 +274,8 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
   const threadFailed = Boolean(threadId) && thread.isError && !thread.data && !threadMissing;
   const prerequisitesLoading = agentsLoading || threadLoading;
   const runs = threadId && !threadOfOtherAgent ? (thread.data?.runs ?? []) : [];
-  // 持ち主以外（system_admin）が送った往復の、送った人の表示名（#1928）。system_admin は他の利用者の会話でも、
-  // 本人と同じく続きの質問・回答前の確認・評価・停止ができる（実行するのは操作した system_admin 自身）。
+  // 持ち主以外（system_admin）が送った往復の、送った人の表示名（#1928）。#3244 より前に system_admin が他の利用者の
+  // 会話で送った往復は消さずに、送った人を添えて出す。
   const senderNames = thread.data?.sender_display_names ?? NO_SENDER_NAMES;
   const viewingOwnThread = thread.data?.owned !== false;
   // 処理の段階の終端が届いたら、回答・成果物を待たずに取り直す（#1359）。応答しない取得（取得中は interval が
@@ -655,6 +655,11 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
     />
   );
 
+  // system_admin が他の利用者の会話を開いているときは閲覧だけ（#3244）。入力欄・確認への回答・評価・名前の変更を
+  // 出さず、閲覧だけの案内を出す（停止・削除・承認の判断はできる）。会話の内容の読み込み中は一覧の値で決める
+  // （入力欄が一瞬出て消えないように）。
+  const listedOwned = threads.data?.items.find((item) => item.thread_id === currentThreadId)?.owned;
+  const readOnlyThread = Boolean(currentThreadId) && (thread.data?.owned ?? listedOwned) === false;
   const composerBlocked = running || waitingApproval || tryBlocked;
   // 送信と停止は同じボタン。送信の要求中・回答の作成中・承認待ちは同じ位置で「停止」になる（buttons.md §3.1、#805）。
   const stoppable = send.isPending || Boolean(stoppableRun);
@@ -690,39 +695,63 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
                 IME の変換を確定する Enter では送信しない（#459）。Shift+Enter は改行。
                 業務 Agent の一覧の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
                 会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
-            <ChatComposer
-              id="chat-composer"
-              textareaRef={composerRef}
-              value={draft}
-              onValueChange={setDraft}
-              onSubmit={submit}
-              onStop={stop}
-              running={stoppable}
-              submitBlocked={composerBlocked || threadLoading || threadFailed}
-              disabled={agentsLoading}
-              label={t("chat.composer.label")}
-              placeholder={t("chat.composer.placeholder")}
-              sendLabel={t("chat.send")}
-              stopLabel={t("chat.stop")}
-              sendTestId="chat-send"
-              // 会話の添付（#2517。運用設定で有効な製品だけ）。
-              attachments={attachments.composer}
-              // system_admin が他の利用者の会話を開いているときは、送る前に持ち主にも見えることを示す（#1954）。
-              // 新しい会話・自分の会話では出さない。
-              notice={
-                user?.is_system_admin && currentThreadId && thread.data?.owned === false
-                  ? t("chat.composer.ownerSeesNotice")
-                  : undefined
-              }
-              footer={
-                <>
-                  {cancel.error ? (
-                    // 停止の失敗は入力欄の下に出す（3 製品で同じ ApiErrorBanner。#1161）。
-                    <ApiErrorBanner error={cancel.error} fallback={t("chat.stopFailed")} testId="chat-stop-error" />
-                  ) : null}
-                </>
-              }
-            />
+            {readOnlyThread ? (
+              // 閲覧だけの会話（#3244）。入力欄の代わりに案内を出し、回答の作成中・承認待ちなら停止だけを置く
+              // （messaging.md §10。info の Banner）。
+              <div className="space-y-2" data-testid="chat-read-only">
+                <Banner
+                  severity="info"
+                  title={t("chat.readOnly.title")}
+                  action={
+                    stoppable ? (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        icon={Square}
+                        loading={cancel.isPending}
+                        onClick={stop}
+                        data-testid="chat-read-only-stop"
+                      >
+                        {t("chat.stop")}
+                      </Button>
+                    ) : undefined
+                  }
+                >
+                  {t("chat.readOnly.message")}
+                </Banner>
+                {cancel.error ? (
+                  <ApiErrorBanner error={cancel.error} fallback={t("chat.stopFailed")} testId="chat-stop-error" />
+                ) : null}
+              </div>
+            ) : (
+              <ChatComposer
+                id="chat-composer"
+                textareaRef={composerRef}
+                value={draft}
+                onValueChange={setDraft}
+                onSubmit={submit}
+                onStop={stop}
+                running={stoppable}
+                submitBlocked={composerBlocked || threadLoading || threadFailed}
+                disabled={agentsLoading}
+                label={t("chat.composer.label")}
+                placeholder={t("chat.composer.placeholder")}
+                sendLabel={t("chat.send")}
+                stopLabel={t("chat.stop")}
+                sendTestId="chat-send"
+                // 会話の添付（#2517。運用設定で有効な製品だけ）。
+                attachments={attachments.composer}
+                footer={
+                  <>
+                    {cancel.error ? (
+                      // 停止の失敗は入力欄の下に出す（3 製品で同じ ApiErrorBanner。#1161）。
+                      <ApiErrorBanner error={cancel.error} fallback={t("chat.stopFailed")} testId="chat-stop-error" />
+                    ) : null}
+                  </>
+                }
+              />
+            )}
           </>
         }
       >
@@ -766,6 +795,8 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
               run={run}
               // 取り消しの操作は、利用者の答えを待っている最後の回答だけに出す（送信中・実行中は押せない）。
               latest={index === runs.length - 1 && !pending}
+              // 閲覧だけの会話（#3244）では、確認への回答・確認の取り消しの操作・評価を出さない。
+              readOnly={readOnlyThread}
               cancelDisabled={composerBlocked || send.isPending || threadLoading || threadFailed}
               onCancelClarification={cancelClarification}
               confirmationDisabled={
@@ -802,12 +833,12 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
                   ? run.executor_display_name || senderNames[run.id] || t("chat.threads.ownerMissing")
                   : undefined
               }
-              onReask={capabilities.operateRuns ? () => reaskAsSelf(run) : undefined}
+              onReask={capabilities.operateRuns && !readOnlyThread ? () => reaskAsSelf(run) : undefined}
               reaskBusy={reask.isPending && reask.variables?.run.id === run.id}
               reaskDisabled={reask.isPending || send.isPending || threadLoading || threadFailed}
               reaskError={reask.variables?.run.id === run.id ? reask.error : null}
-              // 評価は会話を読める利用者（本人と system_admin）が付け、評価した人を残す（#774・#1928）。
-              canRate={capabilities.operateRuns}
+              // 評価は会話の持ち主が付け、評価した人を残す（#774。system_admin も他の利用者の回答には付けない。#3244）。
+              canRate={capabilities.operateRuns && !readOnlyThread}
               deciding={decide.isPending}
               onDecide={(approval, approved) => decide.mutate({ approval, approved })}
               onFeedbackSaved={replaceRun}
@@ -899,6 +930,7 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
 function RunChatTurn({
   run,
   latest,
+  readOnly,
   cancelDisabled,
   onCancelClarification,
   confirmationDisabled,
@@ -934,6 +966,8 @@ function RunChatTurn({
   reaskError: unknown;
   /** 会話の最後の往復か（確認の取り消しの操作を出すのは最後の回答だけ）。 */
   latest: boolean;
+  /** 閲覧だけの会話（他の利用者の会話。#3244）。確認への回答と確認の取り消しの操作を出さない。 */
+  readOnly: boolean;
   cancelDisabled: boolean;
   onCancelClarification: (kind: ClarificationKind) => void;
   /** 回答前の確認のカードを操作できない（送信中・会話の読み込み中）。 */
@@ -987,7 +1021,7 @@ function RunChatTurn({
   const cancelledKinds = cancelledClarificationKinds(run);
   // 回答前の確認（#1839）。答えていない確認は最後の往復だけにカードで出し、答えた内容は利用者の側に残す。
   // 自分では答えられない Agent 自身の確認（system_admin が実行した Run。#1928）はカードを出さない（#1954）。
-  const latestConfirmation = latest ? pendingConfirmation(run) : null;
+  const latestConfirmation = latest && !readOnly ? pendingConfirmation(run) : null;
   const confirmation =
     waitingFor !== undefined && latestConfirmation?.source === "agent" ? null : latestConfirmation;
   const toolConfirmationKind: ClarificationKind | null =
@@ -996,7 +1030,7 @@ function RunChatTurn({
   const agentRecords = agentConfirmationRecords(run);
   // 確認の取り消し（「データベースの検索は不要」など）は、カードの確認事項の種類ならカードの操作に置く。
   const cancelKinds = (
-    latest && run.status === "completed" ? pendingClarificationKinds(run.artifacts) : []
+    latest && !readOnly && run.status === "completed" ? pendingClarificationKinds(run.artifacts) : []
   ).filter((kind) => kind !== toolConfirmationKind);
   // 処理の経過（3 製品共通のイベント。#1359）は Run の trace（span の木。#3226）の投影。span は共通の span の表にあり
   // （案 A）、Run の trace の API を実行中は読み直す（承認待ちの間も続ける）。読み出しが失敗・応答しない間は前の内容を

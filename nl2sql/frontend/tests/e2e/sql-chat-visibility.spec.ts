@@ -4,14 +4,15 @@ import { confirmChatRequirement, mockChatRequirement } from "./_helpers/chat-req
 import { withJobProgress } from "./_helpers/job-progress";
 
 /**
- * 「AI 活用」の下の機能のデータの見え方（#1889・#1928）。system_admin は全員の会話を見られ、履歴に利用者の
- * 表示名を出す。他の利用者の会話でも本人と同じく続きの質問を送れ、持ち主以外が送った質問には送った人の
- * 表示名を添える。一般の利用者の履歴は本人の会話だけで、利用者を出さない（絞り込みは backend。ここでは
- * 画面の出し方を確かめる）。system_admin が他の利用者の会話で入力するときだけ、入力欄の上に「この会話の
- * 持ち主にも、回答と途中の結果が見えます」を出す（新しい会話・自分の会話では出さない。#1954）。
+ * 「AI 活用」の下の機能のデータの見え方（#1889・#3244）。system_admin は全員の会話を見られ、履歴に利用者の
+ * 表示名を出す。他の利用者の会話は閲覧と運用の操作（停止・削除）だけで、入力欄・「実行」・名前の変更を出さず、
+ * 入力欄の代わりに閲覧だけの案内を出す（続きの質問・実行・名前の変更は持ち主だけ。backend も 403）。
+ * すでに入っている持ち主以外（#3244 より前の system_admin）が送った質問には、送った人の表示名を添える。
+ * 一般の利用者の履歴は本人の会話だけで、利用者を出さない（絞り込みは backend。ここでは画面の出し方を確かめる）。
  */
 
-const OWNER_NOTICE = "この会話の持ち主にも、回答と途中の結果が見えます";
+const READ_ONLY_NOTICE =
+  "他の利用者の会話・実行には、続きの質問・実行・回答・評価を追加できません。閲覧・停止・削除はできます。調べ直すときは自分の会話で質問してください。";
 
 const profile = {
   id: "sales",
@@ -36,14 +37,14 @@ type Conversation = {
   actor_display_name: string;
 };
 
-function turn(jobId: string, question: string, sender: string | null) {
+function turn(jobId: string, question: string, sender: string | null, status = "done") {
   return {
     job_id: jobId,
     question,
     conversation_id: "chat-alice",
     chat: true,
     generation_only: true,
-    status: "done",
+    status,
     created_at: now,
     steps: [],
     last_execution: null,
@@ -65,6 +66,8 @@ async function setup(
   await mockDatabaseGateReady(page);
   await mockChatRequirement(page);
   const jobRequests: Record<string, unknown>[] = [];
+  const cancelled: string[] = [];
+  const deleted: string[] = [];
   await page.route("**/api/nl2sql/profiles/search**", (route) =>
     route.fulfill({ json: { data: { items: [profile], total: 1, next_cursor: null } } }),
   );
@@ -85,16 +88,22 @@ async function setup(
     if (!target) {
       return route.fulfill({ status: 404, json: { error_messages: ["会話が見つかりません。"] } });
     }
+    if (route.request().method() === "DELETE") {
+      // 削除は system_admin も他の利用者の会話にできる（運用の操作。#3244）。
+      deleted.push(id);
+      conversations.splice(conversations.indexOf(target), 1);
+      return route.fulfill({ json: { data: null } });
+    }
     return route.fulfill({
       json: { data: { conversation: target, turns: (turns[id] ?? []).map(withJobProgress) } },
     });
   });
-  // system_admin が他の利用者の会話に送った続き（#1928）。backend は送った人を送り手として返す。
+  // 自分の会話への続き（他の利用者の会話には画面から送れない。#3244）。
   await page.route("**/api/nl2sql/jobs", (route) => {
     const body = route.request().postDataJSON();
     jobRequests.push(body);
-    const list = (turns["chat-alice"] ??= []);
-    const sent = turn(`chat-${list.length + 1}`, body.question, "システム管理者");
+    const list = (turns["chat-mine"] ??= []);
+    const sent = turn(`chat-${list.length + 1}`, body.question, null);
     list.push(sent);
     return route.fulfill({
       json: {
@@ -107,7 +116,25 @@ async function setup(
       },
     });
   });
-  return { jobRequests };
+  // 停止は system_admin も他の利用者の会話でできる（運用の操作。#3244）。
+  await page.route("**/api/nl2sql/jobs/*/cancel", (route) => {
+    const jobId = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-2) ?? "");
+    cancelled.push(jobId);
+    for (const list of Object.values(turns)) {
+      const target = list.find((item) => item.job_id === jobId);
+      if (target) {
+        Object.assign(target, {
+          status: "error",
+          error_code: "JOB_CANCELLED",
+          error_message: "停止しました。",
+        });
+      }
+    }
+    return route.fulfill({
+      json: { data: { job_id: jobId, status: "error", created_at: now, steps: [] } },
+    });
+  });
+  return { jobRequests, cancelled, deleted };
 }
 
 async function openHistory(page: Page) {
@@ -118,9 +145,9 @@ async function openHistory(page: Page) {
   return page.getByTestId("sql-chat-history");
 }
 
-test.describe("会話のデータの見え方（#1889・#1928・#1954）", { tag: "@responsive" }, () => {
-  test("system_admin は全員の会話を利用者つきで見て、他の利用者の会話に続きを送れる", async ({ page }) => {
-    const { jobRequests } = await setup(
+test.describe("会話のデータの見え方（#1889・#3244）", { tag: "@responsive" }, () => {
+  test("system_admin は全員の会話を利用者つきで見て、他の利用者の会話は閲覧と削除だけにする", async ({ page }) => {
+    const { jobRequests, deleted } = await setup(
       page,
       [
         {
@@ -149,10 +176,10 @@ test.describe("会話のデータの見え方（#1889・#1928・#1954）", { tag
       },
     );
     const history = await openHistory(page);
-    // 新しい会話では送る前の案内を出さない。
-    await expect(page.locator("[data-chat-composer-notice]")).toHaveCount(0);
     await expect(history.getByText(/・アリス$/)).toBeVisible();
     await expect(history.getByText(/・（削除済みのユーザー）$/)).toBeVisible();
+    // 新しい会話では閲覧だけの案内を出さない。
+    await expect(page.getByTestId("sql-chat-read-only")).toHaveCount(0);
 
     await history.locator('[title="アリスの売上"]').click();
     const turns = page.getByTestId("sql-chat-turn");
@@ -163,33 +190,31 @@ test.describe("会話のデータの見え方（#1889・#1928・#1954）", { tag
     await expect(turns.nth(2).locator("[data-chat-sender]")).toHaveText(
       "（削除済みのユーザー） が送信",
     );
-    // 見るだけにする案内は出さず、入力欄と送信は使える。
-    await expect(page.getByText(/ほかの利用者の会話です。/)).toHaveCount(0);
-    const composer = page.getByRole("textbox", { name: "質問", exact: true });
-    // 送る前に、持ち主にも回答と途中の結果が見えることを入力欄の直上に示し、入力欄の説明に結ぶ（#1954）。
-    const notice = page.locator("[data-chat-composer-notice]");
-    await expect(notice).toHaveText(OWNER_NOTICE);
-    await expect(composer).toHaveAccessibleDescription(OWNER_NOTICE);
-    const noticeBox = await notice.boundingBox();
-    const composerBox = await composer.boundingBox();
-    expect(noticeBox && composerBox && noticeBox.y + noticeBox.height <= composerBox.y).toBe(true);
-    await composer.fill("上位 5 件だけ");
-    await expect(page.getByTestId("sql-chat-send")).toBeEnabled();
-    await composer.press("Enter");
-    await confirmChatRequirement(page);
-    await expect(turns).toHaveCount(4);
-    expect(jobRequests[0]).toMatchObject({
-      question: "上位 5 件だけ",
-      chat: true,
-      previous_job_id: "chat-3",
-    });
-    const sent = turns.nth(3);
-    await expect(sent.locator("[data-chat-sender]")).toHaveText("システム管理者 が送信");
-    await expect(notice).toHaveText(OWNER_NOTICE);
-    // 送り手は吹き出しの上（右寄せの同じ列）に出す。
-    const senderBox = await sent.locator("[data-chat-sender]").boundingBox();
-    const bubbleBox = await sent.getByText("上位 5 件だけ", { exact: true }).first().boundingBox();
-    expect(senderBox && bubbleBox && senderBox.y + senderBox.height <= bubbleBox.y).toBe(true);
+    // 続きの質問・実行は持ち主だけ: 入力欄・送信・「実行」を出さず、入力欄の代わりに閲覧だけの案内を出す。
+    const readOnly = page.getByTestId("sql-chat-read-only");
+    await expect(readOnly).toHaveText(READ_ONLY_NOTICE);
+    await expect(readOnly).toBeInViewport();
+    await expect(page.getByRole("textbox", { name: "質問", exact: true })).toHaveCount(0);
+    await expect(page.getByTestId("sql-chat-send")).toHaveCount(0);
+    await expect(page.getByTestId("sql-chat-execute")).toHaveCount(0);
+    await expect(page.getByTestId("sql-chat-read-only-stop")).toHaveCount(0);
+    await expect(page.locator("[data-chat-composer-notice]")).toHaveCount(0);
+    // SQL は見られる。
+    await expect(turns.nth(0).getByText(SQL)).toBeVisible();
+
+    // 履歴の行は名前の変更を出さず、削除だけを出す（削除は運用の操作）。
+    const toggle = page.getByTestId("sql-chat-history-toggle");
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+    await expect(history.getByRole("button", { name: "「アリスの売上」の名前を変更" })).toHaveCount(0);
+    await history.getByRole("button", { name: "「アリスの売上」を削除" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "削除", exact: true }).click();
+    await expect(history.locator('[title="アリスの売上"]')).toHaveCount(0);
+    expect(deleted).toEqual(["chat-alice"]);
+    // 開いていた会話を消したら、新しい会話（入力欄あり）に戻る。
+    if ((page.viewportSize()?.width ?? 0) < 1024) await page.keyboard.press("Escape");
+    await expect(page.getByRole("textbox", { name: "質問", exact: true })).toBeEditable();
+    await expect(page.getByTestId("sql-chat-read-only")).toHaveCount(0);
+    expect(jobRequests).toEqual([]);
 
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -197,8 +222,36 @@ test.describe("会話のデータの見え方（#1889・#1928・#1954）", { tag
     expect(overflow).toBeLessThanOrEqual(0);
   });
 
-  test("system_admin が自分の会話を開いたときは、送る前の案内を出さない（#1954）", async ({ page }) => {
-    await setup(
+  test("system_admin は他の利用者の会話で処理中の SQL の生成を止められる", async ({ page }) => {
+    const { cancelled } = await setup(
+      page,
+      [
+        {
+          id: "chat-alice",
+          title: "アリスの売上",
+          profile_id: "sales",
+          created_at: now,
+          owned: false,
+          actor_display_name: "アリス",
+        },
+      ],
+      { "chat-alice": [turn("chat-alice", "売上の明細", null, "running")] },
+    );
+    const history = await openHistory(page);
+    await history.locator('[title="アリスの売上"]').click();
+    await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+    await expect(page.getByTestId("sql-chat-read-only")).toContainText(READ_ONLY_NOTICE);
+    await expect(page.getByRole("textbox", { name: "質問", exact: true })).toHaveCount(0);
+    const stop = page.getByTestId("sql-chat-read-only-stop");
+    await expect(stop).toHaveText("停止");
+    await stop.click();
+    await expect.poll(() => cancelled).toEqual(["chat-alice"]);
+    await expect(page.getByTestId("sql-chat-read-only-stop")).toHaveCount(0);
+    await expect(page.getByText("SQL の生成を停止しました", { exact: false })).toBeVisible();
+  });
+
+  test("system_admin が自分の会話を開いたときは、入力欄と「実行」を出し、閲覧だけの案内は出さない", async ({ page }) => {
+    const { jobRequests } = await setup(
       page,
       [
         {
@@ -214,9 +267,25 @@ test.describe("会話のデータの見え方（#1889・#1928・#1954）", { tag
     );
     const history = await openHistory(page);
     await history.locator('[title="管理者の売上"]').click();
-    await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
-    await expect(page.getByRole("textbox", { name: "質問", exact: true })).toBeEditable();
-    await expect(page.locator("[data-chat-composer-notice]")).toHaveCount(0);
+    const turns = page.getByTestId("sql-chat-turn");
+    await expect(turns).toHaveCount(1);
+    await expect(page.getByTestId("sql-chat-read-only")).toHaveCount(0);
+    await expect(page.getByTestId("sql-chat-execute")).toBeVisible();
+    const toggle = page.getByTestId("sql-chat-history-toggle");
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+    await expect(history.getByRole("button", { name: "「管理者の売上」の名前を変更" })).toHaveCount(1);
+    if ((page.viewportSize()?.width ?? 0) < 1024) await page.keyboard.press("Escape");
+    const composer = page.getByRole("textbox", { name: "質問", exact: true });
+    await composer.fill("上位 5 件だけ");
+    await composer.press("Enter");
+    await confirmChatRequirement(page);
+    await expect(turns).toHaveCount(2);
+    expect(jobRequests[0]).toMatchObject({
+      question: "上位 5 件だけ",
+      chat: true,
+      previous_job_id: "chat-mine",
+    });
+    await expect(page.locator("[data-chat-sender]")).toHaveCount(0);
   });
 
   test("一般の利用者の履歴は本人の会話だけで、利用者を出さない", async ({ page }) => {
@@ -254,6 +323,7 @@ test.describe("会話のデータの見え方（#1889・#1928・#1954）", { tag
     await history.locator('[title="自分の売上"]').click();
     await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
     await expect(page.locator("[data-chat-sender]")).toHaveCount(0);
-    await expect(page.locator("[data-chat-composer-notice]")).toHaveCount(0);
+    await expect(page.getByTestId("sql-chat-read-only")).toHaveCount(0);
+    await expect(page.getByRole("textbox", { name: "質問", exact: true })).toBeEditable();
   });
 });

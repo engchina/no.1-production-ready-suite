@@ -21,7 +21,7 @@ from importlib import import_module
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, Literal, NoReturn, cast
 
 import httpx
 from anyio import fail_after
@@ -56,9 +56,12 @@ from pr_backend_core.logging import safe_exception_fields
 from pr_system_settings.answer_notice import build_answer_notice_router
 from pr_system_settings.auth.visibility import (
     DEFAULT_RUN_EXECUTOR_FILTER,
+    OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+    OTHERS_CONTENT_FORBIDDEN_STATUS,
     OWNER_NOT_FOUND_STATUS,
     RunExecutorFilter,
     can_access_user_data,
+    can_add_user_content,
     can_view_all_users_data,
     run_executor_matches,
 )
@@ -1932,6 +1935,11 @@ async def create_run(
         # 下書きで試すのは Agent 管理か、個人の Agent の持ち主だけ（#770・#2523）。
         if run_request.draft and not _policy_manages_agent(_actor_policy(request), agent):
             raise HTTPException(status_code=403, detail=DRAFT_RUN_FORBIDDEN_MESSAGE)
+        # 続きの質問は会話の持ち主だけ（system_admin でも他の利用者の会話は 403。#3244）。
+        if run_request.thread_id is not None and not await run_in_threadpool(
+            _may_continue_thread, request, run_request.thread_id
+        ):
+            _raise_others_content_forbidden()
         # 添付（#2517）は Run を作る前に確かめ（見えない添付は 404・別の会話の添付は 409）、会話が
         # 決まった後に会話へ結び付ける（新しい会話の ID は Run を作るときに決まる）。
         attachments: list[ChatAttachmentReference] = []
@@ -1943,13 +1951,11 @@ async def create_run(
                 conversation_id=run_request.thread_id,
             )
         # 実行は組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI。#754）。Run は操作した
-        # 利用者として実行する。system_admin は他の利用者の会話も続けられ、その Run も
-        # system_admin の権限・範囲で実行する（会話の持ち主の権限は借りない。#1928）。
+        # 利用者として実行し、続ける会話は自分の会話だけ（他の利用者の会話は保存先も 404。#3244）。
         run = await run_in_threadpool(
             runtime_repository.create_builtin_run,
             run_request,
             created_by_user_uuid=_run_creator_user_uuid(request),
-            all_users=_sees_all_users(request),
             attachments=attachments,
         )
         if attachments and run.thread_id:
@@ -2121,7 +2127,11 @@ async def get_thread(thread_id: str, request: Request) -> ApiResponse[ThreadView
 async def rename_thread(
     thread_id: str, update: ThreadUpdateRequest, request: Request
 ) -> ApiResponse[ThreadSummary]:
-    """会話の名前を変える（#1817）。作った利用者と system_admin だけ（ほかは 404。#1889）。"""
+    """会話の名前を変える（#1817）。会話の持ち主だけ。
+
+    system_admin は他の利用者の会話を見られるが、名前は変えられない（403。#3244）。ほかの利用者の
+    会話は 404（#1889）。
+    """
     user_uuid = _run_creator_user_uuid(request)
     all_users = _sees_all_users(request)
     try:
@@ -2131,12 +2141,13 @@ async def rename_thread(
             runtime_repository.get_thread, thread_id, user_uuid=user_uuid, all_users=all_users
         )
         _require_agent_access(request, thread.agent_id)
+        if not can_add_user_content(_request_principal(request), thread.owner_user_uuid):
+            _raise_others_content_forbidden()
         summary = await run_in_threadpool(
             runtime_repository.rename_thread,
             thread_id,
             user_uuid=user_uuid,
             title=update.title,
-            all_users=all_users,
         )
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
@@ -2206,10 +2217,13 @@ async def put_run_feedback(
 ) -> ApiResponse[RunState]:
     """チャットの回答への評価（#774）。
 
-    Run を読める利用者（実行した利用者・会話の持ち主・system_admin。#1928）が付け、付け直すと
-    上書きする。評価した利用者を `feedback.user_uuid` に残す（ほかの利用者の Run は 404）。
+    Run の持ち主（会話の持ち主。会話の無い Run は実行した利用者）が付け、付け直すと上書きする。
+    評価した利用者を `feedback.user_uuid` に残す。system_admin は他の利用者の Run を読めるが、評価は
+    付けられない（403。#3244）。ほかの利用者の Run は 404。
     """
-    _readable_run(request, run_id)
+    run = _readable_run(request, run_id)
+    if not _run_content_addable_by(request, run):
+        _raise_others_content_forbidden()
     user_uuid = _run_creator_user_uuid(request)
     if user_uuid is None:
         raise HTTPException(status_code=401, detail="ログインしてください。")
@@ -3320,12 +3334,13 @@ async def decide_confirmation(
 ) -> ApiResponse[ConfirmationOutcome]:
     """回答前の確認（#1839）に答える・確認せずに回答する・確認をやめる。
 
-    答えるのは Run を読める利用者（実行した利用者・会話の持ち主・system_admin。ほかは 404。
-    #1928）。Agent 自身の確認は同じ Run を再開し、ツールの結果の確認（NL2SQL・RAG）は答えを
-    構造化した次の Run を同じ会話に作り、答えた利用者として実行する。やめると質問を返す
-    （画面が入力欄に戻す）。Agent 自身の確認への答えは同じ Run を Run の利用者の権限で再開する
-    ので、承認と同じく実行した利用者と system_admin だけ（会話の持ち主でも、ほかの人が実行した
-    Run は 404。#1928）。
+    答える・確認せずに回答するのは Run の持ち主（会話の持ち主）だけ。system_admin は他の利用者の
+    Run を読めるが、答えは足せない（403。#3244）。ほかの利用者の Run は 404。Agent 自身の確認は
+    同じ Run を再開し、ツールの結果の確認（NL2SQL・RAG）は答えを構造化した次の Run を同じ会話に
+    作り、答えた利用者として実行する。Agent 自身の確認への答えは同じ Run を Run の利用者の権限で
+    再開するので、加えて Run を実行した利用者だけ（会話の持ち主でも、ほかの人が実行した Run は
+    404）。やめる（取り消し）は運用の操作で、Run を読める利用者ができる（質問は画面が入力欄に
+    戻す）。
     """
     run = _readable_run(request, run_id)
     confirmation = next((item for item in run.confirmations if item.id == confirmation_id), None)
@@ -3336,6 +3351,8 @@ async def decide_confirmation(
         and not _run_approvable_by(request, run)
     ):
         raise HTTPException(status_code=404, detail="回答前の確認が見つかりません。")
+    if decision.action != "cancel" and not _run_content_addable_by(request, run):
+        _raise_others_content_forbidden()
     if decision.action == "answer" or decision.action == "skip":
         # 次の Run を作る・再開する前に、業務 Agent が今も使えるかを確かめる（POST /runs と同じ）。
         try:
@@ -3445,7 +3462,9 @@ async def replay_run(
     try:
         # 同じ Agent・ゴールの新しい Run として組み込み Runtime で実行する
         # （再実行を指示した利用者として。旧エンジンの Run も同じ）。元の Run の起点の印
-        # （品質評価の dry-run・自動実行・MCP など）は引き継がない（#911）。
+        # （品質評価の dry-run・自動実行・MCP など）は引き継がない（#911）。会話は引き継がず、
+        # 再実行した利用者の新しい会話にする（system_admin が他の利用者の Run を再実行しても、
+        # 持ち主の会話には足さない。#3244）。
         replayed = await run_in_threadpool(
             runtime_repository.create_builtin_run,
             RunCreateRequest(
@@ -4484,11 +4503,12 @@ def _sees_all_users(connection: object) -> bool:
 
 
 def _run_visible_to(connection: object, run: RunState | RunSummary) -> bool:
-    """「AI 活用」の画面で Run を見て操作してよいか（#1889・#1928）。
+    """「AI 活用」の画面で Run を見て、運用の操作（停止・削除）をしてよいか（#1889・#1954）。
 
     実行した利用者・その会話の持ち主（system_admin が持ち主の会話で実行した Run も、持ち主の
-    会話の往復として読み、停止・確認への回答・評価ができる）・system_admin。`agent.admin` などの
-    管理権限は理由にしない。持ち主の分からない古い Run は system_admin だけ。
+    会話の往復として読み、停止できる）・system_admin。`agent.admin` などの管理権限は理由にしない。
+    持ち主の分からない古い Run は system_admin だけ。内容を足す操作（確認への回答・評価）は
+    `_run_content_addable_by`（持ち主だけ。#3244）。
     """
     principal = _request_principal(connection)
     if can_access_user_data(principal, run.created_by_user_uuid):
@@ -4504,6 +4524,43 @@ def _run_approvable_by(connection: object, run: RunState | RunSummary | Approval
     でも、ほかの利用者（system_admin）が実行した Run の承認は判断しない。
     """
     return can_access_user_data(_request_principal(connection), run.created_by_user_uuid)
+
+
+def _run_content_addable_by(connection: object, run: RunState) -> bool:
+    """Run に内容（回答前の確認への答え・評価）を足してよいか（Run の持ち主だけ。#3244）。
+
+    持ち主は会話の持ち主（会話の無い Run は実行した利用者）。system_admin も他の利用者の Run には
+    足せない（閲覧と運用の操作は `_run_visible_to`）。
+    """
+    return can_add_user_content(_request_principal(connection), run_thread_owner(run))
+
+
+def _may_continue_thread(connection: object, thread_id: str) -> bool:
+    """会話に続きの質問を足してよいか（会話の持ち主だけ。#3244）。
+
+    system_admin でない利用者は自分の会話しか見えないので True を返し、ほかの利用者の会話・無い
+    会話は Run を作るときに保存先が 404（`ThreadNotFoundError`）にする。system_admin は、見える
+    他の利用者の会話なら False（403）。
+    """
+    if not _sees_all_users(connection):
+        return True
+    principal = _request_principal(connection)
+    try:
+        thread = runtime_repository.get_thread(
+            thread_id,
+            user_uuid=principal.user_uuid if principal is not None else None,
+            all_users=True,
+        )
+    except ThreadNotFoundError:
+        return True
+    return can_add_user_content(principal, thread.owner_user_uuid)
+
+
+def _raise_others_content_forbidden() -> NoReturn:
+    """他の利用者の会話・Run に内容を足そうとした（system_admin。#3244）。"""
+    raise HTTPException(
+        status_code=OTHERS_CONTENT_FORBIDDEN_STATUS, detail=OTHERS_CONTENT_FORBIDDEN_MESSAGE
+    )
 
 
 def _run_owner_of(run: RunState | RunSummary) -> str | None:

@@ -80,8 +80,11 @@ const nl2sqlJa = {
   // system_admin の会話の履歴の利用者（#1889）。
   "chat.historyOwner": "{date}・{name}",
   "chat.historyOwnerMissing": "（削除済みのユーザー）",
-  "chat.composer.ownerSeesNotice": "この会話の持ち主にも、回答と途中の結果が見えます",
-  // 会話の持ち主以外（system_admin）が送った質問の送り手（#1928）。
+  // system_admin が他の利用者の会話を開いたときの、入力欄の代わりの案内（#3244。backend の
+  // OTHERS_CONTENT_FORBIDDEN_MESSAGE と同じ文）。停止・削除はできる。
+  "chat.readOnly.notice":
+    "他の利用者の会話・実行には、続きの質問・実行・回答・評価を追加できません。閲覧・停止・削除はできます。調べ直すときは自分の会話で質問してください。",
+  // 会話の持ち主以外（#3244 より前の system_admin）が送った質問の送り手（#1928）。
   "chat.sentBy": "{name} が送信",
   "chat.noProfiles": "利用できる業務プロファイルがありません",
   "chat.noProfilesHint": "業務プロファイルの設定と利用権限を確認してください。",
@@ -162,6 +165,11 @@ const nl2sqlJa = {
   "chat.execute.last.truncated":
     "前回の実行（{at}）: 先頭の {rows} 行を取得（さらに行があります）・{columns} 列。結果の行は保存していないため、見るにはもう一度実行してください。",
   "chat.execute.last.failed": "前回の実行（{at}）は失敗しました。もう一度実行できます。",
+  // 他の利用者の会話を見ているとき（実行は持ち主だけ。#3244）は「もう一度実行」を案内しない。
+  "chat.execute.last.done.readOnly": "前回の実行（{at}）: {rows} 行・{columns} 列。結果の行は保存していません。",
+  "chat.execute.last.truncated.readOnly":
+    "前回の実行（{at}）: 先頭の {rows} 行を取得（さらに行があります）・{columns} 列。結果の行は保存していません。",
+  "chat.execute.last.failed.readOnly": "前回の実行（{at}）は失敗しました。",
   // DB 管理チャット（#2264）。チャットと同じ部品・同じ書き方（副題・空の状態）にし、名詞だけを変える。
   "dbAdminChat.subtitle":
     "データベースに質問し、生成した SQL と実行の結果を確かめながら会話を続ける",

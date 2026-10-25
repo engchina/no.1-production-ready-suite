@@ -312,6 +312,7 @@ function AssistantColumn({
   progressSource = null,
   stoppedMessage = null,
   onRetry,
+  readOnly = false,
   className,
 }: {
   label: string | null;
@@ -346,6 +347,8 @@ function AssistantColumn({
   stoppedMessage?: string | null;
   /** 失敗した回答をもう一度送信する（最新の質問だけ）。 */
   onRetry?: () => void;
+  /** 他の利用者の会話（system_admin が見る）。回答と根拠の評価を出さない（持ち主だけ。#3244）。 */
+  readOnly?: boolean;
   className?: string;
 }) {
   // 「回答に未反映の関連章節」の行から章節の原文を開くリンクは、文書の詳細を開ける利用者だけ（#2040・#303）。
@@ -475,12 +478,13 @@ function AssistantColumn({
               citations={citations}
               // まとまり（根拠の木）は回答が終わってから届く診断にある（#2097）。
               idPrefix={messageId ? `message-${messageId}` : listId}
-              cardProps={{ traceId, searchAnswerProfileId, sourceSurface: "chat", messageId }}
+              // 他の利用者の会話では根拠の評価を出さない（trace が無ければ評価を出さない。#3244）。
+              cardProps={{ traceId: readOnly ? null : traceId, searchAnswerProfileId, sourceSurface: "chat", messageId }}
               className="border-t border-border px-2 pt-1"
             />
           }
           feedback={
-            finished ? (
+            finished && !readOnly ? (
               <FeedbackControls
                 traceId={traceId}
                 searchAnswerProfileId={searchAnswerProfileId}
@@ -506,6 +510,7 @@ function MessageTurn({
   onAskUnscoped,
   footer,
   liveAttachments,
+  readOnly = false,
   testId,
 }: {
   user: Pick<ChatMessage, "content" | "guardrail_warnings" | "clarification"> &
@@ -522,6 +527,8 @@ function MessageTurn({
   onRetry?: () => void;
   /** 確認で範囲を絞った回答のとき、範囲を指定せずに同じ質問を送る（最新のターンだけ渡す。#721）。 */
   onAskUnscoped?: () => void;
+  /** 他の利用者の会話（system_admin が見る）。評価を出さない（#3244）。 */
+  readOnly?: boolean;
   columns: {
     key: string;
     label: string | null;
@@ -555,7 +562,7 @@ function MessageTurn({
       question={user.content}
       questionStatus={userStatus}
       failedLabel={t("chat.send.failed")}
-      // 会話の持ち主以外（system_admin）が送った質問には、送った人を添える（#1928）。
+      // 会話の持ち主以外（#3244 より前の system_admin）が送った質問には、送った人を添える。
       questionSender={
         user.sent_by_owner === false
           ? t("chat.messages.sender", {
@@ -618,6 +625,7 @@ function MessageTurn({
               progressSource={column.progressSource}
               stoppedMessage={column.stoppedMessage}
               onRetry={column.errorMessage ? onRetry : undefined}
+              readOnly={readOnly}
               className={
                 compare && columns.length % 2 === 1 && index === columns.length - 1
                   ? "col-span-full"
@@ -1503,6 +1511,9 @@ export function ChatClient() {
   const activeConversation =
     conversationQuery.data ?? conversations.find((conversation) => conversation.id === activeId);
   const activeTitle = activeConversation?.title ?? t("chat.sessions.untitled");
+  // system_admin が開いた他の利用者の会話は閲覧と停止・削除だけ（#3244）。続きの質問・再実行・確認への回答・
+  // 評価は持ち主だけなので、入力欄の代わりに閲覧だけの案内を出し、続きの操作を出さない。
+  const readOnly = Boolean(activeId) && activeConversation?.owned === false;
 
   return (
     <div className="flex min-h-full shrink-0 flex-col lg:h-full lg:min-h-0">
@@ -1609,6 +1620,35 @@ export function ChatClient() {
             }}
             testIds={{ log: "chat-messages" }}
             composer={
+              readOnly ? (
+                // 入力欄の代わりの閲覧だけの案内（読み取り専用は無効の入力欄にしない）。停止は作成中の回答があるときだけ出す。
+                <div className="space-y-2" data-testid="chat-read-only-notice">
+                  <Banner
+                    severity="info"
+                    action={
+                      answerInProgress ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          icon={Square}
+                          onClick={stop}
+                          data-testid="chat-read-only-stop"
+                        >
+                          {t("chat.composer.stop")}
+                        </Button>
+                      ) : undefined
+                    }
+                  >
+                    {t("chat.othersConversation.readOnly")}
+                  </Banner>
+                  {errorText ? (
+                    <p className="text-sm text-danger-fg" role="alert">
+                      {errorText}
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
               <>
                 {/* 入力欄の領域（設定の行・入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。
                     送信と停止は同じボタンで、生成中は同じ位置で「停止」になる（buttons.md §3.1、#413）。
@@ -1632,13 +1672,6 @@ export function ChatClient() {
                     conversationFailed
                   }
                   disabled={searchAnswerProfileLoading}
-                  // system_admin が他の利用者の会話で送る前に、持ち主にも回答と途中の結果が見えることを
-                  // 示す（#1954）。新しい会話・自分の会話では出さない。
-                  notice={
-                    seesAllUsers && activeId && activeConversation?.owned === false
-                      ? t("chat.composer.ownerSeesNotice")
-                      : undefined
-                  }
                   label={t("chat.composer.label")}
                   placeholder={t("chat.composer.placeholder")}
                   sendLabel={t("chat.composer.send")}
@@ -1653,6 +1686,7 @@ export function ChatClient() {
                   </p>
                 ) : null}
               </>
+              )
             }
           >
             {/* 会話を選んでいない間は新しい会話の下書き。最初の送信で会話を作る（#664）。 */}
@@ -1684,8 +1718,10 @@ export function ChatClient() {
                     key={turn.user.message_id}
                     user={turn.user}
                     searchAnswerProfileId={searchAnswerProfileId ?? ""}
+                    readOnly={readOnly}
                     onRetry={
-                      // 最新の質問の失敗（時間切れなど）だけ、同じ質問をもう一度送れる（#375）。
+                      // 最新の質問の失敗（時間切れなど）だけ、同じ質問をもう一度送れる（#375）。他の利用者の会話では出さない。
+                      !readOnly &&
                       turn.user.message_id === lastTurnId &&
                       turn.user.status !== "ERROR" &&
                       !liveTurn &&
@@ -1694,6 +1730,7 @@ export function ChatClient() {
                         : undefined
                     }
                     onAskUnscoped={
+                      !readOnly &&
                       turn.user.message_id === lastTurnId && !liveTurn && !answerInProgress && !pendingChoice
                         ? () => askUnscoped(turn.user.content)
                         : undefined
@@ -1784,7 +1821,7 @@ export function ChatClient() {
                   />
                 ) : null}
                 {/* 送る前の質問と、選んでから回答する類似問（#684）。質問の吹き出しは送信後と同じ形。 */}
-                {faqChoice ? (
+                {faqChoice && !readOnly ? (
                   <div className="space-y-2" data-testid="chat-approved-faq-choice">
                     <ChatUserMessage>{faqChoice.content}</ChatUserMessage>
                     <ApprovedFaqSuggestions
@@ -1796,7 +1833,7 @@ export function ChatClient() {
                   </div>
                 ) : null}
                 {/* 類似問の後に出す回答前の確認（#717 / #1839）。 */}
-                {clarifyChoice ? (
+                {clarifyChoice && !readOnly ? (
                   <div className="space-y-2">
                     <ChatUserMessage>{clarifyChoice.content}</ChatUserMessage>
                     <ClarificationChoice
