@@ -24,7 +24,6 @@ import {
   RunTimelineSection,
   SqlSafetyBadge,
   StatusBadge,
-  chatProgressTraceIdOf,
   formatRunDateTime,
   runStepDetailsJson,
   useTraceDetailsLabels,
@@ -63,10 +62,10 @@ import {
   runDurationMs,
   runConversationHref,
   runFinishedAt,
-  runProgressIsLegacy,
   runStatusLabel,
   runTimelineSteps,
 } from "@/lib/run-history";
+import { useRunTraceProgress } from "@/lib/run-trace-progress";
 import { runSourceLabelOf } from "@/lib/run-source";
 import { artifactTable, runToolResultTables, stepResultTable, type ToolResultTable } from "@/lib/run-tables";
 import {
@@ -157,10 +156,12 @@ export function RunDetail({
   const passages = runAnswerPassages(run.artifacts);
   const latestAnswer = answers.at(-1);
   const outcome = latestAnswer ? answerOutcome(latestAnswer.content) : null;
-  // 処理の経過は Run の trace（span の木。#3226）の投影で、チャットと同じ記録・名前にする。
+  // 処理の経過は Run の trace（span の木。#3226）の投影で、チャットと同じ記録・名前にする。span は共通の span の表に
+  // あり（案 A）、終わっていない Run は読み直す。
   const traceLabels = useTraceDetailsLabels();
-  const timelineSteps = runTimelineSteps(run, toolProgressTable, { traceLabels });
-  const legacyProgress = runProgressIsLegacy(run);
+  const progress = useRunTraceProgress(run, { active: CANCELLABLE_RUN_STATUSES.includes(run.status) });
+  const timelineSteps = runTimelineSteps(run, progress.events, toolProgressTable, { traceLabels });
+  const legacyProgress = progress.legacy;
   const failure = runFailure(run, timelineSteps, "detail");
   const usage = run.usage;
 
@@ -291,53 +292,61 @@ export function RunDetail({
           ) : null
         }
         timeline={
-          <RunTimelineSection
-            // 「処理の詳細」には Trace ID だけを出す（処理の経過と同じ記録を 2 回出さない。#3226）。
-            traceId={chatProgressTraceIdOf(run.progress_events ?? [])}
-            key={run.id}
-            title={t("run.section.timeline")}
-            steps={timelineSteps}
-            totalDurationMs={runDurationMs(run)}
-            labels={labels}
-            empty={
-              legacyProgress ? (
-                // span の無い古い形式の記録（空白にしない。#3226）。
-                <div data-testid="run-timeline-legacy">
-                  <EmptyState title={traceLabels.legacy} />
-                </div>
-              ) : (
-                <EmptyState title={t("run.timeline.noSteps")} />
-              )
-            }
-            testId="run-timeline-section"
-            // 処理の詳細（識別子・イベントの記録・ストリームの接続）は、処理の経過のタイムラインの後ろに既定で閉じて置く
-            // （3 製品の実行の詳細とチャットの処理の経過で同じ名前・部品・位置。#2325）。
-            processDetailsProps={{ title: t("run.section.processDetails"), description: t("run.section.processDetailsDescription"), testId: "run-technical-section", summaryTestId: "run-process-details" }}
-            processDetails={
-              <>
-                <RunFactList
-                  facts={[
-                    { id: "agentId", label: t("run.fact.agent"), value: run.agent_id, mono: true },
-                    ...(run.thread_id
-                      ? [{ id: "threadId", label: t("run.fact.thread"), value: run.thread_id, mono: true }]
-                      : []),
-                    {
-                      id: "runtime",
-                      label: t("run.runtime"),
-                      value: run.runtime_id === "builtin" ? t("runtime.builtin.title") : run.runtime_id,
-                    },
-                    { id: "updatedAt", label: t("common.updatedAt"), value: formatDate(run.updated_at) },
-                  ]}
-                />
-                <div className="grid min-w-0 gap-2">
-                  <h3 className="text-sm font-medium text-fg">{t("run.timeline")}</h3>
-                  <p className="text-xs text-fg-muted">{t("run.timelineDescription")}</p>
-                  <EventLog events={run.events} />
-                </div>
-                <RunStreamControls sseState={sseState} />
-              </>
-            }
-          />
+          <>
+            <RunTimelineSection
+              // 「処理の詳細」には Trace ID だけを出す（処理の経過と同じ記録を 2 回出さない。#3226）。
+              traceId={progress.traceId}
+              key={run.id}
+              title={t("run.section.timeline")}
+              steps={timelineSteps}
+              totalDurationMs={runDurationMs(run)}
+              labels={labels}
+              empty={
+                legacyProgress ? (
+                  // span の無い古い形式の記録（空白にしない。#3226）。
+                  <div data-testid="run-timeline-legacy">
+                    <EmptyState title={traceLabels.legacy} />
+                  </div>
+                ) : (
+                  <EmptyState title={t("run.timeline.noSteps")} />
+                )
+              }
+              testId="run-timeline-section"
+              // 処理の詳細（識別子・イベントの記録・ストリームの接続）は、処理の経過のタイムラインの後ろに既定で閉じて置く
+              // （3 製品の実行の詳細とチャットの処理の経過で同じ名前・部品・位置。#2325）。
+              processDetailsProps={{ title: t("run.section.processDetails"), description: t("run.section.processDetailsDescription"), testId: "run-technical-section", summaryTestId: "run-process-details" }}
+              processDetails={
+                <>
+                  <RunFactList
+                    facts={[
+                      { id: "agentId", label: t("run.fact.agent"), value: run.agent_id, mono: true },
+                      ...(run.thread_id
+                        ? [{ id: "threadId", label: t("run.fact.thread"), value: run.thread_id, mono: true }]
+                        : []),
+                      {
+                        id: "runtime",
+                        label: t("run.runtime"),
+                        value: run.runtime_id === "builtin" ? t("runtime.builtin.title") : run.runtime_id,
+                      },
+                      { id: "updatedAt", label: t("common.updatedAt"), value: formatDate(run.updated_at) },
+                    ]}
+                  />
+                  <div className="grid min-w-0 gap-2">
+                    <h3 className="text-sm font-medium text-fg">{t("run.timeline")}</h3>
+                    <p className="text-xs text-fg-muted">{t("run.timelineDescription")}</p>
+                    <EventLog events={run.events} />
+                  </div>
+                  <RunStreamControls sseState={sseState} />
+                </>
+              }
+            />
+            {progress.partial ? (
+              // 共通の span の表に書けなかった span がある（#3226 の案 A）。経過の一覧が全部ではないことを示す。
+              <p className="text-xs text-fg-muted" data-testid="run-timeline-partial">
+                {traceLabels.partial}
+              </p>
+            ) : null}
+          </>
         }
         evidence={
           <>

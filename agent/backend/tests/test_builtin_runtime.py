@@ -52,6 +52,7 @@ from app.features.agent.tools import (
     ToolPermissionLevel,
     tool_registry,
 )
+from app.features.agent.trace_spans import trace_spans
 from app.features.agent.usage import build_usage_report
 from app.settings import get_settings
 
@@ -271,15 +272,17 @@ def test_tool_requiring_approval_waits_and_resumes(
 
     run = runtime_repository.get_run(run_id)
     assert run.status == RunStatus.COMPLETED
-    assert len(run.trace_segments) == 2
-    first, resumed = run.trace_segments
-    assert first.telemetry_trace_id == resumed.telemetry_trace_id
-    resumed_root = next(span for span in resumed.spans if span.span_id == resumed.root_span_id)
-    assert resumed_root.parent_span_id == first.root_span_id
+    # 実行と再開の区間は共通の span の表の 1 つの trace（#3226 の案 A）。再開の区間は実行の
+    # 区間の子。
+    assert run.trace_id is not None
+    spans = trace_spans.fetch(run.trace_id, viewer_user_uuid=None)
+    first, resumed = [span for span in spans if span.root]
+    assert (first.name, resumed.name) == ("agent.execute", "agent.resume")
+    assert resumed.parent_span_id == first.span_id
+    assert {span.trace_id for span in spans} == {run.trace_id}
+    assert {span.owner_user_uuid for span in spans} == {USER_UUID}
     assert all(
-        span.finished_at >= span.started_at
-        for segment in run.trace_segments
-        for span in segment.spans
+        span.finished_at is not None and span.finished_at >= span.started_at for span in spans
     )
 
     assert [name for name, _, _ in calls.items] == [WRITE]

@@ -672,7 +672,10 @@ def test_structured_text_and_image_reach_the_same_model_input(
 
     run = runtime_repository.get_run(run_id)
     assert run.status == RunStatus.COMPLETED
-    assert figure_mcp.calls == [{"name": FIGURE_TOOL, "arguments": {"chunk_id": "chunk-a"}}]
+    # trace の `_meta`（#3226）を除いた呼び出しの中身。
+    assert [
+        {key: value for key, value in call.items() if key != "_meta"} for call in figure_mcp.calls
+    ] == [{"name": FIGURE_TOOL, "arguments": {"chunk_id": "chunk-a"}}]
     output = _tool_output(model.calls[1].input, "call-fig")
     # SDK の画像の出力（Responses API の input_image）で、文字の結果と同じ呼び出しに届く。
     assert isinstance(output, list)

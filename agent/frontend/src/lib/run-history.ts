@@ -263,25 +263,23 @@ export function agentProgressDefinitions(steps: readonly RunStep[]): ChatProgres
 }
 
 /**
- * 処理の経過が古い形式の記録か（#3226）。span の記録が無く、段だけのイベント（span の前の記録）か、記録の無い
- * 終わった Run（#1359 の前）。実行中・受け付けただけの Run と、終端だけの Run（開始の前に終わった）は古い形式では
- * ない。
+ * 処理の経過が古い形式の記録か（#3226）。共通の span の表（案 A）に書く前の Run は `trace_store` が無く、終わって
+ * いれば処理の経過を出せない（画面は古い形式の案内を出す）。実行中・受け付けただけの Run と、表に書く Run（開始の前に
+ * 終わった Run を含む）は古い形式ではない。
  */
-export function runProgressIsLegacy(run: Pick<RunState, "status" | "progress_events">): boolean {
-  const events = run.progress_events ?? [];
-  if (chatProgressHasSpans(events)) return false;
-  if (events.some((event) => event.type === "step")) return true;
-  return events.length === 0 && TERMINAL_RUN_STATUSES.has(run.status);
+export function runProgressIsLegacy(run: Pick<RunState, "status" | "trace_store">): boolean {
+  return run.trace_store !== true && TERMINAL_RUN_STATUSES.has(run.status);
 }
 
 /** 処理の経過の行に、ツールの span と結んだ Run の step の表の結果を中身として付ける（チャットと履歴で同じ）。 */
 export function runProgressSteps(
-  run: Pick<RunState, "steps" | "progress_events">,
+  run: Pick<RunState, "steps">,
+  events: readonly ChatProgressEvent[],
   progress: ChatProgressStep[],
   tableOf?: (step: RunStep) => RunTimelineStep["children"]
 ): ChatProgressStep[] {
   if (!tableOf) return progress;
-  const pairs = progressRunSteps(run.progress_events ?? [], run.steps);
+  const pairs = progressRunSteps(events, run.steps);
   if (pairs.size === 0) return progress;
   return progress.map((item) => {
     const step = pairs.get(item.id);
@@ -291,18 +289,18 @@ export function runProgressSteps(
 }
 
 /**
- * 実行の詳細の処理の経過（`RunTimeline`）。チャットの処理の経過と同じ記録（span のイベント → 木。#3226）を、同じ
- * 名前（`AGENT_CHAT_PROGRESS_STEPS` と共通の span の名前）で写す。古い形式の記録は空（画面は古い形式の案内を出す）。
+ * 実行の詳細の処理の経過（`RunTimeline`）。チャットの処理の経過と同じ記録（共通の span の表の snapshot → 木。#3226）
+ * を、同じ名前（`AGENT_CHAT_PROGRESS_STEPS` と共通の span の名前）で写す。span の無い記録は空。
  */
 export function runTimelineSteps(
-  run: RunState,
+  run: Pick<RunState, "id" | "steps">,
+  events: readonly ChatProgressEvent[],
   tableOf?: (step: RunStep) => RunTimelineStep["children"],
   options: ChatProgressLabelOptions = {}
 ): RunTimelineStep[] {
-  const events = run.progress_events ?? [];
   if (!chatProgressHasSpans(events)) return [];
   const progress = chatProgressStepsFromEvents(events, agentProgressDefinitions(run.steps), run.id, options);
-  return runProgressSteps(run, progress, tableOf).map(chatProgressTimelineStep);
+  return runProgressSteps(run, events, progress, tableOf).map(chatProgressTimelineStep);
 }
 
 /**

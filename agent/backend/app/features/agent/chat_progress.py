@@ -1,11 +1,14 @@
-"""チャットの処理の経過（3 製品共通のイベント。#1359）を、Run の trace（span の木）から記録する。
+"""チャットの処理の経過（3 製品共通のイベント。#1359）を、Run の trace（span の木）から作る。
 
-処理の経過は trace の投影（#3226）: 組み込み Runtime の実行区間（`agent.execute` /
-`agent.resume`）の `operation_trace(listener=...)` が知らせる span の開始・表示用のデータの
-変更・終了を、`ChatProgressRecorder.record_span` で `run.progress_events` に記録する（Run の
-lock の中。`AgentRuntimeRepository.record_builtin_span`）。終端（完了・失敗・停止）の
-イベントは、Run の状態が終わったときに `record_run_terminal` が記録する（Run のイベントを
-足すたびに呼ぶ。冪等）。
+処理の経過は trace の投影（#3226）で、span は共通の span の表（`PLATFORM_TRACE_SPANS`。
+案 A）にある: 組み込み Runtime の実行区間（`agent.execute` / `agent.resume`）の
+`operation_trace(listener=...)` が知らせる span の開始・表示用のデータの変更・終了を、
+process の書き手（`trace_spans`）が表に書く。Run には表に入れないものだけを残す
+（`note_run_span`。Run の lock の中）: 実行の全体の span の trace id（`trace_id`）、工程の詳細
+（`span_details`。span id → 詳細。ツールの引数と結果など）、記録した待ちの回
+（`trace_wait_rounds`）。Run を確定するときに、書けなかった span の数
+（`trace_dropped_spans`）を残す。画面の API は Run の trace id で表を読み、Run の状態（完了・
+失敗・停止。正本）と工程の詳細を合わせてイベントにする（`run_trace_events`）。
 
 工程を測る span の表示用のデータ（`SpanDisplay`。画面の名前は frontend の段の定義が `kind` から
 付ける）:
@@ -14,9 +17,9 @@ lock の中。`AgentRuntimeRepository.record_builtin_span`）。終端（完了�
   回答を作ったら kind `respond`（回答の作成）。呼び出しの後に決める（`model_turn_kind`）。
 - `gen_ai.execute_tool`（ツールの呼び出し）: kind `tool`、params `{"tool": 名前, "run_step":
   Run の step の id}`（表示名〔MCP の `title`。Run の metadata `tool_titles`〕があれば `title`
-  も）、details はツールの内部名・エラー・引数と結果（`tool_details`）。実行しなかったツール
-  （却下・方針で拒否・上限・引数の誤り）も `skipped` の span で残し、承認の却下は params に
-  `rejected: true`。
+  も）、details はツールの内部名・エラー・引数と結果（`tool_details`。Run の `span_details`）。
+  実行しなかったツール（却下・方針で拒否・上限・引数の誤り）も `skipped` の span で残し、承認の
+  却下は params に `rejected: true`。
 - `agent.approval_wait`（kind `approval`、params `{"tools": 承認を待ったツール名, "round": 回}`）
   と `agent.confirmation_wait`（kind `confirmation`、params `{"round": 回}`）: 承認・Agent
   自身の回答前の確認（`ask_user_confirmation`。#1839）の待ちの区間。待ちが終わって再開した区間で、
@@ -34,10 +37,10 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pr_backend_core.chat_progress import (
     ChatProgressParamValue,
-    ChatProgressRecorder,
     ChatProgressStepDetails,
     chat_progress_details,
 )
+from pr_backend_core.observability.trace_store import StoredTraceSpan, trace_progress_events
 from pr_backend_core.observability.tracing import SpanDisplay, SpanUpdate
 
 if TYPE_CHECKING:
@@ -66,44 +69,66 @@ TOOL_TITLES_METADATA_KEY = "tool_titles"
 RUN_STEP_PARAM = "run_step"
 
 # 記録する Run の Runtime（組み込み Runtime だけ。旧エンジンの Run は実行しない）。
-_BUILTIN_RUNTIME_ID = "builtin"
-_TERMINAL_STATUSES: dict[str, Literal["done", "failed", "cancelled"]] = {
+BUILTIN_RUNTIME_ID = "builtin"
+# Run の状態 → 処理の経過の終端（正本は Run の状態。表で実行中のままの span はこれで閉じる）。
+RUN_TERMINAL_STATUSES: dict[str, Literal["done", "failed", "cancelled"]] = {
     "completed": "done",
     "failed": "failed",
     "cancelled": "cancelled",
 }
+# 記録した待ちの回を残す工程の種類（再開し直しても同じ待ちを重ねて記録しない）。
+_WAIT_KINDS = (KIND_APPROVAL, KIND_CONFIRMATION)
 
 
-def record_run_span(run: RunState, update: SpanUpdate) -> bool:
-    """span の知らせを Run の処理の経過のイベントに記録する（記録したら True）。
+def note_run_span(run: RunState, update: SpanUpdate) -> bool:
+    """span の知らせから、表に入れないものを Run に残す（変えたら True）。Run の lock の中で呼ぶ。
 
-    Run の lock の中で呼ぶ。終端を記録した後の知らせ（停止の後に終わった span など）は記録しない。
+    - 実行の全体の span（root）の trace id（最初の区間の trace。再開の区間も同じ trace）。
+    - span の工程の詳細（`SpanDisplay.details`。表には入れない）。実行中のツールの引数も開ける
+      ように、開始の知らせの詳細も残す（終わりの知らせで結果を足した詳細に置き換わる）。
+    - 終わった待ちの span の回（`trace_wait_rounds`）。
     """
-    if run.runtime_id != _BUILTIN_RUNTIME_ID:
-        return False
-    recorder = ChatProgressRecorder(run.id, events=run.progress_events)
-    if recorder.terminal is not None:
-        return False
-    if recorder.record_span(update) is None:
-        return False
-    run.progress_events = recorder.events
-    return True
+    changed = False
+    if update.root and run.trace_id is None:
+        run.trace_id = update.trace_id
+        changed = True
+    display = update.display
+    if display is None:
+        return changed
+    if display.details is not None and run.span_details.get(update.span_id) != display.details:
+        run.span_details[update.span_id] = display.details
+        changed = True
+    if update.status == "running":
+        return changed
+    round_ = (display.params or {}).get("round")
+    if display.kind in _WAIT_KINDS and isinstance(round_, int) and not isinstance(round_, bool):
+        rounds = run.trace_wait_rounds.setdefault(display.kind, [])
+        if round_ not in rounds:
+            rounds.append(round_)
+            changed = True
+    return changed
 
 
-def record_run_terminal(run: RunState) -> None:
-    """終わった Run（完了・失敗・停止）の処理の経過に終端を記録する。
+def run_progress_terminal(run: RunState) -> Literal["done", "failed", "cancelled"] | None:
+    """Run の状態の終端（終わっていなければ None。承認・確認の待ちは終端ではない）。"""
+    return RUN_TERMINAL_STATUSES.get(str(run.status))
 
-    Run の lock の中で呼ぶ。終わっていない Run・終端を記録済みの Run には何もしない（冪等）。
-    開いている span は終端の状態で閉じる（停止はスキップ）。
+
+def run_trace_events(run: RunState, spans: Sequence[StoredTraceSpan]) -> list[dict[str, Any]]:
+    """表の span と Run の状態・工程の詳細から、処理の経過のイベントの一覧（snapshot）を作る。
+
+    終わった Run は終端のイベントで閉じる（表で実行中のままの span も終端に合わせて閉じる）。
+    trace の無い Run（受け付けただけ・開始の前に終わった）は空。
     """
-    if run.runtime_id != _BUILTIN_RUNTIME_ID:
-        return
-    terminal = _TERMINAL_STATUSES.get(str(run.status))
-    if terminal is None:
-        return
-    recorder = ChatProgressRecorder(run.id, events=run.progress_events)
-    if recorder.complete(terminal) is not None:
-        run.progress_events = recorder.events
+    if run.trace_id is None:
+        return []
+    details = {
+        span_id: value.model_dump(mode="json", exclude_none=True)
+        for span_id, value in run.span_details.items()
+    }
+    return trace_progress_events(
+        spans, target_id=run.id, terminal=run_progress_terminal(run), details=details
+    )
 
 
 def model_turn_kind(output: Iterable[Any] | None) -> str | None:
@@ -224,14 +249,7 @@ def confirmation_wait_display(confirmation: ConfirmationRequest) -> SpanDisplay:
 
 def recorded_wait_rounds(run: RunState, kind: str) -> set[int]:
     """記録済みの待ちの span の回（同じ待ちを再開のたびに重ねて記録しない）。"""
-    rounds: set[int] = set()
-    for event in run.progress_events:
-        params = getattr(event, "params", None)
-        if getattr(event, "kind", None) == kind and params:
-            value = params.get("round")
-            if isinstance(value, int):
-                rounds.add(value)
-    return rounds
+    return set(run.trace_wait_rounds.get(kind, []))
 
 
 def _tool_names(approvals: Sequence[ApprovalRequest], titles: dict[str, str]) -> str:
@@ -276,6 +294,7 @@ def approval_rounds(approvals: list[ApprovalRequest]) -> list[list[ApprovalReque
 
 __all__ = [
     "APPROVAL_WAIT_SPAN",
+    "BUILTIN_RUNTIME_ID",
     "CONFIRMATION_WAIT_SPAN",
     "EXECUTE_TOOL_SPAN",
     "KIND_APPROVAL",
@@ -288,10 +307,12 @@ __all__ = [
     "approval_rounds",
     "approval_wait_display",
     "confirmation_wait_display",
+    "RUN_TERMINAL_STATUSES",
     "model_turn_kind",
-    "record_run_span",
-    "record_run_terminal",
+    "note_run_span",
     "recorded_wait_rounds",
+    "run_progress_terminal",
+    "run_trace_events",
     "tool_attributes",
     "tool_details",
     "tool_display",
