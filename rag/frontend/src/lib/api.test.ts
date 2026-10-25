@@ -769,19 +769,6 @@ describe("api.request envelope", () => {
           version: null,
           warning_code: null,
         },
-        {
-          backend: "mineru",
-          package_name: "mineru",
-          import_name: "mineru",
-          distribution_name: null,
-          install_package: "mineru[core]==3.4.0",
-          enabled: false,
-          selected: false,
-          installed: false,
-          status: "disabled",
-          version: null,
-          warning_code: null,
-        },
       ],
       service_backends: [
         {
@@ -814,7 +801,7 @@ describe("api.request envelope", () => {
             warning_codes: [],
           },
           {
-            backend: "mineru",
+            backend: "dots_ocr",
             rank: 2,
             score: 24,
             status: "disabled",
@@ -834,7 +821,7 @@ describe("api.request envelope", () => {
       source_routes: [
         {
           source_kind: "pdf",
-          candidate_order: ["docling", "unstructured", "mineru", "dots_ocr"],
+          candidate_order: ["docling", "unstructured"],
           attempted_order: ["docling"],
           active_order: ["docling"],
           selected_backend: "docling",
@@ -870,9 +857,8 @@ describe("api.request envelope", () => {
     expect(result.effective_order).toEqual(["docling"]);
     expect(result.adapters[1].warning_code).toBe("adapter_flag_ignored_by_backend");
     expect(result.adapters.map((adapter) => adapter.backend)).toContain("dots_ocr");
-    expect(result.adapters.map((adapter) => adapter.backend)).toContain("mineru");
     expect(result.service_backends[0].backend).toBe("oci_document_understanding");
-    expect(result.source_routes[0].candidate_order).toContain("mineru");
+    expect(result.source_routes[0].candidate_order).toContain("unstructured");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/settings/parser-adapters",
       expect.objectContaining({
@@ -886,7 +872,6 @@ describe("api.request envelope", () => {
       adapter_backend: "docling" as const,
       docling_enabled: true,
       unstructured_enabled: true,
-      mineru_enabled: false,
       dots_ocr_enabled: false,
     };
     const responsePayload = {

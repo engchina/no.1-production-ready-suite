@@ -252,7 +252,7 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
 test("取込解析エンジンは抽出工程行に segment parser だけを表示する", async ({
   page,
 }) => {
-  await mockDocumentWorkspace(page, { pdfPreview: true, mineruSegment: true });
+  await mockDocumentWorkspace(page, { pdfPreview: true, externalSegment: true });
 
   await page.goto("/documents/doc-1");
 
@@ -268,8 +268,8 @@ test("取込解析エンジンは抽出工程行に segment parser だけを表�
   const jobsPanel = page
     .getByRole("heading", { name: "工程ごとの実行状況" })
     .locator("xpath=ancestor::section[1]");
-  await expect(jobsPanel.getByText("MinerU v1")).toBeVisible();
-  await expect(jobsPanel.getByText("mineru_adapter")).toHaveCount(0);
+  await expect(jobsPanel.getByText("Dots.OCR v1")).toBeVisible();
+  await expect(jobsPanel.getByText("dots_ocr_adapter")).toHaveCount(0);
   await expect(
     page.getByText("アップロード時の初期判定: OCI Enterprise AI / v1")
   ).toHaveCount(0);
@@ -2331,7 +2331,7 @@ async function mockDocumentWorkspace(
     segmentCount?: number;
     /** 既定の 2 件の後ろに足す chunk の数（一覧の内部スクロールの検証用。#403）。 */
     extraChunkCount?: number;
-    mineruSegment?: boolean;
+    externalSegment?: boolean;
     latestJobStatus?: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
     latestJobPhase?: "PREPROCESS" | "EXTRACT" | "CHUNK" | "INDEX";
     latestJobStartedAt?: string;
@@ -2884,7 +2884,7 @@ async function mockDocumentWorkspace(
         data: options.segmentError
           ? [failedSegment, notStartedSegment]
           : ingestionSegments(options.segmentCount ?? 1, {
-              mineru: options.mineruSegment,
+              externalParser: options.externalSegment,
               progressScenario: options.progressScenario,
             }),
         error_messages: [],
@@ -2958,7 +2958,7 @@ function recipeSteps(
 function ingestionSegments(
   count: number,
   options: {
-    mineru?: boolean;
+    externalParser?: boolean;
     progressScenario?: "pdf17" | "source" | "doclingInline" | "segmentedStale";
   } = {}
 ) {
@@ -3060,15 +3060,15 @@ function ingestionSegments(
     const start = index * 10 + 1;
     const end = start + 9;
     const status = index < 4 ? "SUCCEEDED" : index === 4 ? "RUNNING" : "QUEUED";
-    const mineru = Boolean(options.mineru);
+    const externalParser = Boolean(options.externalParser);
     return {
       segment_id: `doc-1:p${start}-${end}`,
       document_id: "doc-1",
       recipe_id: "recipe-1",
       status,
-      parser_backend: mineru ? "mineru" : index === 0 ? "local_partition" : "enterprise_ai",
-      parser_profile: mineru
-        ? "mineru_adapter"
+      parser_backend: externalParser ? "dots_ocr" : index === 0 ? "local_partition" : "enterprise_ai",
+      parser_profile: externalParser
+        ? "dots_ocr_adapter"
         : index === 0
           ? "local_text_structure"
           : "enterprise_ai_pdf_layout",

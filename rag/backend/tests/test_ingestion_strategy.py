@@ -1148,18 +1148,18 @@ def test_ingestion_selected_external_parser_fallback_stops_ingestion() -> None:
     pipeline._settings = Settings(
         # 項目抽出は対象外(stub の VLM は応答しないため、有効なら取込が止まる。#2481)。
         rag_field_extraction_enabled=False,
-        rag_parser_adapter_backend="mineru",
-        rag_parser_mineru_enabled=True,
+        rag_parser_adapter_backend="dots_ocr",
+        rag_parser_dots_ocr_enabled=True,
     )
     result = ParserRegistryResult(
         extraction=None,
-        parser_backend="mineru",
+        parser_backend="dots_ocr",
         parser_version="service_unavailable",
         fallback_used=True,
-        warnings=("mineru_adapter_failed",),
+        warnings=("dots_ocr_adapter_failed",),
     )
 
-    with pytest.raises(IngestionUserError, match="MinerU"):
+    with pytest.raises(IngestionUserError, match="Dots.OCR"):
         pipeline._raise_if_selected_parser_was_not_used(result)
 
 
