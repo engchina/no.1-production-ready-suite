@@ -57,11 +57,11 @@ from tests.test_answer_scope_after_relaxation import (
     _reference_corpus,
 )
 from tests.test_cross_references import FakeGenAi as ReferenceGenAi
+from tests.test_mcp_profile_scope import SECRET
 from tests.test_section_expansion_answer import SectionMapStub
 from tests.test_security_scope import ScopedViewOracle
 
 client = AsgiTestClient(app)
-SECRET = "rag-mcp-relaxation-test-secret-0123456789ab"  # nosec B105 - テスト用
 VIEWS = {
     "bv-1": SearchAnswerProfileConfig(knowledge_base_ids=["kb-1", "kb-2"]),
     "bv-2": SearchAnswerProfileConfig(knowledge_base_ids=["kb-3"]),
