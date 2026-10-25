@@ -13537,12 +13537,17 @@ def _oracle_conversation_access_predicate_sql(*, alias: str | None = None) -> st
     利用できる検索・回答プロファイルが制限されているときは、その検索・回答プロファイルの会話だけにする（#214）。
     system_admin（`all_users_visible`。#1889）は全員の会話を見て、運用の操作（停止・削除）をする。
     発話の追加・名前の変更・回答の評価は持ち主だけで、route が先に 403 にする（#3244）。
+    利用者の分からない context（文脈が無い・利用者の無い context）は、全員の会話ではなく 0 件に
+    する（fail-closed。`_feedback_owner_scope`・実行履歴と同じ。#3250）。
     """
     predicates = [_oracle_tenant_predicate(alias=alias)]
     context = current_audit_request_context()
-    if context.user_id_hash is not None and not context.all_users_visible:
-        column = f"{alias}.user_id_hash" if alias else "user_id_hash"
-        predicates.append(f"{column} = :conversation_user_id_hash")
+    if not context.all_users_visible:
+        if context.user_id_hash is None:
+            predicates.append("1 = 0")
+        else:
+            column = f"{alias}.user_id_hash" if alias else "user_id_hash"
+            predicates.append(f"{column} = :conversation_user_id_hash")
     predicates.extend(
         _search_answer_profile_scope_predicates(
             f"{alias}.search_answer_profile_id" if alias else "search_answer_profile_id"
@@ -13665,7 +13670,7 @@ def _answer_record_owner_hash() -> str | None:
     """保存済みの回答を絞る持ち主。None は持ち主で絞らない（#304）。
 
     SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者（`answer_records_unrestricted`）は全件。
-    利用者のない context（認証を通らない内部処理・テスト）は会話と同じく絞らない。
+    利用者のない context は、`_answer_record_scope_predicates` が 0 件にする（fail-closed。#3250）。
     持ち主のない行（#304 より前の回答で、持ち主を補えなかったもの）は、絞るときは見せない。
     """
     context = current_audit_request_context()
@@ -13677,8 +13682,12 @@ def _answer_record_owner_hash() -> str | None:
 def _answer_record_scope_predicates() -> list[str]:
     """回答履歴を、利用できる検索・回答プロファイル（#214）と持ち主（#304）の回答へ絞る。"""
     predicates = _search_answer_profile_scope_predicates("search_answer_profile_id")
-    if _answer_record_owner_hash() is not None:
-        predicates.append("user_id_hash = :answer_owner_user_id_hash")
+    context = current_audit_request_context()
+    if not context.answer_records_unrestricted:
+        if context.user_id_hash is None:
+            predicates.append("1 = 0")
+        else:
+            predicates.append("user_id_hash = :answer_owner_user_id_hash")
     return predicates
 
 

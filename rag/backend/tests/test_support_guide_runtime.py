@@ -623,6 +623,7 @@ def test_guide_load_failure_is_recorded_in_answer_diagnostics() -> None:
     assert diagnostics["outcome"] == "answered"
 
 
+@pytest.mark.usefixtures("system_access")
 async def test_resolve_query_context_records_guide_load_failure(monkeypatch: MonkeyPatch) -> None:
     fake = FakeKnowledgeOracle(support_guide_enabled=True)
     monkeypatch.setattr(search_route, "OracleClient", lambda: fake)
@@ -652,6 +653,7 @@ async def test_resolve_query_context_records_guide_load_failure(monkeypatch: Mon
     assert GUIDE_LOAD_FAILED_KEY not in settings.rag_support_guide
 
 
+@pytest.mark.usefixtures("system_access")
 async def test_resolve_query_context_uses_the_draft_only_for_the_preview(
     monkeypatch: MonkeyPatch,
 ) -> None:

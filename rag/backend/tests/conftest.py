@@ -207,6 +207,19 @@ def trace_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeTraceDb]:
 
 
 @pytest.fixture
+def system_access() -> Iterator[None]:
+    """要求の外から route の内部の関数を呼ぶテストを、範囲の制限の無い context で動かす（#3250）。
+
+    文脈の無い呼び出しは何も使えない（`NO_ACCESS_AUDIT_REQUEST_CONTEXT`）ので、範囲と関係の無い
+    処理を確かめるテストだけが明示して使う。
+    """
+    from app.rag.request_context import system_access_context
+
+    with system_access_context():
+        yield
+
+
+@pytest.fixture
 def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """実 Oracle AI Database を使う統合テスト用。未到達なら skip し、作成行を後始末する。
 
@@ -214,8 +227,11 @@ def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     `isolated_local_state` が Oracle 接続設定を初期化した後に実値を再適用するため、
     autouse より後に動く本 fixture で上書きしている。
     """
+    from dataclasses import replace
+
     from app.config import get_settings
     from app.rag.request_context import (
+        NO_ACCESS_AUDIT_REQUEST_CONTEXT,
         audit_request_context_from_headers,
         current_audit_request_context,
         reset_audit_request_context,
@@ -234,15 +250,24 @@ def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     # （テストの既定値を上書きして CI と違う経路を通るため。AI は決定論スタブに差し替える。#483）。
     _oracle_test_db.apply_real_oracle_settings(settings)
     _ai_stubs.patch_ai_clients(monkeypatch)
-    context = audit_request_context_from_headers(
-        TEST_REQUEST_HEADERS,
-        request_id="pytest-oracle-integration",
-        settings=settings,
+    # local の全権限の利用者と同じく、全員の会話・保存済みの回答を扱う（利用者の分からない
+    # context は会話・回答の記録が 0 件になるため、明示する。#3250）。header の dict は大文字の
+    # 名前なので、利用者・tenant の hash は付かない（今までどおり）。
+    context = replace(
+        audit_request_context_from_headers(
+            TEST_REQUEST_HEADERS,
+            request_id="pytest-oracle-integration",
+            settings=settings,
+        ),
+        answer_records_unrestricted=True,
+        all_users_visible=True,
     )
 
     def current_or_default_context() -> AuditRequestContext:
         current = current_audit_request_context()
-        if (
+        # 文脈の無い処理（文脈を引き継がない thread など）は、何も使えない既定の context になる
+        # （#3250）。統合テストでは、その代わりにテストの利用者の context を使う。
+        if current is NO_ACCESS_AUDIT_REQUEST_CONTEXT or (
             current.request_id is None
             and current.tenant_id_hash is None
             and current.user_id_hash is None

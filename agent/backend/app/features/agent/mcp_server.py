@@ -11,8 +11,8 @@
   キーでも他の利用者の会話・Run には 403（`OTHERS_CONTENT_FORBIDDEN`。#3244）。
 - ツール: `agent_list`（使える業務 Agent）・`agent_chat`（質問。`thread_id` で会話を続ける）・
   `agent_get_run`（状態・回答・根拠・回答前の確認）・`agent_answer_confirmation`（回答前の確認に
-  答える / 確認せずに回答）。回答を待つのは `wait_seconds` まで。終わらなければ途中の状態を返し、
-  `agent_get_run` で続きを読む。
+  答える / 確認せずに回答）・`agent_cancel_run`（実行の取消。冪等。#3240）。回答を待つのは
+  `wait_seconds` まで。終わらなければ途中の状態を返し、`agent_get_run` で続きを読む。
 - MCP から作った Run は無人の実行と同じく、承認の要るツールを呼ばない（#1813 と同じ扱い。
   `runtime.is_mcp_run`）。承認する人が画面にいるとは限らないため。
 - キーごとに直近 24 時間に作れる Run の数（`PLATFORM_API_KEY_RUNS_PER_DAY`）。超えたら 429 相当の
@@ -58,6 +58,7 @@ from app.features.agent.confirmation import (
 from app.features.agent.run_facts import run_answer_outcome
 from app.features.agent.runtime import (
     AGENT_UNPUBLISHED_MESSAGE,
+    CANCEL_VIA_KEY,
     MCP_API_KEY_ID_KEY,
     MCP_API_KEY_NAME_KEY,
     MCP_APPROVAL_SKIPPED_CODE,
@@ -99,6 +100,7 @@ RUN_OUTPUT_SCHEMA_VERSION = 3
 # agent_list・agent_skill_export の出力の形の版（3 製品の MCP の出力に版を持たせる。#3240）。
 LIST_OUTPUT_SCHEMA_VERSION = 1
 SKILL_EXPORT_SCHEMA_VERSION = 1
+CANCEL_OUTPUT_SCHEMA_VERSION = 1
 _SOURCE_EXCERPT_CHARS = 400
 _MAX_SOURCES = 10
 
@@ -195,6 +197,28 @@ class AgentGetRunInput(BaseModel):
         le=MAX_WAIT_SECONDS,
         description="まだ終わっていなければ、終わるまで待つ秒数（0 は今の状態をすぐ返す）。",
     )
+
+
+class AgentCancelRunInput(BaseModel):
+    run_id: str = Field(min_length=1, max_length=200, description="agent_chat の run_id")
+
+
+CancelResult = Literal["cancelled", "already_cancelled", "already_finished"]
+
+
+class CancelRunOutput(BaseModel):
+    schema_version: int = Field(
+        default=CANCEL_OUTPUT_SCHEMA_VERSION, description="出力の形の版（変わったら上がる）。"
+    )
+    run_id: str
+    status: str = Field(description="取消の後の Run の状態。")
+    result: CancelResult = Field(
+        description=(
+            "cancelled=取り消した / already_cancelled=すでに取り消されていた / "
+            "already_finished=終わっていたため変えていない（status が completed / failed）。"
+        )
+    )
+    message: str
 
 
 class SkillExportInput(BaseModel):
@@ -705,7 +729,10 @@ def run_output(
             "agent_get_run で後から読めます。"
         )
     else:
-        message = "実行しています。agent_get_run（wait_seconds）で続きを読んでください。"
+        message = (
+            "実行しています。agent_get_run（wait_seconds）で続きを読んでください。"
+            "止めるときは agent_cancel_run を使います。"
+        )
     passage_marks, removed_passages, warnings = _review(run)
     return RunOutput(
         run_id=run.id,
@@ -731,6 +758,31 @@ def run_output(
             else None
         ),
     )
+
+
+_CANCEL_MESSAGES: dict[str, str] = {
+    "cancelled": "実行を取り消しました。",
+    "already_cancelled": "実行はすでに取り消されています。",
+    "already_finished": (
+        "実行はすでに終わっているため、取り消していません。agent_get_run で結果を読めます。"
+    ),
+}
+
+
+def _cancel_via(request: Request) -> dict[str, str]:
+    """取消のイベントに残す入口（MCP とキーの ID。#3240）。"""
+    record = getattr(request.state, "api_key", None)
+    via = {CANCEL_VIA_KEY: MCP_RUN_SOURCE}
+    if record is not None:
+        via[MCP_API_KEY_ID_KEY] = str(record.key_id)
+    return via
+
+
+def _cancel_result(before: RunStatus, after: RunState) -> CancelResult:
+    if before == RunStatus.CANCELLED:
+        return "already_cancelled"
+    # 呼ぶ前に終わっていた、または取消と完了が重なり完了が先に決まった（#911）。
+    return "cancelled" if after.status == RunStatus.CANCELLED else "already_finished"
 
 
 def called_with_api_key(request: Request) -> bool:
@@ -890,6 +942,34 @@ def build_agent_mcp_server(request: Request) -> McpServer:
             include_notice=called_with_api_key(request),
         )
 
+    def cancel_run(arguments: AgentCancelRunInput) -> CancelRunOutput:
+        """Run を取り消す（画面の `POST /runs/{id}/cancel` と同じ人。冪等。#3240）。
+
+        止められるのは Run を見て運用の操作をしてよい人（実行した利用者・会話の持ち主・
+        system_admin。#3244）と、キーの業務 Agent の範囲。終わった Run はエラーにせず `result` で
+        返す（画面の REST の 409 は変えない）。取消は Run を作らないので、キーの Run の数の上限
+        （`PLATFORM_API_KEY_RUNS_PER_DAY`）に数えない。
+        """
+        caller = _principal(request)
+        run = _readable_run(request, arguments.run_id)
+        before = run.status
+        if before not in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}:
+            try:
+                run = runtime_repository.cancel_run(
+                    run.id, cancelled_by=caller.login_user_id, via=_cancel_via(request)
+                )
+            except KeyError as exc:
+                raise McpToolError(
+                    RUN_NOT_FOUND_CODE, "Run が見つかりません。", status=404
+                ) from exc
+        result = _cancel_result(before, run)
+        return CancelRunOutput(
+            run_id=run.id,
+            status=str(run.status.value),
+            result=result,
+            message=_CANCEL_MESSAGES[result],
+        )
+
     def skill_export(arguments: SkillExportInput) -> SkillExportOutput:
         _principal(request)
         # 使える業務 Agent（キーの範囲を含む）の公開中の版が使うスキルだけを出す。
@@ -976,6 +1056,22 @@ def build_agent_mcp_server(request: Request) -> McpServer:
                 permissions=(_OPERATE,),
                 read_only=False,
                 output_model=RunOutput,
+            ),
+            McpTool(
+                name="agent_cancel_run",
+                title="実行の取り消し",
+                description=(
+                    "agent_chat の run_id の実行を止める（回答前の確認の待ちも閉じる）。"
+                    "利用者が止めると言ったとき、回答を待たないと決めたときに使う。"
+                ),
+                input_model=AgentCancelRunInput,
+                handler=cancel_run,
+                permissions=(_OPERATE,),
+                read_only=False,
+                destructive=True,
+                idempotent=True,
+                open_world=False,
+                output_model=CancelRunOutput,
             ),
             McpTool(
                 name="agent_skill_export",

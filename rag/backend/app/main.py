@@ -37,6 +37,7 @@ from app.rag.request_context import (
     audit_request_context_from_headers,
     reset_audit_request_context,
     set_audit_request_context,
+    without_access_scope,
 )
 from app.rag.trace_store import start_trace_span_writer, stop_trace_span_writer
 from app.rag.vector_index_adapter import resolve_vector_index_adapter
@@ -195,7 +196,8 @@ def create_app() -> FastAPI:
         認証と認可は `/api` の router の dependency（`app.security.dependencies`）が行い、
         認可を通った利用者から監査 / 対象範囲の context を作り直す（#214）。ここでは
         dependency を通らない応答（公開 path・404 など）のための初期値だけを作る。
-        production では client の `X-User-ID` と対象範囲の header を使わない。
+        production では client の `X-User-ID` と対象範囲の header を使わず、初期値の対象範囲は
+        すべて空の集合（拒否全件）にする（利用者の分からない要求は何も読めない。fail-closed。#3250）。
         """
         # 外側の共通 ASGI middleware が body 完了まで HTTP 相関とメトリクスを持つ。
         request_id = _response_request_id(request)
@@ -207,6 +209,8 @@ def create_app() -> FastAPI:
             allow_user_header=local_mode,
             trust_scope_headers=local_mode,
         )
+        if not local_mode:
+            context = without_access_scope(context)
         context_token = set_audit_request_context(context)
         try:
             return await call_next(request)

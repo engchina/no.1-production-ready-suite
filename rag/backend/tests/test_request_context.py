@@ -1,13 +1,22 @@
 """監査用リクエストコンテキストのテスト。"""
 
-from app.config import Settings
+import pytest
+
+from app.config import Settings, get_settings
+from app.main import create_app
 from app.rag.request_context import (
+    NO_ACCESS_AUDIT_REQUEST_CONTEXT,
     AuditRequestContext,
     audit_request_context_from_headers,
     current_audit_request_context,
     reset_audit_request_context,
     set_audit_request_context,
+    system_access_context,
+    unrestricted_access_scope,
+    with_system_access,
+    without_access_scope,
 )
+from tests.support import AsgiTestClient
 
 
 def test_audit_request_context_hashes_tenant_and_user_headers() -> None:
@@ -172,8 +181,8 @@ def test_audit_context_empty_access_scope_header_means_deny_all_scope() -> None:
 
 
 def test_audit_request_context_is_scoped_to_current_context() -> None:
-    """contextvars の設定・復元ができる。"""
-    assert current_audit_request_context() == AuditRequestContext()
+    """contextvars の設定・復元ができる。文脈が無ければ何も使えない context（#3250）。"""
+    assert current_audit_request_context() is NO_ACCESS_AUDIT_REQUEST_CONTEXT
 
     token = set_audit_request_context(
         AuditRequestContext(
@@ -190,7 +199,101 @@ def test_audit_request_context_is_scoped_to_current_context() -> None:
     finally:
         reset_audit_request_context(token)
 
-    assert current_audit_request_context() == AuditRequestContext()
+    assert current_audit_request_context() is NO_ACCESS_AUDIT_REQUEST_CONTEXT
+
+
+def test_missing_context_denies_every_access_scope() -> None:
+    """文脈の無い処理の範囲は、制限なし（None）ではなく空の集合（拒否全件）。利用者も無い（#3250）。"""
+    context = current_audit_request_context()
+    assert context.allowed_document_ids == frozenset()
+    assert context.allowed_category_names == frozenset()
+    assert context.allowed_knowledge_base_ids == frozenset()
+    assert context.allowed_search_answer_profile_ids == frozenset()
+    assert context.user_id_hash is None
+    assert not context.all_users_visible
+    assert not context.answer_records_unrestricted
+    assert not context.feedback_all_users
+    # 範囲の制限を一時的に外す処理（既定データの確認）も、文脈の無いところでは外した範囲だけ。
+    with unrestricted_access_scope():
+        widened = current_audit_request_context()
+        assert widened.allowed_search_answer_profile_ids is None
+        assert widened.allowed_knowledge_base_ids is None
+        assert widened.allowed_document_ids == frozenset()
+    assert current_audit_request_context() is NO_ACCESS_AUDIT_REQUEST_CONTEXT
+
+
+def test_system_access_is_explicit_and_restored() -> None:
+    """範囲の制限の無い context は、信頼した処理の入口が明示したときだけ（#3250）。"""
+    with system_access_context():
+        context = current_audit_request_context()
+        assert context == AuditRequestContext()
+        assert context.allowed_document_ids is None
+        assert context.allowed_knowledge_base_ids is None
+        assert context.allowed_search_answer_profile_ids is None
+        # 利用者は分からないので、利用者の物（会話など）は全員の分を見る権限を持たない。
+        assert context.user_id_hash is None
+        assert not context.all_users_visible
+    assert current_audit_request_context() is NO_ACCESS_AUDIT_REQUEST_CONTEXT
+
+    seen: list[AuditRequestContext] = []
+
+    @with_system_access
+    def main(value: int) -> int:
+        seen.append(current_audit_request_context())
+        return value + 1
+
+    assert main(1) == 2
+    assert seen == [AuditRequestContext()]
+    assert current_audit_request_context() is NO_ACCESS_AUDIT_REQUEST_CONTEXT
+
+
+@pytest.mark.parametrize("auth_mode", ["production", "local"])
+def test_request_without_a_principal_starts_with_no_access(
+    monkeypatch: pytest.MonkeyPatch, auth_mode: str
+) -> None:
+    """認証の dependency を通らない要求（公開 path・404 など）の初期の context（#3250）。
+
+    production は利用者が分からないので範囲をすべて空の集合（拒否全件）にし、client の
+    `x-rag-allowed-*` も使わない。local は全権限のローカル利用者なので header のとおり（無ければ
+    制限なし）。
+    """
+    monkeypatch.setattr(get_settings(), "auth_mode", auth_mode)
+    probe_app = create_app()
+    seen: list[AuditRequestContext] = []
+
+    @probe_app.get("/probe-audit-context")
+    async def probe() -> dict[str, str]:
+        seen.append(current_audit_request_context())
+        return {}
+
+    response = AsgiTestClient(probe_app).get(
+        "/probe-audit-context", headers={"x-rag-allowed-knowledge-base-ids": "kb-a"}
+    )
+
+    assert response.status_code == 200
+    [context] = seen
+    assert context.request_id
+    if auth_mode == "production":
+        assert context.user_id_hash is None
+        assert context.allowed_document_ids == frozenset()
+        assert context.allowed_category_names == frozenset()
+        assert context.allowed_knowledge_base_ids == frozenset()
+        assert context.allowed_search_answer_profile_ids == frozenset()
+    else:
+        assert context.allowed_document_ids is None
+        assert context.allowed_knowledge_base_ids == frozenset({"kb-a"})
+
+
+def test_without_access_scope_keeps_audit_fields_and_denies_scopes() -> None:
+    context = without_access_scope(
+        AuditRequestContext(request_id="request-1", user_id_hash="b" * 64)
+    )
+    assert context.request_id == "request-1"
+    assert context.user_id_hash == "b" * 64
+    assert context.allowed_document_ids == frozenset()
+    assert context.allowed_category_names == frozenset()
+    assert context.allowed_knowledge_base_ids == frozenset()
+    assert context.allowed_search_answer_profile_ids == frozenset()
 
 
 def test_production_context_ignores_tenant_header() -> None:

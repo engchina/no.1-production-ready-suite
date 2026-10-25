@@ -28,6 +28,7 @@ import type {
   RunVerification,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { searchPrefillHref } from "@/components/search/search-prefill";
 
 export interface BadgeView {
   variant: StatusVariant;
@@ -147,6 +148,29 @@ export function runConversationOwner(
  * 開始日時（ISO 8601）。記録の時刻（`created_at`）は実行が終わったときなので、所要時間を引いて開始にする。
  * 所要時間の記録が無ければ記録の時刻のまま。
  */
+/**
+ * 実行の詳細の「RAG 検索で開く」の URL（#3309。run-history.md「詳細」）。RAG 検索の実行を、質問・検索・回答
+ * プロファイル・回答の生成の有無・記録の条件（件数・絞り込み）を入れて RAG 検索の画面に開く（検索はしない）。
+ * 出すのは実行した本人で、RAG 検索の画面の権限があるときだけ（system_admin でも他の人の実行には出さない。#3244）。
+ * 質問を保存していない実行（安全チェックで止めた実行）は入れる質問が無いので null。
+ */
+export function runSearchHref(
+  run: Pick<
+    RunDetail,
+    "surface" | "executed_by_me" | "question" | "search_answer_profile_id" | "answer_generated" | "search_conditions"
+  >,
+  { canOpenSearch }: { canOpenSearch: boolean }
+): string | null {
+  if (!canOpenSearch || run.surface !== "search" || run.executed_by_me !== true || !run.question) return null;
+  return searchPrefillHref({
+    question: run.question,
+    searchAnswerProfileId: run.search_answer_profile_id,
+    generateAnswer: run.answer_generated,
+    topK: run.search_conditions?.top_k ?? null,
+    filters: run.search_conditions?.filters ?? {},
+  });
+}
+
 export function runStartedAt(run: Pick<RunSummary, "created_at" | "elapsed_ms">): string {
   const finished = Date.parse(run.created_at);
   if (run.elapsed_ms == null || !Number.isFinite(run.elapsed_ms) || Number.isNaN(finished)) return run.created_at;

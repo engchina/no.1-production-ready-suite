@@ -603,6 +603,10 @@ MCP_API_KEY_NAME_KEY = "api_key_name"
 RUN_ORIGIN_METADATA_KEYS = (RUN_SOURCE_KEY, MCP_API_KEY_ID_KEY, MCP_API_KEY_NAME_KEY)
 # MCP の Run で、承認が要るため使わなかったツールの step の error_code（#1874）。
 MCP_APPROVAL_SKIPPED_CODE = "mcp.approval_required"
+# 取消のイベント（`run.cancelled`）に残す入口の項目（MCP の `agent_cancel_run` は via=mcp と
+# キーの ID。#3240）。
+CANCEL_VIA_KEY = "via"
+_CANCEL_VIA_KEYS = frozenset({CANCEL_VIA_KEY, MCP_API_KEY_ID_KEY})
 
 
 def is_mcp_run(metadata: Mapping[str, Any]) -> bool:
@@ -1415,7 +1419,13 @@ class AgentRuntimeRepositoryContract(Protocol):
         follow: bool = False,
         idle_timeout_seconds: float = 15.0,
     ) -> Iterator[RunEvent | None]: ...
-    def cancel_run(self, run_id: str, *, cancelled_by: str | None = None) -> RunState: ...
+    def cancel_run(
+        self,
+        run_id: str,
+        *,
+        cancelled_by: str | None = None,
+        via: Mapping[str, str] | None = None,
+    ) -> RunState: ...
     def decide_approval(
         self,
         approval_id: str,
@@ -1956,8 +1966,18 @@ class AgentRuntimeRepository:
                         continue
             yield event
 
-    def cancel_run(self, run_id: str, *, cancelled_by: str | None = None) -> RunState:
-        """終わっていない Run を取り消す。`cancelled_by` は操作した利用者のログイン ID（#1928）。"""
+    def cancel_run(
+        self,
+        run_id: str,
+        *,
+        cancelled_by: str | None = None,
+        via: Mapping[str, str] | None = None,
+    ) -> RunState:
+        """終わっていない Run を取り消す。`cancelled_by` は操作した利用者のログイン ID（#1928）。
+
+        `via` は取消の入口（外部の MCP の `agent_cancel_run` は `{"via": "mcp", "api_key_id": …}`。
+        #3240）。イベントに残し、画面の取消は付けない。
+        """
         with self._lock:
             run = self._require_run(run_id)
             if _is_terminal(run.status):
@@ -1965,16 +1985,22 @@ class AgentRuntimeRepository:
                 # 送った、品質評価の取消と完了が重なった、などで来ても、完了の結果を
                 # 取消済みで上書きしない（#911）。
                 return run.model_copy(deep=True)
-            self._cancel_run_locked(run, cancelled_by=cancelled_by)
+            self._cancel_run_locked(run, cancelled_by=cancelled_by, via=via)
             self._persist_locked()
             self._record_fact_locked(run)
             return run.model_copy(deep=True)
 
-    def _cancel_run_locked(self, run: RunState, *, cancelled_by: str | None = None) -> None:
+    def _cancel_run_locked(
+        self,
+        run: RunState,
+        *,
+        cancelled_by: str | None = None,
+        via: Mapping[str, str] | None = None,
+    ) -> None:
         """終わっていない Run を取り消す（承認・回答前の確認の待ちも取り消す）。
 
         利用者の操作の取消は、操作した人（`cancelled_by`。Run の利用者と異なることがある。
-        system_admin の操作。#1928）をイベントに残す。
+        system_admin の操作。#1928）と入口（`via`。MCP とキーの ID。#3240）をイベントに残す。
 
         取消の後は新しいツールを始めない（`start_builtin_tool_step`。#2609）。取消の時点で既に
         呼び先へ送っていた（実行中の）step は `in_flight_step_ids` に残し、未開始の step と
@@ -2013,6 +2039,7 @@ class AgentRuntimeRepository:
                 "cancelled_approval_ids": cancelled_approval_ids,
                 **({"in_flight_step_ids": in_flight_step_ids} if in_flight_step_ids else {}),
                 **({"cancelled_by": cancelled_by} if cancelled_by else {}),
+                **{key: value for key, value in (via or {}).items() if key in _CANCEL_VIA_KEYS},
             },
         )
         call_abort.abort_run_calls(run.id, call_abort.REASON_RUN_CANCELLED)
@@ -2813,9 +2840,16 @@ class AgentRuntimeRepository:
             ),
             None,
         )
-        cancelled_by = cancelled.payload.get("cancelled_by") if cancelled is not None else None
+        payload = cancelled.payload if cancelled is not None else {}
+        cancelled_by = payload.get("cancelled_by")
         self._cancel_run_locked(
-            run, cancelled_by=cancelled_by if isinstance(cancelled_by, str) else None
+            run,
+            cancelled_by=cancelled_by if isinstance(cancelled_by, str) else None,
+            via={
+                key: value
+                for key, value in payload.items()
+                if key in _CANCEL_VIA_KEYS and isinstance(value, str)
+            },
         )
         self._mark_run_changed(run)
         logger.info(

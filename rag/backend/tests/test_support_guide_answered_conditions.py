@@ -142,6 +142,7 @@ async def test_model_failure_and_known_options_do_not_change_the_match(
     assert not calls
 
 
+@pytest.mark.usefixtures("system_access")
 async def test_search_uses_the_chosen_option_for_the_branch(monkeypatch: MonkeyPatch) -> None:
     stub(monkeypatch)
     monkeypatch.setattr(search_route, "OracleClient", lambda: _ProfileOracle())

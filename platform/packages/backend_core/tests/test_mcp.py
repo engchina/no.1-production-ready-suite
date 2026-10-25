@@ -163,6 +163,36 @@ def test_tools_list_shows_only_permitted_tools_with_schema() -> None:
     # グループはすべて満たす必要がある（a と b）。
     assert len(_rpc(_client({"a"}), "tools/list")["result"]["tools"]) == 0
     assert len(_rpc(_client({"a", "b"}), "tools/list")["result"]["tools"]) == 1
+    # 指定の無いツールは readOnlyHint だけ（destructive / idempotent / openWorld は出さない）。
+    assert shout["annotations"] == {"readOnlyHint": False}
+
+
+def test_tool_annotations_show_only_the_given_hints() -> None:
+    """`destructive` / `idempotent` / `open_world` は指定したツールだけ出す（#3240）。"""
+    cancel = McpTool(
+        name="cancel",
+        description="止める",
+        input_model=_EchoInput,
+        handler=_echo,
+        read_only=False,
+        destructive=True,
+        idempotent=True,
+        open_world=False,
+    )
+    assert cancel.descriptor()["annotations"] == {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+    partial = McpTool(
+        name="p", description="d", input_model=_EchoInput, handler=_echo, idempotent=False
+    )
+    assert partial.descriptor()["annotations"] == {"readOnlyHint": True, "idempotentHint": False}
+    # 切断での取消（#2691）は read_only だけで決める（注釈を足しても変わらない）。
+    server = McpServer(name="s", version="1", tools=[cancel])
+    message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "cancel"}}
+    assert server.cancellable_tool(message) is None
 
 
 def test_unlisted_tool_is_hidden_from_list_but_callable_with_the_same_permissions() -> None:

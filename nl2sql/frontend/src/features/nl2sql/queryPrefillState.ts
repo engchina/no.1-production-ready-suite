@@ -21,10 +21,19 @@ export function prefillFromSearchParams(params: URLSearchParams): QueryPrefill {
   };
 }
 
-export function historyRerunUrl(item: HistoryItem, basePath = "/query"): string {
+/**
+ * SQL 生成の画面を、実行の質問・業務プロファイル・生成の方式を入れて開く URL（実行の詳細の「SQL 生成で開く」。
+ * #3309）。画面は値を一度だけ入れて URL から外し、SQL の生成と実行は利用者が押す。質問は書き換えない。
+ * 画面で選べない方式は入れない（画面の業務プロファイルの既定に任せる）。
+ */
+export function querySqlGenerationUrl(
+  item: Pick<HistoryItem, "question" | "engine" | "profile_id">,
+  basePath = "/query"
+): string {
   const params = new URLSearchParams();
   params.set("question", item.question);
-  params.set("engine", item.engine);
+  const engine = parseNl2SqlEngine(item.engine);
+  if (engine) params.set("engine", engine);
   if (item.profile_id) params.set("profile_id", item.profile_id);
   return `${basePath}?${params.toString()}`;
 }

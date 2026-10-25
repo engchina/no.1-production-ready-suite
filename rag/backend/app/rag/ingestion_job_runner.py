@@ -15,6 +15,7 @@ from app.clients.oracle import close_oracle_pool
 from app.config import get_settings
 from app.logging_config import configure_logging
 from app.rag.ingestion_slots import fd_heavy_slot_release, heavy_slot_releaser
+from app.rag.request_context import system_access_context
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,11 @@ async def _run(
     # SIGTERM / SIGINT で job の実行(coroutine)を取り消し、finally の後始末(DB pool の close)を
     # 通してから終了する。既定の SIGTERM は後始末なしで即座に終了する。job の状態は書かない:
     # 親の worker が、停止のときは自分の lease の job を QUEUED に戻し、それ以外は失敗にする(#357)。
-    with bind_log_context(job_id=job_id, worker_id=lease_owner or "ingestion-child"):
+    # 取込は利用者の要求の外の処理なので、範囲の制限の無い context で動かす(#3250)。
+    with (
+        bind_log_context(job_id=job_id, worker_id=lease_owner or "ingestion-child"),
+        system_access_context(),
+    ):
         task = asyncio.current_task()
         if task is not None:
             loop = asyncio.get_running_loop()

@@ -129,6 +129,10 @@ class McpTool:
     - `listed`: False のツールは `tools/list` に出さない（`tools/call` では呼べ、権限は同じに
       確かめる）。製品間の画面の操作だけが名前で呼ぶ内部のツール（Agent の画面が保存した根拠を
       出し直すときの確かめなど。#3252）に使い、モデルと外部の MCP クライアントに見せない。
+    - `destructive` / `idempotent` / `open_world`: 指定したツールだけ `annotations` に
+      `destructiveHint` / `idempotentHint` / `openWorldHint` を出す（MCP 2025-06-18 の tool
+      annotations。書き込みのツールの性質を呼び出し側に示す。#3240）。None（既定）は出さない。
+      `read_only` の扱い（切断での取消・再試行。#2691・#854）は変えない。
     """
 
     name: str
@@ -140,9 +144,23 @@ class McpTool:
     output_model: type[BaseModel] | None = None
     title: str | None = None
     listed: bool = True
+    destructive: bool | None = None
+    idempotent: bool | None = None
+    open_world: bool | None = None
 
     def allowed(self, has_any_permission: HasAnyPermission) -> bool:
         return all(has_any_permission(group) for group in self.permissions)
+
+    def annotations(self) -> dict[str, bool]:
+        annotations = {"readOnlyHint": self.read_only}
+        for key, value in (
+            ("destructiveHint", self.destructive),
+            ("idempotentHint", self.idempotent),
+            ("openWorldHint", self.open_world),
+        ):
+            if value is not None:
+                annotations[key] = value
+        return annotations
 
     def descriptor(self) -> dict[str, Any]:
         descriptor: dict[str, Any] = {"name": self.name}
@@ -151,7 +169,7 @@ class McpTool:
         descriptor |= {
             "description": self.description,
             "inputSchema": self.input_model.model_json_schema(),
-            "annotations": {"readOnlyHint": self.read_only},
+            "annotations": self.annotations(),
         }
         if self.output_model is not None:
             descriptor["outputSchema"] = self.output_model.model_json_schema(mode="serialization")

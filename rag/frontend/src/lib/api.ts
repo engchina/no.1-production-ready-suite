@@ -4804,6 +4804,14 @@ export interface RunDetail extends RunSummary {
   withheld_evidence_count?: number;
   answer_diagnostics: Record<string, JsonValue> | null;
   feedback: RunFeedback[];
+  /** RAG 検索の実行の件数と画面の絞り込み（「RAG 検索で開く」が画面に戻す。#3309）。チャット・古い記録は null。 */
+  search_conditions?: RunSearchConditions | null;
+}
+
+/** RAG 検索の実行の条件（#3309）。`filters` は画面が送れる絞り込み（分類・基準日・抽出項目の値）だけ。 */
+export interface RunSearchConditions {
+  top_k: number | null;
+  filters: Record<string, string>;
 }
 
 /**

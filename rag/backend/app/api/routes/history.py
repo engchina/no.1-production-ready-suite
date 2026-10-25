@@ -23,7 +23,13 @@ from app.rag.request_context import current_audit_request_context
 from app.rag.saved_evidence import withhold_saved_answer
 from app.rag.trace_store import TraceSnapshot, run_trace_snapshot
 from app.schemas.common import ApiResponse, Page
-from app.schemas.history import RunDetail, RunStatus, RunSummary, RunSurface
+from app.schemas.history import (
+    RunDetail,
+    RunSearchConditions,
+    RunStatus,
+    RunSummary,
+    RunSurface,
+)
 from app.schemas.search import RetrievedChunk
 from app.security.user_names import display_names_by_user_hash, user_display_names
 
@@ -112,6 +118,9 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
             item for item in stages.get("storage_failures") or [] if isinstance(item, dict)
         ],
         "citations": _citations(row.get("citations_json")),
+        "search_conditions": (
+            _search_conditions(stages.get("conditions")) if row.get("surface") == "search" else None
+        ),
     }
     if detail["answer_generated"]:
         # 回答・引用・診断は回答の記録が正本（保持期間で消えていれば出さない）。
@@ -160,6 +169,25 @@ async def _conversation_owner_fields(row: dict[str, Any]) -> dict[str, Any]:
         "conversation_owner_display_name": names.get(str(owner_hash), ""),
         "owned_by_me": caller is not None and caller == owner_hash,
     }
+
+
+def _search_conditions(value: object) -> RunSearchConditions | None:
+    """記録の RAG 検索の条件（#3309）。
+
+    無い・壊れた記録は None（画面は質問とプロファイルだけを戻す）。
+    """
+    if not isinstance(value, dict):
+        return None
+    top_k = value.get("top_k")
+    filters = value.get("filters")
+    return RunSearchConditions(
+        top_k=top_k if isinstance(top_k, int) and not isinstance(top_k, bool) else None,
+        filters={
+            str(key): item
+            for key, item in (filters.items() if isinstance(filters, dict) else ())
+            if isinstance(item, str) and item
+        },
+    )
 
 
 def _text_or_none(value: object) -> str | None:

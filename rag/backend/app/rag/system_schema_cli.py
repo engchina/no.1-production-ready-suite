@@ -20,6 +20,7 @@ from pr_system_settings.system_schema import (
     operation_failure_fields,
 )
 
+from app.rag.request_context import with_system_access
 from app.rag.system_schema import (
     DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
     RECREATE_CONFIRMATION,
@@ -80,6 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+@with_system_access
 def main(argv: Sequence[str] | None = None) -> int:
     configure_cli_logging("rag")
     # DB の停止中・届かないときに、Wallet の別名の TNS の再試行（retry_count=20）で 1〜2 分待たずに

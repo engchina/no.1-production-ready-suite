@@ -36,6 +36,7 @@ from app.clients.oracle import (
 from app.clients.oracle_bulk_ingestion_store import OracleBulkIngestionStore
 from app.config import Settings, get_settings
 from app.rag.bulk_ingestion import accept_bulk_ingestion
+from app.rag.request_context import with_system_access
 from app.schemas.document import DocumentProcessingConfig, IngestionJob
 
 _IN_CHUNK = 500
@@ -168,6 +169,7 @@ async def _main(count: int, keep: bool) -> int:
             print(f"cleanup elapsed={time.perf_counter() - started:.1f}s")
 
 
+@with_system_access
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--count", type=int, default=10_000)

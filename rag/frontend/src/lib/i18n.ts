@@ -4993,6 +4993,8 @@ export const ja = {
   "history.detail.errorStage": "止まった段",
   "history.detail.openChat": "会話を開く",
   "history.detail.openChatLabel": "この実行の会話をチャットで開く",
+  "history.detail.openSearch": "RAG 検索で開く",
+  "history.detail.openSearchLabel": "この実行の質問と条件を RAG 検索の画面に入れて開く",
   "history.result.answer": "回答",
   "history.result.answerMissing": "回答の記録は保存期間を過ぎて削除されたか、読み込めませんでした。",
   "history.result.blocked": "質問が安全チェックで止められたため、検索・回答はしていません。",
