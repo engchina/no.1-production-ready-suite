@@ -3971,7 +3971,7 @@ NL2SQL のチャット・DB 管理チャットと、Agent のチャット・実�
 | 部品・関数 | `lang` の渡し方 | 付ける要素 |
 |---|---|---|
 | `AnswerSections` | `lang?`（無ければ段落・項目の `passageText` / 文字列の `content` から判定）。段落・項目の `lang?`（`null` は製品の決まった文言。#3349） | 段落・項目の文・表やコードの塊・引用だけ。節の見出しは見出しの文字から判定。入れ物・根拠の行・ボタン・段落の印・`extra` には付けない（#3349） |
-| `AnswerPlainText`（新規） | `lang?`（無ければ `text` から） | 節に分けない回答（生成中・書式に合わない本文）の本文だけ（`children` のカーソルは外。#3349） |
+| `AnswerPlainText`（新規） | `lang?`（無ければ `text` から） | 節に分けない回答（生成中・書式に合わない本文）の `p`。`children`（カーソル）を後ろに置くときは本文だけを包み、`children` は外（#3349） |
 | `MarkdownText` | `lang?` | 外側の `div`（リンクの読み上げの補足は `uiTextLang()`） |
 | `ExcerptContent` | `lang?` | 段落・表の題・セル（表の読み上げの名前 `tableLabel` は外。#3349） |
 | `EvidenceCard` などの根拠の一覧 | `EvidenceListItem.lang?` | 抜粋（`citation-text`） |
