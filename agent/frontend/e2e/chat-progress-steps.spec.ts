@@ -51,17 +51,24 @@ test.describe("Agent の処理の経過の定義（desktop）", () => {
     );
   });
 
-  test("表示名の無い処理は内部名を出さず、ツールの中の MCP の呼び出しは入れ子にする", () => {
+  test("表示名の無い処理は内部名を出さず、ツールの中の MCP の呼び出しは tools/call だけを入れ子にする", () => {
+    // 1 回のツールの呼び出しは initialize・通知・tools/call の 3 つの MCP の要求になる。手続きの要求は行にしない（#3272）。
+    const mcp = (method: string, tool?: string) => ({
+      parent: "tool:rag__rag_search",
+      attributes: { "mcp.method.name": method, ...(tool ? { "gen_ai.tool.name": tool } : {}) },
+    });
     const log = newLog()
       .step("chat-1", "done", { kind: "plan" })
       .step("tool:rag__rag_search", "running")
-      .step("mcp-1", "done", { parent: "tool:rag__rag_search" })
+      .step("mcp-init", "done", mcp("initialize"))
+      .step("mcp-notify", "done", mcp("notifications/initialized"))
+      .step("mcp-1", "done", mcp("tools/call", "rag_search"))
       .step("tool:rag__rag_search", "done")
       .step("chat-2", "running");
     const items = steps(log);
     expect(summary(items)).toEqual(["chat-1:done", "tool:rag__rag_search:done", "mcp-1:done", "chat-2:running"]);
     expect(items[1].label).toBe("処理を実行しました");
-    expect(items[2]).toMatchObject({ label: "MCP の呼び出し", level: 1 });
+    expect(items[2]).toMatchObject({ label: "MCP の呼び出し · rag_search", level: 1 });
     expect(items[3].label).toBe(`モデルの呼び出し · ${SYNTHETIC_MODEL}`);
   });
 

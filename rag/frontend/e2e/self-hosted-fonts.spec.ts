@@ -3,13 +3,17 @@ import { expect, test, type Page } from "./fixtures/test";
 import { mockDatabaseReady } from "./_helpers";
 import {
   CJK_FALLBACK_SAMPLES,
+  DEFERRED_CJK_FAMILIES,
   FONT_MONO_FAMILY,
   FONT_SANS_PREFIX,
+  firstRenderFontFaces,
+  initialStylesheetFontFaces,
   loadCjkFallbackFonts,
+  recordFirstRenderFontFaces,
   renderedCjkFallbackFonts,
 } from "../../../platform/packages/ui/e2e/font-checks";
 
-/** Noto Sans JP と同じ太さ（src/fonts.css）。 */
+/** Noto Sans JP と同じ太さ（src/fonts.css・src/fonts-cjk.css）。 */
 const WEIGHTS = [400, 500, 700] as const;
 
 /** 等幅書体（--font-mono）が Google Sans Code で、code / .font-mono に効くことを確かめる。 */
@@ -107,13 +111,26 @@ test.describe("自前ホストフォント", () => {
   });
 
   // Noto Sans JP に無い字だけを、自前ホストの Noto Sans SC → TC → HK で補う（#3292）。字は合成の例。
-  test("JP に無い簡体字・繁体字・香港の字を Noto Sans SC・TC・HK で補う", async ({ page }) => {
+  // SC・TC・HK の @font-face は主の CSS に入れず、最初の描画の後に別の CSS の chunk で読む（#3305）。
+  // 端末の幅によらず同じ読み方であることを 375px でも確かめる。
+  test("JP に無い簡体字・繁体字・香港の字を、最初の描画の後に読む Noto Sans SC・TC・HK で補う", { tag: "@responsive" }, async ({ page }) => {
     const external: string[] = [];
     page.on("request", (request) => {
       if (/fonts\.(googleapis|gstatic)\.com|fonts\.bunny\.net/u.test(request.url())) external.push(request.url());
     });
     await mockDatabaseReady(page);
+    await recordFirstRenderFontFaces(page);
     await page.goto("/");
+    // 最初の描画の時点の CSS（dev の <style> を含む）と、index.html が読む CSS（build の成果物）に SC・TC・HK は無い。
+    const firstRender = await firstRenderFontFaces(page);
+    expect(firstRender.families).toContain("Noto Sans JP");
+    const initial = await initialStylesheetFontFaces(page);
+    // dev サーバの index.html は CSS の <link> を持たない（preview・本番だけ主の CSS を確かめられる）。
+    if (initial.hrefs.length > 0) expect(initial.families).toContain("Noto Sans JP");
+    for (const family of DEFERRED_CJK_FAMILIES) {
+      expect(firstRender.families, `最初の描画の CSS に ${family}`).not.toContain(family);
+      expect(initial.families, `index.html の CSS に ${family}`).not.toContain(family);
+    }
     await page.evaluate(() => document.fonts.ready);
     const bodyFont = await page.evaluate(() => getComputedStyle(document.body).fontFamily);
     expect(bodyFont.slice(0, FONT_SANS_PREFIX.length)).toBe(FONT_SANS_PREFIX);

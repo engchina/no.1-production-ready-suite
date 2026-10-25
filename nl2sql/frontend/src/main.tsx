@@ -4,7 +4,7 @@ import { RouterProvider, createBrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConfirmProvider, Toaster } from "@production-ready/ui";
 import { TraceDetailsLabelsProvider } from "@production-ready/ui";
-import { initTheme } from "@production-ready/ui";
+import { initTheme, loadStylesAfterFirstRender } from "@production-ready/ui";
 import {
   UnsavedChangesBlocker,
   useConfirmNavigationKey,
@@ -22,20 +22,7 @@ import "@fontsource/noto-sans-jp/400.css";
 import "@fontsource/noto-sans-jp/500.css";
 import "@fontsource/noto-sans-jp/600.css";
 import "@fontsource/noto-sans-jp/700.css";
-// Noto Sans JP に無い簡体字・繁体字・香港の字だけを SC → TC → HK の順で補う（--font-sans / --font-mono の JP の後ろ。#3292）。
-// <weight>.css は unicode-range で分けた face の集まりで、画面に出た字を含む分だけを読み込む。
-import "@fontsource/noto-sans-sc/400.css";
-import "@fontsource/noto-sans-sc/500.css";
-import "@fontsource/noto-sans-sc/600.css";
-import "@fontsource/noto-sans-sc/700.css";
-import "@fontsource/noto-sans-tc/400.css";
-import "@fontsource/noto-sans-tc/500.css";
-import "@fontsource/noto-sans-tc/600.css";
-import "@fontsource/noto-sans-tc/700.css";
-import "@fontsource/noto-sans-hk/400.css";
-import "@fontsource/noto-sans-hk/500.css";
-import "@fontsource/noto-sans-hk/600.css";
-import "@fontsource/noto-sans-hk/700.css";
+// Noto Sans SC / TC / HK は主の CSS に入れず、fonts-cjk.css を最初の描画の後に読む（末尾の loadStylesAfterFirstRender。#3305）。
 import "@fontsource/roboto/400.css";
 import "@fontsource/roboto/500.css";
 import "@fontsource/roboto/600.css";
@@ -104,3 +91,6 @@ createRoot(root).render(
     </QueryClientProvider>
   </StrictMode>
 );
+
+// Noto Sans JP に無い字を補う Noto Sans SC・TC・HK の @font-face は別の CSS の chunk にし、最初の描画の後に読む（#3305）。
+loadStylesAfterFirstRender(root, () => import("./fonts-cjk.css"), { serviceName: "production-ready-nl2sql" });

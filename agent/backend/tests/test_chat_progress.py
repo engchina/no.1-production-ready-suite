@@ -33,6 +33,7 @@ from pr_backend_core.observability.trace_store import TraceSpanOwner, TraceSpanW
 from pr_backend_core.observability.tracing import (
     SpanDisplay,
     SpanUpdate,
+    attach_trace_context,
     observed_span,
     operation_trace,
 )
@@ -375,6 +376,51 @@ def test_approval_wait_is_recorded_when_the_run_resumes(monkeypatch: MonkeyPatch
     [wait] = [step for step in fold.step_list() if (step.span or {}).get("name") == APPROVAL]
     assert wait.span is not None and wait.span["parent_id"] == resume.step_id
     assert (wait.started_at, wait.finished_at) == (approval.created_at, approval.decided_at)
+
+
+_INCOMING_TRACE = "1" * 32
+_INCOMING_TRACEPARENT = f"00-{_INCOMING_TRACE}-{'2' * 16}-01"
+
+
+def test_run_from_an_external_request_starts_a_new_trace(monkeypatch: MonkeyPatch) -> None:
+    """画面・API キーの外部の MCP クライアントの要求から作った Run は、来た traceparent を親に
+    せず新しい trace を始め、要求の span は span link にだけ残す（#3272。RAG / NL2SQL と同じ
+    `mcp_trace` の規則）。root の span は親を持たない。"""
+    _script(monkeypatch, [assistant_message("合成の回答。")])
+    links: list[Any] = []
+    original = operation_trace
+
+    @contextmanager
+    def recording(name: str, **kwargs: Any) -> Iterator[Any]:
+        links.append((name, list(kwargs.get("links", ()))))
+        with original(name, **kwargs) as summary:
+            yield summary
+
+    monkeypatch.setattr(builtin_runtime, "operation_trace", recording)
+    with attach_trace_context({"traceparent": _INCOMING_TRACEPARENT}):
+        run_id = _create_run("合成の質問")
+
+    created = runtime_repository.get_run(run_id)
+    assert created.trace_context == {}
+    assert created.trace_link_context == {"traceparent": _INCOMING_TRACEPARENT}
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    [root] = _roots(run)
+    assert root.span is not None
+    assert "parent_id" not in root.span
+    assert root.span["trace_id"] != _INCOMING_TRACE
+    assert run.trace_id == root.span["trace_id"]
+    [(name, [link])] = links
+    assert name == "agent.execute"
+    assert f"{link.context.trace_id:032x}" == _INCOMING_TRACE
+
+
+def test_run_without_a_request_span_has_no_link() -> None:
+    """要求の span の外（dispatcher・テスト）で作った Run は親も span link も持たない。"""
+    run = runtime_repository.get_run(_create_run("合成の質問"))
+    assert (run.trace_context, run.trace_link_context) == ({}, {})
 
 
 def test_tool_titles_are_in_tool_and_approval_params(monkeypatch: MonkeyPatch) -> None:

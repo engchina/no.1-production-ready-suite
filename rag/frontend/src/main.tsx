@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider, createBrowserRouter } from "react-router-dom";
-import { initTheme } from "@production-ready/ui";
+import { initTheme, loadStylesAfterFirstRender } from "@production-ready/ui";
 import { UnsavedChangesBlocker } from "@production-ready/system-settings";
 
 import { App } from "./App";
@@ -43,3 +43,6 @@ createRoot(root).render(
     <RouterProvider router={router} />
   </StrictMode>
 );
+
+// Noto Sans JP に無い字を補う Noto Sans SC・TC・HK の @font-face は別の CSS の chunk にし、最初の描画の後に読む（#3305）。
+loadStylesAfterFirstRender(root, () => import("@/fonts-cjk.css"), { serviceName: "production-ready-rag" });

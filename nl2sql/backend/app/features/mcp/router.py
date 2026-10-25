@@ -62,6 +62,7 @@ def traced_mcp_server(request: Request, server: McpServer) -> McpServer:
             return await handle(message, has_any_permission=has_any_permission)
         params = message.get("params")
         meta = params.get("_meta") if isinstance(params, dict) else None
+        tool_name = params.get("name") if isinstance(params, dict) else None
         operation_id = request_id_var.get() or generate_request_id(None)
         with mcp_server_trace(
             operation_id=operation_id,
@@ -72,6 +73,8 @@ def traced_mcp_server(request: Request, server: McpServer) -> McpServer:
             listener=trace_span_listener(
                 operation_id=operation_id, owner_user_uuid=_request_owner(request)
             ),
+            method="tools/call",
+            tool_name=tool_name if isinstance(tool_name, str) else None,
         ):
             return await handle(message, has_any_permission=has_any_permission)
 

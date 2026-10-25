@@ -31,6 +31,7 @@ from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause, paginat
 from pr_backend_core.chat_history import ChatHistoryTurn
 from pr_backend_core.chat_history_window import ChatHistoryPage
 from pr_backend_core.chat_progress import ChatProgressStepDetails
+from pr_backend_core.observability.mcp_trace import operation_trace_parent
 from pr_backend_core.observability.tracing import (
     SpanUpdate,
     capture_trace_context,
@@ -684,7 +685,13 @@ class RunState(BaseModel):
     goal: str
     agent_id: str
     runtime_id: str = "legacy-native"
+    # 実行の区間（`agent.execute` / `agent.resume`）の親の trace context。最初の区間は空（新しい
+    # trace。#3272）で、再開の区間は前の区間の root を親にする。
     trace_context: dict[str, str] = Field(default_factory=dict)
+    # Run を受け付けた要求の trace context（画面・API キーの外部の MCP クライアント。#3272）。親には
+    # せず、最初の区間の root の span link にだけ残す（`mcp_trace` の規則。外部の要求が Run の
+    # trace id を決められないようにする）。
+    trace_link_context: dict[str, str] = Field(default_factory=dict)
     # 処理の経過の span を共通の span の表（`PLATFORM_TRACE_SPANS`。#3226 の案 A）に
     # 書く Run か。
     # これより前の Run（古い形式の記録）は False で、画面は古い形式の案内を出す。
@@ -729,7 +736,7 @@ class RunState(BaseModel):
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
-    @field_validator("trace_context", mode="before")
+    @field_validator("trace_context", "trace_link_context", mode="before")
     @classmethod
     def _parse_trace_context(cls, value: object) -> dict[str, str]:
         return validated_trace_context(value)
@@ -1048,6 +1055,22 @@ def run_thread_owner(run: RunState) -> str | None:
 def _thread_owner(runs: Sequence[RunState]) -> str | None:
     """会話（作成順の Run）の持ち主。会話を始めた Run の持ち主（#1928）。"""
     return run_thread_owner(runs[0]) if runs else None
+
+
+def _new_run_trace_contexts() -> dict[str, dict[str, str]]:
+    """新しい Run の trace の親と span link（#3272。RAG / NL2SQL の実行と同じ規則）。
+
+    信頼した MCP の要求（サービストークン。`mcp_server_trace` の trusted）の中なら今の trace を
+    続ける。それ以外（画面の要求・API キーの外部の MCP クライアント）は新しい trace にし、受け
+    付けた要求の span（来た traceparent を親にした HTTP の span）は span link にだけ残す。
+    """
+    request_context = capture_trace_context()
+    with operation_trace_parent() as links:
+        parent = capture_trace_context()
+    return {
+        "trace_context": parent,
+        "trace_link_context": request_context if links else {},
+    }
 
 
 def _is_draft_run(run: RunState) -> bool:
@@ -2326,7 +2349,7 @@ class AgentRuntimeRepository:
             goal=request.goal,
             agent_id=request.agent_id,
             runtime_id=BUILTIN_RUNTIME_ID,
-            trace_context=capture_trace_context(),
+            **_new_run_trace_contexts(),
             trace_store=True,
             created_by_user_uuid=created_by_user_uuid,
             thread_id=request.thread_id or f"thread_{uuid4().hex}",

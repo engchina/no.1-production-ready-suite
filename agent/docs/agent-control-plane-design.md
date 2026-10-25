@@ -777,7 +777,12 @@ span は共通の span の表（`PLATFORM_TRACE_SPANS`。案 A）にある。組
 `useTraceProgressSnapshot` で読み、実行中は読み直す。書けなかった span があれば「一部の処理だけを記録しています。」、表に書く
 前の Run（`trace_store` が無い）は古い形式の案内を出す。MCP の呼び出し（`mcp.request`）は traceparent を HTTP header と
 JSON-RPC の `params._meta` の両方で送り、呼び先（RAG / NL2SQL）がサービストークンの要求の traceparent を親にすると、呼び先の
-span（持ち主はサービストークンの `sub` = Run の利用者）が Agent の木の `mcp.request` の下に出る。
+span（持ち主はサービストークンの `sub` = Run の利用者）が Agent の木の `mcp.request` の下に出る。`mcp.request` は
+OpenTelemetry の MCP の semantic conventions の `mcp.method.name`（`tools/call` なら `gen_ai.tool.name` も）を持ち、利用者向けの
+処理の経過の木は `tools/call` だけを行にする（`initialize`・通知・`tools/list` は出さない。技術の trace の一覧には残す。#3272）。
+Run の最初の区間（`agent.execute`）は、Run を受け付けた要求（画面・API キーの外部の MCP クライアント）の traceparent を親に
+せず新しい trace を始め、要求の span は span link（`trace_link_context`）にだけ残す（RAG / NL2SQL と同じ
+`operation_trace_parent` の規則。外部の要求が Run の trace id を決められないようにする。#3272）。
 支援タスクの状態（#1243）: 組み込み Runtime は Run の終わり（承認待ちで止めるときも）に、ツールの呼び出しから
 支援タスクの状態を成果物（`kind="support_task"`・「支援タスクの状態」、`schema_version` 1）に残す。項目は会話・持ち主・
 目的（会話の最初の質問）、分かっている条件（`rag_search` に渡した `conditions` と出力の `guide.known_conditions`。

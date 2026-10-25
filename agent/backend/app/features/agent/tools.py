@@ -788,6 +788,24 @@ def _with_trace_meta(payload: JsonObject) -> JsonObject:
     return {**payload, "params": {**params, "_meta": merged}}
 
 
+def _mcp_request_attributes(payload: JsonObject) -> dict[str, object]:
+    """`mcp.request` の span の属性（OpenTelemetry の MCP の semantic conventions。#3272）。
+
+    JSON-RPC の method（`mcp.method.name`）と、`tools/call` なら呼ぶツールの名前
+    （`gen_ai.tool.name`）。画面の処理の経過は `tools/call` だけを行にし、`initialize`・通知・
+    `tools/list` は出さない。引数・結果は入れない。
+    """
+    method = payload.get("method")
+    if not isinstance(method, str) or not method:
+        return {}
+    attributes: dict[str, object] = {"mcp.method.name": method}
+    params = payload.get("params")
+    name = params.get("name") if isinstance(params, dict) else None
+    if method == "tools/call" and isinstance(name, str) and name:
+        attributes["gen_ai.tool.name"] = name
+    return attributes
+
+
 def _call_aborted_error(
     service_code: str, service_label: str, payload: JsonObject, abort: CallAbort
 ) -> ExternalToolError:
@@ -843,6 +861,7 @@ def _post_mcp_attempts(
                     attributes={
                         "pr.attempt": attempt,
                         "http.request.method": "POST",
+                        **_mcp_request_attributes(payload),
                     },
                 ),
                 httpx.Client(timeout=timeout, **http_client_options(url)) as client,

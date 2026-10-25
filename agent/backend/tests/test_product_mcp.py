@@ -25,6 +25,7 @@ from mcp_support import (
     McpToolError,
     fake_product_mcp,
 )
+from pr_backend_core.observability.tracing import SpanUpdate, operation_trace
 from pr_system_settings.auth.service_token import verify_service_token
 from pytest import MonkeyPatch
 from security_support import (
@@ -229,6 +230,33 @@ def test_initialize_session_id_and_headers(monkeypatch: MonkeyPatch) -> None:
     assert result.output["evidence"][0]["locator"]["page_start"] == 3
     assert result.audit_metadata["tool_name"] == "rag__rag_search"
     assert result.audit_metadata["audit_tags"] == ["mcp", "rag"]
+
+
+def test_mcp_request_spans_carry_the_mcp_method_and_tool(monkeypatch: MonkeyPatch) -> None:
+    """`mcp.request` の span は JSON-RPC の method（`mcp.method.name`）と、`tools/call` なら
+    呼んだツール（`gen_ai.tool.name`）を持つ（OpenTelemetry の MCP の semantic conventions。
+    画面は `tools/call` だけを行にする。#3272）。引数は span に入れない。"""
+    fake_product_mcp(monkeypatch)
+    updates: list[SpanUpdate] = []
+
+    with operation_trace("agent.execute", operation_id="run-3272", listener=updates.append):
+        result = _invoke("rag", "rag_search", {"query": "合成の語 A"})
+
+    assert result.success is True, result.error
+    finished = [
+        update.attributes
+        for update in updates
+        if update.operation_name == "mcp.request" and update.status == "done"
+    ]
+    assert [
+        (attributes.get("mcp.method.name"), attributes.get("gen_ai.tool.name"))
+        for attributes in finished
+    ] == [
+        ("initialize", None),
+        ("notifications/initialized", None),
+        ("tools/call", "rag_search"),
+    ]
+    assert all("合成の語 A" not in str(attributes) for attributes in finished)
 
 
 def test_token_subject_audience_and_claims_follow_run_user(monkeypatch: MonkeyPatch) -> None:

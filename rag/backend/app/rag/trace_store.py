@@ -310,11 +310,14 @@ def mcp_request_trace(request: Request, message: Mapping[str, Any]) -> Iterator[
     operation_id = str(getattr(request.state, "request_id", "") or "") or uuid4().hex
     listener = _owner_listener(operation_id, current_audit_request_context().user_uuid)
     # 中の回答・検索は共通の `operation_trace_parent` で、信頼した要求なら Agent の trace を続ける。
+    tool_name = params.get("name") if isinstance(params, Mapping) else None
     with mcp_server_trace(
         operation_id=operation_id,
         trusted=trusted,
         traceparent=traceparent,
         listener=listener,
+        method="tools/call",
+        tool_name=tool_name if isinstance(tool_name, str) else None,
     ):
         yield
 
