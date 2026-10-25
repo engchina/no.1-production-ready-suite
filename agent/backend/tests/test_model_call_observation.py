@@ -13,17 +13,14 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import anyio
 import pytest
 from agents.testing import assistant_message, function_call
+from openai._models import construct_type
 from openai.types.responses import Response
-from openai.types.responses.response_usage import (
-    InputTokensDetails,
-    OutputTokensDetails,
-    ResponseUsage,
-)
+from openai.types.responses.response_usage import ResponseUsage
 from pr_backend_core.observability.tracing import ObservedSpan, observed_span, operation_trace
 from pytest import MonkeyPatch
 from test_agent_output_fields import AGENT_ID as OUTPUT_AGENT_ID
@@ -113,9 +110,8 @@ def test_fingerprints_change_with_instructions_or_schema() -> None:
         != base["pr.context.instructions.fingerprint"]
     )
     assert dynamic["pr.context.tools.fingerprint"] == base["pr.context.tools.fingerprint"]
-    assert (
-        dynamic["pr.context.estimate.dynamic_state_tokens"]
-        > base["pr.context.estimate.dynamic_state_tokens"]
+    assert int(dynamic["pr.context.estimate.dynamic_state_tokens"]) > int(
+        base["pr.context.estimate.dynamic_state_tokens"]
     )
     assert (
         dynamic["pr.context.estimate.static_instructions_tokens"]
@@ -229,7 +225,9 @@ def test_long_conversation_grows_history_but_not_the_static_prefix() -> None:
         {**_request("合成の状態 A"), "input": turns(40)}, static_instructions=STATIC
     )
     assert long["pr.context.input.items"] == 40
-    assert long["pr.context.estimate.history_tokens"] > short["pr.context.estimate.history_tokens"]
+    assert int(long["pr.context.estimate.history_tokens"]) > int(
+        short["pr.context.estimate.history_tokens"]
+    )
     for key in (
         "pr.context.instructions.static_fingerprint",
         "pr.context.tools.fingerprint",
@@ -296,7 +294,7 @@ def test_static_instructions_come_before_the_run_state(monkeypatch: MonkeyPatch)
     assert len({value["pr.context.instructions.static_fingerprint"] for value in values}) == 1
     assert len({value["pr.context.instructions.fingerprint"] for value in values}) == 3
     assert values[0]["pr.context.estimate.dynamic_state_tokens"] == 0
-    assert values[1]["pr.context.estimate.dynamic_state_tokens"] > 0
+    assert int(values[1]["pr.context.estimate.dynamic_state_tokens"]) > 0
 
 
 # --------------------------------------------------------------------------------------------
@@ -313,9 +311,10 @@ def _usage(
         "total_tokens": input_tokens + output_tokens,
     }
     if details:
-        data["input_tokens_details"] = InputTokensDetails.model_construct(cached_tokens=cached)
-        data["output_tokens_details"] = OutputTokensDetails(reasoning_tokens=0)
-    return ResponseUsage.model_construct(**data)
+        # 呼び先の JSON から作る（openai の client と同じ。無い項目は None のまま）。
+        data["input_tokens_details"] = {} if cached is None else {"cached_tokens": cached}
+        data["output_tokens_details"] = {"reasoning_tokens": 0}
+    return cast(ResponseUsage, construct_type(type_=ResponseUsage, value=data))
 
 
 @contextmanager
@@ -412,9 +411,8 @@ def test_provider_overflow_resend_records_usage_only_on_the_sent_attempt(
     assert (second.attributes["gen_ai.usage.input_tokens"], second.attributes[CACHE]) == (900, 300)
     # 送り直しは縮めた入力（縮める前後と縮めた数）で、ツールの結果の見積もりが小さい。
     assert int(second.attributes["pr.context.compaction.outputs"]) >= 1
-    assert (
-        second.attributes["pr.context.estimate.tool_outputs_tokens"]
-        < first.attributes["pr.context.estimate.tool_outputs_tokens"]
+    assert int(second.attributes["pr.context.estimate.tool_outputs_tokens"]) < int(
+        first.attributes["pr.context.estimate.tool_outputs_tokens"]
     )
     # 指示とツールの定義は同じ（送り直しで指紋は変わらない）。
     for key in ("pr.context.instructions.static_fingerprint", "pr.context.tools.fingerprint"):
