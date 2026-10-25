@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Annotated, Literal, NamedTuple
+from typing import Annotated, Any, Literal, NamedTuple
 
 import anyio
 from fastapi import (
@@ -65,6 +66,7 @@ from .incremental_store import (
     IncrementalVersionConflict,
 )
 from .models import (
+    HISTORY_RUN_STATUS_CANCELLED,
     AdminFeedbackReviewData,
     AdminFeedbackReviewRequest,
     AgentConversationCreateData,
@@ -144,6 +146,7 @@ from .models import (
     FeedbackRequest,
     FeedbackSearchConfigData,
     FeedbackSearchConfigRequest,
+    HistoryCancellation,
     HistoryData,
     HistoryItem,
     JobCreateData,
@@ -247,6 +250,7 @@ from .service import (
     ChatConversationBusyError,
     DbAdminChatConversationFullError,
     DbAdminChatGenerationError,
+    HistoryNotRatableError,
     JobIdConflictError,
     JobTraceData,
     OthersContentForbiddenError,
@@ -1988,6 +1992,7 @@ def history(
                     viewer_user_uuid=viewer_user_uuid,
                     is_system_admin=principal is not None and principal.is_system_admin,
                     resolve_names=principal is not None,
+                    principal=principal,
                 ),
             }
         )
@@ -2022,6 +2027,7 @@ def history_item(request: Request, history_id: str) -> ApiResponse[HistoryItem]:
             viewer_user_uuid=viewer_user_uuid,
             is_system_admin=principal is not None and principal.is_system_admin,
             resolve_names=principal is not None,
+            principal=principal,
         )[0]
     )
 
@@ -2059,6 +2065,7 @@ def _with_history_people(
     viewer_user_uuid: str,
     is_system_admin: bool,
     resolve_names: bool = True,
+    principal: Any = None,
 ) -> list[HistoryItem]:
     """実行履歴の行に、実行した人と会話の持ち主の表示名と、見ている利用者との関係を添える（#1954）。
 
@@ -2073,13 +2080,18 @@ def _with_history_people(
         {
             uuid
             for item in items
-            for uuid in (item.actor_user_uuid, item.conversation_owner_user_uuid)
+            for uuid in (
+                item.actor_user_uuid,
+                item.conversation_owner_user_uuid,
+                item.cancelled_by_user_uuid,
+            )
             if uuid
         }
     )
     identities = (
         get_security_service().display_identities(people) if people and resolve_names else {}
     )
+    key_names = _history_cancel_key_names(items, principal) if resolve_names else {}
 
     def name_of(user_uuid: str) -> str:
         identity = identities.get(user_uuid)
@@ -2108,10 +2120,62 @@ def _with_history_people(
                     "actor_display_name": identity.display_name if identity else "",
                     # 工程の詳細は処理の経過（`GET /history/{history_id}/trace`）だけが返す。
                     "span_details": {},
+                    # 取り消した人と入口（停止の行だけ。#3348）。記録の値（利用者・キー・Agent の
+                    # Run の ID）は返さず、見ている利用者に合わせた表示に置き換える。
+                    "cancellation": _history_cancellation(
+                        item,
+                        name_of=name_of,
+                        viewer_user_uuid=viewer_user_uuid,
+                        key_names=key_names,
+                    ),
+                    "cancelled_by_user_uuid": "",
+                    "cancel_via": "",
+                    "cancel_api_key_id": "",
+                    "cancel_agent_run_id": "",
                 }
             )
         )
     return result
+
+
+def _history_cancel_key_names(items: list[HistoryItem], principal: Any) -> dict[str, str]:
+    """停止の行の API キーの名前（見ている利用者が既存のキーの一覧で見られるキーだけ。#3348）。
+
+    system_admin は全員のキー、それ以外は自分のキーだけ（`AuthService.api_key_names`）。見られない
+    キー・削除したキーは名前を返さない（画面は「MCP」だけ）。キーの ID・秘密は返さない。
+    """
+    key_ids = sorted({item.cancel_api_key_id for item in items if item.cancel_api_key_id})
+    if not key_ids or principal is None:
+        return {}
+    try:
+        names: dict[str, str] = get_security_service().api_key_names(principal, key_ids)
+    except Exception:  # noqa: BLE001 - キーの名前は表示の補助（引けなければ「MCP」だけ）
+        logger.warning("nl2sql_history_cancel_key_names_unavailable", exc_info=True)
+        return {}
+    return names
+
+
+def _history_cancellation(
+    item: HistoryItem,
+    *,
+    name_of: Callable[[str], str],
+    viewer_user_uuid: str,
+    key_names: Mapping[str, str],
+) -> HistoryCancellation | None:
+    """停止の行の「取消」（取り消した人と入口。#3348）。停止でない行は None。"""
+    if item.run_status != HISTORY_RUN_STATUS_CANCELLED:
+        return None
+    actor = item.cancelled_by_user_uuid
+    via: Literal["screen", "mcp", "agent_run"] = (
+        "screen" if item.cancel_via != "mcp" else "agent_run" if item.cancel_agent_run_id else "mcp"
+    )
+    return HistoryCancellation(
+        via=via,
+        actor_recorded=bool(actor),
+        actor_display_name=name_of(actor) if actor else "",
+        by_me=bool(actor) and actor == viewer_user_uuid,
+        api_key_name=key_names.get(item.cancel_api_key_id, "") if via == "mcp" else "",
+    )
 
 
 @router.post("/feedback", response_model=ApiResponse[FeedbackData])
@@ -2141,6 +2205,9 @@ def feedback(req: FeedbackRequest, request: Request) -> ApiResponse[FeedbackData
         raise HTTPException(
             status_code=OWNER_NOT_FOUND_STATUS, detail="対象の SQL 履歴が見つかりません。"
         ) from exc
+    except HistoryNotRatableError as exc:
+        # 停止の行は評価できない（#3348）。
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ApiResponse(data=data)
 
 
@@ -2159,6 +2226,9 @@ def admin_review_feedback(
         raise HTTPException(status_code=404, detail="対象の SQL 履歴が見つかりません。") from exc
     except PermissionError as exc:
         raise _profile_access_denied() from exc
+    except HistoryNotRatableError as exc:
+        # 停止の行は評価できない（#3348）。
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ApiResponse(data=data)

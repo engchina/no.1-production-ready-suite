@@ -350,6 +350,11 @@ export interface RunState {
   can_decide?: boolean;
   /** 保存した根拠のうち、見ている利用者が今の権限で見られない根拠の数（抜粋・文書は届かない。#3252）。 */
   withheld_evidence_count?: number;
+  /**
+   * 取り消した人と入口（取り消した Run だけ。#3348）。API キーの名前は見ている利用者が見られるキーだけで、見られなければ空
+   * （画面は「MCP」だけ）。詳細（`GET /api/runs/{id}`）と会話の Run に付く。
+   */
+  cancellation?: RunCancellationView | null;
   /** 回答への評価（#774）。評価していない Run は null / 無し。 */
   feedback?: RunFeedback | null;
   /** 管理者の評価（本人の評価とは別。#774）。 */
@@ -738,6 +743,16 @@ export interface AutomationFired {
 }
 
 /** Run が使ったモデルの量（承認待ちからの再開を含めた累計。#772）。 */
+/** 実行の詳細の「取消」（backend の `RunCancellationView`。#3348）。 */
+export interface RunCancellationView {
+  /** 画面の操作・外部の MCP（API キー）・操作した人の記録の無い自動の取消。 */
+  via: "screen" | "mcp" | "system";
+  /** 取り消した人の表示名（引けない利用者は空）。 */
+  actor_display_name: string;
+  by_me: boolean;
+  api_key_name: string;
+}
+
 export interface RunUsage {
   model: string;
   requests: number;

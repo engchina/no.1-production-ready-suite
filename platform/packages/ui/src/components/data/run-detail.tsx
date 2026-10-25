@@ -47,9 +47,13 @@ export interface RunDetailLabels {
     tokens: string;
     cost: string;
     runId: string;
+    /** 取り消した人と入口（#3348）。 */
+    cancellation: string;
   };
   /** 実行者・持ち主が自分のときの表記。 */
   self: string;
+  /** 取消の入口の表記（`formatRunCancellation`。#3348）。 */
+  cancellation: RunCancellationLabels;
   notRecorded: string;
   /** 処理の経過の要約（「5 ステップ・合計 12.3 秒」）。 */
   timelineSummary: (count: number, duration: string) => string;
@@ -58,6 +62,67 @@ export interface RunDetailLabels {
   /** 段の詳細（`RunTimelineStep.details`）の長さを切ったときの印。 */
   stepDetailsTruncated: string;
   status: RunStatusLabels;
+}
+
+// ---------------------------------------------------------------------------
+// 取消（取り消した人と入口。#3348）
+
+/**
+ * 取消の入口。画面の操作（`screen`）・外部の MCP クライアント（`mcp`。API キー）・Agent の実行
+ * （`agentRun`。NL2SQL のジョブを Agent の Run が止めた）・記録の無い自動の取消（`system`）。
+ */
+export type RunCancellationVia = "screen" | "mcp" | "agentRun" | "system";
+
+export interface RunCancellation {
+  via: RunCancellationVia;
+  /** 取り消した人（`system` は渡さない）。自分なら `isSelf`。 */
+  actor?: { name: string; isSelf?: boolean } | null;
+  /** MCP の API キーの名前（見ている利用者が見られるキーだけ。見られなければ渡さない）。 */
+  apiKeyName?: string | null;
+}
+
+export interface RunCancellationLabels {
+  screen: string;
+  mcp: string;
+  /** MCP と API キーの名前（「MCP（〈キーの名前〉）」）。 */
+  mcpKey: (name: string) => string;
+  agentRun: string;
+  system: string;
+  /** 取り消した人と入口の区切り。 */
+  separator: string;
+}
+
+export const DEFAULT_RUN_CANCELLATION_LABELS: RunCancellationLabels = {
+  screen: "画面",
+  mcp: "MCP",
+  mcpKey: (name) => `MCP（${name}）`,
+  agentRun: "Agent の実行から",
+  system: "システム",
+  separator: " · ",
+};
+
+/**
+ * 取消の事実の文（「〈利用者〉 · MCP（〈キーの名前〉）」「〈利用者〉 · 画面」「システム」）。3 製品で同じ形にする
+ * （#3348）。自分の取消は `self`（「自分」）。
+ */
+export function formatRunCancellation(
+  cancellation: RunCancellation,
+  labels: Partial<RunCancellationLabels> & { self?: string } = {}
+): string {
+  const text = { ...DEFAULT_RUN_CANCELLATION_LABELS, ...labels };
+  if (cancellation.via === "system") return text.system;
+  const keyName = cancellation.apiKeyName?.trim();
+  const via =
+    cancellation.via === "mcp"
+      ? keyName
+        ? text.mcpKey(keyName)
+        : text.mcp
+      : cancellation.via === "agentRun"
+        ? text.agentRun
+        : text.screen;
+  const actor = cancellation.actor;
+  const name = actor ? (actor.isSelf ? labels.self ?? DEFAULT_RUN_DETAIL_LABELS.self : actor.name.trim()) : "";
+  return name ? `${name}${text.separator}${via}` : via;
 }
 
 export const DEFAULT_RUN_DETAIL_LABELS: RunDetailLabels = {
@@ -77,8 +142,10 @@ export const DEFAULT_RUN_DETAIL_LABELS: RunDetailLabels = {
     tokens: "token",
     cost: "費用",
     runId: "実行 ID",
+    cancellation: "取消",
   },
   self: "自分",
+  cancellation: DEFAULT_RUN_CANCELLATION_LABELS,
   notRecorded: "—",
   timelineSummary: (count, duration) => `${count} ステップ・合計 ${duration}`,
   stepStatus: {
@@ -93,8 +160,9 @@ export const DEFAULT_RUN_DETAIL_LABELS: RunDetailLabels = {
   status: DEFAULT_RUN_STATUS_LABELS,
 };
 
-export type RunDetailLabelsInput = Partial<Omit<RunDetailLabels, "facts" | "stepStatus" | "status">> & {
+export type RunDetailLabelsInput = Partial<Omit<RunDetailLabels, "facts" | "stepStatus" | "status" | "cancellation">> & {
   facts?: Partial<RunDetailLabels["facts"]>;
+  cancellation?: Partial<RunCancellationLabels>;
   stepStatus?: Partial<RunDetailLabels["stepStatus"]>;
   status?: Partial<RunStatusLabels>;
 };
@@ -104,6 +172,7 @@ export function resolveRunDetailLabels(labels?: RunDetailLabelsInput): RunDetail
     ...DEFAULT_RUN_DETAIL_LABELS,
     ...labels,
     facts: { ...DEFAULT_RUN_DETAIL_LABELS.facts, ...labels?.facts },
+    cancellation: { ...DEFAULT_RUN_DETAIL_LABELS.cancellation, ...labels?.cancellation },
     stepStatus: { ...DEFAULT_RUN_DETAIL_LABELS.stepStatus, ...labels?.stepStatus },
     status: { ...DEFAULT_RUN_DETAIL_LABELS.status, ...labels?.status },
   };
@@ -172,6 +241,8 @@ export interface RunSummaryProps {
   executor?: { name: string; isSelf?: boolean } | null;
   /** 会話の持ち主（実行者と違うときだけ渡す。#1954）。 */
   owner?: { name: string; isSelf?: boolean } | null;
+  /** 取り消した人と入口（取り消した実行だけ渡す。#3348）。 */
+  cancellation?: RunCancellation | null;
   /** 対象（業務 Agent・検索・回答プロファイル・業務プロファイル）。見出しは製品が渡す。 */
   target?: { label: string; value: ReactNode } | null;
   model?: string | null;
@@ -190,7 +261,7 @@ export interface RunSummaryProps {
 
 /**
  * 詳細の先頭のカード「概要」（#1955）。状態 → 質問 → 事実の並び（開始日時・所要時間・種類・実行者・会話の持ち主・
- * 対象・モデル・token・費用・製品の事実・実行 ID）。記録の無い事実は並べない（「—」の並びにしない）。
+ * 取消（取り消した実行だけ。#3348）・対象・モデル・token・費用・製品の事実・実行 ID）。記録の無い事実は並べない（「—」の並びにしない）。
  */
 export function RunSummary({
   showBadges = false,
@@ -204,6 +275,7 @@ export function RunSummary({
   kind,
   executor,
   owner,
+  cancellation,
   target,
   model,
   usage,
@@ -227,6 +299,13 @@ export function RunSummary({
   if (kind) facts.push({ id: "kind", label: labels.facts.kind, value: kind });
   if (executor) facts.push({ id: "executor", label: labels.facts.executor, value: person(executor) });
   if (owner) facts.push({ id: "owner", label: labels.facts.owner, value: person(owner) });
+  if (cancellation) {
+    facts.push({
+      id: "cancellation",
+      label: labels.facts.cancellation,
+      value: formatRunCancellation(cancellation, { ...labels.cancellation, self: labels.self }),
+    });
+  }
   if (target) facts.push({ id: "target", label: target.label, value: target.value });
   if (model) facts.push({ id: "model", label: labels.facts.model, value: model, mono: true });
   if (usage?.tokens != null) facts.push({ id: "tokens", label: labels.facts.tokens, value: formatRunTokens(usage.tokens) });

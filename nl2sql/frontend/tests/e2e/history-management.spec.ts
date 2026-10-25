@@ -178,8 +178,11 @@ function historyPage(url: URL, items: readonly HistoryRecord[], othersVisible: b
   const since = url.searchParams.get("since");
   const executor = url.searchParams.get("executor") ?? "all";
   const filtered = items.filter((item) => {
-    if (status === "succeeded" && item.safety_is_safe !== true) return false;
-    if (status === "blocked" && item.safety_is_safe !== false) return false;
+    // 停止の行（#3348）は安全性の判定を持たず、完了・ブロックに数えない。
+    const cancelled = item.run_status === "cancelled";
+    if (status === "cancelled" && !cancelled) return false;
+    if (status === "succeeded" && (cancelled || item.safety_is_safe !== true)) return false;
+    if (status === "blocked" && (cancelled || item.safety_is_safe !== false)) return false;
     if (!kindMatches(item, kind)) return false;
     if (since && String(item.created_at) < since) return false;
     if (executor === "mine" && item.executed_by_me === false) return false;
@@ -755,3 +758,79 @@ test("最初の Tab で本文へスキップでき、一覧の題名のリンク
   }
   await expect(link).toBeFocused();
 });
+
+/** 停止で終わった実行の行（#3348。SQL・実行結果・評価を持たない）。 */
+function cancelledItem(id: string, cancellation: Record<string, unknown>): HistoryRecord {
+  return {
+    ...historyItems[1],
+    id,
+    question: `停止した質問 ${id}`,
+    generated_sql: "",
+    executable_sql: "",
+    rewritten_question: "",
+    feedback_rating: null,
+    feedback_comment: "",
+    result_row_count: 0,
+    result_columns: [],
+    created_at: "2026-06-23T10:00:00.000Z",
+    kind: "mcp",
+    run_source: "mcp",
+    run_status: "cancelled",
+    cancellation: { actor_recorded: true, by_me: false, api_key_name: "", ...cancellation },
+  };
+}
+
+const CANCELLED_ITEMS = [
+  cancelledItem("history-cancel-mcp", { via: "mcp", actor_display_name: "管理 花子", api_key_name: "合成のキー A" }),
+  cancelledItem("history-cancel-agent", { via: "agent_run", actor_display_name: "システム管理者", by_me: true }),
+  cancelledItem("history-cancel-screen", { via: "screen", actor_display_name: "" }),
+];
+
+test("停止した実行は一覧で「停止」になり、状態の絞り込みで選べ、評価と行数を持たない (#3348)", async ({ page }) => {
+  const requests: URL[] = [];
+  await mockHistory(page, { items: [...CANCELLED_ITEMS, ...historyItems], requests });
+  await page.goto("/history");
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(6);
+  const cancelledRow = row(page, "history-cancel-mcp");
+  await expect(cancelledRow.locator("[data-run-status]:visible")).toHaveAttribute("data-run-status", "cancelled");
+  // 評価の列は「—」（評価できない）、行数は「未実行」。
+  await expect(cancelledRow).toContainText("—");
+  await expect(cancelledRow).toContainText("未実行");
+  await expect(cancelledRow).not.toContainText("未評価");
+
+  await chooseFilter(page, "status", "cancelled");
+  await expect.poll(() => requests.at(-1)?.searchParams.get("status")).toBe("cancelled");
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+  await expect(page.getByTestId("history-list-count")).toHaveText("3 件（全 6 件）");
+  await chooseFilter(page, "status", "succeeded");
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(2);
+  await expect(row(page, "history-cancel-mcp")).toHaveCount(0);
+});
+
+for (const [id, text] of [
+  ["history-cancel-mcp", "管理 花子 · MCP（合成のキー A）"],
+  ["history-cancel-agent", "自分 · Agent の実行から"],
+  ["history-cancel-screen", "削除済みのユーザー · 画面"],
+] as const) {
+  test(`停止した実行の詳細は概要に取り消した人と入口を出し、SQL と結果の節を出さない (${id})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await mockHistory(page, { items: [...CANCELLED_ITEMS, ...historyItems] });
+    await page.goto(`/history?id=${id}`);
+    const summary = page.getByTestId("history-detail-summary");
+    const fact = summary.locator('[data-run-fact="cancellation"]');
+    await expect(fact.locator("dt")).toHaveText("取消");
+    await expect(fact.locator("dd")).toHaveText(text);
+    const order = await summary.locator("[data-run-fact]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-run-fact")));
+    expect(order.indexOf("cancellation")).toBeGreaterThan(order.indexOf("executor"));
+    expect(order.indexOf("cancellation")).toBeLessThan(order.indexOf("target"));
+    await expect(summary.locator('[data-run-fact="rows"] dd')).toHaveText("未実行");
+    await expect(page.getByTestId("history-detail-sql")).toHaveCount(0);
+    await expect(page.getByTestId("history-detail-feedback")).toHaveCount(0);
+    expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+    if (id === "history-cancel-mcp") {
+      await summary.screenshot({ path: testInfo.outputPath(`history-cancel-${testInfo.project.name}.png`) });
+      if (process.env.E2E_SCREENSHOT_DIR) {
+        await summary.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR}/nl2sql-history-cancellation-${testInfo.project.name}.png` });
+      }
+    }
+  });
+}

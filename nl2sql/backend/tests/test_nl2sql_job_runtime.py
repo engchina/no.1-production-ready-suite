@@ -17,6 +17,7 @@ import pytest
 
 from app.features.nl2sql.incremental_store import MemoryIncrementalNl2SqlRepository
 from app.features.nl2sql.models import (
+    FeedbackRating,
     JobCreateRequest,
     JobStatus,
     JobStepStatus,
@@ -34,6 +35,7 @@ from app.features.nl2sql.service import (
     PROFILE_REVALIDATION_REQUIRED_ERROR_CODE,
     SQL_BLOCKED_ERROR_CODE,
     SQL_EXECUTION_FAILED_ERROR_CODE,
+    HistoryNotRatableError,
     Nl2SqlService,
     StoredJob,
     _new_job_steps,
@@ -340,6 +342,50 @@ def test_cancel_job_records_first_requester_and_reports_repeated_requests() -> N
     blocking.release.set()
     finished = _wait_terminal(owner, created.job_id)
     assert (finished.status, finished.error_code) == (JobStatus.ERROR, JOB_CANCELLED_ERROR_CODE)
+
+    # 停止も実行履歴に行を残し、別のプロセスが受けた最初の要求の記録（取り消した人と入口）を写す
+    # （#3348）。SQL は持たない。
+    [row] = owner.list_history(status="cancelled").items
+    assert (row.job_id, row.run_status, row.question, row.generated_sql) == (
+        created.job_id,
+        "cancelled",
+        _request().question,
+        "",
+    )
+    assert (
+        row.cancelled_by_user_uuid,
+        row.cancel_via,
+        row.cancel_agent_run_id,
+        row.cancel_api_key_id,
+    ) == ("user-1", "mcp", "run-1", "")
+    assert row.actor_user_uuid == "user-1"
+    assert repository.get_document("history", row.id) is not None
+    # 完了・ブロック（安全性の判定）とフィードバックの一覧には出さない。
+    assert owner.list_history(status="succeeded").items == []
+    assert owner.list_history(safety="safe").items == []
+    assert [item.id for item in owner.list_history().items] == [row.id]
+    assert owner.list_feedback(limit=25, rating="all", profile_id="", query="").items == []
+    with pytest.raises(HistoryNotRatableError):
+        owner.save_feedback(row.id, FeedbackRating.GOOD, actor_user_uuid="user-1")
+
+
+def test_cancelled_job_history_records_the_screen_cancel_of_the_same_process() -> None:
+    """取消の要求を受けたプロセスで終わった停止は、手元の記録から画面の取消を写す（#3348）。"""
+    blocking = _BlockingEnterpriseAiClient(_GENERATED)
+    service = _worker(_repository(), blocking)
+    created = service.start_job(_request(), actor_user_uuid="user-1", actor_is_system_admin=True)
+    assert blocking.entered.wait(timeout=10)
+    service.cancel_job(created.job_id, actor_user_uuid="admin-1", actor_can_manage=True)
+    blocking.release.set()
+    _wait_terminal(service, created.job_id)
+
+    [row] = service.list_history(status="cancelled").items
+    assert (row.actor_user_uuid, row.cancelled_by_user_uuid, row.cancel_via) == (
+        "user-1",
+        "admin-1",
+        "",
+    )
+    assert row.elapsed_ms is not None and row.elapsed_ms >= 0
 
 
 def test_cancel_of_unknown_job_returns_none() -> None:

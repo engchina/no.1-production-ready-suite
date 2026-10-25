@@ -57,10 +57,12 @@ from app.features.agent.runtime import (
     Artifact,
     RunCreateRequest,
     RunStatus,
+    run_cancel_record,
     runtime_repository,
 )
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
 from app.features.agent.tools import ToolDefinition, ToolPermissionLevel, tool_registry
+from app.security.dependencies import local_debug_principal
 from app.security.permissions import ADMIN, MENU_EVALUATION, MENU_RUNS
 from app.security.service import set_security_service
 
@@ -370,6 +372,20 @@ def test_evaluation_sets_api(agent: None, no_background: list[str], tmp_path: Pa
     assert sets[0]["last_job_status"] == "cancelled"
     assert client.delete(f"/api/evaluation-sets/{set_id}").status_code == 200
     assert client.get(f"/api/evaluation-sets/{set_id}").status_code == 404
+
+
+def test_cancelling_an_evaluation_records_who_cancelled_the_running_runs(agent: None) -> None:
+    """評価の取消で取り消した Run に、操作した人を残す（実行の詳細の「取消」。#3348）。"""
+    del agent
+    job = _job(_case("one", "合成の質問", "合成の回答"))
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(agent_id=AGENT_ID, goal="合成の質問", draft=True)
+    )
+    evaluation_store.update_result(job.id, 0, status=CaseStatus.RUNNING, run_id=run.id)
+    assert client.post(f"/api/evaluations/{job.id}/cancel").status_code == 200
+    record = run_cancel_record(runtime_repository.get_run(run.id))
+    assert record is not None
+    assert (record.via, record.cancelled_by) == ("screen", local_debug_principal().login_user_id)
 
 
 def test_previous_run_of_the_same_set_is_compared(agent: None) -> None:
