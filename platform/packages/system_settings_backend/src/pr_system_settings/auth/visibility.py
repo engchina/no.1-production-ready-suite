@@ -9,10 +9,13 @@
   理由にしない。
 - 判定は backend で行い、一覧は SQL / store の条件で絞る（画面で隠すだけにしない）。他人のデータの
   詳細・操作は 404 にして存在を漏らさない（製品の API の契約。`OWNER_NOT_FOUND_STATUS`）。
-- system_admin は他の利用者のデータにも本人と同じすべての操作ができる（続きの質問・SQL の
-  実行・確認・停止・評価・Run の操作・承認。#1928）。操作は操作した system_admin 自身として
-  実行し（権限・対象範囲・接続を持ち主から借りない）、発話・ジョブ・Run・監査には操作した人
-  （actor）を残す。持ち主は変えない。
+- system_admin が他の利用者のデータにできるのは、閲覧（一覧・詳細・処理の経過・実行履歴）と
+  運用の操作（停止・取り消し・削除、Agent の承認待ちの判断と再開。続きは Run を実行した人の
+  権限で動く）だけ（#3244。#1928 を置き換え）。新しい実行・内容を足す操作（続きの質問・SQL の
+  実行・再実行・確認や明確化への回答・評価・会話の名前の変更）は持ち主だけで、system_admin でも
+  403（`OTHERS_CONTENT_FORBIDDEN_STATUS`）。system_admin の権限・対象範囲で作った内容が持ち主の
+  会話に入り、持ち主が権限の外の資料・SQL・ツールの出力を見るのを防ぐ。調べ直すときは
+  system_admin が自分の会話で再現する。運用の操作は操作した人（actor）を残し、持ち主は変えない。
 - 実行（RAG・NL2SQL の実行履歴の行、Agent の Run）は、実行した人（executor）と会話の持ち主の
   両方に見える（system_admin は全員。#1954）。system_admin が他の利用者の会話で実行した往復は、
   持ち主の実行履歴にも出す。利用量・API キーの上限・監査は実行した人に数える。一覧は
@@ -29,6 +32,13 @@ from typing import Literal, Protocol
 
 # 他人のデータの詳細・操作に返す status（存在を漏らさない）。
 OWNER_NOT_FOUND_STATUS = 404
+# system_admin が他の利用者のデータに新しい実行・内容を足そうとしたときの status と文言（#3244）。
+# 見えるデータなので 404 にはしない。
+OTHERS_CONTENT_FORBIDDEN_STATUS = 403
+OTHERS_CONTENT_FORBIDDEN_MESSAGE = (
+    "他の利用者の会話・実行には、続きの質問・実行・回答・評価を追加できません。"
+    "閲覧・停止・削除はできます。調べ直すときは自分の会話で質問してください。"
+)
 
 # 実行履歴の「実行者」の絞り込み（#1954）: すべて / 自分が実行 / 他の人が実行。既定は all。
 RunExecutorFilter = Literal["all", "mine", "others"]
@@ -67,6 +77,19 @@ def can_access_user_data(principal: _UserPrincipal | None, owner_user_uuid: str 
         return False
     if can_view_all_users_data(principal):
         return True
+    owner = (owner_user_uuid or "").strip()
+    return bool(owner) and owner == principal.user_uuid
+
+
+def can_add_user_content(principal: _UserPrincipal | None, owner_user_uuid: str | None) -> bool:
+    """`owner_user_uuid` の持ち主のデータに、新しい実行・内容を足してよいか（持ち主だけ。#3244）。
+
+    続きの質問・SQL の実行・再実行・確認や明確化への回答・評価・会話の名前の変更が対象。
+    system_admin も他の利用者のデータには足せない（閲覧と運用の操作は `can_access_user_data`）。
+    持ち主の分からないデータには誰も足せない。
+    """
+    if principal is None:
+        return False
     owner = (owner_user_uuid or "").strip()
     return bool(owner) and owner == principal.user_uuid
 
