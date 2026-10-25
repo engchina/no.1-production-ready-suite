@@ -13,6 +13,8 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from rag_engine.parsing.rendering import PDFIUM_LOCK
+
 logger = logging.getLogger(__name__)
 
 PAGE_LABELS_ARTIFACT_KEY = "page_labels"
@@ -21,24 +23,31 @@ MAX_LABELED_PAGES = 5000
 
 
 def pdf_page_labels(pdf_bytes: bytes) -> dict[int, str]:
-    """物理頁（1 始まり）→ 印刷の頁番号。物理頁と同じラベル・空のラベルは含めない。"""
+    """物理頁（1 始まり）→ 印刷の頁番号。物理頁と同じラベル・空のラベルは含めない。
+
+    PDFium はスレッド安全ではないため、開く・読む・閉じるを process 全体の PDFium の lock の中で行う
+    （#3362）。同期の処理なので、event loop からは ``asyncio.to_thread`` で呼ぶ。
+    """
     try:
         import pypdfium2 as pdfium  # type: ignore[import-untyped]
-
-        document = pdfium.PdfDocument(pdf_bytes)
-    except Exception:  # noqa: BLE001 - 読めない PDF はラベル無しとして扱う
+    except ImportError:
         return {}
     labels: dict[int, str] = {}
-    try:
-        for index in range(min(len(document), MAX_LABELED_PAGES)):
-            try:
-                label = (document.get_page_label(index) or "").strip()
-            except Exception:  # noqa: BLE001 - その頁のラベルだけ諦める（ラベル無しとして扱う）
-                label = ""
-            if label and label != str(index + 1):
-                labels[index + 1] = label
-    finally:
-        document.close()
+    with PDFIUM_LOCK:
+        try:
+            document = pdfium.PdfDocument(pdf_bytes)
+        except Exception:  # noqa: BLE001 - 読めない PDF はラベル無しとして扱う
+            return {}
+        try:
+            for index in range(min(len(document), MAX_LABELED_PAGES)):
+                try:
+                    label = (document.get_page_label(index) or "").strip()
+                except Exception:  # noqa: BLE001 - その頁のラベルだけ諦める（ラベル無しとして扱う）
+                    label = ""
+                if label and label != str(index + 1):
+                    labels[index + 1] = label
+        finally:
+            document.close()
     return labels
 
 
