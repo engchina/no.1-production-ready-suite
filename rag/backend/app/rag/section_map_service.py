@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from app.clients.oracle import OracleClient
 from app.clients.section_map_store import ReadableChunkSet, SectionChunkRow, SectionMapStore
 from app.rag.document_sections_service import document_sections_with_source
+from app.rag.request_context import system_access_context
 from app.rag.section_chunk_map import (
     ROOT_SECTION_ID,
     SectionChunkMap,
@@ -114,7 +115,10 @@ def schedule_refresh_all_section_maps(*, reason: str) -> None:
 
 
 async def _refresh_all(reason: str) -> None:
-    count = await refresh_all_section_maps(reason=reason)
+    # 全体の規則の変更は全文書に効くので、保存した利用者の対象範囲（task が引き継ぐ要求の
+    # context）ではなく、範囲の制限の無い context で全文書を作り直す（#3334）。
+    with system_access_context():
+        count = await refresh_all_section_maps(reason=reason)
     logger.info("section_map_refresh_all_finished", extra={"reason": reason, "count": count})
 
 

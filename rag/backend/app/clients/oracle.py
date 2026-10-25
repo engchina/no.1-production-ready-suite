@@ -63,7 +63,11 @@ from app.rag.kb_adapter_config import (
     KnowledgeBaseQueryConfig,
     parse_adapter_config,
 )
-from app.rag.request_context import current_audit_request_context, unrestricted_access_scope
+from app.rag.request_context import (
+    access_scope_context,
+    current_audit_request_context,
+    unrestricted_access_scope,
+)
 from app.rag.search_answer_profile_config import (
     SearchAnswerProfileConfig,
     dump_search_answer_profile_config,
@@ -12822,7 +12826,10 @@ def _oracle_retrieval_clauses(
         )
         binds.update(knowledge_base_binds)
         knowledge_base_filter_sql = f"AND {knowledge_base_filter_sql}"
-    if knowledge_base_ids or current_audit_request_context().allowed_knowledge_base_ids is not None:
+    if (
+        knowledge_base_ids
+        or access_scope_context("knowledge_base_scope").allowed_knowledge_base_ids is not None
+    ):
         # ナレッジベースに所属する文書と、所属する重複の文書の正本（#2124）。相関の副問い合わせを
         # OR で結ぶと optimizer が semi join に変えられず、全文検索・vector の検索が返した行ごとに
         # 副問い合わせを実行する（DB 全体の命中数 × ナレッジベースの文書数に比例して遅くなり、
@@ -13541,7 +13548,7 @@ def _oracle_conversation_access_predicate_sql(*, alias: str | None = None) -> st
     する（fail-closed。`_feedback_owner_scope`・実行履歴と同じ。#3250）。
     """
     predicates = [_oracle_tenant_predicate(alias=alias)]
-    context = current_audit_request_context()
+    context = access_scope_context("conversation_scope")
     if not context.all_users_visible:
         if context.user_id_hash is None:
             predicates.append("1 = 0")
@@ -13558,7 +13565,7 @@ def _oracle_conversation_access_predicate_sql(*, alias: str | None = None) -> st
 
 def _oracle_access_predicates(*, alias: str | None = None) -> list[str]:
     """tenant と認可済み document/category scope を SQL predicate にする。"""
-    context = current_audit_request_context()
+    context = access_scope_context("document_scope")
     predicates = [_oracle_tenant_predicate(alias=alias)]
     document_column = f"{alias}.document_id" if alias else "document_id"
     if context.allowed_document_ids is not None:
@@ -13590,7 +13597,7 @@ def _oracle_document_knowledge_base_scope_predicates(*, alias: str | None = None
     重複アップロード（`duplicate_of_document_id`）は複製側が KB に属し、chunk は正本側に
     ある。検索と同じく、複製が許可 KB に属する正本も見えるようにする。
     """
-    allowed = current_audit_request_context().allowed_knowledge_base_ids
+    allowed = access_scope_context("knowledge_base_scope").allowed_knowledge_base_ids
     if allowed is None:
         return []
     if not allowed:
@@ -13637,7 +13644,7 @@ def _oracle_search_answer_profile_access_predicates(*, alias: str | None = None)
 
 def _search_answer_profile_scope_predicates(column: str) -> list[str]:
     """利用できる検索・回答プロファイルが制限されているとき、列をその検索・回答プロファイルへ絞る。"""
-    allowed = current_audit_request_context().allowed_search_answer_profile_ids
+    allowed = access_scope_context("search_answer_profile_scope").allowed_search_answer_profile_ids
     if allowed is None:
         return []
     if not allowed:
@@ -13655,7 +13662,7 @@ def _feedback_owner_scope(column: str) -> tuple[list[str], dict[str, object]]:
     自分の `user_id_hash` の行だけ。送信者のない古い行（`user_id_hash IS NULL`）は等号で落ちるので、
     SYSTEM_ADMIN だけが見る。利用者の分からない context は、全件ではなく 0 件にする（fail-closed）。
     """
-    context = current_audit_request_context()
+    context = access_scope_context("feedback_scope")
     if context.feedback_all_users:
         return [], {}
     if context.user_id_hash is None:
@@ -13682,7 +13689,7 @@ def _answer_record_owner_hash() -> str | None:
 def _answer_record_scope_predicates() -> list[str]:
     """回答履歴を、利用できる検索・回答プロファイル（#214）と持ち主（#304）の回答へ絞る。"""
     predicates = _search_answer_profile_scope_predicates("search_answer_profile_id")
-    context = current_audit_request_context()
+    context = access_scope_context("answer_record_scope")
     if not context.answer_records_unrestricted:
         if context.user_id_hash is None:
             predicates.append("1 = 0")
@@ -13750,7 +13757,7 @@ def _oracle_access_predicate_sql(*, alias: str | None = None) -> str:
 
 def _oracle_knowledge_base_access_predicates(*, alias: str | None = None) -> list[str]:
     """tenant と認可済み knowledge base scope を SQL predicate にする。"""
-    context = current_audit_request_context()
+    context = access_scope_context("knowledge_base_scope")
     predicates = [_oracle_tenant_predicate(alias=alias)]
     knowledge_base_column = f"{alias}.knowledge_base_id" if alias else "knowledge_base_id"
     if context.allowed_knowledge_base_ids is not None:
@@ -13773,7 +13780,7 @@ def _oracle_knowledge_base_access_predicate_sql(*, alias: str | None = None) -> 
 def _oracle_membership_access_predicate_sql() -> str:
     """membership table に対する tenant / knowledge base scope predicate。"""
     predicates = [_oracle_tenant_predicate()]
-    context = current_audit_request_context()
+    context = access_scope_context("knowledge_base_scope")
     if context.allowed_knowledge_base_ids is not None:
         if not context.allowed_knowledge_base_ids:
             predicates.append("1 = 0")
