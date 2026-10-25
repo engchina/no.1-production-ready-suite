@@ -3501,6 +3501,7 @@ def _record_question_understanding(step: _ExecutionStep, question: str, plan: Qu
 
 # 画面目録と画面の選択の cache。目録は chunk 集合ごと、選択は（質問、chunk 集合）ごと。CRAG の各回は同じ質問で
 # 検索し直すので、選択の LLM 呼び出しを 1 質問 1 回にする。目録を注入したときは、選択を（質問、目録の内容）ごとにする。
+# 選択に失敗した結果は cache しない（次の回で選び直す。#3278）。
 _SCREEN_CATALOG_CACHE: dict[tuple[int, int], dict[str, list[str]]] = {}
 _SCREEN_LINK_CACHE: dict[tuple[object, ...], list[tuple[str, str]]] = {}
 
@@ -3535,9 +3536,14 @@ def _linked_screen_children(
             link_key = (question, *pool_key)
         links = _SCREEN_LINK_CACHE.get(link_key)
         if links is None:
+            links = link_screens(question, catalog, parse_text_response, settings)
+            if links is None:
+                step.status = "画面の選択に失敗"
+                step.add(f"画面目録（{len(catalog)} 文書）からの画面の選択に失敗したため、画面の根拠を加えずに続けます。")
+                return [], [], []
             if len(_SCREEN_LINK_CACHE) >= 256:
                 _SCREEN_LINK_CACHE.clear()
-            links = _SCREEN_LINK_CACHE[link_key] = link_screens(question, catalog, parse_text_response, settings)
+            _SCREEN_LINK_CACHE[link_key] = links
         if not links:
             step.status = "該当なし"
             step.add(f"画面目録（{len(catalog)} 文書）から該当する画面を選べませんでした。")
