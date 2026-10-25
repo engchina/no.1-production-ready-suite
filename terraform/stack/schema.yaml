@@ -687,13 +687,15 @@ variables:
     description: "SSHキーペアを自動生成するか、既存の公開キーをアップロードまたは貼り付けて、opcユーザーのSSH接続に使用します。"
 
   timezone:
-    type: string
+    type: enum
     required: true
     visible: true
     title: "時間帯"
-    description: "Compute の OS の時間帯と、3 製品の共通の設定（platform/.env の PLATFORM_TIMEZONE。今日〔検索・期間の基準日〕と既定の時間帯）に使う IANA の地域名です。既定は Asia/Tokyo（東京・大阪の時刻、UTC+9）。+09:00 のような固定の offset は使えません。時刻の保存は UTC のままです。Autonomous AI Database の時間帯（DBTIMEZONE）は stack では変えません（README の手順で ADMIN が設定します）。"
+    description: "Compute の OS の時間帯と、3 製品の共通の設定（platform/.env の PLATFORM_TIMEZONE。今日〔検索・期間の基準日〕と既定の時間帯）です。Asia/Tokyo（日本時間：東京・大阪など、UTC+9。既定）か UTC（OCI の Database の Time Zone の既定）を選びます。時刻の保存は UTC のままです。Autonomous AI Database の時間帯（DBTIMEZONE）は stack では変えません（README の手順で ADMIN が設定します）。"
+    enum:
+      - "Asia/Tokyo"
+      - "UTC"
     default: "Asia/Tokyo"
-    pattern: "^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$"
 
   bastion_enabled:
     type: boolean

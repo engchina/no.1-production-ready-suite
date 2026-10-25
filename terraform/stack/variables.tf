@@ -493,17 +493,18 @@ variable "ssh_authorized_keys" {
 }
 
 # 時間帯（#3255）。3 製品の共通の設定（platform/.env の PLATFORM_TIMEZONE）と Compute の OS の時間帯（cloud-init の
-# timezone と platform/deploy/suite-init.sh の timedatectl）に使う。既定は東京・大阪の時刻（IANA の Asia/Tokyo）。
-# 固定の offset（+09:00）は受けない。名前が IANA にあるかは suite-init.sh（timedatectl）と backend（zoneinfo）が確かめる。
+# timezone と platform/deploy/suite-init.sh の timedatectl）に使う。選べるのは Asia/Tokyo（日本時間: 東京・大阪など。
+# 既定）と UTC（OCI の Database の Time Zone の既定）の 2 つだけ（利用者の決定。値は OCI と同じ IANA の地域名）。
+# 配備した後は platform/.env の PLATFORM_TIMEZONE に任意の IANA の地域名を書ける（suite-init.sh と backend が確かめる）。
 # 時刻の保存は UTC のまま（DB の session の時間帯は '+00:00'）。ADB の時間帯（DBTIMEZONE）は stack では変えない（README）。
 variable "timezone" {
-  description = "IANA time zone name of the Compute OS clock and the products' common setting PLATFORM_TIMEZONE (for example Asia/Tokyo for Tokyo and Osaka). Timestamps are still stored in UTC."
+  description = "Time zone of the Compute OS clock and the products' common setting PLATFORM_TIMEZONE: Asia/Tokyo (Japan time: Tokyo, Osaka and so on) or UTC. Timestamps are still stored in UTC."
   type        = string
   default     = "Asia/Tokyo"
 
   validation {
-    condition     = can(regex("^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$", var.timezone))
-    error_message = "timezone must be an IANA time zone name such as Asia/Tokyo or UTC (a fixed offset such as +09:00 is not accepted)."
+    condition     = contains(["Asia/Tokyo", "UTC"], var.timezone)
+    error_message = "timezone must be Asia/Tokyo or UTC."
   }
 }
 

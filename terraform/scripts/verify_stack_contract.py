@@ -1485,6 +1485,7 @@ def verify(package_path: Path) -> None:
     }
 
     _verify_schema(sources["schema.yaml"], sources["variables.tf"])
+    _verify_timezone(sources["schema.yaml"], sources["variables.tf"])
     _verify_terraform(
         sources["variables.tf"],
         sources["adb.tf"],
@@ -1626,6 +1627,30 @@ def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, scr
             raise AssertionError(f"output {name} must be shown only when bastion_enabled")
         if not re.search(rf"(?ms)^  {name}:\n(?:    .*\n)*?    visible: bastion_enabled", _schema_section(schema, "outputs")):
             raise AssertionError(f"output {name} must be shown only when bastion_enabled in the schema")
+
+
+# 時間帯（#3255）: stack で選べるのは OCI と同じ IANA の地域名の 2 つだけ（利用者の決定）。既定は日本時間。
+# 配備した後の platform/.env の PLATFORM_TIMEZONE は任意の IANA の地域名を受ける（入口だけを絞る）。
+TIMEZONE_CHOICES = ["Asia/Tokyo", "UTC"]
+DEFAULT_TIMEZONE = "Asia/Tokyo"
+
+
+def _verify_timezone(schema: str, variables: str) -> None:
+    timezone_schema = _schema_variable(schema, "timezone")
+    choices = re.findall(r'(?m)^      - "([^"]+)"$', timezone_schema)
+    if "    type: enum\n" not in timezone_schema or choices != TIMEZONE_CHOICES:
+        raise AssertionError(f"the timezone input must be an enum of {TIMEZONE_CHOICES}: {choices}")
+    if f'    default: "{DEFAULT_TIMEZONE}"\n' not in timezone_schema:
+        raise AssertionError(f"the timezone input must default to {DEFAULT_TIMEZONE}")
+    variable = _terraform_variable(variables, "timezone")
+    _require_all(
+        variable,
+        [
+            f'default     = "{DEFAULT_TIMEZONE}"',
+            "contains([" + ", ".join(f'"{value}"' for value in TIMEZONE_CHOICES) + "], var.timezone)",
+        ],
+        context="Terraform variable timezone",
+    )
 
 
 def _verify_oracle_linux(
