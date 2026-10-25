@@ -60,7 +60,7 @@ metadata:
 
 集めた根拠だけで答える（「回答の書き方」と「してはいけないこと」に沿う）。根拠の抜粋で足りないときだけ、次のとおり読み足してから答える。
 
-- 根拠の `excerpt` が切り詰められている（`truncated`）か、前後の条件・例外を確かめるときは、`rag_read_source` に `document_id` と `chunk_id` を渡して本文を読む。
+- 根拠の本文が省かれている（`text_omitted`）か切られている（`truncated`）とき、または前後の条件・例外を確かめるときは、`rag_read_source` に `document_id` と `chunk_id` を渡して本文を読む。
 - 根拠の `origin` が `derived`（取込が原文から作った要約・抽出した値）なら、それを原文として引用せず、`rag_read_source` か `rag_read_section` で原文を読んでから、読んだ原文を根拠にする。
 - 答えが図の中の値・配置・矢印・画面の項目に依り、根拠が `evidence_type` の `figure_description`（図を AI が読んだ説明）で `image_ref` を持つときは、`rag_read_source` に `document_id`・`chunk_id` と `include_image: true` を渡して元の図を見て確かめる。図に依らない質問では図を読まない。
 - 質問が手順・一覧・条件のまとまり（「手順をすべて」「確認する項目」「条件の一覧」など）を求め、根拠の章節（`section`。`section_id`・頁の範囲・文字数・親の章節）の文字数（`section.chars`）が抜粋より長いときは、抜粋だけで答えず、`rag_read_section` に `document_id` と根拠の `chunk_id`（または `section_id`）を渡して章節を終わりまで読む。
