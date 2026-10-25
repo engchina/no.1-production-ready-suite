@@ -174,10 +174,6 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(
         get_settings(), "rag_service_runtime_env_file", str(tmp_path / "service-runtime.env")
     )
-    # MinerU の parse job のポーリングの待ちはテストでは待たない（#1329）。
-    from app.clients import external_parser
-
-    monkeypatch.setattr(external_parser, "_poll_sleep", lambda _seconds: None)
 
 
 async def _systemd_unavailable(argv: list[str], timeout: float) -> object:
@@ -341,7 +337,6 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.rag_parser_adapter_backend = "unstructured"
     settings.rag_parser_docling_enabled = False
     settings.rag_parser_unstructured_enabled = True
-    settings.rag_parser_mineru_enabled = False
     settings.rag_parser_dots_ocr_enabled = False
     settings.oci_genai_embedding_model = "cohere.embed-v4.0"
     settings.oci_genai_embedding_dim = 1536

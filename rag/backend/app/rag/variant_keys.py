@@ -53,10 +53,6 @@ _BACKEND_EXTRACTION_RECIPE_FIELDS: dict[str, tuple[str, ...]] = {
     "unstructured": ("rag_parser_unstructured_enabled",),
     "structured_records_jsonl": ("rag_parser_structured_records_jsonl_enabled",),
     "xml_tree_json": ("rag_parser_xml_tree_json_enabled",),
-    "mineru": (
-        "rag_parser_mineru_enabled",
-        "rag_parser_mineru_tier",
-    ),
     "dots_ocr": (
         "rag_parser_dots_ocr_enabled",
         "rag_parser_dots_ocr_model",

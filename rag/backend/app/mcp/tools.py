@@ -58,7 +58,9 @@ from pr_backend_core.source_text import (
     SOURCE_TEXT_RESPONSE_BUDGET_TOKENS,
     SourceText,
     SourceTextItem,
+    SourceTextKind,
     fit_source_texts,
+    read_source_window,
 )
 from pr_backend_core.token_estimate import estimate_input_tokens
 from pydantic import (
@@ -271,7 +273,10 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 33: 根拠の場所（locator）に、表の 1 行の根拠のセルの座標（table_row と、値のあるセルの列・表頭の
 #     段の table_cells）を足した。取込み直す前の chunk・位置が原本で決まらない表は null / 空
 #     （#3262）。
-MCP_OUTPUT_SCHEMA_VERSION = 33
+# 34: 読み取りのツール（rag_read_source・rag_read_section・rag_read_document）の本文を、上限の
+#     文字数に入る最後の文・段落（表は行）の境界で切るようにした。表の続きは先頭に見出しの行を
+#     付け、その位置（rag_read_source と読み取りの chunks の header_range）を足した（#3344）。
+MCP_OUTPUT_SCHEMA_VERSION = 34
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
 # 値と決め方は pr_backend_core.source_text。#3321）。
 EVIDENCE_TEXT_ITEM_MAX_TOKENS = SOURCE_TEXT_ITEM_MAX_TOKENS
@@ -807,12 +812,16 @@ class ReadSourceInput(BaseModel):
             "chunk_id とどちらか一方を渡す。"
         ),
     )
-    offset: int = Field(default=0, ge=0, description="本文の読み始めの位置（文字数）。")
+    offset: int = Field(
+        default=0,
+        ge=0,
+        description="本文の読み始めの位置（文字数。続きは前の結果か根拠の next_offset）。",
+    )
     max_chars: int = Field(
         default=READ_SOURCE_MAX_CHARS_DEFAULT,
         ge=1,
         le=READ_SOURCE_MAX_CHARS_LIMIT,
-        description="返す本文の最大文字数。",
+        description="返す本文の最大文字数（表の続きに付ける見出しの行を含む）。",
     )
     include_image: bool = Field(
         default=False,
@@ -1098,6 +1107,13 @@ class OutlineOutput(VersionedOutput):
     )
 
 
+class ExcerptRange(BaseModel):
+    """本文の中の範囲（文字の位置。[start, end)）。"""
+
+    start: int
+    end: int
+
+
 class ReadDocumentChunk(BaseModel):
     """返した本文に含まれる chunk（根拠として引用するときの場所）。"""
 
@@ -1113,6 +1129,13 @@ class ReadDocumentChunk(BaseModel):
     cell_range: str | None = Field(default=None, description="セル範囲（例: A3:F7）。")
     start: int = Field(description="返した本文の中の開始の位置（文字数）。")
     end: int = Field(description="返した本文の中の終了の位置（文字数）。")
+    header_range: ExcerptRange | None = Field(
+        default=None,
+        description=(
+            "表の chunk を途中から読んだとき、本文の先頭に付けた見出しの行の位置（chunk の本文の"
+            "中の文字の [start, end)）。無ければ null。"
+        ),
+    )
 
 
 class ReadDocumentOutput(VersionedOutput):
@@ -1367,13 +1390,6 @@ class EvidenceSection(BaseModel):
     parent_section_id: str | None = Field(default=None, description="親の章節の id。")
     parent_title: str | None = Field(default=None, description="親の章節の名前。")
     parent_chars: int | None = Field(default=None, description="親の章節の本文の文字数。")
-
-
-class ExcerptRange(BaseModel):
-    """本文の中の範囲（文字の位置。[start, end)）。"""
-
-    start: int
-    end: int
 
 
 class RagEvidence(BaseModel):
@@ -2147,13 +2163,30 @@ class ReadSourceOutput(VersionedOutput):
         description="include_preview=true で返した、原文をブラウザで開くプレビュー（#2389）。",
     )
     locator: EvidenceLocator
-    text: str = Field(description="offset から最大 max_chars 文字の本文。")
+    text: str = Field(
+        description=(
+            "offset から max_chars 文字に入る最後の文・段落（表は行）の境界までの本文"
+            "（1 つの文・行だけで超えるときはその途中まで）。表を途中から読むときは、先頭に"
+            "見出しの行（header_range）を付ける。"
+        )
+    )
     offset: int
     text_length: int
     truncated: bool = Field(description="本文の続きがあるか。")
-    next_offset: int | None = Field(default=None, description="続きを読むときの offset。")
+    next_offset: int | None = Field(
+        default=None,
+        description="続きを読むときの offset（text の本文の終わりの位置。続きが無ければ null）。",
+    )
+    header_range: ExcerptRange | None = Field(
+        default=None,
+        description=(
+            "text の先頭に付けた表の見出しの行の、本文の中の位置（文字の [start, end)）。"
+            "text の見出しの後ろが offset からの本文。無ければ null。"
+        ),
+    )
     parent_text: str | None = Field(
-        default=None, description="親の本文（前後の文脈。最大 max_chars 文字）。"
+        default=None,
+        description="親の本文（前後の文脈。先頭から max_chars 文字に入る文・段落の境界まで）。",
     )
     parent_truncated: bool = False
     superseded: bool = Field(
@@ -2881,11 +2914,9 @@ def _strings(value: object) -> list[str]:
     )
 
 
-def _text_window(text: str, offset: int, max_chars: int) -> tuple[str, bool, int | None]:
-    window = text[offset : offset + max_chars]
-    end = offset + len(window)
-    more = end < len(text)
-    return window, more, (end if more else None)
+def _text_kind(metadata: dict[str, Any]) -> SourceTextKind:
+    """本文の切り方の種類（表は行の境界で切り、続きに見出しの行を付ける。#3344）。"""
+    return "table" if _evidence_type(metadata) == "table" else "text"
 
 
 async def crop_figure(
@@ -3262,7 +3293,14 @@ async def read_section_tool(arguments: ReadSectionInput) -> ReadSectionOutput:
                 # 入りきらない chunk は次の回の先頭にする（最初の chunk だけは途中で切る）。
                 next_cursor = _section_cursor(chunk_set_id, node.section_id, row.chunk_order)
                 break
-            taken = body[:room]
+            # 最初の chunk だけは、上限に入る最後の文・段落（表は行）の境界で切る（#3344）。
+            piece = read_source_window(
+                chunk.text,
+                offset=offset if first else 0,
+                max_chars=room,
+                kind=_text_kind(metadata),
+            )
+            taken = piece.text
             start = length + len(separator) + len(marker)
             parts.append(separator + marker + taken)
             length = start + len(taken)
@@ -3280,11 +3318,12 @@ async def read_section_tool(arguments: ReadSectionInput) -> ReadSectionOutput:
                     cell_range=locator.cell_range,
                     start=start,
                     end=length,
+                    header_range=_excerpt_range(piece.header_range),
                 )
             )
             if page_start:
                 last_page = _metadata_int(metadata, "page_end") or page_start
-            used = (offset if first else 0) + len(taken)
+            used = piece.excerpt_range.end if piece.excerpt_range else len(chunk.text)
             first = False
             offset = 0
             if used < len(chunk.text):
@@ -3431,7 +3470,14 @@ async def read_document(arguments: ReadDocumentInput) -> ReadDocumentOutput:
                 next_cursor = _read_cursor(chunk_set_id, chunk_index, 0)
                 stop = True
                 break
-            taken = body[:room]
+            # 最初の chunk だけは、上限に入る最後の文・段落（表は行）の境界で切る（#3344）。
+            piece = read_source_window(
+                chunk.text,
+                offset=offset if first else 0,
+                max_chars=room,
+                kind=_text_kind(metadata),
+            )
+            taken = piece.text
             start = length + len(separator) + len(marker)
             parts.append(separator + marker + taken)
             length = start + len(taken)
@@ -3449,11 +3495,12 @@ async def read_document(arguments: ReadDocumentInput) -> ReadDocumentOutput:
                     cell_range=locator.cell_range,
                     start=start,
                     end=length,
+                    header_range=_excerpt_range(piece.header_range),
                 )
             )
             if page_start:
                 last_page = _metadata_int(metadata, "page_end") or page_start
-            used = (offset if first else 0) + len(taken)
+            used = piece.excerpt_range.end if piece.excerpt_range else len(chunk.text)
             first = False
             offset = 0
             if used < len(chunk.text):
@@ -3647,9 +3694,18 @@ async def read_source(
         chunk = await readable_chunk(oracle, arguments.document_id, arguments.chunk_id or "")
         chunk = (await _with_extraction_recipe_ids(oracle, [chunk]))[0]
     metadata = dict(chunk.metadata)
-    text, more, next_offset = _text_window(chunk.text, arguments.offset, arguments.max_chars)
+    piece = read_source_window(
+        chunk.text,
+        offset=arguments.offset,
+        max_chars=arguments.max_chars,
+        kind=_text_kind(metadata),
+    )
     parent = metadata.get("parent_text")
-    parent_text = parent if isinstance(parent, str) and parent.strip() else None
+    parent_piece = (
+        read_source_window(parent, max_chars=arguments.max_chars)
+        if isinstance(parent, str) and parent.strip()
+        else None
+    )
     region = figure_region(metadata)
     image: EvidenceImage | None = None
     image_url: EvidenceImageUrl | None = None
@@ -3676,13 +3732,14 @@ async def read_source(
         image_url=image_url,
         preview=preview,
         locator=_locator(metadata),
-        text=text,
+        text=piece.text,
         offset=arguments.offset,
         text_length=len(chunk.text),
-        truncated=more,
-        next_offset=next_offset,
-        parent_text=parent_text[: arguments.max_chars] if parent_text else None,
-        parent_truncated=bool(parent_text) and len(parent_text or "") > arguments.max_chars,
+        truncated=piece.next_offset is not None,
+        next_offset=piece.next_offset,
+        header_range=_excerpt_range(piece.header_range),
+        parent_text=parent_piece.text if parent_piece is not None else None,
+        parent_truncated=parent_piece is not None and parent_piece.next_offset is not None,
         superseded=metadata.get("document_superseded") is True,
         references=_references(metadata),
     )

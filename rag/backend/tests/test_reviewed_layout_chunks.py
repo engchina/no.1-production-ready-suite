@@ -1,11 +1,9 @@
-"""確認の保存から実際の Docling / MinerU 親子分割へ訂正を渡す。"""
+"""確認の保存から実際の Docling の親子分割へ訂正を渡す。"""
 
 from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any, cast
-
-import pytest
 
 from app.api.routes.documents import _reviewed_extraction_with_edits
 from app.rag.chunking_small_to_big import build_parent_child_chunks
@@ -116,9 +114,8 @@ def _source(engine: str) -> StructuredExtraction:
     )
 
 
-@pytest.mark.parametrize("engine", ["docling", "mineru"])
-def test_review_updates_real_parent_child_body_headers_cells_and_search_text(engine: str) -> None:
-    before = _source(engine)
+def test_review_updates_real_parent_child_body_headers_cells_and_search_text() -> None:
+    before = _source("docling")
     original = deepcopy(before.model_dump())
     body = before.elements[1].text.replace("old-body", "new-body")
     after = _reviewed_extraction_with_edits(
