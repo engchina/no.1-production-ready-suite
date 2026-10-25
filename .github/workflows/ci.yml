@@ -218,6 +218,9 @@ jobs:
             rag_backend:
               - "rag/**"
               - "!rag/frontend/**"
+              # 入口の一覧のテスト（tests/test_system_access_entry_points.py）が、配備の後の確認で RAG の CLI を
+              # 呼ぶ platform の配備のスクリプトを読む（#3334）。
+              - "platform/deploy/*.sh"
             nl2sql_backend:
               - "nl2sql/**"
               - "!nl2sql/frontend/**"

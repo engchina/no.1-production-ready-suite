@@ -282,6 +282,11 @@ def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "app.clients.oracle.current_audit_request_context",
         current_or_default_context,
     )
+    # 範囲の条件の context（#3334）も同じ既定にする。
+    monkeypatch.setattr(
+        "app.clients.oracle.access_scope_context",
+        lambda _reader: current_or_default_context(),
+    )
     monkeypatch.setattr(
         "app.rag.audit.current_audit_request_context",
         current_or_default_context,

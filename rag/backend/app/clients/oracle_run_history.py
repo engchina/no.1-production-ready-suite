@@ -37,7 +37,7 @@ from app.clients.oracle import (
     _with_search_answer_profile_scope_bind,
     _with_tenant_bind,
 )
-from app.rag.request_context import current_audit_request_context
+from app.rag.request_context import access_scope_context, current_audit_request_context
 
 RUN_HISTORY_TABLE = "rag_run_history"
 # 会話の表（実行の会話の持ち主を引く。#1954）。
@@ -112,7 +112,7 @@ def _run_scope(alias: str = "r") -> tuple[list[str], dict[str, object]]:
     一般の利用者は、自分が実行した行と、自分の会話で他の人（system_admin）が実行した行
     （`can_access_run` と同じ範囲）。会話の持ち主は会話の表の `user_id_hash` で決める。
     """
-    context = current_audit_request_context()
+    context = access_scope_context("run_history_scope")
     clauses = [_oracle_tenant_predicate(alias=alias)]
     clauses.extend(_search_answer_profile_scope_predicates(f"{alias}.search_answer_profile_id"))
     binds = _with_search_answer_profile_scope_bind(_with_tenant_bind({}))
