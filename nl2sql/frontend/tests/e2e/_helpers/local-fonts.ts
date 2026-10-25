@@ -1,5 +1,16 @@
 import { expect, type Page } from "@playwright/test";
 
+import {
+  CJK_FALLBACK_SAMPLES,
+  FONT_MONO_FAMILY,
+  FONT_SANS_PREFIX,
+  loadCjkFallbackFonts,
+  renderedCjkFallbackFonts,
+} from "../../../../../platform/packages/ui/e2e/font-checks";
+
+/** 自前ホストの書体の太さ（src/main.tsx。Noto Sans JP と SC・TC・HK で同じ）。 */
+export const LOCAL_FONT_WEIGHTS = [400, 500, 600, 700] as const;
+
 /** 画面内の全テキストと入力欄を走査し、局所指定やコード要素の字体漏れを検出する。 */
 export async function expectLocalUiFonts(page: Page) {
   await page.evaluate(() => document.fonts.ready);
@@ -25,8 +36,35 @@ export async function expectLocalUiFonts(page: Page) {
     }
     return { expected, codeFont, checked, mismatches };
   });
-  expect(result.expected).toMatch(/^"Noto Sans JP", Roboto,/);
-  expect(result.codeFont).toMatch(/^"Google Sans Code", "Noto Sans JP", "Roboto", monospace$/);
+  expect(result.expected.slice(0, FONT_SANS_PREFIX.length)).toBe(FONT_SANS_PREFIX);
+  // カスタムプロパティの値は宣言のまま（引用符つきの "Roboto"）で返るため、引用符を外して比べる。
+  expect(result.codeFont.replaceAll('"Roboto"', "Roboto")).toBe(FONT_MONO_FAMILY);
   expect(result.checked).toBeGreaterThan(0);
   expect(result.mismatches).toEqual([]);
+}
+
+/**
+ * Noto Sans JP に無い字（合成の例）だけを、自前ホストの Noto Sans SC → TC → HK で補うことを確かめる（#3292）。
+ * 各太さの読み込みと、本文・等幅で Chromium が実際に使った書体を見る。
+ */
+export async function expectLocalCjkFallbackFonts(page: Page) {
+  for (const font of await loadCjkFallbackFonts(page, LOCAL_FONT_WEIGHTS)) {
+    expect(font.count, `${font.family} ${font.weight}`).toBeGreaterThan(0);
+  }
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const rendered = await renderedCjkFallbackFonts(page, cdp);
+    for (const sample of CJK_FALLBACK_SAMPLES) {
+      for (const kind of ["sans", "mono"] as const) {
+        const families = rendered[`${sample.id}-${kind}`];
+        expect(families.length, `${sample.id}-${kind}`).toBeGreaterThan(0);
+        expect(
+          families.every((family) => family.startsWith(sample.family)),
+          `${sample.id}-${kind}: ${families.join(", ")}`
+        ).toBe(true);
+      }
+    }
+  } finally {
+    await cdp.detach();
+  }
 }

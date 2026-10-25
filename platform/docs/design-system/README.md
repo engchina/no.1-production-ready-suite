@@ -1162,6 +1162,17 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 旧構成は規定が無く、`DataTable` のセルが `word-break: break-word` だったため **「デー／タベース」のように任意の文字で分断**され、禁則処理も効かず **行頭に 、。ー っ ゃ** が来ていました。Japanese-first を掲げるシステムとしては致命的な欠落でした。
 
+### 書体の並び（#3292）
+
+```
+--font-sans: "Noto Sans JP", "Noto Sans SC", "Noto Sans TC", "Noto Sans HK", "Roboto", system-ui, …, sans-serif
+--font-mono: "Google Sans Code", "Noto Sans JP", "Noto Sans SC", "Noto Sans TC", "Noto Sans HK", "Roboto", monospace
+```
+
+- 日本語の字形を優先するため Noto Sans JP を先頭に置き、JP に無い字（簡体字・繁体字・香港の字）だけを Noto Sans SC → Noto Sans TC → Noto Sans HK の順で補う。JP にある字（同じ符号の漢字）は JP の字形のまま。
+- 4 書体とも 3 製品が `@fontsource` で自前ホストする（外部の CDN を使わない）。太さは Noto Sans JP と同じ。SC / TC / HK は unicode-range で分けた CSS（`<weight>.css`）を読み、画面に出た字を含む分だけを取得する。preload はせず、`font-display` は `@fontsource` の既定（`swap`）のまま。
+- e2e は共通の `platform/packages/ui/e2e/font-checks.ts`（JP に無い合成の字で SC / TC / HK の読み込みと、実際に使われた書体を確かめる）。
+
 ### アクセシビリティモード（`tokens/a11y.css`）
 
 - `@media (forced-colors: active)` — システム色（`Canvas` / `CanvasText` / `Highlight` / `HighlightText` / `GrayText` / `LinkText`）に総入れ替え。**強制カラーモードでは塗りだけの要素が消えるため、境界線を明示的に与えています。** hover 行は `Highlight` と `HighlightText` を**必ず対で**指定（背景だけ変えると文字が読めなくなる）
@@ -1334,6 +1345,7 @@ QA に事前共有してください。**96点あります。**
 | 157 | **詳細・作成・編集の画面の確定の行（「作成」「保存」と「変更を破棄」）が画面の下端に貼り付かず、フォームの末尾のふつうの行になる**（#2715。`FormActionBar` の `sticky` を削除。system-settings のユーザー・ロール・権限の編集、RAG のナレッジベース・検索・回答プロファイル、Agent の業務 Agent・Skill・MCP 接続・評価セット・自動実行） | #1786 の後は、長いフォームの途中で行が画面の下端に貼り付き（上向きの影）、カードの末尾を過ぎると上へ流れて、lg 以上で上端に貼り付いた `PageHeader` の上に重なって描かれた。375px でも 1 行に等分で並べていた → 行はフォームの末尾にあり、内容と一緒にスクロールする（RAG の言語資源の画面と同じ）。影・下の余白・`data-stuck` は無い。sm 未満は primary と変更を破棄を全幅で縦に積む。複数のカードを 1 つの保存で確定する画面（Agent）は、最後のカードの下に区切り線と行 | 確定の行が `PageHeader` に重なり、下の節（節ごとに保存する「プロファイルの知識」など）まで進んだ利用者の目の前に、別のフォームの保存が出ていた（ユーザーの指示で、貼り付けない形にそろえる） |
 | 158 | **回答の確かめられない段落が本文に残り、段落に印が付く。根拠と矛盾した段落だけが本文から外れ、バッジが「未確認 N 件」「要注意 N 件」「矛盾で除外 N 件」になる**（#2738。`AnswerSections` の `passages`・`AnswerPassageMarked`・`AnswerPassageWarnings`・`AnswerPassageBadges`・`parseAnswerPassageRecords`。RAG のチャット・RAG 検索・実行履歴、Agent のチャット・実行の詳細） | 確かめられない段落は本文から外し、末尾の節「資料から確認できなかった事項」に並べ、業務ガイドの手順の error・根拠なしでは本文全体を定型文にしていた。Agent の「資料との照合」のバッジは「一部を確かめられず省略 N 件」「確かめられず本文を省略」で、RAG にはバッジが無かった → 印の段落は本文に残り、左に 2px の区切りの線（未確認 = `--color-warning-fg`、要注意 = `--color-border-control`）と、段落の末尾に 12px のアイコンと短いラベルの印（未確認 = `CircleHelp` と warning の文字、要注意 = `TriangleAlert` と `fg-muted` の文字。タッチ端末は当たり判定 44px）。印を押すと（Enter / Space でも）段落の下に理由（backend の短い理由と詳しい理由。`surface-sunken` の枠・12px）を開く。本文の上に回答全体の注意（warning の `Banner`）、本文の後ろに節「根拠と矛盾し除いた内容」（外した段落の引用と理由）と「確認が必要な点」（印の段落の引用。押すと本文の段落へ移ってフォーカスする）。どちらも 10 件を超えると「すべて表示」で畳む。バッジは「未確認 N 件」（warning・`CircleHelp`）「要注意 N 件」（neutral・`TriangleAlert`）「矛盾で除外 N 件」（danger・`CircleMinus`）で、0 件は出さない。Agent は「資料との照合」の行と実行の詳細の対応のバッジの横、RAG は回答の本文の下の案内（実行履歴・回答の記録は「処理の詳細」）。印の記録の無い過去の回答は今の表示のまま（バッジは「確かめられない点 N 件」） | 検出器の判定を確認の手がかりとして示し、利用者に理由の分からない欠けた回答を見せない（Vertex AI の check grounding・Azure の groundedness detection と同じく、検出して印を付ける）。状態は色だけで表さず、アイコンと文字を添える。RAG と Agent で同じ部品・同じ文言にする |
 | 159 | **チャットの処理の経過で、実行中の段階が始まった時点で開始順の位置に出て、その場で状態だけが変わる。今の段階を包む実行中の親の工程も、開始順の位置に回さない実行中の印（`CirclePlay`）で出る**（#2840。`ChatProgress`、`RunTimeline` の `spinRunning`） | 実行中は「終わった段階」と「最も内側の実行中の段階 1 行」だけを出し、実行中の親の工程は出なかった。入れ子の工程（親の中の子）では子だけが字下げされた行で出て、親が終わると親の行が子の上に差し込まれ、一覧が入れ替わって見えた → 始まった段階（実行中・終わった段階）を開始順に 1 本で並べ、今の段階の行（スピナー・経過時間）をその位置に置く。一度出た行は消えず、位置も変わらない。動くスピナーは今の段階の 1 つだけ（§3.7）。「N ステップ完了」の数・`<testId>-current` の行・終端後の一覧は変えない | GitHub Actions の steps・AG-UI の STEP_STARTED / STEP_FINISHED と同じく、段階は始まった位置で状態だけを変える（行を動かさない） |
+| 160 | **Noto Sans JP に無い簡体字・繁体字・香港の字が、端末の書体ではなく自前ホストの Noto Sans SC → TC → HK で描かれる**（#3292。`--font-sans` / `--font-mono`） | `"Noto Sans JP", "Roboto", …`（JP に無い字は端末の書体に任せ、字形がそろわない・豆腐になる）→ `"Noto Sans JP", "Noto Sans SC", "Noto Sans TC", "Noto Sans HK", "Roboto", …`（等幅も Google Sans Code → JP の後ろに同じ順） | JP の字形を優先したまま、中国語の資料・質問・回答の字を端末によらずそろえる。JP にある字の見た目は変わらない |
 
 確認カードの質問見出しは、青い外枠を表示しない。読み上げのための自動フォーカスと操作部品のキーボードフォーカス表示は維持する（#3118）。
 

@@ -16,7 +16,10 @@
   },
   "dependencies": {
     "@fontsource/google-sans-code": "^5.3.2",
+    "@fontsource/noto-sans-hk": "^5.3.1",
     "@fontsource/noto-sans-jp": "^5.3.1",
+    "@fontsource/noto-sans-sc": "^5.3.1",
+    "@fontsource/noto-sans-tc": "^5.3.1",
     "@fontsource/roboto": "^5.3.0",
     "@production-ready/system-settings": "file:../../platform/packages/system-settings",
     "@production-ready/ui": "file:../../platform/packages/ui",
