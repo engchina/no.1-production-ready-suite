@@ -2830,7 +2830,7 @@ def get_settings() -> Settings:
 
 
 def settings_today() -> date:
-    """共通の設定の時間帯（`PLATFORM_TIMEZONE`。既定 Asia/Tokyo）の今日（#3255）。
+    """共通の設定の時間帯（`PLATFORM_TIMEZONE`。既定 UTC）の今日（#3255）。
 
     OS の時間帯に左右されない。検索の基準日（`as_of`）・業務ガイドの期間・LLM に渡す
     「今日の日付」の既定に使う。

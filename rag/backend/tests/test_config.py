@@ -1072,7 +1072,7 @@ def test_platform_and_product_env_examples_load(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_settings_today_uses_common_timezone_not_os_clock(monkeypatch: pytest.MonkeyPatch) -> None:
-    """基準日の既定は共通の設定の時間帯（PLATFORM_TIMEZONE。既定 Asia/Tokyo）の今日（#3255）。"""
+    """基準日の既定は共通の設定の時間帯（PLATFORM_TIMEZONE。既定 UTC）の今日（#3255）。"""
     from datetime import UTC, date, datetime
 
     import pr_backend_core.timezones as timezones_module
@@ -1085,10 +1085,10 @@ def test_settings_today_uses_common_timezone_not_os_clock(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(timezones_module, "datetime", _FixedDatetime)
     settings = config_module.get_settings()
-    assert settings.timezone == "Asia/Tokyo"
-    assert config_module.settings_today() == date(2026, 10, 25)
-    monkeypatch.setattr(settings, "timezone", "UTC")
+    assert settings.timezone == "UTC"  # 既定（#3274）。
     assert config_module.settings_today() == date(2026, 10, 24)
+    monkeypatch.setattr(settings, "timezone", "Asia/Tokyo")
+    assert config_module.settings_today() == date(2026, 10, 25)
 
 
 def test_platform_timezone_rejects_fixed_offsets() -> None:

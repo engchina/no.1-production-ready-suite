@@ -50,7 +50,7 @@ describe("format", () => {
     expect(formatDateTime("not-a-date")).toBe("—");
   });
 
-  it("日時は「MM/DD HH:mm」（システムの設定の時間帯。既定 Asia/Tokyo）", () => {
-    expect(formatDateTime("2026-01-01T18:04:00Z")).toBe("01/02 03:04");
+  it("日時は「MM/DD HH:mm」（システムの設定の時間帯。既定は UTC）", () => {
+    expect(formatDateTime("2026-01-01T18:04:00Z")).toBe("01/01 18:04");
   });
 });

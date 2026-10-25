@@ -32,6 +32,8 @@ from app.security.service import set_security_service
 
 # 2026-10-02（金）09:30 JST。
 NOW = datetime(2026, 10, 2, 0, 30, tzinfo=UTC)
+# 時間帯を明示した予定（既定の時間帯は UTC。#3274）。
+TOKYO = "Asia/Tokyo"
 
 
 def _jst(day: int, hour: int, minute: int = 0) -> datetime:
@@ -41,17 +43,34 @@ def _jst(day: int, hour: int, minute: int = 0) -> datetime:
 @pytest.mark.parametrize(
     ("schedule", "expected"),
     [
-        (AutomationSchedule(frequency=ScheduleFrequency.DAILY, time="10:00"), _jst(2, 10)),
-        (AutomationSchedule(frequency=ScheduleFrequency.DAILY, time="09:00"), _jst(3, 9)),
+        (
+            AutomationSchedule(timezone=TOKYO, frequency=ScheduleFrequency.DAILY, time="10:00"),
+            _jst(2, 10),
+        ),
+        (
+            AutomationSchedule(timezone=TOKYO, frequency=ScheduleFrequency.DAILY, time="09:00"),
+            _jst(3, 9),
+        ),
         # 金曜の 09:30 の後の平日の 09:00 は月曜。
-        (AutomationSchedule(frequency=ScheduleFrequency.WEEKDAYS, time="09:00"), _jst(5, 9)),
+        (
+            AutomationSchedule(timezone=TOKYO, frequency=ScheduleFrequency.WEEKDAYS, time="09:00"),
+            _jst(5, 9),
+        ),
         # 毎週の水曜（2）と土曜（5）。
         (
-            AutomationSchedule(frequency=ScheduleFrequency.WEEKLY, time="08:00", weekdays=[2, 5]),
+            AutomationSchedule(
+                timezone=TOKYO, frequency=ScheduleFrequency.WEEKLY, time="08:00", weekdays=[2, 5]
+            ),
             _jst(3, 8),
         ),
-        (AutomationSchedule(frequency=ScheduleFrequency.HOURLY, minute=15), _jst(2, 10, 15)),
-        (AutomationSchedule(frequency=ScheduleFrequency.HOURLY, minute=45), _jst(2, 9, 45)),
+        (
+            AutomationSchedule(timezone=TOKYO, frequency=ScheduleFrequency.HOURLY, minute=15),
+            _jst(2, 10, 15),
+        ),
+        (
+            AutomationSchedule(timezone=TOKYO, frequency=ScheduleFrequency.HOURLY, minute=45),
+            _jst(2, 9, 45),
+        ),
     ],
     ids=[
         "daily-today",

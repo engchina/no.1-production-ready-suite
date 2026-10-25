@@ -32,9 +32,9 @@ AT_JST_MIDNIGHT = datetime(2026, 3, 31, 15, 0, tzinfo=UTC)
         ("Asia/Tokyo", BEFORE_JST_MIDNIGHT, date(2026, 3, 31)),
         ("Asia/Tokyo", AT_JST_MIDNIGHT, date(2026, 4, 1)),
         ("UTC", AT_JST_MIDNIGHT, date(2026, 3, 31)),
-        # 不明な名前・空は既定(Asia/Tokyo)。
-        ("Asia/Osaka", AT_JST_MIDNIGHT, date(2026, 4, 1)),
-        ("", AT_JST_MIDNIGHT, date(2026, 4, 1)),
+        # 不明な名前・空は既定(UTC。#3274)。
+        ("Asia/Osaka", AT_JST_MIDNIGHT, date(2026, 3, 31)),
+        ("", AT_JST_MIDNIGHT, date(2026, 3, 31)),
     ],
     ids=["tokyo-before-midnight", "tokyo-at-midnight", "utc", "unknown-name", "empty"],
 )
@@ -67,7 +67,8 @@ def test_direct_filter_sql_defaults_to_default_timezone_today() -> None:
         side_effect=lambda timezone: business_today(timezone, now=AT_JST_MIDNIGHT),
     ):
         _sql, binds = _classification_filter_sql("c", None)
-    assert binds["as_of"] == "2026-04-01"
+    # 既定(UTC。#3274)の今日。
+    assert binds["as_of"] == "2026-03-31"
 
 
 class _ConnectionContext:

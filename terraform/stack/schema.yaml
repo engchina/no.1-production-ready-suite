@@ -686,16 +686,18 @@ variables:
     title: "SSHキーの追加"
     description: "SSHキーペアを自動生成するか、既存の公開キーをアップロードまたは貼り付けて、opcユーザーのSSH接続に使用します。"
 
+  # 画面には出さない（#3274。利用者の判断で既定の UTC を使う）。変数は残し、Terraform の CLI などでは
+  # Asia/Tokyo も選べる。
   timezone:
     type: enum
     required: true
-    visible: true
+    visible: false
     title: "時間帯"
-    description: "Compute の OS の時間帯と、3 製品の共通の設定（platform/.env の PLATFORM_TIMEZONE。今日〔検索・期間の基準日〕と既定の時間帯）です。Asia/Tokyo（日本時間：東京・大阪など、UTC+9。既定）か UTC（OCI の Database の Time Zone の既定）を選びます。時刻の保存は UTC のままです。Autonomous AI Database の時間帯（DBTIMEZONE）は stack では変えません（README の手順で ADMIN が設定します）。"
+    description: "Compute の OS の時間帯と、3 製品の共通の設定（platform/.env の PLATFORM_TIMEZONE。今日〔検索・期間の基準日〕と既定の時間帯）です。UTC（既定。OCI の Database の Time Zone の既定）か Asia/Tokyo（日本時間：東京・大阪など、UTC+9）を選びます。時刻の保存は UTC のままです。Autonomous AI Database の時間帯（DBTIMEZONE）は stack では変えません（README の手順で ADMIN が設定します）。"
     enum:
-      - "Asia/Tokyo"
       - "UTC"
-    default: "Asia/Tokyo"
+      - "Asia/Tokyo"
+    default: "UTC"
 
   bastion_enabled:
     type: boolean

@@ -17,9 +17,13 @@ const MOMENT = "2026-10-24T15:30:05.000Z";
 afterEach(() => setDisplayTimeZone(null));
 
 describe("表示の時間帯（#3265）", () => {
-  it("既定は Asia/Tokyo で、端末の時間帯に従わない", () => {
-    expect(DEFAULT_DISPLAY_TIME_ZONE).toBe("Asia/Tokyo");
-    expect(displayTimeZone()).toBe("Asia/Tokyo");
+  it("既定は UTC で、端末の時間帯に従わない（#3274）", () => {
+    expect(DEFAULT_DISPLAY_TIME_ZONE).toBe("UTC");
+    expect(displayTimeZone()).toBe("UTC");
+    expect(formatDisplayDateTime(MOMENT, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })).toBe(
+      "10/24 15:30",
+    );
+    setDisplayTimeZone("Asia/Tokyo");
     expect(formatDisplayDateTime(MOMENT, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })).toBe(
       "10/25 00:30",
     );
@@ -32,10 +36,10 @@ describe("表示の時間帯（#3265）", () => {
     setDisplayTimeZone("America/New_York");
     expect(formatDisplayDateTime(MOMENT, { hour: "2-digit", minute: "2-digit" })).toBe("11:30");
     setDisplayTimeZone("Not/AZone");
-    expect(displayTimeZone()).toBe("Asia/Tokyo");
-    setDisplayTimeZone("UTC");
+    expect(displayTimeZone()).toBe("UTC");
+    setDisplayTimeZone("Asia/Tokyo");
     setDisplayTimeZone("");
-    expect(displayTimeZone()).toBe("Asia/Tokyo");
+    expect(displayTimeZone()).toBe("UTC");
   });
 
   it("読めない日時は invalid の文字", () => {
@@ -45,6 +49,7 @@ describe("表示の時間帯（#3265）", () => {
   });
 
   it("年月日時分秒とファイル名の時刻は表示の時間帯（0 時は 0）", () => {
+    setDisplayTimeZone("Asia/Tokyo");
     expect(displayDateTimeParts(MOMENT)).toEqual({ year: 2026, month: 10, day: 25, hour: 0, minute: 30, second: 5 });
     expect(displayFileTimestamp(MOMENT)).toBe("20261025-003005");
     setDisplayTimeZone("UTC");
