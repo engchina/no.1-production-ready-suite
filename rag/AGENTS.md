@@ -29,7 +29,7 @@
 |---|---|---|
 | 回答生成・構造化抽出・クエリ計画 | OCI Enterprise AI | モデル設定は環境変数 / 設定 API 経由 |
 | 埋め込み / リランク | OCI Generative AI（Cohere Embed v4 / Rerank v4 fast） | 埋め込みの次元数を Oracle AI Vector Search とそろえる |
-| 画像・文書理解 | OCI Document Understanding / Enterprise AI Vision | OCR・ページ解析・VLM 入力 |
+| 画像・文書理解 | Enterprise AI Vision（OCI Document Understanding は準備中〔ロードマップ〕。#3374） | OCR・ページ解析・VLM 入力 |
 
 - データ: Oracle Autonomous AI Database / Oracle AI Vector Search（チャンク・引用・文書構造・評価結果・監査ログ・ベクトル検索の正本）と OCI Object Storage（原本・変換済み artifact・レビュー済み文書・評価 artifact）。
 - SDK は `oci` / `python-oracledb`。Frontend は共有 UI に加えて shadcn/ui、通信は REST + SSE / WebSocket。
