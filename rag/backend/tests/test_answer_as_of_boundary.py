@@ -182,11 +182,12 @@ async def test_main_search_and_expansions_use_the_same_as_of(
     # 主検索と参照先の読み取りは、すべて指定した基準日で SQL を組む(今日で補わない)。
     assert {_bound_as_of(filters) for filters in oracle.all_filters()} == {as_of}
     assert oracle.reference_calls or not effective
-    # 実体・関係情報の拡張の範囲は、KB・旧版の扱い・基準日を保ち、文書名の絞り込みは外す。
+    # 実体・関係情報の拡張の範囲は、利用者が指定した条件(文書名も)をすべて保つ(#3260)。
     entity, graph = plans
+    assert entity.scopes == [request.filters]
+    assert graph.scopes == [request.filters]
+    # 交差参照は KB・旧版の扱い・基準日だけを保ち、文書名の絞り込みは外す(#1280)。
     expected = {"as_of": as_of, "knowledge_base_id": "kb-a", "include_superseded": "true"}
-    assert entity.scopes == [expected]
-    assert graph.scopes == [expected]
     assert {frozenset(call["filters"].items()) for call in oracle.document_batch_calls} <= {
         frozenset(expected.items())
     }

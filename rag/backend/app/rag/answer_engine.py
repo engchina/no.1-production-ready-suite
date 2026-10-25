@@ -177,8 +177,12 @@ _REFERENCE_DOCUMENT_CANDIDATES = 20
 # ``_REFERENCE_CHUNKS_PER_TARGET`` 件を足す)。
 _DOCUMENT_REFERENCE_CANDIDATES = 8
 # 交差参照: 参照先を探す範囲に残す検索条件(ナレッジベース・旧版の扱い・基準日だけ)。文書名・
-# ページ・分類などの絞り込みは参照を辿るときには使わない(業務の絞り込みで正当な参照を止めない。
-# §7.2)。基準日(as_of)は時点の境界なので外さない(主検索と同じ日で有効期間を判定する。#2602)。
+# ページ・分類・項目などの絞り込みは参照を辿るときには使わない(業務の絞り込みで正当な参照を
+# 止めない。§7.2)。本文に明記された参照(「第 5 条を参照」など)は、利用者が指定した文書名の外の
+# 文書へも辿る(引用を辿る一般的なやり方と同じ。#1280)。実体・関係情報の拡張(``_expansion_scope``)
+# と違い、意図して利用者の絞り込みを越える(#3260)。基準日(as_of)は時点の境界なので外さない
+# (主検索と同じ日で有効期間を判定する。#2602)。利用者の権限(認可の範囲)は検索条件ではなく
+# SQL の述語で当たるので、ここでも外れない。
 _REFERENCE_SCOPE_FILTER_KEYS = ("knowledge_base_id", "include_superseded", AS_OF_FILTER_KEY)
 # 診断に出す交差参照の件数の上限。
 _REFERENCE_DIAGNOSTICS_LIMIT = 10
@@ -189,8 +193,6 @@ _REFERENCE_DIAGNOSTICS_SEARCHES = 4
 _ENTITY_INSERT_AFTER = 3
 # 実体の拡張の chunk の RRF の点(起点の点に掛ける。rerank が無効なときの並びに使う)。
 _ENTITY_SCORE_DECAY = 0.5
-# 実体・関係情報の拡張の範囲に残す検索条件(交差参照と同じ。ナレッジベース・旧版の扱い・基準日)。
-_ENTITY_SCOPE_FILTER_KEYS = _REFERENCE_SCOPE_FILTER_KEYS
 # 関係情報(#2055)で足した chunk を置く候補の位置(先頭からこの件数の後ろ。実体の拡張の後)。
 # 位置は rerank が決め直す(実体の拡張と違い、位置を保つ枠は持たない)。
 _GRAPH_INSERT_AFTER = 5
@@ -435,6 +437,20 @@ def _relaxation_steps(
     if "file_name" in added:
         steps.append((RELAX_QUESTION_FILE, dict(base)))
     return steps
+
+
+def _expansion_scope(filters: Mapping[str, str]) -> dict[str, str]:
+    """実体・関係情報の拡張の範囲: 利用者が指定した検索条件をすべて残す(#3260)。
+
+    ``filters`` は利用者が指定した条件(画面・検索・回答プロファイル・呼び出し元の
+    ``request.filters``)で、ナレッジベース・旧版の扱い・基準日に加えて文書名・ページ・分類・項目の
+    条件を含む。拡張は主の検索と同じ範囲の中で広げ、利用者が指定した範囲の外から黙って根拠を足さ
+    ない。質問から推測して自動で足した条件(``_question_filters``・``merge_field_conditions``)は
+    含まない(0 件で外す条件。#2401)。利用者の権限は検索条件ではなく SQL の述語で当たる。本文が
+    明記した参照を辿る交差参照は、意図して文書名などの絞り込みを越える
+    (``_REFERENCE_SCOPE_FILTER_KEYS``)。
+    """
+    return {key: value for key, value in filters.items() if value.strip()}
 
 
 def answer_images_enabled(settings: Settings) -> bool:
@@ -1645,8 +1661,9 @@ class AnswerEngine:
     ) -> list[RetrievedChunk]:
         """質問と上位の候補の実体から、関連する chunk を 1 段だけ足す(#1362)。
 
-        実体は文書レシピで実体の抽出を選んだ文書にだけある。足す chunk は検索範囲のナレッジベース(と
-        利用者の権限・旧版の扱い)の中だけで、合計 ``rag_entity_expansion_max_chunks`` 件まで。
+        実体は文書レシピで実体の抽出を選んだ文書にだけある。足す chunk は主の検索と同じ範囲
+        (利用者が指定した条件と権限。``_expansion_scope``)の中だけで、合計
+        ``rag_entity_expansion_max_chunks`` 件まで。
         上位の候補(起点)は足さない(すでに候補の先頭にある)。読めないとき(実体の表が無い古い
         schema など)は足さずに回答を続ける。LLM は呼ばない。
         """
@@ -1654,11 +1671,7 @@ class AnswerEngine:
             # 既定は on(#1402)。検索・回答プロファイル(と評価の rag_overrides)で off にできる
             # (#1388)。
             return []
-        scope = {
-            key: value
-            for key, value in request.filters.items()
-            if key in _ENTITY_SCOPE_FILTER_KEYS and value.strip()
-        }
+        scope = _expansion_scope(request.filters)
         seeds = list(anchors[:ENTITY_SEED_ANCHORS])
         key = (
             request.query,
@@ -1712,18 +1725,14 @@ class AnswerEngine:
         """関係情報(#2055)で、上位の候補の章節・表と質問の見出しの語から chunk を足す。
 
         関係情報は文書レシピで「関係情報の構築」を「構築する」にした文書にだけあり、無ければ何も
-        足さない。足す chunk は検索範囲のナレッジベース(と利用者の権限・旧版の扱い)の中だけで、
-        合計 ``rag_graph_expansion_max_chunks`` 件まで。読めないときは足さずに回答を続ける。LLM は
-        呼ばない。
+        足さない。足す chunk は主の検索と同じ範囲(利用者が指定した条件と権限。
+        ``_expansion_scope``)の中だけで、合計 ``rag_graph_expansion_max_chunks`` 件まで。読めない
+        ときは足さずに回答を続ける。LLM は呼ばない。
         """
         if not self._settings.rag_graph_expansion_enabled:
             # 既定は off。検索方法の画面・検索・回答プロファイル(と評価の rag_overrides)で on。
             return []
-        scope = {
-            key: value
-            for key, value in request.filters.items()
-            if key in _ENTITY_SCOPE_FILTER_KEYS and value.strip()
-        }
+        scope = _expansion_scope(request.filters)
         seeds = list(anchors[:GRAPH_SEED_ANCHORS])
         key = (
             request.query,
@@ -1809,8 +1818,9 @@ class AnswerEngine:
         候補だけなら DB を読まない。足す chunk は 1 回の検索で合計
         ``rag_reference_expansion_max_chunks`` 件まで、参照先 1 つにつき節の先頭から
         ``_REFERENCE_CHUNKS_PER_TARGET`` 件まで。順位は rag_engine の rerank が決める(LLM は
-        呼ばない)。参照先の範囲は検索範囲のナレッジベース(と利用者の権限)で、文書名・ページ・
-        分類の絞り込みは使わない。読めない参照先は足さない(回答は続ける)。
+        呼ばない)。参照先の範囲は検索範囲のナレッジベース(と利用者の権限・旧版の扱い・基準日)で、
+        文書名・ページ・分類・項目の絞り込みは使わない(本文が明記した参照は、利用者が指定した文書名の
+        外へも辿る。``_REFERENCE_SCOPE_FILTER_KEYS``。#3260)。読めない参照先は足さない(回答は続ける)。
 
         文書名だけの参照(「時間帯は定期保守計画で確かめます」。#1400)は、参照先の文書の中を
         ``question``(検索文とその埋め込み)で検索し、rerank で質問に関連の高い chunk を選ぶ
