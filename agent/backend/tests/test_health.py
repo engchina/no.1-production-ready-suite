@@ -2126,7 +2126,9 @@ def test_trace_exporter_retry_worker_flushes_due_events(monkeypatch: MonkeyPatch
         await start_trace_export_retry_worker()
         try:
             assert trace_export_retry_worker_running() is True
-            for _ in range(50):
+            # 上限は時刻で決める（CI の並列の負荷で worker の周期が遅れても待てるように。#3246）。
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
                 if trace_exporter_status().retry_queue_size == 0:
                     return
                 await anyio.sleep(0.02)
