@@ -92,7 +92,7 @@ def test_mineru_is_not_run_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
         return "# 本文"
 
     fake = types.ModuleType("mineru")
-    setattr(fake, "parse_document", parse_document)
+    fake.parse_document = parse_document  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "mineru", fake)
 
     result = _external_adapter_result(
