@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field, replace
+from functools import wraps
 
 from app.config import Settings, get_settings
 
@@ -59,6 +60,27 @@ _AUDIT_REQUEST_CONTEXT: ContextVar[AuditRequestContext | None] = ContextVar(
     "audit_request_context",
     default=None,
 )
+
+# 文脈を作らずに動いた処理（文脈を引き継がない thread・起動時の task など）の context。範囲は
+# すべて空の集合（拒否全件）で、利用者も分からない（fail-closed。#3250）。範囲の制限の無い
+# context は、利用者の要求の外の信頼した処理だけが `system_access_context` で明示して作る。
+NO_ACCESS_AUDIT_REQUEST_CONTEXT = AuditRequestContext(
+    allowed_document_ids=frozenset(),
+    allowed_category_names=frozenset(),
+    allowed_knowledge_base_ids=frozenset(),
+    allowed_search_answer_profile_ids=frozenset(),
+)
+
+
+def without_access_scope(context: AuditRequestContext) -> AuditRequestContext:
+    """`context` の対象範囲を、すべて空の集合（拒否全件）にする（利用者の分からない要求）。"""
+    return replace(
+        context,
+        allowed_document_ids=frozenset(),
+        allowed_category_names=frozenset(),
+        allowed_knowledge_base_ids=frozenset(),
+        allowed_search_answer_profile_ids=frozenset(),
+    )
 
 
 def audit_request_context_from_headers(
@@ -184,6 +206,32 @@ def unrestricted_access_scope() -> Iterator[None]:
         reset_audit_request_context(token)
 
 
+@contextmanager
+def system_access_context() -> Iterator[None]:
+    """利用者の要求の外の信頼した処理（取込の worker・CLI）を、範囲の制限なしで動かす（#3250）。
+
+    文脈の無い処理は何も使えない（`NO_ACCESS_AUDIT_REQUEST_CONTEXT`）ので、tenant 内の全件を
+    扱う process の入口（`main`・worker の loop）だけがこれで明示する。利用者は分からないので、
+    利用者の物（会話・保存済みの回答・フィードバック・実行履歴）は見えない。
+    """
+    token = set_audit_request_context(AuditRequestContext())
+    try:
+        yield
+    finally:
+        reset_audit_request_context(token)
+
+
+def with_system_access[**P, R](function: Callable[P, R]) -> Callable[P, R]:
+    """CLI の `main` を `system_access_context` の中で動かす（`asyncio.run` は文脈を引き継ぐ）。"""
+
+    @wraps(function)
+    def wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
+        with system_access_context():
+            return function(*args, **kwargs)
+
+    return wrapped
+
+
 def set_audit_request_context(
     context: AuditRequestContext,
 ) -> Token[AuditRequestContext | None]:
@@ -197,8 +245,9 @@ def reset_audit_request_context(token: Token[AuditRequestContext | None]) -> Non
 
 
 def current_audit_request_context() -> AuditRequestContext:
-    """現在の監査 context を返す。"""
-    return _AUDIT_REQUEST_CONTEXT.get() or AuditRequestContext()
+    """現在の監査 context を返す。文脈が無ければ何も使えない context（fail-closed。#3250）。"""
+    context = _AUDIT_REQUEST_CONTEXT.get()
+    return NO_ACCESS_AUDIT_REQUEST_CONTEXT if context is None else context
 
 
 def caller_owns(owner_user_id_hash: str | None) -> bool:
@@ -206,13 +255,12 @@ def caller_owns(owner_user_id_hash: str | None) -> bool:
 
     会話に新しい内容（続きの質問・添付・名前の変更・評価）を足せるのは持ち主だけで、platform の
     `can_add_user_content` と同じ規則にする: 持ち主の分からない会話（`user_id_hash` が NULL の
-    古い行）には誰も足せない。利用者の分からない context（`user_id_hash` が None）は `/api` の
-    認証の dependency を通らない呼び出しだけで（local・本番とも `/api` は必ず利用者の hash を
-    持つ）、会話の条件でも持ち主で絞らないので、本人の会話とみなす。
+    古い行）には誰も足せない。利用者の分からない context（`user_id_hash` が None）は誰の持ち主
+    でもない（fail-closed。会話の条件も会話を返さない。#3250）。
     """
     caller = current_audit_request_context().user_id_hash
     if caller is None:
-        return True
+        return False
     return bool(owner_user_id_hash) and owner_user_id_hash == caller
 
 

@@ -105,6 +105,7 @@ def test_saving_unregistered_model_returns_422_before_database_write(
     assert "選び直す" in "".join(response.json()["error_messages"])
 
 
+@pytest.mark.usefixtures("system_access")
 @pytest.mark.parametrize(
     "profile_model,explicit,generate,expected",
     [

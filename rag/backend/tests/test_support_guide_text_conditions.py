@@ -199,6 +199,7 @@ def test_empty_choices_require_free_text_and_one_choice_is_invalid() -> None:
         RuleClarification(question="対象は？", options=[{"id": "a", "label": "A"}])
 
 
+@pytest.mark.usefixtures("system_access")
 @pytest.mark.parametrize("preview", [False, True])
 async def test_search_and_draft_preview_use_the_same_recognition(
     monkeypatch: pytest.MonkeyPatch, preview: bool
@@ -259,6 +260,7 @@ async def test_separate_explicit_spans_are_preserved_without_inventing_words(
     assert result.decision == "answer"
 
 
+@pytest.mark.usefixtures("system_access")
 async def test_retrieval_without_answer_does_not_add_model_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

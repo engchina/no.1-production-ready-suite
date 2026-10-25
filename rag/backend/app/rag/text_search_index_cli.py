@@ -26,6 +26,7 @@ from rag_engine.retrieval.text_search_tokenizer import normalize_text_search_ind
 
 from app.clients.oracle import _init_oracle_client, _oracle_connect_kwargs
 from app.config import get_settings
+from app.rag.request_context import with_system_access
 
 DEFAULT_BATCH_SIZE = 500
 # (表, 主キー)。どちらも search_text に CONTEXT 索引がある。
@@ -125,6 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+@with_system_access
 def main(argv: Sequence[str] | None = None) -> int:
     configure_cli_logging("rag")
     args = build_parser().parse_args(argv)

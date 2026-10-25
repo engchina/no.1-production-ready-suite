@@ -451,8 +451,10 @@ def test_conversation_scope_adds_user_predicate_only_when_authenticated() -> Non
     assert "c.user_id_hash = :conversation_user_id_hash" in sql
     assert binds["conversation_user_id_hash"] == "user-hash"
 
+    # 文脈の無い呼び出しは、持ち主で絞らずに全件を返すのではなく 0 件（fail-closed。#3250）。
     sql, binds = _oracle_conversation_where()
     assert "user_id_hash" not in sql
+    assert "1 = 0" in sql
     assert "conversation_user_id_hash" not in binds
 
 

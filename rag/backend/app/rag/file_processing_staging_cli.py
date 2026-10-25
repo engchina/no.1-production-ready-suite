@@ -48,6 +48,7 @@ from app.rag.parser_adapter_scorecard import (
     build_parser_adapter_scorecard,
     build_parser_adapter_source_routes,
 )
+from app.rag.request_context import with_system_access
 from app.rag.staging_smoke import SmokePreflightResult, staging_smoke_preflight
 
 PROMOTION_THRESHOLD_GUARDS: Mapping[str, tuple[str, float]] = {
@@ -199,6 +200,7 @@ SENSITIVE_STAGING_PAYLOAD_KEYS = frozenset(
 )
 
 
+@with_system_access
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint。"""
     configure_cli_logging("rag")

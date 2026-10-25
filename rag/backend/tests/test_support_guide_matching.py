@@ -303,6 +303,7 @@ def _published_store(guides: list[Any]) -> type:
     return _Store
 
 
+@pytest.mark.usefixtures("system_access")
 async def test_search_expands_aliases_and_records_the_breakdown(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(search_route, "OracleClient", lambda: _ProfileOracle())
     monkeypatch.setattr(search_route, "SupportGuideStore", _published_store(GUIDES))
@@ -315,6 +316,7 @@ async def test_search_expands_aliases_and_records_the_breakdown(monkeypatch: Mon
     assert guide["match_breakdown"]["alias_terms"] == ["通知画面A"]
 
 
+@pytest.mark.usefixtures("system_access")
 async def test_search_clarifies_close_guides_when_enabled(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(
         search_route,
@@ -491,6 +493,7 @@ async def test_semantic_failure_falls_back_to_term_matching(monkeypatch: MonkeyP
     assert match is not None and match.guide_id == "g-notice"
 
 
+@pytest.mark.usefixtures("system_access")
 @pytest.mark.parametrize("enabled", [None, False])
 async def test_master_off_skips_all_guide_work_and_keeps_regular_knowledge(
     enabled: bool | None, monkeypatch: MonkeyPatch
