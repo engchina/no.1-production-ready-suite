@@ -19,18 +19,13 @@
  *   書体を記録し、`firstRenderFontFaces` で読む。`initialStylesheetFontFaces` は index.html が読む（preload を含む）CSS の
  *   `@font-face` の書体、`waitForCjkFallbackFaces` は後から読む face が登録されるまで待つ
  *
+ * - `renderedLangFonts`: 内容の言語（`lang`）ごとに、共通の漢字が JP / SC / TC / HK のどれで描かれるか（#3335）。
+ *   `renderedFontsForSelector` は画面の部品（回答など）の文字を描いた書体
+ *
  * 製品の spec は相対パスで import し（RAG・Agent `../../../platform/packages/ui/e2e/font-checks`、NL2SQL
  * `../../../../platform/packages/ui/e2e/font-checks`）、結果を製品の `expect` で確かめる。
  * `@playwright/test` の型は import しない（`layout-checks.ts` と同じ理由）。
  */
-
-/** 本文の書体（`--font-sans`）の計算値の先頭。日本語の字形を優先し、JP に無い字だけを SC → TC → HK で補う。 */
-export const FONT_SANS_PREFIX =
-  '"Noto Sans JP Variable", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", Roboto,';
-
-/** 等幅書体（`--font-mono`）の計算値。Google Sans Code に無い字は本文と同じ順で補う。 */
-export const FONT_MONO_FAMILY =
-  '"Google Sans Code", "Noto Sans JP Variable", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", Roboto, monospace';
 
 /** 共有 tokens の太さ（`--font-weight-regular` / `medium` / `semibold` / `bold`）。 */
 export const UI_FONT_WEIGHTS = [400, 500, 600, 700] as const;
@@ -41,6 +36,17 @@ export const UI_FONT_WEIGHTS = [400, 500, 600, 700] as const;
  * Google Sans Code で描かれる）。
  */
 export const JAPANESE_FONT = { family: "Noto Sans JP Variable", renderedFamily: "Noto Sans JP", text: "表示の確認ひらがなカタカナ" } as const;
+
+/**
+ * 本文の書体（`--font-sans`）の計算値の先頭。日本語の字形を優先し、JP に無い字だけを SC → TC → HK で補う。
+ * Web の書体の直後に、寸法を合わせた代わりの書体（`Noto Sans JP Fallback`。端末の書体の local()。#3335）を置く。
+ */
+export const FONT_SANS_PREFIX =
+  '"Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", Roboto,';
+
+/** 等幅書体（`--font-mono`）の計算値。Google Sans Code に無い字は本文と同じ順で補う。 */
+export const FONT_MONO_FAMILY =
+  '"Google Sans Code", "Google Sans Code Fallback", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", Roboto, monospace';
 
 /**
  * Noto Sans JP に無い合成の字（業務の内容ではなく、字の収録の違いだけで選ぶ）。
@@ -206,6 +212,83 @@ export async function loadCjkFallbackFonts(page: EvaluatePage, weights: readonly
 
 /** 合成の字を描いたときに Chromium が使った書体の名前（`familyName`。太さの名前が付くことがある）。 */
 export type RenderedCjkFallbackFonts = Record<`${CjkFallbackSampleId}-${"sans" | "mono"}`, string[]>;
+
+/** Playwright の CDPSession.send は CDP の method 名で型が決まる。ここで使う 4 つだけを型にする。 */
+type CdpSend = (
+  method: string,
+  params?: Record<string, unknown>
+) => Promise<{ root?: { nodeId: number }; nodeId?: number; fonts?: { familyName: string }[] }>;
+
+/** `selector` に当たる要素の子の文字を描いた書体の名前（CDP の `CSS.getPlatformFontsForNode`）。 */
+export async function renderedFontsForSelector(cdp: CdpSessionLike, selector: string): Promise<string[]> {
+  const send = cdp.send.bind(cdp) as unknown as CdpSend;
+  await send("DOM.enable");
+  await send("CSS.enable");
+  const { root } = await send("DOM.getDocument");
+  const { nodeId } = await send("DOM.querySelector", { nodeId: root?.nodeId, selector });
+  if (!nodeId) throw new Error(`要素がありません: ${selector}`);
+  const { fonts } = await send("CSS.getPlatformFontsForNode", { nodeId });
+  return (fonts ?? []).map((font) => font.familyName);
+}
+
+/**
+ * 内容の言語（`lang`）ごとの漢字の書体（#3335）。JP・SC・TC・HK のすべてにある共通の漢字（合成の例）を、
+ * `lang` を付けた要素の本文（`span`）と等幅（`code`）で描き、`renderedFamily` で始まる書体だけで描かれるかを確かめる。
+ * 画面の文言（`<html lang="ja">`）と `lang="ja"` の内容は JP、`zh-Hans` は SC、`zh-Hant` は TC、`zh-HK` は HK。
+ */
+export const LANG_FONT_SAMPLES = [
+  { lang: "ja", family: "Noto Sans JP Variable", renderedFamily: "Noto Sans JP" },
+  { lang: "zh-Hans", family: "Noto Sans SC Variable", renderedFamily: "Noto Sans SC" },
+  { lang: "zh-Hant", family: "Noto Sans TC Variable", renderedFamily: "Noto Sans TC" },
+  { lang: "zh-HK", family: "Noto Sans HK Variable", renderedFamily: "Noto Sans HK" },
+] as const;
+
+/** 4 書体のすべてにある共通の漢字（同じ符号で地域ごとに字形が違う例。業務の内容ではない）。 */
+export const SHARED_HAN_SAMPLE = "骨直角";
+
+export type RenderedLangFonts = Record<`${(typeof LANG_FONT_SAMPLES)[number]["lang"]}-${"sans" | "mono"}`, string[]>;
+
+/** {@link LANG_FONT_SAMPLES} の各言語で共通の漢字を描き、実際に使った書体の名前を返す。描いた要素は返す前に消す。 */
+export async function renderedLangFonts(page: EvaluatePage, cdp: CdpSessionLike): Promise<RenderedLangFonts> {
+  await waitForCjkFallbackFaces(page);
+  await page.evaluate(
+    async ({ samples, text }) => {
+      const host = document.createElement("div");
+      host.setAttribute("data-lang-font-samples", "");
+      for (const sample of samples) {
+        const block = document.createElement("div");
+        block.lang = sample.lang;
+        const sans = document.createElement("span");
+        sans.setAttribute("data-lang-font-sample", `${sample.lang}-sans`);
+        sans.textContent = text;
+        const mono = document.createElement("code");
+        mono.setAttribute("data-lang-font-sample", `${sample.lang}-mono`);
+        mono.textContent = text;
+        block.append(sans, mono);
+        host.append(block);
+      }
+      document.body.append(host);
+      for (const sample of samples) {
+        for (const weight of [400, 700]) await document.fonts.load(`${weight} 14px "${sample.family}"`, text);
+      }
+      await document.fonts.ready;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    },
+    { samples: LANG_FONT_SAMPLES.map((sample) => ({ ...sample })), text: SHARED_HAN_SAMPLE }
+  );
+  const result = {} as RenderedLangFonts;
+  try {
+    for (const sample of LANG_FONT_SAMPLES) {
+      for (const kind of ["sans", "mono"] as const) {
+        const key = `${sample.lang}-${kind}` as const;
+        result[key] = await renderedFontsForSelector(cdp, `[data-lang-font-sample="${key}"]`);
+      }
+    }
+  } finally {
+    await page.evaluate(() => document.querySelector("[data-lang-font-samples]")?.remove(), undefined);
+  }
+  return result;
+}
 
 /**
  * 合成の字を本文の書体（`body` を継承する `span`）と等幅（`code`）で描き、実際に使った書体の名前を返す。

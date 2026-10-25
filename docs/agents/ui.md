@@ -39,7 +39,8 @@
 - この構成を外れた画面は review で差し戻す。`PageHeader` の `actions` は配列で渡す（JSX を渡さない。danger → utility → secondary → primary の順に並び、右端が primary）。画面を移るだけの操作は `ButtonLink`（`<Link className={buttonVariants(...)}>` に手書きしない）。
 - **詳細・作成・編集の画面**: 「一覧へ戻る」は `PageHeader` の `back`。「作成」「保存」（primary）と「変更を破棄」（その右）はフォームの末尾の `FormActionBar` に置き、左端を入力欄の左端にそろえる（`PageHeader` の右端に置かない。画面の下端に貼り付けない。#1786 / #2715）。一覧の「新規作成」は `PageHeader` のまま。対象への操作は最初のカードの `ObjectActionBar` 1 か所、保存の失敗は確定の行の直上の `SaveErrorBanner`。例外を含む正本は README §4「詳細・作成・編集の画面の操作」。
 - `PageHeader` と `PageBody` の `wide` は必ず同じ値にする（1920px で左端がずれる）。
-- 単位の境界: 文字サイズとコントロール高さは px、余白とレイアウト寸法は rem（14px ルート）。本文は `"Noto Sans JP Variable", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", system-ui, sans-serif` の 14px（4 書体とも可変書体。JP に無い字だけを SC → TC → HK で補う）。
+- 単位の境界: 文字サイズとコントロール高さは px、余白とレイアウト寸法は rem（14px ルート）。本文は `"Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", system-ui, sans-serif` の 14px（4 書体とも可変書体。JP に無い字だけを SC → TC → HK で補う。`Noto Sans JP Fallback` は寸法を合わせた端末の書体。書体の並びは `tokens/fonts.css` だけに書く）。
+- **利用者の内容（回答・根拠の抜粋・質問・文書のプレビューの本文）には内容の言語の `lang` を付ける**（#3335）。共有の部品（`AnswerSections` / `AnswerPlainText` / `MarkdownText` / `ExcerptContent` / `EvidenceCard` / `ChatUserMessage` / `DocumentPreview` の text）が本文から判定して付けるので、製品で `lang` を書かず、内容を文字列のまま部品に渡す（取込で言語が分かれば部品の `lang` に渡す）。製品が内容を自前の要素で出すなら `resolveContentLang` で付ける。`lang="zh-Hans"` / `zh-Hant` / `zh-HK` の要素は SC / TC / HK を先頭にした並びになる。画面の文言は `<html lang="ja">` のまま。
 
 ## 操作部品の高さと幅
 

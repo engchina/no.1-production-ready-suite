@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 
+import { resolveContentLang } from "../../lib/content-lang";
 import { cn } from "../../lib/utils";
 import { parseExcerpt, type ExcerptBlock, type ExcerptTableCell } from "../../lib/excerpt-text";
 import { DataTable, type DataTableColumn } from "./data-table";
@@ -11,17 +12,20 @@ export interface ExcerptContentProps {
   className?: string;
   /** 表の読み上げの名前。 */
   tableLabel?: string;
+  /** 本文の言語（#3335。`resolveContentLang`）。渡さなければ本文から判定し、`null` なら `lang` を付けない。 */
+  lang?: string | null;
   testId?: string;
 }
 
 /**
  * 抜粋の全文の表示（#2387）。本文は改行を保って出し、文書の表（HTML の `<table>`）は共通の `DataTable` で表にする。
- * 3 行に畳む表示は {@link excerptPlainText}（表は「セル | セル」の行）を使う。
+ * 3 行に畳む表示は {@link excerptPlainText}（表は「セル | セル」の行）を使う。本文の言語を `lang` に付ける（#3335）。
  */
-export function ExcerptContent({ text, className, tableLabel = "抜粋の表", testId }: ExcerptContentProps) {
+export function ExcerptContent({ text, className, tableLabel = "抜粋の表", lang, testId }: ExcerptContentProps) {
   const blocks = useMemo(() => parseExcerpt(text), [text]);
+  const contentLang = useMemo(() => resolveContentLang(lang, text), [lang, text]);
   return (
-    <div className={cn("min-w-0 space-y-2", className)} data-testid={testId}>
+    <div className={cn("min-w-0 space-y-2", className)} lang={contentLang} data-testid={testId}>
       {blocks.map((block, index) =>
         block.kind === "text" ? (
           <p key={index} className="whitespace-pre-wrap break-words">

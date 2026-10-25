@@ -12,6 +12,7 @@ import {
   formatBboxPercent,
   normalizeBboxForPreview,
 } from "../../lib/bbox";
+import { resolveContentLang } from "../../lib/content-lang";
 import { excerptPlainText } from "../../lib/excerpt-text";
 import { findTextQuote } from "../../lib/text-quote";
 import { INFORMATION_TABLE_FOCUS_CLASS } from "../../lib/list-density";
@@ -69,6 +70,11 @@ export interface DocumentPreviewProps extends DocumentPreviewFocus {
    * 同じ考え方。#2512）。照合は文字と数字だけを比べる汎用の仕組みで、見つからなければ先頭のまま。
    */
   focusText?: string | null;
+  /**
+   * `text`: 本文の言語（BCP 47。#3335。`resolveContentLang`）。取込で分かっていれば渡す。渡さなければ本文から判定して
+   * 本文の領域に `lang` を付け（漢字を内容の言語の字形で描く）、`null` なら付けない。
+   */
+  textLang?: string | null;
   /** `unsupported` の案内（既定は {@link DocumentPreviewLabels.unsupported}）。 */
   unsupportedMessage?: string;
   /** `unsupported` で出すダウンロードの URL。無ければボタンを出さない。 */
@@ -99,6 +105,7 @@ export function DocumentPreview({
   loadText,
   textKey,
   focusText = null,
+  textLang,
   unsupportedMessage,
   downloadUrl = null,
   focusPage = null,
@@ -184,7 +191,14 @@ export function DocumentPreview({
   if (kind === "text" && loadText) {
     return (
       <PreviewFrame className={className} sizing={sizing} labels={labels} {...focus}>
-        <TextPreview key={textKey} loadText={loadText} fileName={fileName} focusText={focusText} labels={labels} />
+        <TextPreview
+          key={textKey}
+          loadText={loadText}
+          fileName={fileName}
+          focusText={focusText}
+          textLang={textLang}
+          labels={labels}
+        />
       </PreviewFrame>
     );
   }
@@ -332,11 +346,13 @@ function TextPreview({
   loadText,
   fileName,
   focusText,
+  textLang,
   labels,
 }: {
   loadText: (signal: AbortSignal) => Promise<string>;
   fileName: string;
   focusText: string | null;
+  textLang: string | null | undefined;
   labels: DocumentPreviewLabels;
 }) {
   // 取得結果は試行ごとに持つ（再試行の直後は前の結果を使わず、読込中として扱う）。
@@ -379,20 +395,25 @@ function TextPreview({
       </TimedLoadingState>
     );
   }
-  return <TextPreviewBody text={current.text} fileName={fileName} focusText={focusText} labels={labels} />;
+  return (
+    <TextPreviewBody text={current.text} fileName={fileName} focusText={focusText} textLang={textLang} labels={labels} />
+  );
 }
 
 function TextPreviewBody({
   text,
   fileName,
   focusText,
+  textLang,
   labels,
 }: {
   text: string;
   fileName: string;
   focusText: string | null;
+  textLang: string | null | undefined;
   labels: DocumentPreviewLabels;
 }) {
+  const contentLang = useMemo(() => resolveContentLang(textLang, text), [textLang, text]);
   // 抜粋に入る文書の表（HTML の `<table>`）は、画面の抜粋と同じく文字にしてから照合する。
   const range = useMemo(() => (focusText ? findTextQuote(text, excerptPlainText(focusText)) : null), [text, focusText]);
   const scrollRef = useRef<HTMLPreElement>(null);
@@ -430,6 +451,7 @@ function TextPreviewBody({
           "relative min-h-40 flex-1 overflow-auto rounded-md border border-border bg-surface p-4 text-sm leading-relaxed whitespace-pre-wrap break-words text-fg",
           INFORMATION_TABLE_FOCUS_CLASS
         )}
+        lang={contentLang}
         data-testid="preview-text"
       >
         {range ? (

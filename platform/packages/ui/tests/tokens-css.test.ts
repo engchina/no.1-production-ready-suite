@@ -18,7 +18,41 @@ describe("tokens CSS", () => {
   });
 
   it("意味トークンを color-scheme を切り替える要素すべてで宣言し直す（Lightning CSS 変換後もスコープ内でダーク値になる）", () => {
-    expect(colors).toMatch(/:root, \[data-theme\], \[data-surface\] \{\s*--font-sans/);
+    expect(colors).toMatch(/:root, \[data-theme\], \[data-surface\] \{[^}]*--color-canvas:\s*light-dark/);
+  });
+
+  it("書体の並びは fonts.css が持ち、内容の言語（lang）で漢字の並びだけを替える（#3335）", () => {
+    const fonts = read("tokens/fonts.css");
+    expect(colors).not.toMatch(/--font-(sans|mono):/);
+    expect(read("tokens.css")).toMatch(/@import "\.\/tokens\/fonts\.css";/);
+    expect(fonts).toMatch(/--font-sans: var\(--font-han\), var\(--font-sans-tail\);/);
+    for (const [lang, first] of [
+      ["ja", "Noto Sans JP Variable"],
+      ["zh-Hans", "Noto Sans SC Variable"],
+      ["zh-Hant", "Noto Sans TC Variable"],
+      ["zh-HK", "Noto Sans HK Variable"],
+    ]) {
+      expect(fonts).toMatch(new RegExp(`:where\\(\\[lang\\]:lang\\(${lang}\\)\\) \\{\\s*--font-han: "${first}",`));
+    }
+    // lang を付けた要素だけで組み直す（詳細度 0。子は継承する）。
+    expect(fonts).toMatch(/:where\(\[lang\]\) \{\s*--font-sans: var\(--font-han\), var\(--font-sans-tail\);\s*--font-mono:[^;]+;/);
+    // 書体の指定は Tailwind の base の層（preflight の code / pre と utility を上書きしない）。
+    expect(fonts).toMatch(/@layer base \{\s*:where\(\[lang\]\) \{\s*font-family: var\(--font-sans\);\s*\}\s*\}/);
+  });
+
+  it("寸法を合わせた代わりの書体は local() だけで、Web の書体の直後に置く（#3335）", () => {
+    const fonts = read("tokens/fonts.css");
+    const faces = [...fonts.matchAll(/@font-face \{([^}]*)\}/g)].map((match) => match[1]);
+    expect(faces).toHaveLength(8);
+    for (const face of faces) {
+      expect(face).toMatch(/font-family: "(Noto Sans JP|Google Sans Code) Fallback";/);
+      expect(face).not.toMatch(/url\(/);
+      expect(face).toMatch(/ascent-override: [\d.]+%;/);
+      expect(face).toMatch(/descent-override: [\d.]+%;/);
+      expect(face).toMatch(/line-gap-override: 0%;/);
+    }
+    expect(fonts).toMatch(/--font-han: "Noto Sans JP Variable", "Noto Sans JP Fallback",/);
+    expect(fonts).toMatch(/--font-mono: "Google Sans Code", "Google Sans Code Fallback",/);
   });
 
   it("テーマ class（.light / .dark）はルート要素でだけ効く（外部ライブラリの同名 class に反応しない）", () => {

@@ -7,6 +7,7 @@ import {
   FONT_SANS_PREFIX,
   JAPANESE_FONT,
   faceCoversWeight,
+  LANG_FONT_SAMPLES,
   firstRenderFontFaces,
   initialStylesheetFontFaces,
   japaneseInkByWeight,
@@ -14,6 +15,7 @@ import {
   loadJapaneseFonts,
   renderedCjkFallbackFonts,
   renderedJapaneseFonts,
+  renderedLangFonts,
 } from "../../../../../platform/packages/ui/e2e/font-checks";
 
 export { recordFirstRenderFontFaces } from "../../../../../platform/packages/ui/e2e/font-checks";
@@ -119,6 +121,29 @@ export async function expectLocalCjkFallbackFonts(page: Page) {
         expect(
           families.every((family) => family.startsWith(sample.renderedFamily)),
           `${sample.id}-${kind}: ${families.join(", ")}`
+        ).toBe(true);
+      }
+    }
+  } finally {
+    await cdp.detach();
+  }
+}
+
+/**
+ * 内容の言語（`lang`）ごとに、JP・SC・TC・HK のすべてにある共通の漢字（合成の例）が、その言語の書体で描かれることを
+ * 確かめる（#3335）。`lang="zh-Hans"` は SC、`zh-Hant` は TC、`zh-HK` は HK、`ja` は JP。本文と等幅の両方。
+ */
+export async function expectLangFonts(page: Page) {
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const rendered = await renderedLangFonts(page, cdp);
+    for (const sample of LANG_FONT_SAMPLES) {
+      for (const kind of ["sans", "mono"] as const) {
+        const families = rendered[`${sample.lang}-${kind}`];
+        expect(families.length, `${sample.lang}-${kind}`).toBeGreaterThan(0);
+        expect(
+          families.every((family) => family.startsWith(sample.renderedFamily)),
+          `${sample.lang}-${kind}: ${families.join(", ")}`
         ).toBe(true);
       }
     }

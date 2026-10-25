@@ -1,6 +1,7 @@
 import { BookOpen, ExternalLink, FileText, History, Layers, LocateFixed, Lock, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
+import { resolveContentLang } from "../../lib/content-lang";
 import { excerptPlainText } from "../../lib/excerpt-text";
 import { INFORMATION_TABLE_FOCUS_CLASS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
@@ -48,6 +49,11 @@ export interface EvidenceListItem {
   fileName: string;
   /** 本文（抜粋）。カードでは 3 行まで出す。 */
   text: string;
+  /**
+   * 本文の言語（BCP 47。#3335）。取込で分かっていれば渡す。渡さなければ本文から判定して抜粋に `lang` を付け、
+   * `null` なら付けない（`resolveContentLang`）。
+   */
+  lang?: string | null;
   /**
    * 回答で引用した箇所か。回答を作らない検索の結果など、引用したかが分からないときは null
    * （見出しは件数だけにし、バッジを出さない）。
@@ -367,6 +373,7 @@ function EvidenceSummaryBody({
             <p
               data-testid="citation-text"
               className="mt-2.5 line-clamp-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-fg/90"
+              lang={resolveContentLang(item.lang, item.text)}
             >
               {excerptPlainText(item.text)}
             </p>
@@ -383,13 +390,13 @@ function EvidenceSummaryBody({
             summaryProps={{ "data-testid": "evidence-excerpt-toggle" }}
           >
             <EvidenceExcerptScroll label={labels.excerptDetails}>
-              <EvidenceExcerpt text={item.text} labels={labels} />
+              <EvidenceExcerpt text={item.text} lang={item.lang} labels={labels} />
               <EvidenceMetadata item={item} labels={labels} />
             </EvidenceExcerptScroll>
           </Disclosure>
         ) : (
           <>
-            <EvidenceExcerpt text={item.text} labels={labels} />
+            <EvidenceExcerpt text={item.text} lang={item.lang} labels={labels} />
             <EvidenceMetadata item={item} labels={labels} />
           </>
         )}
@@ -511,10 +518,10 @@ function EvidenceMetadata({ item, labels }: { item: EvidenceListItem; labels: Ev
 /**
  * パネルの抜粋の全文。抜粋に入る文書の表（HTML の `<table>`）は表にする（HTML として注入しない。#2387）。
  */
-function EvidenceExcerpt({ text, labels }: { text: string; labels: EvidenceLabels }) {
+function EvidenceExcerpt({ text, lang, labels }: { text: string; lang?: string | null; labels: EvidenceLabels }) {
   return (
     <div data-testid="citation-text" className="mt-2.5">
-      <ExcerptContent text={text} className="text-sm leading-relaxed text-fg/90" tableLabel={labels.excerptTable} />
+      <ExcerptContent text={text} lang={lang} className="text-sm leading-relaxed text-fg/90" tableLabel={labels.excerptTable} />
     </div>
   );
 }

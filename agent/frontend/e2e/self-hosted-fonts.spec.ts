@@ -7,6 +7,7 @@ import {
   FONT_MONO_FAMILY,
   FONT_SANS_PREFIX,
   JAPANESE_FONT,
+  LANG_FONT_SAMPLES,
   UI_FONT_WEIGHTS,
   faceCoversWeight,
   firstRenderFontFaces,
@@ -17,6 +18,7 @@ import {
   recordFirstRenderFontFaces,
   renderedCjkFallbackFonts,
   renderedJapaneseFonts,
+  renderedLangFonts,
 } from "../../../platform/packages/ui/e2e/font-checks";
 
 /** 共有 tokens の太さ（400 / 500 / 600 / 700）。JP・SC・TC・HK は可変書体で、どの太さも本物の字形で出す。 */
@@ -144,6 +146,29 @@ test("JP に無い簡体字・繁体字・香港の字を、最初の描画の�
   await checkDeferredCjkFallbackFonts(page);
 });
 
+/** 内容の言語（lang）ごとに、共通の漢字（合成の例）がその言語の書体で描かれることを確かめる（#3335）。 */
+async function checkLangFonts(page: Page) {
+  await page.goto("/");
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const rendered = await renderedLangFonts(page, cdp);
+    for (const sample of LANG_FONT_SAMPLES) {
+      for (const kind of ["sans", "mono"] as const) {
+        const families = rendered[`${sample.lang}-${kind}`];
+        expect(families.length, `${sample.lang}-${kind}`).toBeGreaterThan(0);
+        expect(families.every((family) => family.startsWith(sample.renderedFamily)), `${sample.lang}-${kind}: ${families.join(", ")}`).toBe(true);
+      }
+    }
+  } finally {
+    await cdp.detach();
+  }
+}
+
+// 利用者の内容は lang を付けた要素で、言語の字形の書体を先頭にする（#3335）。画面の文言（html の ja）は JP のまま。
+test("内容の言語（lang）で共通の漢字を JP・SC・TC・HK の字形で描き分ける", async ({ page }) => {
+  await checkLangFonts(page);
+});
+
 // この spec は mobile-375 の project で実行しない（playwright.config.ts）。端末の幅によらず同じ読み方であることを、
 // 375px の viewport でも確かめる。
 test.describe("375px", () => {
@@ -155,5 +180,9 @@ test.describe("375px", () => {
 
   test("Noto Sans JP と等幅書体 Google Sans Code を自前ホストで適用する（375px）", async ({ page }) => {
     await checkSelfHostedFonts(page);
+  });
+
+  test("内容の言語（lang）で共通の漢字を JP・SC・TC・HK の字形で描き分ける（375px）", async ({ page }) => {
+    await checkLangFonts(page);
   });
 });
