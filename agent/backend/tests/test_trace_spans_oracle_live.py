@@ -108,3 +108,49 @@ def test_run_spans_are_written_and_read_with_the_owner_filter(trace_id: str) -> 
             {"trace_id": trace_id},
         )
         assert cursor.fetchone()[0] == 0
+
+
+def test_span_times_keep_sub_seconds_and_order(trace_id: str) -> None:
+    """ミリ秒の差の 2 つの span は、書いて読んでも時刻の差と開始の順を保つ（#3271）。
+
+    python-oracledb は `datetime` を既定で DATE（秒まで）で bind する。秒より細かい部分が落ちると、
+    同じ秒の span は SPAN_ID の順になり、所要時間も整数の秒になる。後に始まる span に小さい
+    SPAN_ID を付けて、開始の時刻で並ぶことを確かめる。
+    """
+    spans = AgentTraceSpans()
+    spans.use_writer(
+        TraceSpanWriter(connection_factory=platform_oracle_connection, flush_seconds=60)
+    )
+    owner = TraceSpanOwner(
+        product="agent", operation_id=f"run_{trace_id}", owner_user_uuid=RUN_USER
+    )
+    base = datetime(2026, 10, 1, 0, 0, 1, 123456, tzinfo=UTC)
+    first, second = "b000000000000002", "b000000000000001"
+    times = {
+        first: (base, base + timedelta(milliseconds=3)),
+        second: (base + timedelta(milliseconds=3), base + timedelta(milliseconds=10)),
+    }
+    for span_id, (started, finished) in times.items():
+        spans.submit(
+            SpanUpdate.model_validate(
+                {
+                    "trace_id": trace_id,
+                    "span_id": span_id,
+                    "operation_name": "gen_ai.execute_tool",
+                    "status": "done",
+                    "started_at": started,
+                    "finished_at": finished,
+                }
+            ),
+            owner,
+        )
+    assert spans._writer is not None  # noqa: SLF001 - テストで待たずに書く
+    spans._writer.flush()  # noqa: SLF001
+    assert spans.dropped(trace_id) == 0
+
+    read = spans.fetch(trace_id, viewer_user_uuid=RUN_USER)
+    assert [span.span_id for span in read] == [first, second]
+    assert [(span.started_at, span.finished_at) for span in read] == [
+        times[first],
+        times[second],
+    ]

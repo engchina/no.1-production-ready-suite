@@ -92,6 +92,9 @@ class _FakeCursor:
         self.rowcount = 0
         self._result: list[tuple[Any, ...]] = []
 
+    def setinputsizes(self, **_sizes: Any) -> None:
+        pass
+
     def executemany(self, sql: str, rows: list[dict[str, Any]]) -> None:
         assert sql.lstrip().startswith("MERGE INTO PLATFORM_TRACE_SPANS")
         self.db.writes += 1

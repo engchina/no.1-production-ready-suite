@@ -177,6 +177,9 @@ class _FakeConnection:
     def cursor(self) -> _FakeConnection:
         return self
 
+    def setinputsizes(self, **_sizes: object) -> None:
+        pass
+
     def executemany(self, _sql: str, rows: list[dict[str, object]]) -> None:
         for row in rows:
             self.rows[(str(row["trace_id"]), str(row["span_id"]))] = dict(row)

@@ -42,6 +42,9 @@ class FakeTraceCursor:
         self._result: list[tuple[Any, ...]] = []
         self.rowcount = 0
 
+    def setinputsizes(self, **_sizes: Any) -> None:
+        pass
+
     def executemany(self, _sql: str, rows: list[dict[str, Any]]) -> None:
         if self.db.fail_writes:
             raise RuntimeError("ORA-03113")
