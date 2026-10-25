@@ -15,6 +15,7 @@ import pytest
 from pr_backend_core.observability.trace_store import TraceSpanWriter
 
 from app.rag import trace_store
+from app.rag.span_display import span_display_name
 
 _COLUMNS = (
     "trace_id",
@@ -98,7 +99,13 @@ class FakeTraceDb:
         self.rows: dict[tuple[str, str], dict[str, Any]] = {}
         self.queries: list[tuple[str, dict[str, Any]]] = []
         self.fail_writes = False
-        self.writer = TraceSpanWriter(self.connect, retries=1, retry_backoff_seconds=0.0)
+        # 工程の名前は本番の書き手（`start_trace_span_writer`）と同じ関数で書く（#3272）。
+        self.writer = TraceSpanWriter(
+            self.connect,
+            retries=1,
+            retry_backoff_seconds=0.0,
+            display_name=span_display_name,
+        )
 
     @contextmanager
     def connect(self) -> Iterator[FakeTraceConnection]:

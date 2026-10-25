@@ -507,6 +507,7 @@ export {
   type ChatProgressStepsState,
 } from "./components/feedback/chat-progress-steps";
 export {
+  CHAT_PROGRESS_DISPLAY_NAME_PARAM,
   CHAT_PROGRESS_SCHEMA_VERSION,
   CHAT_PROGRESS_SSE_EVENT,
   CHAT_PROGRESS_SSE_HEARTBEAT_EVENT,

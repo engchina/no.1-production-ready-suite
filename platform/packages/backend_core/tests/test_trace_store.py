@@ -16,7 +16,11 @@ from typing import Any
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from pr_backend_core.chat_progress import chat_progress_details
+from pr_backend_core.chat_progress import (
+    ChatProgressStepEvent,
+    chat_progress_details,
+    parse_chat_progress_events,
+)
 from pr_backend_core.config.tracing import TracingSettings
 from pr_backend_core.observability import trace_store
 from pr_backend_core.observability.mcp_trace import (
@@ -355,6 +359,52 @@ def test_progress_events_use_latest_attempt_and_product_record_as_final_state() 
     assert steps[2]["status"] == "skipped" and steps[2]["cancelled"] is True
     assert steps[0]["root"] is True
     assert events[-1] == {**events[-1], "type": "terminal", "status": "failed"}
+
+
+def test_writer_puts_the_product_step_name_first_in_display_params() -> None:
+    """製品が渡す工程の名前は `display_name` として名前の値の先頭に入れる（#3272。列は足さない）。
+
+    名前の無い span（技術の span）は今までどおり。製品が名前を返さなければ値は変えない。
+    """
+    db = FakeDb()
+    named = {"rag.engine.stage": "表示の工程 A"}
+    writer = TraceSpanWriter(
+        db.connect, display_name=lambda update: named.get(update.operation_name)
+    )
+    configure_tracing(TracingSettings(), service_name="synthetic")
+    with operation_trace("rag.answer", operation_id="op-a", listener=writer.listener(OWNER)):
+        with observed_span("rag.engine.stage") as span:
+            span.set_display(kind="answer_step", params={"name": "工程 A", "llm_calls": 1})
+        with observed_span("gen_ai.chat", kind="client"):
+            pass
+    writer.flush()
+    rows = {row["name"]: row for row in db.rows.values()}
+    stage = json.loads(rows["rag.engine.stage"]["display_params_json"])
+    assert list(stage) == ["display_name", "name", "llm_calls"]
+    assert stage["display_name"] == "表示の工程 A"
+    assert rows["gen_ai.chat"]["display_params_json"] is None
+
+
+def test_progress_events_carry_the_product_of_each_span() -> None:
+    """処理の経過のイベントは、span を書いた製品を持つ（#3272。画面は製品の境目に製品名を出す）。"""
+    spans = [
+        _stored("1" * 16, None, root=True, product="agent", name="agent.execute"),
+        _stored("2" * 16, "1" * 16, product="rag", display_params={"display_name": "工程 B"}),
+    ]
+    steps = [
+        event
+        for event in trace_progress_events(spans, target_id="run-a")
+        if event["type"] == "step"
+    ]
+    assert [(event["product"], event.get("params")) for event in steps] == [
+        ("agent", None),
+        ("rag", {"display_name": "工程 B"}),
+    ]
+    parsed = parse_chat_progress_events(steps)
+    assert [event.product for event in parsed if isinstance(event, ChatProgressStepEvent)] == [
+        "agent",
+        "rag",
+    ]
 
 
 def test_mcp_trace_context_trusts_only_service_tokens() -> None:

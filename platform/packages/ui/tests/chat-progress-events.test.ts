@@ -26,6 +26,8 @@ import {
   type ChatProgressStepEvent,
   type ChatProgressStepStatus,
   type ChatProgressTerminalEvent,
+  createTraceDetailsLabels,
+  TRACE_DETAILS_JA,
 } from "../src";
 
 // #1359: チャットの処理の段階のイベント（3 製品共通の契約）と、イベントを段階の一覧にまとめる reducer。
@@ -114,6 +116,7 @@ describe("契約（platform/contracts/chat-progress）", () => {
       "trace_id",
       "attributes",
       "cancelled",
+      "product",
     ];
     expect(Object.keys(defs.ChatProgressStepEvent.properties).sort()).toEqual([...stepFields].sort());
     // 段の詳細（#2294）の形は共有 UI の `RunStepDetails` と同じ。
@@ -357,6 +360,49 @@ describe("span の段（#3226）", () => {
       ["MCP の呼び出し", 1],
     ]);
     expect(steps[1].details?.fields).toContainEqual({ label: "mcp.method.name", value: "tools/call", mono: true });
+  });
+
+  // #3272: 別の製品が書いた span は、画面の製品の工程の定義で訳さずに、書いた製品が付けた名前を出し、製品の境目に製品名を添える。
+  it("別の製品の span は書いた製品の名前（display_name）で出し、製品の境目の行に製品名を添える", () => {
+    seq = 0;
+    const agentLabels = createTraceDetailsLabels((key) => TRACE_DETAILS_JA[key], { product: "agent" });
+    const own: ChatProgressStepDefinitions = {
+      ...definitions,
+      tool: { label: () => "ツールの実行（画面の定義）" },
+    };
+    const events: ChatProgressEvent[] = [
+      span("r", undefined, "agent.execute", "done", { root: true, product: "agent" }),
+      span("t", "r", "gen_ai.execute_tool", "done", { kind: "tool", product: "agent" }),
+      span("c", "t", "mcp.request", "done", { product: "agent", attributes: { "mcp.method.name": "tools/call", "gen_ai.tool.name": "tool_a" } }),
+      span("s", "c", "mcp.server", "done", { root: true, product: "rag" }),
+      span("o", "s", "rag.search", "done", { root: true, product: "rag" }),
+      // 画面（Agent）の定義に同じ種類があっても、別の製品の span には使わない。
+      span("a", "o", "rag.engine.stage", "done", { kind: "answer_step", product: "rag", params: { name: "工程 A", display_name: "表示の工程 A" } }),
+      span("e", "a", "gen_ai.embeddings", "done", { product: "rag", attributes: { "gen_ai.request.model": "embed-x" } }),
+      span("b", "o", "rag.retrieval", "done", { product: "rag", params: { display_name: "表示の段 B" }, attributes: { "pr.stage": "retrieval" } }),
+    ];
+    const steps = chatProgressStepsFromEvents(events, own, "t", { traceLabels: agentLabels });
+    expect(steps.map((step) => [step.label, step.level ?? 0, step.product ?? null])).toEqual([
+      ["ツールの実行（画面の定義）", 0, null],
+      ["MCP の呼び出し · tool_a", 1, null],
+      ["表示の工程 A", 2, "RAG"],
+      ["埋め込みの作成 · embed-x", 3, null],
+      ["表示の段 B", 2, "RAG"],
+    ]);
+    expect(steps[2].meta).toBeUndefined();
+    expect(steps[2].details?.fields).toContainEqual({ label: "Product", value: "rag", mono: true });
+    // 画面の製品の span は製品の定義で名前を付け、製品名を添えない。
+    const ragLabels = createTraceDetailsLabels((key) => TRACE_DETAILS_JA[key], { product: "rag" });
+    const inRag = chatProgressStepsFromEvents(events.slice(3), own, "t", { traceLabels: ragLabels });
+    expect(inRag.map((step) => [step.label, step.product ?? null])).toEqual([
+      ["工程 工程 A", null],
+      ["埋め込みの作成 · embed-x", null],
+      ["表示の段 B", null],
+    ]);
+    // 製品の無い古い記録は今までどおり（定義で名前を付け、製品名を出さない）。
+    const legacy = events.map((event) => ({ ...event, product: undefined }) as ChatProgressEvent);
+    expect(chatProgressStepsFromEvents(legacy, own, "t", { traceLabels: agentLabels }).map((step) => step.product ?? null)).toEqual([null, null, null, null, null]);
+    expect(parseChatProgressEvent({ ...events[3], product: "Not Valid" })).not.toHaveProperty("product");
   });
 
   it("実行中の span は実行中の行として出し、古い形式の段だけの記録は span の記録としない", () => {

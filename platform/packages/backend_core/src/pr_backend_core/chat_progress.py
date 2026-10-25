@@ -387,6 +387,12 @@ class ChatProgressStepEvent(_EventBase):
     cancelled: bool | None = Field(
         default=None, description="停止で終わった span（状態は skipped）。"
     )
+    product: str | None = Field(
+        default=None,
+        max_length=32,
+        pattern="^[a-z0-9_]+$",
+        description="span を書いた製品（rag / nl2sql / agent。#3272）。",
+    )
 
 
 class ChatProgressTerminalEvent(_EventBase):
@@ -537,7 +543,7 @@ def apply_chat_progress_event(
     return True
 
 
-_SPAN_FIELDS = ("name", "parent_id", "root", "trace_id", "attributes", "cancelled")
+_SPAN_FIELDS = ("name", "parent_id", "root", "trace_id", "attributes", "cancelled", "product")
 
 
 def _span_fields(event: ChatProgressStepEvent) -> dict[str, Any] | None:

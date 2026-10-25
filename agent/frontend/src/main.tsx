@@ -29,7 +29,7 @@ if (!root) {
 
 const queryClient = new QueryClient();
 
-const TRACE_DETAILS_LABELS = createTraceDetailsLabels(t);
+const TRACE_DETAILS_LABELS = createTraceDetailsLabels(t, { product: "agent" });
 
 /**
  * 共有 ConfirmProvider に Agent の文言を渡し、ルートが変わったら開いている確認をキャンセルする

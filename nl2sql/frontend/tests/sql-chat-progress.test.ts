@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -327,4 +328,18 @@ test("段の span の名前は処理の経過の工程と同じ", () => {
   assert.equal(stageName?.("safety_check", "failed"), "SQL の安全性を確認できませんでした");
   assert.equal(stageName?.("execute_sql", "cancelled"), "SQL の実行");
   assert.equal(stageName?.("unknown_stage", "done"), undefined);
+  // 画面の製品（#3272。別の製品が書いた span は NL2SQL の工程の定義で訳さない）。
+  assert.equal(NL2SQL_TRACE_DETAILS_LABELS.product, "nl2sql");
+});
+
+// #3272: backend が span に書く工程の名前（別の製品の画面が出す名前）は、NL2SQL の画面の工程の名詞の名前と同じ。
+test("backend の工程の名前（STAGE_DISPLAY_NAMES）は画面の工程の名詞の名前と同じ", () => {
+  const source = readFileSync(new URL("../../backend/app/features/nl2sql/trace_spans.py", import.meta.url), "utf8");
+  const block = source.slice(source.indexOf("STAGE_DISPLAY_NAMES: dict"), source.indexOf("def span_display_name"));
+  const pairs = [...block.matchAll(/"([a-z_]+)": "([^"]+)"/g)].map((match) => [match[1], match[2]]);
+  assert.deepEqual(
+    pairs.map(([stage]) => stage),
+    STEPS,
+  );
+  for (const [stage, name] of pairs) assert.equal(chatStageName(stage, "skipped"), name, stage);
 });

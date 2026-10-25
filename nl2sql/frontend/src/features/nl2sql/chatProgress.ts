@@ -98,7 +98,7 @@ export function chatStageName(stage: string, status: ChatProgressStepStatus | "c
 }
 
 /** NL2SQL の trace の文言（root の `TraceDetailsLabelsProvider` で全画面に渡す。段の名前は処理の経過と同じ）。 */
-export const NL2SQL_TRACE_DETAILS_LABELS: TraceDetailsLabels = createTraceDetailsLabels(t, { stageName: chatStageName });
+export const NL2SQL_TRACE_DETAILS_LABELS: TraceDetailsLabels = createTraceDetailsLabels(t, { stageName: chatStageName, product: "nl2sql" });
 
 function label(stage: ChatStage) {
   return (status: ChatProgressStepStatus) => STAGE_LABELS[stage][chatProgressLabelState(status)];

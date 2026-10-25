@@ -47,6 +47,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.config import Settings
 from app.rag.request_context import current_audit_request_context
+from app.rag.span_display import span_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,7 @@ def start_trace_span_writer(settings: Settings) -> TraceSpanWriter | None:
             batch_size=settings.trace_store_batch_size,
             queue_size=settings.trace_store_queue_size,
             retention_days=settings.trace_retention_days,
+            display_name=span_display_name,
         )
         writer.start()
         _WRITER = writer

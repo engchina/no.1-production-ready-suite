@@ -77,6 +77,8 @@ export interface ChatProgressStepEvent extends ChatProgressEventBase {
   attributes?: ChatProgressParams;
   /** 停止で終わった span（状態は skipped）。 */
   cancelled?: boolean;
+  /** span を書いた製品（`rag` / `nl2sql` / `agent`。#3272）。 */
+  product?: string;
 }
 
 export interface ChatProgressTerminalEvent extends ChatProgressEventBase {
@@ -205,6 +207,8 @@ export function parseChatProgressEvent(value: unknown): ChatProgressEvent | null
   const attributes = params(source.attributes);
   if (attributes) event.attributes = attributes;
   if (source.cancelled === true) event.cancelled = true;
+  const product = text(source.product);
+  if (product && /^[a-z0-9_]{1,32}$/.test(product)) event.product = product;
   return event;
 }
 
@@ -243,6 +247,7 @@ export interface ChatProgressEventSpan {
   traceId?: string;
   attributes?: ChatProgressParams;
   cancelled?: boolean;
+  product?: string;
 }
 
 /** 組み立てた 1 つの段階（名前を付ける前）。 */
@@ -319,6 +324,7 @@ function applyEvent(state: ChatProgressEventsState, event: ChatProgressEvent): C
     if (event.trace_id) span.traceId = event.trace_id;
     if (event.attributes) span.attributes = event.attributes;
     if (event.cancelled) span.cancelled = true;
+    if (event.product) span.product = event.product;
     step.span = span;
   }
   const steps = [...next.steps];
@@ -404,6 +410,13 @@ export type ChatProgressStepDefinitions = Readonly<Record<string, ChatProgressSt
 
 const EMPTY_PARAMS: ChatProgressParams = Object.freeze({});
 
+/**
+ * span を書いた製品が付ける、工程の利用者向けの名前の値の key（backend の `DISPLAY_NAME_PARAM`。#3272）。別の製品が書いた
+ * span は、画面の製品の工程の定義で訳さずにこの名前を出す（Jaeger / Langfuse / Phoenix と同じく、span を作ったサービスの
+ * 名前をそのまま出す）。
+ */
+export const CHAT_PROGRESS_DISPLAY_NAME_PARAM = "display_name";
+
 /** 名前の付け方の設定（span の段の名前・root の扱い。#3226）。 */
 export interface ChatProgressLabelOptions {
   /** 技術の span の名前・停止の文言（既定は共通の日本語）。 */
@@ -413,6 +426,8 @@ export interface ChatProgressLabelOptions {
 interface OrderedStep {
   step: ChatProgressEventStep;
   level: number;
+  /** 製品の境目の行（見える親の行・画面と違う製品の span）の製品。 */
+  product?: string;
 }
 
 /**
@@ -420,7 +435,7 @@ interface OrderedStep {
  * MCP の手続きの span（`initialize`・通知・`tools/list`。#3272）は行にせず、子を親の位置に上げる。親の無い段（親が記録の
  * 上限を超えた・別の区間）も最上位に出す。
  */
-function orderSpanSteps(steps: readonly ChatProgressEventStep[]): OrderedStep[] {
+function orderSpanSteps(steps: readonly ChatProgressEventStep[], viewer: string | undefined): OrderedStep[] {
   const ids = new Set(steps.map((step) => step.id));
   const children = new Map<string, ChatProgressEventStep[]>();
   const tops: ChatProgressEventStep[] = [];
@@ -436,17 +451,26 @@ function orderSpanSteps(steps: readonly ChatProgressEventStep[]): OrderedStep[] 
   }
   const ordered: OrderedStep[] = [];
   const visited = new Set<string>();
-  const visit = (step: ChatProgressEventStep, level: number) => {
+  // 製品の境目: 見える親の行（最上位は画面の製品。無ければ最初の span の製品）と製品が違う行に製品名を添える（#3272）。
+  const base = viewer ?? tops[0]?.span?.product;
+  const visit = (step: ChatProgressEventStep, level: number, inherited: string | undefined) => {
     if (visited.has(step.id)) return;
     visited.add(step.id);
     const hidden = step.span?.root === true || isMcpProtocolSpan(step.span?.attributes ?? {});
-    if (!hidden) ordered.push({ step, level });
-    for (const child of children.get(step.id) ?? []) visit(child, hidden ? level : level + 1);
+    const product = step.span?.product;
+    if (!hidden) ordered.push({ step, level, ...(product && inherited && product !== inherited ? { product } : {}) });
+    const next = hidden ? inherited : (product ?? inherited);
+    for (const child of children.get(step.id) ?? []) visit(child, hidden ? level : level + 1, next);
   };
-  for (const step of tops) visit(step, 0);
+  for (const step of tops) visit(step, 0, base);
   // cycle の段も捨てずに最上位に出す。
-  for (const step of steps) if (!visited.has(step.id)) visit(step, 0);
+  for (const step of steps) if (!visited.has(step.id)) visit(step, 0, base);
   return ordered;
+}
+
+function displayNameOf(params: ChatProgressParams): string | undefined {
+  const value = params[CHAT_PROGRESS_DISPLAY_NAME_PARAM];
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, 128) : undefined;
 }
 
 function mergeDetails(product: RunStepDetails | undefined, technical: RunStepDetailField[]): RunStepDetails | undefined {
@@ -454,19 +478,27 @@ function mergeDetails(product: RunStepDetails | undefined, technical: RunStepDet
   return { ...(product ?? {}), fields: [...(product?.fields ?? []), ...technical] };
 }
 
-/** 組み立てた段階に名前を付ける（未知の種類は id をそのまま出す。span の段は共通の規則で付ける）。 */
+/**
+ * 組み立てた段階に名前を付ける（未知の種類は id をそのまま出す。span の段は共通の規則で付ける）。
+ *
+ * 名前は、画面の製品の span なら製品の工程の定義、次に span を書いた製品が付けた名前（`display_name`）、最後に共通の
+ * 規則（技術の span の名前）。別の製品が書いた span（`traceLabels.product` と違う製品）は画面の製品の定義を使わない
+ * （#3272。種類の名前が製品の間で重なっても取り違えない）。製品の境目の行には製品名（`product`）を添える。
+ */
 export function labelChatProgressSteps(
   steps: readonly ChatProgressEventStep[],
   definitions: ChatProgressStepDefinitions,
   options: ChatProgressLabelOptions = {}
 ): ChatProgressStep[] {
   const traceLabels = options.traceLabels ?? DEFAULT_TRACE_DETAILS_LABELS;
+  const viewer = traceLabels.product;
   const spanMode = steps.some((step) => step.span);
-  const ordered: OrderedStep[] = spanMode ? orderSpanSteps(steps) : steps.map((step) => ({ step, level: 0 }));
-  return ordered.map(({ step, level: treeLevel }) => {
-    const definition = Object.prototype.hasOwnProperty.call(definitions, step.kind) ? definitions[step.kind] : undefined;
-    const values = step.params ?? EMPTY_PARAMS;
+  const ordered: OrderedStep[] = spanMode ? orderSpanSteps(steps, viewer) : steps.map((step) => ({ step, level: 0 }));
+  return ordered.map(({ step, level: treeLevel, product }) => {
     const span = step.span;
+    const foreign = Boolean(viewer && span?.product && span.product !== viewer);
+    const definition = !foreign && Object.prototype.hasOwnProperty.call(definitions, step.kind) ? definitions[step.kind] : undefined;
+    const values = step.params ?? EMPTY_PARAMS;
     const spanName = span
       ? traceSpanDisplayName(
           {
@@ -480,9 +512,10 @@ export function labelChatProgressSteps(
       : undefined;
     const result: ChatProgressStep = {
       id: step.id,
-      label: definition ? definition.label(step.status, values) : spanName ?? step.id,
+      label: definition ? definition.label(step.status, values) : ((span ? displayNameOf(values) : undefined) ?? spanName ?? step.id),
       status: step.status,
     };
+    if (product) result.product = traceLabels.productName(product);
     // 状態で変わらない名詞の名前（「SQL の生成」）。失敗のカードの止まった段に使う（#2342）。
     const name = definition ? definition.label("pending", values) : undefined;
     if (name && name !== result.label) result.name = name;
@@ -496,7 +529,10 @@ export function labelChatProgressSteps(
     if (level) result.level = level;
     const productDetails = definition?.details ? definition.details(step.status, values, step.details) : step.details;
     const details = span
-      ? mergeDetails(productDetails, traceSpanFields(undefined, span.name, span.attributes ?? EMPTY_PARAMS, traceLabels))
+      ? mergeDetails(productDetails, [
+          ...traceSpanFields(undefined, span.name, span.attributes ?? EMPTY_PARAMS, traceLabels),
+          ...(span.product ? [{ label: "Product", value: span.product, mono: true }] : []),
+        ])
       : productDetails;
     if (details) result.details = details;
     return result;
