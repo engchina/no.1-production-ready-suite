@@ -186,6 +186,11 @@ export function Nl2SqlWorkbench() {
   return <ExecutableNl2SqlWorkbench />;
 }
 
+/** 未確定のプロファイル（`question:`）の質問を、新しいプロファイルの草稿が空のときだけ引き継ぐ（#168・#3357）。 */
+function carryUnresolvedProfileQuestion({ from, value, stored }: { from: string; value: string; stored: string }) {
+  return from === "question:" && Boolean(value.trim()) && !stored.trim();
+}
+
 function ExecutableNl2SqlWorkbench() {
   const confirmDiscard = useConfirm();
   const writeDraft = useWorkspaceDraftWriter();
@@ -196,19 +201,12 @@ function ExecutableNl2SqlWorkbench() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   useWorkspaceRevalidation();
   const [profileId, setProfileId] = useWorkspaceState("profileId", "");
-  const [question, setQuestion] = useWorkspaceState(`question:${profileId}`, "");
-  // プロファイル未確定（""）の間に入力した質問は、確定した時点で新しいプロファイルの下書きへ
-  // 引き継ぐ。質問はプロファイルごとに保存するため、引き継がないと key が変わって入力が消える（#168）。
-  const unresolvedQuestionRef = useRef("");
-  useEffect(() => {
-    if (!profileId) unresolvedQuestionRef.current = question;
-  }, [profileId, question]);
-  useEffect(() => {
-    const carried = unresolvedQuestionRef.current;
-    if (!profileId || !carried.trim()) return;
-    unresolvedQuestionRef.current = "";
-    setQuestion((current) => (current.trim() ? current : carried));
-  }, [profileId, setQuestion]);
+  // プロファイル未確定（""）の間に入力した質問は、確定した時点で新しいプロファイルの下書きへ引き継ぐ（#168）。
+  // 質問はプロファイルごとに保存するため、引き継がないと key が変わって入力が消える。確定と同じ render で起きた
+  // 入力も失わないよう、key が変わる render の中で引き継ぐ（#3357）。
+  const [question, setQuestion] = useWorkspaceState<string>(`question:${profileId}`, "", {
+    carryOver: carryUnresolvedProfileQuestion,
+  });
   const [selection, setSelection] = useState<SchemaSelection>(() => emptySelection());
   const [result, setResult] = useState<Nl2SqlResult | null>(null);
   // 結果の SQL を実行して結果を整形したか（ジョブが done で終わったか）。遮断・実行の失敗のジョブも
