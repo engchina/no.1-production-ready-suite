@@ -32,6 +32,7 @@ from dataclasses import dataclass, replace
 from time import monotonic
 from typing import Any, Literal
 
+from rag_engine.dependencies import report_degraded
 from rag_engine.retrieval.task_contract import task_contract
 
 COVERAGE_SCHEMA_VERSION = 1
@@ -392,6 +393,7 @@ class TargetedRetrieval:
     parents: tuple[Any, ...]  # ContextParentEvidence（順位順）
     expansion_records: tuple[Any, ...] = ()
     elapsed_ms: int = 0
+    # 失敗したときの例外の型の名前（例外の文は入れない。#3284）。
     error: str = ""
     # この要求に確保する根拠の数（小問）。None は欠けた要求の共有の枠（max_chunks）から取る。
     chunk_cap: int | None = None
@@ -439,6 +441,8 @@ def run_targeted_retrievals(
         try:
             context = retrieve(target.query or target.text, queries)
         except Exception as exc:  # noqa: BLE001 - 再検索は補助。失敗しても既存の根拠で回答する。
+            # 記録には例外の型の名前だけを残す（例外の文は DB のエラーの文を含みうる。#3284）。
+            report_degraded("request_coverage_retrieval", exc)
             results.append(
                 TargetedRetrieval(
                     target.id,
@@ -446,7 +450,7 @@ def run_targeted_retrievals(
                     (),
                     (),
                     int((clock() - began) * 1000),
-                    f"{type(exc).__name__}: {str(exc)[:200]}",
+                    type(exc).__name__,
                     planned.chunk_cap,
                 )
             )

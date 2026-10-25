@@ -7,7 +7,7 @@
 """
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from typing import Any, cast
 
 import pytest
@@ -553,3 +553,290 @@ async def test_main_search_failure_is_an_error_not_zero_evidence(
     with pytest.raises(AnswerExecutionError) as caught:
         await _run(monkeypatch, FailingSearch(fail_overrides=False))
     assert isinstance(caught.value.__cause__, Boom)
+
+
+# ---- 回答エンジンの前の段(会話の書き換え・抽出項目の条件・会話の添付。#3286) ----
+
+
+@pytest.mark.parametrize("fail", [True, False], ids=["error", "not-needed"])
+async def test_history_rewrite_failure_reaches_answer_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, fail: bool
+) -> None:
+    """書き換えの失敗は元の質問で回答を続け、回答の診断の degraded_steps に出す。
+
+    書き換えが要らなかった(書き換えの結果が元の質問と同じ)ときは失敗にしない。
+    """
+    from tests.test_answer_engine import RewriteLlm, _run_chat
+
+    llm = RewriteLlm(Boom(SECRET) if fail else "それの登録方法は？")
+
+    response, oracle = await _run_chat(monkeypatch, llm, history=True)
+
+    assert llm.calls
+    assert oracle.queries[0] == "それの登録方法は?"
+    answer = cast(dict[str, Any], response.diagnostics.answer)
+    assert answer["rewritten_question"] == ""
+    assert response.answer
+    steps = cast(list[dict[str, Any]], answer.get("degraded_steps", []))
+    expected = {"kind": "history_rewrite", "count": 1, "exc_type": "Boom"}
+    assert (expected in steps) is fail
+    assert SECRET not in json.dumps(answer, ensure_ascii=False, default=str)
+
+
+@pytest.mark.parametrize("reply", [Boom(SECRET), "[]"], ids=["error", "no-condition"])
+async def test_field_filter_read_failure_is_recorded(reply: Any) -> None:
+    from app.rag.degraded_steps import DegradedSteps
+    from app.rag.extraction_field_adapter import FieldDefinition
+    from app.rag.field_filter_reader import read_field_conditions
+    from tests.test_answer_engine import RewriteLlm
+
+    degraded = DegradedSteps()
+
+    conditions = await read_field_conditions(
+        "10万円以上の受注は？",
+        [FieldDefinition(name="金額", value_type="number")],
+        RewriteLlm(reply),  # type: ignore[arg-type]
+        report_degraded=degraded.record_degraded,
+    )
+
+    assert conditions == []
+    expected = [{"kind": "field_filter", "count": 1, "exc_type": "Boom"}]
+    assert degraded.steps() == (expected if isinstance(reply, Exception) else [])
+
+
+@pytest.mark.parametrize("fail", [True, False], ids=["error", "no-definition"])
+async def test_field_definitions_load_failure_is_recorded(fail: bool) -> None:
+    """定義を読めなかったときは記録し、定義が無いときは記録しない(どちらも LLM を呼ばない)。"""
+    from app.rag.degraded_steps import DegradedSteps
+    from app.rag.pipeline import RagPipeline
+    from tests.test_answer_engine import RewriteLlm
+
+    class DefinitionOracle(FakeOracle):
+        async def get_search_answer_profile(self, search_answer_profile_id: str) -> Any:
+            if fail:
+                raise Boom(SECRET)
+            return None
+
+    llm = RewriteLlm("[]")
+    pipeline = RagPipeline(
+        settings=Settings(rag_auto_field_filter_enabled=True),
+        oracle=DefinitionOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+        llm=llm,  # type: ignore[arg-type]
+    )
+    degraded = DegradedSteps()
+
+    conditions = await pipeline._read_field_conditions(
+        SearchRequest(query="q", search_answer_profile_id="bv-1"),
+        report_degraded=degraded.record_degraded,
+    )
+
+    assert conditions == [] and llm.calls == []
+    expected = [{"kind": "field_filter", "count": 1, "exc_type": "Boom"}]
+    assert degraded.steps() == (expected if fail else [])
+
+
+@pytest.fixture
+def attachment_service() -> Iterator[Any]:
+    from app.rag import chat_attachments
+    from tests.test_chat_attachments import _service
+
+    created = _service()
+    chat_attachments.set_chat_attachment_service(created)
+    yield created
+    chat_attachments.set_chat_attachment_service(None)
+
+
+@pytest.mark.parametrize("fail", [True, False], ids=["error", "ok"])
+def test_chat_attachment_rerank_failure_is_recorded(attachment_service: Any, fail: bool) -> None:
+    import asyncio
+
+    from app.rag.chat_attachments import attachment_units, select_attachment_units
+    from app.rag.degraded_steps import DegradedSteps
+    from tests.test_chat_attachments import CSV, _upload
+
+    _upload(attachment_service, "b.csv", CSV * 5, "conv-large")
+    toolset = attachment_service.toolset("conv-large")
+    units = attachment_units(toolset.records, toolset.parsed)
+
+    async def rerank(question: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
+        if fail:
+            raise Boom(SECRET)
+        return [(0, 0.9)]
+
+    degraded = DegradedSteps()
+    selected = asyncio.run(
+        select_attachment_units(
+            "A-25", units, rerank=rerank, report_degraded=degraded.record_degraded
+        )
+    )
+
+    # 失敗しても文字の一致で選んで続ける。
+    assert selected
+    expected = [{"kind": "chat_attachment_rerank", "count": 1, "exc_type": "Boom"}]
+    assert degraded.steps() == (expected if fail else [])
+
+
+def test_unreadable_chat_attachment_is_recorded(attachment_service: Any) -> None:
+    """解析できない添付は根拠に入れずに続け、読めなかったことを記録する(読めた添付は記録しない)。"""
+    import asyncio
+    import io
+    import zipfile
+
+    from app.rag.chat_attachments import attachment_evidence
+    from app.rag.degraded_steps import DegradedSteps
+    from tests.test_chat_attachments import ALICE, TEXT, _upload
+
+    _upload(attachment_service, "a.md", TEXT, "conv-e")
+    readable = DegradedSteps()
+    first = asyncio.run(
+        attachment_evidence(
+            "保管の期限", "conv-e", rerank=None, report_degraded=readable.record_degraded
+        )
+    )
+    assert first and readable.steps() == []
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("word/document.xml", "<w:document>")
+    broken = asyncio.run(
+        attachment_service.upload(ALICE, file_name="b.docx", data=buffer.getvalue())
+    )
+    attachment_service.attach_to_conversation(
+        ALICE, [broken.attachment_id], conversation_id="conv-e", owner_user_uuid=ALICE.user_uuid
+    )
+    degraded = DegradedSteps()
+
+    chunks = asyncio.run(
+        attachment_evidence(
+            "保管の期限", "conv-e", rerank=None, report_degraded=degraded.record_degraded
+        )
+    )
+
+    assert {chunk.file_name for chunk in chunks} == {"a.md"}
+    steps = degraded.steps()
+    assert [step["kind"] for step in steps] == ["chat_attachments"]
+    assert steps[0]["count"] == 1
+
+
+@pytest.mark.parametrize("fail", [True, False], ids=["error", "no-attachment"])
+async def test_chat_attachments_failure_reaches_answer_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, fail: bool
+) -> None:
+    """会話の添付を読めないときは添付なしで回答を続け、回答の診断に出す(添付が無いときは出さない)。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    from app.rag import chat_attachments
+    from app.rag.pipeline import RagPipeline
+    from tests.test_answer_engine import QueryRecordingOracle, RewriteLlm
+
+    class Service:
+        def toolset(self, conversation_id: str) -> Any:
+            if fail:
+                raise Boom(SECRET)
+            return None
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    chat_attachments.set_chat_attachment_service(Service())  # type: ignore[arg-type]
+    try:
+        pipeline = RagPipeline(
+            settings=Settings(),
+            oracle=QueryRecordingOracle(),  # type: ignore[arg-type]
+            genai=FakeGenAi(),  # type: ignore[arg-type]
+            llm=RewriteLlm("unused"),  # type: ignore[arg-type]
+            attachment_conversation_id="conv-1",
+        )
+        response = await pipeline.run(SearchRequest(query="受注の登録方法は？"))
+    finally:
+        chat_attachments.set_chat_attachment_service(None)
+
+    assert response.answer
+    answer = cast(dict[str, Any], response.diagnostics.answer)
+    steps = cast(list[dict[str, Any]], answer.get("degraded_steps", []))
+    expected = {"kind": "chat_attachments", "count": 1, "exc_type": "Boom"}
+    assert (expected in steps) is fail
+    assert SECRET not in json.dumps(answer, ensure_ascii=False, default=str)
+
+
+async def test_pre_answer_degraded_steps_reach_approved_faq_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """承認済み FAQ から答えるときも、前の段の縮退を回答の診断に出す。"""
+    import rag_engine.adapters.oci as engine_oci
+    from rag_engine.generation.faq_answer import FaqAnswerDraft
+
+    from app.rag.degraded_steps import DegradedSteps
+
+    monkeypatch.setattr(
+        engine_oci,
+        "parse_text_response",
+        lambda *args, **kwargs: FaqAnswerDraft(answer="日当は 1 泊 2,000 円です。"),
+    )
+    degraded = DegradedSteps()
+    degraded.record_degraded("history_rewrite", Boom(SECRET))
+    engine = AnswerEngine(
+        Settings(),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+        approved_faq=("出張の日当はいくらですか？", "一般は 1 泊 2,000 円です。"),
+        degraded=degraded,
+    )
+
+    outcome = await engine.run(SearchRequest(query="出張したら日当は何円？"))
+
+    assert outcome.diagnostics["degraded_steps"] == [
+        {"kind": "history_rewrite", "count": 1, "exc_type": "Boom"}
+    ]
+
+
+# ---- rerank の失敗と診断のモデル(#3286) ----
+
+
+@pytest.mark.parametrize("fail", [True, False], ids=["error", "ok"])
+async def test_rerank_failure_does_not_show_the_rerank_model(
+    monkeypatch: pytest.MonkeyPatch, fail: bool
+) -> None:
+    """rerank が失敗したら取得の順で回答を続け、models.rerank にモデル名を出さない。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    class RerankGenAi(FakeGenAi):
+        async def rerank(
+            self, query: str, documents: list[str], top_n: int
+        ) -> list[tuple[int, float]]:
+            if fail:
+                raise Boom(SECRET)
+            return await super().rerank(query, documents, top_n)
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    settings = Settings(
+        oci_compartment_id="ocid1.compartment.oc1..example",
+        rag_query_strategy="simple_retrieval",
+        rag_answer_flow="standard_rag",
+        rag_rerank_enabled=True,
+    )
+    engine = AnswerEngine(
+        settings,
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=RerankGenAi(),  # type: ignore[arg-type]
+    )
+
+    outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
+
+    assert outcome.citations
+    steps = cast(list[dict[str, Any]], outcome.diagnostics.get("degraded_steps", []))
+    rerank_steps = [step for step in steps if step["kind"] == "rerank"]
+    assert settings.oci_genai_rerank_model
+    if fail:
+        assert rerank_steps == [{"kind": "rerank", "count": 1, "exc_type": "Boom"}]
+        assert outcome.diagnostics["models"]["rerank"] == ""
+    else:
+        assert rerank_steps == []
+        assert outcome.diagnostics["models"]["rerank"] == settings.oci_genai_rerank_model
+    assert SECRET not in json.dumps(outcome.diagnostics, ensure_ascii=False, default=str)
+
+
+def test_unconfigured_rerank_does_not_show_the_rerank_model() -> None:
+    """compartment が無いと rag_engine は rerank しないので、models.rerank にモデル名を出さない。"""
+    engine = _engine(FakeOracle(), oci_compartment_id="", rag_rerank_enabled=True)
+
+    assert engine._models_used()["rerank"] == ""

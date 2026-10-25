@@ -37,6 +37,7 @@ from pr_system_settings.chat_attachments.models import ChatAttachmentRecord, Par
 
 from app.clients.oracle import StoredConversation
 from app.config import enterprise_ai_vision_model_id, get_settings
+from app.rag.degraded_steps import ReportDegraded, not_recorded
 from app.schemas.search import RetrievedChunk
 
 logger = logging.getLogger(__name__)
@@ -113,8 +114,13 @@ def set_chat_attachment_service(service: ChatAttachmentService | None) -> None:
         _SERVICE = service
 
 
-def conversation_toolset(conversation_id: str) -> ChatAttachmentToolset | None:
-    """会話の添付（添付が無い・読めないときは None。回答は止めない）。"""
+def conversation_toolset(
+    conversation_id: str, *, report_degraded: ReportDegraded = not_recorded
+) -> ChatAttachmentToolset | None:
+    """会話の添付（添付が無い・読めないときは None。回答は止めない）。
+
+    読めなかったときは ``report_degraded`` に残す（添付が無いときは残さない。#3286）。
+    """
     try:
         toolset = chat_attachment_service().toolset(conversation_id)
     except Exception as exc:  # noqa: BLE001 - 添付を読めなくても回答は続ける
@@ -122,6 +128,7 @@ def conversation_toolset(conversation_id: str) -> ChatAttachmentToolset | None:
             "rag_chat_attachments_unavailable",
             extra={"conversation_id": conversation_id, "error_type": type(exc).__name__},
         )
+        report_degraded("chat_attachments", exc)
         return None
     return toolset if toolset else None
 
@@ -166,12 +173,15 @@ def _split(text: str, size: int) -> list[str]:
 
 
 def attachment_units(
-    records: Sequence[ChatAttachmentRecord], parsed: Callable[[str], ParsedAttachment]
+    records: Sequence[ChatAttachmentRecord],
+    parsed: Callable[[str], ParsedAttachment],
+    *,
+    report_degraded: ReportDegraded = not_recorded,
 ) -> list[AttachmentUnit]:
     """会話の添付を根拠の候補に分ける（節は `UNIT_CHARACTERS`、表は `ROWS_PER_UNIT` 行ずつ）。
 
     `parsed` は初めて読む添付を解析する（同期。event loop からは thread で呼ぶ）。読めない添付
-    （解析中・失敗・期限切れ）は根拠に入れずに続ける。
+    （解析中・失敗・期限切れ）は根拠に入れずに続け、``report_degraded`` に残す（#3286）。
     """
     units: list[AttachmentUnit] = []
     for record in records:
@@ -182,6 +192,7 @@ def attachment_units(
                 "rag_chat_attachment_unreadable",
                 extra={"attachment_id": record.attachment_id, "reason": str(exc)},
             )
+            report_degraded("chat_attachments", exc)
             continue
         for section in content.sections:
             for index, piece in enumerate(_split(section.text, UNIT_CHARACTERS), start=1):
@@ -238,8 +249,12 @@ async def select_attachment_units(
     *,
     rerank: RerankFunction | None,
     limit: int = MAX_ATTACHMENT_EVIDENCE,
+    report_degraded: ReportDegraded = not_recorded,
 ) -> list[tuple[AttachmentUnit, float]]:
-    """質問に関係する添付の箇所を選ぶ（小さな添付はすべて。rerank が失敗したら文字の一致）。"""
+    """質問に関係する添付の箇所を選ぶ（小さな添付はすべて。rerank が失敗したら文字の一致）。
+
+    rerank の失敗は ``report_degraded`` に残す（#3286）。
+    """
     if not units:
         return []
     if sum(len(unit.text) for unit in units) <= ALL_IN_CHARACTERS and len(units) <= limit:
@@ -252,6 +267,7 @@ async def select_attachment_units(
             logger.warning(
                 "rag_chat_attachments_rerank_failed", extra={"error_type": type(exc).__name__}
             )
+            report_degraded("chat_attachment_rerank", exc)
     scores = _lexical_scores(question, units)
     order = sorted(range(len(units)), key=lambda index: (-scores[index], index))
     return [(units[index], scores[index]) for index in order[:limit]]
@@ -284,18 +300,33 @@ def attachment_chunk(unit: AttachmentUnit, score: float) -> RetrievedChunk:
 
 
 async def attachment_evidence(
-    question: str, conversation_id: str, *, rerank: RerankFunction | None
+    question: str,
+    conversation_id: str,
+    *,
+    rerank: RerankFunction | None,
+    report_degraded: ReportDegraded = not_recorded,
 ) -> list[RetrievedChunk]:
-    """会話の添付から、質問の根拠にする箇所（添付が無ければ空）。"""
-    toolset = conversation_toolset(conversation_id)
+    """会話の添付から、質問の根拠にする箇所（添付が無ければ空）。
+
+    読めない添付と rerank の失敗は ``report_degraded`` に残す（回答の診断の degraded_steps。
+    #3286）。
+    """
+    toolset = conversation_toolset(conversation_id, report_degraded=report_degraded)
     if toolset is None:
         return []
     try:
-        units = await to_thread.run_sync(lambda: attachment_units(toolset.records, toolset.parsed))
+        units = await to_thread.run_sync(
+            lambda: attachment_units(
+                toolset.records, toolset.parsed, report_degraded=report_degraded
+            )
+        )
     except Exception as exc:  # noqa: BLE001 - 期限で消えた添付などは根拠に入れずに続ける
         logger.warning("rag_chat_attachments_unreadable", extra={"error_type": type(exc).__name__})
+        report_degraded("chat_attachments", exc)
         return []
-    selected = await select_attachment_units(question, units, rerank=rerank)
+    selected = await select_attachment_units(
+        question, units, rerank=rerank, report_degraded=report_degraded
+    )
     return [attachment_chunk(unit, score) for unit, score in selected]
 
 
