@@ -80,7 +80,7 @@ import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 // SQL生成評価にそろえる（評価セット → 実行状況 → 評価概要（前回との比較）→ ケース別結果 → 最近の評価）。
 
 const POLL_INTERVAL_MS = 1500;
-// 最近の評価の 1 ページ（サーバー側のページング。終わった評価は 365 日残る。#794）。
+// 最近の評価の 1 ページ（サーバー側のページング。終わった評価は削除せずに残る。#794・#3235）。
 const JOBS_PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const ACTIVE: ReadonlySet<EvaluationJobStatus> = new Set(["queued", "running"]);
 

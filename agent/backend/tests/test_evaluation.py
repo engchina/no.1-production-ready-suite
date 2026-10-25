@@ -414,29 +414,50 @@ def _finished_job(created_at: datetime, *, set_id: str = "evset_history") -> Eva
     return job
 
 
-def test_history_is_kept_for_a_year_and_listed_page_by_page(agent: None) -> None:
-    """評価の履歴は件数（旧 50 件）ではなく期間（365 日）で残し、ページで読む（#794）。"""
+def test_history_is_kept_without_limit_and_listed_page_by_page(agent: None) -> None:
+    """評価の履歴は期間・件数で消さずに残し（#3235）、ページで読む（#794）。"""
     del agent
     now = datetime.now(UTC)
-    expired = _finished_job(now - timedelta(days=EVALUATION_JOBS_RETENTION_DAYS + 30))
+    assert (EVALUATION_JOBS_RETENTION_DAYS, evaluation.EVALUATION_JOBS_MAX) == (0, 0)
+    oldest = _finished_job(now - timedelta(days=3650))
     jobs = [_finished_job(now - timedelta(days=300 - index)) for index in range(60)]
 
-    assert evaluation_store.prune() == (expired.id,)
-    # 新しい評価を始めても、50 件を超えた古い履歴は消えない。
+    assert evaluation_store.prune() == ()
+    # 新しい評価を始めても、古い履歴は消えない。
     latest = _job(_case("c1", "q", "x"), set_id="evset_history")
 
     first = client.get("/api/evaluations", params={"set_id": "evset_history"}).json()["data"]
-    assert (first["total"], first["offset"], first["limit"], len(first["items"])) == (61, 0, 25, 25)
+    assert (first["total"], first["offset"], first["limit"], len(first["items"])) == (62, 0, 25, 25)
     assert first["items"][0]["id"] == latest.id
     last = client.get(
         "/api/evaluations", params={"set_id": "evset_history", "offset": 60, "limit": 10}
     ).json()["data"]
-    assert [item["id"] for item in last["items"]] == [jobs[0].id]
+    assert [item["id"] for item in last["items"]] == [jobs[0].id, oldest.id]
     assert client.get("/api/evaluations", params={"limit": 101}).status_code == 422
     # 前回との比較は、残っているすべての履歴から探す。
     second = client.get(f"/api/evaluations/{jobs[1].id}").json()["data"]
     assert second["previous_job_id"] == jobs[0].id
-    assert client.get(f"/api/evaluations/{expired.id}").status_code == 404
+    assert client.get(f"/api/evaluations/{oldest.id}").status_code == 200
+
+
+def test_history_prune_applies_only_configured_limits(
+    agent: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """保持期間・件数の上限を決めたときだけ、終わった job を古い順に消す。"""
+    del agent
+    now = datetime.now(UTC)
+    expired = _finished_job(now - timedelta(days=40))
+    kept = _finished_job(now - timedelta(days=10))
+    monkeypatch.setattr(evaluation, "EVALUATION_JOBS_RETENTION_DAYS", 30)
+
+    assert evaluation_store.prune() == (expired.id,)
+    assert client.get(f"/api/evaluations/{kept.id}").status_code == 200
+
+    monkeypatch.setattr(evaluation, "EVALUATION_JOBS_RETENTION_DAYS", 0)
+    newer = _finished_job(now - timedelta(days=5))
+    monkeypatch.setattr(evaluation, "EVALUATION_JOBS_MAX", 1)
+    assert evaluation_store.prune() == (kept.id,)
+    assert client.get(f"/api/evaluations/{newer.id}").status_code == 200
 
 
 def test_cases_can_be_imported_and_exported_as_excel(agent: None) -> None:

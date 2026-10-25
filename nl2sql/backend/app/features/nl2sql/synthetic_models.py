@@ -11,6 +11,9 @@ RunStatus = Literal[
     "pending", "running", "verifying", "completed", "partial", "failed", "no_data", "unknown"
 ]
 TERMINAL = {"completed", "partial", "failed", "no_data"}
+# 確認用データ（一時表）を残し、適用・破棄を受け付ける期間（処理の終了から）。生成の記録そのものは
+# 期間の後も消さない（実行の記録は無期限に残す。#3235）。
+REVIEW_WINDOW = timedelta(hours=24)
 
 
 def now() -> str:
@@ -60,24 +63,28 @@ class SyntheticRun(BaseModel):
     applied_at: str | None = None
     staging: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
-    def history_expired(self, at: datetime | None = None) -> bool:
+    def review_expired(self, at: datetime | None = None) -> bool:
+        """確認用データの期間（`REVIEW_WINDOW`）を過ぎたか。過ぎた記録は閲覧だけにする。"""
         if self.status not in TERMINAL:
             return False
         ended = datetime.fromisoformat(self.finished_at or self.created_at)
         if ended.tzinfo is None:
             ended = ended.replace(tzinfo=UTC)
-        return ended < (at or datetime.now(UTC)) - timedelta(hours=24)
+        return ended < (at or datetime.now(UTC)) - REVIEW_WINDOW
 
     def public(self) -> dict[str, Any]:
-        return self.model_dump(
-            exclude={
-                "actor_id",
-                "worker_id",
-                "context_id",
-                "idempotency_key",
-                "request_hash",
-                "request",
-                "session",
-                "staging",
-            }
-        )
+        return {
+            **self.model_dump(
+                exclude={
+                    "actor_id",
+                    "worker_id",
+                    "context_id",
+                    "idempotency_key",
+                    "request_hash",
+                    "request",
+                    "session",
+                    "staging",
+                }
+            ),
+            "review_expired": self.review_expired(),
+        }

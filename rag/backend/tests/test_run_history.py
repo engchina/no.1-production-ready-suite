@@ -192,6 +192,24 @@ async def test_recorder_saves_summary_progress_events_and_purges_once() -> None:
     assert store.purged == [30]
 
 
+async def test_recorder_keeps_runs_by_default() -> None:
+    """既定の保持日数は 0（無期限）で、実行履歴を自動では削除しない（#3235）。"""
+    store = RecordingStore()
+    recorder = RunRecorder(surface="search", settings=Settings(), store=store)
+
+    await recorder.record(
+        run_id="trace-1",
+        question="q",
+        search_answer_profile_id=None,
+        answer_generated=False,
+        status="success",
+        elapsed_ms=1.0,
+    )
+
+    assert len(store.records) == 1
+    assert store.purged == []
+
+
 async def test_recorder_failure_does_not_raise(caplog: pytest.LogCaptureFixture) -> None:
     recorder = RunRecorder(surface="search", settings=Settings(), store=RecordingStore(fail=True))
     await recorder.record(

@@ -527,7 +527,7 @@ const agentJa = {
   "evaluation.detail.error": "評価できなかった理由",
   "evaluation.detail.run": "実行",
   "evaluation.jobs.title": "最近の評価",
-  "evaluation.jobs.description": "新しい順。終わった評価は 365 日残します。",
+  "evaluation.jobs.description": "新しい順。終わった評価は削除せずに残します。",
   "evaluation.jobs.pagerLabel": "最近の評価のページ",
   "evaluation.jobs.label": "最近の評価",
   "evaluation.jobs.empty": "まだ評価はありません",

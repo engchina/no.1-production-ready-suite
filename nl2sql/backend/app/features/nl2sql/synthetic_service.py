@@ -32,6 +32,11 @@ from .synthetic_store import SyntheticConflict, SyntheticStore
 
 logger = logging.getLogger(__name__)
 
+REVIEW_EXPIRED_MESSAGE = (
+    "確認用データの保持期間（生成終了から24時間）を過ぎたため、適用・破棄できません。"
+    "生成記録は履歴に残ります。"
+)
+
 
 def context_id(settings: Settings) -> str:
     return hashlib.sha256(
@@ -182,7 +187,6 @@ class SyntheticService:
         digest = hashlib.sha256(
             json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()
         ).hexdigest()
-        self.store.purge_expired(self.context, actor.user_uuid)
         old = self.store.by_key(actor.user_uuid, self.context, request.idempotency_key)
         if old:
             if old.request_hash != digest:
@@ -216,13 +220,10 @@ class SyntheticService:
         run = self.store.get(run_id)
         if not run or run.actor_id != actor.user_uuid or run.context_id != self.context:
             raise HTTPException(404, "生成記録が見つかりません。")
-        if run.history_expired():
-            raise HTTPException(404, "生成記録の保存期間（処理終了から24時間）を過ぎています。")
         return run
 
     def list(self, principal: Principal | None) -> list[SyntheticRun]:
         actor = authorize(principal)
-        self.store.purge_expired(self.context, actor.user_uuid)
         return self.store.list(self.context, actor.user_uuid)
 
     def review(
@@ -247,7 +248,9 @@ class SyntheticService:
                 run.request["profile_id"]
             ):
                 raise HTTPException(403, "Profile の利用権限が変更されています。")
-            if not run.preview or run.status not in TERMINAL or run.history_expired():
+            if run.review_expired():
+                raise HTTPException(409, REVIEW_EXPIRED_MESSAGE)
+            if not run.preview or run.status not in TERMINAL:
                 raise HTTPException(409, "この生成記録は適用・破棄できません。")
             if discard:
                 if run.review_status == "applied":
@@ -444,14 +447,14 @@ class SyntheticService:
         # CAS で pending→running を一度だけ claim。期限切れでも生成を再実行しない。
         with self._thread_lock:
             if time.monotonic() - self._last_history_cleanup >= 60:
-                for run in self.store.list(self.context, all_records=True):
-                    if run.status in TERMINAL and (
-                        run.history_expired()
+                # 一時表だけを片付け、生成の記録は消さない（#3235）。
+                for run in self.store.list_cleanup_candidates(self.context):
+                    if (
+                        run.review_expired()
                         or run.review_status == "discarded"
                         or run.status in {"failed", "no_data"}
                     ):
                         self.cleanup(run)
-                self.store.purge_expired(self.context)
                 self._last_history_cleanup = time.monotonic()
             self._threads = {k: t for k, t in self._threads.items() if t.is_alive()}
             for run in reversed(self.store.list(self.context, active=True)):

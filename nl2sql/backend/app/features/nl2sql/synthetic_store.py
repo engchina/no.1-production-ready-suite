@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import builtins
 import threading
 from collections.abc import Callable
 from contextlib import AbstractContextManager
-from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .synthetic_models import TERMINAL, SyntheticRun
@@ -71,53 +71,29 @@ class SyntheticStore:
             r = self._runs.get(run_id)
             return r.model_copy(deep=True) if r else None
 
-    def purge_expired(
-        self, context: str, actor: str | None = None, *, at: datetime | None = None
-    ) -> int:
-        at = at or datetime.now(UTC)
+    def list_cleanup_candidates(self, context: str) -> builtins.list[SyntheticRun]:
+        """確認用データ（一時表）が残っている終端の記録（worker の後始末の対象）。
+
+        生成の記録は消さない（#3235）ので、全件ではなく一時表の管理情報が残る記録だけを読む。
+        """
         if self.connection:
             with self.connection() as conn, conn.cursor() as cur:
                 cur.execute(
                     "SELECT PAYLOAD FROM NL2SQL_SYNTHETIC_RUNS WHERE CONTEXT_ID=:ctx "
-                    "AND (:actor IS NULL OR ACTOR_ID=:actor) "
                     "AND STATUS IN ('completed','partial','failed','no_data') "
-                    "AND CREATED_AT < :cutoff",
-                    {
-                        "ctx": context,
-                        "actor": actor,
-                        "cutoff": (at - timedelta(hours=24)).isoformat(),
-                    },
+                    "AND JSON_EXISTS(PAYLOAD, '$.staging.*') ORDER BY CREATED_AT",
+                    {"ctx": context},
                 )
-                expired = [self.decode(row[0]) for row in cur.fetchall()]
-                deleted = 0
-                for run in expired:
-                    if not run.history_expired(at) or run.staging:
-                        continue
-                    cur.execute(
-                        "DELETE FROM NL2SQL_SYNTHETIC_LOCKS WHERE RUN_ID=:id",
-                        {"id": run.run_id},
-                    )
-                    cur.execute(
-                        "DELETE FROM NL2SQL_SYNTHETIC_RUNS WHERE RUN_ID=:id "
-                        "AND VERSION_NO=:version AND STATUS IN "
-                        "('completed','partial','failed','no_data')",
-                        {"id": run.run_id, "version": run.version},
-                    )
-                    deleted += cur.rowcount
-                conn.commit()
-                return deleted
+                return [self.decode(row[0]) for row in cur.fetchall()]
         with self._lock:
-            expired_ids = [
-                run.run_id
-                for run in self._runs.values()
-                if run.context_id == context
-                and (actor is None or run.actor_id == actor)
-                and run.history_expired(at)
-                and not run.staging
-            ]
-            for run_id in expired_ids:
-                del self._runs[run_id]
-            return len(expired_ids)
+            return sorted(
+                [
+                    r.model_copy(deep=True)
+                    for r in self._runs.values()
+                    if r.context_id == context and r.status in TERMINAL and r.staging
+                ],
+                key=lambda r: r.created_at,
+            )
 
     def by_key(self, actor: str, context: str, key: str) -> SyntheticRun | None:
         if self.connection:
