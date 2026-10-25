@@ -1,4 +1,5 @@
 import {timelineSnapshot, timelineTypography} from "../../../../platform/packages/ui/e2e/timeline-snapshot";
+import { FONT_MONO_FAMILY } from "../../../../platform/packages/ui/e2e/font-checks";
 import {jobProgressEvents, jobProgressTraceId, withJobProgress, withRecordedTrace, type JobProgressStep} from "./_helpers/job-progress";
 import { mockTabularPreview } from "./_helpers/tabular-preview";
 import { readFile } from "node:fs/promises";
@@ -3166,7 +3167,7 @@ test("ローカルコードフォントで英日混在 SQL を表示し業務数
     return counts;
   });
   expect(loaded.every((count) => count > 0)).toBe(true);
-  await expect(sql).toHaveCSS("font-family", '"Google Sans Code", "Noto Sans JP Variable", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", Roboto, monospace');
+  await expect(sql).toHaveCSS("font-family", FONT_MONO_FAMILY);
   const rowLimit = page.getByTestId("nl2sql-direct-sql").getByLabel("取得件数上限");
   await expect(rowLimit).toHaveCSS("font-family", await page.locator("body").evaluate((node) => getComputedStyle(node).fontFamily));
   const cdp = await context.newCDPSession(page);
