@@ -321,7 +321,7 @@ RAG のチャットは MCP で提供しない（#787）。RAG の MCP は検索�
 （「ほか N 件」で切らない。#2361）。成果物の `notice`（節の項目の数 `items`・本文の終わりの見出し `heading`・節の見出し
 `headings`）で画面は本文と節を分け、`withheld`（`removed`・`unverified`・`warnings`〔警告の印の段落の数〕・`all`〔常に
 false〕・`listed`〔節の項目の数〕）で件数を出す。MCP の `agent_chat`・`agent_get_run` も同じ 3 つを返す（出力の
-`schema_version` は 2）。
+`schema_version` は 3。回答の対応・根拠の ID は `docs/agents/mcp.md`）。
 調べるのに使ったツール・プロファイル・内部の ID だけを述べる行（`answer_passages.is_lookup_note`）は、資料の主張ではないので
 検証の前に回答から外す（末尾の節にも書かない。RAG の検証はモデルが `not_a_claim` にした本文の行を
 `unassessed` に直すため〔主張を `not_a_claim` にして監査を逃れるのを防ぐ。#1306。その段落はその段落だけで 1 回監査し直し、

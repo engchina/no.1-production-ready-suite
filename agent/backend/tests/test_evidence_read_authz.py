@@ -53,6 +53,8 @@ USER_PERMISSIONS = [RUNS_VIEW, RUNS_OPERATE, APPROVALS_DECIDE]
 READABLE = "doc-a"
 HIDDEN = "doc-b"
 HIDDEN_TEXT = "doc-b の合成の抜粋"
+# 回答の対応の判断の道筋（MCP に出さない）の目印。
+BASIS_CANARY = "basis-canary-3240"
 
 
 @dataclass
@@ -63,6 +65,7 @@ class People:
     other: str
     admin: str
     logins: dict[str, str]
+    auth: ProductionAuth
 
 
 def _complete(run: RunState) -> None:
@@ -100,6 +103,7 @@ def people(monkeypatch: MonkeyPatch) -> Iterator[People]:
                 "other": other.login_user_id,
                 "system_admin": admin.login_user_id,
             },
+            auth=auth,
         )
     finally:
         set_security_service(None)
@@ -166,7 +170,14 @@ def _seed_evidence_run(people: People, *, agent_id: str | None = None) -> RunSta
             )
         ],
         artifacts=[
-            Artifact(name="回答", kind="answer", content={"text": "合成の回答"}),
+            Artifact(
+                name="回答",
+                kind="answer",
+                content={
+                    "text": "合成の回答",
+                    "outcome": {"schema_version": 1, "value": "answered", "basis": BASIS_CANARY},
+                },
+            ),
             Artifact(
                 name=f"{mcp_function_name('rag', 'rag_search')}:step-1",
                 kind="rag_evidence",
@@ -355,38 +366,140 @@ async def _failing_check(argument: Any) -> dict[str, Any]:
     raise McpToolError("unavailable", "確かめられません。", status=503)
 
 
-def test_mcp_agent_get_run_rechecks_sources(
-    people: People, rag: FakeProductMcp, monkeypatch: MonkeyPatch
-) -> None:
-    """外部の MCP クライアントが後から読む Run の根拠（sources）も、キーの利用者の今の権限で。"""
-    from app.features.agent import mcp_server
-
-    monkeypatch.setattr(mcp_server, "wait_poll_seconds", 0.01)
-    run = _seed_evidence_run(people)
-    rag.unreadable_documents = {HIDDEN}
-    session = _headers(people, "owner")
-    created = client.post(
-        "/api/account/api-keys",
-        json={"name": "外部のクライアント", "products": ["agent"]},
-        headers=session,
-    )
-    assert created.status_code == 200, created.text
+def _mcp_get_run(token: str, run_id: str) -> dict[str, Any]:
     response = client.post(
         "/api/mcp",
         json={
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "agent_get_run", "arguments": {"run_id": run.id, "wait_seconds": 0}},
+            "params": {"name": "agent_get_run", "arguments": {"run_id": run_id, "wait_seconds": 0}},
         },
-        headers={"authorization": f"Bearer {created.json()['data']['token']}"},
+        headers={"authorization": f"Bearer {token}"},
     )
     assert response.status_code == 200, response.text
-    output = response.json()["result"]["structuredContent"]
-    assert [item["title"] for item in output["sources"]] == [f"{READABLE}.pdf"]
-    assert HIDDEN_TEXT not in response.text
-    [call] = rag.calls_of("rag_readable_documents")
-    assert call["claims"]["sub"] == people.owner
+    result: dict[str, Any] = response.json()["result"]
+    return result
+
+
+def _api_key(people: People, principal: str, **body: Any) -> str:
+    created = client.post(
+        "/api/account/api-keys",
+        json={"name": "外部のクライアント", "products": ["agent"], **body},
+        headers=_headers(people, principal),
+    )
+    assert created.status_code == 200, created.text
+    token: str = created.json()["data"]["token"]
+    return token
+
+
+# MCP の agent_get_run: 主体・キーの範囲 → (エラーの code, 出す根拠の文書, 権限の無い根拠の数)。
+MCP_MATRIX = [
+    ("owner", set(), None, None, [READABLE, HIDDEN], 0),
+    ("owner", {HIDDEN}, None, None, [READABLE], 1),
+    ("other", set(), None, "RUN_NOT_FOUND", None, None),
+    # system_admin は閲覧できる（#3244）。根拠は system_admin の今の権限で確かめる。
+    ("system_admin", set(), None, None, [READABLE, HIDDEN], 0),
+    ("system_admin", {HIDDEN}, None, None, [READABLE], 1),
+    # キーの業務 Agent の範囲の外の Run は 403（Run の持ち主でも）。
+    ("owner", set(), "other_agent", "AGENT_OUT_OF_KEY_SCOPE", None, None),
+]
+MCP_IDS = [
+    "owner",
+    "owner-kb-removed",
+    "other",
+    "system_admin",
+    "system_admin-no-scope",
+    "out-of-key-scope",
+]
+
+
+@pytest.mark.parametrize(
+    ("principal", "unreadable", "key_scope", "error_code", "documents", "withheld"),
+    MCP_MATRIX,
+    ids=MCP_IDS,
+)
+def test_mcp_agent_get_run_rechecks_sources(
+    people: People,
+    rag: FakeProductMcp,
+    monkeypatch: MonkeyPatch,
+    principal: str,
+    unreadable: set[str],
+    key_scope: str | None,
+    error_code: str | None,
+    documents: list[str] | None,
+    withheld: int | None,
+) -> None:
+    """外部の MCP クライアントが後から読む Run の根拠（sources）も、キーの利用者の今の権限で。
+
+    見られない根拠は sources に出さず、数（withheld_evidence_count）だけを返す（#3252・#3240）。
+    """
+    from app.features.agent import mcp_server
+
+    monkeypatch.setattr(mcp_server, "wait_poll_seconds", 0.01)
+    run = _seed_evidence_run(people)
+    rag.unreadable_documents = unreadable
+    scopes = {"resource_scopes": {"agent": [people.other_agent_id]}} if key_scope else {}
+    result = _mcp_get_run(_api_key(people, principal, **scopes), run.id)
+    output = result["structuredContent"]
+    if error_code is not None:
+        assert result["isError"] is True
+        assert output["error_code"] == error_code
+        # 見えない Run の根拠は、RAG に問い合わせもしない。
+        assert rag.calls_of("rag_readable_documents") == []
+        return
+    assert documents is not None
+    assert output["schema_version"] == 3
+    assert output["outcome"] == "answered"
+    assert [item["document_id"] for item in output["sources"]] == documents
+    assert [item["chunk_id"] for item in output["sources"]] == [f"{doc}:c1" for doc in documents]
+    assert all(item["cited"] is True for item in output["sources"])
+    assert output["withheld_evidence_count"] == withheld
+    text = json.dumps(result, ensure_ascii=False)
+    # 判断の道筋（outcome の basis）は出さない。見られない根拠の抜粋・文書名も出さない。
+    assert BASIS_CANARY not in text
+    if withheld:
+        assert HIDDEN_TEXT not in text and f"{HIDDEN}.pdf" not in text
+    viewer = people.admin if principal == "system_admin" else people.owner
+    calls = rag.calls_of("rag_readable_documents")
+    assert calls and {call["claims"]["sub"] for call in calls} == {viewer}
+
+
+def test_mcp_agent_get_run_withholds_all_sources_when_access_cannot_be_checked(
+    people: People, rag: FakeProductMcp, monkeypatch: MonkeyPatch
+) -> None:
+    """RAG で確かめられないとき、MCP の sources も全件を伏せて数だけを返す（fail closed）。"""
+    from app.features.agent import mcp_server
+
+    monkeypatch.setattr(mcp_server, "wait_poll_seconds", 0.01)
+    run = _seed_evidence_run(people)
+    tool = rag.servers["rag"].tools["rag_readable_documents"]
+    rag.servers["rag"].tools["rag_readable_documents"] = tool.__class__(
+        name=tool.name,
+        description=tool.description,
+        input_model=tool.input_model,
+        handler=_failing_check,
+        listed=False,
+    )
+    output = _mcp_get_run(_api_key(people, "owner"), run.id)["structuredContent"]
+    assert (output["sources"], output["withheld_evidence_count"]) == ([], 2)
+
+
+def test_mcp_agent_get_run_needs_the_run_capability(people: People, rag: FakeProductMcp) -> None:
+    """Run を読む capability の無い利用者のキーは、agent_get_run を呼べない。"""
+    run = _seed_evidence_run(people)
+    user = people.auth.user_with_permissions(
+        f"no-runs-{uuid4().hex[:8]}", [APPROVALS_DECIDE], agent_ids=[people.agent_id]
+    )
+    created = client.post(
+        "/api/account/api-keys",
+        json={"name": "外部のクライアント", "products": ["agent"]},
+        headers=login(user.login_user_id),
+    )
+    assert created.status_code == 200, created.text
+    result = _mcp_get_run(created.json()["data"]["token"], run.id)
+    assert result["structuredContent"]["error_code"] == "MCP_TOOL_FORBIDDEN"
+    assert rag.calls_of("rag_readable_documents") == []
 
 
 # ---------------------------------------------------------------------------

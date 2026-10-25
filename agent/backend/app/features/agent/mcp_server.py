@@ -29,7 +29,7 @@ import asyncio
 import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pr_backend_core.mcp import McpServer, McpTool, McpToolError, mcp_http_response
@@ -41,7 +41,12 @@ from pr_system_settings.auth.visibility import (
 from pydantic import BaseModel, Field
 
 from app.features.agent import router as agent_api
-from app.features.agent.answer_evidence import ANSWER_EVIDENCE_KIND, answer_evidence
+from app.features.agent.answer_evidence import (
+    ANSWER_EVIDENCE_KIND,
+    ATTACHMENT_DOCUMENT_PREFIX,
+    answer_evidence,
+)
+from app.features.agent.answer_outcome import ANSWER_OUTCOMES
 from app.features.agent.answer_validation import ANSWER_VALIDATION_KIND
 from app.features.agent.confirmation import (
     MAX_ITEMS,
@@ -50,6 +55,7 @@ from app.features.agent.confirmation import (
     ConfirmationAnswerError,
     ConfirmationRequest,
 )
+from app.features.agent.run_facts import run_answer_outcome
 from app.features.agent.runtime import (
     AGENT_UNPUBLISHED_MESSAGE,
     MCP_API_KEY_ID_KEY,
@@ -87,8 +93,12 @@ QUESTION_MAX_CHARS = 8000
 wait_poll_seconds = 0.5
 
 # 根拠の抜き出しの長さと件数（呼び出し側のモデルの文脈を膨らませない）。
-# RunOutput の形の版（#2738 で段落の印・外した段落・回答の警告を足して 2）。
-RUN_OUTPUT_SCHEMA_VERSION = 2
+# RunOutput の形の版（#2738 で段落の印・外した段落・回答の警告を足して 2、#3240 で回答の対応・
+# 根拠の ID・引用の印・見られない根拠の数を足して 3）。
+RUN_OUTPUT_SCHEMA_VERSION = 3
+# agent_list・agent_skill_export の出力の形の版（3 製品の MCP の出力に版を持たせる。#3240）。
+LIST_OUTPUT_SCHEMA_VERSION = 1
+SKILL_EXPORT_SCHEMA_VERSION = 1
 _SOURCE_EXCERPT_CHARS = 400
 _MAX_SOURCES = 10
 
@@ -148,6 +158,9 @@ class AgentSummary(BaseModel):
 
 
 class AgentListOutput(BaseModel):
+    schema_version: int = Field(
+        default=LIST_OUTPUT_SCHEMA_VERSION, description="出力の形の版（変わったら上がる）。"
+    )
     agents: list[AgentSummary]
 
 
@@ -199,6 +212,9 @@ class SkillFileOutput(BaseModel):
 class SkillExportOutput(BaseModel):
     """Agent Skills の形のスキル。`<name>/` のフォルダに files を置くと外部の Agent で使える。"""
 
+    schema_version: int = Field(
+        default=SKILL_EXPORT_SCHEMA_VERSION, description="出力の形の版（変わったら上がる）。"
+    )
     name: str
     files: list[SkillFileOutput]
 
@@ -269,6 +285,30 @@ class SourceOutput(BaseModel):
     title: str
     location: str = ""
     excerpt: str = ""
+    # ID の名前は RAG の根拠（`rag_search` の evidence）と同じ（契約の一致はテストで確かめる）。
+    document_id: str | None = Field(
+        default=None, description="RAG の文書の ID（会話の添付の根拠は null）。"
+    )
+    chunk_id: str | None = Field(
+        default=None, description="RAG の chunk の ID（rag_read_source に渡せる。添付は null）。"
+    )
+    cited: bool = Field(
+        default=False,
+        description=(
+            "回答で引用した根拠か（引用の無い回答は、AI に渡した根拠をすべて false で出す）。"
+        ),
+    )
+
+
+# 回答の対応（RAG の `rag_search` の outcome と同じ語彙。#1305。一致はテストで確かめる）。
+AnswerOutcomeValue = Literal[
+    "answered",
+    "conditional",
+    "needs_clarification",
+    "needs_environment_data",
+    "needs_human",
+    "insufficient_evidence",
+]
 
 
 class ReasonOutput(BaseModel):
@@ -305,12 +345,25 @@ class RunOutput(BaseModel):
     thread_id: str | None = None
     # queued / running / waiting_confirmation / waiting_approval / completed / failed / cancelled
     status: str
+    outcome: AnswerOutcomeValue | None = Field(
+        default=None,
+        description=(
+            "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / "
+            "needs_clarification=利用者への確認 / "
+            "needs_environment_data=現場の値・記録の確認が要る / "
+            "needs_human=人への引き継ぎ / insufficient_evidence=資料から答えられない。"
+            "completed でなければ null。"
+        ),
+    )
     # 待ちをやめた理由に関わらず、Run がまだ進むか（agent_get_run で読み直す）。
     in_progress: bool
     answer: str | None = None
     # 回答前の確認（答えていないもの）。あれば agent_answer_confirmation で答える。
     confirmation: ConfirmationOutput | None = None
     sources: list[SourceOutput] = Field(default_factory=list)
+    withheld_evidence_count: int = Field(
+        default=0, ge=0, description="今の権限で見られないため sources に出さない根拠の数。"
+    )
     passage_marks: list[PassageMarkOutput] = Field(
         default_factory=list,
         description="answer の本文の段落（text）のうち、確かめが要る段落と理由。",
@@ -560,6 +613,24 @@ def _by_document(items: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     )
 
 
+def _rag_ids(item: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    """根拠の RAG の文書と chunk の ID（会話の添付の根拠は RAG の文書ではないので両方 None）。"""
+    document_id, chunk_id = item.get("document_id"), item.get("chunk_id")
+    if not isinstance(document_id, str) or not document_id:
+        return None, None
+    if document_id.startswith(ATTACHMENT_DOCUMENT_PREFIX):
+        return None, None
+    return document_id, chunk_id if isinstance(chunk_id, str) and chunk_id else None
+
+
+def _outcome(run: RunState) -> AnswerOutcomeValue | None:
+    """完了した Run の回答の対応（成果物 `answer` の `outcome.value`。無い・知らない値は None）。"""
+    if run.status != RunStatus.COMPLETED:
+        return None
+    value = run_answer_outcome(run)
+    return cast(AnswerOutcomeValue, value) if value in ANSWER_OUTCOMES else None
+
+
 def _sources(run: RunState) -> list[SourceOutput]:
     """回答の根拠（RAG の資料）。回答で引用した根拠（画面のチャットの「回答で引用」と同じ判定。
     #2328）を選び、1 件も無ければ AI に渡した根拠の全件。
@@ -570,11 +641,15 @@ def _sources(run: RunState) -> list[SourceOutput]:
     for item in _by_document(cited or items):
         title = str(item.get("file_name") or item.get("document_id") or "名前の無い資料")
         excerpt = item.get("excerpt")
+        document_id, chunk_id = _rag_ids(item)
         sources.append(
             SourceOutput(
                 title=title,
                 location=_location(item.get("locator")),
                 excerpt=excerpt[:_SOURCE_EXCERPT_CHARS] if isinstance(excerpt, str) else "",
+                document_id=document_id,
+                chunk_id=chunk_id,
+                cited=item.get("cited") is True,
             )
         )
         if len(sources) >= _MAX_SOURCES:
@@ -589,8 +664,13 @@ def _failure_message(run: RunState) -> str:
     return "業務 Agent の実行に失敗しました。"
 
 
-def run_output(run: RunState, *, include_notice: bool = False) -> RunOutput:
-    """Run の応答。`include_notice` なら、完了した回答の注意書きを付ける（#2405）。"""
+def run_output(
+    run: RunState, *, include_notice: bool = False, withheld_evidence_count: int = 0
+) -> RunOutput:
+    """Run の応答。`include_notice` なら、完了した回答の注意書きを付ける（#2405）。
+
+    `withheld_evidence_count` は、見る人の今の権限で見られないため除いた根拠の数（#3252）。
+    """
     confirmation = _pending_confirmation(run)
     tools_used: list[str] = []
     skipped: list[str] = []
@@ -632,10 +712,12 @@ def run_output(run: RunState, *, include_notice: bool = False) -> RunOutput:
         agent_id=run.agent_id,
         thread_id=run.thread_id,
         status=str(status.value),
+        outcome=_outcome(run),
         in_progress=in_progress,
         answer=run_answer_text(run),
         confirmation=_confirmation_output(confirmation) if confirmation is not None else None,
         sources=_sources(run),
+        withheld_evidence_count=withheld_evidence_count,
         passage_marks=passage_marks,
         removed_passages=removed_passages,
         answer_warnings=warnings,
@@ -739,10 +821,12 @@ def build_agent_mcp_server(request: Request) -> McpServer:
         run = _readable_run(request, arguments.run_id)
         waited = await _wait(run.id, arguments.wait_seconds)
         # 後から読む Run の根拠は、呼んだ利用者の今の権限で確かめ直す（見られない根拠は sources に
-        # 出さない。#3252）。
+        # 出さず、数だけを返す。#3252）。
+        checked, withheld = await agent_api._evidence_checked_run(request, waited)
         return run_output(
-            await agent_api._evidence_checked_run(request, waited),
+            checked,
             include_notice=called_with_api_key(request),
+            withheld_evidence_count=withheld,
         )
 
     async def answer_confirmation(arguments: AgentAnswerConfirmationInput) -> RunOutput:
