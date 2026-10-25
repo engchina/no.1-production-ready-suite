@@ -157,8 +157,8 @@ test("期間を変えると、その期間で集計し直し、Run が無けれ�
   await expect(page.getByText("この期間の実行はありません")).toBeVisible();
   const request = mockApi.lastRequest("GET", "/api/usage");
   expect(request?.searchParams.get("days")).toBe("7");
-  // 日はシステムの設定の時間帯で区切る（既定 Asia/Tokyo。#3265）。
-  expect(request?.searchParams.get("timezone")).toBe("Asia/Tokyo");
+  // 日はシステムの設定の時間帯で区切る（既定 UTC。#3265・#3274）。
+  expect(request?.searchParams.get("timezone")).toBe("UTC");
   // 期間は作業状態に残す（再読込しても 7 日）。
   await page.reload();
   await expect(page.locator("#usage-period")).toContainText("直近 7 日");
@@ -274,11 +274,11 @@ for (const viewport of VIEWPORTS) {
   test(`システムの設定の時間帯で利用状況を取得する (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     // ブラウザの時間帯ではなく、/api/auth/me の timezone（PLATFORM_TIMEZONE）を送る（#3265）。
-    mockApi.setCurrentUser({ ...LOCAL_CURRENT_USER, timezone: "UTC" });
+    mockApi.setCurrentUser({ ...LOCAL_CURRENT_USER, timezone: "Asia/Tokyo" });
     seedReport(mockApi);
     await page.goto("/usage");
     await expect(page.getByTestId("usage-summary")).toContainText("100,000");
-    expect(mockApi.lastRequest("GET", "/api/usage")?.searchParams.get("timezone")).toBe("UTC");
+    expect(mockApi.lastRequest("GET", "/api/usage")?.searchParams.get("timezone")).toBe("Asia/Tokyo");
     await expectNoHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`usage-system-timezone-${viewport.name}.png`), fullPage: true });
   });
@@ -288,10 +288,10 @@ for (const viewport of VIEWPORTS) {
 test.describe("ブラウザの時間帯", () => {
   test.use({ timezoneId: "America/New_York" });
 
-  test("ブラウザの時間帯に関係なく、設定の時間帯の無い応答では既定（Asia/Tokyo）を送る", async ({ page, mockApi }) => {
+  test("ブラウザの時間帯に関係なく、設定の時間帯の無い応答では既定（UTC）を送る", async ({ page, mockApi }) => {
     seedReport(mockApi);
     await page.goto("/usage");
     await expect(page.getByTestId("usage-summary")).toContainText("100,000");
-    expect(mockApi.lastRequest("GET", "/api/usage")?.searchParams.get("timezone")).toBe("Asia/Tokyo");
+    expect(mockApi.lastRequest("GET", "/api/usage")?.searchParams.get("timezone")).toBe("UTC");
   });
 });

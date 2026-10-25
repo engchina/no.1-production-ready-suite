@@ -1,7 +1,7 @@
 """3 製品共通の時間帯（#3255）。
 
 - **値**: 共通の設定（`platform/.env` の `PLATFORM_TIMEZONE`。属性は `timezone`）。
-  既定は `Asia/Tokyo`（東京・大阪の時刻）。IANA の地域名だけを受ける
+  既定は `UTC`（日本時間にするなら `Asia/Tokyo`。#3274）。IANA の地域名だけを受ける
   （夏時間のある地域も正しく扱うため、固定の offset は受けない）。
   配備では Terraform の `timezone` から書き、`platform/deploy/suite-init.sh` が
   Compute の OS の時間帯を合わせる。
@@ -22,7 +22,7 @@ from typing import Final
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # 既定（`platform/.env.example`・Terraform の `timezone`・`suite-init.sh` の既定と同じ）。
-DEFAULT_TIMEZONE: Final = "Asia/Tokyo"
+DEFAULT_TIMEZONE: Final = "UTC"
 # IANA の地域名の形（`Asia/Tokyo`・`UTC`・`America/Argentina/Buenos_Aires`・`Etc/GMT-9`）。
 # Terraform の validation と `suite-init.sh` も同じ形で確かめる。
 _TIMEZONE_NAME: Final = re.compile(r"[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)*")

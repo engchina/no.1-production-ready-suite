@@ -16,8 +16,8 @@ import anyio
 import pytest
 from agents import FunctionTool
 from agents.testing import ScriptedModel, assistant_message, function_call
-from mcp_support import FakeProductMcp, fake_product_mcp
-from pydantic import ValidationError
+from mcp_support import FakeProductMcp, Nl2SqlQueryIn, RagSearchIn, fake_product_mcp
+from pydantic import ConfigDict, ValidationError
 from pytest import MonkeyPatch
 from security_support import ProductionAuth, client, enable_production_auth, login
 
@@ -32,7 +32,7 @@ from app.features.agent.runtime import (
     runtime_repository,
 )
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
-from app.features.agent.tools import ToolPolicy
+from app.features.agent.tools import ToolInvocationContext, ToolPolicy
 from app.security.service import set_security_service
 from app.settings import get_settings
 
@@ -844,3 +844,94 @@ def test_profile_value_is_kept_unless_one_candidate_name_matches(value: str, exp
         "rag__rag_search", {"query": "売上", "search_answer_profile_id": "売上"}, steps
     )
     assert (rag["search_answer_profile_id"], rag_note) == ("売上", None)
+
+
+# ---------------------------------------------------------------------------
+# 呼び出しの文脈（主体・範囲）の不変（#3253）
+# ---------------------------------------------------------------------------
+
+
+def test_tool_context_cannot_be_changed_after_creation() -> None:
+    """文脈は属性も入れ子の範囲も書き換えられない。変えるときは model_copy で新しく作る。"""
+    source = {"rag": ["bv-sales"]}
+    context = ToolInvocationContext(user_uuid=USER_UUID, profile_scopes=source)
+    source["rag"].append("bv-other")
+    source["nl2sql"] = ["profile-hr"]
+    assert dict(context.profile_scopes) == {"rag": ("bv-sales",)}
+
+    with pytest.raises(ValidationError):
+        context.user_uuid = "other-user"  # type: ignore[misc]
+    with pytest.raises(ValidationError):
+        context.profile_scopes = {}  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        context.profile_scopes["rag"] = ("bv-other",)  # type: ignore[index]
+    with pytest.raises(AttributeError):
+        context.profile_scopes["rag"].append("bv-other")  # type: ignore[attr-defined]
+    with pytest.raises(TypeError):
+        ToolInvocationContext().profile_scopes["rag"] = ("bv-other",)  # type: ignore[index]
+
+    # Runtime が範囲を入れる経路（model_copy の update は検証を通らない）も書き換えられない。
+    scopes = data_scope.token_profile_scopes(
+        {"rag": _scope("bv-sales"), "nl2sql": _scope("p-a", "p-b", default="p-a")}
+    )
+    copied = context.model_copy(update={"profile_scopes": scopes})
+    assert dict(copied.profile_scopes) == {"rag": ("bv-sales",), "nl2sql": ("p-a", "p-b")}
+    with pytest.raises(TypeError):
+        copied.profile_scopes["rag"] = ("bv-other",)  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        copied.user_uuid = "other-user"  # type: ignore[misc]
+    assert context.profile_scopes["rag"] == ("bv-sales",)
+
+
+def test_model_arguments_do_not_change_the_token_subject_or_scope(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """モデルが主体・範囲に当たる引数を渡しても、サービストークンの `sub` と範囲は変わらない。
+
+    fake の契約は未知の項目を拒否するので、ここでは未知の項目を受け取る schema に差し替え、
+    引数が呼び先まで届いたうえで token が文脈（Run の利用者・業務 Agent の範囲）のままかを見る。
+    """
+
+    class OpenQueryIn(Nl2SqlQueryIn):
+        model_config = ConfigDict(extra="allow")
+
+    class OpenSearchIn(RagSearchIn):
+        model_config = ConfigDict(extra="allow")
+
+    mcp.servers["nl2sql"].tools["nl2sql_query"] = mcp._tool(  # noqa: SLF001 - テストの差し替え
+        "nl2sql_query", OpenQueryIn, read_only=False
+    )
+    mcp.servers["rag"].tools["rag_search"] = mcp._tool("rag_search", OpenSearchIn)  # noqa: SLF001
+    _agent(
+        nl2sql=_scope("profile-sales", "profile-cost", default="profile-sales"),
+        rag=_scope("bv-sales"),
+    )
+    spoofed = {
+        "user_uuid": "99999999-0000-0000-0000-000000000000",
+        "sub": "99999999-0000-0000-0000-000000000000",
+        "profile_ids": ["profile-hr"],
+        "profile_scopes": {"nl2sql": ["profile-hr"], "rag": ["bv-hr"]},
+    }
+    _script(
+        monkeypatch,
+        [
+            function_call(
+                "nl2sql__nl2sql_query", {"question": "売上", **spoofed}, call_id="call-1"
+            ),
+            function_call("rag__rag_search", {"query": "契約", **spoofed}, call_id="call-2"),
+        ],
+        [assistant_message("売上は 1200 です。")],
+    )
+    run_id = _run()
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    [query] = mcp.calls_of("nl2sql_query")
+    [search] = mcp.calls_of("rag_search")
+    assert query["claims"]["sub"] == USER_UUID
+    assert query["claims"]["profile_ids"] == ["profile-sales", "profile-cost"]
+    # 引数は呼び先に届いている（届いた上で token が変わらないことを確かめている）。
+    assert query["arguments"]["user_uuid"] == spoofed["user_uuid"]
+    assert search["arguments"]["profile_ids"] == ["profile-hr"]
+    assert search["claims"]["sub"] == USER_UUID
+    assert search["claims"]["profile_ids"] == ["bv-sales"]

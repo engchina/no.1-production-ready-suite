@@ -16,9 +16,10 @@ RAG は Agent の Runtime の強制とは別に、呼び先でも同じ範囲を
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterable, Iterator
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from types import MappingProxyType
 
 from fastapi import HTTPException, Request
 from pr_system_settings.auth.dependencies import service_token_profile_scope
@@ -47,10 +48,21 @@ class ProfileScope:
 
     `profile_ids` は claim の ID（利用者の権限とは積を取る前）。`knowledge_base_ids` は、利用者が
     使える範囲のプロファイルごとの参照先のナレッジベース（アーカイブ済みのプロファイルは含めない）。
+    作った後は入れ子まで書き換えられない（#3253）。
     """
 
     profile_ids: frozenset[str]
-    knowledge_base_ids: dict[str, tuple[str, ...]]
+    knowledge_base_ids: Mapping[str, tuple[str, ...]]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "profile_ids", frozenset(self.profile_ids))
+        object.__setattr__(
+            self,
+            "knowledge_base_ids",
+            MappingProxyType(
+                {profile_id: tuple(ids) for profile_id, ids in self.knowledge_base_ids.items()}
+            ),
+        )
 
     def all_knowledge_base_ids(self) -> frozenset[str]:
         return frozenset(item for ids in self.knowledge_base_ids.values() for item in ids)

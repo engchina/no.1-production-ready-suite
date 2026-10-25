@@ -30,6 +30,9 @@ os.environ["NL2SQL_SELECT_AI_CREDENTIAL_NAME"] = ""
 os.environ["NL2SQL_APP_AUTH_ENABLED"] = "false"
 os.environ["PLATFORM_ORACLE_USER"] = "APP"
 os.environ["NL2SQL_ORACLE_DEEPSEC_ENABLED"] = "false"
+# 業務データの SELECT の間だけ session の時間帯を切り替える経路（#3265）を通すため、
+# 既定（UTC。#3274）ではない時間帯にする。UTC のときに切り替えないことは個別のテストで確かめる。
+os.environ["PLATFORM_TIMEZONE"] = "Asia/Tokyo"
 # 本番の Argon2 のコスト（time_cost=3・64 MiB・並列 4）は 1 回のハッシュに約 70ms かかる。
 # テストは RAG / Agent のテスト（security_support.py）と同じ軽い値にする（#344）。
 os.environ["PLATFORM_AUTH_ARGON2_TIME_COST"] = "1"

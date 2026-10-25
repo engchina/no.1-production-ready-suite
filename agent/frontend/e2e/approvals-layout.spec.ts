@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 import { LOCAL_CURRENT_USER, dbUser } from "./fixtures/auth";
 
-// 日時はホストやブラウザの時間帯ではなく、システムの設定の時間帯（/api/auth/me の timezone。既定 Asia/Tokyo。#3265）で示す。
+// 日時はホストやブラウザの時間帯ではなく、システムの設定の時間帯（/api/auth/me の timezone。既定 UTC。#3265・#3274）で示す。
 test.use({ timezoneId: "America/New_York" });
 
 function seedApproval(mockApi: MockApi, id = "approval-layout", status = "pending") {
@@ -36,13 +36,13 @@ function seedApproval(mockApi: MockApi, id = "approval-layout", status = "pendin
 }
 
 test("判断の日時はシステムの設定の時間帯で示す", async ({ page, mockApi }) => {
-  mockApi.setCurrentUser({ ...LOCAL_CURRENT_USER, timezone: "UTC" });
+  mockApi.setCurrentUser({ ...LOCAL_CURRENT_USER, timezone: "Asia/Tokyo" });
   seedApproval(mockApi);
   await page.goto("/approvals?id=approval-layout");
   const detail = page.getByRole("region", { name: "承認の詳細" });
   // MOCK_NOW は東京の 2026/06/28 09:00、UTC の 2026/06/28 00:00（ブラウザは America/New_York）。
-  await expect(detail).toContainText("2026/06/28 00:00");
-  await expect(detail).not.toContainText("2026/06/28 09:00");
+  await expect(detail).toContainText("2026/06/28 09:00");
+  await expect(detail).not.toContainText("2026/06/28 00:00");
 });
 
 async function detailAction(page: Page, name: string) {
@@ -70,7 +70,7 @@ test("全幅のキューから詳細を開き、URL と検索・選択行を戻�
   const detail = page.getByRole("region", { name: "承認の詳細" });
   await expect(detail).toContainText("データの参照範囲を確認してください。");
   await expect(detail).toContainText("承認済みの国内取引");
-  await expect(detail).toContainText("2026/06/28 09:00");
+  await expect(detail).toContainText("2026/06/28 00:00");
   await page.reload();
   await expect(detail).toContainText("売上分析 approval-layout");
   await page.goBack();
@@ -101,7 +101,7 @@ for (const approved of [true, false]) {
     await detailAction(page, label);
     await dialog.getByRole("button", { name: label, exact: true }).click();
     await expect(page.getByTestId("approval-decision-record")).toContainText("ローカル利用者");
-    await expect(page.getByTestId("approval-decision-record")).toContainText("2026/06/28 09:00");
+    await expect(page.getByTestId("approval-decision-record")).toContainText("2026/06/28 00:00");
     await expect(page).toHaveURL(/id=approval-layout$/);
     await expect(page.getByRole("region", { name: "承認の詳細" })).toContainText(approved ? "承認済み" : "却下済み");
     await expect(page.getByTestId("approval-object-actions")).toHaveCount(0);

@@ -1,6 +1,7 @@
 """標準回答による評価の指標と合否(評価の基準の指標と閾値。#680)。"""
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -114,50 +115,10 @@ def test_faithfulness_is_reference_only_and_ignores_generated_boilerplate() -> N
     assert result["passed"] is True
 
 
-# Agent の最終の検証が回答の末尾に足す節の事例（RAG と Agent の両方のテストが読む。#1456・#2738）。
-UNVERIFIED_SECTION: dict[str, Any] = json.loads(
-    (
-        Path(__file__).resolve().parents[3]
-        / "platform/contracts/answer-passages/unverified-section.json"
-    ).read_text("utf-8")
-)
-
-
-@pytest.mark.parametrize("case", UNVERIFIED_SECTION["examples"], ids=lambda case: str(case["id"]))
-def test_grounding_text_excludes_the_sections_of_the_agent(case: dict[str, str]) -> None:
-    """faithfulness は Agent の最終の検証が足した節（headings。#1456・#2738）を数えない。
-
-    節は外した段落・印の段落の引用と理由で、本文の主張ではない。印の段落そのものは本文に残る。
-    """
-    from app.rag.answer_metrics import agent_system_headings, grounding_text
-
-    assert set(UNVERIFIED_SECTION["headings"]) <= agent_system_headings()
-    assert grounding_text(case["answer"]) == grounding_text(case["body"])
-    for heading in UNVERIFIED_SECTION["headings"]:
-        assert heading not in grounding_text(case["answer"])
-
-
-def test_grounding_text_excludes_the_section_of_saved_agent_answers() -> None:
-    """#2738 より前に保存した Agent の回答の「資料で確認できず除いた内容」の節も数えない。
-
-    #1456。
-    """
-    from app.rag.answer_metrics import AGENT_UNVERIFIED_HEADING, grounding_text
-
-    answer = (
-        "承認の記録は 5 年間保管します。\n\n## 資料からは確認できない点\n- 保管の場所は記載が無い。"
-        f"\n\n**{AGENT_UNVERIFIED_HEADING}**\n\n- 根拠で確かめられない: 「延長は 90 日まで」"
-    )
-    body = (
-        "承認の記録は 5 年間保管します。\n\n## 資料からは確認できない点\n- 保管の場所は記載が無い。"
-    )
-    assert grounding_text(answer) == grounding_text(body)
-
-
 def test_grounding_text_keeps_marked_passages_and_drops_the_system_sections() -> None:
     """faithfulness は印の段落を本文として数え、外した段落・確認が必要な点の節は数えない。
 
-    #2738。
+    #2738。RAG 自身の回答の節。Agent の回答の節は test_answer_metrics_legacy_agent.py。
     """
     from rag_engine.generation.answer_labels import answer_labels
 
@@ -188,9 +149,28 @@ def test_grounding_text_keeps_marked_passages_and_drops_the_system_sections() ->
         "設定は 2 段階で変更します。",
         "・区分Ⅱの選択肢の値は 01 です。",
     ]
-    agent_answer = (
-        "登録後は自動で通知されます。\n\n**根拠と矛盾し除いた内容**\n\n"
-        "- 「翌月から反映」（根拠と矛盾）"
-        "\n\n## 確認が必要な点\n- 「登録後は自動で通知されます。」：根拠で確かめられない"
-    )
-    assert grounding_text(agent_answer) == "登録後は自動で通知されます。"
+
+
+# 回答の節の基線（#3240 の段 1）。RAG 自身の回答の節だけを持つ（旧 Agent の回答の節は
+# test_answer_metrics_legacy_agent.py）。
+ANSWER_SECTIONS: dict[str, Any] = json.loads(
+    (
+        Path(__file__).resolve().parent / "fixtures/agent_evaluation_baseline/answer_sections.json"
+    ).read_text("utf-8")
+)
+
+
+def _with_labels(template: str) -> str:
+    """fixture の {name} を言語資源の answer_labels() の項目に置き換える。"""
+    from rag_engine.generation.answer_labels import answer_labels
+
+    labels = answer_labels()
+    return re.sub(r"\{(\w+)\}", lambda match: str(getattr(labels, match.group(1))), template)
+
+
+@pytest.mark.parametrize("case", ANSWER_SECTIONS["rag_sections"], ids=lambda case: str(case["id"]))
+def test_grounding_text_of_rag_answer_sections_matches_the_baseline(case: dict[str, str]) -> None:
+    """RAG 自身の回答の節（見出し・前置き・出典行・参考情報・未反映の章節・外した段落・印）。"""
+    from app.rag.answer_metrics import grounding_text
+
+    assert grounding_text(_with_labels(case["answer"])) == _with_labels(case["grounding"])

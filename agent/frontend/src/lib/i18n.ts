@@ -1577,8 +1577,8 @@ const agentJa = {
   "approval.argumentsDescription": "この内容でツールを呼び出します。対象と範囲を確認してください。",
   "approval.reason": "承認が必要な理由",
   "approval.id": "承認 ID",
-  "approval.createdAt": "申請日時（JST）",
-  "approval.decidedAt": "判断日時（JST）",
+  "approval.createdAt": "申請日時",
+  "approval.decidedAt": "判断日時",
   "approval.decidedBy": "判断者",
   "approval.notRecorded": "記録されていません",
   // 自動の処理が記録した判断者・公開者（`system` など）。利用者の表示名の代わりに出す（#1696）。

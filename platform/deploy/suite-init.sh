@@ -69,7 +69,7 @@ NGINX_MODULE_STREAM="1.24"
 SUITE_OS_PACKAGES=(firewalld git nginx openssl policycoreutils-python-utils tar unzip)
 TLS_RENEW_UNIT="production-ready-suite-tls-renew"
 # 時間帯（#3255）: PLATFORM_TIMEZONE が無いときの既定（backend の pr_backend_core.timezones・Terraform の timezone と同じ）。
-SUITE_DEFAULT_TIMEZONE="Asia/Tokyo"
+SUITE_DEFAULT_TIMEZONE="UTC"
 SUITE_ZONEINFO_DIR="${SUITE_ZONEINFO_DIR:-/usr/share/zoneinfo}"
 SUITE_LOCALTIME_PATH="${SUITE_LOCALTIME_PATH:-/etc/localtime}"
 # アプリ用の DB ユーザーを作る script（suite-db-user.py）を動かす python-oracledb と Python（#1668）。製品の venv の
@@ -183,7 +183,7 @@ suite_env_value() {
   printf '%s\n' "${value}"
 }
 
-# 時間帯（#3255）: 3 製品の共通の設定 PLATFORM_TIMEZONE（IANA の地域名。既定 Asia/Tokyo = 東京・大阪の時刻）。
+# 時間帯（#3255・#3274）: 3 製品の共通の設定 PLATFORM_TIMEZONE（IANA の地域名。既定 UTC。日本時間は Asia/Tokyo）。
 # repository の platform/.env（再配備。手で変えた値）→ props の platform.env（初回。Terraform の timezone）の順に、
 # key のある最初のファイルの値を使う。空なら backend と同じ既定。
 suite_timezone() {

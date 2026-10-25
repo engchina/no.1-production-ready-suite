@@ -183,7 +183,7 @@ export interface CurrentUserPayload {
   allowed_agent_ids: string[] | null;
   debug_mode: boolean;
   password_change_allowed: boolean;
-  /** システムの時間帯（PLATFORM_TIMEZONE）。無ければ画面は既定の Asia/Tokyo で表示する。 */
+  /** システムの時間帯（PLATFORM_TIMEZONE）。無ければ画面は既定の UTC で表示する（#3274）。 */
   timezone?: string;
 }
 

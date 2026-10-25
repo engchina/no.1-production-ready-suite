@@ -36,6 +36,7 @@ Agent の範囲は利用者の権限を広げない（呼び先は今までど�
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
@@ -49,6 +50,7 @@ from app.features.agent.tools import (
     JsonObject,
     McpConnectionClient,
     ToolInvocationContext,
+    freeze_profile_scopes,
     mcp_base_tool_name,
 )
 
@@ -453,16 +455,19 @@ def _enforce_profile(enforcement: ScopeEnforcement, argument: str) -> None:
     note["action"] = action
 
 
-def token_profile_scopes(scopes: AgentDataScopes | None) -> dict[str, list[str]]:
+def token_profile_scopes(scopes: AgentDataScopes | None) -> Mapping[str, tuple[str, ...]]:
     """サービストークンの claim に入れる範囲（接続 → プロファイルの ID。#1379）。
 
-    範囲の無い接続は除く。
+    範囲の無い接続は除く。呼び出しの文脈（`ToolInvocationContext`）にそのまま入れるので、
+    書き換えられない形で返す（#3253）。
     """
-    return {
-        connection: list(scope.profile_ids)
-        for connection, scope in (scopes or {}).items()
-        if connection in DATA_SCOPE_CONNECTIONS and scope.profile_ids
-    }
+    return freeze_profile_scopes(
+        {
+            connection: scope.profile_ids
+            for connection, scope in (scopes or {}).items()
+            if connection in DATA_SCOPE_CONNECTIONS and scope.profile_ids
+        }
+    )
 
 
 def fixed_profile_connections(scopes: AgentDataScopes | None) -> frozenset[str]:

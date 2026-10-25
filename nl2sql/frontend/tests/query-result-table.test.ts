@@ -51,10 +51,10 @@ test("CSV のファイル名は画面ごとの接頭辞と利用者の地域の�
     queryResultCsvFilename("nl2sql-direct-sql", new Date("2026-10-05T05:03:12Z")),
     /^nl2sql-direct-sql-\d{8}-\d{6}\.csv$/u,
   );
-  // 時刻はシステムの設定の時間帯（既定 Asia/Tokyo。#3265）。
+  // 時刻はシステムの設定の時間帯（既定 UTC。#3265・#3274）。
   assert.equal(
     queryResultCsvFilename("nl2sql-direct-sql", new Date("2026-10-05T05:03:12Z")),
-    "nl2sql-direct-sql-20261005-140312.csv",
+    "nl2sql-direct-sql-20261005-050312.csv",
   );
   assert.equal(queryResultCsvFilename("nl2sql-result", new Date("invalid")), "nl2sql-result.csv");
 });

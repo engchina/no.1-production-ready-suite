@@ -1629,10 +1629,10 @@ def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, scr
             raise AssertionError(f"output {name} must be shown only when bastion_enabled in the schema")
 
 
-# 時間帯（#3255）: stack で選べるのは OCI と同じ IANA の地域名の 2 つだけ（利用者の決定）。既定は日本時間。
+# 時間帯（#3255・#3274）: stack で選べるのは OCI と同じ IANA の地域名の 2 つだけ（利用者の決定）。既定は UTC。
 # 配備した後の platform/.env の PLATFORM_TIMEZONE は任意の IANA の地域名を受ける（入口だけを絞る）。
-TIMEZONE_CHOICES = ["Asia/Tokyo", "UTC"]
-DEFAULT_TIMEZONE = "Asia/Tokyo"
+TIMEZONE_CHOICES = ["UTC", "Asia/Tokyo"]
+DEFAULT_TIMEZONE = "UTC"
 
 
 def _verify_timezone(schema: str, variables: str) -> None:
@@ -1642,6 +1642,9 @@ def _verify_timezone(schema: str, variables: str) -> None:
         raise AssertionError(f"the timezone input must be an enum of {TIMEZONE_CHOICES}: {choices}")
     if f'    default: "{DEFAULT_TIMEZONE}"\n' not in timezone_schema:
         raise AssertionError(f"the timezone input must default to {DEFAULT_TIMEZONE}")
+    # 画面には出さない（#3274。変数は残す）。
+    if "    visible: false\n" not in timezone_schema:
+        raise AssertionError("the timezone input must be hidden in the Resource Manager form")
     variable = _terraform_variable(variables, "timezone")
     _require_all(
         variable,

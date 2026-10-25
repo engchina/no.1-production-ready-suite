@@ -183,12 +183,12 @@ describe("画面の日時の時間帯（#3265）", () => {
     expect(host.textContent).toContain("2026/10/24 15:30");
   });
 
-  it("timezone の無い応答は既定（Asia/Tokyo）", async () => {
-    setDisplayTimeZone("UTC");
+  it("timezone の無い応答は既定（UTC。#3274）", async () => {
+    setDisplayTimeZone("Asia/Tokyo");
     await render(
       { me: () => Promise.resolve(USER), login: never, logout: never, changePassword: never },
       () => undefined,
     );
-    expect(displayTimeZone()).toBe("Asia/Tokyo");
+    expect(displayTimeZone()).toBe("UTC");
   });
 });

@@ -7,7 +7,7 @@
  */
 
 /** 設定を受け取る前・読めない値のときの時間帯（backend の既定 `pr_backend_core.timezones` と同じ）。 */
-export const DEFAULT_DISPLAY_TIME_ZONE = "Asia/Tokyo";
+export const DEFAULT_DISPLAY_TIME_ZONE = "UTC";
 
 const LOCALE = "ja-JP";
 
@@ -25,7 +25,7 @@ export function isSupportedTimeZone(value: string): boolean {
   }
 }
 
-/** 表示の時間帯を設定する。空・読めない値は既定（`Asia/Tokyo`）にする。 */
+/** 表示の時間帯を設定する。空・読めない値は既定（`UTC`。#3274）にする。 */
 export function setDisplayTimeZone(value: string | null | undefined): void {
   const next = value && isSupportedTimeZone(value) ? value.trim() : DEFAULT_DISPLAY_TIME_ZONE;
   if (next === currentTimeZone) return;

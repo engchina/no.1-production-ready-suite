@@ -1286,7 +1286,9 @@ class AnswerGenerationTests(unittest.TestCase):
             self.assertEqual(result.selected_strategy, query_strategy_id(strategy))
             self.assertEqual(result.effective_strategy, SIMPLE_RETRIEVAL_STRATEGY)
             self.assertEqual(result.generated_queries, ())
-            self.assertIn("read timeout", result.routing_reason)
+            # 例外の型の名前だけを残し、本文は残さない（#3259）。
+            self.assertIn("（RuntimeError）", result.routing_reason)
+            self.assertNotIn("read timeout", result.routing_reason)
             self.assertIn("単純検索", result.routing_reason)
             self.assertEqual(result.retrieval_queries, ("E1234",))
 
@@ -1913,7 +1915,8 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertIn("fallback answer", result.answer)
         self.assertEqual(parse.call_args_list[-1].args[3], AnswerOutput)
         self.assertEqual(len(result.crag_attempts), 1)
-        self.assertIn("grader down", result.crag_attempts[0]["grade_error"])
+        # 例外の型の名前だけを残し、本文は残さない（#3259）。
+        self.assertEqual(result.crag_attempts[0]["grade_error"], "RuntimeError")
         self.assertIn("評価に失敗", result.question_display)
 
     def test_crag_stops_after_max_three_retrieval_attempts(self):

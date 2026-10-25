@@ -1120,7 +1120,7 @@ def build_crag_answer_context(
                     retrieval_queries=_dedupe_queries(retrieval_queries),
                     sufficient=False,
                     reason="CRAG retrieval evaluator failed; using the best available retrieval context.",
-                    grade_error=_trim_generated_text(exc, 240),
+                    grade_error=type(exc).__name__,  # 例外の型の名前だけ（本文は残さない。#3259）
                     new_evidence_count=new_evidence_count,
                 )
                 step.status = "評価に失敗"
@@ -2137,7 +2137,7 @@ def synthesize_grounded_answer(
                 # 失敗した round は trace に理由だけ残し、直前に採用した round を公開する。
                 rounds.append(
                     {
-                        "error": f"{type(exc).__name__}: {exc}",
+                        "error": type(exc).__name__,  # 例外の型の名前だけ（本文は残さない。#3259）
                         "accepted": False,
                         "audit_calls": 0,
                         **({"deadline_cut": True} if cut else {}),
@@ -2305,7 +2305,7 @@ def synthesize_grounded_answer(
                 render_prompt=lambda inputs: json.dumps(fold_model_view(inputs), ensure_ascii=False),
             )
         except Exception as exc:  # noqa: BLE001 - 補う段の失敗で回答全体を止めない
-            application_step["error"] = f"{type(exc).__name__}: {exc}"[:240]
+            application_step["error"] = type(exc).__name__  # 例外の型の名前だけ（本文は残さない。#3259）
         else:
             application_step["published"] = sum(1 for application in step_applications if application.published)
             current = replace(
@@ -3321,7 +3321,7 @@ def _degraded_query_expansion(
     中断せず、単純検索（拡張なし）として続行し、理由を routing_reason に残して実行記録と payload に
     表示する (#905)。利用者が選んだ selected_strategy は保つ。
     """
-    error = _trim_generated_text(f"{type(exc).__name__}: {exc}", 240)
+    error = type(exc).__name__  # 例外の型の名前だけ（本文は残さない。#3259）
     return QueryExpansionResult(
         original_question=original_question,
         selected_strategy=selected_strategy,
@@ -3412,7 +3412,7 @@ def build_question_text_search_info(
             tokenizer_fingerprint=fingerprint,
             query_variants=tuple(variants),
             query_source=query_source,
-            error=_trim_generated_text(exc, 240),
+            error=type(exc).__name__,  # 例外の型の名前だけ（本文は残さない。#3259）
         )
 
 
@@ -3501,6 +3501,7 @@ def _record_question_understanding(step: _ExecutionStep, question: str, plan: Qu
 
 # 画面目録と画面の選択の cache。目録は chunk 集合ごと、選択は（質問、chunk 集合）ごと。CRAG の各回は同じ質問で
 # 検索し直すので、選択の LLM 呼び出しを 1 質問 1 回にする。目録を注入したときは、選択を（質問、目録の内容）ごとにする。
+# 選択に失敗した結果は cache しない（次の回で選び直す。#3278）。
 _SCREEN_CATALOG_CACHE: dict[tuple[int, int], dict[str, list[str]]] = {}
 _SCREEN_LINK_CACHE: dict[tuple[object, ...], list[tuple[str, str]]] = {}
 
@@ -3535,9 +3536,14 @@ def _linked_screen_children(
             link_key = (question, *pool_key)
         links = _SCREEN_LINK_CACHE.get(link_key)
         if links is None:
+            links = link_screens(question, catalog, parse_text_response, settings)
+            if links is None:
+                step.status = "画面の選択に失敗"
+                step.add(f"画面目録（{len(catalog)} 文書）からの画面の選択に失敗したため、画面の根拠を加えずに続けます。")
+                return [], [], []
             if len(_SCREEN_LINK_CACHE) >= 256:
                 _SCREEN_LINK_CACHE.clear()
-            links = _SCREEN_LINK_CACHE[link_key] = link_screens(question, catalog, parse_text_response, settings)
+            _SCREEN_LINK_CACHE[link_key] = links
         if not links:
             step.status = "該当なし"
             step.add(f"画面目録（{len(catalog)} 文書）から該当する画面を選べませんでした。")
