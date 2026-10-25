@@ -18,6 +18,7 @@ from rag_parser_core.extraction import (
     numbered_heading,
 )
 from rag_parser_core.language.text import text_patterns
+from rag_parser_core.sheet_records import TABLE_LOCATOR_METADATA_KEYS
 from rag_parser_core.structured_records import (
     JSONL_RECORD_BOUNDARY,
     STRUCTURED_RECORD_ID_KEY,
@@ -132,6 +133,8 @@ class _ElementSpan:
     xml_tree_metadata: tuple[tuple[str, str | int | float | bool | None], ...] = ()
     # 要素の由来の metadata（``ELEMENT_PROVENANCE_METADATA_KEYS``。#2590）。
     provenance_metadata: tuple[tuple[str, str | int | float | bool], ...] = ()
+    # 表の 1 行の記録のセルの座標（``TABLE_LOCATOR_METADATA_KEYS``。#3262）。
+    table_locator_metadata: tuple[tuple[str, str | int], ...] = ()
 
     @property
     def xml_tree_citation_label(self) -> str | None:
@@ -562,6 +565,8 @@ _STRUCTURED_RECORD_METADATA_KEYS: tuple[str, ...] = (
     # 選択の記号を読む前の帳票の値・図形の文字を置いたセル範囲(#2526)。
     "form_value_original",
     "sheet_shape_cells",
+    # 表の 1 行の記録のセルの座標(#3262)。
+    *TABLE_LOCATOR_METADATA_KEYS,
     "record_kind",
     # Word の記録(前処理 word_to_jsonl): 本文の順の位置・表の番号・大きい節を分けた部分。
     "word_location_basis",
@@ -1015,6 +1020,12 @@ def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
                     if key.startswith(XML_TREE_METADATA_PREFIX)
                 ),
                 provenance_metadata=_provenance_metadata(element),
+                table_locator_metadata=tuple(
+                    (key, value)
+                    for key in TABLE_LOCATOR_METADATA_KEYS
+                    if isinstance(value := element.metadata.get(key), str | int)
+                    and not isinstance(value, bool)
+                ),
             )
         )
     return spans
@@ -2211,6 +2222,10 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
             else FIGURE_TEXT_SOURCE_OCR
         )
     metadata.update(_sheet_location_metadata(group))
+    # セルの座標は 1 行の記録の chunk（要素 1 つ）だけが持つ（複数の行をまとめた chunk には
+    # 付けない）。
+    if len(group) == 1:
+        metadata.update(dict(first.table_locator_metadata))
     # 由来の metadata は結合の条件でそろえているので、先頭の要素の値をそのまま引き継ぐ(#2590)。
     if all(span.provenance_metadata == first.provenance_metadata for span in group):
         metadata.update(dict(first.provenance_metadata))

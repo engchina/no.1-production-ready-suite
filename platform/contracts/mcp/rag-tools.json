@@ -82,7 +82,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 32,
+            "default": 33,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -692,7 +692,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 32,
+            "default": 33,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -862,7 +862,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 32,
+            "default": 33,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1185,7 +1185,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 32,
+            "default": 33,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1565,7 +1565,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 32,
+            "default": 33,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2046,6 +2046,27 @@
                 "default": null,
                 "description": "根拠の先頭の要素の定位子（#1330。doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。要素を持たない分割の根拠は null。",
                 "title": "Element Locator"
+              },
+              "table_row": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠が表計算の表の 1 つのデータの行のとき、そのシートの行番号。複数行の根拠・ほかの形式の表（PDF・HTML・画像・CSV・Word）は null。",
+                "title": "Table Row"
+              },
+              "table_cells": {
+                "description": "table_row の行の値のあるセル（本文の順）。table_row が null なら空。",
+                "items": {
+                  "$ref": "#/$defs/EvidenceTableCell"
+                },
+                "title": "Table Cells",
+                "type": "array"
               }
             },
             "title": "EvidenceLocator",
@@ -2207,11 +2228,35 @@
             ],
             "title": "EvidenceReference",
             "type": "object"
+          },
+          "EvidenceTableCell": {
+            "description": "表の 1 行の根拠の、値のあるセル（セルの座標は table_row と table_col）。",
+            "properties": {
+              "table_col": {
+                "description": "原本の列（表計算の列の記号。例: B）。",
+                "title": "Table Col",
+                "type": "string"
+              },
+              "header_path": {
+                "description": "列の表頭（複数段の表頭は上の段から。表頭の文字の無い列は空）。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Header Path",
+                "type": "array"
+              }
+            },
+            "required": [
+              "table_col",
+              "header_path"
+            ],
+            "title": "EvidenceTableCell",
+            "type": "object"
           }
         },
         "properties": {
           "schema_version": {
-            "default": 32,
+            "default": 33,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2448,7 +2493,7 @@
       "outputSchema": {
         "properties": {
           "schema_version": {
-            "default": 32,
+            "default": 33,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2582,7 +2627,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 32,
+            "default": 33,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3036,6 +3081,27 @@
                 "default": null,
                 "description": "根拠の先頭の要素の定位子（#1330。doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。要素を持たない分割の根拠は null。",
                 "title": "Element Locator"
+              },
+              "table_row": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠が表計算の表の 1 つのデータの行のとき、そのシートの行番号。複数行の根拠・ほかの形式の表（PDF・HTML・画像・CSV・Word）は null。",
+                "title": "Table Row"
+              },
+              "table_cells": {
+                "description": "table_row の行の値のあるセル（本文の順）。table_row が null なら空。",
+                "items": {
+                  "$ref": "#/$defs/EvidenceTableCell"
+                },
+                "title": "Table Cells",
+                "type": "array"
               }
             },
             "title": "EvidenceLocator",
@@ -3185,6 +3251,30 @@
               "chunk_count"
             ],
             "title": "EvidenceSection",
+            "type": "object"
+          },
+          "EvidenceTableCell": {
+            "description": "表の 1 行の根拠の、値のあるセル（セルの座標は table_row と table_col）。",
+            "properties": {
+              "table_col": {
+                "description": "原本の列（表計算の列の記号。例: B）。",
+                "title": "Table Col",
+                "type": "string"
+              },
+              "header_path": {
+                "description": "列の表頭（複数段の表頭は上の段から。表頭の文字の無い列は空）。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Header Path",
+                "type": "array"
+              }
+            },
+            "required": [
+              "table_col",
+              "header_path"
+            ],
+            "title": "EvidenceTableCell",
             "type": "object"
           },
           "ExcerptRange": {
@@ -3497,7 +3587,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠を作った処理の版。",
+                "description": "根拠を作った処理の版（取込み直すと変わる。文書の改訂の版ではない。改訂した文書は別の document_id で、置き換えた旧版は superseded）。",
                 "title": "Chunk Set Id"
               },
               "recipe_id": {
@@ -3762,7 +3852,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 32,
+            "default": 33,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4346,6 +4436,27 @@
                 "default": null,
                 "description": "根拠の先頭の要素の定位子（#1330。doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。要素を持たない分割の根拠は null。",
                 "title": "Element Locator"
+              },
+              "table_row": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠が表計算の表の 1 つのデータの行のとき、そのシートの行番号。複数行の根拠・ほかの形式の表（PDF・HTML・画像・CSV・Word）は null。",
+                "title": "Table Row"
+              },
+              "table_cells": {
+                "description": "table_row の行の値のあるセル（本文の順）。table_row が null なら空。",
+                "items": {
+                  "$ref": "#/$defs/EvidenceTableCell"
+                },
+                "title": "Table Cells",
+                "type": "array"
               }
             },
             "title": "EvidenceLocator",
@@ -4495,6 +4606,30 @@
               "chunk_count"
             ],
             "title": "EvidenceSection",
+            "type": "object"
+          },
+          "EvidenceTableCell": {
+            "description": "表の 1 行の根拠の、値のあるセル（セルの座標は table_row と table_col）。",
+            "properties": {
+              "table_col": {
+                "description": "原本の列（表計算の列の記号。例: B）。",
+                "title": "Table Col",
+                "type": "string"
+              },
+              "header_path": {
+                "description": "列の表頭（複数段の表頭は上の段から。表頭の文字の無い列は空）。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Header Path",
+                "type": "array"
+              }
+            },
+            "required": [
+              "table_col",
+              "header_path"
+            ],
+            "title": "EvidenceTableCell",
             "type": "object"
           },
           "ExcerptRange": {
@@ -4837,7 +4972,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠を作った処理の版。",
+                "description": "根拠を作った処理の版（取込み直すと変わる。文書の改訂の版ではない。改訂した文書は別の document_id で、置き換えた旧版は superseded）。",
                 "title": "Chunk Set Id"
               },
               "recipe_id": {
@@ -5124,7 +5259,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 32,
+            "default": 33,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -5855,7 +5990,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 32,
+            "default": 33,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

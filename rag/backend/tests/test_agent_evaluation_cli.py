@@ -23,6 +23,7 @@ from app.rag.agent_evaluation_cli import (
     FORBIDDEN_ACTION_REASON,
     MCP_PROTOCOL_VERSION,
     OBSERVATION_PAGE_LIMIT,
+    OBSERVATION_SCHEMA_VERSION,
     AgentMcp,
     agent_turn,
     evaluate,
@@ -144,7 +145,7 @@ def _observation(
     for rank, item in enumerate(items, start=1):
         item["rank"] = rank
     return {
-        "schema_version": 1,
+        "schema_version": OBSERVATION_SCHEMA_VERSION,
         "run_id": run_id,
         "agent_id": "agent-1",
         "thread_id": THREAD,

@@ -399,7 +399,8 @@ _EVIDENCE = {
 # 足した（#2678）。
 # 32: 根拠の excerpt を既定で全文にし、応答の予算で本文を省いた根拠（text_omitted）と、1 件の上限で
 # 切った範囲（excerpt_range・header_range・next_offset）を足した（#3321）。
-RAG_OUTPUT_SCHEMA_VERSION = 32
+# 33: 根拠の locator に表の 1 行のセルの座標（table_row・table_cells）を足した（#3262）。
+RAG_OUTPUT_SCHEMA_VERSION = 33
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {

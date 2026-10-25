@@ -78,6 +78,7 @@ from rag_engine.knowledge.runtime_knowledge import (
 )
 from rag_engine.retrieval.entity_expansion import entity_expansion_relevant
 from rag_parser_core.extraction import is_derived_content
+from rag_parser_core.sheet_records import TABLE_CELLS_KEY, TABLE_ROW_KEY
 from rag_parser_core.xml_tree_json import xml_tree_citation_key
 
 from app.api.errors import DocumentFileMissingError
@@ -267,7 +268,10 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     順に入れ、入らない根拠は本文を省く（text_omitted。省いた数は evidence_text_omitted）。1 件の
 #     上限を超える根拠だけ、質問に当たる部分を中心に文・段落（表は見出しの行を残して行）の境界で
 #     切り、範囲（excerpt_range・header_range）と続きの位置（next_offset）を足した（#3321）。
-MCP_OUTPUT_SCHEMA_VERSION = 32
+# 33: 根拠の場所（locator）に、表の 1 行の根拠のセルの座標（table_row と、値のあるセルの列・表頭の
+#     段の table_cells）を足した。取込み直す前の chunk・位置が原本で決まらない表は null / 空
+#     （#3262）。
+MCP_OUTPUT_SCHEMA_VERSION = 33
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
 # 値と決め方は pr_backend_core.source_text。#3321）。
 EVIDENCE_TEXT_ITEM_MAX_TOKENS = SOURCE_TEXT_ITEM_MAX_TOKENS
@@ -1177,6 +1181,15 @@ class RecommendSearchAnswerProfileOutput(VersionedOutput):
     )
 
 
+class EvidenceTableCell(BaseModel):
+    """表の 1 行の根拠の、値のあるセル（セルの座標は table_row と table_col）。"""
+
+    table_col: str = Field(description="原本の列（表計算の列の記号。例: B）。")
+    header_path: list[str] = Field(
+        description="列の表頭（複数段の表頭は上の段から。表頭の文字の無い列は空）。"
+    )
+
+
 class EvidenceLocator(BaseModel):
     """根拠の場所（種類によって空の項目がある）。"""
 
@@ -1205,6 +1218,17 @@ class EvidenceLocator(BaseModel):
             "文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。"
             "要素を持たない分割の根拠は null。"
         ),
+    )
+    table_row: int | None = Field(
+        default=None,
+        description=(
+            "根拠が表計算の表の 1 つのデータの行のとき、そのシートの行番号。複数行の根拠・"
+            "ほかの形式の表（PDF・HTML・画像・CSV・Word）は null。"
+        ),
+    )
+    table_cells: list[EvidenceTableCell] = Field(
+        default_factory=list,
+        description="table_row の行の値のあるセル（本文の順）。table_row が null なら空。",
     )
 
 
@@ -1359,7 +1383,13 @@ class RagEvidence(BaseModel):
     document_id: str
     chunk_id: str
     file_name: str | None = None
-    chunk_set_id: str | None = Field(default=None, description="根拠を作った処理の版。")
+    chunk_set_id: str | None = Field(
+        default=None,
+        description=(
+            "根拠を作った処理の版（取込み直すと変わる。文書の改訂の版ではない。改訂した文書は"
+            "別の document_id で、置き換えた旧版は superseded）。"
+        ),
+    )
     recipe_id: str | None = Field(default=None, description="根拠を作った処理レシピ。")
     content_kind: str | None = Field(default=None, description="内容の種類（text / table など）。")
     evidence_type: EvidenceType = Field(
@@ -2163,6 +2193,28 @@ def _answer_use(metadata: Mapping[str, Any]) -> Literal["confirmed", "reference"
     return None
 
 
+def _table_cells(metadata: dict[str, Any]) -> list[EvidenceTableCell]:
+    """表の 1 行の chunk の値のあるセル（``table_cells_json``。#3262）。壊れた値は空にする。"""
+    raw = metadata.get(TABLE_CELLS_KEY)
+    if not isinstance(raw, str) or not raw:
+        return []
+    try:
+        items = json.loads(raw)
+    except ValueError:
+        return []
+    cells: list[EvidenceTableCell] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, list) or len(item) != 2:
+            return []
+        column, path = item
+        if not isinstance(column, str) or not column or not isinstance(path, list):
+            return []
+        if not all(isinstance(part, str) for part in path):
+            return []
+        cells.append(EvidenceTableCell(table_col=column, header_path=path))
+    return cells
+
+
 def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
     section = metadata.get("section_path")
     if isinstance(section, list):
@@ -2174,6 +2226,8 @@ def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
     page_start = _metadata_int(metadata, "page_start") or _metadata_int(metadata, "page_number")
     page_end = _metadata_int(metadata, "page_end") or page_start
     sheet_name = _metadata_str(metadata, "sheet_name")
+    # セルの座標は表計算の 1 行の記録だけが持つ（取込で記録したときだけ。推測しない）。
+    table_row = _metadata_int(metadata, TABLE_ROW_KEY) if sheet_name else None
     return EvidenceLocator(
         section_path=path,
         page_start=page_start,
@@ -2189,6 +2243,8 @@ def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
         if bbox_numbers(metadata.get("bbox"))
         else None,
         element_locator=str(element) if (element := chunk_element_locator(metadata)) else None,
+        table_row=table_row,
+        table_cells=_table_cells(metadata) if table_row is not None else [],
     )
 
 
