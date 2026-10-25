@@ -1,4 +1,6 @@
-/** 表示用フォーマッタ（ロケール ja-JP）。 */
+/** 表示用フォーマッタ（ロケール ja-JP。日時はシステムの設定の時間帯。#3265）。 */
+
+import { displayDateTimeFormat } from "@production-ready/ui";
 
 const numberFormat = new Intl.NumberFormat("ja-JP");
 
@@ -7,14 +9,14 @@ export function formatNumber(value: number): string {
   return numberFormat.format(value);
 }
 
-const dateTimeFormat = new Intl.DateTimeFormat("ja-JP", {
+const dateTimeFormat = displayDateTimeFormat({
   month: "2-digit",
   day: "2-digit",
   hour: "2-digit",
   minute: "2-digit",
 });
 
-const dateTimeWithYearFormat = new Intl.DateTimeFormat("ja-JP", {
+const dateTimeWithYearFormat = displayDateTimeFormat({
   year: "numeric",
   month: "2-digit",
   day: "2-digit",

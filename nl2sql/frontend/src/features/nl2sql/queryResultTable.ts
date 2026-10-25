@@ -6,6 +6,7 @@
 // CSV のファイル名だけ。チャット（chatSqlExecution.ts）と画面（components/QueryResultTable.tsx）で共有する。
 
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
+import { displayFileTimestamp } from "@production-ready/ui";
 import type { I18nKey } from "../../lib/i18n";
 import type { QueryResults } from "./types";
 
@@ -38,10 +39,8 @@ export function queryResultExecutionContextKey(
   return `queryResults.executionContext.${context}` as I18nKey;
 }
 
-/** CSV のファイル名（例: nl2sql-direct-sql-20261005-140312.csv）。時刻は利用者の地域の時刻。 */
+/** CSV のファイル名（例: nl2sql-direct-sql-20261005-140312.csv）。時刻はシステムの設定の時間帯。 */
 export function queryResultCsvFilename(prefix: string, at: Date = new Date()): string {
   if (Number.isNaN(at.getTime())) return `${prefix}.csv`;
-  const pad = (value: number) => String(value).padStart(2, "0");
-  const stamp = `${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}-${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}`;
-  return `${prefix}-${stamp}.csv`;
+  return `${prefix}-${displayFileTimestamp(at)}.csv`;
 }

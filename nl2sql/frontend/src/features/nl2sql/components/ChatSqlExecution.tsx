@@ -11,6 +11,7 @@ import {
   toast,
   type ButtonLinkComponent,
   type ChatResultTableLabels,
+  displayDateTimeFormat,
 } from "@production-ready/ui";
 
 import { useWorkspaceIdentity } from "@/components/WorkspaceState";
@@ -28,8 +29,8 @@ import {
 import type { JobData, QueryResults, SqlChatExecuteData } from "../types";
 import { executionFailure, processFailureLabels } from "../processFailure";
 
-const executedAtFormatter = new Intl.DateTimeFormat("ja-JP", {
-  timeZone: "Asia/Tokyo",
+// システムの設定の時間帯で書く（#3265）。
+const executedAtFormatter = displayDateTimeFormat({
   month: "numeric",
   day: "numeric",
   hour: "2-digit",

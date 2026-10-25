@@ -1,8 +1,8 @@
 import type { Page } from "@playwright/test";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
-import { dbUser } from "./fixtures/auth";
+import { LOCAL_CURRENT_USER, dbUser } from "./fixtures/auth";
 
-// 日時はホストやブラウザの timezone ではなく JST で示す。
+// 日時はホストやブラウザの時間帯ではなく、システムの設定の時間帯（/api/auth/me の timezone。既定 Asia/Tokyo。#3265）で示す。
 test.use({ timezoneId: "America/New_York" });
 
 function seedApproval(mockApi: MockApi, id = "approval-layout", status = "pending") {
@@ -34,6 +34,16 @@ function seedApproval(mockApi: MockApi, id = "approval-layout", status = "pendin
   });
   return approval;
 }
+
+test("判断の日時はシステムの設定の時間帯で示す", async ({ page, mockApi }) => {
+  mockApi.setCurrentUser({ ...LOCAL_CURRENT_USER, timezone: "UTC" });
+  seedApproval(mockApi);
+  await page.goto("/approvals?id=approval-layout");
+  const detail = page.getByRole("region", { name: "承認の詳細" });
+  // MOCK_NOW は東京の 2026/06/28 09:00、UTC の 2026/06/28 00:00（ブラウザは America/New_York）。
+  await expect(detail).toContainText("2026/06/28 00:00");
+  await expect(detail).not.toContainText("2026/06/28 09:00");
+});
 
 async function detailAction(page: Page, name: string) {
   const bar = page.getByTestId("approval-object-actions");

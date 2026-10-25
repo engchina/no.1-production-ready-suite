@@ -10,6 +10,8 @@
 - **時刻の保存は UTC のまま**: DB の session の時間帯は
   `oracle_session.init_oracle_session` が `'+00:00'` に固定する。
   設定した時間帯で時刻を保存しない（瞬間を一意に保つ）。
+- **業務データの SQL の「今」**: 業務データの SELECT を実行する間だけ、session の時間帯を
+  `session_time_zone_offset` の offset にする（`oracle_session.local_session_time_zone`。#3265）。
 """
 
 from __future__ import annotations
@@ -69,11 +71,26 @@ def local_today(settings: object, *, now: datetime | None = None) -> date:
     return local_now(settings, now=now).date()
 
 
+def session_time_zone_offset(settings: object, *, now: datetime | None = None) -> str:
+    """設定した時間帯の今の UTC との差（`+09:00` の形。Oracle の session の TIME_ZONE に渡す）。
+
+    地域名（`Asia/Tokyo`）ではなく offset にする: 地域名の session の時間帯の
+    TIMESTAMP WITH TIME ZONE は python-oracledb の thin mode で読めない（DPY-3022。#3241）。
+    夏時間のある地域は今の時刻の差になるため、実行のたびに求める（接続に固定しない）。
+    """
+    offset = local_now(settings, now=now).utcoffset()
+    minutes = int(offset.total_seconds() // 60) if offset is not None else 0
+    sign = "-" if minutes < 0 else "+"
+    hours, rest = divmod(abs(minutes), 60)
+    return f"{sign}{hours:02d}:{rest:02d}"
+
+
 __all__ = [
     "DEFAULT_TIMEZONE",
     "configured_timezone",
     "configured_timezone_name",
     "local_now",
     "local_today",
+    "session_time_zone_offset",
     "validate_timezone_name",
 ]

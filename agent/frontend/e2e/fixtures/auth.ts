@@ -183,6 +183,8 @@ export interface CurrentUserPayload {
   allowed_agent_ids: string[] | null;
   debug_mode: boolean;
   password_change_allowed: boolean;
+  /** システムの時間帯（PLATFORM_TIMEZONE）。無ければ画面は既定の Asia/Tokyo で表示する。 */
+  timezone?: string;
 }
 
 /** ローカル（`AGENT_AUTH_MODE=local`）の利用者。ログインなしで全画面を使える。 */

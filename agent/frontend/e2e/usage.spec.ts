@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 
+import { LOCAL_CURRENT_USER } from "./fixtures/auth";
 import { MOCK_NOW, emptyUsageReport, expect, test, type MockApi } from "./fixtures/mock-api";
 
 // #772: 利用状況（Run のモデル利用量の集計）と、Run の詳細の利用量。
@@ -156,8 +157,8 @@ test("期間を変えると、その期間で集計し直し、Run が無けれ�
   await expect(page.getByText("この期間の実行はありません")).toBeVisible();
   const request = mockApi.lastRequest("GET", "/api/usage");
   expect(request?.searchParams.get("days")).toBe("7");
-  // 日は画面のブラウザのタイムゾーンで区切る。
-  expect(request?.searchParams.get("timezone")).toBeTruthy();
+  // 日はシステムの設定の時間帯で区切る（既定 Asia/Tokyo。#3265）。
+  expect(request?.searchParams.get("timezone")).toBe("Asia/Tokyo");
   // 期間は作業状態に残す（再読込しても 7 日）。
   await page.reload();
   await expect(page.locator("#usage-period")).toContainText("直近 7 日");
@@ -270,33 +271,27 @@ for (const recorded of [false, true]) {
 
 
 for (const viewport of VIEWPORTS) {
-  test(`時差形式のタイムゾーンで利用状況を取得する (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  test(`システムの設定の時間帯で利用状況を取得する (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await page.addInitScript(() => {
-      const original = Intl.DateTimeFormat.prototype.resolvedOptions;
-      Intl.DateTimeFormat.prototype.resolvedOptions = function () {
-        return { ...original.call(this), timeZone: "+00:00" };
-      };
-    });
+    // ブラウザの時間帯ではなく、/api/auth/me の timezone（PLATFORM_TIMEZONE）を送る（#3265）。
+    mockApi.setCurrentUser({ ...LOCAL_CURRENT_USER, timezone: "UTC" });
     seedReport(mockApi);
     await page.goto("/usage");
     await expect(page.getByTestId("usage-summary")).toContainText("100,000");
-    expect(mockApi.lastRequest("GET", "/api/usage")?.searchParams.get("timezone")).toBe("+00:00");
+    expect(mockApi.lastRequest("GET", "/api/usage")?.searchParams.get("timezone")).toBe("UTC");
     await expectNoHorizontalOverflow(page);
-    await page.screenshot({ path: testInfo.outputPath(`usage-offset-${viewport.name}.png`), fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath(`usage-system-timezone-${viewport.name}.png`), fullPage: true });
   });
 }
 
 
-test("ブラウザが不正なタイムゾーンを返すと既定を送る", async ({ page, mockApi }) => {
-  await page.addInitScript(() => {
-    const original = Intl.DateTimeFormat.prototype.resolvedOptions;
-    Intl.DateTimeFormat.prototype.resolvedOptions = function () {
-      return { ...original.call(this), timeZone: "Invalid/Zone" };
-    };
+test.describe("ブラウザの時間帯", () => {
+  test.use({ timezoneId: "America/New_York" });
+
+  test("ブラウザの時間帯に関係なく、設定の時間帯の無い応答では既定（Asia/Tokyo）を送る", async ({ page, mockApi }) => {
+    seedReport(mockApi);
+    await page.goto("/usage");
+    await expect(page.getByTestId("usage-summary")).toContainText("100,000");
+    expect(mockApi.lastRequest("GET", "/api/usage")?.searchParams.get("timezone")).toBe("Asia/Tokyo");
   });
-  seedReport(mockApi);
-  await page.goto("/usage");
-  await expect(page.getByTestId("usage-summary")).toContainText("100,000");
-  expect(mockApi.lastRequest("GET", "/api/usage")?.searchParams.get("timezone")).toBe("Asia/Tokyo");
 });

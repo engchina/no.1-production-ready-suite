@@ -23,6 +23,8 @@ import {
   presentApiError,
   useActionPending,
   surfaceTintFor,
+  DISPLAY_TIME_SECONDS,
+  formatDisplayDateTime,
 } from "@production-ready/ui";
 import { Fragment, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -273,7 +275,7 @@ export function ServicesManagementClient() {
   );
   const lastUpdated = Math.max(query.dataUpdatedAt, latestStatusUpdatedAt);
   const lastUpdatedText = lastUpdated
-    ? new Date(lastUpdated).toLocaleTimeString("ja-JP")
+    ? formatDisplayDateTime(lastUpdated, DISPLAY_TIME_SECONDS)
     : null;
   function refreshServices() {
     setManualRefreshing(true);

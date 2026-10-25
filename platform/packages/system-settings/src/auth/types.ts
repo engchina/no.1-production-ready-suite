@@ -18,6 +18,11 @@ export interface BaseCurrentUser {
   permissions: string[];
   debug_mode: boolean;
   password_change_allowed: boolean;
+  /**
+   * システムの時間帯（共通の設定 `PLATFORM_TIMEZONE`。IANA の地域名）。画面は日時をこの時間帯で表示する
+   * （`AuthProvider` が `@production-ready/ui` の `setDisplayTimeZone` に渡す。#3265）。
+   */
+  timezone?: string;
 }
 
 export interface AuthRequestOptions {

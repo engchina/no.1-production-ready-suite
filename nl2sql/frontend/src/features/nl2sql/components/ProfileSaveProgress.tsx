@@ -6,6 +6,8 @@ import {
   Button,
   ButtonLink,
   StatusBadge,
+  DISPLAY_DATE_TIME_SECONDS,
+  formatDisplayDateTime,
 } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
@@ -101,7 +103,7 @@ function AgentAssetDetails({ result }: { result: AssetRefreshData }) {
           <div className="min-w-0">
             <p className="break-words font-semibold text-fg">{engineLabel(result.engine)}</p>
             <p className="mt-1 break-words text-xs text-fg-muted">
-              {result.refreshed_at ? new Date(result.refreshed_at).toLocaleString("ja-JP") : "-"}
+              {result.refreshed_at ? formatDisplayDateTime(result.refreshed_at, DISPLAY_DATE_TIME_SECONDS, "-") : "-"}
             </p>
           </div>
         </div>

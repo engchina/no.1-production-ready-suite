@@ -27,6 +27,7 @@ import {
   runTimelineBars,
   runStepDetailsJson,
   hasRunStepDetails,
+  setDisplayTimeZone,
   type RunHistoryItem,
   type RunTimelineStep,
 } from "../src";
@@ -91,13 +92,17 @@ describe("書式と絞り込みの値", () => {
     expect(formatRunDuration(undefined, "記録なし")).toBe("記録なし");
   });
 
-  it("日時は端末のタイムゾーンの絶対時刻（相対時刻にしない）", () => {
-    const iso = "2026-10-15T00:12:05.000Z";
-    const date = new Date(iso);
-    const pad = (value: number) => String(value).padStart(2, "0");
-    const expected = `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-    expect(formatRunDateTime(iso)).toBe(expected);
-    expect(formatRunDateTime(iso, { seconds: true })).toBe(`${expected}:${pad(date.getSeconds())}`);
+  it("日時はシステムの設定の時間帯の絶対時刻（相対時刻にしない。端末の時間帯に従わない）", () => {
+    const iso = "2026-10-14T16:12:05.000Z";
+    try {
+      setDisplayTimeZone("Asia/Tokyo");
+      expect(formatRunDateTime(iso)).toBe("2026/10/15 01:12");
+      expect(formatRunDateTime(iso, { seconds: true })).toBe("2026/10/15 01:12:05");
+      setDisplayTimeZone("UTC");
+      expect(formatRunDateTime(iso)).toBe("2026/10/14 16:12");
+    } finally {
+      setDisplayTimeZone(null);
+    }
     expect(formatRunDateTime(null)).toBe("—");
     expect(formatRunDateTime("not-a-date")).toBe("not-a-date");
   });

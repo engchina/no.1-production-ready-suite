@@ -26,6 +26,7 @@ import {
   type EntityAction,
   PageBody,
   RowTitleButton,
+  displayDateTimeFormat,
 } from "@production-ready/ui";
 import {
   ApiError,
@@ -56,8 +57,7 @@ type ApprovalTarget = { id: string; toolName: string; status: ApprovalRequest["s
 const APPROVAL_FILTERS = ["pending", "decided", "all"] as const;
 type ApprovalFilter = (typeof APPROVAL_FILTERS)[number];
 const isApprovalFilter = isOneOf<ApprovalFilter>(APPROVAL_FILTERS);
-const approvalDateFormat = new Intl.DateTimeFormat("ja-JP", {
-  timeZone: "Asia/Tokyo",
+const approvalDateFormat = displayDateTimeFormat({
   year: "numeric",
   month: "2-digit",
   day: "2-digit",
@@ -65,7 +65,7 @@ const approvalDateFormat = new Intl.DateTimeFormat("ja-JP", {
   minute: "2-digit",
 });
 
-/** 判断の日時はブラウザの timezone に依存せず JST。古い記録の欠落は補完しない。 */
+/** 判断の日時はブラウザの時間帯に依存せず、システムの設定の時間帯（#3265）。古い記録の欠落は補完しない。 */
 function approvalDate(value: string | null | undefined) {
   const date = value ? new Date(value) : null;
   return date && !Number.isNaN(date.getTime()) ? approvalDateFormat.format(date) : t("approval.notRecorded");

@@ -6,6 +6,7 @@ RAG の権限と対象範囲を、ログイン中の利用者に実効の権限�
 
 from __future__ import annotations
 
+from pr_system_settings.auth.router import DisplayTimezoneData
 from pr_system_settings.users_roles import RoleData as SharedRoleData
 from pydantic import BaseModel, Field
 
@@ -15,7 +16,7 @@ from .permissions import PermissionDefinition, normalize_permission_codes
 MAX_ACCESS_TARGETS = 1000
 
 
-class CurrentUserData(BaseModel):
+class CurrentUserData(DisplayTimezoneData):
     """`/auth/me` などの応答。`permissions` は implies を展開した実効権限。"""
 
     user_uuid: str

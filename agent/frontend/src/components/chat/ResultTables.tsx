@@ -8,6 +8,7 @@ import {
   splitMarkdownTables,
   type ResultTableLabels,
   type TabularData,
+  displayFileTimestamp,
 } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
@@ -98,11 +99,9 @@ export function ToolResultTable({
   );
 }
 
-/** CSV のファイル名（例: agent-sql-result-20261018-140312.csv。時刻は利用者の地域の時刻）。 */
+/** CSV のファイル名（例: agent-sql-result-20261018-140312.csv。時刻はシステムの設定の時間帯）。 */
 function toolResultCsvFilename(at: Date = new Date(), prefix = "agent-sql-result"): string {
-  const pad = (value: number) => String(value).padStart(2, "0");
-  const stamp = `${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}-${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}`;
-  return `${prefix}-${stamp}.csv`;
+  return `${prefix}-${displayFileTimestamp(at)}.csv`;
 }
 
 /**

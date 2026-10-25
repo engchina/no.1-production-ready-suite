@@ -11,6 +11,8 @@ import {
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
   SelectField,
+  DISPLAY_TIME_SECONDS,
+  formatDisplayDateTime,
 } from "@production-ready/ui";
 import { apiGet } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -112,7 +114,7 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
         finished_at: value.finished_at, operation_ids: value.operation_ids, failure_phase: value.failure_phase,
       });
       const unchanged = snapshot(run) === snapshot(latest);
-      const time = new Date().toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      const time = formatDisplayDateTime(new Date(), DISPLAY_TIME_SECONDS);
       setRefresh({ scope, pending: false, failed: false, message: t(unchanged ? "syntheticRun.refreshUnchanged" : "syntheticRun.refreshUpdated", { time }) });
     } catch {
       if (sequence !== refreshSequence.current) return;

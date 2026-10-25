@@ -5,6 +5,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { displayTimeZone, formatRunDateTime, setDisplayTimeZone } from "@production-ready/ui";
+
 import { AuthProvider, RequireAuth, type AuthApi, type BaseCurrentUser } from "../src";
 
 // #1061: 起動時の /api/auth/me の 401 以外の失敗（5xx・通信断）を未認証と扱わない。
@@ -135,5 +137,58 @@ describe("起動時の認証の確認の失敗（#1061）", () => {
 
     expect(host.textContent).toContain("ログイン画面");
     expect(onIdentityChange).toHaveBeenCalledWith(null);
+  });
+});
+
+describe("画面の日時の時間帯（#3265）", () => {
+  afterEach(() => setDisplayTimeZone(null));
+
+  it("認証の確認の応答の timezone を、最初の描画の前に表示の時間帯にする", async () => {
+    const seen: string[] = [];
+    function Stamp() {
+      seen.push(displayTimeZone());
+      return <p>{formatRunDateTime("2026-10-24T15:30:00Z")}</p>;
+    }
+    const api: AuthApi = {
+      me: () => Promise.resolve({ ...USER, timezone: "UTC" }),
+      login: never,
+      logout: never,
+      changePassword: never,
+    };
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <MemoryRouter initialEntries={["/work"]}>
+            <AuthProvider api={api}>
+              <Routes>
+                <Route
+                  path="/work"
+                  element={
+                    <RequireAuth routes={routes}>
+                      <Stamp />
+                    </RequireAuth>
+                  }
+                />
+              </Routes>
+            </AuthProvider>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await act(async () => undefined);
+
+    expect(displayTimeZone()).toBe("UTC");
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((zone) => zone === "UTC")).toBe(true);
+    expect(host.textContent).toContain("2026/10/24 15:30");
+  });
+
+  it("timezone の無い応答は既定（Asia/Tokyo）", async () => {
+    setDisplayTimeZone("UTC");
+    await render(
+      { me: () => Promise.resolve(USER), login: never, logout: never, changePassword: never },
+      () => undefined,
+    );
+    expect(displayTimeZone()).toBe("Asia/Tokyo");
   });
 });
