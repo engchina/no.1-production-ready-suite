@@ -7055,9 +7055,11 @@ async def start_ontology_build(
     profile_id: str,
     http_request: Request,
     business_text: Annotated[str, Form()] = "",
-    run_schema_naming: Annotated[bool, Form()] = True,
-    run_qa_extraction: Annotated[bool, Form()] = True,
-    run_text_extraction: Annotated[bool, Form()] = True,
+    # 送られない bool の form は False（HTML の checkbox と同じ。FastAPI 0.147 から既定の値を
+    # 使わない）。画面は 3 つとも送る。
+    run_schema_naming: Annotated[bool, Form()] = False,
+    run_qa_extraction: Annotated[bool, Form()] = False,
+    run_text_extraction: Annotated[bool, Form()] = False,
     qa_file: Annotated[UploadFile | None, File()] = None,
     source_files: Annotated[list[UploadFile] | None, File()] = None,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),

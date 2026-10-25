@@ -1598,7 +1598,8 @@ def test_admin_sql_mixed_select_and_dml_stays_blocked_control_plane() -> None:
     "sql",
     [
         "SELECT * FROM T1 WHERE",
-        "SELECT * FROM T1 AS OF TIMESTAMP SYSTIMESTAMP",
+        # sqlglot が解析できない Oracle の構文（MODEL 句）。
+        "SELECT * FROM T1 MODEL DIMENSION BY (ID) MEASURES (V) RULES (V[1] = 1)",
         "WITH A AS (SELECT ID FROM T1) SELECT * FROM A WHERE",
     ],
 )
@@ -1626,6 +1627,27 @@ def test_admin_sql_unverifiable_select_without_confirmation_reports_reason(sql: 
     )
     assert "confirmation=ADMIN_EXECUTE" not in statement.error_message
     assert result.warnings == [statement.error_message]
+
+
+def test_admin_sql_flashback_query_runs_as_read_only_select() -> None:
+    """Oracle の flashback query（AS OF）は読み取り専用の SELECT として data plane で実行する。
+
+    sqlglot 30.23 から解析でき、表の版の指定（`Table.version`）になる。以前は解析できず、
+    読み取り専用と確かめられない SELECT として理由を返していた（#933）。
+    """
+
+    adapter = _FakeAdminSqlAdapter()
+    service = _OracleRuntimeService(adapter)
+    service._deepsec_enabled = True
+    sql = "SELECT * FROM T1 AS OF TIMESTAMP SYSTIMESTAMP"
+
+    with actor_scope("business-user-id", is_system_admin=False):
+        result = service.execute_db_admin_sql(DbAdminExecuteRequest(sql=sql, row_limit=10))
+
+    assert adapter.select_calls == [(sql, 10)]
+    assert adapter.calls == []
+    assert result.committed is False
+    assert [item.statement_type for item in result.statements] == ["SELECT"]
 
 
 def test_admin_sql_select_into_without_confirmation_reports_side_effect_reason() -> None:
