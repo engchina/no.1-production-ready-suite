@@ -1,4 +1,5 @@
-"""共通の DDL（PLATFORM_* テーブル。認証は #212、回答の注意書きは #2405、会話の添付は #2517）。
+"""共通の DDL（PLATFORM_* テーブル。認証は #212、回答の注意書きは #2405、会話の添付は #2517、
+処理の経過の span の表は #3226）。
 
 3 製品が同じ Oracle schema で共有する。各製品の migration
 （NL2SQL の `app_security_migrate`、RAG / Agent のシステムテーブル初期化）から冪等に実行する。
@@ -21,6 +22,11 @@ PLATFORM_AUTH_DDL_IGNORED_ERRORS = frozenset(
         "ORA-01430",  # column being added already exists in table（列の追加の冪等）
     }
 )
+
+# 処理の経過の span の表（#3226）。製品のシステムテーブルの再作成で消さない
+# （各製品の PRESERVED_TABLES）。
+# 認証の準備の判定（`PLATFORM_AUTH_TABLES`）には入れない（表が無くても認証は動く）。
+TRACE_SPAN_TABLES: tuple[str, ...] = ("PLATFORM_TRACE_SPANS",)
 
 PLATFORM_AUTH_DDL: tuple[str, ...] = (
     """
@@ -190,6 +196,41 @@ PLATFORM_AUTH_DDL: tuple[str, ...] = (
         CONSTRAINT CK_PLATFORM_CHAT_ATT_SET_ENABLED CHECK (ENABLED IN (0, 1))
     )
     """,
+    # 処理の経過の span（3 製品共通。#3226）。trace id で読み、parent_span_id で木にする。
+    # 最終の状態の正本は製品の記録で、この表は表示と調査の記録。工程の詳細（検索文・文書名・
+    # ツールの引数など）・質問・SQL・結果は入れない（属性は export と同じ allowlist、表示の値は
+    # スカラーだけ）。保存期限は `PLATFORM_TRACE_RETENTION_DAYS`（既定 0 = 無期限）。
+    """
+    CREATE TABLE PLATFORM_TRACE_SPANS (
+        TRACE_ID VARCHAR2(32) NOT NULL,
+        SPAN_ID VARCHAR2(16) NOT NULL,
+        PARENT_SPAN_ID VARCHAR2(16),
+        PRODUCT VARCHAR2(16) NOT NULL,
+        OPERATION_ID VARCHAR2(128) NOT NULL,
+        ATTEMPT NUMBER(5) DEFAULT 0 NOT NULL,
+        IS_ROOT NUMBER(1) DEFAULT 0 NOT NULL,
+        OWNER_USER_UUID VARCHAR2(36) NOT NULL,
+        NAME VARCHAR2(128) NOT NULL,
+        SPAN_KIND VARCHAR2(16) NOT NULL,
+        STATUS VARCHAR2(16) NOT NULL,
+        STARTED_AT TIMESTAMP(6) WITH TIME ZONE NOT NULL,
+        FINISHED_AT TIMESTAMP(6) WITH TIME ZONE,
+        DISPLAY_KIND VARCHAR2(64),
+        DISPLAY_PARAMS_JSON VARCHAR2(4000),
+        ATTRIBUTES_JSON VARCHAR2(4000),
+        UPDATED_AT TIMESTAMP(6) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+        CONSTRAINT PK_PLATFORM_TRACE_SPANS PRIMARY KEY (TRACE_ID, SPAN_ID),
+        CONSTRAINT CK_PLATFORM_TRACE_SPANS_PRODUCT CHECK (PRODUCT IN ('rag', 'nl2sql', 'agent')),
+        CONSTRAINT CK_PLATFORM_TRACE_SPANS_ROOT CHECK (IS_ROOT IN (0, 1)),
+        CONSTRAINT CK_PLATFORM_TRACE_SPANS_STATUS CHECK (
+            STATUS IN ('running', 'done', 'failed', 'cancelled', 'skipped')
+        ),
+        CONSTRAINT CK_PLATFORM_TRACE_SPANS_PARAMS CHECK (DISPLAY_PARAMS_JSON IS JSON),
+        CONSTRAINT CK_PLATFORM_TRACE_SPANS_ATTRS CHECK (ATTRIBUTES_JSON IS JSON)
+    )
+    """,
+    "CREATE INDEX IX_PLATFORM_TRACE_SPANS_OP ON PLATFORM_TRACE_SPANS (PRODUCT, OPERATION_ID)",
+    "CREATE INDEX IX_PLATFORM_TRACE_SPANS_STARTED ON PLATFORM_TRACE_SPANS (STARTED_AT)",
 )
 
 

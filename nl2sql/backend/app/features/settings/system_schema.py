@@ -242,6 +242,8 @@ PRESERVED_TABLES = frozenset(
         # 会話の添付（#2517）。
         "PLATFORM_CHAT_ATTACHMENTS",
         "PLATFORM_CHAT_ATTACHMENT_SETTINGS",
+        # 処理の経過の span の表（#3226）。
+        "PLATFORM_TRACE_SPANS",
         "NL2SQL_APP_ROLE_PERMISSIONS",
         "NL2SQL_APP_ROLE_PROFILES",
         "NL2SQL_APP_DATA_ENTITLEMENTS",
