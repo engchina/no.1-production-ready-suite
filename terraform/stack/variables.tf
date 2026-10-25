@@ -492,6 +492,22 @@ variable "ssh_authorized_keys" {
   default     = ""
 }
 
+# 時間帯（#3255）。3 製品の共通の設定（platform/.env の PLATFORM_TIMEZONE）と Compute の OS の時間帯（cloud-init の
+# timezone と platform/deploy/suite-init.sh の timedatectl）に使う。選べるのは Asia/Tokyo（日本時間: 東京・大阪など。
+# 既定）と UTC（OCI の Database の Time Zone の既定）の 2 つだけ（利用者の決定。値は OCI と同じ IANA の地域名）。
+# 配備した後は platform/.env の PLATFORM_TIMEZONE に任意の IANA の地域名を書ける（suite-init.sh と backend が確かめる）。
+# 時刻の保存は UTC のまま（DB の session の時間帯は '+00:00'）。ADB の時間帯（DBTIMEZONE）は stack では変えない（README）。
+variable "timezone" {
+  description = "Time zone of the Compute OS clock and the products' common setting PLATFORM_TIMEZONE: Asia/Tokyo (Japan time: Tokyo, Osaka and so on) or UTC. Timestamps are still stored in UTC."
+  type        = string
+  default     = "Asia/Tokyo"
+
+  validation {
+    condition     = contains(["Asia/Tokyo", "UTC"], var.timezone)
+    error_message = "timezone must be Asia/Tokyo or UTC."
+  }
+}
+
 # 任意の bastion の Compute（bastion.tf。#2670）。既定は作らない。作るときの既定は 2 OCPU / 16 GB /
 # boot volume 100 GB / 10 VPUs/GB（利用者の決定。2026-10-20）。shape・image・SSH キーは Suite の Compute と同じ。
 variable "bastion_enabled" {

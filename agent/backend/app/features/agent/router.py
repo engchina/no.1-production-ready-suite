@@ -304,7 +304,6 @@ from app.features.agent.tools import (
 )
 from app.features.agent.trace_spans import trace_spans
 from app.features.agent.usage import (
-    DEFAULT_TIMEZONE,
     USAGE_PERIOD_DAYS,
     UsageReport,
     build_usage_report,
@@ -2950,14 +2949,14 @@ async def delete_evaluation(job_id: str, request: Request) -> ApiResponse[None]:
 async def get_usage_report(
     request: Request,
     days: int = Query(default=30),
-    timezone: str = Query(default=DEFAULT_TIMEZONE, max_length=64),
+    timezone: str = Query(default="", max_length=64),
 ) -> ApiResponse[UsageReport]:
     """利用状況（#772）。利用できる業務 Agent の Run のモデル利用量を集計する。
 
     Oracle の構成は保存した Run の事実（`AGENT_RUN_FACTS`）を SQL で集計する（#794）。
 
     権限は middleware のメニュー権限（`menu.usage`）で確かめる。日は `timezone`（画面の
-    ブラウザの IANA 名）で区切る。
+    ブラウザの IANA 名。省いたら共通の設定の時間帯 `PLATFORM_TIMEZONE`。#3255）で区切る。
     """
     if days not in USAGE_PERIOD_DAYS:
         raise HTTPException(status_code=422, detail=_PERIOD_DETAIL)

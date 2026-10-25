@@ -22,6 +22,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from pr_backend_core import ApiResponse
+from pr_backend_core.timezones import local_today
 from pr_system_settings.auth.visibility import (
     OWNER_NOT_FOUND_STATUS,
     can_access_user_data,
@@ -3042,9 +3043,9 @@ class OntologyApiRuntime:
     # --- 回答前の確認（#1439） -------------------------------------------------
 
     def _requirement_today(self) -> date:
-        """相対的な期間の基準日（実行日）。テストで差し替える。"""
+        """相対的な期間の基準日（実行日）。共通の設定の時間帯の今日（#3255）。テストで差し替える。"""
 
-        return datetime.now().astimezone().date()
+        return local_today(get_settings())
 
     def _requirement_max_review_rounds(self, profile_id: str = "") -> int:
         """AI の再検査の上限。業務プロファイルの確認の上限（往復）があればそれ - 1（#1839）。"""

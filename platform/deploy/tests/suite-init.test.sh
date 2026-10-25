@@ -272,9 +272,9 @@ prepare_case() {
   # provision_db_app_user は失敗しても続ける（#1756）ため、`if ! provision_db_app_user; then` の形。
   # 公開の URL（#1870）は backend が起動する前（製品の配備の前）に platform/.env へ書く。
   printf '%s\n' "${main_body}" | sed -E 's/^  if ! (provision_db_app_user); then$/  \1/' \
-    | grep -E '^  (grow_root_filesystem|install_os_packages|configure_firewall|configure_selinux|provision_db_app_user|configure_public_base_url|deploy_products)$' \
+    | grep -E '^  (configure_timezone|grow_root_filesystem|install_os_packages|configure_firewall|configure_selinux|provision_db_app_user|configure_public_base_url|deploy_products)$' \
     | awk '{printf "%s ", $1}' \
-    | grep -qx 'grow_root_filesystem install_os_packages configure_firewall configure_selinux provision_db_app_user configure_public_base_url deploy_products ' \
+    | grep -qx 'configure_timezone grow_root_filesystem install_os_packages configure_firewall configure_selinux provision_db_app_user configure_public_base_url deploy_products ' \
     || fail "main の順が違う"
   # 最後に配備全体を確かめる（#1642。log の最後の check の行が結果）。URL の一覧の後、失敗の判定の前。
   printf '%s\n' "${main_body}" | grep -E '^  (configure_nginx|report_urls|suite_check_deployment .*)$' \
@@ -342,6 +342,72 @@ prepare_case() {
   rm -f -- "${SUITE_REPO_DIR}/platform/.env"
   configure_public_base_url >/dev/null
   [ ! -e "${SUITE_REPO_DIR}/platform/.env" ] || fail "初回に platform/.env を作った"
+)
+
+# 6c. 時間帯（#3255）: platform/.env → props の platform.env → 既定（Asia/Tokyo）の順に PLATFORM_TIMEZONE を読み、
+#     OS の時間帯を timedatectl で合わせる（同じなら変えない）。不正な値は失敗。timedatectl が使えなければ
+#     /etc/localtime を置き換え、それもできなければ警告だけで続ける。
+(
+  case_dir="${task_dir}/timezone"
+  prepare_case "${case_dir}"
+  # shellcheck source=../suite-init.sh
+  source "${repo}/platform/deploy/suite-init.sh"
+  rm -f -- "${case_dir}/app/no.1-production-ready-suite/platform"
+  mkdir -p "${case_dir}/app/no.1-production-ready-suite/platform" "${case_dir}/bin" "${case_dir}/zoneinfo/Asia" \
+    "${case_dir}/zoneinfo/Etc"
+  : > "${case_dir}/zoneinfo/Asia/Tokyo"
+  : > "${case_dir}/zoneinfo/UTC"
+  : > "${case_dir}/zoneinfo/Etc/GMT-9"
+  SUITE_ZONEINFO_DIR="${case_dir}/zoneinfo"
+  SUITE_LOCALTIME_PATH="${case_dir}/localtime"
+  calls="${case_dir}/timedatectl.calls"
+  current="${case_dir}/timedatectl.current"
+  printf 'UTC\n' > "${current}"
+  # timedatectl の代わり（show は今の時間帯、set-timezone は呼び出しを記録して今の時間帯を変える）。
+  cat > "${case_dir}/bin/timedatectl" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = "show" ]; then cat "${current}"; exit 0; fi
+if [ "\$1" = "set-timezone" ]; then
+  [ "\${TIMEDATECTL_FAIL:-false}" = "true" ] && exit 1
+  printf '%s\n' "\$*" >> "${calls}"; printf '%s\n' "\$2" > "${current}"; exit 0
+fi
+exit 2
+EOF
+  chmod +x "${case_dir}/bin/timedatectl"
+  PATH="${case_dir}/bin:${PATH}"
+  # 既定: どちらの .env にも key が無ければ Asia/Tokyo。
+  [ "$(suite_timezone)" = "Asia/Tokyo" ] || fail "既定の時間帯: $(suite_timezone)"
+  configure_timezone >/dev/null || fail "既定の時間帯にできない"
+  [ "$(cat "${calls}")" = "set-timezone Asia/Tokyo" ] || fail "timedatectl の呼び出し: $(cat "${calls}")"
+  # 同じなら変えない（冪等）。
+  : > "${calls}"
+  configure_timezone | grep -qF '変更なし' || fail "同じ時間帯で変更なしと出さない"
+  [ ! -s "${calls}" ] || fail "同じ時間帯なのに timedatectl を呼んだ"
+  # props の platform.env（初回。Terraform の timezone）。quote は外す。
+  printf "PLATFORM_ORACLE_USER=APP\nPLATFORM_TIMEZONE='UTC'\n" > "${PROPS_DIR}/platform.env"
+  [ "$(suite_timezone)" = "UTC" ] || fail "props の時間帯: $(suite_timezone)"
+  # repository の platform/.env（再配備）を優先する。key があって空なら既定。
+  printf 'PLATFORM_TIMEZONE=Etc/GMT-9\n' > "${SUITE_REPO_DIR}/platform/.env"
+  [ "$(suite_timezone)" = "Etc/GMT-9" ] || fail "platform/.env の時間帯: $(suite_timezone)"
+  configure_timezone >/dev/null || fail "Etc/GMT-9 にできない"
+  [ "$(cat "${current}")" = "Etc/GMT-9" ] || fail "OS の時間帯を変えない"
+  printf 'PLATFORM_TIMEZONE=\n' > "${SUITE_REPO_DIR}/platform/.env"
+  [ "$(suite_timezone)" = "Asia/Tokyo" ] || fail "空の値は既定: $(suite_timezone)"
+  # 不正な値（固定の offset・tzdata に無い名前・相対の path）は失敗にし、OS を変えない。
+  for bad in '+09:00' 'Asia/Osaka' '../../etc/passwd' 'Asia/Tokyo;id'; do
+    printf 'PLATFORM_TIMEZONE=%s\n' "${bad}" > "${SUITE_REPO_DIR}/platform/.env"
+    : > "${calls}"
+    if configure_timezone >/dev/null 2>&1; then fail "不正な時間帯 ${bad} を受け入れた"; fi
+    [ ! -s "${calls}" ] || fail "不正な時間帯 ${bad} で timedatectl を呼んだ"
+  done
+  # timedatectl が使えなければ /etc/localtime を置き換える。
+  printf 'PLATFORM_TIMEZONE=Asia/Tokyo\n' > "${SUITE_REPO_DIR}/platform/.env"
+  printf 'UTC\n' > "${current}"
+  TIMEDATECTL_FAIL=true configure_timezone >/dev/null || fail "timedatectl が失敗したら続けない"
+  [ "$(readlink "${SUITE_LOCALTIME_PATH}")" = "${SUITE_ZONEINFO_DIR}/Asia/Tokyo" ] || fail "/etc/localtime を置き換えない"
+  # それもできなければ警告だけで続ける。
+  SUITE_LOCALTIME_PATH="${case_dir}/missing/dir/localtime"
+  TIMEDATECTL_FAIL=true configure_timezone | grep -qF 'WARNING: timezone' || fail "OS の時間帯を変えられないときに警告しない"
 )
 
 # 7. 製品の init_script.sh の契約（#1316。単独では配備しない）: Nginx の site を書かない・/<製品>/ を base に build・

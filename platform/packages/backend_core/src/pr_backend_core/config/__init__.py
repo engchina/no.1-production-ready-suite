@@ -15,12 +15,14 @@ from .env import (
     settings_env_name,
     settings_env_names,
 )
+from .timezone import TimezoneSettings
 from .tracing import TracingSettings
 
 __all__ = [
     "PLATFORM_ENV_FILE_ENV",
     "PLATFORM_SETTING_FIELDS",
     "BaseServiceSettings",
+    "TimezoneSettings",
     "TracingSettings",
     "EnvFieldReloader",
     "PlatformEnvSourcesMixin",

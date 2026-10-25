@@ -292,6 +292,12 @@ API・worker・RAG の独立微サービス・browser の共通 schema、JST 時
 - 共通 `.env` の場所は `PLATFORM_ENV_FILE`、製品の `backend/.env` の場所は `<接頭辞>ENV_FILE`（`RAG_ENV_FILE` / `NL2SQL_ENV_FILE` / `AGENT_ENV_FILE`）で変えられる（`platform_env_file` / `product_env_file`）。
 - **テストは手元の `.env` を読まない**（#1972）: 3 製品の `tests/conftest.py` は、`app` を import する前に `pr_backend_core.config.isolate_env_files_for_tests("<接頭辞>")` を呼ぶ（共通・製品の `.env` を無い場所に向ける。CI と同じ条件になり、開発機の構成管理者の資格情報・共有の開発の DB に左右されない）。`.env` の読み書きを確かめるテストは、製品の module の `PLATFORM_ENV_FILE` / `BACKEND_ENV_FILE` を `tmp_path` に差し替える。実 Oracle の結合テストの接続は環境変数（`PLATFORM_ORACLE_*`）で渡す（CI の `oracle-integration.yml` は `platform/.env` を環境変数に読み込む。手元ではテスト用の DB の接続を環境変数で渡す）。
 
+### 時刻と時間帯（#3255）
+
+- **時刻は UTC で保存する。** DB の session の時間帯は `pr_backend_core.oracle_session.init_oracle_session` が `'+00:00'` に固定する（python-oracledb は OS の時間帯の offset を session の時間帯にし、`datetime` の tzinfo を無視して bind するため、OS の時間帯で `TIMESTAMP WITH TIME ZONE` の値がずれる）。新しい接続の経路も、pool の `session_callback` か単発の接続の直後にこれを当てる。時間帯は名前（`'UTC'`）ではなく offset で書く（名前の時間帯の値は thin mode で読めない: DPY-3022。#3241）。
+- **「今日」と既定の時間帯は共通の設定 `PLATFORM_TIMEZONE`（属性 `timezone`。既定 `Asia/Tokyo`）から決める**（`pr_backend_core.timezones.local_today(settings)` / `configured_timezone(settings)`）。`date.today()`・`datetime.now()`（時間帯なし）・時間帯の名前の定数を使わない。画面の日時の表示はブラウザの時間帯のまま。
+- ADB の `SYSDATE` / `SYSTIMESTAMP` は UTC を返す。`SYSDATE_AT_DBTIMEZONE` を `TRUE` にしない（手順と理由は [terraform/README.md](../../terraform/README.md)「Autonomous AI Database（全製品で共有）」）。
+
 ### 別の製品・別の worker が保存した共通の設定の反映（#465・#2092・#2102）
 
 システム設定の画面の保存は共通の `platform/.env`（と `model-settings.json`）に書き、保存を受けたプロセスの Settings だけを書き換える。ほかの製品の backend・同じ製品の別の worker（本番の gunicorn は 2 worker）・取込などの worker は、次の `get_settings()` で `.env` の変化（mtime・size）を見て読み直す。再起動は要らない。

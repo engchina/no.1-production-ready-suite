@@ -271,3 +271,17 @@ def test_usage_api_accepts_browser_offset(name: str) -> None:
     response = client.get("/api/usage", params={"timezone": name, "days": 7})
     assert response.status_code == 200, response.text
     assert response.json()["data"]["timezone"] == name
+
+
+def test_omitted_timezone_uses_the_common_setting(monkeypatch: MonkeyPatch) -> None:
+    """時間帯を省いたら（API / MCP）、共通の設定の時間帯（#3255）で日を区切る。"""
+    from app.features.agent.automations import AutomationSchedule
+    from app.settings import get_settings
+
+    assert resolve_timezone("") == ZoneInfo("Asia/Tokyo")
+    monkeypatch.setattr(get_settings(), "timezone", "UTC")
+    assert resolve_timezone(None) == ZoneInfo("UTC")
+    assert resolve_timezone("  ") == ZoneInfo("UTC")
+    # 渡した時間帯（画面のブラウザの時間帯）は設定より優先する。
+    assert resolve_timezone("Asia/Tokyo") == ZoneInfo("Asia/Tokyo")
+    assert AutomationSchedule().timezone == "UTC"

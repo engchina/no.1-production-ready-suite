@@ -147,6 +147,8 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "chat_attachment_ttl_hours",
         "chat_attachment_max_bytes",
         "chat_attachment_max_files",
+        # 利用者の暦の時間帯（IANA の地域名。既定 Asia/Tokyo。#3255）
+        "timezone",
     }
 )
 

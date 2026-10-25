@@ -210,6 +210,8 @@ REQUIRED_BACKEND_ENV_LINES = {
 # 全製品の Compute に置く共通 .env（platform/.env、PLATFORM_*。#211）に必ず書く値。
 # python-dotenv の展開を避けるため、DB の入力由来の値は single quote で囲む。
 REQUIRED_PLATFORM_ENV_LINES = [
+    # 時間帯（#3255）: Terraform の timezone を共通の設定へ書く（suite-init.sh が OS の時間帯にも使う）。
+    "PLATFORM_TIMEZONE=${var.timezone}\n",
     "PLATFORM_OCI_COMPARTMENT_ID=${var.compartment_ocid}\n",
     "PLATFORM_ORACLE_USER='${local.effective_oracle_user}'\n",
     "PLATFORM_ORACLE_PASSWORD='${local.effective_oracle_password}'\n",
@@ -242,6 +244,8 @@ SETTINGS_FILES = {
 }
 # pr_backend_core.BaseServiceSettings の共通 field（各製品の Settings には書かれていない）。
 BASE_SETTINGS_FIELDS = {"app_version", "log_level", "environment", "cors_origins"}
+# 3 製品の Settings が pr_backend_core.config の mixin から受け継ぐ共通の属性（時間帯の TimezoneSettings。#3255）。
+MIXIN_SETTINGS_FIELDS = {"timezone"}
 
 # 1 台の Compute の配備（platform/deploy/suite-init.sh が呼ぶ。#1316。製品は単独では配備しない）の契約。
 # 製品の init_script.sh は Nginx の site を書かず、/<製品>/ を base に frontend を build し、backend/.env は製品ごとの元から作る。
@@ -406,7 +410,7 @@ def _heredoc(locals_source: str, name: str) -> str:
 def _settings_fields(product: str) -> set[str]:
     source = SETTINGS_FILES[product].read_text(encoding="utf-8")
     body = source.split("\nclass Settings(", 1)[1]
-    return set(re.findall(r"(?m)^    ([a-z][a-z0-9_]*): ", body)) | BASE_SETTINGS_FIELDS
+    return set(re.findall(r"(?m)^    ([a-z][a-z0-9_]*): ", body)) | BASE_SETTINGS_FIELDS | MIXIN_SETTINGS_FIELDS
 
 
 def _platform_setting_fields() -> frozenset[str]:
@@ -794,6 +798,7 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             "assign_public_ip = tostring(!local.compute_subnet_prohibits_public_ip)",
             "http_port = tostring(var.http_port)",
             "https_port = tostring(var.https_port)",
+            "timezone = var.timezone",
             'rag_services = var.deploy_rag ? join(" ", local.rag_services) : ""',
             "application_git_ref = var.application_git_ref",
             "application_git_url = var.application_git_url",
@@ -950,6 +955,8 @@ def _verify_bootstrap(bootstrap: str) -> None:
             'path: "/u01/aipoc/props/assign_public_ip.txt"',
             'path: "/u01/aipoc/props/http_port.txt"',
             'path: "/u01/aipoc/props/https_port.txt"',
+            # OS の時間帯（#3255。cloud-init の timezone。suite-init.sh も PLATFORM_TIMEZONE で合わせ直す）。
+            'timezone: "${timezone}"',
             "- openssl",
             # 運用の道具（#1566）: 最新のコードの取得（platform/deploy/suite-pull.sh）と、長い作業を切れない端末で。
             "- git",
@@ -1478,6 +1485,7 @@ def verify(package_path: Path) -> None:
     }
 
     _verify_schema(sources["schema.yaml"], sources["variables.tf"])
+    _verify_timezone(sources["schema.yaml"], sources["variables.tf"])
     _verify_terraform(
         sources["variables.tf"],
         sources["adb.tf"],
@@ -1619,6 +1627,30 @@ def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, scr
             raise AssertionError(f"output {name} must be shown only when bastion_enabled")
         if not re.search(rf"(?ms)^  {name}:\n(?:    .*\n)*?    visible: bastion_enabled", _schema_section(schema, "outputs")):
             raise AssertionError(f"output {name} must be shown only when bastion_enabled in the schema")
+
+
+# 時間帯（#3255）: stack で選べるのは OCI と同じ IANA の地域名の 2 つだけ（利用者の決定）。既定は日本時間。
+# 配備した後の platform/.env の PLATFORM_TIMEZONE は任意の IANA の地域名を受ける（入口だけを絞る）。
+TIMEZONE_CHOICES = ["Asia/Tokyo", "UTC"]
+DEFAULT_TIMEZONE = "Asia/Tokyo"
+
+
+def _verify_timezone(schema: str, variables: str) -> None:
+    timezone_schema = _schema_variable(schema, "timezone")
+    choices = re.findall(r'(?m)^      - "([^"]+)"$', timezone_schema)
+    if "    type: enum\n" not in timezone_schema or choices != TIMEZONE_CHOICES:
+        raise AssertionError(f"the timezone input must be an enum of {TIMEZONE_CHOICES}: {choices}")
+    if f'    default: "{DEFAULT_TIMEZONE}"\n' not in timezone_schema:
+        raise AssertionError(f"the timezone input must default to {DEFAULT_TIMEZONE}")
+    variable = _terraform_variable(variables, "timezone")
+    _require_all(
+        variable,
+        [
+            f'default     = "{DEFAULT_TIMEZONE}"',
+            "contains([" + ", ".join(f'"{value}"' for value in TIMEZONE_CHOICES) + "], var.timezone)",
+        ],
+        context="Terraform variable timezone",
+    )
 
 
 def _verify_oracle_linux(

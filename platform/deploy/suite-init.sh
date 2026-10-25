@@ -68,6 +68,10 @@ NGINX_MODULE_STREAM="1.24"
 # suite-init.sh が dnf で入れる OS の package（製品の init_script.sh は製品が使うものだけを入れる）。
 SUITE_OS_PACKAGES=(firewalld git nginx openssl policycoreutils-python-utils tar unzip)
 TLS_RENEW_UNIT="production-ready-suite-tls-renew"
+# 時間帯（#3255）: PLATFORM_TIMEZONE が無いときの既定（backend の pr_backend_core.timezones・Terraform の timezone と同じ）。
+SUITE_DEFAULT_TIMEZONE="Asia/Tokyo"
+SUITE_ZONEINFO_DIR="${SUITE_ZONEINFO_DIR:-/usr/share/zoneinfo}"
+SUITE_LOCALTIME_PATH="${SUITE_LOCALTIME_PATH:-/etc/localtime}"
 # アプリ用の DB ユーザーを作る script（suite-db-user.py）を動かす python-oracledb と Python（#1668）。製品の venv の
 # 前に動かすため、uv run --no-project で一時の環境に入れる。Python は製品と同じ場所（/opt/uv/python）に入れる。
 SUITE_DB_USER_ORACLEDB_VERSION="4.0.2"
@@ -154,6 +158,78 @@ public_ports() {
   else
     http_port
   fi
+}
+
+# .env の 1 つの key の値（最後の行。前後の空白と、囲む single / double quote を除く）。key が無ければ失敗する。
+suite_env_value() {
+  local file="$1" key="$2" line value
+  if [ ! -f "${file}" ] || ! grep -qE "^${key}=" "${file}"; then
+    return 1
+  fi
+  line="$(grep -E "^${key}=" "${file}" | tail -n 1)"
+  value="${line#*=}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  case "${value}" in
+    \'*\')
+      value="${value#\'}"
+      value="${value%\'}"
+      ;;
+    \"*\")
+      value="${value#\"}"
+      value="${value%\"}"
+      ;;
+  esac
+  printf '%s\n' "${value}"
+}
+
+# 時間帯（#3255）: 3 製品の共通の設定 PLATFORM_TIMEZONE（IANA の地域名。既定 Asia/Tokyo = 東京・大阪の時刻）。
+# repository の platform/.env（再配備。手で変えた値）→ props の platform.env（初回。Terraform の timezone）の順に、
+# key のある最初のファイルの値を使う。空なら backend と同じ既定。
+suite_timezone() {
+  local file value
+  for file in "${SUITE_REPO_DIR}/platform/.env" "${PROPS_DIR}/platform.env"; do
+    if value="$(suite_env_value "${file}" PLATFORM_TIMEZONE)"; then
+      printf '%s\n' "${value:-${SUITE_DEFAULT_TIMEZONE}}"
+      return 0
+    fi
+  done
+  printf '%s\n' "${SUITE_DEFAULT_TIMEZONE}"
+}
+
+# IANA の地域名か（backend の pr_backend_core.timezones・Terraform の validation と同じ形で、tzdata にあるもの）。
+# 固定の offset（+09:00）・相対の path は受けない。
+suite_valid_timezone() {
+  local name="$1"
+  [[ "${name}" =~ ^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$ ]] || return 1
+  [ -f "${SUITE_ZONEINFO_DIR}/${name}" ]
+}
+
+# Compute の OS の時間帯を PLATFORM_TIMEZONE に合わせる（#3255。同じなら変えない。再配備でも効く）。
+# 3 製品の DB の session の時間帯は OS に左右されず UTC（pr_backend_core.oracle_session）なので、時刻の保存は変わらない。
+# 不正な値は配備の前に失敗にする（backend の Settings も起動で拒む）。OS の時間帯を変えられなくても配備は続ける。
+configure_timezone() {
+  local name current
+  name="$(suite_timezone)"
+  if ! suite_valid_timezone "${name}"; then
+    log "timezone: PLATFORM_TIMEZONE=${name} は IANA の地域名ではありません（例: Asia/Tokyo。+09:00 のような固定の offset は使えません）。platform/.env を直してください。"
+    return 1
+  fi
+  current="$(timedatectl show --property=Timezone --value 2>/dev/null || true)"
+  if [ "${current}" = "${name}" ]; then
+    log "timezone: ${name}（変更なし）"
+    return 0
+  fi
+  if timedatectl set-timezone "${name}" 2>/dev/null; then
+    log "timezone: ${current:-unknown} -> ${name}"
+    return 0
+  fi
+  # timedated の無い環境（container など）は /etc/localtime を直接置き換える（timedatectl と同じ symlink）。
+  if ln -sfn "${SUITE_ZONEINFO_DIR}/${name}" "${SUITE_LOCALTIME_PATH}" 2>/dev/null; then
+    log "timezone: ${current:-unknown} -> ${name}（${SUITE_LOCALTIME_PATH}）"
+    return 0
+  fi
+  log "WARNING: timezone: OS の時間帯を ${name} にできませんでした。配備は続けます（DB の時刻は UTC のまま）。"
 }
 
 suite_dnf() {
@@ -556,6 +632,8 @@ main() {
   log "Starting single-Compute deployment."
   load_products
   validate_ports
+  # OS の時間帯（#3255）。不正な PLATFORM_TIMEZONE は何かを入れる前に失敗にする。
+  configure_timezone
   grow_root_filesystem
   install_os_packages
   configure_firewall

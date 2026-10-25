@@ -26,6 +26,7 @@ from checkpoint_support import CheckpointTable, export_state, load_state
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from mcp_support import fake_product_mcp
+from pr_backend_core.oracle_session import SESSION_INIT_SQL
 from pr_system_settings import database as shared_database
 from pr_system_settings import oci as shared_oci
 from pr_system_settings import oci_connectivity
@@ -349,8 +350,8 @@ class _FakeOracleCursor:
             table_name = normalized.split()[2]
             self._store.rows_by_table.setdefault(table_name, []).append(dict(params))
             return
-        if normalized == "ALTER SESSION SET RESULT_CACHE_MODE = MANUAL":
-            # 接続ごとの初期化（result cache を使わない。#333）。
+        if normalized == SESSION_INIT_SQL:
+            # 接続ごとの初期化（result cache を使わない #333・時間帯を UTC に固定 #3255）。
             self._store.session_statements.append(normalized)
             return
         raise AssertionError(f"unexpected statement: {statement}")

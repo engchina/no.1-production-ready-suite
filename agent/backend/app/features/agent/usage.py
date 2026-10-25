@@ -20,9 +20,6 @@ from pydantic import BaseModel, Field
 
 from app.features.agent.run_facts import REPORT_PERIOD_DAYS, RunFact
 from app.features.agent.timezones import (
-    DEFAULT_TIMEZONE as DEFAULT_TIMEZONE,
-)
-from app.features.agent.timezones import (
     resolve_timezone as resolve_timezone,
 )
 from app.features.agent.timezones import (
