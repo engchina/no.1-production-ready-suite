@@ -3442,7 +3442,7 @@ class IngestionPipeline:
         segment は文書ごとで、解析に渡した内容(ファイル準備の後の bytes)・設定・レシピの revision を
         持たない。artifact に保存した鍵(``parse_key``)が今回と違えば再利用しない。ファイル準備や
         解析エンジンを変えて取り込み直したのに前回の解析の結果を使うと、新しい設定が chunk に
-        反映されない(PIIマスクに変えても元の PII が残る。#2076)。
+        反映されない(#2076)。
         """
         if not checkpoint_segments:
             return None

@@ -269,7 +269,7 @@ RAG は NL2SQL / Agent と同じく、Docker を使わずネイティブ（uv �
 - ログイン: 共通認証（`RAG_AUTH_MODE=production`。#214）。最初は構成管理者 `system_admin`（`app_admin_login_user_password`）でログインし、
   「ユーザーとロール」でユーザーとロールを作り、「セキュリティ設定 > 権限管理」でロールごとのメニュー・検索・回答プロファイル・ナレッジベースを設定します。
   Cookie を HTTPS 限定にするか（`PLATFORM_AUTH_COOKIE_SECURE`）は `https_enabled` から決まります。`RAG_AUDIT_CONTEXT_HASH_SALT` は instance 上で生成します。
-- 前処理 5 つと CPU の parser を配備します（出力 `rag_services`）。GPU の parser（Dots.OCR）は含めず、
+- 前処理 4 つと CPU の parser を配備します（出力 `rag_services`）。GPU の parser（Dots.OCR）は含めず、
   起動後に「取込・検索・回答設定 > 文書解析」で外部 API として指定します。音声・動画のファイルは取り込みません。
 
   | service | 既定 | 入力 |
@@ -285,6 +285,7 @@ RAG は NL2SQL / Agent と同じく、Docker を使わずネイティブ（uv �
   OCI Generative AI（Vision）の parser（`parser-oci-genai-vision`）と GPU の ASR の parser（`parser-asr`）、前処理の
   スキャン画像の補正（`preprocess-image-enhance`）と URL→Markdown（`preprocess-url-to-markdown`）は削除しました（#2042）。
   前処理の「PDF を画像として読み直す」（`preprocess-pdf-to-page-images`）も削除しました（#3347。スキャンの PDF は Docling が OCR で読みます）。
+  取込時の「PIIマスク」（`preprocess-pii-redact`）と、その spaCy の日本語モデルの取得も削除しました（#3358）。
   `rag_enable_oci_cloud_parsers` は OCI Document Understanding の parser だけを配備します。既存の Compute は
   `sudo platform/deploy/suite-update.sh` の再配備で `parser-structured-records-jsonl`（起動します）と `parser-xml-tree-json`（起動はしません）の unit が入り、削除したサービスの unit は止めて消されます
   （以前の stack が書いた `/u01/aipoc/props/rag_services.txt` も今の一覧に書き戻します）。
