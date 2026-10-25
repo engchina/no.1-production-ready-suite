@@ -92,6 +92,7 @@ def test_answered_conditions_are_not_marked_unknown(
     assert result["unconfirmed_conditions"] == []
 
 
+@pytest.mark.usefixtures("system_access")
 @pytest.mark.parametrize("policy", ["confirm", "assume"])
 @pytest.mark.parametrize("with_guide", [False, True])
 async def test_search_chat_mcp_shared_context_forwards_rule_and_guide_questions(

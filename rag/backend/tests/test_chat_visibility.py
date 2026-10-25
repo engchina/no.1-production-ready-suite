@@ -33,6 +33,7 @@ from app.main import app
 from app.rag import chat_attachments
 from app.rag.request_context import (
     AuditRequestContext,
+    caller_owns,
     current_audit_request_context,
     reset_audit_request_context,
     set_audit_request_context,
@@ -60,11 +61,10 @@ class OwnedChatOracle(FakeChatOracle):
     assign_caller_as_owner = False
 
     def _visible(self, conversation: StoredConversation) -> bool:
+        # SQL の条件と同じく、利用者の分からない context には何も見せない（#3250）。
         context = current_audit_request_context()
-        return (
-            context.user_id_hash is None
-            or context.all_users_visible
-            or conversation.user_id_hash == context.user_id_hash
+        return context.all_users_visible or (
+            context.user_id_hash is not None and conversation.user_id_hash == context.user_id_hash
         )
 
     async def create_conversation(
@@ -167,6 +167,46 @@ def test_conversation_sql_drops_owner_predicate_only_for_system_admin() -> None:
         access_sql = _oracle_conversation_access_predicate_sql()
         assert "user_id_hash = :conversation_user_id_hash" in access_sql
         assert _with_conversation_access_bind({})["conversation_user_id_hash"] == "admin-hash"
+    finally:
+        reset_audit_request_context(token)
+
+
+@pytest.mark.parametrize(
+    "context",
+    [None, AuditRequestContext(tenant_id_hash="tenant"), AuditRequestContext()],
+    ids=["no-context", "context-without-user", "system-access"],
+)
+def test_conversation_sql_without_a_user_returns_nothing(
+    context: AuditRequestContext | None,
+) -> None:
+    """利用者の分からない context は、全員の会話ではなく 0 件（fail-closed。#3250）。
+
+    文脈の無い処理（`NO_ACCESS_AUDIT_REQUEST_CONTEXT`）・利用者の無い context・範囲の制限の無い
+    信頼した処理（`system_access_context`）のどれも、持ち主の条件を外さない。
+    """
+    token = set_audit_request_context(context) if context is not None else None
+    try:
+        sql, binds = _oracle_conversation_where()
+        access_sql = _oracle_conversation_access_predicate_sql()
+        conversation_binds = _with_conversation_access_bind({})
+    finally:
+        if token is not None:
+            reset_audit_request_context(token)
+    assert "1 = 0" in sql
+    assert "1 = 0" in access_sql
+    assert "conversation_user_id_hash" not in binds
+    assert "conversation_user_id_hash" not in conversation_binds
+
+
+def test_caller_without_a_user_owns_no_conversation() -> None:
+    """利用者の分からない context は、どの会話の持ち主でもない（内容を足せない。#3250）。"""
+    assert not caller_owns("owner-hash")
+    assert not caller_owns(None)
+    token = set_audit_request_context(AuditRequestContext(user_id_hash="owner-hash"))
+    try:
+        assert caller_owns("owner-hash")
+        assert not caller_owns("other-hash")
+        assert not caller_owns(None)
     finally:
         reset_audit_request_context(token)
 

@@ -207,6 +207,19 @@ def trace_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeTraceDb]:
 
 
 @pytest.fixture
+def system_access() -> Iterator[None]:
+    """要求の外から route の内部の関数を呼ぶテストを、範囲の制限の無い context で動かす（#3250）。
+
+    文脈の無い呼び出しは何も使えない（`NO_ACCESS_AUDIT_REQUEST_CONTEXT`）ので、範囲と関係の無い
+    処理を確かめるテストだけが明示して使う。
+    """
+    from app.rag.request_context import system_access_context
+
+    with system_access_context():
+        yield
+
+
+@pytest.fixture
 def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """実 Oracle AI Database を使う統合テスト用。未到達なら skip し、作成行を後始末する。
 
@@ -216,6 +229,7 @@ def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """
     from app.config import get_settings
     from app.rag.request_context import (
+        NO_ACCESS_AUDIT_REQUEST_CONTEXT,
         audit_request_context_from_headers,
         current_audit_request_context,
         reset_audit_request_context,
@@ -242,7 +256,9 @@ def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
     def current_or_default_context() -> AuditRequestContext:
         current = current_audit_request_context()
-        if (
+        # 文脈の無い処理（文脈を引き継がない thread など）は、何も使えない既定の context になる
+        # （#3250）。統合テストでは、その代わりにテストの利用者の context を使う。
+        if current is NO_ACCESS_AUDIT_REQUEST_CONTEXT or (
             current.request_id is None
             and current.tenant_id_hash is None
             and current.user_id_hash is None

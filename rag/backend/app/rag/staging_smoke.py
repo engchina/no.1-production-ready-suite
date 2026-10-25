@@ -19,6 +19,7 @@ from app.clients.oracle import OracleClient, close_oracle_pool
 from app.config import Settings, get_settings
 from app.rag.ingestion import IngestionPipeline
 from app.rag.pipeline import RagPipeline
+from app.rag.request_context import with_system_access
 from app.readiness import READINESS_INVALID, readiness_checks, readiness_checks_are_ok
 from app.schemas.document import FileStatus
 from app.schemas.search import SearchRequest
@@ -79,6 +80,7 @@ class StagingSmokePreflightError(RuntimeError):
         self.preflight = preflight
 
 
+@with_system_access
 def main() -> int:
     """CLI entrypoint。"""
     parser = argparse.ArgumentParser(description="Run OCI / Oracle RAG staging smoke test.")

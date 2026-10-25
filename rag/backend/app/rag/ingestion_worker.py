@@ -48,6 +48,7 @@ from app.rag.ingestion_slots import (
     current_heavy_slot_release,
     heavy_slot_releaser,
 )
+from app.rag.request_context import system_access_context
 from app.schemas.document import (
     INGESTION_HEAVY_PHASES,
     FileStatus,
@@ -514,8 +515,15 @@ class IngestionQueueWorker:
         self._cleanup_task: asyncio.Task[None] | None = None
 
     async def run_forever(self, *, stop_event: asyncio.Event | None = None) -> None:
-        """停止イベントが立つまでキューを消費し続ける。"""
-        stop_event = stop_event or asyncio.Event()
+        """停止イベントが立つまでキューを消費し続ける。
+
+        取込は利用者の要求の外の処理なので、範囲の制限の無い context で動かす（文脈の無い処理は
+        何も読めない。API の process の中の worker も同じ。#3250）。
+        """
+        with system_access_context():
+            await self._run_queue(stop_event or asyncio.Event())
+
+    async def _run_queue(self, stop_event: asyncio.Event) -> None:
         self._stop_event = stop_event
         logger.info(
             "ingestion_worker_started",

@@ -50,6 +50,7 @@ from app.clients.support_guide_store import (
     oracle_support_guide_revision_schema_sql,
     oracle_support_guide_schema_sql,
 )
+from app.rag.request_context import with_system_access
 from app.rag.search_answer_profile_migration import rename_sql as search_answer_profile_rename_sql
 from app.rag.vector_index_adapter import default_vector_index_build
 
@@ -1311,6 +1312,7 @@ def _starts_plsql_block(stripped_line: str) -> bool:
     return upper == "DECLARE" or upper == "BEGIN" or upper.startswith(("DECLARE ", "BEGIN "))
 
 
+@with_system_access
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint。"""
     parser = _build_parser()

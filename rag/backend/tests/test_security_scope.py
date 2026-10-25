@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 
 import pytest
@@ -179,6 +179,26 @@ async def test_answer_records_are_scoped_to_owner() -> None:
     for call in calls:
         assert "user_id_hash = :answer_owner_user_id_hash" in call.statement
         assert call.parameters["answer_owner_user_id_hash"] == "owner-hash"
+    assert not any(call.statement.lstrip().startswith("UPDATE") for call in calls)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("with_context", [True, False], ids=["context-without-user", "no-context"])
+async def test_answer_records_without_a_user_return_nothing(with_context: bool) -> None:
+    """利用者の分からない context は、持ち主で絞らずに全件ではなく 0 件（fail-closed。#3250）。"""
+    pool = FakeOraclePool(execute_results=[[], [{"count_value": 0}], [], [], []])
+    oracle = _client(pool)
+    scope = _scope() if with_context else nullcontext()
+    with scope:
+        await oracle.list_answer_records(search_answer_profile_id=None, limit=10)
+        assert await oracle.count_answer_records(search_answer_profile_id=None) == 0
+        assert await oracle.get_answer_record("trace-1") is None
+        assert await oracle.save_answer_evaluation("trace-1", {"score": 1}) is False
+    calls = pool.connection.calls
+    assert len(calls) == 4
+    for call in calls:
+        assert "1 = 0" in call.statement
+        assert "answer_owner_user_id_hash" not in call.statement
     assert not any(call.statement.lstrip().startswith("UPDATE") for call in calls)
 
 

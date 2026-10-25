@@ -27,6 +27,11 @@ from app.config import BACKEND_ROOT, Settings, get_settings
 from app.rag import ingestion_job_runner, ingestion_worker
 from app.rag.ingestion import IngestionCancelledError
 from app.rag.ingestion_worker import IngestionQueueWorker
+from app.rag.request_context import (
+    NO_ACCESS_AUDIT_REQUEST_CONTEXT,
+    AuditRequestContext,
+    current_audit_request_context,
+)
 from app.schemas.document import (
     DocumentDetail,
     FileStatus,
@@ -639,6 +644,44 @@ async def test_shutdown_requeues_own_leased_job_without_consuming_attempt(
     # 他の worker の lease の job には触れない。
     assert store.job("job-other-worker").status == IngestionJobStatus.RUNNING
     assert store.documents["doc-other"] == FileStatus.INGESTING
+
+
+async def test_worker_and_job_runner_run_with_system_access(
+    store: _LeaseQueueStore, clock: _Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """取込は要求の外の信頼した処理なので、範囲の制限の無い context で動く（#3250）。
+
+    文脈の無い処理は何も読めない（`NO_ACCESS_AUDIT_REQUEST_CONTEXT`）ので、worker の loop と
+    job を 1 件だけ実行する子（`ingestion_job_runner._run`）が明示して入る。
+    """
+    assert current_audit_request_context() is NO_ACCESS_AUDIT_REQUEST_CONTEXT
+    store.add("job-scope", document_id="doc-scope", queued_at=clock())
+    worker, runner = _worker("worker-a", store, clock)
+    seen: list[AuditRequestContext] = []
+    run_job = runner.__call__
+
+    async def capture(job_id: str) -> None:
+        seen.append(current_audit_request_context())
+        runner.release_event(job_id).set()
+        await run_job(job_id)
+
+    worker._job_runner = capture
+    stop = asyncio.Event()
+    task = asyncio.create_task(worker.run_forever(stop_event=stop))
+    await asyncio.wait_for(runner.started_event("job-scope").wait(), timeout=5)
+    stop.set()
+    await asyncio.wait_for(task, timeout=5)
+    assert seen == [AuditRequestContext()]
+
+    child: list[AuditRequestContext] = []
+
+    async def fake_run_ingestion_job(job_id: str, *, lease_owner: str | None = None) -> None:
+        child.append(current_audit_request_context())
+
+    monkeypatch.setattr(documents, "_run_ingestion_job", fake_run_ingestion_job)
+    await ingestion_job_runner._run("job-child")
+    assert child == [AuditRequestContext()]
+    assert current_audit_request_context() is NO_ACCESS_AUDIT_REQUEST_CONTEXT
 
 
 async def test_shutdown_waits_for_job_within_grace(store: _LeaseQueueStore, clock: _Clock) -> None:

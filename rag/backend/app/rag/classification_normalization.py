@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass
 from pydantic import ValidationError
 
 from app.clients.oracle import OracleClient
+from app.rag.request_context import with_system_access
 from app.schemas.document import DocumentClassification
 
 
@@ -98,6 +99,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+@with_system_access
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     counts = asyncio.run(
