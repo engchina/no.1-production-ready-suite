@@ -393,6 +393,11 @@ class ChatProgressStepEvent(_EventBase):
         pattern="^[a-z0-9_]+$",
         description="span を書いた製品（rag / nl2sql / agent。#3272）。",
     )
+    display_name: str | None = Field(
+        default=None,
+        max_length=128,
+        description="span を書いた製品が付けた工程の名前（名詞。別の製品の画面が出す。#3272）。",
+    )
 
 
 class ChatProgressTerminalEvent(_EventBase):
@@ -543,7 +548,16 @@ def apply_chat_progress_event(
     return True
 
 
-_SPAN_FIELDS = ("name", "parent_id", "root", "trace_id", "attributes", "cancelled", "product")
+_SPAN_FIELDS = (
+    "name",
+    "parent_id",
+    "root",
+    "trace_id",
+    "attributes",
+    "cancelled",
+    "product",
+    "display_name",
+)
 
 
 def _span_fields(event: ChatProgressStepEvent) -> dict[str, Any] | None:

@@ -396,8 +396,8 @@ test("呼び先の製品の span は書いた製品の工程の名前で出し�
     .step("mcp-call", "done", mcp("tools/call", {"gen_ai.tool.name": "rag_retrieve_evidence"}))
     .step("rag-server", "done", rag("mcp-call", {name: "mcp.server", root: true}))
     .step("rag-search", "done", rag("rag-server", {name: "rag.search", root: true}))
-    .step("rag-retrieval", "done", rag("rag-search", {name: "rag.retrieval", params: {display_name: "検索"}, attributes: {"pr.stage": "retrieval"}}))
-    .step("rag-stage", "done", rag("rag-retrieval", {name: "rag.engine.stage", kind: "answer_step", params: {name: "文書検索", display_name: "文書の検索"}, attributes: {"pr.stage": "文書検索"}}))
+    .step("rag-retrieval", "done", rag("rag-search", {name: "rag.retrieval", displayName: "検索", attributes: {"pr.stage": "retrieval"}}))
+    .step("rag-stage", "done", rag("rag-retrieval", {name: "rag.engine.stage", kind: "answer_step", params: {name: "文書検索"}, displayName: "文書の検索", attributes: {"pr.stage": "文書検索"}}))
     .step("rag-embed", "done", rag("rag-stage", {name: "gen_ai.embeddings", attributes: {"gen_ai.request.model": "synthetic-embed"}}))
     .step(tool, "done", {finishedAt: end})
     .step("chat-2", "done", {startedAt: start, finishedAt: end, kind: "respond"}).terminal("done").events;

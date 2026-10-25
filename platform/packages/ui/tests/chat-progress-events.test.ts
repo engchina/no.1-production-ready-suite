@@ -117,6 +117,7 @@ describe("契約（platform/contracts/chat-progress）", () => {
       "attributes",
       "cancelled",
       "product",
+      "display_name",
     ];
     expect(Object.keys(defs.ChatProgressStepEvent.properties).sort()).toEqual([...stepFields].sort());
     // 段の詳細（#2294）の形は共有 UI の `RunStepDetails` と同じ。
@@ -377,9 +378,9 @@ describe("span の段（#3226）", () => {
       span("s", "c", "mcp.server", "done", { root: true, product: "rag" }),
       span("o", "s", "rag.search", "done", { root: true, product: "rag" }),
       // 画面（Agent）の定義に同じ種類があっても、別の製品の span には使わない。
-      span("a", "o", "rag.engine.stage", "done", { kind: "answer_step", product: "rag", params: { name: "工程 A", display_name: "表示の工程 A" } }),
+      span("a", "o", "rag.engine.stage", "done", { kind: "answer_step", product: "rag", params: { name: "工程 A" }, display_name: "表示の工程 A" }),
       span("e", "a", "gen_ai.embeddings", "done", { product: "rag", attributes: { "gen_ai.request.model": "embed-x" } }),
-      span("b", "o", "rag.retrieval", "done", { product: "rag", params: { display_name: "表示の段 B" }, attributes: { "pr.stage": "retrieval" } }),
+      span("b", "o", "rag.retrieval", "done", { product: "rag", display_name: "表示の段 B", attributes: { "pr.stage": "retrieval" } }),
     ];
     const steps = chatProgressStepsFromEvents(events, own, "t", { traceLabels: agentLabels });
     expect(steps.map((step) => [step.label, step.level ?? 0, step.product ?? null])).toEqual([

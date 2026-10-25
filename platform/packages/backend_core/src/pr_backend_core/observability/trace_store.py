@@ -569,8 +569,13 @@ def trace_progress_events(
             event["root"] = True
         if span.display_kind:
             event["kind"] = span.display_kind
-        if span.display_params:
-            event["params"] = span.display_params
+        # 製品が付けた工程の名前は、製品の工程の定義の値（params）と分けて送る（#3272）。
+        params = dict(span.display_params)
+        display_name = params.pop(DISPLAY_NAME_PARAM, None)
+        if isinstance(display_name, str) and display_name.strip():
+            event["display_name"] = display_name.strip()[:_DISPLAY_NAME_MAX]
+        if params:
+            event["params"] = params
         if span.attributes:
             event["attributes"] = span.attributes
         if cancelled:

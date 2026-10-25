@@ -396,15 +396,19 @@ def test_progress_events_carry_the_product_of_each_span() -> None:
         for event in trace_progress_events(spans, target_id="run-a")
         if event["type"] == "step"
     ]
-    assert [(event["product"], event.get("params")) for event in steps] == [
-        ("agent", None),
-        ("rag", {"display_name": "工程 B"}),
+    # 工程の名前は製品の工程の定義の値（params）と分けて送る。
+    assert [
+        (event["product"], event.get("display_name"), event.get("params")) for event in steps
+    ] == [
+        ("agent", None, None),
+        ("rag", "工程 B", None),
     ]
     parsed = parse_chat_progress_events(steps)
-    assert [event.product for event in parsed if isinstance(event, ChatProgressStepEvent)] == [
-        "agent",
-        "rag",
-    ]
+    assert [
+        (event.product, event.display_name)
+        for event in parsed
+        if isinstance(event, ChatProgressStepEvent)
+    ] == [("agent", None), ("rag", "工程 B")]
 
 
 def test_mcp_trace_context_trusts_only_service_tokens() -> None:

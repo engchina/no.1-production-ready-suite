@@ -79,6 +79,8 @@ export interface ChatProgressStepEvent extends ChatProgressEventBase {
   cancelled?: boolean;
   /** span を書いた製品（`rag` / `nl2sql` / `agent`。#3272）。 */
   product?: string;
+  /** span を書いた製品が付けた工程の名前（名詞。別の製品の画面が出す。#3272）。 */
+  display_name?: string;
 }
 
 export interface ChatProgressTerminalEvent extends ChatProgressEventBase {
@@ -209,6 +211,8 @@ export function parseChatProgressEvent(value: unknown): ChatProgressEvent | null
   if (source.cancelled === true) event.cancelled = true;
   const product = text(source.product);
   if (product && /^[a-z0-9_]{1,32}$/.test(product)) event.product = product;
+  const displayName = text(source.display_name)?.trim();
+  if (displayName) event.display_name = displayName.slice(0, 128);
   return event;
 }
 
@@ -248,6 +252,7 @@ export interface ChatProgressEventSpan {
   attributes?: ChatProgressParams;
   cancelled?: boolean;
   product?: string;
+  displayName?: string;
 }
 
 /** 組み立てた 1 つの段階（名前を付ける前）。 */
@@ -325,6 +330,7 @@ function applyEvent(state: ChatProgressEventsState, event: ChatProgressEvent): C
     if (event.attributes) span.attributes = event.attributes;
     if (event.cancelled) span.cancelled = true;
     if (event.product) span.product = event.product;
+    if (event.display_name) span.displayName = event.display_name;
     step.span = span;
   }
   const steps = [...next.steps];
@@ -410,13 +416,6 @@ export type ChatProgressStepDefinitions = Readonly<Record<string, ChatProgressSt
 
 const EMPTY_PARAMS: ChatProgressParams = Object.freeze({});
 
-/**
- * span を書いた製品が付ける、工程の利用者向けの名前の値の key（backend の `DISPLAY_NAME_PARAM`。#3272）。別の製品が書いた
- * span は、画面の製品の工程の定義で訳さずにこの名前を出す（Jaeger / Langfuse / Phoenix と同じく、span を作ったサービスの
- * 名前をそのまま出す）。
- */
-export const CHAT_PROGRESS_DISPLAY_NAME_PARAM = "display_name";
-
 /** 名前の付け方の設定（span の段の名前・root の扱い。#3226）。 */
 export interface ChatProgressLabelOptions {
   /** 技術の span の名前・停止の文言（既定は共通の日本語）。 */
@@ -468,10 +467,6 @@ function orderSpanSteps(steps: readonly ChatProgressEventStep[], viewer: string 
   return ordered;
 }
 
-function displayNameOf(params: ChatProgressParams): string | undefined {
-  const value = params[CHAT_PROGRESS_DISPLAY_NAME_PARAM];
-  return typeof value === "string" && value.trim() ? value.trim().slice(0, 128) : undefined;
-}
 
 function mergeDetails(product: RunStepDetails | undefined, technical: RunStepDetailField[]): RunStepDetails | undefined {
   if (!technical.length) return product;
@@ -512,7 +507,7 @@ export function labelChatProgressSteps(
       : undefined;
     const result: ChatProgressStep = {
       id: step.id,
-      label: definition ? definition.label(step.status, values) : ((span ? displayNameOf(values) : undefined) ?? spanName ?? step.id),
+      label: definition ? definition.label(step.status, values) : (span?.displayName ?? spanName ?? step.id),
       status: step.status,
     };
     if (product) result.product = traceLabels.productName(product);
