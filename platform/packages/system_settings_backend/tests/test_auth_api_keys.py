@@ -33,7 +33,7 @@ from pr_system_settings.auth.dependencies import API_KEY_NOT_ALLOWED_CODE, autho
 from pr_system_settings.auth.domain import LOCAL_DEBUG_USER_UUID, Principal
 from pr_system_settings.auth.errors import SecurityApiError, SecurityMigrationRequired
 from pr_system_settings.auth.migrations import PLATFORM_AUTH_DDL
-from pr_system_settings.auth.router import build_auth_router
+from pr_system_settings.auth.router import DisplayTimezoneData, build_auth_router
 from pr_system_settings.auth.service import (
     API_KEY_INVALID_CODE,
     API_KEY_PRODUCT_FORBIDDEN_CODE,
@@ -475,9 +475,7 @@ def test_bearer_api_key_reads_only_prak_tokens() -> None:
 
 
 def _router_paths(*, api_keys: bool) -> set[str]:
-    from pydantic import BaseModel
-
-    class _Model(BaseModel):
+    class _Model(DisplayTimezoneData):
         pass
 
     router = build_auth_router(
@@ -514,9 +512,8 @@ def test_api_key_routes_create_list_and_revoke() -> None:
     user = _user(service, store, "searcher", "menu.search")
     other = _user(service, store, "other", "menu.search")
     _, _ = _create(service, other, name="other")
-    from pydantic import BaseModel
 
-    class _Model(BaseModel):
+    class _Model(DisplayTimezoneData):
         pass
 
     def current(request: Request) -> Principal:

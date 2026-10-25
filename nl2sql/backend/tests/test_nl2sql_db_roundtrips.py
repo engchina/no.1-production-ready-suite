@@ -789,14 +789,16 @@ def _chat_turn(engine: Nl2SqlEngine, previous_job_id: str | None) -> JobCreateRe
 # 定常（pool があり、キャッシュが温まった 2 回目以降）の 1 ジョブの上限（#904 の修正後の値）。
 # 修正前（main）: SQL 生成の worker は Select AI で新しい接続 2・往復 54、Enterprise AI で
 # 新しい接続 1・往復 60。チャットの投入は 2 ターン目で往復 14 から 1 ターンごとに 5 増えていた。
+# 業務データの SELECT は、session の時間帯を設定の時間帯にする・UTC に戻すの 2 往復を含む
+# （#3265。設定が UTC なら 0）。
 _SQL_JOB_LIMITS = {
     # engine: (投入の往復, worker の往復)
-    Nl2SqlEngine.SELECT_AI: (2, 26),
-    Nl2SqlEngine.ENTERPRISE_AI_DIRECT: (2, 34),
+    Nl2SqlEngine.SELECT_AI: (2, 28),
+    Nl2SqlEngine.ENTERPRISE_AI_DIRECT: (2, 36),
 }
 _CHAT_TURN_LIMITS = {
-    Nl2SqlEngine.SELECT_AI: (4, 26),
-    Nl2SqlEngine.ENTERPRISE_AI_DIRECT: (4, 34),
+    Nl2SqlEngine.SELECT_AI: (4, 28),
+    Nl2SqlEngine.ENTERPRISE_AI_DIRECT: (4, 36),
 }
 _ENGINE_IDS = ["select_ai", "enterprise_ai_direct"]
 
@@ -1057,6 +1059,24 @@ def test_chat_execution_connection_follows_requesting_actor(
     state_sql = [c for c in calls if c.op == "execute" and "NL2SQL_" in c.detail]
     assert state_sql
     assert {c.plane for c in state_sql} == {"state-pool"}
+    # 業務データの SELECT の間だけ、その接続の session を設定の時間帯にし、終わると UTC に戻す
+    # （#3265）。状態の保存先の接続は UTC のまま（時間帯を変えない）。
+    time_zone = [
+        (c.plane, c.detail)
+        for c in calls
+        if c.op == "execute" and c.detail.startswith("ALTER SESSION SET TIME_ZONE")
+    ]
+    assert time_zone == [
+        (business_plane, "ALTER SESSION SET TIME_ZONE = '+09:00'"),
+        (business_plane, "ALTER SESSION SET TIME_ZONE = '+00:00'"),
+    ]
+    business_window = [c.detail for c in calls if c.plane == business_plane and c.op == "execute"]
+    start_zone = business_window.index("ALTER SESSION SET TIME_ZONE = '+09:00'")
+    assert business_window[start_zone : start_zone + 3] == [
+        "ALTER SESSION SET TIME_ZONE = '+09:00'",
+        _BUSINESS_SQL,
+        "ALTER SESSION SET TIME_ZONE = '+00:00'",
+    ]
     deepsec_calls = [
         (c.op, c.detail)
         for c in calls

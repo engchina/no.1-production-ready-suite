@@ -21,6 +21,7 @@ from pr_backend_core.timezones import (
     configured_timezone_name,
     local_now,
     local_today,
+    session_time_zone_offset,
     validate_timezone_name,
 )
 
@@ -90,3 +91,22 @@ def test_local_today_uses_configured_timezone_not_os_clock() -> None:
     # 時間帯の無い値は UTC とみなす。
     naive = datetime(2026, 10, 24, 16, 30)
     assert local_now(SimpleNamespace(), now=naive).isoformat() == "2026-10-25T01:30:00+09:00"
+
+
+@pytest.mark.parametrize(
+    ("name", "now", "expected"),
+    [
+        ("Asia/Tokyo", datetime(2026, 10, 24, 23, 30, tzinfo=UTC), "+09:00"),
+        ("UTC", datetime(2026, 10, 24, 23, 30, tzinfo=UTC), "+00:00"),
+        # 夏時間のある地域は、その時刻の差（実行のたびに求める）。
+        ("America/New_York", datetime(2026, 7, 1, 12, tzinfo=UTC), "-04:00"),
+        ("America/New_York", datetime(2026, 12, 1, 12, tzinfo=UTC), "-05:00"),
+        ("Asia/Kolkata", datetime(2026, 1, 1, tzinfo=UTC), "+05:30"),
+    ],
+    ids=["tokyo", "utc", "new-york-summer", "new-york-winter", "half-hour"],
+)
+def test_session_time_zone_offset_is_the_current_offset(
+    name: str, now: datetime, expected: str
+) -> None:
+    # Oracle の session の TIME_ZONE は地域名ではなく offset（thin mode の DPY-3022。#3265）。
+    assert session_time_zone_offset(SimpleNamespace(timezone=name), now=now) == expected

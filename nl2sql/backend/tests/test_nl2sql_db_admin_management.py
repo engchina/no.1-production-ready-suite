@@ -3435,7 +3435,12 @@ def test_oracle_adapter_non_admin_select_uses_normal_connection_when_deepsec_dis
     with actor_scope("business-user", is_system_admin=False):
         result = adapter.execute_select("SELECT ID FROM T1", 100)
 
-    assert calls == ["SELECT ID FROM T1"]
+    # 業務データの SELECT の間だけ、session の時間帯を共通の設定の時間帯にする（#3265）。
+    assert calls == [
+        "ALTER SESSION SET TIME_ZONE = '+09:00'",
+        "SELECT ID FROM T1",
+        "ALTER SESSION SET TIME_ZONE = '+00:00'",
+    ]
     assert result.rows == [{"ID": 3}]
     assert result.execution_context == "oracle_data_plane"
     assert result.vpd_context_enforced is False
@@ -3713,7 +3718,11 @@ def test_select_ai_agent_generation_then_select_execution_keeps_deepsec_data_pla
     assert sql == "SELECT ID FROM T1"
     assert any("CREATE_CONVERSATION" in call for call in generation_calls)
     assert any("RUN_TEAM" in call for call in generation_calls)
-    assert data_calls == ["SELECT ID FROM T1"]
+    assert data_calls == [
+        "ALTER SESSION SET TIME_ZONE = '+09:00'",
+        "SELECT ID FROM T1",
+        "ALTER SESSION SET TIME_ZONE = '+00:00'",
+    ]
     assert manager.actor_ids == ["business-user"]
     assert result.execution_context == "deepsec_data_plane"
     assert result.vpd_context_enforced is True

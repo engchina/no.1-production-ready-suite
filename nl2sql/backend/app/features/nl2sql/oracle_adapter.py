@@ -14,7 +14,7 @@ import re
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import ExitStack, contextmanager, suppress
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -24,7 +24,8 @@ from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause
 from pr_backend_core.observability.tracing import observed_span
 from pr_backend_core.oracle_dsn import dsn_without_tns_retry
 from pr_backend_core.oracle_pool import OraclePoolSize, SharedOraclePool
-from pr_backend_core.oracle_session import init_oracle_session
+from pr_backend_core.oracle_session import init_oracle_session, local_session_time_zone
+from pr_backend_core.timezones import session_time_zone_offset
 
 from app.clients.oracle_diagnostics import oracle_connection_diagnostics
 from app.settings import Settings
@@ -1823,7 +1824,11 @@ class OracleNl2SqlAdapter:
             self.connection() if admin_control_plane else self.user_data_connection(read_only=True)
         )
         try:
-            with connection_cm as conn, conn.cursor() as cursor:
+            with (
+                connection_cm as conn,
+                self._business_session_time_zone(conn, admin_control_plane=admin_control_plane),
+                conn.cursor() as cursor,
+            ):
                 if binds:
                     clob = self._load_oracledb().DB_TYPE_CLOB
                     cursor.setinputsizes(**{name: clob for name in binds})
@@ -1860,6 +1865,21 @@ class OracleNl2SqlAdapter:
             raise
         except Exception as exc:
             raise OracleAdapterError(f"SELECT の実行に失敗しました: {exc}") from exc
+
+    def _business_session_time_zone(
+        self, connection: Any, *, admin_control_plane: bool
+    ) -> AbstractContextManager[None]:
+        """業務データの SELECT の間だけ、session の時間帯を共通の設定の時間帯にする（#3265）。
+
+        `CURRENT_DATE` / `CURRENT_TIMESTAMP` が設定の時間帯の今を返す（生成した SQL の
+        `SYSDATE` / `SYSTIMESTAMP` は `use_session_current_datetime` で置き換えてある）。抜けると
+        `'+00:00'` に戻すため、pool（system_admin 用・非 system_admin 用・DeepSec の DATA USER）
+        に返した接続とアプリの表の接続は UTC のまま。DB 管理チャット（`admin_control_plane`）は
+        更新系の文と同じ session（UTC）のまま読む（読む文と書く文で「今」をそろえる）。
+        """
+        if admin_control_plane:
+            return nullcontext()
+        return local_session_time_zone(connection, session_time_zone_offset(self.settings))
 
     def _fetch_query_rows(
         self, cursor: Any, max_rows: int | None

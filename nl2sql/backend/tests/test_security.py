@@ -399,6 +399,8 @@ def test_local_debug_me_and_logout_need_no_session_or_csrf(
             "allowed_profile_ids": [],
             "debug_mode": True,
             "password_change_allowed": False,
+            # 画面の日時の表示に使うシステムの時間帯（PLATFORM_TIMEZONE。#3265）。
+            "timezone": "Asia/Tokyo",
         }
         logged_out = logout(request, Response())
         assert logged_out.data == {"logged_out": False}

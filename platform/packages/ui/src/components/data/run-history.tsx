@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+import { displayDateTimeParts } from "../../lib/date-time";
 import { INFORMATION_TABLE_VISIBLE_ROWS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
 import { formatChatProgressDuration } from "../feedback/chat-progress-format";
@@ -33,16 +34,16 @@ function pad2(value: number) {
 }
 
 /**
- * 日時の表記（利用者の端末のタイムゾーン。「2026/10/15 09:12」、`seconds` で「09:12:05」）。
+ * 日時の表記（システムの設定の時間帯。`setDisplayTimeZone`。「2026/10/15 09:12」、`seconds` で「09:12:05」）。
  * 一覧・詳細で相対時刻（「3 分前」）を使わない（時刻を見比べ、監査の記録と照らすため。run-history.md）。
  * 読めない値はそのまま返す。
  */
 export function formatRunDateTime(iso: string | null | undefined, options: { seconds?: boolean } = {}): string {
   if (!iso) return "—";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  const day = `${date.getFullYear()}/${pad2(date.getMonth() + 1)}/${pad2(date.getDate())}`;
-  const time = `${pad2(date.getHours())}:${pad2(date.getMinutes())}${options.seconds ? `:${pad2(date.getSeconds())}` : ""}`;
+  const parts = displayDateTimeParts(iso);
+  if (!parts) return iso;
+  const day = `${parts.year}/${pad2(parts.month)}/${pad2(parts.day)}`;
+  const time = `${pad2(parts.hour)}:${pad2(parts.minute)}${options.seconds ? `:${pad2(parts.second)}` : ""}`;
   return `${day} ${time}`;
 }
 

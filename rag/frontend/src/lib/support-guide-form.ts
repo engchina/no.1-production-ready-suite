@@ -28,6 +28,8 @@ import type {
   SupportGuideTool,
   SupportGuideUnknownHandling,
 } from "./api";
+import { displayFileTimestamp } from "@production-ready/ui";
+
 import { t, type I18nKey } from "./i18n";
 
 export const SUPPORT_GUIDE_TOOLS: readonly SupportGuideTool[] = [
@@ -924,10 +926,9 @@ export function parseSupportGuideImport(text: string): ParsedImport {
   return { guides };
 }
 
-/** 書き出しのファイル名（`support-guides-<プロファイル>-<日付>.json`）。 */
+/** 書き出しのファイル名（`support-guides-<プロファイル>-<日付>.json`。日付はシステムの設定の時間帯）。 */
 export function supportGuideExportFileName(searchAnswerProfileId: string, now: Date): string {
-  const pad = (value: number) => String(value).padStart(2, "0");
-  const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+  const date = displayFileTimestamp(now).slice(0, 8);
   const safeId = searchAnswerProfileId.replace(/[^A-Za-z0-9_-]/g, "_");
   return `support-guides-${safeId}-${date}.json`;
 }

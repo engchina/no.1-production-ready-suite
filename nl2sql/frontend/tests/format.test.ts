@@ -1,12 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatDateTimeWithYear, identifierWrapSegments } from "../src/lib/format.ts";
+import { setDisplayTimeZone } from "@production-ready/ui";
+
+import { formatDateTime, formatDateTimeWithYear, identifierWrapSegments } from "../src/lib/format.ts";
 
 test("formatDateTimeWithYear は年を含む日本語形式で日時を表示する", () => {
   const formatted = formatDateTimeWithYear("2026-07-19T00:00:00Z");
 
   assert.match(formatted, /^2026\/07\/19 \d{2}:\d{2}$/);
+});
+
+test("日時は端末ではなくシステムの設定の時間帯で書く（#3265）", () => {
+  try {
+    assert.equal(formatDateTimeWithYear("2026-07-18T15:30:00Z"), "2026/07/19 00:30");
+    assert.equal(formatDateTime("2026-07-18T15:30:00Z"), "07/19 00:30");
+    setDisplayTimeZone("UTC");
+    assert.equal(formatDateTimeWithYear("2026-07-18T15:30:00Z"), "2026/07/18 15:30");
+  } finally {
+    setDisplayTimeZone(null);
+  }
 });
 
 test("formatDateTimeWithYear は未設定または不正な日時をダッシュで表示する", () => {

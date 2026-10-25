@@ -464,7 +464,7 @@ from .reverse_prompts import (
 )
 from .sample_datasets import SAMPLE_DATA_CONFIRMATION, SAMPLE_DATASETS
 from .select_ai_readiness import SELECT_AI_CREDENTIAL_ENGINES, assert_select_ai_credential_ready
-from .sql_lexing import prepare_oracle_query
+from .sql_lexing import prepare_oracle_query, use_session_current_datetime
 from .sql_semantics import parse_oracle_sql
 from .store import MemoryNl2SqlStore, Nl2SqlStore
 from .structured_outputs import (
@@ -24380,6 +24380,52 @@ class Nl2SqlService:
         )
 
     def _generate_sql(
+        self,
+        engine: Nl2SqlEngine,
+        question: str,
+        profile: Nl2SqlProfile,
+        allowed: AllowedObjects,
+        row_limit: int | None,
+        fallback_messages: list[str],
+        select_ai_overrides: SelectAiRequestOverrides | None = None,
+        ontology_context: Any | None = None,
+        *,
+        use_glossary: bool = False,
+        allow_deterministic_fallback: bool = True,
+        runtime_timeout_seconds: float | None = None,
+        runtime_max_retries: int | None = None,
+        engine_timings: list[dict[str, Any]] | None = None,
+        sql_requirement: SqlRequirementSpec | None = None,
+    ) -> GeneratedSql:
+        """SQL を生成する（3 つの生成方法と deterministic の共通の出口）。
+
+        生成した SQL の今の日時（`SYSDATE` / `SYSTIMESTAMP`）は、session の時間帯（共通の設定の
+        時間帯）の `CURRENT_DATE` / `CURRENT_TIMESTAMP` にそろえる（#3265）。ADB の `SYSDATE` は
+        UTC のため、日本時間の 0〜9 時に「今日」が 1 日ずれる。画面・履歴・実行の SQL は同じ。
+        """
+        generated = self._generate_sql_with_engine(
+            engine,
+            question,
+            profile,
+            allowed,
+            row_limit,
+            fallback_messages,
+            select_ai_overrides,
+            ontology_context,
+            use_glossary=use_glossary,
+            allow_deterministic_fallback=allow_deterministic_fallback,
+            runtime_timeout_seconds=runtime_timeout_seconds,
+            runtime_max_retries=runtime_max_retries,
+            engine_timings=engine_timings,
+            sql_requirement=sql_requirement,
+        )
+        session_sql = use_session_current_datetime(generated.generated_sql)
+        if session_sql != generated.generated_sql:
+            generated.generated_sql = session_sql
+            generated.engine_meta = {**generated.engine_meta, "session_current_datetime": True}
+        return generated
+
+    def _generate_sql_with_engine(
         self,
         engine: Nl2SqlEngine,
         question: str,

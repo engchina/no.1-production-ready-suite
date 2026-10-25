@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Trash2 } from "lucide-react";
 import {
+  displayDateTimeFormat,
   PAGE_SIZE_OPTIONS,
   PagedDataTable,
   RowActionMenu,
@@ -14,7 +15,8 @@ import type { ApiKey } from "./types";
 
 type Translate = ReturnType<typeof apiKeysTranslator>;
 
-const dateTimeFormat = new Intl.DateTimeFormat("ja-JP", {
+// システムの設定の時間帯で書く（#3265）。
+const dateTimeFormat = displayDateTimeFormat({
   year: "numeric",
   month: "2-digit",
   day: "2-digit",

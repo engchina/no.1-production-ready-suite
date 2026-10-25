@@ -366,7 +366,8 @@ describe("parseSupportGuideImport", () => {
 });
 
 it("書き出しのファイル名はプロファイルと日付を含む", () => {
-  expect(supportGuideExportFileName("bv/1", new Date(2026, 9, 7))).toBe(
+  // 日付はシステムの設定の時間帯（既定 Asia/Tokyo）。UTC の 10/06 15:00 は東京の 10/07。
+  expect(supportGuideExportFileName("bv/1", new Date("2026-10-06T15:00:00Z"))).toBe(
     "support-guides-bv_1-20261007.json",
   );
 });

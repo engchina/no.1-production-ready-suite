@@ -16,6 +16,8 @@ import {
   TextareaField,
   SelectField,
   FormGrid,
+  DISPLAY_DATE_TIME_SECONDS,
+  formatDisplayDateTime,
 } from "@production-ready/ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -298,7 +300,7 @@ export function SqlToQuestionPage() {
           { signal, timeoutMs: API_TIMEOUT_MS.longRunningJob }
         );
         if (signal.aborted) return;
-        setRegenerated({ ...data, signature: structureSignature, at: new Date().toLocaleString("ja-JP") });
+        setRegenerated({ ...data, signature: structureSignature, at: formatDisplayDateTime(new Date(), DISPLAY_DATE_TIME_SECONDS) });
       });
     } catch (err) {
       if (!isAbortError(err)) setSqlGenerationError(actionableError(err, t("sqlToQuestion.error.regenerate")));
@@ -321,7 +323,7 @@ export function SqlToQuestionPage() {
           { signal, timeoutMs: API_TIMEOUT_MS.longRunningJob }
         );
         if (signal.aborted) return;
-        setQuestionSql({ ...data, at: new Date().toLocaleString("ja-JP") });
+        setQuestionSql({ ...data, at: formatDisplayDateTime(new Date(), DISPLAY_DATE_TIME_SECONDS) });
       });
     } catch (err) {
       if (!isAbortError(err)) setQuestionSqlError(actionableError(err, t("sqlToQuestion.error.questionSql")));

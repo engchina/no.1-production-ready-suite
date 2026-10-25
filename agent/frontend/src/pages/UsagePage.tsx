@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import {
@@ -18,6 +18,8 @@ import {
   Tabs,
   type DataTableColumn,
   useActionPending,
+  displayTimeZone,
+  formatDisplayCalendarDate,
 } from "@production-ready/ui";
 
 import { listTotal } from "@/components/ListFilters";
@@ -26,7 +28,6 @@ import { ReportSourceNote } from "@/components/ReportSourceNote";
 import { agentApi, REPORT_PERIOD_DAYS, type UsagePeriodDays, type UsageReport, type UsageTotals } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
-import { browserTimezone } from "@/lib/timezones";
 import { useWorkspaceState, type WorkspaceValidator } from "@/lib/workspace-state";
 
 // 利用状況（#772）。業務 Agent の Run が使ったモデルの量を、期間・業務 Agent・利用者・モデル・日ごとに見る。
@@ -45,7 +46,8 @@ const isView: WorkspaceValidator<UsageView> = (value): value is UsageView => VIE
 export function UsagePage() {
   const [days, setDays] = useWorkspaceState("usage", "days", DEFAULT_PERIOD, isPeriod);
   const [view, setView] = useWorkspaceState("usage", "view", "agent" as UsageView, isView);
-  const timezone = useMemo(() => browserTimezone(), []);
+  // 集計の日の区切りはシステムの設定の時間帯（ブラウザの時間帯ではない。#3265）。
+  const timezone = displayTimeZone();
   const report = useQuery({
     queryKey: ["usage", days, timezone],
     queryFn: () => agentApi.getUsageReport(days, timezone),
@@ -352,10 +354,9 @@ function ShareBar({ value, total }: { value: number; total: number }) {
   );
 }
 
-const dayFormat = new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", weekday: "short" });
+const DAY_FORMAT = { year: "numeric", month: "2-digit", day: "2-digit", weekday: "short" } as const;
 
-/** `YYYY-MM-DD`（その日）か ISO の日時を「YYYY/MM/DD(曜)」へ。 */
+/** `YYYY-MM-DD`（その日）か ISO の日時（システムの設定の時間帯）を「YYYY/MM/DD(曜)」へ。 */
 function formatDay(value: string): string {
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : new Date(value);
-  return Number.isNaN(date.getTime()) ? value : dayFormat.format(date);
+  return formatDisplayCalendarDate(value, DAY_FORMAT, value);
 }

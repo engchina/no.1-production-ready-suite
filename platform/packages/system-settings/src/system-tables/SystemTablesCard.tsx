@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { QueryKey } from "@tanstack/react-query";
 import { AlertTriangle, DatabaseZap, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import {
+  displayDateTimeFormat,
   Banner,
   Button,
   Card,
@@ -62,7 +63,8 @@ const STATUS_VARIANTS = {
 } as const satisfies Record<SystemTableSchemaStatus, string>;
 
 const numberFormat = new Intl.NumberFormat("ja-JP");
-const dateTimeFormat = new Intl.DateTimeFormat("ja-JP", {
+// システムの設定の時間帯で書く（#3265）。
+const dateTimeFormat = displayDateTimeFormat({
   month: "2-digit",
   day: "2-digit",
   hour: "2-digit",
