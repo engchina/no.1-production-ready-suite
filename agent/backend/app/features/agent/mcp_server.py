@@ -33,7 +33,11 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pr_backend_core.mcp import McpServer, McpTool, McpToolError, mcp_http_response
-from pr_system_settings.auth.visibility import OTHERS_CONTENT_FORBIDDEN_MESSAGE
+from pr_system_settings.auth.visibility import (
+    OTHERS_CONTENT_FORBIDDEN_CODE,
+    OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+    OTHERS_CONTENT_FORBIDDEN_STATUS,
+)
 from pydantic import BaseModel, Field
 
 from app.features.agent import router as agent_api
@@ -107,8 +111,8 @@ AGENT_OUT_OF_KEY_SCOPE_CODE = "AGENT_OUT_OF_KEY_SCOPE"
 AGENT_NOT_AVAILABLE_CODE = "AGENT_NOT_AVAILABLE"
 RUN_NOT_FOUND_CODE = "RUN_NOT_FOUND"
 THREAD_NOT_FOUND_CODE = "THREAD_NOT_FOUND"
-# system_admin のキーで、他の利用者の会話・Run に続きの質問・確認の答えを足そうとした（#3244）。
-OTHERS_CONTENT_FORBIDDEN_CODE = "OTHERS_CONTENT_FORBIDDEN"
+# system_admin のキーで、他の利用者の会話・Run に続きの質問・確認の答えを足そうとしたときの code は
+# platform の `OTHERS_CONTENT_FORBIDDEN_CODE`（3 製品で同じ。#3244）。
 RUN_LIMIT_CODE = "API_KEY_RUN_LIMIT"
 CONFIRMATION_NOT_FOUND_CODE = "CONFIRMATION_NOT_FOUND"
 CONFIRMATION_CLOSED_CODE = "CONFIRMATION_CLOSED"
@@ -700,7 +704,9 @@ def build_agent_mcp_server(request: Request) -> McpServer:
             request, arguments.thread_id
         ):
             raise McpToolError(
-                OTHERS_CONTENT_FORBIDDEN_CODE, OTHERS_CONTENT_FORBIDDEN_MESSAGE, status=403
+                OTHERS_CONTENT_FORBIDDEN_CODE,
+                OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+                status=OTHERS_CONTENT_FORBIDDEN_STATUS,
             )
         _require_run_budget(request)
         try:
@@ -754,7 +760,9 @@ def build_agent_mcp_server(request: Request) -> McpServer:
         if not agent_api._run_content_addable_by(request, run):
             # 答えるのは会話の持ち主だけ（system_admin のキーでも他の利用者の Run は 403。#3244）。
             raise McpToolError(
-                OTHERS_CONTENT_FORBIDDEN_CODE, OTHERS_CONTENT_FORBIDDEN_MESSAGE, status=403
+                OTHERS_CONTENT_FORBIDDEN_CODE,
+                OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+                status=OTHERS_CONTENT_FORBIDDEN_STATUS,
             )
         _require_run_budget(request)
         try:

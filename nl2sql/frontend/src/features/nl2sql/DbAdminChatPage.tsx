@@ -3,6 +3,7 @@ import { keepPreviousData, useQuery, useQueryClient, type QueryClient } from "@t
 import { Check, ListChecks, Play, RefreshCw, Sparkles } from "lucide-react";
 import {
   ApiErrorBanner,
+  ChatReadOnlyNotice,
   Banner,
   AnswerNotice,
   Button,
@@ -43,13 +44,13 @@ import { CHAT_PROGRESS_LABELS, dbAdminChatTurnTracePath, parseTraceProgressRespo
 import { ProgressLegacyNotice } from "./components/ProgressLegacyNotice";
 import {
   Nl2SqlChatComposer,
-  Nl2SqlReadOnlyComposer,
   Nl2SqlChatHistoryList,
   Nl2SqlChatLayout,
   Nl2SqlChatPage,
   Nl2SqlPendingTurn,
   normalizeHistoryOffset,
   SQL_BLOCK_LABELS,
+  othersConversationIds,
 } from "./components/ChatScaffold";
 import { ChatLastExecutionText, ChatQueryResult, formatLastExecutedAt } from "./components/ChatSqlExecution";
 import { DbAdminExecutionResult } from "./components/DbAdminShared";
@@ -273,6 +274,8 @@ export function DbAdminChatPage() {
     },
     disabled: generating,
     idPrefix: "db-admin-chat-history-title",
+    // 他の利用者の会話（system_admin が見る）の名前は持ち主だけが変えられる。削除は出す（#3244）。
+    canRename: (item) => !othersConversationIds(history.data).has(item.id),
   });
 
   const replaceTurn = useCallback(
@@ -332,8 +335,9 @@ export function DbAdminChatPage() {
         testIdPrefix={TEST_ID}
         composer={
           readOnly ? (
-            // 生成は送った人の画面の要求（同期）なので、見ている人の停止は無い。
-            <Nl2SqlReadOnlyComposer testIdPrefix={TEST_ID} />
+            // 入力欄の代わりの閲覧だけの案内（3 製品共通の ChatReadOnlyNotice。#3244）。生成は送った人の画面の
+            // 要求（同期）なので、見ている人の停止は無い。
+            <ChatReadOnlyNotice testIdPrefix={`${TEST_ID}-read-only`} />
           ) : (
             <Nl2SqlChatComposer
               id={`${TEST_ID}-composer`}

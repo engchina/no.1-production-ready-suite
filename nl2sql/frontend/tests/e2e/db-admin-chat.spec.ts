@@ -698,7 +698,7 @@ test("system_admin が見る他の利用者の会話は、日時に利用者の�
   await page.getByTestId("db-admin-chat-history").getByText("会話 X", { exact: true }).click();
   await expect(page.getByTestId("db-admin-chat-turn")).toHaveCount(1);
   // 続きの質問・実行・名前の変更は持ち主だけ: 入力欄と「実行」を出さず、閲覧だけの案内を出す。
-  const readOnly = page.getByTestId("db-admin-chat-read-only");
+  const readOnly = page.getByTestId("db-admin-chat-read-only-notice");
   await expect(readOnly).toContainText("他の利用者の会話・実行には、続きの質問・実行・回答・評価を追加できません。");
   await expect(readOnly).toBeInViewport();
   await expect(page.getByRole("textbox", { name: "質問", exact: true })).toHaveCount(0);

@@ -412,3 +412,34 @@ def test_requirement_preparation_uses_pending_files_without_binding(
             request, actor_user_uuid="user-2", actor_is_system_admin=False
         )
     assert error.value.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("owner", "expected"),
+    [("user-a", "user-a"), ("user-b", "user-b"), ("", "")],
+    ids=["own", "others", "ownerless"],
+)
+def test_attachment_router_returns_the_conversation_owner(
+    monkeypatch: pytest.MonkeyPatch, owner: str, expected: str
+) -> None:
+    """添付の API に渡す会話の持ち主（#3244）。
+
+    持ち主の分からない会話は操作した人にせず空にする（platform の添付の API が、持ち主でない会話への
+    添付を 403 にし、一覧は閲覧として返す）。見えない会話は 404。
+    """
+    from fastapi import HTTPException
+
+    from app.features.nl2sql import chat_attachments_router
+    from app.features.nl2sql.service import nl2sql_service
+
+    def fake_get_sql_chat(conversation_id: str, **_: object) -> object | None:
+        if conversation_id == "hidden":
+            return None
+        return SimpleNamespace(conversation=SimpleNamespace(actor_user_uuid=owner))
+
+    monkeypatch.setattr(nl2sql_service, "get_sql_chat", fake_get_sql_chat)
+    admin = _Principal("user-a", is_system_admin=True)
+    assert chat_attachments_router._conversation_owner(admin, "c1") == expected
+    with pytest.raises(HTTPException) as hidden:
+        chat_attachments_router._conversation_owner(admin, "hidden")
+    assert hidden.value.status_code == 404

@@ -11,8 +11,10 @@ import { mockLocalAuth, openChatHistory, selectSearchAnswerProfile } from "./_he
  * 確かめる。
  */
 
+// 3 製品共通の ChatReadOnlyNotice の文（backend の OTHERS_CONTENT_FORBIDDEN_MESSAGE と同じ）。
+const READ_ONLY_TITLE = "他の利用者の会話です（閲覧のみ）";
 const READ_ONLY_NOTICE =
-  "他の利用者の会話には、続きの質問・回答・評価を追加できません。閲覧・停止・削除はできます。調べ直すときは自分の会話で質問してください。";
+  "他の利用者の会話・実行には、続きの質問・実行・回答・評価を追加できません。閲覧・停止・削除はできます。調べ直すときは自分の会話で質問してください。";
 
 const searchAnswerProfile = {
   id: "bv-1",
@@ -199,6 +201,12 @@ test.describe("チャットの会話の見え方（#1889・#3244）", { tag: "@r
     await expect(history.getByText(/・アリス$/).first()).toBeVisible();
     await expect(history.getByText(/・（削除済みのユーザー）$/)).toBeVisible();
     await expect(history.getByText(/・ローカル利用者$/)).toHaveCount(0);
+    // 名前の変更は持ち主だけ。他の利用者の会話の行は削除だけを出す（行の操作は sm 以上でホバーの間に出る）。
+    await history.locator('[title="アリスの質問"]').hover();
+    await expect(history.getByRole("button", { name: "「アリスの質問」の名前を変更" })).toHaveCount(0);
+    await expect(history.getByRole("button", { name: "「アリスの質問」を削除" })).toBeVisible();
+    await history.locator('[title="自分の質問"]').hover();
+    await expect(history.getByRole("button", { name: "「自分の質問」の名前を変更" })).toBeVisible();
 
     await history.locator('[title="アリスの質問"]').click();
     // 閲覧はできる。#3244 より前に持ち主以外が送った質問にだけ送った人を添える。
@@ -210,6 +218,7 @@ test.describe("チャットの会話の見え方（#1889・#3244）", { tag: "@r
     // 入力欄の代わりに閲覧だけの案内（停止する回答が無いので停止のボタンも無い）。
     const notice = page.getByTestId("chat-read-only-notice");
     await expect(notice).toBeVisible();
+    await expect(notice).toContainText(READ_ONLY_TITLE);
     await expect(notice).toContainText(READ_ONLY_NOTICE);
     await expect(page.getByRole("textbox", { name: "質問", exact: true })).toHaveCount(0);
     await expect(page.getByTestId("chat-run-stop")).toHaveCount(0);

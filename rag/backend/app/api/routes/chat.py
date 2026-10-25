@@ -72,6 +72,7 @@ from app.rag.observability import elapsed_ms, new_trace_id
 from app.rag.pipeline import ChatTurn, RagPipeline, storage_failure
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import (
+    caller_owns,
     current_audit_request_context,
 )
 from app.rag.run_history import RunRecorder
@@ -168,10 +169,12 @@ def _to_conversation_summary(
 
 
 def _owned_by_caller(conversation: StoredConversation) -> bool:
-    """見ている利用者が作った会話か（持ち主・利用者が分からないときは本人の会話とみなす）。"""
-    caller = current_audit_request_context().user_id_hash
-    owner = conversation.user_id_hash
-    return owner is None or caller is None or owner == caller
+    """見ている利用者が作った会話か（持ち主の分からない会話は誰の会話でもない。`caller_owns`）。
+
+    一般の利用者には持ち主の分からない会話は見えず（一覧・詳細の条件で絞る）、system_admin には
+    閲覧と停止・削除だけの会話として出す（#3244）。
+    """
+    return caller_owns(conversation.user_id_hash)
 
 
 def _ensure_caller_owns(conversation: StoredConversation) -> None:

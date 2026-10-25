@@ -14,7 +14,10 @@ from typing import Any
 import httpx
 import pytest
 from pr_system_settings.auth.service_token import issue_service_token
-from pr_system_settings.auth.visibility import OTHERS_CONTENT_FORBIDDEN_MESSAGE
+from pr_system_settings.auth.visibility import (
+    OTHERS_CONTENT_FORBIDDEN_CODE,
+    OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+)
 
 from app.features.mcp import tools as mcp_tools
 from app.features.nl2sql import ontology_router
@@ -1083,6 +1086,8 @@ def test_requirement_session_is_continued_by_owner_and_closed_by_system_admin(
         assert (is_error, content["status"]) == (True, 404)
         is_error, content = _structured(_run(continued, token=admin_token))
         assert (is_error, content["status"]) == (True, 403)
+        # 3 製品の MCP で同じ code（Agent の agent_chat の thread 指定と同じ）。
+        assert content["error_code"] == OTHERS_CONTENT_FORBIDDEN_CODE
         assert content["message"] == OTHERS_CONTENT_FORBIDDEN_MESSAGE
     is_error, content = _structured(_run(cancel, token=_token(other.user_uuid)))
     assert (is_error, content["status"]) == (True, 404)

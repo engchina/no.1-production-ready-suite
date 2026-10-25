@@ -56,6 +56,9 @@ client = AsgiTestClient(app)
 class OwnedChatOracle(FakeChatOracle):
     """作った利用者を記録し、SQL の会話の条件（system_admin は全員）どおりに絞る fake。"""
 
+    # 持ち主は作った利用者（持ち主の分からない会話もそのまま確かめる）。
+    assign_caller_as_owner = False
+
     def _visible(self, conversation: StoredConversation) -> bool:
         context = current_audit_request_context()
         return (
@@ -258,6 +261,11 @@ def test_system_admin_cannot_continue_another_users_conversation(
         files={"file": ("a.txt", b"x", "text/plain")},
     )
     assert attached.status_code == 403, attached.text
+    # 会話の添付の一覧は閲覧なので見られる。
+    listed = client.get(
+        "/api/chat-attachments", params={"conversation_id": created["id"]}, headers=admin
+    )
+    assert listed.status_code == 200, listed.text
     pending = attachment_service.store.list_pending(
         "rag", CONFIGURED_SYSTEM_ADMIN_USER_UUID, now=datetime.now(UTC)
     )
@@ -286,6 +294,35 @@ def test_system_admin_cannot_continue_another_users_conversation(
     ).status_code == 404
     assert (client.post(f"{path}/messages/{question_id}/cancel", headers=bob)).status_code == 404
     assert (client.get(f"{path}/messages/{question_id}/stream", headers=bob)).status_code == 404
+
+
+def test_ownerless_conversation_is_read_only_even_for_system_admin(
+    auth: ProductionAuth, oracle: OwnedChatOracle, monkeypatch: MonkeyPatch
+) -> None:
+    """持ち主の分からない古い会話（`user_id_hash` が NULL）には誰も足せない（#3244）。
+
+    platform の `can_add_user_content` と同じ規則。system_admin には閲覧と削除だけの会話として出し、
+    続きの質問・名前の変更は 403。一般の利用者には見えない（404）。
+    """
+    _stub_stream(monkeypatch, oracle, ["m1"])
+    alice = _user(auth, "ownerless-alice", "アリス")
+    created = client.post(
+        "/api/chat/conversations", json={"search_answer_profile_id": "bv-1"}, headers=alice
+    ).json()["data"]
+    oracle.conversations[created["id"]].user_id_hash = None
+    path = f"/api/chat/conversations/{created['id']}"
+    assert client.get(path, headers=alice).status_code == 404
+
+    admin = login_configured_admin(client)
+    detail = client.get(path, headers=admin)
+    assert detail.status_code == 200
+    assert detail.json()["data"]["owned"] is False
+    sent = client.post(f"{path}/messages/stream", json={"content": "続き"}, headers=admin)
+    assert sent.status_code == 403, sent.text
+    renamed = client.patch(path, json={"title": "x"}, headers=admin)
+    assert renamed.status_code == 403
+    assert oracle.messages.get(created["id"], []) == []
+    assert client.delete(path, headers=admin).status_code == 200
 
 
 def test_earlier_system_admin_questions_keep_the_sender_name(

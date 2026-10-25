@@ -2,11 +2,10 @@
 // （DbAdminChatPage）が同じ部品・同じ文言で描くために使う。骨格・入力欄・送信中の往復・SQL の
 // 表示・会話の履歴は 3 製品共通の部品（ChatLayout / ChatComposer / ChatPendingTurn / ChatProgress /
 // ChatHistoryList）を通し、ここでは NL2SQL の文言と組み合わせだけを持つ（2 つの画面で書き写さない）。
-import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
-import { RotateCcw, Square } from "lucide-react";
+import type { ReactNode } from "react";
+import { RotateCcw } from "lucide-react";
 import {
   ApiErrorBanner,
-  Banner,
   Button,
   ChatComposer,
   ChatHistoryList,
@@ -109,8 +108,6 @@ export function Nl2SqlChatHistoryList<T extends Nl2SqlConversationItem>({
   testIdPrefix: string;
 }) {
   const items = page?.items ?? [];
-  // 他の利用者の会話（system_admin が見る）の名前は変えられない（持ち主だけ。#3244）。削除は出す。
-  const othersIds = new Set(items.filter((item) => item.owned === false).map((item) => item.id));
   return (
     <ChatHistoryList
       items={items.map((item) => ({
@@ -143,10 +140,8 @@ export function Nl2SqlChatHistoryList<T extends Nl2SqlConversationItem>({
         // 期間で絞った一覧の 0 件は期間を含めた文（3 製品共通。#2340）。
         empty: chatHistoryWindowLabels(page?.history_days)?.empty ?? t("chat.historyEmpty"),
       }}
-      renderActions={(row) =>
-        othersIds.has(row.id) ? withoutRename(actions.renderActions(row)) : actions.renderActions(row)
-      }
-      renderEditor={(row) => (othersIds.has(row.id) ? null : actions.renderEditor(row))}
+      renderActions={actions.renderActions}
+      renderEditor={actions.renderEditor}
       operationKey={`${testIdPrefix}-history-load`}
       testIds={{
         loading: `${testIdPrefix}-history-loading`,
@@ -175,57 +170,11 @@ export function Nl2SqlChatHistoryList<T extends Nl2SqlConversationItem>({
 }
 
 /**
- * 共通の `useChatHistoryActions` の行の操作から「名前の変更」を外し、「削除」（danger のボタン）だけを残す
- * （#3244）。共通の部品に行ごとの名前の変更の可否が入るまでのつなぎ（platform に `canRename` を足す）。
+ * 一覧のページの中の、他の利用者の会話（system_admin が見る）の id。名前の変更は持ち主だけなので、
+ * 共通の `useChatHistoryActions` の `canRename` でこの行の「名前の変更」を出さない（削除は出す。#3244）。
  */
-function withoutRename(actions: ReactNode): ReactNode {
-  if (!isValidElement<{ children?: ReactNode }>(actions)) return actions;
-  return Children.toArray(actions.props.children).filter(
-    (child) => isValidElement(child) && (child as ReactElement<{ tone?: string }>).props.tone === "danger",
-  );
-}
-
-/**
- * system_admin が他の利用者の会話を開いたときの、入力欄の代わりの案内（#3244）。続きの質問・実行・
- * 回答・評価・名前の変更は持ち主だけなので入力欄を出さず、処理中なら停止だけを出す（停止・削除は
- * 運用の操作として残す）。
- */
-export function Nl2SqlReadOnlyComposer({
-  stop,
-  footer,
-  testIdPrefix,
-}: {
-  /** 処理中の停止（処理中でなければ省く）。 */
-  stop?: { onStop: () => void; stopping?: boolean };
-  /** 案内の下に出すもの（停止の失敗など）。 */
-  footer?: ReactNode;
-  testIdPrefix: string;
-}) {
-  return (
-    <div className="space-y-2" data-testid={`${testIdPrefix}-read-only`}>
-      <Banner
-        severity="info"
-        action={
-          stop ? (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              icon={Square}
-              loading={stop.stopping}
-              onClick={stop.onStop}
-              data-testid={`${testIdPrefix}-read-only-stop`}
-            >
-              {t("chat.stop")}
-            </Button>
-          ) : undefined
-        }
-      >
-        {t("chat.readOnly.notice")}
-      </Banner>
-      {footer}
-    </div>
-  );
+export function othersConversationIds(page: { items: Nl2SqlConversationItem[] } | undefined): Set<string> {
+  return new Set((page?.items ?? []).filter((item) => item.owned === false).map((item) => item.id));
 }
 
 /** 会話の履歴の位置（offset）を作業状態の値から読む（不正な値は先頭）。 */

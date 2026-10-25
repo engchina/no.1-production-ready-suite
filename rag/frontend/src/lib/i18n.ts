@@ -3500,10 +3500,6 @@ export const ja = {
   "chat.composer.placeholder": "質問を入力（Enter で送信、Shift+Enter で改行）",
   "chat.composer.send": "送信",
   "chat.composer.stop": "停止",
-  // system_admin が他の利用者の会話を開いたときの、入力欄の代わりの閲覧だけの案内（#3244。backend の
-  // OTHERS_CONTENT_FORBIDDEN_MESSAGE と同じ意味）。
-  "chat.othersConversation.readOnly":
-    "他の利用者の会話には、続きの質問・回答・評価を追加できません。閲覧・停止・削除はできます。調べ直すときは自分の会話で質問してください。",
   "chat.error.send": "メッセージの送信に失敗しました。",
   "chat.error.model": "エラーが発生しました。",
   "chat.error.retry": "もう一度送信",

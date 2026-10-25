@@ -655,7 +655,11 @@ def _attachment_principal(request: Request) -> Principal:
 
 
 def _thread_attachment_owner(principal: Principal, thread_id: str) -> str:
-    """添付する会話（thread）の持ち主。見えない会話は 404（「AI 活用」の見え方。#1889）。"""
+    """添付する会話（thread）の持ち主の UUID。見えない会話は 404（「AI 活用」の見え方。#1889）。
+
+    持ち主の分からない会話は空文字（platform の添付の API が添付を 403 にする。一覧は閲覧なので
+    返す。#3244）。
+    """
     try:
         thread = runtime_repository.get_thread(
             thread_id,
@@ -664,7 +668,7 @@ def _thread_attachment_owner(principal: Principal, thread_id: str) -> str:
         )
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
-    return thread.owner_user_uuid or principal.user_uuid
+    return thread.owner_user_uuid or ""
 
 
 # チャットの添付（会話の期間だけ使う作業ファイル。3 製品共通の実装。#2517）。

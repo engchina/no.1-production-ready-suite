@@ -35,6 +35,7 @@ from app.rag.pipeline import (
 )
 from app.rag.request_context import (
     AuditRequestContext,
+    current_audit_request_context,
     reset_audit_request_context,
     set_audit_request_context,
 )
@@ -154,8 +155,19 @@ class FakeChatOracle:
             )
         )
 
+    # OracleClient は会話を作った利用者の hash を保存する。持ち主を書かずに置いた fixture の会話は、
+    # 呼んだ利用者の会話とみなす（持ち主の分からない会話の規則は test_chat_visibility.py。#3244）。
+    assign_caller_as_owner = True
+
     async def get_conversation(self, conversation_id: str) -> StoredConversation | None:
-        return self.conversations.get(conversation_id)
+        conversation = self.conversations.get(conversation_id)
+        if (
+            conversation is not None
+            and conversation.user_id_hash is None
+            and self.assign_caller_as_owner
+        ):
+            conversation.user_id_hash = current_audit_request_context().user_id_hash
+        return conversation
 
     async def delete_conversation(self, conversation_id: str) -> None:
         if self.conversations.pop(conversation_id, None) is None:

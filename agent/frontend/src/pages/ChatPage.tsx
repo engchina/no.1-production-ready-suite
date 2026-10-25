@@ -17,6 +17,7 @@ import {
   Card,
   CardContent,
   ChatComposer,
+  ChatReadOnlyNotice,
   ChatHistoryList,
   chatHistoryWindowLabels,
   ChatLayout,
@@ -587,6 +588,9 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
       queryClient.removeQueries({ queryKey: ["thread", item.id] });
       void queryClient.invalidateQueries({ queryKey: ["threads"] });
     },
+     // 他の利用者の会話（system_admin が見る）の名前は持ち主だけが変えられる。削除は出す（#3244）。
+    canRename: (item) =>
+      threads.data?.items.find((thread) => thread.thread_id === item.id)?.owned !== false,
   });
 
   // 会話の履歴に出す期間（最後の更新が直近 N 日。3 製品共通の文言。#2340）。
@@ -696,34 +700,17 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
                 業務 Agent の一覧の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
                 会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
             {readOnlyThread ? (
-              // 閲覧だけの会話（#3244）。入力欄の代わりに案内を出し、回答の作成中・承認待ちなら停止だけを置く
-              // （messaging.md §10。info の Banner）。
-              <div className="space-y-2" data-testid="chat-read-only">
-                <Banner
-                  severity="info"
-                  title={t("chat.readOnly.title")}
-                  action={
-                    stoppable ? (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        icon={Square}
-                        loading={cancel.isPending}
-                        onClick={stop}
-                        data-testid="chat-read-only-stop"
-                      >
-                        {t("chat.stop")}
-                      </Button>
-                    ) : undefined
-                  }
-                >
-                  {t("chat.readOnly.message")}
-                </Banner>
-                {cancel.error ? (
-                  <ApiErrorBanner error={cancel.error} fallback={t("chat.stopFailed")} testId="chat-stop-error" />
-                ) : null}
-              </div>
+              // 閲覧だけの会話（#3244）。入力欄の代わりに 3 製品共通の ChatReadOnlyNotice を出し、回答の作成中・
+              // 承認待ちなら停止だけを置く。
+              <ChatReadOnlyNotice
+                onStop={stoppable ? stop : undefined}
+                stopping={cancel.isPending}
+                footer={
+                  cancel.error ? (
+                    <ApiErrorBanner error={cancel.error} fallback={t("chat.stopFailed")} testId="chat-stop-error" />
+                  ) : null
+                }
+              />
             ) : (
               <ChatComposer
                 id="chat-composer"

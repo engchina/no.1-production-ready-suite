@@ -110,7 +110,7 @@ test.describe("「AI 活用」のデータの見え方（#1889）", { tag: "@res
     // 持ち主が送った質問には送った人を添えない。
     await expect(turn.locator("[data-chat-sender]")).toHaveCount(0);
     // 閲覧だけ（#3244）: 入力欄の代わりに案内を出し（色だけに頼らない文）、評価を出さない。
-    const readOnly = page.getByTestId("chat-read-only");
+    const readOnly = page.getByTestId("chat-read-only-notice");
     await expect(readOnly).toContainText("他の利用者の会話です（閲覧のみ）");
     await expect(readOnly).toContainText(READ_ONLY_MESSAGE);
     await expect(page.getByRole("textbox", { name: "質問" })).toHaveCount(0);
@@ -118,9 +118,9 @@ test.describe("「AI 活用」のデータの見え方（#1889）", { tag: "@res
     await expect(page.getByTestId("chat-feedback-run-alice")).toHaveCount(0);
     // 回答の作成中ではないので停止も出さない。送る前の案内（#1954）は出さない。
     await expect(page.getByTestId("chat-read-only-stop")).toHaveCount(0);
-    await expect(page.locator("[data-chat-composer-notice]")).toHaveCount(0);
-    // 削除は運用の操作として出す。
+    // 削除は運用の操作として出し、名前の変更は持ち主だけなので出さない（共通の canRename）。
     await expect(page.getByRole("button", { name: /「アリスの質問」を削除/ })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: /「アリスの質問」の名前を変更/ })).toHaveCount(0);
 
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth
@@ -200,7 +200,7 @@ test.describe("「AI 活用」のデータの見え方（#1889）", { tag: "@res
     mockApi.state.creatorDisplayNames[OTHER_USER] = "アリス";
     seedRun(mockApi, "run-alice-notice", "アリスの会話", OTHER_USER);
     seedRun(mockApi, "run-own-notice", "自分の会話", "local");
-    const readOnly = page.getByTestId("chat-read-only");
+    const readOnly = page.getByTestId("chat-read-only-notice");
     const composer = page.getByRole("textbox", { name: "質問" });
     await page.goto("/chat");
     await expect(composer).toBeVisible();
@@ -250,9 +250,9 @@ test.describe("「AI 活用」のデータの見え方（#1889）", { tag: "@res
     const turn = page.getByTestId("chat-turn-run-admin-wait");
     const waiting = page.getByTestId("chat-waiting-for-executor-run-admin-wait");
     await expect(waiting).toContainText("システム管理者（管理 花子）の承認・回答を待っています");
-    // 承認の操作は出さない（backend も 404。#1928）。持ち主自身の会話なので送る前の案内も出さない。
+    // 承認の操作は出さない（backend も 404。#1928）。持ち主自身の会話なので閲覧だけの案内も出さない。
     await expect(turn.getByRole("button", { name: "承認して実行" })).toHaveCount(0);
-    await expect(page.locator("[data-chat-composer-notice]")).toHaveCount(0);
+    await expect(page.getByTestId("chat-read-only-notice")).toHaveCount(0);
 
     // 自分で質問し直す: 止まった往復を止め、同じ質問を同じ会話で自分の権限の新しい実行として送る。
     await waiting.getByRole("button", { name: "自分で質問し直す" }).click();

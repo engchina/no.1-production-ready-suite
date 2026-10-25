@@ -6,8 +6,11 @@
   と上限。
 - `DELETE /chat-attachments/{attachment_id}` → 外す。
 
-権限は製品の API の manifest が判定する（チャットの権限）。会話の権限（見えるか・持ち主）は製品の
-`conversation_owner(principal, conversation_id)` が判定し、見えなければ 404 の例外を投げる。
+権限は製品の API の manifest が判定する（チャットの権限）。会話の権限（見えるか・持ち主）は
+製品の `conversation_owner(principal, conversation_id)` が判定し、見えなければ 404 の例外を投げ、
+見える会話は持ち主の UUID（分からなければ空文字）を返す。会話の添付の一覧は閲覧なので見える
+会話なら返し、会話への添付は内容を足す操作なので持ち主だけ（`can_add_user_content`。
+system_admin でも他の利用者の会話・持ち主の分からない会話は 403。#3244）。
 """
 
 from __future__ import annotations
@@ -15,10 +18,15 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pr_backend_core.schemas import ApiResponse
 from starlette.concurrency import run_in_threadpool
 
+from ..auth.visibility import (
+    OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+    OTHERS_CONTENT_FORBIDDEN_STATUS,
+    can_add_user_content,
+)
 from .limits import file_too_large
 from .models import ChatAttachmentData, ChatAttachmentListData
 from .service import AttachmentPrincipal, ChatAttachmentService
@@ -58,6 +66,12 @@ def build_chat_attachment_router(
         owner: str | None = None
         if conversation_id:
             owner = await run_in_threadpool(conversation_owner, principal, conversation_id)
+            # 会話への添付は持ち主だけ（見える他の利用者の会話は 403。#3244）。
+            if not can_add_user_content(principal, owner):
+                raise HTTPException(
+                    status_code=OTHERS_CONTENT_FORBIDDEN_STATUS,
+                    detail=OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+                )
         data = await read_limited(file, service.limits().max_bytes)
         attachment = await service.upload(
             _principal(principal),
@@ -73,7 +87,10 @@ def build_chat_attachment_router(
         conversation_id: Annotated[str | None, Query(max_length=128)] = None,
         principal: Any = principal_dependency,
     ) -> ApiResponse[ChatAttachmentListData]:
-        """会話の添付と上限（`conversation_id` が無ければ、自分が添付して送る前のもの）。"""
+        """会話の添付と上限（`conversation_id` が無ければ、自分が添付して送る前のもの）。
+
+        見える会話なら持ち主でなくても返す（閲覧。#3244）。
+        """
         if conversation_id:
             conversation_owner(principal, conversation_id)
         return ApiResponse(

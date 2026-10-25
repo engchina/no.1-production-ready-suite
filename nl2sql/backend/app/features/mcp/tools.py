@@ -50,6 +50,7 @@ from pr_system_settings.auth.service_token import (
     narrow_to_profile_scope,
 )
 from pr_system_settings.auth.visibility import (
+    OTHERS_CONTENT_FORBIDDEN_CODE,
     OTHERS_CONTENT_FORBIDDEN_MESSAGE,
     OTHERS_CONTENT_FORBIDDEN_STATUS,
     can_access_user_data,
@@ -505,6 +506,18 @@ class Nl2SqlJobResult(BaseModel):
     )
 
 
+def _others_content_forbidden() -> McpToolError:
+    """system_admin が他の利用者の確認・会話に内容を足そうとしたときのツールのエラー。
+
+    code は 3 製品の MCP で同じ（#3244）。
+    """
+    return McpToolError(
+        OTHERS_CONTENT_FORBIDDEN_CODE,
+        OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+        status=OTHERS_CONTENT_FORBIDDEN_STATUS,
+    )
+
+
 def _translate_domain_errors[A, R](
     handler: Callable[[A], Awaitable[R]],
 ) -> Callable[[A], Awaitable[R]]:
@@ -520,10 +533,9 @@ def _translate_domain_errors[A, R](
         except SchemaCatalogEmptyError as exc:
             raise McpToolError(SCHEMA_CATALOG_EMPTY_ERROR_CODE, str(exc)) from exc
         except OthersContentForbiddenError as exc:
-            # 他の利用者の会話・実行に内容を足す system_admin（画面の 403 と同じ。#3244）。
-            raise HTTPException(
-                status_code=OTHERS_CONTENT_FORBIDDEN_STATUS, detail=OTHERS_CONTENT_FORBIDDEN_MESSAGE
-            ) from exc
+            # 他の利用者の会話・実行に内容を足す system_admin（画面の 403 と同じ。code は 3 製品の
+            # MCP で同じ。#3244）。
+            raise _others_content_forbidden() from exc
         except SelectAiCredentialMissingError as exc:
             # Select AI / Select AI Agent の生成は Credential が前提（画面の 409 と同じ。#1688）。
             raise McpToolError(exc.code, select_ai_credential_missing_message(exc)) from exc
@@ -761,9 +773,7 @@ def build_mcp_server(request: Request) -> McpServer:
             and principal is not None
             and not can_add_user_content(principal, data.session.actor_user_uuid.strip())
         ):
-            raise HTTPException(
-                status_code=OTHERS_CONTENT_FORBIDDEN_STATUS, detail=OTHERS_CONTENT_FORBIDDEN_MESSAGE
-            )
+            raise _others_content_forbidden()
         scoped = scope()
         if scoped is not None and data.session.profile_id not in scoped:
             raise _profile_scope_forbidden(data.session.profile_id)

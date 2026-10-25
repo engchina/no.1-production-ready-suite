@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import {
   ApiErrorBanner,
+  ChatReadOnlyNotice,
   Banner,
   Button,
   Card,
@@ -74,9 +75,9 @@ import {
   Nl2SqlChatLayout,
   Nl2SqlChatPage,
   Nl2SqlPendingTurn,
-  Nl2SqlReadOnlyComposer,
   normalizeHistoryOffset,
   SQL_BLOCK_LABELS,
+  othersConversationIds,
 } from "./components/ChatScaffold";
 import {
   ChatRequirementTurn,
@@ -621,6 +622,8 @@ export function SqlChatPage() {
       void queryClient.invalidateQueries({ queryKey: chatKey });
     },
     disabled: busy,
+    // 他の利用者の会話（system_admin が見る）の名前は持ち主だけが変えられる。削除は出す（#3244）。
+    canRename: (item) => !othersConversationIds(history.data).has(item.id),
   });
   // 一覧の行・読み込み中・失敗・0 件・ページングは DB 管理チャットと共通の Nl2SqlChatHistoryList
   // （3 製品共通の ChatHistoryList。#1161・#2319）。
@@ -767,17 +770,16 @@ export function SqlChatPage() {
           testIdPrefix="sql-chat"
           composer={
             readOnly ? (
-              <Nl2SqlReadOnlyComposer
-                stop={
+              // 入力欄の代わりの閲覧だけの案内（3 製品共通の ChatReadOnlyNotice。#3244）。停止は生成中だけ出す。
+              <ChatReadOnlyNotice
+                onStop={
                   generating
-                    ? {
-                        onStop: () => {
-                          if (!stop.isPending && !conversation.isError) stop.mutate();
-                        },
-                        stopping: stop.isPending,
+                    ? () => {
+                        if (!stop.isPending && !conversation.isError) stop.mutate();
                       }
                     : undefined
                 }
+                stopping={stop.isPending}
                 footer={
                   stop.isError ? (
                     <ApiErrorBanner
@@ -787,7 +789,7 @@ export function SqlChatPage() {
                     />
                   ) : null
                 }
-                testIdPrefix="sql-chat"
+                testIdPrefix="sql-chat-read-only"
               />
             ) : (
               <>

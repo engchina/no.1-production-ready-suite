@@ -316,32 +316,22 @@ def attach_to_conversation(
 
 
 def conversation_owner_for_attachments(principal: Any, conversation_id: str) -> str:
-    """添付の API の会話の持ち主（見えない会話は 404。threadpool から呼ぶ）。
+    """添付の API の会話の持ち主の UUID（見えない会話は 404。threadpool から呼ぶ）。
 
-    会話への添付は内容を足す操作なので持ち主だけ（system_admin でも他の利用者の会話は 403。
-    #3244）。質問に添付した物は会話の詳細で見られる。
+    会話は利用者を hash でしか持たないので、持ち主の UUID は呼んだ利用者の会話のときだけ分かる。
+    他の利用者の会話・持ち主の分からない会話は空文字を返し、platform の添付の API が添付（内容を
+    足す操作）を 403 にする（system_admin でも。#3244）。添付の一覧は閲覧なので見える会話なら返す。
     """
     from anyio import from_thread
     from fastapi import HTTPException
-    from pr_system_settings.auth.visibility import (
-        OTHERS_CONTENT_FORBIDDEN_MESSAGE,
-        OTHERS_CONTENT_FORBIDDEN_STATUS,
-    )
 
     from app.clients.oracle import OracleClient
-    from app.rag.request_context import current_audit_request_context
+    from app.rag.request_context import caller_owns
 
     conversation = from_thread.run(OracleClient().get_conversation, conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="会話が見つかりません。")
-    caller = current_audit_request_context().user_id_hash
-    owner = conversation.user_id_hash
-    # 持ち主・利用者の分からない古い行は本人の会話とみなす（チャットの `owned` と同じ判定）。
-    if owner is not None and caller is not None and owner != caller:
-        raise HTTPException(
-            status_code=OTHERS_CONTENT_FORBIDDEN_STATUS, detail=OTHERS_CONTENT_FORBIDDEN_MESSAGE
-        )
-    return str(principal.user_uuid)
+    return str(principal.user_uuid) if caller_owns(conversation.user_id_hash) else ""
 
 
 def delete_conversation_attachments(conversation_id: str) -> None:

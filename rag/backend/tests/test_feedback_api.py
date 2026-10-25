@@ -285,6 +285,8 @@ def test_submit_feedback_resolves_chat_content_server_side(
     fake = FakeFeedbackClient()
     fake.message_context = {
         "message_id": "message-1",
+        # 評価するのは会話の持ち主（呼んだ利用者。#3244）。
+        "conversation_user_id_hash": user_id_hash_for(TEST_USER_ID),
         "question_text": "質問",
         "answer_text": "回答",
         "citations": [],
@@ -352,6 +354,13 @@ def test_only_the_conversation_owner_rates_chat_answers(
     # 会話に無い trace（RAG 検索など）は持ち主で絞らない。
     fake.chat_answer_owner = None
     assert client.post("/api/feedback", json=body).status_code == 200
+    assert len(fake.saved) == 3
+    # 持ち主の分からない古い会話の回答には誰も評価を足せない（メッセージ ID あり・なし）。
+    fake.chat_answer_owner = ""
+    assert client.post("/api/feedback", json=body).status_code == 403
+    fake.message_context = {**context, "conversation_user_id_hash": None}
+    ownerless = client.post("/api/feedback", json={**body, "message_id": "message-1"})
+    assert ownerless.status_code == 403
     assert len(fake.saved) == 3
 
 

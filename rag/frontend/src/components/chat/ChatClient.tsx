@@ -1,6 +1,7 @@
 import {
   AnswerFooter,
   ChatComposer,
+  ChatReadOnlyNotice,
   ChatAnswer,
   ChatHistoryList,
   chatHistoryWindowLabels,
@@ -699,6 +700,10 @@ export function ChatClient() {
     offset: conversationOffset,
   });
   const conversations = conversationsQuery.data?.items ?? [];
+  // 他の利用者の会話（system_admin が見る）。名前の変更は持ち主だけ（#3244）。
+  const othersConversationIds = new Set(
+    conversations.filter((conversation) => conversation.owned === false).map((conversation) => conversation.id)
+  );
   // 会話が減って今のページが空になったら、ChatHistoryList の共通の OffsetPagination が最後のページへ戻す（#1265 / #1266）。
   const conversationsData = conversationsQuery.data;
 
@@ -753,6 +758,8 @@ export function ChatClient() {
     },
     errorMessage: (error, fallback) =>
       error instanceof ApiError ? error.messages.join(" / ") : fallback,
+    // 他の利用者の会話（system_admin が見る）の名前は持ち主だけが変えられる。削除は出す（#3244）。
+    canRename: (item) => !othersConversationIds.has(item.id),
   });
   const { cancelRename } = historyActions;
   const compareModelsQuery = useCompareModels();
@@ -1621,33 +1628,18 @@ export function ChatClient() {
             testIds={{ log: "chat-messages" }}
             composer={
               readOnly ? (
-                // 入力欄の代わりの閲覧だけの案内（読み取り専用は無効の入力欄にしない）。停止は作成中の回答があるときだけ出す。
-                <div className="space-y-2" data-testid="chat-read-only-notice">
-                  <Banner
-                    severity="info"
-                    action={
-                      answerInProgress ? (
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          icon={Square}
-                          onClick={stop}
-                          data-testid="chat-read-only-stop"
-                        >
-                          {t("chat.composer.stop")}
-                        </Button>
-                      ) : undefined
-                    }
-                  >
-                    {t("chat.othersConversation.readOnly")}
-                  </Banner>
-                  {errorText ? (
-                    <p className="text-sm text-danger-fg" role="alert">
-                      {errorText}
-                    </p>
-                  ) : null}
-                </div>
+                // 入力欄の代わりの閲覧だけの案内（3 製品共通の ChatReadOnlyNotice。#3244）。停止は作成中の回答が
+                // あるときだけ出す。
+                <ChatReadOnlyNotice
+                  onStop={answerInProgress ? stop : undefined}
+                  footer={
+                    errorText ? (
+                      <p className="text-sm text-danger-fg" role="alert">
+                        {errorText}
+                      </p>
+                    ) : null
+                  }
+                />
               ) : (
               <>
                 {/* 入力欄の領域（設定の行・入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。

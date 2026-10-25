@@ -5796,6 +5796,8 @@ class OracleClient:
     async def get_chat_answer_owner_hash(self, trace_id: str) -> str | None:
         """trace の回答があるチャットの会話の持ち主（`user_id_hash`）。見える会話に無ければ None。
 
+        持ち主の分からない古い会話（`user_id_hash` が NULL）は空文字。
+
         メッセージ ID の無いチャットの評価も、持ち主だけに送らせるために使う（#3244）。
         """
         row = await self._fetch_one(
@@ -5814,8 +5816,11 @@ class OracleClient:
             ),
             _with_conversation_access_bind({"trace_id": trace_id}),
         )
-        owner = row.get("user_id_hash") if row is not None else None
-        return owner if isinstance(owner, str) and owner else None
+        if row is None:
+            return None
+        # 持ち主の分からない古い会話は空（誰も評価を足せない。会話に無い trace の None と分ける）。
+        owner = row.get("user_id_hash")
+        return owner if isinstance(owner, str) and owner else ""
 
     async def list_feedback_dashboard_rows(
         self,

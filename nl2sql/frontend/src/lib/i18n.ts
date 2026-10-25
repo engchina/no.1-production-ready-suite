@@ -80,10 +80,6 @@ const nl2sqlJa = {
   // system_admin の会話の履歴の利用者（#1889）。
   "chat.historyOwner": "{date}・{name}",
   "chat.historyOwnerMissing": "（削除済みのユーザー）",
-  // system_admin が他の利用者の会話を開いたときの、入力欄の代わりの案内（#3244。backend の
-  // OTHERS_CONTENT_FORBIDDEN_MESSAGE と同じ文）。停止・削除はできる。
-  "chat.readOnly.notice":
-    "他の利用者の会話・実行には、続きの質問・実行・回答・評価を追加できません。閲覧・停止・削除はできます。調べ直すときは自分の会話で質問してください。",
   // 会話の持ち主以外（#3244 より前の system_admin）が送った質問の送り手（#1928）。
   "chat.sentBy": "{name} が送信",
   "chat.noProfiles": "利用できる業務プロファイルがありません",

@@ -11,6 +11,8 @@ import { withJobProgress } from "./_helpers/job-progress";
  * 一般の利用者の履歴は本人の会話だけで、利用者を出さない（絞り込みは backend。ここでは画面の出し方を確かめる）。
  */
 
+// 3 製品共通の ChatReadOnlyNotice の文（backend の OTHERS_CONTENT_FORBIDDEN_MESSAGE と同じ）。
+const READ_ONLY_TITLE = "他の利用者の会話です（閲覧のみ）";
 const READ_ONLY_NOTICE =
   "他の利用者の会話・実行には、続きの質問・実行・回答・評価を追加できません。閲覧・停止・削除はできます。調べ直すときは自分の会話で質問してください。";
 
@@ -179,7 +181,7 @@ test.describe("会話のデータの見え方（#1889・#3244）", { tag: "@resp
     await expect(history.getByText(/・アリス$/)).toBeVisible();
     await expect(history.getByText(/・（削除済みのユーザー）$/)).toBeVisible();
     // 新しい会話では閲覧だけの案内を出さない。
-    await expect(page.getByTestId("sql-chat-read-only")).toHaveCount(0);
+    await expect(page.getByTestId("sql-chat-read-only-notice")).toHaveCount(0);
 
     await history.locator('[title="アリスの売上"]').click();
     const turns = page.getByTestId("sql-chat-turn");
@@ -191,14 +193,14 @@ test.describe("会話のデータの見え方（#1889・#3244）", { tag: "@resp
       "（削除済みのユーザー） が送信",
     );
     // 続きの質問・実行は持ち主だけ: 入力欄・送信・「実行」を出さず、入力欄の代わりに閲覧だけの案内を出す。
-    const readOnly = page.getByTestId("sql-chat-read-only");
-    await expect(readOnly).toHaveText(READ_ONLY_NOTICE);
+    const readOnly = page.getByTestId("sql-chat-read-only-notice");
+    await expect(readOnly).toContainText(READ_ONLY_TITLE);
+    await expect(readOnly).toContainText(READ_ONLY_NOTICE);
     await expect(readOnly).toBeInViewport();
     await expect(page.getByRole("textbox", { name: "質問", exact: true })).toHaveCount(0);
     await expect(page.getByTestId("sql-chat-send")).toHaveCount(0);
     await expect(page.getByTestId("sql-chat-execute")).toHaveCount(0);
     await expect(page.getByTestId("sql-chat-read-only-stop")).toHaveCount(0);
-    await expect(page.locator("[data-chat-composer-notice]")).toHaveCount(0);
     // SQL は見られる。
     await expect(turns.nth(0).getByText(SQL)).toBeVisible();
 
@@ -213,7 +215,7 @@ test.describe("会話のデータの見え方（#1889・#3244）", { tag: "@resp
     // 開いていた会話を消したら、新しい会話（入力欄あり）に戻る。
     if ((page.viewportSize()?.width ?? 0) < 1024) await page.keyboard.press("Escape");
     await expect(page.getByRole("textbox", { name: "質問", exact: true })).toBeEditable();
-    await expect(page.getByTestId("sql-chat-read-only")).toHaveCount(0);
+    await expect(page.getByTestId("sql-chat-read-only-notice")).toHaveCount(0);
     expect(jobRequests).toEqual([]);
 
     const overflow = await page.evaluate(
@@ -240,7 +242,7 @@ test.describe("会話のデータの見え方（#1889・#3244）", { tag: "@resp
     const history = await openHistory(page);
     await history.locator('[title="アリスの売上"]').click();
     await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
-    await expect(page.getByTestId("sql-chat-read-only")).toContainText(READ_ONLY_NOTICE);
+    await expect(page.getByTestId("sql-chat-read-only-notice")).toContainText(READ_ONLY_NOTICE);
     await expect(page.getByRole("textbox", { name: "質問", exact: true })).toHaveCount(0);
     const stop = page.getByTestId("sql-chat-read-only-stop");
     await expect(stop).toHaveText("停止");
@@ -269,7 +271,7 @@ test.describe("会話のデータの見え方（#1889・#3244）", { tag: "@resp
     await history.locator('[title="管理者の売上"]').click();
     const turns = page.getByTestId("sql-chat-turn");
     await expect(turns).toHaveCount(1);
-    await expect(page.getByTestId("sql-chat-read-only")).toHaveCount(0);
+    await expect(page.getByTestId("sql-chat-read-only-notice")).toHaveCount(0);
     await expect(page.getByTestId("sql-chat-execute")).toBeVisible();
     const toggle = page.getByTestId("sql-chat-history-toggle");
     if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
@@ -323,7 +325,7 @@ test.describe("会話のデータの見え方（#1889・#3244）", { tag: "@resp
     await history.locator('[title="自分の売上"]').click();
     await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
     await expect(page.locator("[data-chat-sender]")).toHaveCount(0);
-    await expect(page.getByTestId("sql-chat-read-only")).toHaveCount(0);
+    await expect(page.getByTestId("sql-chat-read-only-notice")).toHaveCount(0);
     await expect(page.getByRole("textbox", { name: "質問", exact: true })).toBeEditable();
   });
 });

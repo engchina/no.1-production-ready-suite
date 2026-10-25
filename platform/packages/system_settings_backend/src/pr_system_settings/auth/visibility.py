@@ -13,7 +13,8 @@
   運用の操作（停止・取り消し・削除、Agent の承認待ちの判断と再開。続きは Run を実行した人の
   権限で動く）だけ（#3244。#1928 を置き換え）。新しい実行・内容を足す操作（続きの質問・SQL の
   実行・再実行・確認や明確化への回答・評価・会話の名前の変更）は持ち主だけで、system_admin でも
-  403（`OTHERS_CONTENT_FORBIDDEN_STATUS`）。system_admin の権限・対象範囲で作った内容が持ち主の
+  403（`OTHERS_CONTENT_FORBIDDEN_STATUS`。MCP のツールのエラーの code は
+  `OTHERS_CONTENT_FORBIDDEN_CODE`）。system_admin の権限・対象範囲で作った内容が持ち主の
   会話に入り、持ち主が権限の外の資料・SQL・ツールの出力を見るのを防ぐ。調べ直すときは
   system_admin が自分の会話で再現する。運用の操作は操作した人（actor）を残し、持ち主は変えない。
 - 実行（RAG・NL2SQL の実行履歴の行、Agent の Run）は、実行した人（executor）と会話の持ち主の
@@ -39,6 +40,8 @@ OTHERS_CONTENT_FORBIDDEN_MESSAGE = (
     "他の利用者の会話・実行には、続きの質問・実行・回答・評価を追加できません。"
     "閲覧・停止・削除はできます。調べ直すときは自分の会話で質問してください。"
 )
+# 外部の MCP（API キー・サービストークン）のツールのエラーの code（3 製品で同じ。#3244）。
+OTHERS_CONTENT_FORBIDDEN_CODE = "OTHERS_CONTENT_FORBIDDEN"
 
 # 実行履歴の「実行者」の絞り込み（#1954）: すべて / 自分が実行 / 他の人が実行。既定は all。
 RunExecutorFilter = Literal["all", "mine", "others"]
@@ -69,7 +72,9 @@ def owner_filter_user_uuid(principal: _UserPrincipal) -> str | None:
 def can_access_user_data(principal: _UserPrincipal | None, owner_user_uuid: str | None) -> bool:
     """`owner_user_uuid` の持ち主のデータの詳細を見て操作してよいか。
 
-    system_admin は他の利用者のデータにもすべての操作ができる（#1928）。
+    system_admin は他の利用者のデータも見て、運用の操作（停止・取り消し・削除・承認の判断）が
+    できる。新しい実行・内容を足す操作は、さらに `can_add_user_content` で持ち主だけに絞る
+    （#3244）。
 
     持ち主の分からないデータ（記録の無い古い行など）は system_admin だけが扱える。
     """
