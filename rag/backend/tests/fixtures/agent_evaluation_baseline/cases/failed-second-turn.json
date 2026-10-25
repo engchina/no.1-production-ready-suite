@@ -1,0 +1,182 @@
+{
+  "id": "failed-second-turn",
+  "description": "1 往復目は完了し、2 往復目の Run が failed。ケース全体を失敗（error_stage=turn_1）にし、時間は両方の往復の和。",
+  "covers": [
+    "multi_turn",
+    "status:failed",
+    "error_stage",
+    "case_error"
+  ],
+  "case": {
+    "id": "failed-second-turn",
+    "category": "clarification_required",
+    "split": "dev",
+    "reasoning_type": "bridge",
+    "hops": 2,
+    "query": "合成の質問 11: 設定 S の手順は？",
+    "relevant_document_ids": [
+      "doc-c"
+    ],
+    "expected_outcomes": [
+      "needs_clarification"
+    ],
+    "turns": [
+      {
+        "reply": "区分 Q です。",
+        "conditions": {
+          "scope": "Q"
+        },
+        "expected_outcomes": [
+          "answered"
+        ]
+      }
+    ]
+  },
+  "turns": [
+    {
+      "observation": "completed",
+      "elapsed_ms": 1000.0,
+      "run": {
+        "id": "run-failed-second-turn-0",
+        "status": "completed",
+        "thread_id": "thread-failed-second-turn",
+        "steps": [],
+        "artifacts": [
+          {
+            "kind": "answer",
+            "content": {
+              "text": "対象の区分はどれですか？",
+              "outcome": {
+                "schema_version": 1,
+                "value": "needs_clarification",
+                "basis": "clarification_question",
+                "rag_outcome": null,
+                "signals": []
+              }
+            }
+          },
+          {
+            "kind": "answer_validation",
+            "content": {
+              "status": "completed"
+            }
+          }
+        ],
+        "usage": {
+          "requests": 2
+        }
+      }
+    },
+    {
+      "observation": "failed",
+      "elapsed_ms": 500.0,
+      "run": {
+        "id": "run-failed-second-turn-1",
+        "status": "failed",
+        "thread_id": "thread-failed-second-turn",
+        "steps": [],
+        "artifacts": [
+          {
+            "kind": "answer",
+            "content": {
+              "text": ""
+            }
+          },
+          {
+            "kind": "answer_validation",
+            "content": {
+              "status": "completed"
+            }
+          }
+        ],
+        "usage": {
+          "requests": 2
+        }
+      }
+    }
+  ],
+  "expected": {
+    "scores": {
+      "status": "error",
+      "category": "clarification_required",
+      "split": "dev",
+      "reasoning_type": "bridge",
+      "hops": 2,
+      "retrieved_document_ids": [],
+      "relevant_document_ids": [
+        "doc-c"
+      ],
+      "hit_document_ids": [],
+      "required_evidence_recall": null,
+      "mrr": null,
+      "answer_correctness": null,
+      "requirement_coverage": null,
+      "claim_support_rate": null,
+      "response_decision_accuracy": null,
+      "expected_decisions": [
+        "answer",
+        "clarify"
+      ],
+      "observed_outcome": null,
+      "outcome_source": null,
+      "missing_evidence": [],
+      "turn_results": [],
+      "answer_evaluation": null,
+      "guardrail_warnings": [],
+      "failure_reasons": [
+        "case_error"
+      ],
+      "elapsed_ms": 1500.0,
+      "error_type": "AgentRunFailed",
+      "error_stage": "turn_1"
+    },
+    "cli": {
+      "trace_id": "run-failed-second-turn-1",
+      "turn_trace_ids": [],
+      "diagnostics_answer": null,
+      "error_message": "Agent の Run が failed で終わりました。 run_id で Agent の実行履歴を確認してください。",
+      "runs": [
+        {
+          "case_id": "failed-second-turn",
+          "turn": 0,
+          "run_id": "run-failed-second-turn-0",
+          "thread_id": "thread-failed-second-turn",
+          "status": "completed",
+          "elapsed_ms": 1000.0,
+          "outcome": "needs_clarification",
+          "outcome_source": "agent_answer",
+          "validation_status": "completed",
+          "model_requests": 2,
+          "tool_calls": {},
+          "superseded_searches": 0
+        },
+        {
+          "case_id": "failed-second-turn",
+          "turn": 1,
+          "run_id": "run-failed-second-turn-1",
+          "thread_id": "thread-failed-second-turn",
+          "status": "failed",
+          "elapsed_ms": 500.0,
+          "outcome": null,
+          "outcome_source": null,
+          "validation_status": null,
+          "model_requests": null,
+          "tool_calls": {},
+          "superseded_searches": 0
+        }
+      ],
+      "run_requests": [
+        {
+          "agent_id": "agent-baseline",
+          "goal": "合成の質問 11: 設定 S の手順は？"
+        },
+        {
+          "agent_id": "agent-baseline",
+          "goal": "区分 Q です。",
+          "thread_id": "thread-failed-second-turn"
+        }
+      ],
+      "cancelled_run_ids": []
+    }
+  }
+}

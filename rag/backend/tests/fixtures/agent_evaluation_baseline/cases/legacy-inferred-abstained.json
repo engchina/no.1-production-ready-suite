@@ -1,0 +1,117 @@
+{
+  "id": "legacy-inferred-abstained",
+  "description": "成果物の outcome もツールの呼び出しも無い旧形式。引用の無い回答は RAG の評価と同じく拒答（insufficient_evidence）と推定する。正解の文書の無いケースは検索の指標の対象外。",
+  "covers": [
+    "legacy:no_answer_outcome",
+    "outcome:inferred_abstained",
+    "not_evaluable:mrr",
+    "not_evaluable:required_evidence_recall"
+  ],
+  "case": {
+    "id": "legacy-inferred-abstained",
+    "category": "knowledge_missing",
+    "split": "holdout",
+    "query": "合成の質問 5: 資料に無い項目 U の値は？",
+    "expected_outcomes": [
+      "insufficient_evidence"
+    ]
+  },
+  "turns": [
+    {
+      "observation": "completed",
+      "elapsed_ms": 500.0,
+      "run": {
+        "id": "run-legacy-inferred-abstained-0",
+        "status": "completed",
+        "thread_id": "thread-legacy-inferred-abstained",
+        "steps": [],
+        "artifacts": [
+          {
+            "kind": "answer",
+            "content": {
+              "text": "資料からは答えられません。"
+            }
+          },
+          {
+            "kind": "answer_validation",
+            "content": {
+              "status": "completed"
+            }
+          }
+        ],
+        "usage": {
+          "requests": 1
+        }
+      }
+    }
+  ],
+  "expected": {
+    "scores": {
+      "status": "success",
+      "category": "knowledge_missing",
+      "split": "holdout",
+      "reasoning_type": null,
+      "hops": null,
+      "retrieved_document_ids": [],
+      "relevant_document_ids": [],
+      "hit_document_ids": [],
+      "required_evidence_recall": null,
+      "mrr": null,
+      "answer_correctness": null,
+      "requirement_coverage": null,
+      "claim_support_rate": null,
+      "response_decision_accuracy": 1.0,
+      "expected_decisions": [
+        "hold"
+      ],
+      "observed_outcome": "insufficient_evidence",
+      "outcome_source": "inferred",
+      "missing_evidence": [],
+      "turn_results": [],
+      "answer_evaluation": null,
+      "guardrail_warnings": [],
+      "failure_reasons": [],
+      "elapsed_ms": 500.0,
+      "error_type": null,
+      "error_stage": null
+    },
+    "cli": {
+      "trace_id": "run-legacy-inferred-abstained-0",
+      "turn_trace_ids": [],
+      "diagnostics_answer": {
+        "agent": {
+          "run_id": "run-legacy-inferred-abstained-0",
+          "status": "completed",
+          "validation_status": "completed",
+          "outcome_source": "inferred",
+          "tool_calls": {},
+          "model_requests": 1
+        }
+      },
+      "error_message": null,
+      "runs": [
+        {
+          "case_id": "legacy-inferred-abstained",
+          "turn": 0,
+          "run_id": "run-legacy-inferred-abstained-0",
+          "thread_id": "thread-legacy-inferred-abstained",
+          "status": "completed",
+          "elapsed_ms": 500.0,
+          "outcome": null,
+          "outcome_source": "inferred",
+          "validation_status": "completed",
+          "model_requests": 1,
+          "tool_calls": {},
+          "superseded_searches": 0
+        }
+      ],
+      "run_requests": [
+        {
+          "agent_id": "agent-baseline",
+          "goal": "合成の質問 5: 資料に無い項目 U の値は？"
+        }
+      ],
+      "cancelled_run_ids": []
+    }
+  }
+}
