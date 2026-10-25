@@ -2,6 +2,89 @@
   "server": "production-ready-nl2sql",
   "tools": [
     {
+      "name": "nl2sql_cancel_job",
+      "title": "照会のジョブの取り消し",
+      "description": "nl2sql_query の job_id のジョブ（pending / running）を止めます（本人のジョブだけ。利用者が system_admin なら全員のジョブ）。利用者が止めると言ったとき、結果を待たないと決めたときに使います。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "description": "nl2sql_query の job_id",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "CancelJobInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "outputSchema": {
+        "$defs": {
+          "QueryStatus": {
+            "description": "`nl2sql_query` / `nl2sql_get_job` の状態（ジョブの状態か、生成前の確認で止めた状態）。",
+            "enum": [
+              "pending",
+              "running",
+              "done",
+              "error",
+              "needs_clarification",
+              "unanswerable"
+            ],
+            "title": "QueryStatus",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "schema_version": {
+            "default": 2,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/QueryStatus",
+            "description": "取消の後のジョブの状態。"
+          },
+          "result": {
+            "description": "cancelled=取消を受け付けた（止まると status が error・error_code が JOB_CANCELLED）/ already_cancelled=すでに取り消されていた / already_finished=終わっていたため変えていない（status が done / error）。",
+            "enum": [
+              "cancelled",
+              "already_cancelled",
+              "already_finished"
+            ],
+            "title": "Result",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "status",
+          "result",
+          "message"
+        ],
+        "title": "CancelJobOutput",
+        "type": "object"
+      }
+    },
+    {
       "name": "nl2sql_cancel_requirement",
       "title": "照会の確認の取り消し",
       "description": "nl2sql_query の SQL の生成前の確認（needs_clarification）を取り消して閉じます（本人の確認だけ。利用者が system_admin なら全員の確認）。利用者がデータベースの検索は不要と伝えたときに使います。",
@@ -28,7 +111,7 @@
       "outputSchema": {
         "properties": {
           "schema_version": {
-            "default": 1,
+            "default": 2,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -302,7 +385,7 @@
         "description": "契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。",
         "properties": {
           "schema_version": {
-            "default": 1,
+            "default": 2,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -598,7 +681,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 1,
+            "default": 2,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -961,7 +1044,7 @@
         "description": "契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。",
         "properties": {
           "schema_version": {
-            "default": 1,
+            "default": 2,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1277,7 +1360,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 1,
+            "default": 2,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

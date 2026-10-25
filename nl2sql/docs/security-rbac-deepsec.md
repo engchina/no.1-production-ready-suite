@@ -181,8 +181,9 @@ system_admin が他の利用者のデータにできるのは閲覧と運用の�
 - 規則の外: フィードバック管理（`GET /nl2sql/feedback`・`/feedback/admin-review`・`DELETE /feedback/{id}`）・品質評価・
   利用状況などの「改善・運用」は、それぞれの権限のまま。`POST /nl2sql/similar-history`（管理者が良いと評価した
   過去の SQL の候補）は、管理者が確かめた共有の知識なので、業務プロファイルの範囲で全員の物を返す。
-- MCP（`nl2sql_get_job`・`nl2sql_cancel_requirement`）も同じ規則: 本人のジョブ・session だけ、キー（またはサービストークン）の
-  利用者が system_admin なら全員のジョブ・session を見て、確認を取り消せる（キーの製品・業務プロファイルの範囲の制限は残す）。
+- MCP（`nl2sql_get_job`・`nl2sql_cancel_job`・`nl2sql_cancel_requirement`）も同じ規則: 本人のジョブ・session だけ、キー（または
+  サービストークン）の利用者が system_admin なら全員のジョブ・session を見て、ジョブ・確認を取り消せる（運用の操作。#3244。
+  キーの製品・業務プロファイルの範囲の制限は残す）。
   `nl2sql_query` の `requirement_session_id` で確認を続ける（回答して SQL を作る）のは本人だけで、system_admin でも他の利用者の
   session は 403（#3244）。
 
@@ -207,7 +208,8 @@ platform の `docs/backend-standard.md`「製品間の連携（MCP とサービ�
 | `nl2sql_list_profiles` | `nl2sql.profiles.read` | `GET /api/nl2sql/profiles/search` と同じ業務プロファイルの範囲（claim があれば claim との積） |
 | `nl2sql_recommend_profile` | `nl2sql.query.generate` | `POST /api/nl2sql/recommend-profile`。任意の `profile_ids`（候補の一覧）を渡すとその中からだけ推薦する（候補は利用者の範囲・claim との積。積が空なら推薦なし）。範囲外・しきい値未満の推薦は `null` |
 | `nl2sql_query` | `nl2sql.query.generate` と `nl2sql.sql.execute` の両方 | `POST /api/nl2sql/jobs`。**`profile_id` を省略・空白・使えない ID にしても `"default"` に切り替えない**（#1379）。利用者の権限 ∩ claim の中の業務プロファイルが 1 つならそれ、そうでなければ質問の推薦で選び、結果の `auto_selected_profile` に示す（決まらなければ 404 `NL2SQL_PROFILE_NOT_SELECTED` と候補。#2355）。明示した ID が claim の範囲外なら 403（`PROFILE_SCOPE_FORBIDDEN`）。`row_limit`（既定 100、上限 1000）を必ずジョブに渡す。`wait_seconds`（既定 40、上限 45）まで待ち、終わらなければ `pending` / `running` と `job_id` を返す |
-| `nl2sql_get_job` | `nl2sql.query.generate` | `GET /api/nl2sql/jobs/{job_id}`。ただし管理権限があっても本人のジョブだけ（他人・不明は 404） |
+| `nl2sql_get_job` | `nl2sql.query.generate` | `GET /api/nl2sql/jobs/{job_id}`。本人のジョブだけ（フィードバック管理などの製品の管理権限があっても他人・不明は 404。system_admin は全員のジョブ）。読むたびに claim の範囲外・利用者が今は使えない業務プロファイルのジョブは 403（#3318） |
+| `nl2sql_cancel_job` | `nl2sql.query.generate` | `POST /api/nl2sql/jobs/{job_id}/cancel` と同じ協調の取消（実行中の段階の区切りで止まり、`status=error`・`error_code=JOB_CANCELLED`）。判定は `nl2sql_get_job` と同じ（本人と system_admin。#3244 の運用の操作）。冪等で、終わったジョブもエラーにせず `result`（`cancelled` / `already_cancelled` / `already_finished`）で返す。取消の要求のドキュメント（`job_cancel_requests`）に操作した人（`actor_user_uuid`）と入口（`via=mcp`・API キーなら `api_key_id`・サービストークンなら `agent_run_id`）を残し、2 回目以降の要求は最初の記録を上書きしない。annotations は `destructiveHint` / `idempotentHint`（#3318） |
 | `nl2sql_cancel_requirement` | `nl2sql.query.generate` | `POST /api/nl2sql/query-sessions/{session_id}/cancel`。本人の回答前の確認の session だけ（管理権限があっても他人・不明は 404）。claim の範囲外の業務プロファイルの session は 403 |
 
 `nl2sql_query` は SQL を作る前に回答前の確認（`POST /api/nl2sql/query-sessions` の guided と同じ。#1441）を行い、確認の要る項目があれば
@@ -232,7 +234,19 @@ NL2SQL は Agent の Runtime の強制とは別に、呼び先でも同じ範囲
 - `nl2sql_query` の claim の範囲外の `profile_id` は 403（`structuredContent.error_code` が
   `PROFILE_SCOPE_FORBIDDEN`）。ジョブは作らない。
 - `nl2sql_list_profiles` と `nl2sql_recommend_profile` は範囲で絞る（範囲の外を一覧・推薦しない）。
-- `nl2sql_get_job` は変えない（本人のジョブだけの判定のまま）。
+- `nl2sql_get_job`・`nl2sql_cancel_job` も、読む・止めるたびにその時点の claim で判定する（#3318）。ジョブの業務プロファイルが
+  claim の範囲外なら、本人のジョブでも 403（`PROFILE_SCOPE_FORBIDDEN`。確認の session と同じ）。利用者の業務プロファイルの
+  権限（`assert_profile_access`）も同じく読むたびに確かめる。持ち主の判定（他人・不明は 404）が先なので、403 で存在が分かるのは
+  本人と system_admin だけ。
+  - 決定の理由: #1379 では「本人のジョブだけの判定のまま」とだけ決め、claim を当てない理由（壊れる経路）は書いていなかった。
+    OWASP API Security Top 10 の API1（Broken Object Level Authorization。物を読むたびにその時点の権限で判定する）に合わせ、
+    `nl2sql_query`・確認の session と同じ範囲をジョブにも当てる（範囲の外の業務プロファイルの実行結果を、範囲を狭めた
+    業務 Agent が読めないようにする）。
+  - 壊れる経路の確認: Agent の Run は 1 回の Run の中で同じ版のデータの範囲を使い（`nl2sql_query` とジョブの続きの取得
+    〔`tools.wait_for_product_job`〕・Run の取消のジョブの取消は同じ claim）、作ったジョブを同じ claim で読む。業務 Agent の範囲を
+    変えた後の別の Run が、前の範囲で作ったジョブを読めなくなるのは、この決定の意図した振る舞い（新しい範囲の外の結果を
+    返さない）で、続きは新しい範囲で `nl2sql_query` を呼び直す。claim の無い呼び出し（範囲を設定していない Agent・API キー）は
+    利用者の権限だけで判定する。
 - claim の無い呼び出し（範囲を設定していない Agent・画面の API）の判定は変えない。DeepSec・Data Grant の判定も
   変えない。
 - claim の形（1〜50 件の 128 文字以内の ID の一覧）が違う token は 401（壊れた範囲を「範囲なし」として通さない）。

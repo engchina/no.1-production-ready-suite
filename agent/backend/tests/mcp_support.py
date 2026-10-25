@@ -202,6 +202,10 @@ class Nl2SqlCancelRequirementIn(_ContractInput):
     requirement_session_id: str = Field(min_length=1, max_length=128)
 
 
+class Nl2SqlCancelJobIn(_ContractInput):
+    job_id: str = Field(min_length=1, max_length=128)
+
+
 class Nl2SqlGetJobIn(_ContractInput):
     job_id: str
     wait_seconds: int = Field(default=0, ge=0, le=45)
@@ -218,7 +222,7 @@ class Nl2SqlRecommendProfileIn(_ContractInput):
 
 
 # NL2SQL の MCP の出力の形の版（nl2sql-tools.json の schema_version。#3240）。
-NL2SQL_OUTPUT_SCHEMA_VERSION = 1
+NL2SQL_OUTPUT_SCHEMA_VERSION = 2
 
 
 def nl2sql_requirement(status: str = "applied", **extra: Any) -> dict[str, Any]:
@@ -671,6 +675,14 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "rewritten_question": None,
         "candidates": [{"id": "profile-sales", "name": "売上", "reason": None, "score": 0.9}],
     },
+    # ジョブの取消（#3318。Run の取消で Agent の Control Plane が呼ぶ）。
+    "nl2sql_cancel_job": lambda argument: {
+        "schema_version": NL2SQL_OUTPUT_SCHEMA_VERSION,
+        "job_id": argument.job_id,
+        "status": "running",
+        "result": "cancelled",
+        "message": "ジョブの取消を受け付けました。実行中の段階の区切りで止まります。",
+    },
     # SQL の生成前の確認の取り消し（#1441。Agent の Control Plane が呼ぶ）。
     "nl2sql_cancel_requirement": lambda argument: {
         "schema_version": NL2SQL_OUTPUT_SCHEMA_VERSION,
@@ -747,6 +759,7 @@ class FakeProductMcp:
                     self._tool(
                         "nl2sql_cancel_requirement", Nl2SqlCancelRequirementIn, read_only=False
                     ),
+                    self._tool("nl2sql_cancel_job", Nl2SqlCancelJobIn, read_only=False),
                 ],
             ),
         }

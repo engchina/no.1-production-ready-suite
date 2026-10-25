@@ -53,7 +53,7 @@ from app.features.nl2sql.ontology_router import (
     QuerySessionData,
     RequirementApplyRequest,
 )
-from app.features.nl2sql.service import Nl2SqlService, StoredJob
+from app.features.nl2sql.service import JobCancelOutcome, Nl2SqlService, StoredJob
 from app.main import app
 from app.security.domain import UserRecord
 from app.security.passwords import hash_password
@@ -86,6 +86,8 @@ class _FakeNl2SqlService:
         # start_job で作るジョブを get_job 何回目で完了させるか（None は完了させない）。
         self.finish_after_polls: int | None = 0
         self.polls: dict[str, int] = {}
+        # nl2sql_cancel_job が送った取消の要求（job_id・操作した人・入口。#3318）。
+        self.cancels: list[tuple[str, str, dict[str, str]]] = []
         self.recommendation = ProfileRecommendationData(
             recommended_profile_id="sales",
             recommended_profile_name="売上",
@@ -193,6 +195,36 @@ class _FakeNl2SqlService:
             error_code=job.error_code,
             error_message=job.error_message,
             error_detail=job.error_detail,
+        )
+
+    def cancel_job(
+        self,
+        job_id: str,
+        *,
+        actor_user_uuid: str = "",
+        actor_can_manage: bool = False,
+        via: dict[str, str] | None = None,
+    ) -> JobCancelOutcome | None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return None
+        Nl2SqlService._assert_job_actor_access(  # noqa: SLF001 - 所有者判定は実装を使う
+            job, actor_user_uuid=actor_user_uuid, actor_can_manage=actor_can_manage
+        )
+        in_flight = job.status in {JobStatus.PENDING, JobStatus.RUNNING}
+        already = in_flight and job.cancel_requested
+        if in_flight:
+            job.cancel_requested = True
+            self.cancels.append((job_id, actor_user_uuid, dict(via or {})))
+        return JobCancelOutcome(
+            job=JobData(
+                job_id=job.job_id,
+                status=job.status,
+                profile_id=job.request.profile_id or "default",
+                created_at=CREATED_AT,
+                error_code=job.error_code,
+            ),
+            already_requested=already,
         )
 
 
@@ -492,6 +524,7 @@ def test_tools_list_follows_token_user_permissions(
         "nl2sql_recommend_profile",
         "nl2sql_query",
         "nl2sql_get_job",
+        "nl2sql_cancel_job",
         "nl2sql_cancel_requirement",
     }
     # SQL 生成はできるが実行できない利用者には nl2sql_query を出さない。
@@ -499,6 +532,7 @@ def test_tools_list_follows_token_user_permissions(
         "nl2sql_list_profiles",
         "nl2sql_recommend_profile",
         "nl2sql_get_job",
+        "nl2sql_cancel_job",
         "nl2sql_cancel_requirement",
     }
     assert _tool_names(_run(_rpc("tools/list"), token=_token(direct_user.user_uuid))) == set()
@@ -1058,6 +1092,144 @@ def test_get_job_hides_other_users_jobs(users: _Users, fake_service: _FakeNl2Sql
     assert (is_error, content["job_id"]) == (False, job_id)
 
 
+def _owned_job(fake_service: _FakeNl2SqlService, owner: UserRecord, profile_id: str) -> str:
+    """利用者のジョブを直接作る（MCP の作成の判定を通さない。権限が後で変わった状態を作る）。"""
+    created = fake_service.start_job(
+        JobCreateRequest(question="売上", profile_id=profile_id),
+        actor_user_uuid=owner.user_uuid,
+    )
+    return created.job_id
+
+
+def test_job_reads_and_cancel_are_authorized_against_the_current_scope(
+    users: _Users, fake_service: _FakeNl2SqlService
+) -> None:
+    """nl2sql_get_job / nl2sql_cancel_job は、読む・止めるたびにその時点の範囲で判定する（#3318）。
+
+    OWASP API1（物を扱うたびにその時点の権限で判定する）: 本人のジョブでも、トークンの claim
+    （業務 Agent のデータの範囲）の外と、利用者が今は使えない業務プロファイルのジョブは返さない
+    （確認の session と同じ 403）。他の利用者は存在を明かさない 404、system_admin は全員の
+    ジョブを読めて止められる（#3244 の運用の操作）が、claim の外は同じく 403。
+    """
+    fake_service.finish_after_polls = None
+    owner = users.create(
+        "mcp.scope.owner", permissions={"menu.query"}, allowed_profile_ids={"sales", "hr"}
+    )
+    other = users.create(
+        "mcp.scope.other", permissions={"menu.query"}, allowed_profile_ids={"sales", "hr"}
+    )
+    admin = users.system_admin()
+    sales_job = _owned_job(fake_service, owner, "sales")
+    # 作った後に利用者のロールから外れた業務プロファイルのジョブ。
+    lost_job = _owned_job(fake_service, owner, "default")
+
+    def outcome(tool: str, job_id: str, token: str) -> tuple[bool, Any]:
+        is_error, content = _structured(_run(_call(tool, {"job_id": job_id}), token=token))
+        if is_error:
+            return True, (content["status"], content.get("error_code"))
+        return False, content["job_id"]
+
+    for tool in ("nl2sql_get_job", "nl2sql_cancel_job"):
+        # 本人・claim の中（claim なしも同じ）。
+        assert outcome(tool, sales_job, _token(owner.user_uuid, profile_ids=["sales"])) == (
+            False,
+            sales_job,
+        )
+        assert outcome(tool, sales_job, _token(owner.user_uuid)) == (False, sales_job)
+        # 本人・claim の外: 業務 Agent の範囲を変えた後に、前の範囲で作ったジョブを読めない。
+        assert outcome(tool, sales_job, _token(owner.user_uuid, profile_ids=["hr"])) == (
+            True,
+            (403, "PROFILE_SCOPE_FORBIDDEN"),
+        )
+        # 本人・利用者が今は使えない業務プロファイル。
+        assert outcome(tool, lost_job, _token(owner.user_uuid))[1][0] == 403
+        # 他の利用者: 存在も明かさない。
+        for job_id in (sales_job, "missing-job"):
+            assert outcome(tool, job_id, _token(other.user_uuid)) == (True, (404, "HTTP_404"))
+        # system_admin: 全員のジョブ。claim の外は同じく 403。
+        assert outcome(tool, sales_job, _token(admin.user_uuid)) == (False, sales_job)
+        assert outcome(tool, sales_job, _token(admin.user_uuid, profile_ids=["hr"])) == (
+            True,
+            (403, "PROFILE_SCOPE_FORBIDDEN"),
+        )
+    # 取消を送ったのは判定を通った呼び出しだけ（本人 2 回・system_admin 1 回）。
+    assert [(job_id, actor) for job_id, actor, _ in fake_service.cancels] == [
+        (sales_job, owner.user_uuid),
+        (sales_job, owner.user_uuid),
+        (sales_job, admin.user_uuid),
+    ]
+
+
+def test_cancel_job_is_idempotent_and_records_the_entry(
+    users: _Users, fake_service: _FakeNl2SqlService
+) -> None:
+    """nl2sql_cancel_job は冪等で、終わったジョブもエラーにせず result で返す（#3318）。"""
+    fake_service.finish_after_polls = None
+    user = users.create("mcp.cancel", permissions={"menu.query"}, allowed_profile_ids={"sales"})
+    token = _token(user.user_uuid)
+    job_id = _owned_job(fake_service, user, "sales")
+    cancel = _call("nl2sql_cancel_job", {"job_id": job_id})
+
+    is_error, content = _structured(_run(cancel, token=token))
+    assert is_error is False
+    assert content == {
+        "schema_version": mcp_tools.MCP_OUTPUT_SCHEMA_VERSION,
+        "job_id": job_id,
+        "status": "pending",
+        "result": "cancelled",
+        "message": "ジョブの取消を受け付けました。実行中の段階の区切りで止まります。",
+    }
+    # 入口は MCP と、サービストークンの Run の ID（署名した claim から）。
+    assert fake_service.cancels[-1] == (
+        job_id,
+        user.user_uuid,
+        {"via": "mcp", "agent_run_id": "run-1"},
+    )
+    # 2 回目（まだ止まっていない）は要求済み。
+    _, content = _structured(_run(cancel, token=token))
+    assert (content["status"], content["result"]) == ("pending", "already_cancelled")
+
+    job = fake_service.jobs[job_id]
+    job.status = JobStatus.ERROR
+    job.error_code = "JOB_CANCELLED"
+    is_error, content = _structured(_run(cancel, token=token))
+    assert (is_error, content["status"], content["result"]) == (False, "error", "already_cancelled")
+
+    done_job = _owned_job(fake_service, user, "sales")
+    fake_service.jobs[done_job].status = JobStatus.DONE
+    sent = len(fake_service.cancels)
+    is_error, content = _structured(
+        _run(_call("nl2sql_cancel_job", {"job_id": done_job}), token=token)
+    )
+    assert (is_error, content["status"], content["result"]) == (False, "done", "already_finished")
+    assert "nl2sql_get_job" in content["message"]
+    assert len(fake_service.cancels) == sent  # 終わったジョブには取消を送らない
+
+    # API キー（外部の MCP クライアント）の入口はキーの ID。
+    key_job = _owned_job(fake_service, user, "sales")
+    _structured(_run(_call("nl2sql_cancel_job", {"job_id": key_job}), token=_api_key(users, user)))
+    key_cancel = fake_service.cancels[-1]
+    assert key_cancel[0] == key_job
+    assert key_cancel[2]["via"] == "mcp"
+    assert key_cancel[2]["api_key_id"]
+    assert "agent_run_id" not in key_cancel[2]
+
+
+def test_cancel_job_annotations(users: _Users, fake_service: _FakeNl2SqlService) -> None:
+    user = users.create("mcp.cancel.list", permissions={"menu.query"})
+    response = _run(_rpc("tools/list"), token=_token(user.user_uuid))
+    assert response.status_code == 200
+    tool = next(
+        item for item in response.json()["result"]["tools"] if item["name"] == "nl2sql_cancel_job"
+    )
+    assert tool["annotations"] == {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+
+
 def test_requirement_session_is_continued_by_owner_and_closed_by_system_admin(
     users: _Users, fake_service: _FakeNl2SqlService
 ) -> None:
@@ -1125,6 +1297,7 @@ def test_local_mode_uses_local_debug_user_without_token(
                     "nl2sql_recommend_profile",
                     "nl2sql_query",
                     "nl2sql_get_job",
+                    "nl2sql_cancel_job",
                     "nl2sql_cancel_requirement",
                 }
                 response = await client.post(
