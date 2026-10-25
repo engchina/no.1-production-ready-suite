@@ -1913,6 +1913,349 @@ async def test_oracle_reference_documents_many_reads_chunks_once(
     assert len(calls) == 1
 
 
+# ---- 参照先の章節の拡張(#3325) ----
+
+_SECTION_KB = "kb-1"
+_OUTSIDE_KB = "kb-2"
+
+
+def _section_corpus() -> list[RetrievedChunk]:
+    """文書 A は文書 B の第3章を、文書 C は文書 B の全体を参照する(合成。B は章ごとに 1 chunk)。"""
+    return [
+        _retrieved(
+            "doc-a:cs-1:0",
+            "合成の操作は合成文書Bの第3章を参照。",
+            "第1章 概要",
+            document_id="doc-a",
+            file_name="合成文書A.md",
+            targets=[ReferenceTarget("第3章", "chapter", "3", "合成文書B")],
+        ),
+        _retrieved(
+            "doc-c:cs-3:0",
+            "合成の操作は『合成文書B』を参照。",
+            "第1章 概要",
+            document_id="doc-c",
+            file_name="合成文書C.md",
+            chunk_set_id="cs-3",
+            targets=[ReferenceTarget("合成文書B", "document", "合成文書B", "合成文書B")],
+        ),
+        _retrieved(
+            "doc-b:cs-9:0",
+            "合成文書Bの概要の本文。",
+            "第1章 概要",
+            document_id="doc-b",
+            file_name="合成文書B.md",
+            chunk_set_id="cs-9",
+        ),
+        _retrieved(
+            "doc-b:cs-9:1",
+            "合成の操作の手順の本文。",
+            "第3章 手順",
+            document_id="doc-b",
+            file_name="合成文書B.md",
+            chunk_set_id="cs-9",
+        ),
+    ]
+
+
+class SectionScopeMap:
+    """章節と chunk の対応の代役(#1438)。
+
+    章節の本文は ``SectionMapStore.section_chunks`` と同じく、渡された検索条件(文書・文書名・
+    ナレッジベース)と読む文書の条件を重ねて読む(条件に合わなければ空)。読んだときの監査 context
+    (認可の範囲)も残す。
+    """
+
+    def __init__(self, chunks: list[RetrievedChunk], knowledge_bases: dict[str, set[str]]) -> None:
+        self.chunks = chunks
+        self.knowledge_bases = knowledge_bases
+        self.reads: list[tuple[str, str, dict[str, str]]] = []
+        self.contexts: list[Any] = []
+
+    @staticmethod
+    def _section_id(chunk: RetrievedChunk) -> str:
+        return f"{chunk.document_id}:{chunk.metadata['section_path']}"
+
+    def _document_chunks(self, document_id: str) -> list[RetrievedChunk]:
+        return [chunk for chunk in self.chunks if chunk.document_id == document_id]
+
+    async def chunk_section(
+        self, document_id: str, chunk_id: str, *, oracle: Any = None
+    ) -> tuple[str, str] | None:
+        for chunk in self._document_chunks(document_id):
+            if chunk.chunk_id == chunk_id:
+                return str(chunk.metadata["chunk_set_id"]), self._section_id(chunk)
+        return None
+
+    async def section_outline(
+        self, document_id: str, *, chunk_set_id: str | None = None, oracle: Any = None
+    ) -> Any:
+        from app.clients.section_map_store import ReadableChunkSet
+        from app.rag.section_chunk_map import SectionNode
+        from app.rag.section_map_service import SectionOutline
+
+        chunks = self._document_chunks(document_id)
+        root = f"{document_id}:root"
+        nodes = [SectionNode(root, chunks[0].file_name or "", 0, 0, None, 1, 1, len(chunks), 40)]
+        nodes.extend(
+            SectionNode(
+                self._section_id(chunk),
+                str(chunk.metadata["section_path"]),
+                1,
+                n,
+                root,
+                1,
+                1,
+                1,
+                20,
+            )
+            for n, chunk in enumerate(chunks, start=1)
+        )
+        chunk_set = ReadableChunkSet(
+            document_id, str(chunks[0].metadata["chunk_set_id"]), chunks[0].file_name or "", False
+        )
+        return SectionOutline(chunk_set=chunk_set, sections=nodes)
+
+    async def read_section(
+        self,
+        document_id: str,
+        section_id: str,
+        *,
+        chunk_set_id: str | None = None,
+        limit: int | None = None,
+        filters: dict[str, str] | None = None,
+        oracle: Any = None,
+        **_: Any,
+    ) -> Any:
+        from app.clients.section_map_store import SectionChunkRow
+        from app.rag.request_context import current_audit_request_context
+        from app.rag.section_map_service import SectionText
+
+        scoped = dict(filters or {})
+        self.reads.append((document_id, section_id, scoped))
+        self.contexts.append(current_audit_request_context())
+        outline = await self.section_outline(document_id)
+        node = outline.get(section_id)
+        knowledge_bases = [kb for kb in scoped.get("knowledge_base_id", "").split(",") if kb]
+        visible = [
+            chunk
+            for chunk in self._document_chunks(document_id)
+            if (section_id.endswith(":root") or self._section_id(chunk) == section_id)
+            and scoped.get("document_id", document_id) == document_id
+            and scoped.get("file_name", "") in (chunk.file_name or "")
+            and int(str(chunk.metadata["page_start"])) <= int(scoped.get("page_number_max") or 9999)
+            and (
+                not knowledge_bases
+                or any(document_id in self.knowledge_bases.get(kb, set()) for kb in knowledge_bases)
+            )
+        ]
+        rows = [SectionChunkRow(order, chunk) for order, chunk in enumerate(visible)]
+        return SectionText(outline=outline, section=node, chunks=rows, complete=True)
+
+
+_SECTION_ANSWER = "合成の操作の手順の本文。"
+
+
+def _section_answer_llm(
+    system: str, prompt: str, settings: Any, schema: type, **options: Any
+) -> Any:
+    """CRAG は不足と判定して章節を広げ、回答は参照先の文書 B の手順を引用する LLM の代役。"""
+    from rag_engine.models.llm import CragRetrievalGradeOutput, GroundedDraft
+
+    from tests.test_answer_engine import _fake_llm
+
+    if schema is CragRetrievalGradeOutput:
+        return CragRetrievalGradeOutput(
+            reason="不足", sufficient=False, confidence=0.4, rewritten_query=""
+        )
+    if schema is GroundedDraft:
+        # 本文の直前の根拠の ID(本文の前の補助情報に括弧があるので、最も近い ID を取る)。
+        ids = re.findall(r"\[(E[0-9]+)\]", prompt.split(_SECTION_ANSWER)[0])
+        items = (
+            [
+                {
+                    "kind": "rule",
+                    "text": _SECTION_ANSWER,
+                    "evidence_id": ids[-1],
+                    "quote": _SECTION_ANSWER,
+                }
+            ]
+            if _SECTION_ANSWER in prompt and ids
+            else []
+        )
+        return GroundedDraft.model_validate(
+            {"summary": "手順", "items": items, "confidence": "high"}
+        )
+    return _fake_llm(system, prompt, settings, schema, **options)
+
+
+@pytest.fixture
+def section_scope(monkeypatch: pytest.MonkeyPatch) -> SectionScopeMap:
+    import rag_engine.adapters.oci as engine_oci
+
+    from app.rag import section_map_service
+
+    stub = SectionScopeMap(
+        _section_corpus(), {_SECTION_KB: {"doc-a", "doc-b", "doc-c"}, _OUTSIDE_KB: {"doc-b"}}
+    )
+    monkeypatch.setattr(section_map_service, "chunk_section", stub.chunk_section)
+    monkeypatch.setattr(section_map_service, "section_outline", stub.section_outline)
+    monkeypatch.setattr(section_map_service, "read_section", stub.read_section)
+    monkeypatch.setattr(engine_oci, "parse_text_response", _section_answer_llm)
+    return stub
+
+
+class SectionReferenceOracle(ReferenceOracle):
+    """回答の実行(``AnswerEngine.run``)で読む部分も持つ交差参照の代役。"""
+
+    async def has_retrieval_chunks(self, filters: dict[str, str]) -> bool:
+        return True
+
+
+class PageScopedReferenceOracle(SectionReferenceOracle):
+    """主の検索は、呼び出し元のページの範囲の中の ``hits`` だけを返す代役。"""
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        return list(self.hits)
+
+
+def _section_engine(oracle: ReferenceOracle) -> AnswerEngine:
+    return _engine(
+        oracle,
+        FakeGenAi({"手順": 0.9}),
+        rag_answer_flow="crag",
+        rag_query_strategy="auto_routing",
+        rag_section_expansion_enabled=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("anchor_document", "added"),
+    [("doc-a", ["doc-b:cs-9:1"]), ("doc-c", ["doc-b:cs-9:1", "doc-b:cs-9:0"])],
+    ids=["chapter-of-other-document", "whole-other-document"],
+)
+async def test_section_expansion_reads_reference_target_outside_caller_document_filter(
+    section_scope: SectionScopeMap, anchor_document: str, added: list[str]
+) -> None:
+    """文書を絞った検索の交差参照で足した文書 B の章節は、参照先と同じ範囲で読める(#3325)。
+
+    呼び出し元の文書の絞り込み(document_id)は、参照で足した B の章節の読み取りに重ねない。
+    ナレッジベース・基準日は残す。絞り込んだ文書 A / C の章節は呼び出し元の条件のまま読む。
+    """
+    oracle = SectionReferenceOracle(
+        [], _section_corpus(), knowledge_bases={_SECTION_KB: {"doc-a", "doc-b", "doc-c"}}
+    )
+    filters = {"knowledge_base_id": _SECTION_KB, "document_id": anchor_document}
+
+    outcome = await _section_engine(oracle).run(
+        SearchRequest(query="合成の操作の手順は？", filters=filters)
+    )
+
+    references = outcome.diagnostics["reference_expansion"]
+    assert sorted(item["chunk_id"] for item in references["chunks"]) == sorted(added)
+    reads = section_scope.reads
+    reference_reads = [scoped for document, _section, scoped in reads if document == "doc-b"]
+    assert reference_reads
+    # 参照先の章節は参照先を探した範囲(KB・基準日)で読み、呼び出し元の文書の条件を重ねない。
+    assert all(set(scoped) == {"knowledge_base_id", "as_of"} for scoped in reference_reads)
+    assert all(scoped["knowledge_base_id"] == _SECTION_KB for scoped in reference_reads)
+    # 絞り込んだ文書の章節は呼び出し元の条件(文書の絞り込みを含む)のまま読む。
+    own_reads = [scoped for document, _section, scoped in reads if document != "doc-b"]
+    assert own_reads
+    assert all(scoped["document_id"] == anchor_document for scoped in own_reads)
+    expansion = outcome.diagnostics["section_expansion"]
+    assert expansion["stop_reason"] != "partial_read"
+    assert all(item.get("document_id") != "doc-b" for item in expansion.get("unread", []))
+    assert "回答に未反映の関連章節" not in outcome.answer
+    assert "原文の一部だけを取得" not in outcome.answer
+    assert outcome.diagnostics["outcome"] == "answered"
+    assert _SECTION_ANSWER in outcome.answer
+
+
+async def test_section_expansion_does_not_read_reference_target_outside_knowledge_base(
+    section_scope: SectionScopeMap,
+) -> None:
+    """検索範囲(KB)の外の文書は参照先にせず、その章節も読まない(#3325)。"""
+    oracle = SectionReferenceOracle(
+        [],
+        _section_corpus(),
+        knowledge_bases={_SECTION_KB: {"doc-a", "doc-c"}, _OUTSIDE_KB: {"doc-b"}},
+    )
+
+    outcome = await _section_engine(oracle).run(
+        SearchRequest(
+            query="合成の操作の手順は？",
+            filters={"knowledge_base_id": _SECTION_KB, "document_id": "doc-a"},
+        )
+    )
+
+    assert "reference_expansion" not in outcome.diagnostics or not outcome.diagnostics[
+        "reference_expansion"
+    ].get("chunks")
+    assert section_scope.reads
+    assert all(document == "doc-a" for document, _section, _scoped in section_scope.reads)
+    assert all(
+        scoped["document_id"] == "doc-a" for _document, _section, scoped in section_scope.reads
+    )
+    assert all(citation.document_id != "doc-b" for citation in outcome.citations)
+
+
+async def test_section_expansion_keeps_caller_filters_for_sections_not_reached_by_reference(
+    section_scope: SectionScopeMap,
+) -> None:
+    """同じ文書の中の参照で足した章節だけを参照先の範囲で読み、当たった章節は呼び出し元の条件で読む。
+
+    参照で足した文書であることを理由に、その文書の他の章節の読み取りから呼び出し元の絞り込み
+    (ページなど)を外さない(#3325)。
+    """
+    anchor = _retrieved(
+        "doc-a:cs-1:0",
+        "合成の操作は第3章を参照。",
+        "第1章 概要",
+        document_id="doc-a",
+        file_name="合成文書A.md",
+        targets=[ReferenceTarget("第3章", "chapter", "3", None, "第3章 手順")],
+    )
+    referenced = _retrieved(
+        "doc-a:cs-1:1",
+        _SECTION_ANSWER,
+        "第3章 手順",
+        document_id="doc-a",
+        file_name="合成文書A.md",
+    )
+    # 参照先の章は呼び出し元のページの範囲の外(主の検索では当たらない)。
+    referenced.metadata.update(page_start=5, page_end=5)
+    section_scope.chunks = [anchor, referenced]
+    oracle = PageScopedReferenceOracle(
+        [anchor], [anchor, referenced], knowledge_bases={_SECTION_KB: {"doc-a"}}
+    )
+    caller = {"knowledge_base_id": _SECTION_KB, "document_id": "doc-a", "page_number_max": "1"}
+
+    outcome = await _section_engine(oracle).run(
+        SearchRequest(query="合成の操作の手順は？", filters=caller)
+    )
+
+    assert [item["chunk_id"] for item in outcome.diagnostics["reference_expansion"]["chunks"]] == [
+        "doc-a:cs-1:1"
+    ]
+    reads = {section: scoped for _document, section, scoped in section_scope.reads}
+    # 主の検索で当たった章節は、呼び出し元の条件(文書・ページ)のまま読む。
+    assert reads["doc-a:第1章 概要"] == {**caller, "as_of": reads["doc-a:第1章 概要"]["as_of"]}
+    # 参照で足した章節は、参照先と同じ範囲(KB・基準日)で読む。
+    assert set(reads["doc-a:第3章 手順"]) == {"knowledge_base_id", "as_of"}
+    assert all(
+        item.get("section_id") != "doc-a:第3章 手順"
+        for item in outcome.diagnostics["section_expansion"].get("unread", [])
+    )
+
+
 # ---- MCP の根拠 ----
 
 

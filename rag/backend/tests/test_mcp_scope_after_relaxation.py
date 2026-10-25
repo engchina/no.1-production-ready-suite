@@ -10,6 +10,7 @@ caller。#2651)を、サービストークン(claim ``profile_ids``。#1379)で�
   実体・関係情報の拡張の範囲、章節の拡張の読み取りに、呼び出し元の条件と基準日が残る。
 - どの検索・拡張も、トークンの範囲に絞った監査 context(認可の述語)で Oracle を読む。
 - 本文が明記した参照を辿る交差参照(#1280)は、呼び出し元の文書名の外へも辿る(利用者の判断 B)。
+  参照で足した文書の章節の拡張も、参照先と同じ範囲で読む(#3325)。
 """
 
 from __future__ import annotations
@@ -57,6 +58,11 @@ from tests.test_answer_scope_after_relaxation import (
     _reference_corpus,
 )
 from tests.test_cross_references import FakeGenAi as ReferenceGenAi
+from tests.test_cross_references import (
+    SectionScopeMap,
+    _section_answer_llm,
+    _section_corpus,
+)
 from tests.test_mcp_profile_scope import SECRET
 from tests.test_section_expansion_answer import SectionMapStub
 from tests.test_security_scope import ScopedViewOracle
@@ -426,3 +432,68 @@ def test_mcp_section_expansion_reads_with_caller_conditions_and_as_of(
     assert all(read_filters == expected for _section, read_filters in stub.reads)
     assert json.loads(expected["extraction_fields"]) == [MANUAL_FIELD.model_dump()]
     _assert_token_scope(stub.contexts)
+
+
+class ScopedViewSectionReferenceOracle(_ResultLookups, ScopedViewOracle, ContextReferenceOracle):
+    """検索・回答プロファイルの解決と、文書 A の候補が文書 B の第3章を参照する検索を受ける代役。"""
+
+    def __init__(self) -> None:
+        corpus = _section_corpus()
+        ScopedViewOracle.__init__(self, VIEWS)
+        ContextReferenceOracle.__init__(self, corpus[:1], corpus)
+
+    async def has_retrieval_chunks(self, filters: dict[str, str]) -> bool:
+        return True
+
+
+def test_mcp_section_expansion_reads_reference_target_outside_caller_file_name(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """呼び出し元の文書名の外へ参照で辿った文書 B の章節は、参照先と同じ範囲で読む(#3325)。
+
+    範囲は KB(トークンの範囲のプロファイルの参照先)・旧版の扱い・基準日で、呼び出し元の文書名・
+    分類は重ねない。認可の範囲はトークンの範囲に絞った監査 context の述語で当たる。呼び出し元の
+    文書名の中の文書 A の章節は、呼び出し元の条件のまま読む。
+    """
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _section_answer_llm)
+    for name, value in {
+        "rag_query_strategy": "auto_routing",
+        "rag_section_expansion_enabled": True,
+        "rag_entity_expansion_enabled": False,
+        "rag_graph_expansion_enabled": False,
+    }.items():
+        monkeypatch.setattr(get_settings(), name, value)
+    stub = SectionScopeMap(_section_corpus(), {"kb-1": {"doc-a", "doc-b", "doc-c"}})
+    monkeypatch.setattr(section_map_service, "chunk_section", stub.chunk_section)
+    monkeypatch.setattr(section_map_service, "section_outline", stub.section_outline)
+    monkeypatch.setattr(section_map_service, "read_section", stub.read_section)
+    oracle = ScopedViewSectionReferenceOracle()
+    _install(monkeypatch, oracle, ReferenceGenAi({"手順": 0.9}))
+    filters = {"file_name": "合成文書A", "large_category": "分類A", "as_of": "2020-06-30"}
+
+    result = _call(
+        "rag_search",
+        {
+            "query": "合成の操作の手順は？",
+            "search_answer_profile_id": "bv-1",
+            "filters": filters,
+            "include_superseded": True,
+        },
+        _headers(auth),
+    )
+
+    evidence = result["structuredContent"]["evidence"]
+    assert "doc-b:cs-9:1" in [item["chunk_id"] for item in evidence]
+    kept = {"knowledge_base_id": "kb-1,kb-2", "include_superseded": "true", "as_of": "2020-06-30"}
+    reference_reads = [scoped for document, _section, scoped in stub.reads if document == "doc-b"]
+    assert reference_reads
+    assert all(scoped == kept for scoped in reference_reads)
+    own_reads = [scoped for document, _section, scoped in stub.reads if document == "doc-a"]
+    assert own_reads
+    assert all(scoped["file_name"] == "合成文書A" for scoped in own_reads)
+    _assert_token_scope(stub.contexts)
+    assert "回答に未反映の関連章節" not in json.dumps(
+        result["structuredContent"], ensure_ascii=False
+    )

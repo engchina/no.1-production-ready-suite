@@ -323,6 +323,9 @@ class _SearchState:
     # 足した chunk の記録(診断に出す。chunk_id → 起点・表記・参照先)。
     reference_chunks: dict[tuple[str, ...], list[RetrievedChunk]] = field(default_factory=dict)
     reference_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
+    # 交差参照で足した chunk を起点にした章節の拡張で読む章節((document_id, chunk_set_id,
+    # section_id)。所有の章節から根まで)。参照先と同じ範囲(``_reference_scope``)で読む(#3325)。
+    reference_sections: set[tuple[str, str, str]] = field(default_factory=set)
     # 交差参照の起点の記録(検索ごと。#1549)。参照を持つ候補の統合の順位と、辿った・辿らなかった
     # 理由(起点の外・参照先が無い・上限)を診断に出し、回答の記録から replay で確かめる。
     reference_sources: list[dict[str, object]] = field(default_factory=list)
@@ -427,6 +430,30 @@ def _relaxation_steps(
     if "file_name" in added:
         steps.append((RELAX_QUESTION_FILE, dict(base)))
     return steps
+
+
+def _reference_scope(filters: Mapping[str, str]) -> dict[str, str]:
+    """交差参照の参照先を探して読む範囲: ナレッジベース・旧版の扱い・基準日だけ(#1280・#3260)。
+
+    ``filters`` は利用者が指定した条件(``request.filters``)。参照で足した chunk の章節を読むときも
+    同じ範囲を使う(#3325)。利用者の権限は検索条件ではなく SQL の述語で当たる。
+    """
+    return {
+        key: value
+        for key, value in filters.items()
+        if key in _REFERENCE_SCOPE_FILTER_KEYS and value.strip()
+    }
+
+
+def _section_chain(sections: Sequence[Any], owner_section_id: str) -> list[str]:
+    """所有の章節から根までの章節の ID(章節の拡張が広げる列。``SectionOutline.chain`` と同じ)。"""
+    nodes = {node.section_id: node for node in sections}
+    chain: list[str] = []
+    current = nodes.get(owner_section_id)
+    while current is not None and current.section_id not in chain:
+        chain.append(current.section_id)
+        current = nodes.get(current.parent_section_id) if current.parent_section_id else None
+    return chain
 
 
 def _expansion_scope(filters: Mapping[str, str]) -> dict[str, str]:
@@ -1843,11 +1870,7 @@ class AnswerEngine:
         if not self._settings.rag_reference_expansion_enabled:
             return {}
         budget = self._settings.rag_reference_expansion_max_chunks
-        scope = {
-            key: value
-            for key, value in request.filters.items()
-            if key in _REFERENCE_SCOPE_FILTER_KEYS and value.strip()
-        }
+        scope = _reference_scope(request.filters)
         limit = max(_REFERENCE_SOURCE_ANCHORS, min(int(request.top_k), _REFERENCE_EXTENDED_ANCHORS))
         seen = set(existing)
         added: dict[str, list[RetrievedChunk]] = {}
@@ -2411,6 +2434,12 @@ class AnswerEngine:
             return None
         if outline is None:
             return None
+        if chunk_id in state.reference_expansions:
+            # 交差参照で足した chunk の章節(所有の章節から根まで)は、参照先と同じ範囲で読む(#3325)。
+            state.reference_sections.update(
+                (chunk.document_id, chunk_set_id, section_id)
+                for section_id in _section_chain(outline.sections, owner_section_id)
+            )
         return SectionOutline(
             document_id=chunk.document_id,
             chunk_set_id=chunk_set_id,
@@ -2441,6 +2470,10 @@ class AnswerEngine:
     ) -> list[Any]:
         """章節の chunk(章節の中の順の child と、その親)を回答の検索と同じ条件で読む(#1436)。
 
+        交差参照で足した chunk を起点にした章節(``state.reference_sections``)は、参照先を読んだ
+        範囲(``_reference_scope``。ナレッジベース・旧版の扱い・基準日と利用者の権限)で読む。呼び出し
+        元の文書・文書名・ページなどの絞り込みの外の参照先でも、参照で足した文書の章節を読めなくしない
+        (#3325)。それ以外の章節は回答の検索と同じ条件のまま。
         読んだ chunk は引用へ戻せるよう ``state.chunks`` に入れ、分類・1 ページ目の本文・根拠画像は
         検索の候補と同じく付ける。読めなければ空(広げずに回答を続ける)。
         """
@@ -2454,7 +2487,11 @@ class AnswerEngine:
                 section_id,
                 chunk_set_id=chunk_set_id,
                 limit=MAX_SECTION_CHUNKS,
-                filters=dict(state.filters if state.filters is not None else request.filters),
+                filters=(
+                    _reference_scope(request.filters)
+                    if (document_id, chunk_set_id, section_id) in state.reference_sections
+                    else dict(state.filters if state.filters is not None else request.filters)
+                ),
                 oracle=self._oracle,
             )
         except Exception as exc:  # noqa: BLE001 - 章節の拡張は補助。この章節を足さずに続ける。
