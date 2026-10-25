@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -81,6 +82,12 @@ def test_service_token_call_is_a_child_of_the_agent_span(
     assert root["parent_span_id"] == _AGENT_SPAN
     assert root["span_kind"] == "server" and root["is_root"] == 1
     assert root["owner_user_uuid"] == "user-1" and root["product"] == "nl2sql"
+    # OpenTelemetry の MCP の semantic conventions の method と呼んだツール（#3272）。
+    attributes = json.loads(root["attributes_json"])
+    assert (attributes["mcp.method.name"], attributes["gen_ai.tool.name"]) == (
+        "tools/call",
+        "probe",
+    )
     [work] = [row for row in rows if row["name"] == "nl2sql.tool_work"]
     assert work["parent_span_id"] == root["span_id"]
     assert seen["context"]["traceparent"].split("-")[1] == _AGENT_TRACE

@@ -6,13 +6,16 @@ function textAttribute(attributes: Readonly<Record<string, unknown>>, key: strin
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-/** 技術の span の名前と、名前に添える対象（モデル・ツール）の属性。 */
-const TECHNICAL_SPANS: Readonly<Record<string, { name: Exclude<keyof TraceSpanNames, "attempt" | "root">; target?: string }>> = {
-  "gen_ai.chat": { name: "chat", target: "gen_ai.request.model" },
-  "gen_ai.embeddings": { name: "embeddings", target: "gen_ai.request.model" },
-  "gen_ai.rerank": { name: "rerank", target: "gen_ai.request.model" },
-  "gen_ai.execute_tool": { name: "executeTool", target: "gen_ai.tool.name" },
-  "mcp.request": { name: "mcpRequest" },
+/**
+ * 技術の span の名前と、名前に添える対象（モデル・ツール）の属性（先に見つかったもの）。MCP の呼び出しは呼んだツール、
+ * ツール以外の要求（`initialize` など）は JSON-RPC の method（OpenTelemetry の MCP の semantic conventions。#3272）。
+ */
+const TECHNICAL_SPANS: Readonly<Record<string, { name: Exclude<keyof TraceSpanNames, "attempt" | "root">; target?: readonly string[] }>> = {
+  "gen_ai.chat": { name: "chat", target: ["gen_ai.request.model"] },
+  "gen_ai.embeddings": { name: "embeddings", target: ["gen_ai.request.model"] },
+  "gen_ai.rerank": { name: "rerank", target: ["gen_ai.request.model"] },
+  "gen_ai.execute_tool": { name: "executeTool", target: ["gen_ai.tool.name"] },
+  "mcp.request": { name: "mcpRequest", target: ["gen_ai.tool.name", "mcp.method.name"] },
   "oracle.select_ai": { name: "selectAi" },
   "http.request": { name: "httpRequest" },
 };
@@ -38,17 +41,27 @@ export function traceSpanDisplayName(span: TraceSpanNameInput, labels: TraceDeta
   } else if (stage) {
     name = (labels.stageName?.(stage, span.status)?.trim() || stage).slice(0, 128);
   } else {
-    const technical = TECHNICAL_SPANS[span.operationName] ?? (span.operationName.startsWith("gen_ai.") ? { name: "genAi" as const, target: "gen_ai.request.model" } : undefined);
+    const technical = TECHNICAL_SPANS[span.operationName] ?? (span.operationName.startsWith("gen_ai.") ? { name: "genAi" as const, target: ["gen_ai.request.model"] } : undefined);
     if (!technical) return span.operationName;
-    const target = technical.target ? textAttribute(span.attributes, technical.target) : undefined;
+    const target = technical.target?.map((key) => textAttribute(span.attributes, key)).find(Boolean);
     name = target ? `${names[technical.name]} · ${target.slice(0, 128)}` : names[technical.name];
   }
   const attempt = span.attributes["pr.attempt"];
   return typeof attempt === "number" && Number.isInteger(attempt) && attempt > 1 ? names.attempt(name, attempt) : name;
 }
 
+/**
+ * MCP の手続きの span（OpenTelemetry の MCP の semantic conventions の `mcp.method.name` が `tools/call` 以外。
+ * `initialize`・`notifications/*`・`tools/list` など。#3272）。利用者向けの処理の経過の木には出さず（子は親の位置に
+ * 上げる）、技術の trace の一覧（`traceTimeline`）には残す。method の無い古い記録は今までどおり出す。
+ */
+export function isMcpProtocolSpan(attributes: Readonly<Record<string, unknown>>): boolean {
+  const method = textAttribute(attributes, "mcp.method.name");
+  return method !== undefined && method !== "tools/call";
+}
+
 /** span の技術の値（詳細の見出しと値）。モデル・ツール・試行・利用量・エラーの種類の allowlist だけ。 */
-const TECHNICAL_FIELDS = ["pr.stage", "gen_ai.request.model", "gen_ai.tool.name", "pr.attempt", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.reasoning.output_tokens", "error.type"];
+const TECHNICAL_FIELDS = ["pr.stage", "gen_ai.request.model", "gen_ai.tool.name", "mcp.method.name", "pr.attempt", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.reasoning.output_tokens", "error.type"];
 
 /**
  * span の詳細の技術の値（3 製品共通）。行の名前は日本語にし、実測の記録を引けるように元の span の名前を残す。

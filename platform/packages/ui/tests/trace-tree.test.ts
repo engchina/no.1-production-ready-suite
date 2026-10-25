@@ -43,11 +43,15 @@ describe("span の表示名（#3219。3 製品の 9 画面で共通の規則）"
     stage("9", "3", "gen_ai.invoke_agent", { "gen_ai.request.model": "model-x" }),
     stage("a", "3", "oracle.select_ai"),
     stage("b", "3", "custom.operation"),
+    stage("c", "5", "mcp.request", { "mcp.method.name": "tools/call", "gen_ai.tool.name": "tool_y" }),
+    stage("d", "5", "mcp.request", { "mcp.method.name": "initialize" }),
   ] };
   it("既定は root・段・技術の span を日本語にし、対象と試行の回数を添える", () => {
     const steps = traceTimeline(summary).steps;
     expect(steps.map(s => s.label)).toEqual([
       "実行の全体（2 回目）", "answer", "工程 A", "モデルの呼び出し · model-x", "ツールの実行 · tool_y", "MCP の呼び出し（3 回目）",
+      // 技術の trace の一覧は MCP の手続きも残し、呼んだツールか method を添える（#3272）。
+      "MCP の呼び出し · tool_y", "MCP の呼び出し · initialize",
       "埋め込みの作成 · embed-x", "並べ替え（rerank） · rerank-x", "AI の呼び出し · model-x", "Select AI の呼び出し", "custom.operation",
     ]);
   });

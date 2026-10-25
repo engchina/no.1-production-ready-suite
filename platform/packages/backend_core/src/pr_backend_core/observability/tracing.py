@@ -64,6 +64,7 @@ _SAFE_ATTRIBUTES = frozenset(
         "gen_ai.usage.output_tokens",
         "gen_ai.usage.cache_read.input_tokens",
         "gen_ai.usage.reasoning.output_tokens",
+        "mcp.method.name",
         "pr.operation.id",
         "pr.operation.status",
         "pr.attempt",

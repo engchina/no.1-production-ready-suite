@@ -1,6 +1,6 @@
 import type { RunStepDetailCode, RunStepDetailField, RunStepDetails } from "../data/run-step-details";
 import { DEFAULT_TRACE_DETAILS_LABELS, type TraceDetailsLabels } from "../../lib/trace-labels";
-import { traceSpanDisplayName, traceSpanFields } from "../../lib/trace-tree";
+import { isMcpProtocolSpan, traceSpanDisplayName, traceSpanFields } from "../../lib/trace-tree";
 import type { ChatProgressStep, ChatProgressStepStatus } from "./chat-progress";
 import { CHAT_PROGRESS_STATUS_RANK } from "./chat-progress-steps";
 
@@ -416,8 +416,9 @@ interface OrderedStep {
 }
 
 /**
- * span の段を木の順（親の直後に子。兄弟は始まった順）に並べ、入れ子の深さを付ける（#3226）。実行の全体の span（root）は
- * 行にせず、子を最上位にする。親の無い段（親が記録の上限を超えた・別の区間）も最上位に出す。
+ * span の段を木の順（親の直後に子。兄弟は始まった順）に並べ、入れ子の深さを付ける（#3226）。実行の全体の span（root）と
+ * MCP の手続きの span（`initialize`・通知・`tools/list`。#3272）は行にせず、子を親の位置に上げる。親の無い段（親が記録の
+ * 上限を超えた・別の区間）も最上位に出す。
  */
 function orderSpanSteps(steps: readonly ChatProgressEventStep[]): OrderedStep[] {
   const ids = new Set(steps.map((step) => step.id));
@@ -438,7 +439,7 @@ function orderSpanSteps(steps: readonly ChatProgressEventStep[]): OrderedStep[] 
   const visit = (step: ChatProgressEventStep, level: number) => {
     if (visited.has(step.id)) return;
     visited.add(step.id);
-    const hidden = step.span?.root === true;
+    const hidden = step.span?.root === true || isMcpProtocolSpan(step.span?.attributes ?? {});
     if (!hidden) ordered.push({ step, level });
     for (const child of children.get(step.id) ?? []) visit(child, hidden ? level : level + 1);
   };
