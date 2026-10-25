@@ -41,6 +41,7 @@ from typing import Any, Never, cast
 
 from agents import (
     Agent,
+    AgentHooks,
     FunctionTool,
     MaxTurnsExceeded,
     Model,
@@ -52,6 +53,7 @@ from agents import (
     RunState,
     set_tracing_disabled,
 )
+from agents.items import ModelResponse
 from agents.run_config import CallModelData, ModelInputData, ToolErrorFormatterArgs
 from agents.tool_context import ToolContext
 from openai import DEFAULT_MAX_RETRIES, APIStatusError, AsyncOpenAI, BadRequestError
@@ -1316,6 +1318,12 @@ APPROVAL_REQUIRED_MESSAGE = (
     "このツールは実行の前に承認が必要になったため、実行していません。"
     "必要なら、同じ引数でもう一度呼ぶと承認を求めます。"
 )
+# 同じ応答で回答前の確認（`ask_user_confirmation`）を出したため、実行しなかった呼び出し（#3352）。
+CONFIRMATION_PENDING_CODE = "tool.confirmation_pending"
+CONFIRMATION_PENDING_MESSAGE = (
+    "利用者に回答前の確認を出したため、このツールは実行していません。"
+    "確認の答えを受け取った後に、必要なら呼び直してください。"
+)
 
 
 class RunCancelledError(BuiltinRuntimeError):
@@ -1413,6 +1421,59 @@ class _ToolRecorder:
         self.loop_stop: tool_loop_guard.LoopFinding | None = None
         # モデルが画像の入力に対応するか（#2650。対応しなければ結果の画像を添付しない）。
         self.image_input = False
+        # 回答前の確認（#3352）: 確認の呼び出しで中断するか（呼び出し ID → 判断。応答ごとに 1 回
+        # 決める）と、その判断を返す関数（`_approval_gate` が置く）。
+        self.confirmation_decisions: dict[str, bool] = {}
+        self.decide_confirmation: Callable[[Any, dict[str, Any], str], Awaitable[bool]] | None = (
+            None
+        )
+        # 同じ応答で確認を出したため、実行しない呼び出しの ID（確認の答えを待つ間は実行しない）。
+        self.held_calls: set[str] = set()
+
+    async def hold_for_confirmation(self, context: Any, output: Sequence[Any]) -> None:
+        """モデルの応答に回答前の確認があれば、ツールを実行する前に中断するかを決める（#3352）。
+
+        確認で中断する応答では、同じ応答のほかのツールの呼び出しを実行しない（`held_calls`。
+        確認の答えを待つ間に資料・業務データを調べて回答を進めない）。利用者への確認は Run の
+        状態を変える中断（LangGraph の interrupt と同じ）で、確認の答えの後にモデルが続きを決める。
+        SDK は同じ応答の呼び出しを並列に実行するので、中断の判断はここで先に決め、
+        `needs_approval` はその判断を返す（実行の順で判断が変わらない）。
+        """
+        decide = self.decide_confirmation
+        if decide is None:
+            return
+        calls = [
+            item
+            for item in output
+            if getattr(item, "type", None) == "function_call"
+            and isinstance(getattr(item, "call_id", None), str)
+        ]
+        interrupts = False
+        for item in calls:
+            if item.name != CONFIRMATION_TOOL:
+                continue
+            parsed, _errors = parse_arguments(getattr(item, "arguments", None))
+            interrupts = await decide(context, parsed or {}, item.call_id) or interrupts
+        if not interrupts:
+            return
+        held = {item.call_id for item in calls if item.name != CONFIRMATION_TOOL}
+        if held:
+            self.held_calls.update(held)
+            logger.info(
+                "builtin_runtime_tool_calls_held_for_confirmation",
+                extra={"run_id": self.run_id, "held_calls": len(held)},
+            )
+
+    def held_result(self, name: str, call_id: str, arguments: str) -> str:
+        """回答前の確認を出した応答のほかの呼び出し（呼び先へ送らない。#3352）。"""
+        parsed, _errors = parse_arguments(arguments)
+        record_skipped_tool(
+            self.run_id, ToolCall(name=name, arguments=parsed or {}, trace_id=call_id)
+        )
+        return json.dumps(
+            {"error": CONFIRMATION_PENDING_MESSAGE, "error_code": CONFIRMATION_PENDING_CODE},
+            ensure_ascii=False,
+        )
 
     def _skips_rag_clarification(self, name: str, definition: ToolDefinition | None) -> bool:
         if (
@@ -1591,6 +1652,9 @@ class _ToolRecorder:
         # 1. 取消: 取消が確定した Run では step を作らず、呼び先へ送らない（#2609）。
         if await asyncio.to_thread(runtime_repository.builtin_run_ended, self.run_id):
             return self.cancelled_result(name)
+        if call_id and call_id in self.held_calls:
+            # 同じ応答で回答前の確認を出した（#3352）。確認の答えを待つ間は実行しない。
+            return self.held_result(name, call_id, arguments)
         # 進展の無い呼び出しが上限に達した Run では、同じ応答の残りの呼び出しも実行しない（#2580。
         # Run は次のモデルの呼び出しの前に失敗にする）。
         stop = await asyncio.to_thread(self.loop_stop_finding)
@@ -2255,20 +2319,29 @@ def _approval_gate(
 
     回答前の確認（`ask_user_confirmation`）は確認の往復の残りで中断を決める（#1839）。どちらも
     引数が schema に合わない呼び出しは中断しない（実行の境界で引数の誤りとして返す。#2630）。
+    確認の判断は応答ごとに 1 回だけ決め（`_ToolRecorder.hold_for_confirmation` が先に決める。
+    #3352）、確認で中断する応答のほかの呼び出しは承認にも回さない（実行せずに返す）。
     """
     if name == CONFIRMATION_TOOL and confirmation is not None:
         confirm = confirmation_gate(confirmation)
 
-        async def confirmation_needs_answer(
-            context: Any, params: dict[str, Any], call_id: str
-        ) -> bool:
+        async def decide(context: Any, params: dict[str, Any], call_id: str) -> bool:
+            if call_id in recorder.confirmation_decisions:
+                return recorder.confirmation_decisions[call_id]
             if recorder.prepare_arguments(name, params).errors:
-                return False
-            return await confirm(context, params, call_id)
+                decision = False
+            else:
+                decision = await confirm(context, params, call_id)
+            if call_id:
+                recorder.confirmation_decisions[call_id] = decision
+            return decision
 
-        return confirmation_needs_answer
+        recorder.decide_confirmation = decide
+        return decide
 
-    async def needs_approval(_context: Any, params: dict[str, Any], _call_id: str) -> bool:
+    async def needs_approval(_context: Any, params: dict[str, Any], call_id: str) -> bool:
+        if call_id and call_id in recorder.held_calls:
+            return False
         return recorder.needs_approval(name, params)
 
     return needs_approval
@@ -2485,6 +2558,18 @@ def build_function_tools(
     return tools
 
 
+class _ConfirmationTurnHooks(AgentHooks[Any]):
+    """モデルの応答ごとに、回答前の確認で中断するかをツールの実行の前に決める（#3352）。"""
+
+    def __init__(self, recorder: _ToolRecorder) -> None:
+        self.recorder = recorder
+
+    async def on_llm_end(
+        self, context: RunContextWrapper[Any], agent: Agent[Any], response: ModelResponse
+    ) -> None:
+        await self.recorder.hold_for_confirmation(context, list(response.output))
+
+
 def build_sdk_agent(
     run_id: str,
     *,
@@ -2599,12 +2684,21 @@ def build_sdk_agent(
         ):
             if text:
                 composed = f"{composed}\n\n{render_tool_names(text, confirmation_names)}"
+    recorder = next(
+        (
+            found
+            for tool in tools
+            if isinstance(found := getattr(tool, _RECORDER_ATTR, None), _ToolRecorder)
+        ),
+        None,
+    )
     sdk_agent = Agent(
         name=name or "agent",
         instructions=composed,
         tools=list(tools),
         model=model_factory(target),
         model_settings=model_settings_for(target),
+        hooks=_ConfirmationTurnHooks(recorder) if recorder is not None else None,
     )
     # 入力を収める上限（#2383。`_run_config` の `_ContextWindow` が読む）。
     setattr(
