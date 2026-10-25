@@ -113,7 +113,7 @@ uv run python -m app.rag.search_load_cli \
 
 ## File Processing Golden Fixtures
 
-`docs/evaluation/file-processing-golden-set.json` は PDF / image / Office / HTML / Markdown / TSV table / email / duplicate / corrupted file / unsupported audio の取込品質を追跡する manifest です。各 case は `scenario`、期待 parser profile、期待 chunk template、必須 check を持ち、`evaluation/file-processing-fixtures/` のサンプルファイルを参照します。音声は承認済みの文字起こし経路ができるまで `unsupported_audio` として明示的に skip し、parser warning と `audio_transcription_not_configured` reason を gate します。
+`docs/evaluation/file-processing-golden-set.json` は PDF / image / Office / HTML / Markdown / TSV table / email / duplicate / corrupted file の取込品質を追跡する manifest です。各 case は `scenario`、期待 parser profile、期待 chunk template、必須 check を持ち、`evaluation/file-processing-fixtures/` のサンプルファイルを参照します。音声・動画は取り込まない形式で、アップロードで止めるため(#3369)、manifest に case を持ちません。
 
 同梱 fixture は標準ライブラリだけで再生成できます。
 

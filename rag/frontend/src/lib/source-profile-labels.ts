@@ -10,7 +10,6 @@ const PARSER_PROFILE_KEYS: Record<string, I18nKey> = {
   local_office_structure: "sourceProfile.parser.office",
   local_html_semantic: "sourceProfile.parser.html",
   local_email_thread: "sourceProfile.parser.email",
-  unsupported_audio: "sourceProfile.parser.audio",
   unsupported_outlook_msg: "sourceProfile.parser.outlookMsg",
   unsupported_tiff_image: "sourceProfile.parser.tiffImage",
   unsupported_legacy_office_binary: "sourceProfile.parser.legacyOffice",
@@ -44,7 +43,6 @@ const SOURCE_WARNING_KEYS: Record<string, I18nKey> = {
   content_type_extension_mismatch: "sourceProfile.warning.contentTypeMismatch",
   large_file: "sourceProfile.warning.largeFile",
   unknown_modality: "sourceProfile.warning.unknown",
-  unsupported_audio: "sourceProfile.warning.unsupportedAudio",
   unsupported_outlook_msg: "sourceProfile.warning.unsupportedOutlookMsg",
   unsupported_tiff_image: "sourceProfile.warning.unsupportedTiffImage",
   unsupported_legacy_office_binary: "sourceProfile.warning.unsupportedLegacyOffice",
@@ -59,7 +57,6 @@ const SOURCE_WARNING_KEYS: Record<string, I18nKey> = {
 };
 
 const UNSUPPORTED_REASON_KEYS: Record<string, I18nKey> = {
-  audio_transcription_not_configured: "sourceProfile.unsupported.audioTranscriptionNotConfigured",
   outlook_msg_not_supported: "sourceProfile.unsupported.outlookMsgNotSupported",
   tiff_image_not_supported: "sourceProfile.unsupported.tiffImageNotSupported",
   legacy_office_binary_not_supported: "sourceProfile.unsupported.legacyOfficeNotSupported",
@@ -83,7 +80,6 @@ const EVALUATION_WARNING_KEYS: Record<string, I18nKey> = {
   failed_segments: "evaluation.ingestionQuality.warning.failedSegments",
   segment_extraction_artifact_cache_miss:
     "evaluation.ingestionQuality.warning.segmentArtifactCacheMiss",
-  unsupported_audio: "evaluation.ingestionQuality.warning.unsupportedAudio",
   unsupported_outlook_msg: "evaluation.ingestionQuality.warning.unsupportedOutlookMsg",
   unsupported_tiff_image: "evaluation.ingestionQuality.warning.unsupportedTiffImage",
   unsupported_legacy_office_binary: "evaluation.ingestionQuality.warning.unsupportedLegacyOffice",
@@ -181,7 +177,6 @@ export function documentFileTypeLabel(document: Pick<DocumentSummary, "source_pr
   const mime = document.content_type?.split(";", 1)[0]?.trim().toLowerCase();
   if (mime === "application/pdf") return t(sourceModalityKey("pdf"));
   if (mime?.startsWith("image/")) return t(sourceModalityKey("image"));
-  if (mime?.startsWith("audio/")) return t(sourceModalityKey("audio"));
   if (mime === "text/html") return t(sourceModalityKey("html"));
   if (mime?.startsWith("text/")) return t(sourceModalityKey("text"));
   return t(sourceModalityKey("unknown"));

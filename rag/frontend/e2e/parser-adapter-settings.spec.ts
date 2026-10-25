@@ -1104,13 +1104,13 @@ function parserAdapterEnvelope(data: object) {
       ],
       backend_source_kind_matrix: {
         evidence_source: "runtime_routes",
-        required_source_kinds: ["pdf", "image", "office", "html", "email", "audio", "text", "unknown"],
-        covered_source_kinds: ["pdf", "image", "office", "html", "email", "audio", "text", "unknown"],
+        required_source_kinds: ["pdf", "image", "office", "html", "email", "text", "unknown"],
+        covered_source_kinds: ["pdf", "image", "office", "html", "email", "text", "unknown"],
         missing_source_kinds: [],
         backend_source_kinds: {
           docling: ["pdf", "image", "office", "html"],
           dots_ocr: ["pdf", "image"],
-          local: ["audio", "text", "unknown"],
+          local: ["text", "unknown"],
         },
         route_evidence: sourceRoutes,
       },
@@ -1149,15 +1149,6 @@ function defaultSourceRoutes() {
       selected_backend: "local",
       reason_codes: ["selected_adapter_unsupported_for_source"],
       warning_codes: ["docling_adapter_source_unsupported"],
-    },
-    {
-      source_kind: "audio",
-      candidate_order: [],
-      attempted_order: [],
-      active_order: [],
-      selected_backend: "local",
-      reason_codes: ["audio_transcription_not_configured", "selected_adapter_unsupported_for_source"],
-      warning_codes: ["unsupported_audio", "audio_transcription_not_configured"],
     },
     {
       source_kind: "text",

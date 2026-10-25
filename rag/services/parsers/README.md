@@ -11,7 +11,7 @@
 | `xml_tree_json` | CPU | ✅ | XML ツリー JSON（XML の要素の木を tag / attr / children の JSON にした文書。対応する形の `.json`）。使用エンジン（`RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`）に選んだときだけ使う（#2042） |
 | `oci_document_understanding` | OCI | — | OCI Document Understanding を呼ぶ proxy。stack の `rag_enable_oci_cloud_parsers` / `rag-services.sh --oci` |
 
-音声・動画の文字起こしは parser のサービスを使わず、backend が OCI AI Speech で行う。
+音声・動画は取り込まない（アップロードで止める。#3369）。
 
 ## 共通 HTTP 契約(`rag_parser_core`)
 

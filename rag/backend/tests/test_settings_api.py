@@ -152,7 +152,7 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert matrix["evidence_source"] == "runtime_routes"
     assert "pdf" in matrix["backend_source_kinds"]["local"]
     assert "email" in matrix["backend_source_kinds"]["local"]
-    assert "audio" in matrix["backend_source_kinds"]["local"]
+    assert "text" in matrix["backend_source_kinds"]["local"]
     assert matrix["missing_source_kinds"] == []
     assert "raw_text" not in str(matrix)
     capability_by_backend = {item["backend"]: item for item in body["capabilities"]}

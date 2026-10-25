@@ -44,7 +44,6 @@ _COMMON_EXTRACTION_RECIPE_FIELDS: tuple[str, ...] = (
     "rag_preprocess_profile",
     "rag_preprocess_enabled",
     "rag_parser_adapter_backend",
-    "rag_parser_asr_enabled",
     # Vision は解析エンジンに関係なく図の要素の本文を変える(#497)。変えると再解析になる。
     "rag_vision_enabled",
 )
@@ -73,6 +72,9 @@ _CHUNK_SET_FIELDS: tuple[str, ...] = (
 # 削除した親子階層(#271)の子 chunk サイズ(rag_chunk_child_size の既定値)。hash 入力から
 # 外すと既存の chunk_set_id がすべて変わるため、固定値で残して ID を保つ。
 _REMOVED_CHUNK_CHILD_SIZE_HASH_VALUE = 320
+# 削除した音声の文字起こしの設定(#3369。rag_parser_asr_enabled の既定値)。hash 入力から外すと
+# 既存の extraction_recipe_id(と、それに従う chunk_set_id)がすべて変わるため、固定値で残す。
+_REMOVED_ASR_ENABLED_HASH_VALUE = True
 _SMALL_TO_BIG_STRATEGY = "small_to_big"
 # #599 で分割方式の値と親子階層の 5 項目の属性名を改名した。hash の入力は改名の前の名前のまま
 # 計算し、既存の chunk_set_id(chunk・embedding の共有と再処理の対象の特定に使う)を保つ。
@@ -175,6 +177,7 @@ def compute_extraction_recipe_id(source_sha256: str, settings: Settings) -> str:
         "v": KEY_VERSION,
         "src": source_sha256,
         **extraction_recipe_subset(settings),
+        "rag_parser_asr_enabled": _REMOVED_ASR_ENABLED_HASH_VALUE,
     }
     return _digest("er", payload)
 

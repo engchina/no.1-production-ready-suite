@@ -86,7 +86,6 @@ def test_ingestion_raptor_disabled_returns_leaves() -> None:
         oracle=cast(Any, object()),
         object_storage=cast(Any, object()),
         document_understanding=cast(Any, object()),
-        speech=cast(Any, object()),
         settings=Settings(rag_raptor_enabled=False),
     )
     leaves = _chunks(4)
