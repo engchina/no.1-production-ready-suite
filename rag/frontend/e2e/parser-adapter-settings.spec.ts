@@ -689,6 +689,11 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
             { ...disabledAdapter("mineru"), enabled: true, selected: true, status: "active" },
             disabledAdapter("dots_ocr"),
           ],
+          mineru_license: {
+            acknowledged: true,
+            acknowledged_by: "管理者 A",
+            acknowledged_at: "2026-10-26T00:00:00+00:00",
+          },
         }),
       });
       return;
@@ -714,6 +719,10 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
   await expect(page.getByRole("radio", { name: /^Local/ })).toHaveCount(0);
   await expect(page.getByText(/未選択時は既定の Docling で解析します/)).toBeVisible();
   const mineruBackend = page.getByRole("radio", { name: /MinerU/ });
+  // MinerU はライセンスの条件を確認するまで選べない（#3359）。
+  await expect(mineruBackend).toBeDisabled();
+  await page.getByRole("checkbox", { name: "MinerU のライセンスの条件を確認した" }).check();
+  await expect(mineruBackend).toBeEnabled();
   await mineruBackend.focus();
   await expect(mineruBackend).toBeFocused();
   // 本物のラジオは Space（または矢印キー）で選ぶ（#469）。
@@ -730,6 +739,7 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
     docling_enabled: false,
     unstructured_enabled: false,
     mineru_enabled: true,
+    mineru_license_acknowledged: true,
     dots_ocr_enabled: false,
     structured_records_jsonl_enabled: false,
     xml_tree_json_enabled: false,
@@ -998,6 +1008,83 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
   });
   await expectNoHorizontalOverflow(page);
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`MinerU のライセンスの主な条件と公式のリンクを出し、確認するまで選べない (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockParserAdapters(page);
+    await page.goto("/settings/parser-adapters");
+
+    const notice = page.getByTestId("mineru-license-notice");
+    await expect(notice).toContainText("MinerU のライセンス（MinerU Open Source License）の主な条件");
+    await expect(notice).toContainText("月間アクティブユーザーが 1 億を超えるか、月の売上が 2,000 万米ドルを超える");
+    await expect(notice).toContainText("MinerU を使っていることを明示します");
+    await expect(notice).toContainText("通知なしに自動で終わります");
+    await expect(notice).toContainText("MinerU2.5-Pro-2605-1.2B（Apache-2.0）");
+    await expect(notice).toContainText("利用の前に、ライセンスの全文を確認してください");
+    await expect(notice).toContainText("法的な助言ではありません");
+    await expect(notice.getByRole("link", { name: /MinerU の公式リポジトリ/ })).toHaveAttribute(
+      "href",
+      "https://github.com/opendatalab/MinerU"
+    );
+    const licenseLink = notice.getByRole("link", { name: /ライセンスの全文/ });
+    await expect(licenseLink).toHaveAttribute(
+      "href",
+      "https://github.com/opendatalab/MinerU/blob/master/LICENSE.md"
+    );
+    await expect(licenseLink).toHaveAttribute("target", "_blank");
+    // 確認するまで MinerU は選べない（#3359。backend も 422 で拒否する）。
+    const mineruBackend = page.getByRole("radio", { name: /MinerU/ });
+    await expect(mineruBackend).toBeDisabled();
+    await expect(page.locator('label[for="settings-parser-backend-mineru"]')).toContainText(
+      "先に下の「MinerU のライセンスの条件を確認した」を確かめてください"
+    );
+    const acknowledge = notice.getByRole("checkbox", { name: "MinerU のライセンスの条件を確認した" });
+    await expect(acknowledge).not.toBeChecked();
+    await acknowledge.check();
+    await expect(mineruBackend).toBeEnabled();
+    await expect(page.getByText("未保存の変更があります。")).toBeVisible();
+    await expectNoPageOverflow(page);
+  });
+
+  test(`MinerU を使用エンジンにしている間は確認を外せない (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.route("**/api/settings/parser-adapters", (route) =>
+      route.fulfill({
+        json: parserAdapterEnvelope({
+          adapter_backend: "mineru",
+          effective_order: ["mineru"],
+          config_source: "runtime",
+          adapters: [
+            disabledAdapter("docling"),
+            disabledAdapter("unstructured"),
+            { ...disabledAdapter("mineru"), enabled: true, selected: true, status: "active" },
+            disabledAdapter("dots_ocr"),
+          ],
+          mineru_license: {
+            acknowledged: true,
+            acknowledged_by: "管理者 A",
+            acknowledged_at: "2026-10-26T00:00:00+00:00",
+          },
+        }),
+      })
+    );
+    await page.goto("/settings/parser-adapters");
+
+    const notice = page.getByTestId("mineru-license-notice");
+    const acknowledge = notice.getByRole("checkbox", { name: "MinerU のライセンスの条件を確認した" });
+    await expect(acknowledge).toBeChecked();
+    await expect(acknowledge).toBeDisabled();
+    await expect(notice).toContainText("MinerU を使用エンジンにしている間は、確認を外せません");
+    await expect(notice).toContainText("確認済み: 管理者 A");
+    await expectNoPageOverflow(page);
+  });
+}
 
 async function mockParserAdapters(page: Page, extra: object = {}) {
   await page.route("**/api/settings/parser-adapters", async (route) => {

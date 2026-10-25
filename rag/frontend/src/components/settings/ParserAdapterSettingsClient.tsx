@@ -67,6 +67,7 @@ import {
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { FeaturePromptDisclosure } from "./AnswerPromptEditor";
+import { MineruLicenseNotice } from "./MineruLicenseNotice";
 import { PostParseSettingsCard } from "./PostParseSettingsCard";
 
 type ParserAdapterForm = {
@@ -74,6 +75,8 @@ type ParserAdapterForm = {
   docling_enabled: boolean;
   unstructured_enabled: boolean;
   mineru_enabled: boolean;
+  /** MinerU のライセンスの条件の確認（#3359）。確認するまで MinerU を選べない。 */
+  mineru_license_acknowledged: boolean;
   dots_ocr_enabled: boolean;
   structured_records_jsonl_enabled: boolean;
   xml_tree_json_enabled: boolean;
@@ -87,7 +90,7 @@ type ExternalParserConnectionForm = {
 };
 type ParserAdapterFlagField = Exclude<
   keyof ParserAdapterForm,
-  "adapter_backend" | "connections"
+  "adapter_backend" | "connections" | "mineru_license_acknowledged"
 >;
 type ConnectionFieldErrors = Record<string, string>;
 
@@ -192,8 +195,19 @@ export function ParserAdapterSettingsClient() {
   }
 
   function selectBackend(adapterBackend: ParserAdapterBackend) {
+    // MinerU はライセンスの条件を確認するまで選べない（#3359。backend も 422 で拒否する）。
+    if (adapterBackend === "mineru" && !form?.mineru_license_acknowledged) return;
     const enabledUpdate = externalBackendFlagUpdate(adapterBackend);
     updateForm({ adapter_backend: adapterBackend, ...enabledUpdate });
+  }
+
+  function acknowledgeMineruLicense(checked: boolean) {
+    // 確認を外すときは MinerU の有効化も外す（使用エンジンが MinerU の間は外せない）。
+    updateForm(
+      checked
+        ? { mineru_license_acknowledged: true }
+        : { mineru_license_acknowledged: false, mineru_enabled: false }
+    );
   }
 
   function resetForm() {
@@ -255,6 +269,7 @@ export function ParserAdapterSettingsClient() {
         errorMessage={save.isError ? saveError : null}
         connectionErrors={connectionErrors}
         onBackendChange={selectBackend}
+        onMineruLicenseChange={acknowledgeMineruLicense}
         onConnectionChange={updateConnection}
         onReset={resetForm}
         onSubmit={submit}
@@ -274,6 +289,7 @@ function OverviewCard({
   errorMessage,
   connectionErrors,
   onBackendChange,
+  onMineruLicenseChange,
   onConnectionChange,
   onReset,
   onSubmit,
@@ -285,6 +301,7 @@ function OverviewCard({
   errorMessage: string | null;
   connectionErrors: ConnectionFieldErrors;
   onBackendChange: (backend: ParserAdapterBackend) => void;
+  onMineruLicenseChange: (checked: boolean) => void;
   onConnectionChange: (
     backend: ExternalParserBackendName,
     update: Partial<ExternalParserConnectionForm>
@@ -387,6 +404,9 @@ function OverviewCard({
                   const capability = findParserCapability(settings.capabilities, backend);
                   const supportedFormats = formatSupportedFormats(capability);
                   const supportedExtensions = formatSupportedExtensions(capability);
+                  // MinerU はライセンスの条件を確認するまで選べない（#3359）。
+                  const licenseBlocked =
+                    backend === "mineru" && !selected && !form.mineru_license_acknowledged;
                   return (
                     <div key={backend} className="relative min-w-0">
                       <input
@@ -396,7 +416,10 @@ function OverviewCard({
                         name="settings-parser-backend"
                         value={backend}
                         checked={selected}
-                        disabled={saving}
+                        disabled={saving || licenseBlocked}
+                        aria-describedby={
+                          licenseBlocked ? "settings-parser-backend-mineru-blocked" : undefined
+                        }
                         onChange={() => onBackendChange(backend)}
                       />
                       <label
@@ -426,6 +449,14 @@ function OverviewCard({
                             {supportedExtensions}
                           </span>
                         ) : null}
+                        {licenseBlocked ? (
+                          <span
+                            id="settings-parser-backend-mineru-blocked"
+                            className="mt-1 block text-xs leading-relaxed text-warning-fg"
+                          >
+                            {t("mineruLicense.selectBlocked")}
+                          </span>
+                        ) : null}
                         <span className="mt-2 flex flex-wrap items-center gap-1.5">
                           {runtimeStatus ? <ServiceStatusBadge status={runtimeStatus} /> : null}
                           {service && !service.configured ? (
@@ -441,6 +472,22 @@ function OverviewCard({
                 })}
             </div>
           </div>
+          {/* MinerU の選択肢のすぐ下に、ライセンスの主な条件と確認を出す（#3359）。 */}
+          <MineruLicenseNotice
+            acknowledgement={settings.mineru_license}
+            acknowledge={{
+              id: "settings-parser-mineru-license-acknowledged",
+              checked: form.mineru_license_acknowledged,
+              // 使用エンジンが MinerU の間は確認を外せない（backend も 422 で拒否する）。
+              disabled:
+                saving || (form.mineru_license_acknowledged && form.adapter_backend === "mineru"),
+              note:
+                form.mineru_license_acknowledged && form.adapter_backend === "mineru"
+                  ? t("mineruLicense.withdrawLocked")
+                  : null,
+              onChange: onMineruLicenseChange,
+            }}
+          />
           {form.adapter_backend === "local" ? (
             <p className="text-xs leading-relaxed text-warning-fg">
               {t("settings.parserAdapters.legacyBackendNotice")}
@@ -867,6 +914,7 @@ function formFromSettings(settings: ParserAdapterSettingsData): ParserAdapterFor
     docling_enabled: enabledByBackend.get("docling") ?? false,
     unstructured_enabled: enabledByBackend.get("unstructured") ?? false,
     mineru_enabled: enabledByBackend.get("mineru") ?? false,
+    mineru_license_acknowledged: settings.mineru_license?.acknowledged ?? false,
     dots_ocr_enabled: enabledByBackend.get("dots_ocr") ?? false,
     structured_records_jsonl_enabled: enabledByBackend.get("structured_records_jsonl") ?? false,
     xml_tree_json_enabled: enabledByBackend.get("xml_tree_json") ?? false,
@@ -910,6 +958,7 @@ function serializeForm(form: ParserAdapterForm) {
     docling_enabled: form.docling_enabled,
     unstructured_enabled: form.unstructured_enabled,
     mineru_enabled: form.mineru_enabled,
+    mineru_license_acknowledged: form.mineru_license_acknowledged,
     dots_ocr_enabled: form.dots_ocr_enabled,
     structured_records_jsonl_enabled: form.structured_records_jsonl_enabled,
     xml_tree_json_enabled: form.xml_tree_json_enabled,
@@ -923,6 +972,7 @@ function parserSettingsUpdate(form: ParserAdapterForm): ParserAdapterSettingsUpd
     docling_enabled: form.docling_enabled,
     unstructured_enabled: form.unstructured_enabled,
     mineru_enabled: form.mineru_enabled,
+    mineru_license_acknowledged: form.mineru_license_acknowledged,
     dots_ocr_enabled: form.dots_ocr_enabled,
     structured_records_jsonl_enabled: form.structured_records_jsonl_enabled,
     xml_tree_json_enabled: form.xml_tree_json_enabled,

@@ -114,7 +114,11 @@ def test_rag_parser_save_then_nl2sql_save_then_rag_reads() -> None:
     model_file = Path(settings.model_settings_file)
     saved = client.patch(
         "/api/settings/parser-adapters",
-        json={"adapter_backend": "mineru", "mineru_enabled": True},
+        json={
+            "adapter_backend": "mineru",
+            "mineru_enabled": True,
+            "mineru_license_acknowledged": True,
+        },
     )
     assert saved.status_code == 200
     assert not model_file.exists()

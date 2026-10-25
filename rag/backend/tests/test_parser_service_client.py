@@ -135,7 +135,12 @@ def test_runner_fail_fast_raises_when_service_unreachable(
 
 
 def test_runner_fail_fast_raises_when_external_parser_is_unconfigured() -> None:
-    client = ParserServiceClient(Settings(rag_parser_mineru_api_host=""))
+    client = ParserServiceClient(
+        Settings(
+            rag_parser_mineru_api_host="",
+            rag_parser_mineru_license_acknowledged_at="2026-10-26T00:00:00+00:00",
+        )
+    )
 
     with pytest.raises(ParserServiceUnavailableError) as exc_info:
         client.runner(

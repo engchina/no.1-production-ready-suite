@@ -142,6 +142,10 @@ from app.rag.layer_fingerprint import (
     NAVIGATION_SUMMARY_MAX_NODES_ARTIFACT_KEY,
     field_schema_hash,
 )
+from app.rag.mineru_license import (
+    MINERU_LICENSE_REQUIRED_MESSAGE,
+    MINERU_LICENSE_UNACKNOWLEDGED_WARNING,
+)
 from app.rag.navigation import (
     build_navigation_tree,
     navigation_summary_elements,
@@ -4116,6 +4120,8 @@ def _selected_parser_failure_message(
         )
     if warning == STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_WARNING:
         return structured_records_requires_jsonl_backend_message(label) + warning_suffix
+    if warning == MINERU_LICENSE_UNACKNOWLEDGED_WARNING:
+        return MINERU_LICENSE_REQUIRED_MESSAGE + warning_suffix
     if warning and warning.startswith("structured_records_invalid:"):
         return (
             f"選択した文書解析エンジン（{label}）は、ファイル準備の「CSV→JSONL」「Excel→JSONL」「Word→JSONL」が"

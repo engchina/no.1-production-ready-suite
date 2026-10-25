@@ -105,6 +105,11 @@ from app.rag.layer_fingerprint import (
     current_layer_inputs,
     recorded_layer_fingerprint,
 )
+from app.rag.mineru_license import (
+    MINERU_BACKEND,
+    MINERU_LICENSE_REQUIRED_MESSAGE,
+    mineru_license_acknowledged,
+)
 from app.rag.navigation import build_navigation_tree
 from app.rag.parser_source_guard import check_parser_source, settings_convert_source
 from app.rag.rate_limit import enforce_rate_limit
@@ -1316,6 +1321,7 @@ async def update_document_recipe(
         _merge_document_processing_config(request)
     except KbAdapterConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _raise_if_recipe_selects_mineru_without_license(request)
     oracle = OracleClient()
     try:
         await oracle.update_document_recipe_config(document_id, recipe_id, request)
@@ -2545,6 +2551,18 @@ def _layer_requested(layer: str, settings: Settings) -> bool:
     if layer == "navigation":
         return bool(settings.rag_navigation_summary_enabled or settings.rag_raptor_enabled)
     return False
+
+
+def _raise_if_recipe_selects_mineru_without_license(config: DocumentProcessingConfig) -> None:
+    """MinerU のライセンスの条件の確認が無いまま、レシピで MinerU を選ぶ保存を拒否する（#3359）。
+
+    レシピが明示した値だけを見る（全体の既定から継いだ MinerU は文書解析の設定の確認で決まる）。
+    """
+    selects_mineru = (
+        config.parser_adapter_backend == MINERU_BACKEND or config.parser_mineru_enabled is True
+    )
+    if selects_mineru and not mineru_license_acknowledged(get_settings()):
+        raise HTTPException(status_code=422, detail=MINERU_LICENSE_REQUIRED_MESSAGE)
 
 
 def _merge_document_processing_config(

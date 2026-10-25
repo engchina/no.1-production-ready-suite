@@ -34,6 +34,10 @@ from app.clients.external_parser import (
 )
 from app.clients.http_retry import request_with_retry, retry_config_from_settings
 from app.config import Settings
+from app.rag.mineru_license import (
+    MINERU_LICENSE_REQUIRED_MESSAGE,
+    MINERU_LICENSE_UNACKNOWLEDGED_REASON,
+)
 from app.schemas.document import SourceProfile
 
 logger = logging.getLogger(__name__)
@@ -595,6 +599,8 @@ def _service_unavailable_message(
             "旧結果は保持されていますが、新しい処理は開始できません。"
             "文書レシピで利用可能な解析エンジンを選び直してください。"
         )
+    if reason == MINERU_LICENSE_UNACKNOWLEDGED_REASON:
+        return MINERU_LICENSE_REQUIRED_MESSAGE + warning_suffix
     if reason == STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_REASON:
         return structured_records_requires_jsonl_backend_message(label) + warning_suffix
     if reason == "unconfigured":

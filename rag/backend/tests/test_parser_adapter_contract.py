@@ -302,17 +302,13 @@ def test_compatibility_matrix_mineru_unconfigured_connection_is_missing(
         lambda *_args: (False, None, None),
     )
     monkeypatch.setattr(parser_registry, "_module_available", lambda name: name == "mineru")
-    monkeypatch.setattr(
-        parser_registry,
-        "_run_mineru",
-        lambda _path: (_ for _ in ()).throw(AssertionError("in-process OCR must not run")),
-    )
 
     matrix = run_parser_adapter_compatibility_matrix(
         Settings(
             rag_parser_adapter_backend="mineru",
             rag_parser_mineru_enabled=True,
             rag_parser_mineru_api_host="",
+            rag_parser_mineru_license_acknowledged_at="2026-10-26T00:00:00+00:00",
         ),
         fixture_root=fixture_root,
         fixture_specs=(

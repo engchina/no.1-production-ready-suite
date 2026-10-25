@@ -203,6 +203,8 @@ def _mineru_settings(**overrides: object) -> Settings:
     return Settings(
         rag_parser_mineru_api_host=f"{_MINERU_HOST}/",
         rag_parser_mineru_api_key="mineru-secret",
+        # 管理者が MinerU のライセンスの条件を確認済み（#3359）。
+        rag_parser_mineru_license_acknowledged_at="2026-10-26T00:00:00+00:00",
         **overrides,  # type: ignore[arg-type]
     )
 

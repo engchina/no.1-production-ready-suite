@@ -6,6 +6,7 @@ import logging
 import re
 import stat
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -87,6 +88,12 @@ from app.rag.graph_adapter import (
     graph_adapter_runtime_settings,
     normalize_graph_profile,
 )
+from app.rag.mineru_license import (
+    MINERU_BACKEND,
+    MINERU_LICENSE_REQUIRED_MESSAGE,
+    mineru_license_acknowledged,
+    settings_use_mineru,
+)
 from app.rag.oracle_schema import vector_index_reindex_sql
 from app.rag.parser_adapter_readiness import parser_adapter_runtime_settings
 from app.rag.parser_adapter_scorecard import (
@@ -143,6 +150,7 @@ from app.schemas.settings import (
     GuardrailSettingsUpdate,
     HuggingFaceSettingsData,
     HuggingFaceSettingsUpdate,
+    MineruLicenseAcknowledgementData,
     ModelSettingsTestRequest,
     OciConfigField,
     ParserAdapterBackendSourceMatrixData,
@@ -171,6 +179,7 @@ from app.schemas.settings import (
     VectorIndexSettingsData,
     VectorIndexSettingsUpdate,
 )
+from app.security.dependencies import current_principal
 from app.security.permissions import ANSWER_PROMPT_EDIT_PERMISSIONS
 from app.security.service import get_security_service
 
@@ -366,16 +375,25 @@ async def get_external_parser_status(
 @router.patch("/parser-adapters", response_model=ApiResponse[ParserAdapterSettingsData])
 async def update_parser_adapter_settings(
     payload: ParserAdapterSettingsUpdate,
+    request: Request,
 ) -> ApiResponse[ParserAdapterSettingsData]:
     """任意 parser adapter の backend/feature flag と「解析後の処理」を保存し runtime へ反映する。
 
     - 解析エンジン（`adapter_backend` と feature flag・接続）は parser-settings.json（#1701）。
     - 「解析後の処理」（Vision・項目抽出・章節木。#528）は backend/.env。ほかのプロセスは
       `.env` の更新時刻の変化で読み直す（#466）。
+    - MinerU は、ライセンスの条件の確認（`mineru_license_acknowledged`）が無ければ有効にも
+      選択にもできない（422。#3359）。確認した人・日時は parser-settings.json に保存する。
     """
     settings = get_settings()
     post_parse_updates = _post_parse_settings_updates(payload)
     parser_fields = payload.model_fields_set - set(POST_PARSE_SETTING_FIELDS)
+    actor = _principal_display_name(request)
+    if parser_fields:
+        # 「解析後の処理」の .env を書く前に、MinerU の確認の不足で止める（途中まで保存しない）。
+        _raise_if_mineru_license_missing(
+            settings, _parser_adapter_settings_candidate(settings, payload, actor=actor), payload
+        )
     if post_parse_updates:
         # 先に .env を書く。失敗したら解析エンジンの設定も変えない（500）。
         _persist_post_parse_settings(settings.model_copy(update=post_parse_updates))
@@ -387,7 +405,8 @@ async def update_parser_adapter_settings(
         try:
             with PARSER_SETTINGS_STORE.lock(settings):
                 PARSER_SETTINGS_STORE.reload_if_changed(settings)
-                candidate = _parser_adapter_settings_candidate(settings, payload)
+                candidate = _parser_adapter_settings_candidate(settings, payload, actor=actor)
+                _raise_if_mineru_license_missing(settings, candidate, payload)
                 PARSER_SETTINGS_STORE.save(candidate)
         except OSError as exc:
             raise HTTPException(
@@ -1124,6 +1143,7 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
         field_extraction_enabled=settings.rag_field_extraction_enabled,
         navigation_summary_enabled=settings.rag_navigation_summary_enabled,
         vision_concurrency=settings.rag_vision_concurrency,
+        mineru_license=_mineru_license_data(settings),
         config_source="runtime",
     )
 
@@ -1241,12 +1261,79 @@ def _parser_adapter_backend_source_matrix(
     )
 
 
+def _principal_display_name(request: Request) -> str:
+    """操作した利用者の表示名（MinerU のライセンスの確認の記録に使う。#3359）。"""
+    try:
+        return current_principal(request).display_name or ""
+    except Exception:  # noqa: BLE001 - 認証の無い開発の構成（local）では名前を記録しない
+        return ""
+
+
+def _mineru_license_updates(
+    base: Settings,
+    payload: ParserAdapterSettingsUpdate,
+    *,
+    actor: str,
+) -> dict[str, object]:
+    """MinerU のライセンスの確認の記録の更新（#3359）。確認済みなら最初の記録を保つ。"""
+    if payload.mineru_license_acknowledged is None:
+        return {}
+    if not payload.mineru_license_acknowledged:
+        return {
+            "rag_parser_mineru_license_acknowledged_by": "",
+            "rag_parser_mineru_license_acknowledged_at": "",
+        }
+    if mineru_license_acknowledged(base):
+        return {}
+    return {
+        "rag_parser_mineru_license_acknowledged_by": actor[:256],
+        "rag_parser_mineru_license_acknowledged_at": datetime.now(UTC).isoformat(
+            timespec="seconds"
+        ),
+    }
+
+
+def _raise_if_mineru_license_missing(
+    base: Settings,
+    candidate: Settings,
+    payload: ParserAdapterSettingsUpdate,
+) -> None:
+    """MinerU のライセンスの条件を確認せずに MinerU を有効・選択にする保存を拒否する（#3359）。
+
+    この保存で MinerU を選んだ・有効にした・確認を外したときだけ止める。`.env` で前から MinerU が
+    有効だった構成でも、ほかの項目の保存は止めない（取込では確認が無ければ MinerU を呼ばない）。
+    """
+    if mineru_license_acknowledged(candidate) or not settings_use_mineru(candidate):
+        return
+    newly_selected = (
+        candidate.rag_parser_adapter_backend == MINERU_BACKEND
+        and base.rag_parser_adapter_backend != MINERU_BACKEND
+    )
+    newly_enabled = candidate.rag_parser_mineru_enabled and not base.rag_parser_mineru_enabled
+    withdrawn = payload.mineru_license_acknowledged is False and mineru_license_acknowledged(base)
+    if newly_selected or newly_enabled or withdrawn:
+        raise HTTPException(status_code=422, detail=MINERU_LICENSE_REQUIRED_MESSAGE)
+
+
+def _mineru_license_data(settings: Settings) -> MineruLicenseAcknowledgementData:
+    if not mineru_license_acknowledged(settings):
+        return MineruLicenseAcknowledgementData(acknowledged=False)
+    return MineruLicenseAcknowledgementData(
+        acknowledged=True,
+        acknowledged_by=settings.rag_parser_mineru_license_acknowledged_by.strip() or None,
+        acknowledged_at=settings.rag_parser_mineru_license_acknowledged_at.strip(),
+    )
+
+
 def _parser_adapter_settings_candidate(
     base: Settings,
     payload: ParserAdapterSettingsUpdate,
+    *,
+    actor: str = "",
 ) -> Settings:
     """parser adapter 更新 payload から保存候補 settings を作る。"""
     updates: dict[str, object] = {
+        **_mineru_license_updates(base, payload, actor=actor),
         # 省略したときは今の解析エンジンのまま（「解析後の処理」だけの保存。#528）。
         "rag_parser_adapter_backend": payload.adapter_backend or base.rag_parser_adapter_backend,
         "rag_parser_docling_enabled": _optional_bool(

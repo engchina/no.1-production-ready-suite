@@ -334,6 +334,10 @@ class _PersistedParserAdapterSettings(BaseModel):
     structured_records_jsonl_enabled: bool = False
     xml_tree_json_enabled: bool = False
     mineru_api_host: str = Field(default="", max_length=2048)
+    # MinerU のライセンスの条件を管理者が確認した記録（#3359）。確認するまで MinerU を有効にも
+    # 選択にもできない（app.rag.mineru_license）。確認した人の表示名と日時（UTC の ISO 8601）。
+    mineru_license_acknowledged_by: str = Field(default="", max_length=256)
+    mineru_license_acknowledged_at: str = Field(default="", max_length=64)
     dots_ocr_api_host: str = Field(default="", max_length=2048)
     dots_ocr_model: str = Field(default="rednote-hilab/dots.mocr", max_length=512)
 
@@ -2245,6 +2249,16 @@ class Settings(
         default="", description="MinerU 4.x の V1 API（/v1/parse/jobs）の base URL。"
     )
     rag_parser_mineru_api_key: str = Field(default="", repr=False)
+    # MinerU のライセンスの条件の確認（#3359）。「文書解析」画面で管理者が確認すると
+    # parser-settings.json に保存する。空の間は MinerU を有効・選択・実行できない。
+    rag_parser_mineru_license_acknowledged_by: str = Field(
+        default="",
+        description="MinerU のライセンスの条件を確認した管理者の表示名(画面の確認で保存する)。",
+    )
+    rag_parser_mineru_license_acknowledged_at: str = Field(
+        default="",
+        description="MinerU のライセンスの条件を確認した日時(UTC の ISO 8601。画面で保存する)。",
+    )
     # MinerU 4.0 は解析の方式（pipeline / vlm / hybrid）を品質の tier にまとめた（#1329）。
     # OCR の言語は MinerU の API サーバーの起動時の設定で、V1 の request には無い。
     rag_parser_mineru_tier: MineruTier = Field(

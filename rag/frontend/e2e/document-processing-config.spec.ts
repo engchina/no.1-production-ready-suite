@@ -106,6 +106,8 @@ async function mockWorkspace(
     previewChunkMetadata?: Record<string, string>;
     /** 設定を保存するまで、レシピの処理の投入を 409 にする文(#2639)。 */
     enqueueConflictUntilSaved?: string;
+    /** 管理者が MinerU のライセンスの条件を確認済みか（#3359。既定は確認済み）。 */
+    mineruLicenseAcknowledged?: boolean;
   } = {}
 ) {
   const status = options.documentStatus ?? "INDEXED";
@@ -147,6 +149,22 @@ async function mockWorkspace(
     };
   };
 
+  // 処理設定パネルは文書解析の設定から対応形式と MinerU のライセンスの確認を読む（#3359）。
+  const mineruLicenseAcknowledged = options.mineruLicenseAcknowledged ?? true;
+  await page.route("**/api/settings/parser-adapters", (route) =>
+    route.fulfill({
+      json: ok({
+        capabilities: [],
+        mineru_license: mineruLicenseAcknowledged
+          ? {
+              acknowledged: true,
+              acknowledged_by: "管理者 A",
+              acknowledged_at: "2026-10-26T00:00:00+00:00",
+            }
+          : { acknowledged: false, acknowledged_by: null, acknowledged_at: null },
+      }),
+    })
+  );
   await page.route("**/api/knowledge-bases**", (route) =>
     route.fulfill({
       json: ok({
@@ -780,6 +798,56 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
+  test(`MinerU はライセンスの条件の確認の後だけ選べ、選ぶと主な条件を出す (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockWorkspace(page, { mineruLicenseAcknowledged: false });
+    await page.goto("/documents/doc-1");
+
+    const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
+    await panel.getByRole("button", { name: "処理設定を編集" }).click();
+    await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
+    const parserRow = panel
+      .getByTestId("document-processing-config-editor-items")
+      .locator('[data-config-field="parser_adapter_backend"]');
+    // 未確認の間は MinerU を選択肢に出さず、管理者の確認が要ることを示す（#3359）。
+    await expect(parserRow).toContainText(
+      "管理者が「取込・検索・回答設定 › 文書解析」で MinerU のライセンスの条件を確認する必要があります"
+    );
+    await panel.getByRole("combobox", { name: "文書解析" }).click();
+    await expect(page.getByRole("option", { name: "Docling" })).toBeVisible();
+    await expect(page.getByRole("option", { name: "MinerU" })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expectNoPageOverflow(page);
+  });
+
+  test(`MinerU を選んだレシピにライセンスの主な条件と公式のリンクを出す (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockWorkspace(page);
+    await page.goto("/documents/doc-1");
+
+    const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
+    await panel.getByRole("button", { name: "処理設定を編集" }).click();
+    await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
+    await panel.getByRole("combobox", { name: "文書解析" }).click();
+    await page.getByRole("option", { name: "MinerU" }).click();
+
+    const notice = panel.getByTestId("document-mineru-license-notice-doc-1");
+    await expect(notice).toContainText("MinerU Open Source License");
+    await expect(notice).toContainText("月間アクティブユーザーが 1 億を超える");
+    await expect(notice).toContainText("利用の前に、ライセンスの全文を確認してください");
+    await expect(notice).toContainText("確認済み: 管理者 A");
+    await expect(notice.getByRole("link", { name: /ライセンスの全文/ })).toHaveAttribute(
+      "href",
+      "https://github.com/opendatalab/MinerU/blob/master/LICENSE.md"
+    );
+    await expect(notice.getByRole("checkbox")).toHaveCount(0);
+    await expectNoPageOverflow(page);
+  });
+
   test(
     `処理の開始の失敗は、設定を直して保存したら消える (${viewport.name})`,
     { tag: "@responsive" },

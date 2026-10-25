@@ -49,6 +49,18 @@ XML ツリー JSON(`.json`)は、文書解析の既定か処理レシピの使�
 Unstructured の解析サービスは既定では配備しない。形式ごとの取り込み方は [docs/deployment.md](./docs/deployment.md) の
 「既定の解析エンジン（Docling）で扱える形式と、それ以外の形式の取り込み方」を参照。
 GPU の OCR(mineru / dots_ocr)は外部で運用する API を「取込・検索・回答設定 › 文書解析」で指定する。
+
+**MinerU のライセンス(#3359)**: MinerU は「MinerU Open Source License」(Apache-2.0 に追加の条件)で提供される。主な条件は次のとおり。
+**利用の前に、ライセンスの全文([LICENSE.md](https://github.com/opendatalab/MinerU/blob/master/LICENSE.md)。公式のリポジトリは
+[opendatalab/MinerU](https://github.com/opendatalab/MinerU))を確認すること**(ここは主な条件の抜粋で、法的な助言ではない)。
+
+1. 利用者とその関連会社の合算で、月間アクティブユーザーが 1 億を超えるか月の売上が 2,000 万米ドルを超えると、MinerU のチームの別途の商用ライセンスが要る。
+2. MinerU を使って第三者にオンラインサービスを提供するときは、サービスの画面か公開の文書の目立つ所に MinerU を使っていることを明示する。
+3. 1・2 を満たさないと、ライセンスは通知なしに自動で終わる。旧モデルの `MinerU2.5-2509-1.2B` は AGPL-3.0 なので、`MinerU2.5-Pro-2605-1.2B`(Apache-2.0)を使う。
+
+管理者が「文書解析」の画面で「MinerU のライセンスの条件を確認した」を確かめて保存するまで、MinerU は使用エンジンにも処理レシピにも選べない
+(backend も拒否する)。公式の remote 解析(mineru.net)は使わず、自前の API サーバーでは `mineru telemetry disable` で利用状況の送信を止める
+(詳細は [docs/deployment.md](./docs/deployment.md) の「許可（ライセンス）の確認」)。
 Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 詳細は [services/parsers/README.md](./services/parsers/README.md) と
 [AGENTS.md](./AGENTS.md) の「Parser マイクロサービス」節を参照。

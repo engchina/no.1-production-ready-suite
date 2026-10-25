@@ -208,7 +208,36 @@ export const ja = {
   "settings.parserAdapters.backend.local.description": "旧 in-process 解析。既定の Docling へ正規化",
   "settings.parserAdapters.backend.docling.description": "既定の解析エンジン。PDF と画像を解析",
   "settings.parserAdapters.backend.unstructured.description": "テキスト・HTML・Office・メールなども受ける汎用の解析。選んだ場合だけ使用",
-  "settings.parserAdapters.backend.mineru.description": "外部 MinerU API を使用",
+  "settings.parserAdapters.backend.mineru.description":
+    "外部 MinerU API を使用。ライセンスの条件の確認が要る",
+  // MinerU のライセンス（MinerU Open Source License）の主な条件と、利用の前の確認（#3359）。
+  "mineruLicense.title": "MinerU のライセンス（MinerU Open Source License）の主な条件",
+  "mineruLicense.intro":
+    "MinerU は Apache-2.0 に追加の条件を付けたライセンスで提供されています。主な条件は次のとおりです。",
+  "mineruLicense.point.threshold":
+    "利用者とその関連会社の合算で、月間アクティブユーザーが 1 億を超えるか、月の売上が 2,000 万米ドルを超えると、MinerU のチームの別途の商用ライセンスが要ります。",
+  "mineruLicense.point.attribution":
+    "MinerU を使って第三者にオンラインサービスを提供するときは、サービスの画面か公開の文書の目立つ所に、MinerU を使っていることを明示します。",
+  "mineruLicense.point.termination":
+    "上の条件を満たさないと、ライセンスは通知なしに自動で終わります。",
+  "mineruLicense.point.model":
+    "旧モデルの MinerU2.5-2509-1.2B は AGPL-3.0 です。MinerU2.5-Pro-2605-1.2B（Apache-2.0）を使ってください。",
+  "mineruLicense.confirmFullText":
+    "利用の前に、ライセンスの全文を確認してください。この案内は主な条件の抜粋で、法的な助言ではありません。",
+  "mineruLicense.link.repository": "MinerU の公式リポジトリ（GitHub）",
+  "mineruLicense.link.license": "ライセンスの全文（LICENSE.md）",
+  "mineruLicense.link.newTab": "（新しいタブで開く）",
+  "mineruLicense.acknowledge": "MinerU のライセンスの条件を確認した",
+  "mineruLicense.acknowledgeHelper":
+    "確認すると、MinerU を使用エンジンに選べます。確認した人と日時は保存の時に記録します。",
+  "mineruLicense.acknowledgedBy": "確認済み: {name}（{at}）",
+  "mineruLicense.acknowledgedAt": "確認済み（{at}）",
+  "mineruLicense.withdrawLocked":
+    "MinerU を使用エンジンにしている間は、確認を外せません。先に別の使用エンジンを選んでください。",
+  "mineruLicense.selectBlocked":
+    "MinerU を選ぶには、先に下の「MinerU のライセンスの条件を確認した」を確かめてください。",
+  "mineruLicense.recipeUnacknowledged":
+    "MinerU を選ぶには、管理者が「取込・検索・回答設定 › 文書解析」で MinerU のライセンスの条件を確認する必要があります。",
   "settings.parserAdapters.backend.dots_ocr.description": "外部 Dots.OCR API を使用",
   "settings.parserAdapters.backend.oci_document_understanding": "OCI Document Understanding",
   "settings.parserAdapters.backend.oci_document_understanding.description":

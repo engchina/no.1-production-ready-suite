@@ -2248,7 +2248,16 @@ export interface ParserAdapterSettingsData {
   navigation_summary_enabled: boolean;
   /** 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。1〜16。#2002）。 */
   vision_concurrency?: number;
+  /** MinerU のライセンスの条件の確認（#3359）。確認するまで MinerU を選べない。 */
+  mineru_license?: MineruLicenseAcknowledgement;
   config_source: "runtime";
+}
+
+/** MinerU のライセンスの条件を管理者が確認した記録（#3359）。 */
+export interface MineruLicenseAcknowledgement {
+  acknowledged: boolean;
+  acknowledged_by: string | null;
+  acknowledged_at: string | null;
 }
 
 /** `adapter_backend` を省略すると解析エンジンの設定は変えない（「解析後の処理」だけの保存。#528）。 */
@@ -2257,6 +2266,8 @@ export interface ParserAdapterSettingsUpdate {
   docling_enabled?: boolean;
   unstructured_enabled?: boolean;
   mineru_enabled?: boolean;
+  /** true で確認した人・日時を記録し、false で記録を消す（#3359）。 */
+  mineru_license_acknowledged?: boolean;
   dots_ocr_enabled?: boolean;
   structured_records_jsonl_enabled?: boolean;
   xml_tree_json_enabled?: boolean;

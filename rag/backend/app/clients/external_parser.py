@@ -23,6 +23,12 @@ from rag_parser_core.result import ParserRegistryResult
 
 from app.clients.http_retry import request_with_retry, retry_config_from_settings
 from app.config import Settings
+from app.rag.mineru_license import (
+    MINERU_BACKEND,
+    MINERU_LICENSE_UNACKNOWLEDGED_REASON,
+    MINERU_LICENSE_UNACKNOWLEDGED_WARNING,
+    mineru_license_acknowledged,
+)
 from app.schemas.document import SourceModality, SourceProfile
 
 logger = logging.getLogger(__name__)
@@ -196,6 +202,12 @@ class ExternalParserClient:
         source_profile: SourceProfile | None,
         content_type: str,
     ) -> ParserRegistryResult:
+        if backend == MINERU_BACKEND and not mineru_license_acknowledged(self._settings):
+            # 管理者が MinerU のライセンスの条件を確認するまで MinerU を呼ばない（#3359）。
+            raise ExternalParserCallError(
+                MINERU_LICENSE_UNACKNOWLEDGED_REASON,
+                warning_code=MINERU_LICENSE_UNACKNOWLEDGED_WARNING,
+            )
         connection = external_parser_connection(self._settings, backend)
         if not connection.configured:
             raise ExternalParserCallError("unconfigured", warning_code=f"{backend}_unconfigured")

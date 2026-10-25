@@ -313,6 +313,7 @@ def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_
         json={
             "adapter_backend": "mineru",
             "mineru_enabled": True,
+            "mineru_license_acknowledged": True,
             "dots_ocr_enabled": False,
         },
     )
@@ -348,6 +349,7 @@ def test_update_external_parser_connection_retains_and_clears_secret(
         "/api/settings/parser-adapters",
         json={
             "adapter_backend": "mineru",
+            "mineru_license_acknowledged": True,
             "connections": [
                 {
                     "backend": "mineru",
