@@ -20,29 +20,7 @@
     {
       "observation": "cancelled",
       "elapsed_ms": 500.0,
-      "run": {
-        "id": "run-cancelled-run-0",
-        "status": "cancelled",
-        "thread_id": "thread-cancelled-run",
-        "steps": [],
-        "artifacts": [
-          {
-            "kind": "answer",
-            "content": {
-              "text": ""
-            }
-          },
-          {
-            "kind": "answer_validation",
-            "content": {
-              "status": "completed"
-            }
-          }
-        ],
-        "usage": {
-          "requests": 2
-        }
-      }
+      "run_id": "run-cancelled-run-0"
     }
   ],
   "expected": {
@@ -89,7 +67,7 @@
           "case_id": "cancelled-run",
           "turn": 0,
           "run_id": "run-cancelled-run-0",
-          "thread_id": "thread-cancelled-run",
+          "thread_id": "thread_d5b2344f70113ba52cc9d56fedc06955",
           "status": "cancelled",
           "elapsed_ms": 500.0,
           "outcome": null,
@@ -97,13 +75,18 @@
           "validation_status": null,
           "model_requests": null,
           "tool_calls": {},
-          "superseded_searches": 0
+          "superseded_searches": 0,
+          "agent_version": null,
+          "skipped_approval_tools": [],
+          "withheld_evidence_count": 0,
+          "evidence_text_omitted": 0,
+          "cancel_result": null
         }
       ],
-      "run_requests": [
+      "chat_requests": [
         {
           "agent_id": "agent-baseline",
-          "goal": "合成の質問: cancelled-run"
+          "question": "合成の質問: cancelled-run"
         }
       ],
       "cancelled_run_ids": []

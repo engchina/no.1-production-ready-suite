@@ -1,6 +1,6 @@
 {
   "id": "answered-agent-outcome",
-  "description": "成果物 answer の outcome（agent_answer）で採点する 1 往復。同じ文書とみなす文書の引用を正解の文書にそろえ、ページの合わない根拠は取れなかった根拠に数える。",
+  "description": "公開の outcome（agent_answer）で採点する 1 往復。同じ文書とみなす文書の引用を正解の文書にそろえ、ページの合わない根拠は取れなかった根拠に数える。",
   "covers": [
     "outcome:agent_answer",
     "citations:evidence+read_source",
@@ -45,99 +45,7 @@
     {
       "observation": "completed",
       "elapsed_ms": 1500.0,
-      "run": {
-        "id": "run-answered-agent-outcome-0",
-        "status": "completed",
-        "thread_id": "thread-answered-agent-outcome",
-        "steps": [
-          {
-            "status": "completed",
-            "tool_call": {
-              "name": "rag__rag_retrieve_evidence",
-              "arguments": {
-                "query": "項目 X 上限"
-              }
-            },
-            "tool_result": {
-              "name": "rag_retrieve_evidence",
-              "success": true,
-              "output": {
-                "evidence": [
-                  {
-                    "evidence_id": "c-z1",
-                    "document_id": "doc-z",
-                    "chunk_id": "c-z1",
-                    "file_name": "doc-z.pdf",
-                    "excerpt": "合成の無関係の記載。",
-                    "score": 0.8,
-                    "locator": {
-                      "page_start": 9,
-                      "page_end": 9
-                    }
-                  },
-                  {
-                    "evidence_id": "c-a1",
-                    "document_id": "doc-a-copy",
-                    "chunk_id": "c-a1",
-                    "file_name": "doc-a-copy.pdf",
-                    "excerpt": "項目 X の上限は 30 日です。",
-                    "score": 0.8,
-                    "locator": {
-                      "page_start": 1,
-                      "page_end": 1
-                    }
-                  }
-                ]
-              }
-            }
-          },
-          {
-            "status": "completed",
-            "tool_call": {
-              "name": "rag__rag_read_source",
-              "arguments": {}
-            },
-            "tool_result": {
-              "name": "rag_read_source",
-              "success": true,
-              "output": {
-                "document_id": "doc-b",
-                "chunk_id": "c-b1",
-                "text": "承認者は管理者 B です。",
-                "file_name": "doc-b.pdf",
-                "locator": {
-                  "page_start": 2,
-                  "page_end": 2
-                }
-              }
-            }
-          }
-        ],
-        "artifacts": [
-          {
-            "kind": "answer",
-            "content": {
-              "text": "項目 X の上限は 30 日です。承認者は管理者 B です。",
-              "outcome": {
-                "schema_version": 1,
-                "value": "answered",
-                "basis": "answer_passages",
-                "rag_outcome": null,
-                "signals": []
-              }
-            }
-          },
-          {
-            "kind": "answer_validation",
-            "content": {
-              "status": "completed"
-            }
-          }
-        ],
-        "usage": {
-          "requests": 2
-        }
-      }
+      "run_id": "run-answered-agent-outcome-0"
     }
   ],
   "expected": {
@@ -207,7 +115,7 @@
           "case_id": "answered-agent-outcome",
           "turn": 0,
           "run_id": "run-answered-agent-outcome-0",
-          "thread_id": "thread-answered-agent-outcome",
+          "thread_id": "thread_2bcc392a542c1d40310e2ad992adad96",
           "status": "completed",
           "elapsed_ms": 1500.0,
           "outcome": "answered",
@@ -218,13 +126,18 @@
             "rag_retrieve_evidence": 1,
             "rag_read_source": 1
           },
-          "superseded_searches": 0
+          "superseded_searches": 0,
+          "agent_version": null,
+          "skipped_approval_tools": [],
+          "withheld_evidence_count": 0,
+          "evidence_text_omitted": 0,
+          "cancel_result": null
         }
       ],
-      "run_requests": [
+      "chat_requests": [
         {
           "agent_id": "agent-baseline",
-          "goal": "合成の質問 1: 項目 X の上限と、その承認者は？"
+          "question": "合成の質問 1: 項目 X の上限と、その承認者は？"
         }
       ],
       "cancelled_run_ids": []

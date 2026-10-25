@@ -1,10 +1,10 @@
 {
   "id": "multi-turn-clarify-then-answer",
-  "description": "確認の質問の後に返答を同じ会話（thread_id）の次の Run として送る 2 往復。1 往復目は成果物にoutcome の無い旧形式（rag_search の outcome）、2 往復目は成果物の outcome。読んだ chunk の重複は1 つに数え、章節（section_path）で根拠を照合する。",
+  "description": "確認の質問の後に返答を同じ会話（thread_id）の次の agent_chat として送る 2 往復。1 往復目は成果物に outcome の無い旧形式（公開の MCP の outcome は null で、最後の行が問いなので needs_clarification と推定する）、2 往復目は公開の outcome。読んだ chunk の重複は 1 つに数え、章節（section_path）で根拠を照合する。",
   "covers": [
     "multi_turn",
     "known_conditions",
-    "outcome:agent_rag_search",
+    "outcome:inferred_question",
     "outcome:agent_answer",
     "citations:read_document",
     "citations:dedupe",
@@ -51,163 +51,12 @@
     {
       "observation": "completed",
       "elapsed_ms": 1000.0,
-      "run": {
-        "id": "run-multi-turn-clarify-then-answer-0",
-        "status": "completed",
-        "thread_id": "thread-multi-turn-clarify-then-answer",
-        "steps": [
-          {
-            "status": "completed",
-            "tool_call": {
-              "name": "rag__rag_search",
-              "arguments": {
-                "query": "設定 Y 手順"
-              }
-            },
-            "tool_result": {
-              "name": "rag_search",
-              "success": true,
-              "output": {
-                "outcome": "needs_clarification",
-                "clarifications": [
-                  {
-                    "condition_id": "scope",
-                    "question": "対象の区分は？"
-                  }
-                ],
-                "evidence": []
-              }
-            }
-          }
-        ],
-        "artifacts": [
-          {
-            "kind": "answer",
-            "content": {
-              "text": "対象の区分を確かめます。\n区分 P と区分 Q のどちらですか？"
-            }
-          },
-          {
-            "kind": "answer_validation",
-            "content": {
-              "status": "completed"
-            }
-          }
-        ],
-        "usage": {
-          "requests": 2
-        }
-      }
+      "run_id": "run-multi-turn-clarify-then-answer-0"
     },
     {
       "observation": "completed",
       "elapsed_ms": 2250.0,
-      "run": {
-        "id": "run-multi-turn-clarify-then-answer-1",
-        "status": "completed",
-        "thread_id": "thread-multi-turn-clarify-then-answer",
-        "steps": [
-          {
-            "status": "completed",
-            "tool_call": {
-              "name": "rag__rag_search",
-              "arguments": {
-                "query": "設定 Y 手順",
-                "conditions": {
-                  "scope": "P"
-                }
-              }
-            },
-            "tool_result": {
-              "name": "rag_search",
-              "success": true,
-              "output": {
-                "outcome": "answered",
-                "clarifications": [],
-                "evidence": [
-                  {
-                    "evidence_id": "c-c1",
-                    "document_id": "doc-c",
-                    "chunk_id": "c-c1",
-                    "file_name": "doc-c.pdf",
-                    "excerpt": "区分 P の手順: 画面 1 で値を変える。",
-                    "score": 0.8,
-                    "locator": {
-                      "section_path": [
-                        "2. 手順"
-                      ],
-                      "page_start": 4,
-                      "page_end": 4
-                    }
-                  }
-                ]
-              }
-            }
-          },
-          {
-            "status": "completed",
-            "tool_call": {
-              "name": "rag__rag_read_document",
-              "arguments": {}
-            },
-            "tool_result": {
-              "name": "rag_read_document",
-              "success": true,
-              "output": {
-                "document_id": "doc-c",
-                "file_name": "doc-c.pdf",
-                "text": "区分 P の手順: 画面 1 で値を変える。保存して終える。",
-                "chunks": [
-                  {
-                    "chunk_id": "c-c1",
-                    "section_path": [
-                      "2. 手順"
-                    ],
-                    "page_start": 4,
-                    "page_end": 4,
-                    "start": 0,
-                    "end": 22
-                  },
-                  {
-                    "chunk_id": "c-c2",
-                    "section_path": [
-                      "2. 手順"
-                    ],
-                    "page_start": 5,
-                    "page_end": 5,
-                    "start": 22,
-                    "end": 30
-                  }
-                ]
-              }
-            }
-          }
-        ],
-        "artifacts": [
-          {
-            "kind": "answer",
-            "content": {
-              "text": "区分 P の手順は、画面 1 で値を変えて保存します。",
-              "outcome": {
-                "schema_version": 1,
-                "value": "answered",
-                "basis": "answer_passages",
-                "rag_outcome": null,
-                "signals": []
-              }
-            }
-          },
-          {
-            "kind": "answer_validation",
-            "content": {
-              "status": "completed"
-            }
-          }
-        ],
-        "usage": {
-          "requests": 4
-        }
-      }
+      "run_id": "run-multi-turn-clarify-then-answer-1"
     }
   ],
   "expected": {
@@ -243,7 +92,7 @@
         {
           "turn": 0,
           "observed_outcome": "needs_clarification",
-          "outcome_source": "agent_rag_search",
+          "outcome_source": "inferred",
           "response_decision_accuracy": 1.0,
           "expected_decisions": [
             "clarify"
@@ -294,23 +143,28 @@
           "case_id": "multi-turn-clarify-then-answer",
           "turn": 0,
           "run_id": "run-multi-turn-clarify-then-answer-0",
-          "thread_id": "thread-multi-turn-clarify-then-answer",
+          "thread_id": "thread_94207fc60be625afbb5e518975e8e332",
           "status": "completed",
           "elapsed_ms": 1000.0,
           "outcome": "needs_clarification",
-          "outcome_source": "agent_rag_search",
+          "outcome_source": "inferred",
           "validation_status": "completed",
           "model_requests": 2,
           "tool_calls": {
             "rag_search": 1
           },
-          "superseded_searches": 0
+          "superseded_searches": 0,
+          "agent_version": null,
+          "skipped_approval_tools": [],
+          "withheld_evidence_count": 0,
+          "evidence_text_omitted": 0,
+          "cancel_result": null
         },
         {
           "case_id": "multi-turn-clarify-then-answer",
           "turn": 1,
           "run_id": "run-multi-turn-clarify-then-answer-1",
-          "thread_id": "thread-multi-turn-clarify-then-answer",
+          "thread_id": "thread_94207fc60be625afbb5e518975e8e332",
           "status": "completed",
           "elapsed_ms": 2250.0,
           "outcome": "answered",
@@ -321,18 +175,23 @@
             "rag_search": 1,
             "rag_read_document": 1
           },
-          "superseded_searches": 0
+          "superseded_searches": 0,
+          "agent_version": null,
+          "skipped_approval_tools": [],
+          "withheld_evidence_count": 0,
+          "evidence_text_omitted": 0,
+          "cancel_result": null
         }
       ],
-      "run_requests": [
+      "chat_requests": [
         {
           "agent_id": "agent-baseline",
-          "goal": "合成の質問 2: 設定 Y を変える手順は？\n（既知の条件: modeは「標準」）"
+          "question": "合成の質問 2: 設定 Y を変える手順は？\n（既知の条件: modeは「標準」）"
         },
         {
           "agent_id": "agent-baseline",
-          "goal": "対象は区分 P です。",
-          "thread_id": "thread-multi-turn-clarify-then-answer"
+          "question": "対象は区分 P です。",
+          "thread_id": "thread_94207fc60be625afbb5e518975e8e332"
         }
       ],
       "cancelled_run_ids": []

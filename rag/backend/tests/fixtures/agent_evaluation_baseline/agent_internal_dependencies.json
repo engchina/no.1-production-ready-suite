@@ -1,25 +1,12 @@
 {
-  "description": "今の CLI の採点・記録が使う、公開の Agent MCP（platform/contracts/mcp/agent-tools.json の agent_chat / agent_get_run の出力）に無い Run の観測の一覧（#3240 の段 2 の設計の入力）。dependencies は fixture の観測を消して確かめられる項目（witness の fixture で、score_changes の採点の項目だけが変わり、run_changes の Run の記録が変わる）。not_ablatable は観測を消す形では確かめられない項目。",
+  "description": "段 1 の CLI の採点・記録が Agent の Run の内部の記録（observations）から読んでいた観測と、それを返す公開の Agent MCP（platform/contracts/mcp/agent-tools.json）の項目（public_fields）の対応（#3240 の段 2）。段 2 の後の CLI は公開の出力だけを読む。dependencies は公開の項目を消して確かめられる項目（witness の fixture で、score_changes の採点の項目だけが変わり、run_changes の Run の記録が変わる。段 1 で内部の記録を消して確かめた変化と同じ）。not_ablatable は消す形では確かめられない項目、not_added は公開の契約に足さなかった観測と理由。",
   "public_contract": "platform/contracts/mcp/agent-tools.json",
-  "public_run_output": [
-    "run_id",
-    "agent_id",
-    "thread_id",
-    "status",
-    "in_progress",
-    "answer",
-    "confirmation",
-    "sources[].title",
-    "sources[].location",
-    "sources[].excerpt",
-    "passage_marks",
-    "removed_passages",
-    "answer_warnings",
-    "tools_used",
-    "skipped_approval_tools",
-    "pending_approvals",
-    "message",
-    "notice"
+  "public_fixture": "platform/contracts/mcp/fixtures/agent-evaluation-baseline.json",
+  "public_tools": [
+    "agent_chat",
+    "agent_get_run",
+    "agent_get_run_observation",
+    "agent_cancel_run"
   ],
   "dependencies": [
     {
@@ -38,8 +25,15 @@
         "failure_reasons:evidence_miss",
         "引用の重複の除去（document_id と chunk_id の組）"
       ],
-      "public_agent_mcp": "absent",
-      "public_note": "sources[] は title・location・excerpt だけで、文書と chunk の ID が無い。引用は ID の無い項目を数えないため、MRR と必要な根拠は 0 になる。",
+      "public_agent_mcp": "public",
+      "public_fields": [
+        "agent_get_run_observation.evidence[].document_id",
+        "agent_get_run_observation.evidence[].chunk_id",
+        "agent_get_run_observation.evidence[].rank",
+        "agent_get_run.sources[].document_id",
+        "agent_get_run.sources[].chunk_id"
+      ],
+      "public_note": "観測の根拠は RAG と同じ名前の ID を持ち、重複を除いて初めて現れた順（rank）に並ぶ（MRR の順）。ID の無い根拠は数えない。",
       "ablation": "strip_citation_ids",
       "witness": {
         "fixture": "answered-agent-outcome",
@@ -58,15 +52,18 @@
       "id": "structured-locator",
       "observations": [
         "steps[].tool_result.output.evidence[].locator（page_start・page_end・section_path・sheet_name・row_start・row_end）",
-        "rag_read_source の locator・rag_read_document / rag_read_section の chunks[] の場所の項目（READ_CHUNK_LOCATION_KEYS）"
+        "rag_read_source の locator・rag_read_document / rag_read_section の chunks[] の場所の項目"
       ],
       "used_by": [
         "required_evidence_recall（page・section・sheet・row の条件の付いた根拠）",
         "missing_evidence",
         "failure_reasons:evidence_miss"
       ],
-      "public_agent_mcp": "partial",
-      "public_note": "sources[].location は表示用の文字列で、頁・章節・シート・行を構造で持たない。",
+      "public_agent_mcp": "public",
+      "public_fields": [
+        "agent_get_run_observation.evidence[].locator"
+      ],
+      "public_note": "観測の locator は RAG の EvidenceLocator と同じ名前（bbox は出さない）。読み取りのツールの chunk の場所も同じ形で返す。",
       "ablation": "strip_locators",
       "witness": {
         "fixture": "multi-turn-clarify-then-answer",
@@ -90,8 +87,12 @@
         "拒答の判定（insufficient_evidence）",
         "検索の指標の対象外の判定（needs_clarification / needs_human で引用が無い）による mrr・required_evidence_recall の分母"
       ],
-      "public_agent_mcp": "absent",
-      "public_note": "出力に outcome が無い。status・confirmation・answer の本文から推定するしかない（推定は RAG の推定と同じ規則になるとは限らない）。",
+      "public_agent_mcp": "public",
+      "public_fields": [
+        "agent_get_run.outcome",
+        "agent_get_run_observation.outcome"
+      ],
+      "public_note": "rag_search.outcome と同じ語彙。完了の Run だけで、ほかは null。語彙に無い値・旧形式の Run は null（CLI は回答の文から推定する）。",
       "ablation": "strip_answer_outcome",
       "witness": {
         "fixture": "clarification-skips-retrieval",
@@ -111,31 +112,6 @@
       }
     },
     {
-      "id": "rag-search-signals",
-      "observations": [
-        "rag_search の出力の outcome・clarifications・insufficient_reason（成果物に outcome の無い旧形式の対応の出所）"
-      ],
-      "used_by": [
-        "observed_outcome（outcome_source=agent_rag_search）",
-        "outcome_source",
-        "diagnostics.answer.clarifications・insufficient_reason"
-      ],
-      "public_agent_mcp": "absent",
-      "public_note": "ツールの出力は公開されない（tools_used はツールの名前だけ）。",
-      "ablation": "strip_rag_search_signals",
-      "witness": {
-        "fixture": "legacy-rag-search-outcome",
-        "score_changes": [
-          "observed_outcome",
-          "outcome_source"
-        ],
-        "run_changes": [
-          "outcome",
-          "outcome_source"
-        ]
-      }
-    },
-    {
       "id": "validation-status",
       "observations": [
         "artifacts[kind=answer_validation].content.status"
@@ -143,9 +119,12 @@
       "used_by": [
         "Run の記録の validation_status"
       ],
-      "public_agent_mcp": "partial",
-      "public_note": "answer_warnings・passage_marks・removed_passages はあるが、最終の検証を終えたかの状態は無い。",
-      "ablation": "strip_validation_artifact",
+      "public_agent_mcp": "public",
+      "public_fields": [
+        "agent_get_run_observation.validation_status"
+      ],
+      "public_note": "completed / skipped / unvalidated（無ければ null）。",
+      "ablation": "strip_validation_status",
       "witness": {
         "fixture": "answered-agent-outcome",
         "score_changes": [],
@@ -162,8 +141,11 @@
       "used_by": [
         "Run の記録の model_requests"
       ],
-      "public_agent_mcp": "absent",
-      "public_note": "モデルの呼び出しの数は出力に無い。",
+      "public_agent_mcp": "public",
+      "public_fields": [
+        "agent_get_run_observation.usage"
+      ],
+      "public_note": "requests・input_tokens・output_tokens・model（OpenTelemetry の gen_ai.usage.* の名前）。",
       "ablation": "strip_usage",
       "witness": {
         "fixture": "answered-agent-outcome",
@@ -182,9 +164,13 @@
         "Run の記録の superseded_searches",
         "agent.superseded_cases（旧版も検索して答えるケースで旧版を検索したか。#1392）"
       ],
-      "public_agent_mcp": "absent",
-      "public_note": "ツールの引数は公開されない。",
-      "ablation": "strip_tool_arguments",
+      "public_agent_mcp": "public",
+      "public_fields": [
+        "agent_get_run_observation.tool_calls[].include_superseded",
+        "agent_get_run_observation.tool_calls[].status"
+      ],
+      "public_note": "引数の本体は出さず、RAG の根拠のツールの include_superseded の真偽だけを返す。成功した呼び出しは status=completed。",
+      "ablation": "strip_include_superseded",
       "witness": {
         "fixture": "unknown-outcome-vocabulary",
         "score_changes": [],
@@ -197,18 +183,41 @@
   "not_ablatable": [
     {
       "id": "retrieved-not-only-used",
-      "public_agent_mcp": "partial",
-      "note": "CLI は Run のツールが返した根拠をすべて引用に数える（回答に使わなかった根拠も含む）。sources[] は回答に使った根拠だけなので、同じ観測からでも MRR・必要な根拠の値が変わりうる。"
+      "public_agent_mcp": "public",
+      "public_fields": [
+        "agent_get_run_observation.evidence[].cited",
+        "agent_get_run_observation.evidence_total",
+        "agent_get_run_observation.next_cursor"
+      ],
+      "note": "CLI は Run のツールが返した根拠をすべて引用に数える（回答に使わなかった根拠も含む）。観測の evidence[] は AI に渡した根拠と読んだ chunk の全件で（next_cursor でページをたどる）、回答で引用したかは cited で分かる。agent_get_run の sources[] は回答に使った根拠だけなので、採点には使わない。"
     },
     {
       "id": "tool-call-counts",
-      "public_agent_mcp": "partial",
-      "note": "Run の記録の tool_calls はツールごとの呼び出しの数（失敗した呼び出しを含む）。tools_used はツールの名前だけで数が無い。"
+      "public_agent_mcp": "public",
+      "public_fields": [
+        "agent_get_run_observation.tool_calls[].name",
+        "agent_get_run_observation.tool_call_total"
+      ],
+      "note": "Run の記録の tool_calls はツールごとの呼び出しの数（失敗・承認で呼ばなかった呼び出しを含む）。観測の tool_calls[] は呼び出しごと（200 件まで。全件の数は tool_call_total）。"
     },
     {
       "id": "run-lifecycle-operations",
-      "public_agent_mcp": "absent",
-      "note": "--create-agent の業務 Agent の作成・公開（POST /api/agents・/publish）と、時間切れの Run の取消（POST /api/runs/{id}/cancel）。公開の Agent MCP は agent_list・agent_chat・agent_get_run・agent_answer_confirmation・agent_skill_export だけで、作成・公開・取消のツールが無い。"
+      "public_agent_mcp": "partial",
+      "public_fields": [
+        "agent_cancel_run.result",
+        "agent_get_run_observation.agent_version"
+      ],
+      "note": "時間切れの Run の取消は agent_cancel_run（冪等。result を Run の記録の cancel_result に残す）。業務 Agent の作成・公開（段 1 の --create-agent）の MCP のツールは足さない（#3240 の Q4。攻撃面を広げない）。CLI は公開済みの業務 Agent を --agent-id で指定し、使った版（agent_version）を記録する。"
+    }
+  ],
+  "not_added": [
+    {
+      "id": "rag-search-signals",
+      "public_agent_mcp": "not_added",
+      "observations": [
+        "rag_search の出力の outcome・clarifications・insufficient_reason（成果物に outcome の無い旧形式の対応の出所）"
+      ],
+      "note": "公開の契約に足さない（ツールの出力の本体を出さない。設計の §3）。MCP で作る新しい Run は完了すれば outcome を持つ。CLI は outcome の無い完了の Run を回答の文から推定する（outcome_source=inferred）。段 1 でこの観測で採点していた 3 つのケースの採点が変わった（README.md「意図して作り直した値」の #3240 の段 2）。保存した旧形式の Run の推定は段 4 で suite の adapter が扱う。"
     }
   ]
 }
