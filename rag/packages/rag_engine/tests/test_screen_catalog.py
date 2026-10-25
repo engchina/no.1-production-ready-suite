@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 
+from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.retrieval.screen_catalog import (
     LinkedScreen,
     ScreenLinks,
@@ -96,6 +97,30 @@ def test_link_failures_leave_retrieval_unchanged():
 
     assert link_screens("帳票の印字を変えたい。", build_screen_catalog(POOL), broken, settings=None) == []
     assert link_screens("帳票の印字を変えたい。", {}, broken, settings=None) == []
+
+
+def test_link_failure_is_reported_as_degraded_not_as_no_match():
+    # 選択の失敗は「該当なし」と分けて、呼び出し元の記録に処理の種類と例外を渡す（#3259）。
+    def broken(*args, **kwargs):
+        raise RuntimeError("provider unavailable")
+
+    def no_match(*args, **kwargs):
+        return ScreenLinks(candidates=[])
+
+    reported: list[tuple[str, str]] = []
+    dependencies = AnswerDependencies(
+        search=lambda **_: None,
+        check_ready=lambda **_: None,
+        parse_text=lambda *a, **k: None,
+        parse_images=lambda *a, **k: None,
+        rerank=lambda *a, **k: None,
+        report_degraded=lambda kind, exc: reported.append((kind, type(exc).__name__)),
+    )
+    with bind_dependencies(dependencies):
+        assert link_screens("帳票の印字を変えたい。", build_screen_catalog(POOL), no_match, settings=None) == []
+        assert reported == []
+        assert link_screens("帳票の印字を変えたい。", build_screen_catalog(POOL), broken, settings=None) == []
+    assert reported == [("screen_link", "RuntimeError")]
 
 
 def test_reserve_moves_only_the_best_child_of_each_linked_screen_up_to_the_rank():
