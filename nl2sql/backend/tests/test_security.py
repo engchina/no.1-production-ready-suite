@@ -2373,8 +2373,8 @@ def test_route_permissions_cover_every_mounted_route() -> None:
     # 失敗の分析と会話の履歴（#2319）は menu.db_admin_chat だけ。回答の注意書きの取得・保存
     # （#2405）は menu.settings_answer_notice。チャットの添付（#2517）は生成の権限、使うかの設定は
     # menu.settings_chat_attachments。
-    assert len(mounted) == 305
-    assert len(ROUTE_PERMISSIONS) == 293
+    assert len(mounted) == 306
+    assert len(ROUTE_PERMISSIONS) == 294
     assert ROUTE_PERMISSIONS[("GET", "/nl2sql/select-ai/credential-readiness")] == frozenset(
         {
             "nl2sql.profiles.manage",
@@ -2391,10 +2391,16 @@ def test_route_permissions_cover_every_mounted_route() -> None:
     )
     for path in ("/nl2sql/chats", "/nl2sql/chats/{conversation_id}"):
         assert ROUTE_PERMISSIONS[("GET", path)] == frozenset({QUERY_GENERATE_PERMISSION})
-    for path in ("/nl2sql/jobs/{job_id}/progress", "/nl2sql/jobs/{job_id}/progress/stream"):
-        assert (
-            ROUTE_PERMISSIONS[("GET", path)] == ROUTE_PERMISSIONS[("GET", "/nl2sql/jobs/{job_id}")]
-        )
+    # 処理の経過（#3226 の案 A）は記録と同じ権限。
+    for path, record in (
+        ("/nl2sql/jobs/{job_id}/trace", "/nl2sql/jobs/{job_id}"),
+        ("/nl2sql/history/{history_id}/trace", "/nl2sql/history/{history_id}"),
+        (
+            "/nl2sql/db-admin-chat/conversations/{conversation_id}/turns/{turn_id}/trace",
+            "/nl2sql/db-admin-chat/conversations/{conversation_id}",
+        ),
+    ):
+        assert ROUTE_PERMISSIONS[("GET", path)] == ROUTE_PERMISSIONS[("GET", record)]
     assert set(ROUTE_PERMISSIONS).isdisjoint(OPEN_API_OPERATIONS)
     assert set(ROUTE_PERMISSIONS) | set(OPEN_API_OPERATIONS) == mounted
     for key, permissions in ROUTE_PERMISSIONS.items():

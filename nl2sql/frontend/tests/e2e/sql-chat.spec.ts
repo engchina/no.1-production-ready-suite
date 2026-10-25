@@ -16,7 +16,14 @@ import {
   expectProgressTimerMonotonic,
   startProgressTimerSampler,
 } from "./_helpers/progress-timer";
-import { jobProgressEvents, jobProgressTraceId, turnProgressEvents, withJobProgress } from "./_helpers/job-progress";
+import {
+  jobProgressEvents,
+  jobProgressTraceId,
+  recordMockTrace,
+  turnProgressEvents,
+  withJobProgress,
+  withRecordedTrace,
+} from "./_helpers/job-progress";
 import {
   REQUIREMENT_CLARIFIED_QUESTION,
   REQUIREMENT_PENDING_HINT,
@@ -135,8 +142,6 @@ async function setup(page: Page, requirementOptions: ChatRequirementMockOptions 
           status: turn.status,
           created_at: turn.created_at,
           steps: [],
-          // 作成時の処理の段階のイベント（backend の start_job と同じ。#1359）。
-          progress_events: turnProgressEvents(turn),
         },
       },
     });
@@ -890,7 +895,6 @@ async function loseJobSubmitResponse(
         },
       });
     if (control.lose) return route.abort("failed");
-    const created = state.turns.find((turn) => turn.job_id === id)!;
     return route.fulfill({
       json: {
         data: {
@@ -898,7 +902,6 @@ async function loseJobSubmitResponse(
           status: "done",
           created_at: now,
           steps: [],
-          progress_events: turnProgressEvents(created),
         },
       },
     });
@@ -1322,9 +1325,9 @@ test("上を読んでいる間に回答が届いても引き戻さず「最新�
   await expect(latest).toHaveCount(0);
 });
 
-// #1359: 処理の段階は backend が記録したイベントを SSE で受け取る（会話の取り直しを待たない）。
+// #1359・#3226: 処理の段階は worker が共通の span の表に書いた span を読み直して受け取る（会話の取り直しを待たない）。
 for (const width of [1280, 375]) {
-  test(`処理中の段階を SSE で受け取り、会話の記録の続きから積む (#1359, ${width}px)`, async ({ page }) => {
+  test(`処理中の段階を span の表から受け取り、会話の取り直しを待たない (#1359・#3226, ${width}px)`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     const state = await setup(page);
     state.queued = true;
@@ -1337,51 +1340,35 @@ for (const width of [1280, 375]) {
         generate_sql: { status: "running", params: { engine: "select_ai" } },
       },
     });
-    const streams: { since: number; lastEventId: string | undefined }[] = [];
-    await page.route("**/api/nl2sql/jobs/*/progress/stream**", (route) => {
-      const url = new URL(route.request().url());
-      const since = Number(url.searchParams.get("since") ?? 0);
-      const lastEventId = route.request().headers()["last-event-id"];
-      streams.push({ since, lastEventId });
-      const cursor = Math.max(since, Number(lastEventId ?? 0));
-      const events = generating.filter((event) => Number(event.seq) > cursor);
-      // 送るものが無ければ 204（ブラウザは張り直しをやめ、画面は polling に縮退する）。
-      if (events.length === 0) return route.fulfill({ status: 204 });
-      const body = [
-        "retry: 2000\n\n",
-        ...events.map((event) => `id: ${event.seq}\nevent: chat_progress\ndata: ${JSON.stringify(event)}\n\n`),
-      ].join("");
-      return route.fulfill({ status: 200, headers: { "Content-Type": "text/event-stream" }, body });
+    // span は worker が共通の span の表に書く（会話のターンの保存を待たない）。画面は処理の経過の API を読み直す。
+    let traceReads = 0;
+    page.on("request", (request) => {
+      if (/\/api\/nl2sql\/jobs\/chat-1\/trace/.test(request.url())) traceReads += 1;
     });
-    await page.route("**/api/nl2sql/jobs/*/progress?**", (route) =>
-      route.fulfill({
-        json: { data: { target_id: "chat-1", attempt: 0, events: [], last_seq: generating.length, terminal: false } },
-      }),
-    );
     await page.goto("/chat");
     const composer = page.getByRole("textbox", { name: "質問", exact: true });
     await composer.fill("カテゴリ別売上");
     await composer.press("Enter");
     await confirmChatRequirement(page);
     await expect.poll(() => state.turns.length).toBe(1);
-    // 会話の取り直しは開始待ちまで（実行の全体と開始待ちの span の 3 件目まで）。続きは SSE だけが届ける。
+    // 会話のターンは実行中のまま（段階を持たない）。span の表には生成の途中まで入っている。
     Object.assign(state.turns[0], {
       status: "running",
       engine: "select_ai",
       created_at: createdAt,
       started_at: createdAt,
-      progress_events: generating.slice(0, 3),
     });
+    recordMockTrace("chat-1", generating, { pinned: true });
     const current = page.getByTestId("sql-chat-turn").getByTestId("sql-chat-progress-current");
     await expect(current).toHaveAttribute("data-step-id", "generate_sql");
     await expect(current).toContainText("SQL を生成しています（Select AI）");
-    // SSE は受け取った記録の続き（`since`）から開く。
-    expect(streams.length).toBeGreaterThan(0);
-    // 完了は会話の取り直しで届く（記録に終端が入る）。
+    expect(traceReads).toBeGreaterThan(0);
+    // 完了は会話の取り直しで届く（ジョブの状態が正本）。
     const generatedSql = "SELECT CATEGORY, SUM(AMOUNT) FROM APP.SALES GROUP BY CATEGORY";
     // 終わった段階の詳細は段階の終わりの記録で届き、後の段階の実行中から開ける（ジョブの終わりを待たない。#2373）。
-    Object.assign(state.turns[0], {
-      progress_events: jobProgressEvents("chat-1", {
+    recordMockTrace(
+      "chat-1",
+      jobProgressEvents("chat-1", {
         at: createdAt,
         steps: {
           queue: "done",
@@ -1394,7 +1381,8 @@ for (const width of [1280, 375]) {
           safety_check: "running",
         },
       }),
-    });
+      { pinned: true },
+    );
     const liveProgress = page.getByTestId("sql-chat-turn").getByTestId("sql-chat-progress");
     await expect(current).toHaveAttribute("data-step-id", "safety_check");
     const liveToggle = liveProgress.getByTestId("sql-chat-progress-step-generate_sql-toggle");
@@ -1404,11 +1392,10 @@ for (const width of [1280, 375]) {
       liveProgress.getByTestId("sql-chat-progress-step-generate_sql-details").getByLabel("生成した SQL"),
     ).toHaveText(generatedSql);
     await expect(current).toHaveAttribute("data-step-id", "safety_check");
-    Object.assign(state.turns[0], {
-      status: "done",
-      finished_at: iso(0),
-      // 終わった段階には backend が段を開いて見る詳細を付ける（#2294。生成した SQL・安全性の確認の結果）。
-      progress_events: jobProgressEvents("chat-1", {
+    // 終わった段階には backend が段を開いて見る詳細を付ける（#2294。生成した SQL・安全性の確認の結果）。
+    recordMockTrace(
+      "chat-1",
+      jobProgressEvents("chat-1", {
         at: createdAt,
         terminal: "done",
         steps: {
@@ -1428,6 +1415,11 @@ for (const width of [1280, 375]) {
           format_results: "done",
         },
       }),
+      { pinned: true },
+    );
+    Object.assign(state.turns[0], {
+      status: "done",
+      finished_at: iso(0),
       steps: [],
       result: {
         generated_sql: generatedSql,
@@ -2329,6 +2321,46 @@ test("処理の経過は span の木で、段の中のモデルの呼び出し�
   await page.screenshot({ path: testInfo.outputPath("sql-chat-span-tree.png"), fullPage: true });
 });
 
+test("終わったジョブの span が読んだ後に書かれても、読み直して処理の経過を出す (#3226)", async ({ page, context }) => {
+  const state = await setup(page);
+  state.turns.push({ job_id: "chat-1", question: "合成データの件数", status: "done", created_at: now, steps: [],
+    result: { generated_sql: "SELECT 1 FROM DUAL", original_question: "合成データの件数", explanation: "合成の応答です。", safety: { is_safe: true, safety_checked: true, referenced_tables: [], referenced_columns: [] } } });
+  // worker の書き手は span をまとめて後から書く: 最初の読み出しの時点では表にまだ span が無い（終端だけ）。
+  let reads = 0;
+  await context.route(/\/api\/nl2sql\/jobs\/chat-1\/trace/, (route) => {
+    reads += 1;
+    // 開発の build は StrictMode で最初の読み出しが 2 回になるので、2 回目までは span の無い応答にする。
+    if (reads > 2) return route.fallback();
+    return route.fulfill({ json: { data: { events: [
+      { schema_version: 1, seq: 1, target_id: "chat-1", attempt: 0, emitted_at: now, type: "terminal", status: "done" },
+    ], dropped_spans: 0 } } });
+  });
+  await page.goto("/chat?profile_id=sales&conversation_id=chat-1");
+  // 読み直しを終えるまで古い形式の案内を出さない。
+  await expect.poll(() => reads).toBeGreaterThan(0);
+  await expect(page.getByTestId("sql-chat-progress-legacy")).toHaveCount(0);
+  await expect(page.getByTestId("sql-chat-progress-summary")).toHaveText(/^処理の経過（6 ステップ・/);
+  expect(reads).toBeGreaterThan(2);
+});
+
+test("書けなかった span がある記録は、処理の経過の中に一部だけの記録と出す (#3226)", async ({ page }) => {
+  const state = await setup(page);
+  state.turns.push({ job_id: "chat-1", question: "合成データの件数", status: "done", created_at: now, steps: [],
+    result: { generated_sql: "SELECT 1 FROM DUAL", original_question: "合成データの件数", explanation: "合成の応答です。", safety: { is_safe: true, safety_checked: true, referenced_tables: [], referenced_columns: [] } } });
+  // span の表に書けなかった span がある（書き手の queue が満杯など）。終端は会話のターン（ジョブの状態）で決まる。
+  recordMockTrace(
+    "chat-1",
+    jobProgressEvents("chat-1", { at: now, terminal: "done", steps: { queue: "done", prepare_context: "done", generate_sql: "done" } }),
+    { droppedSpans: 2, pinned: true },
+  );
+  await page.goto("/chat?profile_id=sales&conversation_id=chat-1");
+  const progress = page.getByTestId("sql-chat-progress");
+  await expect(progress).toHaveAttribute("data-chat-progress-state", "done");
+  await page.getByTestId("sql-chat-progress-summary").click();
+  await expect(page.getByTestId("sql-chat-progress-partial")).toHaveText("一部の処理だけを記録しています。");
+  await expect(page.getByTestId("sql-chat-progress-legacy")).toHaveCount(0);
+});
+
 test("チャットと履歴の工程の内容・階層・状態・時間が一致する", {tag: "@responsive"}, async ({page}, testInfo) => {
   const state = await setup(page);
   const turn: Turn = {job_id: "synthetic-parity", question: "合成の質問", status: "done", created_at: now, engine: "enterprise_ai_direct", steps: [{stage: "safety_check", status: "skipped"}],
@@ -2344,12 +2376,12 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   expect(liveTypography.summary?.fontSize).toBe("12px");
   expect(live).toHaveLength(6);
   await page.screenshot({path: testInfo.outputPath("chat-process.png")});
-  await page.route("**/api/nl2sql/history/synthetic-parity", (route) => route.fulfill({json: {data: {
+  await page.route("**/api/nl2sql/history/synthetic-parity", (route) => route.fulfill({json: {data: withRecordedTrace("synthetic-parity", {
     id: "synthetic-parity", kind: "chat", session_id: "chat-1", question: "合成の質問", engine: "enterprise_ai_direct", generated_sql: "SELECT 1 AS VALUE FROM DUAL",
     executable_sql: "SELECT 1 AS VALUE FROM DUAL", created_at: now, elapsed_ms: 0, engine_timings: [], stage_timings: [],
     profile_id: "sales", profile_name: "プロファイル A", rewritten_question: "合成の質問", safety_is_safe: true,
     result_row_count: 1, result_columns: ["VALUE"], feedback_comment: "", feedback_updated_at: "", progress_events: events,
-  }}}));
+  })}}));
   await page.goto("/history?id=synthetic-parity");
   await expect(page.getByTestId("history-detail-summary")).toBeVisible();
   await expect(page.getByTestId("history-detail-summary").locator("[data-run-summary-heading] [data-status-variant]")).toHaveCount(0);

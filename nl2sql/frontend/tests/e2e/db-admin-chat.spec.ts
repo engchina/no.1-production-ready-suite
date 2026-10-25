@@ -9,7 +9,7 @@
 import { expect, test, type Page, type Request, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { openSidebarNav } from "./_helpers/sidebar-nav";
-import { dbAdminChatProgressEvents } from "./_helpers/job-progress";
+import { dbAdminChatProgressEvents, withRecordedTrace } from "./_helpers/job-progress";
 
 const timing = { created_at: "2026-10-18T00:00:00Z", finished_at: "2026-10-18T00:00:01Z", elapsed_ms: 120 };
 
@@ -161,7 +161,8 @@ interface ChatMock {
 }
 
 function storedTurn(turnId: string, question: string, next: Generated): StoredTurn {
-  return {
+  // 生成したときの span は mock の span の表に書き、ターンの処理の経過の API が返す（#3226 の案 A）。
+  return withRecordedTrace(turnId, {
     turn_id: turnId,
     question,
     created_at: "2026-10-18T00:00:00Z",
@@ -181,7 +182,7 @@ function storedTurn(turnId: string, question: string, next: Generated): StoredTu
       createdAt: "2026-10-18T00:00:00Z",
       generatedAt: "2026-10-18T00:00:02Z",
     }),
-  };
+  });
 }
 
 /** 保存した 1 文の最後の実行の要約（サーバーと同じく、結果の行は残さない）。 */

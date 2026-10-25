@@ -1,18 +1,17 @@
-"""ジョブの処理の経過のイベント（チャット・SQL 生成・実行履歴の `ChatProgress`。#1359・#3226）。
+"""ジョブの処理の経過（チャット・SQL 生成・実行履歴の `ChatProgress`。#1359・#3226 の案 A）。
 
 - 処理の経過は実行の trace（span の木）の投影: 実行の全体（root）の下に、開始待ち（`queue`）と
   5 段階の span が並ぶ。段の span は表示用のデータの `kind` に段階の id、補足の値（生成方法・
   参照した表・行数）は `params`、開いて見る詳細は `details`。
-- 保存と読み込み（ジョブの文書の `progress_events`。別の worker が読み直しても同じ）。
-- 配信: `GET /jobs/{job_id}/progress?since=`（polling）と `/progress/stream`（SSE。`since` /
-  `Last-Event-ID` の続きから・終わったジョブの続きは 204・権限は `GET /jobs/{job_id}` と同じ）。
+- span は共通の span の表に書く（worker の書き手。ジョブの保存を待たずに、段の中の span も実行中から
+  出る）。ジョブには trace id・書けなかった span の数・工程の詳細（表には入れない内容）だけを置く。
+- 読み出し: `GET /jobs/{job_id}/trace`（span の表の snapshot。権限は `GET /jobs/{job_id}` と同じ。
+  最終の状態はジョブの状態で決める）。
 """
 
 from __future__ import annotations
 
 import json
-import threading
-import time
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -22,11 +21,12 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from pr_backend_core.chat_progress import (
-    ChatProgressStepEvent,
+    ChatProgressEvent,
     ChatProgressStepState,
     ChatProgressTerminalEvent,
     fold_chat_progress_events,
 )
+from pr_backend_core.observability.trace_store import TraceSpanOwner
 from pr_backend_core.observability.tracing import SpanDisplay, SpanUpdate
 from test_nl2sql_job_runtime import (
     _FakeEnterpriseAiClient,
@@ -36,6 +36,7 @@ from test_nl2sql_job_runtime import (
     _worker,
 )
 from test_nl2sql_operation_profile_access import _principal
+from trace_span_fake import TraceTable, trace_table  # noqa: F401 - fixture
 
 from app.features.nl2sql import router as nl2sql_router
 from app.features.nl2sql.incremental_store import MemoryIncrementalNl2SqlRepository
@@ -43,10 +44,8 @@ from app.features.nl2sql.models import JobCreateRequest, JobData, JobStatus
 from app.features.nl2sql.service import (
     JOB_CANCELLED_ERROR_CODE,
     Nl2SqlService,
-    StoredJob,
-    _new_job_steps,
-    _record_job_progress_span,
 )
+from app.features.nl2sql.trace_spans import install_trace_span_store, reset_trace_span_store
 from app.security.permissions import QUERY_GENERATE_PERMISSION, SQL_EXECUTE_PERMISSION
 from app.settings import get_settings
 
@@ -60,12 +59,11 @@ _STEPS = [
     "format_results",
 ]
 
-type Event = ChatProgressStepEvent | ChatProgressTerminalEvent
 type Fixture = tuple[Nl2SqlService, MemoryIncrementalNl2SqlRepository]
 
 
 @pytest.fixture
-def jobs(monkeypatch: pytest.MonkeyPatch) -> Fixture:
+def jobs(monkeypatch: pytest.MonkeyPatch, trace_table: TraceTable) -> Fixture:  # noqa: F811
     # worker は明示して動かす（記録の位置を 1 つずつ確かめる）。
     monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
     repository = _repository()
@@ -90,150 +88,166 @@ def run(service: Nl2SqlService, job_id: str) -> JobData:
     return job
 
 
-def stages(events: list[Event]) -> dict[str, ChatProgressStepState]:
+def events_of(service: Nl2SqlService, table: TraceTable, job_id: str) -> list[ChatProgressEvent]:
+    """書き手の queue を書いてから、画面と同じ読み出し（system_admin 以外の利用者）で読む。"""
+
+    table.flush()
+    data = service.get_job_trace(job_id, actor_user_uuid="user-1")
+    assert data is not None
+    return data.trace.events
+
+
+def stages(events: list[ChatProgressEvent]) -> dict[str, ChatProgressStepState]:
     """工程の span（`kind` が段階の id）。"""
 
     fold = fold_chat_progress_events(events)
     return {step.kind: step for step in fold.step_list() if step.kind in _STEPS}
 
 
-def states(events: list[Event]) -> list[str]:
+def states(events: list[ChatProgressEvent]) -> list[str]:
     return [f"{kind}:{step.status}" for kind, step in stages(events).items()]
 
 
-def params(events: list[Event], kind: str) -> dict[str, Any]:
+def params(events: list[ChatProgressEvent], kind: str) -> dict[str, Any]:
     return dict(stages(events)[kind].params or {})
 
 
-def root(events: list[Event]) -> ChatProgressStepState:
+def root(events: list[ChatProgressEvent]) -> ChatProgressStepState:
     fold = fold_chat_progress_events(events)
     [found] = [step for step in fold.step_list() if (step.span or {}).get("root")]
     return found
 
 
-def assert_contiguous(events: list[Event]) -> None:
-    assert [event.seq for event in events] == list(range(1, len(events) + 1))
-    assert {event.target_id for event in events} == {events[0].target_id}
+# --- 書き込み -------------------------------------------------------------------------------
 
 
-# --- 記録の位置 -----------------------------------------------------------------------------
-
-
-def test_created_job_has_no_progress_until_the_worker_starts(jobs: Fixture) -> None:
+def test_created_job_has_no_trace_until_the_worker_starts(
+    jobs: Fixture,
+    trace_table: TraceTable,  # noqa: F811
+) -> None:
     """worker が受け取るまでは span が無い（画面は開始待ちの仮の表示を出す。#3226）。"""
 
     service, repository = jobs
     created = service.start_job(chat_turn(), actor_user_uuid="user-1", actor_is_system_admin=True)
     job = service.get_job(created.job_id, actor_user_uuid="user-1")
-    assert job is not None and job.status == JobStatus.PENDING
-    assert created.progress_events == [] and job.progress_events == []
+    assert job is not None and job.status == JobStatus.PENDING and job.trace_id == ""
     document = repository.get_document("jobs", created.job_id)
     assert document is not None
-    assert document["progress_events"] == []
+    assert "progress_events" not in document and document["trace_id"] == ""
+    assert events_of(service, trace_table, created.job_id) == []
+    assert trace_table.db.rows == {}
 
 
-def test_done_chat_turn_records_the_span_tree_and_params(jobs: Fixture) -> None:
+def test_done_chat_turn_writes_the_span_tree_to_the_table(
+    jobs: Fixture,
+    trace_table: TraceTable,  # noqa: F811
+) -> None:
     service, repository = jobs
     job = run(service, start(service))
     assert job.status == JobStatus.DONE, job.error_message
-    history = repository.list_documents("history", limit=100)
-    assert len(history) == 1
-    assert history[0]["progress_events"] == [
-        event.model_dump(mode="json") for event in job.progress_events
-    ]
+    trace_table.flush()
+    # span は共通の span の表に、ジョブ（`OPERATION_ID`）・実行した利用者・試行で入る。
+    rows = trace_table.db.spans(operation_id=job.job_id)
+    assert {row["product"] for row in rows} == {"nl2sql"}
+    assert {row["owner_user_uuid"] for row in rows} == {"user-1"}
+    assert {row["attempt"] for row in rows} == {0}
+    assert {row["trace_id"] for row in rows} == {job.trace_id}
+    [root_row] = [row for row in rows if row["is_root"]]
+    assert root_row["name"] == "nl2sql.execute" and root_row["status"] == "done"
+    # 工程の詳細（生成した SQL など）は表に入れない（ジョブの記録に置く）。
+    assert job.result is not None
+    assert job.result.generated_sql not in json.dumps(rows, default=str)
+    document = repository.get_document("jobs", job.job_id)
+    assert document is not None
+    assert "progress_events" not in document and "trace_summary" not in document
+    assert document["trace_id"] == job.trace_id
 
-    events = job.progress_events
-    assert_contiguous(events)
+    events = events_of(service, trace_table, job.job_id)
+    # snapshot: span ごとに 1 件と終端。番号はこの一覧の中の番号。
+    assert [event.seq for event in events] == list(range(1, len(events) + 1))
+    assert {event.target_id for event in events} == {job.job_id}
     assert states(events) == [f"{step}:done" for step in _STEPS]
     fold = fold_chat_progress_events(events)
     assert fold.terminal == "done"
-    assert fold.attempt == 0
-    # 実行の全体（root）の下に工程の span が並ぶ（親子・span の名前・trace id）。
     top = root(events)
     assert top.span is not None and top.span["name"] == "nl2sql.execute"
     for kind, step in stages(events).items():
         assert step.span is not None
         assert step.span["name"] == f"nl2sql.{kind}"
         assert step.span["parent_id"] == top.step_id
-        assert step.span["trace_id"] == top.span["trace_id"]
-    # 保存した trace（`trace_summary`）と同じ span（id が一致する）。
-    assert job.trace_summary is not None
-    span_ids = {span.span_id for span in job.trace_summary.spans}
-    assert {step.step_id for step in stages(events).values()} <= span_ids
+        assert step.span["trace_id"] == job.trace_id
     # 補足の値: 生成方法・参照した表・取得した行数（名前と文言は画面が付ける）。
     assert params(events, "generate_sql") == {"engine": "enterprise_ai_direct"}
     assert params(events, "safety_check") == {"tables": "APP.ORDERS", "table_count": 1}
     assert job.last_execution is not None
     assert params(events, "execute_sql") == {"rows": job.last_execution.row_count}
-    # 段を開いて見る詳細（#2294）: 生成した SQL・安全性の確認の結果と参照した表・取得した行数。
+    # 段を開いて見る詳細（#2294）はジョブの記録から足す。
     found = stages(events)
     generate = found["generate_sql"].details
     assert generate is not None and generate.code[0].language == "sql"
-    assert job.result is not None
     assert generate.code[0].text == job.result.generated_sql
     safety = found["safety_check"].details
     assert safety is not None
     assert {field.label: field.value for field in safety.fields}["結果"] == "安全"
-    assert {field.label: field.value for field in safety.fields}["参照した表"] == "APP.ORDERS"
     execute = found["execute_sql"].details
-    assert execute is not None
-    assert execute.fields[0].label == "取得した行数"
+    assert execute is not None and execute.fields[0].label == "取得した行数"
     assert found["queue"].details is None
-    # 開始待ちはジョブの作成から worker の開始まで。各段階は開始と終了の時刻を持つ。
+    # 開始待ちはジョブの作成から worker の開始まで。
     queue = found["queue"]
     assert queue.started_at == datetime.fromisoformat(job.created_at)
     assert queue.finished_at == datetime.fromisoformat(job.started_at or "")
-    for kind in _STEPS[1:]:
-        step = found[kind]
-        assert step.started_at is not None and step.finished_at is not None, kind
-    # 終端は最後のイベント。
     assert isinstance(events[-1], ChatProgressTerminalEvent)
 
-    # 別の worker（プロセス）が読み直しても同じイベント。
+    # 実行履歴の行も同じ実行（ジョブ）の span を指す。
+    [history] = repository.list_documents("history", limit=100)
+    assert history["job_id"] == job.job_id and history["trace_id"] == job.trace_id
+    assert set(history["span_details"]) == set(document["span_details"])
+    # 別の worker（プロセス）が読んでも同じ。
     observer = _worker(repository)
-    seen = observer.get_job(job.job_id, actor_user_uuid="user-1")
+    seen = observer.get_job_trace(job.job_id, actor_user_uuid="user-1")
     assert seen is not None
-    assert seen.progress_events == events
+    assert [e.model_dump(exclude={"emitted_at"}) for e in seen.trace.events] == [
+        e.model_dump(exclude={"emitted_at"}) for e in events
+    ]
 
 
-def test_running_job_saves_running_spans_and_keeps_formatting_until_the_result(
-    jobs: Fixture, monkeypatch: pytest.MonkeyPatch
+def test_inner_spans_reach_the_table_before_the_job_is_saved(
+    jobs: Fixture,
+    trace_table: TraceTable,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """実行中の保存に、始まった段が実行中で出る。結果の整形は結果の保存まで実行中（#1176）。"""
+    """段の中の span は段の切り替えの保存を待たずに表に入る（実行中の画面に出る。#3226 の案 A）。"""
 
-    service, repository = jobs
+    service, _ = jobs
     job_id = start(service)
-    snapshots: list[dict[str, Any]] = []
-    save = repository.patch_document_if_current
+    seen: dict[str, Any] = {}
+    generate = service._generate_selected_engine  # noqa: SLF001
 
-    def record(collection: str, entity_id: str, payload: dict[str, Any], **kwargs: Any) -> Any:
-        if collection == "jobs":
-            snapshots.append(payload)
-        return save(collection, entity_id, payload, **kwargs)
+    def observe(*args: Any, **kwargs: Any) -> Any:
+        trace_table.flush()
+        progress = service.get_job_trace(job_id, actor_user_uuid="user-1")
+        assert progress is not None
+        seen["states"] = states(progress.trace.events)
+        return generate(*args, **kwargs)
 
-    monkeypatch.setattr(repository, "patch_document_if_current", record)
+    monkeypatch.setattr(service, "_generate_selected_engine", observe)
     run(service, job_id)
-    running: set[str] = set()
-    last_open: list[Event] = []
-    for snapshot in snapshots:
-        events = service._job_from_snapshot(snapshot).progress_events  # noqa: SLF001
-        fold = fold_chat_progress_events(events)
-        if fold.terminal is not None:
-            continue
-        # 終端になるまで、実行の全体は実行中。
-        assert root(events).status == "running"
-        running |= {kind for kind, step in stages(events).items() if step.status == "running"}
-        last_open = events
-    # 段はそれぞれ実行中の状態で保存される（画面が実行中の行を出せる）。
-    assert running == set(_STEPS[1:])
-    assert stages(last_open)["format_results"].status == "running"
+    assert seen["states"] == [
+        "queue:done",
+        "prepare_context:done",
+        "generate_sql:running",
+    ]
 
 
-def test_generation_only_turn_skips_execution(jobs: Fixture) -> None:
+def test_generation_only_turn_skips_execution(
+    jobs: Fixture,
+    trace_table: TraceTable,  # noqa: F811
+) -> None:
     service, _ = jobs
     job = run(service, start(service, chat_turn(generation_only=True)))
     assert job.status == JobStatus.DONE
-    assert states(job.progress_events) == [
+    events = events_of(service, trace_table, job.job_id)
+    assert states(events) == [
         "queue:done",
         "prepare_context:done",
         "generate_sql:done",
@@ -241,13 +255,13 @@ def test_generation_only_turn_skips_execution(jobs: Fixture) -> None:
         "execute_sql:skipped",
         "format_results:done",
     ]
-    execute = stages(job.progress_events)["execute_sql"]
-    # 実行しなかった段は所要時間 0 の span（行は残す）。
+    execute = stages(events)["execute_sql"]
     assert execute.started_at is not None and execute.started_at == execute.finished_at
 
 
 def test_blocked_sql_fails_safety_check_and_ends_failed(
     monkeypatch: pytest.MonkeyPatch,
+    trace_table: TraceTable,  # noqa: F811
 ) -> None:
     monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
     service = _worker(
@@ -256,7 +270,8 @@ def test_blocked_sql_fails_safety_check_and_ends_failed(
     )
     job = run(service, start(service))
     assert job.status == JobStatus.ERROR
-    assert states(job.progress_events) == [
+    events = events_of(service, trace_table, job.job_id)
+    assert states(events) == [
         "queue:done",
         "prepare_context:done",
         "generate_sql:done",
@@ -264,13 +279,14 @@ def test_blocked_sql_fails_safety_check_and_ends_failed(
         "execute_sql:skipped",
         "format_results:done",
     ]
-    assert fold_chat_progress_events(job.progress_events).terminal == "failed"
-    # 遮断した SQL の参照した表は補足に出さない。
-    assert params(job.progress_events, "safety_check") == {}
+    assert fold_chat_progress_events(events).terminal == "failed"
+    assert params(events, "safety_check") == {}
 
 
 def test_failed_stage_fails_its_span_and_the_rest_do_not_start(
-    jobs: Fixture, monkeypatch: pytest.MonkeyPatch
+    jobs: Fixture,
+    trace_table: TraceTable,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service, _ = jobs
 
@@ -280,138 +296,130 @@ def test_failed_stage_fails_its_span_and_the_rest_do_not_start(
     monkeypatch.setattr(service, "_generate_selected_engine", failing_generate)
     job = run(service, start(service))
     assert job.status == JobStatus.ERROR
-    # 失敗した段の span は失敗。後の段は始まらない（span が無い）。
-    assert states(job.progress_events) == [
-        "queue:done",
-        "prepare_context:done",
-        "generate_sql:failed",
-    ]
-    assert fold_chat_progress_events(job.progress_events).terminal == "failed"
-    # 例外の文はイベントに入れない（span の属性は例外の種類だけ）。
-    assert "想定外" not in json.dumps([e.model_dump(mode="json") for e in job.progress_events])
+    events = events_of(service, trace_table, job.job_id)
+    assert states(events) == ["queue:done", "prepare_context:done", "generate_sql:failed"]
+    assert fold_chat_progress_events(events).terminal == "failed"
+    # 例外の文は表にもイベントにも入れない（span の属性は例外の種類だけ）。
+    assert "想定外" not in json.dumps([e.model_dump(mode="json") for e in events])
+    assert "想定外" not in json.dumps(list(trace_table.db.rows.values()), default=str)
 
 
-def test_cancelled_job_ends_cancelled_after_the_finished_spans(jobs: Fixture) -> None:
+def test_cancelled_job_ends_cancelled(jobs: Fixture, trace_table: TraceTable) -> None:  # noqa: F811
     service, _ = jobs
     job_id = start(service)
     assert service.request_job_cancel(job_id, actor_user_uuid="user-1") is not None
     job = run(service, job_id)
     assert job.error_code == JOB_CANCELLED_ERROR_CODE
-
-    events = job.progress_events
-    # 停止は段の span の中で確かめる: 止めた段（準備）は停止、後の段は始まらない。
+    events = events_of(service, trace_table, job_id)
     assert states(events) == ["queue:done", "prepare_context:skipped"]
     prepare = stages(events)["prepare_context"]
     assert prepare.span is not None and prepare.span["cancelled"] is True
-    fold = fold_chat_progress_events(events)
-    assert fold.terminal == "cancelled"
+    assert fold_chat_progress_events(events).terminal == "cancelled"
     assert root(events).status == "skipped"
 
 
-def test_interrupted_job_before_start_ends_failed() -> None:
-    """worker が始める前に終わったジョブ（再起動で中断）は、span の無いまま失敗で終わる。"""
+def test_span_left_running_in_the_table_closes_with_the_job(
+    jobs: Fixture,
+    trace_table: TraceTable,  # noqa: F811
+) -> None:
+    """表で実行中のままの span（書けなかった終了・落ちた process）は、ジョブの終端で閉じる。"""
 
-    job = StoredJob(job_id="job-interrupted", request=chat_turn(), steps=_new_job_steps())
-    Nl2SqlService._mark_job_interrupted(job)  # noqa: SLF001
-    assert states(job.progress_events) == []
-    assert fold_chat_progress_events(job.progress_events).terminal == "failed"
-
-
-def _span_update(
-    span_id: str, kind: str | None, status: str, *, at: str, root_span: bool = False
-) -> SpanUpdate:
-    return SpanUpdate.model_validate(
-        {
-            "span_id": span_id,
-            "parent_span_id": None if root_span else "a" * 16,
-            "trace_id": "b" * 32,
-            "operation_name": f"nl2sql.{kind or 'execute'}",
-            "status": status,
-            "started_at": at,
-            "root": root_span,
-            "display": SpanDisplay(kind=kind) if kind else None,
-        }
-    )
+    service, _ = jobs
+    job = run(service, start(service))
+    trace_table.flush()
+    [row] = [
+        row
+        for row in trace_table.db.spans(operation_id=job.job_id)
+        if row["name"] == "nl2sql.format_results"
+    ]
+    row.update(status="running", finished_at=None)
+    events = events_of(service, trace_table, job.job_id)
+    assert stages(events)["format_results"].status == "done"
 
 
-def test_reclaimed_job_starts_a_new_attempt(jobs: Fixture) -> None:
+def test_reclaimed_job_shows_only_the_latest_attempt(
+    jobs: Fixture,
+    trace_table: TraceTable,  # noqa: F811
+) -> None:
     """lease の切れたジョブを引き継いだ実行は、試行を増やして span の木を作り直す（#1358）。"""
 
     service, repository = jobs
-    two_hours_ago = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
-    _put_in_flight_snapshot(service, repository, job_id="job-orphan", updated_at=two_hours_ago)
-    # 前の実行（最初の試行）が準備の途中まで記録していた。
-    previous = StoredJob(
-        job_id="job-orphan",
-        request=_request(),
-        created_at=two_hours_ago,
-        started_at=two_hours_ago,
-        steps=_new_job_steps(),
-        attempt=1,
+    two_hours_ago = datetime.now(UTC) - timedelta(hours=2)
+    _put_in_flight_snapshot(
+        service, repository, job_id="job-orphan", updated_at=two_hours_ago.isoformat()
     )
-    for update in (
-        _span_update("a" * 16, None, "running", at=two_hours_ago, root_span=True),
-        _span_update("c" * 16, "prepare_context", "running", at=two_hours_ago),
-    ):
-        _record_job_progress_span(previous, update)
-    document = repository.get_document("jobs", "job-orphan")
-    assert document is not None
-    document["progress_events"] = [e.model_dump(mode="json") for e in previous.progress_events]
-    repository.put_document("jobs", "job-orphan", document, status="running")
-    first_seq = previous.progress_events[-1].seq
+    # 前の実行（最初の試行）が準備の途中まで表に書いていた。
+    previous = TraceSpanOwner(product="nl2sql", operation_id="job-orphan", owner_user_uuid="user-1")
+    for span_id, kind in (("a" * 16, None), ("c" * 16, "prepare_context")):
+        trace_table.store.writer.submit(
+            SpanUpdate(
+                span_id=span_id,
+                parent_span_id=None if kind is None else "a" * 16,
+                trace_id="b" * 32,
+                operation_name=f"nl2sql.{kind or 'execute'}",
+                status="running",
+                started_at=two_hours_ago,
+                root=kind is None,
+                display=SpanDisplay(kind=kind) if kind else None,
+            ),
+            previous,
+        )
 
     assert service.run_next_nl2sql_job(worker_id="worker-retry") is True
     job = service.get_job("job-orphan")
     assert job is not None and job.status == JobStatus.DONE and job.attempt == 2
-
-    events = job.progress_events
-    assert_contiguous(events)
-    # 番号は続け、新しい試行（attempt 1）で span の木を出し直す（前の試行の span は残らない）。
-    later = [event for event in events if event.seq > first_seq]
-    assert {event.attempt for event in later} == {1}
-    fold = fold_chat_progress_events(events)
-    assert fold.attempt == 1
-    assert "c" * 16 not in fold.steps
+    trace_table.flush()
+    assert {row["attempt"] for row in trace_table.db.spans(trace_id=job.trace_id)} == {1}
+    events = events_of(service, trace_table, "job-orphan")
+    assert "c" * 16 not in fold_chat_progress_events(events).steps
     assert states(events) == [f"{step}:done" for step in _STEPS]
-    assert fold.terminal == "done"
 
 
-def test_span_after_the_terminal_is_not_recorded() -> None:
-    """span の知らせは記録し、終端の後の知らせ（実行の全体の終了など）は記録しない。"""
+def test_finished_job_without_trace_id_reads_as_legacy(jobs: Fixture) -> None:
+    """span の記録より前の形式の実行（trace id が無い）は終端だけ（画面は古い形式の案内）。"""
 
-    at = datetime.now(UTC).isoformat()
-    job = StoredJob(job_id="job-closed", request=chat_turn(), steps=_new_job_steps(), attempt=1)
-    assert _record_job_progress_span(
-        job, _span_update("a" * 16, None, "running", at=at, root_span=True)
-    )
-    assert _record_job_progress_span(
-        job, _span_update("c" * 16, "prepare_context", "running", at=at)
-    )
-    # 同じ状態の同じ知らせは重ねない。
-    assert not _record_job_progress_span(
-        job, _span_update("c" * 16, "prepare_context", "running", at=at)
-    )
-    Nl2SqlService._mark_job_interrupted(job)  # noqa: SLF001
-    count = len(job.progress_events)
-    assert not _record_job_progress_span(
-        job, _span_update("a" * 16, None, "done", at=at, root_span=True)
-    )
-    assert len(job.progress_events) == count
-    assert states(job.progress_events) == ["prepare_context:failed"]
+    service, repository = jobs
+    job_id = start(service)
+    document = repository.get_document("jobs", job_id)
+    assert document is not None
+    document.update(status="done", started_at=document["created_at"], trace_id="")
+    document["progress_events"] = [{"stage": "prepare_context", "status": "done"}]
+    repository.put_document("jobs", job_id, document, status="done")
+    progress = Nl2SqlService.get_job_trace(_worker(repository), job_id, actor_user_uuid="user-1")
+    assert progress is not None
+    events = progress.trace.events
+    assert len(events) == 1 and isinstance(events[0], ChatProgressTerminalEvent)
 
 
-def test_snapshot_without_or_with_broken_events_reads_empty(jobs: Fixture) -> None:
-    service, _ = jobs
-    stored = StoredJob(job_id="job-old", request=_request(), steps=_new_job_steps())
-    snapshot = service._job_to_snapshot(stored)  # noqa: SLF001
-    snapshot.pop("progress_events")
-    assert service._job_from_snapshot(snapshot).progress_events == []  # noqa: SLF001
-    # 旧形式（段階の snapshot の list）・形の違う要素は捨てる。
-    snapshot["progress_events"] = [{"stage": "prepare_context", "status": "done"}, "x"]
-    assert service._job_from_snapshot(snapshot).progress_events == []  # noqa: SLF001
+def test_dropped_spans_are_saved_with_the_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """書き手の queue が満杯で捨てた span の数を、確定の保存に入れる。
+
+    画面は一部だけの記録の案内を出す。
+    """
+
+    from trace_span_fake import FakeTraceSpanDb
+
+    monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
+    monkeypatch.setattr(get_settings(), "trace_store_queue_size", 1)
+    db = FakeTraceSpanDb()
+    store = install_trace_span_store(db.connect, start=False)
+    try:
+        repository = _repository()
+        service = _worker(repository)
+        job = run(service, start(service))
+        assert job.trace_dropped_spans > 0
+        [history] = repository.list_documents("history", limit=100)
+        assert history["trace_dropped_spans"] == job.trace_dropped_spans
+        store.writer.flush()
+        progress = service.get_job_trace(job.job_id, actor_user_uuid="user-1")
+        assert progress is not None and progress.trace.dropped_spans == job.trace_dropped_spans
+    finally:
+        reset_trace_span_store()
 
 
-# --- 配信（polling・SSE） ------------------------------------------------------------------
+# --- 読み出し（API） ------------------------------------------------------------------------
 
 _PERMISSIONS = {QUERY_GENERATE_PERMISSION, SQL_EXECUTE_PERMISSION}
 
@@ -422,6 +430,7 @@ class _Viewer:
     def __init__(self) -> None:
         self.user_uuid = "user-1"
         self.profiles = {_PROFILE_ID}
+        self.roles = ["GENERAL"]
 
 
 @pytest.fixture
@@ -434,7 +443,9 @@ def api(jobs: Fixture, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestCl
     @app.middleware("http")
     async def principal(request: Request, call_next: Any) -> Any:
         current = _principal(viewer.profiles, permissions=_PERMISSIONS)
-        request.state.principal = replace(current, user_uuid=viewer.user_uuid)
+        request.state.principal = replace(
+            current, user_uuid=viewer.user_uuid, role_codes=list(viewer.roles)
+        )
         return await call_next(request)
 
     app.include_router(nl2sql_router.router, prefix="/api")
@@ -443,130 +454,82 @@ def api(jobs: Fixture, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestCl
         yield client, viewer
 
 
-def sse_events(text: str) -> list[dict[str, Any]]:
-    """SSE の本文の `event: chat_progress` のイベント（`id:` と data）。"""
-
-    events: list[dict[str, Any]] = []
-    for block in text.split("\n\n"):
-        fields: dict[str, str] = {}
-        for line in block.splitlines():
-            name, _, value = line.partition(": ")
-            fields[name] = value
-        if fields.get("event") == "chat_progress":
-            data = json.loads(fields["data"])
-            assert int(fields["id"]) == data["seq"]
-            events.append(data)
-    return events
-
-
-def test_progress_polling_returns_events_after_since(
-    jobs: Fixture, api: tuple[TestClient, _Viewer]
+def test_trace_route_returns_the_snapshot(
+    jobs: Fixture,
+    trace_table: TraceTable,  # noqa: F811
+    api: tuple[TestClient, _Viewer],
 ) -> None:
     service, _ = jobs
     client, _ = api
     job = run(service, start(service))
-    last = job.progress_events[-1].seq
-
-    body = client.get(f"/api/nl2sql/jobs/{job.job_id}/progress").json()["data"]
-    assert body["target_id"] == job.job_id
-    assert body["attempt"] == 0
-    assert body["last_seq"] == last
-    assert body["terminal"] is True
-    assert [item["seq"] for item in body["events"]] == list(range(1, last + 1))
-
-    later = client.get(f"/api/nl2sql/jobs/{job.job_id}/progress", params={"since": last - 2})
-    assert [item["seq"] for item in later.json()["data"]["events"]] == [last - 1, last]
-    assert client.get(f"/api/nl2sql/jobs/{job.job_id}/progress?since=-1").status_code == 422
+    trace_table.flush()
+    body = client.get(f"/api/nl2sql/jobs/{job.job_id}/trace").json()["data"]
+    assert body["dropped_spans"] == 0
+    assert body["events"][-1] == {**body["events"][-1], "type": "terminal", "status": "done"}
+    assert {item["target_id"] for item in body["events"]} == {job.job_id}
+    # system_admin 以外は、その実行の利用者の span だけを読む。
+    assert trace_table.db.selects[-1]["viewer"] == "user-1"
 
 
-def test_progress_routes_check_access_like_get_job(
-    jobs: Fixture, api: tuple[TestClient, _Viewer]
+def test_trace_route_checks_access_like_get_job(
+    jobs: Fixture,
+    trace_table: TraceTable,  # noqa: F811
+    api: tuple[TestClient, _Viewer],
 ) -> None:
     service, _ = jobs
     client, viewer = api
-    job_id = start(service)
-    for path in ("progress", "progress/stream"):
-        assert client.get(f"/api/nl2sql/jobs/missing/{path}").status_code == 404
-        # 他の利用者のジョブは 404（存在を漏らさない。#1889）。
-        viewer.user_uuid = "other"
-        assert client.get(f"/api/nl2sql/jobs/{job_id}/{path}").status_code == 404
-        viewer.user_uuid = "user-1"
-        # 業務プロファイルの利用権限が外れた。
-        viewer.profiles = set()
-        assert client.get(f"/api/nl2sql/jobs/{job_id}/{path}").status_code == 403
-        viewer.profiles = {_PROFILE_ID}
+    job = run(service, start(service))
+    trace_table.flush()
+    assert client.get("/api/nl2sql/jobs/missing/trace").status_code == 404
+    # 他の利用者のジョブは 404（存在を漏らさない。#1889）。
+    viewer.user_uuid = "other"
+    assert client.get(f"/api/nl2sql/jobs/{job.job_id}/trace").status_code == 404
+    # system_admin は全員のジョブと、全員の span を読む。
+    viewer.roles = ["SYSTEM_ADMIN"]
+    response = client.get(f"/api/nl2sql/jobs/{job.job_id}/trace")
+    assert response.status_code == 200 and response.json()["data"]["events"]
+    assert "viewer" not in trace_table.db.selects[-1]
+    viewer.user_uuid, viewer.roles = "user-1", ["GENERAL"]
+    # 業務プロファイルの利用権限が外れた。
+    viewer.profiles = set()
+    assert client.get(f"/api/nl2sql/jobs/{job.job_id}/trace").status_code == 403
 
 
-def test_progress_stream_sends_events_and_closes_at_terminal(
-    jobs: Fixture, api: tuple[TestClient, _Viewer]
+def test_trace_route_reports_a_read_failure(
+    jobs: Fixture,
+    trace_table: TraceTable,  # noqa: F811
+    api: tuple[TestClient, _Viewer],
 ) -> None:
     service, _ = jobs
     client, _ = api
     job = run(service, start(service))
-    last = job.progress_events[-1].seq
-
-    response = client.get(f"/api/nl2sql/jobs/{job.job_id}/progress/stream")
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/event-stream")
-    assert response.headers["x-accel-buffering"] == "no"
-    sent = sse_events(response.text)
-    assert [item["seq"] for item in sent] == list(range(1, last + 1))
-    assert sent[-1]["type"] == "terminal" and sent[-1]["status"] == "done"
-
-    # 続きから（`since`・ブラウザの張り直しの `Last-Event-ID` の大きい方）。
-    resumed = client.get(
-        f"/api/nl2sql/jobs/{job.job_id}/progress/stream?since=1",
-        headers={"Last-Event-ID": str(last - 1)},
-    )
-    assert [item["seq"] for item in sse_events(resumed.text)] == [last]
-    # 終わったジョブを続きから求めたら 204（ブラウザは張り直しをやめる）。
-    finished = client.get(f"/api/nl2sql/jobs/{job.job_id}/progress/stream?since={last}")
-    assert finished.status_code == 204
-    finished = client.get(
-        f"/api/nl2sql/jobs/{job.job_id}/progress/stream", headers={"Last-Event-ID": str(last)}
-    )
-    assert finished.status_code == 204
+    trace_table.db.fail_reads = True
+    response = client.get(f"/api/nl2sql/jobs/{job.job_id}/trace")
+    assert response.status_code == 503
 
 
-def test_progress_stream_delivers_events_recorded_by_another_worker(
-    jobs: Fixture, api: tuple[TestClient, _Viewer]
-) -> None:
-    """SSE はジョブの文書を読み直して送る（worker が別のプロセスでも届く）。"""
-
-    service, repository = jobs
-    client, _ = api
-    job_id = start(service)
-    worker = _worker(repository)
-
-    def run_later() -> None:
-        time.sleep(0.3)
-        worker.run_next_nl2sql_job(worker_id="other-process", job_id=job_id)
-
-    thread = threading.Thread(target=run_later, daemon=True)
-    thread.start()
-    with client.stream("GET", f"/api/nl2sql/jobs/{job_id}/progress/stream") as response:
-        text = "".join(response.iter_text())
-    thread.join(timeout=10)
-    sent = sse_events(text)
-    assert [item["seq"] for item in sent] == list(range(1, len(sent) + 1))
-    assert sent[-1]["type"] == "terminal" and sent[-1]["status"] == "done"
-    persisted = repository.get_document("jobs", job_id)
-    assert persisted is not None
-    assert len(persisted["progress_events"]) == len(sent)
-
-
-@pytest.mark.parametrize("generation_only", [False, True])
-def test_query_history_keeps_the_same_progress_as_the_generation_page(
-    jobs: Fixture, generation_only: bool
+@pytest.mark.parametrize("generation_only", [False, True], ids=["execute", "generation-only"])
+def test_history_trace_reads_the_same_spans_as_the_job(
+    jobs: Fixture,
+    trace_table: TraceTable,  # noqa: F811
+    api: tuple[TestClient, _Viewer],
+    generation_only: bool,
 ) -> None:
     service, repository = jobs
+    client, viewer = api
     request = _request().model_copy(update={"chat": False, "generation_only": generation_only})
     job = run(service, start(service, request))
-    assert job.status == JobStatus.DONE
-    history = repository.list_documents("history", limit=100)
-    assert len(history) == 1
-    assert history[0]["progress_events"] == [
-        event.model_dump(mode="json") for event in job.progress_events
+    [history] = repository.list_documents("history", limit=100)
+    job_events = events_of(service, trace_table, job.job_id)
+    body = client.get(f"/api/nl2sql/history/{history['id']}/trace").json()["data"]
+    assert {item["target_id"] for item in body["events"]} == {history["id"]}
+    assert [item.get("step_id") for item in body["events"]] == [
+        getattr(event, "step_id", None) for event in job_events
     ]
-    execute = stages(job.progress_events)["execute_sql"]
+    execute = stages(job_events)["execute_sql"]
     assert execute.status == ("skipped" if generation_only else "done")
+    # 一覧・詳細の応答には工程の詳細を入れない（処理の経過の API だけが返す）。
+    detail = client.get(f"/api/nl2sql/history/{history['id']}").json()["data"]
+    assert detail["span_details"] == {} and detail["trace_id"] == job.trace_id
+    viewer.user_uuid = "other"
+    assert client.get(f"/api/nl2sql/history/{history['id']}/trace").status_code == 404

@@ -1,4 +1,4 @@
-import { CHAT_PROGRESS_LABELS } from "../chatProgress";
+import { CHAT_PROGRESS_LABELS, historyTracePath } from "../chatProgress";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -21,8 +21,8 @@ import {
   RunTimelineSection,
   StatusBadge,
   TimedLoadingState,
+  chatProgressTimelineStep,
   toast,
-  useTraceDetailsLabels,
   type RunFact,
 } from "@production-ready/ui";
 import { useAuth } from "@/features/security/AuthProvider";
@@ -39,12 +39,13 @@ import {
   historyKindDisplay,
   historyOwner,
   historyRunStatus,
-  historyTimeline,
 } from "../historyManagementState";
 import { engineLabel } from "../labels";
 import { profileRecordDisplayLabel } from "../profileDisplay";
 import type { HistoryItem } from "../types";
+import { useNl2SqlTraceProgress } from "../useTraceProgress";
 import { ProgressLegacyNotice } from "./ProgressLegacyNotice";
+import { ProgressPartialNotice } from "./ProgressPartialNotice";
 
 /*
  * 実行履歴の全幅の詳細（`?id=<run_id>`。#1955。UX 契約 run-history.md「詳細」）。
@@ -78,8 +79,10 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
   });
   const status = historyRunStatus(item);
   const sql = item.executable_sql || item.generated_sql;
-  const traceLabels = useTraceDetailsLabels();
-  const timeline = useMemo(() => historyTimeline(item, traceLabels), [item, traceLabels]);
+  // 処理の経過は実行したジョブの span の木（チャット・SQL 生成と同じ記録・工程の定義。#3226 の案 A）。span は共通の
+  // span の表にあり、行の処理の経過の API で 1 回読む（行は終わった実行）。span の無い古い形式の記録は案内の文を出す。
+  const progress = useNl2SqlTraceProgress({ targetId: item.id, path: historyTracePath(item.id), active: false });
+  const timelineSteps = useMemo(() => progress.steps.map(chatProgressTimelineStep), [progress.steps]);
   const executed = !item.generation_only && item.safety_is_safe;
 
   const extraFacts: RunFact[] = [
@@ -118,9 +121,13 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
 
   // 処理の詳細（#2325）: 呼び出し元・生成した SQL・エンジンの試行を、処理の経過のタイムラインの後ろに既定で閉じて置く
   // （3 製品の実行の詳細とチャットの処理の経過で同じ名前・部品・位置）。
+  // 書けなかった span がある記録は、処理の詳細の先頭に一部だけの記録の案内を出す（共通の部品が trace の記録の
+  // 欠けを出す位置と同じ。#3226 の案 A）。
+  const partialNotice = progress.partial && timelineSteps.length > 0;
   const processDetails =
-    showGeneratedSql || engineErrors.length > 0 || callerFacts.length > 0 ? (
+    partialNotice || showGeneratedSql || engineErrors.length > 0 || callerFacts.length > 0 ? (
       <>
+        {partialNotice ? <ProgressPartialNotice testId="history-detail-timeline-partial" /> : null}
         {callerFacts.length > 0 ? <RunFactList facts={callerFacts} testId="history-detail-caller" /> : null}
         {showGeneratedSql ? (
           <div className="grid min-w-0 gap-1">
@@ -185,13 +192,20 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
           />
         }
         timeline={
-          timeline.steps.length > 0 || timeline.legacy || processDetails ? (
-            // 処理の経過は実行の span の木（#3226）。span の無い古い形式の記録は案内の文を出す。
+          timelineSteps.length > 0 || progress.legacy || progress.partial || processDetails ? (
+            // 処理の経過は実行の span の木（#3226）。span の無い古い形式の記録は案内の文、書けなかった span がある
+            // 記録は一部だけの記録の案内を出す（処理の経過の中。成功と見なさない）。
             <RunTimelineSection
-              traceId={timeline.traceId}
+              traceId={progress.traceId}
               title={t("history.detail.timeline")}
-              steps={timeline.steps}
-              empty={timeline.legacy ? <ProgressLegacyNotice testId="history-detail-timeline-legacy" /> : undefined}
+              steps={progress.legacy ? [] : timelineSteps}
+              empty={
+                progress.partial ? (
+                  <ProgressPartialNotice testId="history-detail-timeline-partial" />
+                ) : progress.legacy ? (
+                  <ProgressLegacyNotice testId="history-detail-timeline-legacy" />
+                ) : undefined
+              }
               labels={{ stepStatus: CHAT_PROGRESS_LABELS.status }}
               totalDurationMs={item.elapsed_ms ?? null}
               processDetailsProps={{ title: t("history.detail.technical"), testId: "history-detail-technical", summaryTestId: "history-detail-process-details" }}

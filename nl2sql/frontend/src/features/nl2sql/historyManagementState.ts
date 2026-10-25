@@ -4,23 +4,16 @@
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
 import {
   runPeriodSince,
-  chatProgressStepsFromEvents,
-  chatProgressTimelineStep,
-  chatProgressTraceIdOf,
-  parseChatProgressEvents,
   RUN_EXECUTOR_FILTERS,
   RUN_PERIODS,
   type RunExecutorFilter,
   type RunPeriod,
   type RunStatus,
   type RunStatusFilter,
-  type RunTimelineStep,
-  type TraceDetailsLabels,
 } from "@production-ready/ui";
 
 import { t } from "../../lib/i18n";
 import { APP_ROUTES } from "../../lib/routes";
-import { CHAT_PROGRESS_STEP_DEFINITIONS, chatProgressIsLegacy } from "./chatProgress";
 import type { HistoryItem } from "./types";
 
 /** NL2SQL が写せる共通の状態（完了 = 安全性の判定を通過、ブロック = 実行を止めた）。失敗は記録しない。 */
@@ -164,28 +157,6 @@ export function historyOwner(item: HistoryItem) {
   const name = item.conversation_owner_display_name || t("history.actor.missing");
   if (!executor.isSelf && !ownerIsSelf && name === executor.name) return null;
   return { name, isSelf: ownerIsSelf };
-}
-
-/** 実行の詳細の処理の経過（#1955・#3226）。 */
-export interface HistoryTimeline {
-  steps: RunTimelineStep[];
-  traceId?: string;
-  /** span の無い古い形式の記録（処理の経過の位置に古い形式の案内を出す）。 */
-  legacy: boolean;
-}
-
-/**
- * 実行の詳細の処理の経過: 実行のときに backend が記録した span の木（チャット・SQL 生成と同じ記録・工程の定義）。
- * span の無い古い形式の記録（段だけのイベント・工程の秒だけの記録）は再構成せず、古い形式として扱う（#3226）。
- */
-export function historyTimeline(item: HistoryItem, traceLabels?: TraceDetailsLabels): HistoryTimeline {
-  const events = parseChatProgressEvents(item.progress_events);
-  const steps = chatProgressStepsFromEvents(events, CHAT_PROGRESS_STEP_DEFINITIONS, undefined, { traceLabels }).map(
-    chatProgressTimelineStep
-  );
-  const traceId = chatProgressTraceIdOf(events);
-  const legacy = chatProgressIsLegacy(events);
-  return { steps: legacy ? [] : steps, ...(traceId ? { traceId } : {}), legacy };
 }
 
 /** 詳細の URL（`?id=<run_id>`。新しいタブでも開ける）。 */

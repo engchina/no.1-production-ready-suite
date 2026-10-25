@@ -4,10 +4,11 @@
 // 生成した SQL はサーバーが文に分け（PL/SQL のブロックは 1 文）、文ごとに分類・実行する（#2333。
 // SQL Developer などのワークシートと同じ）。「すべて実行」は上から順に実行し、最初のエラーで止める。
 //
-// 処理の経過は backend が生成のときに記録した span の木（#3226）を、NL2SQL のチャットと同じ工程の定義
-// （`CHAT_PROGRESS_STEP_DEFINITIONS`）と共通の `ChatProgress` で出す（生成 → SQL の確認（サーバーの分類））。
-// 実行は経過に足さない（文の区画に出す）。
+// 処理の経過は backend が生成のときに共通の span の表に書いた span の木（#3226 の案 A）を、ターンの処理の経過の
+// API で読み、NL2SQL のチャットと同じ工程の定義（`CHAT_PROGRESS_STEP_DEFINITIONS`）と共通の `ChatProgress` で出す
+// （生成 → SQL の確認（サーバーの分類））。実行は経過に足さない（文の区画に出す）。
 import {
+  chatProgressHasSpans,
   chatProgressStepsFromEvents,
   chatProgressTraceIdOf,
   parseChatProgressEvents,
@@ -18,7 +19,7 @@ import {
 
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
 import { t } from "../../lib/i18n";
-import { CHAT_PROGRESS_STEP_DEFINITIONS, chatProgressIsLegacy } from "./chatProgress";
+import { CHAT_PROGRESS_STEP_DEFINITIONS, type TraceProgressResponse } from "./chatProgress";
 import type {
   DbAdminChatExecuteData,
   DbAdminChatPlan,
@@ -156,32 +157,35 @@ export function dbAdminChatGenerateStep(
   };
 }
 
-/** 1 往復の処理の経過（#3226）。 */
+/** 1 往復の処理の経過（#3226 の案 A）。 */
 export interface DbAdminChatProgress {
   steps: ChatProgressStep[];
   traceId?: string;
   /** span の無い古い形式のターン（処理の経過の位置に古い形式の案内を出す）。 */
   legacy: boolean;
+  /** 書けなかった span がある（「一部の処理だけを記録しています。」を出す）。 */
+  partial: boolean;
 }
 
 /**
- * 1 往復の処理の経過: backend が生成のときに記録した span の木（生成 → SQL の確認と、その中のモデルの呼び出し）。
- * 実行（「実行」「もう一度実行」「すべて実行」）は利用者が後から押す操作なので経過に足さず、その文の区画の実行の
- * 表示に出す。経過は生成したときのまま変わらない。
+ * 1 往復の処理の経過: ターンの処理の経過の API（共通の span の表の snapshot）の span の木（生成 → SQL の確認と、その中の
+ * モデルの呼び出し）。実行（「実行」「もう一度実行」「すべて実行」）は利用者が後から押す操作なので経過に足さず、その文の
+ * 区画の実行の表示に出す。経過は生成したときのまま変わらない。まだ読めていない（`trace` が無い）ときは何も出さない。
  */
-export function dbAdminChatProgress(
-  turn: Pick<DbAdminChatTurn, "turn_id" | "progress_events">,
+export function dbAdminChatTraceProgress(
+  turnId: string,
+  trace: TraceProgressResponse | undefined,
   traceLabels?: TraceDetailsLabels,
 ): DbAdminChatProgress {
-  const events = parseChatProgressEvents(turn.progress_events);
-  const steps = chatProgressStepsFromEvents(events, CHAT_PROGRESS_STEP_DEFINITIONS, turn.turn_id, {
-    traceLabels,
-  });
+  const events = parseChatProgressEvents(trace?.events);
+  const steps = chatProgressStepsFromEvents(events, CHAT_PROGRESS_STEP_DEFINITIONS, turnId, { traceLabels });
   const traceId = chatProgressTraceIdOf(events);
+  const partial = (trace?.droppedSpans ?? 0) > 0;
   return {
     steps,
     ...(traceId ? { traceId } : {}),
-    legacy: chatProgressIsLegacy(events),
+    legacy: events.length > 0 && !chatProgressHasSpans(events) && !partial,
+    partial,
   };
 }
 

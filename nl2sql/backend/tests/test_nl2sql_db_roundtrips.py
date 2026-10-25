@@ -831,6 +831,34 @@ def test_sql_generation_job_db_round_trips(
     assert all(not connection.autocommit for connection in h.state.created_connections())
 
 
+def test_trace_span_writes_do_not_add_job_round_trips(harness: Callable[..., Harness]) -> None:
+    """span の表の書き込み（#3226 の案 A）は書き手の別の接続で後から行い、ジョブの往復を増やさない。
+
+    ジョブの文書の保存は段の切り替え・完了だけのまま（段の中の span で保存しない。#904）。
+    """
+    from trace_span_fake import FakeTraceSpanDb
+
+    from app.features.nl2sql.trace_spans import install_trace_span_store, reset_trace_span_store
+
+    h = harness()
+    request = _sql_job(Nl2SqlEngine.ENTERPRISE_AI_DIRECT)
+    h.measure(request)
+    _, baseline, _ = h.measure(request)
+    db = FakeTraceSpanDb()
+    store = install_trace_span_store(db.connect, start=False)
+    try:
+        _, traced, job = h.measure(request)
+        # 主の処理は queue に積むだけで、まだ表には書いていない（DB を待たない）。
+        assert db.writes == 0
+        store.writer.flush()
+    finally:
+        reset_trace_span_store()
+    assert traced.total_round_trips == baseline.total_round_trips
+    assert traced.total_new_connections == 0
+    assert db.writes >= 1
+    assert {row["operation_id"] for row in db.rows.values()} == {job.job_id}
+
+
 @pytest.mark.parametrize("engine", list(_CHAT_TURN_LIMITS), ids=_ENGINE_IDS)
 def test_chat_turn_db_round_trips_do_not_grow_with_turns(
     harness: Callable[..., Harness], engine: Nl2SqlEngine

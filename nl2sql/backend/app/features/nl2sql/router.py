@@ -21,7 +21,6 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import StreamingResponse
 from pr_backend_core import ApiResponse
 from pr_backend_core.api import (
     DEFAULT_PAGE_LIMIT,
@@ -33,7 +32,6 @@ from pr_backend_core.api import (
     offset_params,
 )
 from pr_backend_core.chat_history_window import chat_history_days
-from pr_backend_core.chat_progress import ChatProgressPage, chat_progress_sse_response
 from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE, SecurityApiError
 from pr_system_settings.auth.visibility import (
     DEFAULT_RUN_EXECUTOR_FILTER,
@@ -210,6 +208,7 @@ from .models import (
     SyntheticDataGenerateRequest,
     SyntheticDataOperationData,
     SyntheticDataResultsData,
+    TraceProgressData,
     normalize_profile_identifier,
     validate_profile_identifier,
 )
@@ -247,7 +246,7 @@ from .service import (
     DbAdminChatConversationFullError,
     DbAdminChatGenerationError,
     JobIdConflictError,
-    JobProgressData,
+    JobTraceData,
     ProfileNameConflict,
     ProfileOracleCleanupFailed,
     ProfileScopePermissionError,
@@ -258,6 +257,7 @@ from .service import (
     is_select_only as _is_select_only,
 )
 from .tabular_files import TabularFileReadError
+from .trace_spans import TraceSpanReadError
 
 logger = logging.getLogger(__name__)
 LEARNING_MATERIAL_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
@@ -980,16 +980,24 @@ def get_job(job_id: str, request: Request) -> ApiResponse[JobData]:
 _JOB_PROGRESS_NOT_FOUND_DETAIL = "指定されたジョブが見つかりません。"
 
 
-def _job_progress_for_request(job_id: str, request: Request, since: int) -> JobProgressData:
-    """ジョブの処理の段階のイベント（`since` より後）。
+_TRACE_READ_FAILED_DETAIL = "処理の経過を読み込めませんでした。時間をおいて再度お試しください。"
+
+
+def _trace_read_unavailable(exc: TraceSpanReadError) -> HTTPException:
+    """span の表を読めなかった（画面は前の内容を残して読み直す）。"""
+
+    return HTTPException(status_code=503, detail=_TRACE_READ_FAILED_DETAIL)
+
+
+def _job_trace_for_request(job_id: str, request: Request) -> JobTraceData:
+    """ジョブの処理の経過（span の表の snapshot）。
 
     アクセスの判定は `GET /jobs/{job_id}` と同じ（本人のジョブか system_admin・業務プロファイル）。
     """
     try:
         access = _ai_use_access(request)
-        progress = nl2sql_service.get_job_progress(
+        progress = nl2sql_service.get_job_trace(
             job_id,
-            since=since,
             actor_user_uuid=access.actor_user_uuid,
             actor_can_manage=access.actor_can_manage,
         )
@@ -997,6 +1005,8 @@ def _job_progress_for_request(job_id: str, request: Request, since: int) -> JobP
         raise HTTPException(
             status_code=OWNER_NOT_FOUND_STATUS, detail=_JOB_PROGRESS_NOT_FOUND_DETAIL
         ) from exc
+    except TraceSpanReadError as exc:
+        raise _trace_read_unavailable(exc) from exc
     if progress is None:
         raise HTTPException(status_code=404, detail=_JOB_PROGRESS_NOT_FOUND_DETAIL)
     if progress.chat:
@@ -1004,50 +1014,14 @@ def _job_progress_for_request(job_id: str, request: Request, since: int) -> JobP
     return progress
 
 
-@router.get("/jobs/{job_id}/progress", response_model=ApiResponse[ChatProgressPage])
-def get_job_progress(
-    job_id: str,
-    request: Request,
-    since: Annotated[int, Query(ge=0, description="この番号より後のイベントを返す。")] = 0,
-) -> ApiResponse[ChatProgressPage]:
-    """ジョブの処理の段階のイベント（polling。3 製品共通の契約。#1359）。"""
-    return ApiResponse(data=_job_progress_for_request(job_id, request, since).page)
+@router.get("/jobs/{job_id}/trace", response_model=ApiResponse[TraceProgressData])
+def get_job_trace(job_id: str, request: Request) -> ApiResponse[TraceProgressData]:
+    """ジョブの処理の経過（共通の span の表の snapshot。#3226 の案 A）。
 
-
-@router.get(
-    "/jobs/{job_id}/progress/stream",
-    response_class=StreamingResponse,
-    responses={204: {"description": "終わったジョブを続きから求めた（配信するイベントが無い）。"}},
-)
-async def stream_job_progress(
-    job_id: str,
-    request: Request,
-    since: Annotated[int | None, Query(ge=0, description="この番号より後から送る。")] = None,
-    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
-) -> Response:
-    """ジョブの処理の段階のイベントを SSE で送る（3 製品共通の契約。#1359）。
-
-    アクセス（404 / 403・業務プロファイルの利用権限）は配信の前に `GET /jobs/{job_id}` と同じく
-    判定する。配信は永続の job の文書を 1 秒ごとに読み直すので、worker が別のプロセスでも届く。
-    job の読み直しは同期 I/O なので threadpool で行う（backend-concurrency-contract）。
+    span は worker（別の process）が書くので、実行中も段の中の span（モデルの呼び出し・Select AI）
+    まで読める。画面は実行中に 1 秒ごとに読み直す。最終の状態はジョブの状態（正本）で決める。
     """
-    await run_sync_io(_job_progress_for_request, job_id, request, since or 0)
-    access = _ai_use_access(request)
-
-    async def fetch(cursor: int) -> ChatProgressPage | None:
-        try:
-            progress = await run_sync_io(
-                nl2sql_service.get_job_progress,
-                job_id,
-                since=cursor,
-                actor_user_uuid=access.actor_user_uuid,
-                actor_can_manage=access.actor_can_manage,
-            )
-        except PermissionError:
-            return None
-        return progress.page if progress is not None else None
-
-    return await chat_progress_sse_response(fetch, since=since, last_event_id=last_event_id)
+    return ApiResponse(data=_job_trace_for_request(job_id, request).trace)
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=ApiResponse[JobData])
@@ -2035,6 +2009,33 @@ def history_item(request: Request, history_id: str) -> ApiResponse[HistoryItem]:
     )
 
 
+@router.get("/history/{history_id}/trace", response_model=ApiResponse[TraceProgressData])
+def history_item_trace(request: Request, history_id: str) -> ApiResponse[TraceProgressData]:
+    """実行履歴の行の処理の経過（実行したジョブの span。#3226 の案 A）。
+
+    見え方は `GET /history/{history_id}` と同じ（見えない行と無い行はどちらも 404）。
+    """
+    principal = getattr(request.state, "principal", None)
+    item = nl2sql_service.get_history_item(history_id)
+    if item is None or (
+        principal is not None
+        and not can_access_run(
+            principal,
+            executor_user_uuid=item.actor_user_uuid,
+            owner_user_uuid=item.conversation_owner_user_uuid or None,
+        )
+    ):
+        raise HTTPException(status_code=OWNER_NOT_FOUND_STATUS, detail=_HISTORY_NOT_FOUND_DETAIL)
+    try:
+        progress = nl2sql_service.history_trace(
+            item,
+            viewer_is_admin=principal is None or can_view_all_users_data(principal),
+        )
+    except TraceSpanReadError as exc:
+        raise _trace_read_unavailable(exc) from exc
+    return ApiResponse(data=progress)
+
+
 def _with_history_people(
     items: list[HistoryItem],
     *,
@@ -2088,6 +2089,8 @@ def _with_history_people(
                     "kind": item.run_source or ("chat" if owner else "query"),
                     "actor_login_user_id": identity.login_user_id if identity else "",
                     "actor_display_name": identity.display_name if identity else "",
+                    # 工程の詳細は処理の経過（`GET /history/{history_id}/trace`）だけが返す。
+                    "span_details": {},
                 }
             )
         )
@@ -3102,10 +3105,16 @@ def _with_db_admin_chat_senders(turns: list[DbAdminChatTurn]) -> list[DbAdminCha
     """持ち主以外（system_admin）が送ったターンに、送り手の表示名を足す（チャットと同じ。#1928）。"""
     senders = sorted({turn.sender_user_uuid for turn in turns if turn.sender_user_uuid})
     names = _chat_owner_names(senders) if senders else {}
+    # 工程の詳細は処理の経過（`GET .../turns/{turn_id}/trace`）だけが返す。
     return [
-        turn
+        turn.model_copy(update={"span_details": {}})
         if turn.sender_user_uuid is None
-        else turn.model_copy(update={"sender_display_name": names.get(turn.sender_user_uuid, "")})
+        else turn.model_copy(
+            update={
+                "sender_display_name": names.get(turn.sender_user_uuid, ""),
+                "span_details": {},
+            }
+        )
         for turn in turns
     ]
 
@@ -3141,6 +3150,29 @@ def list_db_admin_chats(
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return ApiResponse(data=_with_chat_owners(page, actor=actor, all_users=all_users))
+
+
+@router.get(
+    "/db-admin-chat/conversations/{conversation_id}/turns/{turn_id}/trace",
+    response_model=ApiResponse[TraceProgressData],
+)
+def get_db_admin_chat_turn_trace(
+    conversation_id: str, turn_id: str, request: Request
+) -> ApiResponse[TraceProgressData]:
+    """DB 管理チャットのターンの処理の経過（生成のときの span。#3226 の案 A）。
+
+    見え方は会話と同じ（system_admin は全員、それ以外は本人の会話だけ。他人と無いターンは 404）。
+    """
+    actor, all_users = _db_admin_chat_actor(request)
+    try:
+        progress = nl2sql_service.db_admin_chat_turn_trace(
+            conversation_id, turn_id, actor=actor, all_users=all_users
+        )
+    except (PermissionError, LookupError) as exc:
+        raise _chat_not_found() from exc
+    except TraceSpanReadError as exc:
+        raise _trace_read_unavailable(exc) from exc
+    return ApiResponse(data=progress)
 
 
 @router.get(

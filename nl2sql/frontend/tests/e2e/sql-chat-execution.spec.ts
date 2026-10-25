@@ -9,7 +9,7 @@ import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { confirmChatRequirement, mockChatRequirement } from "./_helpers/chat-requirement";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { expectFieldLabelOnOneLine } from "./_helpers/field-label";
-import { turnProgressEvents, withJobProgress } from "./_helpers/job-progress";
+import { withJobProgress } from "./_helpers/job-progress";
 
 const profile = {
   id: "sales",
@@ -191,8 +191,6 @@ async function setup(
           status: safe ? "done" : "error",
           created_at: now,
           steps: [],
-          // 作成時の処理の段階のイベント（#1359。mock は完了したジョブを返す）。
-          progress_events: turnProgressEvents(state.turns.at(-1)!),
         },
       },
     });

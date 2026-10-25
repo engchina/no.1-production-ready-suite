@@ -11,6 +11,7 @@ from pr_backend_core import configure_logging
 from pr_backend_core.observability.tracing import tracing_lifecycle
 
 from app.features.nl2sql.service import nl2sql_service
+from app.features.nl2sql.trace_spans import start_trace_span_store, stop_trace_span_store
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -35,11 +36,16 @@ def main() -> None:
         worker_id = f"{socket.gethostname()}:nl2sql-job"
         signal.signal(signal.SIGTERM, _stop)
         signal.signal(signal.SIGINT, _stop)
+        # 処理の経過の span の書き手（#3226 の案 A）。実行中の span を共通の span の表に書く。
+        start_trace_span_store()
         logger.info("nl2sql_job_worker_started", extra={"worker_id": worker_id})
-        while _running:
-            processed = nl2sql_service.run_next_nl2sql_job(worker_id=worker_id)
-            if not processed:
-                time.sleep(max(0.1, settings.nl2sql_job_worker_poll_seconds))
+        try:
+            while _running:
+                processed = nl2sql_service.run_next_nl2sql_job(worker_id=worker_id)
+                if not processed:
+                    time.sleep(max(0.1, settings.nl2sql_job_worker_poll_seconds))
+        finally:
+            stop_trace_span_store()
         logger.info("nl2sql_job_worker_stopped", extra={"worker_id": worker_id})
 
 
