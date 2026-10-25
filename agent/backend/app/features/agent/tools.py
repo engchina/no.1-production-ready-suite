@@ -12,11 +12,12 @@ import logging
 import re
 import secrets
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from enum import StrEnum
 from time import monotonic, perf_counter
+from types import MappingProxyType
 from typing import Any
 from uuid import uuid4
 
@@ -27,7 +28,15 @@ from pr_backend_core.observability.request_context import outbound_correlation_h
 from pr_backend_core.observability.tracing import capture_trace_context, observed_span
 from pr_system_settings.auth.errors import SecurityApiError
 from pr_system_settings.auth.service_token import issue_service_token
-from pydantic import BaseModel, Field, PrivateAttr, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from app.features.agent.call_abort import CallAbort, current_call_abort
 from app.features.agent.config import (
@@ -198,7 +207,23 @@ class JsonRpcResponse(BaseModel):
     error: JsonObject | None = None
 
 
+def freeze_profile_scopes(
+    scopes: Mapping[str, Iterable[str]] | None,
+) -> Mapping[str, tuple[str, ...]]:
+    """接続 → プロファイルの ID を、書き換えられない形（読み取り専用の mapping と tuple）にする。"""
+    return MappingProxyType({connection: tuple(ids) for connection, ids in (scopes or {}).items()})
+
+
 class ToolInvocationContext(BaseModel):
+    """1 回のツールの呼び出しの文脈（主体・範囲）。作った後は変えない（#3253）。
+
+    主体（`user_uuid`）と範囲（`profile_scopes`）は認証と業務 Agent の定義から作り、モデルが渡す
+    ツールの引数からは決めない。変えるときは `model_copy(update=...)` で新しい文脈を作る
+    （`update` は検証を通らないので、`profile_scopes` は `freeze_profile_scopes` の値を渡す）。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
     approval_id: str | None = None
     trace_id: str | None = None
     agent_id: str | None = None
@@ -214,7 +239,16 @@ class ToolInvocationContext(BaseModel):
     # 業務 Agent のデータの範囲（標準の接続 → 使えるプロファイルの ID。#1379）。その接続の
     # サービストークンの claim `profile_ids` に入れ、呼び先でも範囲を強制させる。範囲の無い接続は
     # claim を付けない。
-    profile_scopes: dict[str, list[str]] = Field(default_factory=dict)
+    profile_scopes: Mapping[str, tuple[str, ...]] = Field(
+        default_factory=lambda: freeze_profile_scopes(None)
+    )
+
+    @field_validator("profile_scopes", mode="after")
+    @classmethod
+    def _freeze_profile_scopes(
+        cls, value: Mapping[str, tuple[str, ...]]
+    ) -> Mapping[str, tuple[str, ...]]:
+        return freeze_profile_scopes(value)
 
 
 # handler は文字の結果（JSON）か、画像を伴う結果（`ToolOutputWithImages`。#2650）を返す。

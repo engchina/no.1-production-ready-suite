@@ -7,6 +7,7 @@ Agent の Runtime を通さずに `POST /api/mcp` を直接呼び、呼び先の
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from typing import Any
 
 import pytest
@@ -348,6 +349,31 @@ def test_scope_that_cannot_be_loaded_is_not_treated_as_no_scope(
     )
     assert (result["isError"], result["structuredContent"]["status"]) == (True, 503)
     assert RecordingPipeline.captured_request is None
+
+
+def test_profile_scope_cannot_be_changed_after_creation() -> None:
+    """1 回の呼び出しの範囲は、属性も入れ子のナレッジベースの一覧も書き換えられない（#3253）。"""
+    knowledge_base_ids = {"bv-1": ["kb-1", "kb-2"]}
+    scope = profile_scope.ProfileScope(
+        profile_ids=frozenset({"bv-1"}),
+        knowledge_base_ids=knowledge_base_ids,  # type: ignore[arg-type]
+    )
+    # 作った後に元の dict / list を変えても、範囲は変わらない。
+    knowledge_base_ids["bv-1"].append("kb-9")
+    knowledge_base_ids["bv-2"] = ["kb-3"]
+    assert dict(scope.knowledge_base_ids) == {"bv-1": ("kb-1", "kb-2")}
+    assert scope.all_knowledge_base_ids() == frozenset({"kb-1", "kb-2"})
+
+    with pytest.raises(FrozenInstanceError):
+        scope.knowledge_base_ids = {}  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        scope.profile_ids = frozenset({"bv-2"})  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        scope.knowledge_base_ids["bv-2"] = ("kb-3",)  # type: ignore[index]
+    with pytest.raises(AttributeError):
+        scope.knowledge_base_ids["bv-1"].append("kb-9")  # type: ignore[attr-defined]
+    with pytest.raises(AttributeError):
+        scope.profile_ids.add("bv-2")  # type: ignore[attr-defined]
 
 
 def _install_reading_recorders(monkeypatch: MonkeyPatch) -> None:
