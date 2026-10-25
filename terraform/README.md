@@ -76,7 +76,7 @@ Resource Manager の画面では製品を選ばず、RAG / NL2SQL / Agent Contro
 - DB の password / user / DSN に single quote は使えません（共通 `.env` では値を single quote で囲むため）。
 - **時間帯（#3255）**: 時刻は UTC で保存します（3 製品の DB の session の時間帯は、Compute の OS の時間帯に関わらず
   `'+00:00'` に固定します。`pr_backend_core.oracle_session`）。stack の `timezone`（`Asia/Tokyo`〔日本時間: 東京・大阪など。既定〕か `UTC`〔OCI の Database の Time Zone の既定〕）は Compute の OS と
-  共通の設定 `PLATFORM_TIMEZONE`（今日〔検索・期間の基準日〕と既定の時間帯）に使い、ADB の時間帯（`DBTIMEZONE`）は変えません
+  共通の設定 `PLATFORM_TIMEZONE`（今日〔検索・期間の基準日〕・既定の時間帯・画面の日時の表示・NL2SQL の業務データの SQL の今の日時。#3265）に使い、ADB の時間帯（`DBTIMEZONE`）は変えません
   （OCI の Terraform provider の `oci_database_autonomous_database` に時間帯の引数が無く、stack は DB に接続しないため）。
   ADB の時間帯も合わせるときは、ADMIN で次を実行し、ADB を再起動します（再起動の間は 3 製品が DB を使えません。共有の ADB では
   使っている全員に確かめてから）。
