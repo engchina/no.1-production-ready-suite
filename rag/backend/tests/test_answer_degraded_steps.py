@@ -445,13 +445,12 @@ async def _run(monkeypatch: pytest.MonkeyPatch, oracle: FakeOracle) -> Any:
     import rag_engine.adapters.oci as engine_oci
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
-    # 実体・関係情報・章節の拡張は、この試験の外(FakeOracle に無い SQL を読む。処理ごとの試験は
-    # 上にある)。
+    # 実体・関係情報の拡張は、この試験の外(FakeOracle に無い SQL を読む。処理ごとの試験は
+    # 上にある)。章節の拡張は既定のまま(FakeOracle の文書は章節の対応を持たず、広げない)。
     engine = _engine(
         oracle,
         rag_entity_expansion_enabled=False,
         rag_graph_expansion_enabled=False,
-        rag_section_expansion_enabled=False,
     )
     return await engine.run(
         SearchRequest(query="登録の手順は？", filters={"knowledge_base_id": "kb-1"})
@@ -478,6 +477,29 @@ async def test_zero_evidence_separates_read_failure_from_no_hit(
         assert zero["degraded_steps"] == []
         assert "degraded_steps" not in outcome.diagnostics
     assert SECRET not in json.dumps(outcome.diagnostics, ensure_ascii=False, default=str)
+
+
+async def test_shared_fake_oracle_answers_without_degraded_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """共通の FakeOracle は既定の設定で補助の処理を失敗させない(編集したプロンプト・章節の対応)。
+
+    代役に無い読み取りが ``AttributeError`` で degraded_steps に混ざると、各試験の診断が
+    実際の失敗と見分けられない。
+    """
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    # 章節の拡張は既定で有効(章節の対応を読む)。
+    assert Settings().rag_section_expansion_enabled
+    engine = _engine(FakeOracle())
+
+    outcome = await engine.run(
+        SearchRequest(query="登録の手順は？", filters={"knowledge_base_id": "kb-1"})
+    )
+
+    assert outcome.citations
+    assert "degraded_steps" not in outcome.diagnostics
 
 
 async def test_answer_continues_and_records_degraded_steps(

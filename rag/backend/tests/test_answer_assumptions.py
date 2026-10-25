@@ -175,7 +175,7 @@ async def test_final_answer_generation_receives_assumptions(
 
     monkeypatch.setattr(engine_oci, "parse_text_response", llm)
     outcome = await AnswerEngine(
-        Settings(rag_answer_flow="standard_rag", rag_section_expansion_enabled=False),
+        Settings(rag_answer_flow="standard_rag"),
         oracle=FakeOracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
         runtime_knowledge_payload=prepared(policy),
