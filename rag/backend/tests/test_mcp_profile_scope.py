@@ -22,7 +22,8 @@ from app.mcp import tools as mcp_tools
 from app.rag import section_map_service
 from app.rag.request_context import AuditRequestContext, current_audit_request_context
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
-from app.security.permissions import KNOWLEDGE_BASES_MANAGE
+from app.schemas.search_answer_profile import SearchAnswerProfileDetail, SearchAnswerProfileStatus
+from app.security.permissions import KNOWLEDGE_BASES_MANAGE, SCOPE_FORBIDDEN_CODE
 from tests.security_support import ProductionAuth, enable_production_auth
 from tests.support import AsgiTestClient
 from tests.test_mcp_api import _chunk
@@ -373,3 +374,149 @@ def test_profile_scope_cannot_be_changed_after_creation() -> None:
         scope.knowledge_base_ids["bv-1"].append("kb-9")  # type: ignore[attr-defined]
     with pytest.raises(AttributeError):
         scope.profile_ids.add("bv-2")  # type: ignore[attr-defined]
+
+
+def _install_reading_recorders(monkeypatch: MonkeyPatch) -> None:
+    _RecordingReadOracle.contexts = []
+    monkeypatch.setattr(mcp_tools, "OracleClient", _RecordingReadOracle)
+    monkeypatch.setattr(section_map_service, "OracleClient", _RecordingReadOracle)
+    monkeypatch.setattr(section_map_service, "SectionMapStore", _RecordingSectionStore)
+
+
+def _read_with_every_reading_tool(headers: dict[str, str]) -> list[AuditRequestContext]:
+    """文書を読む 4 つのツールを呼び、Oracle を読んだときの監査 context を返す。"""
+    _RecordingReadOracle.contexts = []
+    read = _call("rag_read_source", {"document_id": "d1", "chunk_id": "c1"}, headers)
+    assert read["isError"] is False, read
+    for tool, arguments in [
+        ("rag_outline", {"document_id": "d1"}),
+        ("rag_read_document", {"document_id": "d1"}),
+        ("rag_read_section", {"document_id": "d1", "section_id": "s1"}),
+    ]:
+        result = _call(tool, arguments, headers)
+        assert result["structuredContent"]["error_code"] == mcp_tools.SOURCE_NOT_FOUND_CODE
+    assert len(_RecordingReadOracle.contexts) == 4
+    return list(_RecordingReadOracle.contexts)
+
+
+class _RecordingTargetsOracle:
+    """推薦（rag_recommend_search_answer_profile）がプロファイルを読むときの範囲を残す fake。
+
+    Oracle の SQL と同じく、範囲（監査 context）の外の検索・回答プロファイルは返さない。
+    """
+
+    contexts: list[AuditRequestContext] = []
+
+    async def search_answer_profile_targets(
+        self, *, search_answer_profile_ids: list[str] | None = None
+    ) -> list[Any]:
+        context = current_audit_request_context()
+        self.contexts.append(context)
+        allowed = context.allowed_search_answer_profile_ids
+        return [item for item in VIEWS if allowed is None or item in allowed]
+
+
+def _searcher(auth: ProductionAuth, user_knowledge_bases: list[str] | None) -> str:
+    user = auth.user_with_permissions(
+        "searcher",
+        # ナレッジベース管理はすべての KB を使える（利用者の KB の範囲の制限なし）。
+        ["menu.search"]
+        if user_knowledge_bases is not None
+        else ["menu.search", KNOWLEDGE_BASES_MANAGE],
+        search_answer_profile_ids=["bv-1", "bv-2"],
+        knowledge_base_ids=user_knowledge_bases or (),
+    )
+    return user.user_uuid
+
+
+USER_KNOWLEDGE_BASES = pytest.mark.parametrize(
+    "user_knowledge_bases",
+    [None, ["kb-1", "kb-2", "kb-3"]],
+    ids=["user-kb-unrestricted", "user-kb-restricted"],
+)
+
+
+@USER_KNOWLEDGE_BASES
+def test_claim_disjoint_from_user_profiles_denies_everything(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch, user_knowledge_bases: list[str] | None
+) -> None:
+    """claim ∩ 利用者のプロファイル = 空 なら、どのツールも何も使えない（範囲なしにしない）。
+
+    空の集合は「何も使えない」、None は「制限なし」（#3250）。利用者の KB が制限なしでも、
+    範囲の KB は空の集合になり、Oracle を「制限なし」で読まない。
+    """
+    fake = ScopedFakeOracle()
+    monkeypatch.setattr(search_answer_profiles_route, "OracleClient", lambda *_a, **_k: fake)
+    disjoint = _headers(_searcher(auth, user_knowledge_bases), ["bv-3"])
+
+    for tool in ["rag_search", "rag_retrieve_evidence"]:
+        # claim の中でも利用者が使えないプロファイルは使えず、ほかのプロファイルに選び直さない。
+        result = _call(tool, {"query": "規程", "search_answer_profile_id": "bv-3"}, disjoint)
+        assert result["isError"] is True, result
+        content = result["structuredContent"]
+        assert (content["status"], content["error_code"]) == (
+            404,
+            mcp_tools.SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE,
+        )
+        assert content["details"]["next_tools"] == []  # 使えるプロファイルを案内しない
+        # 利用者が使えても claim の外のプロファイルと、プロファイルなしの検索は 403。
+        _forbidden(_call(tool, {"query": "規程", "search_answer_profile_id": "bv-1"}, disjoint))
+        _forbidden(_call(tool, {"query": "規程"}, disjoint))
+    assert RecordingPipeline.captured_request is None
+    _forbidden(
+        _call("rag_lookup_guides", {"query": "精算", "search_answer_profile_id": "bv-1"}, disjoint)
+    )
+
+    listed = _call("rag_list_search_answer_profiles", {"limit": 10}, disjoint)
+    assert listed["structuredContent"]["search_answer_profiles"] == []
+
+    _RecordingTargetsOracle.contexts = []
+    monkeypatch.setattr(mcp_tools, "OracleClient", _RecordingTargetsOracle)
+    recommended = _call("rag_recommend_search_answer_profile", {"question": "規程"}, disjoint)
+    assert recommended["isError"] is False, recommended
+    assert recommended["structuredContent"]["recommended_profile_id"] is None
+    assert recommended["structuredContent"]["candidates"] == []
+    assert [
+        item.allowed_search_answer_profile_ids for item in _RecordingTargetsOracle.contexts
+    ] == [frozenset()]
+
+    _install_reading_recorders(monkeypatch)
+    for context in _read_with_every_reading_tool(disjoint):
+        assert context.allowed_search_answer_profile_ids == frozenset()
+        assert context.allowed_knowledge_base_ids == frozenset()
+
+
+class _ArchivedViewOracle(ScopedViewOracle):
+    """範囲を作るときに読む検索・回答プロファイルが、すべてアーカイブ済みの fake。"""
+
+    async def get_search_answer_profile(
+        self, search_answer_profile_id: str
+    ) -> SearchAnswerProfileDetail | None:
+        view = await super().get_search_answer_profile(search_answer_profile_id)
+        if view is None:
+            return None
+        return view.model_copy(update={"status": SearchAnswerProfileStatus.ARCHIVED})
+
+
+@USER_KNOWLEDGE_BASES
+def test_scope_with_only_archived_profiles_denies_knowledge_bases(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch, user_knowledge_bases: list[str] | None
+) -> None:
+    """範囲のプロファイルがすべてアーカイブ済みなら、範囲の KB は空の集合（何も読めない）。
+
+    検索の側がアーカイブを見落としても、検索する KB は 0 件（範囲なしにしない）。
+    """
+    monkeypatch.setattr(profile_scope, "OracleClient", lambda *_a, **_k: _ArchivedViewOracle(VIEWS))
+    archived = _headers(_searcher(auth, user_knowledge_bases), ["bv-1"])
+
+    for tool in ["rag_search", "rag_retrieve_evidence"]:
+        result = _call(tool, {"query": "規程", "search_answer_profile_id": "bv-1"}, archived)
+        assert result["isError"] is True, result
+        content = result["structuredContent"]
+        assert (content["status"], content["error_code"]) == (403, SCOPE_FORBIDDEN_CODE)
+    assert RecordingPipeline.captured_request is None
+
+    _install_reading_recorders(monkeypatch)
+    for context in _read_with_every_reading_tool(archived):
+        assert context.allowed_search_answer_profile_ids == frozenset({"bv-1"})
+        assert context.allowed_knowledge_base_ids == frozenset()

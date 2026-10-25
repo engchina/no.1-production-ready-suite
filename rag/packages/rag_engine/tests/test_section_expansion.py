@@ -604,6 +604,8 @@ def test_grade_error_keeps_read_sections():
 
     assert result.stop_reason == sections.STOP_GRADE_ERROR and result.applied
     assert "c31b" in _child_ids(result.context) and result.unread == []
+    # 例外の型の名前だけを残し、本文は残さない（#3259）。
+    assert [level.get("grade_error") for level in result.trace["levels"] if "grade_error" in level] == ["RuntimeError"]
 
 
 def test_two_seed_sections_share_the_parent_once():

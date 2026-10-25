@@ -172,5 +172,5 @@ class ApplicationStepTest(unittest.TestCase):
         self.assertNotIn("ApplicationDraft", model.calls)
         result, _ = neutral_answer(QUESTION, RuntimeError("LLM 失敗"), self.STEP_AUDIT)
         self.assertTrue(result.answer_text.startswith("延滞料は1200円です。"))
-        self.assertIn("RuntimeError", result.generation_trace["application_step"]["error"])
+        self.assertEqual(result.generation_trace["application_step"]["error"], "RuntimeError")
         self.assertIn("延滞料は1200円です。", [m["text"] for m in result.envelope["passage_marks"]])

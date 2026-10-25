@@ -19,6 +19,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from rag_engine.dependencies import report_degraded
+
 # 番号付きの画面見出し（「（２）帳票印字設定」「（Ｄ）請求処理」「(3)…」）。目録に入れる見出しの形。
 _NUMBERED_HEADING = re.compile(r"^[（(][0-9０-９Ａ-ＺA-Zａ-ｚ]{1,3}[）)]")
 # `_key`（NFKC で全角を半角にした表記）の先頭の番号。
@@ -131,14 +133,19 @@ def validated_links(links: ScreenLinks, catalog: dict[str, list[str]]) -> list[t
 def link_screens(
     question: str, catalog: dict[str, list[str]], parse_text: Callable[..., ScreenLinks], settings: Any
 ) -> list[tuple[str, str]]:
-    """質問から操作すべき画面を目録で選ぶ。LLM の呼び出しに失敗したら空（検索は従来どおり続ける）。"""
+    """質問から操作すべき画面を目録で選ぶ。
+
+    LLM の呼び出しに失敗したら空（検索は従来どおり続ける）。失敗は「該当なし」と分けるため、
+    呼び出し元の診断に残す（#3259）。
+    """
     if not catalog:
         return []
     text = "\n".join(f"[{source}]\n" + " / ".join(headings) for source, headings in catalog.items())
     prompt = json.dumps({"question": question, "catalog": text}, ensure_ascii=False)
     try:
         return validated_links(parse_text(LINK_SYSTEM_PROMPT, prompt, settings, ScreenLinks), catalog)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - 画面の選択は補助。選ばずに検索を続ける。
+        report_degraded("screen_link", exc)
         return []
 
 

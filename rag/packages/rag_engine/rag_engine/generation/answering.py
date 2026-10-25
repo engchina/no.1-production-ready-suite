@@ -1120,7 +1120,7 @@ def build_crag_answer_context(
                     retrieval_queries=_dedupe_queries(retrieval_queries),
                     sufficient=False,
                     reason="CRAG retrieval evaluator failed; using the best available retrieval context.",
-                    grade_error=_trim_generated_text(exc, 240),
+                    grade_error=type(exc).__name__,  # 例外の型の名前だけ（本文は残さない。#3259）
                     new_evidence_count=new_evidence_count,
                 )
                 step.status = "評価に失敗"
@@ -2137,7 +2137,7 @@ def synthesize_grounded_answer(
                 # 失敗した round は trace に理由だけ残し、直前に採用した round を公開する。
                 rounds.append(
                     {
-                        "error": f"{type(exc).__name__}: {exc}",
+                        "error": type(exc).__name__,  # 例外の型の名前だけ（本文は残さない。#3259）
                         "accepted": False,
                         "audit_calls": 0,
                         **({"deadline_cut": True} if cut else {}),
@@ -2305,7 +2305,7 @@ def synthesize_grounded_answer(
                 render_prompt=lambda inputs: json.dumps(fold_model_view(inputs), ensure_ascii=False),
             )
         except Exception as exc:  # noqa: BLE001 - 補う段の失敗で回答全体を止めない
-            application_step["error"] = f"{type(exc).__name__}: {exc}"[:240]
+            application_step["error"] = type(exc).__name__  # 例外の型の名前だけ（本文は残さない。#3259）
         else:
             application_step["published"] = sum(1 for application in step_applications if application.published)
             current = replace(
@@ -3321,7 +3321,7 @@ def _degraded_query_expansion(
     中断せず、単純検索（拡張なし）として続行し、理由を routing_reason に残して実行記録と payload に
     表示する (#905)。利用者が選んだ selected_strategy は保つ。
     """
-    error = _trim_generated_text(f"{type(exc).__name__}: {exc}", 240)
+    error = type(exc).__name__  # 例外の型の名前だけ（本文は残さない。#3259）
     return QueryExpansionResult(
         original_question=original_question,
         selected_strategy=selected_strategy,
@@ -3412,7 +3412,7 @@ def build_question_text_search_info(
             tokenizer_fingerprint=fingerprint,
             query_variants=tuple(variants),
             query_source=query_source,
-            error=_trim_generated_text(exc, 240),
+            error=type(exc).__name__,  # 例外の型の名前だけ（本文は残さない。#3259）
         )
 
 

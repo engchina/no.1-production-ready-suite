@@ -754,6 +754,9 @@ class _FakeSpanCursor:
         self.db = db
         self._result: list[tuple[Any, ...]] = []
 
+    def setinputsizes(self, **_sizes: Any) -> None:
+        pass
+
     def executemany(self, sql: str, rows: list[dict[str, Any]]) -> None:
         assert "MERGE INTO PLATFORM_TRACE_SPANS" in sql
         for row in rows:

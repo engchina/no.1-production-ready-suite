@@ -768,7 +768,7 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertIn("・一覧表を選択し、処理を選択します。", result.response.answer_text)
         rounds = result.response.generation_trace["rounds"]
         self.assertEqual([r["accepted"] for r in rounds], [True, False])
-        self.assertEqual(rounds[1]["error"], "RuntimeError: read timed out")
+        self.assertEqual(rounds[1]["error"], "RuntimeError")
         self.assertEqual(result.response.generation_trace["llm_calls"], 3)
 
     def test_first_round_error_is_still_raised(self):

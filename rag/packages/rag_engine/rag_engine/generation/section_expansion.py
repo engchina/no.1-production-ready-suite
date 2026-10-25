@@ -1165,7 +1165,7 @@ def expand_sections(
         except Exception as exc:  # noqa: BLE001 - 判定の失敗は、読んだ章節のまま回答へ進む
             if type(exc).__name__ == "DeadlineExceeded":
                 raise
-            level_trace["grade_error"] = f"{type(exc).__name__}: {exc}"[:240]
+            level_trace["grade_error"] = type(exc).__name__  # 例外の型の名前だけ（本文は残さない。#3259）
             return finish(STOP_GRADE_ERROR)
         level_seconds = max(1.0, clock() - before)
         latest = attempt

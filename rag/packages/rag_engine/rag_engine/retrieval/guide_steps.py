@@ -276,11 +276,8 @@ def run_step_searches(
         try:
             context = retrieve(text, queries, page_ranges)
         except Exception as exc:  # noqa: BLE001 - 手順の検索は補助。失敗しても既存の根拠で回答する。
-            results.append(
-                StepSearch(
-                    step.step_id, kind, text, queries, (), (), int((clock() - began) * 1000), f"{type(exc).__name__}: {str(exc)[:200]}"
-                )
-            )
+            # error は例外の型の名前だけ（本文は残さない。#3259）。
+            results.append(StepSearch(step.step_id, kind, text, queries, (), (), int((clock() - began) * 1000), type(exc).__name__))
             continue
         results.append(
             StepSearch(

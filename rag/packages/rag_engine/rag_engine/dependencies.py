@@ -51,6 +51,8 @@ class AnswerDependencies:
     embedder は業務ガイドの手順の充足で、根拠を共有する手順のどれを item が説明したかを語で決められないときに、
     意味の近さで決める embedding（`ports.Embedder`。索引と同じ OCI Generative AI の Cohere Embed。#2649）。省略時は
     語の判定だけで決める。
+    report_degraded は補助の処理（画面の選択など）が失敗して空のまま続けたことを、処理の種類と例外を受け取って
+    呼び出し元の診断に残す（#3259。例外の文は呼び出し元が残さない）。省略時は残さない。
     """
 
     search: Callable[..., Any]
@@ -70,6 +72,7 @@ class AnswerDependencies:
     article_question: Callable[[], str | None] | None = None
     article_leads: Callable[..., Mapping[str, str]] | None = None
     embedder: "Embedder | None" = None
+    report_degraded: Callable[[str, BaseException], None] | None = None
 
 
 _active: ContextVar[AnswerDependencies | None] = ContextVar("rag_engine_answer_dependencies", default=None)
@@ -167,6 +170,13 @@ def injected_embedder() -> "Embedder | None":
     """注入された embedding（#2649）。注入が無ければ None（業務ガイドの手順の充足を語の判定だけで決める）。"""
     current = _active.get()
     return None if current is None else current.embedder
+
+
+def report_degraded(kind: str, exc: BaseException) -> None:
+    """補助の処理 ``kind`` の失敗を、注入された記録に残す（#3259）。注入が無ければ何もしない。"""
+    current = _active.get()
+    if current is not None and current.report_degraded is not None:
+        current.report_degraded(kind, exc)
 
 
 def injected_prefetch_search() -> Callable[..., Any] | None:
