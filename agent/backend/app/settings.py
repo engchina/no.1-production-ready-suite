@@ -220,9 +220,6 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 300 秒で足りる。
     # nl2sql_get_job を wait_seconds 付きで繰り返し呼ぶ。0 なら待たずにそのまま返す。
     agent_nl2sql_job_wait_seconds: float = 300.0
-    # Run の利用者がいない呼び出し（画面からのツール一覧の取得など、利用者のいない経路）で使う
-    # 共通認証のログインユーザー ID。空ならその呼び出しは失敗する。
-    agent_mcp_service_user_login_id: str = ""
     # MCP の 1 メッセージの再試行の回数（#854）。送信前の失敗（接続できない・接続の timeout）と
     # 429 / 503 は全メッセージ、502 / 504 は手順（initialize・tools/list）と読み取り専用の
     # ツールだけ。待ちは指数 backoff + jitter（Retry-After に従う）で、呼び出し全体は接続の

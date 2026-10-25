@@ -511,8 +511,8 @@ def test_chat_threads_are_own_and_system_admin_sees_everyone(
 ) -> None:
     """チャットの会話も「AI 活用」の規則（#1889）。
 
-    system_admin は全員の会話を利用者つきで見て、名前の変更ができる。ほかの利用者の会話は 404。
-    system_admin は他の利用者の会話も続けられる（#1928。詳細は test_admin_operates_others.py）。
+    system_admin は全員の会話を利用者つきで見られるが、他の利用者の会話の名前の変更・続きの質問は
+    403（持ち主だけ。#3244。詳細は test_admin_operates_others.py）。ほかの利用者の会話は 404。
     """
     alice = _scoped_user(auth, "thread-alice", ["agent.runs.operate"])
     auth.store.users[alice].display_name = "アリス"
@@ -544,8 +544,12 @@ def test_chat_threads_are_own_and_system_admin_sees_everyone(
     own = client.get(f"/api/threads/{thread_id}", headers=login("thread-alice")).json()["data"]
     assert (own["owned"], own["actor_display_name"]) == (True, "")
     renamed = client.patch(f"/api/threads/{thread_id}", json={"title": "確認済み"}, headers=admin)
-    assert renamed.status_code == 200
-    assert renamed.json()["data"]["title"] == "確認済み"
+    assert renamed.status_code == 403, renamed.text
+    by_owner = client.patch(
+        f"/api/threads/{thread_id}", json={"title": "確認済み"}, headers=login("thread-alice")
+    )
+    assert by_owner.status_code == 200, by_owner.text
+    assert by_owner.json()["data"]["title"] == "確認済み"
     # system_admin でない利用者は他人の会話を続けられない（404）。
     by_bob = client.post(
         "/api/runs",

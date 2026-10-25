@@ -69,6 +69,12 @@ export interface UseChatHistoryActionsOptions {
   initialTitle?: (item: ChatHistoryItem) => string;
   /** 操作を受け付けない間（送信の要求中など）。 */
   disabled?: boolean;
+  /**
+   * 行ごとに名前を変えられるか（既定はすべての行で可）。false の行は「名前の変更」を出さず、欄も開かない。
+   * 他の利用者の会話（system_admin が見る）の名前は持ち主だけが変えられるので、その行で false を返す（削除は
+   * 運用の操作として出す。#3244）。
+   */
+  canRename?: (item: ChatHistoryItem) => boolean;
   labels?: Partial<ChatHistoryActionLabels>;
   /** 失敗の文（既定は共通の `apiErrorMessage`）。 */
   errorMessage?: (error: unknown, fallback: string) => string;
@@ -94,6 +100,7 @@ export interface ChatHistoryActions {
  *   保存の失敗も欄の下に出して欄にフォーカスを戻す。messaging.md §10）。
  * - 削除は取り消せないので確認のダイアログ（danger。scrim では閉じない。buttons.md §5.1）を通し、結果は Toast。
  * - 行の操作は `ChatHistoryList` が sm 以上でホバー・フォーカスの間と開いている会話で出す（モバイルは常に出す）。
+ * - `canRename` が false の行（他の利用者の会話。#3244）は「名前の変更」を出さず、「削除」だけを出す。
  */
 export function useChatHistoryActions({
   onRename,
@@ -102,6 +109,7 @@ export function useChatHistoryActions({
   onDeleted,
   initialTitle,
   disabled = false,
+  canRename,
   labels: labelOverrides,
   errorMessage = apiErrorMessage,
   idPrefix = "chat-history-title",
@@ -124,7 +132,10 @@ export function useChatHistoryActions({
     if (error && !saving) inputRef.current?.focus();
   }, [error, saving]);
 
+  const renameAllowed = (item: ChatHistoryItem) => (canRename ? canRename(item) : true);
+
   function startRename(item: ChatHistoryItem) {
+    if (!renameAllowed(item)) return;
     setEditingId(item.id);
     setDraft(initialTitle ? initialTitle(item) : item.title);
     setError("");
@@ -182,7 +193,7 @@ export function useChatHistoryActions({
     editingId,
     cancelRename,
     renderEditor: (item) =>
-      editingId === item.id ? (
+      editingId === item.id && renameAllowed(item) ? (
         <div className="flex items-start gap-1">
           <TextField
             ref={inputRef}
@@ -230,16 +241,18 @@ export function useChatHistoryActions({
       ) : null,
     renderActions: (item) => (
       <>
-        <Button
-          type="button"
-          variant="ghost"
-          size="md"
-          iconOnly
-          disabled={disabled}
-          aria-label={labels.rename(item.title)}
-          onClick={() => startRename(item)}
-          icon={Pencil}
-        />
+        {renameAllowed(item) ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="md"
+            iconOnly
+            disabled={disabled}
+            aria-label={labels.rename(item.title)}
+            onClick={() => startRename(item)}
+            icon={Pencil}
+          />
+        ) : null}
         <Button
           type="button"
           variant="ghost"

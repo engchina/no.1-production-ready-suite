@@ -7,7 +7,8 @@
 - 利用者はキーを発行した利用者で、画面と同じ権限（capability）と対象範囲（使える業務 Agent）で
   判定する。キーに業務 Agent の範囲（`resource_scopes["agent"]`）があれば、さらにその範囲だけ
   （範囲の外は 403）。Run・会話の見え方も画面と同じで、キーの持ち主が system_admin なら他の
-  利用者の Run を読み、会話を続けられる（Run はキーの持ち主として実行する。#1928）。
+  利用者の Run を読める。会話を続ける・回答前の確認に答えるのは会話の持ち主だけで、system_admin の
+  キーでも他の利用者の会話・Run には 403（`OTHERS_CONTENT_FORBIDDEN`。#3244）。
 - ツール: `agent_list`（使える業務 Agent）・`agent_chat`（質問。`thread_id` で会話を続ける）・
   `agent_get_run`（状態・回答・根拠・回答前の確認）・`agent_answer_confirmation`（回答前の確認に
   答える / 確認せずに回答）。回答を待つのは `wait_seconds` まで。終わらなければ途中の状態を返し、
@@ -32,6 +33,11 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pr_backend_core.mcp import McpServer, McpTool, McpToolError, mcp_http_response
+from pr_system_settings.auth.visibility import (
+    OTHERS_CONTENT_FORBIDDEN_CODE,
+    OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+    OTHERS_CONTENT_FORBIDDEN_STATUS,
+)
 from pydantic import BaseModel, Field
 
 from app.features.agent import router as agent_api
@@ -105,6 +111,8 @@ AGENT_OUT_OF_KEY_SCOPE_CODE = "AGENT_OUT_OF_KEY_SCOPE"
 AGENT_NOT_AVAILABLE_CODE = "AGENT_NOT_AVAILABLE"
 RUN_NOT_FOUND_CODE = "RUN_NOT_FOUND"
 THREAD_NOT_FOUND_CODE = "THREAD_NOT_FOUND"
+# system_admin のキーで、他の利用者の会話・Run に続きの質問・確認の答えを足そうとしたときの code は
+# platform の `OTHERS_CONTENT_FORBIDDEN_CODE`（3 製品で同じ。#3244）。
 RUN_LIMIT_CODE = "API_KEY_RUN_LIMIT"
 CONFIRMATION_NOT_FOUND_CODE = "CONFIRMATION_NOT_FOUND"
 CONFIRMATION_CLOSED_CODE = "CONFIRMATION_CLOSED"
@@ -390,7 +398,7 @@ def _require_available_agent(request: Request, agent_id: str) -> AgentProfile:
 
 
 def _readable_run(request: Request, run_id: str) -> RunState:
-    """呼び出し元が読める Run（画面と同じ規則。#1889・#1928）。
+    """呼び出し元が読める Run（画面と同じ規則。#1889・#1954）。
 
     呼び出し元が実行した Run・呼び出し元の会話の Run、キーの持ち主が system_admin なら全員の Run。
     ほかの利用者の Run は「無い」として扱い、存在を漏らさない。キーの業務 Agent の範囲はその上に
@@ -690,6 +698,16 @@ def build_agent_mcp_server(request: Request) -> McpServer:
     async def chat(arguments: AgentChatInput) -> RunOutput:
         caller = _principal(request)
         agent = _require_available_agent(request, arguments.agent_id)
+        # 続ける会話はキーの持ち主の会話だけ（system_admin のキーでも他の利用者の会話は 403。
+        # 画面と同じ。#3244）。
+        if arguments.thread_id is not None and not agent_api._may_continue_thread(
+            request, arguments.thread_id
+        ):
+            raise McpToolError(
+                OTHERS_CONTENT_FORBIDDEN_CODE,
+                OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+                status=OTHERS_CONTENT_FORBIDDEN_STATUS,
+            )
         _require_run_budget(request)
         try:
             run = runtime_repository.create_builtin_run(
@@ -700,9 +718,6 @@ def build_agent_mcp_server(request: Request) -> McpServer:
                 ),
                 created_by_user_uuid=caller.user_uuid,
                 extra_metadata=_key_metadata(request),
-                # キーの持ち主が system_admin なら、他の利用者の会話も続けられる（画面と同じ。
-                # Run はキーの持ち主として実行する。#1928）。
-                all_users=agent_api._sees_all_users(request),
             )
         except ThreadNotFoundError as exc:
             # 他人の会話（system_admin でないキー）・別の業務 Agent の会話も「無い」として
@@ -740,8 +755,15 @@ def build_agent_mcp_server(request: Request) -> McpServer:
             and not agent_api._run_approvable_by(request, run)
         ):
             # Agent 自身の確認への答えは同じ Run を Run の利用者の権限で再開するので、実行した
-            # 利用者と system_admin だけ（画面と同じ。#1928）。
+            # 利用者だけ（画面と同じ）。
             raise McpToolError(RUN_NOT_FOUND_CODE, "Run が見つかりません。", status=404)
+        if not agent_api._run_content_addable_by(request, run):
+            # 答えるのは会話の持ち主だけ（system_admin のキーでも他の利用者の Run は 403。#3244）。
+            raise McpToolError(
+                OTHERS_CONTENT_FORBIDDEN_CODE,
+                OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+                status=OTHERS_CONTENT_FORBIDDEN_STATUS,
+            )
         _require_run_budget(request)
         try:
             outcome = runtime_repository.decide_confirmation(

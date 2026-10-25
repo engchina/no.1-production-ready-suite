@@ -3053,7 +3053,8 @@ def test_tool_guardrail_masks_sensitive_values_inside_text() -> None:
                 "identity": "123-45-6789",
                 "inline": "api_key=super-secret-value",
             },
-        )
+        ),
+        context=ToolInvocationContext(),
     )
 
     assert result.success is True

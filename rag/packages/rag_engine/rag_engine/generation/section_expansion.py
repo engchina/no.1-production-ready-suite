@@ -56,6 +56,7 @@ from dataclasses import dataclass, field, replace
 from time import monotonic
 from typing import Any
 
+from rag_engine.dependencies import report_degraded
 from rag_engine.generation.answer_models import AnswerContext, CragRetrievalAttempt
 from rag_engine.generation.answer_records import AnswerRecord, _stored_chunk_answer_record
 from rag_engine.resources.deadline import ANSWER_FINALIZE_RESERVE_SECONDS, DEFAULT_GENERATION_ROUND_SECONDS
@@ -595,8 +596,9 @@ def _rank_children(
             if order:
                 rest = [index for index in range(len(children)) if index not in order]
                 return [children[index] for index in [*order, *rest]], "rerank"
-        except Exception:  # noqa: BLE001 - 並びは補助。語の重なりで並べる
-            pass
+        except Exception as exc:  # noqa: BLE001 - 並びは補助。語の重なりで並べる
+            # ``ranking: lexical`` は rerank が無いときと同じなので、失敗を呼び出し元の診断に残す（#3286）。
+            report_degraded("section_child_rerank", exc)
     from rag_engine.retrieval.evidence_selection import evidence_relevance
 
     scored = sorted(range(len(children)), key=lambda index: (-evidence_relevance(question, documents[index]), index))

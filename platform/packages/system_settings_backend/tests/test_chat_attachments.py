@@ -569,7 +569,8 @@ def _client(service: ChatAttachmentService, principal: _Principal) -> TestClient
     def owner(current: _Principal, conversation_id: str) -> str:
         if conversation_id == "hidden":
             raise SecurityApiError(404, "会話が見つかりません。")
-        return "user-a"
+        # 見える他の利用者の会話（system_admin が見る）と、持ち主の分からない会話（#3244）。
+        return {"others": "user-b", "ownerless": ""}.get(conversation_id, "user-a")
 
     app.include_router(
         build_chat_attachment_router(
@@ -626,6 +627,26 @@ def test_api_rejects_hidden_conversation_and_large_file() -> None:
     )
     assert large.status_code == 413
     assert large.json()["code"] == "CHAT_ATTACHMENT_TOO_LARGE"
+
+
+def test_api_attaches_only_to_own_conversation_but_lists_visible_ones() -> None:
+    """会話への添付は持ち主だけ（内容を足す操作）、会話の添付の一覧は閲覧なので見える会話なら返す。
+
+    見える他の利用者の会話・持ち主の分からない会話への添付は 403 で、何も保存しない（#3244）。
+    """
+    service = _service(settings=SimpleNamespace(chat_attachment_max_bytes=1024 * 1024))
+    client = _client(service, ALICE)
+    for conversation_id in ("others", "ownerless"):
+        refused = client.post(
+            "/api/chat-attachments",
+            files={"file": ("a.txt", b"x", "text/plain")},
+            data={"conversation_id": conversation_id},
+        )
+        assert refused.status_code == 403, refused.text
+        listed = client.get("/api/chat-attachments", params={"conversation_id": conversation_id})
+        assert listed.status_code == 200
+        assert listed.json()["data"]["items"] == []
+    assert client.get("/api/chat-attachments").json()["data"]["items"] == []
 
 
 # ---- Oracle ----

@@ -18,6 +18,7 @@ from pr_backend_core.logging import safe_exception_fields
 from pydantic import ValidationError
 
 from app.config import settings_today
+from app.rag.degraded_steps import ReportDegraded, not_recorded
 from app.rag.extraction_field_adapter import (
     FieldDefinition,
     extract_json_array,
@@ -65,10 +66,12 @@ async def read_field_conditions(
     llm: OciEnterpriseAiClient,
     *,
     today: date | None = None,
+    report_degraded: ReportDegraded = not_recorded,
 ) -> list[ExtractionFieldCondition]:
     """質問から抽出項目の条件を読み取る。項目の定義が無ければ LLM を呼ばない。
 
-    読み取りは補助なので、LLM の失敗・不正な出力は空(条件なしで検索を続ける)にする。
+    読み取りは補助なので、LLM の失敗・不正な出力は空(条件なしで検索を続ける)にする。LLM の失敗は
+    ``report_degraded`` に残す(条件が無いときと分ける。#3286)。
     """
     if not field_defs or not question.strip():
         return []
@@ -80,6 +83,7 @@ async def read_field_conditions(
         raw = await llm.generate(question, context, system_prompt=FIELD_FILTER_SYSTEM_PROMPT)
     except Exception as exc:  # noqa: BLE001 - 読み取りは補助。条件なしで検索を続ける。
         logger.warning("field filter read failed", extra={**safe_exception_fields(exc)})
+        report_degraded("field_filter", exc)
         return []
     return parse_field_conditions(raw, field_defs)
 

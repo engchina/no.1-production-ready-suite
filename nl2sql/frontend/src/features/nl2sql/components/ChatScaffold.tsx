@@ -169,6 +169,14 @@ export function Nl2SqlChatHistoryList<T extends Nl2SqlConversationItem>({
   );
 }
 
+/**
+ * 一覧のページの中の、他の利用者の会話（system_admin が見る）の id。名前の変更は持ち主だけなので、
+ * 共通の `useChatHistoryActions` の `canRename` でこの行の「名前の変更」を出さない（削除は出す。#3244）。
+ */
+export function othersConversationIds(page: { items: Nl2SqlConversationItem[] } | undefined): Set<string> {
+  return new Set((page?.items ?? []).filter((item) => item.owned === false).map((item) => item.id));
+}
+
 /** 会話の履歴の位置（offset）を作業状態の値から読む（不正な値は先頭）。 */
 export function normalizeHistoryOffset(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0;

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import unicodedata
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 RUNTIME_KNOWLEDGE_SCHEMA_VERSION = 1
 RUNTIME_KNOWLEDGE_FILE_NAME = "runtime_knowledge.json"
@@ -108,9 +111,12 @@ class RuntimeKnowledge:
     terms: tuple[RuntimeTerm, ...] = ()
     rules: tuple[RuntimeRule, ...] = ()
     loaded: bool = False
+    # 読み込み・解析の失敗の例外の型の名前（例外の文は path などを含みうるので入れない。#3284）。
     error: str = ""
     assume_unconfirmed: bool = False
     unconfirmed_conditions: tuple[dict[str, Any], ...] = ()
+    # 失敗の例外（回答の診断の degraded_steps に型の名前を残すため。表示・payload には出さない）。
+    failure: BaseException | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -123,6 +129,7 @@ class RuntimeKnowledgeContext:
     matched_terms: tuple[RuntimeTerm, ...] = ()
     matched_rules: tuple[RuntimeRule, ...] = ()
     loaded: bool = False
+    # 読み込みの失敗の例外の型の名前（#3284）。
     error: str = ""
     assume_unconfirmed: bool = False
     unconfirmed_conditions: tuple[dict[str, Any], ...] = ()
@@ -133,6 +140,8 @@ class RuntimeKnowledgeContext:
     scope_context: str = ""
     # 業務ガイドの手順ごとの根拠(#2395)。(手順 id, 題名, 根拠の chunk_uid の列) の列。手順ごとの検索の後に入る。
     guide_steps: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
+    # 読み込みの失敗の例外（`RuntimeKnowledge.failure`。表示・payload には出さない）。
+    failure: BaseException | None = field(default=None, repr=False, compare=False)
     # 業務ガイドの手順のうち、回答の充足で必須に数えない手順の id(条件が決まらない分岐の行き先とその後続。#2491)。
     guide_optional_steps: tuple[str, ...] = ()
     # 業務ガイドの手順ごとの検索の手がかり(手順 id, 手がかりの列)。共有の根拠の item を手順に対応付ける語(#2649)。
@@ -246,13 +255,13 @@ def load_runtime_knowledge(
     except FileNotFoundError:
         return RuntimeKnowledge(path=path)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        return RuntimeKnowledge(path=path, loaded=False, error=_clean_text(exc, 240))
+        return _load_failure(path, exc)
 
     try:
         terms = tuple(_parse_terms(payload)[:MAX_TERMS])
         rules = tuple(_parse_rules(payload)[:MAX_RULES])
     except Exception as exc:
-        return RuntimeKnowledge(path=path, loaded=False, error=_clean_text(exc, 240))
+        return _load_failure(path, exc)
     pending = (
         tuple(
             {
@@ -276,6 +285,12 @@ def load_runtime_knowledge(
     )
 
 
+def _load_failure(path: Path, exc: BaseException) -> RuntimeKnowledge:
+    """読めない用語・ルール。記録には例外の型の名前だけを残し、例外の文はログだけに出す（#3284）。"""
+    logger.warning("runtime knowledge load failed (%s)", type(exc).__name__, exc_info=True)
+    return RuntimeKnowledge(path=path, loaded=False, error=type(exc).__name__, failure=exc)
+
+
 def build_runtime_knowledge_context(
     question: str,
     output_dir: str | Path,
@@ -294,6 +309,7 @@ def build_runtime_knowledge_context(
             path=knowledge.path,
             loaded=knowledge.loaded,
             error=knowledge.error,
+            failure=knowledge.failure,
         )
 
     matched_terms = _matched_terms(original_question, knowledge.terms, term_limit)

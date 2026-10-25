@@ -23,7 +23,11 @@ from app.features.nl2sql.models import (
     SqlChatExecuteData,
 )
 from app.features.nl2sql.oracle_adapter import OracleAdapterError
-from app.features.nl2sql.service import Nl2SqlService, _cap_chat_results
+from app.features.nl2sql.service import (
+    Nl2SqlService,
+    OthersContentForbiddenError,
+    _cap_chat_results,
+)
 from app.security.request_actor import current_actor_context
 from app.settings import get_settings
 
@@ -102,9 +106,13 @@ def test_chat_execute_runs_stored_sql_and_keeps_only_summary(
 def test_chat_execute_rejects_other_users_and_non_chat_jobs(chat: ChatFixture) -> None:
     service, _, _ = chat
     turn = run(service, request())
-    # 一般の利用者は他の利用者の会話を実行しない（system_admin は実行できる。#1928）。
+    # 実行は会話の持ち主だけ（#3244）。見えない一般の利用者は PermissionError（404）、見える
+    # system_admin は OthersContentForbiddenError（403）で、どちらも SQL を実行しない。
     with pytest.raises(PermissionError):
         _execute(service, turn.job_id, actor="other", admin=False)
+    with pytest.raises(OthersContentForbiddenError):
+        _execute(service, turn.job_id, actor="admin", admin=True)
+    assert service.get_job(turn.job_id, actor_user_uuid="user-1").last_execution is None  # type: ignore[union-attr]
     with pytest.raises(PermissionError):
         _execute(service, turn.job_id, actor="")
     with pytest.raises(LookupError):

@@ -17,7 +17,11 @@ from app.security.dependencies import current_principal
 
 
 def _conversation_owner(principal: Any, conversation_id: str) -> str:
-    """会話（SQL チャット）の持ち主。見えない会話は 404（「AI 活用」の見え方。#1889）。"""
+    """会話（SQL チャット）の持ち主の UUID。見えない会話は 404（「AI 活用」の見え方。#1889）。
+
+    持ち主の分からない会話は空文字（platform の添付の API が添付を 403 にする。一覧は閲覧なので
+    返す。#3244）。
+    """
     from app.features.nl2sql.service import nl2sql_service
 
     actor = str(getattr(principal, "user_uuid", ""))
@@ -29,8 +33,7 @@ def _conversation_owner(principal: Any, conversation_id: str) -> str:
         chat = None
     if chat is None:
         raise HTTPException(status_code=404, detail="会話が見つかりません。")
-    owner = chat.conversation.actor_user_uuid
-    return owner or actor
+    return (chat.conversation.actor_user_uuid or "").strip()
 
 
 router = build_chat_attachment_router(

@@ -13,6 +13,10 @@ from typing import Any
 
 import pytest
 from fastapi import HTTPException
+from pr_system_settings.auth.visibility import (
+    OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+    OTHERS_CONTENT_FORBIDDEN_STATUS,
+)
 from pydantic import ValidationError
 from test_nl2sql_guided_clarification import (
     _ambiguous_status_output,
@@ -50,6 +54,7 @@ from app.features.nl2sql.ontology_service import (
     OntologyNotFoundError,
     OntologyStateConflictError,
 )
+from app.features.nl2sql.service import OthersContentForbiddenError
 from app.settings import get_settings
 
 # pytest の fixture を読み込む（推薦の確認を既定で外す autouse と、本物の service のチャット）。
@@ -71,7 +76,11 @@ class _ChatLegacyService(_LegacyService):
     def chat_requirement_history(self, **kwargs: Any) -> list[dict[str, str]]:
         self.history_calls.append(kwargs)
         if kwargs["actor_user_uuid"] != "user-1":
-            raise PermissionError("他の利用者の会話は継続できません。")
+            # 会話を続けられるのは持ち主（user-1）だけ。見える system_admin は 403、見えない
+            # 一般の利用者は 404（#3244。本物の `_assert_chat_owner_adds` と同じ）。
+            if kwargs.get("actor_is_system_admin"):
+                raise OthersContentForbiddenError()
+            raise PermissionError("他の利用者の会話は参照できません。")
         return [dict(turn) for turn in self.history]
 
 
@@ -91,6 +100,7 @@ def _create_chat(
     *,
     previous_job_id: str | None = "job-previous",
     actor: str = "user-1",
+    admin: bool = False,
 ) -> QuerySessionData:
     return runtime.create_session(
         QuerySessionApiCreate(
@@ -101,6 +111,7 @@ def _create_chat(
             previous_job_id=previous_job_id,
         ),
         actor_user_uuid=actor,
+        actor_is_system_admin=admin,
     )
 
 
@@ -123,7 +134,7 @@ def test_chat_session_passes_conversation_history_to_requirement_check() -> None
             "profile_id": "sales",
             "previous_job_id": "job-previous",
             "actor_user_uuid": "user-1",
-            # system_admin は他の利用者の会話の前のターンも読める（#1928）。
+            # 確認は会話の続きなので、持ち主だけが始められる（#3244）。
             "actor_is_system_admin": False,
         }
     ]
@@ -170,10 +181,28 @@ def test_first_chat_turn_has_no_history_and_needs_signed_in_user() -> None:
 
 
 def test_chat_session_rejects_other_users_conversation() -> None:
-    """一般の利用者は他の利用者の会話の確認を始められない（存在を漏らさない 404。#1928）。"""
+    """一般の利用者は他の利用者の会話の確認を始められない（存在を漏らさない 404。#1889）。"""
     runtime, _legacy = _chat_runtime(_ScriptedLlm(_clear_output()))
     with pytest.raises(OntologyNotFoundError, match="会話が見つかりません"):
         _create_chat(runtime, actor="user-2")
+
+
+def test_system_admin_cannot_start_check_in_other_users_conversation() -> None:
+    """system_admin も他の利用者の会話の続きの確認は始められない（見えるので 403。#3244）。
+
+    確認の LLM は呼ばず、session も作らない。route は 403 と共通の文言にする。
+    """
+    llm = _ScriptedLlm(_clear_output())
+    runtime, _legacy = _chat_runtime(llm)
+    with pytest.raises(OthersContentForbiddenError) as denied:
+        _create_chat(runtime, actor="admin", admin=True)
+    assert llm.calls == []
+    with pytest.raises(HTTPException) as mapped:
+        ontology_router_module._raise_domain_error(denied.value)  # noqa: SLF001
+    assert mapped.value.status_code == OTHERS_CONTENT_FORBIDDEN_STATUS == 403
+    assert mapped.value.detail == OTHERS_CONTENT_FORBIDDEN_MESSAGE
+    # 自分の会話（持ち主）は今どおり始められる。
+    assert _create_chat(runtime).session.chat is True
 
 
 def test_chat_session_does_not_require_profile_recommendation(

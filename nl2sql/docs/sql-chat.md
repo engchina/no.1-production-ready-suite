@@ -38,7 +38,7 @@
 
 - 送信のジョブ（`POST /api/nl2sql/jobs` の `chat: true`）の実行の段階は、SQL 生成のジョブと同じ `_run_job` の中で、チャットの上限で実行する（`Nl2SqlService._run_chat_sql`。「もう一度実行」と同じ関数）。
 - 結果の行の受け渡し（#1176）: 行はターンのジョブ（会話）に残さず、`NL2SQL_STATE_DOCUMENTS` の `chat_results`（ジョブ ID ごと。ジョブの結果と同じトランザクションで保存）に、画面が受け取るまでの間だけ置く。画面は `POST /api/nl2sql/jobs/{job_id}/execution-result`（権限 `nl2sql.sql.execute`・本人の会話・業務プロファイルの利用権限）で 1 回だけ受け取り、backend は受け取ったら消す。期限（`NL2SQL_CHAT_RESULT_RETENTION_SECONDS`、既定 600 秒）を過ぎた・受け取り済みの結果は 404（画面は要約と「もう一度実行」）。受け取られなかった行は、次のチャットの実行のときに期限を過ぎたものをまとめて消す。「もう一度実行」は応答で行を返し、受け取られていない行を消す。
-- `POST /api/nl2sql/jobs/{job_id}/execute`（権限 `nl2sql.sql.execute`。「もう一度実行」）。SQL は画面から受け取らず、ターンのジョブに保存した生成 SQL を使う。本人の会話のターン（管理の権限でも他の利用者の会話は不可）、ターンの業務プロファイルの利用権限を確かめる。
+- `POST /api/nl2sql/jobs/{job_id}/execute`（権限 `nl2sql.sql.execute`。「もう一度実行」）。SQL は画面から受け取らず、ターンのジョブに保存した生成 SQL を使う。本人の会話のターン（管理の権限でも他の利用者の会話は不可。system_admin は見えるので 403。#3244）、ターンの業務プロファイルの利用権限を確かめる。
 - 実行は SQL 生成のジョブの実行の段階と同じ経路（`Nl2SqlService._execute_generated_sql`）: 業務プロファイルの範囲（`_resolve_allowed_objects`）→ 安全検査（`analyze_sql`。生成の後に範囲が変わっていれば `SQL_BLOCKED`）→ `execute_sql`（`OracleNl2SqlAdapter.user_data_connection(read_only=True)`）。actor は要求の利用者を `actor_scope` で明示し、system_admin と非 system_admin で別の接続 pool、DeepSec 有効時の非 system_admin は DATA USER の pool（借りるたびに利用者の context を設定・消去。#904）。
 - 監査: 実行ごとに実行履歴（`HistoryItem`。`generation_only=false`・`session_id` は会話 ID・件数と列）を残し、構造化ログ `nl2sql_chat_sql_executed`（SQL の本文・行の値は出さない）を出す。
 - 結果の行は会話に保存しない。ターンのジョブに要約（`last_execution`: 状態・時刻・行数・列数・打ち切り・実行履歴の ID・受け取りの期限）だけを残し、会話を開き直したら「前回の実行（…）: 12 行・5 列。…」と「もう一度実行」を出す。理由: SQL 生成のジョブの永続の記録である実行履歴も件数と列だけで、会話は長く残るため業務データの行を会話に残さない（後で DeepSec・業務プロファイルの権限が変わっても古い行を見せない）。画面の中では結果をメモリ（TanStack Query のキャッシュ）にだけ持つ。
@@ -67,7 +67,7 @@
 - `GET /api/nl2sql/chats?limit=&offset=`: 本人の会話（system_admin は全員の会話。#1889）の先頭ジョブを、現在利用可能な業務プロファイルで絞って新しい順に返す。任意のページへ移る offset 型（`limit` は 1〜100・既定 25（#1952）。応答は共通の `Page` の `items` / `total` / `limit` / `offset` / `has_next`。#1891）。
 - `GET /api/nl2sql/chats/{conversation_id}`: 本人の会話と各ターンの永続ジョブを返す。ID は先頭のジョブ ID。
 - `PATCH /api/nl2sql/chats/{conversation_id}`（`{"title"}`。前後の空白を除いて 1〜80 文字）: 本人の会話の名前を変える（#1817）。名前は先頭のジョブの `chat_title` に置く（無ければ先頭の質問）。先頭のジョブの生成中は 409。
-- `DELETE /api/nl2sql/chats/{conversation_id}`: 本人の会話を消す（#1817）。ジョブは監査・フィードバック・実行履歴の元なので消さず、会話の全ジョブに `chat_deleted` の印を付けて会話の一覧・詳細・続きから外す。SQL の生成中のターンがあれば 409。他の利用者の会話は 403（管理者も変えない）。
+- `DELETE /api/nl2sql/chats/{conversation_id}`: 本人の会話を消す（#1817）。ジョブは監査・フィードバック・実行履歴の元なので消さず、会話の全ジョブに `chat_deleted` の印を付けて会話の一覧・詳細・続きから外す。SQL の生成中のターンがあれば 409。他の利用者の会話は一般の利用者には 404、system_admin は削除できる（運用の操作。#3244）。
 - 停止は既存の `POST /api/nl2sql/jobs/{job_id}/cancel`。既存の worker・lease・fence・再起動時の復旧を使う。
 - 処理の経過（#3226 の案 A）: `GET /api/nl2sql/jobs/{job_id}/trace`・`GET /api/nl2sql/history/{history_id}/trace`・`GET /api/nl2sql/db-admin-chat/conversations/{conversation_id}/turns/{turn_id}/trace`（`TraceProgressData`: span の表の snapshot。span ごとに最新の状態 1 件と、記録が終わっていれば終端。`dropped_spans` は書けなかった span の数）。権限・所有者・業務プロファイルの判定は記録の API（`GET /api/nl2sql/jobs/{job_id}`・`/history/{history_id}`・DB 管理チャットの会話）と同じで、画面から trace id を受け取らない。読むのはその記録の trace id の、その実行（ジョブ・ターン）の span だけで、system_admin 以外は記録の実行者の span だけ。span の表を読めなければ 503（画面は前の内容を残して読み直す）。
 

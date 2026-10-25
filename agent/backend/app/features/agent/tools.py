@@ -228,8 +228,8 @@ class ToolInvocationContext(BaseModel):
     trace_id: str | None = None
     agent_id: str | None = None
     # Run の ID と、Run を作った利用者（共通認証の user_uuid。#233）。RAG / NL2SQL の MCP は
-    # この利用者の token で呼ぶ。利用者がいない呼び出し（Binding 経由の MCP など）は
-    # サービス利用者で呼ぶ。
+    # この利用者の token で呼ぶ。利用者が無い呼び出しは `mcp.user_required` で失敗し、別の主体に
+    # 置き換えない（#3251。サービスの主体で呼んでよい入口は無い）。
     run_id: str | None = None
     user_uuid: str | None = None
     # Run のきっかけ（`run_facts.run_source`。品質評価の Run は `evaluation`）。サービストークンの
@@ -389,7 +389,7 @@ class ToolRegistry:
         call: ToolCall,
         *,
         policy: ToolPolicy | None = None,
-        context: ToolInvocationContext | None = None,
+        context: ToolInvocationContext,
         force: bool = False,
         definition: ToolDefinition | None = None,
         handler: ToolHandler | None = None,
@@ -402,11 +402,11 @@ class ToolRegistry:
         （`definition.input_schema`）と照合し、合わなければ handler を呼ばない。`force` は「承認」
         （ASK）のツールを実行してよいという呼ぶ側の判断（承認の記録と結び付けた呼び出し・Control
         Plane 自身の読み取り）で、「拒否」（DENY）は `force` でも実行しない。`authorization` は
-        その判断の理由（監査に残す。#2610）。
+        その判断の理由（監査に残す。#2610）。`context`（主体・範囲）は入口が必ず作って渡す（利用者
+        の無い既定の文脈は作らない。#3251）。
         """
         started_at = _now()
         started_monotonic = perf_counter()
-        active_context = context or ToolInvocationContext(trace_id=call.trace_id)
         if definition is None or handler is None:
             definition = self._definitions.get(call.name)
             handler = self._handlers.get(call.name)
@@ -419,8 +419,8 @@ class ToolRegistry:
                 started_monotonic=started_monotonic,
                 audit_metadata={
                     "tool_name": call.name,
-                    "trace_id": active_context.trace_id,
-                    "approval_id": active_context.approval_id,
+                    "trace_id": context.trace_id,
+                    "approval_id": context.approval_id,
                 },
             )
 
@@ -430,7 +430,7 @@ class ToolRegistry:
         decision = active_policy.decide(definition)
         audit_metadata = _tool_audit_metadata(
             definition=definition,
-            context=active_context,
+            context=context,
             force=force,
         )
         if authorization:
@@ -483,7 +483,7 @@ class ToolRegistry:
         try:
             output = handler(
                 call.arguments,
-                active_context,
+                context,
             )
         except ExternalToolError as exc:
             return _tool_result(
@@ -1358,42 +1358,20 @@ def _luhn_valid(digits: str) -> bool:
     return total % 10 == 0
 
 
-# サービス利用者（AGENT_MCP_SERVICE_USER_LOGIN_ID）の login ID → user_uuid。
-_service_user_uuid_cache: dict[str, str] = {}
-
-
 def _mcp_subject(context: ToolInvocationContext, *, code: str) -> str:
-    """token の `sub`。Run の利用者、いなければサービス利用者の user_uuid。"""
+    """token の `sub`（Run の利用者・ログイン中の利用者の user_uuid）。利用者が無ければ失敗にする。
+
+    利用者の無い呼び出しを別の主体（サービス利用者など）に黙って置き換えない（#3251。confused
+    deputy を防ぐ）。今はサービスの主体で呼んでよい入口は無い。将来要るなら `sub` を替えず、
+    呼ばれた側に見える別の主体（RFC 8693 の `act` など）として足す。
+    """
     if context.user_uuid:
         return context.user_uuid
-    login_id = get_settings().agent_mcp_service_user_login_id.strip()
-    if not login_id:
-        raise ExternalToolError(
-            f"{code}.user_required",
-            "Run の利用者がいない呼び出しです。AGENT_MCP_SERVICE_USER_LOGIN_ID に"
-            "サービス利用者のログインユーザー ID を設定してください。",
-        )
-    cached = _service_user_uuid_cache.get(login_id)
-    if cached is not None:
-        return cached
-    # security は agent の router を import するため、ここで遅延 import する（循環を避ける）。
-    from app.security.service import get_security_service
-
-    try:
-        user = get_security_service().store.get_user_by_login_user_id(login_id.casefold())
-    except Exception as exc:  # noqa: BLE001 - 認証 store の障害はツールの失敗として返す
-        raise ExternalToolError(
-            f"{code}.service_user_unavailable",
-            "サービス利用者を確認できません。共通認証のデータベースを確認してください。",
-            {"reason": exc.__class__.__name__},
-        ) from exc
-    if user is None:
-        raise ExternalToolError(
-            f"{code}.service_user_not_found",
-            f"サービス利用者（{login_id}）が見つかりません。ユーザー管理で作成してください。",
-        )
-    _service_user_uuid_cache[login_id] = user.user_uuid
-    return user.user_uuid
+    raise ExternalToolError(
+        f"{code}.user_required",
+        "利用者の無い呼び出しです。RAG / NL2SQL の MCP は、実行の利用者かログイン中の利用者として"
+        "だけ呼べます。",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1576,8 +1554,9 @@ def parse_mcp_tool_result(
 class McpConnectionClient:
     """MCP 接続の client。認証は接続の方式（サービストークン・OAuth・API キー・なし）。
 
-    サービストークンは呼び出しごとに作る短命の token（`sub` = Run の利用者、なければ
-    サービス利用者。`aud` = 接続の audience）。呼び先は `sub` の利用者の権限で実行する（#233）。
+    サービストークンは呼び出しごとに作る短命の token（`sub` = Run の利用者かログイン中の利用者。
+    無ければ `mcp.user_required`。`aud` = 接続の audience）。呼び先は `sub` の利用者の権限で実行
+    する（#233・#3251）。
     """
 
     def __init__(

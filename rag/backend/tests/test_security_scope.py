@@ -574,11 +574,15 @@ def test_chat_stream_without_permitted_kbs_is_forbidden(monkeypatch: MonkeyPatch
 
     class FakeChatOracle(ScopedViewOracle):
         async def get_conversation(self, conversation_id: str) -> StoredConversation | None:
+            from app.rag.request_context import current_audit_request_context
+
+            # 呼んだ利用者の会話（続きを送れるのは持ち主だけ。#3244）。
             return StoredConversation(
                 id=conversation_id,
                 search_answer_profile_id="bv-3",
                 created_at=datetime(2026, 1, 1, tzinfo=UTC),
                 updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+                user_id_hash=current_audit_request_context().user_id_hash,
             )
 
     monkeypatch.setattr(chat_route, "OracleClient", lambda *_a, **_k: FakeChatOracle(views))

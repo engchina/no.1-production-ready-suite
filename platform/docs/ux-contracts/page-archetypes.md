@@ -455,13 +455,14 @@ PageBody wide
 - 「新しい会話」は上端の行の 1 か所だけに置く（履歴の一覧の中に重ねて置かない。#889）。会話を選んでいる間は、履歴を閉じていても上端の行に会話の名前を出す。
 - 会話の欄は会話の領域の中だけでスクロールし、自動の移動は会話の欄の `scrollTo` で行う（祖先を動かす `scrollIntoView` を使わない。design-system README §4「AppShell」）。
 - 入力欄は回答の作成中も書ける。Enter で送信、Shift+Enter で改行、IME の変換中の Enter では送らない（`isSubmitEnter`。#459）。実行中の Enter では停止しない（buttons.md §3.1）。
+- **閲覧だけの会話**（system_admin が開いた他の利用者の会話。#3244）は、入力欄の領域に `ChatComposer` の代わりに `ChatReadOnlyNotice`（info の Banner「他の利用者の会話です（閲覧のみ）」と、できないこと・できることの文。文は backend の 403 の `OTHERS_CONTENT_FORBIDDEN_MESSAGE` と同じ）を置く。回答の作成中・処理中・承認待ちなら案内の中に「停止」を出す。続きの操作（再送信・確認への回答・評価・SQL の実行）は会話の欄にも出さず、会話の履歴の行は「名前の変更」を出さない（`useChatHistoryActions` の `canRename`）で「削除」だけを出す。3 製品で同じ部品・同じ文にする。
 - 読み込み中・失敗・空は、履歴の一覧・会話の欄・対象の選択のそれぞれの領域の中で出す（messaging.md §3.6。前提の読み込み中に空の状態を出さず、送信を止める。入力欄を無効にするのは対象の一覧の読み込み中だけで、会話の内容の読み込み中は書ける。#1153 / #1188）。
 
 ### 6.2 共通の部品と製品の分担
 
 | 共通（`packages/ui`） | 製品 |
 |---|---|
-| 骨格（履歴のパネルとシート・会話の領域・上端の行・会話の欄・入力欄の領域）、履歴の開閉の判定、履歴の行の名前の変更・削除（`useChatHistoryActions`。その場の欄・空の名前の検証・確認のダイアログ・Toast と文言。#1817）、1 往復の入れ物と回答の入れ物、仮の質問と失敗・再送信の表示、入力欄の行と Enter / IME の判定、自動スクロール、処理の段階（`ChatProgress`）、評価（`FeedbackControls`）、回答前の確認のカードと会話に残す表示（`ClarificationCard` / `ClarificationRecord`。[confirm-before-answer.md](./confirm-before-answer.md)。#1839） | データの取得（会話の一覧・会話・ポーリング / SSE）、送信・置き換え・停止・会話の名前の変更・削除の API、作業状態の保存（下書き・対象・会話・履歴の開閉）、対象の選択の中身、回答の本文と回答に付く操作（RAG の引用・複数モデル・類似問・確認、NL2SQL の SQL と実行、Agent のツール・承認・出典）、処理の段階の組み立て、文言 |
+| 骨格（履歴のパネルとシート・会話の領域・上端の行・会話の欄・入力欄の領域）、履歴の開閉の判定、履歴の行の名前の変更・削除（`useChatHistoryActions`。その場の欄・空の名前の検証・確認のダイアログ・Toast と文言・行ごとの `canRename`。#1817・#3244）、閲覧だけの会話の入力欄の代わりの案内（`ChatReadOnlyNotice`。#3244）、1 往復の入れ物と回答の入れ物、仮の質問と失敗・再送信の表示、入力欄の行と Enter / IME の判定、自動スクロール、処理の段階（`ChatProgress`）、評価（`FeedbackControls`）、回答前の確認のカードと会話に残す表示（`ClarificationCard` / `ClarificationRecord`。[confirm-before-answer.md](./confirm-before-answer.md)。#1839） | データの取得（会話の一覧・会話・ポーリング / SSE）、送信・置き換え・停止・会話の名前の変更・削除の API、作業状態の保存（下書き・対象・会話・履歴の開閉）、対象の選択の中身、回答の本文と回答に付く操作（RAG の引用・複数モデル・類似問・確認、NL2SQL の SQL と実行、Agent のツール・承認・出典）、処理の段階の組み立て、文言 |
 
 - 共通の部品は業務の語彙を知らない。文言は翻訳済みを props で受け、会話・メッセージのデータは製品が自分の API の型から写して渡す。回答の本文は子要素（スロット）で渡す。
 - 回答の中のデータの表（SQL の実行の結果・表の形のツールの結果・回答の Markdown の表）は、3 製品とも `ResultTable`（#1154 / #1178。旧名 `ChatResultTable`）で回答の入れ物の中に出す。画面のデータの結果も同じ部品にする（上の「データの結果の型」）。JSON・Markdown から列と行を作る判定は共通の `toTabularData` / `splitMarkdownTables`（#1158）で、製品で表を組み立てない。表でない結果は製品の今の表示のまま。RAG の回答は根拠付きの文章で、列と行の結果を返さないので出さない（RAG `docs/frontend-page-archetypes-spec.md` §5。#1159）。

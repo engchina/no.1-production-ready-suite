@@ -680,8 +680,6 @@ const agentJa = {
   "chat.threads.ownerMissing": "（削除済みのユーザー）",
   // 会話の持ち主以外（system_admin）が送った質問の、送った人（#1928）。
   "chat.sender": "{name} が送信",
-  // system_admin が他の利用者の会話を開いているときの、送る前の案内（#1954）。
-  "chat.composer.ownerSeesNotice": "この会話の持ち主にも、回答と途中の結果が見えます",
   // 持ち主が操作できない待ち（system_admin が実行した Run。#1954）と、自分の権限で質問し直す操作。
   "chat.waitingForExecutorHint":
     "この実行はシステム管理者の権限で動いているため、承認・回答はシステム管理者だけができます。待たずに進めるなら、この実行を止めて、同じ質問をあなたの権限で送り直せます。",
@@ -1377,9 +1375,6 @@ const agentJa = {
   "settings.productMcp.authStatus": "サービス間認証の状態",
   "settings.productMcp.secret": "署名鍵（PLATFORM_SERVICE_TOKEN_SECRET）",
   "settings.productMcp.secretHint": "3 製品の共通 .env に同じ値（32 文字以上）を設定します。未設定のあいだ、呼び出しは失敗します。",
-  "settings.productMcp.serviceUser": "サービス利用者（AGENT_MCP_SERVICE_USER_LOGIN_ID）",
-  "settings.productMcp.serviceUserHint":
-    "実行の利用者がいない呼び出しで使うログインユーザー ID です。未設定ならその呼び出しだけ失敗します。",
   "settings.timeout": "タイムアウト秒",
   "settings.mcpDiscovery.tool": "ツール",
   "settings.mcpDiscovery.descriptionColumn": "説明",

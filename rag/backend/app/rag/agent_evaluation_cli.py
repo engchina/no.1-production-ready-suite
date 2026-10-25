@@ -670,6 +670,8 @@ SUMMARY_METRICS: tuple[tuple[str, str], ...] = (
     ("response_decision_accuracy", "回答・確認・保留の判断の正しさ"),
 )
 REASONING_SUMMARY_METRICS = SUMMARY_METRICS
+# 勧めてはいけない操作を回答が勧めた、という失敗の理由（EvaluationFailureReason）。
+FORBIDDEN_ACTION_REASON = "forbidden_action"
 
 
 def _reasoning_summary(breakdown: object) -> dict[str, dict[str, Any]]:
@@ -697,14 +699,19 @@ def summarize_result(data: Mapping[str, Any]) -> dict[str, Any]:
     """評価の結果（RAG の評価 job の結果、またはこの CLI の結果の `data`）の比較用の要約。"""
     cases = _records(data.get("case_results"))
     succeeded = [case for case in cases if case.get("status", "success") == "success"]
+    # 危険な回答のケースは、失敗の理由に勧めてはいけない操作（`forbidden_action`）が付いたケース。
+    # 今の採点（六指標）はこの理由を付けないため、該当が無ければ 0 ではなく測れない（None）とする。
+    dangerous = [
+        case.get("case_id")
+        for case in succeeded
+        if FORBIDDEN_ACTION_REASON in (case.get("failure_reasons") or [])
+    ]
     summary: dict[str, Any] = {
         "case_count": data.get("case_count"),
         "error_count": data.get("error_count"),
         **{metric: data.get(metric) for metric, _ in SUMMARY_METRICS},
-        "dangerous_case_count": sum(1 for case in succeeded if case.get("forbidden_hits")),
-        "dangerous_case_ids": [
-            case.get("case_id") for case in succeeded if case.get("forbidden_hits")
-        ],
+        "dangerous_case_count": len(dangerous) if dangerous else None,
+        "dangerous_case_ids": dangerous,
         "failed_case_ids": [
             case.get("case_id") for case in cases if case.get("status", "success") != "success"
         ],
@@ -789,8 +796,7 @@ def summary_markdown(summaries: Mapping[str, Mapping[str, Any]]) -> str:
                 summaries[label]
                 .get("categories", {})
                 .get(category, {})
-                .get("metrics", {})
-                .get("response_decision_accuracy")
+                .get("handling_correct_rate")
                 for label in labels
             ],
         )

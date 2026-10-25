@@ -24,8 +24,11 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Reque
 from pr_backend_core import ApiResponse
 from pr_backend_core.timezones import local_today
 from pr_system_settings.auth.visibility import (
+    OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+    OTHERS_CONTENT_FORBIDDEN_STATUS,
     OWNER_NOT_FOUND_STATUS,
     can_access_user_data,
+    can_add_user_content,
     can_view_all_users_data,
 )
 from pydantic import Field, ValidationError, model_validator
@@ -143,7 +146,7 @@ from .ontology_store import (
     stable_physical_id,
 )
 from .profile_access import assert_profile_access
-from .service import nl2sql_service
+from .service import OthersContentForbiddenError, nl2sql_service
 from .sql_requirement import (
     RequirementAiUnavailableError,
     RequirementAnswerInvalidError,
@@ -3105,7 +3108,8 @@ class OntologyApiRuntime:
     ) -> list[RequirementConversationTurn]:
         """チャットの同じ会話の前のターン（質問と SQL）を読む（#1442。結果の行は読まない）。
 
-        会話の持ち主と system_admin（他の利用者の会話の続き。#1928）が読める。
+        確認は会話の続きの一部なので、会話の持ち主だけが始められる（#3244。system_admin が他の
+        利用者の会話で始めるのは `OthersContentForbiddenError` で 403）。
         """
 
         if not request.chat:
@@ -3128,7 +3132,7 @@ class OntologyApiRuntime:
                 actor_is_system_admin=actor_is_system_admin,
             )
         except PermissionError as exc:
-            # 続けられない他の利用者の会話は、存在を漏らさず 404 にする（#1889・#1928）。
+            # 見えない他の利用者の会話は、存在を漏らさず 404 にする（#1889）。
             raise OntologyNotFoundError(
                 "CHAT_CONVERSATION_NOT_FOUND", "会話が見つかりません。"
             ) from exc
@@ -6185,35 +6189,52 @@ def _assert_sql_execute_permission(request: Request) -> None:
     raise HTTPException(status_code=403, detail="SQL を実行する権限がありません。")
 
 
-def _ensure_query_session_access(data: QuerySessionData, request: Request) -> QuerySessionData:
-    """SQL の生成前の確認の session の判定（「AI 活用」の規則。#1889）。
+def _ensure_query_session_access(
+    data: QuerySessionData, request: Request, *, adding: bool = False
+) -> QuerySessionData:
+    """SQL の生成前の確認の session の判定（「AI 活用」の規則。#1889・#3244）。
 
     system_admin は全員の session、それ以外は本人の session だけ（他人の session は 404 で、
     存在を漏らさない）。持ち主の無い session（認証無効の期間に作ったもの）も本人の物とみなさない
-    （#1126）。
+    （#1126）。`adding`（確認への回答・反映・SQL の生成と実行など、session に内容を足す操作）は
+    持ち主だけで、見える他の利用者の session（system_admin）は 403。見る・取り消すは `adding` なし。
     """
     principal = _principal_from_request(request)
-    if principal is None or can_view_all_users_data(principal):
+    if principal is None:
         return data
-    if not can_access_user_data(principal, data.session.actor_user_uuid.strip()):
+    owner = data.session.actor_user_uuid.strip()
+    if not can_access_user_data(principal, owner):
         raise HTTPException(
             status_code=OWNER_NOT_FOUND_STATUS,
             detail="指定された query session が見つかりません。",
         )
-    assert_profile_access(request, data.session.profile_id)
+    if adding and not can_add_user_content(principal, owner):
+        raise HTTPException(
+            status_code=OTHERS_CONTENT_FORBIDDEN_STATUS, detail=OTHERS_CONTENT_FORBIDDEN_MESSAGE
+        )
+    if not can_view_all_users_data(principal):
+        assert_profile_access(request, data.session.profile_id)
     return data
 
 
-def _load_authorized_query_session(session_id: str, request: Request) -> QuerySessionData:
+def _load_authorized_query_session(
+    session_id: str, request: Request, *, adding: bool = False
+) -> QuerySessionData:
     return _ensure_query_session_access(
         _run_runtime_sync(ontology_runtime.get_session, session_id),
         request,
+        adding=adding,
     )
 
 
 def _raise_domain_error(exc: Exception) -> NoReturn:
     if isinstance(exc, HTTPException):
         raise exc
+    if isinstance(exc, OthersContentForbiddenError):
+        # 他の利用者の会話の続きで確認を始めた system_admin（#3244）。
+        raise HTTPException(
+            status_code=OTHERS_CONTENT_FORBIDDEN_STATUS, detail=OTHERS_CONTENT_FORBIDDEN_MESSAGE
+        ) from exc
     if isinstance(exc, OntologyNotFoundError):
         status_code = 404
     elif isinstance(
@@ -6693,7 +6714,7 @@ def answer_query_clarification(
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ApiResponse[QuerySessionData]:
     try:
-        _load_authorized_query_session(session_id, http_request)
+        _load_authorized_query_session(session_id, http_request, adding=True)
         return ApiResponse(
             data=_run_runtime_sync(
                 ontology_runtime.answer_clarification_idempotent,
@@ -6733,7 +6754,7 @@ def apply_query_requirement(
     """回答前の確認の結果を反映し、session を閉じる（#1439）。"""
 
     try:
-        _load_authorized_query_session(session_id, http_request)
+        _load_authorized_query_session(session_id, http_request, adding=True)
         return ApiResponse(
             data=_run_runtime_sync(
                 ontology_runtime.apply_requirement_idempotent,
@@ -6778,7 +6799,7 @@ def patch_query_intent(
     http_request: Request,
 ) -> ApiResponse[QuerySessionData]:
     try:
-        _load_authorized_query_session(session_id, http_request)
+        _load_authorized_query_session(session_id, http_request, adding=True)
         return ApiResponse(data=_run_runtime_sync(ontology_runtime.patch_intent, session_id, patch))
     except OntologyVersionConflictError as exc:
         try:
@@ -6809,7 +6830,7 @@ def generate_query_sql(
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ApiResponse[QuerySessionData]:
     try:
-        _load_authorized_query_session(session_id, http_request)
+        _load_authorized_query_session(session_id, http_request, adding=True)
         return ApiResponse(
             data=_run_runtime_sync(
                 ontology_runtime.generate_sql_idempotent,
@@ -6833,7 +6854,7 @@ def confirm_query_sql(
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ApiResponse[QuerySessionData]:
     try:
-        _load_authorized_query_session(session_id, http_request)
+        _load_authorized_query_session(session_id, http_request, adding=True)
         if request.session_id != session_id:
             raise OntologyIntegrityError(
                 "SESSION_BINDING_MISMATCH",
@@ -6863,7 +6884,7 @@ def execute_query_session(
 ) -> ApiResponse[QueryExecutionData]:
     try:
         _assert_sql_execute_permission(http_request)
-        _load_authorized_query_session(session_id, http_request)
+        _load_authorized_query_session(session_id, http_request, adding=True)
         if payload.session_id != session_id:
             raise OntologyIntegrityError(
                 "SESSION_BINDING_MISMATCH",
@@ -6894,7 +6915,7 @@ def create_ontology_improvement_proposal(
     http_request: Request,
 ) -> ApiResponse[OntologyProposal]:
     try:
-        _load_authorized_query_session(session_id, http_request)
+        _load_authorized_query_session(session_id, http_request, adding=True)
         proposal, _session = _run_runtime_sync(
             ontology_runtime.create_proposal,
             session_id,

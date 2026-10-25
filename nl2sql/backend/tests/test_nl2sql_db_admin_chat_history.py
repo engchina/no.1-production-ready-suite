@@ -1,5 +1,8 @@
 """DB 管理チャットの会話の履歴（#2319）: 保存・開き直し・続きの文脈・実行の要約・見え方。
 
+見え方は「AI 活用」と同じ（#3244）: system_admin は他の利用者の会話を見て削除できるが、続きの質問・
+実行・SQL の置き換え・エラーの分析・名前の変更は持ち主だけ（403）。
+
 LLM（OCI Enterprise AI）と Oracle は決定論のスタブで置き換える（memory の保存先）。表・列の名前は
 合成のもの。route の関数は画面の request の代わりに principal だけを持つ値で呼ぶ。
 """
@@ -15,11 +18,16 @@ import pytest
 from fastapi import HTTPException, Request
 from pr_backend_core.api import OffsetParams
 from pr_system_settings.auth.domain import SYSTEM_ADMIN_ROLE_CODE, UserIdentity
+from pr_system_settings.auth.visibility import (
+    OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+    OTHERS_CONTENT_FORBIDDEN_STATUS,
+)
 from test_nl2sql_db_admin_chat import _catalog_service, _FakeAdapter, _FakeEnterpriseAi
 from trace_span_fake import TraceTable, trace_table  # noqa: F401 - fixture
 
 from app.features.nl2sql import router
 from app.features.nl2sql.models import (
+    DbAdminChatAnalyzeRequest,
     DbAdminChatGenerateRequest,
     DbAdminChatPlanUpdateRequest,
     DbAdminChatTurnExecuteRequest,
@@ -361,29 +369,73 @@ def test_other_users_conversations_are_404_and_system_admin_sees_all(
     assert "actor_user_uuid" not in everyone.items[0].model_dump()
 
 
-def test_system_admin_continues_other_users_conversation_as_admin(
+def test_system_admin_views_and_deletes_but_cannot_add_to_other_users_conversation(
     setup: tuple[Nl2SqlService, _FakeAdapter, _FakeEnterpriseAi],
 ) -> None:
-    _service, _adapter, ai = setup
+    """system_admin は他の利用者の会話を見て削除できる。内容を足す・変える操作は 403（#3244）。"""
+    service, _adapter, ai = setup
     ai.responses.extend([_answer("SELECT 1 FROM DUAL"), _answer("SELECT 2 FROM DUAL")])
     bob = _send(BOB, "bob の質問")
     conversation_id = bob.conversation.id
-    sent = _send(ADMIN, "管理者の続き", conversation_id=conversation_id)
-    assert sent.turn.sender_user_uuid == "admin"
-    assert sent.turn.sender_display_name == "admin さん"
-    assert sent.conversation.owned is False
-    # 会話の持ち主は変えない（持ち主の一覧に残り、持ち主にも管理者のターンが見える）。
+    turn_id = bob.turn.turn_id
+    viewed = router.get_db_admin_chat(conversation_id, _http(ADMIN)).data
+    assert viewed is not None and viewed.conversation.owned is False
+    assert viewed.conversation.actor_display_name == "bob さん"
+    for call in (
+        lambda: _send(ADMIN, "管理者の続き", conversation_id=conversation_id),
+        lambda: router.db_admin_chat_execute(
+            DbAdminChatTurnExecuteRequest(
+                conversation_id=conversation_id, turn_id=turn_id, statement_index=1
+            ),
+            _http(ADMIN),
+        ),
+        lambda: router.replace_db_admin_chat_turn_sql(
+            conversation_id,
+            turn_id,
+            DbAdminChatPlanUpdateRequest(sql="SELECT 3 FROM DUAL"),
+            _http(ADMIN),
+        ),
+        lambda: router.db_admin_chat_analyze_error(
+            conversation_id, turn_id, DbAdminChatAnalyzeRequest(statement_index=1), _http(ADMIN)
+        ),
+        lambda: router.rename_db_admin_chat(
+            conversation_id, SqlChatUpdateRequest(title="x"), _http(ADMIN)
+        ),
+    ):
+        with pytest.raises(HTTPException) as denied:
+            call()
+        assert denied.value.status_code == OTHERS_CONTENT_FORBIDDEN_STATUS == 403
+        assert denied.value.detail == OTHERS_CONTENT_FORBIDDEN_MESSAGE
+    # 何も足していない（ターン・実行の要約・名前・SQL はそのまま）。
+    owner_view = router.get_db_admin_chat(conversation_id, _http(BOB)).data
+    assert owner_view is not None and owner_view.conversation.owned is True
+    assert owner_view.conversation.title == "bob の質問"
+    [turn] = owner_view.turns
+    assert turn.statement_executions == [] and turn.plan.sql == "SELECT 1 FROM DUAL"
+
+    # #3244 より前に system_admin が送ったターンは消さず、送り手つきで持ち主にも見せる。実行できる
+    # のは持ち主だけ。
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            service, "_db_admin_chat_owned_conversation", service._db_admin_chat_conversation
+        )
+        legacy = _send(ADMIN, "管理者の続き", conversation_id=conversation_id)
     owner_view = router.get_db_admin_chat(conversation_id, _http(BOB)).data
     assert owner_view is not None
-    assert owner_view.conversation.owned is True
-    assert [turn.sender_display_name for turn in owner_view.turns] == [None, "admin さん"]
-    executed = router.db_admin_chat_execute(
-        DbAdminChatTurnExecuteRequest(
-            conversation_id=conversation_id, turn_id=sent.turn.turn_id, statement_index=1
-        ),
-        _http(ADMIN),
-    ).data
+    assert [item.sender_display_name for item in owner_view.turns] == [None, "admin さん"]
+    legacy_execute = DbAdminChatTurnExecuteRequest(
+        conversation_id=conversation_id, turn_id=legacy.turn.turn_id, statement_index=1
+    )
+    with pytest.raises(HTTPException) as denied:
+        router.db_admin_chat_execute(legacy_execute, _http(ADMIN))
+    assert denied.value.status_code == 403
+    executed = router.db_admin_chat_execute(legacy_execute, _http(BOB)).data
     assert executed is not None and executed.executed is True
+
+    # 削除は system_admin もできる。
+    router.delete_db_admin_chat(conversation_id, _http(ADMIN))
+    listed = router.list_db_admin_chats(_http(BOB), PAGE).data
+    assert listed is not None and listed.total == 0
 
 
 def test_rename_and_delete_conversation(

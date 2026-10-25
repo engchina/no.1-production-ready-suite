@@ -80,7 +80,7 @@ npx playwright test tests/e2e/<対象>.spec.ts               # e2e（関係す�
 
 3 製品共通の契約は platform の [UX 契約](../platform/docs/ux-contracts/README.md) が正本。NL2SQL 固有の規則は [docs/agents/security-contracts.md](./docs/agents/security-contracts.md) にあり、権限・会話・実行履歴・状態保持に触る前に読む。特に次を守る。
 
-- 「AI 活用」は system_admin は全員、それ以外は自分のデータだけ（他人のデータは 404）。system_admin が他の利用者のデータを操作するときも、実行は操作した本人（actor・権限・SQL の実行の接続。#904 の分け方を崩さない）で、会話の持ち主は変えない。
+- 「AI 活用」は system_admin は全員、それ以外は自分のデータだけ（他人のデータは 404）。system_admin が他の利用者のデータにできるのは閲覧と運用の操作（停止・削除）だけで、続きの質問・SQL の実行・確認への回答・評価・名前の変更は持ち主だけ（403。#3244）。実行は操作した本人の権限と SQL の実行の接続（#904 の分け方を崩さない）。
 - `SYSTEM_ADMIN` 以外の role の更新・割当では、追加される実効権限が actor 自身の実効権限の部分集合でなければ `403` にする（権限昇格を許可しない）。
 
 ## オントロジーの標準（#1729）

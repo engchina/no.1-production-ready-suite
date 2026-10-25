@@ -835,7 +835,7 @@ class ThreadSummary(BaseModel):
     # 会話の持ち主（応答には出さない。表示名の解決と本人の会話の判定に使う。#1889）。
     owner_user_uuid: str | None = Field(default=None, exclude=True)
     # 見ている利用者の会話か（system_admin が他の利用者の会話を見るときは false。画面は一覧に
-    # 持ち主の表示名を添える。#1889。system_admin は他の利用者の会話も続けられる。#1928）。
+    # 持ち主の表示名を添える。#1889。system_admin は見るだけで、続けられない。#3244）。
     owned: bool = True
     # system_admin の一覧・詳細だけに付く利用者の表示名（#1889・#1696。引けない利用者は空）。
     actor_display_name: str = ""
@@ -2153,8 +2153,8 @@ class AgentRuntimeRepository:
                         thread_id=run.thread_id,
                         draft=draft,
                     ),
-                    # 次の Run は答えた利用者として実行する（system_admin が他の利用者の会話で
-                    # 答えたら system_admin の権限・範囲。持ち主の権限は借りない。#1928）。
+                    # 次の Run は答えた利用者として実行する（答えるのは会話の持ち主だけ。呼ぶ側が
+                    # 確かめる。#3244）。
                     created_by_user_uuid=actor_user_uuid or run.created_by_user_uuid,
                     agent_version=None,
                     # 会話を操作してよいかは呼ぶ側が確かめた（同じ会話の続き）。
@@ -2259,9 +2259,9 @@ class AgentRuntimeRepository:
 
         `agent_version` は公開した版を指定して実行する（品質評価が始めたときの版に固定する。#810）。
         API の `RunCreateRequest` からは指定できない。`extra_metadata` は Control Plane が付ける
-        予約の metadata（回答前の確認の答え。#1839）。`all_users`（system_admin。#1928）は
-        他の利用者の会話（`thread_id`）も続けられる。Run は `created_by_user_uuid`（操作した
-        利用者）として実行し、会話の持ち主は変えない。
+        予約の metadata（回答前の確認の答え。#1839）。続ける会話（`thread_id`）は
+        `created_by_user_uuid` の会話だけ（ほかは `ThreadNotFoundError`。#3244）。`all_users` は
+        持ち主の確かめを呼ぶ側が済ませたときだけ渡す（会話の持ち主は変えない）。
         """
         with self._lock:
             run = self._create_builtin_run_locked(
@@ -2305,9 +2305,8 @@ class AgentRuntimeRepository:
         )
         thread_owner = created_by_user_uuid
         if request.thread_id is not None:
-            # 続ける会話は、自分の会話・同じ Agent のものだけ（他人の会話へ書き込ませない）。
-            # system_admin（`all_users`）は他の利用者の会話も続けられる。会話の持ち主は変えず、
-            # Run は操作した利用者（actor）として実行する（#1928）。
+            # 続ける会話は、自分の会話・同じ Agent のものだけ（他人の会話へ書き込ませない。
+            # system_admin も同じ。#3244）。`all_users` は呼ぶ側が持ち主を確かめた続き。
             thread_runs = self._require_thread_locked(
                 request.thread_id,
                 user_uuid=created_by_user_uuid,
@@ -2447,7 +2446,7 @@ class AgentRuntimeRepository:
         """支援タスクの目的（会話の最初の質問）と、前の完了した Run の状態（#1243）。
 
         読むのは同じ会話で、同じ持ち主（会話の持ち主。#1928）の、この Run より前の Run だけ。
-        会話を続けられるのは持ち主と system_admin（#768・#1928）で、system_admin が続けた Run も
+        会話を続けられるのは持ち主だけ（#768・#3244）。#3244 より前に system_admin が続けた Run も
         同じ会話の状態を引き継ぐ。保存先の不整合で別の会話の Run が混ざっても、その状態は使わない。
         前の完了した Run より後の失敗・取消の Run の消費は、状態の会話の通しの予算に足す
         （#1277。失敗・取消を繰り返して予算を超えさせない）。

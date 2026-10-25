@@ -7,14 +7,19 @@
 
 from __future__ import annotations
 
+import inspect
 import json
+import threading
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
 
 import httpx
 import pytest
 from mcp_support import (
+    DEFAULT_OUTPUTS,
     SERVICE_TOKEN_SECRET,
     FakeProductMcp,
     McpToolError,
@@ -78,11 +83,6 @@ ALLOW_ALL = ToolPolicy(
         mcp_function_name("rag" if name.startswith("rag") else "nl2sql", name) for name in READ_ONLY
     }
 )
-
-
-@pytest.fixture(autouse=True)
-def _clear_service_user_cache(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setattr(tools_module, "_service_user_uuid_cache", {})
 
 
 @pytest.fixture
@@ -257,42 +257,75 @@ def test_token_subject_audience_and_claims_follow_run_user(monkeypatch: MonkeyPa
         verify_service_token(SERVICE_TOKEN_SECRET, token, audience="rag")
 
 
-def test_service_user_is_used_without_run_user(
+def test_missing_user_fails_before_calling_without_a_substitute(
     monkeypatch: MonkeyPatch, auth: ProductionAuth
 ) -> None:
-    service_user = auth.create_user("svc-agent")
-    monkeypatch.setattr(get_settings(), "agent_mcp_service_user_login_id", "SVC-Agent")
+    """利用者の無い呼び出しは、別の主体に置き換えず `mcp.user_required` で失敗する（#3251）。
+
+    共通認証に利用者がいても、文脈に利用者が無ければ呼び先へ送らない（confused deputy を防ぐ）。
+    """
+    auth.create_user("svc-agent")
     mcp = fake_product_mcp(monkeypatch)
 
-    first = _invoke("rag", "rag_search", {"query": "a"}, context=ToolInvocationContext())
-    second = _invoke("rag", "rag_search", {"query": "b"}, context=ToolInvocationContext())
-
-    assert first.success is True, first.error
-    assert second.success is True, second.error
-    assert [call["claims"]["sub"] for call in mcp.tool_calls] == [service_user.user_uuid] * 2
-    assert "run_id" not in mcp.tool_calls[0]["claims"]
-
-
-def test_missing_user_and_service_user_fail_before_calling(monkeypatch: MonkeyPatch) -> None:
-    mcp = fake_product_mcp(monkeypatch)
-    monkeypatch.setattr(get_settings(), "agent_mcp_service_user_login_id", "")
-
-    result = _invoke("rag", "rag_search", {"query": "a"}, context=ToolInvocationContext())
-
-    assert result.success is False
-    assert result.error_code == "mcp.user_required"
-    assert "AGENT_MCP_SERVICE_USER_LOGIN_ID" in (result.error or "")
+    for server_id, name, arguments in (
+        ("rag", "rag_search", {"query": "a"}),
+        ("nl2sql", "nl2sql_get_job", {"job_id": "j"}),
+    ):
+        result = _invoke(
+            server_id, name, arguments, context=ToolInvocationContext(run_id="run-3251")
+        )
+        assert result.success is False
+        assert result.error_code == "mcp.user_required"
+    assert mcp.requests == []
+    # `tools/list`（画面の「ツールを取得」・ツール権限の画面の経路）も同じ。
+    with pytest.raises(ExternalToolError) as raised:
+        list_mcp_connection_tools("rag", context=ToolInvocationContext())
+    assert raised.value.code == "mcp.user_required"
     assert mcp.requests == []
 
 
-def test_unknown_service_user_fails(monkeypatch: MonkeyPatch, auth: ProductionAuth) -> None:
-    mcp = fake_product_mcp(monkeypatch)
-    monkeypatch.setattr(get_settings(), "agent_mcp_service_user_login_id", "missing-user")
+def test_invoke_has_no_default_context() -> None:
+    """`tool_registry.invoke` は利用者の無い既定の文脈を作らない（入口が主体を決める。#3251）。"""
+    parameter = inspect.signature(tool_registry.invoke).parameters["context"]
+    assert parameter.default is inspect.Parameter.empty
+    with pytest.raises(TypeError):
+        tool_registry.invoke(ToolCall(name="rag__rag_search", arguments={}))  # type: ignore[call-arg]
 
-    result = _invoke("nl2sql", "nl2sql_get_job", {"job_id": "j"}, context=ToolInvocationContext())
 
-    assert result.error_code == "mcp.service_user_not_found"
-    assert mcp.requests == []
+def test_concurrent_calls_of_different_users_do_not_cross(monkeypatch: MonkeyPatch) -> None:
+    """別の利用者の呼び出しを同時に動かしても、token の `sub` / `profile_ids` / `run_id` は
+    それぞれの文脈のまま（#3251。thread をまたいで共有の主体を持たない）。"""
+    barrier = threading.Barrier(2, timeout=10)
+
+    def search(_argument: Any) -> dict[str, Any]:
+        # 2 つの呼び出しが同時に呼び先の中にいる状態を作る（片方だけなら timeout で失敗する）。
+        barrier.wait()
+        return deepcopy(DEFAULT_OUTPUTS["rag_search"])
+
+    mcp = fake_product_mcp(monkeypatch, outputs={"rag_search": search})
+    users = {
+        "a": ("aaaaaaaa-0000-0000-0000-000000000001", ("profile-a",)),
+        "b": ("bbbbbbbb-0000-0000-0000-000000000002", ("profile-b1", "profile-b2")),
+    }
+
+    def call(key: str) -> ToolResult:
+        user_uuid, profiles = users[key]
+        context = ToolInvocationContext(
+            run_id=f"run-{key}", user_uuid=user_uuid, profile_scopes={"rag": profiles}
+        )
+        return _invoke("rag", "rag_search", {"query": key}, context=context)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(call, ["a", "b"]))
+
+    assert all(result.success for result in results), [result.error for result in results]
+    assert len(mcp.tool_calls) == 2
+    for tool_call in mcp.tool_calls:
+        key = tool_call["arguments"]["query"]
+        user_uuid, profiles = users[key]
+        assert tool_call["claims"]["sub"] == user_uuid
+        assert tool_call["claims"]["profile_ids"] == list(profiles)
+        assert tool_call["claims"]["run_id"] == f"run-{key}"
 
 
 def test_missing_service_token_secret_fails(monkeypatch: MonkeyPatch) -> None:
