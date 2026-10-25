@@ -45,12 +45,11 @@ for (const viewport of [
     await page.getByRole("radio", { name: /Word→JSONL/ }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath("preprocess-word-to-jsonl.png") });
     // 名前と説明で、どの文書に使うかが分かる(#563)。実装の言葉(ラスタライズ・canonical な中間物 等)は出さない(保存先の値 artifacts/canonical は除く)。
+    // スキャン画像の補正と URL→Markdown（#2042）、PDF を画像として読み直す（#3347）は削除した。
     await expect(
-      page.getByRole("radio", { name: /PDF を画像として読み直す.*文字化けする PDF/ })
-    ).toBeVisible();
-    // スキャン画像の補正と URL→Markdown は削除した（#2042）。
-    await expect(page.getByRole("radio", { name: /スキャン画像の補正|URL→Markdown/ })).toHaveCount(0);
-    await expect(page.getByRole("radio")).toHaveCount(7);
+      page.getByRole("radio", { name: /スキャン画像の補正|URL→Markdown|PDF を画像として読み直す/ })
+    ).toHaveCount(0);
+    await expect(page.getByRole("radio")).toHaveCount(6);
     const main = page.getByRole("main");
     for (const jargon of ["ラスタライズ", "VLM/OCR 経路", "canonical な", "派生系譜", "溯源", "in-process"]) {
       await expect(main).not.toContainText(jargon);
@@ -146,7 +145,6 @@ function preprocessEnvelope(overrides: PreprocessOverrides = {}) {
   }[] = [
     { name: "passthrough", origin: "baseline_no_conversion", recommended_for: ["any"], in_process: true, requires_service: false },
     { name: "office_to_pdf", origin: "libreoffice_headless", recommended_for: ["office"], in_process: false, requires_service: true },
-    { name: "pdf_to_page_images", origin: "no1_pdfparser_page_images", recommended_for: ["pdf"], in_process: false, requires_service: true },
     { name: "csv_to_jsonl", origin: "no1_csv2json_records", recommended_for: ["csv"], in_process: false, requires_service: true },
     { name: "excel_to_jsonl", origin: "no1_excel2json_records", recommended_for: ["excel"], in_process: false, requires_service: true },
     { name: "word_to_jsonl", origin: "libreoffice_python_docx_records", recommended_for: ["word"], in_process: false, requires_service: true },

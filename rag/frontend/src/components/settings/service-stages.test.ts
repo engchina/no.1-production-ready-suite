@@ -85,7 +85,6 @@ describe("サービス管理のサービス名", () => {
   it("ファイル準備・文書解析のサービスは、設定画面の方式・エンジンと同じ名前", () => {
     const sameAs: Record<string, I18nKey> = {
       "settings.services.item.preprocessOfficeToPdf": "settings.preprocess.profile.office_to_pdf",
-      "settings.services.item.preprocessPdfToPageImages": "settings.preprocess.profile.pdf_to_page_images",
       "settings.services.item.preprocessCsvToJsonl": "settings.preprocess.profile.csv_to_jsonl",
       "settings.services.item.preprocessExcelToJsonl": "settings.preprocess.profile.excel_to_jsonl",
       "settings.services.item.preprocessWordToJsonl": "settings.preprocess.profile.word_to_jsonl",

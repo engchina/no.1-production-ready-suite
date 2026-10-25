@@ -21,7 +21,6 @@ import type { RecipeConfigItem } from "./DocumentProcessingConfigPanel.logic";
 const PREPROCESS_VALUES = [
   "passthrough",
   "office_to_pdf",
-  "pdf_to_page_images",
   "csv_to_jsonl",
   "excel_to_jsonl",
   "word_to_jsonl",

@@ -55,7 +55,6 @@ MODELS_VARIANT="${RAG_SERVICES_MODELS:-}"
 
 CPU_SERVICES=(
   preprocess-office-to-pdf
-  preprocess-pdf-to-page-images
   preprocess-csv-to-jsonl
   preprocess-excel-to-jsonl
   preprocess-word-to-jsonl

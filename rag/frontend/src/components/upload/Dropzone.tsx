@@ -61,6 +61,9 @@ export function Dropzone({
       <p className="max-w-2xl text-xs text-fg-muted">
         {t("upload.dropzoneFormats", { formats: ACCEPTED_UPLOAD_EXTENSION_LABELS.join(", ") })}
       </p>
+      <p className="max-w-2xl text-xs text-fg-muted" data-testid="upload-dropzone-unsupported">
+        {t("upload.dropzoneUnsupported")}
+      </p>
       <input
         ref={inputRef}
         type="file"

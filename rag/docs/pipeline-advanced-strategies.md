@@ -52,7 +52,7 @@ cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 
 上げる。視覚特徴(multi-vector / late interaction)で query とページをマッチング。
 
 ### 設計メモ(要 GPU + 版管理 schema DDL)
-- **取込時**: 既存 `pdf_to_page_images` 前処理でページ画像化 → **GPU サービス**(ColQwen/ColPali を
+- **取込時**: PDF の各ページを画像に描画する(前処理 `pdf_to_page_images` は #3347 で削除した)→ **GPU サービス**(ColQwen/ColPali を
   transformers でロード)で **multi-vector embedding** を生成。OCI Enterprise AI VLM 経路でも近似可能だが
   multi-vector が要点。
 - **索引(schema 変更)**: Oracle AI Database に視覚 embedding 列/表(`rag_page_visual_vectors`、

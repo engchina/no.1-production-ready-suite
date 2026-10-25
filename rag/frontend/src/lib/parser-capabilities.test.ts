@@ -40,10 +40,6 @@ describe("effectiveModalityForParser", () => {
     expect(effectiveModalityForParser("pdf", "office_to_pdf")).toBe("pdf");
     expect(effectiveModalityForParser("office", null)).toBe("office");
   });
-
-  it("pdf_to_page_images は pdf を image として扱う", () => {
-    expect(effectiveModalityForParser("pdf", "pdf_to_page_images")).toBe("image");
-  });
 });
 
 describe("parserSupportsDocument", () => {

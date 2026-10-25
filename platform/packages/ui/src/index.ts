@@ -62,6 +62,7 @@ export {
   detectContentLang,
   normalizeContentLang,
   resolveContentLang,
+  uiTextLang,
   type ContentLang,
 } from "./lib/content-lang";
 export {

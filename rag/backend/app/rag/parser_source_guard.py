@@ -17,7 +17,8 @@ worker が parser サービスを呼んだ後で失敗する。アップロー�
   ここで止める(#2457)。
 - ``source_profile.unsupported_reason`` がある形式(TIFF・Outlook .msg・音声など): 既存の
   「非対応形式」として別に止まる。ただし旧形式の Office(.doc / .xls / .ppt)とマクロ付きの Office
-  (.docm / .xlsm / .pptm)は、原本のままでは解析しないが、ファイル準備で変換できる(#2470)。
+  (.docm / .xlsm / .pptm)、ODT・RTF(.odt / .rtf。#3351)は、原本のままでは解析しないが、
+  ファイル準備で変換できる(#2470)。
   変換できるファイル準備を選んでいれば変換後の形式で判定を続け、選んでいなければ「ファイル準備で
   変換を選ぶ」案内で止める(`office_conversion_formats`)。
 - 削除済み・未知の解析エンジン: 取込時に ``engine_removed`` として止まる。
@@ -51,18 +52,23 @@ _FORMAT_PRESERVING_PREPROCESS = frozenset({"passthrough", "pii_redact"})
 STRUCTURED_RECORDS_PREPROCESS = frozenset({"csv_to_jsonl", "excel_to_jsonl", "word_to_jsonl"})
 # PIIマスクが扱う原本の種類(サービスの判定 `services/preprocess/pii_redact` と同じ)。
 _PII_REDACT_MODALITIES = frozenset({SourceModality.TEXT, SourceModality.HTML})
-# 原本のままでは解析しない Office(旧形式のバイナリ・マクロ付き。source_profile の
-# unsupported_reason)と、それを変換できるファイル準備の対応(#2470)。マクロは実行しない。
+# 原本のままでは解析しない Office(旧形式のバイナリ・マクロ付き・ODT / RTF。source_profile の
+# unsupported_reason)と、それを変換できるファイル準備の対応(#2470・#3351)。マクロは実行しない。
 CONVERSION_REQUIRED_OFFICE_REASONS = frozenset(
-    {"legacy_office_binary_not_supported", "macro_enabled_office_not_supported"}
+    {
+        "legacy_office_binary_not_supported",
+        "macro_enabled_office_not_supported",
+        "odt_rtf_not_supported",
+    }
 )
 PREPROCESS_REQUIRED_CODE = "office_conversion_required"
 # 変換が要る Office の品質の warning(変換した派生物の解析では確認事項にしない)。
 _CONVERSION_REQUIRED_WARNINGS = frozenset(
-    {"unsupported_legacy_office_binary", "unsupported_macro_enabled_office"}
+    {"unsupported_legacy_office_binary", "unsupported_macro_enabled_office", "unsupported_odt_rtf"}
 )
 _OFFICE_CONVERSION_FORMATS: dict[str, frozenset[str]] = {
-    "office_to_pdf": frozenset({".doc", ".docm", ".ppt", ".pptm"}),
+    # ODT・RTF は Office→PDF だけが変換する(unstructured は pandoc で読むが入れない。#3351)。
+    "office_to_pdf": frozenset({".doc", ".docm", ".ppt", ".pptm", ".odt", ".rtf"}),
     "excel_to_jsonl": frozenset({".xls", ".xlsm"}),
     "word_to_jsonl": frozenset({".doc", ".docm"}),
 }
@@ -89,6 +95,10 @@ _OFFICE_FORMAT_BY_CONTENT_TYPE = {
     "application/vnd.ms-word.document.macroenabled.12": ".docm",
     "application/vnd.ms-excel.sheet.macroenabled.12": ".xlsm",
     "application/vnd.ms-powerpoint.presentation.macroenabled.12": ".pptm",
+    "application/vnd.oasis.opendocument.text": ".odt",
+    "application/rtf": ".rtf",
+    "application/x-rtf": ".rtf",
+    "text/rtf": ".rtf",
 }
 UNSTRUCTURED_BACKEND = "unstructured"
 UNSTRUCTURED_SERVICE_ID = "parser-unstructured"
@@ -180,7 +190,7 @@ def requires_office_conversion(source_profile: SourceProfile) -> bool:
 
 
 def preprocess_converts_source(preprocess_profile: str, source_profile: SourceProfile) -> bool:
-    """選んだファイル準備が、変換の要る Office(旧形式・マクロ付き)を変換できるか(#2470)。"""
+    """選んだファイル準備が、変換の要る Office(旧形式・マクロ付き・ODT / RTF)を変換できるか。"""
     if not requires_office_conversion(source_profile):
         return False
     office_format = _office_format(source_profile)
@@ -207,7 +217,7 @@ def office_conversion_required_message(source_profile: SourceProfile) -> str:
     labels = office_conversion_preprocess_labels(source_profile) or ["Office→PDF"]
     return (
         f"{_file_format(source_profile)} は原本のままでは解析できません"
-        "(旧形式の Office・マクロ付きの Office)。"
+        "(旧形式の Office・マクロ付きの Office・ODT・RTF)。"
         f"文書レシピのファイル準備で「{'」か「'.join(labels)}」を選んでから取り込んでください"
         "(マクロは実行しません)。"
     )
@@ -218,8 +228,8 @@ def converted_source_profile(
 ) -> SourceProfile | None:
     """ファイル準備で変換した派生物を解析するときの source profile(#2470)。
 
-    旧形式・マクロ付きの Office の ``unsupported_reason`` は原本の形式の理由なので、変換した
-    派生物(PDF・JSONL)の解析では止める理由にしない。変換しなかったときは原本のまま返す。
+    旧形式・マクロ付きの Office・ODT / RTF の ``unsupported_reason`` は原本の形式の理由なので、
+    変換した派生物(PDF・JSONL)の解析では止める理由にしない。変換しなかったときは原本のまま返す。
     """
     if source_profile is None or not converted or not requires_office_conversion(source_profile):
         return source_profile

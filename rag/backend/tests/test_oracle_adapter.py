@@ -768,7 +768,7 @@ async def test_oracle_client_get_document_restores_preprocess_artifact() -> None
     row["preprocess_artifact"] = json.dumps(
         {
             "derivation_id": "derivation-1",
-            "profile": "pdf_to_page_images",
+            "profile": "office_to_pdf",
             "converted": True,
             "object_storage_path": "oci://namespace/bucket/artifacts/canonical/doc-1.pdf",
             "content_type": "application/pdf",

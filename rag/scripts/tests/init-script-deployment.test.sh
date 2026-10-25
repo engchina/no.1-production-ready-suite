@@ -197,7 +197,7 @@ run_systemd_case() (
 
 # 既存の Compute の再配備（suite-update.sh → suite-restart.sh → suite-init.sh → init_script.sh の main。#2042）。
 # 以前の stack が書いた rag_services.txt（parser-xml-tree-json が無く、提供しなくなった preprocess-url-to-markdown・preprocess-image-enhance・parser-oci-genai-vision・
-# parser-asr がある）と、以前の配備の unit がある状態から、main と同じ順に load_rag_services → configure_systemd を実行する。
+# parser-asr・preprocess-pdf-to-page-images（#3347）がある）と、以前の配備の unit がある状態から、main と同じ順に load_rag_services → configure_systemd を実行する。
 run_redeploy_case() (
   local case_dir="${TEST_TMP_DIR}/redeploy"
   local service
@@ -209,10 +209,10 @@ run_redeploy_case() (
     visudo() { :; }
   fi
 
-  printf '%s\n' 'preprocess-office-to-pdf preprocess-url-to-markdown preprocess-image-enhance parser-docling parser-oci-genai-vision parser-asr parser-oci-document-understanding' \
+  printf '%s\n' 'preprocess-office-to-pdf preprocess-pdf-to-page-images preprocess-url-to-markdown preprocess-image-enhance parser-docling parser-oci-genai-vision parser-asr parser-oci-document-understanding' \
     > "${APP_ROOT}/props/rag_services.txt"
   chmod 0640 "${APP_ROOT}/props/rag_services.txt"
-  for service in preprocess-office-to-pdf preprocess-url-to-markdown preprocess-image-enhance parser-docling parser-oci-genai-vision parser-asr parser-oci-document-understanding; do
+  for service in preprocess-office-to-pdf preprocess-pdf-to-page-images preprocess-url-to-markdown preprocess-image-enhance parser-docling parser-oci-genai-vision parser-asr parser-oci-document-understanding; do
     printf '[Unit]\nDescription=previous %s\n' "${service}" > "${SYSTEMD_UNIT_DIR}/production-ready-rag-${service}.service"
     touch "${case_dir}/enabled/production-ready-rag-${service}.service"
   done
@@ -311,8 +311,8 @@ test "$(cat "${TEST_TMP_DIR}/services-legacy-file/services")" = \
   "parser-unstructured parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl" \
   || fail "以前の stack の backend / ingestion-worker を前処理 / parser として扱った"
 # 以前の stack が書いた一覧に、提供しなくなったサービス（#270 の parser-marker・#2042 の parser-asr /
-# parser-oci-genai-vision・preprocess-url-to-markdown・preprocess-image-enhance）や未知の名前があっても、再配備を止めずに読み飛ばす。
-run_services_case services-removed "parser-docling parser-asr parser-oci-genai-vision preprocess-url-to-markdown preprocess-image-enhance parser-marker frontend"
+# parser-oci-genai-vision・preprocess-url-to-markdown・preprocess-image-enhance・#3347 の preprocess-pdf-to-page-images）や未知の名前があっても、再配備を止めずに読み飛ばす。
+run_services_case services-removed "parser-docling parser-asr parser-oci-genai-vision preprocess-url-to-markdown preprocess-image-enhance preprocess-pdf-to-page-images parser-marker frontend"
 test "$(cat "${TEST_TMP_DIR}/services-removed/result")" = "ok" \
   || fail "提供しなくなったサービスが rag_services.txt にあると再配備が失敗する"
 test "$(cat "${TEST_TMP_DIR}/services-removed/services")" = "parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl" \
@@ -551,7 +551,7 @@ for service in preprocess-csv-to-jsonl preprocess-excel-to-jsonl; do
     "${redeploy_dir}/sudoers.d/production-ready-rag-services" \
     || fail "再配備の sudoers が ${service} の操作を許可していない"
 done
-for removed in preprocess-url-to-markdown preprocess-image-enhance parser-oci-genai-vision parser-asr; do
+for removed in preprocess-pdf-to-page-images preprocess-url-to-markdown preprocess-image-enhance parser-oci-genai-vision parser-asr; do
   grep -Fqx "[rag-init] Skipping RAG service that is no longer provided: ${removed}" "${redeploy_dir}/load.log" \
     || fail "提供しなくなった ${removed} を読み飛ばしたことを log に出していない"
   grep -qx "disable --now production-ready-rag-${removed}.service" "${redeploy_log}" \
@@ -771,7 +771,7 @@ test "${torch_locks}" -ge 2 || fail "torch を持つ lock が見つからない�
 
 # --- OS の package（Oracle Linux 9 の dnf。#1611）: 前処理 / parser の分だけ足す。Nginx は suite-init.sh が入れる ---
 os_packages="$(
-  RAG_INIT_TEST_MODE=true bash -c 'source "$1/init_script.sh"; RAG_SERVICES=(parser-docling); system_packages; echo ---; RAG_SERVICES=(parser-docling preprocess-office-to-pdf parser-unstructured preprocess-pdf-to-page-images); system_packages' _ "${REPO_DIR}"
+  RAG_INIT_TEST_MODE=true bash -c 'source "$1/init_script.sh"; RAG_SERVICES=(parser-docling); system_packages; echo ---; RAG_SERVICES=(parser-docling preprocess-office-to-pdf parser-unstructured preprocess-word-to-jsonl); system_packages' _ "${REPO_DIR}"
 )"
 base_packages="${os_packages%%---*}"
 all_packages="${os_packages#*---}"
@@ -782,7 +782,7 @@ for package in libreoffice-core google-noto-sans-cjk-ttc-fonts poppler-utils tes
   printf '%s\n' "${base_packages}" | grep -qx "${package}" && fail "parser-docling だけなのに ${package} を入れる"
   printf '%s\n' "${all_packages}" | grep -qx "${package}" || fail "前処理 / parser の package に ${package} が無い"
 done
-test "$(printf '%s\n' "${all_packages}" | grep -cx 'google-noto-sans-cjk-ttc-fonts')" -eq 1 || fail "同じ package を重ねて入れる"
+test "$(printf '%s\n' "${all_packages}" | grep -cx 'libreoffice-core')" -eq 1 || fail "同じ package を重ねて入れる"
 for package in nginx netfilter-persistent build-essential fonts-noto-cjk tesseract-ocr; do
   printf '%s\n' "${all_packages}" | grep -qx "${package}" && fail "${package} を入れる（Oracle Linux に無い・suite が入れる）"
 done

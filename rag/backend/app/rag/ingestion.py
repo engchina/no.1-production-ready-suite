@@ -1555,7 +1555,11 @@ class IngestionPipeline:
             # 派生系譜(溯源)を抽出 metadata へ刻む。artifact cache / document payload 経由で永続。
             extraction = _extraction_with_source_derivation(extraction, source_derivation)
             # PDF の印刷の頁番号（ページラベル）を残し、chunk の場所に付ける（#1244）。
-            extraction = _extraction_with_page_labels(extraction, parse_bytes, parse_content_type)
+            # PDFium の呼び出しは lock の中で同期に行うため、event loop を止めないよう
+            # 別のスレッドで読む（#3362）。
+            extraction = await asyncio.to_thread(
+                _extraction_with_page_labels, extraction, parse_bytes, parse_content_type
+            )
             # 図・画像の読み取り(Vision)は解析エンジンに関係なくここで行う(#497)。抽出の cache より
             # 前に行い、後段の失敗から再開しても読み取り済みの図を読み直さない。
             extraction = await self._attach_vision(
@@ -4099,6 +4103,11 @@ def _unsupported_parser_message(result: ParserRegistryResult) -> str:
             "文書レシピのファイル準備で変換(Word・PowerPoint は「Office→PDF」、"
             "Word は「Word→JSONL」も可、Excel は「Excel→JSONL」)を選んでから取り込んでください"
             "(マクロは実行しません)。"
+        )
+    if result.unsupported_reason == "odt_rtf_not_supported":
+        return (
+            "ODT・RTF は原本のままでは解析できません。"
+            "文書レシピのファイル準備で「Office→PDF」を選んでから取り込んでください。"
         )
     return "このファイル形式は取込に対応していません。"
 

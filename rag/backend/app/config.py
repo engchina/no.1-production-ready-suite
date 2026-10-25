@@ -148,7 +148,6 @@ PREVIOUS_DEFAULT_CHUNK_DELIMITER = "\\n\\n"
 PreprocessProfile = Literal[
     "passthrough",
     "office_to_pdf",
-    "pdf_to_page_images",
     "csv_to_jsonl",
     "excel_to_jsonl",
     "word_to_jsonl",
@@ -731,6 +730,11 @@ class Settings(
             "text/markdown",
             "text/csv",
             "text/tab-separated-values",
+            # reStructuredText・Org(プレーンテキストとして読む。#3351)。
+            "text/x-rst",
+            "text/prs.fallenstein.rst",
+            "text/org",
+            "text/x-org",
             "text/html",
             "application/xhtml+xml",
             "application/json",
@@ -738,6 +742,8 @@ class Settings(
             "application/jsonlines",
             "application/ndjson",
             "application/xml",
+            # .xml は text/xml でも送られる(#3360)。
+            "text/xml",
             "application/csv",
             "application/x-ndjson",
             "message/rfc822",
@@ -754,6 +760,11 @@ class Settings(
             "application/vnd.ms-word.document.macroEnabled.12",
             "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
             "application/vnd.ms-excel.sheet.macroEnabled.12",
+            # ODT・RTF(ファイル準備の Office→PDF で PDF にしてから読む。#3351)。
+            "application/vnd.oasis.opendocument.text",
+            "application/rtf",
+            "application/x-rtf",
+            "text/rtf",
             "audio/aac",
             "audio/flac",
             "audio/mp3",
@@ -2099,7 +2110,7 @@ class Settings(
             "parse の前に原本を一度だけ canonical な中間物へ変換する前処理プリセット。"
             "passthrough(既定)は変換せず現行挙動と一致。office_to_pdf は Word・PowerPoint→PDF"
             "(.doc/.docm/.ppt/.pptm を含む。Excel は対象外)、"
-            "pdf_to_page_images は PDF→ページ画像、csv_to_jsonl は CSV→構造化 JSON、"
+            "csv_to_jsonl は CSV→構造化 JSON、"
             "excel_to_jsonl は Excel(.xls/.xlsx/.xlsm)→構造化 JSON、"
             "pii_redact は取込時の PII マスク"
             "(Presidio + 日本語 NER、外部 SaaS 非使用)"
@@ -2117,10 +2128,6 @@ class Settings(
     rag_preprocess_office_to_pdf_service_url: str = Field(
         default="http://127.0.0.1:18010",
         description="Office→PDF(Word・PowerPoint)前処理マイクロサービスの base URL。",
-    )
-    rag_preprocess_pdf_to_page_images_service_url: str = Field(
-        default="http://127.0.0.1:18011",
-        description="PDF→ページ画像PDF 前処理マイクロサービスの base URL。",
     )
     rag_preprocess_csv_to_jsonl_service_url: str = Field(
         default="http://127.0.0.1:18012",

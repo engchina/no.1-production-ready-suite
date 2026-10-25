@@ -178,6 +178,8 @@ export function StructuredAnswer({
         // 根拠の原文・決まった説明の文は Markdown として読まない（原文の記号を強調にしない）。
         content: entry.plain ? entry.text : <MarkdownInlineText text={entry.text} />,
         muted: entry.muted,
+        // 画面の決まった説明の文は回答の言語の lang を付けない（#3349）。
+        lang: entry.uiText ? null : undefined,
         citations: citations(entry.chunkIds),
         passageText: entry.raw ?? entry.text,
       })),
