@@ -6,10 +6,11 @@ import json
 import re
 import unicodedata
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
-from datetime import date
+from dataclasses import dataclass, field, replace
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from rag_parser_core.language.markers import marker_patterns
 
@@ -205,6 +206,32 @@ def classification_filter_from_values(
         small_category=_small_category_value(small_category),
         as_of=as_of_value(as_of),
     )
+
+
+def business_today(timezone: str, *, now: datetime | None = None) -> date:
+    """設定した時間帯の今日(検索の基準日の既定。#3249)。OS の時間帯に左右されない。
+
+    不明な時間帯の名前は既定(``DEFAULT_TIMEZONE``)にする。``now`` の時間帯の無い値は UTC とみなす。
+    """
+    from rag_engine.config import DEFAULT_TIMEZONE
+
+    try:
+        zone = ZoneInfo(timezone.strip() or DEFAULT_TIMEZONE)
+    except (ZoneInfoNotFoundError, ValueError):
+        zone = ZoneInfo(DEFAULT_TIMEZONE)
+    moment = now or datetime.now(UTC)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return moment.astimezone(zone).date()
+
+
+def with_effective_as_of(classification_filter: ClassificationFilter | None, today: date) -> ClassificationFilter:
+    """基準日の無い条件に今日を入れる(#3249)。明示した基準日は変えない。
+
+    1 回の検索の入口で 1 回だけ決め、下流(vector・Oracle Text・chunk の読み取り)は同じ日で有効期間を判定する。
+    """
+    current = classification_filter or ClassificationFilter()
+    return current if current.as_of else replace(current, as_of=today.isoformat())
 
 
 def classification_filter_from_metadata(value: Any) -> ClassificationFilter:

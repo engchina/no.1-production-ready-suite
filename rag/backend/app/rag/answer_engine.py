@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
 
 from pr_backend_core.observability.tracing import ObservedSpan, SpanDisplay, observed_span
+from pr_backend_core.timezones import configured_timezone_name
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
 from rag_engine.resources.deadline import check_deadline, current_deadline
@@ -489,6 +490,8 @@ def build_engine_settings(
         "RERANK_MODEL": settings.oci_genai_rerank_model,
         "RAG_ENGINE_PROFILE": settings.rag_answer_profile,
         "RAG_ENGINE_OUTPUT_DIR": str(output_dir),
+        # 「今日」(基準日の既定)の時間帯(共通の設定 PLATFORM_TIMEZONE。#3249)。
+        "PLATFORM_TIMEZONE": configured_timezone_name(settings),
         "LLM_REQUEST_TIMEOUT_SECONDS": str(int(settings.oci_enterprise_ai_timeout_seconds)),
         "LLM_RETRIES": str(int(settings.oci_enterprise_ai_max_retries)),
         # 原画像を添付する回だけ既定の Vision モデルで答える(ほかは既定のテキストモデル。#649)。

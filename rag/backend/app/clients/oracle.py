@@ -1287,9 +1287,12 @@ class OracleClient:
 
         tenant・利用できるナレッジベース・INDEXED の文書・有効な chunk_set に限る。ID を知って
         いても、検索で見えない chunk は返さない。新しい版に置き換えた文書(旧版)も文書としては
-        有効なので読める(#1248。根拠の ``superseded`` で旧版と分かる)。
+        有効なので読める(#1248。根拠の ``superseded`` で旧版と分かる)。有効期間では絞らない
+        (過去の基準日の検索で返った根拠を、日付を跨いでも読める。#3249)。
         """
-        where_sql, binds = _oracle_retrieval_where({INCLUDE_SUPERSEDED_FILTER_KEY: "true"})
+        where_sql, binds = _oracle_retrieval_where(
+            {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False
+        )
         row = await self._fetch_one(
             _render_sql(
                 """
@@ -1372,7 +1375,9 @@ class OracleClient:
         文書分割の設定を変えて chunk を作り直しても、同じ要素を含む chunk を返す。
         1 つの要素が複数の chunk に分かれたときは、文書の中で最初の chunk を返す。
         """
-        where_sql, binds = _oracle_retrieval_where({INCLUDE_SUPERSEDED_FILTER_KEY: "true"})
+        where_sql, binds = _oracle_retrieval_where(
+            {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False
+        )
         rows = await self._fetch_all(
             _render_sql(
                 """
@@ -1427,7 +1432,7 @@ class OracleClient:
         ``retrievable_chunk`` と同じ見え方の条件。1 つの段落が複数の chunk に分かれたときは、
         文書の中で最初の chunk を返す。
         """
-        where_sql, binds = _oracle_retrieval_where({})
+        where_sql, binds = _oracle_retrieval_where({}, effective_period=False)
         rows = await self._fetch_all(
             _render_sql(
                 """
@@ -1500,7 +1505,9 @@ class OracleClient:
         ``chunk_index`` / ``chunk_id`` / ``section_path`` / ``page_start`` / ``page_end`` /
         ``chars`` で返す。複数レシピの文書は同じ本文を別の分け方で持つだけなので、1 つだけを読む。
         """
-        where_sql, binds = _oracle_retrieval_where({INCLUDE_SUPERSEDED_FILTER_KEY: "true"})
+        where_sql, binds = _oracle_retrieval_where(
+            {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False
+        )
         chunk_set_sql = (
             ":read_chunk_set_id"
             if chunk_set_id is not None
@@ -1573,7 +1580,9 @@ class OracleClient:
         unique_ids = _unique_optional_sequence(document_ids)
         for offset in range(0, len(unique_ids), _EVALUATION_LOCATION_BATCH):
             batch = unique_ids[offset : offset + _EVALUATION_LOCATION_BATCH]
-            where_sql, binds = _oracle_retrieval_where({INCLUDE_SUPERSEDED_FILTER_KEY: "true"})
+            where_sql, binds = _oracle_retrieval_where(
+                {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False
+            )
             in_sql, in_binds = _oracle_in_predicate("c.document_id", "location_document_id", batch)
             rows = await self._fetch_all(
                 _render_sql(
@@ -1619,7 +1628,9 @@ class OracleClient:
 
         見え方の条件は ``document_reading_index`` と同じ。chunk_set が有効でなくなっていれば空。
         """
-        where_sql, binds = _oracle_retrieval_where({INCLUDE_SUPERSEDED_FILTER_KEY: "true"})
+        where_sql, binds = _oracle_retrieval_where(
+            {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False
+        )
         rows = await self._fetch_all(
             _render_sql(
                 """
@@ -12666,15 +12677,23 @@ def _duplicate_reuses_canonical_sql(*, include_superseded: bool) -> str:
     return " AND ".join(predicates)
 
 
-def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
+def _oracle_retrieval_where(
+    filters: dict[str, str], *, effective_period: bool = True
+) -> tuple[str, dict[str, object]]:
     """検索と同じ見え方の条件(``c`` = chunk と ``d`` = 文書を join した SQL の WHERE)。
+
+    ``effective_period=False`` は有効期間で絞らない(ID で読む入口。#3249)。検索で有効期間を当てて
+    選んだ根拠を、ID で読み直すときに今日の日付で変えない。tenant・認可の範囲・INDEXED・有効な
+    chunk_set の条件は同じに当てる。
 
     文書の側の条件で文書の集合を副問い合わせで先に決め(``c.document_id IN (...)``)、
     chunk の側の条件を並べる(#2800)。両方を 1 つの WHERE に並べると、ナレッジベースの
     所属・重複の文書の正本・有効期間の副問い合わせを optimizer が行ごとの FILTER にし、
     範囲の chunk を読むだけの SQL が 1 回 9 秒かかった(分けると 0.7 秒。読む行は同じ)。
     """
-    document_sql, chunk_sql, binds = _oracle_retrieval_where_split(filters)
+    document_sql, chunk_sql, binds = _oracle_retrieval_where_split(
+        filters, effective_period=effective_period
+    )
     return (
         f"c.document_id IN (SELECT d.document_id FROM rag_documents d WHERE {document_sql})"
         f" AND {chunk_sql}",
@@ -12686,7 +12705,9 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
 _CHUNK_SIDE_CLAUSE = re.compile(r"(?<![\w.$])(?:c|cs|r)\.")
 
 
-def _oracle_retrieval_where_split(filters: dict[str, str]) -> tuple[str, str, dict[str, object]]:
+def _oracle_retrieval_where_split(
+    filters: dict[str, str], *, effective_period: bool = True
+) -> tuple[str, str, dict[str, object]]:
     """``_oracle_retrieval_where`` と同じ条件を、文書の側（``d`` だけ）と chunk の側に
     分ける(#2800)。
 
@@ -12696,13 +12717,15 @@ def _oracle_retrieval_where_split(filters: dict[str, str]) -> tuple[str, str, di
     optimizer が行ごとの FILTER にし、近傍の検索が chunk の全件の走査になっていた(検証環境で
     1 回 9 秒 → 分けて 0.7 秒。上位の結果は同じ)。
     """
-    clauses, binds = _oracle_retrieval_clauses(filters)
+    clauses, binds = _oracle_retrieval_clauses(filters, effective_period=effective_period)
     chunk = [clause for clause in clauses if _CHUNK_SIDE_CLAUSE.search(clause)]
     document = [clause for clause in clauses if not _CHUNK_SIDE_CLAUSE.search(clause)]
     return " AND ".join(document) or "1 = 1", " AND ".join(chunk) or "1 = 1", binds
 
 
-def _oracle_retrieval_clauses(filters: dict[str, str]) -> tuple[list[str], dict[str, object]]:
+def _oracle_retrieval_clauses(
+    filters: dict[str, str], *, effective_period: bool = True
+) -> tuple[list[str], dict[str, object]]:
     clauses = ["d.status = 'INDEXED'", *_oracle_access_predicates(alias="d")]
     binds = _with_tenant_bind({}, alias="d")
     # 実験: chunk_set_id を明示すると is_serving に関係なくその chunk_set だけを検索する。
@@ -12895,7 +12918,9 @@ def _oracle_retrieval_clauses(filters: dict[str, str]) -> tuple[list[str], dict[
             binds.update(field_binds)
         else:
             raise ValueError(f"未対応の検索フィルターです: {key}")
-    classification_clauses, classification_binds = _classification_where(filters)
+    classification_clauses, classification_binds = _classification_where(
+        filters, effective_period=effective_period
+    )
     clauses.extend(classification_clauses)
     binds.update(classification_binds)
     if not _includes_superseded_documents(filters):
@@ -13055,14 +13080,17 @@ def _extraction_field_where(value: str) -> tuple[list[str], dict[str, object]]:
     return clauses, binds
 
 
-def _classification_where(filters: Mapping[str, str]) -> tuple[list[str], dict[str, object]]:
+def _classification_where(
+    filters: Mapping[str, str], *, effective_period: bool = True
+) -> tuple[list[str], dict[str, object]]:
     """文書の分類と有効期間の述語(rag_poc の _classification_filter_sql と同じ意味)。
 
     - 分類は指定した項目だけを、番号の接頭辞を除いた名前の一致で絞る(`10_業務A` と `業務A` を
       同じ分類として扱う。rag_engine の `_category_label` と同じ規則。#547)。表記(NFKC・空白)は
       保存時と検索の入力で同じ正規化を通すので、SQL では接頭辞だけを外す。
-    - 有効期間は基準日(未指定なら今日)で常に絞る。期間のない文書は除外しない。終了日は排他的。
-      ISO 日付の文字列比較は時系列順と一致する。
+    - 有効期間は基準日(未指定なら今日)で絞る。期間のない文書は除外しない。終了日は排他的。
+      ISO 日付の文字列比較は時系列順と一致する。``effective_period=False`` (ID で読む入口。#3249)
+      は有効期間で絞らない。
     """
     clauses: list[str] = []
     binds: dict[str, object] = {}
@@ -13071,6 +13099,8 @@ def _classification_where(filters: Mapping[str, str]) -> tuple[list[str], dict[s
             column = f"JSON_VALUE(d.classification, '$.{key}')"
             clauses.append(f"{_category_label_sql(column)} = :filter_{key}")
             binds[f"filter_{key}"] = label
+    if not effective_period:
+        return clauses, binds
     clauses.append(
         "COALESCE(JSON_VALUE(d.classification, '$.effective_from'), :filter_as_of) <= :filter_as_of"
     )
