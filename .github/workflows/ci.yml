@@ -250,11 +250,12 @@ jobs:
             rag_frontend:
               - "rag/frontend/**"
               - "rag/backend/app/rag/answer_engine.py"
-              - "rag/backend/app/rag/answer_timeout.py"
+              - "rag/backend/app/rag/span_display.py"
               - "rag/backend/app/security/permissions.py"
               - "rag/backend/app/services/catalog.py"
             nl2sql_frontend:
               - "nl2sql/frontend/**"
+              - "nl2sql/backend/app/features/nl2sql/trace_spans.py"
             agent_frontend:
               - "agent/frontend/**"
               - "agent/backend/app/features/agent/router.py"

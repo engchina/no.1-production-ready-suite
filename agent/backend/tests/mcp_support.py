@@ -217,6 +217,10 @@ class Nl2SqlRecommendProfileIn(_ContractInput):
     profile_ids: list[str] | None = Field(default=None, min_length=1, max_length=50)
 
 
+# NL2SQL の MCP の出力の形の版（nl2sql-tools.json の schema_version。#3240）。
+NL2SQL_OUTPUT_SCHEMA_VERSION = 1
+
+
 def nl2sql_requirement(status: str = "applied", **extra: Any) -> dict[str, Any]:
     """契約の `requirement`（SQL の生成前の確認の状態。#1441）。"""
     return {
@@ -244,6 +248,7 @@ def nl2sql_needs_clarification(
 ) -> dict[str, Any]:
     """`nl2sql_query` が SQL を作らずに確認の項目を 1 つ返した結果（#1441）。"""
     return {
+        "schema_version": NL2SQL_OUTPUT_SCHEMA_VERSION,
         "job_id": None,
         "status": "needs_clarification",
         "profile_id": "profile-sales",
@@ -298,6 +303,7 @@ def nl2sql_needs_clarification(
 
 def _job(status: str = "done") -> dict[str, Any]:
     return {
+        "schema_version": NL2SQL_OUTPUT_SCHEMA_VERSION,
         "job_id": "job-1",
         "status": status,
         "profile_id": "profile-sales",
@@ -642,6 +648,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
     "nl2sql_query": _job(),
     "nl2sql_get_job": _job(),
     "nl2sql_list_profiles": {
+        "schema_version": NL2SQL_OUTPUT_SCHEMA_VERSION,
         "profiles": [
             {
                 "id": "profile-sales",
@@ -649,15 +656,17 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "category": "営業",
                 "description": "売上の集計",
             }
-        ]
+        ],
     },
     "nl2sql_recommend_profile": {
+        "schema_version": NL2SQL_OUTPUT_SCHEMA_VERSION,
         "recommended_profile_id": "profile-sales",
         "rewritten_question": None,
         "candidates": [{"id": "profile-sales", "name": "売上", "reason": None, "score": 0.9}],
     },
     # SQL の生成前の確認の取り消し（#1441。Agent の Control Plane が呼ぶ）。
     "nl2sql_cancel_requirement": lambda argument: {
+        "schema_version": NL2SQL_OUTPUT_SCHEMA_VERSION,
         "requirement_session_id": argument.requirement_session_id,
         "status": "cancelled",
     },
@@ -873,6 +882,7 @@ def fake_product_mcp(
 __all__ = [
     "DEFAULT_OUTPUTS",
     "NL2SQL_MCP_URL",
+    "NL2SQL_OUTPUT_SCHEMA_VERSION",
     "RAG_MCP_URL",
     "SERVICE_TOKEN_SECRET",
     "FakeProductMcp",

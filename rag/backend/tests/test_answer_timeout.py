@@ -7,13 +7,13 @@ from pydantic import ValidationError
 
 from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings
 from app.rag.answer_timeout import (
-    ANSWER_STAGE_LABELS,
     AnswerTimeoutError,
     StageTracker,
     answer_timeout_message,
     run_answer_with_timeout,
 )
 from app.rag.pipeline import SearchStageProgress
+from app.rag.span_display import ANSWER_STAGE_LABELS
 
 
 def _progress(stage: str, outcome: str) -> SearchStageProgress:

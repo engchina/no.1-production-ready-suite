@@ -3281,16 +3281,18 @@ async def _evidence_checked_views(
     return views
 
 
-async def _evidence_checked_run(request: Request, run: RunState) -> RunState:
-    """保存した根拠を見る人の今の権限で確かめ直した Run（MCP の `agent_get_run`。#3252）。"""
-    unreadable = await _unreadable_evidence(request, [run], await _evidence_artifacts(run))
+async def _evidence_checked_run(request: Request, run: RunState) -> tuple[RunState, int]:
+    """保存した根拠を見る人の今の権限で確かめ直した Run と、見られないため除いた根拠の数（画面の
+    `withheld_evidence_count` と同じ数え方。MCP の `agent_get_run`。#3252）。"""
+    artifacts = await _evidence_artifacts(run)
+    unreadable = await _unreadable_evidence(request, [run], artifacts)
     if not unreadable:
-        return run
-    loaded = {item.id: item for item in await _evidence_artifacts(run)}
+        return run, 0
+    loaded = {item.id: item for item in artifacts}
     hydrated = run.model_copy(
         update={"artifacts": [loaded.get(item.id, item) for item in run.artifacts]}
     )
-    return withhold_run(hydrated, unreadable)
+    return withhold_run(hydrated, unreadable), withheld_count(run, unreadable, artifacts)
 
 
 def _readable_run(request: Request, run_id: str) -> RunState:

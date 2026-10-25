@@ -321,7 +321,7 @@ RAG のチャットは MCP で提供しない（#787）。RAG の MCP は検索�
 （「ほか N 件」で切らない。#2361）。成果物の `notice`（節の項目の数 `items`・本文の終わりの見出し `heading`・節の見出し
 `headings`）で画面は本文と節を分け、`withheld`（`removed`・`unverified`・`warnings`〔警告の印の段落の数〕・`all`〔常に
 false〕・`listed`〔節の項目の数〕）で件数を出す。MCP の `agent_chat`・`agent_get_run` も同じ 3 つを返す（出力の
-`schema_version` は 2）。
+`schema_version` は 3。回答の対応・根拠の ID は `docs/agents/mcp.md`）。
 調べるのに使ったツール・プロファイル・内部の ID だけを述べる行（`answer_passages.is_lookup_note`）は、資料の主張ではないので
 検証の前に回答から外す（末尾の節にも書かない。RAG の検証はモデルが `not_a_claim` にした本文の行を
 `unassessed` に直すため〔主張を `not_a_claim` にして監査を逃れるのを防ぐ。#1306。その段落はその段落だけで 1 回監査し直し、
@@ -783,6 +783,8 @@ OpenTelemetry の MCP の semantic conventions の `mcp.method.name`（`tools/ca
 Run の最初の区間（`agent.execute`）は、Run を受け付けた要求（画面・API キーの外部の MCP クライアント）の traceparent を親に
 せず新しい trace を始め、要求の span は span link（`trace_link_context`）にだけ残す（RAG / NL2SQL と同じ
 `operation_trace_parent` の規則。外部の要求が Run の trace id を決められないようにする。#3272）。
+呼び先（RAG / NL2SQL）の span は、呼び先が付けた工程の名前（`display_name`。呼び先の画面と同じ名前）で出し、製品の
+境目の行に製品名（「RAG · 文書の検索」）を添える（Agent の工程の定義では訳さない。#3272）。
 支援タスクの状態（#1243）: 組み込み Runtime は Run の終わり（承認待ちで止めるときも）に、ツールの呼び出しから
 支援タスクの状態を成果物（`kind="support_task"`・「支援タスクの状態」、`schema_version` 1）に残す。項目は会話・持ち主・
 目的（会話の最初の質問）、分かっている条件（`rag_search` に渡した `conditions` と出力の `guide.known_conditions`。

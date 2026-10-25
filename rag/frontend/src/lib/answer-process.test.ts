@@ -63,11 +63,17 @@ describe("answerStepDisplayName", () => {
 
   it("backend の時間切れの文言の名前（ANSWER_STEP_DISPLAY_NAMES）と同じ名前にする", async () => {
     const { answerStepDisplayName } = await import("./answer-process");
-    const source = readFileSync(resolve(__dirname, "../../../backend/app/rag/answer_timeout.py"), "utf-8");
+    const source = readFileSync(resolve(__dirname, "../../../backend/app/rag/span_display.py"), "utf-8");
     const block = source.slice(source.indexOf("ANSWER_STEP_DISPLAY_NAMES"), source.indexOf("_STEP_ATTEMPT ="));
     const pairs = [...block.matchAll(/"([^"]+)": "([^"]+)"/g)].map((match) => [match[1], match[2]]);
     expect(pairs.length).toBeGreaterThan(10);
     for (const [name, label] of pairs) expect(answerStepDisplayName(name), name).toBe(label);
+  });
+
+  // #3272: 画面の製品。別の製品が書いた span は RAG の工程の定義で訳さず、書いた製品が付けた名前で出す。
+  it("RAG の trace の文言は画面の製品を rag にする", async () => {
+    const { RAG_TRACE_DETAILS_LABELS } = await import("./answer-process");
+    expect(RAG_TRACE_DETAILS_LABELS.product).toBe("rag");
   });
 });
 

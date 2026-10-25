@@ -392,6 +392,35 @@
             "default": null,
             "description": "停止で終わった span（状態は skipped）。",
             "title": "Cancelled"
+          },
+          "product": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "pattern": "^[a-z0-9_]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "span を書いた製品（rag / nl2sql / agent。#3272）。",
+            "title": "Product"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "span を書いた製品が付けた工程の名前（名詞。別の製品の画面が出す。#3272）。",
+            "title": "Display Name"
           }
         },
         "required": [
@@ -860,6 +889,35 @@
             "default": null,
             "description": "停止で終わった span（状態は skipped）。",
             "title": "Cancelled"
+          },
+          "product": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "pattern": "^[a-z0-9_]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "span を書いた製品（rag / nl2sql / agent。#3272）。",
+            "title": "Product"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "span を書いた製品が付けた工程の名前（名詞。別の製品の画面が出す。#3272）。",
+            "title": "Display Name"
           }
         },
         "required": [

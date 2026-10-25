@@ -22,6 +22,7 @@ import pytest
 from opentelemetry import trace as otel_trace
 from pr_backend_core.config.tracing import TracingSettings
 from pr_backend_core.observability.tracing import (
+    SpanDisplay,
     configure_tracing,
     observed_span,
     operation_trace,
@@ -450,6 +451,47 @@ async def test_service_token_mcp_call_continues_the_agent_trace(
     )
     assert inner["parent_span_id"] == server["span_id"]
     assert inner["operation_id"] == "rag-run-1"
+
+
+async def test_rag_spans_carry_the_rag_step_names_for_other_products(
+    tracing: None, trace_db: FakeTraceDb, actor: None
+) -> None:
+    """RAG の工程の span は RAG の画面と同じ工程の名前（名詞）を `display_name` に持つ（#3272）。
+
+    別の製品の画面（Agent の実行の詳細）は RAG の工程の定義を持たず、この名前を出す。技術の span
+    には付けない（画面が共通の規則で名前を付ける）。
+    """
+    search = AnswerTrace("rag-run-names", owner_user_uuid="user-sub")
+    with (
+        operation_trace("rag.search", operation_id="rag-run-names", listener=search.listener()),
+        observed_span("rag.retrieval", attributes={"pr.stage": "retrieval"}),
+        observed_span(
+            "rag.engine.stage",
+            attributes={"pr.stage": "文書検索（2回目）"},
+            display=SpanDisplay(kind="answer_step", params={"name": "文書検索（2回目）"}),
+        ) as stage,
+    ):
+        stage.set_display(params={"llm_calls": 1})
+        with observed_span("gen_ai.embeddings", kind="client"):
+            pass
+    rows = {row["name"]: row for row in trace_db.spans()}
+    names = {
+        name: json.loads(row["display_params_json"] or "{}").get("display_name")
+        for name, row in rows.items()
+    }
+    assert names == {
+        "rag.search": None,
+        "rag.retrieval": "検索",
+        "rag.engine.stage": "文書の検索（2 回目）",
+        "gen_ai.embeddings": None,
+    }
+    assert {row["product"] for row in rows.values()} == {"rag"}
+    # 工程の定義の値（工程名・LLM の回数）はそのまま残す。
+    assert json.loads(rows["rag.engine.stage"]["display_params_json"]) == {
+        "display_name": "文書の検索（2 回目）",
+        "name": "文書検索（2回目）",
+        "llm_calls": 1,
+    }
 
 
 async def test_api_key_mcp_call_starts_a_new_trace(

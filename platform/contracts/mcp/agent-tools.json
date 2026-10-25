@@ -286,6 +286,38 @@
                 "default": "",
                 "title": "Excerpt",
                 "type": "string"
+              },
+              "document_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の文書の ID（会話の添付の根拠は null）。",
+                "title": "Document Id"
+              },
+              "chunk_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の chunk の ID（rag_read_source に渡せる。添付は null）。",
+                "title": "Chunk Id"
+              },
+              "cited": {
+                "default": false,
+                "description": "回答で引用した根拠か（引用の無い回答は、AI に渡した根拠をすべて false で出す）。",
+                "title": "Cited",
+                "type": "boolean"
               }
             },
             "required": [
@@ -297,7 +329,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 3,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -325,6 +357,27 @@
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "answered",
+                  "conditional",
+                  "needs_clarification",
+                  "needs_environment_data",
+                  "needs_human",
+                  "insufficient_evidence"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / needs_clarification=利用者への確認 / needs_environment_data=現場の値・記録の確認が要る / needs_human=人への引き継ぎ / insufficient_evidence=資料から答えられない。completed でなければ null。",
+            "title": "Outcome"
           },
           "in_progress": {
             "title": "In Progress",
@@ -359,6 +412,13 @@
             },
             "title": "Sources",
             "type": "array"
+          },
+          "withheld_evidence_count": {
+            "default": 0,
+            "description": "今の権限で見られないため sources に出さない根拠の数。",
+            "minimum": 0,
+            "title": "Withheld Evidence Count",
+            "type": "integer"
           },
           "passage_marks": {
             "description": "answer の本文の段落（text）のうち、確かめが要る段落と理由。",
@@ -678,6 +738,38 @@
                 "default": "",
                 "title": "Excerpt",
                 "type": "string"
+              },
+              "document_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の文書の ID（会話の添付の根拠は null）。",
+                "title": "Document Id"
+              },
+              "chunk_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の chunk の ID（rag_read_source に渡せる。添付は null）。",
+                "title": "Chunk Id"
+              },
+              "cited": {
+                "default": false,
+                "description": "回答で引用した根拠か（引用の無い回答は、AI に渡した根拠をすべて false で出す）。",
+                "title": "Cited",
+                "type": "boolean"
               }
             },
             "required": [
@@ -689,7 +781,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 3,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -717,6 +809,27 @@
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "answered",
+                  "conditional",
+                  "needs_clarification",
+                  "needs_environment_data",
+                  "needs_human",
+                  "insufficient_evidence"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / needs_clarification=利用者への確認 / needs_environment_data=現場の値・記録の確認が要る / needs_human=人への引き継ぎ / insufficient_evidence=資料から答えられない。completed でなければ null。",
+            "title": "Outcome"
           },
           "in_progress": {
             "title": "In Progress",
@@ -751,6 +864,13 @@
             },
             "title": "Sources",
             "type": "array"
+          },
+          "withheld_evidence_count": {
+            "default": 0,
+            "description": "今の権限で見られないため sources に出さない根拠の数。",
+            "minimum": 0,
+            "title": "Withheld Evidence Count",
+            "type": "integer"
           },
           "passage_marks": {
             "description": "answer の本文の段落（text）のうち、確かめが要る段落と理由。",
@@ -1048,6 +1168,38 @@
                 "default": "",
                 "title": "Excerpt",
                 "type": "string"
+              },
+              "document_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の文書の ID（会話の添付の根拠は null）。",
+                "title": "Document Id"
+              },
+              "chunk_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の chunk の ID（rag_read_source に渡せる。添付は null）。",
+                "title": "Chunk Id"
+              },
+              "cited": {
+                "default": false,
+                "description": "回答で引用した根拠か（引用の無い回答は、AI に渡した根拠をすべて false で出す）。",
+                "title": "Cited",
+                "type": "boolean"
               }
             },
             "required": [
@@ -1059,7 +1211,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 3,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1087,6 +1239,27 @@
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "answered",
+                  "conditional",
+                  "needs_clarification",
+                  "needs_environment_data",
+                  "needs_human",
+                  "insufficient_evidence"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / needs_clarification=利用者への確認 / needs_environment_data=現場の値・記録の確認が要る / needs_human=人への引き継ぎ / insufficient_evidence=資料から答えられない。completed でなければ null。",
+            "title": "Outcome"
           },
           "in_progress": {
             "title": "In Progress",
@@ -1121,6 +1294,13 @@
             },
             "title": "Sources",
             "type": "array"
+          },
+          "withheld_evidence_count": {
+            "default": 0,
+            "description": "今の権限で見られないため sources に出さない根拠の数。",
+            "minimum": 0,
+            "title": "Withheld Evidence Count",
+            "type": "integer"
           },
           "passage_marks": {
             "description": "answer の本文の段落（text）のうち、確かめが要る段落と理由。",
@@ -1263,6 +1443,12 @@
           }
         },
         "properties": {
+          "schema_version": {
+            "default": 1,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "agents": {
             "items": {
               "$ref": "#/$defs/AgentSummary"
@@ -1324,6 +1510,12 @@
         },
         "description": "Agent Skills の形のスキル。`<name>/` のフォルダに files を置くと外部の Agent で使える。",
         "properties": {
+          "schema_version": {
+            "default": 1,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "name": {
             "title": "Name",
             "type": "string"

@@ -4,7 +4,7 @@
  * backend は SSE の `stage` で、会話を踏まえた質問の書き換え（`history_rewrite`）・根拠の検索と
  * 回答の生成（`answer`。中の各工程は `answer_step:` で入れ子に送る）・回答側の安全チェック（`answer_guardrail`）・
  * 検索だけのとき（`retrieval`）を送る。
- * 工程の名前は backend の時間切れの文言（`app/rag/answer_timeout.py` の `ANSWER_STAGE_LABELS`）と揃える。
+ * 工程の名前は backend の時間切れの文言（`app/rag/span_display.py` の `ANSWER_STAGE_LABELS`。span に書く工程の名前にも使う）と揃える。
  */
 
 import { ANSWER_STEP_STAGE_PREFIX, answerStepDisplayName } from "./answer-process";

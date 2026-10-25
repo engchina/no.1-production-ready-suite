@@ -1039,6 +1039,69 @@ def test_refusal_without_evidence_has_no_notice(
         assert _answer_outcome(run)["value"] == "insufficient_evidence"
 
 
+RESTATED_ANSWER = f"{ANSWER}期限を過ぎた場合の扱いは資料に記載がありません。"
+
+
+def test_followup_whose_search_found_nothing_is_validated_with_the_previous_evidence(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """会話の続きで、今のターンの検索が 0 件だった回答（#3314）: 検索が成功しただけでは根拠を
+    得たことにせず、前のターンの検証で裏付けた根拠で検証する（ツールを呼ばなかったときと同じ。
+    #1879）。前のターンの事実を言い直した段落に「資料の根拠を使っておらず…」の注記を付けない。"""
+    first, _ = _searched_run(monkeypatch)
+    assert first.thread_id is not None
+    _insufficient_search(mcp)
+    _script(
+        monkeypatch,
+        [function_call("rag__rag_search", {"query": "期限を過ぎた場合"}, call_id="call-2")],
+        [assistant_message(RESTATED_ANSWER)],
+    )
+    created = runtime_repository.create_builtin_run(
+        RunCreateRequest(
+            goal="その期限を過ぎたらどうなりますか？", agent_id=AGENT_ID, thread_id=first.thread_id
+        ),
+        created_by_user_uuid=USER_UUID,
+    )
+
+    anyio.run(builtin_runtime.execute_run, created.id)
+
+    run = runtime_repository.get_run(created.id)
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert len(mcp.calls_of("rag_search")) == 2
+    _first_call, second_call = mcp.calls_of("rag_validate_answer")
+    # 前のターンで裏付けた根拠だけで検証する（本文は RAG が今の利用者の権限で読み直す）。
+    assert second_call["arguments"]["evidence"] == [{"document_id": "doc-1", "chunk_id": "chunk-1"}]
+    assert second_call["arguments"]["answer"] == RESTATED_ANSWER
+    assert run_answer_text(run) == RESTATED_ANSWER
+    content = _validation(run)
+    assert (content["status"], content["connection"]) == ("completed", "rag")
+
+
+def test_first_turn_whose_search_found_nothing_still_has_the_notice(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """前のターンの根拠が無い（会話の最初の）ターンの検索が 0 件なら、資料の主張を含む回答には
+    今までどおり注記する（引き継ぐ根拠が無いときの振る舞いは変えない。#3314）。"""
+    _insufficient_search(mcp)
+    _script(
+        monkeypatch,
+        [function_call("rag__rag_search", {"query": "契約の更新"}, call_id="call-1")],
+        [assistant_message(ANSWER)],
+    )
+    created = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="契約の更新の期限は？", agent_id=AGENT_ID),
+        created_by_user_uuid=USER_UUID,
+    )
+
+    anyio.run(builtin_runtime.execute_run, created.id)
+
+    run = runtime_repository.get_run(created.id)
+    assert mcp.calls_of("rag_validate_answer") == []
+    assert run_answer_text(run) == f"{ANSWER}\n\n{NO_EVIDENCE_NOTICE}"
+    content = _validation(run)
+    assert (content["status"], content["reason"]) == ("unvalidated", "no_rag_evidence")
+
+
 @pytest.mark.parametrize(
     ("answer", "expected"),
     [

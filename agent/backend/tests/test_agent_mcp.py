@@ -550,7 +550,7 @@ def test_run_output_returns_the_passage_marks_of_the_validation() -> None:
 
     output = mcp_server.run_output(run).model_dump()
 
-    assert output["schema_version"] == 2
+    assert output["schema_version"] == 3
     assert output["answer"].startswith(f"{kept}\n\n{unverified}\n\n**根拠と矛盾し除いた内容**")
     assert output["passage_marks"] == [
         {
@@ -577,3 +577,92 @@ def test_run_output_returns_the_passage_marks_of_the_validation() -> None:
     # 完了していない Run には返さない。
     running = run.model_copy(update={"status": RunStatus.RUNNING})
     assert mcp_server.run_output(running).passage_marks == []
+
+
+def _evidence_run(items: list[dict[str, Any]], *, outcome: object = None) -> RunState:
+    """成果物「回答の根拠」を保存した完了の Run（合成の値）。"""
+    answer: dict[str, Any] = {"text": "合成の回答"}
+    if outcome is not None:
+        answer["outcome"] = outcome
+    return RunState(
+        id="run_v3",
+        goal="合成の質問",
+        agent_id=AGENT_ID,
+        status=RunStatus.COMPLETED,
+        artifacts=[
+            Artifact(name="回答", kind="answer", content=answer),
+            Artifact(name="回答の根拠", kind="answer_evidence", content={"items": items}),
+        ],
+    )
+
+
+def _item(document_id: str, chunk_id: str, *, cited: bool) -> dict[str, Any]:
+    return {
+        "document_id": document_id,
+        "chunk_id": chunk_id,
+        "file_name": f"{document_id}.pdf",
+        "excerpt": "合成の抜粋",
+        "cited": cited,
+    }
+
+
+def test_run_output_v3_returns_the_outcome_and_the_rag_ids_of_the_sources() -> None:
+    """schema_version 3: 回答の対応（RAG と同じ語彙）・根拠の RAG の ID・引用の印（#3240）。"""
+    run = _evidence_run(
+        [
+            _item("doc-x", "doc-x:c1", cited=True),
+            _item("doc-y", "doc-y:c1", cited=False),
+            _item("attachment:att-1", "attachment:att-1:s1", cited=True),
+        ],
+        outcome={"schema_version": 1, "value": "conditional", "basis": "basis-canary"},
+    )
+    output = mcp_server.run_output(run).model_dump()
+    assert output["schema_version"] == 3
+    assert (output["outcome"], output["withheld_evidence_count"]) == ("conditional", 0)
+    # 引用した根拠だけ。会話の添付の根拠は RAG の文書ではないので ID を出さない。
+    assert [
+        (item["document_id"], item["chunk_id"], item["cited"]) for item in output["sources"]
+    ] == [("doc-x", "doc-x:c1", True), (None, None, True)]
+    # 判断の道筋（basis）は出さない。
+    assert "basis-canary" not in json.dumps(output, ensure_ascii=False)
+    # 抜粋の長さは変えない（400 文字）。
+    assert output["sources"][0]["excerpt"] == "合成の抜粋"
+
+    # 引用の無い回答は、AI に渡した根拠をすべて cited=false で出す。
+    uncited = _evidence_run([_item("doc-x", "doc-x:c1", cited=False)])
+    [source] = mcp_server.run_output(uncited).sources
+    assert (source.document_id, source.chunk_id, source.cited) == ("doc-x", "doc-x:c1", False)
+
+
+@pytest.mark.parametrize(
+    ("status", "outcome"),
+    [
+        (RunStatus.COMPLETED, None),
+        (RunStatus.COMPLETED, {"value": "unknown-value"}),
+        (RunStatus.RUNNING, {"value": "answered"}),
+        (RunStatus.FAILED, {"value": "answered"}),
+        (RunStatus.CANCELLED, {"value": "answered"}),
+    ],
+    ids=["completed-without-outcome", "unknown-value", "running", "failed", "cancelled"],
+)
+def test_run_output_outcome_is_null_unless_completed_with_a_known_value(
+    status: RunStatus, outcome: object
+) -> None:
+    run = _evidence_run([], outcome=outcome).model_copy(update={"status": status})
+    assert mcp_server.run_output(run).outcome is None
+
+
+def test_chat_returns_the_outcome_of_the_completed_run(
+    monkeypatch: MonkeyPatch, agents: None
+) -> None:
+    """agent_chat の完了の応答に、Runtime が決めた回答の対応を返す（実行中は null）。"""
+    del agents
+    _script(monkeypatch, [assistant_message("合成の回答です。")])
+    output = _call("agent_chat", {"agent_id": AGENT_ID, "question": "合成の質問"})[
+        "structuredContent"
+    ]
+    assert output["status"] == "completed"
+    stored = runtime_repository.get_run(output["run_id"])
+    [answer] = [item for item in stored.artifacts if item.kind == "answer"]
+    assert output["outcome"] == answer.content["outcome"]["value"]
+    assert output["outcome"] in {"answered", "conditional", "insufficient_evidence"}
