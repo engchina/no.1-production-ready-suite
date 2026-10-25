@@ -334,116 +334,114 @@ export function EvaluationClient() {
     <div>
       <PageHeader wide title={t("nav.evaluation")} subtitle={t("evaluation.subtitle")} />
       <PageBody wide>
-        <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_26rem]">
-          <Card className="min-w-0">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <ClipboardCheck size={16} className="text-accent-fg" aria-hidden />
-                {t("evaluation.conditions.title")}
-              </CardTitle>
-              <CardDescription>{t("evaluation.conditions.description")}</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form
-                className="grid min-w-0 gap-5"
-                aria-label={t("evaluation.conditions.title")}
-                noValidate
-                onSubmit={(event) => void runEvaluation(event)}
-              >
-                {/* ナレッジベースの選択は FormGrid の外に置く（FormGrid は container の箱で、開いた候補の一覧が
-                    後ろのカードの下に隠れるため）。幅は部品の width（lg）で決まる。 */}
-                <div className="min-w-0" data-testid="evaluation-knowledge-base">
-                  <KnowledgeBaseScopePicker
-                    selectedIds={knowledgeBaseIds}
-                    onChange={changeKnowledgeBases}
-                    disabled={runMutation.isPending}
-                    helper={t("evaluation.knowledgeBaseScope.helper")}
-                    emptySelectionText={t("evaluation.knowledgeBaseScope.emptySelection")}
-                    required
-                    errorId={knowledgeBaseError ? KNOWLEDGE_BASE_ERROR_ID : undefined}
-                    // 対象の選択（ナレッジベース）は lg（#1891）。
-                    width="lg"
-                  />
-                  <FieldError
-                    id={KNOWLEDGE_BASE_ERROR_ID}
-                    message={knowledgeBaseError}
-                    className="mt-1"
-                  />
-                </div>
-                <FormGrid columns={1}>
-                  <EvaluationRequestUpload
-                    fileName={fileName}
-                    result={shownResult}
-                    validating={validating}
-                    disabled={runMutation.isPending}
-                    error={uploadError}
-                    notice={uploadNotice}
-                    maxRows={EVALUATION_EXCEL_MAX_ROWS}
-                    maxMegabytes={EVALUATION_EXCEL_MAX_MEGABYTES}
-                    templateDownloading={templateDownloading}
-                    templateError={templateError}
-                    onFiles={selectFiles}
-                    onDownloadTemplate={() => void downloadTemplate()}
-                  />
-                </FormGrid>
-                {shownResult && shownResult.error_count === 0 && processRows.length ? (
-                  <EvaluationProcessDrafts
-                    rows={processRows}
-                    knowledgeBaseIds={knowledgeBaseIds}
-                    drafts={processDrafts}
-                    onDrafts={setProcessDrafts}
-                    confirmed={useProcessDrafts}
-                    onConfirmedChange={setUseProcessDrafts}
-                    disabled={runMutation.isPending}
-                  />
-                ) : null}
-                <CompareOption
-                  enabled={compareEnabled}
-                  onEnabledChange={(enabled) => {
-                    setCompareEnabled(enabled);
-                    setCompareError(null);
-                  }}
-                  profileId={compareProfileId}
-                  onProfileChange={(id) => {
-                    setCompareProfileId(id);
-                    setCompareError(null);
-                  }}
-                  query={profilesQuery}
-                  error={compareError}
+        {/* 評価の基準を先に読み、条件を選んで実行する順に、縦に全幅で並べる（#3295。間隔は PageBody の gap）。 */}
+        <SuiteSummary query={settingsQuery} />
+        <Card className="min-w-0" data-testid="evaluation-conditions">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ClipboardCheck size={16} className="text-accent-fg" aria-hidden />
+              {t("evaluation.conditions.title")}
+            </CardTitle>
+            <CardDescription>{t("evaluation.conditions.description")}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form
+              className="grid min-w-0 gap-5"
+              aria-label={t("evaluation.conditions.title")}
+              noValidate
+              onSubmit={(event) => void runEvaluation(event)}
+            >
+              {/* ナレッジベースの選択は FormGrid の外に置く（FormGrid は container の箱で、開いた候補の一覧が
+                  後ろのカードの下に隠れるため）。幅は部品の width（lg）で決まる。 */}
+              <div className="min-w-0" data-testid="evaluation-knowledge-base">
+                <KnowledgeBaseScopePicker
+                  selectedIds={knowledgeBaseIds}
+                  onChange={changeKnowledgeBases}
+                  disabled={runMutation.isPending}
+                  helper={t("evaluation.knowledgeBaseScope.helper")}
+                  emptySelectionText={t("evaluation.knowledgeBaseScope.emptySelection")}
+                  required
+                  errorId={knowledgeBaseError ? KNOWLEDGE_BASE_ERROR_ID : undefined}
+                  // 対象の選択（ナレッジベース）は lg（#1891）。
+                  width="lg"
+                />
+                <FieldError
+                  id={KNOWLEDGE_BASE_ERROR_ID}
+                  message={knowledgeBaseError}
+                  className="mt-1"
+                />
+              </div>
+              <FormGrid columns={1}>
+                <EvaluationRequestUpload
+                  fileName={fileName}
+                  result={shownResult}
+                  validating={validating}
+                  disabled={runMutation.isPending}
+                  error={uploadError}
+                  notice={uploadNotice}
+                  maxRows={EVALUATION_EXCEL_MAX_ROWS}
+                  maxMegabytes={EVALUATION_EXCEL_MAX_MEGABYTES}
+                  templateDownloading={templateDownloading}
+                  templateError={templateError}
+                  onFiles={selectFiles}
+                  onDownloadTemplate={() => void downloadTemplate()}
+                />
+              </FormGrid>
+              {shownResult && shownResult.error_count === 0 && processRows.length ? (
+                <EvaluationProcessDrafts
+                  rows={processRows}
+                  knowledgeBaseIds={knowledgeBaseIds}
+                  drafts={processDrafts}
+                  onDrafts={setProcessDrafts}
+                  confirmed={useProcessDrafts}
+                  onConfirmedChange={setUseProcessDrafts}
                   disabled={runMutation.isPending}
                 />
-                <div className="grid min-w-0 gap-3">
-                  <div>
-                    <Button
-                      type="submit"
-                      loading={runMutation.isPending}
-                      disabled={runActive || validating}
-                      icon={BarChart3}
-                    >
-                      {t("evaluation.actions.run")}
-                    </Button>
-                  </div>
-                  {/* 投入の失敗は操作の行の直下に出す（messaging.md §10）。 */}
-                  {runError ? <Banner severity="danger">{runError}</Banner> : null}
-                  {runMutation.isPending ? (
-                    // job の投入（検証と作成）の間。ボタンの loading がスピナーを担うので、ここは文言と
-                    // 経過時間だけを出す（messaging.md §3.7）。作成後は実行状況（placement="job"）が引き継ぐ。
-                    <ProcessingIndicator
-                      active
-                      label={t("evaluation.actions.starting")}
-                      operationKey="evaluation-run"
-                      placement="action"
-                      activityIcon="none"
-                      testId="evaluation-run-processing"
-                    />
-                  ) : null}
+              ) : null}
+              <CompareOption
+                enabled={compareEnabled}
+                onEnabledChange={(enabled) => {
+                  setCompareEnabled(enabled);
+                  setCompareError(null);
+                }}
+                profileId={compareProfileId}
+                onProfileChange={(id) => {
+                  setCompareProfileId(id);
+                  setCompareError(null);
+                }}
+                query={profilesQuery}
+                error={compareError}
+                disabled={runMutation.isPending}
+              />
+              <div className="grid min-w-0 gap-3">
+                <div>
+                  <Button
+                    type="submit"
+                    loading={runMutation.isPending}
+                    disabled={runActive || validating}
+                    icon={BarChart3}
+                  >
+                    {t("evaluation.actions.run")}
+                  </Button>
                 </div>
-              </form>
-            </CardContent>
-          </Card>
-
-          <SuiteSummary query={settingsQuery} />
-        </div>
+                {/* 投入の失敗は操作の行の直下に出す（messaging.md §10）。 */}
+                {runError ? <Banner severity="danger">{runError}</Banner> : null}
+                {runMutation.isPending ? (
+                  // job の投入（検証と作成）の間。ボタンの loading がスピナーを担うので、ここは文言と
+                  // 経過時間だけを出す（messaging.md §3.7）。作成後は実行状況（placement="job"）が引き継ぐ。
+                  <ProcessingIndicator
+                    active
+                    label={t("evaluation.actions.starting")}
+                    operationKey="evaluation-run"
+                    placement="action"
+                    activityIcon="none"
+                    testId="evaluation-run-processing"
+                  />
+                ) : null}
+              </div>
+            </form>
+          </CardContent>
+        </Card>
 
         {runJob.jobId ? (
           <EvaluationJobSection

@@ -159,6 +159,52 @@ for (const viewport of [
   );
 }
 
+for (const viewport of [
+  { name: "desktop 1280", width: 1280, height: 760, maxChipRows: 2 },
+  { name: "desktop 1920", width: 1920, height: 1080, maxChipRows: 1 },
+  { name: "mobile 375", width: 375, height: 812, maxChipRows: null },
+]) {
+  test(`評価の基準は評価の条件の上に全幅で置き、閾値は横に並べる (#3295, ${viewport.name})`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/evaluation");
+
+    const suite = page.getByTestId("evaluation-suite");
+    const conditions = page.getByTestId("evaluation-conditions");
+    await expect(suite.getByTestId("evaluation-suite-current")).toBeVisible();
+    await expect(conditions.getByRole("form", { name: "評価の条件" })).toBeVisible();
+
+    // DOM の順（読み上げ・Tab の順）でも、基準が条件の前。
+    const suiteFirst = await suite.evaluate((node) => {
+      const other = document.querySelector('[data-testid="evaluation-conditions"]');
+      return Boolean(other && node.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING);
+    });
+    expect(suiteFirst).toBe(true);
+
+    // 見た目の順も、基準の下端が条件の上端より上。どちらも同じ左端と幅（全幅）。
+    const suiteBox = await suite.boundingBox();
+    const conditionsBox = await conditions.boundingBox();
+    expect(suiteBox).not.toBeNull();
+    expect(conditionsBox).not.toBeNull();
+    expect(suiteBox!.y + suiteBox!.height).toBeLessThanOrEqual(conditionsBox!.y);
+    expect(Math.abs(suiteBox!.x - conditionsBox!.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(suiteBox!.width - conditionsBox!.width)).toBeLessThanOrEqual(1);
+
+    await page.screenshot({ path: testInfo.outputPath("evaluation-layout.png"), fullPage: true });
+
+    // 全幅の desktop では、閾値の chip は横に並べて折り返す（1 行に 1 つずつ縦に積まない。375px は幅の分だけ折り返す）。
+    const chipTops = await page
+      .getByTestId("evaluation-suite-thresholds")
+      .locator("li")
+      .evaluateAll((items) => items.map((item) => Math.round(item.getBoundingClientRect().top)));
+    expect(chipTops).toHaveLength(6);
+    if (viewport.maxChipRows !== null) {
+      expect(new Set(chipTops).size).toBeLessThanOrEqual(viewport.maxChipRows);
+    }
+
+    await expectNoPageOverflow(page);
+  });
+}
+
 test("テンプレートをダウンロードでき、選んだナレッジベースの文書の一覧を求める", async ({ page }) => {
   const urls: string[] = [];
   await page.route("**/api/evaluation/cases/template**", (route) => {
