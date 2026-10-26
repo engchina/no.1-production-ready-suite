@@ -4,6 +4,7 @@ import { useId, useMemo, useState } from "react";
 import {
   Button,
   Banner,
+  EmptyState,
   LoadMoreFooter,
   Skeleton,
   TimedLoadingState,
@@ -38,6 +39,7 @@ type SchemaInsertMode = "logical" | "physical";
 export function SchemaReferencePanel({
   catalog,
   loading,
+  profileUnselected = false,
   disabled,
   insertMode = "logical",
   allowedTableNames = null,
@@ -63,6 +65,11 @@ export function SchemaReferencePanel({
 }: {
   catalog: SchemaCatalog | null;
   loading: boolean;
+  /**
+   * 業務プロファイルが未選択・使えないので表を取りに行っていない（#3413）。読み込み中にせず、選ぶと表と列を出すと
+   * 案内する（検索欄は無効、件数・「スキーマ未取得です」の案内は出さない）。
+   */
+  profileUnselected?: boolean;
   disabled?: boolean;
   insertMode?: SchemaInsertMode;
   /** 非 null のとき、この表名集合（正規化比較）に絞り込む。null は全表表示。 */
@@ -164,14 +171,16 @@ export function SchemaReferencePanel({
   // 絞り込む前の全件（「N 件（全 M 件）」の M）。検索語の無いときに全件を読み終えた件数を覚えておく
   // （検索語は API 側で絞るため、検索中の一覧からは分からない。#1891）。
   const [knownUnfilteredCount, setKnownUnfilteredCount] = useState<number | null>(null);
-  const loadedAllUnfiltered = !loading && !searching && !hasMore && catalog !== null;
+  // 一覧の読み込み中と業務プロファイルの未選択では、表の一覧・件数・空の案内を出さない。
+  const listHidden = loading || profileUnselected;
+  const loadedAllUnfiltered = !listHidden && !searching && !hasMore && catalog !== null;
   const loadedUnfilteredCount = scopedTables.length;
   // render の中で前の値と比べて合わせる（effect で setState しない。React の「props の変化で state を合わせる」型）。
   if (loadedAllUnfiltered && knownUnfilteredCount !== loadedUnfilteredCount) {
     setKnownUnfilteredCount(loadedUnfilteredCount);
   }
   const listCount = schemaReferenceListCount({
-    loading,
+    loading: listHidden,
     searching,
     hasMore,
     scoped: allowedSet !== null,
@@ -223,14 +232,23 @@ export function SchemaReferencePanel({
             onSearch={setQuery}
             clearLabel={t("common.clearSearch")}
             placeholder={t("nl2sql.schema.searchPlaceholder")}
-            disabled={disabled}
+            disabled={disabled || profileUnselected}
             className="min-w-0 max-w-full"
           />
         }
         count={listCount}
       />
 
-      {loading && (
+      {profileUnselected ? (
+        <div data-testid="nl2sql-schema-profile-unselected">
+          <EmptyState
+            title={t("nl2sql.schema.profileUnselected.title")}
+            hint={t("nl2sql.schema.profileUnselected.hint")}
+          />
+        </div>
+      ) : null}
+
+      {loading && !profileUnselected && (
         <TimedLoadingState
           label={t("nl2sql.schema.loading")}
           operationKey="schema-reference-load"
@@ -251,7 +269,7 @@ export function SchemaReferencePanel({
         />
       ) : null}
 
-      {!loading && detailLoadError ? (
+      {!listHidden && detailLoadError ? (
         <div data-testid="nl2sql-schema-detail-error">
           <Banner
             severity="danger"
@@ -272,7 +290,7 @@ export function SchemaReferencePanel({
         </div>
       ) : null}
 
-      {!loading && filteredTables.length === 0 && catalogEmpty && onRefreshSchema && (
+      {!listHidden && filteredTables.length === 0 && catalogEmpty && onRefreshSchema && (
         <div className="grid min-w-0 gap-3 rounded-md border border-dashed border-border p-4 text-sm text-fg-muted">
           <p className="[overflow-wrap:anywhere]">{t("nl2sql.schema.emptyCatalog")}</p>
           <div>
@@ -289,13 +307,13 @@ export function SchemaReferencePanel({
         </div>
       )}
 
-      {!loading && filteredTables.length === 0 && !(catalogEmpty && onRefreshSchema) && (
+      {!listHidden && filteredTables.length === 0 && !(catalogEmpty && onRefreshSchema) && (
         <p className="min-w-0 rounded-md border border-dashed border-border p-3 text-sm text-fg-muted [overflow-wrap:anywhere]">
           {t("nl2sql.schema.empty")}
         </p>
       )}
 
-      {!loading && (
+      {!listHidden && (
       <div
         className={`grid min-w-0 max-w-full ${listMaxHeightClass} content-start gap-1 overflow-x-hidden overflow-y-auto pr-1`}
       >
