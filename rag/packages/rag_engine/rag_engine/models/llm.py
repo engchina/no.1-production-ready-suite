@@ -371,7 +371,8 @@ class RequestCoverage(_StrictModel):
     request_id: str = Field(description="request_units の id。")
     evidence_scope: list[RequestEvidenceScope] = Field(
         default_factory=list,
-        description="候補の根拠を対象ごとに照合する。各 evidence_id を1回ずつ、質問の対象との関係を決めてから evidence_ids を選ぶ。",
+        description="候補の根拠を対象ごとに照合する。各 evidence_id を1回ずつ、質問の対象との関係を決めてから evidence_ids を選ぶ。"
+        "catalog の印の根拠は、どれかの要求で evidence_ids に入れるか、質問に関係しなければ unrelated と照合する。",
     )
     evidence_ids: list[str] = Field(
         default_factory=list,

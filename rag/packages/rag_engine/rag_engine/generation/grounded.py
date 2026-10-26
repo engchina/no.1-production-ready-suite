@@ -78,7 +78,7 @@ from rag_engine.resources.deadline import (
     deadline_cut_short,
 )
 from rag_engine.resources.llm_usage import usage_delta, usage_line, usage_snapshot
-from rag_engine.retrieval.article_catalog import ARTICLE_UNIT_KEY
+from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY, ARTICLE_UNIT_KEY
 from rag_engine.retrieval.character_forms import fold_model_view, fold_text, fold_text_with_positions, fold_width
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
 from rag_engine.retrieval.evidence_cues import evidence_cues
@@ -114,7 +114,7 @@ GENERATE_SYSTEM_PROMPT = (
 2.1 user message の構成
 - 質問契約: 変更してはいけない目的・条件（request_units の id と kind、requested_granularity など）。
 - 必須根拠（pinned）: 質問に適用できる限り必ず item に使う Evidence の ID。
-- 機能別の根拠: BEGIN_UNTRUSTED_RETRIEVED_CONTEXT と END_UNTRUSTED_RETRIEVED_CONTEXT の間。`=== 機能 F1: 文書名 / 版 / 機能見出し ===` の見出しで機能ごとに分かれ、各 Evidence は `[E1] p.頁 origin=… tags=… pinned` の行で始まる。機能見出しは文書の節名であり、開く画面やメニューとは限らない。
+- 機能別の根拠: BEGIN_UNTRUSTED_RETRIEVED_CONTEXT と END_UNTRUSTED_RETRIEVED_CONTEXT の間。`=== 機能 F1: 文書名 / 版 / 機能見出し ===` の見出しで機能ごとに分かれ、各 Evidence は `[E1] p.頁 origin=… tags=… pinned catalog` の行で始まる。機能見出しは文書の節名であり、開く画面やメニューとは限らない。
 - 前回の草稿の検査結果（是正時のみ）: 指摘を直し、支持済みの item は同じ citations のまま保持する。
 - 添付原画像と根拠レコードの対応（画像がある場合）: 各画像の bbox / context_bbox / target_highlight / asset_kind。
 - 業務ガイドがある場合は、目的・必要な根拠・終わりの条件を満たす説明を、前提の手順から順に items にする。業務ガイドの手順は質問で分かっている条件に合わせて選んであるので、すべて説明し、利用者が自分で行えない手順も省かない。資料で裏付けられない要件は gap にする。
@@ -122,6 +122,7 @@ GENERATE_SYSTEM_PROMPT = (
 - この指示の quote は、citations の各出典（evidence_id と lines）が指す根拠の原文を意味する。quote を別に生成するのではなく、その原文が支える内容を書く。
 2.2 Evidence の見出し行
 - origin（見出し行では `origin=` と表記）: document_text は解析された本文、image_extraction は画像からの生成説明・OCR、unclassified は未分類。
+- catalog: 条で構成された文書の条の目録から、質問の根拠の候補として選ばれた条。
 - tags は原文の性質を示す。
   - definition: 項目の定義・表示条件。
   - operation_entry: 質問の操作の入口。
@@ -286,6 +287,8 @@ AUDIT_SYSTEM_PROMPT = (
         "text）が text の対象・操作・効果を積極的に裏付ける場合だけ"
         "。quote と矛盾しないだけの付加説明、quote にない前提・限"
         "定・因果の追加は unsupported。\n"
+        "- text が quote の規則を述べ、quote にある例外・ただし書き・適用の条件だけを省いているときは unsupported にせず supported とし、"
+        "省いた例外・条件は applicability で扱う。\n"
         "- 実データが未提供という理由だけで unsupported や n"
         "ot_applicable にしない。原文どおりの説明は suppo"
         "rted。\n"
@@ -314,8 +317,8 @@ AUDIT_SYSTEM_PROMPT = (
         "質問に直接答えていない」は not_applicable の理由にな"
         "らない（答えの充足は request_reviews で判定する）。"
         "\n"
-        "- 原文に適用条件・限定が明記され、その成立が質問から確認できなけれ"
-        "ば conditional とし condition に原文の条件を"
+        "- 原文に適用条件・限定・例外が明記され、その成立が質問から確認できなけれ"
+        "ば conditional とし condition に原文の条件・例外の短い句を"
         "書く。別の対象・項目・業務向けなら not_applicable。\n"
         "- glossary は運用者が登録した用語の名前と別名。質問の語と"
         " quote の語が glossary の同じ用語の名前どうしなら、"
@@ -1654,6 +1657,25 @@ def _plan_undecided_errors(draft: GroundedDraft, spans: Sequence[dict]) -> list[
         ):
             errors.append(f"{item.request_id or '-'}: {item.evidence_id} の対象を計画で照合できませんでした。")
     return list(dict.fromkeys(errors))
+
+
+def catalog_undecided_errors(draft: GroundedDraft, spans: Sequence[dict]) -> list[str]:
+    """条の目録で選んだ根拠（catalog の印。#3526）のうち、要求の計画で使うとも無関係とも決めていないもの。
+
+    目録で選んだ条は、検索の言葉が条文と違っても質問の根拠になり得るので、生成に必ず検討させる。検討の結果は計画に
+    残す: どれかの要求の ``evidence_ids`` に入れた（使う）か、``evidence_scope`` で ``unrelated`` と照合した（関係
+    しない）か。出典に使うかは今までどおり原文が説明を支えるかで決め、引用は強いない。
+    """
+    decided: set[str] = set()
+    for plan in draft.request_coverage:
+        labels = [*plan.evidence_ids, *(scope.evidence_id for scope in plan.evidence_scope if scope.relation == "unrelated")]
+        decided.update(str(span["evidence_id"]) for label in labels for span in _label_spans(label, spans))
+    return [
+        f"{span['label']} は条の目録で選んだ根拠（catalog）です。要求の evidence_ids に入れるか、"
+        "質問に関係しなければ evidence_scope で unrelated と照合してください。"
+        for span in spans
+        if span.get(ARTICLE_CATALOG_KEY) and str(span["evidence_id"]) not in decided
+    ]
 
 
 # 1 つの説明に付ける出典の上限（#3526）。超えた分は照合しない（出典ごとに検査・監査するため）。
@@ -4103,6 +4125,7 @@ def format_functions(spans: Sequence[dict]) -> str:
             f"[{span['label']}] {span.get('location') or 'p.' + str(span.get('page', ''))} origin={span.get('origin', 'unclassified')}"
             + (f" tags={','.join(span['tags'])}" if span["tags"] else "")
             + (" pinned" if span["pinned"] else "")
+            + (" catalog" if span.get(ARTICLE_CATALOG_KEY) else "")
             + (f"\n{CONTEXT_NOTE_BEGIN}\n{span['answer_context']}\n{CONTEXT_NOTE_END}" if span.get("answer_context") else "")
             + "\n"
             + numbered_text(span["text"])
@@ -5375,6 +5398,7 @@ def run_round(
                             "source": span.get("source", ""),
                             "section": _function_title(span),
                             "text": span["text"],
+                            **({"catalog": True} if span.get(ARTICLE_CATALOG_KEY) else {}),
                         }
                         for span in evidence
                     ],
@@ -5426,6 +5450,9 @@ def run_round(
         draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
     generation_calls = 1 + int(scope_plan is not None)
     plan_errors = _request_plan_errors(draft, spans)
+    # 目録で選んだ条を検討していない草稿は、計画の不整合と同じ 1 回の作り直しで検討させる（#3526）。計画を別に立てた
+    # round は、計画の段で条の印を渡している。
+    catalog_errors = catalog_undecided_errors(draft, spans) if scope_plan is None else []
     plan_unsettled: list[str] = []
     plan_recovery = ""
     if plan_errors == [_MISSING_REQUEST_PLAN] and scope_plan is None:
@@ -5443,14 +5470,14 @@ def run_round(
             plan_unsettled = _request_plan_errors(draft, spans) + _plan_undecided_errors(draft, spans)
             plan_recovery = "planned"
         generation_calls += 1
-    elif plan_errors:
+    elif plan_errors or catalog_errors:
         # 構造の不整合だけを一度直す。回答の生成後の意味の監査や、無制限の是正にはしない。
         repair_prompt = (
             prompt
             + "\n"
             + json.dumps(
                 {
-                    "invalid_request_plan": plan_errors,
+                    "invalid_request_plan": plan_errors + catalog_errors,
                     "previous_draft": draft.model_dump(mode="json"),
                     "instruction": "対象の照合が抜けた根拠を照合し、unrelated を計画と説明から除き、根拠計画と items が対応する完全な草稿を返してください。",
                 },
@@ -5474,6 +5501,10 @@ def run_round(
     timing["generation_calls"] = generation_calls
     if plan_errors:
         timing["request_plan_errors"] = plan_errors
+    if catalog_errors:
+        # 最初の草稿が検討しなかった目録の条と、作り直しても残ったもの（#3526）。
+        timing["catalog_undecided"] = len(catalog_errors)
+        timing["catalog_undecided_after_repair"] = len(catalog_undecided_errors(draft, spans))
     if plan_recovery:
         # 計画だけを立て直した（planned）か、立て直しの出力が契約を満たさなかった（例外の型名）か（#3394）。
         timing["request_plan_recovery"] = plan_recovery
