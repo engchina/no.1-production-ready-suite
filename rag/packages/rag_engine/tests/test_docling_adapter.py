@@ -633,7 +633,11 @@ class DoclingAdapterTests(unittest.TestCase):
             cell(2, 1, "10", [30, 20, 60, 30]),
             cell(2, 2, "11", [60, 20, 90, 30]),
         ]
-        table = {**_item("", "table", 1, [10, 10, 90, 30]), "self_ref": "#/tables/0", "data": {"num_rows": 3, "num_cols": 3, "table_cells": cells}}
+        table = {
+            **_item("", "table", 1, [10, 10, 90, 30]),
+            "self_ref": "#/tables/0",
+            "data": {"num_rows": 3, "num_cols": 3, "table_cells": cells},
+        }
         context = AnalysisContext(
             pdf_path=Path("source.pdf"),
             run_dir=Path("."),
