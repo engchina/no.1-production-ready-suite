@@ -347,7 +347,16 @@ def test_guide_clarification_record_marks_free_text_conditions() -> None:
     }
     # 選択肢のある条件（enum・boolean）は付けない（自由入力の答えは「その他: 」のまま）。
     enum = guide_clarification_record(GUIDES, "guide:g-grant:target", [], "その他の値")
-    assert enum is not None and "free_text_only" not in enum["entries"][0]
+    assert enum == {
+        "outcome": "answered",
+        "entries": [
+            {
+                "prompt": "権限は個別の利用者とグループのどちらに付けますか？",
+                "selected": [],
+                "other_text": "その他の値",
+            }
+        ],
+    }
 
 
 # ---- 適用範囲・条件の出所・矛盾・分岐の絞り込み（#1278） ---------------------------------
