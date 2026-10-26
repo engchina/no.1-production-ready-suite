@@ -272,7 +272,7 @@ class GroundedItem(_StrictModel):
     lines: str = Field(
         default="",
         max_length=20,
-        description="引用する行の範囲。行番号（`3| `）の付いた根拠では、text を支える行の番号か範囲（例: 3、3-5）。"
+        description="引用する行の範囲。行番号（`3| `）の付いた根拠では必ず、text を支える行の番号か範囲（例: 3、3-5）を書く。"
         "text が述べる操作・値をすべて含む行にする。行番号の無い根拠は空（根拠の全文が引用になる）。",
     )
     # 引用の原文。モデルには出力させず（応答の schema に出さない）、evidence_id と lines からシステムが取り出す（#2830）。
@@ -318,7 +318,7 @@ class RequestEvidenceScope(_StrictModel):
     evidence_id: str = Field(description="対象を照合する Evidence の id。")
     target: str = Field(description="この根拠が操作・説明する対象。原文の対象名を写す。")
     relation: Literal["direct", "linked", "unrelated"] = Field(
-        description="direct=質問の対象に直接答える。linked=別対象だが、質問の操作の前提・後続とする関係が原文に明記されている。unrelated=別の対象・独立した操作。同じ文書や頁にあるだけでは linked にしない。"
+        description="direct=質問の対象・要求について、規則・要件・定義・手順・事実を述べる。linked=別対象だが、質問の操作の前提・後続とする関係が原文に明記されている。unrelated=別の対象・独立した操作。同じ文書や頁にあるだけでは linked にしない。"
     )
     link_quote: str = Field(
         default="", description="linked のとき、操作同士の関係を明記した連続する原文。関係が書かれていなければ unrelated とし空文字にする。"
@@ -335,7 +335,7 @@ class RequestCoverage(_StrictModel):
     )
     evidence_ids: list[str] = Field(
         default_factory=list,
-        description="この要求に直接答える根拠と、原文に関係が明記された前提・後続操作の evidence_id（[E1] 形式の番号）。同じ文書・頁にあるだけの別操作は含めない。items はこの計画の根拠だけで作る。無ければ空にし kind=gap にする。",
+        description="この要求の説明に使う根拠（relation=direct）と、原文に関係が明記された前提・後続操作の evidence_id（[E1] 形式の番号）。同じ内容を述べた根拠が複数の文書にあれば（規則・要件・定義を定めた条項と、それを説明・運用する手順書など）、文書ごとに挙げる。同じ文書・頁にあるだけの別操作は含めない。items はこの計画の根拠だけで作る。無ければ空にし kind=gap にする。",
     )
 
 

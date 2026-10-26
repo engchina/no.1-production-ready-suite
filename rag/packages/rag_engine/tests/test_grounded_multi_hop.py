@@ -230,3 +230,24 @@ def test_prompts_tell_generation_and_audit_how_to_treat_intermediate_hops():
     assert "つなぐ段のどれかが supported な item に無ければ false" in audit_prompt
     # 監査の prompt は 1 行 1 規則（節見出しと空行を除く）。
     assert all(line.startswith(("- ", "## ")) or line[:1].isdigit() or not line for line in audit_prompt.splitlines())
+
+
+def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
+    """同じ内容を述べた規則の原文と手順書の両方を出典にし、出典を 1 つに絞る言い方を残さない（#3526）。"""
+    from rag_engine.models.llm import RequestCoverage, RequestEvidenceScope
+
+    generate = grounded.GENERATE_SYSTEM_PROMPT
+    section = generate.split("4.10 出典の網羅", 1)[1].split("## 5.", 1)[0]
+    assert "挙げた文書ごとに" in section
+    assert "言い換えていても省かず" in section
+    assert "その quote が支える範囲だけ" in section
+    assert "説明の内容を支えない原文は、質問に関係していても引かない" in section
+    assert "重複する item をまとめ" not in generate
+    assert "同じ根拠の同じ内容の item をまとめ" in generate
+    relation = RequestEvidenceScope.model_json_schema()["properties"]["relation"]["description"]
+    plan_ids = RequestCoverage.model_json_schema()["properties"]["evidence_ids"]["description"]
+    assert "直接答える" not in relation + plan_ids
+    # 別の対象の根拠を外す判断と、計画の根拠だけで items を作る契約は残す。
+    assert "unrelated=別の対象・独立した操作" in relation
+    assert "文書ごとに挙げる" in plan_ids
+    assert "items はこの計画の根拠だけで作る" in plan_ids
