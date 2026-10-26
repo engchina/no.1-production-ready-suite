@@ -3458,6 +3458,23 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         self.assertTrue(text.startswith(grounded_summary))
         self.assertNotIn(grounded.answer_labels().cause_gap, text)
 
+    def test_cause_gap_follows_whether_the_reason_noun_is_asked(self):
+        """「理由」が入力項目の名前の質問には原因の gap を足さず、理由を問う質問には足す (#3491)。"""
+        step = "差戻しの理由は20文字以上で入力します。"
+        ctx = context(record(0, step, "Ⅲ 差戻し", page=3))
+        for question, expected in [
+            ("申請画面Aの差戻しの理由は何文字以上ですか。", False),
+            ("申請画面Aで差し戻された理由は何ですか。", True),
+        ]:
+            with self.subTest(question=question):
+                eid = ids(ctx, question)[step]
+                model = FakeModel(
+                    [draft(item(eid, "差戻しの理由は20文字以上で入力します。", step), summary="20文字以上です。")],
+                    [audit((0, "supported", "matched", ""), summary_supported=True)],
+                )
+                text = run(model, ctx, question).response.answer_text
+                self.assertEqual(grounded.answer_labels().cause_gap in text, expected)
+
     def test_refusal_still_shows_related_document_text_with_citation(self):
         """草稿が gap だけでも、質問の語を含む原文があれば拒答文の後に「資料の記載」として出典付きで示す (#722)。"""
         rule = "⑤本部からの連絡メモが届くと「連」と表示されるので、ボタンを押します。"
