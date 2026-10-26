@@ -2,7 +2,7 @@
 
 解析(Docling / Docling 以外)→ Vision の共通の段(``read_figures_with_vision``)→ 分割 →
 索引の本文(Oracle Text の ``search_text`` と embedding の入力)の順に、決定論スタブで確かめる。
-VLM は ``FakeDescriber`` に置き換え、表の中の画像は pymupdf で作った PDF に置く。
+VLM は ``FakeDescriber`` に置き換え、表の中の画像は reportlab で作った PDF に置く。
 
 分割の方法ごとの結果(修正前 → 修正後):
 
@@ -23,7 +23,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import fitz  # type: ignore[import-untyped]
 import pytest
 from PIL import Image
 from rag_pipeline_core.chunking import (
@@ -41,6 +40,7 @@ from app.rag.chunking_small_to_big import (
 )
 from app.rag.vision import read_figures_with_vision
 from app.schemas.extraction import DocumentElement, ExtractionPage, StructuredExtraction
+from tests.fixtures.synthetic_pdf import SyntheticPdf
 
 PAGE_PT = (595.0, 842.0)
 TABLE_PT = (100.0, 500.0, 500.0, 620.0)
@@ -87,13 +87,11 @@ def _png() -> bytes:
 
 
 def _pdf() -> bytes:
-    document = fitz.open()
-    page = document.new_page(width=PAGE_PT[0], height=PAGE_PT[1])
-    page.insert_text((100, 80), "受注入力の手順", fontsize=14)
-    page.insert_image(fitz.Rect(*TABLE_IMAGE_PT), stream=_png())
-    data = document.tobytes()
-    document.close()
-    return bytes(data)
+    document = SyntheticPdf()
+    page = document.page(*PAGE_PT)
+    page.text(100, 80, "受注入力の手順", font="japan", size=14)
+    page.image(TABLE_IMAGE_PT, _png())
+    return document.to_bytes()
 
 
 def _px(points: Sequence[float], dpi: float) -> list[float]:

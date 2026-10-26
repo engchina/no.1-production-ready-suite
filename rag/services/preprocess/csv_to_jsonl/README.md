@@ -7,7 +7,7 @@ parse の **前** に CSV 原本を決定論で構造化レコードの JSON Lin
   (`application/vnd.production-ready.structured-records+jsonl`。schema は `rag_parser_core.structured_records`)で、
   Docling / Unstructured の parser のサービスが外部の parser に渡さずに 1 記録 1 要素にする。
 - readiness: `GET /health`(外部依存なしで常時 ready)
-- 純 Python(`csv` + pydantic)のみ。LibreOffice / PyMuPDF を含まない軽量な venv。
+- 純 Python(`csv` + pydantic)のみ。LibreOffice を含まない軽量な venv。
 
 ## 変換仕様
 

@@ -6,7 +6,7 @@ A production-ready RAG reference implementation covering data ingestion, chunkin
 
 > プロジェクトの開発ルール（技術スタック・規約）は [AGENTS.md](./AGENTS.md) が正本です（Claude Code / Codex 共通）。
 >
-> 第三者の部品のライセンスの通知（PyMuPDF・同梱の native ライブラリ・書体など）は root の [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md) にあります。
+> 第三者の部品のライセンスの通知（pypdfium2 が同梱する PDFium などの native ライブラリ・書体など）は root の [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md) にあります。
 
 ## 技術スタック
 

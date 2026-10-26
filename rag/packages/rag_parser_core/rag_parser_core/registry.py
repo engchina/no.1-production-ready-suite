@@ -988,7 +988,7 @@ _INVALID_INPUT_EXCEPTION_NAMES = frozenset(
         "PSSyntaxError",
         "UnidentifiedImageError",  # PIL(画像系 OCR adapter)
         "BadZipFile",  # docx/pptx/xlsx(unstructured/docling)
-        "FileDataError",  # pymupdf
+        "FileDataError",  # dots.ocr の公式 parser が内部で PDF を開けないとき
         "EmptyFileError",
     }
 )

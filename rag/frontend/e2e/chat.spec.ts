@@ -2519,7 +2519,13 @@ test("業務ガイドの自由入力条件だけを確認して回答へ進め�
   await expect(card.getByRole("radio")).toHaveCount(0);
   const confirm = card.getByRole("button", { name: "この内容で回答" });
   await expect(confirm).toBeDisabled();
-  await card.getByRole("textbox", { name: "その他（自由入力）" }).fill("資料 A の項目 B");
+  // 選択肢が無いので「その他」「選択肢に無いとき」と言わず、自由入力だけの言い方にする（#3366）。
+  const answer = card.getByRole("textbox", { name: "答え", exact: true });
+  await expect(answer).toHaveAttribute("placeholder", "答えを書いてください");
+  await expect(card.getByText("答えを書くと押せます。")).toBeVisible();
+  await expect(card).not.toContainText("その他");
+  await expect(card).not.toContainText("選択肢");
+  await answer.fill("資料 A の項目 B");
   await expect(confirm).toBeEnabled();
   await expectNoPageOverflow(page);
   for (const colorScheme of ["light", "dark"] as const) {

@@ -6,7 +6,11 @@ import { ProcessingIndicator } from "../feedback/processing-state";
 import { Button } from "../ui/button";
 import type { ControlSize } from "../ui/control-size";
 import { TextareaField } from "../ui/textarea-field";
-import { DEFAULT_CLARIFICATION_LABELS, type ClarificationLabels } from "./clarification-labels";
+import {
+  DEFAULT_CLARIFICATION_LABELS,
+  type ClarificationAnswerKind,
+  type ClarificationLabels,
+} from "./clarification-labels";
 import { clarificationRecordAnswerText } from "./clarification-record";
 
 /** 確認事項の選択肢。 */
@@ -244,14 +248,21 @@ export function ClarificationCard({
 
   const busy = busyAction !== null;
   const inputsDisabled = disabled || busy;
-  const remaining = items.filter((item) => !item.optional && !isClarificationEntryAnswered(draft[item.id])).length;
+  const unanswered = items.filter((item) => !item.optional && !isClarificationEntryAnswered(draft[item.id]));
+  const remaining = unanswered.length;
+  // 押せない理由は、答えていない確認事項の答え方（選択肢の有無）で言い方を変える（#3366）。
+  const freeTextCount = unanswered.filter((item) => item.options.length === 0).length;
+  const answerKind: ClarificationAnswerKind =
+    freeTextCount === 0 ? "choice" : freeTextCount === remaining ? "freeText" : "mixed";
   const blocked =
     blockedReason ??
     (remaining === 0
       ? ""
       : items.length > 1
-        ? labels.confirmBlockedMultiple(remaining)
-        : labels.confirmBlocked);
+        ? labels.confirmBlockedMultiple(remaining, answerKind)
+        : answerKind === "freeText"
+          ? labels.confirmBlockedFreeText
+          : labels.confirmBlocked);
   const ready = !blocked;
   const lastRound = round ? round.current >= round.max : false;
 
@@ -424,6 +435,7 @@ function ClarificationConfirming({
           .map((optionId) => item.options.find((option) => option.id === optionId)?.label)
           .filter((label): label is string => Boolean(label)),
         otherText: entry.otherText,
+        freeTextOnly: item.options.length === 0,
       };
     });
   return (
@@ -578,10 +590,11 @@ function ClarificationItemFields({
 
       <TextareaField
         id={`${baseId}-other`}
-        label={labels.other}
+        // 選択肢の無い確認事項は自由入力だけで答えるので、「その他」「選択肢に無いとき」と言わない（#3366）。
+        label={item.options.length > 0 ? labels.other : labels.freeText}
         value={entry.otherText}
         rows={2}
-        placeholder={labels.otherPlaceholder}
+        placeholder={item.options.length > 0 ? labels.otherPlaceholder : labels.freeTextPlaceholder}
         disabled={disabled}
         onValueChange={changeOther}
         data-testid={`${testId}-other`}

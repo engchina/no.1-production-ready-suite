@@ -214,6 +214,20 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `RAG_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#3343 PDF の処理を PyMuPDF から pypdfium2 に置き換え）
+
+backend の PDF の処理（文書のプレビューの頁の画像・bbox の切り出し・dots.ocr へ渡す頁の画像・頁の境目の段落の続きの判定の
+行の位置・Docling の文字の照合）を、PyMuPDF（AGPL）から PDFium（pypdfium2。BSD-3-Clause / Apache-2.0）と Pillow に置き換えた
+（`app/rag/pdf_backend.py`）。設定・DB・保存値の変更は無い。
+
+- **依存**: backend の依存から `pymupdf` を外した。backend の venv を lock で同期し直す（`uv sync --locked --no-dev`。配備の
+  更新の手順が行う）と消える。pypdfium2 は既存の依存で、OS の package も増えない。書体を埋め込まない PDF は OS の書体
+  （`google-noto-sans-cjk-ttc-fonts` など）で描く。
+- **並行**: PDFium はスレッド安全ではないため、backend の process の中の PDFium の呼び出しは 1 つの lock で直列にする（#3362）。
+  頁の描画は直列になり、PNG の符号化は lock の外で行う。
+- **振る舞いの変化**: 合字（ﬁ など）は分けた文字として読む。1 字ずつ縦に積んだ字は縦の行として扱い、横書きの行の位置の判定に
+  使わない。WebP の画像の原本も切り出せる。頁の画像の PNG は以前より 2〜3 割大きい。暗号化・破損した PDF は以前と同じく 422。
+
 ## 既存環境の更新手順（#3377 親子階層の分割をどの解析の結果でも行う）
 
 文書分割の親子階層（`small_to_big`。既定）を、Docling のレイアウトの記録（`layout_records`）を持つ文書に限らず、どの解析の結果でも行うようにした（[rag-engine.md の「使い方」2.](./rag-engine.md)）。これまでは、それ以外の文書（標準の解析の Markdown・テキスト、Unstructured・OCI などの解析の結果、構造化レコード JSONL の CSV・Word など）を構造認識（`structure_aware`）へ縮退していた（#300）。

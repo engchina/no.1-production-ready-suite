@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import unicodedata
 
-import fitz as pymupdf  # type: ignore[import-untyped]
 import pytest
 
 from app.clients.oracle import _chunk_search_text
@@ -19,6 +18,7 @@ from app.schemas.extraction import (
     StructuredExtraction,
     strip_formatting_marks,
 )
+from tests.fixtures.synthetic_pdf import blank_pdf
 
 _LINES = ("\u0305", "\u0332", "\u0333", "\u033f")
 
@@ -112,9 +112,7 @@ def _record(record_id: str, category: str, seq_no: int, text: str) -> dict[str, 
 
 def test_unverified_lines_from_pdf_do_not_reach_sections_chunks_or_search_text() -> None:
     """原文で裏付けられない線（文字層の無い合成の PDF）も、章節・本文・検索の文に残さない。"""
-    with pymupdf.open() as document:
-        document.new_page()
-        pdf = bytes(document.tobytes())
+    pdf = blank_pdf()
     title = "Heading\u033202"
     body = "Synthetic body\u0332 paragraph with an underlined word\u0332."
     records = [_record("title-1", "Section-header", 1, title), _record("body-1", "Text", 2, body)]

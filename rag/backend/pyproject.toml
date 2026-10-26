@@ -21,7 +21,6 @@ dependencies = [
     "prometheus-client>=0.24",
     "charset-normalizer>=3.4,<4",
     "pypdf>=6.4,<7",
-    "pymupdf>=1.26,<2",
     "rag-parser-core",
     "rag-pipeline-core",
     # rag_poc 由来の Small-to-Big 分割・検索・根拠付き回答・FAQ/ドメインキーワード。
@@ -85,6 +84,8 @@ dev = [
     "mypy>=1.14",
     "bandit>=1.8",
     "pip-audit>=2.9",
+    # テストの合成の PDF を作る（BSD。#3343）。実行時には使わない。
+    "reportlab>=4.4,<5",
 ]
 
 [build-system]

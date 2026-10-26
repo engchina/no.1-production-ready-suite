@@ -10,7 +10,6 @@ import io
 import json
 from typing import Any
 
-import fitz  # type: ignore[import-untyped]
 import httpx
 import pytest
 from PIL import Image
@@ -33,6 +32,7 @@ from app.rag.chunking_small_to_big import (
 from app.rag.vision import _page_px_bbox as page_px_bbox
 from app.rag.vision import read_figures_with_vision
 from app.schemas.extraction import StructuredExtraction
+from tests.fixtures.synthetic_pdf import SyntheticPdf
 from tests.test_external_parser_client import (
     _install_transport,
     _mineru_handler,
@@ -234,16 +234,16 @@ def _middle_json(*, geometry: bool = True) -> dict[str, object]:
 
 
 def _pdf() -> bytes:
-    """2 頁の A4 の PDF。2 頁目の ``FIGURE_PT`` に画像を置く（Vision の切り出しを確かめる）。"""
+    """2 頁の A4 の PDF。2 頁目の ``FIGURE_PT`` に画像を置く（Vision の切り出しを確かめる）。
+
+    PyMuPDF（AGPL）は使わず、合成の PDF（reportlab）で作る（#3343）。
+    """
     buffer = io.BytesIO()
     Image.new("RGB", (400, 300), "navy").save(buffer, format="PNG")
-    document = fitz.open()
-    for _ in range(2):
-        document.new_page(width=PAGE_PT[0], height=PAGE_PT[1])
-    document[1].insert_image(fitz.Rect(*FIGURE_PT), stream=buffer.getvalue())
-    data = document.tobytes()
-    document.close()
-    return bytes(data)
+    document = SyntheticPdf()
+    document.page(*PAGE_PT)
+    document.page(*PAGE_PT).image(FIGURE_PT, buffer.getvalue())
+    return document.to_bytes()
 
 
 def _parse(
