@@ -202,7 +202,7 @@ for (const viewport of [
 
 const ANSWERING_SETTINGS = {
   query_strategy: "auto_routing",
-  answer_flow: "crag",
+  answer_flow: "standard_rag",
   neighbor_child_count: 3,
   rerank_enabled: true,
   screen_linking_enabled: false,
@@ -263,7 +263,10 @@ for (const viewport of [
         .toEqual(["質問から項目の条件を読み取る", "名称・別名でつながる根拠", "関係情報で根拠を広げる", "画面目録で操作画面を探す", "Rerank で検索候補を並べ替える", "章節で広げる根拠", "根拠の無い要求を探し直す"]);
       const strategy = page.getByRole("combobox", { name: "質問の拡張", exact: true });
       await expect(strategy).toContainText("自動ルーティング");
-      await expect(page.getByRole("combobox", { name: "回答の生成方式", exact: true })).toContainText("CRAG");
+      // 回答の生成方式の既定は標準 RAG。先頭に「（既定）」付きで並べ、CRAG は任意で AI の呼び出しが増えると説明する（#3509）。
+      const answerFlow = page.getByRole("combobox", { name: "回答の生成方式", exact: true });
+      await expect(answerFlow).toContainText("標準 RAG（既定）");
+      await expect(answerFlow).toHaveAccessibleDescription(/CRAG は必要なときだけ選ぶ方式.*AI の呼び出しが増え/);
       await expect(page.getByRole("switch", { name: "Rerank で検索候補を並べ替える" })).toBeChecked();
       await page.getByRole("switch", { name: "質問から項目の条件を読み取る" }).scrollIntoViewIfNeeded();
       await page.screenshot({ path: test.info().outputPath("retrieval-option-order.png") });
@@ -283,6 +286,10 @@ for (const viewport of [
 
       await strategy.click();
       await page.getByRole("option", { name: /RAG フュージョン/ }).click();
+      await answerFlow.click();
+      await expect(page.getByRole("option")).toHaveText(["標準 RAG（既定）", "CRAG（根拠を評価し、必要なら補正検索）"]);
+      await page.getByRole("option", { name: /^CRAG/ }).click();
+      await expect(answerFlow).toContainText("CRAG");
       await page.getByRole("combobox", { name: "根拠の前後から加える数", exact: true }).click();
       await page.getByRole("option", { name: "5", exact: true }).click();
       await screenLinking.click();

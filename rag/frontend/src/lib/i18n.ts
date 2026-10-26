@@ -2183,8 +2183,8 @@ export const ja = {
   "searchAnswerProfiles.queryStrategy.query_decomposition": "質問分解",
   "searchAnswerProfiles.queryStrategy.step_back_prompting": "ステップバックプロンプト",
   "searchAnswerProfiles.queryStrategy.hyde": "仮説文生成（HyDE）",
-  "searchAnswerProfiles.answerFlow.crag": "CRAG（検索結果を評価し、必要なら補正検索）",
-  "searchAnswerProfiles.answerFlow.standard_rag": "標準 RAG（検索して回答を生成・補正なし）",
+  "searchAnswerProfiles.answerFlow.standard_rag": "標準 RAG（既定）",
+  "searchAnswerProfiles.answerFlow.crag": "CRAG（根拠を評価し、必要なら補正検索）",
   "searchAnswerProfiles.faq.title": "Approved FAQ（類似問）",
   "searchAnswerProfiles.faq.enabled.label": "回答の前に類似問を提示する",
   "searchAnswerProfiles.faq.enabled.help":
@@ -4005,7 +4005,7 @@ export const ja = {
     "質問の言い回しでは届きにくい資料の表現を補う検索文の作り方です。自動ルーティングは質問ごとに AI が選びます。",
   "settings.answering.answerFlow": "回答の生成方式",
   "settings.answering.answerFlowHint":
-    "CRAG は検索結果を AI が評価し、根拠が足りなければ検索文を書き換えて探し直します（最大 3 回）。",
+    "標準 RAG は検索した根拠からそのまま回答を作ります。CRAG は必要なときだけ選ぶ方式で、検索結果を AI が評価し、根拠が足りなければ検索文を書き換えて探し直します（最大 3 回）。評価の AI の呼び出しが増え、回答までの時間が長くなります。",
   "settings.answering.neighborChildCount": "根拠の前後から加える数",
   "settings.answering.neighborChildCountHint":
     "根拠のチャンクの前後から文脈に加えるチャンクの数です。0 は加えません。",
