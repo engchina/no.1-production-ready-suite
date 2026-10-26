@@ -23,6 +23,7 @@ from rag_engine.generation.answer_models import (
 )
 from rag_engine.parsing.picture_text import fold_picture_ocr_entries
 from rag_engine.retrieval.context_builder import ContextParentEvidence, record_context_key
+from rag_engine.retrieval.rerank_scores import keeps_original_order
 
 
 def _records_for_prompt_injection_scan(
@@ -392,7 +393,9 @@ def answer_evidence_items(
         item = _answer_record_evidence_item(record, used_ids, usage_order, uses)
         item["children"] = []
         items.append(item)
-    return [item for _, item in sorted(enumerate(items), key=_evidence_item_sort_key)]
+    # 条の目録で選んだ条（rerank 最優先の例外。`keeps_original_order`）を含む一覧は元の規則（rerank を使わない）で並べる。
+    original = any(keeps_original_order(record) for record in records)
+    return [item for _, item in sorted(enumerate(items), key=lambda pair: _evidence_item_sort_key(pair, rerank_first=not original))]
 
 
 def _answer_record_evidence_item(
@@ -583,13 +586,15 @@ def _model_usage_rank(identity_keys: set[str], usage_order: dict[str, int]) -> i
     return min(ranks) if ranks else None
 
 
-def _evidence_item_sort_key(index_and_item: tuple[int, dict[str, Any]]) -> tuple[Any, ...]:
+def _evidence_item_sort_key(index_and_item: tuple[int, dict[str, Any]], *, rerank_first: bool = True) -> tuple[Any, ...]:
     source_index, item = index_and_item
     model_used = bool(item.get("is_model_used")) or _finite_float(item.get("model_usage_rank")) is not None
 
     return (
         0 if model_used else 1,
         _ascending_number_sort_key(item.get("model_usage_rank")) if model_used else (1, 0.0),
+        # rerank の点数を主キーにし、RRF・経路の点数・語の一致は同点の順と rerank の無い根拠の順だけ（#3504）。
+        _descending_number_sort_key(item.get("rerank_score") if rerank_first else None),
         _descending_number_sort_key(item.get("hybrid_score")),
         _descending_number_sort_key(_best_mapping_number(item.get("channel_scores"))),
         _descending_number_sort_key(item.get("profile_score")),
