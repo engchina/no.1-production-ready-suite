@@ -203,6 +203,9 @@ class DoclingAdapter:
                 repairs = _repair_table_cells(item, table_lines)
                 if repairs:
                     item["table_cell_repairs"] = repairs
+                cell_bboxes = _table_cell_bboxes(item, provenances, page_lookup)
+                if cell_bboxes:
+                    item[TABLE_CELL_BBOXES_KEY] = cell_bboxes
             text = _item_text(item, category, table_html_by_ref or {})
             # ページまたぎ等で prov が複数ある item は、全文を prov ごとに複製すると
             # チャンクと検索結果が重複する。charspan で分割できなければ最初の 1 件だけに持たせる。
@@ -500,6 +503,35 @@ def _table_native_lines(
         except Exception:
             return []
     return []
+
+
+# 表のセルの領域（record の bbox と同じ画像の座標）。{"row", "col", "bbox"}（行・列は Docling の格子の
+# 0 始まりの左上）の並び。根拠の場所の解析の表のセルの領域に使う（#3429）。
+TABLE_CELL_BBOXES_KEY = "table_cell_bboxes"
+
+
+def _table_cell_bboxes(
+    item: dict[str, Any], provenances: Sequence[dict[str, Any]], page_lookup: dict[int, Any]
+) -> list[dict[str, Any]]:
+    """Docling の表のセルの bbox を、record の bbox と同じ画像の座標にする。
+
+    1 頁だけの表のときだけ作る（頁をまたぐ表のセルは、どの頁の座標か Docling の出力から決まらない）。
+    """
+    pages = {int(entry.get("page_no") or entry.get("pageNo") or 0) for entry in provenances}
+    page = page_lookup.get(next(iter(pages))) if len(pages) == 1 else None
+    if page is None:
+        return []
+    boxes: list[dict[str, Any]] = []
+    for cell in (item.get("data") or {}).get("table_cells") or []:
+        if not isinstance(cell, dict) or not isinstance(cell.get("bbox"), dict):
+            continue
+        row = _nonnegative_int(cell.get("start_row_offset_idx"))
+        col = _nonnegative_int(cell.get("start_col_offset_idx"))
+        bbox = _docling_bbox_to_image(cell["bbox"], page)
+        if row is None or col is None or not bbox or bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+            continue
+        boxes.append({"row": row, "col": col, "bbox": [round(float(value), 2) for value in bbox]})
+    return boxes
 
 
 def _table_grid_rows(item: dict[str, Any]) -> list[list[tuple[str, bool]]]:

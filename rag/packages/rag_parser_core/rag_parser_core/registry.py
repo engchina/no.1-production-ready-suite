@@ -43,6 +43,11 @@ from rag_parser_core.extraction import (
     ExtractionTableCell,
     StructuredExtraction,
 )
+from rag_parser_core.parsed_table import (
+    HEADER_CELL_KEY,
+    PARSED_TABLE_GRID_KEY,
+    PARSED_TABLE_GRID_VERSION,
+)
 from rag_parser_core.result import (
     EXTERNAL_ADAPTER_PACKAGES as EXTERNAL_ADAPTER_PACKAGES,
 )
@@ -155,6 +160,8 @@ class _HTMLTableCell:
     text: str
     row_span: int = 1
     col_span: int = 1
+    # th のセル（表頭）か（解析の表の格子の表頭の段。#3429）。
+    header: bool = False
 
 
 @dataclass(frozen=True)
@@ -248,6 +255,7 @@ class _TextHTMLParser(HTMLParser):
         self._table_cell_buffer: list[str] | None = None
         self._table_cell_row_span = 1
         self._table_cell_col_span = 1
+        self._table_cell_header = False
         self._table_caption_buffer: list[str] | None = None
         self._table_caption: str | None = None
 
@@ -284,6 +292,7 @@ class _TextHTMLParser(HTMLParser):
                 self._table_cell_buffer = []
                 self._table_cell_row_span = _html_span_attr(attrs, "rowspan")
                 self._table_cell_col_span = _html_span_attr(attrs, "colspan")
+                self._table_cell_header = normalized == "th"
             return
         if normalized in self.BLOCK_TAGS:
             self._flush_block()
@@ -436,17 +445,21 @@ class _TextHTMLParser(HTMLParser):
         if self._table_cell_buffer is None:
             return
         text = _clean_table_cell(" ".join(self._table_cell_buffer))
-        if text and self._table_row is not None:
+        # 空のセルも列の位置を持つので行に足す（捨てると後ろのセルが左の列にずれる。#3428）。
+        # すべてのセルが空の行は ``_flush_table_row`` が捨てる。
+        if self._table_row is not None:
             self._table_row.append(
                 _HTMLTableCell(
                     text=text,
                     row_span=self._table_cell_row_span,
                     col_span=self._table_cell_col_span,
+                    header=self._table_cell_header,
                 )
             )
         self._table_cell_buffer = None
         self._table_cell_row_span = 1
         self._table_cell_col_span = 1
+        self._table_cell_header = False
 
     def _flush_table_row(self) -> None:
         if self._table_row is None:
@@ -593,7 +606,10 @@ def _table_cells_from_html_table(table: _HTMLTable) -> list[ExtractionTableCell]
                     text=html_cell.text,
                     row_span=html_cell.row_span,
                     col_span=html_cell.col_span,
-                    metadata={"cell_ref": _a1_cell_ref(row_index, col_index)},
+                    metadata={
+                        "cell_ref": _a1_cell_ref(row_index, col_index),
+                        **({HEADER_CELL_KEY: True} if html_cell.header else {}),
+                    },
                 )
             )
             if html_cell.row_span > 1:
@@ -1974,7 +1990,8 @@ def _structured_from_html_blocks(
                     page_number=1,
                     caption=table.caption,
                     cells=table_cells,
-                    metadata=metadata,
+                    # セルは HTML の表の格子（span と th の表頭の印つき。#3429）。
+                    metadata={**metadata, PARSED_TABLE_GRID_KEY: PARSED_TABLE_GRID_VERSION},
                 )
             )
             continue
@@ -3655,9 +3672,19 @@ def _adapter_table_from_cells(
                 "row_count": row_count,
                 "column_count": column_count,
                 "table_source": table_source,
+                # 解析が渡したセル・行は解析の表の格子（本文から推したセルは除く。#3429）。
+                **(
+                    {PARSED_TABLE_GRID_KEY: PARSED_TABLE_GRID_VERSION}
+                    if table_source in _PARSED_GRID_TABLE_SOURCES
+                    else {}
+                ),
             },
         )
     ]
+
+
+# 解析が表の格子を渡した表の出どころ（``adapter_text`` は本文から推した行なので含めない）。
+_PARSED_GRID_TABLE_SOURCES = frozenset({"adapter_cells", "adapter_rows"})
 
 
 def _adapter_table_with_page_metadata(
