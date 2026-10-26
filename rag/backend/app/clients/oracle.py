@@ -36,6 +36,8 @@ from pr_backend_core.oracle_pool import (
 )
 from pr_backend_core.oracle_session import init_oracle_session
 from pydantic import ValidationError
+from rag_engine.resources.tracing import observe_call
+from rag_engine.retrieval.search_stages import TEXT_SEARCH_STAGE, VECTOR_SEARCH_STAGE
 from rag_parser_core.xml_tree_json import query_citation_keys
 
 from app.clients.oracle_read_stats import (
@@ -454,7 +456,9 @@ class OracleClient:
         例: SELECT ... ORDER BY VECTOR_DISTANCE(embedding, :v, COSINE) FETCH FIRST :k ROWS ONLY
         """
         self._validate_embedding_width(embedding, "query embedding")
-        return await self._vector_search_with_oracle(embedding, top_k, filters or {})
+        # 処理の経過の段(文書の検索の中の DB の検索。#3436・#3443)。
+        with observe_call("stage", VECTOR_SEARCH_STAGE):
+            return await self._vector_search_with_oracle(embedding, top_k, filters or {})
 
     async def keyword_search(
         self,
@@ -463,7 +467,8 @@ class OracleClient:
         filters: dict[str, str] | None = None,
     ) -> list[RetrievedChunk]:
         """Oracle Text 相当のキーワード検索を行う。"""
-        return await self._keyword_search_with_oracle(query, top_k, filters or {})
+        with observe_call("stage", TEXT_SEARCH_STAGE):
+            return await self._keyword_search_with_oracle(query, top_k, filters or {})
 
     async def hybrid_search(
         self,
@@ -585,17 +590,26 @@ class OracleClient:
         # (branch ごとの CTE。#1498)は、optimizer が文書の集合の副問い合わせを行ごとの FILTER にし、
         # chunk の全件を走査する計画を選んでいた(検証環境で vector 2 本 20 秒・keyword 4 本 6.5 秒 →
         # 1 本ずつ vector 0.6 秒・keyword 0.1 秒)。
-        reads: list[Awaitable[None]] = [
+        # vector の検索と keyword の検索は、それぞれ処理の経過の段(文書の検索の中の DB の検索)にする
+        # (rag_engine の検索の実装と同じ名前。#3436・#3443)。2 つの段は並行に読むので重なる。
+        vector_reads: list[Awaitable[None]] = [
             self._read_vector_branch(
                 binds[f"embedding_{n}"], top_k=top_k, filters=filters, into=branch_rows[n]
             )
+            for n, kind in enumerate(branch_kinds)
             if kind == "vector"
-            else self._read_keyword_branch(
+        ]
+        keyword_reads: list[Awaitable[None]] = [
+            self._read_keyword_branch(
                 str(binds[f"query_{n}"]), top_k=top_k, filters=filters, into=branch_rows[n]
             )
             for n, kind in enumerate(branch_kinds)
+            if kind == "keyword"
         ]
-        await asyncio.gather(*reads)
+        await asyncio.gather(
+            _observed_reads(VECTOR_SEARCH_STAGE, vector_reads),
+            _observed_reads(TEXT_SEARCH_STAGE, keyword_reads),
+        )
         branch_hits: list[list[RetrievedChunk]] = []
         for kind, rows in zip(branch_kinds, branch_rows, strict=True):
             ordered = [row for _rank, row in sorted(rows, key=lambda item: item[0])]
@@ -16172,6 +16186,17 @@ def _retrieved_chunk_score_sort_key(
 
 async def _no_citation_hits() -> list[RetrievedChunk]:
     return []
+
+
+async def _observed_reads(stage: str, reads: Sequence[Awaitable[None]]) -> None:
+    """読み取りを並行に読み、全体を 1 つの処理の経過の段(``observe_call("stage", stage)``)にする。
+
+    読むものが無ければ段を出さない(#3443)。
+    """
+    if not reads:
+        return
+    with observe_call("stage", stage):
+        await asyncio.gather(*reads)
 
 
 def _with_citation_hits(
