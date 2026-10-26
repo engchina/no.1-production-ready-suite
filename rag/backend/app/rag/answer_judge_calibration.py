@@ -203,13 +203,35 @@ def evaluate_labels(labels: HumanLabels, evaluate: Evaluate) -> dict[str, dict[s
     return {item.id: dict(evaluate(item)) for item in labels.items}
 
 
-def _backend_evaluator() -> tuple[Evaluate, dict[str, Any]]:
+def judge_provenance(settings: Any) -> dict[str, Any]:
+    """評価器の判定のモデル（校正の結果に記録し、画面の「校正済み」の照合に使う。#3578）。"""
+    from app.config import enterprise_ai_default_model_id
+
+    return {"provider": "oci_enterprise_ai", "model": enterprise_ai_default_model_id(settings)}
+
+
+def judge_prompt_sha256() -> str:
+    """評価器の指示（``answer_eval`` の ``*_PROMPT``）の sha256（校正の結果と照合する。#3578）。
+
+    指示の名前・数が変わっても、module の大文字の ``*_PROMPT`` の文字列を名前の順に hash する。
+    """
+    from rag_engine.evaluation import answer_eval
+
+    prompts = sorted(
+        (name, value)
+        for name, value in vars(answer_eval).items()
+        if name.isupper() and name.endswith("PROMPT") and isinstance(value, str)
+    )
+    return _sha256(prompts)
+
+
+def backend_evaluator(settings: Any | None = None) -> tuple[Evaluate, dict[str, Any]]:
     """RAG の設定で、画面・評価の job と同じ評価器（`evaluate_answer_record`）を使う。"""
-    from app.config import enterprise_ai_default_model_id, get_settings
+    from app.config import get_settings
     from app.rag.answer_engine import evaluate_answer_record
     from app.schemas.search import RetrievedChunk
 
-    settings = get_settings()
+    resolved = settings or get_settings()
 
     def evaluate(item: LabeledAnswer) -> Mapping[str, Any]:
         citations = [
@@ -219,13 +241,10 @@ def _backend_evaluator() -> tuple[Evaluate, dict[str, Any]]:
             for evidence in item.evidence
         ]
         return evaluate_answer_record(
-            evaluation_input(item), item.standard_answer or "", settings, citations=citations
+            evaluation_input(item), item.standard_answer or "", resolved, citations=citations
         )
 
-    return evaluate, {
-        "provider": "oci_enterprise_ai",
-        "model": enterprise_ai_default_model_id(settings),
-    }
+    return evaluate, judge_provenance(resolved)
 
 
 def _pass_at(values: Sequence[str]) -> dict[str, float]:
@@ -285,7 +304,7 @@ def main(
             if missing:
                 raise ValueError(f"評価の無い項目があります: {', '.join(missing[:10])}")
         else:
-            evaluate, provenance = evaluator or _backend_evaluator()
+            evaluate, provenance = evaluator or backend_evaluator()
             evaluations = evaluate_labels(labels, evaluate)
         report = calibrate_evaluations(
             labels, evaluations, thresholds=thresholds, pass_at=cutoffs, evaluator=provenance

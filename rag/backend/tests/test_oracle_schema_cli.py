@@ -137,6 +137,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "feedback_details",
         "evaluation_artifacts",
         "evaluation_jobs",
+        "evaluation_calibration",
         "role_access",
     ]
     assert all(section["statement_count"] > 0 for section in manifest["sections"])
@@ -427,7 +428,9 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "''compare''" not in compare_migration
     assert "column_name = 'CURRENT_EXPERIMENT_ID'" in compare_migration
     # 文書の分類の一覧の表と索引を無いときだけ作る（#2131）。一意の索引も作る。
-    categories_migration = sql.split("-- migration: 20261016_003_document_categories", 1)[1]
+    categories_migration = sql.split("-- migration: 20261016_003_document_categories", 1)[1].split(
+        "-- migration: ", 1
+    )[0]
     assert "CREATE TABLE rag_document_categories" in categories_migration
     assert "CREATE UNIQUE INDEX rag_document_categories_name_ux" in categories_migration
     assert "index_name = 'RAG_DOCUMENT_CATEGORIES_NAME_UX'" in categories_migration
@@ -442,7 +445,9 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     # 評価の結果の行は消さない。
     assert "DELETE FROM rag_evaluation_runs" not in compare_migration
     # 業務ガイドの質問の例の埋め込みの表を無いときだけ作る（#2398）。
-    embeddings_migration = sql.split("-- migration: 20261018_001_support_guide_embeddings", 1)[1]
+    embeddings_migration = sql.split("-- migration: 20261018_001_support_guide_embeddings", 1)[
+        1
+    ].split("-- migration: ", 1)[0]
     assert "CREATE TABLE rag_support_guide_embeddings" in embeddings_migration
     assert "table_name = 'RAG_SUPPORT_GUIDE_EMBEDDINGS'" in embeddings_migration
     assert "DROP" not in embeddings_migration
@@ -461,7 +466,9 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "column_name = 'ATTACHMENTS_JSON'" in attachments_migration
     assert "DROP" not in attachments_migration.split("-- migration:", 1)[0]
     # 業務ガイドの内容の形の版を 2 にする（#2395）。schema_version だけを書き換える。
-    guide_migration = sql.split("-- migration: 20261018_004_support_guide_schema_v2", 1)[1]
+    guide_migration = sql.split("-- migration: 20261018_004_support_guide_schema_v2", 1)[1].split(
+        "-- migration: ", 1
+    )[0]
     assert "JSON_TRANSFORM(draft_json, SET '$.schema_version' = 2)" in guide_migration
     assert "JSON_TRANSFORM(content_json, SET '$.schema_version' = 2)" in guide_migration
     assert "DELETE" not in guide_migration and "DROP" not in guide_migration
@@ -486,7 +493,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     # ファイル準備の改名と、文書レシピの解析エンジン・分割符の移行(#2457)。値の書き換えだけ。
     jsonl_migration = sql.split("-- migration: 20261019_003_structured_records_jsonl_profiles", 1)[
         1
-    ]
+    ].split("-- migration: ", 1)[0]
     assert "''\"csv_to_json\"'', ''\"csv_to_jsonl\"''" in jsonl_migration
     assert "''\"excel_to_json\"'', ''\"excel_to_jsonl\"''" in jsonl_migration
     assert "'RAG_DOCUMENT_RECIPES.PROCESSING_CONFIG'" in jsonl_migration
@@ -496,7 +503,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 107
+    assert len(statements) == 109
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -592,6 +599,8 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261021_001_answer_prompt_placeholders",
         "20261021_002_document_delete_fk_indexes",
         "20261022_001_cited_evidence",
+        "20261026_001_evaluation_calibration",
+        "20261026_002_evaluation_job_calibration_kind",
     ]
 
 
@@ -721,3 +730,27 @@ def test_migration_artifact_separates_unterminated_sql_from_plsql() -> None:
     assert len(statements) == 2
     assert statements[0].endswith("UPDATE example SET value = 1")
     assert statements[1].endswith("END;")
+
+
+def test_oracle_schema_migration_sql_adds_evaluation_calibration() -> None:
+    """判定の校正の表と索引は無いときだけ作り、job の kind に calibration を足す（#3578）。"""
+    sql = oracle_schema.oracle_schema_migration_sql()
+    tables = sql.split("-- migration: 20261026_001_evaluation_calibration", 1)[1].split(
+        "-- migration: ", 1
+    )[0]
+    for table in (
+        "RAG_EVALUATION_LABEL_SETS",
+        "RAG_EVALUATION_LABEL_ITEMS",
+        "RAG_EVALUATION_LABELS",
+        "RAG_EVALUATION_CALIBRATIONS",
+    ):
+        assert f"table_name = '{table}'" in tables
+    assert "index_name = 'RAG_EVALUATION_LABELS_ANNOTATOR_IDX'" in tables
+    assert "DROP" not in tables
+    assert "DELETE FROM" not in tables
+    kind = sql.split("-- migration: 20261026_002_evaluation_job_calibration_kind", 1)[1].split(
+        "-- migration: ", 1
+    )[0]
+    assert "constraint_name = 'RAG_EVALUATION_JOBS_KIND_CK'" in kind
+    assert "'CHECK (kind IN (''run'', ''calibration''))'" in kind
+    assert "DELETE" not in kind
