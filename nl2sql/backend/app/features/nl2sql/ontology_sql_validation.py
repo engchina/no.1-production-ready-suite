@@ -57,7 +57,7 @@ def physical_table(table: exp.Table, physical: dict[str, set[str]]) -> str:
         if split_match_key(key)[-1:] == [name] and (not owner or key == f"{owner}.{name}")
     ]
     if table.catalog or len(matches) != 1:
-        raise ValueError(f"SQL 表 {table.sql()} を Profile 内で一意に解決できません。")
+        raise ValueError(f"SQL 表 {table.sql()} を業務プロファイル内で一意に解決できません。")
     return matches[0]
 
 
@@ -181,7 +181,7 @@ def physical_column(
         and (not owner or key == f"{owner}.{table}")
     ]
     if column.catalog or len(matches) != 1:
-        raise ValueError(f"SQL 列 {column.sql()} を Profile 内で一意に解決できません。")
+        raise ValueError(f"SQL 列 {column.sql()} を業務プロファイル内で一意に解決できません。")
     return f"{matches[0]}.{name}"
 
 

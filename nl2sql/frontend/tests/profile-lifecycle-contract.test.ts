@@ -57,7 +57,7 @@ test("profile Oracle sync exposes progress, failure recovery and retry", () => {
   assert.match(profileSyncPresentation, /job\.oracle_result/u);
   assert.match(profileSyncPresentation, /job\.agent_result/u);
   assert.match(profilePage, /\/oracle-sync-jobs\/\$\{oracleSyncJob\.job_id\}\/retry/u);
-  assert.match(messages, /業務 Profile は保存されましたが、Oracle 反映に失敗しました/u);
+  assert.match(messages, /業務プロファイルは保存されましたが、Oracle 反映に失敗しました/u);
   assert.doesNotMatch(profilePage, /function OracleMutationResult/u);
   assert.doesNotMatch(profilePage, /profile-oracle-result/u);
   assert.doesNotMatch(messages, /Oracle Profile 反映結果/u);

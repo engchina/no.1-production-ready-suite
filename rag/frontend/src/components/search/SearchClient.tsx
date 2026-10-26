@@ -231,19 +231,34 @@ export function SearchClient() {
     Boolean(searchAnswerProfilesQuery.data) &&
     !searchAnswerProfilesQuery.data?.has_next &&
     !searchAnswerProfiles.some((view) => view.id === searchAnswerProfileId);
+  // 一覧で使えると分かった検索・回答プロファイル。分かるまでは項目・質問の候補を取りに行かない（使えない検索・回答
+  // プロファイルの 404 を出さない。#3355）。
+  const confirmedSearchAnswerProfileId =
+    searchAnswerProfilesQuery.data && !searchAnswerProfileMissing ? searchAnswerProfileId : null;
   // 選んだ検索・回答プロファイルが参照 KB を持たないなら検索しない（利用者の全 KB を検索しない。#304）。
   // backend も 409 で理由を返すが、送信する前にこの場で理由を示す。
   const selectedSearchAnswerProfile = searchAnswerProfiles.find((view) => view.id === searchAnswerProfileId);
   const selectedWithoutKnowledgeBases = selectedSearchAnswerProfile?.knowledge_base_count === 0;
   // 画面を離れたら生成中の検索を止める（backend の pipeline と LLM を無駄に動かし続けない。#285）。
   useEffect(() => () => abortRef.current?.abort(), []);
+  // 実行履歴の「RAG 検索で開く」で受け取った検索・回答プロファイルが使えない（削除・アーカイブ・権限なし）ときは、
+  // 選択を空にして選び直しを案内する（黙って外さない。#3355）。
+  const [prefillProfileUnavailable, setPrefillProfileUnavailable] = useState(false);
+  if (
+    searchAnswerProfileMissing &&
+    !prefillProfileUnavailable &&
+    Boolean(prefill?.searchAnswerProfileId) &&
+    prefill?.searchAnswerProfileId === searchAnswerProfileId
+  ) {
+    setPrefillProfileUnavailable(true);
+  }
   useEffect(() => {
     if (searchAnswerProfileMissing) setSearchAnswerProfileId(null);
   }, [searchAnswerProfileMissing, setSearchAnswerProfileId]);
   const hasClassificationFilters = Object.values(classification).some((value) => value.trim());
   const hasExtractionFieldFilters = extractionRows.some(isActiveExtractionFieldFilterRow);
   const extractionFieldsQuery = useSearchExtractionFields(
-    searchAnswerProfileId,
+    confirmedSearchAnswerProfileId,
     extractionOpen || hasExtractionFieldFilters
   );
   const fieldFilter = extractionFieldConditions(
@@ -552,6 +567,7 @@ export function SearchClient() {
                 onChange={(next) => {
                   setSearchAnswerProfileId(next);
                   setScopeError("");
+                  setPrefillProfileUnavailable(false);
                 }}
                 disabled={isStreaming}
                 error={
@@ -559,6 +575,12 @@ export function SearchClient() {
                   (selectedWithoutKnowledgeBases ? t("searchAnswerProfiles.scope.noKnowledgeBases") : "")
                 }
               />
+              {prefillProfileUnavailable && !searchAnswerProfileId ? (
+                // 選択欄の直下に出す（NL2SQL の「SQL 生成で開く」と同じ。#3355）。
+                <div data-testid="search-prefill-profile-unavailable">
+                  <Banner severity="warning">{t("search.prefill.profileUnavailable")}</Banner>
+                </div>
+              ) : null}
 
               <div className="rounded-md border border-border bg-surface-sunken">
                 <button
@@ -767,7 +789,7 @@ export function SearchClient() {
                   />
                 </FieldActionRow>
                 <QuerySuggestions
-                  searchAnswerProfileId={searchAnswerProfileId}
+                  searchAnswerProfileId={confirmedSearchAnswerProfileId}
                   query={query}
                   filters={classificationSuggestionFilters(classification)}
                   disabled={isStreaming}

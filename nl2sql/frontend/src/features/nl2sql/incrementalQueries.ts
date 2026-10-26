@@ -32,6 +32,17 @@ const LEGACY_COMPATIBILITY_STATUSES = new Set([404, 410, 501]);
 
 export type DbAdminObjectQueryScope = "all" | "name_comment";
 
+/** 業務プロファイルが削除済み・アーカイブ済み・権限なしで使えない（利用の情報を取れない。#3355）。 */
+export class ProfileUnavailableError extends Error {
+  readonly profileId: string;
+
+  constructor(profileId: string) {
+    super(t("profiles.error.notFound"));
+    this.name = "ProfileUnavailableError";
+    this.profileId = profileId;
+  }
+}
+
 export function isLegacyCompatibilityError(error: unknown): boolean {
   return error instanceof ApiError && LEGACY_COMPATIBILITY_STATUSES.has(error.status);
 }
@@ -173,7 +184,7 @@ export function useProfileUsageContext(profileId: string) {
           timeoutMs: API_TIMEOUT_MS.interactiveList,
         });
         const profile = profiles.find((item) => item.id === profileId && !item.archived);
-        if (!profile) throw new Error(t("profiles.error.notFound"));
+        if (!profile) throw new ProfileUnavailableError(profileId);
         return {
           data: {
             id: profile.id,

@@ -37,7 +37,7 @@ class _FakeProfileService:
 
     def get_profile(self, profile_id: str) -> Nl2SqlProfile:
         if profile_id != self.profile.id:
-            raise ValueError("指定された profile が見つかりません。")
+            raise ValueError("指定された業務プロファイルが見つかりません。")
         return self.profile.model_copy(deep=True)
 
     def upsert_profile_select_ai_profile(
