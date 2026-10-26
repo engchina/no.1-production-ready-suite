@@ -120,7 +120,7 @@ describe("記録の表示", () => {
     ]);
   });
 
-  it("選択肢の無い確認事項の答えは、自由入力だけの記録にする（#3366）", () => {
+  it("選択肢の無い確認事項の答えは、自由入力だけの記録にする", () => {
     const freeText = confirmation({
       status: "answered",
       items: [{ id: "item_1", prompt: "どの資料ですか？", reason: "", selection: "single", options: [] }],
