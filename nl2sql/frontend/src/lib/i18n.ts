@@ -1446,6 +1446,19 @@ const nl2sqlJa = {
   "nl2sql.clarification.other": "その他（自由入力）",
   "nl2sql.clarification.otherPlaceholder":
     "選択肢に無い内容を入力してください。表・列は TABLE.COLUMN の名前で書くと確実です",
+  // 選択肢の無い確認事項の欄（#3366）。「その他」「選択肢に無い」と言わない。
+  "nl2sql.clarification.freeText": "答え",
+  "nl2sql.clarification.freeTextPlaceholder":
+    "答えを入力してください。表・列は TABLE.COLUMN の名前で書くと確実です",
+  // 選択肢の無い欄で、確認済みの要件を直す・条件を足すとき（答えではなく直しを書く。#3366）。
+  "nl2sql.clarification.correctionText": "直す内容",
+  "nl2sql.clarification.correctionPlaceholder":
+    "直す内容を入力してください。表・列は TABLE.COLUMN の名前で書くと確実です",
+  "nl2sql.clarification.correctionBlocked": "直す内容を書くと押せます。",
+  "nl2sql.clarification.addText": "追加する条件",
+  "nl2sql.clarification.addPlaceholder":
+    "追加する条件を入力してください。表・列は TABLE.COLUMN の名前で書くと確実です",
+  "nl2sql.clarification.addBlocked": "追加する条件を書くと押せます。",
   "nl2sql.clarification.otherPendingHint":
     "入力した内容は「直しを伝える」で AI に伝えてから、SQL を生成してください。",
   "nl2sql.clarification.targetPendingHint":

@@ -91,12 +91,15 @@ function recordOf(confirmation: ConfirmationRequest): ConfirmationRecordView | n
     outcome: confirmation.status,
     entries: records<ConfirmationRequest["items"][number]>(confirmation.items).map((item) => {
       const answer = answers.get(item.id);
-      const labels = new Map(records<{ id: string; label: string }>(item.options).map((option) => [option.id, option.label]));
+      const options = records<{ id: string; label: string }>(item.options);
+      const labels = new Map(options.map((option) => [option.id, option.label]));
       return {
         id: item.id,
         prompt: item.prompt,
         selected: (answer?.option_ids ?? []).map((id) => labels.get(id) ?? "").filter(Boolean),
         otherText: answer?.other_text || undefined,
+        // 選択肢の無い確認事項の答えに「その他: 」を付けない（#3366）。
+        freeTextOnly: options.length === 0,
       };
     }),
   };
