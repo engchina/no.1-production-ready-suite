@@ -191,6 +191,9 @@ def run_history_list_where(
     return " AND ".join(clauses), binds
 
 
+# 一覧の列。利用量（#3419）は `stages_json` の全体（処理の段・trace の記録）を読まず、
+# 合計の token と計測の状態の 2 つの値だけを `JSON_VALUE` で取り出す（#3466。DDL・索引は
+# 足さない）。
 _LIST_COLUMNS = f"""
     r.run_id, r.surface, r.search_answer_profile_id, p.name AS search_answer_profile_name,
     r.user_id_hash, r.user_uuid,
@@ -198,7 +201,11 @@ _LIST_COLUMNS = f"""
     r.answer_generated, r.status, r.answer_outcome, r.verification, r.confidence,
     r.needs_human_review, r.citation_count, r.elapsed_ms, r.error_stage, r.model_id,
     r.conversation_id, r.message_id, r.created_at,
-    rc.user_id_hash AS conversation_owner_hash
+    rc.user_id_hash AS conversation_owner_hash,
+    JSON_VALUE(r.stages_json, '$.usage.total_tokens' RETURNING NUMBER(19) NULL ON ERROR)
+        AS usage_total_tokens,
+    JSON_VALUE(r.stages_json, '$.usage.measurement' RETURNING VARCHAR2(16) NULL ON ERROR)
+        AS usage_measurement
 """
 
 # 会話の持ち主（実行の詳細の「会話の持ち主」・会話を開ける人の判定。#1954）。削除された会話は NULL。
@@ -315,13 +322,22 @@ class RunHistoryStore:
         where, binds = run_history_list_where(
             query=query, surface=surface, status=status, executor=executor, since=since
         )
+        # ページの実行（run_id）を先に決め、列（質問の先頭・利用量の JSON_VALUE・名前の
+        # 結合）はページの行だけで読む（#3466）。1 つの SELECT にすると、並べ替えが全行の
+        # `stages_json`（処理の段・trace の記録）を抱えて運び、行が増えるほど重くなる。
         rows = await self._oracle._fetch_all(  # noqa: SLF001
             f"""
+            WITH run_page AS (
+                SELECT r.run_id
+                FROM {RUN_HISTORY_TABLE} r
+                WHERE {where}
+                ORDER BY r.created_at DESC, r.run_id DESC
+                {offset_fetch_clause()}
+            )
             SELECT {_LIST_COLUMNS}
             {_FROM}
-            WHERE {where}
+            JOIN run_page pg ON pg.run_id = r.run_id
             ORDER BY r.created_at DESC, r.run_id DESC
-            {offset_fetch_clause()}
             """,
             {**binds, **offset_fetch_binds(offset=offset, limit=limit)},
         )

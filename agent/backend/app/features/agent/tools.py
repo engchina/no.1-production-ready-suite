@@ -12,7 +12,9 @@ import logging
 import re
 import secrets
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from enum import StrEnum
@@ -788,12 +790,47 @@ def _with_trace_meta(payload: JsonObject) -> JsonObject:
     return {**payload, "params": {**params, "_meta": merged}}
 
 
+# 実行中のツール（function tool の名前, 表示名〔MCP の `title`〕）。同じツールの `tools/call` の
+# `mcp.request` の span に表示名を付ける（#3468）。
+_TOOL_TITLE: ContextVar[tuple[str, str] | None] = ContextVar("agent_tool_title", default=None)
+# `mcp.request` の span の、呼ぶツールの表示名の属性（画面の行の名前に使う。#3468）。
+MCP_TOOL_TITLE_ATTRIBUTE = "pr.tool.title"
+
+
+@contextmanager
+def tool_title_scope(function_name: str, title: str | None) -> Iterator[None]:
+    """この中の同じツールの `tools/call` の `mcp.request` の span に、表示名を付ける（#3468）。
+
+    表示名はツールの span と同じ（Run の `tool_titles`。MCP の `title`）。無ければ何もしない。
+    """
+    if not title:
+        yield
+        return
+    token = _TOOL_TITLE.set((function_name, title))
+    try:
+        yield
+    finally:
+        _TOOL_TITLE.reset(token)
+
+
+def _current_tool_title(mcp_tool_name: str) -> str | None:
+    """実行中のツールの表示名（呼ぶ MCP のツールが、そのツールのときだけ）。"""
+    current = _TOOL_TITLE.get()
+    if current is None:
+        return None
+    function_name, title = current
+    if mcp_tool_name in (function_name, mcp_base_tool_name(function_name)):
+        return title
+    return None
+
+
 def _mcp_request_attributes(payload: JsonObject) -> dict[str, object]:
     """`mcp.request` の span の属性（OpenTelemetry の MCP の semantic conventions。#3272）。
 
     JSON-RPC の method（`mcp.method.name`）と、`tools/call` なら呼ぶツールの名前
-    （`gen_ai.tool.name`）。画面の処理の経過は `tools/call` だけを行にし、`initialize`・通知・
-    `tools/list` は出さない。引数・結果は入れない。
+    （`gen_ai.tool.name`）と表示名（`pr.tool.title`。実行中のツールの表示名。#3468）。画面の処理の
+    経過は `tools/call` だけを行にし、`initialize`・通知・`tools/list` は出さない。引数・結果は
+    入れない。
     """
     method = payload.get("method")
     if not isinstance(method, str) or not method:
@@ -803,6 +840,8 @@ def _mcp_request_attributes(payload: JsonObject) -> dict[str, object]:
     name = params.get("name") if isinstance(params, dict) else None
     if method == "tools/call" and isinstance(name, str) and name:
         attributes["gen_ai.tool.name"] = name
+        if title := _current_tool_title(name):
+            attributes[MCP_TOOL_TITLE_ATTRIBUTE] = title
     return attributes
 
 

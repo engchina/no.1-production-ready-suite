@@ -254,6 +254,35 @@ describe("RunHistoryTable", () => {
     expect(cells[1]).toBe("—");
   });
 
+  it("利用量の計測の状態の注記: 数があれば数の下に、無ければ注記だけ（0・「—」にしない。#3466）", () => {
+    const usages: RunHistoryItem["usage"][] = [
+      { tokens: 12345, note: "一部計測" },
+      { tokens: null, note: "未計測" },
+      { tokens: 0, note: null },
+    ];
+    const rows: ProductRow[] = usages.map((_, index) => ({
+      run_id: `u${index}`,
+      question: `合成の質問 ${index}`,
+      status: "ok",
+      by: "me",
+    }));
+    render(
+      <RunHistoryTable
+        rows={rows}
+        toItem={(row) => ({ ...toItem(row), usage: usages[Number(row.run_id.slice(1))] })}
+        onOpen={() => undefined}
+        showUsage
+      />
+    );
+    const cells = Array.from(container.querySelectorAll("tbody tr")).map((tr) => tr.lastElementChild);
+    expect(cells.map((cell) => cell?.textContent)).toEqual(["12,345 token一部計測", "未計測", "0 token"]);
+    expect(cells[0]?.querySelector("[data-run-usage-note]")?.textContent).toBe("一部計測");
+    expect(cells[1]?.querySelector("[data-run-usage-note]")?.textContent).toBe("未計測");
+    // 右寄せ・等幅数字で、狭い置き場所（56rem 未満）では出さない列。
+    expect(cells[0]?.className).toContain("tnum");
+    expect(cells[0]?.className).toContain("hidden");
+  });
+
   it("文言は部分で上書きできる（Agent の「依頼」など）", () => {
     render(
       <RunHistoryTable rows={ROWS} toItem={toItem} onOpen={() => undefined} labels={{ columns: { title: "依頼" } }} />

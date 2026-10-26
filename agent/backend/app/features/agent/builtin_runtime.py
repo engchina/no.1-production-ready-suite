@@ -326,6 +326,7 @@ from app.features.agent.tools import (
     mcp_tool_handler,
     tool_registry,
     tool_result_images,
+    tool_title_scope,
     with_tool_result_images,
 )
 from app.features.agent.trace_spans import run_trace_owner, trace_spans
@@ -1806,6 +1807,20 @@ class _ToolRecorder:
                 {"error": message, "error_code": BUDGET_EXCEEDED_CODE, "budget": exceeded},
                 ensure_ascii=False,
             )
+        base = mcp_base_tool_name(name)
+        guide_note: dict[str, Any] | None = None
+
+        async def check_guides(result: ToolResult) -> None:
+            # 根拠の取得の結果に足す業務ガイドの照合（#1322）は、根拠の取得の一部なので、その
+            # ツールの span の中で呼ぶ（処理の経過で根拠の取得の行の子になる。#3471）。
+            nonlocal guide_note
+            if (
+                result.success
+                and base == RAG_RETRIEVE_EVIDENCE
+                and isinstance(result.output or {}, dict)
+            ):
+                guide_note = await self.check_guides(name, call.arguments)
+
         # 4. handler（呼び先へ送る。ツールの span は `execute` が測る）。
         result = await self.execute(
             step_id,
@@ -1815,10 +1830,10 @@ class _ToolRecorder:
             handler=handler,
             scoped=scoped,
             authorization=authorization,
+            follow_up=check_guides,
         )
         if result.success:
             output = result.output or {}
-            base = mcp_base_tool_name(name)
             if base == RAG_SEARCH and isinstance(output, dict):
                 next_step = self._without_asking(rag_next_step(output, self.environment_tools))
                 if next_step is not None:
@@ -1856,9 +1871,8 @@ class _ToolRecorder:
                         "builtin_runtime_profile_knowledge_passed",
                         extra={"run_id": self.run_id, "tool_name": name, **knowledge},
                     )
-                note = await self.check_guides(name, call.arguments)
-                if note is not None:
-                    output = {**output, "guide_check": note}
+                if guide_note is not None:
+                    output = {**output, "guide_check": guide_note}
             if base == RAG_LOOKUP_GUIDES and isinstance(output, dict):
                 # モデルが自分で引いた業務ガイドにも次の手を足す（業務ガイドだけで答えさせない）。
                 note = guide_check_note(
@@ -2105,11 +2119,14 @@ class _ToolRecorder:
         scoped: data_scope.ScopeEnforcement | None = None,
         authorization: _Authorization,
         abortable: bool = True,
+        follow_up: Callable[[ToolResult], Awaitable[None]] | None = None,
     ) -> ToolResult:
         """handler を呼び、結果を step に記録する。
 
         `abortable` の呼び出しは、Run の取消・終了で実行中の呼び先への送信を打ち切る（#2691。
         `_invoke_abortable`）。打ち切った呼び出しは失敗ではなく取消として step に残す。
+        `follow_up` は、このツールの結果に続けて Runtime が行う処理（根拠の取得の後の業務ガイドの
+        照合など）で、ツールの span の中で呼ぶ（その中の span はこのツールの子になる。#3471）。
         """
         from app.features.agent.runtime import runtime_repository
 
@@ -2123,18 +2140,18 @@ class _ToolRecorder:
         # ツールの呼び出しの span（処理の経過のツールの行。#3226）。回答前の確認のツールは
         # 利用者の答えを返すだけなので span にしない（待ちの区間の span が表す）。実行中も
         # 呼んだ引数を開いて見られる。
+        titles = runtime_repository.builtin_tool_titles(self.run_id)
         scope: AbstractContextManager[ObservedSpan | None] = (
             nullcontext(None)
             if call.name == CONFIRMATION_TOOL
             else observed_span(
                 EXECUTE_TOOL_SPAN,
                 attributes=tool_attributes(call.name, call.trace_id),
-                display=tool_display(
-                    call, runtime_repository.builtin_tool_titles(self.run_id), run_step=step_id
-                ),
+                display=tool_display(call, titles, run_step=step_id),
             )
         )
-        with scope as tool_span:
+        # ツールの中の MCP の呼び出しの行も、ツールの行と同じ表示名で出す（#3468）。
+        with scope as tool_span, tool_title_scope(call.name, titles.get(call.name)):
             result = await self._execute_handler(
                 step_id,
                 call,
@@ -2157,6 +2174,8 @@ class _ToolRecorder:
                 # 終わったツールの詳細（内部名・エラー・引数と結果）は終わりのイベントで送る
                 # （#2373）。
                 tool_span.set_display(details=tool_details(call, result))
+            if follow_up is not None:
+                await follow_up(result)
         return result
 
     async def _execute_handler(

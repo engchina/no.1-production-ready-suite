@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from opentelemetry import trace as otel_trace
 from pytest import MonkeyPatch
 
 from app.clients import support_guide_store
@@ -227,6 +228,9 @@ def test_mcp_validate_answer(auth: Any, monkeypatch: MonkeyPatch) -> None:  # no
         question: str, answer: str, refs: list[EvidenceRef], settings: Any, **kwargs: Any
     ) -> AnswerValidation:
         assert [ref.chunk_id for ref in refs] == ["c1"]
+        # MCP の照合は回答フローと同じ「資料との照合」の工程の span の中で動く（#3470）。
+        current = otel_trace.get_current_span()
+        assert getattr(current, "attributes", {}).get("pr.stage") == "資料との照合"
         # 任意の入力が無ければ、決定的な検査はしない（#1276）。
         assert (kwargs["requests"], kwargs["gaps"], kwargs["guide"]) == (None, [], None)
         return AnswerValidation(

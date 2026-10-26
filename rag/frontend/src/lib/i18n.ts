@@ -4998,6 +4998,7 @@ export const ja = {
   "history.list.aria": "実行履歴",
   "history.col.outcome": "回答の対応",
   "history.col.verification": "資料との照合",
+  "history.col.usage": "token",
   "history.col.createdAt": "日時",
   "history.question.withheld": "（安全チェックで止めた質問は保存しません）",
   "history.profile.none": "検索・回答プロファイルなし",
