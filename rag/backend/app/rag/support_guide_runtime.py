@@ -13,7 +13,7 @@
 比べ、手がかりがあって合わなければそのガイドを使わない。手がかりが無い項目は ``unverified`` として
 回答の記録・MCP に出す（推測で埋めない）。
 
-業務ガイドの内容は、用語・ルールと同じ経路（runtime knowledge のルール。`pinned` で必ず使う）で
+業務ガイドの内容は、回答ルールと同じ経路（runtime knowledge のルール。`pinned` で必ず使う）で
 回答の材料に渡す。手順の検索の手がかりは検索文に足す。分かっている条件で決まる分岐だけを残し、
 合わない分岐の行き先の手順は材料から外す（#1278）。
 
@@ -34,7 +34,12 @@ from datetime import date
 from typing import Any, Literal
 
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
-from rag_engine.knowledge.runtime_knowledge import label_matches, parse_runtime_terms
+from rag_engine.knowledge.runtime_knowledge import (
+    PINNED_RULE_TAG,
+    SUPPORT_GUIDE_RULE_TAG,
+    label_matches,
+    parse_runtime_terms,
+)
 
 from app.config import settings_today
 from app.schemas.classification import category_label
@@ -67,7 +72,6 @@ _GUIDE_CHOICE_LIMIT = 4
 # 質問の中から名指しを探す値の最短の長さ（#553 の業務の名前と同じ）。
 _MIN_NAME_CHARS = 2
 _BOOLEAN_VALUES = SUPPORT_GUIDE_BOOLEAN_VALUES
-PINNED_RULE_TAG = "pinned"
 # 公開の業務ガイドを読めなかったとき、回答の診断に残す key（回答は続ける。#1278）。
 GUIDE_LOAD_FAILED_KEY = "guide_load_failed"
 # 回答の診断の、業務ガイドの手順ごとの検索の記録の key（回答エンジンが置き、業務ガイドの記録へ
@@ -934,7 +938,7 @@ def guide_rule(match: GuideMatch) -> dict[str, Any]:
         "triggers": list(dict.fromkeys(hints)),
         "content": "\n".join(_lines(match)),
         "source": f"業務ガイド {match.guide_id}@{match.revision}",
-        "tags": [PINNED_RULE_TAG, "support_guide"],
+        "tags": [PINNED_RULE_TAG, SUPPORT_GUIDE_RULE_TAG],
         "status": "approved",
     }
 
@@ -1021,7 +1025,7 @@ def guide_step_plan(match: GuideMatch) -> list[dict[str, Any]]:
 
 
 def with_guide_rule(payload: Mapping[str, Any] | None, match: GuideMatch) -> dict[str, Any]:
-    """用語・ルールの payload に業務ガイドのルールを先頭に足した写し。"""
+    """用語・同義語と回答ルールの payload に業務ガイドのルールを先頭に足した写し。"""
     base = dict(payload or {})
     rules = [rule for rule in base.get("rules", []) if isinstance(rule, dict)]
     return {

@@ -3984,7 +3984,7 @@ def _keep_trusted_queries(
 
 
 def _record_runtime_knowledge_load(step: _ExecutionStep, runtime_knowledge: RuntimeKnowledgeContext) -> bool:
-    """用語・ルールの読み込みの失敗を工程に記録する。読めていれば True（工程の結果と詳細を続けて書く）。
+    """用語・同義語と回答ルールの読み込みの失敗を工程に記録する。読めていれば True（工程の結果と詳細を続けて書く）。
 
     詳細の行は例外の型の名前だけ（例外の文は path などを含みうる。#3284）。
     """
@@ -4239,8 +4239,8 @@ def answer_question_result(
             inquiry_conditions,
             keyword_trace=keyword_trace,
         )
-        # 用語・同義語に一致したら、一致した用語と別名だけの検索文を足す（#2163）。原質問の後ろに足しただけの
-        # 検索文（用語・ルールの拡張）は長い質問に別名が埋もれ、規定の用語で書かれた根拠に当たりにくい。
+        # 用語・同義語に一致したら、一致した用語と別名だけの検索文を足す（#2163）。原質問の後ろに語を足しただけの
+        # 検索文（expanded_question）は長い質問に別名が埋もれ、規定の用語で書かれた根拠に当たりにくい。
         term_query = matched_term_query(runtime_knowledge)
         candidate_queries = inquiry_retrieval_queries(
             normalized_question,
@@ -4269,13 +4269,14 @@ def answer_question_result(
             report_degraded("text_search_tokenizer", tokenizer_failure)
         sources = {_dedupe_query_key(normalized_question): "原質問"}
         if runtime_knowledge.expanded_question != runtime_knowledge.original_question:
-            sources.setdefault(_dedupe_query_key(runtime_knowledge.expanded_question), "用語・ルール")
+            # 出どころは実際に語を足したもの（用語・同義語 / 回答ルール / 業務ガイド / 確認で選んだ条件。#3490）。
+            sources.setdefault(_dedupe_query_key(runtime_knowledge.expanded_question), runtime_knowledge.query_source)
         for query in expansion.generated_queries:
             sources.setdefault(_dedupe_query_key(query), "呼び出し元" if caller_planned else "質問拡張")
         for query in lexical_queries:
             sources.setdefault(_dedupe_query_key(query), "語彙の補助")
         if term_query:
-            sources.setdefault(_dedupe_query_key(term_query), "用語・同義語")
+            sources.setdefault(_dedupe_query_key(term_query), "用語・同義語だけ")
         step.result(
             f"検索文 {len(retrieval_queries)} 本",
             *(
