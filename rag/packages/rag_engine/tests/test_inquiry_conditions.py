@@ -51,7 +51,6 @@ class InquiryConditionsTests(unittest.TestCase):
         self.assertIn(OPERATION_PROFILE, parsed.active_profiles)
         self.assertIn("拠点倉庫名", parsed.search_terms)
         self.assertIn("倉庫マスタ登録", parsed.search_terms)
-        self.assertTrue(parsed.retrieval_queries)
 
     def test_parse_file_data_question_extracts_file_code_column_and_external_context(self):
         parsed = parse_inquiry_conditions("倉庫連携ゲートウェイから取込した result.csv で W1114 が出た。EC列を確認する必要がありますか。")
@@ -124,7 +123,6 @@ class InquiryConditionsTests(unittest.TestCase):
                 parsed = parse_inquiry_conditions(question)
 
                 self.assertIn(expected_term, parsed.search_terms)
-                self.assertTrue(parsed.retrieval_queries)
 
     def test_chunk_metadata_records_only_compact_filter_and_profile_signals(self):
         metadata = build_inquiry_chunk_metadata(

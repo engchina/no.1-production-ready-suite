@@ -135,7 +135,7 @@ def run_keyword_comparison(
                 domain_keywords_override=keywords if condition == "with_keywords" else (),
             )
             expansion_trace: dict[str, Any] = {}
-            lexical = _lexical_retrieval_queries(case.question, case.question, None, keyword_trace=expansion_trace)
+            lexical = _lexical_retrieval_queries(case.question, case.question, keyword_trace=expansion_trace)
             queries = tuple(dict.fromkeys((case.question, *lexical)))
             info = build_question_text_search_info(case.question, variant, query_variants=queries)
             if info.error:

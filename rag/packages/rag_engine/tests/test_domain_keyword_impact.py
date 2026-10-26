@@ -29,7 +29,7 @@ class DomainKeywordImpactTests(unittest.TestCase):
         # 質問の語と部分的に重なるだけの登録キーワードは検索文に加えない。この機能と設定は廃止した (#557)。
         with patch("rag_engine.generation.answering.load_domain_keywords", return_value=("出庫伝票番号",)):
             trace = {}
-            queries = _lexical_retrieval_queries("出庫伝票", "出庫伝票", None, keyword_trace=trace)
+            queries = _lexical_retrieval_queries("出庫伝票", "出庫伝票", keyword_trace=trace)
         self.assertNotIn("出庫伝票番号", " ".join(queries))
         self.assertEqual(set(trace), {"decisions"})
         settings = get_settings(environ={"DOMAIN_KEYWORD_EXPANSION_ENABLED": "true"}, dotenv_path=None)
