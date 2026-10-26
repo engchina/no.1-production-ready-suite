@@ -734,10 +734,31 @@ def test_observation_drops_table_cells_of_another_shape(cells: object) -> None:
             {"row_basis": "csv", "row_start": 4, "source_line_start": 5, "source_line_end": 6},
             {"row_basis": "csv", "row_start": 4, "source_line_start": 5, "source_line_end": 6},
         ),
+        # 解析の表の格子の行（#3429）。セルの領域（bbox）は写さない。
+        (
+            {
+                "row_basis": "parsed_table",
+                "table_index": 2,
+                "row_start": 3,
+                "row_end": 3,
+                "table_row": 3,
+                "table_cells": [
+                    {"table_col": "B", "header_path": ["上の段", "下の段"], "bbox": [1, 2, 3, 4]}
+                ],
+            },
+            {
+                "row_basis": "parsed_table",
+                "table_index": 2,
+                "row_start": 3,
+                "row_end": 3,
+                "table_row": 3,
+                "table_cells": [{"table_col": "B", "header_path": ["上の段", "下の段"]}],
+            },
+        ),
         # 知らない基準・形の合わない番号は写さない。
         ({"row_basis": "page", "table_index": "3"}, {}),
     ],
-    ids=["word-table", "csv", "unknown"],
+    ids=["word-table", "csv", "parsed-table", "unknown"],
 )
 def test_observation_copies_the_row_basis_of_rag(
     value: dict[str, object], expected: object

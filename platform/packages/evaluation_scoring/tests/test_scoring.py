@@ -124,6 +124,62 @@ def test_page_number_is_the_fallback_and_unknown_places_do_not_match() -> None:
     )
 
 
+@dataclass(frozen=True)
+class BasisCriteria(Criteria):
+    row_basis: str | None = None
+
+
+@pytest.mark.parametrize(
+    ("criteria", "locator", "matched"),
+    [
+        # 評価セットの行（原本の行）は、シート・CSV の行に一致する。
+        (Criteria(sheet="一覧", row_start=4), {"sheet_name": "一覧", "row_start": 4}, True),
+        (Criteria(row_start=4), {"row_basis": "csv", "row_start": 4, "row_end": 4}, True),
+        # 解析が組み立てた表の格子の行は、同じ番号でも原本の行の条件に一致しない。
+        (
+            Criteria(row_start=4),
+            {"row_basis": "parsed_table", "table_index": 1, "row_start": 4, "row_end": 4},
+            False,
+        ),
+        (
+            Criteria(sheet="一覧", row_start=4),
+            {"row_basis": "parsed_table", "row_start": 4, "row_end": 4},
+            False,
+        ),
+        # 基準を書いた条件は、同じ基準の行だけに一致する。
+        (
+            BasisCriteria(row_start=3, row_end=5, row_basis="parsed_table"),
+            {"row_basis": "parsed_table", "row_start": 4, "row_end": 4},
+            True,
+        ),
+        (
+            BasisCriteria(row_start=4, row_basis="parsed_table"),
+            {"row_basis": "csv", "row_start": 4, "row_end": 4},
+            False,
+        ),
+        (
+            BasisCriteria(row_start=4, row_basis="csv"),
+            {"sheet_name": "一覧", "row_start": 4},
+            False,
+        ),
+    ],
+    ids=[
+        "sheet",
+        "csv",
+        "parsed-vs-original",
+        "parsed-vs-sheet",
+        "parsed-criteria",
+        "parsed-criteria-vs-csv",
+        "csv-criteria-vs-sheet",
+    ],
+)
+def test_rows_are_matched_within_the_same_row_basis(
+    criteria: Criteria, locator: dict[str, object], matched: bool
+) -> None:
+    """行は同じ行の番号の基準の中だけで照合する（#3429）。"""
+    assert location_matches(criteria, document_id="d", locator=locator) is matched
+
+
 def test_table_rows_are_matched_one_row_at_a_time() -> None:
     html = (
         "前の本文<table><caption>表の見出し</caption>"
