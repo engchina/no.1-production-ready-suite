@@ -88,7 +88,7 @@ dev = [
     "bandit>=1.8",
     "pip-audit>=2.9",
     # テストの合成の PDF を作る（BSD。#3343）。実行時には使わない。
-    "reportlab>=4.4,<5",
+    "reportlab>=4.4,<6",
 ]
 
 [build-system]
