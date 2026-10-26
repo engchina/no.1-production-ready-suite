@@ -5,9 +5,12 @@ from dataclasses import replace
 
 from rag_engine.generation.answering import AnswerRecord
 from rag_engine.retrieval.context_builder import (
+    IMAGE_NEED_EXPLICIT,
+    IMAGE_NEED_OPERATION,
     ContextBuildRequest,
     build_chunk_context_bundle,
     context_bundle_from_records,
+    image_evidence_need,
     should_include_image_evidence,
 )
 
@@ -354,6 +357,22 @@ class ContextBuilderTests(unittest.TestCase):
 
         self.assertTrue(should_include_image_evidence("画像のボタンは？", records=[record]))
         self.assertFalse(should_include_image_evidence("倉庫連携の説明は？", records=[record]))
+
+    def test_image_need_separates_visual_questions_from_operation_questions(self):
+        """図・画面を名指しする質問は explicit、操作の質問で根拠に画面の部品の語があるだけなら operation（#3441）。"""
+        screen = _chunk_record(
+            "target", "child", 1, "", "設定の画面で保存ボタンを押す。", metadata={"active": True, "image_evidence": [{"image_id": "p1"}]}
+        )
+        plain = replace(screen, text="設定を保存する。")
+        self.assertEqual(image_evidence_need("保存ボタンはどこ？", records=[screen]), IMAGE_NEED_EXPLICIT)
+        self.assertEqual(image_evidence_need("連携を設定する手順は？", records=[screen]), IMAGE_NEED_OPERATION)
+        # 根拠の本文に画面の部品の語が無い・操作の質問でない・根拠に画像が無いなら見せない。
+        self.assertEqual(image_evidence_need("連携を設定する手順は？", records=[plain]), "")
+        self.assertEqual(image_evidence_need("連携の目的は？", records=[screen]), "")
+        self.assertEqual(image_evidence_need("保存ボタンはどこ？", records=[replace(screen, metadata={"active": True})]), "")
+        # 質問の理解が画像を要るとしたときも explicit。
+        plan = type("Plan", (), {"requires_visual_context": True})()
+        self.assertEqual(image_evidence_need("連携を設定する手順は？", question_plan=plan, records=[screen]), IMAGE_NEED_EXPLICIT)
 
     def test_table_visual_evidence_counts_as_image_evidence(self):
         record = _chunk_record(

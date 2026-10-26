@@ -238,7 +238,8 @@ class OciGenerator:
                 TraceStep(
                     "image_fallback",
                     detail=json.dumps(
-                        {key: decision.get(key) for key in ("reason", "source_provider", "regeneration_calls")}, ensure_ascii=False
+                        {key: decision.get(key) for key in ("policy", "reason", "source_provider", "regeneration_calls")},
+                        ensure_ascii=False,
                     ),
                 ),
             )

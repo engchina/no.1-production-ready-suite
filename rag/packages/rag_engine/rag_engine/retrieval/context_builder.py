@@ -901,6 +901,44 @@ def context_bundle_from_records(
     )
 
 
+# 回答で根拠の画像を見せる理由（`image_evidence_need`）。
+# explicit: 質問が図・画像・画面を名指しする、または質問の理解・条件の読み取りが画像を要るとした（画像が要る）。
+# operation: 操作の質問で、画像を持つ根拠の本文に画面の部品の語がある（画像が要るかもしれない）。
+IMAGE_NEED_EXPLICIT = "explicit"
+IMAGE_NEED_OPERATION = "operation"
+
+
+def image_evidence_need(
+    question: str,
+    *,
+    question_plan: Any | None = None,
+    inquiry_conditions: Any | None = None,
+    records: Sequence[Any] = (),
+) -> str:
+    """質問と根拠の性質から、画像 evidence を回答で見せる理由を返します（見せないなら空文字）。
+
+    ``IMAGE_NEED_EXPLICIT`` は最初から添付し、``IMAGE_NEED_OPERATION`` はテキストで答えた草稿に答えていない要求が
+    残ったときだけ添付する（#3441。``answering`` の「回答に使う画像の確認」）。
+    """
+    if not any(record_has_image_evidence(record) for record in records):
+        return ""
+    if bool(getattr(question_plan, "requires_visual_context", False)):
+        return IMAGE_NEED_EXPLICIT
+    if bool(getattr(inquiry_conditions, "requires_visual_evidence", False)):
+        return IMAGE_NEED_EXPLICIT
+    if _looks_visual_question(question):
+        return IMAGE_NEED_EXPLICIT
+    # 操作に関する問いは「画像」と明記しなくても、同じ根拠のボタン配置が必要になることがある。
+    operation_question = any(term in question.casefold() for term in evidence_cues().words["operation_question_words"])
+    if operation_question and any(
+        record_has_image_evidence(record)
+        and any(term in str(getattr(record, "text", "")) for term in evidence_cues().words["image_control_words"])
+        for record in records
+    ):
+        return IMAGE_NEED_OPERATION
+    return ""
+
+
 def should_include_image_evidence(
     question: str,
     *,
@@ -908,22 +946,8 @@ def should_include_image_evidence(
     inquiry_conditions: Any | None = None,
     records: Sequence[Any] = (),
 ) -> bool:
-    """質問と根拠の性質から画像 evidence を prompt 添付すべきか判定します。"""
-    if not any(record_has_image_evidence(record) for record in records):
-        return False
-    if bool(getattr(question_plan, "requires_visual_context", False)):
-        return True
-    if bool(getattr(inquiry_conditions, "requires_visual_evidence", False)):
-        return True
-    if _looks_visual_question(question):
-        return True
-    # 操作に関する問いは「画像」と明記しなくても、同じ根拠のボタン配置が必要になる。
-    operation_question = any(term in question.casefold() for term in evidence_cues().words["operation_question_words"])
-    return operation_question and any(
-        record_has_image_evidence(record)
-        and any(term in str(getattr(record, "text", "")) for term in evidence_cues().words["image_control_words"])
-        for record in records
-    )
+    """質問と根拠の性質から画像 evidence を回答で見せるか（理由を問わない。``image_evidence_need``）を判定します。"""
+    return bool(image_evidence_need(question, question_plan=question_plan, inquiry_conditions=inquiry_conditions, records=records))
 
 
 def record_has_image_evidence(record: Any) -> bool:

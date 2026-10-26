@@ -219,13 +219,15 @@ from rag_engine.retrieval.article_catalog import is_added_catalog_article
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.character_forms import fold_model_view, fold_width
 from rag_engine.retrieval.context_builder import (
+    IMAGE_NEED_EXPLICIT,
+    IMAGE_NEED_OPERATION,
     MAX_ANCHORS_PER_PARENT,
     ContextBuildRequest,
     ContextParentEvidence,
     build_chunk_context_bundle,
     context_bundle_from_parent_evidence,
     context_bundle_from_records,
-    should_include_image_evidence,
+    image_evidence_need,
 )
 from rag_engine.retrieval.context_recovery import ContextRecovery, recover_context_records, recover_definition_records
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
@@ -1959,6 +1961,35 @@ def _invalid_structured_output(exc: Exception) -> bool:
     return is_invalid_structured_output(exc)
 
 
+# 必要になったときだけ添付する原画像（#3441）の `generation_trace.image_fallback.reason`。添付した組の結果は
+# 従来どおり accepted（添付した組を採用）/ kept_supported_partial_answer（添付しない組を採用）。
+LAZY_IMAGES_PENDING = "lazy_pending"
+LAZY_IMAGES_NEEDED = "lazy_needed"
+LAZY_IMAGES_NOT_NEEDED = "lazy_not_needed"
+LAZY_IMAGES_NOT_ATTEMPTED = "lazy_not_attempted"
+
+
+def answer_round_limit(settings: Settings) -> tuple[str, int]:
+    """回答文の生成と根拠確認の監査の型と、組の数の上限（1 組目と是正の組）。
+
+    是正の組の回数は `answer_max_correction_rounds`（#1912。0〜2。既定 2 は従来の MAX_ROUNDS と同じ）。監査の型（#2795）
+    が通常の回答（standard）なら、作り直しは事実の問題があるときの 1 組まで（完全性の不足は作り直さず、本文の不足・確認の
+    節に示す）。監査なし（none）は、決定的検査の実値の断定と前提付き回答の過剰な拒答だけを 1 回是正する（対象外の指摘は
+    correction_feedback が返さないので、通常は 1 回の生成で終える）。
+    """
+    from rag_engine.generation import grounded
+
+    max_rounds = 1 + max(0, min(grounded.MAX_ROUNDS - 1, int(getattr(settings, "answer_max_correction_rounds", grounded.MAX_ROUNDS - 1))))
+    audit_mode = str(getattr(settings, "answer_audit_mode", grounded.AUDIT_MODE_DETAILED))
+    if audit_mode not in grounded.AUDIT_MODES:
+        audit_mode = grounded.AUDIT_MODE_DETAILED
+    if audit_mode == grounded.AUDIT_MODE_STANDARD:
+        max_rounds = min(max_rounds, grounded.STANDARD_MAX_ROUNDS)
+    elif audit_mode == grounded.AUDIT_MODE_NONE:
+        max_rounds = min(max_rounds, 2)
+    return audit_mode, max_rounds
+
+
 def synthesize_grounded_answer(
     question: str,
     context: AnswerContext,
@@ -1969,6 +2000,7 @@ def synthesize_grounded_answer(
     inquiry_conditions: InquiryConditionParse | None = None,
     image_evidence: Sequence[dict[str, Any]] = (),
     image_prompt_mode: str,
+    deferred_image_evidence: Sequence[dict[str, Any]] = (),
     answer_llm_provider: str | None = None,
     query_expansion: QueryExpansionResult | None = None,
     known_gaps: Sequence[str] = (),
@@ -1985,6 +2017,10 @@ def synthesize_grounded_answer(
     （業務ガイドの手順の参照の文書）の章節だけで、行数に上限がある（#2828。``answer_unread_view``）。
     evidence_budget_chars は章節を広げたときの原文の予算（文字）で、渡すと広げた根拠を予算の中で切らずに渡す
     （None は `settings.evidence_budget_chars`）。
+    deferred_image_evidence は、必要になったときだけ添付する原画像（#3441。Vision モデルで添付できる画像）。1 組目は
+    画像を添付せずに作り、その組に答えていない要求（監査、監査なしの型では説明の有無の判定で partial / missing）が
+    残ったときだけ、次の組でこの画像を添付して既定の Vision モデルで作り直す（監査の型が完全性の不足を作り直さない
+    型でも、この 1 組は作り直す）。``image_evidence`` を渡したとき・作り直しの組が無い設定では、最初から添付する。
 
     是正は1回につき1手段（既取得poolからの同機能根拠の追加、原画像の添付、指摘の反映）。
     支持済みの要求を失うか問題が増える候補は採用せず、最良の回を公開する。
@@ -1992,6 +2028,7 @@ def synthesize_grounded_answer(
     """
     from rag_engine.generation import grounded
     from rag_engine.models.llm import GroundedItem
+    from rag_engine.resources.deadline import remaining_seconds
 
     provider = answer_llm_provider
     source_provider = answer_llm_provider or settings.default_answer_llm
@@ -1999,6 +2036,14 @@ def synthesize_grounded_answer(
     # 監査は生成と別の推論の量で呼ぶ (#1528。判定の仕事なので生成ほど推論を要らない)。
     audit_settings = settings_for_llm_purpose(settings, LLM_PURPOSE_AUDIT)
     images, mode = tuple(image_evidence), image_prompt_mode
+    # 是正の round の時間の配分（#1516）: 回答の期限の残りから次の round を始めるかを決め、round の LLM の呼び出しには
+    # 回答の確定の分を残した期限を渡す（期限が無い文脈では何もしない）。
+    budget = grounded.RoundBudget(remaining_seconds)
+    audit_mode, max_rounds = answer_round_limit(settings)
+    # 必要になったときだけ添付する原画像（#3441）。作り直しの組が無ければ、最初から添付する。
+    deferred = () if images else tuple(deferred_image_evidence)
+    if deferred and max_rounds < 2:
+        images, mode, deferred = deferred, "vision_attachments", ()
     rounds: list[dict[str, Any]] = []
     best: tuple[Any, AnswerContext, list[dict[str, Any]], tuple, str] | None = None
     feedback: dict[str, Any] | None = None
@@ -2006,33 +2051,20 @@ def synthesize_grounded_answer(
     # 監査が summary を不支持とした round の (番号, その round に公開しなかった草稿の主張があったか, 草稿の summary)。
     summary_flags: list[tuple[int, bool, str]] = []
     best_number = 0
-    image_decision = {
+    image_decision: dict[str, Any] = {
         "reason": "already_multimodal" if mode == "vision_attachments" else "not_needed",
         "regeneration_calls": 0,
         "source_provider": source_provider,
     }
+    # 原画像を添付する時機（#3441）。eager は 1 組目から、lazy は 1 組目に答えていない要求が残ったときだけ。
+    if mode == "vision_attachments":
+        image_decision["policy"] = "eager"
+    elif deferred:
+        image_decision.update(policy="lazy", reason=LAZY_IMAGES_PENDING, deferred_images=len(deferred))
     # 生成中に Prompt 設定が保存されても、1回答の全ラウンドで同じテンプレートを使う。
     template = read_prompt(VLM_ANSWER_PROMPT_KEY)
     context, unit_fill = _fill_same_unit(question, context)
-    # 是正の round の時間の配分（#1516）: 回答の期限の残りから次の round を始めるかを決め、round の LLM の呼び出しには
-    # 回答の確定の分を残した期限を渡す（期限が無い文脈では何もしない）。
-    from rag_engine.resources.deadline import remaining_seconds
-
-    budget = grounded.RoundBudget(remaining_seconds)
-    # 是正の組の回数の上限（#1912。`answer_max_correction_rounds`、0〜2。既定 2 は従来の MAX_ROUNDS と同じ）。
-    max_rounds = 1 + max(0, min(grounded.MAX_ROUNDS - 1, int(getattr(settings, "answer_max_correction_rounds", grounded.MAX_ROUNDS - 1))))
     assume_unconfirmed = bool(runtime_knowledge and runtime_knowledge.assume_unconfirmed)
-    # 監査の型（#2795）。通常の回答（standard）の作り直しは事実の問題があるときの 1 組まで。完全性の不足（答えていない
-    # 要求・説明していない手順）は作り直さず、本文の不足・確認の節に示す。
-    audit_mode = str(getattr(settings, "answer_audit_mode", grounded.AUDIT_MODE_DETAILED))
-    if audit_mode not in grounded.AUDIT_MODES:
-        audit_mode = grounded.AUDIT_MODE_DETAILED
-    if audit_mode == grounded.AUDIT_MODE_STANDARD:
-        max_rounds = min(max_rounds, grounded.STANDARD_MAX_ROUNDS)
-    elif audit_mode == grounded.AUDIT_MODE_NONE:
-        # 決定的検査の実値の断定と、前提付き回答の過剰な拒答だけを 1 回是正する。
-        # 対象外の指摘は correction_feedback が返さないので、通常は 1 回の生成で終える。
-        max_rounds = min(max_rounds, 2)
     compact_audit_reasons = bool(getattr(settings, "answer_audit_compact_reasons", False))
     # 作り直しの組の LLM の呼び出しが失敗し、前の組を公開したときの例外の型（#2729）。
     correction_failure = ""
@@ -2057,6 +2089,8 @@ def synthesize_grounded_answer(
     embedder = injected_embedder() if guide_steps else None
     guide_semantics = grounded.GuideStepSemantics(embedder.embed if embedder is not None else None)
     for number in range(max_rounds):
+        # 1 組目に答えていない要求（先送りした原画像を次の組で添付する。#3441）。
+        lazy_requests: list[dict[str, Any]] = []
         # 質問に名前が出た画面の図の項目の種類と、それで決まる業務ガイドの条件（#2404）と、その条件の手順の計画（#2689）。
         field_kinds = form_field_kinds.question_field_kinds(question, context)
         resolved_conditions = form_field_kinds.resolve_conditions(field_kinds, settings.evidence_conditions)
@@ -2177,6 +2211,16 @@ def synthesize_grounded_answer(
                 )
             accepted = best is None or grounded.better(current, best[0])
             _record_round_audit(step, current, accepted=accepted, first=best is None, audited=audit_mode != grounded.AUDIT_MODE_NONE)
+            # 必要になったときだけ添付する原画像（#3441）は、1 組目の要求ごとの充足で添付するかを決める。
+            if deferred and number == 0:
+                lazy_requests = current.feedback().get("unanswered_requests") or []
+                image_decision["reason"] = LAZY_IMAGES_NEEDED if lazy_requests else LAZY_IMAGES_NOT_NEEDED
+                step.field(
+                    "原画像の添付",
+                    f"次の回で添付する（答えていない要求 {len(lazy_requests)} 件）"
+                    if lazy_requests
+                    else "しない（答えていない要求が無く、文字の根拠で答えられたため）",
+                )
         if accepted:
             best = (current, context, spans, images, mode)
             best_number = number
@@ -2188,6 +2232,11 @@ def synthesize_grounded_answer(
             feedback,
             grounded.correction_feedback(best[0].feedback(), audit_mode, assume_unconfirmed=assume_unconfirmed),
         )
+        if lazy_requests:
+            # 監査の型が完全性の不足を作り直さない型でも、原画像を添付する 1 組には答えていない要求を渡す。
+            feedback = {**feedback, "unanswered_requests": lazy_requests}
+            if "supported_items" not in feedback and (supported := best[0].feedback().get("supported_items")):
+                feedback["supported_items"] = supported
         budget.note(current, feedback, accepted=accepted)
         if not feedback or number == max_rounds - 1:
             if feedback and max_rounds < grounded.MAX_ROUNDS:
@@ -2200,7 +2249,12 @@ def synthesize_grounded_answer(
             break
         needs_content = any(feedback.get(key) for key in ("unanswered_requests", "unused_evidence_ids", "goal_alignment"))
         remedy: dict[str, Any] | None = None
-        if needs_content and not expanded:
+        image_candidates: tuple[dict[str, Any], ...] = ()
+        if lazy_requests:
+            # 先送りした原画像を、取得済みの根拠の追加より先に添付する（最初から添付したときと同じ材料で答える）。
+            image_candidates = deferred
+            remedy = {"remedy": "images", "image_ids": [i["image_id"] for i in deferred]}
+        if remedy is None and needs_content and not expanded:
             expanded = True
             candidate, remedy = _expand_context_from_pool(question, context)
             if candidate is None:
@@ -2208,7 +2262,6 @@ def synthesize_grounded_answer(
                 remedy = None
             else:
                 context = candidate
-        image_candidates: tuple[dict[str, Any], ...] = ()
         if remedy is None and needs_content and mode != "vision_attachments":
             candidates = tuple(
                 i for i in answer_image_evidence(context.records, settings.output_dir, question=question) if i.get("prompt_path")
@@ -2235,7 +2288,6 @@ def synthesize_grounded_answer(
             corrected = True
         elif image_candidates:
             images, mode = image_candidates, "vision_attachments"
-            image_decision.update(reason="attempted", regeneration_calls=1)
         if not budget.allows_round(number + 1):
             # 次の round の見積もり（直前の組の実測）が回答の期限の残りに入らない（#1516）。是正をせず、それまでの
             # 最良の round で確定し、直していない不足を「回答時間の上限により省略した処理」に出す。
@@ -2248,6 +2300,9 @@ def synthesize_grounded_answer(
                 )
                 stop_step.impact("直していない不足を「回答時間の上限により省略した処理」に示し、条件つきの回答にします。")
             break
+        if image_candidates:
+            # 原画像を添付した作り直しは、その組を始めるときだけ数える（時間の上限で始めなかった組は数えない）。
+            image_decision.update(reason="attempted", regeneration_calls=1)
         rounds[-1]["remedy"] = remedy
         with _execution_step("是正") as remedy_step:
             remedy_step.result(
@@ -2327,6 +2382,9 @@ def synthesize_grounded_answer(
         image_decision["reason"] = (
             "accepted" if mode == "vision_attachments" and image_prompt_mode != "vision_attachments" else "kept_supported_partial_answer"
         )
+    elif image_decision["reason"] in {LAZY_IMAGES_PENDING, LAZY_IMAGES_NEEDED}:
+        # 添付が要ったが、時間の上限・1 組目の失敗で添付した組を始めなかった（#3441）。
+        image_decision["reason"] = LAZY_IMAGES_NOT_ATTEMPTED
     # 廃止・旧版の文書の説明には警告を付ける（#1492・#2738）。生成の是正では直せないので、採用した round の確定の段で
     # 決定的に行う。
     superseded = grounded.superseded_evidence_ids(question, spans)
@@ -4547,31 +4605,49 @@ def answer_question_result(
         with _execution_step(
             "回答に使う画像の確認", "根拠に含まれる画面・図を、回答するモデルへ原画像のまま見せるかを決めます。"
         ) as image_step:
-            image_evidence = (
-                answer_image_evidence(context.records, settings.output_dir, question=normalized_question)
-                if should_include_image_evidence(
-                    normalized_question,
-                    question_plan=question_plan,
-                    inquiry_conditions=inquiry_conditions,
-                    records=context.records,
-                )
-                else ()
+            image_need = image_evidence_need(
+                normalized_question,
+                question_plan=question_plan,
+                inquiry_conditions=inquiry_conditions,
+                records=context.records,
             )
+            image_evidence = answer_image_evidence(context.records, settings.output_dir, question=normalized_question) if image_need else ()
             image_prompt_mode = _image_prompt_mode(image_evidence, settings)
-            if not image_evidence:
+            # 操作の質問で根拠に画面がある（画像が要るかもしれない）だけなら、先に文字の根拠で答え、答えていない要求が
+            # 残ったときだけ原画像を添付する（#3441。Vision モデルの呼び出しは遅い）。質問が図・画面を尋ねるなら最初から。
+            deferred_images: tuple[dict[str, Any], ...] = ()
+            lazy_available = answer_round_limit(settings)[1] >= 2
+            if image_need == IMAGE_NEED_OPERATION and image_prompt_mode == "vision_attachments" and lazy_available:
+                deferred_images, image_evidence, image_prompt_mode = tuple(image_evidence), (), "text_only"
+            shown_images = deferred_images or image_evidence
+            if not shown_images:
                 # 記録の文からは省くが、処理の経過の段は出るので理由を残す（#2341）。
                 image_step.hide()
                 image_step.result("回答で見せる画像はありません（質問が画像を要しないか、根拠に画像がありません）")
             else:
                 image_step.result(
-                    f"画像 {len(image_evidence)} 件を"
+                    f"画像 {len(shown_images)} 件"
                     + (
-                        "原画像のまま添付し、既定の Vision モデルで回答します"
+                        "は、先に文字の根拠で回答し、答えていない要求が残ったときだけ原画像のまま添付して既定の Vision モデルで作り直します"
+                        if deferred_images
+                        else "を原画像のまま添付し、既定の Vision モデルで回答します"
                         if image_prompt_mode == "vision_attachments"
-                        else "文字の説明として使います（画像の添付が無効か、Vision モデルか画像ファイルがありません）"
+                        else "を文字の説明として使います（画像の添付が無効か、Vision モデルか画像ファイルがありません）"
                     )
                 )
-                image_step.field("画像ファイルのある画像", f"{sum(1 for item in image_evidence if item.get('prompt_path'))} 件")
+                image_step.field(
+                    "画像を見せる理由",
+                    "質問が図・画面を尋ねている" if image_need == IMAGE_NEED_EXPLICIT else "質問の操作に根拠の画面が関係する",
+                )
+                if image_prompt_mode == "vision_attachments" or deferred_images:
+                    image_step.field(
+                        "原画像の添付",
+                        "答えていない要求が残ったときだけ"
+                        if deferred_images
+                        else "最初から"
+                        + ("（回答の作り直しの組が無い設定のため）" if image_need == IMAGE_NEED_OPERATION and not lazy_available else ""),
+                    )
+                image_step.field("画像ファイルのある画像", f"{sum(1 for item in shown_images if item.get('prompt_path'))} 件")
                 image_step.add(
                     "回答に使う画像:",
                     *numbered(
@@ -4579,7 +4655,7 @@ def answer_question_result(
                             f"{Path(str(item.get('source') or '')).name or item.get('image_id')}"
                             + (f"（p.{item['page']}）" if item.get("page") else "")
                             + (f" {item['visual_kind']}" if item.get("visual_kind") else "")
-                            for item in image_evidence
+                            for item in shown_images
                         ]
                     ),
                 )
@@ -4593,6 +4669,7 @@ def answer_question_result(
             inquiry_conditions=inquiry_conditions,
             image_evidence=image_evidence,
             image_prompt_mode=image_prompt_mode,
+            deferred_image_evidence=deferred_images,
             answer_llm_provider=answer_llm_provider,
             query_expansion=expansion,
             known_gaps=_known_gaps(crag_attempts, section_expansion),

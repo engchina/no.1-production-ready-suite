@@ -96,7 +96,7 @@ class AnswerGenerationTests(unittest.TestCase):
         """主張と引用の生成は専用テストで検証し、検索・実行フローのテストから分離する。"""
         from grounded_stub import stub_generation
 
-        stub_generation(self)
+        self.generation = stub_generation(self)
 
     def test_bare_abstentions_explain_evidence_gap_in_each_language(self):
         for text, expected in (
@@ -734,6 +734,88 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertEqual(multimodal.call_args.kwargs["provider_id"], settings.default_vision_llm)
         self.assertEqual(settings.llm_providers[settings.default_vision_llm].model, "vision-model")
         text_parser.assert_not_called()
+
+    def _image_plan_flow(self, question: str):
+        """画面の画像を持つ根拠で回答し、生成に渡した画像と「回答に使う画像の確認」の詳細を返す（#3441）。"""
+        with TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            crop = output_dir / "abcdef" / "docling" / "vision" / "picture.png"
+            crop.parent.mkdir(parents=True)
+            crop.write_bytes(b"png")
+            settings = replace(
+                get_settings(
+                    environ={
+                        "RAG_ENGINE_ANSWER_IMAGES": "1",
+                        "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "text-model",
+                        "OCI_ENTERPRISE_AI_VLM_MODEL": "vision-model",
+                    },
+                    dotenv_path=None,
+                ),
+                output_dir=output_dir,
+            )
+            search_result = _hybrid_result(
+                _stored_child(
+                    "chunk-docling-c000001",
+                    1,
+                    "倉庫連携の画面で登録ボタンを押す。",
+                    metadata={
+                        "active": True,
+                        "image_evidence": [
+                            {
+                                "image_id": "picture-1",
+                                "source_run_id": "abcdef",
+                                "page": 1,
+                                "seq_no": 1,
+                                "crop_path": "docling/vision/picture.png",
+                                "embedding_modality": "image_caption_fallback",
+                            }
+                        ],
+                    },
+                )
+            )
+            with (
+                patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", return_value=_chunk_run_stub()),
+                patch("rag_engine.generation.answering.check_adb_hybrid_search_ready"),
+                patch("rag_engine.generation.answering.search_adb_hybrid_chunks", return_value=search_result),
+                patch(
+                    "rag_engine.generation.answering.parse_multimodal_response", return_value=_answer_output(answer="vision answer")
+                ) as multimodal,
+                patch("rag_engine.generation.answering.parse_text_response", return_value=_answer_output(answer="text answer")),
+            ):
+                result = answer_question_result(
+                    question,
+                    "abcdef",
+                    ["docling"],
+                    settings,
+                    query_strategy=SIMPLE_RETRIEVAL_LABEL,
+                    answer_flow=STANDARD_ANSWER_FLOW_LABEL,
+                )
+        options = self.generation.call_args.kwargs
+        step = next(step for step in result.execution_steps if step["name"] == "回答に使う画像の確認")
+        fields = {field["label"]: field["value"] for field in step["details"]["fields"]}
+        return result, options, fields, multimodal, str(crop)
+
+    def test_operation_question_defers_screen_images_until_a_request_is_unanswered(self):
+        """操作の質問で根拠に画面があるだけなら、1 組目は画像を添付せずテキストのモデルで答える（#3441）。"""
+        result, options, fields, multimodal, crop = self._image_plan_flow("倉庫連携を設定する手順は？")
+        self.assertEqual((tuple(options["image_evidence"]), options["image_prompt_mode"]), ((), "text_only"))
+        self.assertEqual([image["prompt_path"] for image in options["deferred_image_evidence"]], [crop])
+        self.assertEqual(fields["画像を見せる理由"], "質問の操作に根拠の画面が関係する")
+        self.assertEqual(fields["原画像の添付"], "答えていない要求が残ったときだけ")
+        self.assertIn("答えていない要求が残ったときだけ原画像のまま添付", fields["結果"])
+        self.assertEqual(result.image_prompt_mode, "text_only")
+        multimodal.assert_not_called()
+
+    def test_visual_question_attaches_screen_images_from_the_first_round(self):
+        """質問が画面・図を尋ねるなら、今どおり 1 組目から原画像を添付して Vision モデルで答える。"""
+        result, options, fields, multimodal, crop = self._image_plan_flow("倉庫連携の画面のボタンは？")
+        self.assertEqual(options["image_prompt_mode"], "vision_attachments")
+        self.assertEqual([image["prompt_path"] for image in options["image_evidence"]], [crop])
+        self.assertEqual(tuple(options["deferred_image_evidence"]), ())
+        self.assertEqual(fields["画像を見せる理由"], "質問が図・画面を尋ねている")
+        self.assertEqual(fields["原画像の添付"], "最初から")
+        self.assertEqual(result.image_prompt_mode, "vision_attachments")
+        multimodal.assert_called_once()
 
     def test_answer_generation_keeps_image_evidence_text_only_for_nonvisual_questions(self):
         with TemporaryDirectory() as tmp:

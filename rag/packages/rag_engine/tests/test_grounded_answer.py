@@ -1704,6 +1704,133 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertEqual(result.envelope["outcome"], "insufficient_evidence")  # 確かめた段落が 1 つも無い
 
 
+class LazyImageAttachmentTest(unittest.TestCase):
+    """先送りした原画像（操作の質問の画面）は、1 組目に答えていない要求が残ったときだけ添付する（#3441）。
+
+    Vision モデルの呼び出しは決定論スタブで数え、記録の経路（``image_fallback``）と処理の経過の段の詳細を確かめる。
+    """
+
+    # 操作の語（出力・一覧）を含み、要求が 1 つだけの質問（明細などの構成の要求を足さない）。
+    QUESTION = "一覧表を出力する手順を教えてください"
+
+    def setUp(self):
+        self.ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
+        eid = ids(self.ctx, self.QUESTION)[LIST_TEXT]
+        self.answer = draft(
+            item(eid, "一覧表を選択し、処理を選択します。", "一覧表を選択し、処理を選択します。", request_id="Q1"),
+            item(eid, "実行ボタンを押して完了します。", "実行ボタンを押して完了します。", request_id="Q1"),
+        )
+        self.supported = ((0, "supported", "matched", ""), (1, "supported", "matched", ""))
+
+    def run_lazy(self, drafts, audits, *, environ=None):
+        import tempfile
+
+        from rag_engine.generation.execution_record import _structured_steps
+
+        text_model = FakeModel(drafts, audits)
+        vision_calls = []
+
+        def vision(system, prompt, paths, settings, schema, **options):
+            vision_calls.append({"paths": list(paths), "provider_id": options["provider_id"], "prompt": prompt})
+            return GroundedDraft.model_validate(self.answer)
+
+        def unused(*a, **k):
+            return (_ for _ in ()).throw(AssertionError("unexpected I/O"))
+
+        steps: list[dict] = []
+        token = _structured_steps.set(steps)
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".png") as image:
+                settings = get_settings(
+                    environ={
+                        "RAG_ENGINE_ANSWER_IMAGES": "1",
+                        "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "text-model",
+                        "OCI_ENTERPRISE_AI_VLM_MODEL": "vision-model",
+                        **(environ or {}),
+                    },
+                    dotenv_path=None,
+                )
+                with bind_dependencies(AnswerDependencies(unused, unused, text_model, vision, unused)):
+                    result = synthesize_grounded_answer(
+                        self.QUESTION,
+                        self.ctx,
+                        settings,
+                        image_prompt_mode="text_only",
+                        deferred_image_evidence=({"image_id": "img1", "prompt_path": image.name},),
+                    )
+                path = image.name
+        finally:
+            _structured_steps.reset(token)
+        return result, text_model, vision_calls, {step["name"]: step for step in steps}, path
+
+    @staticmethod
+    def calls(model, schema):
+        return sum(1 for name, _prompt in model.prompts if name == schema)
+
+    @staticmethod
+    def fields(step):
+        return {field["label"]: field["value"] for field in step.get("details", {}).get("fields", [])}
+
+    def test_text_draft_that_answers_every_request_does_not_call_vision(self):
+        satisfied = audit(*self.supported, requests=[("Q1", "addressed")])
+        result, text_model, vision_calls, steps, _ = self.run_lazy([self.answer], [satisfied])
+        self.assertEqual(vision_calls, [])
+        self.assertEqual(result.image_prompt_mode, "text_only")
+        self.assertEqual(result.image_evidence, ())
+        # 1 組目はテキストのモデルの生成と監査の 2 回だけ（最初から添付すると、生成は Vision モデルの 1 回）。
+        self.assertEqual((self.calls(text_model, "GroundedDraft"), self.calls(text_model, "GroundedAudit")), (1, 1))
+        self.assertEqual(result.response.generation_trace["llm_calls"], 2)
+        decision = result.response.generation_trace["image_fallback"]
+        self.assertEqual(
+            {key: decision[key] for key in ("policy", "reason", "regeneration_calls", "deferred_images")},
+            {"policy": "lazy", "reason": "lazy_not_needed", "regeneration_calls": 0, "deferred_images": 1},
+        )
+        self.assertTrue(self.fields(steps["回答文の生成と根拠確認（1回目）"])["原画像の添付"].startswith("しない（"))
+        self.assertNotIn("是正", steps)
+
+    def test_unanswered_request_attaches_deferred_images_with_vision_model(self):
+        partial = audit(*self.supported, requests=[("Q1", "partial")])
+        complete = audit(*self.supported, requests=[("Q1", "addressed")])
+        result, text_model, vision_calls, steps, path = self.run_lazy([self.answer], [partial, complete])
+        # 原画像を添付した作り直しは既定の Vision モデルで 1 回（取得済みの根拠の追加より先に添付する）。
+        self.assertEqual([(call["paths"], call["provider_id"]) for call in vision_calls], [([path], "enterprise-ai-vision")])
+        self.assertIn("unanswered_requests", vision_calls[0]["prompt"])
+        self.assertEqual(self.calls(text_model, "GroundedDraft"), 1)
+        self.assertEqual(result.image_prompt_mode, "vision_attachments")
+        rounds = result.response.generation_trace["rounds"]
+        self.assertEqual(rounds[0]["remedy"]["remedy"], "images")
+        decision = result.response.generation_trace["image_fallback"]
+        self.assertEqual((decision["policy"], decision["reason"], decision["regeneration_calls"]), ("lazy", "accepted", 1))
+        self.assertEqual(self.fields(steps["回答文の生成と根拠確認（1回目）"])["原画像の添付"], "次の回で添付する（答えていない要求 1 件）")
+        self.assertIn("根拠の原画像を添付して作り直します", self.fields(steps["是正"])["結果"])
+
+    def test_without_llm_audit_missing_request_still_attaches_images_once(self):
+        """監査なしの型（既定）でも、説明の無い要求が残れば原画像を添付する 1 組を作る（完全性の是正は他にしない）。"""
+        result, text_model, vision_calls, _steps, _ = self.run_lazy(
+            [draft(summary="資料に記載がありません。")], [], environ={"RAG_ENGINE_ANSWER_AUDIT_MODE": "none"}
+        )
+        self.assertEqual(len(vision_calls), 1)
+        self.assertEqual((self.calls(text_model, "GroundedDraft"), self.calls(text_model, "GroundedAudit")), (1, 0))
+        self.assertEqual(result.response.generation_trace["image_fallback"]["reason"], "accepted")
+        self.assertEqual(result.image_prompt_mode, "vision_attachments")
+
+    def test_without_llm_audit_answered_requests_keep_text_answer(self):
+        result, _text_model, vision_calls, _steps, _ = self.run_lazy([self.answer], [], environ={"RAG_ENGINE_ANSWER_AUDIT_MODE": "none"})
+        self.assertEqual(vision_calls, [])
+        self.assertEqual(result.response.generation_trace["image_fallback"]["reason"], "lazy_not_needed")
+
+    def test_no_correction_rounds_attaches_images_from_the_first_round(self):
+        """作り直しの組が無い設定では、後から添付できないので最初から添付する。"""
+        satisfied = audit(*self.supported, requests=[("Q1", "addressed")])
+        result, text_model, vision_calls, _steps, _ = self.run_lazy(
+            [self.answer], [satisfied], environ={"RAG_ENGINE_ANSWER_MAX_CORRECTION_ROUNDS": "0"}
+        )
+        self.assertEqual(len(vision_calls), 1)
+        self.assertEqual(self.calls(text_model, "GroundedDraft"), 0)
+        decision = result.response.generation_trace["image_fallback"]
+        self.assertEqual((decision["policy"], decision["reason"]), ("eager", "already_multimodal"))
+
+
 class AuditRetryAndHeadingTest(unittest.TestCase):
     """空の監査応答は 1 回再試行し、監査には引用の見出しを渡す (#629)。"""
 
