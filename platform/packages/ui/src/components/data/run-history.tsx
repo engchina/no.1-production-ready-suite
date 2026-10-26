@@ -601,17 +601,22 @@ export function RunHistoryTable<T>({
   if (actionsFor) {
     columns.push({
       key: "actions",
-      header: <span className="sr-only @4xl:not-sr-only">{labels.columns.actions}</span>,
+      // not-sr-only は white-space: normal に戻すので、広い置き場所でも 1 行に保つ（「操 / 作」にしない。#3427）。
+      header: <span className="sr-only @4xl:not-sr-only @4xl:whitespace-nowrap">{labels.columns.actions}</span>,
       align: "right",
       className: "w-px whitespace-nowrap",
       render: (row) => {
         const item = toItem(row);
+        // 操作の無い行（終わった実行）のセルは空。列はメニューのボタン（iconOnly の sm）の幅を保ち、操作の無い行だけの
+        // ページでも縮めない（ページ・再取得で列の幅を変えない。#3427）。
         return (
-          <RowActionMenu
-            actions={actionsFor(row)}
-            ariaLabel={labels.rowActions(item.title)}
-            testId={testId ? `${testId}-row-actions-${item.id}` : undefined}
-          />
+          <div className="flex min-w-[var(--button-height-sm)] justify-end" data-run-history-actions="">
+            <RowActionMenu
+              actions={actionsFor(row)}
+              ariaLabel={labels.rowActions(item.title)}
+              testId={testId ? `${testId}-row-actions-${item.id}` : undefined}
+            />
+          </div>
         );
       },
     });

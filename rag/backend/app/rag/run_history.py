@@ -24,6 +24,7 @@ from pr_backend_core.logging import safe_error_code, safe_exception_fields
 from pr_backend_core.observability.tracing import finish_operation_trace
 
 from app.config import Settings
+from app.rag.run_usage import RunModelUsage
 from app.rag.stored_answer import stored_citations
 from app.schemas.search import (
     EXTRACTION_FIELD_FILTER_KEY,
@@ -127,8 +128,12 @@ class RunRecorder:
     store: _RunStore | None = None
     conversation_id: str | None = None
     message_id: str | None = None
+    # 実行のときに解決した回答のモデルの ID（既定のモデルも具体的な ID。後の設定の変更で変えない。
+    # #3419）。
     model_id: str | None = None
     trace_source: Callable[[], dict[str, Any]] | None = None
+    # 実行のモデルの呼び出しの回数と利用量（`AnswerTrace.model_usage`。#3419）。
+    usage_source: Callable[..., RunModelUsage | None] | None = None
     # 実行の条件（RAG 検索の件数・絞り込み。`search_run_conditions`。#3309）。チャットは持たない。
     conditions: Mapping[str, object] | None = None
     # 終わった段（止まった段を決める。保存しない）。
@@ -178,7 +183,7 @@ class RunRecorder:
             error_stage = _failed_stage(self.stages)
         error_code = safe_error_code(error) if error is not None else None
         failures = list(storage_failures)
-        finish_operation_trace(
+        trace_summary = finish_operation_trace(
             run_id,
             status=(
                 "cancelled"
@@ -188,6 +193,8 @@ class RunRecorder:
                 else "done"
             ),
         )
+        # 実行を確定した後に集める（記録の上限で span を切った trace は一部計測。#3419）。
+        usage = self._usage_record(truncated=trace_summary is not None and trace_summary.truncated)
         record: dict[str, object] = {
             "run_id": run_id,
             "surface": self.surface,
@@ -215,6 +222,9 @@ class RunRecorder:
                 **({"trace": trace} if (trace := self._trace_record()) is not None else {}),
                 # 実行の条件（詳細の「RAG 検索で開く」が画面に戻す。#3309）。
                 **({"conditions": dict(self.conditions)} if self.conditions else {}),
+                # モデルの呼び出しの回数と利用量（概要の「モデル」「token」「モデルの呼び出し」。
+                # #3419）。
+                **({"usage": usage} if usage is not None else {}),
                 # 失敗のエラーコードと保存できなかった記録（処理の段と一緒に持つ。#2342）。
                 **({"error_code": str(error_code)} if error_code is not None else {}),
                 **(
@@ -228,6 +238,16 @@ class RunRecorder:
         }
         self._last_record = record
         await self._save(record)
+
+    def _usage_record(self, *, truncated: bool) -> dict[str, object] | None:
+        if self.usage_source is None:
+            return None
+        try:
+            usage = self.usage_source(primary_model=self.model_id, truncated=truncated)
+        except Exception as exc:  # noqa: BLE001 - 利用量は補助。実行の記録は残す（未計測にする）。
+            logger.warning("run history usage record failed", extra=safe_exception_fields(exc))
+            return None
+        return usage.model_dump(mode="json") if usage is not None else None
 
     def _trace_record(self) -> dict[str, Any] | None:
         if self.trace_source is None:

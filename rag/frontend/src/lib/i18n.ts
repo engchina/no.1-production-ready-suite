@@ -5034,7 +5034,12 @@ export const ja = {
   "history.detail.summary": "実行の概要",
   "history.detail.profile": "検索・回答プロファイル",
   "history.detail.citations": "AI に渡した件数",
-  "history.detail.modelDefault": "既定のテキストモデル",
+  // モデルの呼び出し（Agent の実行の詳細と同じ形。#3419）。
+  "history.detail.modelCalls": "モデルの呼び出し",
+  "history.detail.modelCallsValue": "{requests} 回（入力 {input} / 出力 {output} token）",
+  "history.detail.modelCallsPartial": "{requests} 回（うち {measured} 回を計測。入力 {input} / 出力 {output} token）",
+  "history.detail.usageUnmeasured": "未計測",
+  "history.detail.usagePartial": "一部計測",
   "history.detail.errorStage": "止まった段",
   "history.detail.openChat": "会話を開く",
   "history.detail.openChatLabel": "この実行の会話をチャットで開く",

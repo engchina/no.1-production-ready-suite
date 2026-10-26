@@ -173,6 +173,29 @@ describe("RunHistoryTable", () => {
     expect(container.querySelector("[data-run-history-table]")?.className).toContain("@container");
   });
 
+  it("「操作」の見出しは広い置き場所で 1 行、セルは操作が無くてもメニューのボタンの幅を保つ（#3427）", () => {
+    render(
+      <RunHistoryTable
+        rows={ROWS}
+        toItem={toItem}
+        onOpen={() => undefined}
+        // 1 行目だけに操作（終わった実行の行は操作が無い）。
+        actionsFor={(row) => [{ id: "cancel", label: "停止", visible: row.run_id === "r1", onSelect: () => undefined }]}
+        testId="runs"
+      />
+    );
+    const label = container.querySelector("thead th:last-child span")!;
+    expect(label.textContent).toBe("操作");
+    // not-sr-only は white-space: normal に戻すので、nowrap を重ねる。
+    expect(label.className).toContain("@4xl:not-sr-only");
+    expect(label.className).toContain("@4xl:whitespace-nowrap");
+    const cells = container.querySelectorAll("[data-run-history-actions]");
+    expect(cells).toHaveLength(2);
+    for (const cell of cells) expect(cell.className).toContain("min-w-[var(--button-height-sm)]");
+    expect(cells[0].querySelector('[data-testid="runs-row-actions-r1"]')).not.toBeNull();
+    expect(cells[1].childElementCount).toBe(0);
+  });
+
   it("題名は詳細へのリンク（href・aria-current）で、狭い画面の 1 行に状態・日時・所要時間・実行者を持つ", () => {
     render(
       <RunHistoryTable rows={ROWS} toItem={toItem} onOpen={() => undefined} showExecutor selectedRunId="r2" />
@@ -358,6 +381,22 @@ describe("RunSummary", () => {
     expect(container.querySelector("[data-run-status]")).toBeNull();
     expect(container.querySelector("[data-run-summary-heading]")?.textContent).toBe("概要");
     expect(container.textContent).not.toContain("合成の追加バッジ");
+  });
+
+  it("token の計測の状態の注記は数の後ろに括弧で、数が無ければ注記だけを出す（#3419）", () => {
+    const tokens = () => container.querySelector("[data-run-fact='tokens'] dd")?.textContent;
+    const summary = (usage: { tokens?: number | null; note?: string | null } | null) => (
+      <RunSummary status="succeeded" question="合成の質問" startedAt="2026-10-15T00:12:05.000Z" usage={usage} runId="run-1" />
+    );
+    render(summary({ tokens: 1200, note: "一部計測" }));
+    expect(tokens()).toBe("1,200 token（一部計測）");
+    render(summary({ tokens: null, note: "未計測" }));
+    expect(tokens()).toBe("未計測");
+    // LLM を呼ばなかった実行の実測の 0 は 0 と出す（注記なし）。
+    render(summary({ tokens: 0 }));
+    expect(tokens()).toBe("0 token");
+    render(summary(null));
+    expect(container.querySelector("[data-run-fact='tokens']")).toBeNull();
   });
 });
 

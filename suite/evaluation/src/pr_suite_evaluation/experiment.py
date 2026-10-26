@@ -21,7 +21,8 @@ from pr_suite_evaluation.dataset import Case, LoadedDataset, canonical_sha256
 from pr_suite_evaluation.evaluators import EVALUATORS_VERSION, CaseScore, score_case
 from pr_suite_evaluation.observation import CaseObservation
 from pr_suite_evaluation.report import Report, build_report
-from pr_suite_evaluation.targets import agent_mcp
+from pr_suite_evaluation.targets import agent_mcp, rag_mcp
+from pr_suite_evaluation.views import CaseView
 
 RECORD_SCHEMA_VERSION = 1
 PACKAGE_NAME = "production-ready-suite-evaluation"
@@ -36,6 +37,29 @@ class Target(Protocol):
 
 
 @dataclass(frozen=True)
+class Adapter:
+    """Target の種類ごとの、観測 → 採点の入力の変換と Target の診断（同じ Evaluator にかける）。"""
+
+    rules_version: str
+    view: Callable[..., CaseView]
+    summary: Callable[..., dict[str, Any]]
+
+
+ADAPTERS: dict[str, Adapter] = {
+    agent_mcp.TARGET_KIND: Adapter(
+        rules_version=agent_mcp.RULES_VERSION,
+        view=agent_mcp.agent_case_view,
+        summary=agent_mcp.target_summary,
+    ),
+    rag_mcp.TARGET_KIND: Adapter(
+        rules_version=rag_mcp.RULES_VERSION,
+        view=rag_mcp.rag_case_view,
+        summary=rag_mcp.target_summary,
+    ),
+}
+
+
+@dataclass(frozen=True)
 class ScorerConfig:
     """採点の設定（版と hash を結果に記録する）。"""
 
@@ -44,12 +68,23 @@ class ScorerConfig:
     infer_missing_outcome: bool = False
     run_timeout_seconds: float = agent_mcp.DEFAULT_RUN_TIMEOUT_SECONDS
 
+    def __post_init__(self) -> None:
+        if self.target_kind not in ADAPTERS:
+            raise ValueError(f"採点できない Target の種類です: {self.target_kind}")
+
     @property
     def metrics_version(self) -> str:
-        version = f"{EVALUATORS_VERSION}+{agent_mcp.RULES_VERSION}"
-        if self.infer_missing_outcome:
+        version = f"{EVALUATORS_VERSION}+{ADAPTERS[self.target_kind].rules_version}"
+        if self.infer_missing_outcome and self.target_kind == agent_mcp.TARGET_KIND:
             version = f"{version}+{agent_mcp.LEGACY_OUTCOME_RULES}"
         return version
+
+    def view(self, observation: CaseObservation) -> CaseView:
+        return ADAPTERS[self.target_kind].view(
+            observation,
+            infer_missing_outcome=self.infer_missing_outcome,
+            run_timeout_seconds=self.run_timeout_seconds,
+        )
 
     def provenance(self, thresholds: Mapping[str, float]) -> dict[str, Any]:
         config = {
@@ -113,12 +148,7 @@ def score_observations(
     for observation in observations:
         if observation.target_kind != scorer.target_kind:
             raise ValueError(f"採点できない Target の観測です: {observation.target_kind}")
-        view = agent_mcp.agent_case_view(
-            observation,
-            infer_missing_outcome=scorer.infer_missing_outcome,
-            run_timeout_seconds=scorer.run_timeout_seconds,
-        )
-        score = score_case(by_id[observation.case_id], view)
+        score = score_case(by_id[observation.case_id], scorer.view(observation))
         scores.append(score)
         status = final_status(observation, score)
         statuses[status] = statuses.get(status, 0) + 1
@@ -129,7 +159,7 @@ def score_observations(
         final_statuses=statuses,
     )
     cases = [by_id[item.case_id] for item in observations]
-    target = agent_mcp.target_summary(
+    target = ADAPTERS[scorer.target_kind].summary(
         cases, observations, infer_missing_outcome=scorer.infer_missing_outcome
     )
     return report, target
@@ -144,6 +174,10 @@ def run_experiment(
     log: Callable[[str], None] = print,
 ) -> ExperimentRecord:
     """評価セットのケースを順に Target に流し、観測を保存して採点する。"""
+    if target.kind != scorer.target_kind:
+        raise ValueError(
+            f"採点の設定（{scorer.target_kind}）と Target（{target.kind}）が違います。"
+        )
     observations: list[CaseObservation] = []
     total = len(dataset.dataset.cases)
     for index, case in enumerate(dataset.dataset.cases, start=1):

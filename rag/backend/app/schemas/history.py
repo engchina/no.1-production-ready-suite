@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.rag.run_usage import RunModelUsage
 from app.schemas.common import JsonValue
 from app.schemas.search import RetrievedChunk, StorageFailure
 
@@ -97,3 +98,6 @@ class RunDetail(RunSummary):
     feedback: list[RunFeedback] = Field(default_factory=list)
     # RAG 検索の実行の条件（#3309）。チャットの実行と、この機能より前の記録は None。
     search_conditions: RunSearchConditions | None = None
+    # モデルの呼び出しの回数と利用量（#3419）。この機能より前の記録・trace の始まる前に失敗した
+    # 実行は None（画面は「未計測」）。LLM を呼ばなかった実行は requests=0 の実測。
+    usage: RunModelUsage | None = None
