@@ -2370,7 +2370,7 @@ def _ensure_llm_call_fits(prompt: str, context: str) -> None:
     if _llm_call_chars(prompt, context) <= _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS:
         return
     raise OntologyBuildContextBudgetError(
-        "LLM 入力が上限を超えています。Profile の対象 object を減らすか、"
+        "LLM 入力が上限を超えています。業務プロファイルの対象 object を減らすか、"
         "単一行・単一ページ・単一セルの内容を分割して再実行してください。"
     )
 
@@ -2783,7 +2783,7 @@ def _split_text_unit_for_budget(
     if available <= 0:
         raise OntologyBuildContextBudgetError(
             "schema_context が大きすぎるため、資料本文を 1 chunk も LLM 入力へ追加できません。"
-            "Profile の対象 object を減らして再実行してください。"
+            "業務プロファイルの対象 object を減らして再実行してください。"
         )
     available = min(available, _extraction_batch_max_chars())
     if len(unit.text) <= available:
@@ -3747,7 +3747,7 @@ class OntologyBuildService:
     def _raise_active_profile_job_conflict(job: OntologyBuildJob) -> None:
         raise OntologyStateConflictError(
             "ONTOLOGY_BUILD_JOB_ALREADY_RUNNING",
-            f"この profile では構築 job {job.id} が実行中です。完了後に再実行してください。",
+            f"この業務プロファイルでは構築 job {job.id} が実行中です。完了後に再実行してください。",
         )
 
     # --- internal ---------------------------------------------------------------------------
@@ -3927,7 +3927,7 @@ class OntologyBuildService:
         source = OntologySourceDocument.model_validate(document["payload"])
         if profile_id and source.profile_id != profile_id:
             raise RuntimeError(
-                f"Ontology source document の profile が構築 job と一致しません: {source_id}"
+                f"Ontology source document の業務プロファイルが構築 job と一致しません: {source_id}"
             )
         return source
 
@@ -4486,7 +4486,7 @@ class OntologyBuildService:
             )
             self._fail(
                 job_id,
-                "Profile の範囲が変更されたため再構築してください。",
+                "業務プロファイルの範囲が変更されたため再構築してください。",
                 error_code="PROFILE_SCOPE_CHANGED",
             )
             return
@@ -4719,7 +4719,7 @@ class OntologyBuildService:
             OntologyBuildStepStatus.RUNNING,
             "DB から profile 範囲のスキーマ情報を取得中…",
         )
-        self._emit(job_id, "DB から profile 範囲のスキーマ情報を取得しています。")
+        self._emit(job_id, "DB から業務プロファイル範囲のスキーマ情報を取得しています。")
         prepared_schema = self._runtime.prepare_build_schema_context(job.profile_id)
         schema_warnings = list(prepared_schema.warnings)
         schema_errors = list(prepared_schema.errors)
@@ -4751,8 +4751,9 @@ class OntologyBuildService:
             )
             self._fail(
                 job_id,
-                "profile の対象オブジェクトを DB schema catalog に解決できません。"
-                "DB 構造を再取得するか、Profile の対象 object を確認してから再実行してください。"
+                "業務プロファイルの対象オブジェクトを DB schema catalog に解決できません。"
+                "DB 構造を再取得するか、業務プロファイルの対象 object を確認してから"
+                "再実行してください。"
                 f"{unresolved_hint}",
                 error_code="SCHEMA_SCOPE_UNRESOLVED",
             )

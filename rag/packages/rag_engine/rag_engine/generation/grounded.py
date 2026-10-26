@@ -1516,11 +1516,14 @@ def _attachment_label(label: str, spans: Sequence[dict]) -> bool:
     return bool(named) and all(span.get("conversation_attachment") for span in named)
 
 
+_MISSING_REQUEST_PLAN = "説明に使う要求ごとの根拠計画がありません。"
+
+
 def _request_plan_errors(draft: GroundedDraft, spans: Sequence[dict] = ()) -> list[str]:
     """計画と説明の構造の不整合を列挙する。旧形式の応答は追加の欄を要求しない。"""
     errors = []
     if "request_coverage" in draft.model_fields_set and not draft.request_coverage and any(item.kind != "gap" for item in draft.items):
-        errors.append("説明に使う要求ごとの根拠計画がありません。")
+        errors.append(_MISSING_REQUEST_PLAN)
     for plan in draft.request_coverage:
         if "evidence_scope" not in plan.model_fields_set:
             continue
@@ -1594,6 +1597,34 @@ def _plan_marks_unrelated(item: GroundedItem, span: dict, draft: GroundedDraft, 
             ):
                 return True
     return False
+
+
+def _cited_spans(draft: GroundedDraft, spans: Sequence[dict]) -> list[dict]:
+    """草稿の説明が引いた根拠（引いた順。gap は根拠を引かない）。"""
+    cited: dict[str, dict] = {}
+    for item in draft.items:
+        if item.kind != "gap":
+            for span in _named_spans(item, spans):
+                cited.setdefault(str(span["evidence_id"]), span)
+    return list(cited.values())
+
+
+def _plan_undecided_errors(draft: GroundedDraft, spans: Sequence[dict]) -> list[str]:
+    """立て直した計画（#3394）が、説明の引いた根拠を照合しなかった不整合。
+
+    計画が unrelated と判断していない根拠の説明を計画の外として黙って外さず、``plan_unsettled`` に入れて
+    ``verify`` で印を付けて残す（根拠と矛盾した説明ではない。#2738）。
+    """
+    errors = []
+    for item in draft.items:
+        if item.kind == "gap":
+            continue
+        if any(
+            _outside_request_plan(item, span, draft, spans) and not _plan_marks_unrelated(item, span, draft, spans)
+            for span in _named_spans(item, spans)
+        ):
+            errors.append(f"{item.request_id or '-'}: {item.evidence_id} の対象を計画で照合できませんでした。")
+    return list(dict.fromkeys(errors))
 
 
 def verify(
@@ -3502,8 +3533,13 @@ def _body_sections(
     unsourced = [entry for entry in published if not entry.span]
     sections: list[tuple[str, list[str]]] = []
     rules = [entry for entry in shown if entry.item.kind == "rule"]
-    if rules:
-        sections.append((answer_labels().rules_section, lines(rules, False)))
+    # 印の付いた説明（確かめていない・注意が要る。#2738）は「資料により確認できた事項」に入れない。確かめた説明と
+    # 分けて別の節に置く（根拠の使われ方 answer_use の confirmed / reference と同じ分け方。#3394）。
+    if confirmed_rules := [entry for entry in rules if not entry.state]:
+        sections.append((answer_labels().rules_section, lines(confirmed_rules, False)))
+    if marked_rules := [entry for entry in rules if entry.state]:
+        labels = answer_labels()
+        sections.append((labels.marked_rules_section, [labels.marked_rules_section_note, *lines(marked_rules, False)]))
     # 規則を質問の事実に当てはめた結果（#2155）。確かめきれないものは警告つき（#2738）。出典は当てはめた規則の根拠。
     if applied := application_lines(applications, _citation, add_citation, mark_application):
         sections.append((APPLICATIONS_SECTION_TITLE, applied))
@@ -4995,9 +5031,10 @@ def run_round(
     image_fallback = ""
     presentation = _retrieved_heading_context(spans)
     scope_plan = None
-    # 保存された章節が無く、原文から複数の対象を復元した場合だけ、対象の照合を本文生成から分ける。
-    if len({span["function"] for span in presentation}) > len({span["function"] for span in spans}):
-        scope_plan = parse_text(
+
+    def plan_scope(evidence: Sequence[dict]) -> RequestScopePlan:
+        """本文の生成と分けて、要求ごとに根拠の対象を照合する計画を立てる。"""
+        return parse_text(
             SCOPE_PLAN_SYSTEM_PROMPT,
             json.dumps(
                 {
@@ -5012,7 +5049,7 @@ def run_round(
                             "section": _function_title(span),
                             "text": span["text"],
                         }
-                        for span in presentation
+                        for span in evidence
                     ],
                 },
                 ensure_ascii=False,
@@ -5021,6 +5058,10 @@ def run_round(
             RequestScopePlan,
             provider_id=provider_id,
         )
+
+    # 保存された章節が無く、原文から複数の対象を復元した場合だけ、対象の照合を本文生成から分ける。
+    if len({span["function"] for span in presentation}) > len({span["function"] for span in spans}):
+        scope_plan = plan_scope(presentation)
         planned = GroundedDraft(request_coverage=scope_plan.request_coverage, items=[], summary="", confidence="high")
         selected = [
             span
@@ -5058,7 +5099,24 @@ def run_round(
         draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
     generation_calls = 1 + int(scope_plan is not None)
     plan_errors = _request_plan_errors(draft, spans)
-    if plan_errors:
+    plan_unsettled: list[str] = []
+    plan_recovery = ""
+    if plan_errors == [_MISSING_REQUEST_PLAN] and scope_plan is None:
+        # 計画だけが無い草稿（#3394）。全体を同じ大きさの入力で作り直すと同じ省略を繰り返すので、説明が引いた
+        # 根拠だけで計画を立て直し、説明はそのまま照合する（本文の生成と根拠の照合を分ける）。
+        try:
+            recovered = plan_scope(_cited_spans(draft, spans))
+        except Exception as exc:
+            if invalid_output is None or not invalid_output(exc):
+                raise
+            plan_recovery = type(exc).__name__
+            plan_unsettled = list(plan_errors)
+        else:
+            draft = draft.model_copy(update={"request_coverage": recovered.request_coverage})
+            plan_unsettled = _request_plan_errors(draft, spans) + _plan_undecided_errors(draft, spans)
+            plan_recovery = "planned"
+        generation_calls += 1
+    elif plan_errors:
         # 構造の不整合だけを一度直す。回答の生成後の意味の監査や、無制限の是正にはしない。
         repair_prompt = (
             prompt
@@ -5081,16 +5139,19 @@ def run_round(
         generation_calls += 1
         if scope_plan is not None:
             draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
+        # 作り直しても残った不整合（#3228）。計画が決まらない説明は外さずに印を付けて残す（verify）。
+        plan_unsettled = _request_plan_errors(draft, spans)
     from rag_engine.generation.number_notation import format_draft_numbers
 
     draft = format_draft_numbers(question, draft, spans)
     draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
     timing["generation_calls"] = generation_calls
-    # 作り直しても残った不整合（#3228）。計画が決まらない説明は外さずに印を付けて残す（verify）。
-    plan_unsettled = _request_plan_errors(draft, spans) if plan_errors else []
     if plan_errors:
         timing["request_plan_errors"] = plan_errors
+    if plan_recovery:
+        # 計画だけを立て直した（planned）か、立て直しの出力が契約を満たさなかった（例外の型名）か（#3394）。
+        timing["request_plan_recovery"] = plan_recovery
     if plan_unsettled:
         timing["request_plan_unsettled"] = plan_unsettled
     if image_fallback:

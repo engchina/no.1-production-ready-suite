@@ -207,7 +207,7 @@ def answer_labels(item: ConfirmationItem, answer: ConfirmationAnswer) -> list[st
 
 
 def record_entries(request: ConfirmationRequest) -> list[JsonObject]:
-    """会話に残す「回答前に確認した内容」（確認事項ごとの文・選んだ選択肢の名前・自由入力）。"""
+    """会話に残す「回答前に確認した内容」（確認事項ごとの文・選んだ選択肢の名前・自由入力・選択肢の有無）。"""
     answers = {answer.item_id: answer for answer in request.answers}
     entries: list[JsonObject] = []
     for item in request.items:
@@ -219,6 +219,9 @@ def record_entries(request: ConfirmationRequest) -> list[JsonObject]:
                 "selected": answer_labels(item, answer) if answer is not None else [],
                 "option_ids": list(answer.option_ids) if answer is not None else [],
                 "other_text": answer.other_text if answer is not None else "",
+                # 選択肢の無い確認事項（自由入力だけで答える）。記録は答えた時点の写しなので、画面は
+                # この値で自由入力の答えに「その他: 」を付けない（#3410）。
+                "free_text_only": not item.options,
             }
         )
     return entries

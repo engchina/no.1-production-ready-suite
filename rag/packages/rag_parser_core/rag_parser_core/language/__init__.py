@@ -606,6 +606,8 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "marked_section_note",
         "unsourced_section",
         "unsourced_section_note",
+        "marked_rules_section",
+        "marked_rules_section_note",
         "guide_notes_section",
         "guide_notes_note_template",
         "guide_handoff_template",

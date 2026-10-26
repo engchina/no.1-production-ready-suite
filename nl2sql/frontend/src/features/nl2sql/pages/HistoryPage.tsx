@@ -17,6 +17,7 @@ import {
   PageBody,
   PageHeader,
   ProcessingIndicator,
+  RunHistoryPeriodEmptyState,
   RunHistoryTable,
   RunHistoryToolbar,
   StatusBadge,
@@ -47,6 +48,8 @@ import {
   HISTORY_RUN_STATUSES,
   isCancelledHistory,
   hasActiveHistoryFilters,
+  hasActiveNonPeriodHistoryFilters,
+  isHistoryListNarrowed,
   historyDetailPath,
   historyExecutor,
   historyKindDisplay,
@@ -243,6 +246,10 @@ function HistoryList({
   }, [requestSignature, abortAll]);
 
   const filtered = hasActiveHistoryFilters(filters);
+  // 件数の「N 件（全 M 件）」は既定の過去 7 日でも出す（7 日より前の実行があることを伝える。#3386）。
+  const narrowed = isHistoryListNarrowed(filters);
+  // 期間だけで絞り、その中に実行が無くそれより前にはある（期間を広げる操作を出す。#3386）。
+  const periodOnlyEmpty = !hasActiveNonPeriodHistoryFilters(filters) && filters.period !== "all" && unfilteredTotal > 0;
   // スケルトンで覆うのは、まだ 1 度も一覧を取得できていない初回の読み込みだけ。条件の変更後は前の一覧と
   // 絞り込みの欄を出したまま処理中を示す（入力中の検索欄のフォーカスを失わせない。#739）。
   const initialLoading = loading && !loadedRequest;
@@ -371,7 +378,7 @@ function HistoryList({
                       ? undefined
                       : {
                           total: unfilteredTotal,
-                          matched: filtered ? total : undefined,
+                          matched: narrowed ? total : undefined,
                           labels: listCountLabels(),
                           testId: "history-list-count",
                         }
@@ -441,7 +448,13 @@ function HistoryList({
                     rowActions: (title) => t("history.rowActions", { title }),
                   }}
                   empty={
-                    listUnavailable ? undefined : evaluationOnly ? (
+                    listUnavailable ? undefined : periodOnlyEmpty && filters.period !== "all" ? (
+                      <RunHistoryPeriodEmptyState
+                        period={filters.period}
+                        onShowAll={() => updateFilters({ period: "all" })}
+                        testId="history-period-empty"
+                      />
+                    ) : evaluationOnly ? (
                       // 品質評価の実行だけがある: 既定で隠していることと出し方を伝える（Agent と同じ。#1986）。
                       <EmptyState
                         title={t("history.empty.title")}

@@ -208,6 +208,40 @@ export const ja = {
   "settings.parserAdapters.backend.local.description": "旧 in-process 解析。既定の Docling へ正規化",
   "settings.parserAdapters.backend.docling.description": "既定の解析エンジン。PDF と画像を解析",
   "settings.parserAdapters.backend.unstructured.description": "テキスト・HTML・Office・メールなども受ける汎用の解析。選んだ場合だけ使用",
+  "settings.parserAdapters.backend.mineru.description":
+    "外部 MinerU API を使用。ライセンスの条件の確認が要る",
+  // MinerU のライセンス（MinerU Open Source License）の主な条件と、利用の前の確認（#3359）。
+  "mineruLicense.title": "MinerU のライセンス（MinerU Open Source License）の主な条件",
+  "mineruLicense.intro":
+    "MinerU は Apache-2.0 に追加の条件を付けたライセンスで提供されています。主な条件は次のとおりです。",
+  "mineruLicense.point.threshold":
+    "利用者とその関連会社の合算で、月間アクティブユーザーが 1 億を超えるか、月の売上が 2,000 万米ドルを超えると、MinerU のチームの別途の商用ライセンスが要ります。",
+  "mineruLicense.point.attribution":
+    "MinerU を使って第三者にオンラインサービスを提供するときは、サービスの画面か公開の文書の目立つ所に、MinerU を使っていることを明示します。",
+  "mineruLicense.point.termination":
+    "上の条件を満たさないと、ライセンスは通知なしに自動で終わります。",
+  "mineruLicense.point.model":
+    "旧モデルの MinerU2.5-2509-1.2B は AGPL-3.0 です。MinerU2.5-Pro-2605-1.2B（Apache-2.0）を使ってください。",
+  "mineruLicense.confirmFullText":
+    "利用の前に、ライセンスの全文を確認してください。この案内は主な条件の抜粋で、法的な助言ではありません。",
+  "mineruLicense.link.repository": "MinerU の公式リポジトリ（GitHub）",
+  "mineruLicense.link.license": "ライセンスの全文（LICENSE.md）",
+  "mineruLicense.link.newTab": "（新しいタブで開く）",
+  "mineruLicense.acknowledge": "MinerU のライセンスの条件を確認した",
+  "mineruLicense.acknowledgeHelper":
+    "確認すると、MinerU を使用エンジンに選べます。確認した人と日時は保存の時に記録します。",
+  "mineruLicense.acknowledgedBy": "確認済み: {name}（{at}）",
+  "mineruLicense.acknowledgedAt": "確認済み（{at}）",
+  "mineruLicense.withdrawLocked":
+    "MinerU を使用エンジンにしている間は、確認を外せません。先に別の使用エンジンを選んでください。",
+  "mineruLicense.compact":
+    "MinerU のライセンス（MinerU Open Source License）は Apache-2.0 に追加の条件（企業の規模による別途の商用ライセンス・オンラインサービスでの利用の明示）があります。利用の前に全文を確認してください。",
+  "mineruLicense.adminOnly":
+    "MinerU のライセンスの条件の確認と取り消しは、システム管理者だけができます。",
+  "mineruLicense.selectBlocked":
+    "MinerU を選ぶには、先に下の「MinerU のライセンスの条件を確認した」を確かめてください。",
+  "mineruLicense.recipeUnacknowledged":
+    "MinerU を選ぶには、システム管理者が「取込・検索・回答設定 › 文書解析」で MinerU のライセンスの条件を確認する必要があります。",
   "settings.parserAdapters.backend.dots_ocr.description": "外部 Dots.OCR API を使用",
   "settings.parserAdapters.backend.oci_document_understanding": "OCI Document Understanding",
   "settings.parserAdapters.backend.oci_document_understanding.description":
@@ -232,6 +266,7 @@ export const ja = {
   "settings.parserAdapters.connection.endpoint": "Endpoint",
   "settings.parserAdapters.connection.model": "Model",
   "settings.parserAdapters.connection.apiKey": "API key",
+  "settings.parserAdapters.connection.nativeModel": "接続先の MinerU 設定を使用",
   "settings.parserAdapters.connection.apiKeyRetained": "設定済み（空欄なら保持）",
   "settings.parserAdapters.connection.clearApiKey": "保存済み API key を削除",
   "settings.parserAdapters.connection.configured": "設定済み",
@@ -1011,6 +1046,10 @@ export const ja = {
   "settings.language.field.unsourced_section.help": "検索した資料の原文と照合できない説明・業務ガイドの文から来た説明を、資料の出典を付けずに並べる節の見出しです。",
   "settings.language.field.unsourced_section_note": "出典を確かめられない説明の節の説明",
   "settings.language.field.unsourced_section_note.help": "出典を確かめられない説明の節の見出しの下に書く 1 文です。",
+  "settings.language.field.marked_rules_section": "確かめきれていない説明の節の見出し",
+  "settings.language.field.marked_rules_section.help": "根拠で確かめきれていない説明・注意が必要な説明を、資料により確認できた事項と分けて並べる節の見出しです。",
+  "settings.language.field.marked_rules_section_note": "確かめきれていない説明の節の説明",
+  "settings.language.field.marked_rules_section_note.help": "確かめきれていない説明の節の見出しの下に書く 1 文です。",
   "settings.language.field.guide_notes_section": "業務ガイドの案内の節の見出し",
   "settings.language.field.guide_notes_section.help": "業務ガイドの設定の窓口・引き継ぐ条件・承認を、資料の記載と分けて並べる節の見出しです。",
   "settings.language.field.guide_notes_note_template": "業務ガイドの案内の節の説明の型",
@@ -2348,6 +2387,7 @@ export const ja = {
     "「{name}」をアーカイブします。参照先のナレッジベース・文書は削除されません。",
   "searchAnswerProfiles.scope.label": "検索・回答プロファイル",
   "searchAnswerProfiles.scope.required": "対象の検索・回答プロファイルを選択してください。",
+  "search.prefill.profileUnavailable": "元の検索・回答プロファイルは使えません。選び直してください。",
   "searchAnswerProfiles.scope.noKnowledgeBases":
     "この検索・回答プロファイルには参照するナレッジベースがありません。検索・回答プロファイルの設定でナレッジベースを追加してください。",
   "searchAnswerProfileSelect.placeholder": "検索・回答プロファイルを検索して選択…",

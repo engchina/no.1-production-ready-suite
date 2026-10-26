@@ -1448,13 +1448,16 @@ function decideConfirmation(state: MockApiState, run: Json, confirmationId: stri
   const entries = items.map((item) => {
     const answer = answers.find((candidate) => candidate.item_id === item.id);
     const optionIds = (answer?.option_ids as string[] | undefined) ?? [];
-    const labels = new Map(((item.options as Json[] | undefined) ?? []).map((option) => [option.id, option.label]));
+    const options = (item.options as Json[] | undefined) ?? [];
+    const labels = new Map(options.map((option) => [option.id, option.label]));
     return {
       item_id: item.id,
       prompt: item.prompt,
       selected: optionIds.map((id) => String(labels.get(id) ?? "")),
       option_ids: optionIds,
       other_text: String(answer?.other_text ?? ""),
+      // backend の `record_entries` と同じく、選択肢の無い確認事項を残す（#3410）。
+      free_text_only: options.length === 0,
     };
   });
   const id = `run-chat-${state.runs.length + 1}`;
@@ -1659,7 +1662,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     // 種類（きっかけ）と期間（`since` 以後に始めた Run。#1955）。
     const kind = query.get("kind");
     const since = query.get("since");
-    const sinceMs = since ? Date.parse(since) : null;
+    // 画面は端末の今の時刻から期間の開始を求める。モックの記録は MOCK_NOW の時刻なので、backend の時計が
+    // MOCK_NOW にあるとみなし、今から同じ幅だけ前を期間の開始として比べる（既定の過去 7 日。#3386）。
+    const sinceMs = since ? Date.parse(MOCK_NOW) - (Date.now() - Date.parse(since)) : null;
     const matched = visible.filter(
       (run) =>
         runStatusMatches(String(run.status), status) &&

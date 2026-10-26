@@ -640,16 +640,15 @@ def clarification_record(
     if answer is None:
         return {"outcome": "skipped", "entries": [{"prompt": clarification.question}]}
     labels = [option.label for option in clarification.options if option.id in answer.option_ids]
-    return {
-        "outcome": "answered",
-        "entries": [
-            {
-                "prompt": clarification.question,
-                "selected": labels,
-                "other_text": answer.other_text.strip(),
-            }
-        ],
+    entry: dict[str, object] = {
+        "prompt": clarification.question,
+        "selected": labels,
+        "other_text": answer.other_text.strip(),
     }
+    if not clarification.options:
+        # 選択肢の無い確認事項の答えに「その他: 」を付けない（#3410）。
+        entry["free_text_only"] = True
+    return {"outcome": "answered", "entries": [entry]}
 
 
 def clarification_document_ids(

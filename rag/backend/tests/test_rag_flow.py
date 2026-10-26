@@ -1276,18 +1276,24 @@ def test_ingest_marks_document_error_when_local_extraction_is_empty(
 def test_ingest_chunks_locally_without_http_delegation(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """取込の分割は HTTP 委譲せず、backend 内の分割実装を直接使う。"""
+    """取込の分割は HTTP 委譲せず、backend 内の分割実装を直接使う。
+
+    既定の親子階層（small-to-big）はどの解析の結果でも ``build_parent_child_chunks`` で分割し
+    (#3377)、ほかの方式は ``chunk_extraction_with_strategy`` で分割する。どちらかを呼ぶ(#3407)。
+    """
     import app.rag.ingestion as ingestion
-    from app.rag.chunking import chunk_extraction_with_strategy
 
     calls: list[object] = []
-    original_chunking = chunk_extraction_with_strategy
 
-    def local_chunking(*args: Any, **kwargs: Any) -> Any:
-        calls.append(args)
-        return original_chunking(*args, **kwargs)
+    def counted(original: Any) -> Any:
+        def local_chunking(*args: Any, **kwargs: Any) -> Any:
+            calls.append(args)
+            return original(*args, **kwargs)
 
-    monkeypatch.setattr(ingestion, "chunk_extraction_with_strategy", local_chunking)
+        return local_chunking
+
+    for name in ("chunk_extraction_with_strategy", "build_parent_child_chunks"):
+        monkeypatch.setattr(ingestion, name, counted(getattr(ingestion, name)))
     upload_resp = client.post(
         "/api/documents/upload",
         files={"file": ("local-chunking.txt", b"chunk target text", "text/plain")},

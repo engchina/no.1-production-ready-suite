@@ -10,6 +10,7 @@ from rag_parser_core.source import SourceModality
 ParserAdapterRouteBackend = Literal[
     "docling",
     "unstructured",
+    "mineru",
     "dots_ocr",
 ]
 ParserAdapterSourceKind = Literal[
@@ -36,17 +37,17 @@ SOURCE_ROUTE_KINDS: tuple[ParserAdapterSourceKind, ...] = (
     "unknown",
 )
 
-# source kind ごとの外部 adapter の優先順。Dots.OCR は OCR が強みのため
-# image の候補末尾に足す。未導入時は readiness が missing として fallback するため、
+# source kind ごとの外部 adapter の優先順。MinerU/Dots.OCR は OCR が強みのため
+# pdf/image の候補末尾に足す。未導入時は readiness が missing として fallback するため、
 # 順序は導入後に効く。
 # ここは「順番」だけを持ち、対応形式は持たない。実際の候補は、対応形式の正本
 # (capabilities.ADAPTER_CAPABILITIES)がその source kind を宣言する backend だけに絞る(#366)。
 # 例: Docling の parser サービスは PDF と画像だけを解析するため、office / html / unknown の
 # 候補に入らない。
 _ADAPTER_PREFERENCE_BY_SOURCE_KIND: AdapterOrderBySourceKind = {
-    "pdf": ("docling", "unstructured"),
-    "image": ("unstructured", "docling", "dots_ocr"),
-    "office": ("docling", "unstructured"),
+    "pdf": ("docling", "unstructured", "mineru"),
+    "image": ("unstructured", "docling", "dots_ocr", "mineru"),
+    "office": ("docling", "unstructured", "mineru"),
     "html": ("docling", "unstructured"),
     "email": ("unstructured",),
     "text": (),

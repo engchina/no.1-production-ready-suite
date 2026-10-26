@@ -225,6 +225,25 @@ def test_clarification_record_for_the_conversation() -> None:
     assert clarification_record(_payload(), "R99", None) is None
 
 
+def test_clarification_record_marks_free_text_only_rules() -> None:
+    """選択肢の無い確認のルールの答えは、記録に `free_text_only` を残す（#3410）。"""
+    payload = {
+        "rules": [{"id": "R01", "clarification": {"question": "対象の名前は？", "options": []}}]
+    }
+    answer = ClarificationAnswer(rule_id="R01", other_text=" 名前 A ")
+    assert clarification_record(payload, "R01", answer) == {
+        "outcome": "answered",
+        "entries": [
+            {
+                "prompt": "対象の名前は？",
+                "selected": [],
+                "other_text": "名前 A",
+                "free_text_only": True,
+            }
+        ],
+    }
+
+
 def test_single_choice_rejects_multiple_options() -> None:
     payload = {"rules": [{"id": "R01", "clarification": {**CLARIFICATION, "multiple": False}}]}
     answer = ClarificationAnswer(rule_id="R01", option_ids=["travel", "expense"])

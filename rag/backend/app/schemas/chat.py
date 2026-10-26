@@ -51,6 +51,9 @@ class ChatClarificationRecordEntry(BaseModel):
     # 会話の記録は変えない）。
     selected: list[str] = Field(default_factory=list)
     other_text: str = ""
+    # 選択肢の無い（自由入力だけで答える）確認事項。画面は自由入力の答えに「その他: 」を
+    # 付けない（答えた時点の写し。#3410）。
+    free_text_only: bool = False
 
 
 class ChatClarificationRecord(BaseModel):

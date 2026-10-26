@@ -211,10 +211,20 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
     () => (agents.data?.agents ?? []).filter(isRunnableAgent),
     [agents.data]
   );
-  // 選んだ Agent が使えなくなっていたら、先頭の Agent にする。
+  // 開いている会話の業務 Agent が削除された・使えない（実行の詳細の「会話を開く」など。#3356）。既定の業務 Agent へ
+  // 黙って切り替えず、会話は閲覧だけで出し、業務 Agent を選び直すか新しい会話を始めてもらう。
+  const conversationAgentUnavailable =
+    !tryTarget &&
+    agents.isSuccess &&
+    Boolean(agentId) &&
+    Boolean(threadId) &&
+    !usableAgents.some((agent) => agent.id === agentId);
+  // 選んだ Agent が使えなくなっていたら、先頭の Agent にする（開いている会話が無いときだけ）。
   const selectedAgent = tryTarget
     ? tryTarget.agent
-    : (usableAgents.find((agent) => agent.id === agentId) ?? usableAgents[0]);
+    : conversationAgentUnavailable
+      ? undefined
+      : (usableAgents.find((agent) => agent.id === agentId) ?? usableAgents[0]);
   const selectedAgentId = selectedAgent?.id ?? "";
   // 「試す」で別の業務 Agent を開いたら、前の業務 Agent の会話と書きかけの質問を持ち越さない。
   if (tryTarget && agentId !== tryTarget.agent.id) {
@@ -663,14 +673,16 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
   // 出さず、閲覧だけの案内を出す（停止・削除・承認の判断はできる）。会話の内容の読み込み中は一覧の値で決める
   // （入力欄が一瞬出て消えないように）。
   const listedOwned = threads.data?.items.find((item) => item.thread_id === currentThreadId)?.owned;
-  const readOnlyThread = Boolean(currentThreadId) && (thread.data?.owned ?? listedOwned) === false;
+  const readOnlyThread =
+    conversationAgentUnavailable ||
+    (Boolean(currentThreadId) && (thread.data?.owned ?? listedOwned) === false);
   const composerBlocked = running || waitingApproval || tryBlocked;
   // 送信と停止は同じボタン。送信の要求中・回答の作成中・承認待ちは同じ位置で「停止」になる（buttons.md §3.1、#805）。
   const stoppable = send.isPending || Boolean(stoppableRun);
 
   // 業務 Agent の読み込み中も会話の領域を描く（寸法を予約し、読み込み後に現れて押し下げない。#1153）。
   const chatLayout =
-    agentsLoading || selectedAgentId ? (
+    agentsLoading || selectedAgentId || conversationAgentUnavailable ? (
       // 骨格（履歴のパネル・シート、会話の領域の上端の行・会話の欄・入力欄の領域）は 3 製品共通の ChatLayout（#1161）。
       <ChatLayout
         embedded={Boolean(tryTarget)}
@@ -703,6 +715,13 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
               // 閲覧だけの会話（#3244）。入力欄の代わりに 3 製品共通の ChatReadOnlyNotice を出し、回答の作成中・
               // 承認待ちなら停止だけを置く。
               <ChatReadOnlyNotice
+                // 業務 Agent が削除された・使えない会話（#3356）は、その理由と続け方を出す。
+                labels={
+                  conversationAgentUnavailable
+                    ? { title: t("chat.agentUnavailable.title"), message: t("chat.agentUnavailable.message") }
+                    : undefined
+                }
+                testIdPrefix={conversationAgentUnavailable ? "chat-agent-unavailable" : undefined}
                 onStop={stoppable ? stop : undefined}
                 stopping={cancel.isPending}
                 footer={
@@ -889,6 +908,8 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
                 id="chat-agent"
                 label={t("chat.agent.label")}
                 value={selectedAgentId}
+                // 開いている会話の業務 Agent が使えず、選んでいないとき（#3356）に出す。
+                placeholder={t("chat.agent.placeholder")}
                 options={usableAgents.map((agent) => ({
                   value: agent.id,
                   label: agent.name,

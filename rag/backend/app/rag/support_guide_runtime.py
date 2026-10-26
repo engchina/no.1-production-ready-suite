@@ -1409,10 +1409,15 @@ def guide_clarification_record(
     selected = [
         value for value in (_guide_option_value(condition, item) for item in option_ids) if value
     ]
-    return {
-        "outcome": "answered",
-        "entries": [{"prompt": prompt, "selected": selected, "other_text": other_text.strip()}],
+    entry: dict[str, object] = {
+        "prompt": prompt,
+        "selected": selected,
+        "other_text": other_text.strip(),
     }
+    if not _condition_options(condition):
+        # 選択肢の無い条件（text）の答えは条件の値そのもの。「その他: 」を付けない（#3410）。
+        entry["free_text_only"] = True
+    return {"outcome": "answered", "entries": [entry]}
 
 
 __all__ = [
