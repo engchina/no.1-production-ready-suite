@@ -56,7 +56,13 @@ from agents import (
 from agents.items import ModelResponse
 from agents.run_config import CallModelData, ModelInputData, ToolErrorFormatterArgs
 from agents.tool_context import ToolContext
-from openai import DEFAULT_MAX_RETRIES, APIStatusError, AsyncOpenAI, BadRequestError
+from openai import (
+    DEFAULT_MAX_RETRIES,
+    APIStatusError,
+    AsyncOpenAI,
+    BadRequestError,
+    DefaultAsyncHttpxClient,
+)
 from openai.types.shared import Reasoning, ReasoningEffort
 from opentelemetry import trace
 from pr_backend_core.chat_history import (
@@ -64,6 +70,7 @@ from pr_backend_core.chat_history import (
     ChatHistoryBudget,
     build_chat_history,
 )
+from pr_backend_core.llm_request_params_httpx import asend_dropping_parameters
 from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.mcp_trace import traceparent_links
 from pr_backend_core.observability.request_context import bind_log_context
@@ -91,10 +98,8 @@ from pr_system_settings.model import (
     enterprise_ai_model_catalog,
     enterprise_ai_output_token_budget,
     enterprise_ai_reasoning_effort,
-    enterprise_ai_seed,
     lower_reasoning_effort,
     reasoning_effort_to_send,
-    seed_to_send,
 )
 
 from app.features.agent import (
@@ -381,8 +386,6 @@ class ModelTarget:
     api_key: str
     # 推論（思考）の量（#1425。システム設定 > モデル の登録モデルの値）。none は送らない。
     reasoning_effort: str = ""
-    # LLM の呼び出しの seed（#1434。システム設定 > モデル の共通の値、既定 42）。
-    seed: int = 42
     # 1 回の呼び出しの出力の上限（#1719。システム設定 > モデル の登録モデルの値。既定 32768）。
     max_output_tokens: int = DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS
     # 入力の上限（#2383。prompt と応答の合計。システム設定 > モデル の登録モデルの値。
@@ -430,7 +433,6 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
         project_ocid=connection.project_ocid,
         api_key=connection.api_key,
         reasoning_effort=enterprise_ai_reasoning_effort(settings, resolved),
-        seed=enterprise_ai_seed(settings),
         # モデルの出力の上限と入力の上限の小さい方（#1719。prompt は会話で伸びるので見積もらない）。
         max_output_tokens=enterprise_ai_output_token_budget(settings, resolved),
         max_input_tokens=enterprise_ai_max_input_tokens(settings, resolved),
@@ -448,26 +450,22 @@ def model_accepts_images(settings: Any, model_id: str) -> bool:
 
 
 def model_settings_for(target: ModelTarget) -> ModelSettings:
-    """Run・評価の判定に使う SDK の ModelSettings（#1425 / #1434）。
+    """Run・評価の判定に使う SDK の ModelSettings（#1425）。
 
     - モデルの推論（思考）の量を Responses API の `reasoning: {"effort": ...}` で送る
       （none は送らない。解釈は platform の `reasoning_effort_to_send`）
-    - seed を top-level の `seed` で送る（Responses API に seed の引数が無いため、SDK の
-      `extra_body`。解釈は platform の `seed_to_send`）
     - モデルの出力の上限を `max_output_tokens` で送る（#1719。SDK の `max_tokens`。送らないと
       endpoint の既定の上限になり、推論のあるモデルは推論だけで上限に達することがある）
     """
-    extra_body = {"seed": seed_to_send(target.seed)}
     max_tokens = max(1, int(target.max_output_tokens))
     effort = reasoning_effort_to_send(target.reasoning_effort)
     if not effort:
-        return ModelSettings(store=False, max_tokens=max_tokens, extra_body=extra_body)
+        return ModelSettings(store=False, max_tokens=max_tokens)
     # 値は共通のモデル設定（pr_system_settings）が SDK と同じ候補に絞って保存している。
     return ModelSettings(
         store=False,
         reasoning=Reasoning(effort=cast(ReasoningEffort, effort)),
         max_tokens=max_tokens,
-        extra_body=extra_body,
     )
 
 
@@ -933,6 +931,25 @@ class OciResponsesModel(OpenAIResponsesModel):
         )
 
 
+class _ParameterDroppingHttpClient(DefaultAsyncHttpxClient):
+    """SDK の既定（timeout・接続の上限・redirect）の client に、受け付けない引数の扱いを足す。
+
+    モデルが受け付けない引数（temperature など）の 400 は、外して 1 回だけ送り直し、以後この
+    モデルには送らない（#3539。判定と記憶は platform の部品）。
+    """
+
+    async def send(self, request: Any, *args: Any, **kwargs: Any) -> Any:
+        parent = super().send
+        return await asend_dropping_parameters(lambda item: parent(item, *args, **kwargs), request)
+
+
+def enterprise_ai_http_client(timeout: float | None = None) -> DefaultAsyncHttpxClient:
+    """Enterprise AI を呼ぶ `AsyncOpenAI` の HTTP の client（`timeout` が無ければ SDK の既定）。"""
+    if timeout is None:
+        return _ParameterDroppingHttpClient()
+    return _ParameterDroppingHttpClient(timeout=timeout)
+
+
 def _default_model_factory(target: ModelTarget) -> Model:
     headers = {"OpenAI-Project": target.project_ocid} if target.project_ocid else None
     client = AsyncOpenAI(
@@ -942,6 +959,7 @@ def _default_model_factory(target: ModelTarget) -> Model:
         max_retries=(
             DEFAULT_MAX_RETRIES if target.sdk_max_retries is None else target.sdk_max_retries
         ),
+        http_client=enterprise_ai_http_client(),
     )
     model = OciResponsesModel(model=target.model_id, openai_client=client)
     # 上限つきの並行の実行器を通す呼び出し（SDK の再試行 0）は、送り直しを実行器に任せる（#2023）。

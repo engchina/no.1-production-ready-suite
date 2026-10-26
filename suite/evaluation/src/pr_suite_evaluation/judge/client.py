@@ -10,7 +10,7 @@ platform の `pr_enterprise_ai` の規則を使う。接続とモデルは suite
 - `SUITE_EVALUATION_JUDGE_PROJECT_OCID`: Project OCID（入れたときだけ `OpenAI-Project` ヘッダーを
   送る）
 - `SUITE_EVALUATION_JUDGE_MODEL`: 判定のモデルの ID
-- `SUITE_EVALUATION_JUDGE_SEED`（任意）・`SUITE_EVALUATION_JUDGE_MAX_OUTPUT_TOKENS`（任意）・
+- `SUITE_EVALUATION_JUDGE_MAX_OUTPUT_TOKENS`（任意）・
   `SUITE_EVALUATION_JUDGE_TIMEOUT_SECONDS`（任意。既定 600）
 
 テストは `JudgeClient` の台本（録画した応答）で差し替え、実サービスを呼ばない。
@@ -76,7 +76,6 @@ class JudgeModelConfig:
     model: str
     api_key: str = field(repr=False)
     project_ocid: str = ""
-    seed: int | None = None
     max_output_tokens: int | None = None
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
 
@@ -109,7 +108,6 @@ class JudgeModelConfig:
             model=value("MODEL"),
             api_key=value("API_KEY"),
             project_ocid=value("PROJECT_OCID"),
-            seed=optional_int("SEED"),
             max_output_tokens=optional_int("MAX_OUTPUT_TOKENS"),
             timeout_seconds=float(timeout) if timeout else DEFAULT_TIMEOUT_SECONDS,
         )
@@ -120,7 +118,6 @@ class JudgeModelConfig:
             "provider": "oci_enterprise_ai",
             "endpoint_host": urlsplit(self.endpoint).hostname or "",
             "model": self.model,
-            "seed": self.seed,
             "max_output_tokens": self.max_output_tokens,
         }
 
@@ -169,8 +166,6 @@ class EnterpriseAiJudgeClient:
                 }
             },
         }
-        if self._config.seed is not None:
-            body["seed"] = self._config.seed
         if self._config.max_output_tokens is not None:
             body["max_output_tokens"] = self._config.max_output_tokens
         headers = {"Authorization": f"Bearer {self._config.api_key}"}

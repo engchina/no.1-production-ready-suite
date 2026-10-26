@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import stat
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 from dotenv import dotenv_values
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pr_backend_core.llm_request_params import note_dropped_parameters
 from pydantic import Field
 
 from pr_system_settings import model as shared_model
@@ -49,7 +51,6 @@ class FakeSettings(ModelSecretStateMixin):
     oci_enterprise_ai_vlm_response_path: str = ""
     oci_enterprise_ai_timeout_seconds: float = 600.0
     oci_enterprise_ai_max_retries: int = 3
-    oci_enterprise_ai_seed: int = 42
     oci_genai_embedding_model: str = "cohere.embed-v4.0"
     oci_genai_embedding_dim: int = 1536
     oci_genai_rerank_model: str = "cohere.rerank-v4.0-fast"
@@ -270,6 +271,35 @@ def test_model_test_requires_model_id(tmp_path: Path) -> None:
     assert data["data"]["raw_error"] == "テストするモデル ID を入力してください。"
 
 
+def test_model_test_reports_dropped_parameters(tmp_path: Path) -> None:
+    """受け付けない引数を外して送ったら、詳細と成功の文に出す（#3539。worker thread も）。"""
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    request = {"settings": PAYLOAD, "target_type": "enterprise_text", "model_id": "llm-a"}
+
+    async def dropped(_candidate: Any, _request: ModelSettingsTestRequest) -> dict[str, Any]:
+        await asyncio.to_thread(note_dropped_parameters, ("temperature",))
+        note_dropped_parameters(("top_p",))
+        return {"response_chars": 2, "surface": "llm"}
+
+    data = (
+        make_client(settings, store, run_model_test=dropped)
+        .post("/api/settings/model/test", json=request)
+        .json()["data"]
+    )
+    assert data["status"] == "success"
+    assert data["details"] == {
+        "response_chars": 2,
+        "surface": "llm",
+        "dropped_parameters": "temperature, top_p",
+    }
+    assert "受け付けない引数（temperature, top_p）は外して送りました" in data["message"]
+
+    plain = make_client(settings, store).post("/api/settings/model/test", json=request).json()
+    assert "dropped_parameters" not in plain["data"]["details"]
+    assert "外して送りました" not in plain["data"]["message"]
+
+
 def test_saved_key_overrides_process_environment_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -290,6 +320,38 @@ def test_saved_key_overrides_process_environment_key(
     assert cleared["settings"]["enterprise_ai"]["connections"][0]["has_api_key"] is True
     client.get("/api/settings/model")
     assert settings.oci_enterprise_ai_api_key == "sk-process"
+
+
+def test_seed_is_not_kept(tmp_path: Path) -> None:
+    """seed は持たない（#3529）。保存済みの JSON・送られた payload の `seed` は読み捨てる。"""
+    (tmp_path / "model-settings.json").write_text(
+        json.dumps(
+            {
+                "version": 6,
+                "enterprise_ai": {
+                    "models": [{"model_id": "llm-a", "display_name": "A"}],
+                    "default_text_model_id": "llm-a",
+                    "seed": 42,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    client = make_client(settings, store)
+
+    assert (
+        "seed" not in client.get("/api/settings/model").json()["data"]["settings"]["enterprise_ai"]
+    )
+    payload = {**PAYLOAD, "enterprise_ai": {**PAYLOAD["enterprise_ai"], "seed": 7}}
+    saved = client.patch("/api/settings/model", json=payload)
+
+    assert saved.status_code == 200
+    assert "seed" not in saved.json()["data"]["settings"]["enterprise_ai"]
+    document = json.loads((tmp_path / "model-settings.json").read_text(encoding="utf-8"))
+    assert "seed" not in document["enterprise_ai"]
 
 
 def test_broken_json_is_reported(tmp_path: Path) -> None:

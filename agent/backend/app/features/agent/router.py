@@ -52,6 +52,7 @@ from pr_backend_core.chat_history_window import (
     within_chat_history,
 )
 from pr_backend_core.chat_progress import CHAT_PROGRESS_SSE_HEADERS
+from pr_backend_core.llm_request_params_httpx import asend_dropping_parameters
 from pr_backend_core.logging import safe_exception_fields
 from pr_system_settings.answer_notice import build_answer_notice_router
 from pr_system_settings.auth.visibility import (
@@ -86,7 +87,6 @@ from pr_system_settings.model import (
     model_payload,
     output_token_budget,
     reasoning_payload,
-    seed_to_send,
 )
 from pr_system_settings.model_test_input import (
     MODEL_TEST_EMBEDDING_INPUT,
@@ -955,11 +955,9 @@ def _model_output_token_budget(settings: EnterpriseAiModelSettings, model_id: st
 def _with_model_reasoning(
     settings: EnterpriseAiModelSettings, model_id: str, payload: dict[str, object]
 ) -> dict[str, object]:
-    """テストするモデルの推論（思考）の量を `reasoning` に、seed を top-level の `seed` に入れる。
+    """テストするモデルの推論（思考）の量を `reasoning` に入れる（#1425。none は送らない）。
 
-    推論の量は #1425（none は送らない）、seed は #1434（全モデルで共通、既定 42）。
-    画面の保存前の値（`settings.models` / `settings.seed`）で呼ぶので、選んだ値をモデルが
-    受け付けるかを確かめられる。
+    画面の保存前の値（`settings.models`）で呼ぶので、選んだ値をモデルが受け付けるかを確かめられる。
     """
     effort = next(
         (model.reasoning_effort for model in settings.models if model.model_id == model_id),
@@ -968,7 +966,6 @@ def _with_model_reasoning(
     reasoning = reasoning_payload(effort)
     if reasoning is not None:
         payload["reasoning"] = reasoning
-    payload["seed"] = seed_to_send(settings.seed)
     return payload
 
 
@@ -1040,7 +1037,11 @@ async def _post_enterprise_ai(
     if connection.project_ocid:
         headers["OpenAI-Project"] = connection.project_ocid
     async with httpx.AsyncClient(timeout=settings.timeout_seconds) as client:
-        response = await client.post(url, headers=headers, json=dict(payload))
+        # モデルが受け付けない引数（temperature など）の 400 は、外して 1 回だけ送り直し、
+        # 以後このモデルには送らない（#3539。外した引数は結果の詳細に出る）。
+        response = await asend_dropping_parameters(
+            client.send, client.build_request("POST", url, headers=headers, json=dict(payload))
+        )
     if response.is_error:
         # 受け付けない推論の量（#1425）などの 400 は、応答の本文に理由があるので結果の詳細に出す。
         raise ValueError(f"OCI Enterprise AI HTTP {response.status_code}: {response.text[:500]}")

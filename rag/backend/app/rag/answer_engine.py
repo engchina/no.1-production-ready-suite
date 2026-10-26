@@ -73,7 +73,6 @@ from app.config import (
     enterprise_ai_model_catalog,
     enterprise_ai_output_token_budget,
     enterprise_ai_reasoning_effort_to_send,
-    enterprise_ai_seed,
     enterprise_ai_vision_model_id,
     settings_today,
 )
@@ -564,8 +563,6 @@ def build_engine_settings(
         "OCI_ENTERPRISE_AI_VLM_REASONING_EFFORT": enterprise_ai_reasoning_effort_to_send(
             settings, vision_model
         ),
-        # seed は全モデルで共通(#1434。既定 42)。rag_engine が Responses API の top-level で送る。
-        "OCI_ENTERPRISE_AI_SEED": str(enterprise_ai_seed(settings)),
         # 回答のモデルの入力の上限(tokens。#1437)。章節の拡張の根拠の入力の上限と、抽出してから
         # 統合の 1 回分の大きさを、この値の割合で決める(値の解釈は platform の 1 か所)。
         "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS": str(

@@ -17,6 +17,7 @@ from contextlib import ExitStack
 from typing import Any, Protocol, cast
 
 import httpx
+from pr_backend_core.llm_request_params_httpx import send_dropping_parameters
 from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.tracing import observed_span
 from pr_system_settings.enterprise_ai_errors import (
@@ -45,7 +46,6 @@ from app.settings import (
     enterprise_ai_default_model_id,
     enterprise_ai_reasoning,
     enterprise_ai_vision_model_id,
-    seed_payload,
 )
 
 from .structured_outputs import validate_json_output
@@ -510,7 +510,12 @@ class OciEnterpriseAiDirectClient:
                         )
                     )
                     try:
-                        response = client.post(url, headers=headers, json=dict(payload))
+                        # モデルが受け付けない引数（temperature など）の 400 は、外して 1 回だけ
+                        # 送り直し、以後このモデルには送らない（#3539。platform の部品）。
+                        response = send_dropping_parameters(
+                            client.send,
+                            client.build_request("POST", url, headers=headers, json=dict(payload)),
+                        )
                     except httpx.TimeoutException as exc:
                         call_span.set_attributes({"error.type": type(exc).__name__})
                         call_span.set_status("failed")
@@ -742,18 +747,13 @@ def _with_reasoning_effort(payload: Mapping[str, Any], effort: str) -> Mapping[s
 
 
 def _with_reasoning(payload: dict[str, Any], settings: Settings, model_id: str) -> dict[str, Any]:
-    """モデルの推論（思考）の量と seed を入れる。
-
-    - 推論の量: Responses API の `reasoning`（#1425。none は送らない）
-    - seed: top-level の `seed`（#1434。全モデルで共通、既定 42。Responses API に seed の field が
-      無いため、OpenAI SDK の `extra_body` と同じ形）
+    """モデルの推論（思考）の量を Responses API の `reasoning` に入れる（#1425。none は送らない）。
 
     標準の payload だけに入れる（payload template の構成は template に任せる）。
     """
     reasoning = enterprise_ai_reasoning(settings, model_id)
     if reasoning is not None:
         payload["reasoning"] = reasoning
-    payload.update(seed_payload(settings))
     return payload
 
 

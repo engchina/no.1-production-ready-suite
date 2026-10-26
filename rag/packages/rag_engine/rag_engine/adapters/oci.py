@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pr_backend_core.llm_request_params_httpx import ParameterDroppingClient
 from pydantic import BaseModel
 
 from rag_engine.config import (
@@ -127,8 +128,6 @@ def _runtime(
 
 
 # 生成・監査・質問ルーティング・Vision 説明の全呼出で同じ入力から同じ出力を得やすくするための設定。
-# seed は共通のモデル設定の値(#1434。`settings.llm_seed`、既定 42)。Responses API に seed の引数は
-# ないため extra_body(top-level の `seed`)で渡す。
 LLM_TEMPERATURE = 0.0
 
 
@@ -152,15 +151,20 @@ def _openai_client(
     そのまま使えるようにします。
     """
     try:
-        from openai import OpenAI
+        from openai import DEFAULT_CONNECTION_LIMITS, OpenAI
     except ImportError as exc:
         raise RuntimeError("OpenAI Python SDK が未インストールです。`openai` をインストールしてください。") from exc
+    timeout = max(1, int(timeout_seconds))
     return OpenAI(
         base_url=base_url,
         api_key=api_key,
         project=project_id or None,
-        timeout=max(1, int(timeout_seconds)),
+        timeout=timeout,
         max_retries=max(0, int(max_retries)),
+        # モデルが受け付けない引数（temperature など）の 400 は、外して 1 回だけ送り直し、以後この
+        # モデルには送らない（#3539。platform の部品）。受け付けるモデルには temperature 0 を送り続ける。
+        # timeout・接続の上限・redirect は SDK の既定の client と同じにする。
+        http_client=ParameterDroppingClient(timeout=timeout, limits=DEFAULT_CONNECTION_LIMITS, follow_redirects=True),
     )
 
 
@@ -745,7 +749,6 @@ def _openai_parsed[StructuredOutputT: BaseModel](
             "text_format": text_format,
             "max_output_tokens": send_budget,
             "temperature": LLM_TEMPERATURE,
-            "extra_body": {"seed": int(settings.llm_seed)},
             **reasoning,
         }
         timing: _StreamTiming | None = None
