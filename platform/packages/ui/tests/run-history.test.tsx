@@ -28,6 +28,7 @@ import {
   runStatusIcon,
   runStatusVariant,
   runTimelineBars,
+  runTimelineHasChildren,
   runStepDetailsJson,
   hasRunStepDetails,
   setDisplayTimeZone,
@@ -542,6 +543,56 @@ describe("RunTimeline", () => {
     expect(container.textContent).toContain("引数と結果");
     const region = document.getElementById(buttons[0].getAttribute("aria-controls") ?? "");
     expect(region?.hidden).toBe(false);
+  });
+});
+
+describe("RunTimeline の実行中の段のアイコン（#3436）", () => {
+  const icon = (id: string) => {
+    const row = container.querySelector(`[data-run-timeline-step='${id}']`);
+    if (row?.querySelector("svg.animate-spin")) return "spinner";
+    const svg = row?.querySelector(".pr-icon-line svg");
+    return svg?.getAttribute("class")?.match(/lucide-([a-z0-9-]+)/g)?.find((name) => name !== "lucide-icon") ?? "none";
+  };
+  const steps: RunTimelineStep[] = [
+    { id: "root", label: "全体", status: "running" },
+    { id: "search", label: "検索", status: "running", level: 1 },
+    { id: "embed", label: "埋め込み", status: "done", durationMs: 100, level: 2 },
+    { id: "vector", label: "ベクトル検索", status: "running", level: 2 },
+    { id: "failed", label: "失敗した工程", status: "failed", durationMs: 10, level: 1 },
+    { id: "skipped", label: "飛ばした工程", status: "skipped", level: 1 },
+    { id: "pending", label: "未実行の工程", status: "pending", level: 1 },
+  ];
+
+  it("子の段を持つかは直後の段の level で決める（字下げの上限に関わらない）", () => {
+    expect(runTimelineHasChildren(steps)).toEqual([true, true, false, false, false, false, false]);
+    expect(runTimelineHasChildren([{ level: 3 }, { level: 5 }, { level: 5 }])).toEqual([true, false, false]);
+    expect(runTimelineHasChildren([])).toEqual([]);
+  });
+
+  it("実行中の親の工程は CirclePlay、実行中の末端の段だけを Spinner で回し、終わった段のアイコンは変えない", () => {
+    render(<RunTimeline steps={steps} showBars={false} testId="timeline" />);
+    expect(icon("root")).toBe("lucide-circle-play");
+    expect(icon("search")).toBe("lucide-circle-play");
+    expect(icon("vector")).toBe("spinner");
+    expect(icon("embed")).not.toBe("spinner");
+    expect(icon("failed")).not.toBe("spinner");
+    expect(icon("skipped")).not.toBe("spinner");
+    expect(icon("pending")).not.toBe("spinner");
+    expect(container.querySelectorAll("svg.animate-spin")).toHaveLength(1);
+    // 末端の子が終わり、次の子がまだ無い間も親は回さない。
+    render(
+      <RunTimeline
+        steps={steps.map((step) => (step.id === "vector" ? { ...step, status: "done", durationMs: 200 } : step))}
+        showBars={false}
+        testId="timeline"
+      />
+    );
+    expect(icon("search")).toBe("lucide-circle-play");
+    expect(container.querySelectorAll("svg.animate-spin")).toHaveLength(0);
+    // spinRunning={false} は末端の段も回さない。
+    render(<RunTimeline steps={steps} spinRunning={false} showBars={false} testId="timeline" />);
+    expect(icon("vector")).toBe("lucide-circle-play");
+    expect(container.querySelectorAll("svg.animate-spin")).toHaveLength(0);
   });
 });
 

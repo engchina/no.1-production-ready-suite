@@ -9,6 +9,7 @@ import re
 import time
 import unicodedata
 from collections.abc import Callable, Iterable, Sequence
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -55,6 +56,7 @@ from rag_engine.parsing.decorative_pictures import (
     INLINE_ICON_VISUAL_ROLE,
     visual_role_from_ref,
 )
+from rag_engine.resources.tracing import observe_call
 from rag_engine.retrieval.inquiry_conditions import (
     InquiryConditionParse,
     InquiryMetadataFilter,
@@ -72,6 +74,12 @@ from rag_engine.retrieval.text_search_tokenizer import (
     TextSearchTokenizerConfig,
     oracle_text_query_for_question,
 )
+
+# 文書の検索の中の DB の検索の工程の名前（処理の経過の段。#3436）。埋め込み・並べ替えと同じく span だけを足し、工程の
+# 記録（回答の記録の文・`execution_steps`）には書かない。名前は利用者向けの名詞（画面にそのまま出る）。
+VECTOR_SEARCH_STAGE = "ベクトル検索"
+TEXT_SEARCH_STAGE = "全文検索"
+CHUNK_POOL_LOAD_STAGE = "検索対象のチャンクの読み込み"
 
 # 原質問以外の検索文（用語補助・LLM拡張・語彙・質問理解・CRAGの書き換え）全体の票の合計。
 # 各検索文を 1.0 で足すと、検索文が10本前後のとき原質問の票が1割になり、無関係な
@@ -876,22 +884,12 @@ def search_adb_hybrid_chunks(
             image_rankings: list[list[tuple[str, float | None]]] = []
             limit = max(1, int(candidate_limit or 1))
             query_weights = derived_query_weights(len(queries), enabled=getattr(settings, "original_query_weighting_enabled", True))
-            for query_vector in _query_vectors(queries, settings, query_embedder):
-                rankings.append(
-                    _vector_search(
-                        connection,
-                        chunk_run_id,
-                        query_vector,
-                        settings,
-                        preferred_engine_ids,
-                        limit,
-                        metadata_filter,
-                        retrieval_scope=scope,
-                        classification_filter=category_filter,
-                    )
-                )
-                if _image_embedding_enabled(settings):
-                    image_rankings.append(
+            # 埋め込み（`gen_ai.embeddings` の span）の後の DB の検索は、それぞれ工程の span にする（処理の経過で、文書の
+            # 検索の中の今の作業を末端の段として出す。#3436）。
+            query_vectors = _query_vectors(queries, settings, query_embedder)
+            with observe_call("stage", VECTOR_SEARCH_STAGE):
+                for query_vector in query_vectors:
+                    rankings.append(
                         _vector_search(
                             connection,
                             chunk_run_id,
@@ -902,9 +900,23 @@ def search_adb_hybrid_chunks(
                             metadata_filter,
                             retrieval_scope=scope,
                             classification_filter=category_filter,
-                            embedding_modality=EMBEDDING_MODALITY_IMAGE,
                         )
                     )
+                    if _image_embedding_enabled(settings):
+                        image_rankings.append(
+                            _vector_search(
+                                connection,
+                                chunk_run_id,
+                                query_vector,
+                                settings,
+                                preferred_engine_ids,
+                                limit,
+                                metadata_filter,
+                                retrieval_scope=scope,
+                                classification_filter=category_filter,
+                                embedding_modality=EMBEDDING_MODALITY_IMAGE,
+                            )
+                        )
             text_rankings: list[list[tuple[str, float | None]]] = []
             text_query_weights: list[float] = []
             seen_text_queries: set[str] = set()
@@ -917,37 +929,60 @@ def search_adb_hybrid_chunks(
             tokenizer_config = _text_search_tokenizer_config(settings)
             # 全文検索の上限は vector 専用の検索文（HyDE の仮説文）を除いてから数える (#921)。重みは元の位置で決める。
             text_candidates = [(index, query) for index, query in enumerate(queries) if _query_key(query) not in vector_only_keys]
-            for query_index, query in text_candidates[: _text_search_query_variant_limit(settings)]:
-                text_query = oracle_text_query(
-                    query,
-                    domain_keywords=domain_keywords,
-                    tokenizer_config=tokenizer_config,
-                )
-                if not text_query or text_query in seen_text_queries:
-                    continue
-                seen_text_queries.add(text_query)
-                text_query_weights.append(query_weights[query_index])
-                text_rankings.append(
-                    _text_search(
+            # 質問文の変種の全文検索と、組み立て済みの検索式（extra_text_queries）の全文検索を 1 つの工程にする
+            # （融合の順と重みは変えない）。検索するものが無ければ工程を出さない。
+            text_variants = text_candidates[: _text_search_query_variant_limit(settings)]
+            with observe_call("stage", TEXT_SEARCH_STAGE) if text_variants or extra_text_queries else nullcontext():
+                for query_index, query in text_variants:
+                    text_query = oracle_text_query(
+                        query,
+                        domain_keywords=domain_keywords,
+                        tokenizer_config=tokenizer_config,
+                    )
+                    if not text_query or text_query in seen_text_queries:
+                        continue
+                    seen_text_queries.add(text_query)
+                    text_query_weights.append(query_weights[query_index])
+                    text_rankings.append(
+                        _text_search(
+                            connection,
+                            chunk_run_id,
+                            text_query,
+                            settings,
+                            preferred_engine_ids,
+                            limit,
+                            metadata_filter,
+                            retrieval_scope=scope,
+                            classification_filter=category_filter,
+                        )
+                    )
+                for text_query in extra_text_queries:
+                    if not text_query or text_query in seen_text_queries:
+                        continue
+                    seen_text_queries.add(text_query)
+                    text_query_weights.append(derived_weight)
+                    text_rankings.append(
+                        _text_search(
+                            connection,
+                            chunk_run_id,
+                            text_query,
+                            settings,
+                            preferred_engine_ids,
+                            limit,
+                            metadata_filter,
+                            retrieval_scope=scope,
+                            classification_filter=category_filter,
+                        )
+                    )
+            if all_chunks is None:
+                with observe_call("stage", CHUNK_POOL_LOAD_STAGE):
+                    all_chunks = _load_chunk_run_chunks(
                         connection,
                         chunk_run_id,
-                        text_query,
-                        settings,
                         preferred_engine_ids,
-                        limit,
-                        metadata_filter,
                         retrieval_scope=scope,
                         classification_filter=category_filter,
                     )
-                )
-            if all_chunks is None:
-                all_chunks = _load_chunk_run_chunks(
-                    connection,
-                    chunk_run_id,
-                    preferred_engine_ids,
-                    retrieval_scope=scope,
-                    classification_filter=category_filter,
-                )
                 if len(_pool_cache) >= 8:
                     _pool_cache.clear()
                 _pool_cache[pool_key] = (time.monotonic(), all_chunks)
@@ -956,24 +991,6 @@ def search_adb_hybrid_chunks(
                 metadata_filter,
                 category_filter,
             )
-            for text_query in extra_text_queries:
-                if not text_query or text_query in seen_text_queries:
-                    continue
-                seen_text_queries.add(text_query)
-                text_query_weights.append(derived_weight)
-                text_rankings.append(
-                    _text_search(
-                        connection,
-                        chunk_run_id,
-                        text_query,
-                        settings,
-                        preferred_engine_ids,
-                        limit,
-                        metadata_filter,
-                        retrieval_scope=scope,
-                        classification_filter=category_filter,
-                    )
-                )
             # 比較実験用。質問理解の profile に合う chunk を第4のチャネルとして融合するかどうか。
             profile_rankings = (
                 profile_channel_rankings(

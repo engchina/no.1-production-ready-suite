@@ -638,7 +638,7 @@ const okChatStream: TimedChunk[] = [
   },
 ];
 
-async function mockChatPage(page: Page) {
+async function mockChatPage(page: Page, chat: TimedChunk[][] = [timedOutChatStream, okChatStream]) {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (route) =>
@@ -692,7 +692,7 @@ async function mockChatPage(page: Page) {
     }
     await route.fulfill({ json: { data: detail, error_messages: [], warning_messages: [] } });
   });
-  await mockStreams(page, { search: [[]], chat: [timedOutChatStream, okChatStream] });
+  await mockStreams(page, { search: [[]], chat });
 }
 
 for (const viewport of [
@@ -787,5 +787,103 @@ for (const viewport of [
     expect(requests[1].body).toMatchObject({ content: userMessage.content });
     // 再送に成功したら、最新のターンではなくなった失敗には再送の操作を出さない。
     await expect(page.getByRole("button", { name: "もう一度送信" })).toHaveCount(0);
+  });
+}
+
+// --- 処理の経過の実行中の段のアイコン（#3436） ---
+
+const nestedProgress = chatProgressStream("a3");
+
+/**
+ * 回答フローの中の文書の検索で、子の段（埋め込み → ベクトル検索 → 子が途切れた間 → 全文検索）が順に進むチャットの SSE。
+ * 子の段を持つ親の工程（質問の読み取りから回答の作成まで・根拠の検索と回答の作成・文書の検索）は回さず、実行中の
+ * 末端の段だけが回ることを確かめる。最後の chunk は送らない（確かめる間は作成中のまま）。
+ */
+const nestedChatStream: TimedChunk[] = [
+  {
+    afterMs: 0,
+    text: [
+      sse("start", {
+        conversation_id: "conv-1",
+        user_message: userMessage,
+        columns: [{ model_id: "m1", label: "MODEL 1", message_id: "a3" }],
+      }),
+      nestedProgress.start("root", ragSpan.root()),
+      nestedProgress.start("answer", ragSpan.stage("answer")),
+      nestedProgress.start("flow", ragSpan.step("回答生成フロー")),
+      nestedProgress.start("search", ragSpan.step("文書検索", "flow")),
+      nestedProgress.start(
+        "embed",
+        ragSpan.technical("gen_ai.embeddings", "search", {
+          "gen_ai.operation.name": "embeddings",
+          "gen_ai.request.model": "cohere.embed-v4.0",
+        })
+      ),
+    ].join(""),
+  },
+  {
+    afterMs: 2500,
+    text: [nestedProgress.finish("embed"), nestedProgress.start("vector", ragSpan.step("ベクトル検索", "search"))].join(""),
+  },
+  // ベクトル検索が終わり、次の子がまだ始まっていない間（親の工程の中で子が途切れた間）。
+  { afterMs: 4000, text: nestedProgress.finish("vector") },
+  { afterMs: 4000, text: nestedProgress.start("text", ragSpan.step("全文検索", "search")) },
+  { afterMs: 60_000, text: sse("all_done", { conversation_id: "conv-1" }) },
+];
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`チャットの処理の経過は子の段を持つ親の工程を回さず、実行中の末端の段だけを回す (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockChatPage(page, [nestedChatStream]);
+
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理ビュー");
+    await page.getByRole("button", { name: "新しい会話" }).click();
+    await page.getByRole("textbox").fill(userMessage.content);
+    await page.getByRole("button", { name: "送信" }).click();
+
+    const progress = page.getByTestId("chat-answer-progress");
+    const current = page.getByTestId("chat-answer-progress-current");
+    const row = (key: string) => page.getByTestId(`chat-answer-progress-step-${spanStepId(key)}`);
+    const parentsAreStill = async () => {
+      for (const key of ["answer", "flow", "search"]) {
+        await expect(row(key)).toHaveAttribute("data-status", "running");
+        await expect(row(key).locator("svg.animate-spin")).toHaveCount(0);
+        await expect(row(key).locator("svg.lucide-circle-play")).toHaveCount(1);
+      }
+      // 動くスピナーは今の行の 1 つだけ。
+      await expect(progress.locator("svg.animate-spin")).toHaveCount(1);
+      await expect(current.locator("svg.animate-spin")).toHaveCount(1);
+    };
+
+    // 1. 埋め込みが終わり、ベクトル検索が今の段階（文書の検索の子）。
+    await expect(current).toContainText("ベクトル検索", { timeout: 6_000 });
+    await expect(current).toHaveAttribute("data-step-id", spanStepId("vector"));
+    await expect(row("embed")).toHaveAttribute("data-status", "done");
+    await parentsAreStill();
+    await progress.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `test-results/answer-progress-nested-leaf-${viewport.name}.png`, fullPage: false });
+
+    // 2. ベクトル検索が終わり、次の子がまだ無い間: 文書の検索は回さず、その 1 段下に「処理を続けています」を回す。
+    await expect(current).toContainText("処理を続けています", { timeout: 6_000 });
+    await expect(current).toHaveAttribute("data-step-id", "");
+    await expect(row("vector")).toHaveAttribute("data-status", "done");
+    await parentsAreStill();
+    // 今の行は親（文書の検索）の 1 段下に字下げする。
+    const searchIcon = await row("search").locator("svg.lucide-circle-play").boundingBox();
+    const workingIcon = await current.locator("svg.animate-spin").boundingBox();
+    expect(searchIcon && workingIcon && workingIcon.x > searchIcon.x).toBeTruthy();
+    await page.screenshot({ path: `test-results/answer-progress-nested-gap-${viewport.name}.png`, fullPage: false });
+
+    // 3. 次の子（全文検索）が始まると、それが今の段階になる。
+    await expect(current).toContainText("全文検索", { timeout: 6_000 });
+    await expect(current).toHaveAttribute("data-step-id", spanStepId("text"));
+    await parentsAreStill();
+    await expectNoPageOverflow(page);
   });
 }

@@ -6,7 +6,13 @@ import { operationTimestampMs } from "../../lib/operation-timing";
 import { cn } from "../../lib/utils";
 import { RunProcessDetails } from "../data/run-detail";
 import { useTraceDetailsLabels } from "../data/trace-labels-provider";
-import { RunTimeline, RunTimelineProduct, runTimelineStepIndent, type RunTimelineStep } from "../data/run-detail";
+import {
+  RunTimeline,
+  RunTimelineProduct,
+  runTimelineHasChildren,
+  runTimelineStepIndent,
+  type RunTimelineStep,
+} from "../data/run-detail";
 import { hasRunStepDetails, type RunStepDetails } from "../data/run-step-details";
 import { Disclosure } from "../ui/disclosure";
 import { TEXT_ICON_SIZE } from "../ui/text-icon";
@@ -241,9 +247,16 @@ function totalDurationMs(steps: ChatProgressStep[]): number | null {
   return Math.max(0, Math.max(...ends) - Math.min(...starts));
 }
 
-function lastRunningStep(steps: readonly ChatProgressStep[]): ChatProgressStep | undefined {
+/**
+ * 最後に始まった実行中の段（`leaf` なら子の段を持たない末端の段だけ。#3436）。子の段を持つ段（親の工程）は、子が
+ * 終わって次の子がまだ始まっていない間も今の段階にしない（親の行を回さない）。
+ */
+function lastRunningStep(
+  steps: readonly ChatProgressStep[],
+  hasChildren?: readonly boolean[]
+): ChatProgressStep | undefined {
   for (let index = steps.length - 1; index >= 0; index -= 1) {
-    if (steps[index].status === "running") return steps[index];
+    if (steps[index].status === "running" && !hasChildren?.[index]) return steps[index];
   }
   return undefined;
 }
@@ -401,6 +414,7 @@ function ProgressNotice({
 function CurrentStepRow({
   activityIndicator,
   step,
+  level,
   slow,
   reconnecting,
   labels,
@@ -409,6 +423,10 @@ function CurrentStepRow({
   activityIndicator: boolean;
   /** 今の段階。終端でないのに実行中・待機中の段階が無いときは null（「処理を続けています」を出す）。 */
   step: ChatProgressStep | null;
+  /**
+   * `step` が null のときの字下げ（`level`）。実行中の親の工程の中で、子の段が途切れた間は親の 1 段下に出す（#3436）。
+   */
+  level?: number;
   slow: boolean;
   reconnecting: boolean;
   labels: ChatProgressLabels;
@@ -433,7 +451,7 @@ function CurrentStepRow({
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3"
         data-testid={testId && step ? `${testId}-step-${step.id}` : undefined}
         data-status="running" aria-current="step">
-        <div className={cn("flex min-w-0 items-start gap-2 text-xs leading-5", runTimelineStepIndent(step?.level))}>
+        <div className={cn("flex min-w-0 items-start gap-2 text-xs leading-5", runTimelineStepIndent(step ? step.level : level))}>
           <span className="pr-icon-line">
             {activityIndicator ? <Spinner size={TEXT_ICON_SIZE.xs} className="text-accent-fg" /> : <Clock3 size={TEXT_ICON_SIZE.xs} className="text-fg-muted" aria-hidden />}
           </span>
@@ -470,8 +488,9 @@ function CurrentStepRow({
  *   開いたまま。
  * - `footer` は開いた中身の末尾（タイムラインの後ろ）に出し、一覧と一緒に開閉する（#2325。処理の経過に属する
  *   技術的な詳細を、回答の本文との間に独立して置かない）。
- * - 入れ子の工程は `level` で字下げし、親と子が同時に実行中なら最後に始まった段階を今の段階にする。計測値
- *   （`meta`。LLM の回数など）は名前の後ろの括弧、右の列は失敗とスキップの文字・所要時間。
+ * - 入れ子の工程は `level` で字下げし、最後に始まった実行中の末端の段（子の段を持たない段）を今の段階にする。子の
+ *   段を持つ実行中の段（親の工程）は回さない実行中の印で出し、子が途切れた間は親の 1 段下に「処理を続けています」を
+ *   出す（#3436）。計測値（`meta`。LLM の回数など）は名前の後ろの括弧、右の列は失敗とスキップの文字・所要時間。
  * - 段階の切り替わりは polite で読み上げる（経過時間の毎秒の更新は読み上げない）。状態はアイコンと文字で示す。
  * - 動くスピナーは今の段階の 1 つだけ（同じ処理のスピナーは 1 つ。messaging.md §3.7）。
  * - 処理中は一度出した段階を消さず、状態を戻さない（古い snapshot・段階が実行中に戻る組み立てでも、
@@ -523,10 +542,15 @@ export function ChatProgress({
   const steps = trackedSteps.length === 0 && activeProp === true ? startingSteps(labels.starting, startedAt) : trackedSteps;
   const failed = !cancelled && steps.some((step) => step.status === "failed");
   const state: ProgressState = active ? "running" : cancelled ? "cancelled" : failed ? "failed" : "done";
-  // 実行中の段階が無い（段階の間・開始前）ときは、次に進む段階を今の段階として出す。
-  // 入れ子の工程（親と子が同時に実行中）は、最後に始まった実行中の段階（いちばん内側）を今の段階にする。
+  // 今の段階は、最後に始まった実行中の末端の段（子の段を持たない段）。子の段を持つ実行中の段（親の工程）は今の段階に
+  // せず、開始順の位置に回さない実行中の印で出す（#2840 / #3436）。親の子が終わって次の子がまだ始まっていない間は、
+  // 親の 1 段下に「処理を続けています」を出す（親の行を回さない）。実行中の段階が無い（段階の間・開始前）ときは、次に
+  // 進む段階を今の段階として出す。
+  const hasChildren = runTimelineHasChildren(steps);
+  const runningLeaf = active ? lastRunningStep(steps, hasChildren) : undefined;
+  const runningParent = active && !runningLeaf ? lastRunningStep(steps) : undefined;
   const current = active
-    ? lastRunningStep(steps) ?? steps.find((step) => step.status === "pending")
+    ? runningLeaf ?? (runningParent ? undefined : steps.find((step) => step.status === "pending"))
     : undefined;
   const finished = steps.filter((step) => step.status === "done" || step.status === "failed" || step.status === "skipped");
   // 実行中の一覧（#2840）: 始まった段階（実行中・終わった段階）を一覧の順（開始順）に 1 本で並べ、今の段階の行は
@@ -550,7 +574,8 @@ export function ChatProgress({
   const total = elapsedMs ?? totalDurationMs(steps);
   const overallStartedAt = operationTimestampMs(startedAt) ?? firstStartedAtMs(steps);
   // 段階の切り替わりと、取り直しの開始を読み上げる。
-  const currentLabel = active ? (current?.label ?? labels.working) : "";
+  // 子が途切れた親の工程の中では、閉じたときの見出しと読み上げに親の工程の名前を出す。
+  const currentLabel = active ? (current?.label ?? runningParent?.label ?? labels.working) : "";
   // 遅延は今の段階の経過時間で判断し（#1176）、一度出たら処理が終わるまで消さない（#2426。段階が変わって今の段階の
   // 経過時間が 0 に戻っても出直さない）。有限でない閾値（承認待ちなど）の間は出さず、出ていた案内も忘れる。
   const slowEnabled = active && Number.isFinite(slowAfterMs);
@@ -601,6 +626,7 @@ export function ChatProgress({
             <CurrentStepRow
               activityIndicator={activityIndicator}
               step={current ?? null}
+              level={runningParent ? (runningParent.level ?? 0) + 1 : undefined}
               slow={slow}
               reconnecting={reconnecting}
               labels={labels}

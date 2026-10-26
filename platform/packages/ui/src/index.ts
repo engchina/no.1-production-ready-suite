@@ -774,6 +774,7 @@ export {
   RunDetailSkeleton,
   RunFactList,
   runTimelineBars,
+  runTimelineHasChildren,
   resolveRunDetailLabels,
   formatRunCancellation,
   DEFAULT_RUN_DETAIL_LABELS,
