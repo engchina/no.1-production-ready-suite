@@ -84,12 +84,11 @@ health の確認）への HTTP は、`HTTP_PROXY` を設定していてもプロ
 | parser-unstructured（既定では配備しない。Docling が扱えない形式を取り込む場合） | `services/parsers/unstructured` | 18022 |
 | parser-structured-records-jsonl（構造化レコード JSONL の解析エンジン。既定で配備・起動。#2457） | `services/parsers/structured_records_jsonl` | 18023 |
 | parser-xml-tree-json（XML ツリー JSON の解析エンジン。既定で配備し、既定は停止。#2024・#2042・#2453） | `services/parsers/xml_tree_json` | 18021 |
-| parser-oci-document-understanding（OCI Document Understanding） | `services/parsers/oci_document_understanding` | 18028 |
+| parser-oci-document-understanding（OCI Document Understanding。**準備中（ロードマップ）で配備しない**。#3374） | `services/parsers/oci_document_understanding` | 18028 |
 
-音声・動画の文字起こしは parser のサービスを使わず、backend が OCI AI Speech で行う（GPU の ASR の parser と、
-OCI Generative AI（Vision）の parser は #2042 で削除した）。ファイル準備の「PDF を画像として読み直す」
-（`preprocess-pdf-to-page-images`、18011）は #3347 で、取込時の「PIIマスク」（`preprocess-pii-redact`、18016）は
-#3358 で削除した。
+音声・動画は取り込まない（アップロードで止める。#3369）。GPU の ASR の parser と、OCI Generative AI（Vision）の parser は
+#2042 で削除した。ファイル準備の「PDF を画像として読み直す」（`preprocess-pdf-to-page-images`、18011）は #3347 で、
+取込時の「PIIマスク」（`preprocess-pii-redact`、18016）は #3358 で削除した。
 
 backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_URL`）の既定はこの `127.0.0.1:<port>`。
 `backend/.env` に以前の Docker Compose の service 名（`http://parser-docling:8000` など）が残っている場合は `127.0.0.1:<port>` に直す（#356 から読み替えない）。
@@ -113,7 +112,6 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
    ```bash
    scripts/rag-services.sh install            # 前処理 4 つと既定の CPU parser（docling・structured-records-jsonl・xml-tree-json）
    scripts/rag-services.sh install --unstructured  # Unstructured（Docling が扱えない形式を取り込む場合）
-   scripts/rag-services.sh install --oci      # OCI Document Understanding の parser も足す
    scripts/rag-services.sh status             # unit の状態
    scripts/rag-services.sh render /tmp/units  # 登録せずに unit と sudoers の中身だけ確かめる
    scripts/rag-services.sh uninstall          # unit と sudoers を消す
@@ -149,8 +147,9 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
 | ODT・RTF（`.odt` / `.rtf`） | 原本のままでは解析しない | 処理レシピの「ファイル準備」で **Office→PDF** を選ぶ（PDF にしてから解析する）。Unstructured は原本を読まない（pandoc を入れないため。#3351） |
 | テキスト・Markdown・reStructuredText・Org・CSV / TSV・JSON / JSONL・XML・HTML（`.txt` / `.md` / `.rst` / `.org` / `.csv` / `.tsv` / `.json` / `.jsonl` / `.xml` / `.html` など） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ（`.rst` / `.org` はプレーンテキストとして読む。#3351） |
 | メール（`.eml`） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ |
-| TIFF・Outlook（`.msg`）・音声・不明な形式 | どの解析エンジンでも取り込めない（以前から「非対応形式」として止まる） | PDF などに変換してからアップロードする |
+| TIFF・Outlook（`.msg`）・不明な形式 | どの解析エンジンでも取り込めない（以前から「非対応形式」として止まる） | PDF などに変換してからアップロードする |
 | HEIC / HEIF の画像（`.heic` / `.heif`）・EPUB（`.epub`） | アップロードできない（画面の選択と API の 415 で、変換の方法を添えて止める） | 画像は JPEG / PNG（iPhone は「設定 › カメラ › フォーマット › 互換性優先」で JPEG で保存できる）、EPUB は PDF に変換してからアップロードする |
+| 音声・動画（`.mp3` / `.wav` / `.m4a` / `.flac` / `.ogg` / `.aac`・`.mp4` / `.mov` / `.webm` など、`audio/*` / `video/*`） | アップロードできない（画面の選択と API の 415 で止める。#3369） | 内容をテキストに書き起こしてからアップロードする |
 
 - **HEIC / HEIF・EPUB・ODT・RTF の原本を解析する依存は入れない（#3351）。** Unstructured の解析サービスは `unstructured[all-docs]`
   ではなく、残す形式の extra（`pdf,image,docx,pptx,xlsx,csv,tsv,md`）だけを入れ、`pi-heif`（同梱の libheif / libde265 が LGPL-3.0。
@@ -214,6 +213,23 @@ ln -s "${NEW}" "${OLD}"
 移行後に backend を起動し、警告ログが出ないこと、既存文書のプレビュー / 再取込ができることを確認してから退避ディレクトリを削除する。
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `RAG_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
+
+## 既存環境の更新手順（#3369 音声・動画の取込の削除）
+
+音声のファイル（`.mp3` / `.wav` / `.m4a` / `.flac` / `.ogg` / `.aac`）の取込（backend が OCI AI Speech の transcription job で
+文字起こしする経路）を削除した。#2042 は GPU の ASR の解析エンジン（`parser-asr`）だけを外し、OCI AI Speech の経路が残っていた。
+音声・動画は製品として対応しない形式と決めた（利用者の判断。2026-10-26）。音声・動画のファイルは、アップロードの画面（送る前）と
+API（415）で「音声・動画のファイル（MP3・WAV・OGG・MP4 など）は対応していません。…」と止める。表の変更（migration）は無い。
+抽出の ID（`extraction_recipe_id`）は変わらない（削除した設定の既定値を hash の入力に固定で残す）ので、ほかの文書の再処理は要らない。
+
+- 未リリースのため互換は持たない。`backend/.env` の `RAG_PARSER_ASR_ENABLED`・`RAG_OCI_SPEECH_*`（compartment・namespace・
+  入力 / 出力の bucket・prefix・言語・poll の間隔・timeout）は読まない（残っていても害は無い）。
+- 取り込み済みの音声の文書（文字起こしで索引を作ったもの）は検索に残るが、原本は未知の形式（`unknown_file_type`）として扱われ、
+  再処理できない。
+
+1. `backend/.env` から `RAG_PARSER_ASR_ENABLED`・`RAG_OCI_SPEECH_*` を消す（任意）。
+2. 音声の文書が残っていれば、文書インデックスから削除する（内容をテキストに書き起こしたファイルを取り込み直す）。
+3. tenancy に OCI AI Speech のための IAM policy（`ai-service-speech-family` など）を足していれば、RAG では使わなくなったので外してよい。
 
 ## 既存環境の更新手順（#3358 取込時の「PIIマスク」の削除）
 
@@ -654,8 +670,9 @@ backend と取込 worker を更新して再起動する。旧 `RAG_CHUNKING_SERV
 
 XML ツリー JSON の解析（`parser-xml-tree-json`）を、形式を見て自動で回す例外から、Docling・Unstructured と同じ使用エンジン
 （`RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`）にした。形式で自動に回すスイッチは削除した。あわせて、OCI Generative AI（Vision）の
-parser（`parser-oci-genai-vision`、18027）と GPU の ASR の parser（`parser-asr`、18026）を削除した（音声は backend が
-OCI AI Speech で文字起こしする。取込の「図・画像を AI で読み取る」（OCI Enterprise AI の VLM）は変わらない）。
+parser（`parser-oci-genai-vision`、18027）と GPU の ASR の parser（`parser-asr`、18026）を削除した（音声の文字起こしは
+その後 backend の OCI AI Speech で行っていたが、#3369 で音声・動画の取込ごと削除した。取込の「図・画像を AI で読み取る」
+（OCI Enterprise AI の VLM）は変わらない）。
 「ファイル準備」の変換方式のうち、スキャン画像の補正（`preprocess-image-enhance`、18015）と URL→Markdown
 （`preprocess-url-to-markdown`、18014）も削除した。保存済みの設定・文書レシピにこの 2 つが残っていても、読み込み時に
 「変換なし」（passthrough）として扱い、次に保存すると消える。
@@ -1314,7 +1331,7 @@ PDF（2 段以上。既定 11 ページ以上）を段（既定 10 ページ）�
 2. Compute の `rag/backend/.env` に `RAG_INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS`（旧既定の 1200 など）を書いていれば消すか、
    `86400` に書き換える（書いた値が優先され、旧い短い上限のまま止まる）。既定のままなら書かなくてよい。
 3. 停滞の時間を変えるなら `RAG_INGESTION_JOB_STALL_TIMEOUT_SECONDS` を書く。解析サービス・MinerU・Document Understanding・
-   AI Speech・Vision の LLM の timeout（再試行を含む）より短い値は起動時の検証で止まる（エラーに直す設定の名前が出る）。
+   Vision の LLM の timeout（再試行を含む）より短い値は起動時の検証で止まる（エラーに直す設定の名前が出る）。
 4. backend と取込 worker を再起動する（`sudo systemctl restart production-ready-rag-backend production-ready-rag-ingestion-worker`）。実行中の job は worker の停止で
    `QUEUED` に戻り、再起動の後に新しい止め方で最初から実行する。前に 1200 秒で失敗した文書は、文書の詳細から再実行する。
 
@@ -1695,7 +1712,7 @@ ADB（Oracle Autonomous AI Database）と Wallet も stack が用意し（NL2SQL
 | Python | `uv python install 3.12`（`/opt/uv/python`。`ragsvc` も読める）。各サービスの venv は `uv sync --locked --no-dev --python 3.12` |
 | backend | `production-ready-rag-backend.service`（gunicorn + UvicornWorker、`127.0.0.1:8000`、workers 2、`RAG_ENVIRONMENT=prod`、in-process の取込 worker は無効） |
 | 取込 worker | `production-ready-rag-ingestion-worker.service`（`python -m app.rag.ingestion_worker`、`KillMode=mixed`、`RAG_INGESTION_QUEUE_SHUTDOWN_GRACE_SECONDS=60`、`TimeoutStopSec=90`。停止は下の「取込 worker の lease と停止」） |
-| 前処理 / parser | `production-ready-rag-<service>.service`（サービスごとの venv の gunicorn、`127.0.0.1:<port>`）。対象は stack の `rag_services`（前処理 4 つ・parser-docling・parser-structured-records-jsonl・parser-xml-tree-json と、選べば parser-unstructured・parser-oci-document-understanding）。parser-xml-tree-json は既定は停止で、初めて配備しても起動しない（#2453）。GPU の parser は配備しない |
+| 前処理 / parser | `production-ready-rag-<service>.service`（サービスごとの venv の gunicorn、`127.0.0.1:<port>`）。対象は stack の `rag_services`（前処理 4 つ・parser-docling・parser-structured-records-jsonl・parser-xml-tree-json と、選べば parser-unstructured。準備中〔ロードマップ〕の parser-oci-document-understanding は配備しない。#3374）。parser-xml-tree-json は既定は停止で、初めて配備しても起動しない（#2453）。GPU の parser は配備しない |
 | frontend | host の Node.js 24 で `platform` と `rag/frontend` を build し、Nginx が `rag/frontend/dist` を配信して `/api/` を backend へ proxy する |
 | upload の上限 | Nginx の `client_max_body_size` は backend の `RAG_MAX_UPLOAD_BYTES`（`backend/.env`。既定 200 MiB）+ 10 MiB（MiB で切り上げ。Refs #306） |
 | 設定 | `platform/.env`（`PLATFORM_*`）と `rag/backend/.env`（`RAG_*`）。どちらも `ragsvc` だけが読める 0600。OCI parser の unit は両方を EnvironmentFile で読む |
@@ -1872,7 +1889,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `RAG_PDF_SEGMENTATION_ENABLED` / `RAG_PDF_MAX_PAGES_PER_SEGMENT` / `RAG_PDF_MAX_SEGMENTS` / `RAG_PDF_SEGMENT_PARSE_CONCURRENCY`: PDF をページの段（既定 10 ページ。最大 300 段）に分け、段ごとに解析サービス（Docling・Unstructured・外部の解析 API）を呼ぶ（#2001。2 段以上の PDF だけ。OCI の解析サービス〔Document Understanding・Vision〕と PDF 以外は原本全体を 1 回で解析する）。段ごとに 待機中 → 処理中 → 完了 / 失敗 と抽出結果（段の artifact。`<RAG_EXTRACTION_ARTIFACT_PREFIX>/<文書>/segments/<段>.json`）を残し、失敗・中断・再起動の後の再実行は、成功した段の artifact（段の PDF と解析・前処理の設定の鍵が同じもの）を使って残りの段だけを解析する。段が失敗したら、始めていない段は「取消済み」にして止める。すべての段が終わったら、ページの順に 1 つの抽出結果にまとめ（ページ番号・ID・`layout_records` を原本のページにそろえ、Docling の見出しの階層は原本全体の record から作り直す）、文書全体を整える（PDF のしおりに当たる見出しの深さ・ページの境目で切れた段落・リスト・表の続き。下の #2001 の節）。段を同時に解析する数は `RAG_PDF_SEGMENT_PARSE_CONCURRENCY`（1〜4。既定 1 = 順番）。上げるときは解析サービスの CPU・メモリを確かめる。
 - `RAG_PAGE_CONTINUATION_GEOMETRY_ENABLED` / `RAG_PAGE_CONTINUATION_RIGHT_EDGE_TOLERANCE` / `RAG_PAGE_CONTINUATION_INDENT_TOLERANCE` / `RAG_PAGE_CONTINUATION_WIDTH_DIFFERENCE_RATIO`: ページの境目の段落の続きの判定で、PDF の文字の層の行の位置（前の段落の最後の行が右端まで届く・次の段落の最初の行に字下げが無い・幅が近い）も確かめる（#2273。既定 true / 1.0 / 0.5 / 1.0。右端と字下げは行の高さの倍数、幅の差は狭いほうの幅の倍数）。文字の層の無いページ・縦書き・回転したページは文の終わりの規則だけで判定する。
 - `RAG_PARSER_ADAPTER_BACKEND`: 任意の外部 parser adapter 選択。`local` は本プロジェクト標準 parser のみ、`auto` は有効化済み adapter を source-aware に選ぶ。PDF は `docling` → `unstructured` → `mineru`、画像は `unstructured` → `docling` → `dots_ocr` → `mineru`、Office/HTML は `docling` → `unstructured`、email は `unstructured`、単純 text/markdown/csv/json は local parser を優先する。`docling` / `unstructured` / `mineru` / `dots_ocr` を明示するとその adapter を優先するが、現行 adapter 実装が扱えない source では `*_adapter_source_unsupported` warning を残して標準 parser / Enterprise AI fallback へ戻す。adapter 出力は必ず `StructuredExtraction` / `DocumentElement` / citation metadata へ再マップし、Oracle AI Database、OCI Enterprise AI、OCI Generative AI Cohere の確定スタックは変更しない。
-- `RAG_PARSER_DOCLING_ENABLED` / `RAG_PARSER_UNSTRUCTURED_ENABLED`: Docling / Unstructured adapter の feature flag。**外部 parser は services/parsers/<name> の独立サービスへ切り出した**ため、backend の venv と `scripts/start-backend.sh` は parser 依存を同期しない(`uv sync` は lean)。各 parser のバージョンは各サービスの pyproject(`docling` / `unstructured[pdf,image,docx,pptx,xlsx,csv,tsv,md]`。pi-heif・pandoc は入れない。#3351)で固定する。parser ごとに依存が大きく異なり独立して upgrade したいことが、サービス分離の理由。backend は取込時に各サービスへ HTTP 委譲し、サービス未達なら標準 parser / Enterprise AI fallback へ戻して `*_adapter_service_unreachable` を warning に出す。`RAG_PARSER_<name>_SERVICE_URL` で URL、`RAG_PARSER_SERVICE_TIMEOUT_SECONDS` で timeout、`RAG_PARSER_READINESS_PROBE_ENABLED` で readiness の /health 問い合わせを制御する。設定と導入状態は `GET /api/settings/parser-adapters` と `rag-file-processing-staging --preflight-only` の `parser_adapters` で確認する。schema remap smoke の実行証跡は必要時に `python -m app.rag.parser_adapter_contract_cli` で確認し（画面と API からは #492 で削除）、通常の readiness 取得では重い fixture parse を走らせない。両方の出力には `parser_adapter_scorecard` も含まれ、readiness と file-processing golden/staging 指標から推奨 backend を機械可読に返す。外部 adapter を staging metrics で推奨するには retrieval recall、table QA、page hit、element lineage、fallback rate の中核証拠が必要で、不足時は `adapter_metric_evidence_incomplete` を warning として返し local fallback を優先する。file-processing staging では selected adapter が未導入の場合、`parser_adapter_preflight` を失敗させ、実 OCI / Oracle client 作成前に停止する。明示 adapter が staging 指標で local fallback 未満の場合も `parser_adapter_scorecard_mismatch` を promotion blocker として返す。staging payload の `parser_adapter_source_routes` は `source_kind` ごとの `candidate_order`、`attempted_order`、`active_order`、`selected_backend`、warning を返し、PDF / image / Office / HTML / email / audio / text の routing が CI artifact として監査できる。audio は現時点では転写サービスを有効化していないため `candidate_order=[]`、`selected_backend=local`、`unsupported_audio` / `audio_transcription_not_configured` として明示し、外部 adapter へ誤って流さない。legacy ingestion で `SourceProfile` が欠落していても、parser registry は `audio/*` content-type を同じ unsupported path に固定する。
+- `RAG_PARSER_DOCLING_ENABLED` / `RAG_PARSER_UNSTRUCTURED_ENABLED`: Docling / Unstructured adapter の feature flag。**外部 parser は services/parsers/<name> の独立サービスへ切り出した**ため、backend の venv と `scripts/start-backend.sh` は parser 依存を同期しない(`uv sync` は lean)。各 parser のバージョンは各サービスの pyproject(`docling` / `unstructured[pdf,image,docx,pptx,xlsx,csv,tsv,md]`。pi-heif・pandoc は入れない。#3351)で固定する。parser ごとに依存が大きく異なり独立して upgrade したいことが、サービス分離の理由。backend は取込時に各サービスへ HTTP 委譲し、サービス未達なら標準 parser / Enterprise AI fallback へ戻して `*_adapter_service_unreachable` を warning に出す。`RAG_PARSER_<name>_SERVICE_URL` で URL、`RAG_PARSER_SERVICE_TIMEOUT_SECONDS` で timeout、`RAG_PARSER_READINESS_PROBE_ENABLED` で readiness の /health 問い合わせを制御する。設定と導入状態は `GET /api/settings/parser-adapters` と `rag-file-processing-staging --preflight-only` の `parser_adapters` で確認する。schema remap smoke の実行証跡は必要時に `python -m app.rag.parser_adapter_contract_cli` で確認し（画面と API からは #492 で削除）、通常の readiness 取得では重い fixture parse を走らせない。両方の出力には `parser_adapter_scorecard` も含まれ、readiness と file-processing golden/staging 指標から推奨 backend を機械可読に返す。外部 adapter を staging metrics で推奨するには retrieval recall、table QA、page hit、element lineage、fallback rate の中核証拠が必要で、不足時は `adapter_metric_evidence_incomplete` を warning として返し local fallback を優先する。file-processing staging では selected adapter が未導入の場合、`parser_adapter_preflight` を失敗させ、実 OCI / Oracle client 作成前に停止する。明示 adapter が staging 指標で local fallback 未満の場合も `parser_adapter_scorecard_mismatch` を promotion blocker として返す。staging payload の `parser_adapter_source_routes` は `source_kind` ごとの `candidate_order`、`attempted_order`、`active_order`、`selected_backend`、warning を返し、PDF / image / Office / HTML / email / text の routing が CI artifact として監査できる。音声・動画はアップロードで止めるため(#3369)、routing の source kind に持たない。
   - Unstructured adapter は対応する runtime では `include_page_breaks=true`、PDF/画像では `strategy=auto` と `infer_table_structure=true` を要求する。adapter 関数の signature を見て未対応 kwargs は渡さないため、古い Unstructured API でも不要な fallback を増やさない。
   - 外部 adapter の block metadata に `parent_id` / `section_path` / heading level が含まれる場合は `DocumentElement.parent_id` / `section_path` へ再マップする。metadata が不足する場合も title block の reading order から section stack を補完し、citation / chunk lineage を保持する。
   - 外部 adapter が `FigureCaption` / `TableCaption` を parent_id なしで返す場合は、reading order 上の直前 figure / table へ parent-child lineage を補完する。figure caption は同一 chunk の `dependency_edges` へ入り、table caption も `content_kind=table` として filter / citation lineage に残す。
@@ -1932,8 +1949,7 @@ uv run python -m app.rag.file_processing_staging_cli \
     進捗を読めない間（DB の一時的な失敗）は進んだとも止まったとも決めない（`ingestion_job_progress_read_failed` を warning で出す）。
   - 停滞の時間は、進捗を変えずに続きうる 1 回の呼び出し（再試行を含む）の最長より長くする。起動時に検証し、短ければ直す設定の名前を出して起動を止める。
     対象は解析サービス（`RAG_PARSER_SERVICE_TIMEOUT_SECONDS` × `RAG_HTTP_SERVICE_RETRY_ATTEMPTS` + 待ち。配備の unit は 1230 秒で約 6170 秒）、
-    MinerU の job（`RAG_PARSER_MINERU_JOB_TIMEOUT_SECONDS`）、Document Understanding（`RAG_OCI_DOCUMENT_UNDERSTANDING_TIMEOUT_SECONDS`）、
-    AI Speech（`RAG_OCI_SPEECH_TIMEOUT_SECONDS`）、Vision の LLM（`PLATFORM_OCI_ENTERPRISE_AI_TIMEOUT_SECONDS` × (`PLATFORM_OCI_ENTERPRISE_AI_MAX_RETRIES` + 1)）。
+    MinerU の job（`RAG_PARSER_MINERU_JOB_TIMEOUT_SECONDS`）、Document Understanding（`RAG_OCI_DOCUMENT_UNDERSTANDING_TIMEOUT_SECONDS`）、Vision の LLM（`PLATFORM_OCI_ENTERPRISE_AI_TIMEOUT_SECONDS` × (`PLATFORM_OCI_ENTERPRISE_AI_MAX_RETRIES` + 1)）。
   - 全体の上限（既定 86400 秒、設定できる上限 604800 秒〔7 日〕）: 進んでいても、これを超えたら止める保険。1 文書 1,000 図を 1 件 60 秒で順に読んでも足りる長さ。
   - 失敗の文言（job と文書の `error_message`。画面に出る）は、停滞（「取込の進捗が … 進まなかったため止めました」）と全体の上限（「取込が全体の上限（…）を超えたため止めました」）を分け、
     最後に進んだ段・件数（例「図・表の説明 120 / 232 件」）と、長くする設定の名前を出す。

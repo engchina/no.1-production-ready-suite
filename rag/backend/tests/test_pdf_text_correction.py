@@ -173,7 +173,8 @@ def test_consolidation_corrects_text_paths_navigation_and_chunks() -> None:
     corrected = consolidate_document_extraction(
         extraction, source_bytes=pdf, geometry=ContinuationGeometry(enabled=False)
     )
-    assert extraction.elements[0].text == record["text"]
+    # 抽出の正規化は書式の飾りの線を除き（#3354）、原文で裏付けた所だけ下線の文字に戻る。
+    assert extraction.elements[0].text == "Synthetic01Title"
     assert corrected.elements[0].text == "Synthetic_01_Title"
     assert corrected.raw_text.endswith("\n\nAdditional image description.")
     assert "\u0332" not in corrected.raw_text

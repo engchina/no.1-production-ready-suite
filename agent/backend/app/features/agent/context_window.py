@@ -527,6 +527,78 @@ def estimate_tokens(items: Sequence[Any], *, budget: ContextBudget, fixed_text: 
     return budget.estimate(fixed_text) + sum(_item_tokens(_as_dict(item), budget) for item in items)
 
 
+@dataclass(frozen=True)
+class InputComposition:
+    """モデルの 1 回の呼び出しの入力の、部分ごとの token の見積もり（#2583。本文は持たない）。
+
+    - `static_instructions`: 業務 Agent の指示・スキル・データの範囲の案内（Run の中で変わらない
+      部分）
+    - `dynamic_state`: 指示の末尾に足す Run の状態（支援タスクの状態・取り消した確認・添付の索引・
+      回答前の確認）
+    - `tool_definitions`: ツールの定義（名前・説明・引数の schema）
+    - `history`: 会話の履歴・利用者の質問・モデルの発話とツールの呼び出し
+    - `tool_outputs`: ツールの結果（縮めた後。画像の見積もりを含む）
+    """
+
+    static_instructions_tokens: int
+    dynamic_state_tokens: int
+    tool_definitions_tokens: int
+    history_tokens: int
+    tool_outputs_tokens: int
+    items: int
+
+    @property
+    def total_tokens(self) -> int:
+        return (
+            self.static_instructions_tokens
+            + self.dynamic_state_tokens
+            + self.tool_definitions_tokens
+            + self.history_tokens
+            + self.tool_outputs_tokens
+        )
+
+
+def split_instructions(instructions: str, static_instructions: str | None) -> tuple[str, str]:
+    """指示を（変わらない部分, Run の状態の部分）に分ける。
+
+    Run の状態は変わらない部分の後ろに足すので、`static_instructions` が先頭に一致するときだけ
+    分ける（分からなければ全体を変わらない部分とする）。
+    """
+    if static_instructions and instructions.startswith(static_instructions):
+        return static_instructions, instructions[len(static_instructions) :]
+    return instructions, ""
+
+
+def input_composition(
+    items: Any,
+    *,
+    budget: ContextBudget,
+    instructions: str,
+    static_instructions: str | None,
+    tools: Sequence[Any],
+) -> InputComposition:
+    """モデルに送る入力の部分ごとの見積もり（予算と同じ見積もり。部分ごとに切り上げる）。"""
+    static, dynamic = split_instructions(instructions, static_instructions)
+    entries = list(items) if isinstance(items, list) else ([items] if items else [])
+    history = 0
+    outputs = 0
+    for entry in entries:
+        data = _as_dict(entry)
+        size = _item_tokens(data, budget)
+        if isinstance(data, dict) and data.get("type") in _TOOL_OUTPUT_TYPES:
+            outputs += size
+        else:
+            history += size
+    return InputComposition(
+        static_instructions_tokens=budget.estimate(static),
+        dynamic_state_tokens=budget.estimate(dynamic),
+        tool_definitions_tokens=budget.estimate(tools_text(tools)) if tools else 0,
+        history_tokens=history,
+        tool_outputs_tokens=outputs,
+        items=len(entries),
+    )
+
+
 def compact_items(
     items: Sequence[Any],
     *,
@@ -761,13 +833,16 @@ __all__ = [
     "CompactionResult",
     "ContextBudget",
     "ContextLimits",
+    "InputComposition",
     "ProviderOverflow",
     "compact_items",
     "compact_output",
     "estimate_tokens",
+    "input_composition",
     "is_id_key",
     "overflow_message",
     "provider_overflow",
     "provider_overflow_message",
+    "split_instructions",
     "tools_text",
 ]

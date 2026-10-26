@@ -2,7 +2,7 @@
 
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Literal, Self, TypeGuard
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -37,6 +37,19 @@ RAPTOR_SUMMARY_KEY = "raptor_summary"
 # 根拠に渡すときに、この要素を含む原文の chunk を読む（#2641）。
 FIELD_SOURCE_ELEMENT_KEY = "field_source_element_id"
 DERIVED_FLAG_KEYS = (NAV_SUMMARY_KEY, EXTRACTED_FIELD_KEY, RAPTOR_SUMMARY_KEY)
+
+# 書式の飾りとして文字に重ねる結合の線（上線 U+0305・下線 U+0332・二重下線 U+0333・
+# 二重上線 U+033F）。前後の文字の線とつながるように作られた記号で、文字の読みと意味を変えない。
+# PDF などの抽出が下線・上線の書式をこの形で本文に残すと、表示の書体に字形が無く豆腐になり、
+# 検索の語も切れる（#3354）。文字の一部になる結合文字（濁点・半濁点 U+3099 / U+309A、
+# アクセント U+0301、マクロン U+0304、下のマクロン U+0331 など）は除かない。
+FORMATTING_COMBINING_MARKS = frozenset({"\u0305", "\u0332", "\u0333", "\u033f"})
+_FORMATTING_MARK_TABLE = dict.fromkeys(map(ord, FORMATTING_COMBINING_MARKS))
+
+
+def strip_formatting_marks(text: str) -> str:
+    """書式の飾りの結合の線（``FORMATTING_COMBINING_MARKS``）を除く。ほかの文字は変えない。"""
+    return text.translate(_FORMATTING_MARK_TABLE)
 
 
 def is_derived_content(content_kind: object, metadata: Mapping[str, object]) -> bool:
@@ -134,6 +147,19 @@ SEARCHABLE_ELEMENT_KINDS = {
 }
 
 
+def section_path_items(items: Iterable[str]) -> list[str]:
+    """章節名の並びの正規化（書式の飾りの結合の線を除き、空白を詰め、1 項目 80 文字まで）。
+
+    ``DocumentElement.section_path`` の検証と、検証を通らない ``model_copy`` で章節を
+    作り直す所が共有する。切った後の末尾の空白も除き、保存と読み戻しで同じ値にする。
+    空になった項目は落とす。
+    """
+    cleaned = (
+        re.sub(r"\s+", " ", strip_formatting_marks(item)).strip()[:80].strip() for item in items
+    )
+    return [item for item in cleaned if item]
+
+
 class DocumentElement(BaseModel):
     """ページ・見出し・表などを保持する文書構造要素。"""
 
@@ -165,8 +191,8 @@ class DocumentElement(BaseModel):
     @field_validator("text")
     @classmethod
     def normalize_text(cls, value: str) -> str:
-        """要素本文の改行だけ正規化し、表・リストの構造は残す。"""
-        return value.replace("\r\n", "\n").replace("\r", "\n").strip()
+        """要素本文の改行と書式の飾りの結合の線だけ正規化し、表・リストの構造は残す。"""
+        return strip_formatting_marks(value.replace("\r\n", "\n").replace("\r", "\n")).strip()
 
     @field_validator("element_id", "parent_id", "content_kind", "source_parser")
     @classmethod
@@ -199,7 +225,7 @@ class DocumentElement(BaseModel):
             items = list(value)
         else:
             items = [value]
-        return [re.sub(r"\s+", " ", str(item)).strip()[:80] for item in items if str(item).strip()]
+        return section_path_items(str(item) for item in items)
 
     @field_validator("metadata")
     @classmethod
@@ -271,6 +297,12 @@ class ExtractionTableCell(BaseModel):
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     metadata: dict[str, ExtractionMetadataValue] = Field(default_factory=dict)
 
+    @field_validator("text")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        """セルの本文から書式の飾りの結合の線を除く（要素の本文と同じ規則）。"""
+        return strip_formatting_marks(value)
+
     @field_validator("bbox", mode="before")
     @classmethod
     def validate_bbox(cls, value: object) -> list[float] | None:
@@ -301,6 +333,12 @@ class ExtractionTable(BaseModel):
     caption: str | None = None
     cells: list[ExtractionTableCell] = Field(default_factory=list)
     metadata: dict[str, ExtractionMetadataValue] = Field(default_factory=dict)
+
+    @field_validator("caption")
+    @classmethod
+    def normalize_caption(cls, value: str | None) -> str | None:
+        """表の題から書式の飾りの結合の線を除く（要素の本文と同じ規則）。"""
+        return strip_formatting_marks(value) if value is not None else None
 
 
 class ExtractionAsset(BaseModel):
@@ -390,7 +428,9 @@ class StructuredExtraction(BaseModel):
     @model_validator(mode="after")
     def normalize_structure(self) -> Self:
         """raw_text と elements のどちらか片方だけでも検索可能な形へ補完する。"""
-        self.raw_text = self.raw_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+        self.raw_text = strip_formatting_marks(
+            self.raw_text.replace("\r\n", "\n").replace("\r", "\n")
+        ).strip()
         self.elements = normalize_document_elements(self.elements, fallback_text=self.raw_text)
         if not self.pages:
             self.pages = infer_extraction_pages(self.elements)

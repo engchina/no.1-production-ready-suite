@@ -106,6 +106,7 @@ from app.config import (
     PreprocessProfile,
     QueryStrategy,
     VectorIndexProfile,
+    reject_roadmap_parser_adapter_backend,
 )
 from app.schemas.document import DocumentProcessingConfig
 
@@ -377,10 +378,15 @@ class ParserServiceBackendData(BaseModel):
     """service 系 parser backend(OCI クラウドサービス直呼び)の選択状態と可用性。
 
     package readiness の対象外。OCI Document Understanding を呼ぶため、設定の完全性で
-    「利用可能か」を示す。
+    「利用可能か」を示す。準備中(ロードマップ)のエンジンは ``availability="roadmap"`` で、
+    選べない(``selected`` は常に False、未設定の警告も出さない。#3374)。
     """
 
     backend: Literal["oci_document_understanding"]
+    availability: Literal["available", "roadmap"] = Field(
+        default="available",
+        description="available=選べる、roadmap=準備中(ロードマップ)でまだ選べない(#3374)。",
+    )
     selected: bool
     configured: bool
     warning_code: str | None = None
@@ -471,7 +477,8 @@ class ParserAdapterSettingsUpdate(BaseModel):
             raise ValueError(
                 "parser adapter の旧既定値は廃止されました。明示的な解析方式を選択してください。"
             )
-        return value
+        # 準備中(ロードマップ)の解析エンジンは選べない(#3374)。
+        return reject_roadmap_parser_adapter_backend(value)
 
     @model_validator(mode="after")
     def reject_duplicate_connections(self) -> "ParserAdapterSettingsUpdate":

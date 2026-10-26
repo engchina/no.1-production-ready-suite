@@ -269,11 +269,7 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
     assert route_by_kind["pdf"]["attempted_order"] == ()
     assert route_by_kind["pdf"]["selected_backend"] == "local"
     assert route_by_kind["email"]["candidate_order"] == ("unstructured",)
-    assert route_by_kind["audio"]["candidate_order"] == ()
-    assert route_by_kind["audio"]["attempted_order"] == ()
-    assert route_by_kind["audio"]["selected_backend"] == "local"
-    assert "unsupported_audio" in route_by_kind["audio"]["warning_codes"]
-    assert "audio_transcription_not_configured" in route_by_kind["audio"]["warning_codes"]
+    assert "audio" not in route_by_kind
     assert route_by_kind["text"]["candidate_order"] == ()
     assert "local_parser_preferred_for_source" in route_by_kind["text"]["reason_codes"]
     assert payload["chunk_template_scorecard"]["promotion_blocking"] is False
@@ -372,7 +368,6 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
     ]
     assert trend_route_by_kind["pdf"]["selected_backend"] == "local"
     assert trend_route_by_kind["email"]["candidate_order"] == ["unstructured"]
-    assert trend_route_by_kind["audio"]["selected_backend"] == "local"
     assert trend["parser_adapter_scorecard"]["recommended_backend"] == "local"
     assert trend["backend_source_kind_matrix"]["missing_source_kinds"] == []
     assert trend["staging_dataset_policy"]["configured"] is False

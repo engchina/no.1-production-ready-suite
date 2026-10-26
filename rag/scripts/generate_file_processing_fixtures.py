@@ -163,7 +163,6 @@ Content-Type: text/plain; charset=utf-8
 """,
     )
     _write_png("receipt-ja.png", ["RECEIPT", "TOTAL 1000 JPY", "PAGE 1"])
-    _write("meeting.m4a", b"FAKEAUDIO")
     return 0
 
 

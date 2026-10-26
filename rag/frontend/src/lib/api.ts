@@ -174,7 +174,7 @@ export type CitationFeedbackReason =
 export type FeedbackTargetType = "answer" | "citation";
 export type FeedbackSourceSurface = "search" | "chat";
 export type SourceModality =
-  "pdf" | "image" | "text" | "html" | "email" | "office" | "audio" | "unknown";
+  "pdf" | "image" | "text" | "html" | "email" | "office" | "unknown";
 export type SourcePreviewKind =
   "pdf" | "image" | "text" | "html" | "email" | "office" | "unsupported";
 export type IngestionJobStatus =
@@ -246,7 +246,7 @@ export type ParserAdapterScoreBackend = "local" | ParserAdapterBackendName;
 export type ParserAdapterScoreStatus =
   "recommended" | "eligible" | "available" | "disabled" | "ignored" | "missing";
 export type ParserAdapterSourceKind =
-  "pdf" | "image" | "office" | "html" | "email" | "audio" | "text" | "unknown";
+  "pdf" | "image" | "office" | "html" | "email" | "text" | "unknown";
 
 export interface ApiResponse<T> {
   data: T | null;
@@ -2195,6 +2195,8 @@ export interface ParserAdapterBackendSourceMatrixData {
 
 export interface ParserServiceBackendData {
   backend: ParserServiceBackendName;
+  /** roadmap = 準備中（ロードマップ）で、まだ選べない（#3374）。省略は available。 */
+  availability?: ServiceAvailability;
   selected: boolean;
   configured: boolean;
   warning_code: string | null;
@@ -2352,8 +2354,12 @@ export type ServiceRuntimeStatus =
   | "failed"
   | "stopped"
   | "not_installed"
-  | "unconfigured";
+  | "unconfigured"
+  // 準備中（ロードマップ）のサービス。配備しないので問い合わせない（#3374。エラーではない）。
+  | "roadmap";
 export type ServiceExecutionPolicy = "selected_adapter" | "default_adapter";
+// available = 使える、roadmap = 準備中（ロードマップ）。roadmap は配備・起動しない（#3374）。
+export type ServiceAvailability = "available" | "roadmap";
 // 起動 = systemctl enable --now、停止 = systemctl disable --now、再起動 = systemctl restart。
 export type ServiceAction = "start" | "stop" | "restart";
 
@@ -2372,6 +2378,8 @@ export interface ServiceCatalogItemData {
   configured: boolean;
   /** 起動/停止・ログに使う systemd の unit 名。 */
   systemd_unit: string;
+  /** roadmap = 準備中（ロードマップ）で、灰色にして操作を出さない（#3374）。省略は available。 */
+  availability?: ServiceAvailability;
   model_cache: ServiceModelCacheData | null;
 }
 

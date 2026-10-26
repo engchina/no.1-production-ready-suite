@@ -9,9 +9,9 @@
 | `unstructured` | CPU | — | 多形式 partition(テキスト・HTML・Office・メール など)。stack の `rag_enable_parser_unstructured` / `rag-services.sh --unstructured` |
 | `structured_records_jsonl` | CPU | ✅ | 構造化レコード JSONL（前処理 CSV→JSONL・Excel→JSONL・Word→JSONL の成果物）。記録を 1 要素にし、検索用テキストを記録の境界で区切る。使用エンジン（`RAG_PARSER_ADAPTER_BACKEND=structured_records_jsonl`）に選んだときだけ使う（#2457） |
 | `xml_tree_json` | CPU | ✅ | XML ツリー JSON（XML の要素の木を tag / attr / children の JSON にした文書。対応する形の `.json`）。使用エンジン（`RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`）に選んだときだけ使う（#2042） |
-| `oci_document_understanding` | OCI | — | OCI Document Understanding を呼ぶ proxy。stack の `rag_enable_oci_cloud_parsers` / `rag-services.sh --oci` |
+| `oci_document_understanding` | OCI | — | **準備中（ロードマップ。#3374）**。OCI Document Understanding を呼ぶ proxy。実装は残すが、まだ選べず、stack・`rag-services.sh` も配備しない |
 
-音声・動画の文字起こしは parser のサービスを使わず、backend が OCI AI Speech で行う。
+音声・動画は取り込まない（アップロードで止める。#3369）。
 
 ## 共通 HTTP 契約(`rag_parser_core`)
 
@@ -35,7 +35,6 @@ venv(`uv sync --locked --no-dev --python 3.12`)と unit を作る。起動 / 停
 # rag/ で実行する
 scripts/rag-services.sh install            # 前処理と既定の CPU parser(docling・structured-records-jsonl・xml-tree-json)
 scripts/rag-services.sh install --unstructured  # Unstructured(Docling が扱えない形式を取り込む場合)
-scripts/rag-services.sh install --oci      # OCI Document Understanding の proxy
 scripts/rag-services.sh run parser-docling # systemd の無い環境で前面に起動(127.0.0.1:18020)
 ```
 

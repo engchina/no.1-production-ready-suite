@@ -477,9 +477,12 @@ def test_ingestion_job_stall_timeout_default_starts_with_deployed_parser_timeout
             {"rag_parser_mineru_job_timeout_seconds": 7200.0},
             "RAG_PARSER_MINERU_JOB_TIMEOUT_SECONDS",
         ),
-        ({"oci_speech_timeout_seconds": 7200.0}, "RAG_OCI_SPEECH_TIMEOUT_SECONDS"),
+        (
+            {"rag_parser_service_timeout_seconds": 3600.0},
+            "RAG_PARSER_SERVICE_TIMEOUT_SECONDS",
+        ),
     ],
-    ids=["stall-too-short", "mineru-longer", "speech-longer"],
+    ids=["stall-too-short", "mineru-longer", "parser-service-longer"],
 )
 def test_ingestion_job_stall_timeout_rejects_shorter_than_silent_call(
     overrides: dict[str, float], setting_name: str
@@ -704,6 +707,12 @@ def test_removed_parser_engine_settings_are_gone() -> None:
         assert not [name for name in names if engine in name], engine
 
 
+def test_removed_audio_transcription_settings_are_gone() -> None:
+    """音声・動画の取込(OCI AI Speech の文字起こし)の設定は持たない(#3369)。"""
+    names = set(settings_env_names(Settings).values())
+    assert not [name for name in names if "SPEECH" in name or "_ASR" in name]
+
+
 def test_parser_adapter_per_adapter_extras_are_declared_and_conflict_free() -> None:
     """外部 parser はサービス化。backend は per-adapter extra のみ宣言する(combined extra なし)。"""
     pyproject = tomllib.loads(
@@ -759,21 +768,12 @@ def test_semantic_html_and_outlook_msg_content_types_are_allowed_by_default() ->
     assert {"application/vnd.ms-outlook", "application/x-msg"} <= allowed
 
 
-def test_common_audio_content_types_are_allowed_for_explicit_skip_by_default() -> None:
-    """音声は取込未対応だが、upload metadata と skipped reason を返せるよう許可する。"""
-    allowed = set(Settings().allowed_upload_content_types)
+def test_audio_and_video_content_types_are_not_allowed_by_default() -> None:
+    """音声・動画は取り込まない形式で、upload の既定の許可に含めない(#3369)。"""
+    allowed = Settings().allowed_upload_content_types
 
-    assert {
-        "audio/aac",
-        "audio/flac",
-        "audio/mp3",
-        "audio/mpeg",
-        "audio/mp4",
-        "audio/ogg",
-        "audio/wav",
-        "audio/x-m4a",
-        "application/ogg",
-    } <= allowed
+    assert not [item for item in allowed if item.startswith(("audio/", "video/"))]
+    assert "application/ogg" not in allowed
 
 
 def test_enterprise_ai_response_paths_default_to_known_envelope_detection() -> None:

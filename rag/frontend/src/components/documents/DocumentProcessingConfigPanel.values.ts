@@ -42,11 +42,19 @@ export const PARSER_VALUES = [
   "mineru",
   "dots_ocr",
 ] as const;
+// 準備中（ロードマップ）の解析エンジン（#3374）。選択肢には灰色で出し、選ばせない（backend も保存を 422 にする）。
+export const ROADMAP_PARSER_VALUES: readonly ParserAdapterBackend[] = ["oci_document_understanding"];
 export const PARSER_OPTIONS: SelectFieldOption<ParserAdapterBackend>[] = PARSER_VALUES.map(
-  (value) => ({
-    value,
-    label: parserBackendLabel(value),
-  })
+  (value) =>
+    ROADMAP_PARSER_VALUES.includes(value)
+      ? {
+          value,
+          label: parserBackendLabel(value),
+          disabled: true,
+          badge: t("settings.parserAdapters.roadmap.badge"),
+          disabledReason: t("settings.parserAdapters.roadmap.reason"),
+        }
+      : { value, label: parserBackendLabel(value) }
 );
 
 const CHUNKING_VALUES = [

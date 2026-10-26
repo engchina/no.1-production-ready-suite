@@ -129,11 +129,6 @@ DEFAULT_FIXTURES: Mapping[ParserAdapterSourceKind, ParserAdapterFixtureSpec] = {
         file_name="runbook-code-formula.md",
         content_type="text/markdown",
     ),
-    "audio": ParserAdapterFixtureSpec(
-        source_kind="audio",
-        file_name="meeting.m4a",
-        content_type="audio/mp4",
-    ),
 }
 DEFAULT_SOURCE_KINDS: tuple[ParserAdapterSourceKind, ...] = (
     "pdf",
@@ -142,7 +137,6 @@ DEFAULT_SOURCE_KINDS: tuple[ParserAdapterSourceKind, ...] = (
     "html",
     "email",
     "text",
-    "audio",
 )
 BLOCKING_FAILURE_STATUSES = frozenset(
     {"failed", "fallback", "missing", "disabled", "fixture_missing", "unsupported"}
@@ -989,7 +983,6 @@ _CONTENT_TYPE_BY_EXTENSION: Mapping[str, str] = {
     ".htm": "text/html",
     ".html": "text/html",
     ".json": "application/json",
-    ".m4a": "audio/mp4",
     ".md": "text/markdown",
     ".pdf": "application/pdf",
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -1000,7 +993,6 @@ _CONTENT_TYPE_BY_EXTENSION: Mapping[str, str] = {
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
 _CONTENT_TYPE_BY_SOURCE_KIND: Mapping[ParserAdapterSourceKind, str] = {
-    "audio": "audio/mp4",
     "email": "message/rfc822",
     "html": "text/html",
     "image": "image/png",

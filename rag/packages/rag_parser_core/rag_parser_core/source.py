@@ -34,7 +34,6 @@ class SourceModality(StrEnum):
     HTML = "html"
     EMAIL = "email"
     OFFICE = "office"
-    AUDIO = "audio"
     UNKNOWN = "unknown"
 
 

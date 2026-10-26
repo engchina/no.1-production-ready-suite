@@ -47,6 +47,20 @@ def test_extraction_recipe_id_is_deterministic() -> None:
     assert recipe_id.startswith("er_")
 
 
+def test_extraction_recipe_id_keeps_removed_asr_axis_in_hash() -> None:
+    """音声の文字起こしの設定を外しても(#3369)、既存の extraction_recipe_id は変わらない。"""
+    from app.rag.variant_keys import KEY_VERSION, _digest, extraction_recipe_subset
+
+    settings = get_settings()
+    subset = extraction_recipe_subset(settings)
+    assert "rag_parser_asr_enabled" not in subset
+    # 削除の前の hash の入力(既定値 True を含む)と同じ ID になる。
+    expected = _digest(
+        "er", {"v": KEY_VERSION, "src": SRC, **subset, "rag_parser_asr_enabled": True}
+    )
+    assert compute_extraction_recipe_id(SRC, settings) == expected
+
+
 def test_document_recipe_extraction_id_is_isolated_by_recipe_and_revision() -> None:
     """同じ抽出設定でも recipe/revision が違えば成果物を共有しない。"""
     base = compute_extraction_recipe_id(SRC, get_settings())

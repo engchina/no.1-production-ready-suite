@@ -161,6 +161,7 @@ from app.schemas.document import (
     DocumentPreviewPage,
     DocumentPreviewPages,
     DocumentProcessingConfig,
+    DocumentProcessingConfigInput,
     DocumentRecipeCreateRequest,
     DocumentRecipeDeleteResult,
     DocumentRecipeStep,
@@ -436,7 +437,8 @@ async def _store_uploaded_document(
     file_name = _safe_display_filename(original_file_name)
     rejected_message = rejected_upload_format_message(file_name, content_type)
     if rejected_message is not None:
-        # HEIC / HEIF・EPUB は解析の依存を入れないため、保存せずに変換の方法を返す(#3351)。
+        # HEIC / HEIF・EPUB(解析の依存を入れない。#3351)と音声・動画(取り込まない。#3369)は、
+        # 保存せずに変換の方法を返す。
         raise HTTPException(status_code=415, detail=rejected_message)
     if not _is_allowed_upload_content_type(
         content_type,
@@ -1318,9 +1320,9 @@ async def create_document_recipe(
 
 @router.put("/{document_id}/recipes/{recipe_id}", response_model=ApiResponse[DocumentRecipeView])
 async def update_document_recipe(
-    document_id: str, recipe_id: str, request: DocumentProcessingConfig
+    document_id: str, recipe_id: str, request: DocumentProcessingConfigInput
 ) -> ApiResponse[DocumentRecipeView]:
-    """選択レシピの明示設定を保存する。"""
+    """選択レシピの明示設定を保存する(準備中の解析エンジンは 422。#3374)。"""
     try:
         _merge_document_processing_config(request)
     except KbAdapterConfigError as exc:

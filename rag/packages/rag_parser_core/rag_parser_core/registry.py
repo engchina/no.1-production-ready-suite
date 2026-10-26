@@ -33,13 +33,7 @@ from xml.etree import ElementTree
 
 from charset_normalizer import from_bytes
 
-from rag_parser_core.capabilities import (
-    AUDIO_EXTENSIONS as AUDIO_EXTENSIONS,
-)
-from rag_parser_core.capabilities import (
-    adapter_supports_source,
-    is_audio_source,
-)
+from rag_parser_core.capabilities import adapter_supports_source
 from rag_parser_core.extraction import (
     DocumentElement,
     ExtractionAsset,
@@ -83,7 +77,6 @@ from rag_parser_core.unstructured_compat import ensure_pi_heif_absent_stub
 
 # 共有 contract 型・定数は result.py(軽量)へ移設済み。registry は実装専用とし、backend が
 # registry を読み込まずに型を参照できるようにする。本モジュール固有の定数のみ残す。
-# AUDIO_EXTENSIONS は capabilities.py 正本を re-export(後方互換)。
 TABLE_PRESERVE_ROWS_TEMPLATE = "table_preserve_rows"
 
 logger = logging.getLogger(__name__)
@@ -638,14 +631,6 @@ def parse_with_registry(
     optional package を import する既定挙動(`_external_adapter_result`)を使う。
     """
     modality = source_profile.modality if source_profile is not None else SourceModality.UNKNOWN
-    if _is_audio_source(source_profile, content_type):
-        return ParserRegistryResult(
-            extraction=None,
-            parser_backend="unsupported",
-            template="unsupported_audio",
-            warnings=("unsupported_audio",),
-            unsupported_reason="audio_transcription_not_configured",
-        )
     if _is_unsupported_outlook_msg(source_profile):
         return ParserRegistryResult(
             extraction=None,
@@ -853,18 +838,12 @@ def _source_extension(source_profile: SourceProfile | None) -> str:
     return (source_profile.extension or PurePath(source_profile.sanitized_file_name).suffix).lower()
 
 
-def _is_audio_source(source_profile: SourceProfile | None, content_type: str) -> bool:
-    return is_audio_source(source_profile, content_type)
-
-
 def _source_route_kind(source_profile: SourceProfile | None, content_type: str) -> str:
     modality = source_profile.modality if source_profile is not None else SourceModality.UNKNOWN
     extension = _source_extension(source_profile)
     normalized_content_type = _normalized_content_type_for_parser(
         content_type or (source_profile.content_type if source_profile is not None else "")
     )
-    if _is_audio_source(source_profile, normalized_content_type):
-        return "audio"
     if modality == SourceModality.TEXT:
         return "text"
     if modality == SourceModality.EMAIL or extension == ".eml":
@@ -5276,7 +5255,6 @@ def _document_type_for_source(source_profile: SourceProfile | None) -> str:
         SourceModality.HTML: "HTML",
         SourceModality.EMAIL: "メール",
         SourceModality.OFFICE: "Office 文書",
-        SourceModality.AUDIO: "音声",
         SourceModality.UNKNOWN: "ドキュメント",
     }[source_profile.modality]
 

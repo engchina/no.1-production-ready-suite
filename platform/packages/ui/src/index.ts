@@ -608,6 +608,8 @@ export {
 
 // --- data ---
 export {
+  DEFAULT_ROADMAP_LABEL,
+  RoadmapBadge,
   StatusBadge,
   type StatusVariant,
 } from "./components/data/status-badge";

@@ -583,7 +583,6 @@ async def test_recipe_extraction_artifacts_are_isolated_and_pointer_switches_aft
         oracle=cast(Any, oracle),
         object_storage=cast(Any, FakeObjectStorage()),
         document_understanding=cast(Any, object()),
-        speech=cast(Any, object()),
         settings=settings,
         recipe_id="recipe-1",
         recipe_revision=2,
@@ -594,7 +593,6 @@ async def test_recipe_extraction_artifacts_are_isolated_and_pointer_switches_aft
         oracle=cast(Any, oracle),
         object_storage=cast(Any, FakeObjectStorage()),
         document_understanding=cast(Any, object()),
-        speech=cast(Any, object()),
         settings=settings,
         recipe_id="recipe-2",
         recipe_revision=2,
@@ -624,7 +622,6 @@ async def test_recipe_extraction_persistence_failure_is_fatal() -> None:
         oracle=cast(Any, FailingRecipeOracle()),
         object_storage=cast(Any, FakeObjectStorage()),
         document_understanding=cast(Any, object()),
-        speech=cast(Any, object()),
         settings=Settings(rag_parser_adapter_backend="local"),
         recipe_id="recipe-1",
         recipe_revision=1,
@@ -649,7 +646,6 @@ async def test_recipe_review_load_does_not_fall_back_to_document_extraction() ->
         oracle=cast(Any, oracle),
         object_storage=cast(Any, FakeObjectStorage()),
         document_understanding=cast(Any, object()),
-        speech=cast(Any, object()),
         settings=Settings(rag_parser_adapter_backend="local"),
         recipe_id="recipe-empty",
         recipe_revision=1,
@@ -1401,7 +1397,6 @@ def _preflight_pipeline(backend: str, monkeypatch: pytest.MonkeyPatch) -> Ingest
         oracle=cast(Any, FakeOracle()),
         object_storage=cast(Any, FakeObjectStorage()),
         document_understanding=cast(Any, object()),
-        speech=cast(Any, object()),
         settings=Settings().model_copy(update={"rag_parser_adapter_backend": backend}),
     )
 
@@ -1426,22 +1421,30 @@ def test_partition_source_preflight_blocks_unsupported_format(
     assert "対応形式: PDF・画像" in str(exc_info.value)
 
 
-def test_partition_source_preflight_blocks_service_backend_unsupported(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("content_kind", ["pdf", "office"], ids=["pdf", "office"])
+def test_partition_source_blocks_roadmap_engine_before_any_call(
+    monkeypatch: pytest.MonkeyPatch, content_kind: str
 ) -> None:
-    """OCI Document Understanding × Office も HTTP 前に停止する(sentinel を返さない)。"""
+    """準備中(ロードマップ)の OCI Document Understanding は、対応形式でも呼ばずに止める(#3374)。"""
     from app.clients.parser_service import ParserServiceUnavailableError
 
     pipeline = _preflight_pipeline("oci_document_understanding", monkeypatch)
+    profile = (
+        _pdf_source_profile(file_size_bytes=10)
+        if content_kind == "pdf"
+        else _office_source_profile()
+    )
 
     with pytest.raises(ParserServiceUnavailableError) as exc_info:
         pipeline._partition_source(
-            parse_bytes=b"docx-bytes",
-            source_profile=_office_source_profile(),
-            content_type=_office_source_profile().content_type,
+            parse_bytes=b"source-bytes",
+            source_profile=profile,
+            content_type=profile.content_type,
         )
 
-    assert exc_info.value.reason == "adapter_source_unsupported"
+    assert exc_info.value.reason == "engine_roadmap"
+    assert exc_info.value.warning_code == "parser_engine_roadmap"
+    assert "準備中（ロードマップ）" in str(exc_info.value)
 
 
 def test_partition_source_blocks_historical_removed_engine(
@@ -1512,7 +1515,6 @@ def test_partition_source_maps_legacy_or_empty_backend_to_default_docling(
         oracle=cast(Any, FakeOracle()),
         object_storage=cast(Any, FakeObjectStorage()),
         document_understanding=cast(Any, object()),
-        speech=cast(Any, object()),
         # validator を通さず旧値・空値を直接入れる(保存済み snapshot 相当)。
         settings=Settings().model_copy(update={"rag_parser_adapter_backend": configured}),
     )

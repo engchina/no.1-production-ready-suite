@@ -229,9 +229,6 @@ test("アップロード画面から現在の保存先と設定導線を確認�
     page.getByText("PDF・画像・テキスト・HTML・メール・Office"),
   ).toBeVisible();
   await expect(page.getByText("最大 200 MB")).toBeVisible();
-  await expect(
-    page.getByText("音声は保存のみで取込はスキップされます。"),
-  ).toBeVisible();
   const acceptedTypes = await page
     .locator('input[type="file"]')
     .getAttribute("accept");
@@ -240,7 +237,9 @@ test("アップロード画面から現在の保存先と設定導線を確認�
   expect(acceptedTypes).toContain(".xlsx");
   expect(acceptedTypes).toContain(".html");
   expect(acceptedTypes).toContain(".eml");
-  expect(acceptedTypes).toContain("audio/mpeg");
+  // 音声・動画は取り込まない形式で、ファイル選択に出さない（#3369）。
+  expect(acceptedTypes).not.toContain("audio/");
+  expect(acceptedTypes).not.toContain(".mp3");
   await expect(page.getByText("example-namespace/rag-originals")).toBeVisible();
   await page.getByRole("link", { name: "保存先設定" }).click();
   await expect(page).toHaveURL(/\/settings\/upload-storage$/);
@@ -309,28 +308,6 @@ test("アップロード画面で原本の処理情報を確認できる", async
   await expect(
     page.getByRole("link", { name: "upload.txt の文書詳細を開く" }),
   ).toHaveAttribute("href", "/documents/doc-upload");
-});
-
-test("未対応 audio は保存時に処理情報として表示する", async ({ page }) => {
-  await mockUploadStorageSettings(page, () => localStorageSettings);
-  await mockKnowledgeBases(page);
-  await mockIngestionJobs(page);
-  await mockDocumentUpload(page, () => undefined, { kind: "audio" });
-
-  await page.goto("/upload");
-
-  await page.locator('input[type="file"]').setInputFiles({
-    name: "voice.mp3",
-    mimeType: "audio/mpeg",
-    buffer: Buffer.from("ID3"),
-  });
-  await page.getByRole("button", { name: /アップロードを開始/ }).click();
-
-  // 結果の行に原本の解析方式（音声未対応）を出す（#707）。
-  await expect(
-    page.getByRole("link", { name: "voice.mp3 の文書詳細を開く" }),
-  ).toBeVisible();
-  await expect(page.getByText("原本判定: 音声未対応")).toBeVisible();
 });
 
 test("複数ファイルをまとめてアップロードし結果を確認できる", async ({
@@ -650,27 +627,21 @@ async function mockKnowledgeBases(page: Page) {
 async function mockDocumentUpload(
   page: Page,
   onUpload: (body: string) => void,
-  options: { kind?: "text" | "audio" } = {},
 ) {
   await page.route("**/api/documents/upload", async (route) => {
     const body = route.request().postData() ?? "";
     onUpload(body);
-    const audio = options.kind === "audio";
-    const documentId = audio ? "doc-audio" : "doc-upload";
-    const fileName = audio ? "voice.mp3" : "upload.txt";
     await route.fulfill({
       json: {
         data: {
-          id: documentId,
-          file_name: fileName,
+          id: "doc-upload",
+          file_name: "upload.txt",
           status: "UPLOADED",
-          file_size_bytes: audio ? 3 : 6,
-          content_sha256: audio ? "a".repeat(64) : "b".repeat(64),
+          file_size_bytes: 6,
+          content_sha256: "b".repeat(64),
           duplicate_of_document_id: null,
           knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
-          source_profile: audio
-            ? audioUploadSourceProfile()
-            : uploadSourceProfile(),
+          source_profile: uploadSourceProfile(),
           ingestion_started: false,
         },
         error_messages: [],
@@ -678,15 +649,6 @@ async function mockDocumentUpload(
       },
     });
   });
-  if (options.kind === "audio") {
-    await mockDocumentDetail(
-      page,
-      "doc-audio",
-      "voice.mp3",
-      audioUploadSourceProfile(),
-    );
-    return;
-  }
   await mockDocumentDetail(page, "doc-upload", "upload.txt");
 }
 
@@ -878,17 +840,13 @@ function ingestionJob(
   documentId: string,
   status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED" = "QUEUED",
 ) {
-  const audio = documentId === "doc-audio";
   return {
     id,
     document_id: documentId,
     status,
-    parser_profile: audio ? "unsupported_audio" : "local_text_structure",
-    quality_warnings: audio ? ["unsupported_audio"] : [],
-    skip_reason:
-      audio && status === "SKIPPED"
-        ? "audio_transcription_not_configured"
-        : null,
+    parser_profile: "local_text_structure",
+    quality_warnings: [] as string[],
+    skip_reason: null as string | null,
     error_message: null as string | null,
     attempt_count: status === "QUEUED" ? 0 : 1,
     max_attempts: 3,
@@ -904,10 +862,7 @@ function ingestionJob(
   };
 }
 
-// テキストと音声の source_profile の両方を渡せる型（text_charset などの値の型が違う）。
-type UploadSourceProfileFixture =
-  | ReturnType<typeof uploadSourceProfile>
-  | ReturnType<typeof audioUploadSourceProfile>;
+type UploadSourceProfileFixture = ReturnType<typeof uploadSourceProfile>;
 
 function uploadSourceProfile(fileName = "upload.txt") {
   return {
@@ -928,28 +883,6 @@ function uploadSourceProfile(fileName = "upload.txt") {
     unsupported_reason: null,
     quality_status: "ready",
     quality_warnings: [],
-  };
-}
-
-function audioUploadSourceProfile() {
-  return {
-    original_file_name: "voice.mp3",
-    sanitized_file_name: "voice.mp3",
-    extension: ".mp3",
-    content_type: "audio/mpeg",
-    inferred_content_type: "audio/mpeg",
-    file_size_bytes: 3,
-    content_sha256: "a".repeat(64),
-    modality: "audio",
-    parser_profile: "unsupported_audio",
-    parser_backend: "unsupported",
-    parser_version: "v1",
-    preview_kind: "unsupported",
-    text_charset: null,
-    duplicate_of_document_id: null,
-    unsupported_reason: "audio_transcription_not_configured",
-    quality_status: "warning",
-    quality_warnings: ["unsupported_audio"],
   };
 }
 

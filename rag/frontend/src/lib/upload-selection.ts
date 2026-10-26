@@ -37,12 +37,6 @@ export const ACCEPTED_UPLOAD_TYPES = [
   ".xlsm",
   ".odt",
   ".rtf",
-  ".aac",
-  ".flac",
-  ".m4a",
-  ".mp3",
-  ".ogg",
-  ".wav",
   "application/pdf",
   "image/gif",
   "image/jpeg",
@@ -86,18 +80,6 @@ export const ACCEPTED_UPLOAD_TYPES = [
   "application/rtf",
   "application/x-rtf",
   "text/rtf",
-  "audio/aac",
-  "audio/flac",
-  "audio/mp3",
-  "audio/mpeg",
-  "audio/mp4",
-  "audio/ogg",
-  "audio/wave",
-  "audio/wav",
-  "audio/x-flac",
-  "audio/x-m4a",
-  "audio/x-wav",
-  "application/ogg",
 ].join(",");
 
 const ACCEPTED_EXTENSIONS = new Set(
@@ -111,13 +93,38 @@ export const ACCEPTED_UPLOAD_EXTENSION_LABELS = [...ACCEPTED_EXTENSIONS].map((ex
 
 /**
  * 受け付けない形式のうち、変換の方法を案内する形式（#3351）。解析に要る依存（HEIC / HEIF は pi-heif の
- * libheif・EPUB は pandoc）をライセンスの理由で入れないため、送らずに止める。backend の
- * `app.rag.source_profile.REJECTED_UPLOAD_EXTENSIONS` と同じ拡張子（backend のテストで照合する）。
+ * libheif・EPUB は pandoc）をライセンスの理由で入れないため、送らずに止める。音声・動画は取り込まない
+ * 形式で、同じく送らずに止める（#3369）。backend の `app.rag.source_profile.REJECTED_UPLOAD_EXTENSIONS`
+ * と同じ拡張子（backend のテストで照合する）。
  */
 export const REJECTED_UPLOAD_FORMATS = {
   ".heic": "heicImage",
   ".heif": "heicImage",
   ".epub": "epubBook",
+  ".aac": "audioVideo",
+  ".aif": "audioVideo",
+  ".aiff": "audioVideo",
+  ".amr": "audioVideo",
+  ".flac": "audioVideo",
+  ".m4a": "audioVideo",
+  ".mp3": "audioVideo",
+  ".oga": "audioVideo",
+  ".ogg": "audioVideo",
+  ".opus": "audioVideo",
+  ".wav": "audioVideo",
+  ".weba": "audioVideo",
+  ".wma": "audioVideo",
+  ".3gp": "audioVideo",
+  ".avi": "audioVideo",
+  ".m4v": "audioVideo",
+  ".mkv": "audioVideo",
+  ".mov": "audioVideo",
+  ".mp4": "audioVideo",
+  ".mpeg": "audioVideo",
+  ".mpg": "audioVideo",
+  ".ogv": "audioVideo",
+  ".webm": "audioVideo",
+  ".wmv": "audioVideo",
 } as const;
 
 export type RejectedUploadFormat = (typeof REJECTED_UPLOAD_FORMATS)[keyof typeof REJECTED_UPLOAD_FORMATS];

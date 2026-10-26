@@ -1,8 +1,7 @@
 """parser backend × 対応ファイル形式の宣言(単一正本)。
 
 `registry._external_adapter_supports_source` の if-chain を宣言的データへ抽出したもの。
-判定は従来どおり「modality OR content_type OR 拡張子」の OR セマンティクスで、
-音声はどの backend も非対応として先行除外する。
+判定は従来どおり「modality OR content_type OR 拡張子」の OR セマンティクス。
 
 `result.py` と同じ軽量モジュールとして置き、backend / parser microservice / API 公開
 (設定画面の対応形式表示)が重い `registry` を import せずに参照できるようにする。
@@ -16,8 +15,6 @@ from pathlib import PurePath
 
 from rag_parser_core.source import SourceModality, SourceProfile
 from rag_parser_core.structured_records import STRUCTURED_RECORDS_CONTENT_TYPE
-
-AUDIO_EXTENSIONS = frozenset({".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"})
 
 _IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp"})
 _OPENXML_CONTENT_TYPES = frozenset(
@@ -132,7 +129,7 @@ ADAPTER_CAPABILITIES: Mapping[str, ParserBackendCapability] = {
     "oci_document_understanding": _PDF_AND_IMAGE,
 }
 
-# 表示用の modality 並び(SourceModality の定義順。AUDIO/UNKNOWN は表示しない)
+# 表示用の modality 並び(SourceModality の定義順。UNKNOWN は表示しない)
 _DISPLAY_MODALITY_ORDER: tuple[SourceModality, ...] = (
     SourceModality.PDF,
     SourceModality.IMAGE,
@@ -153,18 +150,6 @@ def _normalized_content_type(content_type: str) -> str:
     return content_type.split(";", 1)[0].strip().casefold()
 
 
-def is_audio_source(source_profile: SourceProfile | None, content_type: str) -> bool:
-    modality = source_profile.modality if source_profile is not None else SourceModality.UNKNOWN
-    normalized = _normalized_content_type(
-        content_type or (source_profile.content_type if source_profile is not None else "")
-    )
-    return (
-        modality == SourceModality.AUDIO
-        or normalized.startswith("audio/")
-        or _source_extension(source_profile) in AUDIO_EXTENSIONS
-    )
-
-
 # 前処理の構造化レコードの JSONL を受け付ける解析エンジン（#2457）。Docling / Unstructured は
 # 受けない（黙って変換せず、構造化レコード JSONL を選ぶよう診断で止める）。
 STRUCTURED_RECORDS_BACKENDS = frozenset({"structured_records_jsonl"})
@@ -176,15 +161,13 @@ def adapter_supports_source(
     source_profile: SourceProfile | None,
     content_type: str,
 ) -> bool:
-    """backend が原本を処理できるかの宣言判定(音声は全 backend 非対応)。"""
+    """backend が原本を処理できるかの宣言判定。"""
     capability = ADAPTER_CAPABILITIES.get(backend)
     if capability is None:
         return False
     normalized = _normalized_content_type(
         content_type or (source_profile.content_type if source_profile is not None else "")
     )
-    if is_audio_source(source_profile, normalized):
-        return False
     if normalized == STRUCTURED_RECORDS_CONTENT_TYPE:
         # 前処理（csv_to_jsonl / excel_to_jsonl / word_to_jsonl）の構造化レコードの JSONL は、
         # 構造化レコード JSONL の解析エンジンだけが読む（#2457）。
@@ -199,7 +182,7 @@ def adapter_supports_source(
 
 
 def supported_modalities(backend: str) -> tuple[SourceModality, ...]:
-    """表示用の対応 modality 一覧(定義順・UNKNOWN/AUDIO 除外)。"""
+    """表示用の対応 modality 一覧(定義順・UNKNOWN 除外)。"""
     capability = ADAPTER_CAPABILITIES.get(backend)
     if capability is None:
         return ()
