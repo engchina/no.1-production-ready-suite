@@ -353,19 +353,20 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
 
   await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
   await panel.getByRole("combobox", { name: "文書解析" }).click();
-  // 解析エンジンの選択肢は文書解析の画面のカードと同じ並び（XML ツリー JSON を含む。#2042）。
-  // 構造化レコード JSONL は Unstructured の後、XML ツリー JSON の前（#2457）。
-  // OCI Document Understanding は準備中（ロードマップ。#3374）の印と理由つきで、選べない選択肢として並ぶ。
+  // 解析エンジンの選択肢は文書解析の画面のカードと同じ並び（PARSER_BACKEND_ORDER。#3359）。
+  // 構造化レコード JSONL は Unstructured の後、XML ツリー JSON の前（#2457）。続いて Dots.OCR →
+  // MinerU → OCI Document Understanding（利用者の判断）。MinerU（#3359）と OCI Document
+  // Understanding（#3374）は準備中（ロードマップ）の印と理由つきで、選べない選択肢として並ぶ。
   await expect(page.getByRole("option")).toHaveText([
     "Docling",
     "Unstructured",
     "構造化レコード JSONL",
     "XML ツリー JSON",
-    /^OCI Document Understanding準備中（ロードマップ）準備中（ロードマップ）のため、まだ選べません。$/,
-    "MinerU",
     "Dots.OCR",
+    /^MinerU準備中（ロードマップ）準備中（ロードマップ）のため、まだ選べません。$/,
+    /^OCI Document Understanding準備中（ロードマップ）準備中（ロードマップ）のため、まだ選べません。$/,
   ]);
-  await page.getByRole("option", { name: "MinerU" }).click();
+  await page.getByRole("option", { name: "Dots.OCR" }).click();
   // Vision は解析エンジンに関係なくレシピで選べる。「図表 VLM 要約」は Vision に統合した(#497)。
   await expect(panel.getByText("図表 VLM 要約")).toHaveCount(0);
   // 概要(読み取り専用)にも同じ見出しがあるので、編集欄(説明付き)に絞る。
@@ -380,7 +381,7 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
 
   await expect(page.getByText(/この文書の処理設定を保存しました/)).toBeVisible();
   expect(state.saved()).toMatchObject({
-    parser_adapter_backend: "mineru",
+    parser_adapter_backend: "dots_ocr",
     vision_enabled: true,
     chunk_size: 800,
   });
@@ -788,67 +789,17 @@ test("保存失敗時は編集値を保持する", async ({ page }) => {
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
   await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
   await panel.getByRole("combobox", { name: "文書解析" }).click();
-  await page.getByRole("option", { name: "MinerU" }).click();
+  await page.getByRole("option", { name: "Dots.OCR" }).click();
   await panel.getByRole("button", { name: "構築設定を保存" }).click();
 
   await expect(panel).toContainText("取込ジョブの実行中は設定を変更できません");
-  await expect(panel.getByRole("combobox", { name: "文書解析" })).toContainText("MinerU");
+  await expect(panel.getByRole("combobox", { name: "文書解析" })).toContainText("Dots.OCR");
 });
 
 for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`MinerU はライセンスの条件の確認の後だけ選べ、選ぶと主な条件を出す (${viewport.name})`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await mockWorkspace(page, { mineruLicenseAcknowledged: false });
-    await page.goto("/documents/doc-1");
-
-    const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
-    await panel.getByRole("button", { name: "処理設定を編集" }).click();
-    await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
-    const parserRow = panel
-      .getByTestId("document-processing-config-editor-items")
-      .locator('[data-config-field="parser_adapter_backend"]');
-    // 未確認の間は MinerU を選択肢に出さず、管理者の確認が要ることを示す（#3359）。
-    await expect(parserRow).toContainText(
-      "システム管理者が「取込・検索・回答設定 › 文書解析」で MinerU のライセンスの条件を確認する必要があります"
-    );
-    await panel.getByRole("combobox", { name: "文書解析" }).click();
-    await expect(page.getByRole("option", { name: "Docling" })).toBeVisible();
-    await expect(page.getByRole("option", { name: "MinerU" })).toHaveCount(0);
-    await page.keyboard.press("Escape");
-    await expectNoPageOverflow(page);
-  });
-
-  test(`MinerU を選んだレシピにライセンスの主な条件と公式のリンクを出す (${viewport.name})`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await mockWorkspace(page);
-    await page.goto("/documents/doc-1");
-
-    const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
-    await panel.getByRole("button", { name: "処理設定を編集" }).click();
-    await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
-    await panel.getByRole("combobox", { name: "文書解析" }).click();
-    await page.getByRole("option", { name: "MinerU" }).click();
-
-    const notice = panel.getByTestId("document-mineru-license-notice-doc-1");
-    await expect(notice).toContainText("MinerU Open Source License");
-    await expect(notice).toContainText("月間アクティブユーザーが 1 億を超える");
-    await expect(notice).toContainText("利用の前に、ライセンスの全文を確認してください");
-    await expect(notice).toContainText("確認済み: 管理者 A");
-    await expect(notice.getByRole("link", { name: /ライセンスの全文/ })).toHaveAttribute(
-      "href",
-      "https://github.com/opendatalab/MinerU/blob/master/LICENSE.md"
-    );
-    await expect(notice.getByRole("checkbox")).toHaveCount(0);
-    await expectNoPageOverflow(page);
-  });
-
   test(
     `準備中（ロードマップ）の解析エンジンは、処理レシピの選択肢に灰色で出て選べない (${viewport.name})`,
     { tag: "@responsive" },
@@ -862,6 +813,10 @@ for (const viewport of [
       await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
       const combobox = panel.getByRole("combobox", { name: "文書解析" });
       await combobox.click();
+      // MinerU（#3359）も OCI Document Understanding（#3374）と同じく準備中の印と理由つきで選べない。
+      const mineru = page.getByRole("option", { name: /^MinerU/ });
+      await expect(mineru).toHaveAttribute("aria-disabled", "true");
+      await expect(mineru).toContainText("準備中（ロードマップ）のため、まだ選べません。");
       const roadmap = page.getByRole("option", { name: /OCI Document Understanding/ });
       await expect(roadmap).toHaveAttribute("aria-disabled", "true");
       await expect(roadmap).toContainText("準備中（ロードマップ）のため、まだ選べません。");
@@ -913,7 +868,7 @@ for (const viewport of [
       await panel.getByRole("button", { name: "処理設定を編集" }).click();
       await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
       await panel.getByRole("combobox", { name: "文書解析" }).click();
-      await page.getByRole("option", { name: "MinerU" }).click();
+      await page.getByRole("option", { name: "Dots.OCR" }).click();
       await panel.getByRole("button", { name: "構築設定を保存" }).click();
       await expect(page.getByText(/この文書の処理設定を保存しました/)).toBeVisible();
       await expect(panel.getByText(conflict)).toHaveCount(0);

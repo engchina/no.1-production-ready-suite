@@ -510,7 +510,7 @@ function OverviewCard({
                           {service && !roadmap && !service.configured ? (
                             <ConnectionConfiguredBadge configured={false} />
                           ) : null}
-                          {externalConnection ? (
+                          {externalConnection && !roadmap ? (
                             <ConnectionConfiguredBadge configured={externalConnection.configured} />
                           ) : null}
                         </span>

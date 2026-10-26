@@ -76,7 +76,25 @@ for (const viewport of [
     await expect(
       page.getByRole("radio", { name: /Unstructured.*選んだ場合だけ使用/ })
     ).toBeVisible();
-    await expect(page.getByRole("radio", { name: /MinerU.*GPU.*未設定/ })).toBeVisible();
+    // MinerU は OCI Document Understanding と同じ準備中（ロードマップ。#3359）。灰色で選べず、
+    // 接続の状態（未設定）も出さない。カードの下にライセンスの短い案内と公式のリンクを出す。
+    const mineru = page.getByRole("radio", { name: /MinerU.*GPU.*準備中（ロードマップ）/ });
+    await expect(mineru).toBeDisabled();
+    await expect(mineru).toHaveAttribute("data-availability", "roadmap");
+    await expect(page.locator('label[for="settings-parser-backend-mineru"]')).not.toContainText("未設定");
+    const mineruNote = page.getByTestId("mineru-license-note");
+    await expect(mineruNote).toContainText("MinerU Open Source License");
+    await expect(mineruNote.getByRole("link", { name: /MinerU の公式リポジトリ/ })).toHaveAttribute(
+      "href",
+      "https://github.com/opendatalab/MinerU"
+    );
+    await expect(mineruNote.getByRole("link", { name: /ライセンスの全文/ })).toHaveAttribute(
+      "href",
+      "https://github.com/opendatalab/MinerU/blob/master/LICENSE.md"
+    );
+    // 準備中の間は確認の checkbox と外部接続の欄を出さない。
+    await expect(page.getByRole("checkbox", { name: "MinerU のライセンスの条件を確認した" })).toHaveCount(0);
+    await expect(page.locator("#external-parser-mineru-endpoint")).toHaveCount(0);
     // 対応形式の拡張子に .rst / .org を出し、読まない形式（.heic / .epub など）は出さない（#3351）。
     const unstructuredCard = page.locator('label[for="settings-parser-backend-unstructured"]');
     await expect(unstructuredCard).toContainText(".org");
@@ -121,18 +139,19 @@ for (const viewport of [
           elements.map((element) => (element as HTMLInputElement).labels?.[0]?.textContent ?? "")
         )
     ).map((text) => text.replace(/\s+/g, " ").trim());
-    // 並びは CPU → OCI → GPU（#2042）。CPU は Docling → Unstructured → 構造化レコード JSONL →
-    // XML ツリー JSON（#2457）。
+    // 並びは PARSER_BACKEND_ORDER（#3359。利用者の判断）。CPU は Docling → Unstructured →
+    // 構造化レコード JSONL → XML ツリー JSON（#2457）、続いて Dots.OCR → MinerU →
+    // OCI Document Understanding。処理レシピの選択肢も同じ順。
     expect(engineNames).toHaveLength(7);
     expect(engineNames[0]).toContain("Docling");
     expect(engineNames[1]).toContain("Unstructured");
     expect(engineNames[2]).toContain("構造化レコード JSONL");
     expect(engineNames[3]).toContain("XML ツリー JSON");
-    expect(engineNames[4]).toContain("OCI Document Understanding");
+    expect(engineNames[4]).toContain("Dots.OCR");
     expect(engineNames[5]).toContain("MinerU");
-    expect(engineNames[6]).toContain("Dots.OCR");
+    expect(engineNames[6]).toContain("OCI Document Understanding");
     // desktop は 2 列（1 行目 Docling・Unstructured / 2 行目 構造化レコード JSONL・XML ツリー JSON /
-    // 3 行目 OCI Document Understanding・MinerU / 4 行目 Dots.OCR）、375px は 1 列で同じ順。
+    // 3 行目 Dots.OCR・MinerU / 4 行目 OCI Document Understanding）、375px は 1 列で同じ順。
     const cardBoxes = await page
       .locator('label[for^="settings-parser-backend-"]')
       .evaluateAll((elements) =>
@@ -158,9 +177,10 @@ for (const viewport of [
       }
     }
     await expect(page.getByText("外部 GPU 解析エンジンの接続")).toBeVisible();
-    await expect(page.getByLabel("Endpoint")).toHaveCount(2);
-    await expect(page.getByLabel("Model")).toHaveCount(2);
-    await expect(page.getByLabel("API key", { exact: true })).toHaveCount(2);
+    // 準備中（ロードマップ）の MinerU の接続の欄は出さない（Dots.OCR の 1 組だけ。#3359）。
+    await expect(page.getByLabel("Endpoint")).toHaveCount(1);
+    await expect(page.getByLabel("Model")).toHaveCount(1);
+    await expect(page.getByLabel("API key", { exact: true })).toHaveCount(1);
     await expect(page.getByText("運用診断", { exact: true })).toHaveCount(0);
     await expect(page.getByText("解析方式の稼働状況")).toHaveCount(0);
     await expect(page.getByText("原本種別ごとの実行順")).toHaveCount(0);
@@ -737,7 +757,13 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
           adapters: [
             disabledAdapter("docling"),
             disabledAdapter("unstructured"),
-            { ...disabledAdapter("mineru"), enabled: true, selected: true, status: "active" },
+            {
+              ...disabledAdapter("mineru"),
+              availability: "available",
+              enabled: true,
+              selected: true,
+              status: "active",
+            },
             disabledAdapter("dots_ocr"),
           ],
           mineru_license: {
@@ -757,7 +783,8 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
         adapters: [
           disabledAdapter("docling"),
           disabledAdapter("unstructured"),
-          disabledAdapter("mineru"),
+          // ライセンスの確認から MinerU を選ぶ経路は、準備中の判定を外して確かめる（#3359）。
+          { ...disabledAdapter("mineru"), availability: "available" },
           disabledAdapter("dots_ocr"),
         ],
       }),
@@ -794,11 +821,15 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
     dots_ocr_enabled: false,
     structured_records_jsonl_enabled: false,
     xml_tree_json_enabled: false,
-    connections: defaultConnections().map((connection) => ({
-      backend: connection.backend,
-      endpoint: connection.endpoint,
-      ...(connection.backend === "mineru" ? {} : { model: connection.model }),
-    })),
+    // 接続の並びも使用エンジンのカードと同じ（Dots.OCR → MinerU。#3359）。
+    connections: ["dots_ocr", "mineru"].map((backend) => {
+      const connection = defaultConnections().find((item) => item.backend === backend)!;
+      return {
+        backend: connection.backend,
+        endpoint: connection.endpoint,
+        ...(connection.backend === "mineru" ? {} : { model: connection.model }),
+      };
+    }),
   });
   await expectNoHorizontalOverflow(page);
 });
@@ -1068,7 +1099,7 @@ for (const viewport of [
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await mockParserAdapters(page);
+    await mockParserAdapters(page, {}, { mineruAvailability: "available" });
     await page.goto("/settings/parser-adapters");
 
     const notice = page.getByTestId("mineru-license-notice");
@@ -1107,7 +1138,7 @@ for (const viewport of [
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     // 文書解析の設定の権限はあるが system_admin ではない利用者（#3359）。
     await mockAuthUser(page, { permissions: ["menu.settings_parser_adapters"] });
-    await mockParserAdapters(page);
+    await mockParserAdapters(page, {}, { mineruAvailability: "available" });
     await page.goto("/settings/parser-adapters");
 
     const notice = page.getByTestId("mineru-license-notice");
@@ -1133,7 +1164,13 @@ for (const viewport of [
           adapters: [
             disabledAdapter("docling"),
             disabledAdapter("unstructured"),
-            { ...disabledAdapter("mineru"), enabled: true, selected: true, status: "active" },
+            {
+              ...disabledAdapter("mineru"),
+              availability: "available",
+              enabled: true,
+              selected: true,
+              status: "active",
+            },
             disabledAdapter("dots_ocr"),
           ],
           mineru_license: {
@@ -1156,7 +1193,13 @@ for (const viewport of [
   });
 }
 
-async function mockParserAdapters(page: Page, extra: object = {}) {
+async function mockParserAdapters(
+  page: Page,
+  extra: object = {},
+  // MinerU のライセンスの確認の画面を確かめるときは、準備中の判定を外す（backend の
+  // mineru_selectable と同じ。#3359）。
+  options: { mineruAvailability?: "available" | "roadmap" } = {}
+) {
   await page.route("**/api/settings/parser-adapters", async (route) => {
     await route.fulfill({
       json: parserAdapterEnvelope({
@@ -1219,6 +1262,7 @@ async function mockParserAdapters(page: Page, extra: object = {}) {
             },
             {
               backend: "mineru",
+              availability: options.mineruAvailability ?? "roadmap",
               package_name: "external_api",
               import_name: "external_api",
               distribution_name: "mineru_v1",
@@ -1428,6 +1472,8 @@ function disabledAdapter(
   const external = backend === "mineru" || backend === "dots_ocr";
   return {
     backend,
+    // MinerU は準備中（ロードマップ。#3359）。backend の GET と同じく roadmap を返す。
+    availability: backend === "mineru" ? "roadmap" : "available",
     package_name: external ? "external_api" : backend,
     import_name: external ? "external_api" : backend,
     distribution_name: null,
