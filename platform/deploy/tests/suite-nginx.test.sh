@@ -2,7 +2,7 @@
 # platform/deploy/suite-nginx.sh が生成する 1 台の Compute の Nginx の site（#1316）を検証する。
 #   1. 生成した設定の静的な検査（製品の組み合わせ・HTTPS on / off・/ の転送先）
 #   2. 隔離した Nginx と偽の backend に実 HTTP / HTTPS を送る（prefix を外した URI・SSE・MCP・login の上限・
-#      health・frontend の SPA・/platform/ca.crt・HTTP → HTTPS・TLS 1.2 / 1.3・HSTS が無いこと）
+#      health・frontend の SPA・licenses の Content-Type・/platform/ca.crt・HTTP → HTTPS・TLS 1.2 / 1.3・HSTS が無いこと）
 # Nginx が無い環境では 2 を飛ばす（CI は nginx を入れて実行する）。
 set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -75,6 +75,8 @@ for product in rag nl2sql agent; do
   assert_contains "${site_all_https}" "alias /srv/suite/${product}/frontend/dist/;" "${product} の frontend"
   assert_contains "${site_all_https}" "location /${product}/assets/ {" "${product} の build の出力"
   assert_contains "${site_all_https}" "alias /srv/suite/${product}/frontend/dist/assets/;" "${product} の build の出力の場所"
+  assert_contains "${site_all_https}" "location /${product}/licenses/ {" "${product} のライセンスの一覧"
+  assert_contains "${site_all_https}" "alias /srv/suite/${product}/frontend/dist/licenses/;" "${product} のライセンスの一覧の場所"
 done
 assert_contains "${site_all_https}" "proxy_pass http://127.0.0.1:8000\$pr_suite_upstream_uri;" "RAG の backend は 8000"
 assert_contains "${site_all_https}" "proxy_pass http://127.0.0.1:8010\$pr_suite_upstream_uri;" "NL2SQL の backend は 8010"
@@ -243,6 +245,9 @@ for product in rag nl2sql agent; do
   mkdir -p "${task_dir}/suite/${product}/frontend/dist/assets"
   printf '<!doctype html><title>%s</title>\n' "${product}" > "${task_dir}/suite/${product}/frontend/dist/index.html"
   printf 'console.log("%s");\n' "${product}" > "${task_dir}/suite/${product}/frontend/dist/assets/app.js"
+  mkdir -p "${task_dir}/suite/${product}/frontend/dist/licenses/fonts"
+  printf '# ライセンス %s\n' "${product}" > "${task_dir}/suite/${product}/frontend/dist/licenses/javascript.md"
+  printf 'font license %s\n' "${product}" > "${task_dir}/suite/${product}/frontend/dist/licenses/fonts/font-a-OFL.txt"
 done
 
 # 証明書（private IP を 127.0.0.1 にして、検証付きの HTTPS で確かめる）。
@@ -317,8 +322,18 @@ for product in ("rag", "nl2sql", "agent"):
     for path in (f"/{product}/", f"/{product}/settings/oci", f"/{product}/documents/a/b"):
         status, _, data = call(path)
         assert status == 200 and f"<title>{product}</title>" in data.decode(), (path, status, data)
-    status, _, data = call(f"/{product}/assets/app.js")
+    status, headers, data = call(f"/{product}/assets/app.js")
     assert status == 200 and product in data.decode(), (product, status)
+    assert headers["content-type"] == "application/javascript", headers
+    # ライセンスの一覧（.md / .txt）はブラウザで読めるよう text/plain; charset=utf-8（#3420）。無いファイルは 404。
+    status, headers, data = call(f"/{product}/licenses/javascript.md")
+    assert status == 200 and f"ライセンス {product}" in data.decode(), (product, status, data)
+    assert headers["content-type"] == "text/plain; charset=utf-8", headers
+    assert headers["x-content-type-options"] == "nosniff" and headers["cache-control"] == "no-cache", headers
+    assert "content-disposition" not in headers, headers
+    status, headers, data = call(f"/{product}/licenses/fonts/font-a-OFL.txt")
+    assert status == 200 and headers["content-type"] == "text/plain; charset=utf-8", (product, status, headers)
+    assert call(f"/{product}/licenses/missing.md")[0] == 404, product
     # API: prefix だけを外し、エンコードと query はそのまま渡す。
     echo = backend(f"/{product}/api/documents/a%2Fb/files?x=1&y=%E6%97%A5")
     assert echo["backend"] == product, echo

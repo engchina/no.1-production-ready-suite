@@ -305,6 +305,24 @@ EOF
         alias ${dist_dir}/assets/;
         add_header Cache-Control "public, max-age=31536000, immutable" always;
     }
+
+    # build が出すサードパーティのライセンス（licenses/javascript.md・licenses/fonts/*.txt。#3392）。
+    # mime.types に .md が無く既定の application/octet-stream になり、ブラウザがダウンロードするので、
+    # この下だけ .md / .txt を text/plain; charset=utf-8 にしてブラウザで読めるようにする（#3420）。
+    # text/markdown は inline で表示しないブラウザがあるため使わない。無いファイルは SPA の index.html にせず 404。
+    location /${product}/licenses/ {
+        set \$pr_service_name "production-ready-${product}";
+        access_log ${SUITE_NGINX_LOG_DIR:-/var/log/nginx}/production-ready-${product}-access.log production_ready_json if=\$pr_loggable;
+        error_log ${SUITE_NGINX_LOG_DIR:-/var/log/nginx}/production-ready-${product}-error.log warn;
+        alias ${dist_dir}/licenses/;
+        types {
+            text/plain md txt;
+        }
+        default_type text/plain;
+        charset utf-8;
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options "nosniff" always;
+    }
 EOF
 }
 
