@@ -234,6 +234,8 @@ export const ja = {
   "mineruLicense.acknowledgedAt": "確認済み（{at}）",
   "mineruLicense.withdrawLocked":
     "MinerU を使用エンジンにしている間は、確認を外せません。先に別の使用エンジンを選んでください。",
+  "mineruLicense.compact":
+    "MinerU のライセンス（MinerU Open Source License）は Apache-2.0 に追加の条件（企業の規模による別途の商用ライセンス・オンラインサービスでの利用の明示）があります。利用の前に全文を確認してください。",
   "mineruLicense.adminOnly":
     "MinerU のライセンスの条件の確認と取り消しは、システム管理者だけができます。",
   "mineruLicense.selectBlocked":

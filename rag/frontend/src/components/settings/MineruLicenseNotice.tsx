@@ -36,9 +36,10 @@ export function mineruLicenseAcknowledgedText(
 export function MineruLicenseNotice({
   acknowledgement,
   acknowledge,
+  compact = false,
   testId = "mineru-license-notice",
 }: {
-  acknowledgement: MineruLicenseAcknowledgement | undefined;
+  acknowledgement?: MineruLicenseAcknowledgement;
   acknowledge?: {
     id: string;
     checked: boolean;
@@ -47,8 +48,28 @@ export function MineruLicenseNotice({
     note?: string | null;
     onChange: (checked: boolean) => void;
   };
+  /**
+   * 準備中（ロードマップ）の間の短い案内（カードの下に 1 文と公式のリンクだけ。確認の checkbox は
+   * 出さない）。主な条件の全文は README と配備の文書に書く。
+   */
+  compact?: boolean;
   testId?: string;
 }) {
+  if (compact) {
+    return (
+      <div data-testid="mineru-license-note" className="space-y-1 px-1 text-xs leading-relaxed text-fg-muted">
+        <p>{t("mineruLicense.compact")}</p>
+        <ul className="flex flex-wrap gap-x-3 gap-y-1">
+          <li>
+            <LicenseLink href={MINERU_REPOSITORY_URL} label={t("mineruLicense.link.repository")} />
+          </li>
+          <li>
+            <LicenseLink href={MINERU_LICENSE_URL} label={t("mineruLicense.link.license")} />
+          </li>
+        </ul>
+      </div>
+    );
+  }
   const acknowledgedText = mineruLicenseAcknowledgedText(acknowledgement);
   const noteId = acknowledge ? `${acknowledge.id}-note` : undefined;
   return (

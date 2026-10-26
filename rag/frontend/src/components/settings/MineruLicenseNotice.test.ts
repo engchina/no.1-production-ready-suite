@@ -70,3 +70,15 @@ describe("MinerU のライセンスの案内", () => {
     ).toMatch(/^確認済み（/);
   });
 });
+
+describe("MinerU が準備中（ロードマップ）の間の短い案内", () => {
+  it("1 文と公式のリンクだけを出し、確認の checkbox は出さない", () => {
+    const html = render({ compact: true });
+
+    expect(html).toContain("MinerU Open Source License");
+    expect(html).toContain("利用の前に全文を確認してください");
+    expect(html).toContain(`href="${MINERU_REPOSITORY_URL}"`);
+    expect(html).toContain(`href="${MINERU_LICENSE_URL}"`);
+    expect(html).not.toContain('type="checkbox"');
+  });
+});

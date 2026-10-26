@@ -33,7 +33,6 @@ import {
 import { ApiErrorState } from "@/components/StateViews";
 import { useAuth } from "@/components/security/AuthProvider";
 import {
-  SERVICE_PROFILE_ORDER,
   ServiceProfileBadge,
   ServiceStatusBadge,
   type DisplayRuntimeStatus,
@@ -53,6 +52,7 @@ import {
   type ServiceProfile,
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
+import { sortParserBackends } from "@/lib/parser-backend-order";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
@@ -96,7 +96,8 @@ type ParserAdapterFlagField = Exclude<
 >;
 type ConnectionFieldErrors = Record<string, string>;
 
-const EXTERNAL_BACKENDS: ExternalParserBackendName[] = ["mineru", "dots_ocr"];
+// 並びは使用エンジンのカードと同じ（Dots.OCR → MinerU。PARSER_BACKEND_ORDER。#3359）。
+const EXTERNAL_BACKENDS: ExternalParserBackendName[] = ["dots_ocr", "mineru"];
 
 /** 外部 GPU 接続の欄の上限（backend の ExternalParserConnectionUpdate の max_length と同じ。#976）。 */
 const EXTERNAL_CONNECTION_MAX_LENGTH = { endpoint: 2048, model: 512, apiKey: 4096 } as const;
@@ -128,6 +129,21 @@ function isAdapterBackend(backend: ParserAdapterBackend): backend is ParserAdapt
 
 function isServiceBackend(backend: ParserAdapterBackend): backend is ParserServiceBackendName {
   return (SERVICE_BACKENDS as ParserAdapterBackend[]).includes(backend);
+}
+
+/**
+ * 準備中（ロードマップ）のエンジン（OCI Document Understanding は #3374、MinerU は #3359）。
+ * カードを灰色にして選ばせず、状態も問い合わせない。外部の接続の欄も出さず、保存にも送らない。
+ */
+function roadmapBackendsFromSettings(settings: ParserAdapterSettingsData): Set<ParserAdapterBackend> {
+  return new Set<ParserAdapterBackend>([
+    ...(settings.service_backends ?? [])
+      .filter((service) => service.availability === "roadmap")
+      .map((service) => service.backend),
+    ...settings.adapters
+      .filter((adapter) => adapter.availability === "roadmap")
+      .map((adapter) => adapter.backend),
+  ]);
 }
 
 function isExternalBackend(
@@ -243,14 +259,15 @@ export function ParserAdapterSettingsClient() {
 
   function submit() {
     if (!form || save.isPending) return;
-    const errors = validateConnections(form);
+    const roadmap = roadmapBackendsFromSettings(settings);
+    const errors = validateConnections(form, roadmap);
     setConnectionErrors(errors);
     const firstError = Object.keys(errors)[0];
     if (firstError) {
       requestAnimationFrame(() => focusConnectionError(firstError));
       return;
     }
-    save.mutate(parserSettingsUpdate(form), {
+    save.mutate(parserSettingsUpdate(form, roadmap), {
       onSuccess: (data) => {
         const next = formFromSettings(data);
         setBase(serializeForm(next));
@@ -319,26 +336,13 @@ function OverviewCard({
   const canAcknowledgeMineruLicense = useAuth().user?.is_system_admin === true;
   const mineruLicenseLocked =
     form.mineru_license_acknowledged && form.adapter_backend === "mineru";
-  // CPU → OCI → GPU の順（サービス管理の節と同じ。#2042）。1 つの 2 列の grid に並べ、
-  // 375px の 1 列でも同じ順にする（Docling・Unstructured / 構造化レコード JSONL・XML ツリー JSON /
-  // OCI Document Understanding / MinerU・Dots.OCR。#2457）。
-  const orderedBackends = useMemo(
-    () =>
-      SERVICE_PROFILE_ORDER.flatMap((profile) =>
-        backendOptions.filter((backend) => serviceProfileForBackend(backend) === profile)
-      ),
-    [backendOptions]
-  );
-  // 準備中（ロードマップ）のエンジン（#3374）。カードを灰色にして選ばせず、サービスの状態も問い合わせない。
-  const roadmapBackends = useMemo(
-    () =>
-      new Set<ParserAdapterBackend>(
-        (settings.service_backends ?? [])
-          .filter((service) => service.availability === "roadmap")
-          .map((service) => service.backend)
-      ),
-    [settings.service_backends]
-  );
+  // 正本（PARSER_BACKEND_ORDER。#3359）の順。1 つの 2 列の grid に並べ、375px の 1 列でも同じ順にする
+  // （Docling・Unstructured / 構造化レコード JSONL・XML ツリー JSON / Dots.OCR・MinerU /
+  // OCI Document Understanding）。処理レシピの選択肢も同じ順。
+  const orderedBackends = useMemo(() => sortParserBackends(backendOptions), [backendOptions]);
+  // 準備中（ロードマップ）のエンジン（#3374・#3359）。カードを灰色にして選ばせず、状態も問い合わせない。
+  const roadmapBackends = useMemo(() => roadmapBackendsFromSettings(settings), [settings]);
+  const mineruRoadmap = roadmapBackends.has("mineru");
   const serviceIds = useMemo(
     () => [
       ...new Set(
@@ -425,9 +429,15 @@ function OverviewCard({
                   const supportedExtensions = formatSupportedExtensions(capability);
                   // MinerU はライセンスの条件を確認するまで選べない（#3359）。
                   const licenseBlocked =
-                    backend === "mineru" && !selected && !form.mineru_license_acknowledged;
+                    backend === "mineru" &&
+                    !roadmap &&
+                    !selected &&
+                    !form.mineru_license_acknowledged;
                   return (
-                    <div key={backend} className="relative min-w-0">
+                    // 準備中の MinerU は、カードの下（選ぶ操作の外）にライセンスの短い案内と公式のリンクを
+                    // 出す（#3359）。行の高さはそろえ、カードは残りの高さを埋める。
+                    <div key={backend} className="flex min-w-0 flex-col gap-1">
+                    <div className="relative min-w-0 flex-1">
                       <input
                         id={`settings-parser-backend-${backend}`}
                         className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
@@ -506,11 +516,15 @@ function OverviewCard({
                         </span>
                       </label>
                     </div>
+                    {backend === "mineru" && roadmap ? <MineruLicenseNotice compact /> : null}
+                    </div>
                   );
                 })}
             </div>
           </div>
-          {/* MinerU の選択肢のすぐ下に、ライセンスの主な条件と確認を出す（#3359）。 */}
+          {/* MinerU の選択肢のすぐ下に、ライセンスの主な条件と確認を出す（#3359）。準備中（ロードマップ）の
+              間は確認の checkbox を出さない（カードの下の短い案内だけ）。 */}
+          {mineruRoadmap ? null : (
           <MineruLicenseNotice
             acknowledgement={settings.mineru_license}
             acknowledge={{
@@ -527,6 +541,7 @@ function OverviewCard({
               onChange: onMineruLicenseChange,
             }}
           />
+          )}
           {form.adapter_backend === "local" ? (
             <p className="text-xs leading-relaxed text-warning-fg">
               {t("settings.parserAdapters.legacyBackendNotice")}
@@ -546,7 +561,7 @@ function OverviewCard({
             </p>
           </div>
           <div className="grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-2">
-            {EXTERNAL_BACKENDS.map((backend) => (
+            {EXTERNAL_BACKENDS.filter((backend) => !roadmapBackends.has(backend)).map((backend) => (
               <ExternalConnectionCard
                 key={backend}
                 backend={backend}
@@ -1005,7 +1020,10 @@ function serializeForm(form: ParserAdapterForm) {
   });
 }
 
-function parserSettingsUpdate(form: ParserAdapterForm): ParserAdapterSettingsUpdate {
+function parserSettingsUpdate(
+  form: ParserAdapterForm,
+  roadmap: ReadonlySet<ParserAdapterBackend>
+): ParserAdapterSettingsUpdate {
   return {
     adapter_backend: form.adapter_backend,
     docling_enabled: form.docling_enabled,
@@ -1015,7 +1033,7 @@ function parserSettingsUpdate(form: ParserAdapterForm): ParserAdapterSettingsUpd
     dots_ocr_enabled: form.dots_ocr_enabled,
     structured_records_jsonl_enabled: form.structured_records_jsonl_enabled,
     xml_tree_json_enabled: form.xml_tree_json_enabled,
-    connections: EXTERNAL_BACKENDS.map((backend) => {
+    connections: EXTERNAL_BACKENDS.filter((backend) => !roadmap.has(backend)).map((backend) => {
       const connection = form.connections[backend];
       return {
         backend,
@@ -1028,9 +1046,13 @@ function parserSettingsUpdate(form: ParserAdapterForm): ParserAdapterSettingsUpd
   };
 }
 
-function validateConnections(form: ParserAdapterForm): ConnectionFieldErrors {
+function validateConnections(
+  form: ParserAdapterForm,
+  roadmap: ReadonlySet<ParserAdapterBackend>
+): ConnectionFieldErrors {
   const errors: ConnectionFieldErrors = {};
   for (const backend of EXTERNAL_BACKENDS) {
+    if (roadmap.has(backend)) continue;
     const connection = form.connections[backend];
     const endpoint = connection.endpoint.trim();
     if (endpoint) {

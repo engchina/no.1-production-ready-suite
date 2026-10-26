@@ -56,6 +56,7 @@ import {
   SECTION_RULES_OPTIONS,
   PARSER_OPTIONS,
   PARSER_VALUES,
+  ROADMAP_PARSER_VALUES,
   PREPROCESS_OPTIONS,
   boolLabel,
   optionLabel,
@@ -186,26 +187,27 @@ export function DocumentProcessingConfigPanel({
     modality: sourceModality,
     preprocessProfile: effectivePreprocessProfile,
   });
-  // MinerU はライセンスの条件を管理者が確認するまで選べない（#3359。backend も 422 で拒否する）。
+  // MinerU は準備中（ロードマップ。#3359）の間は、ほかの準備中のエンジンと同じく灰色の選択肢で出す。
+  // 準備中でなくなったら、ライセンスの条件を system_admin が確認するまで選べない（backend も 422）。
   // 選択中のレシピが MinerU のときは選択肢に残し、主な条件の案内を出す。
+  const mineruRoadmap = ROADMAP_PARSER_VALUES.includes("mineru");
   const mineruLicense = adapterSettingsQuery.data?.mineru_license;
   const mineruAcknowledged = mineruLicense?.acknowledged ?? false;
   const parserOptions = useMemo(
     () =>
-      mineruAcknowledged || form.parser_adapter_backend === "mineru"
+      mineruRoadmap || mineruAcknowledged || form.parser_adapter_backend === "mineru"
         ? PARSER_OPTIONS
         : PARSER_OPTIONS.filter((option) => option.value !== "mineru"),
-    [mineruAcknowledged, form.parser_adapter_backend]
+    [mineruRoadmap, mineruAcknowledged, form.parser_adapter_backend]
   );
-  const parserNotice =
-    effectiveParserBackend === "mineru" ? (
-      <MineruLicenseNotice
-        acknowledgement={mineruLicense}
-        testId={`document-mineru-license-notice-${documentId}`}
-      />
-    ) : adapterSettingsQuery.data && !mineruAcknowledged && form.parser_adapter_backend !== null ? (
-      <p className="text-xs text-fg-muted">{t("mineruLicense.recipeUnacknowledged")}</p>
-    ) : null;
+  const parserNotice = mineruRoadmap ? null : effectiveParserBackend === "mineru" ? (
+    <MineruLicenseNotice
+      acknowledgement={mineruLicense}
+      testId={`document-mineru-license-notice-${documentId}`}
+    />
+  ) : adapterSettingsQuery.data && !mineruAcknowledged && form.parser_adapter_backend !== null ? (
+    <p className="text-xs text-fg-muted">{t("mineruLicense.recipeUnacknowledged")}</p>
+  ) : null;
   const parserHint = parserFormats
     ? t("documents.processingConfig.parserFormats", { formats: parserFormats })
     : null;

@@ -2137,6 +2137,8 @@ export interface HuggingFaceSettingsUpdate {
 // --- 設定: Parser adapter ---
 export interface ParserAdapterStatusData {
   backend: ParserAdapterBackendName;
+  /** roadmap = 準備中（ロードマップ）で、まだ選べない（MinerU。#3359）。省略は available。 */
+  availability?: ServiceAvailability;
   package_name: string;
   import_name: string;
   distribution_name: string | null;
