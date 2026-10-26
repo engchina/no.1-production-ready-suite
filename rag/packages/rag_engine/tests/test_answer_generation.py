@@ -15,12 +15,14 @@ from grounded_stub import AnswerOutput
 from rag_engine.adapters.oracle.store import AdbHybridSearchUnavailable, HybridSearchResult, StoredChunk
 from rag_engine.chunking import ChunkingConfig, create_chunk_run
 from rag_engine.config import get_settings
+from rag_engine.generation.answer_models import DEFAULT_ANSWER_FLOW_LABEL
 from rag_engine.generation.answering import (
     ANSWER_FLOW_DISPLAY_SEPARATOR,
     AUTO_ROUTING_LABEL,
     AUTO_ROUTING_STRATEGY,
     CRAG_ANSWER_FLOW,
     CRAG_ANSWER_FLOW_LABEL,
+    DEFAULT_ANSWER_FLOW,
     HYDE_LABEL,
     HYDE_STRATEGY,
     QUERY_DECOMPOSITION_LABEL,
@@ -44,6 +46,7 @@ from rag_engine.generation.answering import (
     _synthesize_answer_from_context,
     answer_evidence_items,
     answer_flow_id,
+    answer_flow_label,
     answer_image_evidence,
     answer_question,
     answer_question_result,
@@ -1929,11 +1932,12 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertEqual(payload["answer_flow"], CRAG_ANSWER_FLOW)
         self.assertEqual(payload["answer_flow_label"], CRAG_ANSWER_FLOW_LABEL)
 
-    def test_answer_question_result_uses_crag_by_default(self):
+    def test_answer_question_result_uses_standard_rag_by_default(self):
+        """answer_flow を省いた呼び出しは標準 RAG で回答し、CRAG の評価器を呼ばない (#3509)。"""
         settings = get_settings()
         context = _answer_context(
             [
-                _chunk_record("chunk-default", "child", 1, "", "default CRAG evidence"),
+                _chunk_record("chunk-default", "child", 1, "", "default evidence"),
             ]
         )
 
@@ -1947,13 +1951,7 @@ class AnswerGenerationTests(unittest.TestCase):
             patch(
                 "rag_engine.generation.answering.parse_text_response",
                 side_effect=[
-                    _crag_grade(
-                        sufficient=True,
-                        confidence=0.96,
-                        relevant_chunk_ids=["chunk-default"],
-                        reason="根拠が十分",
-                    ),
-                    _answer_output(answer="default crag answer", cited_evidence_id="chunk-default"),
+                    _answer_output(answer="default standard answer", cited_evidence_id="chunk-default"),
                 ],
             ) as parse,
         ):
@@ -1965,14 +1963,21 @@ class AnswerGenerationTests(unittest.TestCase):
                 query_strategy=SIMPLE_RETRIEVAL_LABEL,
             )
 
-        self.assertIn("default crag answer", result.answer)
-        self.assertEqual(result.answer_flow, CRAG_ANSWER_FLOW)
+        self.assertIn("default standard answer", result.answer)
+        self.assertEqual(result.answer_flow, STANDARD_ANSWER_FLOW)
         self.assertEqual(build_context.call_count, 1)
-        self.assertEqual(
-            [call.args[3] for call in parse.call_args_list],
-            [CragRetrievalGradeOutput, AnswerOutput],
-        )
-        self.assertRegex(result.question_display, heading("根拠確認（1回目）"))
+        self.assertEqual([call.args[3] for call in parse.call_args_list], [AnswerOutput])
+        self.assertNotRegex(result.question_display, heading("根拠確認（1回目）"))
+
+    def test_answer_flow_defaults_to_standard_rag(self):
+        """空・不明の値は標準 RAG に正規化し、CRAG は明示したときだけ選ぶ (#3509)。"""
+        self.assertEqual(DEFAULT_ANSWER_FLOW, STANDARD_ANSWER_FLOW)
+        self.assertEqual(DEFAULT_ANSWER_FLOW_LABEL, STANDARD_ANSWER_FLOW_LABEL)
+        for value in (None, "", "unknown-flow"):
+            with self.subTest(value=value):
+                self.assertEqual(answer_flow_id(value), STANDARD_ANSWER_FLOW)
+        self.assertEqual(answer_flow_id("crag"), CRAG_ANSWER_FLOW)
+        self.assertEqual(answer_flow_label("unknown-flow"), STANDARD_ANSWER_FLOW_LABEL)
 
     def test_legacy_crag_strategy_selects_crag_flow_even_when_flow_is_standard(self):
         """flow を分ける前の呼び出し側は strategy で CRAG を指定し、SDK の既定 flow は standard になる (#541)。"""
