@@ -1003,3 +1003,35 @@ test.describe("実行履歴の詳細の幅とテーマ", () => {
     });
   }
 });
+
+// #3422: 章節の階層（section_path）がとても長い根拠でも、根拠のカードの一覧（run-history-citations）が横に
+// スクロールしない。章節のチップはカードの幅で省略（…）し、全文は title で読める。
+test.describe("実行履歴の詳細の長い章節の根拠（#3422）", { tag: "@responsive" }, () => {
+  test("章節の階層が長い根拠のチップはカードの幅で省略し、根拠の一覧が横にスクロールしない", async ({ page }, testInfo) => {
+    const longPath = Array.from({ length: 12 }, (_, index) => `第 ${index + 1} 章 合成の章節の見出し`).join(" > ");
+    await mockLocalAuth(page);
+    await mockRuns(page, [
+      run(1, {
+        citations: [{ ...CITATION, metadata: { section_path: longPath, page_start: 7, page_end: 7 } }],
+      }),
+    ]);
+
+    await page.goto("/history/run-1");
+    const evidence = page.getByTestId("run-history-evidence").getByTestId("answer-citations");
+    await evidence.locator("summary").click();
+    const list = page.getByTestId("run-history-citations");
+    const chip = list.getByTestId("evidence-chips").locator("dd", { hasText: "第 12 章" });
+    await expect(chip).toHaveAttribute("title", longPath);
+    const overflow = await list.evaluate((element) => element.scrollWidth - element.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+    // チップはカードの中に収まり、文字は省略される（全文の幅より狭い）。
+    const [chipBox, cardBox] = await Promise.all([
+      chip.boundingBox(),
+      list.getByTestId("evidence-card").first().boundingBox(),
+    ]);
+    expect(chipBox!.x + chipBox!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width);
+    expect(await chip.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+    await list.getByTestId("evidence-card").first().screenshot({ path: testInfo.outputPath("long-section-path-card.png") });
+    await expectNoPageOverflow(page);
+  });
+});
