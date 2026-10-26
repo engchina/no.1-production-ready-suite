@@ -517,8 +517,8 @@ def test_csv_rows_cite_lines_and_cells_from_ingest_to_locator(strategy: str) -> 
     assert (first["source_line_start"], first["source_line_end"]) == (2, 2)
     # 空の値のセルは入らない。
     assert first["table_cells"] == [
-        {"table_col": "A", "header_path": ["区分"]},
-        {"table_col": "B", "header_path": ["値"]},
+        {"table_col": "A", "header_path": ["区分"], "bbox": None},
+        {"table_col": "B", "header_path": ["値"], "bbox": None},
     ]
     # 引用符の中の改行を含む記録も 1 つの行（記録の番号 3）で、物理行は 3〜4。
     assert (multiline["row_start"], multiline["row_end"], multiline["table_row"]) == (3, 3, 3)
@@ -527,7 +527,7 @@ def test_csv_rows_cite_lines_and_cells_from_ingest_to_locator(strategy: str) -> 
     # 後ろの記録は、記録の番号（4）と物理行（5）がずれる。重複した表頭の列（列名は「値_1」）の
     # 表頭は、原本の文字のまま。
     assert (last["table_row"], last["source_line_start"]) == (4, 5)
-    assert last["table_cells"][2] == {"table_col": "C", "header_path": ["値"]}
+    assert last["table_cells"][2] == {"table_col": "C", "header_path": ["値"], "bbox": None}
     for locator in locators.values():
         assert (locator["sheet_name"], locator["cell_range"], locator["table_index"]) == (
             None,

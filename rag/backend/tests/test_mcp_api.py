@@ -928,9 +928,9 @@ def test_search_evidence_of_a_spreadsheet_row_cites_cells_and_headers(
     assert (locator["row_basis"], locator["table_index"]) == ("sheet", None)
     assert locator["table_row"] == 7
     assert locator["table_cells"] == [
-        {"table_col": "A", "header_path": ["区分"]},
-        {"table_col": "C", "header_path": ["上の段", "下の段"]},
-        {"table_col": "D", "header_path": []},
+        {"table_col": "A", "header_path": ["区分"], "bbox": None},
+        {"table_col": "C", "header_path": ["上の段", "下の段"], "bbox": None},
+        {"table_col": "D", "header_path": [], "bbox": None},
     ]
 
 
@@ -978,9 +978,67 @@ def test_search_evidence_of_a_csv_record_cites_the_record_lines_and_cells(
     )
     assert locator["table_row"] == 4
     assert locator["table_cells"] == [
-        {"table_col": "A", "header_path": ["列 1"]},
-        {"table_col": "C", "header_path": []},
+        {"table_col": "A", "header_path": ["列 1"], "bbox": None},
+        {"table_col": "C", "header_path": [], "bbox": None},
     ]
+
+
+def test_search_evidence_of_a_parsed_table_row_cites_the_parsed_grid(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """解析の表の 1 行は、表の番号・格子の行・セルの表頭の段と領域を返す（#3429）。"""
+    cells = [["A", ["区分"]], ["C", ["上の段", "下の段"], [10.0, 20.0, 30.0, 40.0]]]
+    locator = _locator_of(
+        auth,
+        monkeypatch,
+        content_kind="table",
+        row_basis="parsed_table",
+        table_index=2,
+        table_row_start=3,
+        table_row_end=3,
+        table_row=3,
+        table_cells_json=json.dumps(cells, ensure_ascii=False),
+    )
+    assert (locator["row_basis"], locator["table_index"]) == ("parsed_table", 2)
+    assert (locator["row_start"], locator["row_end"], locator["table_row"]) == (3, 3, 3)
+    assert (locator["sheet_name"], locator["cell_range"], locator["source_line_start"]) == (
+        None,
+        None,
+        None,
+    )
+    assert locator["table_cells"] == [
+        {"table_col": "A", "header_path": ["区分"], "bbox": None},
+        {"table_col": "C", "header_path": ["上の段", "下の段"], "bbox": [10.0, 20.0, 30.0, 40.0]},
+    ]
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        # 表の番号の無い解析の表の行・壊れたセルの領域は、行・セルを作らない。
+        {"row_basis": "parsed_table", "table_row_start": 3, "table_row_end": 3},
+        {
+            "row_basis": "parsed_table",
+            "table_index": 1,
+            "table_row_start": 3,
+            "table_row_end": 3,
+            "table_row": 3,
+            "table_cells_json": json.dumps([["A", [], [1, 2]]]),
+        },
+    ],
+    ids=["no-table-index", "broken-cell-region"],
+)
+def test_search_evidence_of_a_parsed_table_without_a_full_record(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch, metadata: dict[str, object]
+) -> None:
+    locator = _locator_of(auth, monkeypatch, content_kind="table", **metadata)
+    if "table_index" not in metadata:
+        assert (locator["row_basis"], locator["row_start"], locator["table_row"]) == (
+            None,
+            None,
+            None,
+        )
+    assert locator["table_cells"] == []
 
 
 @pytest.mark.parametrize(

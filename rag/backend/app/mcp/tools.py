@@ -81,6 +81,7 @@ from rag_engine.knowledge.runtime_knowledge import (
 )
 from rag_engine.retrieval.entity_expansion import entity_expansion_relevant
 from rag_parser_core.extraction import is_derived_content
+from rag_parser_core.parsed_table import ROW_BASIS_PARSED_TABLE
 from rag_parser_core.sheet_records import (
     ROW_BASIS_CSV,
     ROW_BASIS_KEY,
@@ -295,7 +296,10 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     （table_row・table_cells）、Word の 1 つの表の根拠に表の行の範囲を入れた。根拠に、表の行・
 #     列の対応の検査が読める表か（table_binding）を、rag_search・rag_retrieve_evidence に、失敗して
 #     縮退した任意の補助の処理（degraded_steps）を足した（#3262）。
-MCP_OUTPUT_SCHEMA_VERSION = 35
+# 36: 行の番号の基準に、解析が組み立てた表の格子（parsed_table。PDF・HTML・画像の表。原本の座標では
+#     ない）を足し、その根拠に表の番号・格子の行の範囲、1 つのデータの行の根拠にセルの座標と、
+#     解析が出したときはセルの領域（table_cells の bbox）を入れた（#3429）。
+MCP_OUTPUT_SCHEMA_VERSION = 36
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
 # 値と決め方は pr_backend_core.source_text。#3321）。
 EVIDENCE_TEXT_ITEM_MAX_TOKENS = SOURCE_TEXT_ITEM_MAX_TOKENS
@@ -1133,13 +1137,15 @@ class ExcerptRange(BaseModel):
     end: int
 
 
-RowBasis = Literal["sheet", "csv", "word_table"]
+RowBasis = Literal["sheet", "csv", "word_table", "parsed_table"]
 ROW_BASIS_DESCRIPTION = (
     "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の"
     "記録の番号〔RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から数える。表計算の"
     "ソフトで開いたときの行〕/ word_table=Word の table_index の表の行。表頭の行も数え、大きい表を"
-    "分けた部分は先頭に繰り返した表頭を数えない）。原本の行の位置が分からない根拠（PDF・HTML・"
-    "画像の表など）は null。"
+    "分けた部分は先頭に繰り返した表頭を数えない / parsed_table=解析が PDF・HTML・画像の表から"
+    "組み立てた table_index の表の格子の行。原本の座標ではなく、解析し直すと変わることがある。"
+    "表頭の行も数え〔表頭が 2 段なら最初のデータの行は 3〕、分けた部分は先頭に繰り返した表頭を"
+    "数えない）。行の位置が分からない根拠（解析が表の格子を出さなかった表など）は null。"
 )
 SOURCE_LINE_START_DESCRIPTION = (
     "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録は"
@@ -1147,8 +1153,8 @@ SOURCE_LINE_START_DESCRIPTION = (
 )
 SOURCE_LINE_END_DESCRIPTION = "原本のテキストの終了の物理行（row_basis=csv だけ）。"
 TABLE_INDEX_DESCRIPTION = (
-    "表の番号（1 始まり。row_basis=word_table は本文の表の順、sheet は 1 シートを複数の表に"
-    "分けたときの表の順）。無ければ null。"
+    "表の番号（1 始まり。row_basis=word_table は本文の表の順、parsed_table は文書の中の表の順、"
+    "sheet は 1 シートを複数の表に分けたときの表の順）。無ければ null。"
 )
 
 
@@ -1252,10 +1258,19 @@ class EvidenceTableCell(BaseModel):
     """表の 1 行の根拠の、値のあるセル（セルの座標は table_row と table_col）。"""
 
     table_col: str = Field(
-        description="原本の列（表計算の列の記号。例: B。CSV は列の位置を同じ記号で示す）。"
+        description=(
+            "列（表計算の列の記号。例: B。CSV・parsed_table は列の位置を同じ記号で示し、"
+            "結合したセルは左の列）。"
+        )
     )
     header_path: list[str] = Field(
         description="列の表頭（複数段の表頭は上の段から。表頭の文字の無い列は空）。"
+    )
+    bbox: list[float] | None = Field(
+        default=None,
+        description=(
+            "セルの領域 [x0, y0, x1, y1]（locator の bbox と同じ頁・座標。解析が出したときだけ）。"
+        ),
     )
 
 
@@ -1299,9 +1314,9 @@ class EvidenceLocator(BaseModel):
     table_row: int | None = Field(
         default=None,
         description=(
-            "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 記録）のとき、その行の"
-            "番号（row_basis の番号）。複数行の根拠・行の番号を原本で決められない表（PDF・HTML・"
-            "画像・Word）は null。"
+            "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 記録・解析の表の 1 行）の"
+            "とき、その行の番号（row_basis の番号）。複数のデータの行の根拠・Word の表・行の位置が"
+            "分からない表は null。"
         ),
     )
     table_cells: list[EvidenceTableCell] = Field(
@@ -2327,14 +2342,18 @@ def _table_cells(metadata: dict[str, Any]) -> list[EvidenceTableCell]:
         return []
     cells: list[EvidenceTableCell] = []
     for item in items if isinstance(items, list) else []:
-        if not isinstance(item, list) or len(item) != 2:
+        # [列, 表頭の段] か、解析の表のセルの領域つきの [列, 表頭の段, bbox]（#3429）。
+        if not isinstance(item, list) or len(item) not in {2, 3}:
             return []
-        column, path = item
+        column, path = item[0], item[1]
         if not isinstance(column, str) or not column or not isinstance(path, list):
             return []
         if not all(isinstance(part, str) for part in path):
             return []
-        cells.append(EvidenceTableCell(table_col=column, header_path=path))
+        bbox = bbox_numbers(item[2]) if len(item) == 3 else None
+        if len(item) == 3 and bbox is None:
+            return []
+        cells.append(EvidenceTableCell(table_col=column, header_path=path, bbox=bbox))
     return cells
 
 
@@ -2346,7 +2365,8 @@ def _table_rows(
     表計算はシート名があれば、CSV は表頭の行（``csv_header_row``）があれば、基準を記録する前の
     chunk でも基準が決まる。CSV の行は記録の番号（RFC 7111 の行）で、記録の番号を記録する前の
     chunk は行を返さない（物理行は ``_source_lines``）。Word は 1 つの表だけを含むまとまりで取込が
-    記録したときだけ。
+    記録したときだけ。解析の表の格子（parsed_table。#3429）も、取込が格子と本文の行を対応させて
+    記録したときだけ（``rag_parser_core.parsed_table``）。
     """
     basis = _metadata_str(metadata, ROW_BASIS_KEY)
     if sheet_name:
@@ -2364,13 +2384,13 @@ def _table_rows(
         if start is None or end is None or end < start:
             return ROW_BASIS_CSV, None, None, None
         return ROW_BASIS_CSV, None, start, end
-    if basis == ROW_BASIS_WORD_TABLE:
+    if basis in {ROW_BASIS_WORD_TABLE, ROW_BASIS_PARSED_TABLE}:
         table_index = _metadata_int(metadata, TABLE_INDEX_KEY)
         start = _metadata_int(metadata, TABLE_ROW_START_KEY)
         end = _metadata_int(metadata, TABLE_ROW_END_KEY)
         if table_index is None or start is None or end is None or end < start:
             return None
-        return ROW_BASIS_WORD_TABLE, table_index, start, end
+        return cast("RowBasis", basis), table_index, start, end
     return None
 
 
@@ -2402,7 +2422,7 @@ def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
     # セルの座標は表計算・CSV の 1 行の記録だけが持つ（取込で記録したときだけ。推測しない）。
     table_row = (
         _metadata_int(metadata, TABLE_ROW_KEY)
-        if basis in {ROW_BASIS_SHEET, ROW_BASIS_CSV}
+        if basis in {ROW_BASIS_SHEET, ROW_BASIS_CSV, ROW_BASIS_PARSED_TABLE}
         else None
     )
     return EvidenceLocator(

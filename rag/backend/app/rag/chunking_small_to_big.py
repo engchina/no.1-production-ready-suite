@@ -34,6 +34,7 @@ from rag_parser_core.extraction import (
     is_derived_content,
     strip_formatting_marks,
 )
+from rag_parser_core.parsed_table import ParsedCell, ParsedTableGrid, grid_rows_metadata
 from rag_parser_core.sheet_records import SHEET_RECORD_CONTENT_KIND
 from rag_parser_core.structured_records import has_record_boundaries
 from rag_parser_core.xml_tree_json import is_xml_tree_json_extraction
@@ -210,8 +211,9 @@ def build_parent_child_chunks(
     page_sizes = {
         int(page.get("page") or 0): (page.get("width"), page.get("height")) for page in pages
     }
+    tables = _layout_tables(records)
     backend_chunks = [
-        _backend_chunk(child, index, parents.get(child.parent_chunk_id), page_sizes)
+        _backend_chunk(child, index, parents.get(child.parent_chunk_id), page_sizes, tables)
         for index, child in enumerate(children)
     ]
     # rag_engine は子ごとに同じ 1 ページ目の本文を document に持たせるので、先頭の子から
@@ -683,6 +685,7 @@ def _backend_chunk(
     index: int,
     parent: DocumentChunk | None,
     page_sizes: Mapping[int, tuple[object, object]],
+    tables: Mapping[str, tuple[int, ParsedTableGrid]] | None = None,
 ) -> Chunk:
     metadata = child.metadata
     section_path = [str(part) for part in metadata.get("section_path") or [] if str(part)]
@@ -738,8 +741,137 @@ def _backend_chunk(
             ),
             "source_seq_ranges_json": json.dumps(child.source_seq_ranges, default=str),
             "engine_chunk_seq": child.chunk_seq,
+            # 解析の表の格子の行（row_basis=parsed_table。#3429）。表の子だけに付ける。
+            **(
+                _layout_table_locator(child.source_record_refs, tables)
+                if content_kind == "table" and tables
+                else {}
+            ),
         },
     )
+
+
+def _layout_tables(records: list[dict[str, Any]]) -> dict[str, tuple[int, ParsedTableGrid]]:
+    """layout_records の表の record の id → (文書の中の表の番号, 解析の表の格子)(#3429)。
+
+    格子は分割(``rag_engine`` の表の行のまとまり)と同じ読み方(``parse_html_table_structure``)で
+    表の HTML から作り、行の番号を行のまとまりの ``row_start`` / ``row_end`` とそろえる。番号は
+    頁と読み順の順で、頁をまたいで続く表(``raw.continues_record_id``)は前の表と同じ番号にする。
+    格子を作らない表: HTML でない表・Vision などで書き直した表(``table_enhanced_html``)・頁を
+    またいで続く表(格子が頁ごとに分かれ、表全体の行の番号が決まらない)。
+    """
+    from rag_engine.parsing.table_structure import parse_html_table_structure
+
+    ordered = sorted(
+        (
+            record
+            for record in records
+            if str(record.get("category") or "") == "Table"
+            and str(record.get("raw_type") or "") != "table_unassigned_text"
+            and str(record.get("text") or "").strip()
+        ),
+        key=lambda record: (int(record.get("page") or 0), int(record.get("seq_no") or 0)),
+    )
+    continued = {_raw(record).get("continues_record_id") for record in ordered} - {None, ""}
+    numbers: dict[str, int] = {}
+    tables: dict[str, tuple[int, ParsedTableGrid]] = {}
+    for record in ordered:
+        record_id = str(record.get("id") or "")
+        raw = _raw(record)
+        previous = str(raw.get("continues_record_id") or "")
+        numbers[record_id] = numbers.get(previous) or len(set(numbers.values())) + 1
+        text = str(record.get("text") or "")
+        if previous or record_id in continued or raw.get("table_enhanced_html"):
+            continue
+        if "<table" not in text.casefold():
+            continue
+        grid = _layout_table_grid(parse_html_table_structure(text), raw)
+        if grid is not None:
+            tables[record_id] = (numbers[record_id], grid)
+    return tables
+
+
+def _layout_table_grid(
+    structure: Mapping[str, Any], raw: Mapping[str, Any]
+) -> ParsedTableGrid | None:
+    """``parse_html_table_structure`` の行・セル(1 始まり)を格子にする。
+
+    セルの領域は Docling が出した値(``raw.table_cell_bboxes``)。
+    """
+    boxes = {
+        (entry.get("row"), entry.get("col")): entry.get("bbox")
+        for entry in _items(raw.get("table_cell_bboxes"))
+        if isinstance(entry, Mapping)
+    }
+    cells: list[ParsedCell] = []
+    for row in _items(structure.get("rows")):
+        for cell in _items(row.get("cells") if isinstance(row, Mapping) else None):
+            if not isinstance(cell, Mapping):
+                continue
+            row_index, col_index = (
+                int(cell.get("row_index") or 0),
+                int(cell.get("column_index") or 0),
+            )
+            if row_index < 1 or col_index < 1:
+                return None
+            box = boxes.get((row_index - 1, col_index - 1))
+            cells.append(
+                ParsedCell(
+                    row=row_index,
+                    col=col_index,
+                    text=str(cell.get("text") or ""),
+                    row_span=max(1, int(cell.get("rowspan") or 1)),
+                    col_span=max(1, int(cell.get("colspan") or 1)),
+                    header=cell.get("is_header") is True,
+                    bbox=_cell_bbox(box),
+                )
+            )
+    return ParsedTableGrid.build(cells)
+
+
+def _layout_table_locator(
+    refs: object, tables: Mapping[str, tuple[int, ParsedTableGrid]]
+) -> dict[str, str | int]:
+    """表の子が行として含む解析の表の格子の行(表の行のまとまりはその範囲、表全体は全行)。
+
+    1 つの表だけを含む子にだけ付ける。行のまとまりの ``row_start`` / ``row_end`` はデータの行で、
+    先頭に付く列見出しは行として含まないので数えない。
+    """
+    table_refs = [
+        ref
+        for ref in _items(refs)
+        if isinstance(ref, Mapping)
+        and str(ref.get("category") or "") == "Table"
+        and str(ref.get("raw_type") or "") != "table_unassigned_text"
+    ]
+    if len(table_refs) != 1:
+        return {}
+    ref = table_refs[0]
+    table = tables.get(str(ref.get("source_table_record_id") or ref.get("record_id") or ""))
+    if table is None:
+        return {}
+    table_index, grid = table
+    group = ref.get("table_row_group")
+    if isinstance(group, Mapping):
+        start, end = int(group.get("row_start") or 0), int(group.get("row_end") or 0)
+        if start < 1 or end < start:
+            return {}
+        return grid_rows_metadata(grid, table_index, range(start, end + 1))
+    return grid_rows_metadata(grid, table_index, range(1, grid.row_count + 1))
+
+
+def _cell_bbox(value: object) -> tuple[float, float, float, float] | None:
+    if not isinstance(value, list) or len(value) != 4:
+        return None
+    if not all(isinstance(item, int | float) and not isinstance(item, bool) for item in value):
+        return None
+    x0, y0, x1, y1 = (float(item) for item in value)
+    return (x0, y0, x1, y1)
+
+
+def _raw(record: Mapping[str, Any]) -> Mapping[str, Any]:
+    raw = record.get("raw")
+    return raw if isinstance(raw, Mapping) else {}
 
 
 def _without_first_page_context(metadata: Mapping[str, Any]) -> Mapping[str, Any]:

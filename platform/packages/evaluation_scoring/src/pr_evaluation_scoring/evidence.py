@@ -4,6 +4,11 @@
 あれば、その根拠を取れたとみなす。chunk の場所は RAG の `EvidenceLocator` と同じ名前の項目
 （`page_start` / `page_end` / `page_number` / `sheet_name` / `row_start` / `row_end` /
 `section_path`）で受け取る（RAG の chunk の metadata と、Agent の観測の `locator` が同じ名前）。
+
+行の条件は、同じ行の番号の基準（`row_basis`）の中だけで照合する（#3429）。評価セットの行は原本の
+行（表計算のシート・CSV の記録・Word の表）なので、解析が組み立てた表の格子の行
+（`row_basis=parsed_table`。原本の座標ではない）には一致させない。条件が基準（`row_basis`）を持つ
+ときは、同じ基準の chunk だけに一致させる。
 """
 
 from __future__ import annotations
@@ -63,8 +68,11 @@ def location_matches(
         criteria.sheet
     ):
         return False
-    if criteria.row_start is not None and not _ranges_overlap(
-        _chunk_range(locator, "row_start", "row_end"), criteria.row_start, criteria.row_end
+    if criteria.row_start is not None and not (
+        _row_basis_matches(criteria, locator)
+        and _ranges_overlap(
+            _chunk_range(locator, "row_start", "row_end"), criteria.row_start, criteria.row_end
+        )
     ):
         return False
     # 章節の見出しの道筋は、値の文字列の形（RAG の chunk の metadata と同じ）で照合する。
@@ -94,6 +102,21 @@ def evidence_matches(
     if not location_matches(criteria, document_id=document_id, locator=locator):
         return False
     return criteria.text is None or text_matches(text, criteria.text)
+
+
+# 解析が組み立てた表の格子の行の基準（RAG の `EvidenceLocator.row_basis`）。
+PARSED_TABLE_ROW_BASIS = "parsed_table"
+
+
+def _row_basis_matches(criteria: EvidenceCriteria, locator: Mapping[str, object]) -> bool:
+    """行の番号の基準が同じか（基準を書かない条件の行は原本の行で、解析の表の行と比べない）。"""
+    found = locator.get("row_basis")
+    if not isinstance(found, str) or not found:
+        found = "sheet" if locator.get("sheet_name") else None
+    expected = getattr(criteria, "row_basis", None)
+    if isinstance(expected, str) and expected:
+        return found == expected
+    return found != PARSED_TABLE_ROW_BASIS
 
 
 def _ranges_overlap(found: tuple[int, int] | None, start: int, end: int | None) -> bool:

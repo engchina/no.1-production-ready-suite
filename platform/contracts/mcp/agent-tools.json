@@ -1994,7 +1994,8 @@
                     "enum": [
                       "sheet",
                       "csv",
-                      "word_table"
+                      "word_table",
+                      "parsed_table"
                     ],
                     "type": "string"
                   },
@@ -2323,7 +2324,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 3,
+            "default": 4,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

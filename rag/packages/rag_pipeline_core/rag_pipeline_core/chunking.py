@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from rag_parser_core.extraction import (
@@ -18,6 +19,7 @@ from rag_parser_core.extraction import (
     numbered_heading,
 )
 from rag_parser_core.language.text import text_patterns
+from rag_parser_core.parsed_table import ParsedTableBinding, parsed_table_bindings
 from rag_parser_core.sheet_records import TABLE_LOCATOR_METADATA_KEYS
 from rag_parser_core.structured_records import (
     JSONL_RECORD_BOUNDARY,
@@ -135,6 +137,8 @@ class _ElementSpan:
     provenance_metadata: tuple[tuple[str, str | int | float | bool], ...] = ()
     # 表の 1 行の記録のセルの座標（``TABLE_LOCATOR_METADATA_KEYS``。#3262）。
     table_locator_metadata: tuple[tuple[str, str | int], ...] = ()
+    # 解析の表の格子と要素の本文の行の対応（``row_basis=parsed_table``。#3429）。
+    parsed_table: ParsedTableBinding | None = None
 
     @property
     def xml_tree_citation_label(self) -> str | None:
@@ -272,7 +276,7 @@ def chunk_extraction(
     table_size = table_chunk_size or chunk_size
     spans = [
         span
-        for span in _element_spans(extraction.elements)
+        for span in _element_spans(extraction.elements, parsed_table_bindings(extraction))
         if span.kind not in NON_INDEXED_ELEMENT_KINDS
     ]
     if not spans:
@@ -707,7 +711,7 @@ def _chunk_page_level(
     """PageIndex 風にページ単位で 1 chunk にまとめる。無ページ文書は章節へ fallback する。"""
     spans = [
         span
-        for span in _element_spans(extraction.elements)
+        for span in _element_spans(extraction.elements, parsed_table_bindings(extraction))
         if span.kind not in NON_INDEXED_ELEMENT_KINDS
     ]
     if not spans:
@@ -923,8 +927,14 @@ def _chunk_normalized_text(
     return _apply_overlap(chunks, overlap) if overlap and len(chunks) > 1 else chunks
 
 
-def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
-    """DocumentElement を offset / section metadata 付き span に変換する。"""
+def _element_spans(
+    elements: list[DocumentElement],
+    parsed_tables: Mapping[str, ParsedTableBinding] | None = None,
+) -> list[_ElementSpan]:
+    """DocumentElement を offset / section metadata 付き span に変換する。
+
+    ``parsed_tables`` は表の要素（``element_id``）ごとの解析の表の格子の対応（#3429）。
+    """
     spans: list[_ElementSpan] = []
     cursor = 0
     for element in elements:
@@ -1038,6 +1048,9 @@ def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
                     if isinstance(value := element.metadata.get(key), str | int)
                     and not isinstance(value, bool)
                 ),
+                parsed_table=(parsed_tables or {}).get(element.element_id or "")
+                if content_kind == "table"
+                else None,
             )
         )
     return spans
@@ -1411,6 +1424,8 @@ def _chunk_table_span(
         metadata["source_chunk_template"] = source_template
     metadata["chunk_template"] = TABLE_PRESERVE_ROWS_TEMPLATE
     if len(span.text) <= chunk_size:
+        if span.parsed_table is not None:
+            metadata.update(span.parsed_table.chunk_metadata(span.text))
         return _with_chunk_group_metadata(
             [
                 Chunk(
@@ -1430,6 +1445,7 @@ def _chunk_table_span(
             start_index=start_index,
             start_offset=span.start_offset,
             metadata=metadata,
+            parsed_table=span.parsed_table,
         ),
         group_kind="table",
         group_text=span.text,
@@ -1539,8 +1555,13 @@ def _chunks_from_table_parts(
     start_index: int,
     start_offset: int,
     metadata: ChunkMetadata,
+    parsed_table: ParsedTableBinding | None = None,
 ) -> list[Chunk]:
-    """表の行グループ分割結果を Chunk にする。"""
+    """表の行グループ分割結果を Chunk にする。
+
+    ``parsed_table`` があれば、各部分が行として含む解析の表の格子の行を付ける（#3429）。部分の
+    データの行 d は要素の本文の d 番目の行（0 番目は表頭）で、表頭を繰り返した部分は表頭を数えない。
+    """
     chunks: list[Chunk] = []
     cursor = start_offset
     for part in parts:
@@ -1552,6 +1573,14 @@ def _chunks_from_table_parts(
         if part.row_end is not None:
             part_metadata["table_data_row_end"] = part.row_end
         part_metadata["table_header_repeated"] = part.header_repeated
+        if parsed_table is not None and part.row_start is not None:
+            part_metadata.update(
+                parsed_table.chunk_metadata(
+                    part.text,
+                    first_text_row=part.row_start if part.header_repeated else 0,
+                    header_repeated=part.header_repeated,
+                )
+            )
         chunks.append(
             Chunk(
                 text=part.text,

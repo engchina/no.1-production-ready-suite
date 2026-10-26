@@ -89,11 +89,13 @@ def test_run_observation_uses_the_names_of_the_rag_contract() -> None:
     for field, schema in locator.items():
         assert schema.get("type") == rag_locator[field].get("type"), field
         assert schema.get("anyOf") == rag_locator[field].get("anyOf"), field
-    # 表のセルの座標（#3262）: RAG の EvidenceTableCell と同じ名前・型で写す。
+    # 表のセルの座標（#3262）: RAG の EvidenceTableCell と同じ名前・型で写す（場所と同じく、セルの
+    # 領域の bbox は写さない。#3429）。
     assert {"table_row", "table_cells"} <= set(locator)
     rag_cell = rag["$defs"]["EvidenceTableCell"]
     cell = observation["$defs"]["ObservedTableCell"]
-    assert set(cell["properties"]) == set(rag_cell["properties"])
+    assert "bbox" in rag_cell["properties"]
+    assert set(cell["properties"]) == set(rag_cell["properties"]) - {"bbox"}
     assert set(cell["required"]) == set(rag_cell["required"])
     for field, schema in cell["properties"].items():
         assert schema.get("type") == rag_cell["properties"][field].get("type"), field

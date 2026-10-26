@@ -216,3 +216,67 @@ def png(size: tuple[int, int] = (200, 100), color: tuple[int, int, int] = (255, 
     buffer = io.BytesIO()
     Image.new("RGB", size, color).save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+# 多段の表頭と結合セルを含む合成の表（#3429）。表頭は 2 段（「Group」「Item」は 2 段を結合、「H1」
+# 「H2」は 2 列を結合）、本文の「Group」は 2 行ずつ結合する。値は合成の数。
+MERGED_HEADER_TABLE_ROWS: tuple[tuple[str, ...], ...] = (
+    ("Group", "Item", "H1", "", "H2", ""),
+    ("", "", "Plan", "Actual", "Plan", "Actual"),
+    ("G1", "Alpha", "110", "105", "120", "118"),
+    ("", "Beta", "210", "198", "220", "231"),
+    ("G2", "Gamma", "310", "322", "330", "301"),
+    ("", "Delta", "410", "407", "420", "415"),
+)
+# reportlab の SPAN の (列, 行) の範囲。
+MERGED_HEADER_TABLE_SPANS: tuple[tuple[tuple[int, int], tuple[int, int]], ...] = (
+    ((0, 0), (0, 1)),
+    ((1, 0), (1, 1)),
+    ((2, 0), (3, 0)),
+    ((4, 0), (5, 0)),
+    ((0, 2), (0, 3)),
+    ((0, 4), (0, 5)),
+)
+
+
+def merged_header_table_pdf() -> bytes:
+    """``MERGED_HEADER_TABLE_ROWS`` の表を罫線つきで 1 頁に描いた PDF。
+
+    同じ入力からは同じバイト列を作る（``invariant``）。
+    """
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet  # type: ignore[import-untyped]
+    from reportlab.platypus import (  # type: ignore[import-untyped]
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
+
+    buffer = io.BytesIO()
+    document = SimpleDocTemplate(buffer, pagesize=A4, invariant=1, title="Synthetic table")
+    style = TableStyle(
+        [
+            ("GRID", (0, 0), (-1, -1), 0.8, colors.black),
+            ("FONTNAME", (0, 0), (-1, 1), "Helvetica-Bold"),
+            ("FONTNAME", (0, 2), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 11),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            *(("SPAN", start, end) for start, end in MERGED_HEADER_TABLE_SPANS),
+        ]
+    )
+    table = Table([list(row) for row in MERGED_HEADER_TABLE_ROWS], colWidths=72, rowHeights=24)
+    table.setStyle(style)
+    styles = getSampleStyleSheet()
+    document.build(
+        [
+            Paragraph("Synthetic quarterly table", styles["Heading2"]),
+            Spacer(1, 12),
+            table,
+            Spacer(1, 12),
+            Paragraph("The values in this table are synthetic.", styles["BodyText"]),
+        ]
+    )
+    return buffer.getvalue()

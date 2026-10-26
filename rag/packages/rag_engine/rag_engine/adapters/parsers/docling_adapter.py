@@ -10,6 +10,7 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+from rag_parser_core.extraction import ExtractionTableCell
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.markers import marker_patterns
 
@@ -203,6 +204,9 @@ class DoclingAdapter:
                 repairs = _repair_table_cells(item, table_lines)
                 if repairs:
                     item["table_cell_repairs"] = repairs
+                cell_bboxes = _table_cell_bboxes(item, provenances, page_lookup)
+                if cell_bboxes:
+                    item[TABLE_CELL_BBOXES_KEY] = cell_bboxes
             text = _item_text(item, category, table_html_by_ref or {})
             # ページまたぎ等で prov が複数ある item は、全文を prov ごとに複製すると
             # チャンクと検索結果が重複する。charspan で分割できなければ最初の 1 件だけに持たせる。
@@ -500,6 +504,70 @@ def _table_native_lines(
         except Exception:
             return []
     return []
+
+
+# 表のセルの領域（record の bbox と同じ画像の座標）。{"row", "col", "bbox"}（行・列は Docling の格子の
+# 0 始まりの左上）の並び。根拠の場所の解析の表のセルの領域に使う（#3429）。
+TABLE_CELL_BBOXES_KEY = "table_cell_bboxes"
+
+
+def _table_cell_bboxes(item: dict[str, Any], provenances: Sequence[dict[str, Any]], page_lookup: dict[int, Any]) -> list[dict[str, Any]]:
+    """Docling の表のセルの bbox を、record の bbox と同じ画像の座標にする。
+
+    1 頁だけの表のときだけ作る（頁をまたぐ表のセルは、どの頁の座標か Docling の出力から決まらない）。
+    """
+    pages = {int(entry.get("page_no") or entry.get("pageNo") or 0) for entry in provenances}
+    page = page_lookup.get(next(iter(pages))) if len(pages) == 1 else None
+    if page is None:
+        return []
+    boxes: list[dict[str, Any]] = []
+    for cell in (item.get("data") or {}).get("table_cells") or []:
+        if not isinstance(cell, dict) or not isinstance(cell.get("bbox"), dict):
+            continue
+        row = _nonnegative_int(cell.get("start_row_offset_idx"))
+        col = _nonnegative_int(cell.get("start_col_offset_idx"))
+        bbox = _docling_bbox_to_image(cell["bbox"], page)
+        if row is None or col is None or not bbox or bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+            continue
+        boxes.append({"row": row, "col": col, "bbox": [round(float(value), 2) for value in bbox]})
+    return boxes
+
+
+def docling_table_cells(item: dict[str, Any]) -> list[ExtractionTableCell] | None:
+    """Docling の表の格子（``data.table_cells``）を共通抽出の表のセルにする（#3429）。
+
+    結合セルは左上の 1 つ（行・列は 0 始まり、span は end - start）。列の見出し・行の見出しの印
+    （``column_header`` / ``row_header``）と、1 頁の表のセルの領域（``TABLE_CELL_BBOXES_KEY``。record の
+    bbox と同じ座標）を持つ。位置の無いセル・同じ位置のセルがあれば、格子として読まないので None。
+    """
+    data = item.get("data") if isinstance(item.get("data"), dict) else {}
+    boxes = {
+        (entry.get("row"), entry.get("col")): entry.get("bbox")
+        for entry in item.get(TABLE_CELL_BBOXES_KEY) or []
+        if isinstance(entry, dict)
+    }
+    cells: list[ExtractionTableCell] = []
+    starts: set[tuple[int, int]] = set()
+    for cell in data.get("table_cells") or []:
+        if not isinstance(cell, dict):
+            return None
+        row, col = _nonnegative_int(cell.get("start_row_offset_idx")), _nonnegative_int(cell.get("start_col_offset_idx"))
+        if row is None or col is None or (row, col) in starts:
+            return None
+        starts.add((row, col))
+        end_row, end_col = _nonnegative_int(cell.get("end_row_offset_idx")), _nonnegative_int(cell.get("end_col_offset_idx"))
+        cells.append(
+            ExtractionTableCell(
+                row=row,
+                col=col,
+                text=str(cell.get("text") or ""),
+                row_span=max(1, (end_row - row) if end_row is not None else 1),
+                col_span=max(1, (end_col - col) if end_col is not None else 1),
+                bbox=boxes.get((row, col)),
+                metadata={key: True for key in ("column_header", "row_header") if cell.get(key) is True},
+            )
+        )
+    return cells or None
 
 
 def _table_grid_rows(item: dict[str, Any]) -> list[list[tuple[str, bool]]]:

@@ -38,8 +38,9 @@ TARGET_KIND = "rag_mcp"
 # RAG の経路の規則の版（rag_v1: 公開の rag_search の出力だけで採点する最初の版。#3417）。
 RULES_VERSION = "rag_v1"
 TOOL = "rag_search"
-# 読める出力の版（契約 rag-tools.json の rag_search の schema_version）。
-RAG_SEARCH_SCHEMA_VERSION = 35
+# 読める出力の版（契約 rag-tools.json の rag_search の schema_version。#3429 で行の番号の基準に
+# 解析の表の格子の parsed_table を足して 36）。
+RAG_SEARCH_SCHEMA_VERSION = 36
 # 返す根拠の上限（契約の evidence_limit の maximum）。
 DEFAULT_EVIDENCE_LIMIT = 50
 MAX_EVIDENCE_LIMIT = 50

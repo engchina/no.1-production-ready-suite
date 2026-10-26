@@ -76,8 +76,9 @@ LOCATOR_FIELDS = (
     "table_row",
     "table_cells",
 )
-# 行の番号の基準（RAG の `EvidenceLocator.row_basis`）。知らない値は写さない。
-ROW_BASES = frozenset({"sheet", "csv", "word_table"})
+# 行の番号の基準（RAG の `EvidenceLocator.row_basis`）。知らない値は写さない。parsed_table は解析が
+# 組み立てた表の格子の行（原本の座標ではない。#3429）。
+ROW_BASES = frozenset({"sheet", "csv", "word_table", "parsed_table"})
 # 失敗の分類として出してよい形（外部の MCP の結果の任意の文を分類として写さない）。
 _ERROR_CODE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _OTHER_ERROR_CODE = "tool_error"
