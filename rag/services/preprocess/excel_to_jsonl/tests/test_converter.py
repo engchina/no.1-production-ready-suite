@@ -23,6 +23,7 @@ from rag_parser_core.structured_records import (
     SheetLine,
     StructuredRecordsDocument,
     parse_structured_records,
+    structured_records_extraction,
     structured_records_to_sheet_records,
 )
 
@@ -62,8 +63,13 @@ def _loaded(derived: bytes) -> dict[str, Any]:
     )
     # 表・手順書の記録には帳票の項目の欄（#2516・#2526）を比べない。図形の文字の無い記録には
     # 図形のセル範囲（#2526）を比べない。
+    # 表の下の注記（#3566）の無いシート・行には注記の欄を比べない。
     for sheet in payload["sheets"]:
+        if not sheet["notes"]:
+            sheet.pop("notes")
         for block in sheet["blocks"]:
+            if not block["notes"]:
+                block.pop("notes")
             if block["kind"] != "form_field":
                 for key in ("label", "value", "label_cell", "value_cell", "value_original"):
                     block.pop(key)
@@ -78,7 +84,7 @@ def _payload(source: bytes, **options: Any) -> dict[str, Any]:
     assert outcome.converted is True, outcome.warnings
     assert outcome.derived_bytes is not None
     assert outcome.derived_content_type == STRUCTURED_RECORDS_CONTENT_TYPE
-    assert outcome.converter_version == "v8"
+    assert outcome.converter_version == "v9"
     return _loaded(outcome.derived_bytes)
 
 
@@ -790,3 +796,71 @@ def test_macro_enabled_workbook_is_read_without_macros() -> None:
     assert b"synthetic-macro" not in (outcome.derived_bytes or b"")
     loaded = _loaded(outcome.derived_bytes)
     assert loaded["sheets"][0]["blocks"][0]["values"] == {"名前": "行 A", "値": "1"}
+
+
+def test_note_rows_below_a_table_become_note_records_not_a_new_table() -> None:
+    """表の下の注記の行を別の表・表頭にせず、注記の記録にする（#3566）。データは合成。
+
+    表は A1:C4、空の行を挟んで A6・A7 に注記を 1 つずつ置く。注記の印をセルに含む行の記録は、
+    その注記の文を本文に含める（1 行 = 1 記録）。
+    """
+    note_1 = "※1 合成の注記の一つ目で、表の値の条件を説明する文です。"
+    note_2 = "※2 合成の注記の二つ目の文です。"
+    outcome = convert(
+        _xlsx_bytes(
+            {
+                "表": [
+                    ["項目", "値", "区分"],
+                    ["項目A", "10※1", "甲"],
+                    ["項目B", "20", "乙"],
+                    ["項目C", "30", "丙"],
+                    [],
+                    [note_1],
+                    [note_2],
+                ]
+            }
+        ),
+        "",
+        "excel_to_jsonl",
+        None,
+    )
+    assert outcome.converted is True and outcome.derived_bytes is not None
+    raw = [json.loads(line) for line in outcome.derived_bytes.decode("utf-8").splitlines()]
+    assert [item["record_type"] for item in raw] == [
+        "document",
+        "sheet",
+        "row",
+        "row",
+        "row",
+        "note",
+        "note",
+    ]
+    sheet = raw[1]
+    assert sheet["header_row"] == 1
+    assert [column["name"] for column in sheet["columns"]] == ["項目", "値", "区分"]
+    assert all(note_1 not in str(column) for column in sheet["columns"])
+    assert [(item["record_id"], item["text"], item["marker"]) for item in raw[5:]] == [
+        ("sheet-000-r6", note_1, "※1"),
+        ("sheet-000-r7", note_2, "※2"),
+    ]
+    assert raw[5]["location"] == {"row_start": 6, "row_end": 6, "cell_range": "A6:A6"}
+    assert raw[2]["notes"] == [note_1]
+    assert "notes" not in raw[3]
+
+    # JSONL から戻した記録と要素: 注記は文の要素、注記の印のある行の本文は注記を含む。
+    loaded = _loaded(outcome.derived_bytes)
+    assert [note["text"] for note in _sheet(loaded)["notes"]] == [note_1, note_2]
+    extraction = structured_records_extraction(
+        _records(outcome.derived_bytes),
+        source_parser="test",
+        parser_backend="test",
+        parser_version="0",
+    )
+    by_id = {element.element_id: element for element in extraction.elements}
+    assert by_id["sheet-000-r2"].text == f"項目: 項目A / 値: 10※1 / 区分: 甲\n{note_1}"
+    assert by_id["sheet-000-r3"].text == "項目: 項目B / 値: 20 / 区分: 乙"
+    note = by_id["sheet-000-r6"]
+    assert note.text == note_1
+    assert note.content_kind == "text"
+    assert note.metadata["sheet_block_kind"] == "note"
+    assert note.metadata["structured_record_id"] == "sheet-000-r6"
