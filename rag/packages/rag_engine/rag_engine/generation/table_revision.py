@@ -62,18 +62,21 @@ class RevisedPassage:
 ParseText = Callable[[str, str, type[BaseModel]], BaseModel]
 
 
-def revise_table_passage(passage: str, evidence_texts: Sequence[str], parse: ParseText) -> RevisedPassage | None:
+def revise_table_passage(
+    passage: str, evidence_texts: Sequence[str], parse: ParseText, *, line_pairs: bool = True
+) -> RevisedPassage | None:
     """段落の表の対応の取り違えを、表の正しい値に直す。直せない・確かめに通らなければ None。
 
     ``parse`` は (system, 入力の JSON, schema) で構造化出力を返す LLM の呼び出し（呼び出し側の設定・モデル）。
+    ``line_pairs`` は ``table_binding.evidence_tables`` と同じ（取り違えを見つけた検査と同じ表で直す）。
     """
-    pairs = unbound_table_values(passage, evidence_texts)
+    pairs = unbound_table_values(passage, evidence_texts, line_pairs=line_pairs)
     if not pairs:
         return None
-    corrections = table_corrections(pairs, evidence_texts)
+    corrections = table_corrections(pairs, evidence_texts, line_pairs=line_pairs)
     if any(correct is None for _wrong, correct in corrections):
         return None
-    notes = table_mismatch_notes(pairs, evidence_texts)
+    notes = table_mismatch_notes(pairs, evidence_texts, line_pairs=line_pairs)
     inputs = {
         "passage": passage,
         "corrections": [{"wrong": wrong, "correct": correct} for wrong, correct in corrections],
@@ -87,19 +90,19 @@ def revise_table_passage(passage: str, evidence_texts: Sequence[str], parse: Par
         logger.warning("table revision failed")
         return None
     revised = output.revised_text.strip()
-    if not _acceptable(passage, revised, evidence_texts, [correct for _wrong, correct in corrections if correct]):
+    if not _acceptable(passage, revised, evidence_texts, [correct for _wrong, correct in corrections if correct], line_pairs=line_pairs):
         logger.info("table revision rejected")
         return None
     return RevisedPassage(revised, "、".join(notes))
 
 
-def _acceptable(passage: str, revised: str, evidence_texts: Sequence[str], correct: Sequence[str]) -> bool:
+def _acceptable(passage: str, revised: str, evidence_texts: Sequence[str], correct: Sequence[str], *, line_pairs: bool = True) -> bool:
     """直した文を採るか（取り違えが無い・正しい値を述べる・元の段落との差が小さい）。"""
     if not revised or revised == passage.strip():
         return False
     if len(revised) > len(passage) * MAX_LENGTH_RATIO:
         return False
-    if unbound_table_values(revised, evidence_texts):
+    if unbound_table_values(revised, evidence_texts, line_pairs=line_pairs):
         return False
     if not all(states_value(value, revised) for value in correct):
         return False

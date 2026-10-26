@@ -31,6 +31,7 @@ import unicodedata
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 
+from rag_engine.parsing.content_labels import content_labels
 from rag_engine.retrieval.character_forms import SYMBOL_FOLD, fold_width
 
 # 値とみなすセル（英数字と区切りの「-」「_」「.」だけ。NFKC でローマ数字・全角も英数字にそろえる）。
@@ -268,8 +269,42 @@ def _table(rows: Sequence[tuple[bool, list[str]]]) -> Table | None:
     )
 
 
-def evidence_tables(text: str) -> list[Table]:
-    """根拠の本文の表（HTML の表・Markdown の表・「名前：値」の行の並び）。行が 2 つ以上のものだけ。"""
+def _generated_block_start(line: str) -> bool:
+    """画像の生成説明の欄の見出し（「■ グループ」）か、図の中の文字（OCR）の欄の行か（言語資源のラベル）。"""
+    labels = content_labels()
+    stripped = line.strip()
+    prefix = labels.group_prefix.strip()
+    if prefix and stripped.startswith(prefix) and stripped[len(prefix) :].strip() in set(labels.groups.values()):
+        return True
+    ocr = labels.text("picture_ocr")
+    return bool(ocr) and re.match(rf"{re.escape(ocr)}\s*[:：]", stripped) is not None
+
+
+def _document_lines(lines: Sequence[str]) -> list[str]:
+    """本文の行から、画像の生成説明の欄と図の中の文字（OCR）の欄（見出しの行から次の空行まで）を除いた行。
+
+    生成説明は 1 つの図の属性を「ラベル: 値」で並べた形で、行は同じ図の別の属性（区分・名前ごとに値を対応させた
+    表の行ではない）。欄の値と別の欄の名前を同じ所で述べても、表の対応の取り違えではない（#3482）。
+    """
+    kept: list[str] = []
+    generated = False
+    for line in lines:
+        if not line.strip():
+            generated = False
+            kept.append(line)
+        elif generated or _generated_block_start(line):
+            generated = True
+        else:
+            kept.append(line)
+    return kept
+
+
+def evidence_tables(text: str, *, line_pairs: bool = True) -> list[Table]:
+    """根拠の本文の表（HTML の表・Markdown の表・「名前：値」の行の並び）。行が 2 つ以上のものだけ。
+
+    「名前：値」の行と 1 文の並びは資料の本文からだけ取る（画像の生成説明・図の中の文字の欄は除く）。
+    ``line_pairs`` が偽なら、本当の表の構造（HTML・Markdown の表）だけを返す（画像の生成説明の抜粋の根拠）。
+    """
     source = str(text or "")
     tables: list[Table] = []
     for block in _TABLE_BLOCK.findall(source):
@@ -278,7 +313,8 @@ def evidence_tables(text: str) -> list[Table]:
             tables.append(table)
     rest = _TABLE_BLOCK.sub("\n", source)
     lines = [line for line in rest.split("\n") if line.strip()]
-    for rows in (_pipe_rows(lines), *_pair_runs(lines), *_prose_runs(lines)):
+    document = [line for line in _document_lines(rest.split("\n")) if line.strip()] if line_pairs else []
+    for rows in (_pipe_rows(lines), *_pair_runs(document), *_prose_runs(document)):
         table = _table(rows)
         if table is not None:
             tables.append(table)
@@ -446,12 +482,13 @@ def _other_column(table: Table, value: str, rows: Sequence[int], said: Callable[
     return ""
 
 
-def unbound_table_values(claim: str, evidence_texts: Sequence[str]) -> list[tuple[str, str]]:
+def unbound_table_values(claim: str, evidence_texts: Sequence[str], *, line_pairs: bool = True) -> list[tuple[str, str]]:
     """文が、根拠の表の別の行の区分・名前と結び付けた値の組（値, 別の行のセル。根拠の原文の表記）。
 
     同じ値をどれかの表で同じ行の区分・名前と結び付けていれば、その値は外さない（表をまたいで疑わない）。
+    ``line_pairs`` は ``evidence_tables`` と同じ。
     """
-    tables = [table for text in evidence_texts for table in evidence_tables(text)]
+    tables = [table for text in evidence_texts for table in evidence_tables(text, line_pairs=line_pairs)]
     if not tables:
         return []
     values = {key for table in tables for row in table.rows for key in row if table.is_value(key)}
@@ -497,9 +534,9 @@ def _correct_cell(pair: tuple[str, str], tables: Sequence[Table]) -> tuple[str, 
     return None
 
 
-def table_mismatch_notes(pairs: Sequence[tuple[str, str]], evidence_texts: Sequence[str]) -> list[str]:
+def table_mismatch_notes(pairs: Sequence[tuple[str, str]], evidence_texts: Sequence[str], *, line_pairs: bool = True) -> list[str]:
     """取り違えた組（`unbound_table_values`）ごとの、根拠の表の正しい対応の文（外した段落の理由に出す）。"""
-    tables = [table for text in evidence_texts for table in evidence_tables(text)]
+    tables = [table for text in evidence_texts for table in evidence_tables(text, line_pairs=line_pairs)]
     notes: list[str] = []
     for value, other in pairs:
         correct = _correct_cell((value, other), tables)
@@ -513,9 +550,11 @@ def table_mismatch_notes(pairs: Sequence[tuple[str, str]], evidence_texts: Seque
     return notes
 
 
-def table_corrections(pairs: Sequence[tuple[str, str]], evidence_texts: Sequence[str]) -> list[tuple[str, str | None]]:
+def table_corrections(
+    pairs: Sequence[tuple[str, str]], evidence_texts: Sequence[str], *, line_pairs: bool = True
+) -> list[tuple[str, str | None]]:
     """取り違えた組ごとの（誤った値, 表の正しい値）。正しい値が決まらなければ None。"""
-    tables = [table for text in evidence_texts for table in evidence_tables(text)]
+    tables = [table for text in evidence_texts for table in evidence_tables(text, line_pairs=line_pairs)]
     return [(value, correct[2] if (correct := _correct_cell((value, other), tables)) else None) for value, other in pairs]
 
 
