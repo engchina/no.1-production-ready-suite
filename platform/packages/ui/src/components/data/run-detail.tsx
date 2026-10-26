@@ -563,8 +563,19 @@ function stepIndent(level: number | undefined): string {
 export const runTimelineStepIndent = stepIndent;
 
 /**
- * 回さない実行中の印（`spinRunning` が false の一覧の実行中の段。チャットの処理の経過の、今の段階を包む親の工程）。
- * `RunStatusBadge` の実行中と同じ形（`CirclePlay`）にする。
+ * 段ごとに、子の段を持つか（一覧で直後の段が 1 段以上深い `level`）を返す（#3436）。子の段を持つ段は親の工程で、
+ * 実行中でも回さない実行中の印（`CirclePlay`）で出す。回すのは実行中の末端の段（子を持たない段）だけ。
+ * 字下げは 3 段で止めるが、親子の判定は `level` の値そのもので行う。
+ */
+export function runTimelineHasChildren(steps: readonly { level?: number | null }[]): boolean[] {
+  return steps.map(
+    (step, index) => index + 1 < steps.length && stepLevel(steps[index + 1].level ?? undefined) > stepLevel(step.level ?? undefined)
+  );
+}
+
+/**
+ * 回さない実行中の印（子の段を持つ実行中の段（親の工程）と、`spinRunning` が false の一覧の実行中の段。チャットの
+ * 処理の経過の、今の段階を包む親の工程）。`RunStatusBadge` の実行中と同じ形（`CirclePlay`）にする。
  */
 const RUNNING_STATIC_ICON = { icon: CirclePlay, className: "text-accent-fg" } as const;
 
@@ -676,8 +687,9 @@ export interface RunTimelineProps {
    */
   showBars?: boolean;
   /**
-   * 実行中の段を `Spinner` で回すか。既定 true。false は回さない実行中の印（`CirclePlay`）で出す。チャットの処理の経過
-   * （`ChatProgress`）は、今の段階（最も内側の実行中の段）の行を自分で描き、その行だけを回す。今の段階を包む実行中の
+   * 実行中の末端の段（子の段を持たない段）を `Spinner` で回すか。既定 true。false は回さない実行中の印（`CirclePlay`）
+   * で出す。子の段を持つ実行中の段（親の工程）は、この値にかかわらず回さない（#3436）。チャットの処理の経過
+   * （`ChatProgress`）は、今の段階（最後に始まった実行中の末端の段）の行を自分で描き、その行だけを回す。今の段階を包む実行中の
    * 親の工程は、この一覧の中で開始順の位置に回さずに出す（同じ処理のスピナーは 1 つ。messaging.md §3.7。#2840）。
    */
   spinRunning?: boolean;
@@ -721,6 +733,7 @@ export function RunTimeline({
   const traceLabels = useTraceDetailsLabels();
   const labels = resolveRunDetailLabels(labelsInput);
   const bars = runTimelineBars(steps);
+  const hasChildren = runTimelineHasChildren(steps);
   const idPrefix = useId();
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(
@@ -793,7 +806,12 @@ export function RunTimeline({
               >
                 <div className={cn("flex min-w-0 items-start gap-2 leading-5", nameText, stepIndent(level))}>
                   <span className="pr-icon-line">
-                    <StepIcon status={step.status} size={RUN_TIMELINE_CHEVRON_SIZE[size]} spin={spinRunning} />
+                    <StepIcon
+                      status={step.status}
+                      size={RUN_TIMELINE_CHEVRON_SIZE[size]}
+                      // 回すのは実行中の末端の段だけ。子の段を持つ段（親の工程）は回さない（#3436）。
+                      spin={spinRunning && !hasChildren[index]}
+                    />
                   </span>
                   {hasDetails ? (
                     <button
