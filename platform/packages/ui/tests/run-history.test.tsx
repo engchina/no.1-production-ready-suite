@@ -10,6 +10,7 @@ import {
   RUN_STATUSES,
   RunDetailLayout,
   RunDetailSection,
+  RunJobProgress,
   RunProcessDetails,
   RunHistoryPeriodEmptyState,
   RunHistoryTable,
@@ -29,6 +30,7 @@ import {
   runStatusVariant,
   runTimelineBars,
   runTimelineHasChildren,
+  runTimelineCurrentStepIndex,
   runStepDetailsJson,
   hasRunStepDetails,
   setDisplayTimeZone,
@@ -593,6 +595,71 @@ describe("RunTimeline の実行中の段のアイコン（#3436）", () => {
     render(<RunTimeline steps={steps} spinRunning={false} showBars={false} testId="timeline" />);
     expect(icon("vector")).toBe("lucide-circle-play");
     expect(container.querySelectorAll("svg.animate-spin")).toHaveLength(0);
+  });
+});
+
+describe("動くスピナーは 1 つ（#3445）", () => {
+  // 並行して実行中の末端の段（ベクトル検索と全文検索、並行のツールの呼び出し）がある。
+  const steps: RunTimelineStep[] = [
+    { id: "plan", label: "進め方の検討", status: "done", durationMs: 1200 },
+    { id: "search", label: "文書の検索", status: "running", level: 1 },
+    { id: "vector", label: "ベクトル検索", status: "running", level: 2 },
+    { id: "text", label: "全文検索", status: "running", level: 2 },
+  ];
+  // 見えるスピナー（閉じた開閉の中身は数えない。e2e の `svg.animate-spin:visible` と同じ）。
+  const spinners = () =>
+    [...container.querySelectorAll("svg.animate-spin")].filter((svg) => !svg.closest("details:not([open]) > :not(summary)"));
+
+  it("今の段は最後に始まった実行中の末端の段で、一覧はその段だけを回す", () => {
+    expect(runTimelineCurrentStepIndex(steps)).toBe(3);
+    expect(runTimelineCurrentStepIndex(steps.slice(0, 2))).toBe(1);
+    expect(runTimelineCurrentStepIndex([{ status: "done" }])).toBe(-1);
+    render(<RunTimeline steps={steps} showBars={false} testId="timeline" />);
+    expect(spinners()).toHaveLength(1);
+    expect(container.querySelector("[data-run-timeline-step='text'] svg.animate-spin")).not.toBeNull();
+    expect(container.querySelector("[data-run-timeline-step='vector'] .lucide-circle-play")).not.toBeNull();
+  });
+
+  it("処理の経過を開いて今の段が回る間は、概要の進行表示を回さない実行中の印にする", () => {
+    const startedAt = new Date(Date.now() - 12_000).toISOString();
+    render(
+      <RunDetailLayout
+        summary={<RunJobProgress active label="「根拠の取得」を実行しています" startedAt={startedAt} testId="progress" />}
+        timeline={<RunTimelineSection title="処理の経過" steps={steps} active startedAt={startedAt} testId="section" />}
+      />
+    );
+    const progress = container.querySelector<HTMLElement>("[data-testid='progress']");
+    // 経過時間は概要の進行表示の 1 か所だけ（処理の経過の見出しに重ねない）。
+    expect(container.querySelectorAll("[role='timer']")).toHaveLength(1);
+    expect(container.querySelector("[data-testid='section-timer']")).toBeNull();
+    // 閉じている間は概要の進行表示だけが回る。
+    expect(progress?.dataset.processingPlacement).toBe("job");
+    expect(progress?.dataset.processingActivityIcon).toBe("spinner");
+    expect(spinners()).toHaveLength(1);
+    act(() => container.querySelector<HTMLElement>("[data-testid='section-summary']")?.click());
+    expect(progress?.dataset.processingActivityIcon).toBe("static");
+    expect(progress?.querySelector("[data-processing-static-icon]")).not.toBeNull();
+    expect(spinners()).toHaveLength(1);
+    expect(container.querySelector("[data-run-timeline-step='text'] svg.animate-spin")).not.toBeNull();
+    // 閉じると進行表示が回る。
+    act(() => container.querySelector<HTMLElement>("[data-testid='section-summary']")?.click());
+    expect(progress?.dataset.processingActivityIcon).toBe("spinner");
+    expect(spinners()).toHaveLength(1);
+  });
+
+  it("実行中の見出しは「処理中（N ステップ完了）」と経過時間で、合計の所要時間を出さない", () => {
+    const startedAt = new Date(Date.now() - 65_000).toISOString();
+    render(<RunTimelineSection title="処理の経過" steps={steps} totalDurationMs={null} active startedAt={startedAt} testId="section" />);
+    const summary = container.querySelector<HTMLElement>("[data-testid='section-summary']");
+    expect(summary?.textContent).toContain("処理中（1 ステップ完了）");
+    expect(summary?.textContent).not.toContain("合計");
+    const timer = container.querySelector<HTMLElement>("[data-testid='section-timer']");
+    expect(timer?.getAttribute("role")).toBe("timer");
+    expect(timer?.getAttribute("aria-label")).toMatch(/^経過時間 01:0[5-6]$/);
+    // 終わった実行は今までどおり「N ステップ・合計 M 秒」。
+    render(<RunTimelineSection title="処理の経過" steps={steps.slice(0, 1)} totalDurationMs={1200} testId="done" />);
+    expect(container.querySelector("[data-testid='done-summary']")?.textContent).toBe("1 ステップ・合計 1.2 秒");
+    expect(container.querySelector("[data-testid='done-timer']")).toBeNull();
   });
 });
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Clock3 } from "lucide-react";
+import { CirclePlay, Clock3 } from "lucide-react";
 
 import {
   elapsedMsBetween,
@@ -47,7 +47,12 @@ export type ProcessingPlacement =
   | "action"
   | "job";
 
-export type ProcessingActivityIcon = "spinner" | "none";
+/**
+ * 処理中の印。`spinner` は回す、`static` は回さない実行中の印（`CirclePlay`。同じ処理のスピナーをほかの場所〔実行の
+ * 詳細の処理の経過の今の段〕が回している間。文字の位置を変えない。#3445）、`none` は印を出さない（起点のボタンが
+ * `loading` を出している間）。
+ */
+export type ProcessingActivityIcon = "spinner" | "static" | "none";
 
 export interface UseOperationTimingOptions {
   active: boolean;
@@ -158,7 +163,10 @@ export interface ProcessingIndicatorProps extends UseOperationTimingOptions {
   showSlowMessage?: boolean;
   /** 遅延案内を live region にするか。別の status が状態を担う場合は false。 */
   announceSlow?: boolean;
-  /** 同じ operation の主ボタンが loading の場合は "none" にして動的 icon を 1 つへ絞る。 */
+  /**
+   * 同じ operation の主ボタンが loading の場合は "none"、同じ処理の別の場所（実行の詳細の処理の経過の今の段）が回して
+   * いる場合は "static" にして、動的 icon を 1 つへ絞る。
+   */
   activityIcon?: ProcessingActivityIcon;
   /** 別の live region が状態遷移を通知する場合は false にして二重読み上げを避ける。 */
   announceActivity?: boolean;
@@ -213,7 +221,11 @@ export function ProcessingIndicator({
             <span className="pr-icon-line">
               <Spinner size={16} className="text-accent-fg" />
             </span>
-          ) : !timing.active && showActivityIcon ? (
+          ) : timing.active && activityIcon === "static" ? (
+            <span className="pr-icon-line text-accent-fg" data-processing-static-icon="true">
+              <CirclePlay size={16} aria-hidden="true" />
+            </span>
+          ) : !timing.active && activityIcon !== "none" ? (
             <span className="pr-icon-line text-fg-muted">
               <Clock3 size={16} aria-hidden="true" />
             </span>

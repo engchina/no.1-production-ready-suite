@@ -15,11 +15,11 @@ import {
   ObjectActionBar,
   OpenConversationAction,
   ProcessFailureNotice,
-  ProcessingIndicator,
   RunDetailLayout,
   RunDetailSection,
   RunEventLog,
   RunFactList,
+  RunJobProgress,
   RunSummary,
   RunTimelineSection,
   SqlSafetyBadge,
@@ -27,9 +27,11 @@ import {
   formatRunCancellation,
   formatRunDateTime,
   runStepDetailsJson,
+  runTimelineCurrentStepIndex,
   useTraceDetailsLabels,
   type EntityAction,
   type RunEventLogItem,
+  type RunTimelineStep,
   type StatusVariant,
 } from "@production-ready/ui";
 import {
@@ -241,7 +243,7 @@ export function RunDetail({
             }
             alert={
               <>
-                <RunProgressIndicator run={run} />
+                <RunProgressIndicator run={run} steps={timelineSteps} />
                 {waitingForExecutor ? (
                   // 操作のボタンは出さず、待っている相手を出す（messaging.md §10。info の Banner。#1954）。
                   <div data-testid="run-waiting-for-executor">
@@ -311,6 +313,9 @@ export function RunDetail({
               title={t("run.section.timeline")}
               steps={timelineSteps}
               totalDurationMs={runDurationMs(run)}
+              // 実行中は「処理中（N ステップ完了）」と Run の開始からの経過時間（#3445）。
+              active={CANCELLABLE_RUN_STATUSES.includes(run.status)}
+              startedAt={run.created_at}
               labels={labels}
               // 共通の span の表に書けなかった span がある（#3226 の案 A）。経過の一覧が全部ではないことを示す。
               partial={progress.partial}
@@ -446,14 +451,15 @@ function ApprovalsSection({ run }: { run: RunState }) {
 }
 
 /**
- * 実行中の Run の経過時間（durable job。messaging.md §3.7 の placement="job"）。
+ * 実行中の Run の経過時間（durable job。messaging.md §3.7 の placement="job"。共通の `RunJobProgress`）。
  * 開始時刻はサーバーの created_at を使い、Run を開き直しても経過時間が 0 に戻らない。
- * 実行中の工程（tool / step）が分かるときは工程名も出す。承認待ちは人の操作を待つため遅延の案内を出さない。
+ * 実行中は処理の経過の今の段の名前（ツールは表示名。チャットと同じ名前）を出し、ツールの内部名・段の種類のコードは
+ * 出さない（#3445）。処理の経過を開いて今の段が回っている間は、この表示は回さない（動くスピナーは 1 つ）。
+ * 承認待ちは人の操作を待つため遅延の案内を出さない。
  */
-function RunProgressIndicator({ run }: { run: RunState }) {
-  if (!["queued", "running", "waiting_approval", "waiting_confirmation"].includes(run.status)) return null;
-  const currentStep = [...run.steps].reverse().find((step) => step.status === "running");
-  const stepName = currentStep ? (currentStep.tool_call?.name ?? currentStep.kind) : null;
+function RunProgressIndicator({ run, steps }: { run: RunState; steps: readonly RunTimelineStep[] }) {
+  if (!CANCELLABLE_RUN_STATUSES.includes(run.status)) return null;
+  const currentStep = steps[runTimelineCurrentStepIndex(steps)];
   const label =
     run.status === "queued"
       ? t("run.progress.queued")
@@ -461,16 +467,13 @@ function RunProgressIndicator({ run }: { run: RunState }) {
         ? t("run.progress.waitingApproval")
         : run.status === "waiting_confirmation"
           ? t("run.progress.waitingConfirmation")
-          : stepName
-          ? t("run.progress.runningStep", { step: stepName })
-          : t("run.progress.running");
+          : (currentStep?.label ?? t("run.progress.running"));
   return (
-    <ProcessingIndicator
+    <RunJobProgress
       active
       label={label}
       operationKey={run.id}
       startedAt={run.created_at}
-      placement="job"
       showSlowMessage={run.status !== "waiting_approval" && run.status !== "waiting_confirmation"}
       className="rounded-md border border-border bg-surface-sunken px-3 py-2"
       testId="run-progress"

@@ -374,6 +374,52 @@ for (const viewport of VIEWPORTS) {
   }
 }
 
+// #3445: 実行中の Run の詳細は、処理の経過を開いても動くスピナーが 1 つ（開いた一覧の今の段）。概要の進行表示は今の段の
+// 名前（ツールは表示名）で、ツールの内部名を出さない。処理の経過の見出しは実行中なら「処理中（N ステップ完了）」と経過時間。
+test("実行中の Run の詳細は処理の経過を開いても動くスピナーが 1 つで、進行表示は今の段の名前を出す", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
+  const {run} = seedRunningRun(mockApi);
+  const start = iso(-8_000);
+  run.created_at = start;
+  const tool = "tool:rag__rag_retrieve_evidence";
+  const rag = (parent: string, extra: Record<string, unknown> = {}) => ({startedAt: start, parent, product: "rag", ...extra});
+  // ベクトル検索と全文検索は並行に実行中（#3443）。今の段は最後に始まった全文検索。
+  run.progress_events = new ProgressLog(RUN_ID, undefined, start)
+    .step("chat-1", "done", {startedAt: start, finishedAt: iso(-7_000), kind: "plan"})
+    .step(tool, "running", {startedAt: start, params: {tool: "rag__rag_retrieve_evidence", title: "根拠の取得"}})
+    .step("mcp-call", "running", {startedAt: start, parent: tool, attributes: {"mcp.method.name": "tools/call", "gen_ai.tool.name": "rag_retrieve_evidence"}})
+    .step("rag-server", "running", rag("mcp-call", {name: "mcp.server", root: true}))
+    .step("rag-search", "running", rag("rag-server", {name: "rag.search", root: true}))
+    .step("rag-retrieval", "running", rag("rag-search", {name: "rag.retrieval", displayName: "検索", attributes: {"pr.stage": "retrieval"}}))
+    .step("rag-stage", "running", rag("rag-retrieval", {name: "rag.engine.stage", kind: "answer_step", params: {name: "文書検索"}, displayName: "文書の検索", attributes: {"pr.stage": "文書検索"}}))
+    .step("rag-vector", "running", rag("rag-stage", {name: "rag.engine.stage", kind: "answer_step", params: {name: "ベクトル検索"}, displayName: "ベクトル検索", attributes: {"pr.stage": "ベクトル検索"}}))
+    .step("rag-text", "running", rag("rag-stage", {name: "rag.engine.stage", kind: "answer_step", params: {name: "全文検索"}, displayName: "全文検索", attributes: {"pr.stage": "全文検索"}})).events;
+  await page.goto(`/runs?id=${RUN_ID}`);
+  const progress = page.getByTestId("run-progress");
+  await expect(progress.locator("[data-processing-label]")).toHaveText("全文検索");
+  await expect(progress).not.toContainText("rag__");
+  await expect(progress).toHaveAttribute("data-processing-activity-icon", "spinner");
+  const section = page.getByTestId("run-timeline-section");
+  const summary = page.getByTestId("run-timeline-section-summary");
+  await expect(summary).toContainText("処理中（1 ステップ完了）");
+  await expect(summary).not.toContainText("合計");
+  // 経過時間は概要の進行表示の 1 か所だけ（見出しに重ねない。messaging.md §3.7）。
+  await expect(progress.getByRole("timer")).toHaveAccessibleName(/^経過時間 00:\d\d$/);
+  await expect(section.getByTestId("run-timeline-section-timer")).toHaveCount(0);
+  await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
+  // 開くと一覧の今の段（全文検索）だけが回り、進行表示は回さない実行中の印にする。
+  await summary.click();
+  await expect(progress).toHaveAttribute("data-processing-activity-icon", "static");
+  await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
+  await expect(section.locator("[data-run-timeline-step] svg.animate-spin")).toHaveCount(1);
+  await expect(progress).toContainText("経過時間");
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({path: testInfo.outputPath("run-detail-running.png"), fullPage: true});
+  // 閉じると進行表示が回る。
+  await summary.click();
+  await expect(progress).toHaveAttribute("data-processing-activity-icon", "spinner");
+  await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
+});
+
 // #3272: MCP で呼んだ RAG の span は、RAG が付けた工程の名前（`display_name`）で出し、製品の境目の行に製品名を添える。
 // MCP の手続き（initialize・通知）の行は出さない。チャットと実行の詳細で同じ。
 test("呼び先の製品の span は書いた製品の工程の名前で出し、製品の境目に製品名を添える", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
