@@ -73,7 +73,7 @@ ANSWER_STAGE_LABELS: dict[str, str] = {
 # 同じ名前にする（frontend の `answer-process.test.ts` が照合する）。工程名はログ・記録の識別に
 # 使うので変えない。
 ANSWER_STEP_DISPLAY_NAMES: dict[str, str] = {
-    "質問の理解": "質問の条件の読み取り",
+    "質問の理解": "Query Understanding（質問の理解）",
     "用語・同義語の確認": "用語・同義語の確認",
     "回答ルールの確認": "回答ルールの確認",
     "検索の準備確認": "検索の準備の確認",
