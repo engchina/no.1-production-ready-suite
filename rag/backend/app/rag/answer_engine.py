@@ -1260,7 +1260,8 @@ class AnswerEngine:
             article_documents=lambda **kwargs: run_async(
                 lambda: self._article_documents(request, state)
             ),
-            # 条の選択の 2 段目で見せる、同じ章の条の本文の書き出し。
+            # 条の選択の 2 段目で見せる、同じ章の条と別の章の条（選んだ条の名指しを探す）の
+            # 本文の書き出し。
             article_leads=lambda *, document_id, chunk_set_id, sections, **kwargs: run_async(
                 lambda: self._article_leads(document_id, chunk_set_id, sections, state=state)
             ),

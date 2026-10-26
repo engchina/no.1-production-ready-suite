@@ -46,7 +46,8 @@ class AnswerDependencies:
     文書だけを読む。article_question は利用者の元の質問（呼び出し元が検索文を短く言い換えたとき。無ければ None）を
     返す。条の目録から文書・条を選ぶ段だけが検索文と合わせて使う（#2261）。article_leads は document_id・chunk_set_id・
     sections（{section_id: 章節の名前}）・settings を受け取り、その章節の本文の書き出し（名前を除く。
-    {section_id: 文}）を返す。条の選択の 2 段目（選んだ条と同じ章の条を書き出しつきで見せて足させる）が使う。
+    {section_id: 文}）を返す。条の選択の 2 段目（選んだ条と同じ章の条と、選んだ条を名指しする別の章の条を書き出し
+    つきで見せて足させる）が使う。
     省略時は 2 段目を行わない。
     embedder は業務ガイドの手順の充足で、根拠を共有する手順のどれを item が説明したかを語で決められないときに、
     意味の近さで決める embedding（`ports.Embedder`。索引と同じ OCI Generative AI の Cohere Embed。#2649）。省略時は
