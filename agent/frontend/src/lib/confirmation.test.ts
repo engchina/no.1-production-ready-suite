@@ -110,13 +110,24 @@ describe("記録の表示", () => {
       {
         key: "confirmation_1",
         outcome: "answered",
-        entries: [{ id: "item_1", prompt: "どの期間の売上を見ますか？", selected: ["今年度"], otherText: undefined }],
+        entries: [{ id: "item_1", prompt: "どの期間の売上を見ますか？", selected: ["今年度"], otherText: undefined, freeTextOnly: false }],
       },
       {
         key: "confirmation_2",
         outcome: "skipped",
-        entries: [{ id: "item_1", prompt: "どの期間の売上を見ますか？", selected: [], otherText: undefined }],
+        entries: [{ id: "item_1", prompt: "どの期間の売上を見ますか？", selected: [], otherText: undefined, freeTextOnly: false }],
       },
+    ]);
+  });
+
+  it("選択肢の無い確認事項の答えは、自由入力だけの記録にする（#3366）", () => {
+    const freeText = confirmation({
+      status: "answered",
+      items: [{ id: "item_1", prompt: "どの資料ですか？", reason: "", selection: "single", options: [] }],
+      answers: [{ item_id: "item_1", option_ids: [], other_text: "資料 A" }],
+    });
+    expect(agentConfirmationRecords(run({ status: "completed", confirmations: [freeText] }))[0]?.entries).toEqual([
+      { id: "item_1", prompt: "どの資料ですか？", selected: [], otherText: "資料 A", freeTextOnly: true },
     ]);
   });
 

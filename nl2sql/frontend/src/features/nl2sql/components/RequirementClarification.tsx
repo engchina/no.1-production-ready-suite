@@ -571,6 +571,8 @@ export function requirementClarificationLabels(): ClarificationLabels {
     }),
     other: t("nl2sql.clarification.other"),
     otherPlaceholder: t("nl2sql.clarification.otherPlaceholder"),
+    freeText: t("nl2sql.clarification.freeText"),
+    freeTextPlaceholder: t("nl2sql.clarification.freeTextPlaceholder"),
     confirming: t("nl2sql.clarification.loading.answer"),
   };
 }

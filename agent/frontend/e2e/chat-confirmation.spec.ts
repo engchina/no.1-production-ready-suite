@@ -202,8 +202,13 @@ test.describe("回答前の確認のカード", { tag: "@responsive" }, () => {
     const card = turn.getByTestId("chat-confirmation");
     await expect(card.getByRole("heading", { name: "どの資料の概要ですか？" })).toBeVisible();
     await expect(card.getByRole("radio")).toHaveCount(0);
-    const other = card.getByLabel("その他（自由入力）");
+    // 選択肢が無いので「その他」「選択肢に無いとき」と言わず、自由入力だけの言い方にする（#3366）。
+    const other = card.getByRole("textbox", { name: "答え", exact: true });
     await expect(other).toBeVisible();
+    await expect(other).toHaveAttribute("placeholder", "答えを書いてください");
+    await expect(card.getByTestId("chat-confirmation-blocked")).toHaveText("答えを書くと押せます。");
+    await expect(card).not.toContainText("その他");
+    await expect(card).not.toContainText("選択肢");
     await expectNoHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath("agent-confirmation-free-text.png"), fullPage: true });
 
@@ -213,7 +218,8 @@ test.describe("回答前の確認のカード", { tag: "@responsive" }, () => {
       .poll(() => mockApi.lastRequest("POST", "/api/runs/run-ask-free/confirmations/confirmation_agent_free")?.body)
       .toEqual({ action: "answer", answers: [{ item_id: "item_1", option_ids: [], other_text: "請求の資料" }] });
     await expect(turn.getByTestId("chat-confirmation")).toHaveCount(0);
-    await expect(turn.getByTestId("chat-confirmation-record-confirmation_agent_free").getByText("請求の資料")).toBeVisible();
+    const freeRecord = turn.getByTestId("chat-confirmation-record-confirmation_agent_free");
+    await expect(freeRecord.locator("dd")).toHaveText("請求の資料");
   });
 
   test("ダークテーマでも確認のカードと答えの記録を出す", async ({ page, mockApi }, testInfo) => {
