@@ -10,7 +10,7 @@ import re
 import unicodedata
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from time import monotonic
 from typing import Any
@@ -3710,15 +3710,26 @@ def _catalog_terms(question: str, settings: Settings) -> tuple[Any, ...]:
     return tuple(CatalogTerm(term=term.term, aliases=tuple(term.aliases), description=term.description) for term in runtime.matched_terms)
 
 
+@dataclass(frozen=True)
+class _CatalogReferences:
+    """2 段目に、選んだ条を名指しする別の章の条を候補にした文書（文書名・候補にした数・そのうち足した条の行）。"""
+
+    file_name: str
+    candidates: int
+    added: tuple[str, ...]
+
+
 def _select_catalog_articles(
     question: str, catalogs: Sequence[Any], settings: Settings, *, terms: Sequence[Any] = ()
-) -> tuple[list[Any], list[tuple[str, str]], int, list[str]]:
+) -> tuple[list[Any], list[tuple[str, str]], int, list[str], list[_CatalogReferences]]:
     """文書ごとに目録から条を選び（並行に呼ぶ）、文書を順に回した順・選べなかった文書（名前, 理由）・2 段目で足した条の
-    数・2 段目に失敗した文書の名前を返す（#2254）。
+    数・2 段目に失敗した文書の名前・名指しの条を候補にした文書を返す（#2254・#3517）。
 
-    文書ごとに 2 段で選ぶ。1 段目は目録の行（条の名前）から論点ごとに選び、2 段目は選んだ条と同じ章の条を本文の
-    書き出しつきで見せて、足りない論点の条を足させる（`article_catalog_refine_articles` 件まで。書き出しの読み込み
-    `article_leads` が注入されたときだけ）。条の名前が質問の語から遠い条（重なったときの扱い・特例など）を拾うため。
+    文書ごとに 2 段で選ぶ。1 段目は目録の行（条の名前）から論点ごとに選び、2 段目は選んだ条と同じ章の条と、選んだ条の
+    番号を書き出しで名指しする別の章の条（附則の特例・読替えなど）を本文の書き出しつきで見せて、足りない論点の条を
+    足させる（`article_catalog_refine_articles` 件まで。書き出しの読み込み `article_leads` が注入されたときだけ）。
+    条の名前が質問の語から遠い条（重なったときの扱い・特例など）を拾うため。名指しの条は cache した結果からは数えない
+    （この回に選んだ文書だけを工程に残す。足した条の数と同じ）。
 
     呼び出し 1 回の出力と時間は役目に合わせて抑える（`article_catalog_output_token_cap` /
     `article_catalog_call_timeout_seconds`。段ごとに数える）。同じ出力を繰り返して書き続ける呼び出しが 1 つあると、
@@ -3751,6 +3762,7 @@ def _select_catalog_articles(
     results: dict[int, list[tuple[str, str]]] = {}
     calls: dict[int, int] = {}
     added_counts: dict[int, int] = {}
+    references: dict[int, _CatalogReferences] = {}
     if missing:
         parent = current_deadline()
 
@@ -3775,7 +3787,7 @@ def _select_catalog_articles(
             try:
                 with bind_deadline(second), bind_output_cap(max_output):
                     calls[index] = 2
-                    added = refine_articles(
+                    refinement = refine_articles(
                         question,
                         catalog,
                         chosen,
@@ -3793,11 +3805,19 @@ def _select_catalog_articles(
                     )
             except Exception:  # noqa: BLE001 - 2 段目は補助。1 段目の条で続ける。
                 logger.warning("article catalog refine failed", exc_info=True)
-                added = None
-            if added is None:
+                refinement = None
+            if refinement is None:
                 refine_failures.add(index)
                 return chosen
+            added = refinement.added
             added_counts[index] = len(added)
+            if refinement.referencing:
+                referencing = set(refinement.referencing)
+                references[index] = _CatalogReferences(
+                    file_name=catalog.file_name,
+                    candidates=len(refinement.referencing),
+                    added=tuple(title for section_id, title in added if (section_id, title) in referencing),
+                )
             # 足した条は足りない論点の根拠なので、1 段目の条と交互に並べて前に出す（後ろに置くと、文書を順に回した
             # 順で先頭から数える上限（MCP の根拠の件数など）に切られる）。
             merged: list[tuple[str, str]] = []
@@ -3819,7 +3839,8 @@ def _select_catalog_articles(
     selections = [results[index] if index in results else _ARTICLE_SELECTION_CACHE.get(key, []) for index, key in enumerate(keys)]
     failed = [(catalogs[index].file_name, failures[index]) for index in sorted(failures)]
     refine_failed = [catalogs[index].file_name for index in sorted(refine_failures)]
-    return interleave_selections(catalogs, selections), failed, sum(added_counts.values()), refine_failed
+    referenced = [references[index] for index in sorted(references)]
+    return interleave_selections(catalogs, selections), failed, sum(added_counts.values()), refine_failed, referenced
 
 
 # 範囲の文書の選択（質問・文書の一覧・件数・モデル → 選んだ文書）。選択に失敗した結果は cache しない（#3285）。
@@ -3913,18 +3934,20 @@ def _catalog_article_children(
         if extra:
             catalogs += list(load_catalogs(document_ids=extra, limit=len(extra), settings=settings))
         terms = _catalog_terms(question, settings)
-        selected, failed, refined, refine_failed = _select_catalog_articles(question, catalogs, settings, terms=terms)
+        selected, failed, refined, refine_failed, referenced = _select_catalog_articles(question, catalogs, settings, terms=terms)
         if terms:
             step.field("選択に渡した用語", join_values(term.term for term in terms))
         if refined:
-            step.field("同じ章から足した条", f"{refined} 件")
+            step.field("2 段目で足した条", f"{refined} 件")
+        if referenced:
+            step.field("選んだ条を名指しする別の章の条（候補）", f"{sum(item.candidates for item in referenced)} 件")
         step.field("条の目録を読んだ文書", f"{len(catalogs)} 件")
         if extra:
             step.field("範囲の一覧から加えた文書", f"{len(extra)} 件")
         if failed:
             step.field("条を選べなかった文書", f"{len(failed)} 件")
         if refine_failed:
-            step.field("同じ章の条の選択に失敗した文書", f"{len(refine_failed)} 件")
+            step.field("2 段目の条の選択に失敗した文書", f"{len(refine_failed)} 件")
         step.add("条の目録を読んだ文書:", *numbered([catalog.file_name for catalog in catalogs], limit=8))
         if failed:
             step.add(
@@ -3933,8 +3956,19 @@ def _catalog_article_children(
             )
         if refine_failed:
             step.add(
-                "同じ章の条の選択に失敗した文書（目録から選んだ条だけで続けました）:",
+                "2 段目の条の選択に失敗した文書（目録から選んだ条だけで続けました）:",
                 *numbered(refine_failed, limit=8),
+            )
+        if referenced:
+            step.add(
+                "選んだ条を名指しする別の章の条を候補にした文書（候補の数・そのうち足した条）:",
+                *numbered(
+                    [
+                        f"{item.file_name}（{item.candidates} 件" + (f"。足した条: {join_values(item.added)}）" if item.added else "）")
+                        for item in referenced
+                    ],
+                    limit=8,
+                ),
             )
         if scope_failed:
             step.add("範囲の条で構成された文書の一覧からの文書の選択に失敗したため、候補の文書だけで続けました。")
