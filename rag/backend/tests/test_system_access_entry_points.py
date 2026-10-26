@@ -69,7 +69,6 @@ SYSTEM_ACCESS_ENTRY_POINTS: dict[str, tuple[str, ...]] = {
 OTHER_ENTRY_POINTS: dict[str, str] = {
     "app.main": "API。要求ごとに middleware と認証の dependency が利用者の context を作る",
     "app.rag.legacy_export": "旧テーブルを生の接続で書き出すだけ（範囲の条件を通らない）",
-    "app.rag.agent_evaluation_cli": "Agent MCP を HTTP で呼ぶ。DB は読まない（採点の関数だけ）",
     "app.rag.answer_verify_cli": "backend の API を HTTP で呼ぶ。DB は読まない（判定の設定だけ）",
 }
 

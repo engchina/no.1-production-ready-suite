@@ -1,6 +1,6 @@
-# 製品横断の評価の基線（#3240 の段 1・段 2）
+# 製品横断の評価の基線（#3240 の段 1〜3）
 
-比較評価の CLI（`app.rag.agent_evaluation_cli`）が Agent の Run を採点・集計した結果を、合成の入力で固定する。評価を `suite/evaluation/` へ移す（段 3〜5）ときは、同じ fixture から同じ値を出すことを確かめる。値を意図して変えるときは、採点の version（`metrics_version`）を上げ、差と理由を PR とこのファイルに書く。
+業務 Agent の Run の採点・集計を、合成の入力で固定する。段 1・段 2 は rag の比較評価の CLI（`app.rag.agent_evaluation_cli`。#3240 の段 3 で削除）の値で、段 3 でこの fixture を rag から `suite/evaluation/` へ移した。suite の Target・Evaluator・Report が、旧形式の推定（`--infer-missing-outcome`）を選ぶと段 2 と同じ値を出し、既定（推定しない）では suite の基線（`expected.v3`）と同じ値を出すことを確かめる。値を意図して変えるときは、採点の版（`metrics_version`）を上げ、差と理由を PR とこのファイルに書く。
 
 内容はすべて合成のデータで、業務の内容を含まない（AGENTS.md「業務の内容は書かない」）。
 
@@ -8,30 +8,31 @@
 
 | ファイル | 内容 | テスト |
 |---|---|---|
-| `cases/<id>.json` | 1 ケース（`case` は `EvaluationCase`）と、往復ごとの観測の種類と時間と Run の ID（`turns[]`: `observation`・`elapsed_ms`・`run_id`）。`expected.scores` は採点、`expected.cli` は今の CLI に固有の出力 | `tests/test_agent_evaluation_baseline.py` |
-| `platform/contracts/mcp/fixtures/agent-evaluation-baseline.json`（共有） | Run の ID ごとの公開の Agent MCP の出力（`agent_get_run`・`agent_get_run_observation`、終わっていない Run は `agent_cancel_run`）と、その元の合成の Run の記録（`source`。Agent の内部の形で、CLI と rag のテストは読まない） | Agent の `tests/test_evaluation_baseline_observation.py`（本物の MCP の入口で作った出力と一致し、契約の outputSchema に合う）・rag の上のテスト（公開の出力だけで再生） |
-| `summaries.json` | 評価セット（ケースの並びと閾値）ごとの集計（`expected.metrics`）・分母（`expected.denominators`）・CLI の比較の要約（`expected.cli`） | `tests/test_agent_evaluation_baseline.py` |
-| `agent_internal_dependencies.json` | 段 1 の CLI が Run の内部の記録から読んでいた観測と、それを返す公開の Agent MCP の項目（`public_fields`）の対応。各項目は公開の項目を消すと変わる採点の項目を `witness` に持つ。足さなかった観測は `not_added` | 同上 |
-| `answer_sections.json` | 回答の本文のうち主張に数える部分（`grounding_text`）。`rag_sections` は RAG 自身の回答の節、`legacy_agent_sections` は Agent の回答の節（#2738 の前と後） | `tests/test_answer_metrics.py`（RAG）・`tests/test_answer_metrics_legacy_agent.py`（Agent） |
+| `cases/<id>.json` | 1 ケース（`case` は評価セットのケースの形）と、往復ごとの観測の種類と時間と Run の ID（`turns[]`: `observation`・`elapsed_ms`・`run_id`）。`expected.scores` は段 2 の採点、`expected.cli` は段 2 の CLI の出力（Agent に送った依頼・取り消した Run・Run の記録。suite は送った依頼・取消・Run の要約を比べる）、`expected.v3` は suite の既定の採点（段 2 の項目と、指標ごとの状態 `metric_status`・取れたか分からない根拠 `undetermined_evidence`） | `tests/test_baseline.py` |
+| `platform/contracts/mcp/fixtures/agent-evaluation-baseline.json`（共有） | Run の ID ごとの公開の Agent MCP の出力（`agent_get_run`・`agent_get_run_observation`、終わっていない Run は `agent_cancel_run`）と、その元の合成の Run の記録（`source`。Agent の内部の形で、suite は読まない） | Agent の `tests/test_evaluation_baseline_observation.py`（本物の MCP の入口で作った出力と一致し、契約の outputSchema に合う）・suite の上のテスト（公開の出力だけで再生） |
+| `summaries.json` | 評価セット（ケースの並びと閾値）ごとの段 2 の集計（`expected.metrics`）・分母（`expected.denominators`）・比較の要約（`expected.cli`）と、suite の既定の集計と分母（`expected.v3`） | `tests/test_baseline.py` |
+| `agent_internal_dependencies.json` | 段 1 の CLI が Run の内部の記録から読んでいた観測と、それを返す公開の Agent MCP の項目（`public_fields`）の対応。各項目は公開の項目を消すと変わる採点の項目を `witness` に持つ。足さなかった観測は `not_added` | 同上（旧形式の推定を選んで比べる） |
+| `answer_sections.json` | Agent の回答の節（今の見出しと #2738 より前の見出し）を除いた回答の本文の基線（段 3 で rag の `answer_sections.json` の `legacy_agent_sections` から移した。RAG 自身の回答の節は rag に残る） | `tests/test_agent_legacy.py` |
 
 ## 保証すること
 
-- **採点（`expected.scores`）**: ケースの結果のうち Agent の Run の ID と本文を含まない項目（六指標・引用の文書・正解の文書・取れなかった根拠・対応と出所・往復ごとの判断・失敗の理由・失敗の種類と段・時間）。移設の後も一致させる。
-- **集計（`expected.metrics`）**: 六指標の平均（成功したケースのうち測れたものだけ）、`metric_case_counts`、`error_count`、区分・分類・種類・段の数・期待する判断ごとの内訳、閾値の判定（`threshold_failures`・`passed`）、採点の版（`metrics_version`。Agent の経路は `six_metrics_v1+agent_v2`）。
-- **分母（`expected.denominators`）**: ケースの数・失敗の数・最後の往復の観測の種類ごとの数（completed / failed / timeout / cancelled / waiting_approval / api_error）、指標ごとの測れた数（`measured`）と、成功したのに測れなかった数（`not_evaluable`）。失敗は指標の分母に入らず、失敗が 1 つでもあれば `passed=false`。どの指標も測れなければ `passed=null`。
-- **失敗の扱い**: failed・cancelled・waiting_approval・回答前の確認で止まった Run（取り消す）・時間切れ（取り消す）・承認の要るツールを呼ばずに完了した Run（`skipped_approval_tools`・観測の `tool_calls[].status=approval_skipped`。#3240 の Q7）・Run を作れない（HTTP の失敗・ツールのエラー・知らない `schema_version`）は、どれもケースの失敗（`case_error`）。複数往復の途中で失敗したら、それまでの往復を採点せずケースの失敗にする（`error_stage=turn_<n>`、時間は往復の和）。
-- **旧形式の扱い**: 公開の `outcome` が null の完了の Run（成果物に outcome の無い #1305 より前の Run・語彙に無い値）は、回答の文から推定する（最終の検証の定型の注記を除いた最後の行が問いなら確認の質問、引用の無い回答は拒答。`outcome_source=inferred`）。`rag_search` の outcome は公開しないので使わない。
-- **今の CLI に固有の出力（`expected.cli`）**: 往復の Run の ID、診断（`diagnostics.answer`）、失敗の文言、Run の記録（`RunRecord`。使った版 `agent_version`・呼ばなかった承認のツール・見られない根拠と本文を省かれた根拠の数・取消の結果を含む）、Agent に送った依頼（`agent_chat` の `agent_id`・既知の条件を足した最初の質問・`thread_id`）、取り消した Run。段 4 で adapter に移すと形が変わりうる。変えるときは差を記録する。
+- **採点**: ケースの結果のうち Agent の Run の ID と本文を含まない項目（六指標・引用の文書・正解の文書・取れなかった根拠・対応と出所・往復ごとの判断・失敗の理由・失敗の種類と段・時間）。段 2 の結果にあった RAG の評価だけの項目（`answer_evaluation`・`guardrail_warnings`。Agent の経路ではいつも空）は suite に無い。
+- **集計**: 六指標の平均（成功したケースのうち測れたものだけ）、`metric_case_counts`、`error_count`、区分・分類・種類・段の数・期待する判断ごとの内訳、閾値の判定（`threshold_failures`・`passed`）、採点の版。段 2 の結果にあった RAG の評価だけの項目（`evaluation_suite`・`comparison`）は suite に無い。
+- **分母**: 段 2 の形（ケースの数・失敗の数・最後の往復の観測の種類ごとの数・指標ごとの測れた数と測れなかった数）と、suite の形（`denominators`: 最後の往復の状態・失敗の種類・指標ごとの測れた / 対象外 / 評価不能の数と評価不能の理由）。失敗は指標の分母に入らず、失敗が 1 つでもあれば `passed=false`。どの指標も測れなければ `passed=null`。
+- **失敗の扱い**: failed・cancelled・waiting_approval・時間切れ（取り消す）・承認の要るツールを呼ばずに完了した Run（`skipped_approval_tools`・観測の `tool_calls[].status=approval_skipped`。#3240 の Q7）・Run を作れない（HTTP の失敗・ツールのエラー・知らない `schema_version`）は、どれもケースの失敗（`case_error`）。複数往復の途中で失敗したら、それまでの往復を採点せずケースの失敗にする（`error_stage=turn_<n>`、時間は往復の和）。
+- **旧形式の扱い**: 公開の `outcome` が null の完了の Run は、既定では対応を推定せず、判断の正しさを評価不能（`outcome_missing`）にする。`--infer-missing-outcome` を選ぶと段 2 と同じく回答の文から推定する（最終の検証の定型の注記と Agent の回答の節を除いた最後の行が問いなら確認の質問、引用の無い回答は拒答。`outcome_source=inferred`）。`rag_search` の outcome は公開しないので使わない。
+- **保存した観測からの採点**: 結果のファイルの観測だけから採点し直すと、流したときと同じ集計になる。推定の有無を変えた採点し直しは、その設定で流したときと同じ集計になる（Target を呼ばない）。
 
 ## 再生の条件
 
-`tests/test_agent_evaluation_baseline.py` の `replay` が、Agent の公開の MCP（`POST /api/mcp` の `tools/call`）を共有の fixture の公開の出力で再生して、`evaluate` を呼ぶ。CLI が送る引数は契約（`agent-tools.json` の inputSchema）で確かめる。
+`tests/baseline_support.py` の `replay` が、Agent の公開の MCP（`POST /api/mcp` の `tools/call`）を共有の fixture の公開の出力で再生して、suite の `run_experiment` を呼ぶ。送る引数は契約（`agent-tools.json` の inputSchema）で確かめる。
 
 - 往復の時間は `turns[].elapsed_ms`（往復の始まりを 0 秒、Run の終わりを elapsed_ms の時刻にする時計）。
 - 時間切れの上限は 2 秒（`RUN_TIMEOUT_SECONDS`）。時間切れの Run（`observation=timeout`）の `agent_get_run` は running（`in_progress=true`）のまま返し、待ちの時計は読むたびに 1 秒進む。期限を過ぎたら `agent_cancel_run` を送る。
 - `observation=api_error` の往復は `agent_chat` が `http_status` の HTTP の失敗を返す。
-- 観測は 1 回（`limit=100`）で全件を返す（ページのたどり方は `tests/test_agent_evaluation_cli.py`）。
-- 業務ガイドの条件の名前（`--guides`）は渡さない（既知の条件は条件の id で書く）。
+- 観測は 1 回（`limit=100`）で全件を返す（ページのたどり方は `tests/test_agent_mcp_target.py`）。
+- 業務ガイドの条件の名前は渡さない（既知の条件は条件の id で書く）。
+- 回答の前の確認・本文を省かれた根拠・見られない根拠は共有の fixture に無いため、`tests/test_agent_mcp_target.py` の合成の出力で確かめる。
 
 ## 公開の Agent MCP の項目
 
@@ -77,6 +78,20 @@ CLI は Agent の画面の API（`POST /api/runs`・`GET /api/runs/{id}`）と R
 - **`expected.cli`**: 診断から `rag_search` 由来の `insufficient_reason` と、確認の質問で聞いた条件（`clarifications`）が無くなった。Run の記録に `agent_version`・`skipped_approval_tools`・`withheld_evidence_count`・`evidence_text_omitted`・`cancel_result` を足し、送った依頼は `run_requests`（`goal`）から `chat_requests`（`question`）にした。fixture の `thread_id` は契約の形（`thread_<32 桁の hex>`）にした。
 - `cases/<id>.json` の `turns[].run`（Agent の内部の記録）は共有の fixture の `source` に移し、ケースは Run の ID だけを持つ。
 
+### #3240 の段 3: suite へ移した（採点の版 `six_metrics_v1+agent_v3`）
+
+比較評価を rag から `suite/evaluation/` の独立の uv project に移し、採点の部品（照合・順位・判断・集計）を platform の `pr_evaluation_scoring` に出した（RAG の評価ランナーも同じ部品を使い、RAG 自身の評価の値は変えていない）。旧形式の推定を選ぶと（`six_metrics_v1+agent_v3+legacy_outcome`）、段 2 の採点・集計・分母・比較の要約と同じ値になる。差は次だけ。
+
+- `run-create-error`: `error_stage` が null → `turn_0`（Run を作れなかった往復にも段を付ける。段 2 は Run を作れない失敗だけ段と時間を捨てていた）。
+- 採点の版: `six_metrics_v1+agent_v2` → `six_metrics_v1+agent_v3+legacy_outcome`。
+- Run の要約: 推定した対応を `outcome` に出す（段 2 の Run の記録は、推定した対応のうち確認の質問だけを残していた。`legacy-inferred-abstained`・`legacy-rag-search-outcome`・`unknown-outcome-vocabulary`）。承認の要るツールを呼ばなかった往復は採点しないので対応を出さない（段 2 と同じ）。
+
+既定（推定しない。`six_metrics_v1+agent_v3`）の値（`expected.v3`）は、段 2 から次が変わる。
+
+- **outcome の無い完了の Run は判断の正しさを評価不能にする**（`outcome_missing`）: `legacy-inferred-abstained`・`legacy-inferred-question`・`legacy-rag-search-outcome`・`unknown-outcome-vocabulary` の `observed_outcome`・`outcome_source` が null、`response_decision_accuracy` が null（`legacy-inferred-question` は推定が誤っていた `unexpected_handling` も付かない）。`multi-turn-clarify-then-answer` は 1 往復目が評価不能なので、ケースの判断も評価不能（2 往復目は answered で正しい）。
+- その結果、`response_decision_accuracy` の測れた数が減り（`all`・`completed` は 7 → 2、`passing` は 2 → 1）、平均は 1.0。`passing` は閾値を付けた判断の正しさに評価不能のケースがあるので、合格にしない（`passed` が true → null）。検索の指標（MRR・必要な根拠の取得率）は、引用がある Run なので変わらない。
+- 回答の前の確認（`agent_answer_confirmation` で答える）・本文を省かれた根拠（`evidence_text_omitted`）・見られない根拠（`evidence_withheld`）の規則は、共有の fixture にその Run が無いので基線の値は変わらない（合成の出力のテストで確かめる）。
+
 ## 基線を作り直すとき
 
-採点を意図して変えたときと、CLI の出力の不具合を直したとき（`expected.cli` だけ。上の「意図して作り直した値」に記録する）だけ作り直す。今のコードで `replay` の結果（`case_result`・`suite_result`）を `expected` に書き、変わった値を PR で一つずつ説明する。移設のために作り直さない（移設の後の実装を、この基線で確かめる）。Agent の公開の出力を意図して変えたときは、Agent の `UPDATE_AGENT_EVALUATION_BASELINE=1 uv run pytest tests/test_evaluation_baseline_observation.py` で共有の fixture を書き直し、この基線の採点が変わらないことを確かめる。
+採点を意図して変えたときだけ作り直す。`UPDATE_SUITE_EVALUATION_BASELINE=1 uv run pytest tests/test_baseline.py -p no:xdist`（並列にしない）で `expected.v3` を書き直し、変わった値を PR とこのファイルで一つずつ説明する。段 2 の値（`expected.scores`・`expected.metrics`・`expected.denominators`・`expected.cli`）は段 2 の記録として書き換えず、意図した差は `tests/test_baseline.py` の `STAGE2_DIFFS` に書く。Agent の公開の出力を意図して変えたときは、Agent の `UPDATE_AGENT_EVALUATION_BASELINE=1 uv run pytest tests/test_evaluation_baseline_observation.py` で共有の fixture を書き直し、この基線の採点が変わらないことを確かめる。

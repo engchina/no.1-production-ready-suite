@@ -2,8 +2,9 @@
 
 採点の部品を platform へ出したとき、RAG 自身の評価の結果が変わらないことを確かめる。
 
-- 表の行の照合: RAG の表の構造の解析（`rag_engine.parsing.table_structure`。取り込みの表の行と同じ）と、
-  platform の `table_row_texts` が同じ行の本文を返す（照合は空白を無視するので、正規化した形で比べる）。
+- 表の行の照合: RAG の表の構造の解析（`rag_engine.parsing.table_structure`。取り込みの表の行と
+  同じ）と、platform の `table_row_texts` が同じ行の本文を返す（照合は空白を無視するので、正規化
+  した形で比べる）。
 - 対応の語彙: RAG の評価の `EvaluationOutcome` と platform の `OUTCOMES` が同じ。
 """
 

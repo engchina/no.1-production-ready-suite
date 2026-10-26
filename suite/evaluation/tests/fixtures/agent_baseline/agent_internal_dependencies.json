@@ -1,5 +1,5 @@
 {
-  "description": "段 1 の CLI の採点・記録が Agent の Run の内部の記録（observations）から読んでいた観測と、それを返す公開の Agent MCP（platform/contracts/mcp/agent-tools.json）の項目（public_fields）の対応（#3240 の段 2）。段 2 の後の CLI は公開の出力だけを読む。dependencies は公開の項目を消して確かめられる項目（witness の fixture で、score_changes の採点の項目だけが変わり、run_changes の Run の記録が変わる。段 1 で内部の記録を消して確かめた変化と同じ）。not_ablatable は消す形では確かめられない項目、not_added は公開の契約に足さなかった観測と理由。",
+  "description": "段 1 の CLI の採点・記録が Agent の Run の内部の記録（observations）から読んでいた観測と、それを返す公開の Agent MCP（platform/contracts/mcp/agent-tools.json）の項目（public_fields）の対応（#3240 の段 2）。段 2 の後の CLI と、それを移した suite の Agent の adapter（#3240 の段 3）は公開の出力だけを読む（suite の tests/test_baseline.py が旧形式の推定を選んで確かめる）。dependencies は公開の項目を消して確かめられる項目（witness の fixture で、score_changes の採点の項目だけが変わり、run_changes の Run の記録が変わる。段 1 で内部の記録を消して確かめた変化と同じ）。not_ablatable は消す形では確かめられない項目、not_added は公開の契約に足さなかった観測と理由。",
   "public_contract": "platform/contracts/mcp/agent-tools.json",
   "public_fixture": "platform/contracts/mcp/fixtures/agent-evaluation-baseline.json",
   "public_tools": [

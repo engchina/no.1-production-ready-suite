@@ -1,5 +1,5 @@
 {
-  "description": "評価セットごとの集計の基線。case_fixtures は cases/ の fixture の id（この順に流す）。expected は tests/test_agent_evaluation_baseline.py の suite_result の値。",
+  "description": "評価セットごとの集計の基線。case_fixtures は cases/ の fixture の id（この順に流す）。expected.metrics・denominators・cli は段 2（rag の比較評価の CLI。採点の版 six_metrics_v1+agent_v2）の値で、suite の tests/test_baseline.py が旧形式の推定（--infer-missing-outcome）で同じ値になることを確かめる。expected.v3 は suite の既定（推定しない。six_metrics_v1+agent_v3）の集計と分母。",
   "suites": [
     {
       "id": "all",

@@ -223,7 +223,8 @@ Excel は前処理 `excel_to_jsonl`）、旧版を新しい版に置き換えた
 ```bash
 cd rag/backend
 uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop.json \
-  --api-base-url http://127.0.0.1:8000 --output /tmp/multi-hop.resolved.json
+  --api-base-url http://127.0.0.1:8000 --output /tmp/multi-hop.resolved.json \
+  --document-map-output /tmp/multi-hop.document-map.json
 uv run python -m app.rag.evaluation_cli /tmp/multi-hop.resolved.json --split dev \
   --api-base-url http://127.0.0.1:8000 --output /tmp/multi-hop.a.json
 # 旧版を除かない評価（紛らわしさの測定）。別のナレッジベースに取り込む。
@@ -281,18 +282,21 @@ done
 
 D は、同じナレッジベースを参照する検索・回答プロファイルを使う業務 Agent（スキル `business-rag-research`）の Run です。
 この評価セットには業務ガイドが無いため（`evaluation_corpus_cli --guides` は業務ガイドの無いファイルを受け付けない）、
-画面の「検索・回答プロファイル」で、取り込んだナレッジベース（`/tmp/multi-hop.resolved.json` の
+画面の「検索・回答プロファイル」で、取り込んだナレッジベース（`evaluation_corpus_cli` の `--output` の
 `knowledge_base_ids`）だけを参照するプロファイルを作って公開し、そのプロファイルをデータの範囲にした業務 Agent を
-Agent の画面で作って公開しておきます（評価の CLI は業務 Agent を作らない。#3240）。
+Agent の画面で作って公開しておきます（評価の CLI は業務 Agent を作らない。#3240）。D は製品横断の評価
+（`suite/evaluation`。#3240）で流し、評価セットの `file:` は `evaluation_corpus_cli --document-map-output` の
+対応表で解決します。
 
 ```bash
-cd rag/backend
-export RAG_EVALUATION_AGENT_API_KEY=prak_...   # 使える製品に agent を含む API キー
-uv run python -m app.rag.agent_evaluation_cli run /tmp/multi-hop.resolved.json --split dev \
+cd suite/evaluation
+export SUITE_EVALUATION_API_KEY=prak_...   # 使える製品に agent を含む API キー
+uv run suite-evaluation run ../../rag/evaluation/multi-hop/multi-hop.json --split dev \
+  --document-map /tmp/multi-hop.document-map.json \
   --agent-mcp-url http://127.0.0.1:8020/api/mcp --agent-id <公開済みの業務 Agent> \
   --output /tmp/multi-hop.d.json
 # 比べる表（種類別・段の数別・区分ごとの種類別の根拠の連鎖の完全率の行を含む）
-uv run python -m app.rag.agent_evaluation_cli summarize A=/tmp/multi-hop.a.json D=/tmp/multi-hop.d.json
+uv run suite-evaluation compare A=/tmp/multi-hop.a.json D=/tmp/multi-hop.d.json
 ```
 
 - D の引用は、公開の Agent MCP の観測（`agent_get_run_observation` の `evidence[]`）の根拠で、その Run の

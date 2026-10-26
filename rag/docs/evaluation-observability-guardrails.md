@@ -36,7 +36,7 @@
 - `POST /api/evaluation/jobs/run`: 非同期実行。job の取得・取消は `/api/evaluation/jobs/{id}` と `/cancel`。同期は `/api/evaluation/run`。
 - 結果は `six_metrics_v1`、六指標と対象件数、ケース詳細、分類・区分・質問の種類・段数・期待する判断別の内訳を返します。比較も同じ順序です。
 - 正確性・網羅性・忠実性の評価は「品質評価」で実行します。検索・チャットの回答詳細には標準回答による評価操作を置きません。
-- CLI (`app.rag.evaluation_cli` / `app.rag.agent_evaluation_cli`) の出力・比較も同じ六指標です。
+- CLI (`app.rag.evaluation_cli`) の出力と、業務 Agent との比較（製品横断の評価 `suite/evaluation` の `suite-evaluation`。#3240）も同じ六指標です。照合・順位・判断の部品は platform の `pr_evaluation_scoring` を共有します。
 
 実行時の安全機構、回答生成の監査、引用リンクは評価指標の整理によって削除しません。
 

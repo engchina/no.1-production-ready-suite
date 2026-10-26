@@ -4,12 +4,12 @@
 段 1 の合成の Run の記録（`source`）と、その Run を Agent の公開の MCP で読んだ出力
 （`agent_get_run`・`agent_get_run_observation`、終わっていない Run は `agent_cancel_run`）を持つ。
 このテストは記録を保存先に置いて本物の MCP の入口（API キー）で読み、出力が fixture と同じで、
-契約（`agent-tools.json` の outputSchema）に合うことを確かめる。rag の評価の CLI の基線
-（`rag/backend/tests/test_agent_evaluation_baseline.py`）は、この公開の出力だけで採点する。
+契約（`agent-tools.json` の outputSchema）に合うことを確かめる。製品横断の評価の基線
+（`suite/evaluation/tests/test_baseline.py`）は、この公開の出力だけで採点する。
 
 Agent の観測・出力を意図して変えたら
 `UPDATE_AGENT_EVALUATION_BASELINE=1 uv run pytest tests/test_evaluation_baseline_observation.py`
-で fixture の公開の出力を書き直し、rag の基線の採点が変わらないことを確かめる。
+で fixture の公開の出力を書き直し、suite の基線の採点が変わらないことを確かめる。
 """
 
 from __future__ import annotations
@@ -50,10 +50,10 @@ FIXTURE = CONTRACTS / "fixtures/agent-evaluation-baseline.json"
 CONTRACT = CONTRACTS / "agent-tools.json"
 # fixture の業務 Agent の ID（テストの業務 Agent の ID をこの値に置き換えて比べる）。
 AGENT_ID = "agent-baseline"
-# 観測を 1 回で読む件数（rag の評価の CLI と同じ契約の上限）。
+# 観測を 1 回で読む件数（suite の評価の adapter と同じ契約の上限）。
 OBSERVATION_LIMIT = 100
 T0 = datetime(2026, 10, 25, 1, 0, tzinfo=UTC)
-# 終わっていない Run（rag の評価の CLI が時間切れで取り消す）。
+# 終わっていない Run（suite の評価の adapter が時間切れで取り消す）。
 UNFINISHED = frozenset({RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_CONFIRMATION})
 PUBLIC_TOOLS = ("agent_get_run", "agent_get_run_observation", "agent_cancel_run")
 
@@ -212,12 +212,12 @@ def test_baseline_runs_read_through_the_public_mcp_match_the_shared_fixture(
     }
     assert actual == expected, (
         "公開の MCP の出力が共有の fixture と違います。意図した変更なら "
-        "UPDATE_AGENT_EVALUATION_BASELINE=1 で書き直し、rag の評価の基線を確かめてください。"
+        "UPDATE_AGENT_EVALUATION_BASELINE=1 で書き直し、suite の評価の基線を確かめてください。"
     )
 
 
 def test_shared_fixture_outputs_follow_the_public_contract() -> None:
-    """fixture の公開の出力は契約の outputSchema に合う（rag の CLI は契約の形だけを読む）。"""
+    """fixture の公開の出力は契約の outputSchema に合う（suite の評価は契約の形だけを読む）。"""
     validators = _validators()
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     assert fixture["runs"]
@@ -227,5 +227,5 @@ def test_shared_fixture_outputs_follow_the_public_contract() -> None:
             if tool in entry:
                 errors = [error.message for error in validators[tool].iter_errors(entry[tool])]
                 assert errors == [], (entry["run_id"], tool, errors)
-        # 観測は 1 回で全件を読める大きさ（rag の基線の再生はページをたどらない）。
+        # 観測は 1 回で全件を読める大きさ（suite の基線の再生はページをたどらない）。
         assert entry["agent_get_run_observation"]["next_cursor"] is None, entry["run_id"]

@@ -21,7 +21,10 @@
    `entity_expansion_enabled: true` を入れる（既存の明示値は変えない）。
    `--no-entity-index` は構築を無効にし、未指定は全体の既定に従う。
    検索・回答プロファイルには拡張の個別設定を保存しない。
-7. `--guides` を渡したとき（#1289）は、そのナレッジベースを参照する検索・回答プロファイルを作り、
+7. `--document-map-output` を渡したとき（#3240）は、取り込んだファイル名 → 文書 ID の対応表
+   （`{"documents": {"<ファイル名>": "<document_id>"}}`）を書く。製品横断の
+   評価（`suite-evaluation run --document-map`）が評価セットの `file:` を解決する。
+8. `--guides` を渡したとき（#1289）は、そのナレッジベースを参照する検索・回答プロファイルを作り、
    業務ガイド（`support-guides.json`。参照の `file:` も文書 ID に置き換える）を取り込んで公開し、
    `search_answer_profile_id` を入れた評価セット（業務ガイドあり = C）を `--guided-output` に書く。
 
@@ -412,6 +415,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--output", type=Path, required=True, help="置き換えた評価セットの出力先")
     parser.add_argument(
+        "--document-map-output",
+        type=Path,
+        help="取り込んだファイル名 → 文書 ID の対応表の出力先（製品横断の評価が使う。#3240）",
+    )
+    parser.add_argument(
         "--guides",
         type=Path,
         help=(
@@ -516,6 +524,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.entity_index is True:
             resolved = with_entity_expansion(resolved)
         _write(args.output, resolved)
+        if args.document_map_output:
+            _write(args.document_map_output, {"documents": dict(documents)})
         if profile_id is not None:
             _write(args.guided_output, guided_golden_set(resolved, profile_id))
         return 0
