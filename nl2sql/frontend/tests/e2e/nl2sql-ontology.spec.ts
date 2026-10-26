@@ -960,9 +960,11 @@ async function expectNoPageOverflow(page: Page) {
     await expect(skeleton).toContainText("WHERE ORDERS.ORDER_DATE >= DATE '2026-04-01'");
     await expect(summary).toContainText("実行はせず、生成する SQL そのものでもありません");
     await expect(panel.getByTestId("nl2sql-clarification-question")).toHaveCount(0);
-    // 確認のカード（チャットと同じ部品・同じ文言。#1761）: その他（自由入力）と、確定・スキップの操作。
+    // 確認のカード（チャットと同じ部品・同じ文言。#1761）: 直す内容の欄と、確定・スキップの操作。
+    // 選び直す対象が無い（選択肢の無い）カードなので「その他」と言わない（#3366）。
     const confirm = panel.getByTestId("nl2sql-clarification-confirm");
-    await expect(confirm.getByRole("textbox", { name: "その他（自由入力）" })).toBeVisible();
+    await expect(confirm.getByRole("textbox", { name: "直す内容", exact: true })).toBeVisible();
+    await expect(confirm.getByRole("textbox", { name: "その他（自由入力）" })).toHaveCount(0);
     await expect(confirm.getByRole("button", { name: "直しを伝える" })).toBeDisabled();
     await expect(confirm.getByRole("button")).toHaveText([
       "この内容で SQL を生成して実行",
@@ -1095,7 +1097,8 @@ test("回答前の確認は AI の推測を確認済みの一覧から直せる"
   await expect(question).toHaveAttribute("data-item-key", "period_this_fiscal_year");
 
   await selectRow.getByRole("button", { name: "地域と受注金額の合計を直す" }).click();
-  await question.getByLabel("その他（自由入力）").fill("CUSTOMERS.REGION と AVG(ORDERS.AMOUNT)");
+  // 候補の無い要件を直す欄は「直す内容」（「その他」と言わない。#3366）。
+  await question.getByRole("textbox", { name: "直す内容", exact: true }).fill("CUSTOMERS.REGION と AVG(ORDERS.AMOUNT)");
   await question.getByRole("button", { name: "直した内容で更新" }).click();
   expect(payloads.clarificationAnswer).toEqual({
     base_version: 1,
@@ -1255,7 +1258,8 @@ for (const colorScheme of ["light", "dark"] as const) {
     const question = panel.getByTestId("nl2sql-clarification-question");
     await expect(question.getByText("追加する条件: 並び順")).toBeVisible();
     await expect(question.getByRole("heading", { name: "並び順の条件を入力してください。" })).toBeFocused();
-    await question.getByLabel("その他（自由入力）").fill("EMPLOYEE.HIRE_DATE の新しい順");
+    // 条件を足す欄は「追加する条件」（「その他」と言わない。#3366）。
+    await question.getByRole("textbox", { name: "追加する条件", exact: true }).fill("EMPLOYEE.HIRE_DATE の新しい順");
     await question.getByRole("button", { name: "この条件を追加" }).click();
     expect(payloads.clarificationAnswer).toEqual({
       base_version: 2,

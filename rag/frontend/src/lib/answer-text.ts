@@ -151,6 +151,18 @@ export interface AnswerCitationRef {
 const CITATION_LINE = /^根拠：(.+?)(?:\s+p\.(\d*))?$/;
 const SHEET_CITATION_LINE = /^根拠：(.+?)\s+シート「(.+)」(?:[A-Z]+(\d+):[A-Z]+(\d+))?$/;
 
+/**
+ * 根拠の行のファイル名の後ろの位置（「p.3」「シート「名前」A3:D6」）。押せる根拠の行で長いファイル名を省略しても、
+ * 位置は省略せずに出すのに使う（#3353）。ファイル名が読めない・位置が無いときは undefined。
+ */
+export function citationLocation(line: string, fileName: string | null | undefined): string | undefined {
+  if (!fileName) return undefined;
+  const value = line.trim();
+  const at = value.lastIndexOf(fileName);
+  if (at < 0) return undefined;
+  return value.slice(at + fileName.length).trim() || undefined;
+}
+
 export function parseCitationLine(line: string, format?: AnswerFormat): AnswerCitationRef | null {
   if (format?.citation_prefix) {
     const value = line.trim();

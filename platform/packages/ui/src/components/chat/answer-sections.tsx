@@ -1,10 +1,11 @@
 import { ChevronDown, ChevronUp, FileText } from "lucide-react";
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { detectContentLang, resolveContentLang } from "../../lib/content-lang";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { TEXT_ICON_SIZE } from "../ui/text-icon";
+import { Tooltip } from "../ui/tooltip";
 import {
   ANSWER_PASSAGE_STATE_ICON,
   AnswerPassageMarked,
@@ -63,6 +64,11 @@ export interface AnswerCitationRef {
   label: string;
   /** 押せる行の読み上げの名前（例:「根拠：文書 p.3 を表示」）。 */
   ariaLabel?: string;
+  /**
+   * `label` の末尾の位置（例:「p.3」）。渡すと、押せる行の長い名前を省略しても位置は省略せずに出す（#3353）。
+   * `label` の末尾と一致しないときは使わない。
+   */
+  location?: string;
   onOpen?: () => void;
 }
 
@@ -119,35 +125,73 @@ export type AnswerSectionsBlock =
       testId?: string;
     };
 
+/** 根拠の行の文を、省略してよい名前と省略しない末尾の位置に分ける。 */
+function splitAnswerCitationLabel(label: string, location?: string): { head: string; location: string | null } {
+  const tail = location?.trim();
+  if (!tail || !label.endsWith(tail)) return { head: label, location: null };
+  const head = label.slice(0, -tail.length).trimEnd();
+  // 区切りの空白は位置の側に残す（読み上げ・文字の取得で「文書 A.pdf p.3」のまま。見た目の間は Button の gap）。
+  return head ? { head, location: label.slice(head.length) } : { head: label, location: null };
+}
+
+/**
+ * 押せる根拠の行（#3353）。長いファイル名は 1 行に収めて名前の末尾を省略し（`Button` の `[&>span]:truncate`）、位置
+ * （`location`。頁など）は省略しない。省略したときだけ全文を Tooltip で出す。読み上げの名前（`ariaLabel`）は全文のまま。
+ */
+function AnswerCitationLinkButton({ citation }: { citation: AnswerCitationRef }) {
+  const { head, location } = splitAnswerCitationLabel(citation.label, citation.location);
+  const labelRef = useRef<HTMLSpanElement | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  useLayoutEffect(() => {
+    const element = labelRef.current;
+    if (!element) return undefined;
+    const measure = () => setTruncated(element.scrollWidth - element.clientWidth > 1);
+    measure();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [head]);
+  return (
+    // 行の幅に収める（`min-w-0`）。本文の入れ物の最小幅を根拠の行の全長で広げない。
+    <span className="mt-0.5 flex min-w-0">
+      <Tooltip content={citation.label} disabled={!truncated} describe={false}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          icon={FileText}
+          // 押せる根拠の行は強調色にし、当たらない根拠の行（文字だけ）と見分ける。
+          className="text-accent-fg"
+          aria-label={citation.ariaLabel}
+          onClick={citation.onOpen}
+          data-testid="answer-citation-link"
+          data-truncated={truncated || undefined}
+        >
+          <span ref={labelRef}>{head}</span>
+          {location ? <span className="shrink-0">{location}</span> : null}
+        </Button>
+      </Tooltip>
+    </span>
+  );
+}
+
 /** 根拠の行の並び。 */
 export function AnswerCitationLinks({ citations }: { citations: readonly AnswerCitationRef[] }) {
   return (
     <>
       {citations.map((citation) =>
         citation.onOpen ? (
-          <span key={citation.key} className="mt-0.5 flex">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              icon={FileText}
-              // 押せる根拠の行は強調色にし、当たらない根拠の行（文字だけ）と見分ける。
-              className="text-accent-fg"
-              aria-label={citation.ariaLabel}
-              onClick={citation.onOpen}
-              data-testid="answer-citation-link"
-            >
-              {citation.label}
-            </Button>
-          </span>
+          <AnswerCitationLinkButton key={citation.key} citation={citation} />
         ) : (
           <span
             key={citation.key}
-            className="mt-0.5 flex items-center gap-1 text-xs text-fg-muted"
+            className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-fg-muted"
             data-testid="answer-citation-text"
           >
             <FileText size={14} aria-hidden className="shrink-0" />
-            {citation.label}
+            {/* 押せない行は省略せず折り返す（全文を読める）。 */}
+            <span className="min-w-0 [overflow-wrap:anywhere]">{citation.label}</span>
           </span>
         ),
       )}
