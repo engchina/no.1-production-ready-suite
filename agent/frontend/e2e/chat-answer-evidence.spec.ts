@@ -530,6 +530,40 @@ test("実行の詳細の回答も同じ節で出し、根拠の塊は RAG と同
   await expect(page.getByTestId("run-artifacts-section")).toHaveCount(0);
 });
 
+// #3422: 章節の階層（section_path）がとても長い根拠でも、根拠のカードの一覧が横にスクロールしない（チャットと実行の詳細）。
+// 章節のチップはカードの幅で省略（…）し、全文は title で読める。
+const LONG_SECTION_PATH = Array.from({ length: 12 }, (_, index) => `第 ${index + 1} 章 合成の章節の見出し`);
+
+async function expectEvidenceListFits(citations: ReturnType<Page["getByTestId"]>) {
+  await citations.locator("summary").click();
+  const list = citations.locator(".bounded-scroll-area-lg");
+  const chip = list.getByTestId("evidence-chips").locator("dd", { hasText: "第 12 章" });
+  await expect(chip).toHaveAttribute("title", LONG_SECTION_PATH.join(" > "));
+  expect(await list.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
+  const [chipBox, cardBox] = await Promise.all([chip.boundingBox(), list.getByTestId("evidence-card").first().boundingBox()]);
+  expect(chipBox!.x + chipBox!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width);
+}
+
+for (const viewport of VIEWPORTS) {
+  test(`章節の階層が長い根拠でも根拠の一覧が横にスクロールしない (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    seedRun(mockApi);
+    const run = mockApi.state.runs.find((item) => item.id === RUN_ID)!;
+    const artifacts = run.artifacts as { kind: string; content: { items: Record<string, unknown>[] } }[];
+    const evidence = artifacts.find((item) => item.kind === "answer_evidence")!.content;
+    evidence.items[0].locator = { page_start: 3, page_end: 3, section_path: LONG_SECTION_PATH };
+
+    await page.goto("/chat");
+    await openThread(page);
+    await expectEvidenceListFits(page.getByTestId(`chat-turn-${RUN_ID}`).getByTestId("answer-citations"));
+    await expectNoHorizontalOverflow(page);
+
+    await page.goto(`/runs?id=${RUN_ID}`);
+    await expectEvidenceListFits(page.getByTestId("run-evidence-section").getByTestId("answer-citations"));
+    await expectNoHorizontalOverflow(page);
+  });
+}
+
 // #3252: 保存した根拠は見る人の今の権限で確かめ直し、見られない根拠は backend が中身を返さず数（`withheld_evidence_count`）
 // だけを返す。画面は RAG と同じ共通の行「権限の無い根拠 N 件」を折りたたみに出し、「AI に渡した N 件」に含める。
 for (const viewport of VIEWPORTS) {

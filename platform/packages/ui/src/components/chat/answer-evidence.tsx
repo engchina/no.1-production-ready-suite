@@ -466,7 +466,9 @@ function EvidenceMetadata({ item, labels }: { item: EvidenceListItem; labels: Ev
   return (
     <div className="mt-2 flex flex-wrap items-center gap-1.5">
       {chips.length > 0 ? (
-        <dl className="flex flex-wrap gap-1.5" data-testid="evidence-chips">
+        // 行（flex-wrap）の item の dl は min-width: auto だと、折り返さないチップの文字の全幅まで伸び、
+        // チップの max-w-full と truncate が効かず根拠の一覧が横にスクロールする（375px。#3422）。行の幅で止める。
+        <dl className="flex min-w-0 max-w-full flex-wrap gap-1.5" data-testid="evidence-chips">
           {chips.map((chip) => (
             <div
               key={chip.id}

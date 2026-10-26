@@ -129,6 +129,24 @@ describe("EvidenceCard", () => {
     expect(plain.textContent).toContain("—");
     expect(plain.querySelector('[role="meter"]')).toBeNull();
   });
+
+  it("長いチップは行の幅で止めて省略し、全文を title と読み上げに残す（#3422）", () => {
+    const longPath = Array.from({ length: 12 }, (_, index) => `第 ${index + 1} 章`).join(" > ");
+    const card = html(
+      <ul>
+        <EvidenceCard index={0} item={item({ chips: [{ id: "section_path", label: "章節", value: longPath }] })} />
+      </ul>
+    );
+    // 行（flex-wrap）の item の dl は、縮められない（min-width: auto）と文字の全幅まで伸びる。幅の確認は e2e（RAG・Agent）。
+    const chips = card.querySelector('[data-testid="evidence-chips"]')!;
+    expect(chips.classList).toContain("min-w-0");
+    expect(chips.classList).toContain("max-w-full");
+    const value = chips.querySelector("dd")!;
+    expect(value.classList).toContain("truncate");
+    expect(value.getAttribute("title")).toBe(longPath);
+    expect(value.textContent).toBe(longPath);
+    expect(chips.querySelector("dt")!.textContent).toBe("章節");
+  });
 });
 
 describe("AnswerEvidence", () => {
