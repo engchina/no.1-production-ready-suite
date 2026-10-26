@@ -280,6 +280,32 @@ async def test_context_group_siblings_batch_keeps_anchor_order(
     assert all(chunk.score == 0.5 for chunk in siblings)
 
 
+async def test_context_group_siblings_batches_are_read_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """起点が 1 回の SQL の上限を超えたときの複数回の SQL は、並行に読む(#3461)。"""
+    size = oracle_module._CONTEXT_ANCHOR_BATCH_SIZE
+    anchors = [_anchor(f"a{index}", index=100, chunk_set_id="set-a") for index in range(size + 1)]
+    client = OracleClient(settings=Settings.model_construct())
+    started: list[str] = []
+    both_started = asyncio.Event()
+
+    async def fake_fetch_all(
+        statement: str, binds: Mapping[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        started.append(str((binds or {})["ca_chunk_0"]))
+        if len(started) == 2:
+            both_started.set()
+        # 直列に読むと 2 回目の SQL が始まらず、ここで時間切れになる。
+        await asyncio.wait_for(both_started.wait(), timeout=5)
+        return []
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+
+    assert await client.context_group_siblings(anchors, max_chunks_per_group=2) == []
+    assert sorted(started) == ["a0", f"a{size}"]
+
+
 def test_anchor_positions_parses_integers_only() -> None:
     assert oracle_module._anchor_positions("0:1,12:3") == [(0, 1), (12, 3)]
     assert oracle_module._anchor_positions(None) == []
