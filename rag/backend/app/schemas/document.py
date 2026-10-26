@@ -30,7 +30,10 @@ from app.config import (
     CHUNK_TABLE_CHILD_TARGET_CHARS_MIN,
     ChunkingStrategy,
 )
-from app.rag.kb_adapter_config import KnowledgeBaseIngestionConfig
+from app.rag.kb_adapter_config import (
+    KnowledgeBaseIngestionConfig,
+    reject_roadmap_parser_backend_input,
+)
 from app.schemas.classification import (
     CLASSIFICATION_CATEGORY_KEYS,
     normalize_category_value,
@@ -623,6 +626,19 @@ class DocumentProcessingConfig(KnowledgeBaseIngestionConfig):
     chunk_context_header_enabled: bool | None = None
     # 章節の抽出規則の方式。章節の表示と、取込時に要約する章節に適用する。
     section_rules_mode: SectionRulesMode | None = None
+
+
+class DocumentProcessingConfigInput(DocumentProcessingConfig):
+    """処理レシピの保存の入力(``PUT /documents/{id}/recipes/{recipe_id}``)。
+
+    保存済みの値は読み込み時に準備中(ロードマップ)の解析エンジンを継承へ寄せるが、新しく選ぶ保存は
+    理由の分かる検証のエラー(422)にする(#3374)。親の検証(削除済みの項目の読み替え)はその後に通す。
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_roadmap_parser_backend(cls, data: object) -> object:
+        return reject_roadmap_parser_backend_input(data)
 
 
 class DocumentRecipeStepStatus(StrEnum):

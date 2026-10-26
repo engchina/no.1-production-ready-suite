@@ -4,6 +4,8 @@ Production Ready NL2SQL is a production-oriented NL2SQL reference implementation
 for deploying an Oracle AI Database-backed application with OCI Enterprise AI and OCI
 Generative AI.
 
+第三者の部品のライセンスの通知（同梱の native ライブラリ・書体など）は root の [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md) にあります。
+
 ## Deploy to OCI
 
 Click the button below to open OCI Resource Manager with the Osaka region

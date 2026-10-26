@@ -1,4 +1,5 @@
 import {
+  CalendarClock,
   CircleAlert,
   CircleCheck,
   History,
@@ -80,6 +81,31 @@ export function StatusBadge({
         </span>
       ) : null}
       {label}
+    </span>
+  );
+}
+
+/**
+ * 準備中（ロードマップ）の機能・選択肢の既定のラベル（#3374）。3 製品で同じ語にそろえるため `packages/ui` が持つ
+ * （`DEFAULT_TAB_INVALID_LABEL` と同じ）。
+ */
+export const DEFAULT_ROADMAP_LABEL = "準備中（ロードマップ）";
+
+/**
+ * 準備中（ロードマップ）でまだ使えない機能・選択肢のバッジ（#3374）。中立色の `StatusBadge` に予定のアイコンを付け、
+ * 色だけでなく文字とアイコンで「まだ使えない」を伝える。無効の選択肢（`SelectField` の `badge`）・カード・一覧の行で同じ形にする。
+ */
+export function RoadmapBadge({
+  label = DEFAULT_ROADMAP_LABEL,
+  className,
+}: {
+  /** 翻訳済みのラベル。既定 `DEFAULT_ROADMAP_LABEL`。 */
+  label?: string;
+  className?: string;
+}) {
+  return (
+    <span data-roadmap-badge="" className="inline-flex">
+      <StatusBadge variant="neutral" icon={CalendarClock} label={label} className={className} />
     </span>
   );
 }

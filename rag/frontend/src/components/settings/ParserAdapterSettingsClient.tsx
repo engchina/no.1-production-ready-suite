@@ -13,6 +13,7 @@ import {
   ProcessingIndicator,
   TimedLoadingState,
   FormSkeleton,
+  RoadmapBadge,
   StatusBadge,
   TextField,
   type FieldWidth,
@@ -304,15 +305,26 @@ function OverviewCard({
       ),
     [backendOptions]
   );
+  // 準備中（ロードマップ）のエンジン（#3374）。カードを灰色にして選ばせず、サービスの状態も問い合わせない。
+  const roadmapBackends = useMemo(
+    () =>
+      new Set<ParserAdapterBackend>(
+        (settings.service_backends ?? [])
+          .filter((service) => service.availability === "roadmap")
+          .map((service) => service.backend)
+      ),
+    [settings.service_backends]
+  );
   const serviceIds = useMemo(
     () => [
       ...new Set(
         backendOptions
+          .filter((backend) => !roadmapBackends.has(backend))
           .map(serviceIdForBackend)
           .filter((serviceId): serviceId is string => Boolean(serviceId))
       ),
     ],
-    [backendOptions]
+    [backendOptions, roadmapBackends]
   );
   const serviceStatusQueries = useServiceStatusQueries(serviceIds);
   const runtimeByServiceId = useMemo(() => {
@@ -371,7 +383,9 @@ function OverviewCard({
             {/* 1 行 2 枚で横幅いっぱいに並べる（下の外部 GPU 接続カードと同じ 2 列）。 */}
             <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                 {orderedBackends.map((backend) => {
-                  const selected = form.adapter_backend === backend;
+                  const roadmap = roadmapBackends.has(backend);
+                  const selected = !roadmap && form.adapter_backend === backend;
+                  const roadmapReasonId = `settings-parser-backend-${backend}-roadmap-reason`;
                   const service = isServiceBackend(backend)
                     ? serviceByName.get(backend)
                     : undefined;
@@ -394,7 +408,10 @@ function OverviewCard({
                         name="settings-parser-backend"
                         value={backend}
                         checked={selected}
-                        disabled={saving}
+                        // 準備中（ロードマップ）のエンジンは選べない（#3374）。理由は下の文で読み上げる。
+                        disabled={saving || roadmap}
+                        aria-describedby={roadmap ? roadmapReasonId : undefined}
+                        data-availability={roadmap ? "roadmap" : undefined}
                         onChange={() => onBackendChange(backend)}
                       />
                       <label
@@ -402,15 +419,27 @@ function OverviewCard({
                         htmlFor={`settings-parser-backend-${backend}`}
                         className={cn(
                           "block h-full cursor-pointer min-h-[5.43rem] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
-                          selected
-                            ? "border-accent-emphasis bg-accent-subtle text-fg"
-                            : "border-border bg-surface text-fg peer-hover:bg-surface-hover"
+                          roadmap
+                            ? // 準備中は無効の地と灰色の名前にし、理由は読める濃さのまま残す（全体を薄くしない。#3374）。
+                              "border-border bg-surface-disabled text-fg-disabled peer-disabled:opacity-100"
+                            : selected
+                              ? "border-accent-emphasis bg-accent-subtle text-fg"
+                              : "border-border bg-surface text-fg peer-hover:bg-surface-hover"
                         )}
                       >
-                        <span className="flex items-center gap-1.5">
+                        <span className="flex flex-wrap items-center gap-1.5">
                           <span className="text-sm font-semibold">{backendLabel(backend)}</span>
                           {runtimeProfile ? <ServiceProfileBadge profile={runtimeProfile} /> : null}
+                          {roadmap ? <RoadmapBadge label={t("settings.parserAdapters.roadmap.badge")} /> : null}
                         </span>
+                        {roadmap ? (
+                          <span
+                            id={roadmapReasonId}
+                            className="mt-1 block text-xs font-medium leading-relaxed text-fg-muted"
+                          >
+                            {t("settings.parserAdapters.roadmap.reason")}
+                          </span>
+                        ) : null}
                         <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
                           {t(backendDescriptionKey(backend))}
                         </span>
@@ -426,7 +455,7 @@ function OverviewCard({
                         ) : null}
                         <span className="mt-2 flex flex-wrap items-center gap-1.5">
                           {runtimeStatus ? <ServiceStatusBadge status={runtimeStatus} /> : null}
-                          {service && !service.configured ? (
+                          {service && !roadmap && !service.configured ? (
                             <ConnectionConfiguredBadge configured={false} />
                           ) : null}
                           {externalConnection ? (

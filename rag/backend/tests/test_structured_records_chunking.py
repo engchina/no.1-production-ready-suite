@@ -314,7 +314,6 @@ def _pipeline(settings: Any) -> Any:
         oracle=cast(Any, object()),
         object_storage=cast(Any, object()),
         document_understanding=cast(Any, object()),
-        speech=cast(Any, object()),
         settings=settings,
     )
 

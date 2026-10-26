@@ -103,6 +103,11 @@ def supported_formats_label(backend: str) -> str:
     )
 
 
+# 準備中(ロードマップ)の解析エンジンが選ばれていたときの理由とエラーコード(#3374)。
+PARSER_ENGINE_ROADMAP_REASON = "engine_roadmap"
+PARSER_ENGINE_ROADMAP_WARNING = "parser_engine_roadmap"
+
+
 class ParserServiceUnavailableError(RuntimeError):
     """明示選択された parser サービスを利用できないため取込を止めるエラー。"""
 
@@ -593,6 +598,14 @@ def _service_unavailable_message(
             f"この文書レシピが参照する解析エンジン（{label}）は削除されました。"
             "旧結果は保持されていますが、新しい処理は開始できません。"
             "文書レシピで利用可能な解析エンジンを選び直してください。"
+        )
+    if reason == PARSER_ENGINE_ROADMAP_REASON:
+        # 準備中(ロードマップ)のエンジンは選べない(#3374)。保存済みの値でも呼ばずに止める。
+        return (
+            f"この文書レシピが参照する解析エンジン（{label}）は準備中（ロードマップ）のため、"
+            "まだ使えません。別の解析エンジンには切り替えずに取込を停止しました。"
+            "文書レシピか「取込・検索・回答設定 › 文書解析」で Docling などの使える解析エンジンを"
+            "選び直してから再実行してください。"
         )
     if reason == STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_REASON:
         return structured_records_requires_jsonl_backend_message(label) + warning_suffix

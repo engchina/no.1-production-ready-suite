@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from contextvars import ContextVar
 from dataclasses import dataclass
 from io import BytesIO
-from pathlib import Path, PurePath
+from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 
@@ -37,7 +37,7 @@ from rag_parser_core.result import (
     SERVICE_ADAPTER_BACKENDS,
     ParserRegistryResult,
 )
-from rag_parser_core.source import SourceModality, template_for_source_profile
+from rag_parser_core.source import template_for_source_profile
 from rag_parser_core.structured_records import (
     STRUCTURED_RECORDS_CONTENT_TYPE,
     STRUCTURED_RECORDS_FILE_EXTENSION,
@@ -59,9 +59,10 @@ from app.clients.oci_enterprise_ai import (
     OciEnterpriseAiClient,
 )
 from app.clients.oci_genai import OciGenAiClient
-from app.clients.oci_speech import OciSpeechClient
 from app.clients.oracle import OracleClient
 from app.clients.parser_service import (
+    PARSER_ENGINE_ROADMAP_REASON,
+    PARSER_ENGINE_ROADMAP_WARNING,
     STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_REASON,
     ParserServiceClient,
     ParserServiceUnavailableError,
@@ -76,17 +77,15 @@ from app.config import (
     enterprise_ai_default_model_id,
     enterprise_ai_max_input_tokens,
     get_settings,
+    is_roadmap_parser_adapter_backend,
 )
 from app.rag.audit import record_rag_ingestion_audit
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
 from app.rag.chunking_small_to_big import (
-    LAYOUT_MISSING_REASON,
-    SMALL_TO_BIG_FALLBACK_STRATEGY,
     SMALL_TO_BIG_STRATEGY,
     build_parent_child_chunks,
     engine_search_text,
-    mark_small_to_big_fallback,
-    small_to_big_fallback_needed,
+    small_to_big_parent_source,
 )
 from app.rag.chunking_strategy import resolve_chunking_params
 from app.rag.cross_references import annotate_cross_references, apply_reference_search_context
@@ -597,7 +596,6 @@ class IngestionPipeline:
         oracle: OracleClient | None = None,
         object_storage: ObjectStorageClient | None = None,
         document_understanding: OciDocumentUnderstandingClient | None = None,
-        speech: OciSpeechClient | None = None,
         settings: Settings | None = None,
         recipe_id: str | None = None,
         recipe_revision: int | None = None,
@@ -620,8 +618,6 @@ class IngestionPipeline:
         self._document_understanding = document_understanding or OciDocumentUnderstandingClient(
             settings=self._settings
         )
-        # 音声/動画の文字起こし。失敗時は別経路へ切り替えず取込を止める。
-        self._speech = speech or OciSpeechClient(settings=self._settings)
 
     def _selected_parser_backend(self) -> str:
         """設定の解析エンジン(小文字)。廃止済みの local / local_partition は既定のエンジン。"""
@@ -656,7 +652,6 @@ class IngestionPipeline:
         in-process 解析・local fallback は一切持たない。
         - 非対応形式(outlook .msg / TIFF / 旧 Office バイナリ)は profiling 済みの
           ``source_profile.unsupported_reason`` を sentinel として返す。
-        - 音声/動画は sentinel を返し、ingestion 本体が転写経路へ振り分ける。
         - OCI service backend(Document Understanding)も sentinel を返し、
           ``_extract_with_service_backend`` が直接 HTTP 呼び出しする。
         - それ以外(既定 ``docling`` 含む)は runner を fail-fast で実行する。
@@ -673,15 +668,15 @@ class IngestionPipeline:
                 warnings=(unsupported_reason,),
                 unsupported_reason=unsupported_reason,
             )
-        if _is_audio_source(source_profile, content_type):
-            return ParserRegistryResult(
-                extraction=None,
-                parser_backend="unsupported",
-                template="unsupported_audio",
-                warnings=("unsupported_audio",),
-                unsupported_reason="audio_transcription_not_configured",
-            )
         backend = self._selected_parser_backend()
+        # 準備中(ロードマップ)のエンジン(#3374)は選べない。保存済みの値・上書きに残っていても
+        # 呼ばずに止める。
+        if is_roadmap_parser_adapter_backend(backend):
+            raise ParserServiceUnavailableError(
+                backend,
+                PARSER_ENGINE_ROADMAP_REASON,
+                warning_code=PARSER_ENGINE_ROADMAP_WARNING,
+            )
         if backend not in ADAPTER_CAPABILITIES and backend not in SERVICE_ADAPTER_BACKENDS:
             raise ParserServiceUnavailableError(
                 backend,
@@ -1452,20 +1447,7 @@ class IngestionPipeline:
                     attributes=partition_attributes,
                     progress=progress,
                 )
-            audio_extraction: StructuredExtraction | None = None
-            if parser_result.unsupported_reason == "audio_transcription_not_configured":
-                # 音声/動画は OCI AI Speech → ローカル faster-whisper の順で文字起こしする。
-                audio_extraction = await self._transcribe_audio(
-                    trace_id=trace_id,
-                    document_id=document_id,
-                    source_bytes=parse_bytes,
-                    content_type=parse_content_type,
-                    source_profile=source_profile,
-                    cancel_checker=cancel_checker,
-                )
-                if audio_extraction is None:
-                    raise IngestionUserError(_unsupported_parser_message(parser_result))
-            elif parser_result.unsupported_reason:
+            if parser_result.unsupported_reason:
                 raise IngestionUserError(_unsupported_parser_message(parser_result))
             self._raise_if_selected_parser_was_not_used(parser_result)
             effective_parser_profile = _checkpoint_parser_profile(
@@ -1483,8 +1465,7 @@ class IngestionPipeline:
                     recipe_id=self._recipe_id,
                 )
             await _raise_if_cancelled(cancel_checker)
-            # 音声文字起こしが成功していれば以降の parser/VLM 経路は短絡する。
-            extraction: StructuredExtraction | None = audio_extraction
+            extraction: StructuredExtraction | None = None
             service_backend = _service_parser_backend(parser_result.parser_backend)
             try:
                 if service_backend is not None:
@@ -2138,46 +2119,31 @@ class IngestionPipeline:
             raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
         await _raise_if_cancelled(cancel_checker)
         chunking_params = resolve_chunking_params(self._settings)
-        # 親子階層（small-to-big）は Docling の解析結果(layout_records)を入力にする。
-        # それがない文書は失敗させず構造認識で分割し、縮退したことを chunk metadata と trace に
-        # 残す(#300)。
-        small_to_big_fallback = small_to_big_fallback_needed(chunking_params.strategy, extraction)
+        # 親子階層（small-to-big）は、どの解析の結果でも親子に分割する(#3377)。親子を作った入力
+        # (Docling のレイアウト・行の記録・XML ツリー JSON・抽出の構造)は trace に残す。
         is_small_to_big = chunking_params.strategy == SMALL_TO_BIG_STRATEGY
-        effective_strategy = (
-            SMALL_TO_BIG_FALLBACK_STRATEGY if small_to_big_fallback else chunking_params.strategy
-        )
-        if small_to_big_fallback:
-            logger.info(
-                "small_to_big_fallback",
-                extra={"trace_id": trace_id, "effective_chunk_strategy": effective_strategy},
-            )
-
-        def _run_standard_chunking() -> list[Chunk]:
-            try:
-                return chunk_extraction_with_strategy(
-                    extraction,
-                    strategy=effective_strategy,
-                    chunk_size=chunking_params.chunk_size,
-                    overlap=chunking_params.overlap,
-                    min_chars=chunking_params.min_chars,
-                    delimiter=chunking_params.delimiter,
-                )
-            except RecordBoundaryError as exc:
-                raise IngestionUserError(record_boundary_failure_message(exc)) from exc
 
         def _run_chunking() -> list[Chunk]:
             diagnostics: dict[str, int] = {}
-            if small_to_big_fallback:
-                result = mark_small_to_big_fallback(_run_standard_chunking())
-            elif is_small_to_big:
-                result = build_parent_child_chunks(
-                    extraction,
-                    source_name=source_name,
-                    params=chunking_params.small_to_big,
-                    diagnostics=diagnostics,
-                )
-            else:
-                result = _run_standard_chunking()
+            try:
+                if is_small_to_big:
+                    result = build_parent_child_chunks(
+                        extraction,
+                        source_name=source_name,
+                        params=chunking_params.small_to_big,
+                        diagnostics=diagnostics,
+                    )
+                else:
+                    result = chunk_extraction_with_strategy(
+                        extraction,
+                        strategy=chunking_params.strategy,
+                        chunk_size=chunking_params.chunk_size,
+                        overlap=chunking_params.overlap,
+                        min_chars=chunking_params.min_chars,
+                        delimiter=chunking_params.delimiter,
+                    )
+            except RecordBoundaryError as exc:
+                raise IngestionUserError(record_boundary_failure_message(exc)) from exc
             if not result:
                 # 空の結果は分割段階の失敗として記録し、本文を含めず除去理由の件数を示す。
                 boilerplate_count = diagnostics.get("excluded_page_boilerplate_count", 0)
@@ -2185,7 +2151,7 @@ class IngestionPipeline:
                     f"ページ定型文の除外: {boilerplate_count} 件、"
                     f"装飾の除外: {diagnostics.get('excluded_decorative_count', 0)} 件、"
                     f"空の要素: {diagnostics.get('empty_record_count', 0)} 件。"
-                    if is_small_to_big and not small_to_big_fallback
+                    if diagnostics
                     else "分割と除外処理の後に索引対象が残りませんでした。"
                 )
                 raise IngestionUserError(
@@ -2205,12 +2171,12 @@ class IngestionPipeline:
                 "chunk_parent_max_pages": chunking_params.small_to_big.parent_max_pages,
                 "chunk_parent_max_children": chunking_params.small_to_big.parent_max_children,
             }
-            if is_small_to_big and not small_to_big_fallback
+            if is_small_to_big
             else {}
         )
-        fallback_attributes: dict[str, str] = (
-            {"chunk_strategy_fallback_reason": LAYOUT_MISSING_REASON}
-            if small_to_big_fallback
+        parent_source_attributes: dict[str, str] = (
+            {"chunk_parent_source": small_to_big_parent_source(extraction)}
+            if is_small_to_big
             else {}
         )
         chunks = await _observe_cpu_ingestion_stage(
@@ -2220,8 +2186,8 @@ class IngestionPipeline:
             attributes={
                 "chunk_profile": "structure_v1",
                 "chunk_strategy": chunking_params.strategy,
-                "effective_chunk_strategy": effective_strategy,
-                **fallback_attributes,
+                "effective_chunk_strategy": chunking_params.strategy,
+                **parent_source_attributes,
                 "chunk_size": chunking_params.chunk_size,
                 "chunk_overlap": chunking_params.overlap,
                 "chunk_min_chars": chunking_params.min_chars,
@@ -3750,40 +3716,6 @@ class IngestionPipeline:
                 "RAPTOR 設定と Enterprise AI の応答を確認してから再実行してください。"
             ) from exc
 
-    async def _transcribe_audio(
-        self,
-        *,
-        trace_id: str,
-        document_id: str,
-        source_bytes: bytes,
-        content_type: str,
-        source_profile: SourceProfile | None,
-        cancel_checker: Callable[[], Awaitable[bool]] | None,
-    ) -> StructuredExtraction | None:
-        """音声/動画を文字起こしする。失敗時は別経路へ切り替えない。"""
-        _ = trace_id
-        if not getattr(self._settings, "rag_parser_asr_enabled", True):
-            return None
-        await _raise_if_cancelled(cancel_checker)
-        payload = await self._speech.transcribe(
-            source_bytes, content_type=content_type, document_id=document_id
-        )
-        if payload is not None:
-            try:
-                return _validate_structured_extraction_payload(payload)
-            except Exception as exc:
-                logger.warning("OCI Speech 結果の検証に失敗。", exc_info=True)
-                raise IngestionUserError(
-                    "音声文字起こし結果の形式が保存用 schema と一致しません。"
-                    "別経路には切り替えずに取込を停止しました。OCI Speech の出力と"
-                    "変換設定を確認してから再実行してください。"
-                ) from exc
-        _ = source_profile
-        raise IngestionUserError(
-            "音声文字起こしに失敗しました。別経路には切り替えずに取込を停止しました。"
-            "OCI Speech の設定、Object Storage、対象ファイル形式を確認してから再実行してください。"
-        )
-
     async def _save_index(
         self,
         trace_id: str,
@@ -4080,11 +4012,6 @@ async def _raise_if_cancelled(
 
 def _unsupported_parser_message(result: ParserRegistryResult) -> str:
     """parser registry の未対応理由を利用者向け文言へ寄せる。"""
-    if result.unsupported_reason == "audio_transcription_not_configured":
-        return (
-            "音声ファイルの取込は現在未対応です。"
-            "承認済みの音声文字起こし経路を設定してから再試行してください。"
-        )
     if result.unsupported_reason == "tiff_image_not_supported":
         return (
             "TIFF 画像の取込は現在未対応です。"
@@ -4273,26 +4200,6 @@ def _uses_external_adapter_extraction(parser_result: ParserRegistryResult) -> bo
     return parser_result.extraction is not None and _is_external_adapter_backend(
         parser_result.parser_backend
     )
-
-
-_AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
-
-
-def _is_audio_source(source_profile: SourceProfile | None, content_type: str) -> bool:
-    """音声/動画ソースかどうか(転写経路へ振り分けるための軽量判定)。"""
-    if source_profile is not None and source_profile.modality == SourceModality.AUDIO:
-        return True
-    normalized = (
-        (content_type or (source_profile.content_type if source_profile is not None else ""))
-        .strip()
-        .casefold()
-    )
-    if normalized.startswith("audio/"):
-        return True
-    extension = (source_profile.extension if source_profile is not None else None) or ""
-    if not extension and source_profile is not None:
-        extension = PurePath(source_profile.sanitized_file_name).suffix
-    return extension.strip().casefold() in _AUDIO_EXTENSIONS
 
 
 def _is_external_adapter_backend(parser_backend: str) -> bool:

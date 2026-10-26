@@ -3174,53 +3174,6 @@ def test_extraction_table_cell_and_asset_bbox_accept_adapter_key_variants() -> N
     assert asset.bbox == [5.0, 7.0, 25.0, 37.0]
 
 
-def test_parser_registry_marks_audio_as_unsupported_without_transcription() -> None:
-    """audio は v1 では明示的な unsupported warning に止める。"""
-    data = b"audio"
-    profile = build_source_profile(
-        original_file_name="voice.mp3",
-        sanitized_file_name="voice.mp3",
-        content_type="audio/mpeg",
-        file_size_bytes=len(data),
-        content_sha256="d" * 64,
-        data=data,
-    )
-
-    result = parse_with_registry(data, source_profile=profile, content_type=profile.content_type)
-
-    assert profile.modality == SourceModality.AUDIO
-    assert result.extraction is None
-    assert result.parser_backend == "unsupported"
-    assert result.unsupported_reason == "audio_transcription_not_configured"
-    assert "unsupported_audio" in result.warnings
-
-
-def test_parser_registry_blocks_audio_content_type_without_source_profile(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """legacy path でも audio content-type は外部 adapter へ流さない。"""
-
-    def fail_if_adapter_called(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("audio source must not be sent to external parser adapters")
-
-    monkeypatch.setattr("rag_parser_core.registry._external_adapter_result", fail_if_adapter_called)
-
-    result = parse_with_registry(
-        b"audio",
-        source_profile=None,
-        content_type="audio/mpeg",
-        adapter_backend="unstructured",
-        docling_enabled=True,
-        unstructured_enabled=True,
-    )
-
-    assert result.extraction is None
-    assert result.parser_backend == "unsupported"
-    assert result.template == "unsupported_audio"
-    assert result.unsupported_reason == "audio_transcription_not_configured"
-    assert result.warnings == ("unsupported_audio",)
-
-
 def _docx_bytes(text: str) -> bytes:
     return _zip_bytes({"word/document.xml": f"<document><t>{text}</t></document>"})
 
@@ -3349,9 +3302,6 @@ _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         # OCI service backend: PDF・画像
         ("oci_document_understanding", "scan.png", "image/png", True),
         ("oci_document_understanding", "mail.eml", "message/rfc822", False),
-        # 音声は全 backend 非対応
-        ("unstructured", "meeting.m4a", "audio/mp4", False),
-        ("docling", "meeting.m4a", "audio/mp4", False),
         # 未宣言 backend と削除したエンジン(#270)は非対応
         ("no_such_backend", "doc.pdf", "application/pdf", False),
         ("marker", "doc.pdf", "application/pdf", False),
@@ -3391,7 +3341,7 @@ def test_adapter_capabilities_unknown_modality_only_unstructured() -> None:
 
 
 def test_supported_modalities_for_display() -> None:
-    """表示用一覧は定義順で UNKNOWN/AUDIO を含まない。"""
+    """表示用一覧は定義順で UNKNOWN を含まない。"""
     from rag_parser_core.capabilities import supported_modalities
 
     assert [m.value for m in supported_modalities("dots_ocr")] == ["pdf", "image"]

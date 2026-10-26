@@ -4,7 +4,8 @@
   ``allowed_upload_content_types`` と同じ。画面の拡張子は、backend が形式を判定できる
   (415 にしない)。
 - HEIC / HEIF・EPUB は解析の依存(pi-heif の libheif・pandoc)をライセンスの理由で入れないので、
-  画面と API の両方で変換の方法を添えて止める。文言は画面と API で同じ。
+  画面と API の両方で変換の方法を添えて止める。音声・動画は取り込まない形式で、同じく止める
+  (#3369)。文言は画面と API で同じ。
 - Unstructured の解析サービスと backend の任意の extra は、pi-heif・pypandoc-binary を入れない。
 """
 
@@ -17,9 +18,11 @@ from pathlib import Path
 
 import pytest
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES
+from rag_parser_core.source import SourceModality
 
 from app.config import Settings
 from app.rag.source_profile import (
+    AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE,
     EPUB_UPLOAD_REJECTED_MESSAGE,
     HEIC_UPLOAD_REJECTED_MESSAGE,
     REJECTED_UPLOAD_EXTENSIONS,
@@ -78,10 +81,13 @@ def test_rejected_formats_match_between_frontend_and_backend() -> None:
     accepted = {item.casefold() for item in _accepted_upload_types()}
     assert accepted.isdisjoint(REJECTED_UPLOAD_EXTENSIONS)
     assert accepted.isdisjoint({"image/heic", "image/heif", "application/epub+zip"})
+    assert not [item for item in accepted if item.startswith(("audio/", "video/"))]
+    assert "application/ogg" not in accepted
     i18n = I18N.read_text(encoding="utf-8")
     # 画面の案内と API の 415 は同じ文言(変換の方法を含む)。
     assert HEIC_UPLOAD_REJECTED_MESSAGE in i18n
     assert EPUB_UPLOAD_REJECTED_MESSAGE in i18n
+    assert AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE in i18n
     assert "JPEG / PNG" in HEIC_UPLOAD_REJECTED_MESSAGE
     assert "互換性優先" in HEIC_UPLOAD_REJECTED_MESSAGE
 
@@ -94,15 +100,49 @@ def test_rejected_formats_match_between_frontend_and_backend() -> None:
         ("a", "image/heic; charset=binary", HEIC_UPLOAD_REJECTED_MESSAGE),
         ("a.epub", None, EPUB_UPLOAD_REJECTED_MESSAGE),
         ("a", "application/epub+zip", EPUB_UPLOAD_REJECTED_MESSAGE),
+        ("a.mp3", None, AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE),
+        ("a.WAV", "application/octet-stream", AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE),
+        ("a.mov", None, AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE),
+        ("a", "audio/flac", AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE),
+        ("a", "video/webm; codecs=vp9", AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE),
+        ("a", "application/ogg", AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE),
         ("a.png", "image/png", None),
         ("a.odt", "application/vnd.oasis.opendocument.text", None),
     ],
-    ids=["heic", "heif-upper", "heic-mime", "epub", "epub-mime", "png", "odt"],
+    ids=[
+        "heic",
+        "heif-upper",
+        "heic-mime",
+        "epub",
+        "epub-mime",
+        "mp3",
+        "wav-upper-octet-stream",
+        "mov",
+        "audio-mime",
+        "video-mime-params",
+        "ogg-application",
+        "png",
+        "odt",
+    ],
 )
 def test_rejected_upload_format_message(
     file_name: str, content_type: str | None, expected: str | None
 ) -> None:
     assert rejected_upload_format_message(file_name, content_type) == expected
+
+
+def test_audio_is_not_a_source_modality() -> None:
+    """音声は取り込む形式に無い(#3369)。保存済みの音声の原本も未知の形式として解析しない。"""
+    profile = build_source_profile(
+        original_file_name="voice.mp3",
+        sanitized_file_name="voice.mp3",
+        content_type="audio/mpeg",
+        file_size_bytes=3,
+        content_sha256="a" * 64,
+    )
+    assert "audio" not in {item.value for item in SourceModality}
+    assert profile.modality == SourceModality.UNKNOWN
+    assert profile.unsupported_reason == "unknown_file_type"
 
 
 def test_unstructured_capability_lists_plain_text_markup_but_not_removed_formats() -> None:

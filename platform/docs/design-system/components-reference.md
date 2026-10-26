@@ -1227,6 +1227,33 @@ export declare function BlockedPageNotice(props: BlockedPageNoticeProps): JSX.El
 - 使っている所: NL2SQL の Deep Data Security（`ScopeExpressionEditor` の「列」・関連テーブル条件の「候補を選ぶ Profile」「関連テーブル」「対象テーブルの列」「関連テーブルの列」）、`describedBy` は NL2SQL のサンプルデータの種類。Agent の Run の「実行先 Binding」は既定が無いとき必須なので出さない。
 - 単体テストは `packages/ui/tests/select-field-empty-option.test.tsx`。
 
+### SelectField — 選べない選択肢（`disabled` / `disabledReason` / `badge`）と `RoadmapBadge`（#3374）
+
+準備中（ロードマップ）の機能など、まだ選べない選択肢を隠さずに灰色で出す形を足しました（既存の props・id・aria は変えていません）。
+
+```tsx
+import { DEFAULT_ROADMAP_LABEL, RoadmapBadge, SelectField } from "@production-ready/ui";
+
+<SelectField id="engine" label={t("engine")} value={engine} onValueChange={setEngine}
+  options={[
+    { value: "docling", label: "Docling" },
+    { value: "planned", label: "Engine B", disabled: true,
+      badge: DEFAULT_ROADMAP_LABEL, disabledReason: t("engine.planned.reason") },
+  ]} />
+
+<RoadmapBadge />   {/* カード・一覧の行で同じ印を出す（既定の文言は DEFAULT_ROADMAP_LABEL） */}
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 選べない選択肢は一覧から消さず、灰色の文字（`--color-fg-disabled`）と禁止のカーソルで出し、`aria-disabled="true"` を付ける | 何が無いのかを伝える（隠すと「無い」のか「探せない」のか分からない）。W3C APG の listbox の無効の選択肢と同じく、↑↓ で強調して読み上げられるが、クリック・Enter・Space では選ばれない（一覧も閉じない） |
+| 理由（`disabledReason`）は選択肢の下の行に、読める濃さ（`--color-fg-muted`）で折り返して出す | 一覧の中では Tooltip を出せない（`Tabs` の `disabledReason` は `title`。ここでは常に見せる）。灰色の文字だけでは 4.5:1 にならないため、理由の行は灰色にしない |
+| `badge` は中立色の `StatusBadge`（アイコンなし）。カード・一覧の行の印は `RoadmapBadge`（中立色・`CalendarClock`） | 状態を色だけで表さない（文字で「準備中（ロードマップ）」）。3 製品で同じ語にそろえるため、既定の文言 `DEFAULT_ROADMAP_LABEL` を `packages/ui` が持つ（`DEFAULT_TAB_INVALID_LABEL` と同じ） |
+| 保存済みの値が選べない選択肢でも、閉じたボタンはそのラベルを出す | 以前に保存した値を消さずに見せ、別の値を選び直させる |
+
+- 使っている所: RAG の処理レシピの「文書解析」（OCI Document Understanding）。`RoadmapBadge` は RAG の文書解析の使用エンジンのカードとサービス管理の行。
+- 単体テストは `packages/ui/tests/select-field.test.tsx`、動きは RAG の e2e（`document-processing-config.spec.ts`）。
+
 ---
 
 ## PageHeader の「その他の操作」メニュー — 変更（#363）

@@ -107,6 +107,7 @@ sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-restart.sh
 | [`agent/`](./agent/) | Production Control Plane for AI Agents — Business Agent・Skill・Runtime の管理 |
 | [`skills/`](./skills/) | 組み込みのスキル（Agent Skills の形式 `skills/<name>/SKILL.md`）。Agent が読み、外部の Agent にも入れられる |
 
+- 準備中（ロードマップ）の機能は各製品の README の「ロードマップ」にあります（RAG: OCI Document Understanding の解析は準備中で、まだ選べません。[rag/README.md](./rag/README.md#ロードマップ)）。
 - 依存は `platform/` → 各製品の一方向です。各製品は `platform/` を相対パスで参照し、backend / frontend / 実行環境（uv の venv）/ 配備はそれぞれ独立しています。
 - 開発・起動方法は各ディレクトリの `README.md` を参照してください。
 
@@ -223,6 +224,10 @@ claude plugin list   # production-ready-skills@production-ready-suite が ✔ en
 - 製品固有ルール: 各ディレクトリの `AGENTS.md`（詳細は各製品の `docs/agents/`）
 - `AGENTS.md` の大きさの上限（root は 20 KB、root と製品の合計は 32 KB。Codex の `project_doc_max_bytes` の既定 32 KiB に収める）は `scripts/check-agents-md-size.sh` が CI で確かめる
 - Claude Code（2.1.277 以降）と Codex は `AGENTS.md` を直接読み込みます。`CLAUDE.md` は置いていません。
+
+## ライセンスと第三者の部品
+
+自前のコードは [LICENSE](./LICENSE)（MIT）です。3 製品が使う第三者の部品のうち、表示・原文の同梱などの義務があるもの（LGPL・MPL・AGPL の部品、Apache-2.0 の NOTICE、書体の OFL など）と、配備先での入手（`uv sync --locked`・`npm ci`・`dnf`）と再配布の違いは [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md) にまとめています（法的な助言ではありません）。frontend の build は、bundle の npm の package と書体のライセンスを成果物の `licenses/` に出します。
 
 ## CI
 

@@ -57,8 +57,10 @@ from app.config import (
     QueryStrategy,
     Settings,
     VectorIndexProfile,
+    is_roadmap_parser_adapter_backend,
     normalize_legacy_chunking_strategy_value,
     normalize_removed_preprocess_profile,
+    reject_roadmap_parser_adapter_backend,
 )
 
 logger = logging.getLogger(__name__)
@@ -188,6 +190,45 @@ def _migrate_legacy_vision_fields(data: dict[object, object]) -> dict[object, ob
     return migrated
 
 
+def _clean_persisted_ingestion_config(data: object) -> object:
+    """保存値・入力の取込設定から削除済みの項目を除き、旧値を読み替える(KnowledgeBaseIngestionConfig)。
+
+    削除済みエンジン(#270)と準備中(ロードマップ)のエンジン(#3374)は「global 既定の文書解析エンジンを
+    継承」(None)へ寄せる。準備中のエンジンを選ぶ保存(処理レシピの PUT)は、入力のモデル
+    (``DocumentProcessingConfigInput``)が検証のエラーにする。
+    """
+    if not isinstance(data, dict):
+        return data
+    cleaned = {
+        key: value
+        for key, value in _migrate_legacy_vision_fields(data).items()
+        if key not in _REMOVED_PARSER_FLAG_FIELDS
+    }
+    backend = cleaned.get("parser_adapter_backend")
+    if isinstance(backend, str) and backend.strip().casefold() in REMOVED_PARSER_ADAPTER_BACKENDS:
+        cleaned["parser_adapter_backend"] = None
+    elif is_roadmap_parser_adapter_backend(backend):
+        logger.warning(
+            "保存済みの処理レシピの解析エンジン %s は準備中（ロードマップ）のため使わず、"
+            "全体の既定を継承します。",
+            backend,
+        )
+        cleaned["parser_adapter_backend"] = None
+    # 削除したファイル準備の変換方式(#2042)は「変換なし」へ寄せる(ログに出す)。
+    if "preprocess_profile" in cleaned:
+        cleaned["preprocess_profile"] = normalize_removed_preprocess_profile(
+            cleaned["preprocess_profile"]
+        )
+    return cleaned
+
+
+def reject_roadmap_parser_backend_input(data: object) -> object:
+    """処理レシピの保存の入力で、準備中(ロードマップ)の解析エンジンを検証のエラーにする(#3374)。"""
+    if isinstance(data, Mapping):
+        reject_roadmap_parser_adapter_backend(data.get("parser_adapter_backend"))
+    return data
+
+
 class KnowledgeBaseIngestionConfig(BaseModel):
     """取込時(Parser / Chunking)の KB 上書き。None はグローバル継承。"""
 
@@ -205,25 +246,7 @@ class KnowledgeBaseIngestionConfig(BaseModel):
         Vision の旧 key(#497)も同じ理由でここで ``vision_enabled`` へ移す。
         Oracle 上の JSON を書き換える migration は持たない(値の置換だけで済み、再保存で消えるため)。
         """
-        if not isinstance(data, dict):
-            return data
-        cleaned = {
-            key: value
-            for key, value in _migrate_legacy_vision_fields(data).items()
-            if key not in _REMOVED_PARSER_FLAG_FIELDS
-        }
-        backend = cleaned.get("parser_adapter_backend")
-        if (
-            isinstance(backend, str)
-            and backend.strip().casefold() in REMOVED_PARSER_ADAPTER_BACKENDS
-        ):
-            cleaned["parser_adapter_backend"] = None
-        # 削除したファイル準備の変換方式(#2042)は「変換なし」へ寄せる(ログに出す)。
-        if "preprocess_profile" in cleaned:
-            cleaned["preprocess_profile"] = normalize_removed_preprocess_profile(
-                cleaned["preprocess_profile"]
-            )
-        return cleaned
+        return _clean_persisted_ingestion_config(data)
 
     preprocess_profile: PreprocessProfile | None = None
     # 前処理 excel_to_jsonl の選択肢(#1221)。None はグローバル継承。

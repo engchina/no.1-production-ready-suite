@@ -152,7 +152,7 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert matrix["evidence_source"] == "runtime_routes"
     assert "pdf" in matrix["backend_source_kinds"]["local"]
     assert "email" in matrix["backend_source_kinds"]["local"]
-    assert "audio" in matrix["backend_source_kinds"]["local"]
+    assert "text" in matrix["backend_source_kinds"]["local"]
     assert matrix["missing_source_kinds"] == []
     assert "raw_text" not in str(matrix)
     capability_by_backend = {item["backend"]: item for item in body["capabilities"]}
@@ -168,12 +168,15 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     ]
 
 
-def test_parser_adapter_settings_reports_service_backends(
+def test_parser_adapter_settings_reports_roadmap_service_backend(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """service 系 backend(OCI Document Understanding)の選択・可用性を返す。"""
+    """OCI Document Understanding は準備中(ロードマップ。#3374)。
+
+    選択中・未設定の警告にせず roadmap を返す。
+    """
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "oci_document_understanding")
+    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "docling")
     monkeypatch.setattr(settings, "oci_compartment_id", "")
     monkeypatch.setattr(settings, "oci_document_understanding_compartment_id", "")
     monkeypatch.setattr(settings, "oci_document_understanding_namespace", "")
@@ -185,16 +188,68 @@ def test_parser_adapter_settings_reports_service_backends(
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["adapter_backend"] == "oci_document_understanding"
     service = {item["backend"]: item for item in body["service_backends"]}
     # OCI Generative AI (Vision) は削除した(#2042)。
     assert set(service) == {"oci_document_understanding"}
-    assert service["oci_document_understanding"]["selected"] is True
-    assert service["oci_document_understanding"]["configured"] is False
-    assert (
-        service["oci_document_understanding"]["warning_code"]
-        == "oci_document_understanding_unconfigured"
+    assert service["oci_document_understanding"]["availability"] == "roadmap"
+    assert service["oci_document_understanding"]["selected"] is False
+    # 準備中はエラーではないため、未設定の警告を出さない。
+    assert service["oci_document_understanding"]["warning_code"] is None
+
+
+def test_update_parser_adapter_settings_rejects_roadmap_backend_without_saving(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """準備中(ロードマップ)の解析エンジンは選べない(#3374)。
+
+    理由の分かる 422 にし、設定を変えない。
+    """
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "docling")
+    parser_file = PARSER_SETTINGS_STORE.path(settings)
+    before = parser_file.read_text(encoding="utf-8") if parser_file.exists() else None
+
+    resp = client.patch(
+        "/api/settings/parser-adapters",
+        json={"adapter_backend": "oci_document_understanding"},
     )
+
+    assert resp.status_code == 422
+    assert "準備中（ロードマップ）" in json.dumps(resp.json(), ensure_ascii=False)
+    assert settings.rag_parser_adapter_backend == "docling"
+    after = parser_file.read_text(encoding="utf-8") if parser_file.exists() else None
+    assert after == before
+
+
+def test_persisted_roadmap_parser_backend_falls_back_to_default(tmp_path: Path) -> None:
+    """以前の版が parser-settings.json に保存した準備中のエンジンは既定へ寄せる(#3374)。
+
+    起動を止めない。
+    """
+    parser_file = tmp_path / "parser-settings.json"
+    parser_file.write_text(
+        json.dumps({"adapter_backend": "oci_document_understanding"}), encoding="utf-8"
+    )
+    worker_settings = Settings(
+        _env_file=None,
+        rag_parser_settings_file=str(parser_file),
+        rag_parser_adapter_backend="unstructured",
+    )
+    store = copy.copy(PARSER_SETTINGS_STORE)
+    store.reset()
+
+    store.load(worker_settings)
+
+    assert worker_settings.rag_parser_adapter_backend == "docling"
+
+
+def test_env_roadmap_parser_backend_is_rejected_with_reason() -> None:
+    """RAG_PARSER_ADAPTER_BACKEND でも準備中のエンジンは選べない(#3374)。
+
+    理由の分かる検証のエラーにする。
+    """
+    with pytest.raises(ValueError, match="準備中（ロードマップ）"):
+        Settings(_env_file=None, rag_parser_adapter_backend="oci_document_understanding")
 
 
 def test_parser_adapter_contract_endpoint_is_removed() -> None:
