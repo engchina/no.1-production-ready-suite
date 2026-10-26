@@ -6,13 +6,10 @@
 
 import asyncio
 import logging
-import unicodedata
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
-from html.parser import HTMLParser
-from math import fsum
 from time import perf_counter
 from typing import Any, Protocol
 
@@ -22,7 +19,20 @@ from pr_backend_core.bounded_calls import (
     BoundedCaller,
     BoundedCallFailed,
 )
-from rag_engine.parsing.table_structure import parse_html_table_structure
+from pr_evaluation_scoring import (
+    MetricAggregate,
+    ThresholdFailure,
+    count_reasons,
+    evidence_matches,
+    expected_decisions,
+    overall_passed,
+    reciprocal_rank,
+    response_decision,
+    rounded_mean,
+    skips_retrieval,
+    threshold_failures,
+    unique_in_order,
+)
 
 from app.clients.ai_calls import make_ai_caller
 from app.clients.oracle import OracleClient
@@ -44,10 +54,7 @@ from app.rag.answer_timeout import (
 )
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
-from app.rag.evaluation_handling import (
-    contains_normalized,
-    observed_outcome,
-)
+from app.rag.evaluation_handling import observed_outcome
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
     elapsed_ms,
@@ -204,28 +211,9 @@ _AGGREGATED_METRIC_NAMES: tuple[str, ...] = (
 )
 
 
-@dataclass
-class _Aggregate:
-    """指標ごとに、測れたケースの値を集める。"""
-
-    values: dict[str, list[float]] = field(default_factory=dict)
-
-    def add(self, metric: str, value: float | None) -> None:
-        if value is not None:
-            self.values.setdefault(metric, []).append(float(value))
-
-    def means(self) -> dict[str, float | None]:
-        return {
-            metric: (
-                fsum(self.values[metric]) / len(self.values[metric])
-                if self.values.get(metric)
-                else None
-            )
-            for metric in _AGGREGATED_METRIC_NAMES
-        }
-
-    def counts(self) -> dict[str, int]:
-        return {metric: len(self.values.get(metric, [])) for metric in _AGGREGATED_METRIC_NAMES}
+def _aggregate() -> MetricAggregate:
+    """指標ごとに、測れたケースの値を集める（platform の採点の部品。#3240）。"""
+    return MetricAggregate(names=_AGGREGATED_METRIC_NAMES)
 
 
 @dataclass(frozen=True)
@@ -766,12 +754,12 @@ def summarize_case_results(
     ケースがあれば合格にしない。
     """
     results = list(case_results)
-    aggregate = _Aggregate()
+    aggregate = _aggregate()
     failure_reason_counts: dict[str, int] = {}
     error_count = 0
     judge_incomplete_count = 0
     for result in results:
-        _accumulate_failure_reasons(failure_reason_counts, result.failure_reasons)
+        count_reasons(failure_reason_counts, result.failure_reasons)
         if result.status != "success":
             error_count += 1
             continue
@@ -780,7 +768,7 @@ def summarize_case_results(
             judge_incomplete_count += 1
         _accumulate_case_metrics(aggregate, result)
     aggregate_values = aggregate.means()
-    threshold_failures = _threshold_failures(thresholds, aggregate_values)
+    failures = _threshold_failures(thresholds, aggregate_values)
     return EvaluationMetrics(
         metrics_version=EVALUATION_METRICS_VERSION,
         decision_breakdown=decision_breakdown(results),
@@ -790,18 +778,20 @@ def summarize_case_results(
         split_breakdown=split_breakdown(results),
         reasoning_type_breakdown=reasoning_type_breakdown(results),
         hops_breakdown=hops_breakdown(results),
-        passed=(
-            False
-            if threshold_failures or error_count or judge_incomplete_count
-            else None
-            if not any(aggregate.counts().values())
-            or any(
-                aggregate_values.get(name) is None
-                for name in (thresholds.model_dump(exclude_none=True) if thresholds else ())
-            )
-            else True
+        passed=overall_passed(
+            failures=failures,
+            error_count=error_count,
+            incomplete_count=judge_incomplete_count,
+            measured_counts=aggregate.counts(),
+            thresholds=_threshold_values(thresholds),
+            values=aggregate_values,
         ),
-        threshold_failures=threshold_failures,
+        threshold_failures=[
+            EvaluationThresholdFailure(
+                metric=item.metric, actual=item.actual, threshold=item.threshold
+            )
+            for item in failures
+        ],
         failure_reason_counts=failure_reason_counts,
         metric_case_counts=aggregate.counts(),
         case_results=results,
@@ -827,21 +817,13 @@ def score_case_answers(
     return _case_result(case, runs[-1].response, judgement, turn_runs=runs)
 
 
-def _response_decision(outcome: str) -> str:
-    if outcome in {"answered", "conditional"}:
-        return "answer"
-    return "clarify" if outcome == "needs_clarification" else "hold"
-
-
 def _expected_case_decisions(case: EvaluationCase) -> list[str]:
     return sorted(
         {
             decision
             for expectation in [case, *case.turns]
-            for decision in (
-                [expectation.expected_response_decision]
-                if expectation.expected_response_decision
-                else [_response_decision(item) for item in expectation.expected_outcomes]
+            for decision in expected_decisions(
+                expectation.expected_response_decision, expectation.expected_outcomes
             )
         }
     )
@@ -890,7 +872,7 @@ def _case_result(
     """
     runs = list(turn_runs) if turn_runs else [_TurnRun(response, dict(case.conditions))]
     # 同じ文書とみなす文書（同じ名前の文書。#2086）は、正解の文書の ID にそろえて数える。
-    retrieved_ids = _unique_in_order(
+    retrieved_ids = unique_in_order(
         [case.canonical_document_id(chunk.document_id) for chunk in response.citations]
     )
     relevant = set(case.relevant_document_ids)
@@ -898,10 +880,10 @@ def _case_result(
     # 指標の対象外(#591)。
     abstained = is_abstained(response)
     hits: list[str] = []
-    reciprocal_rank: float | None = None
+    rank: float | None = None
     if relevant and not _skips_retrieval(response):
         hits = [doc_id for doc_id in retrieved_ids if doc_id in relevant]
-        reciprocal_rank = _reciprocal_rank(retrieved_ids, relevant)
+        rank = reciprocal_rank(retrieved_ids, relevant)
 
     evidence_recall, missing_evidence = _evidence_scores(case, response)
     observed = observed_outcome(response.diagnostics.answer, abstained=abstained)
@@ -909,20 +891,18 @@ def _case_result(
     expectations_by_turn = [case, *case.turns]
     decisions = []
     turn_results = []
-    expected_decisions: set[str] = set()
+    case_decisions: set[str] = set()
     for index, (expectation, run) in enumerate(zip(expectations_by_turn, runs, strict=False)):
-        expected = (
-            {expectation.expected_response_decision}
-            if expectation.expected_response_decision
-            else {_response_decision(item) for item in expectation.expected_outcomes}
+        expected = expected_decisions(
+            expectation.expected_response_decision, expectation.expected_outcomes
         )
         actual = observed_outcome(
             run.response.diagnostics.answer, abstained=is_abstained(run.response)
         )
-        correct = _response_decision(actual.outcome) in expected if expected else None
+        correct = response_decision(actual.outcome) in expected if expected else None
         if correct is not None:
             decisions.append(correct)
-            expected_decisions.update(expected)
+            case_decisions.update(expected)
         turn_results.append(
             EvaluationTurnResult(
                 turn=index,
@@ -959,13 +939,13 @@ def _case_result(
         hops=case.hops,
         retrieved_document_ids=retrieved_ids,
         relevant_document_ids=list(case.relevant_document_ids),
-        hit_document_ids=_unique_in_order(hits),
-        mrr=reciprocal_rank,
+        hit_document_ids=unique_in_order(hits),
+        mrr=rank,
         requirement_coverage=judgement.requirement_coverage if judgement else None,
         claim_support_rate=judgement.claim_support_rate if judgement else None,
         answer_correctness=judgement.answer_correctness if judgement else None,
         response_decision_accuracy=_bool_value(all(decisions)) if decisions else None,
-        expected_decisions=sorted(expected_decisions),
+        expected_decisions=sorted(case_decisions),
         observed_outcome=observed.outcome,
         outcome_source=observed.source,
         required_evidence_recall=evidence_recall,
@@ -1008,107 +988,14 @@ def evidence_matches_chunk(
     """引用の 1 つの chunk が根拠の条件（文書・ページ・シート・行・章節・本文）をすべて満たすか。
 
     #2065・#2086。`document_id` は chunk の文書の ID の代わりに比べる ID（同じ文書とみなす文書を
-    正解の文書の ID にそろえたもの）。
+    正解の文書の ID にそろえたもの）。照合は platform の採点の部品（#3240）。
     """
-    chunk_document_id = document_id if document_id is not None else chunk.document_id
-    if evidence.document_id is not None and chunk_document_id != evidence.document_id:
-        return False
-    if evidence.page_start is not None and not _ranges_overlap(
-        _chunk_range(chunk, "page_start", "page_end", fallback="page_number"),
-        evidence.page_start,
-        evidence.page_end,
-    ):
-        return False
-    if evidence.sheet is not None and _normalized_name(
-        chunk.metadata.get("sheet_name")
-    ) != _normalized_name(evidence.sheet):
-        return False
-    if evidence.row_start is not None and not _ranges_overlap(
-        _chunk_range(chunk, "row_start", "row_end"), evidence.row_start, evidence.row_end
-    ):
-        return False
-    if evidence.section is not None and not contains_normalized(
-        str(chunk.metadata.get("section_path") or ""), evidence.section
-    ):
-        return False
-    if evidence.text is None:
-        return True
-    # 表示上は連続するセルの原文を、HTML のタグを含めず同じ行の中で照合する。
-    # 行を連結すると、別の行にある数値を組み合わせて根拠にしてしまう。
-    if "<table" not in chunk.text.lower():
-        return contains_normalized(chunk.text, evidence.text)
-    structure = parse_html_table_structure(chunk.text)
-    outside = _OutsideTableText()
-    outside.feed(chunk.text)
-    outside.close()
-    if any(contains_normalized(text, evidence.text) for text in outside.segments):
-        return True
-    return any(
-        contains_normalized(" ".join(cell["text"] for cell in row["cells"]), evidence.text)
-        for row in structure.get("rows", [])
+    return evidence_matches(
+        evidence,
+        document_id=document_id if document_id is not None else chunk.document_id,
+        text=chunk.text,
+        locator=chunk.metadata,
     )
-
-
-class _OutsideTableText(HTMLParser):
-    """表の前後の本文も照合するが、表をまたいで本文をつなげない。"""
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.depth = 0
-        self.segments = [""]
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag == "table":
-            if self.depth == 0:
-                self.segments.append("")
-            self.depth += 1
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "table" and self.depth:
-            self.depth -= 1
-
-    def handle_data(self, data: str) -> None:
-        if not self.depth:
-            self.segments[-1] += data
-
-
-def _ranges_overlap(found: tuple[int, int] | None, start: int, end: int | None) -> bool:
-    """chunk の範囲（分からなければ None で、一致しない）が、根拠の範囲と重なるか。"""
-    return found is not None and found[1] >= start and found[0] <= (end or start)
-
-
-def _normalized_name(value: object) -> str:
-    """シート名の比較の形（NFKC・前後の空白なし・大小文字を区別しない）。"""
-    return unicodedata.normalize("NFKC", str(value or "")).strip().casefold()
-
-
-def _chunk_range(
-    chunk: RetrievedChunk, start_key: str, end_key: str, *, fallback: str | None = None
-) -> tuple[int, int] | None:
-    """chunk の範囲（ページは `page_start`〜`page_end`、無ければ `page_number`。行は
-    `row_start`〜`row_end`）。分からなければ None。
-    """
-    start = _positive_page(chunk.metadata.get(start_key))
-    if start is None and fallback is not None:
-        start = _positive_page(chunk.metadata.get(fallback))
-    if start is None:
-        return None
-    end = _positive_page(chunk.metadata.get(end_key)) or start
-    return start, max(start, end)
-
-
-def _positive_page(value: object) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if value >= 1 else None
-    if isinstance(value, str) and value.strip().isdigit():
-        number = int(value.strip())
-        return number if number >= 1 else None
-    return None
-
-
-_NO_RETRIEVAL_OUTCOMES = frozenset({"needs_clarification", "needs_human"})
 
 
 def _explicit_outcome(response: SearchResponse) -> str | None:
@@ -1119,7 +1006,7 @@ def _explicit_outcome(response: SearchResponse) -> str | None:
 
 def _skips_retrieval(response: SearchResponse) -> bool:
     """確認の質問・人への引き継ぎで引用の無い回答（検索の指標の対象外）。"""
-    return _explicit_outcome(response) in _NO_RETRIEVAL_OUTCOMES and not response.citations
+    return skips_retrieval(_explicit_outcome(response), has_citations=bool(response.citations))
 
 
 def is_abstained(response: SearchResponse) -> bool:
@@ -1137,7 +1024,7 @@ def is_abstained(response: SearchResponse) -> bool:
     )
 
 
-def _accumulate_case_metrics(aggregate: _Aggregate, result: EvaluationCaseResult) -> None:
+def _accumulate_case_metrics(aggregate: MetricAggregate, result: EvaluationCaseResult) -> None:
     """成功したケースの測れた指標を集計へ足す。"""
     aggregate.add("required_evidence_recall", result.required_evidence_recall)
     aggregate.add("mrr", result.mrr)
@@ -1175,13 +1062,6 @@ def _case_timeout_message(error: AnswerTimeoutError, *, limited_by_budget: bool)
         f"評価ケースの回答生成が{limit}終わりませんでした（時間切れになった工程: {stage}）。"
         "trace_id で監査ログを確認してください。"
     )
-
-
-def _reciprocal_rank(retrieved_ids: list[str], relevant_ids: set[str]) -> float:
-    for index, document_id in enumerate(retrieved_ids, start=1):
-        if document_id in relevant_ids:
-            return 1.0 / index
-    return 0.0
 
 
 def _case_error_result(
@@ -1273,43 +1153,22 @@ def _record_case_error_audit(
     )
 
 
-def _unique_in_order(values: list[str]) -> list[str]:
-    """重複を除き、初出順を維持する。"""
-    seen: set[str] = set()
-    unique: list[str] = []
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        unique.append(value)
-    return unique
-
-
-def _accumulate_failure_reasons(counts: dict[str, int], reasons: Sequence[str]) -> None:
-    """失敗理由の case 件数を集計する。"""
-    for reason in reasons:
-        counts[reason] = counts.get(reason, 0) + 1
+def _threshold_values(thresholds: EvaluationThresholds | None) -> dict[str, float]:
+    """設定された最低閾値（指標 → 値）。"""
+    return thresholds.model_dump(exclude_none=True) if thresholds is not None else {}
 
 
 def _threshold_failures(
     thresholds: EvaluationThresholds | None,
     aggregate_values: Mapping[str, float | None],
-) -> list[EvaluationThresholdFailure]:
-    """設定された最低閾値を下回った aggregate metric を返す(測れなかった指標は判定しない)。"""
-    if thresholds is None:
-        return []
+) -> list[ThresholdFailure]:
+    """設定された最低閾値を下回った aggregate metric（測れなかった指標は判定しない）。
 
-    failures: list[EvaluationThresholdFailure] = []
-    for metric, threshold in thresholds.model_dump(exclude_none=True).items():
-        # 語句の一致率(faithfulness)は参考値。閾値は目安として表示し、合否に使わない(#711)。
-        if metric in REFERENCE_ONLY_METRICS:
-            continue
-        actual = aggregate_values.get(metric)
-        if actual is not None and actual < threshold:
-            failures.append(
-                EvaluationThresholdFailure(metric=metric, actual=actual, threshold=threshold)
-            )
-    return failures
+    参考だけの指標（REFERENCE_ONLY_METRICS）は閾値を目安として表示し、合否に使わない（#711）。
+    """
+    return threshold_failures(
+        _threshold_values(thresholds), aggregate_values, reference_only=REFERENCE_ONLY_METRICS
+    )
 
 
 def _mapping_list(value: object) -> list[Mapping[str, object]]:
@@ -1331,14 +1190,6 @@ def _bool_value(value: bool | None) -> float | None:
     return None if value is None else (1.0 if value else 0.0)
 
 
-def _rate(values: list[bool]) -> float | None:
-    return round(sum(values) / len(values), 4) if values else None
-
-
-def _mean(values: list[float]) -> float | None:
-    return round(sum(values) / len(values), 4) if values else None
-
-
 def decision_breakdown(
     results: list[EvaluationCaseResult],
 ) -> dict[str, EvaluationReasoningSummary]:
@@ -1356,7 +1207,7 @@ def decision_breakdown(
         result[decision] = EvaluationReasoningSummary(
             case_count=len(cases),
             error_count=sum(item.status == "error" for item in cases),
-            metrics={"response_decision_accuracy": _mean(values)},
+            metrics={"response_decision_accuracy": rounded_mean(values)},
             metric_case_counts={"response_decision_accuracy": len(values)},
         )
     return result
@@ -1371,7 +1222,7 @@ def category_breakdown(results: list[EvaluationCaseResult]) -> dict[str, Evaluat
         grouped.setdefault(item.category or EVALUATION_UNCATEGORIZED, []).append(item)
     summaries = {}
     for name, members in grouped.items():
-        aggregate = _Aggregate()
+        aggregate = _aggregate()
         for item in members:
             if item.status == "success":
                 _accumulate_case_metrics(aggregate, item)
@@ -1396,12 +1247,12 @@ def split_breakdown(results: list[EvaluationCaseResult]) -> dict[str, Evaluation
         grouped.setdefault(result.split or EVALUATION_UNASSIGNED_SPLIT, []).append(result)
     breakdown: dict[str, EvaluationSplitSummary] = {}
     for split, members in grouped.items():
-        aggregate = _Aggregate()
+        aggregate = _aggregate()
         failure_reason_counts: dict[str, int] = {}
         for result in members:
             if result.status == "success":
                 _accumulate_case_metrics(aggregate, result)
-            _accumulate_failure_reasons(failure_reason_counts, result.failure_reasons)
+            count_reasons(failure_reason_counts, result.failure_reasons)
         breakdown[split] = EvaluationSplitSummary(
             case_count=len(members),
             error_count=sum(1 for result in members if result.status != "success"),
@@ -1456,7 +1307,7 @@ def _reasoning_breakdown(
         grouped.setdefault(key(result), []).append(result)
     breakdown: dict[str, EvaluationReasoningSummary] = {}
     for name, members in grouped.items():
-        aggregate = _Aggregate()
+        aggregate = _aggregate()
         for result in members:
             if result.status == "success":
                 _accumulate_case_metrics(aggregate, result)

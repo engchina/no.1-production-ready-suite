@@ -3,8 +3,8 @@
 評価のケースが期待する対応（`expected_outcomes`）・手順（`required_answer_points`）・勧めてはいけない操作
 （`forbidden_phrases`）・触れるべき条件（`required_conditions`）を、回答の記録と照らして採点する。
 どれも LLM を呼ばない決定的な判定で、語の照合は NFKC・大小文字・空白を無視する（全角・半角の違いと
-改行・空白の入り方で一致が変わらないようにする）。期待する手順の別解（`acceptable_alternatives`。#1284）は、
-いちばん点の高い列で採点する。
+改行・空白の入り方で一致が変わらないようにする。照合は platform の採点の部品
+`pr_evaluation_scoring`。#3240）。期待する手順の別解（`acceptable_alternatives`。#1284）は、いちばん点の高い列で採点する。
 
 回答の対応は、回答の記録の `diagnostics.answer.outcome` があればそれを使う。無いときは、拒答・
 現場のデータが要るか（`external_data_required`）・確認の質問・人の確認が要るか（`needs_human_review`）
@@ -13,10 +13,12 @@
 
 from __future__ import annotations
 
-import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import get_args
+
+from pr_evaluation_scoring import contains_normalized
+from pr_evaluation_scoring import normalize_for_match as _normalized
 
 from app.schemas.evaluation import EvaluationOutcome
 
@@ -28,19 +30,6 @@ class ObservedOutcome:
     outcome: EvaluationOutcome
     # explicit: 回答の記録が対応を持っていた / inferred: 診断から推定した
     source: str
-
-
-def _normalized(text: str) -> str:
-    return "".join(unicodedata.normalize("NFKC", text).casefold().split())
-
-
-def contains_normalized(text: str, phrase: str) -> bool:
-    """`phrase` が `text` に含まれるか（NFKC・大小文字・空白を無視）。
-
-    空の語は含まれないとみなす。
-    """
-    needle = _normalized(phrase)
-    return bool(needle) and needle in _normalized(text)
 
 
 def observed_outcome(

@@ -29,6 +29,8 @@ dependencies = [
     "rag-engine[japanese,excel,pdf]",
     "production-ready-backend-core",
     "production-ready-system-settings-backend",
+    # 製品の評価と suite の評価が共有する決定的な採点の部品（#3240）。
+    "production-ready-evaluation-scoring",
 ]
 
 # 重い parser 依存(docling/unstructured/dots_ocr)は backend に載せない。
@@ -62,6 +64,7 @@ rag-engine = { path = "../packages/rag_engine", editable = true }
 # 共有 backend インフラ（platform repo の sibling パス）。変更時は uv lock 再生成が必要。
 production-ready-backend-core = { path = "../../platform/packages/backend_core", editable = true }
 production-ready-system-settings-backend = { path = "../../platform/packages/system_settings_backend", editable = true }
+production-ready-evaluation-scoring = { path = "../../platform/packages/evaluation_scoring", editable = true }
 torch = { index = "pytorch-cpu" }
 torchvision = { index = "pytorch-cpu" }
 
