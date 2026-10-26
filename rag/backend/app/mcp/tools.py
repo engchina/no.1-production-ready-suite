@@ -2470,6 +2470,20 @@ def _source_lines(metadata: dict[str, Any]) -> tuple[int | None, int | None]:
     return start, end
 
 
+def evidence_row_location(metadata: dict[str, Any]) -> dict[str, Any]:
+    """根拠の行の番号の基準と行の範囲（``EvidenceLocator`` と同じ名前・値。行が分からなければ空）。
+
+    評価の必要な根拠の行の条件（``row_basis``・``row_start``・``row_end``）を、MCP の根拠の場所と
+    同じ行で照合するために使う（#3547。chunk の metadata の ``row_start`` は CSV では物理行、解析の
+    表の格子の行は ``table_row_start`` にある）。
+    """
+    rows = _table_rows(metadata, _metadata_str(metadata, "sheet_name"))
+    if rows is None or rows[2] is None:
+        return {}
+    basis, _table_index, row_start, row_end = rows
+    return {"row_basis": basis, "row_start": row_start, "row_end": row_end}
+
+
 def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
     section = metadata.get("section_path")
     if isinstance(section, list):

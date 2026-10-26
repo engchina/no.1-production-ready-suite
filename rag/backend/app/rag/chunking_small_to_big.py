@@ -25,8 +25,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
-from dataclasses import replace
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, cast
 
 from rag_parser_core.extraction import (
@@ -685,7 +685,7 @@ def _backend_chunk(
     index: int,
     parent: DocumentChunk | None,
     page_sizes: Mapping[int, tuple[object, object]],
-    tables: Mapping[str, tuple[int, ParsedTableGrid]] | None = None,
+    tables: Mapping[str, LayoutTable] | None = None,
 ) -> Chunk:
     metadata = child.metadata
     section_path = [str(part) for part in metadata.get("section_path") or [] if str(part)]
@@ -751,14 +751,43 @@ def _backend_chunk(
     )
 
 
-def _layout_tables(records: list[dict[str, Any]]) -> dict[str, tuple[int, ParsedTableGrid]]:
-    """layout_records の表の record の id → (文書の中の表の番号, 解析の表の格子)(#3429)。
+@dataclass(frozen=True)
+class LayoutTable:
+    """layout_records の表の record の、解析の表の番号と格子(#3429)。
+
+    ``rows`` は分割(``rag_engine`` の表の行のまとまり)がその record に使った表の構造の行 → 格子の
+    行。頁をまたいで続く表(#3547)は、元の表と続きの表を 1 つの格子にし、続きの表の行を元の表の
+    行の後ろに続けて数える(続きの表の先頭の表頭の行は対応させない)。None は構造の行と格子の行が
+    同じ(頁をまたがない表)。
+    """
+
+    table_index: int
+    grid: ParsedTableGrid
+    rows: Mapping[int, int] | None = None
+
+    def grid_rows(self, rows: Iterable[int]) -> list[int]:
+        """構造の行 → 格子の行(対応の無い行は除く)。"""
+        if self.rows is None:
+            return list(rows)
+        return [self.rows[row] for row in rows if row in self.rows]
+
+    def record_rows(self) -> list[int]:
+        """record が含む格子の行(続きの表は繰り返した表頭を除いたデータの行)。"""
+        if self.rows is None:
+            return list(range(1, self.grid.row_count + 1))
+        return sorted(set(self.rows.values()))
+
+
+def _layout_tables(records: list[dict[str, Any]]) -> dict[str, LayoutTable]:
+    """layout_records の表の record の id → 解析の表の番号と格子(#3429)。
 
     格子は分割(``rag_engine`` の表の行のまとまり)と同じ読み方(``parse_html_table_structure``)で
     表の HTML から作り、行の番号を行のまとまりの ``row_start`` / ``row_end`` とそろえる。番号は
     頁と読み順の順で、頁をまたいで続く表(``raw.continues_record_id``)は前の表と同じ番号にする。
-    格子を作らない表: HTML でない表・Vision などで書き直した表(``table_enhanced_html``)・頁を
-    またいで続く表(格子が頁ごとに分かれ、表全体の行の番号が決まらない)。
+    頁をまたいで続く表は、元の表から続きの表を順にたどって 1 つの格子にする(#3547。
+    ``_continued_table``)。格子を作らない表: HTML でない表・Vision などで書き直した表
+    (``table_enhanced_html``。続きの表に前の表の表頭を付けたもの〔``table_header_carried``〕は
+    除く)・続きの形が元の表と合わない表(その表から後ろの続き)。
     """
     from rag_engine.parsing.table_structure import parse_html_table_structure
 
@@ -772,31 +801,112 @@ def _layout_tables(records: list[dict[str, Any]]) -> dict[str, tuple[int, Parsed
         ),
         key=lambda record: (int(record.get("page") or 0), int(record.get("seq_no") or 0)),
     )
-    continued = {_raw(record).get("continues_record_id") for record in ordered} - {None, ""}
+    by_id = {str(record.get("id") or ""): record for record in ordered}
+    next_of: dict[str, str] = {}
+    for record in ordered:
+        previous = str(_raw(record).get("continues_record_id") or "")
+        if previous in by_id:
+            next_of.setdefault(previous, str(record.get("id") or ""))
     numbers: dict[str, int] = {}
-    tables: dict[str, tuple[int, ParsedTableGrid]] = {}
+    tables: dict[str, LayoutTable] = {}
     for record in ordered:
         record_id = str(record.get("id") or "")
         raw = _raw(record)
         previous = str(raw.get("continues_record_id") or "")
         numbers[record_id] = numbers.get(previous) or len(set(numbers.values())) + 1
-        text = str(record.get("text") or "")
-        if previous or record_id in continued or raw.get("table_enhanced_html"):
+        if previous in by_id or raw.get("table_enhanced_html"):
+            # 続きの表は元の表から作る。書き直した表は格子を作らない。
             continue
+        text = str(record.get("text") or "")
         if "<table" not in text.casefold():
             continue
         grid = _layout_table_grid(parse_html_table_structure(text), raw)
-        if grid is not None:
-            tables[record_id] = (numbers[record_id], grid)
+        if grid is None:
+            continue
+        chain: list[dict[str, Any]] = []
+        current = next_of.get(record_id)
+        while current and current in by_id and len(chain) < len(ordered):
+            chain.append(by_id[current])
+            current = next_of.get(current)
+        if not chain:
+            tables[record_id] = LayoutTable(numbers[record_id], grid)
+            continue
+        tables.update(_continued_table(numbers[record_id], record_id, grid, chain))
     return tables
 
 
+def _continued_table(
+    table_index: int,
+    record_id: str,
+    grid: ParsedTableGrid,
+    chain: list[dict[str, Any]],
+) -> dict[str, LayoutTable]:
+    """頁をまたいで続く表を 1 つの格子にし、record ごとの構造の行 → 格子の行を作る(#3547)。
+
+    元の表の表頭(``grid.header_rows`` 行)が要る。続きの表の構造(分割と同じく ``table_enhanced_html``
+    があればそれ)の先頭が元の表と同じ表頭の行なら(繰り返した表頭・取込が前の表から付けた表頭)
+    表頭として対応させず、表頭が無ければ先頭から数える。列の数が違う・表頭が違う・書き直した続きの
+    表は、その表から後ろを格子に入れない(前までの表の行の番号は変わらない)。Azure Document
+    Intelligence の頁をまたぐ表と同じく、表全体の格子の行の番号にする。
+    """
+    from rag_engine.parsing.table_structure import parse_html_table_structure
+
+    header_rows = grid.header_rows
+    if header_rows < 1:
+        return {}
+    header_keys = [grid.row_key(row) for row in range(1, header_rows + 1)]
+    columns = _grid_columns(grid)
+    cells = list(grid.cells)
+    maps: dict[str, dict[int, int]] = {
+        record_id: {row: row for row in range(1, grid.row_count + 1)}
+    }
+    offset = grid.row_count
+    for piece in chain:
+        raw = _raw(piece)
+        enhanced = str(raw.get("table_enhanced_html") or "")
+        carried = bool(enhanced) and raw.get("table_header_carried") is True
+        if enhanced and not carried:
+            break
+        structure = parse_html_table_structure(enhanced or str(piece.get("text") or ""))
+        # 取込が付けた表頭の行の分だけ、Docling のセルの領域(元の表の行)をずらす。
+        piece_grid = _layout_table_grid(
+            structure, raw, bbox_row_shift=header_rows if carried else 0
+        )
+        if piece_grid is None or _grid_columns(piece_grid) != columns:
+            break
+        piece_header = piece_grid.header_rows
+        if piece_header and (
+            piece_header != header_rows
+            or [piece_grid.row_key(row) for row in range(1, header_rows + 1)] != header_keys
+        ):
+            break
+        if carried and not piece_header:
+            break
+        data_rows = range(piece_header + 1, piece_grid.row_count + 1)
+        maps[str(piece.get("id") or "")] = {row: offset + row - piece_header for row in data_rows}
+        cells.extend(
+            replace(cell, row=offset + cell.row - piece_header)
+            for cell in piece_grid.cells
+            if cell.row > piece_header
+        )
+        offset += len(data_rows)
+    combined = ParsedTableGrid.build(cells)
+    if combined is None or combined.header_rows != header_rows:
+        return {}
+    return {piece_id: LayoutTable(table_index, combined, rows) for piece_id, rows in maps.items()}
+
+
+def _grid_columns(grid: ParsedTableGrid) -> int:
+    return max((cell.col + cell.col_span - 1 for cell in grid.cells), default=0)
+
+
 def _layout_table_grid(
-    structure: Mapping[str, Any], raw: Mapping[str, Any]
+    structure: Mapping[str, Any], raw: Mapping[str, Any], *, bbox_row_shift: int = 0
 ) -> ParsedTableGrid | None:
     """``parse_html_table_structure`` の行・セル(1 始まり)を格子にする。
 
-    セルの領域は Docling が出した値(``raw.table_cell_bboxes``)。
+    セルの領域は Docling が出した値(``raw.table_cell_bboxes``。record の元の表の行・列)。
+    ``bbox_row_shift`` は構造の先頭に足した行の数(続きの表に付けた表頭。その行は領域を持たない)。
     """
     boxes = {
         (entry.get("row"), entry.get("col")): entry.get("bbox")
@@ -814,7 +924,11 @@ def _layout_table_grid(
             )
             if row_index < 1 or col_index < 1:
                 return None
-            box = boxes.get((row_index - 1, col_index - 1))
+            box = (
+                boxes.get((row_index - 1 - bbox_row_shift, col_index - 1))
+                if row_index > bbox_row_shift
+                else None
+            )
             cells.append(
                 ParsedCell(
                     row=row_index,
@@ -829,9 +943,7 @@ def _layout_table_grid(
     return ParsedTableGrid.build(cells)
 
 
-def _layout_table_locator(
-    refs: object, tables: Mapping[str, tuple[int, ParsedTableGrid]]
-) -> dict[str, str | int]:
+def _layout_table_locator(refs: object, tables: Mapping[str, LayoutTable]) -> dict[str, str | int]:
     """表の子が行として含む解析の表の格子の行(表の行のまとまりはその範囲、表全体は全行)。
 
     1 つの表だけを含む子にだけ付ける。行のまとまりの ``row_start`` / ``row_end`` はデータの行で、
@@ -850,14 +962,15 @@ def _layout_table_locator(
     table = tables.get(str(ref.get("source_table_record_id") or ref.get("record_id") or ""))
     if table is None:
         return {}
-    table_index, grid = table
     group = ref.get("table_row_group")
     if isinstance(group, Mapping):
         start, end = int(group.get("row_start") or 0), int(group.get("row_end") or 0)
         if start < 1 or end < start:
             return {}
-        return grid_rows_metadata(grid, table_index, range(start, end + 1))
-    return grid_rows_metadata(grid, table_index, range(1, grid.row_count + 1))
+        rows = table.grid_rows(range(start, end + 1))
+    else:
+        rows = table.record_rows()
+    return grid_rows_metadata(table.grid, table.table_index, rows) if rows else {}
 
 
 def _cell_bbox(value: object) -> tuple[float, float, float, float] | None:
