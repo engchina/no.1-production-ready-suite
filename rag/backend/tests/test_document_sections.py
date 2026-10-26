@@ -239,3 +239,31 @@ def test_summary_rule_signature_detects_boundary_changes_even_with_same_section_
     response = client.get(URL)
     assert response.status_code == 200
     assert response.json()["data"]["summary_rules_match"] is (not changed)
+
+
+def test_sections_api_strips_formatting_lines_from_stored_navigation(
+    oracle: FakeSectionsOracle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """線を除く前に保存した章節の木でも、章節の API の名前に書式の線を出さない(#3434)。"""
+    from app.rag import document_sections_service as service
+    from app.rag.section_rules import SectionRulesStore
+
+    monkeypatch.setattr(service, "load_section_rules", SectionRulesStore)
+    payload = StructuredExtraction(
+        raw_text="本文", pages=[ExtractionPage(page_number=page) for page in range(1, 7)]
+    ).model_dump(mode="json")
+    payload["navigation"] = [
+        {"section_id": "nav-1", "title": "Chapter̲ 1", "depth": 1, "page_start": 1},
+        {"section_id": "nav-2", "title": "Section̅ が", "depth": 2, "page_start": 2},
+    ]
+
+    async def stored_artifact(**kwargs: Any) -> dict[str, Any]:
+        return {"extraction_json": payload}
+
+    monkeypatch.setattr(oracle, "get_document_extraction_artifact", stored_artifact)
+    data = client.get(URL).json()["data"]
+    assert data["source"] == "extraction"
+    assert [(s["id"], s["title"]) for s in data["sections"]] == [
+        ("nav-1", "Chapter 1"),
+        ("nav-2", "Section が"),
+    ]

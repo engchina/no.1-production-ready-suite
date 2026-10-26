@@ -379,6 +379,25 @@ class DocumentNavigationNode(BaseModel):
     page_end: int | None = Field(default=None, ge=1)
     summary: str | None = None
 
+    # 要素の本文・章節の道と同じ規則で書式の飾りの結合の線を除く。読むたびに当たるので、
+    # 線を除く前に保存した木（``parser_navigation`` の artifact など）も再解析なしで表示が直る。
+    # ``section_id`` は保存時の値のまま（人の修正・章節と chunk の対応が参照する。#3434）。
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str) -> str:
+        return strip_formatting_marks(value).strip()
+
+    @field_validator("section_path")
+    @classmethod
+    def normalize_section_path(cls, value: list[str]) -> list[str]:
+        cleaned = (strip_formatting_marks(item).strip() for item in value)
+        return [item for item in cleaned if item]
+
+    @field_validator("summary")
+    @classmethod
+    def normalize_summary(cls, value: str | None) -> str | None:
+        return strip_formatting_marks(value).strip() if value is not None else None
+
 
 class ExtractionField(BaseModel):
     """schema 駆動で抽出した named field/entity（PoweRAG の LangExtract 抽出 由来）。
