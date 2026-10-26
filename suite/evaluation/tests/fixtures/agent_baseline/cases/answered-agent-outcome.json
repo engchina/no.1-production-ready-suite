@@ -141,6 +141,76 @@
         }
       ],
       "cancelled_run_ids": []
+    },
+    "v3": {
+      "scores": {
+        "status": "success",
+        "category": "document_answerable",
+        "split": "dev",
+        "reasoning_type": "bridge",
+        "hops": 2,
+        "retrieved_document_ids": [
+          "doc-z",
+          "doc-a",
+          "doc-b"
+        ],
+        "relevant_document_ids": [
+          "doc-a",
+          "doc-b"
+        ],
+        "hit_document_ids": [
+          "doc-a",
+          "doc-b"
+        ],
+        "required_evidence_recall": 0.5,
+        "mrr": 0.5,
+        "answer_correctness": null,
+        "requirement_coverage": null,
+        "claim_support_rate": null,
+        "response_decision_accuracy": 1.0,
+        "expected_decisions": [
+          "answer"
+        ],
+        "observed_outcome": "answered",
+        "outcome_source": "agent_answer",
+        "missing_evidence": [
+          "ev-approver"
+        ],
+        "turn_results": [],
+        "failure_reasons": [
+          "evidence_miss"
+        ],
+        "elapsed_ms": 1500.0,
+        "error_type": null,
+        "error_stage": null,
+        "undetermined_evidence": [],
+        "metric_status": {
+          "required_evidence_recall": {
+            "status": "scored",
+            "reason": null
+          },
+          "mrr": {
+            "status": "scored",
+            "reason": null
+          },
+          "response_decision_accuracy": {
+            "status": "scored",
+            "reason": null
+          },
+          "answer_correctness": {
+            "status": "not_applicable",
+            "reason": null
+          },
+          "requirement_coverage": {
+            "status": "not_applicable",
+            "reason": null
+          },
+          "claim_support_rate": {
+            "status": "not_applicable",
+            "reason": null
+          }
+        }
+      }
     }
   }
 }

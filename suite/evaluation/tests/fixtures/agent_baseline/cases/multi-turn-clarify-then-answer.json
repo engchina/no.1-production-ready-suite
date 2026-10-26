@@ -195,6 +195,90 @@
         }
       ],
       "cancelled_run_ids": []
+    },
+    "v3": {
+      "scores": {
+        "status": "success",
+        "category": "clarification_required",
+        "split": "dev",
+        "reasoning_type": "single_hop",
+        "hops": 1,
+        "retrieved_document_ids": [
+          "doc-c"
+        ],
+        "relevant_document_ids": [
+          "doc-c"
+        ],
+        "hit_document_ids": [
+          "doc-c"
+        ],
+        "required_evidence_recall": 1.0,
+        "mrr": 1.0,
+        "answer_correctness": null,
+        "requirement_coverage": null,
+        "claim_support_rate": null,
+        "response_decision_accuracy": null,
+        "expected_decisions": [
+          "answer",
+          "clarify"
+        ],
+        "observed_outcome": "answered",
+        "outcome_source": "agent_answer",
+        "missing_evidence": [],
+        "turn_results": [
+          {
+            "turn": 0,
+            "observed_outcome": null,
+            "outcome_source": null,
+            "response_decision_accuracy": null,
+            "expected_decisions": [
+              "clarify"
+            ],
+            "elapsed_ms": 1000.0
+          },
+          {
+            "turn": 1,
+            "observed_outcome": "answered",
+            "outcome_source": "agent_answer",
+            "response_decision_accuracy": 1.0,
+            "expected_decisions": [
+              "answer"
+            ],
+            "elapsed_ms": 2250.0
+          }
+        ],
+        "failure_reasons": [],
+        "elapsed_ms": 3250.0,
+        "error_type": null,
+        "error_stage": null,
+        "undetermined_evidence": [],
+        "metric_status": {
+          "required_evidence_recall": {
+            "status": "scored",
+            "reason": null
+          },
+          "mrr": {
+            "status": "scored",
+            "reason": null
+          },
+          "response_decision_accuracy": {
+            "status": "unevaluable",
+            "reason": "outcome_missing"
+          },
+          "answer_correctness": {
+            "status": "not_applicable",
+            "reason": null
+          },
+          "requirement_coverage": {
+            "status": "not_applicable",
+            "reason": null
+          },
+          "claim_support_rate": {
+            "status": "not_applicable",
+            "reason": null
+          }
+        }
+      }
     }
   }
 }

@@ -136,6 +136,42 @@
         }
       ],
       "cancelled_run_ids": []
+    },
+    "v3": {
+      "scores": {
+        "status": "error",
+        "category": "clarification_required",
+        "split": "dev",
+        "reasoning_type": "bridge",
+        "hops": 2,
+        "retrieved_document_ids": [],
+        "relevant_document_ids": [
+          "doc-c"
+        ],
+        "hit_document_ids": [],
+        "required_evidence_recall": null,
+        "mrr": null,
+        "answer_correctness": null,
+        "requirement_coverage": null,
+        "claim_support_rate": null,
+        "response_decision_accuracy": null,
+        "expected_decisions": [
+          "answer",
+          "clarify"
+        ],
+        "observed_outcome": null,
+        "outcome_source": null,
+        "missing_evidence": [],
+        "turn_results": [],
+        "failure_reasons": [
+          "case_error"
+        ],
+        "elapsed_ms": 1500.0,
+        "error_type": "AgentRunFailed",
+        "error_stage": "turn_1",
+        "undetermined_evidence": [],
+        "metric_status": {}
+      }
     }
   }
 }
