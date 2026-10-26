@@ -3,7 +3,7 @@
 製品の module・DB・保存ファイルを読まない。
 
 - suite の src は標準 library・httpx・pydantic・platform の `pr_evaluation_scoring`
-  /`pr_system_settings`（OCI Enterprise AI の呼び方）・自分だけを import する（製品の `app.*`・
+  /`pr_enterprise_ai`（OCI Enterprise AI の呼び方）・自分だけを import する（製品の `app.*`・
   `rag_*`・`nl2sql`・Agent の package を import しない）。
 - suite の src は製品の DB の driver（`oracledb`）を import せず、製品のディレクトリの path を書か
   ない。
@@ -27,7 +27,7 @@ SUITE_ALLOWED = {
     "httpx",
     "pydantic",
     "pr_evaluation_scoring",
-    "pr_system_settings",
+    "pr_enterprise_ai",
     "pr_suite_evaluation",
 }
 SCORING_ALLOWED = {"pr_evaluation_scoring"}
@@ -82,3 +82,13 @@ def test_products_and_platform_do_not_depend_on_the_suite() -> None:
     ]
     for path in manifests:
         assert "production-ready-suite-evaluation" not in path.read_text(encoding="utf-8"), path
+
+
+def test_suite_does_not_install_fastapi() -> None:
+    """suite の venv に FastAPI を入れない（OCI Enterprise AI の呼び方は標準 library だけの
+    `pr_enterprise_ai` から使う。#3418）。"""
+    root = Path(__file__).resolve().parents[1]
+    assert "production-ready-system-settings-backend" not in (root / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    assert 'name = "fastapi"' not in (root / "uv.lock").read_text(encoding="utf-8")

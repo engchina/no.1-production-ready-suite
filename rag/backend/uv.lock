@@ -2218,6 +2218,24 @@ dev = [
 ]
 
 [[package]]
+name = "production-ready-enterprise-ai"
+version = "0.1.0"
+source = { editable = "../../platform/packages/enterprise_ai" }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "bandit", specifier = ">=1.8" },
+    { name = "mypy", specifier = ">=1.14" },
+    { name = "pip-audit", specifier = ">=2.9" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-timeout", specifier = ">=2.3" },
+    { name = "pytest-xdist", specifier = ">=3.8" },
+    { name = "ruff", specifier = ">=0.9" },
+]
+
+[[package]]
 name = "production-ready-evaluation-scoring"
 version = "0.1.0"
 source = { editable = "../../platform/packages/evaluation_scoring" }
@@ -2352,6 +2370,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "openpyxl" },
     { name = "production-ready-backend-core" },
+    { name = "production-ready-enterprise-ai" },
     { name = "pwdlib", extra = ["argon2"] },
     { name = "pydantic" },
     { name = "pypdf" },
@@ -2368,6 +2387,7 @@ requires-dist = [
     { name = "oci", marker = "extra == 'oci'", specifier = ">=2.168" },
     { name = "openpyxl", specifier = ">=3.1" },
     { name = "production-ready-backend-core", editable = "../../platform/packages/backend_core" },
+    { name = "production-ready-enterprise-ai", editable = "../../platform/packages/enterprise_ai" },
     { name = "pwdlib", extras = ["argon2"], specifier = ">=0.3,<1.0" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "pypdf", specifier = ">=6.4,<7" },

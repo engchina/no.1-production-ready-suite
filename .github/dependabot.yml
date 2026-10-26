@@ -99,6 +99,7 @@ updates:
       - /platform/packages/backend_core
       - /platform/packages/system_settings_backend
       - /platform/packages/evaluation_scoring
+      - /platform/packages/enterprise_ai
     schedule:
       interval: weekly
       day: monday

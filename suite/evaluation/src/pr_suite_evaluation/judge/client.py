@@ -1,7 +1,7 @@
 """判定のモデルの呼び出し（OCI Enterprise AI の Responses API。#3418）。
 
 URL の決め方（`{Endpoint URL}/responses`。path は補わない）と HTTP の失敗の分類は、3 製品と同じ
-platform の`pr_system_settings` の規則を使う。接続とモデルは suite の環境変数で決め、既定のモデル
+platform の `pr_enterprise_ai` の規則を使う。接続とモデルは suite の環境変数で決め、既定のモデル
 を持たない（指定が無ければ失敗にする。別のモデル・接続へ黙って切り替えない）。
 
 - `SUITE_EVALUATION_JUDGE_ENDPOINT`: OCI Enterprise AI の Endpoint URL（例
@@ -26,11 +26,11 @@ from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 import httpx
-from pr_system_settings.enterprise_ai_errors import (
+from pr_enterprise_ai.errors import (
     classify_enterprise_ai_http_failure,
     enterprise_ai_provider_message,
 )
-from pr_system_settings.model import enterprise_ai_request_url
+from pr_enterprise_ai.urls import enterprise_ai_request_url
 
 ENV_PREFIX = "SUITE_EVALUATION_JUDGE_"
 DEFAULT_TIMEOUT_SECONDS = 600.0
