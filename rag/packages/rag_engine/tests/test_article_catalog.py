@@ -86,7 +86,7 @@ def test_catalog_articles_are_not_deferred_by_document_selection():
     top = child("m1", 1, "手引き", "架空手引き.pdf", "p1", score=0.9)
     article = _marked(child("art1", 2, "第一条", "架空規程.json", "q1", score=0.2))
 
-    kept, deferred, _trace = answering.select_documents([top, article], settings)
+    kept, deferred, _trace = answering.select_documents([top, article], settings, top_k=1)
 
     assert [r.id for r in kept] == ["m1", "art1"]
     assert deferred == []
@@ -378,7 +378,7 @@ def test_catalog_articles_do_not_raise_the_top_document_score():
     manual = child("m1", 1, "手引き", "架空手引き.pdf", "p1", score=0.4)
     article = _marked(child("art1", 2, "第一条", "架空規程.json", "q1", score=0.95))
 
-    kept, deferred, trace = answering.select_documents([manual, article], settings)
+    kept, deferred, trace = answering.select_documents([manual, article], settings, top_k=1)
 
     assert [r.id for r in kept] == ["m1", "art1"]
     assert deferred == []

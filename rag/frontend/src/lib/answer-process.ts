@@ -43,6 +43,8 @@ const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
   質問拡張戦略: "answer.step.expandQuestion",
   検索文と検索語の確定: "answer.step.decideQueries",
   回答生成フロー: "answer.step.answerFlow",
+  // 回答を作らない RAG 検索の同じ流れ（#3506）
+  根拠検索フロー: "answer.step.evidenceFlow",
   "検索語の再確定（書き換え後）": "answer.step.redecideKeywords",
   文書検索: "answer.step.searchDocuments",
   Rerank: "answer.step.rerank",
@@ -81,12 +83,13 @@ export function answerStepDisplayName(name: string): string {
 
 /**
  * 段の利用者向けの名前（#3219 / #3226）。処理の経過の段の span（属性 `pr.stage`）の名前に使う。
- * パイプラインの段（全体を包む `answer` / `retrieval` を含む）と回答エンジンの工程名を引き、知らない段は undefined
+ * パイプラインの段（全体を包む `answer` / `evidence` / `retrieval` を含む）と回答エンジンの工程名を引き、知らない段は undefined
  * （処理の経過も trace も段の名前をそのまま出す）。
  */
 export function answerStageName(stage: string): string | undefined {
   const value = stage.trim();
   if (value === "answer") return t("search.stage.answer");
+  if (value === "evidence") return t("search.stage.evidence");
   if (value === "retrieval") return t("search.stage.retrieval");
   if (Object.prototype.hasOwnProperty.call(PIPELINE_STEP_LABEL, value)) return t(PIPELINE_STEP_LABEL[value]);
   return knownAnswerStepName(value);

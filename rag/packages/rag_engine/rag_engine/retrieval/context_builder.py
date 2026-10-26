@@ -666,13 +666,20 @@ def _finalize_parent_evidence(
 
 
 def _parent_group_sort_key(group: _ParentEvidenceBuilder) -> tuple[Any, ...]:
+    """親の並び（`max_records` の切り・根拠の予算の配分・評価器に渡す順が引き継ぐ）。
+
+    主キーは起点の最上位の順位（rerank の後の候補の並び = rerank の点数の順。MaxP。#3504）。rerank の後の
+    並びは、rerank の工程の明示の配置（質問が名指しした画面の先頭寄せ・交差参照の参照先を参照元の直後へ・
+    位置を保つ候補。`rerank_records`）だけが点数の順の例外で、ここでは並べ替えない。起点の数・前後の chunk の
+    数・RRF などの合成の点数は同点の順だけに使う（件数で、上位の起点 1 件の親を下げない）。
+    """
     anchor_ranks = [
         child.retrieval_rank for child in group.children.values() if child.role == "retrieved_anchor" and child.retrieval_rank is not None
     ]
     best_rank = min(anchor_ranks) if anchor_ranks else 1_000_000
     return (
-        -_parent_group_evidence_score(group),
         best_rank,
+        -_parent_group_evidence_score(group),
         _record_page(group.record),
         _record_chunk_seq(group.record),
         record_context_key(group.record),

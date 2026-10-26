@@ -248,8 +248,8 @@ class SearchRequest(BaseModel):
     retrieval_only: bool = Field(
         default=False,
         description=(
-            "回答を作らずに検索だけを行う(LLM を呼ばない)。KB の検索テストとレシピの検索比較が"
-            "使う(#593)。"
+            "回答フローを通らずに検索だけを行う(質問拡張・条の選択・回答の生成の LLM を呼ばない)。"
+            "KB の検索テストとレシピの検索比較が使う(#593)。"
         ),
     )
     auto_field_filter_excluded: list[str] = Field(
@@ -271,8 +271,10 @@ class SearchRequest(BaseModel):
     generate_answer: bool = Field(
         default=True,
         description=(
-            "False なら回答を生成しない(RAG 検索の画面。#649)。質問の理解・拡張・検索・rerank"
-            "まではチャットと同じ工程で行い、CRAG と回答の生成(LLM)はしない。"
+            "False なら回答を生成しない(RAG 検索の画面。#649)。根拠を集め終えるまで(質問の理解・"
+            "拡張・文書の検索・回答フロー・章節の拡張・要求ごとの根拠の確認)はチャットと同じ工程で、"
+            "同じ LLM(質問拡張・条の選択・CRAG の根拠確認など)を呼ぶ。回答の生成と検査はしない"
+            "(#3506)。"
         ),
     )
     model_id: str | None = Field(
