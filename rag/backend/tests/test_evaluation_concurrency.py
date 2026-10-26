@@ -73,6 +73,7 @@ class _ThrottledJudge:
         standard_answer: str,
         citations: Sequence[RetrievedChunk],
         timeout_seconds: float,
+        judge_model_id: str,
     ) -> Mapping[str, object]:
         self.calls += 1
         if self.errors:

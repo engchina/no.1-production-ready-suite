@@ -107,6 +107,7 @@ class FakeJudge:
         standard_answer: str,
         citations: Sequence[RetrievedChunk],
         timeout_seconds: float,
+        judge_model_id: str,
     ) -> Mapping[str, object]:
         self.calls.append(
             {
@@ -115,6 +116,7 @@ class FakeJudge:
                 "standard_answer": standard_answer,
                 "citations": list(citations),
                 "timeout_seconds": timeout_seconds,
+                "judge_model_id": judge_model_id,
             }
         )
         if isinstance(self.result, Exception):
@@ -1959,6 +1961,8 @@ def test_summarize_answer_judgement_keeps_judge_diagnostics() -> None:
         "standard_scope_dropped": 1,
         "judge_retries": 1,
         "retry_reasons": ["judge:InvalidStructuredOutput"],
+        # 判定に使ったモデル（#3574）。
+        "judge_model_id": "model-judge",
     }
     completed = summarize_answer_judgement(
         {**_completed_judgement(), "judge_diagnostics": diagnostics}

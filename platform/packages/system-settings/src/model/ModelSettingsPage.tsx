@@ -84,6 +84,7 @@ import {
   DEFAULT_MODEL_FIELD_IDS,
   DEFAULT_MODEL_FIELD_ORDER,
   followModelChange,
+  judgeModelOptions,
   textModelOptions,
   validateDefaultModels,
   validateModelIds,
@@ -282,7 +283,9 @@ export function ModelSettingsPage({
     setCheckData(baselineData);
     setTestResults({});
     const isDefaultModel =
-      key === "default_text_model_id" || key === "default_vision_model_id";
+      key === "default_text_model_id" ||
+      key === "default_vision_model_id" ||
+      key === "default_judge_model_id";
     if (isDefaultModel) setShowDefaultErrors(true);
     clearSaveError(isDefaultModel ? "enterprise_models" : "enterprise_connection");
   };
@@ -1643,9 +1646,10 @@ const CATALOG_COLUMNS =
 
 /**
  * 既定のモデル（#499）。登録モデルの一覧の下に置き、登録モデルの節と一緒に保存する。
- * 並びはテキスト → Vision（desktop の 2 列でも 375px の縦積みでも同じ順。#566）。
+ * 並びはテキスト → Vision → 判定（desktop の 2 列でも 375px の縦積みでも同じ順。#566・#3574）。
  * - 既定のテキストモデル: 必須。選択肢は登録モデルすべて
  * - 既定の Vision モデル: 必須。選択肢は画像入力（Vision）に対応した登録モデルだけ
+ * - 既定の判定モデル: 任意。先頭が既定の「既定のテキストモデル」（空）、次が「回答と同じモデル」、続けて登録モデルすべて
  * 一覧から消えた・Vision 対応でなくなったモデルが選ばれたままなら、その ID を出したままエラーにする。
  */
 function DefaultModelFields({
@@ -1695,6 +1699,16 @@ function DefaultModelFields({
           width="lg"
           error={errors.default_vision_model_id}
           onValueChange={(value) => onChange("default_vision_model_id", value)}
+        />
+        <SelectField
+          id={DEFAULT_MODEL_FIELD_IDS.default_judge_model_id}
+          label={t("settings.model.defaults.judge")}
+          value={enterprise.default_judge_model_id ?? ""}
+          options={judgeModelOptions(enterprise.models, enterprise.default_text_model_id)}
+          helper={t("settings.model.defaults.judgeHelp")}
+          width="lg"
+          error={errors.default_judge_model_id}
+          onValueChange={(value) => onChange("default_judge_model_id", value)}
         />
       </FormGrid>
     </section>
@@ -1972,6 +1986,8 @@ export function buildSectionSavePayload(
       draft.enterprise_ai.default_text_model_id;
     payload.enterprise_ai.default_vision_model_id =
       draft.enterprise_ai.default_vision_model_id;
+    payload.enterprise_ai.default_judge_model_id =
+      draft.enterprise_ai.default_judge_model_id ?? "";
   } else {
     payload.generative_ai = { ...draft.generative_ai };
   }
@@ -1992,6 +2008,7 @@ function mergeSavedSectionIntoDraft(
         models: draft.enterprise_ai.models.map((model) => ({ ...model })),
         default_text_model_id: draft.enterprise_ai.default_text_model_id,
         default_vision_model_id: draft.enterprise_ai.default_vision_model_id,
+        default_judge_model_id: draft.enterprise_ai.default_judge_model_id,
       },
       generative_ai: { ...draft.generative_ai },
     };

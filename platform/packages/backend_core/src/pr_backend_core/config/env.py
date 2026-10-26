@@ -80,6 +80,7 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "oci_enterprise_ai_models",
         "oci_enterprise_ai_default_text_model",
         "oci_enterprise_ai_default_vision_model",
+        "oci_enterprise_ai_default_judge_model",
         "oci_enterprise_ai_llm_path",
         "oci_enterprise_ai_vlm_path",
         "oci_enterprise_ai_vlm_input_mode",
