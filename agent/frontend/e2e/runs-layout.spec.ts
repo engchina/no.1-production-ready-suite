@@ -8,6 +8,14 @@ import {
   measureHorizontalOverflow,
 } from "../../../platform/packages/ui/e2e/layout-checks";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** 直前に入れた Run の開始を MOCK_NOW から `days` 日前にする（期間の絞り込みを確かめる）。 */
+function ageLastRun(mockApi: MockApi, days: number) {
+  const run = mockApi.state.runs.at(-1)!;
+  run.created_at = new Date(Date.parse(MOCK_NOW) - days * DAY_MS).toISOString();
+}
+
 function seedRun(
   mockApi: MockApi,
   id = "run-layout",
@@ -113,6 +121,8 @@ test("状態・種類・期間で絞り込み、条件で 0 件なら条件を�
   seedRun(mockApi);
   seedRun(mockApi, "run-waiting", "waiting_approval");
   seedRun(mockApi, "run-auto", "completed", { automation_id: "auto-1" });
+  // 3 日前の自動実行（既定の過去 7 日には入り、過去 24 時間には入らない）。
+  ageLastRun(mockApi, 3);
   await page.goto("/runs");
   const toolbar = page.getByTestId("run-list-toolbar");
   await withListFilters(toolbar, async (scope) => {
@@ -128,12 +138,61 @@ test("状態・種類・期間で絞り込み、条件で 0 件なら条件を�
   });
   await expect.poll(() => mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("kind")).toBe("automation");
   expect(mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("since")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-  // MOCK_NOW は過去の日時なので、過去 24 時間には入らない（条件で 0 件）。
+  // 自動実行は 3 日前なので、過去 24 時間には入らない（条件で 0 件）。
   await expect(page.getByText("条件に一致する実行がありません")).toBeVisible();
   await page.getByRole("button", { name: "条件をクリア", exact: true }).first().click();
   await expect(page.locator("a[data-run-id]")).toHaveCount(3);
   // 「条件をクリア」は種類を既定（品質評価以外）へ戻す（#1983）。
   expect(mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("kind")).toBe("not_evaluation");
+});
+
+// #3386: 期間の既定は 3 製品で共通の過去 7 日。「すべて」は既定からの変更として「条件をクリア」を出し、作業状態に残す。
+test("期間の既定は過去 7 日で、「すべて」を選ぶと古い Run も出し、再読込の後も残す", { tag: "@responsive" }, async ({ page, mockApi }) => {
+  seedRun(mockApi);
+  seedRun(mockApi, "run-old");
+  ageLastRun(mockApi, 20);
+  await page.goto("/runs");
+  const toolbar = page.getByTestId("run-list-toolbar");
+  await expect(page.locator('a[data-run-id="run-layout"]')).toBeVisible();
+  await expect(page.locator('a[data-run-id="run-old"]')).toHaveCount(0);
+  const since = mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("since");
+  const ageMs = Date.now() - Date.parse(String(since));
+  expect(ageMs).toBeGreaterThan(7 * DAY_MS - 60 * 60 * 1000);
+  expect(ageMs).toBeLessThan(7 * DAY_MS + 60 * 60 * 1000);
+  // 期間で絞っているので件数は「N 件（全 M 件）」。既定のままなら「条件をクリア」を出さない。
+  await expect(toolbar).toContainText("1 件（全 2 件）");
+  await expect(page.getByRole("button", { name: "条件をクリア", exact: true })).toHaveCount(0);
+  await withListFilters(toolbar, async (scope) => {
+    const period = scope.getByTestId("run-list-toolbar-period");
+    await expect(period).toContainText("過去 7 日");
+    await chooseSelectFieldOption(period, "all");
+  });
+  await expect(page.locator('a[data-run-id="run-old"]')).toBeVisible();
+  expect(mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("since")).toBeNull();
+  await expect(toolbar).toContainText("全 2 件");
+  await expect(page.getByRole("button", { name: "条件をクリア", exact: true }).first()).toBeVisible();
+  await page.reload();
+  await expect(page.locator('a[data-run-id="run-old"]')).toBeVisible();
+  expect(mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("since")).toBeNull();
+  // 「条件をクリア」は過去 7 日へ戻す。
+  await page.getByRole("button", { name: "条件をクリア", exact: true }).first().click();
+  await expect(page.locator('a[data-run-id="run-old"]')).toHaveCount(0);
+  expect(mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("since")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+});
+
+test("過去 7 日に Run が無く、それより前にはあるときは、期間を「すべて」にする操作を出す", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  seedRun(mockApi, "run-old");
+  ageLastRun(mockApi, 20);
+  await page.goto("/runs");
+  const empty = page.getByTestId("runs-period-empty");
+  await expect(empty).toContainText("過去 7 日の実行はありません");
+  await expect(empty).toContainText("期間を「すべて」にすると表示します");
+  await expect(page.getByText("実行はまだありません")).toHaveCount(0);
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("runs-period-empty.png"), fullPage: true });
+  await empty.getByRole("button", { name: "すべての期間を表示" }).click();
+  await expect(page.locator('a[data-run-id="run-old"]')).toBeVisible();
+  expect(mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("since")).toBeNull();
 });
 
 // #1983: 品質評価の Run（評価のケースごとの Run）は既定で隠し、「種類: 品質評価」「すべて」で出す。
@@ -148,7 +207,7 @@ test("品質評価の Run は既定で隠し、種類で品質評価・すべて
   await expect(page.locator("a[data-run-id]")).toHaveCount(2);
   await expect(page.locator('a[data-run-id^="run-eval-"]')).toHaveCount(0);
   expect(mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("kind")).toBe("not_evaluation");
-  await expect(toolbar).toContainText("全 2 件");
+  await expect(toolbar).toContainText("2 件（全 2 件）");
   await expect(page.getByRole("button", { name: "条件をクリア", exact: true })).toHaveCount(0);
   await withListFilters(toolbar, async (scope) => {
     const kind = scope.getByTestId("run-list-toolbar-kind");
