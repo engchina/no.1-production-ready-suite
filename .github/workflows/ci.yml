@@ -222,12 +222,13 @@ jobs:
             platform_evaluation_scoring_deps:
               - "platform/packages/evaluation_scoring/uv.lock"
               - "platform/packages/evaluation_scoring/pyproject.toml"
-            # 製品横断の評価（#3240）。テストは Agent の MCP の契約と共有の fixture、Agent の回答の節の契約、
+            # 製品横断の評価（#3240・#3417）。テストは Agent と RAG の MCP の契約と共有の fixture、Agent の回答の節の契約、
             # 製品の評価セット（rag/evaluation の JSON）、製品と platform の package の依存（suite に依存しないこと）を読む。
             suite_evaluation:
               - "suite/evaluation/**"
               - "platform/packages/evaluation_scoring/**"
               - "platform/contracts/mcp/agent-tools.json"
+              - "platform/contracts/mcp/rag-tools.json"
               - "platform/contracts/mcp/fixtures/**"
               - "platform/contracts/answer-passages/unverified-section.json"
               - "rag/evaluation/*/*.json"
