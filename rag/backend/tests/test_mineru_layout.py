@@ -23,11 +23,12 @@ from app.clients.mineru_layout import (
     mineru_layout_records,
 )
 from app.rag.chunking_small_to_big import (
-    CHUNK_STRATEGY_FALLBACK_REASON_KEY,
+    PARENT_SOURCE_LAYOUT,
+    PARENT_SOURCE_STRUCTURE,
     build_parent_child_chunks,
     has_layout_records,
     layout_source_parser,
-    small_to_big_fallback_needed,
+    small_to_big_parent_source,
 )
 from app.rag.vision import _page_px_bbox as page_px_bbox
 from app.rag.vision import read_figures_with_vision
@@ -366,17 +367,18 @@ def test_unknown_mineru_block_type_maps_to_text_with_raw_type() -> None:
     }
 
 
-def test_small_to_big_uses_mineru_layout_records_without_fallback(
+def test_small_to_big_uses_mineru_layout_records(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     extraction = _parse(monkeypatch, _middle_json(), _pdf())
 
     assert has_layout_records(extraction)
-    assert not small_to_big_fallback_needed("small_to_big", extraction)
+    # MinerU のレイアウトの記録から親子を作る(Docling と同じ入力。#1334・#3377)。
+    assert small_to_big_parent_source(extraction) == PARENT_SOURCE_LAYOUT
     chunks = build_parent_child_chunks(extraction, source_name="manual.pdf")
 
     assert chunks
-    assert all(CHUNK_STRATEGY_FALLBACK_REASON_KEY not in chunk.metadata for chunk in chunks)
+    assert all("chunk_strategy_fallback_reason" not in chunk.metadata for chunk in chunks)
     assert {chunk.metadata["chunk_strategy"] for chunk in chunks} == {"small_to_big"}
     assert {chunk.metadata["source_parser"] for chunk in chunks} == {"mineru_layout"}
     text = "\n".join(chunk.text for chunk in chunks)
@@ -413,14 +415,14 @@ def test_small_to_big_uses_mineru_layout_records_without_fallback(
     assert "取り消しは管理者だけ" in text
 
 
-def test_mineru_without_page_geometry_keeps_structure_aware_fallback(
+def test_mineru_without_page_geometry_uses_extraction_structure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """頁の寸法が分からない Middle JSON は record を作らず、今までどおり構造認識へ縮退する。"""
+    """頁の寸法が分からない Middle JSON は record を作らず、抽出の構造から親子を作る(#3377)。"""
     extraction = _parse(monkeypatch, _middle_json(geometry=False), _pdf())
 
     assert "layout_records" not in extraction.parser_artifacts
-    assert small_to_big_fallback_needed("small_to_big", extraction)
+    assert small_to_big_parent_source(extraction) == PARENT_SOURCE_STRUCTURE
 
 
 def test_mineru_layout_records_need_bbox_for_every_block() -> None:
