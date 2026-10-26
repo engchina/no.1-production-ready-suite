@@ -284,7 +284,7 @@
               },
               "excerpt": {
                 "default": "",
-                "description": "根拠の本文（既定は全文）。応答の合計の予算（token の見積もり 20000）に根拠の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
+                "description": "根拠の本文（既定は全文）。応答の合計の予算（token の見積もり 24000）に根拠の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
                 "title": "Excerpt",
                 "type": "string"
               },
@@ -893,7 +893,7 @@
               },
               "excerpt": {
                 "default": "",
-                "description": "根拠の本文（既定は全文）。応答の合計の予算（token の見積もり 20000）に根拠の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
+                "description": "根拠の本文（既定は全文）。応答の合計の予算（token の見積もり 24000）に根拠の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
                 "title": "Excerpt",
                 "type": "string"
               },
@@ -1412,7 +1412,7 @@
               },
               "excerpt": {
                 "default": "",
-                "description": "根拠の本文（既定は全文）。応答の合計の予算（token の見積もり 20000）に根拠の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
+                "description": "根拠の本文（既定は全文）。応答の合計の予算（token の見積もり 24000）に根拠の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
                 "title": "Excerpt",
                 "type": "string"
               },
@@ -1896,7 +1896,7 @@
               },
               "text_omitted": {
                 "default": false,
-                "description": "1 件でページの予算（token の見積もり 20000）を超えるため本文を省いたか（RAG の rag_read_source で読む）。",
+                "description": "1 件でページの予算（token の見積もり 24000）を超えるため本文を省いたか（RAG の rag_read_source で読む）。",
                 "title": "Text Omitted",
                 "type": "boolean"
               },
@@ -2466,7 +2466,7 @@
             "type": "integer"
           },
           "evidence": {
-            "description": "cursor からの根拠（rank の順。limit 件と、本文の合計の予算 20000 まで）。",
+            "description": "cursor からの根拠（rank の順。limit 件と、本文の合計の予算 24000 まで）。",
             "items": {
               "$ref": "#/$defs/ObservedEvidence"
             },
