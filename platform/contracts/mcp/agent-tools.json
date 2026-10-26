@@ -1756,6 +1756,26 @@
       },
       "outputSchema": {
         "$defs": {
+          "ObservedDegradedStep": {
+            "description": "縮退した任意の補助の処理（RAG の DegradedStep と同じ名前）。",
+            "properties": {
+              "kind": {
+                "title": "Kind",
+                "type": "string"
+              },
+              "count": {
+                "minimum": 1,
+                "title": "Count",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "count"
+            ],
+            "title": "ObservedDegradedStep",
+            "type": "object"
+          },
           "ObservedEvidence": {
             "description": "Run が調べた RAG の根拠（根拠のツールの evidence と、読み取りのツールで読んだ chunk）。",
             "properties": {
@@ -1881,6 +1901,23 @@
               },
               "locator": {
                 "$ref": "#/$defs/ObservedLocator"
+              },
+              "table_binding": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "checkable",
+                      "not_checkable"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の table_binding（表の行・列の対応の検査がこの根拠の本文を読めるか。null は表の無い根拠・読み取りのツールの chunk）。",
+                "title": "Table Binding"
               },
               "text": {
                 "default": "",
@@ -2271,6 +2308,54 @@
                 "default": null,
                 "description": "NL2SQL の truncated。",
                 "title": "Rows Truncated"
+              },
+              "degraded_steps": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "$ref": "#/$defs/ObservedDegradedStep"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の根拠のツールの degraded_steps（失敗して縮退した任意の補助の処理の種類と回数。空なら縮退していない）。ほかのツール・失敗した呼び出しは null。",
+                "title": "Degraded Steps"
+              },
+              "guardrail_degraded": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の根拠のツールの guardrail_degraded（安全チェックを完了できず止めた）。ほかのツール・失敗した呼び出しは null。",
+                "title": "Guardrail Degraded"
+              },
+              "zero_evidence_stage": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "retrieval",
+                      "filter",
+                      "evidence_check",
+                      "context"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の根拠のツールが根拠 0 件のとき、0 件になった段（zero_evidence.stage）。",
+                "title": "Zero Evidence Stage"
               }
             },
             "required": [
@@ -2324,7 +2409,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 4,
+            "default": 5,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

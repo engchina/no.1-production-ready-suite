@@ -241,6 +241,7 @@ from app.features.agent.output_fields import (
     record_output_tool,
     without_output_record_sections,
 )
+from app.features.agent.rag_retrieval_state import retrieval_notice
 from app.features.agent.run_claim import RunClaim
 from app.features.agent.section_coverage import (
     COVERAGE_INCOMPLETE,
@@ -1902,6 +1903,12 @@ class _ToolRecorder:
                 )
                 if note is not None:
                     output = {**output, "next_step": self._without_asking(note["next_step"])}
+            if base in RAG_BUDGET_TOOLS and isinstance(output, dict):
+                # 根拠 0 件が資料の不在を意味しない（安全チェックの未完了・補助の処理の縮退）とき
+                # の案内（#3546）。
+                notice = retrieval_notice(output)
+                if notice is not None:
+                    output = {**output, "retrieval_notice": notice}
             if isinstance(output, dict):
                 output = self.hop_hints(
                     call, output, step_id=step_id, adjusted_limits=adjusted_limits

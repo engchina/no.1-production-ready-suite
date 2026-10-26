@@ -39,8 +39,9 @@ TARGET_KIND = "rag_mcp"
 RULES_VERSION = "rag_v1"
 TOOL = "rag_search"
 # 読める出力の版（契約 rag-tools.json の rag_search の schema_version。#3429 で行の番号の基準に
-# 解析の表の格子の parsed_table を足して 36）。
-RAG_SEARCH_SCHEMA_VERSION = 36
+# 解析の表の格子の parsed_table を足して 36、#3546 で安全チェックの未完了 guardrail_degraded と
+# 根拠 0 件の段 zero_evidence を足して 37）。
+RAG_SEARCH_SCHEMA_VERSION = 37
 # 返す根拠の上限（契約の evidence_limit の maximum）。
 DEFAULT_EVIDENCE_LIMIT = 50
 MAX_EVIDENCE_LIMIT = 50

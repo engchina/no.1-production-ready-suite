@@ -407,7 +407,9 @@ _EVIDENCE = {
 # 対応の検査が読める表か（table_binding）、rag_search・rag_retrieve_evidence に縮退した任意の
 # 補助の処理（degraded_steps）を足した（#3262）。
 # 36: 行の番号の基準に解析の表の格子（parsed_table）を、表のセルに領域（bbox）を足した（#3429）。
-RAG_OUTPUT_SCHEMA_VERSION = 36
+# 37: rag_search・rag_retrieve_evidence に、安全チェックを完了できず止めたか（guardrail_degraded）と
+# 根拠 0 件の段（zero_evidence）を足した（#3546）。
+RAG_OUTPUT_SCHEMA_VERSION = 37
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {
