@@ -1,4 +1,4 @@
-"""質問から抽出項目の条件を読み取る(self-query。#652)。
+"""質問から抽出項目の条件を読み取る(Metadata Filter Extraction。#652)。
 
 検索・回答プロファイルの KB で定義した抽出項目(名前・型)と質問を LLM に渡し、質問に書かれた条件
 (「2025 年以降」「10 万円以上」など)を ``ExtractionFieldCondition`` にする。LLM の出力は
