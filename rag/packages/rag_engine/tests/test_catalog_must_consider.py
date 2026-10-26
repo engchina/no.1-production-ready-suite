@@ -1,8 +1,8 @@
-"""条の目録で選んだ条を、生成で必ず検討させる（#3526）。
+"""条の目録で選んだ条を、回答の生成で必ず検討する（#3526）。
 
-目録の段が選んだ条の child に重なる根拠に印（catalog）を付け、生成の計画（request_coverage）でその根拠を使う
-（evidence_ids）か関係しない（unrelated）かを決めさせる。決めていない草稿は、計画の不整合と同じく 1 回だけ
-作り直す。出典に使うかは原文が説明を支えるかで決め、引用は強いない。
+目録の段が選んだ条の child に重なる根拠に印（catalog）を付けて生成に渡す。草稿の説明が引かず、計画も unrelated と
+しなかった条は、条ごとに原文が支える説明があるかを別に検討させ、支える説明の出典に足す。足した出典も原文照合と
+条の出典の監査に掛け、通らなければ外す（引用は強いない）。
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import AnswerContext, AnswerRecord, _grounded_spans, synthesize_grounded_answer
-from rag_engine.models.llm import GroundedDraft
 from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY, ARTICLE_UNIT_KEY
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.retrieval.evidence_selection import evidence_spans
@@ -86,14 +85,20 @@ def _label(spans, head: str) -> str:
 
 
 class _Model:
-    def __init__(self, drafts: list[dict], audits: list[dict] = ()):
-        self.drafts, self.audits, self.prompts = list(drafts), list(audits), []
+    """schema ごとに用意した応答を順に返し、受け取った入力を記録する。"""
+
+    def __init__(self, drafts: list, audits: list = (), reviews: list = ()):
+        self.sources = {"GroundedDraft": list(drafts), "CatalogEvidenceReviews": list(reviews)}
+        self.audits, self.prompts = list(audits), []
 
     def __call__(self, system, prompt, settings, schema, **options):
         self.prompts.append((schema.__name__, prompt))
-        source = self.drafts if schema is GroundedDraft else self.audits
+        source = self.sources.get(schema.__name__, self.audits)
         value = source.pop(0) if len(source) > 1 else source[0]
         return schema.model_validate(value(prompt) if callable(value) else value)
+
+    def names(self) -> list[str]:
+        return [name for name, _prompt in self.prompts]
 
 
 def _run(model, mode=grounded.AUDIT_MODE_NONE):
@@ -133,64 +138,95 @@ def test_the_prompt_shows_the_catalog_mark_on_the_evidence_line():
     lines = [line for line in grounded.format_functions(spans).splitlines() if line.startswith("[E")]
     assert [line.endswith(" catalog") for line in lines].count(True) == 1
     assert "catalog" in grounded.GENERATE_SYSTEM_PROMPT
-    assert "catalog" in GroundedDraft.model_json_schema()["$defs"]["RequestCoverage"]["properties"]["evidence_scope"]["description"]
 
 
-def test_a_draft_that_does_not_consider_the_chosen_article_is_repaired_once():
+def _review(*supports: tuple[int, str]):
+    """検討に渡した条ごとに、同じ説明を支えると答える（supports が空なら支える説明なし）。"""
+
+    def respond(prompt: str) -> dict:
+        evidence = json.loads(prompt)["evidence"]
+        return {
+            "reviews": [
+                {"evidence_id": entry["evidence_id"], "supports": [{"item_index": i, "lines": lines} for i, lines in supports]}
+                for entry in evidence
+            ]
+        }
+
+    return respond
+
+
+def test_a_chosen_article_the_draft_did_not_cite_is_reviewed_and_cited_where_it_supports_the_claim():
     labels = _labels()
-    first = _draft([_claim(labels["guide"])], [(labels["guide"], "direct")], [labels["guide"]])
-    repaired = _draft(
-        [_claim(labels["guide"], labels["article_1"])],
-        [(labels["guide"], "direct"), (labels["article_1"], "direct")],
-        [labels["guide"], labels["article_1"]],
-    )
-    model = _Model([first, repaired], [_audit("supported", "matched", "")])
+    draft = _draft([_claim(labels["guide"])], [(labels["guide"], "direct")], [labels["guide"]])
+    model = _Model([draft], [_audit("supported", "matched", "")], [_review((0, ""))])
 
     result = _run(model)
 
-    drafts = [prompt for name, prompt in model.prompts if name == "GroundedDraft"]
-    assert len(drafts) == 2
-    repair = json.loads(drafts[1][drafts[1].rindex('{"invalid_request_plan"') :])
-    assert [error.split(" ", 1)[0] for error in repair["invalid_request_plan"]] == [_catalog_label(drafts[0])]
-    timing = _timing(result)
-    assert (timing["catalog_undecided"], timing["catalog_undecided_after_repair"], timing["generation_calls"]) == (1, 0, 2)
-    assert {entry["source"] for entry in result.cited_evidence} == {"規則A.xml", "手順書B.pdf"}
+    assert model.names() == ["GroundedDraft", "CatalogEvidenceReviews", "GroundedFactAudit"]
+    review_input = json.loads(model.prompts[1][1])
+    # 検討するのは目録で選んだ条だけ。説明は index つきで渡す。
+    assert [entry["text"].split("\n", 1)[0] for entry in review_input["evidence"]] == ["第一条"]
+    assert review_input["items"] == [{"index": 0, "kind": "rule", "text": CLAIM}]
+    assert _sources(result) == {"規則A.xml", "手順書B.pdf"}
+    assert result.answer_text.count(CLAIM) == 1
+    review = _timing(result)["catalog_review"]
+    assert (review["reviewed"], len(review["cited"]), review["not_relevant"], review["missing"]) == (1, 1, [], [])
+    assert _timing(result)["generation_calls"] == 2
 
 
-def _catalog_label(prompt: str) -> str:
-    """prompt で catalog の印を付けた根拠の表示 ID（`[E1]`）。"""
-    return next(line[1 : line.index("]")] for line in prompt.splitlines() if line.startswith("[E") and line.endswith(" catalog"))
-
-
-def test_a_chosen_article_judged_unrelated_needs_no_repair():
+def test_an_article_supporting_no_claim_is_not_cited():
     labels = _labels()
-    model = _Model(
-        [_draft([_claim(labels["guide"])], [(labels["guide"], "direct"), (labels["article_1"], "unrelated")], [labels["guide"]])]
+    draft = _draft(
+        [_claim(labels["guide"])], [(labels["guide"], "direct"), (labels["article_1"], "direct")], [labels["guide"], labels["article_1"]]
     )
+    model = _Model([draft], [], [_review()])
 
     result = _run(model)
 
-    assert [name for name, _prompt in model.prompts] == ["GroundedDraft"]
-    assert "catalog_undecided" not in _timing(result)
+    assert model.names() == ["GroundedDraft", "CatalogEvidenceReviews"]
+    assert _sources(result) == {"手順書B.pdf"}
+    assert len(_timing(result)["catalog_review"]["not_relevant"]) == 1
 
 
-def test_a_planned_article_is_not_forced_into_a_citation():
-    """計画に入れた条を説明が引かなくても作り直さない。出典は原文が説明を支える説明だけに付く。"""
+def test_a_citation_added_by_the_review_is_dropped_when_the_audit_does_not_support_it():
+    """足した条の出典も条の出典の監査に掛け、支持されなければ外す（説明は元の出典で残る）。"""
     labels = _labels()
-    model = _Model(
-        [
-            _draft(
-                [_claim(labels["guide"])],
-                [(labels["guide"], "direct"), (labels["article_1"], "direct")],
-                [labels["guide"], labels["article_1"]],
-            )
-        ]
-    )
+    draft = _draft([_claim(labels["guide"])], [(labels["guide"], "direct")], [labels["guide"]])
+
+    def audit_by_source(prompt: str) -> dict:
+        items = json.loads(prompt)["items"]
+        reviews = [(entry["index"], "unsupported" if entry["evidence_id"] == labels["article_1"] else "supported") for entry in items]
+        return {
+            "goal_alignment": "aligned",
+            "summary_supported": True,
+            "reviews": [{"index": i, "support": s, "applicability": "matched", "condition": "", "reason": "r"} for i, s in reviews],
+            "request_reviews": [{"request_id": "Q1", "status": "addressed", "reason": "r"}],
+        }
+
+    model = _Model([draft], [audit_by_source], [_review((0, ""))])
 
     result = _run(model)
 
-    assert [name for name, _prompt in model.prompts] == ["GroundedDraft"]
-    assert {entry["source"] for entry in result.cited_evidence} == {"手順書B.pdf"}
+    assert _sources(result) == {"手順書B.pdf"}
+    assert not result.envelope["passage_marks"]
+
+
+def test_articles_cited_or_judged_unrelated_are_not_reviewed():
+    labels = _labels()
+    for draft in (
+        _draft([_claim(labels["guide"])], [(labels["guide"], "direct"), (labels["article_1"], "unrelated")], [labels["guide"]]),
+        _draft([_claim(labels["article_1"])], [(labels["article_1"], "direct")], [labels["article_1"]]),
+    ):
+        model = _Model([draft], [_audit("supported", "matched", "")])
+
+        result = _run(model)
+
+        assert "CatalogEvidenceReviews" not in model.names()
+        assert "catalog_review" not in _timing(result)
+
+
+def _sources(result) -> set[str]:
+    return {entry["source"] for entry in result.cited_evidence}
 
 
 def _audit(support: str, applicability: str, condition: str):
@@ -219,7 +255,7 @@ def test_a_claim_omitting_the_articles_exception_is_conditional_and_keeps_its_ci
 
     result = _run(model)
 
-    assert [name for name, _prompt in model.prompts] == ["GroundedDraft", "GroundedFactAudit"]
+    assert model.names() == ["GroundedDraft", "GroundedFactAudit"]
     assert not result.envelope["passage_marks"]
     body = result.answer_text
     assert grounded.answer_labels().condition(grounded._condition_phrase("第三号に該当する者を除く")) + CLAIM in body

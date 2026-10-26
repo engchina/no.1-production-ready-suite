@@ -371,8 +371,7 @@ class RequestCoverage(_StrictModel):
     request_id: str = Field(description="request_units の id。")
     evidence_scope: list[RequestEvidenceScope] = Field(
         default_factory=list,
-        description="候補の根拠を対象ごとに照合する。各 evidence_id を1回ずつ、質問の対象との関係を決めてから evidence_ids を選ぶ。"
-        "catalog の印の根拠は、どれかの要求で evidence_ids に入れるか、質問に関係しなければ unrelated と照合する。",
+        description="候補の根拠を対象ごとに照合する。各 evidence_id を1回ずつ、質問の対象との関係を決めてから evidence_ids を選ぶ。",
     )
     evidence_ids: list[str] = Field(
         default_factory=list,
@@ -384,6 +383,35 @@ class RequestScopePlan(_StrictModel):
     """章節情報が欠けた候補を、本文の生成とは分けて照合する。"""
 
     request_coverage: list[RequestCoverage] = Field(max_length=64, description="質問契約の要求ごとに使用する Evidence の計画。")
+
+
+class CatalogClaimSupport(_StrictModel):
+    """条の根拠が支える説明 1 つ（#3526）。"""
+
+    item_index: int = Field(description="items の index（0 始まり）。")
+    lines: str = Field(
+        default="",
+        max_length=20,
+        description="text を支える行の番号か範囲（例: 3、3-5）。行番号（`3| `）の付いた根拠では必ず書き、行番号の無い根拠は空。",
+    )
+
+
+class CatalogEvidenceReview(_StrictModel):
+    """条の目録で選んだ条の根拠 1 つの検討の結果（#3526）。"""
+
+    evidence_id: str = Field(description="evidence の evidence_id。")
+    supports: list[CatalogClaimSupport] = Field(
+        default_factory=list,
+        max_length=4,
+        description="この根拠の原文がそれだけで text の全体を支える items。原文が text の一部だけを述べる、別の対象・場面の規定なら選ばない。"
+        "支える item が無ければ空。",
+    )
+
+
+class CatalogEvidenceReviews(_StrictModel):
+    """条の目録で選んだ条の根拠を、回答の説明の出典に使えるか 1 つずつ検討する（#3526）。"""
+
+    reviews: list[CatalogEvidenceReview] = Field(max_length=16, description="evidence の各根拠を 1 回ずつ判定する。")
 
 
 class ExternalDataItem(_StrictModel):
