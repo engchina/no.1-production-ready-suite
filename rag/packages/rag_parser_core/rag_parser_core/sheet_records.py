@@ -15,7 +15,9 @@ RAG の要素化と、モデルの再公開だけを持つ。
   - `procedure_step`: 手順書の 1 手順（番号と題名の行から次の手順までの複数行）。
   - `form_field`: 帳票（方眼紙）の 1 項目（「ラベル: 値」と、ラベル・値のセル。#2516）。
 - 節はシート名と、表の題名（1 シートの複数の表を分けたとき）、手順なら章・手順の題名、帳票なら
-  見出し（`section_path=[シート名, …]`）。表頭より上の行（説明など）は本文の要素にする。
+  見出し（`section_path=[シート名, …]`）。表頭より上の行（説明など）と表の下の注記の行（#3566）は
+  本文の要素にする。注記の印（例: ※1）をセルに含む表の行は、その注記の文を行の本文の後ろに続ける
+  （1 行 = 1 chunk のまま、行の chunk だけで注記が読める）。
   シート名だけの見出しの要素は作らない。
 - 1 シートの複数の表（#2516）: 前処理が空の行・列で分けた表は、それぞれ別の `SheetRecords`
   （同じシート名・`table_index`・`region`）になる。親子階層の親は表をまたがない
@@ -62,6 +64,7 @@ from pr_backend_core.spreadsheet.models import (
     SheetColumn,
     SheetDiagnostic,
     SheetLayout,
+    SheetNoteRow,
     SheetPreambleRow,
     SheetRecords,
     SheetRecordsDocument,
@@ -145,6 +148,9 @@ def _block_text(
             for name, value in block.values.items()
             if value.strip()
         )
+        if text and block.notes:
+            # セルの注記の印が指す表の下の注記（#3566）。
+            text = "\n".join([text, *block.notes])
     return text if max_chars is None else text[:max_chars]
 
 
@@ -306,6 +312,32 @@ def sheet_records_extraction(
             )
             raw_lines.append(text)
             order += 1
+        for note in sheet.notes:
+            column_start, column_end = _column_bounds(note.cell_range)
+            elements.append(
+                DocumentElement(
+                    kind="text",
+                    text=note.text,
+                    order=order,
+                    element_id=f"{heading_id}-r{note.row_number}",
+                    content_kind=SHEET_PREAMBLE_CONTENT_KIND,
+                    source_parser=source_parser,
+                    section_path=section_path,
+                    metadata={
+                        "sheet_name": sheet.name,
+                        "row_start": note.row_number,
+                        "row_end": note.row_number,
+                        "cell_range": note.cell_range,
+                        "cell_column_start": column_start,
+                        "cell_column_end": column_end,
+                        "sheet_block_kind": "note",
+                        **sheet_metadata,
+                        **_shape_metadata(note.shape_cells),
+                    },
+                )
+            )
+            raw_lines.append(note.text)
+            order += 1
     diagnostics = [
         f"{sheet.name}:{item.code}" + (f"@{item.cell}" if item.cell else "")
         for sheet in document.sheets
@@ -371,6 +403,7 @@ __all__ = [
     "LayoutDetection",
     "SheetColumn",
     "SheetDiagnostic",
+    "SheetNoteRow",
     "SheetPreambleRow",
     "SheetRecords",
     "SheetRecordsDocument",

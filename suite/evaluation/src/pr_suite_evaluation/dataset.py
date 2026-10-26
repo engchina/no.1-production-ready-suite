@@ -119,6 +119,9 @@ class Evidence(BaseModel):
     sheet: str | None = None
     row_start: int | None = Field(default=None, ge=1)
     row_end: int | None = Field(default=None, ge=1)
+    # 行の番号の基準（RAG の根拠の locator.row_basis と同じ語彙。省くと原本の行として照合し、解析の
+    # 表の格子の行〔parsed_table〕には一致させない。#3547）。
+    row_basis: Literal["sheet", "csv", "word_table", "parsed_table"] | None = None
 
     @field_validator("document_id", "text", "section", "sheet")
     @classmethod
@@ -127,6 +130,8 @@ class Evidence(BaseModel):
 
     @model_validator(mode="after")
     def _has_condition(self) -> Self:
+        if self.row_basis is not None and self.row_start is None:
+            raise ValueError(f"根拠 {self.id} の row_basis は row_start と一緒に書いてください。")
         if all(
             item is None
             for item in (self.text, self.page_start, self.section, self.sheet, self.row_start)

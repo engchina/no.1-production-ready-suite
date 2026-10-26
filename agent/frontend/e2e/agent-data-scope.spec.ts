@@ -18,8 +18,6 @@ function seedAgent(mockApi: MockApi, overrides: Record<string, unknown> = {}) {
     skill_ids: [],
     model_id: "",
     data_scopes: {},
-    migration_required: false,
-    tool_names: [],
     enabled: true,
     source: "runtime",
     versioned: true,

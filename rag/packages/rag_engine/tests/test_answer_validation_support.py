@@ -206,6 +206,35 @@ def test_audit_contract_asks_for_the_evidence_and_the_target_before_the_verdict(
     assert "evidence_quote は空文字でよい" not in VALIDATION_SYSTEM_PROMPT
 
 
+def test_value_from_another_row_record_is_not_supported() -> None:
+    """表計算・CSV の 1 行の記録の根拠をまたいで値を結び付けた段落も、同じ表に組み直して見つける（#2594）。"""
+    cells = [["A", ["区分"]], ["B", ["上限値"]]]
+    rows = {"r2": (2, "区分: 区分 A / 上限値: 120"), "r3": (3, "区分: 区分 B / 上限値: 300")}
+
+    def items(with_record: bool) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": chunk,
+                "source": "table.csv",
+                "text": text,
+                **({"table_record": {"group": "doc|set|csv", "row": row, "cells": cells}} if with_record else {}),
+            }
+            for chunk, (row, text) in rows.items()
+        ]
+
+    answer = "区分 A の上限値は 120 です。\n\n区分 A の上限値は 300 です。"
+    verdicts = [{"chunk": "r2"}, {"chunk": "r3"}]
+    for with_record, expected in ((False, "supported"), (True, "contradicted")):
+        with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=_audit(verdicts)):
+            result = validate_answer_claims("質問", answer, items(with_record), settings=None)
+        claims = _by_quote(result)
+        assert claims["区分 A の上限値は 120 です。"]["status"] == "supported"
+        wrong = claims["区分 A の上限値は 300 です。"]
+        assert wrong["status"] == expected
+    assert wrong["support_check"] == SUPPORT_VALUE_UNBOUND
+    assert wrong["reason"].startswith("根拠の表では『区分 A』の値は『120』（『300』は別の行の値）です。")
+
+
 def test_word_values_and_audit_reasons_stating_another_rows_mapping_are_not_supported() -> None:
     """日本語の値の対応の取り違えと、根拠と逆の対応を「記載あり」と述べた監査の理由を supported にしない（#2659）。"""
     table = (

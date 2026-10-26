@@ -2,9 +2,10 @@
 
 RAG の検索の評価器の校正（`rag_engine.evaluation.crag_grader_eval`。検索の候補の関連・根拠の足りる
 かのラベル）とは対象が違うので分ける。ここは回答の品質の観点（rubric の観点）ごとのラベルを使い、
-一致の集計は platform の `pr_evaluation_scoring.agreement` を共有する。
+一致の集計と校正の合否の閾値は platform の `pr_evaluation_scoring.agreement` を共有する（RAG の回答
+の評価器の校正も同じ形・同じ閾値を使う）。
 
-人手の判定の形（`LabelSet`。JSON）:
+人手の判定の形（`LabelSet`。JSON。`suite-evaluation label-import` が記入用のブックから書く）:
 
     {"rubric_id": "answer_quality",
      "items": [{"id": "c01", "split": "holdout",
@@ -16,21 +17,31 @@ RAG の検索の評価器の校正（`rag_engine.evaluation.crag_grader_eval`。
 
 - `split`: dev は rubric の調整に使ってよい項目、holdout は調整に使わず合否の判定だけに使う項目。
 - `labels` は観点ごとの pass / fail（その観点を人が判定できない項目は書かない）。
+- `origin`: human は人手の判定、synthetic は故意に壊した回答（`perturbation`）にコードが付けた
+  fail。synthetic は holdout の合否に入れず、`synthetic` の区分として別に集計する（参考）。
+- `annotator_labels`: 記入者ごとの元の判定（裁定の前。cannot_judge を含む）。
 
-校正の合否（`CalibrationThresholds`）は holdout の項目で、観点ごとに件数・判定率・Cohen の κ・誤
-合格の率を閾値と比べる。合格した観点だけ、同じ rubric（sha256）・同じモデルの判定を合否に使える。
+校正の合否（`CalibrationThresholds`）は holdout の人手の項目で、観点ごとに件数・判定率・Cohen の κ・
+誤合格の率を閾値と比べる。合格した観点だけ、同じ rubric（sha256）・同じモデルの判定を合否に使える。
+同じ項目を複数回判定したとき（`--repeats`）は、判定の分散（観点ごとに回の間でラベルが変わった項目
+の率）も記録する（合否には最初の回を使う）。
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Self
 
-from pr_evaluation_scoring import LabelPair, agreement
+from pr_evaluation_scoring import (
+    Agreement,
+    CalibrationThresholds,
+    LabelPair,
+    agreement,
+    calibration_failures,
+)
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from pr_suite_evaluation.dataset import canonical_sha256
@@ -44,9 +55,24 @@ from pr_suite_evaluation.judge.judging import (
 )
 from pr_suite_evaluation.judge.rubric import FAIL, PASS, Rubric
 
+__all__ = [
+    "CalibrationThresholds",
+    "CalibrationReport",
+    "LabelSet",
+    "LabeledItem",
+    "calibrate",
+    "judge_labels",
+    "judge_variance",
+    "load_labels",
+]
+
 CALIBRATION_SCHEMA_VERSION = 1
 HUMAN_LABELS = (PASS, FAIL)
 SPLITS = ("dev", "holdout")
+# 合成の対照（故意に壊した回答）の集計の区分（dev / holdout と別に、合否に入れない）。
+SYNTHETIC_SPLIT = "synthetic"
+
+AnnotatorLabel = Literal["pass", "fail", "cannot_judge"]
 
 
 class LabeledEvidence(BaseModel):
@@ -54,6 +80,16 @@ class LabeledEvidence(BaseModel):
 
     id: str = Field(..., min_length=1, max_length=200)
     text: str
+
+
+class PerturbationInfo(BaseModel):
+    """合成の項目の元の項目と壊し方。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str = Field(..., min_length=1, max_length=80)
+    base_item_id: str = Field(..., min_length=1, max_length=200)
+    description: str = ""
 
 
 class LabeledItem(BaseModel):
@@ -70,6 +106,17 @@ class LabeledItem(BaseModel):
     labels: dict[str, Literal["pass", "fail"]] = Field(..., min_length=1)
     labeler: str | None = None
     note: str | None = None
+    origin: Literal["human", "synthetic"] = "human"
+    perturbation: PerturbationInfo | None = None
+    # 記入者が付けた誤りの型・対照（#2577 の型。件数の目標を確かめるため）。
+    error_types: list[str] = Field(default_factory=list)
+    annotator_labels: dict[str, dict[str, AnnotatorLabel]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _origin(self) -> Self:
+        if (self.origin == "synthetic") != (self.perturbation is not None):
+            raise ValueError(f"合成の項目には perturbation を、人手の項目には付けない: {self.id}")
+        return self
 
     def judge_input(self) -> JudgeInput:
         return JudgeInput(
@@ -86,6 +133,8 @@ class LabelSet(BaseModel):
 
     rubric_id: str
     description: str | None = None
+    # 記入用のブック・記入者・裁定・記入者の間の一致（label-import が書く）。
+    provenance: dict[str, Any] = Field(default_factory=dict)
     items: list[LabeledItem] = Field(..., min_length=1)
 
     @model_validator(mode="after")
@@ -116,25 +165,6 @@ def load_labels(path: Path) -> LabelSet:
     return LabelSet.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
 
-@dataclass(frozen=True)
-class CalibrationThresholds:
-    """校正の合否の閾値（holdout の観点ごと）。"""
-
-    min_items: int = 50
-    min_kappa: float = 0.6
-    max_false_pass_rate: float = 0.1
-    min_coverage: float = 0.95
-
-    def provenance(self) -> dict[str, Any]:
-        return {
-            "split": "holdout",
-            "min_items": self.min_items,
-            "min_kappa": self.min_kappa,
-            "max_false_pass_rate": self.max_false_pass_rate,
-            "min_coverage": self.min_coverage,
-        }
-
-
 class AgreementSummary(BaseModel):
     total: int
     judged: int
@@ -150,9 +180,20 @@ class AgreementSummary(BaseModel):
 
 
 class AspectCalibration(BaseModel):
+    # dev・holdout（人手）と synthetic（合成の対照。合否に入れない）の集計。
     splits: dict[str, AgreementSummary] = Field(default_factory=dict)
     passed: bool
     failures: list[str] = Field(default_factory=list)
+
+
+class JudgeVariance(BaseModel):
+    """同じ項目を複数回判定したときの、観点ごとの回の間の揺れ。"""
+
+    runs: int
+    items: int
+    unstable: int
+    unstable_rate: float | None
+    unstable_items: list[str] = Field(default_factory=list)
 
 
 class CalibrationReport(BaseModel):
@@ -162,13 +203,16 @@ class CalibrationReport(BaseModel):
     created_at: str
     provenance: dict[str, Any] = Field(default_factory=dict)
     judgements: list[Judgement] = Field(default_factory=list)
+    # 2 回目以降の判定（`--repeats`。判定の分散を測る。合否には最初の回を使う）。
+    repeat_judgements: list[list[Judgement]] = Field(default_factory=list)
+    variance: dict[str, JudgeVariance] = Field(default_factory=dict)
     aspects: dict[str, AspectCalibration] = Field(default_factory=dict)
     passed: bool
 
 
-def _summary(pairs: Sequence[LabelPair]) -> AgreementSummary:
+def _summary(pairs: Sequence[LabelPair]) -> tuple[AgreementSummary, Agreement]:
     result = agreement(pairs, HUMAN_LABELS, positive=PASS, negative=FAIL)
-    return AgreementSummary(
+    summary = AgreementSummary(
         total=result.total,
         judged=result.judged,
         unjudged=result.unjudged,
@@ -180,21 +224,49 @@ def _summary(pairs: Sequence[LabelPair]) -> AgreementSummary:
         confusion=result.confusion,
         disagreements=[item.item_id for item in pairs if item.judge != item.human],
     )
+    return summary, result
 
 
-def _gate(summary: AgreementSummary | None, thresholds: CalibrationThresholds) -> list[str]:
-    if summary is None:
-        return ["holdout の項目がありません"]
-    failures: list[str] = []
-    if summary.total < thresholds.min_items:
-        failures.append(f"holdout の件数 {summary.total} < {thresholds.min_items}")
-    if summary.coverage is None or summary.coverage < thresholds.min_coverage:
-        failures.append(f"判定率 {summary.coverage} < {thresholds.min_coverage}")
-    if summary.kappa is None or summary.kappa < thresholds.min_kappa:
-        failures.append(f"κ {summary.kappa} < {thresholds.min_kappa}")
-    if summary.false_pass_rate is None or summary.false_pass_rate > thresholds.max_false_pass_rate:
-        failures.append(f"誤合格の率 {summary.false_pass_rate} > {thresholds.max_false_pass_rate}")
-    return failures
+def _bucket(item: LabeledItem) -> str:
+    return SYNTHETIC_SPLIT if item.origin == "synthetic" else item.split
+
+
+def _label_of(judgement: Judgement | None, aspect_id: str) -> str | None:
+    result = judgement.aspects.get(aspect_id) if judgement is not None else None
+    return result.label if result is not None and result.status == "scored" else None
+
+
+def judge_variance(runs: Sequence[Sequence[Judgement]], rubric: Rubric) -> dict[str, JudgeVariance]:
+    """観点ごとに、回の間で判定（ラベルか評価不能）が変わった項目を数える（2 回以上のとき）。"""
+    if len(runs) < 2:
+        return {}
+    by_run = [{item.item_id: item for item in run} for run in runs]
+    item_ids = [item.item_id for item in runs[0]]
+    variance: dict[str, JudgeVariance] = {}
+    for aspect_id in rubric.aspect_ids:
+        unstable: list[str] = []
+        counted = 0
+        for item_id in item_ids:
+            outcomes: set[str] = set()
+            for judgements in by_run:
+                judgement = judgements.get(item_id)
+                result = judgement.aspects.get(aspect_id) if judgement is not None else None
+                if result is None or result.status == "not_applicable":
+                    continue
+                outcomes.add(result.label if result.status == "scored" and result.label else "-")
+            if not outcomes:
+                continue
+            counted += 1
+            if len(outcomes) > 1:
+                unstable.append(item_id)
+        variance[aspect_id] = JudgeVariance(
+            runs=len(runs),
+            items=counted,
+            unstable=len(unstable),
+            unstable_rate=round(len(unstable) / counted, 4) if counted else None,
+            unstable_items=unstable,
+        )
+    return variance
 
 
 def calibrate(
@@ -205,6 +277,7 @@ def calibrate(
     judge_provenance: Mapping[str, Any],
     settings: JudgeSettings,
     thresholds: CalibrationThresholds,
+    repeat_judgements: Sequence[Sequence[Judgement]] = (),
 ) -> CalibrationReport:
     """判定の結果と人手の判定の一致を観点ごと・区分ごとに集計し、holdout で合否を決める。"""
     labels.check_rubric(rubric)
@@ -215,32 +288,47 @@ def calibrate(
     aspects: dict[str, AspectCalibration] = {}
     for aspect_id in rubric.aspect_ids:
         splits: dict[str, AgreementSummary] = {}
-        for split in SPLITS:
-            pairs: list[LabelPair] = []
-            for item in labels.items:
-                human = item.labels.get(aspect_id)
-                if item.split != split or human is None:
-                    continue
-                result = by_id[item.id].aspects.get(aspect_id)
-                judge = result.label if result is not None and result.status == "scored" else None
-                pairs.append(LabelPair(item_id=item.id, human=human, judge=judge))
+        holdout: Agreement | None = None
+        for split in (*SPLITS, SYNTHETIC_SPLIT):
+            pairs = [
+                LabelPair(
+                    item_id=item.id,
+                    human=human,
+                    judge=_label_of(by_id[item.id], aspect_id),
+                )
+                for item in labels.items
+                if _bucket(item) == split and (human := item.labels.get(aspect_id)) is not None
+            ]
             if pairs:
-                splits[split] = _summary(pairs)
-        failures = _gate(splits.get("holdout"), thresholds)
+                splits[split], result = _summary(pairs)
+                if split == "holdout":
+                    holdout = result
+        failures = calibration_failures(holdout, thresholds)
         aspects[aspect_id] = AspectCalibration(
             splits=splits, passed=not failures, failures=failures
         )
+    origins = {
+        origin: sum(1 for item in labels.items if item.origin == origin)
+        for origin in ("human", "synthetic")
+    }
     return CalibrationReport(
         created_at=datetime.now(UTC).isoformat(timespec="seconds"),
         provenance={
             "rubric": rubric.provenance(),
             "prompt_sha256": prompt_sha256(rubric),
-            "labels": {"sha256": labels.sha256, "item_count": len(labels.items)},
+            "labels": {
+                "sha256": labels.sha256,
+                "item_count": len(labels.items),
+                "origins": origins,
+            },
             "judge": dict(judge_provenance),
             "settings": settings.provenance(),
             "thresholds": thresholds.provenance(),
+            "repeats": 1 + len(repeat_judgements),
         },
         judgements=list(judgements),
+        repeat_judgements=[list(run) for run in repeat_judgements],
+        variance=judge_variance([list(judgements), *repeat_judgements], rubric),
         aspects=aspects,
         passed=all(item.passed for item in aspects.values()),
     )

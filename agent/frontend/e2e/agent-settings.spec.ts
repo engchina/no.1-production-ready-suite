@@ -436,7 +436,7 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByRole("heading", { name: "ツール権限", level: 1 })).toBeVisible();
     await expect(page.getByLabel("未指定ツールの既定動作")).toBeVisible();
     // 組み込みのツールと、URL を設定した MCP 接続のツール（#1814）。既定の RAG / NL2SQL は URL が未設定なので並ばず、失敗にもしない。
-    await expect(page.getByText("agent_skill_list", { exact: true })).toBeVisible();
+    await expect(page.getByText("echo", { exact: true })).toBeVisible();
     await expect(page.getByText("rag__rag_search")).toHaveCount(0);
     await expect(page.getByTestId("tool-policy-connection-errors")).toHaveCount(0);
     await expect(page.getByText("sandbox_command_run")).toHaveCount(0);
@@ -452,10 +452,10 @@ test.describe("Agent Runtime settings", () => {
     await search.fill("該当なし");
     await expect(page.getByText("検索に一致するツールがありません")).toBeVisible();
     await page.getByRole("button", { name: "検索語をクリア" }).last().click();
-    await search.fill("agent_skill_list");
+    await search.fill("echo");
     await expect(page.getByTestId("tool-policy-toolbar")).toContainText("1 件");
     await expectNoHorizontalOverflow(page);
-    const firstPolicy = page.getByRole("combobox", { name: "agent_skill_list のポリシー", exact: true });
+    const firstPolicy = page.getByRole("combobox", { name: "echo のポリシー", exact: true });
     // 連続保存では前回のトーストが残るため、保存 API の成功を待ってから最新のトーストを確認する。
     const savePolicy = async () => {
       const saved = page.waitForResponse(

@@ -2,7 +2,8 @@
 
 製品の module・DB・保存ファイルを読まない。
 
-- suite の src は標準 library・httpx・pydantic・platform の `pr_evaluation_scoring`
+- suite の src は標準 library・httpx・pydantic・openpyxl（人手の判定の記入用のブック）・platform の
+  `pr_evaluation_scoring`
   /`pr_enterprise_ai`（OCI Enterprise AI の呼び方）・自分だけを import する（製品の `app.*`・
   `rag_*`・`nl2sql`・Agent の package を import しない）。
 - suite の src は製品の DB の driver（`oracledb`）を import せず、製品のディレクトリの path を書か
@@ -38,6 +39,7 @@ PLATFORM_ENTERPRISE_AI_SRC = REPO / "platform" / "packages" / "enterprise_ai" / 
 SUITE_ALLOWED = {
     "httpx",
     "pydantic",
+    "openpyxl",
     "pr_evaluation_scoring",
     "pr_enterprise_ai",
     "pr_suite_evaluation",
