@@ -29,6 +29,9 @@ from app.rag.mineru_license import (
 from app.schemas.document import SourceModality, SourceProfile
 from tests.support import AsgiTestClient
 
+# MinerU は準備中(ロードマップ。#3359)。ライセンスの確認の関門の経路は判定を外して確かめる。
+pytestmark = pytest.mark.usefixtures("mineru_selectable")
+
 client = AsgiTestClient(app)
 ACKNOWLEDGED_AT = "2026-10-26T00:00:00+00:00"
 

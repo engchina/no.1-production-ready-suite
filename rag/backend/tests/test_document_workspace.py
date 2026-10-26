@@ -1060,6 +1060,7 @@ def test_document_upload_keeps_ingestion_manual_until_explicit_enqueue() -> None
     assert job_detail.json()["data"]["attempt_count"] == 1
 
 
+@pytest.mark.usefixtures("mineru_selectable")
 def test_document_processing_config_is_used_by_ingestion_pipeline() -> None:
     """レシピの上書きは KB を介さず、取込の Settings へ渡る（#488。レシピの job と同じ合成）。"""
     settings, effective = documents_route._merge_document_processing_config(
@@ -3000,6 +3001,7 @@ def test_ingestion_segments_progress_unit_for_persisted_office_segments(
     assert xlsx_resp.json()["data"][0]["progress_start"] == 3
 
 
+@pytest.mark.usefixtures("mineru_selectable")
 def test_ingestion_segments_fallback_uses_planned_parser_for_running_extract_job(
     fake_document_dependencies: FakeWorkspaceOracle,
     monkeypatch: pytest.MonkeyPatch,
@@ -3034,6 +3036,7 @@ def test_ingestion_segments_fallback_uses_planned_parser_for_running_extract_job
     assert segments[0]["parser_profile"] == "mineru"
 
 
+@pytest.mark.usefixtures("mineru_selectable")
 def test_ingestion_segments_fallback_uses_document_parser_before_ingest(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:

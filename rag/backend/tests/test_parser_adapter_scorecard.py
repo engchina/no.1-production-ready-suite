@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 
+import pytest
 from pytest import MonkeyPatch
 
 from app.config import Settings
@@ -266,6 +267,7 @@ def test_source_routes_follow_selected_adapter_support(
     assert "local_parser_preferred_for_source" in by_kind["text"].reason_codes
 
 
+@pytest.mark.usefixtures("mineru_selectable")
 def test_source_routes_explain_explicit_adapter_source_mismatch(
     monkeypatch: MonkeyPatch,
 ) -> None:

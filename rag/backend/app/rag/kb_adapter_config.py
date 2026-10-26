@@ -228,6 +228,9 @@ def reject_roadmap_parser_backend_input(data: object) -> object:
     """処理レシピの保存の入力で、準備中(ロードマップ)の解析エンジンを検証のエラーにする(#3374)。"""
     if isinstance(data, Mapping):
         reject_roadmap_parser_adapter_backend(data.get("parser_adapter_backend"))
+        # MinerU の flag(parser_mineru_enabled)で選ぶことも止める(#3359)。
+        if data.get("parser_mineru_enabled") is True:
+            reject_roadmap_parser_adapter_backend("mineru")
     return data
 
 

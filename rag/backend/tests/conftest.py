@@ -408,3 +408,14 @@ def _stub_upload_storage_object_storage(monkeypatch: pytest.MonkeyPatch) -> None
         "default_object_storage_client",
         lambda _settings: _ObjectStorageStub(),
     )
+
+
+@pytest.fixture
+def mineru_selectable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MinerU の準備中(ロードマップ)の判定を外す(#3359)。
+
+    MinerU は準備中だが、client・ライセンスの確認の関門の実装は残す。その経路のテストで使う。
+    """
+    from app import config as app_config
+
+    monkeypatch.delitem(app_config.ROADMAP_PARSER_ADAPTER_BACKENDS, "mineru")

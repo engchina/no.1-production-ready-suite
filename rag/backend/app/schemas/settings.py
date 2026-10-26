@@ -308,6 +308,10 @@ class ParserAdapterStatusData(BaseModel):
     """任意 parser adapter の feature flag / package readiness。"""
 
     backend: ParserAdapterBackendName
+    availability: Literal["available", "roadmap"] = Field(
+        default="available",
+        description="available=選べる、roadmap=準備中(ロードマップ)でまだ選べない(#3359)。",
+    )
     package_name: str
     import_name: str
     distribution_name: str | None = None

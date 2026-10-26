@@ -1138,6 +1138,7 @@ async def test_ingestion_pipeline_does_not_reuse_full_extraction_for_other_parse
     assert artifacts["extraction_artifact_parse_key"] != first_key
 
 
+@pytest.mark.usefixtures("mineru_selectable")
 def test_ingestion_selected_external_parser_fallback_stops_ingestion() -> None:
     """明示選択 parser が fallback 結果なら Enterprise AI へ進めず止める。"""
     pipeline = object.__new__(IngestionPipeline)
@@ -1422,13 +1423,17 @@ def test_partition_source_preflight_blocks_unsupported_format(
 
 
 @pytest.mark.parametrize("content_kind", ["pdf", "office"], ids=["pdf", "office"])
+@pytest.mark.parametrize("backend", ["oci_document_understanding", "mineru"])
 def test_partition_source_blocks_roadmap_engine_before_any_call(
-    monkeypatch: pytest.MonkeyPatch, content_kind: str
+    monkeypatch: pytest.MonkeyPatch, content_kind: str, backend: str
 ) -> None:
-    """準備中(ロードマップ)の OCI Document Understanding は、対応形式でも呼ばずに止める(#3374)。"""
+    """準備中(ロードマップ)のエンジンは、対応形式でも呼ばずに止める。
+
+    OCI Document Understanding(#3374)と MinerU(#3359)。
+    """
     from app.clients.parser_service import ParserServiceUnavailableError
 
-    pipeline = _preflight_pipeline("oci_document_understanding", monkeypatch)
+    pipeline = _preflight_pipeline(backend, monkeypatch)
     profile = (
         _pdf_source_profile(file_size_bytes=10)
         if content_kind == "pdf"

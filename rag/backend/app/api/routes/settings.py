@@ -63,6 +63,7 @@ from app.config import (
     Settings,
     get_settings,
     is_roadmap_parser_adapter_backend,
+    roadmap_parser_adapter_backend_message,
 )
 from app.rag.answer_prompts import (
     EDITABLE_PROMPT_KEYS,
@@ -1108,6 +1109,10 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
         adapters=[
             ParserAdapterStatusData(
                 backend=adapter.backend,
+                # 準備中(ロードマップ)のエンジン(MinerU。#3359)は画面で選べない。
+                availability=(
+                    "roadmap" if is_roadmap_parser_adapter_backend(adapter.backend) else "available"
+                ),
                 package_name=adapter.package_name,
                 import_name=adapter.import_name,
                 distribution_name=adapter.distribution_name,
@@ -1352,6 +1357,12 @@ def _raise_if_mineru_license_missing(
     この保存で MinerU を選んだ・有効にした・確認を外したときだけ止める。`.env` で前から MinerU が
     有効だった構成でも、ほかの項目の保存は止めない（取込では確認が無ければ MinerU を呼ばない）。
     """
+    newly_enabled_flag = candidate.rag_parser_mineru_enabled and not base.rag_parser_mineru_enabled
+    if newly_enabled_flag and is_roadmap_parser_adapter_backend(MINERU_BACKEND):
+        # 準備中(ロードマップ)の MinerU は有効にもできない(#3359)。
+        raise HTTPException(
+            status_code=422, detail=roadmap_parser_adapter_backend_message(MINERU_BACKEND)
+        )
     if mineru_license_acknowledged(candidate) or not settings_use_mineru(candidate):
         return
     newly_selected = (

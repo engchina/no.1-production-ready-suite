@@ -138,6 +138,9 @@ DEFAULT_PARSER_ADAPTER_BACKEND: Literal["docling"] = "docling"
 #   global の継承へ寄せる(画面・取込を壊さない)。取込の経路は選ばれていても呼ばずに止める
 #   (ingestion._partition_source)。
 ROADMAP_PARSER_ADAPTER_BACKENDS: dict[str, str] = {
+    # MinerU は外部の HTTP API の client とライセンスの確認(app.rag.mineru_license)を戻したうえで、
+    # 準備中にする(#3359。利用者の判断)。有効にするときはこの行を消す。
+    "mineru": "MinerU",
     "oci_document_understanding": "OCI Document Understanding",
 }
 

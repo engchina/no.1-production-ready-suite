@@ -348,6 +348,7 @@ def test_parser_adapter_settings_no_longer_handle_docling_vision(
     )
 
 
+@pytest.mark.usefixtures("mineru_selectable")
 def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_omitted_flags(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -394,6 +395,7 @@ def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_
     assert not [key for key in parser if "marker" in key or "unlimited" in key or "glm" in key]
 
 
+@pytest.mark.usefixtures("mineru_selectable")
 def test_update_external_parser_connection_retains_and_clears_secret(
     monkeypatch: MonkeyPatch,
 ) -> None:

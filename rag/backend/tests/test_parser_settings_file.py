@@ -108,6 +108,7 @@ def test_v4_shared_file_from_other_product_loads_and_backend_serves() -> None:
     assert response.json()["data"]["adapter_backend"] == before
 
 
+@pytest.mark.usefixtures("mineru_selectable")
 def test_rag_parser_save_then_nl2sql_save_then_rag_reads() -> None:
     """RAG が文書解析を保存 → NL2SQL がモデル設定を保存 → RAG は両方を読む。"""
     settings = get_settings()

@@ -5,6 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from pytest import MonkeyPatch
 from rag_parser_core import registry as parser_registry
 from rag_parser_core.result import ParserRegistryResult
@@ -289,6 +290,7 @@ def test_compatibility_matrix_uses_parser_service_runner_for_dots_ocr(
     assert matrix.cases[0].status == "passed"
 
 
+@pytest.mark.usefixtures("mineru_selectable")
 def test_compatibility_matrix_mineru_unconfigured_connection_is_missing(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
