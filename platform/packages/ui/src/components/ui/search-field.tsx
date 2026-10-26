@@ -41,6 +41,7 @@ export type SearchFieldProps = Omit<
    * - 入力が `debounceMs` 止まったとき（IME の変換中は呼ばない。変換を確定した値で呼ぶ）
    * - Enter（debounce を待たずにすぐ。変換を確定する Enter では呼ばない）
    * - 消去（× / Escape）
+   * - 待っている値があるまま入力欄が外れる・ページを離れる（`pagehide`）とき（その場で確定する）
    * 前回呼んだ値と同じなら呼ばない（ページングを 1 ページ目へ戻す処理を空打ちしない）。
    */
   onSearch: (value: string) => void;
@@ -161,6 +162,17 @@ export function SearchField({
     },
     [emit]
   );
+
+  // ページを離れるとき（再読込・別の文書への移動・タブを閉じる）も、待っている絞り込みをその場で確定する（#3385）。
+  // React の unmount は起きないため、入力してから debounce の間に再読込すると、作業状態・URL に残らず入力が消える。
+  useEffect(() => {
+    const flush = () => {
+      const pending = pendingRef.current;
+      if (pending !== null) emit(pending);
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, [emit]);
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
     // 変換中の入力（未確定の読み・候補）では絞り込まない。確定は compositionend で拾う。

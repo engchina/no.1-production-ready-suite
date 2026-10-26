@@ -17665,6 +17665,10 @@ test("workspace: 一覧の検索条件は戻る・進む・再読込でも保持
   await expect(search).toHaveValue("INVOICES");
   await expect(page.getByTestId("list-detail-table-management-list").getByLabel("所有者", { exact: true })).toHaveValue("APP");
   await expectNoHorizontalScroll(page);
+  // 入力してから絞り込みの確定（debounce）の前に再読込しても、入力した検索語を失わない（pagehide で確定する。#3385）。
+  await search.fill("INVOICE");
+  await page.reload();
+  await expect(search).toHaveValue("INVOICE");
 
   // 選んだテーブルは URL（?table=）に持ち、サイドナビで離れて戻っても同じ対象を開く（keep-alive。#2281）。
   await page.getByRole("button", { name: "APP.INVOICES を表示" }).click();

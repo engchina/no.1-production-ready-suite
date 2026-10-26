@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
@@ -85,7 +85,19 @@ export function useWorkspaceState<T>(
     mark(key, !saved);
     return () => mark(key, false);
   }, [key, mark, owner, value]);
-  return [value, setValue];
+  // setter は effect（commit の後）を待たずに草稿を書く（#3385）。ページを離れる直前（pagehide。SearchField が
+  // 待っている検索語を確定するときなど）の更新は commit されないまま文書が破棄されるため、effect だけでは残らない。
+  // 最新の値と置き場所は commit 時に入れ、続けて呼ばれた setter は直前の setter の値から計算する。
+  const latest = useRef({ key, owner, value });
+  useLayoutEffect(() => { latest.current = { key, owner, value }; });
+  const update = useCallback<Dispatch<SetStateAction<T>>>((action) => {
+    const current = latest.current;
+    const next = typeof action === "function" ? (action as (previous: T) => T)(current.value) : action;
+    latest.current = { ...current, value: next };
+    setValue(next);
+    try { writeDraft(window.sessionStorage, current.owner, current.key, next); } catch { /* storage disabled */ }
+  }, [setValue]);
+  return [value, update];
 }
 
 export function WorkspaceDraftWarning() {

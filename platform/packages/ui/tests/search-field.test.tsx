@@ -267,6 +267,35 @@ describe("SearchField の消去と外からの変更", () => {
     expect(onSearch).toHaveBeenCalledTimes(1);
   });
 
+  it("ページを離れるとき（pagehide。再読込など）は、待っている絞り込みをその場で確定する（#3385）", () => {
+    const onSearch = vi.fn();
+    const input = mount(<Harness onSearch={onSearch} />);
+    type(input, "abc");
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    expect(onSearch).toHaveBeenCalledTimes(1);
+    expect(onSearch).toHaveBeenLastCalledWith("abc");
+    advance(SEARCH_FIELD_DEBOUNCE_MS * 2);
+    expect(onSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("確定済み・外れた後の pagehide では呼び直さない", () => {
+    const onSearch = vi.fn();
+    const input = mount(<Harness onSearch={onSearch} />);
+    type(input, "abc");
+    advance(SEARCH_FIELD_DEBOUNCE_MS);
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    expect(onSearch).toHaveBeenCalledTimes(1);
+    act(() => root.render(null));
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    expect(onSearch).toHaveBeenCalledTimes(1);
+  });
+
   it("確定済みなら、外れるときに呼び直さない", () => {
     const onSearch = vi.fn();
     const input = mount(<Harness onSearch={onSearch} />);
