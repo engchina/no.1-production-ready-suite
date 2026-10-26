@@ -2076,8 +2076,7 @@ def _section_answer_llm(
                 {
                     "kind": "rule",
                     "text": _SECTION_ANSWER,
-                    "evidence_id": ids[-1],
-                    "quote": _SECTION_ANSWER,
+                    "citations": [{"evidence_id": ids[-1], "quote": _SECTION_ANSWER}],
                 }
             ]
             if _SECTION_ANSWER in prompt and ids

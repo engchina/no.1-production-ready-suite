@@ -48,6 +48,7 @@ from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
 from rag_engine.resources.deadline import check_deadline, current_deadline
 from rag_engine.resources.tracing import observe_call
+from rag_engine.retrieval.article_catalog import ARTICLE_UNIT_KEY
 from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
 from rag_engine.retrieval.search_stages import (
     CONTEXT_SIBLINGS_STAGE,
@@ -3346,6 +3347,8 @@ def _stored_child(
         # XML ツリー JSON の段落の根拠(#2024)。回答の本文の出典を引用ラベルにする(ページの
         # 無い原本なので「p.1」にしない)。親(単位)の場所は単位のラベル。
         metadata["location_label"], metadata["parent_location_label"] = xml_tree_location
+        # 条で構成された文書の条の根拠(#3526)。回答はこの根拠を出典にした説明を事実の監査に掛ける。
+        metadata[ARTICLE_UNIT_KEY] = True
     if chunk.metadata.get("document_superseded") is True:
         # 新しい版に置き換えた文書(旧版)の chunk(#1248)。rag_engine は旧版の説明を今の手順として
         # 公開しない(#1492)。

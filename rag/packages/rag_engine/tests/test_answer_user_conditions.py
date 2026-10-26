@@ -43,7 +43,7 @@ def environment(text):
 
 def rule(eid, text, request_id="Q1"):
     # 原文どおりの説明（言い換えの検査で落ちないよう text = quote にする）。
-    return {"kind": "rule", "text": text, "evidence_id": eid, "quote": text, "request_id": request_id}
+    return {"kind": "rule", "text": text, "citations": [{"evidence_id": eid, "quote": text}], "request_id": request_id}
 
 
 def answer(question, texts, external_data_items, *, external_data_required=True):

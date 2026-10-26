@@ -15,12 +15,13 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from rag_engine.retrieval.article_catalog import ARTICLE_UNIT_KEY
 from rag_parser_core.registry import ParserRegistryResult
 from rag_parser_core.xml_tree_json import xml_tree_json_extraction
 from rag_pipeline_core.chunking import Chunk, chunk_extraction_with_strategy
 
 from app.config import Settings
-from app.rag.answer_engine import _xml_tree_location_labels
+from app.rag.answer_engine import _stored_child, _xml_tree_location_labels
 from app.rag.chunking_small_to_big import (
     build_parent_child_chunks,
     has_xml_tree_units,
@@ -32,6 +33,7 @@ from app.rag.source_profile import build_source_profile
 from app.rag.variant_keys import extraction_recipe_subset
 from app.rag.xml_tree_source_urls import apply_xml_tree_source_urls
 from app.schemas.document import SourceProfile
+from app.schemas.search import RetrievedChunk
 
 FIXTURE = (
     Path(__file__).resolve().parents[2]
@@ -246,6 +248,21 @@ def test_location_labels_for_answer_citations() -> None:
     }
     assert _xml_tree_location_labels(paragraph) == ("第7条第1項", "第7条")
     assert _xml_tree_location_labels({"section_path": "x"}) is None
+
+
+def test_article_units_are_marked_for_the_answer_audit() -> None:
+    """条で構成された文書の段落の根拠に印を付け、回答がその出典の説明を監査に掛ける(#3526)。"""
+    paragraph = RetrievedChunk(
+        document_id="doc-1",
+        chunk_id="chunk-1",
+        text="本文",
+        score=0.5,
+        file_name="rules.xml",
+        metadata={"xml_tree_label_arabic": "第7条第1項", "xml_tree_parent_label_arabic": "第7条"},
+    )
+    other = paragraph.model_copy(update={"metadata": {"section_path": "x"}})
+    assert _stored_child(paragraph, rrf_score=0.1).metadata[ARTICLE_UNIT_KEY] is True
+    assert ARTICLE_UNIT_KEY not in _stored_child(other, rrf_score=0.1).metadata
 
 
 def test_source_url_template_is_applied_only_when_https() -> None:

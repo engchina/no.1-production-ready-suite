@@ -8,7 +8,7 @@ from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answer_payload import answer_evidence_items
 from rag_engine.generation.answering import AnswerContext, AnswerRecord, _grounded_spans, synthesize_grounded_answer
-from rag_engine.models.llm import GroundedDraft, GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.retrieval.evidence_selection import evidence_spans
 
@@ -91,7 +91,7 @@ def _evidence_id() -> str:
 
 
 def _rule(quote: str) -> dict:
-    return {"kind": "rule", "text": quote, "evidence_id": _evidence_id(), "quote": quote}
+    return {"kind": "rule", "text": quote, "citations": [{"evidence_id": _evidence_id(), "quote": quote}]}
 
 
 def test_spans_keep_the_children_and_their_ranges_in_the_parent() -> None:
@@ -125,7 +125,9 @@ def test_used_mark_does_not_spread_to_siblings() -> None:
 
 
 def _entry(quote: str, span: dict) -> grounded.CheckedItem:
-    return grounded.CheckedItem(GroundedItem(kind="rule", text=quote, evidence_id=span["evidence_id"], quote=quote), span=span)
+    return grounded.CheckedItem(
+        GroundedItem(kind="rule", text=quote, citations=[GroundedCitation(evidence_id=span["evidence_id"], quote=quote)]), span=span
+    )
 
 
 def _parent_span() -> dict:

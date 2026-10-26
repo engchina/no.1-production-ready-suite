@@ -20,7 +20,7 @@ from rag_engine.generation import form_field_kinds
 from rag_engine.generation.answer_models import AnswerContext
 from rag_engine.generation.answering import _grounded_prompt
 from rag_engine.models.layout import LayoutRecord, PageImage
-from rag_engine.models.llm import FORM_FIELD_KINDS, FormFieldOutput, PictureDescriptionOutput
+from rag_engine.models.llm import FORM_FIELD_KINDS, FormFieldOutput, GroundedCitation, PictureDescriptionOutput
 from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.picture_descriptions import _bounded_vision_description, describe_docling_pictures, vision_description_text
 from rag_engine.parsing.vision_checkpoints import VisionCheckpoints
@@ -342,7 +342,13 @@ class CitableFieldKindTests(unittest.TestCase):
         draft = GroundedDraft(
             summary="",
             confidence="medium",
-            items=[GroundedItem(kind="rule", text="項目Aは選択項目です。", quote=evidence["text"], evidence_id=evidence["label"])],
+            items=[
+                GroundedItem(
+                    kind="rule",
+                    text="項目Aは選択項目です。",
+                    citations=[GroundedCitation(quote=evidence["text"], evidence_id=evidence["label"])],
+                )
+            ],
         )
         checked, dropped = grounded.verify("項目Aの種類", draft, spans)
         self.assertFalse(dropped)

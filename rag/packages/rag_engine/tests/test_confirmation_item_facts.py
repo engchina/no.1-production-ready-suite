@@ -256,7 +256,7 @@ def _run(model, ctx, question, **settings):
 
 
 def rule(eid, text, kind="rule"):
-    return {"kind": kind, "text": text, "evidence_id": eid, "quote": text, "request_id": "Q1"}
+    return {"kind": kind, "text": text, "citations": [{"evidence_id": eid, "quote": text}], "request_id": "Q1"}
 
 
 class GroundedConfirmationFactsTest(unittest.TestCase):

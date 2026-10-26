@@ -18,7 +18,7 @@ from rag_engine.generation import grounded
 from rag_engine.generation.answer_envelope import GUIDE_STEP_REQUEST_PREFIX, build_envelope, guide_step_requests
 from rag_engine.generation.answering import _grounded_spans, synthesize_grounded_answer
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
-from rag_engine.models.llm import GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedItem
 from rag_engine.retrieval.guide_steps import GuidePlan
 
 QUESTION = "設定 A を変更する手順を教えてください"
@@ -87,7 +87,13 @@ class GuideStepCoverageUnitTest(unittest.TestCase):
 
     def _entry(self, span, *, quote_only=False, applies="matched", kind="operation", quote=None):
         entry = grounded.CheckedItem(
-            GroundedItem(kind=kind, text="t", quote=span["text"] if quote is None else quote, applies=applies), span=span
+            GroundedItem(
+                kind=kind,
+                text="t",
+                citations=[GroundedCitation(evidence_id="", quote=span["text"] if quote is None else quote)],
+                applies=applies,
+            ),
+            span=span,
         )
         entry.quote_only = quote_only
         return entry
@@ -448,7 +454,9 @@ class GuideStepSharedEvidenceTest(unittest.TestCase):
         return {"source_id": source, "evidence_id": f"e-{source}", "label": label, "text": text}
 
     def _entry(self, span, quote, *, quote_only=False, applies="matched"):
-        entry = grounded.CheckedItem(GroundedItem(kind="operation", text="t", quote=quote, applies=applies), span=span)
+        entry = grounded.CheckedItem(
+            GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="", quote=quote)], applies=applies), span=span
+        )
         entry.quote_only = quote_only
         return entry
 
@@ -595,7 +603,10 @@ class GuideStepUnsearchedTest(unittest.TestCase):
         self.span = {"source_id": "run:s", "evidence_id": "e-s", "label": "E1", "text": SHARED}
 
     def _entry(self, quote, *, quote_only=False):
-        entry = grounded.CheckedItem(GroundedItem(kind="operation", text="t", quote=quote, applies="matched"), span=self.span)
+        entry = grounded.CheckedItem(
+            GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="", quote=quote)], applies="matched"),
+            span=self.span,
+        )
         entry.quote_only = quote_only
         return entry
 
@@ -692,7 +703,10 @@ class GuideStepSemanticMatchTest(unittest.TestCase):
         self.span = {"source_id": "run:s", "evidence_id": "e-s", "label": "E1", "text": SHARED}
 
     def _entry(self, quote, *, quote_only=False):
-        entry = grounded.CheckedItem(GroundedItem(kind="operation", text="t", quote=quote, applies="matched"), span=self.span)
+        entry = grounded.CheckedItem(
+            GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="", quote=quote)], applies="matched"),
+            span=self.span,
+        )
         entry.quote_only = quote_only
         return entry
 
@@ -779,7 +793,12 @@ class GuideStepSemanticMatchTest(unittest.TestCase):
         ]
         steps = (("s1", "値の登録", ("run:a",)), ("s2", "内容の確定", ("run:b",)))
         checked = [
-            grounded.CheckedItem(GroundedItem(kind="operation", text="t", quote=span["text"], applies="matched"), span=span)
+            grounded.CheckedItem(
+                GroundedItem(
+                    kind="operation", text="t", citations=[GroundedCitation(evidence_id="", quote=span["text"])], applies="matched"
+                ),
+                span=span,
+            )
             for span in spans
         ]
         coverage = grounded.guide_step_coverage(steps, checked, spans, (), {}, semantics)
@@ -832,7 +851,10 @@ class GuideStepSpecificOwnerTest(unittest.TestCase):
     def _statuses(self, items, semantics):
         checked = []
         for quote, quote_only in items:
-            entry = grounded.CheckedItem(GroundedItem(kind="operation", text="t", quote=quote, applies="matched"), span=self.span)
+            entry = grounded.CheckedItem(
+                GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="", quote=quote)], applies="matched"),
+                span=self.span,
+            )
             entry.quote_only = quote_only
             checked.append(entry)
         coverage = grounded.guide_step_coverage(REWORDED_GUIDE, checked, [self.span], (), dict(SECTION_TERMS), semantics)
