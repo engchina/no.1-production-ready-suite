@@ -90,6 +90,7 @@ import {
   runStatusParam,
   runSurfaceLabel,
   runTimeline,
+  runUsageView,
   runVerificationView,
   toRunStatus,
   type RunSurfaceFilter,
@@ -466,7 +467,10 @@ function RunDetailView({ run }: { run: RunDetail }) {
   // 失敗は 3 製品共通の失敗のカード（チャットと同じ 1 文目・次の操作。#2342）。
   const failure = runFailure(run);
 
+  // モデル・token・モデルの呼び出し（実行のときに記録した値。Agent の実行の詳細と同じ形。#3419）。
+  const usageView = runUsageView(run);
   const extraFacts: RunFact[] = [
+    { id: "modelCalls", label: t("history.detail.modelCalls"), value: usageView.modelCalls },
     { id: "citations", label: t("history.detail.citations"), value: formatNumber(run.citation_count) },
   ];
   if (run.status === "error") {
@@ -536,7 +540,8 @@ function RunDetailView({ run }: { run: RunDetail }) {
           executor={{ name: runExecutorLabel(run), isSelf: run.executed_by_me }}
           owner={runConversationOwner(run)}
           target={{ label: t("history.detail.profile"), value: runProfileLabel(run) }}
-          model={run.answer_generated ? run.model_id || t("history.detail.modelDefault") : null}
+          model={usageView.model}
+          usage={usageView.usage}
           runId={run.run_id}
           extraFacts={extraFacts}
           alert={
