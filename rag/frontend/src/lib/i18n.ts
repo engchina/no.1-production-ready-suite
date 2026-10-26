@@ -1839,7 +1839,7 @@ export const ja = {
     "文書を取り込むときに、文書と章・節の見出しのつながり（関係情報）を作るかどうかを選びます。",
   "settings.graph.overview.title": "ナレッジベースの関係情報グラフ",
   "settings.graph.overview.description":
-    "文書全体と、その中の章・節の見出し（表・図を含む）をつないだ図を作ります。作った図はナレッジベースの「関係情報グラフ」で見られます。検索方法の「関係情報で根拠を広げる」（または検索・回答プロファイル）を有効にすると、回答の検索にも使います（既定は使いません）。文書ごとに処理レシピで上書きできます。",
+    "文書全体と、その中の章・節の見出し（表・図を含む）をつないだ図を作ります。作った図はナレッジベースの「関係情報グラフ」で見られます。検索方法の「関係情報で根拠を広げる」（全体設定。検索・回答プロファイルでは上書きしません）を有効にすると、回答の検索にも使います（既定は使いません）。文書ごとに処理レシピで上書きできます。",
   "settings.graph.profile": "取込のときに作るか",
   "settings.graph.defaultTag": "既定",
   "settings.graph.profile.off": "構築しない",
@@ -2165,18 +2165,6 @@ export const ja = {
   "searchAnswerProfiles.field.guideStepMaxQueries": "手順ごとの検索の上限",
   "searchAnswerProfiles.field.guideStepMaxQueriesHelper":
     "既定は {defaultValue} です。1 回の回答で手順ごとに探す回数の上限です（参照の頁に絞った検索を含む）。主の検索の後に足す検索の合計の枠も超えません。継承時は検索方法の現在の設定を使います。",
-  "searchAnswerProfiles.sectionExpansion.title": "章節で広げる根拠",
-  "searchAnswerProfiles.sectionExpansion.enabled": "当たった根拠の章節から親の章節へ広げる",
-  "searchAnswerProfiles.sectionExpansion.helper":
-    "根拠が足りると判定した場合でも、最低 1 段は章節の範囲を広げて回答の材料に加えます。1 段目は当たった根拠が属する章節全体です。標準 RAG は必要な範囲の補完後に回答し、CRAG はその後も根拠が足りない場合に親の章節、…、文書全体の順に 1 段ずつ広げ、足りれば止めます。CRAG で足りるかを確かめるたびに、AI の呼び出しが 1 回増えます。上限に達したら、読めなかった章節を「回答に未反映の関連章節」に示し、条件つきの回答にします。標準 RAG と CRAG の両方で効きます。一部だけを取得した章節は読了として扱いません。既定は有効で、このプロファイルの検索だけに効きます。",
-  "searchAnswerProfiles.sectionExpansion.maxLevels": "広げる段の上限",
-  "searchAnswerProfiles.sectionExpansion.maxLevelsValue": "{count} 段",
-  "searchAnswerProfiles.sectionExpansion.maxLevelsDefault": "{count} 段（既定）",
-  "searchAnswerProfiles.sectionExpansion.inputTokenPercent": "根拠の入力の上限",
-  "searchAnswerProfiles.sectionExpansion.inputTokenPercentValue": "{percent}%",
-  "searchAnswerProfiles.sectionExpansion.inputTokenPercentDefault": "{percent}%（既定）",
-  "searchAnswerProfiles.sectionExpansion.limitsHelper":
-    "根拠の入力の上限は、回答のモデルの入力の上限（システム設定 › モデル の「入力の上限（tokens）」）に対する割合です。上限に入らない長い章節は、質問に関係する原文だけを AI に抜き出させてから（当たった根拠に近い範囲から順に）回答の材料にします。抜き出した原文は資料の原文と照合し、一致しないものは使いません。章節の拡張専用の時間や原文の抽出回数では打ち切りません。回答全体の期限と、広げる段数・根拠入力の上限の範囲で処理します。",
   "searchAnswerProfiles.queryStrategy.auto_routing": "自動ルーティング（自動選択）",
   "searchAnswerProfiles.queryStrategy.simple_retrieval": "単純検索（拡張なし）",
   "searchAnswerProfiles.queryStrategy.rag_fusion": "RAG フュージョン（複数の検索質問 + 順位融合）",

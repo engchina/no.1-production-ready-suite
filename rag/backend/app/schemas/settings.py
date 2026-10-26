@@ -763,10 +763,8 @@ class AnswerPromptUpdate(BaseModel):
 class AnsweringSettingsData(BaseModel):
     """回答の検索と生成の全体既定(回答エンジン。#593)。
 
-    検索・回答プロファイルの「検索・回答設定」で上書きできる。値は
-     backend/.env の `RAG_*`(回答の設定)に
-
-    保存する。
+    全体設定だけで決め、検索・回答プロファイルでは上書きしない
+    (``PROFILE_GLOBAL_QUERY_FIELDS``)。値は backend/.env の `RAG_*`(回答の設定)に保存する。
     """
 
     query_strategy: QueryStrategy

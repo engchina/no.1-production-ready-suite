@@ -243,9 +243,9 @@ uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop
 実体の層（文書レシピの「実体の抽出」（既定 on。#1388）と、回答の検索の 1 段の拡張（既定 on。#1402）。
 [../../docs/rag-engine.md](../../docs/rag-engine.md) の `RAG_ENTITY_INDEX_ENABLED`）の効果は、同じ資料を
 **別のナレッジベース**に、レシピの有り / 無しで取り込んで A を流して比べます（同じ文書を両方に入れると、
-実体を持つ文書が両方の検索範囲に入るため）。拡張は既定 on で、検索・回答プロファイルで選び、全体の環境変数は
-持たない（#1388 / #1402）。`--entity-index` で書き出す評価セットには、既定に頼らず `rag_overrides` の
-`entity_expansion_enabled: true` が入ります（`--guides` で作る検索・回答プロファイルでも拡張を明示します）。実体の抽出は全体の既定で on のため、
+実体を持つ文書が両方の検索範囲に入るため）。拡張は検索方法の全体設定（`RAG_ENTITY_EXPANSION_ENABLED`。既定 OFF）で選び、
+検索・回答プロファイルでは上書きしない（#1388 / #3053）。`--entity-index` で書き出す評価セットには、既定に頼らず `rag_overrides` の
+`entity_expansion_enabled: true` が入ります（評価の実行だけの上書きで、全体設定は変わりません）。実体の抽出は全体の既定で on のため、
 無しの側は `--no-entity-index` でレシピの実体の抽出を無効にします。実体を持たないナレッジベースでは何も
 足しません。
 

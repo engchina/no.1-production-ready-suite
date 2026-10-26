@@ -289,7 +289,7 @@ class SectionRead(list[Any]):
 
 @dataclass(frozen=True)
 class SectionExpansionLimits:
-    """拡張の上限（検索・回答プロファイルで変えられる）。``input_tokens`` は根拠の本文の入力 token の上限。"""
+    """拡張の上限（検索方法の全体設定で決める）。``input_tokens`` は根拠の本文の入力 token の上限。"""
 
     max_levels: int
     input_tokens: int

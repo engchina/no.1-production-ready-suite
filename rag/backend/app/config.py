@@ -330,9 +330,9 @@ DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
 
 # 検索・回答プロファイル（と品質評価の rag_overrides）の値だけで決める Settings の項目（#1388）。
 # プロファイルの値は Settings に重ねて回答の検索へ渡す（``compose_query_settings``）ため Settings の
-# 項目として持つが、環境変数 / .env からは読まない（既定はコードの Settings の既定。拡張は on。
-# #1402）。止めるときはプロファイルの開閉を off にする（再起動は要らない）。値の範囲は Settings の
-# 検証で持つ。
+# 項目として持つが、環境変数 / .env からは読まない（既定はコードの Settings の既定）。値の範囲は
+# Settings の検証で持つ。プロファイルで上書きできない項目は ``PROFILE_GLOBAL_QUERY_FIELDS``
+# （``app/rag/search_answer_profile_config.py``）が正本。
 PROFILE_ONLY_SETTING_FIELDS = frozenset(
     {
         # rerank の後、起点に採る同じ文書の chunk の上限（#2167）。既定 5。
@@ -1062,7 +1062,7 @@ class Settings(
             "言及）と「実体と chunk の関連」を決定的に抜き出し、Oracle の rag_entities / "
             "rag_entity_aliases / rag_entity_chunks に保存する。既定 OFF。全体の設定と文書"
             "レシピの「名称・別名の索引」で構築を選ぶ。LLM は使わない。回答の検索は、"
-            "この表との SQL の join で関連する chunk を 1 段だけ足す（検索・回答プロファイルの"
+            "この表との SQL の join で関連する chunk を 1 段だけ足す（検索方法の全体設定の"
             " entity_expansion_enabled。#1388）。"
         ),
     )
@@ -1105,8 +1105,8 @@ class Settings(
             "回答の検索で、関係情報の構築（rag_graph_profile=entities）で作った章節・表 / 図の"
             "見出しの entity と chunk の対応から候補を足す（#2055。既定 OFF。LLM の呼び出しは"
             "増えない）。検索の上位の chunk と同じ狭い章節・表の chunk と、質問に見出しの語が"
-            "含まれる章節の chunk を足す。検索方法の画面と検索・回答プロファイルの"
-            " graph_expansion_enabled で選ぶ。関係情報の無い文書では何もしない。"
+            "含まれる章節の chunk を足す。検索方法の画面で選ぶ（全体設定だけで決め、"
+            "検索・回答プロファイルでは上書きしない）。関係情報の無い文書では何もしない。"
         ),
     )
     rag_graph_expansion_max_chunks: int = Field(
@@ -1310,7 +1310,7 @@ class Settings(
     rag_query_strategy: QueryStrategy = Field(
         default="simple_retrieval",
         description="質問の拡張(query rewriting / expa"
-        "nsion)の方式。検索・回答プロファイルで上書きできる。",
+        "nsion)の方式。全体設定だけで決め、検索・回答プロファイルでは上書きしない。",
     )
     rag_answer_flow: AnswerFlow = Field(
         default="standard_rag",
@@ -1324,11 +1324,17 @@ class Settings(
         default=3,
         ge=0,
         le=20,
-        description="回答で、根拠の child の前後から context へ足す近傍 child 数。",
+        description=(
+            "回答で、根拠の child の前後から context へ足す近傍 child 数。"
+            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
+        ),
     )
     rag_rerank_enabled: bool = Field(
         default=True,
-        description="回答で、検索候補を OCI Generative AI の rerank で並べ替える。",
+        description=(
+            "回答で、検索候補を OCI Generative AI の rerank で並べ替える。"
+            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
+        ),
     )
     rag_screen_linking_enabled: bool = Field(
         default=False,
@@ -1336,7 +1342,7 @@ class Settings(
             "回答で、検索範囲の画面目録(文書ごとの番号付きの見出し)から質問を解決する"
             "操作画面を LLM で選び、その画面の根拠を検索候補に加える"
             "(LLM の呼び出しが 1 回増える。#554)。"
-            "検索・回答プロファイルで上書きできる。"
+            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_article_catalog_enabled: bool = Field(
@@ -1489,7 +1495,7 @@ class Settings(
         description=(
             "回答の生成の前に、質問の要求ごとに根拠があるかを語の一致で確かめ(LLM は呼ばない)、"
             "根拠の無い要求だけを要求の文で 1 回ずつ検索し直して回答の材料に足す(#1279)。"
-            "検索・回答プロファイルで上書きできる。"
+            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_request_coverage_max_queries: int = Field(
@@ -1541,7 +1547,7 @@ class Settings(
         description=(
             "照合した業務ガイドの手順(分岐で残った手順)ごとに「質問 + 手順の検索の手がかり」で"
             "検索し、手順が参照する資料の頁の根拠を回答の材料に入れる(#2395)。LLM は呼ばない"
-            "(検索が手順ごとに増える)。検索・回答プロファイルで上書きできる。"
+            "(検索が手順ごとに増える)。全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_guide_step_max_queries: int = Field(
@@ -1760,7 +1766,7 @@ class Settings(
             "抽出項目の条件として LLM で読み取り、検索を絞り込む"
             "(Metadata Filter Extraction。LLM の呼び出しが 1 回増える。"
             "読み取った条件で 0 件なら条件を外して検索し直す。#652)。"
-            "検索・回答プロファイルで上書きできる。"
+            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_filter_relaxation_max_steps: int = Field(
