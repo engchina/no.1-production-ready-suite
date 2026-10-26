@@ -18,7 +18,7 @@ import { AnswerPromptStages } from "./AnswerPromptStages";
 import { isRetrievalPromptStage } from "./answer-prompt.logic";
 
 /**
- * 検索方法の画面。回答の検索と生成の全体既定（検索・回答プロファイルで上書きできる）と、回答の記録・質問履歴を設定する。
+ * 検索方法の画面。回答の検索と生成の全体設定（検索・回答プロファイルでは上書きしない）と、回答の記録・質問履歴を設定する。
  * 以前の検索モード・検索オプションは、回答エンジンを 1 つにしたときに削除した（#595）。
  */
 export function RetrievalSettingsClient() {

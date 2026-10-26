@@ -184,9 +184,9 @@ def resolve_golden_set(
 def with_entity_expansion(golden_set: Mapping[str, Any]) -> dict[str, Any]:
     """実体の 1 段の拡張を選んだ評価セット（#1388）。
 
-    拡張は既定 on（#1402）で、検索・回答プロファイルで選ぶ（全体の環境変数は持たない）。既定に
-    頼らず、プロファイルを使わない評価（A）は評価の `rag_overrides` で明示する。評価セットが明示した
-    `entity_expansion_enabled` は変えない。
+    拡張は検索方法の全体設定（`RAG_ENTITY_EXPANSION_ENABLED`。既定 OFF）で決め、検索・回答
+    プロファイルでは上書きしない。全体設定に頼らず、評価（A）は評価の `rag_overrides` で
+    明示する。評価セットが明示した `entity_expansion_enabled` は変えない。
     """
     resolved: dict[str, Any] = json.loads(json.dumps(dict(golden_set)))
     overrides = resolved.get("rag_overrides")

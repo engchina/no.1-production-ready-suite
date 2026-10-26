@@ -28,7 +28,7 @@ import { useLeaveGuard } from "@/lib/leave-guard";
 import { useAnsweringSettings, useUpdateAnsweringSettings } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 
-// 選択肢の名前は検索・回答プロファイルの上書きの欄と同じ文言を使う（backend の QueryStrategy と同じ順）。
+// 選択肢の名前は `searchAnswerProfiles.queryStrategy.*` の文言を使う（backend の QueryStrategy と同じ順）。
 const QUERY_STRATEGY_OPTIONS: SelectFieldOption<QueryStrategyName>[] = (
   [
     "auto_routing",
