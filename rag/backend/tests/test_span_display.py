@@ -48,3 +48,9 @@ def test_old_combined_step_name_is_not_known() -> None:
     """まとめた工程の名前（旧名）は持たない（知らない工程名はそのまま）。"""
     assert answer_step_display_name("用語・ルールの確認") == "用語・ルールの確認"
     assert "用語・ルールの確認" not in ANSWER_STEP_DISPLAY_NAMES
+
+
+def test_search_readiness_step_is_not_known() -> None:
+    """検索の前提の確認は工程にしない（#3495）。古い記録に残った工程名はそのまま出す。"""
+    assert "検索の準備確認" not in ANSWER_STEP_DISPLAY_NAMES
+    assert answer_step_display_name("検索の準備確認") == "検索の準備確認"

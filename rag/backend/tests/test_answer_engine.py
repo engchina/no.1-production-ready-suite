@@ -378,6 +378,8 @@ async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPat
     terms_index = engine_names.index("用語・同義語の確認")
     assert engine_names[terms_index + 1] == "回答ルールの確認"
     assert "用語・ルールの確認" not in engine_names
+    # 検索の前提の確認は工程にしない（#3495。backend は確認を注入しない）。
+    assert "検索の準備確認" not in engine_names
     for step in engine_steps[terms_index : terms_index + 2]:
         assert (step.span or {}).get("parent_id") == answer_span.step_id
         assert step.details is not None and "結果" in {field.label for field in step.details.fields}

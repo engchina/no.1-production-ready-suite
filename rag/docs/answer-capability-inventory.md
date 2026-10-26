@@ -58,7 +58,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 派生の chunk の原文への置き換え（#2641） | 必須（派生の chunk が当たったとき） | 読み込みの例外は**エラー**。原文が無いときは根拠に渡さない | `DX`（`derived_evidence.unresolved_count`） | 見せない（要約の文を確かめた記載にしない） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._original_anchors` |
 | 自動の検索条件の緩和（#2401） | 任意（設定 `RAG_FILTER_RELAXATION_MAX_STEPS`） | 0 件のとき自動で足した条件を段ごとに外す（失敗ではない） | `DX`（`filter_relaxation`）・`ZE`（`relaxed`・`automatic_filters`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._relax_filters` |
 | 元の質問の検索の先読み（#1499） | 任意 | 失敗 → 続く検索がそのまま読む | `ST`（工程の詳細の文） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py::_wait_original_query_prefetch` |
-| 主の検索の準備の確認 | — | backend は `check_ready` を何もしない関数にしている（埋め込みの有無を事前に確かめない） | — | — | `rag/backend/app/rag/answer_engine.py::AnswerEngine._answer_sync` |
+| 主の検索の準備の確認 | — | backend は `check_ready` を何もしない関数にしている（埋め込みの有無を事前に確かめない）。工程にもしない（#3495。rag_engine を単独で使う経路だけが工程を開かずに確かめ、中止したときだけ「文書検索」の工程に理由を残す） | — | — | `rag/backend/app/rag/answer_engine.py::AnswerEngine._answer_sync` |
 
 - rag_engine の `AdbHybridSearchUnavailable`（`ADB hybrid search を使用できません` の回答を返す経路）は rag_engine の Oracle store 用で、backend の注入した検索（`_search`）はこの例外を出さない（静的確認）。backend の主の検索の失敗がエラーになることは `rag/backend/tests/test_answer_degraded_steps.py::test_main_search_failure_is_an_error_not_zero_evidence` が確かめる。
 
