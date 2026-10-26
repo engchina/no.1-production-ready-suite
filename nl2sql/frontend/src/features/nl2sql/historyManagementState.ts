@@ -7,11 +7,15 @@ import {
   runPeriodSince,
   RUN_EXECUTOR_FILTERS,
   RUN_PERIODS,
+  runListUsage,
+  runUsageView,
   type RunCancellation,
   type RunExecutorFilter,
   type RunPeriod,
   type RunStatus,
   type RunStatusFilter,
+  type RunUsageLabels,
+  type RunUsageView,
 } from "@production-ready/ui";
 
 import { t } from "../../lib/i18n";
@@ -232,4 +236,36 @@ export function historySqlGenerationHref(
   if (!canOpenQuery || historyKind(item) !== "query" || item.executed_by_me !== true) return null;
   if (!item.question.trim()) return null;
   return querySqlGenerationUrl(item, APP_ROUTES.query);
+}
+
+/** 利用量の文言（NL2SQL の i18n。RAG と同じ文言。表示の規則は共通の `runUsageView` / `runListUsage`。#3543）。 */
+function historyUsageLabels(): RunUsageLabels {
+  return {
+    unmeasured: t("history.detail.usageUnmeasured"),
+    partial: t("history.detail.usagePartial"),
+    modelCalls: (values) => t("history.detail.modelCallsValue", values),
+    modelCallsPartial: (values) => t("history.detail.modelCallsPartial", values),
+  };
+}
+
+/** 利用量を計測できない呼び出しの出どころの表示名（DB の中でモデルを呼ぶ Select AI。知らない値は ID のまま）。 */
+function historyUsageSourceLabel(source: string): string {
+  if (source === "select_ai") return t("history.usage.source.selectAi");
+  if (source === "select_ai_agent") return t("history.usage.source.selectAiAgent");
+  return source;
+}
+
+/**
+ * 詳細の概要の「モデル」「token」「モデルの呼び出し」と「未計測の呼び出し」（RAG と同じ形。#3543）。記録の無い行は
+ * 「未計測」（0 にしない）、Select AI だけの実行は数を作らず「未計測」、Enterprise AI の呼び出しと混ざれば「一部計測」。
+ */
+export function historyUsageView(item: Pick<HistoryItem, "usage">): RunUsageView {
+  return runUsageView(item.usage, { labels: historyUsageLabels(), sourceLabel: historyUsageSourceLabel });
+}
+
+/** 一覧の「token」の列（合計と計測の状態。規則は詳細と同じ。#3543）。 */
+export function historyListUsage(
+  item: Pick<HistoryItem, "total_tokens" | "usage_measurement">
+): { tokens: number | null; note: string | null } {
+  return runListUsage(item.total_tokens, item.usage_measurement, historyUsageLabels());
 }

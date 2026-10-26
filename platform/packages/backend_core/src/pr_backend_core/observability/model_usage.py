@@ -1,23 +1,24 @@
-"""1 回の実行のモデルの利用量（実行履歴の概要の「モデル」「token」「モデルの呼び出し」。#3419）。
+"""1 回の実行のモデルの利用量（実行履歴の「モデル」「token」「モデルの呼び出し」。#3419・#3543）。
 
-集計の元は、その実行の trace（`operation_trace`）の span の知らせ（`SpanUpdate`）だけで、別の
-計測は持たない。数えるのは LLM の呼び出しの span（`gen_ai.chat`。回答エンジンの呼び出し
-`_observe_engine_call` と backend の `OciEnterpriseAiClient`。会話の履歴による質問の書き換え・
-質問の理解・回答の生成・検証・送り直しの 1 回ずつ）で、利用量は provider が返した値
-（`record_genai_usage` の `gen_ai.usage.*`）。
+RAG と NL2SQL の実行履歴が同じ規則で数える。集計の元は、その実行の trace（`operation_trace`）の
+span の知らせ（`SpanUpdate`）だけで、別の計測は持たない。数えるのは LLM の呼び出しの span
+（`gen_ai.chat`）で、利用量は provider が返した値（`record_genai_usage` の `gen_ai.usage.*`）。
 
-- 工程の span（`rag.engine.stage` など）は数えない（子の呼び出しと二重に数えない）。
-  `gen_ai.chat` の中に `gen_ai.chat` があれば、内側（実際の呼び出し）だけを数える。
+- 工程の span は数えない（子の呼び出しと二重に数えない）。`gen_ai.chat` の中に `gen_ai.chat`
+  があれば、内側（実際の呼び出し）だけを数える。
 - embedding / rerank（`gen_ai.embeddings` / `gen_ai.rerank`）は LLM の token に入れない。
 - 合計は入力 + 出力。cached は入力の内数、reasoning は出力の内数で、合計に足さない。
 - 利用量の無い呼び出し（失敗・取消・provider が返さない）・終わっていない呼び出し・記録の上限
   で切った trace は「一部計測」（`measurement="partial"`）。LLM を呼ばなかった実行は実測の 0
   （`complete`）。
+- アプリが利用量を受け取れない呼び出し（DB の中でモデルを呼ぶ Select AI など）は、その span に
+  `UNMEASURED_SOURCE_ATTRIBUTE`（出どころの名前）を付ける。数は作らず、出どころを
+  `unmeasured_sources` に残す: ほかに LLM の呼び出しが無ければ「未計測」（`unmeasured`）、
+  あれば「一部計測」。
 - 記録の無い実行（この機能より前の記録・trace の始まる前に失敗した実行）は利用量を持たない
   （画面は「未計測」）。
 
-比較の列（チャット）は列ごとに trace と実行が分かれているので、列の間で混ざらない。MCP の呼び
-出し元の業務 Agent の利用量も別の trace で、ここには入らない。
+別の trace（比較の列・MCP の呼び出し元の業務 Agent）の利用量は混ざらない。
 """
 
 from __future__ import annotations
@@ -25,10 +26,14 @@ from __future__ import annotations
 import threading
 from typing import Literal
 
-from pr_backend_core.observability.tracing import SpanUpdate
 from pydantic import BaseModel, Field
 
+from .tracing import SpanUpdate
+
 LLM_CALL_SPAN = "gen_ai.chat"
+# アプリが利用量を受け取れないモデルの呼び出しを含む span の属性（値は出どころの名前。例: Select AI
+# の `select_ai`）。属性は `tracing._SAFE_ATTRIBUTES` に載せている。
+UNMEASURED_SOURCE_ATTRIBUTE = "pr.gen_ai.unmeasured_source"
 _TOKEN_ATTRIBUTES = {
     "input": "gen_ai.usage.input_tokens",
     "output": "gen_ai.usage.output_tokens",
@@ -37,15 +42,18 @@ _TOKEN_ATTRIBUTES = {
 }
 _FINISHED = {"done", "failed", "cancelled", "skipped"}
 
-type UsageMeasurement = Literal["complete", "partial"]
+# complete: すべての呼び出しの入力・出力を計測した。partial: 一部の呼び出しの利用量が無い。
+# unmeasured: 計測できない呼び出し（`unmeasured_sources`）だけで、数を持たない。
+type UsageMeasurement = Literal["complete", "partial", "unmeasured"]
+USAGE_MEASUREMENTS: frozenset[str] = frozenset({"complete", "partial", "unmeasured"})
 
 
 class RunModelUsage(BaseModel):
-    """1 回の実行のモデルの利用量（実行履歴の `stages_json.usage`）。"""
+    """1 回の実行のモデルの利用量（RAG の `stages_json.usage`・NL2SQL の実行履歴の `usage`）。"""
 
     # 呼び出したモデルの ID（最初に呼んだ順。回答のモデルを先頭にする）。
     models: list[str] = Field(default_factory=list)
-    # LLM の呼び出しの回数（失敗・取消の呼び出しも 1 回）。
+    # LLM の呼び出しの回数（失敗・取消の呼び出しも 1 回）。計測できない呼び出しは数えない。
     requests: int = Field(default=0, ge=0)
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
@@ -56,10 +64,11 @@ class RunModelUsage(BaseModel):
     cached_input_tokens: int | None = Field(default=None, ge=0)
     # 出力のうち推論の token（同上）。
     reasoning_output_tokens: int | None = Field(default=None, ge=0)
-    # complete: すべての呼び出しの入力・出力を計測した。partial: 一部の呼び出しの利用量が無い。
     measurement: UsageMeasurement = "complete"
     # 利用量（入力と出力）を計測できた呼び出しの数。
     measured_requests: int = Field(default=0, ge=0)
+    # 利用量を計測できない呼び出しの出どころ（Select AI など。最初に呼んだ順。回数は数えない）。
+    unmeasured_sources: list[str] = Field(default_factory=list)
 
 
 class _Call:
@@ -79,7 +88,7 @@ def _token(value: object) -> int | None:
 class ModelUsageCollector:
     """trace の span の知らせから、LLM の呼び出しの回数と利用量を集める。
 
-    回答の thread からも呼ばれる。
+    実行の thread のほか、生成の中の thread からも呼ばれる。
     """
 
     def __init__(self) -> None:
@@ -87,12 +96,16 @@ class ModelUsageCollector:
         self._started = False
         self._parents: dict[str, str | None] = {}
         self._calls: dict[str, _Call] = {}
+        self._unmeasured: list[str] = []
 
     def observe(self, update: SpanUpdate) -> None:
         with self._lock:
             if update.root:
                 self._started = True
             self._parents[update.span_id] = update.parent_span_id
+            source = update.attributes.get(UNMEASURED_SOURCE_ATTRIBUTE)
+            if isinstance(source, str) and source and source not in self._unmeasured:
+                self._unmeasured.append(source)
             if update.operation_name != LLM_CALL_SPAN:
                 return
             call = self._calls.setdefault(update.span_id, _Call())
@@ -118,10 +131,11 @@ class ModelUsageCollector:
         記録の上限で span を切った trace（呼び出しを数えきれていないので一部計測）。
         """
         with self._lock:
-            if not self._started and not self._calls:
+            if not self._started and not self._calls and not self._unmeasured:
                 return None
             calls = {span_id: call for span_id, call in self._calls.items()}
             parents = dict(self._parents)
+            unmeasured = list(self._unmeasured)
         # `gen_ai.chat` の中の `gen_ai.chat` は内側だけを数える（外側は子の呼び出しの和と重なる）。
         outer: set[str] = set()
         for span_id in calls:
@@ -152,6 +166,14 @@ class ModelUsageCollector:
             values = [call.tokens[key] for call in leaves if key in call.tokens]
             return sum(values) if values else None
 
+        measurement: UsageMeasurement
+        if unmeasured and not leaves:
+            # 計測できない呼び出しだけ（Select AI だけの実行）。数を作らない。
+            measurement = "unmeasured"
+        elif unmeasured or truncated or len(measured) < len(leaves):
+            measurement = "partial"
+        else:
+            measurement = "complete"
         return RunModelUsage(
             models=models,
             requests=len(leaves),
@@ -160,8 +182,9 @@ class ModelUsageCollector:
             total_tokens=input_tokens + output_tokens,
             cached_input_tokens=subtotal("cached"),
             reasoning_output_tokens=subtotal("reasoning"),
-            measurement="partial" if truncated or len(measured) < len(leaves) else "complete",
+            measurement=measurement,
             measured_requests=len(measured),
+            unmeasured_sources=unmeasured,
         )
 
 
@@ -180,11 +203,13 @@ def run_usage_totals(
 ) -> tuple[int | None, UsageMeasurement | None]:
     """一覧の行の利用量（合計の token と計測の状態。#3466）。
 
-    一覧は `stages_json.usage` の全体を読まず、SQL で取り出した 2 つの値だけを使う。計測の状態が
-    無い・形の違う記録（この機能より前の実行・trace の始まる前に失敗した実行）は未計測（どちらも
-    None。0 にしない）。計測した記録の合計が無ければ 0（`RunModelUsage` の既定と同じ。LLM を
-    呼ばなかった実行は実測の 0）。
+    一覧は利用量の全体を読まず、2 つの値だけを使う。計測の状態が無い・形の違う記録（この機能より
+    前の実行・trace の始まる前に失敗した実行）は未計測（どちらも None。0 にしない）。計測できない
+    呼び出しだけの実行（`unmeasured`）は数を持たない（合計は None）。計測した記録の合計が無ければ 0
+    （`RunModelUsage` の既定と同じ。LLM を呼ばなかった実行は実測の 0）。
     """
+    if measurement == "unmeasured":
+        return None, "unmeasured"
     if measurement != "complete" and measurement != "partial":
         return None, None
     if isinstance(total_tokens, bool) or not isinstance(total_tokens, int | float):
@@ -192,3 +217,25 @@ def run_usage_totals(
     if total_tokens < 0 or not float(total_tokens).is_integer():
         return 0, measurement
     return int(total_tokens), measurement
+
+
+def run_usage_summary_fields(
+    usage: RunModelUsage | None,
+) -> tuple[int | None, UsageMeasurement | None]:
+    """利用量の全体から、一覧と同じ 2 つの値（合計の token と計測の状態）を決める。"""
+    if usage is None:
+        return None, None
+    return run_usage_totals(usage.total_tokens, usage.measurement)
+
+
+__all__ = [
+    "LLM_CALL_SPAN",
+    "UNMEASURED_SOURCE_ATTRIBUTE",
+    "USAGE_MEASUREMENTS",
+    "ModelUsageCollector",
+    "RunModelUsage",
+    "UsageMeasurement",
+    "parse_run_usage",
+    "run_usage_summary_fields",
+    "run_usage_totals",
+]

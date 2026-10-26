@@ -42,6 +42,7 @@ import {
   historyOwner,
   historyRunStatus,
   historySqlGenerationHref,
+  historyUsageView,
   isCancelledHistory,
 } from "../historyManagementState";
 import { engineLabel } from "../labels";
@@ -92,7 +93,15 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
   const cancelled = isCancelledHistory(item);
   const executed = !item.generation_only && item.safety_is_safe && !cancelled;
 
+  // モデル・token・モデルの呼び出し（ジョブの中の LLM の呼び出し。RAG の実行の詳細と同じ形・文言。#3543）。Select AI は
+  // DB の中でモデルを呼ぶので数を作らず、「未計測の呼び出し」に出どころを出す。
+  const usageView = historyUsageView(item);
   const extraFacts: RunFact[] = [
+    // 「モデル」「token」の直後（RAG の概要と同じ並び）。
+    { id: "modelCalls", label: t("history.detail.modelCalls"), value: usageView.modelCalls },
+    ...(usageView.unmeasuredCalls
+      ? [{ id: "unmeasuredCalls", label: t("history.detail.unmeasuredCalls"), value: usageView.unmeasuredCalls }]
+      : []),
     { id: "engine", label: t("history.detail.engine"), value: engineLabel(item.engine) },
     {
       id: "rows",
@@ -173,6 +182,8 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
             owner={historyOwner(item)}
             cancellation={historyCancellation(item)}
             target={{ label: t("history.detail.target"), value: profileRecordDisplayLabel(item) || "—" }}
+            model={usageView.model}
+            usage={usageView.usage}
             runId={item.id}
             extraFacts={extraFacts}
             actions={

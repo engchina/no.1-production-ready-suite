@@ -21,10 +21,10 @@ from time import monotonic
 from typing import Any, Literal, Protocol, cast
 
 from pr_backend_core.logging import safe_error_code, safe_exception_fields
+from pr_backend_core.observability.model_usage import RunModelUsage
 from pr_backend_core.observability.tracing import finish_operation_trace
 
 from app.config import Settings
-from app.rag.run_usage import RunModelUsage
 from app.rag.stored_answer import stored_citations
 from app.schemas.search import (
     EXTRACTION_FIELD_FILTER_KEY,
