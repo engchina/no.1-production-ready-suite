@@ -1,4 +1,4 @@
-"""故意に壊した回答（seeded perturbation）: 判定の校正の合成の対照（#3418・#2577）。
+"""故意に壊した回答（seeded perturbation）: 判定の校正の合成の対照（#3418・#2577・#3578）。
 
 回答の本文をコードで決まった形に壊し、壊した観点を fail と決めた合成の項目を作る。人手の判定とは
 分けて記録し（`origin=synthetic`）、校正の合否（holdout の人手の判定）には入れず、判定が壊れた回答
@@ -12,7 +12,10 @@
 - `reverse_steps`: 番号つきの手順の並びを逆にする（手順の前後関係の誤り）。
 
 合成の fail は「壊したので不合格のはず」というコードの仮定で、人の判定ではない。壊した結果が誤りに
-ならない回答もあり得るので、記入用のブックの「合成の対照」で人が除外できる。
+ならない回答もあり得るので、記入用のブック・RAG の判定の校正の画面で人が除外できる。
+
+suite の `label-template` と RAG の判定の校正の画面が、同じ壊し方と選び方（`perturb_items`）を
+使う。
 """
 
 from __future__ import annotations
@@ -20,9 +23,9 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from pr_suite_evaluation.judge.rubric import FAIL
+from pr_evaluation_scoring.labeling import FAIL
 
 
 @dataclass(frozen=True)
@@ -243,3 +246,67 @@ def perturbed_labels(
     return {
         aspect: FAIL for aspect in perturbation.fail_aspects if aspect in set(applicable_aspects)
     }
+
+
+@dataclass(frozen=True)
+class PerturbationSource:
+    """壊す元の項目（人が判定する項目の ID・回答・標準回答・判定する観点）。"""
+
+    id: str
+    answer: str
+    standard_answer: str | None
+    aspects: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PerturbedItem:
+    """合成の項目（`<元の ID>~<壊し方>`）と、fail にした観点。"""
+
+    id: str
+    base_item_id: str
+    kind: str
+    answer: str
+    description: str
+    labels: dict[str, str] = field(default_factory=dict)
+
+
+def _order_key(salt: str, item_id: str) -> str:
+    return hashlib.sha256(f"{salt}:perturb:{item_id}".encode()).hexdigest()
+
+
+def perturb_items(
+    items: Sequence[PerturbationSource], kinds: Sequence[str], *, perturb_max: int, salt: str
+) -> list[PerturbedItem]:
+    """壊し方ごとに、sha256 の順（決定的）に `perturb_max` 件まで合成の項目を作る。
+
+    壊せない回答（数値が 1 つしかない・条件の文が無い・番号つきの手順が無いなど）と、壊した観点が
+    判定の対象に無い項目は飛ばす。
+    """
+    synthetic: list[PerturbedItem] = []
+    ordered = sorted(items, key=lambda item: _order_key(salt, item.id))
+    for kind in kinds:
+        perturbation = PERTURBATIONS[kind]
+        count = 0
+        for item in ordered:
+            if count >= perturb_max:
+                break
+            if perturbation.needs_standard_answer and not item.standard_answer:
+                continue
+            labels = perturbed_labels(perturbation, item.aspects)
+            if not labels:
+                continue
+            result = perturbation.apply(item.answer, item.standard_answer, item.id)
+            if result is None or result.answer == item.answer:
+                continue
+            synthetic.append(
+                PerturbedItem(
+                    id=f"{item.id}~{kind}",
+                    base_item_id=item.id,
+                    kind=kind,
+                    answer=result.answer,
+                    description=result.description,
+                    labels=labels,
+                )
+            )
+            count += 1
+    return synthetic

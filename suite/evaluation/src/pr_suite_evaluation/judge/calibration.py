@@ -41,6 +41,7 @@ from pr_evaluation_scoring import (
     LabelPair,
     agreement,
     calibration_failures,
+    label_variance,
 )
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -240,31 +241,26 @@ def judge_variance(runs: Sequence[Sequence[Judgement]], rubric: Rubric) -> dict[
     """観点ごとに、回の間で判定（ラベルか評価不能）が変わった項目を数える（2 回以上のとき）。"""
     if len(runs) < 2:
         return {}
-    by_run = [{item.item_id: item for item in run} for run in runs]
-    item_ids = [item.item_id for item in runs[0]]
     variance: dict[str, JudgeVariance] = {}
     for aspect_id in rubric.aspect_ids:
-        unstable: list[str] = []
-        counted = 0
-        for item_id in item_ids:
-            outcomes: set[str] = set()
-            for judgements in by_run:
-                judgement = judgements.get(item_id)
-                result = judgement.aspects.get(aspect_id) if judgement is not None else None
+        outcomes: list[dict[str, str]] = []
+        for run in runs:
+            by_item: dict[str, str] = {}
+            for judgement in run:
+                result = judgement.aspects.get(aspect_id)
                 if result is None or result.status == "not_applicable":
                     continue
-                outcomes.add(result.label if result.status == "scored" and result.label else "-")
-            if not outcomes:
-                continue
-            counted += 1
-            if len(outcomes) > 1:
-                unstable.append(item_id)
+                by_item[judgement.item_id] = (
+                    result.label if result.status == "scored" and result.label else "-"
+                )
+            outcomes.append(by_item)
+        measured = label_variance(outcomes)
         variance[aspect_id] = JudgeVariance(
-            runs=len(runs),
-            items=counted,
-            unstable=len(unstable),
-            unstable_rate=round(len(unstable) / counted, 4) if counted else None,
-            unstable_items=unstable,
+            runs=measured.runs,
+            items=measured.items,
+            unstable=measured.unstable,
+            unstable_rate=measured.unstable_rate,
+            unstable_items=measured.unstable_items,
         )
     return variance
 
