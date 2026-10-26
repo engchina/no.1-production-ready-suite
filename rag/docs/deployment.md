@@ -574,7 +574,7 @@ XML ツリー JSON の解析サービス（`parser-xml-tree-json`）は、文書
 2. 設定（`rag/backend/.env`。どれも任意で既定のままでよい）: `RAG_GUIDE_STEP_RETRIEVAL_ENABLED`（既定 true）・
    `RAG_GUIDE_STEP_MAX_QUERIES`（4）・`RAG_GUIDE_STEP_CHUNKS_PER_STEP`（2）・`RAG_GUIDE_REFERENCE_MAX_CHUNKS`（4）・
    `RAG_GUIDE_STEP_DEADLINE_SECONDS`（60。#2826）と、追加の検索（手順ごとの検索・小問ごとの検索・根拠の無い要求の再検索）の回数の合計の枠
-   `RAG_EXTRA_RETRIEVAL_MAX_QUERIES`（8）。手順ごとの検索の ON / OFF は全体設定だけで決め、検索・回答プロファイルでは上書きしない。回数と時間の上限は検索・回答プロファイルで上書きできる。
+   `RAG_EXTRA_RETRIEVAL_MAX_QUERIES`（8）。手順ごとの検索の ON / OFF と回数・時間の上限は全体設定だけで決め、検索・回答プロファイルでは上書きしない（上限は #3523 から）。
 3. backend を再起動する。
 
 ## 既存環境の更新手順（#2847 文書分割を backend 内で実行）
@@ -693,7 +693,7 @@ backend と取込 worker を更新して再起動する。旧 `RAG_CHUNKING_SERV
 #2055 で、関係情報の構築（`RAG_GRAPH_PROFILE=entities`）で作った章節・表 / 図の見出しの entity と chunk の対応を、回答の検索の候補を広げるのにも使えるようにした。既定は OFF で、更新しただけでは回答は変わらない。
 
 - **schema の変更は無い。** 既存の表（`rag_graph_entities`・`rag_graph_entity_chunks`）を読むだけで、migration は要らない。
-- **新しい設定**: `RAG_GRAPH_EXPANSION_ENABLED`（既定 `false`。検索方法の画面の「関係情報で根拠を広げる」が書く）と `RAG_GRAPH_EXPANSION_MAX_CHUNKS`（既定 `6`。1〜20）。`RAG_GRAPH_EXPANSION_ENABLED` は全体設定だけで決め（検索・回答プロファイルでは上書きしない）、`RAG_GRAPH_EXPANSION_MAX_CHUNKS` は検索・回答プロファイルの `graph_expansion_max_chunks` で上書きできる。
+- **新しい設定**: `RAG_GRAPH_EXPANSION_ENABLED`（既定 `false`。検索方法の画面の「関係情報で根拠を広げる」が書く）と `RAG_GRAPH_EXPANSION_MAX_CHUNKS`（既定 `6`。1〜20）。どちらも全体設定だけで決め、検索・回答プロファイルでは上書きしない（`RAG_GRAPH_EXPANSION_MAX_CHUNKS` は #3523 から。保存済みのプロファイルの `graph_expansion_max_chunks` は適用せず、次の保存で消える）。
 - **関係情報の無い文書には効かない。** 関係情報の構築を「構築しない」で取り込んだ文書は、文書の詳細の処理レシピで「関係情報の構築」を「構築する」にして「再処理」するまで、何も足さない。
 
 ## 既存環境の更新手順（#2042 XML ツリー JSON を使用エンジンにする・OCI Vision / ASR の parser とファイル準備の 2 つの変換方式の削除）

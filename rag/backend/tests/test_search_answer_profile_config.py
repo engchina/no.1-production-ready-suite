@@ -1,10 +1,9 @@
 """検索・回答プロファイル(Search Answer Profile)設定解決の単体テスト(DB 非依存)。"""
 
-from pytest import MonkeyPatch
-
 from app.config import get_settings
 from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
 from app.rag.search_answer_profile_config import (
+    PROFILE_GLOBAL_QUERY_FIELDS,
     SearchAnswerProfileConfig,
     dump_search_answer_profile_config,
     parse_search_answer_profile_config,
@@ -224,8 +223,9 @@ def test_global_search_options_ignore_legacy_profile_values_and_drop_them_on_sav
             "rag_section_expansion_enabled": True,
             "rag_section_expansion_max_levels": 4,
             "rag_section_expansion_input_token_percent": 50,
-            "rag_guide_step_max_queries": 4,
-            "rag_guide_step_deadline_seconds": 60.0,
+            "rag_graph_expansion_max_chunks": 5,
+            "rag_guide_step_max_queries": 2,
+            "rag_guide_step_deadline_seconds": 20.0,
         }
     )
     old = {
@@ -243,7 +243,12 @@ def test_global_search_options_ignore_legacy_profile_values_and_drop_them_on_sav
         "section_expansion_enabled": False,
         "section_expansion_max_levels": 2,
         "section_expansion_input_token_percent": 40,
+        # 関係情報の拡張の上限と業務ガイドの手順ごとの検索の上限・期限も全体設定だけ(#3523)。
+        "graph_expansion_max_chunks": 3,
+        "guide_step_max_queries": 7,
+        "guide_step_deadline_seconds": 37.5,
     }
+    assert set(old) == set(PROFILE_GLOBAL_QUERY_FIELDS)
     config = parse_search_answer_profile_config(
         {
             "knowledge_base_ids": ["kb-1"],
@@ -251,8 +256,6 @@ def test_global_search_options_ignore_legacy_profile_values_and_drop_them_on_sav
                 **old,
                 "max_anchors_per_document": 2,
                 "support_guide_enabled": True,
-                "guide_step_max_queries": 7,
-                "guide_step_deadline_seconds": 37.5,
             },
         }
     )
@@ -261,8 +264,10 @@ def test_global_search_options_ignore_legacy_profile_values_and_drop_them_on_sav
     for key in old:
         assert getattr(merged, f"rag_{key}") == getattr(settings, f"rag_{key}")
     assert merged.rag_max_anchors_per_document == 2
-    assert merged.rag_guide_step_max_queries == 7
-    assert merged.rag_guide_step_deadline_seconds == 37.5
+    # 全体の値が効く(プロファイルの保存値は重ねない)。
+    assert merged.rag_graph_expansion_max_chunks == 5
+    assert merged.rag_guide_step_max_queries == 2
+    assert merged.rag_guide_step_deadline_seconds == 20.0
     saved = dump_search_answer_profile_config(config)
     assert saved["knowledge_base_ids"] == ["kb-1"]
     query = saved["query"]
@@ -270,27 +275,3 @@ def test_global_search_options_ignore_legacy_profile_values_and_drop_them_on_sav
     assert not set(old) & set(query)
     assert query["support_guide_enabled"] is True
     assert query["max_anchors_per_document"] == 2
-    assert query["guide_step_max_queries"] == 7
-    assert query["guide_step_deadline_seconds"] == 37.5
-
-
-def test_profile_can_read_actual_guide_search_defaults_without_global_edit_permission(
-    monkeypatch: "MonkeyPatch",
-) -> None:
-    from app.api.routes import settings as settings_route
-    from app.main import app
-    from tests.security_support import enable_production_auth, login
-    from tests.support import AsgiTestClient
-
-    settings = get_settings().model_copy(
-        update={"rag_guide_step_max_queries": 7, "rag_guide_step_deadline_seconds": 37.5}
-    )
-    monkeypatch.setattr(settings_route, "get_settings", lambda: settings)
-    client = AsgiTestClient(app)
-    auth = enable_production_auth(monkeypatch)
-    auth.user_with_permissions("profile-settings", ["menu.search_answer_profiles"])
-    headers = login(client, "profile-settings")
-    response = client.get("/api/settings/profile-guide-search-defaults", headers=headers)
-    assert response.status_code == 200, response.text
-    assert response.json()["data"] == {"max_queries": 7, "deadline_seconds": 37.5}
-    assert client.get("/api/settings/answering", headers=headers).status_code == 403

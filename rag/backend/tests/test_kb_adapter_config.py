@@ -389,7 +389,7 @@ def test_small_to_big_params_overlay_ingestion_settings() -> None:
 
 
 @pytest.mark.parametrize("value", [0, 15.5, 60])
-def test_profile_step_deadline_override_is_bounded_and_does_not_mutate_defaults(
+def test_query_overlay_step_deadline_is_bounded_and_does_not_mutate_defaults(
     value: float,
 ) -> None:
     settings = get_settings()
@@ -402,6 +402,6 @@ def test_profile_step_deadline_override_is_bounded_and_does_not_mutate_defaults(
 
 
 @pytest.mark.parametrize("value", [-1, 61])
-def test_profile_step_deadline_rejects_out_of_range(value: float) -> None:
+def test_query_overlay_step_deadline_rejects_out_of_range(value: float) -> None:
     with pytest.raises(ValueError):
         KnowledgeBaseQueryConfig(guide_step_deadline_seconds=value)

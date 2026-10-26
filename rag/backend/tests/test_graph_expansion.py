@@ -289,7 +289,11 @@ async def test_no_graph_tables_add_nothing() -> None:
     assert store.calls == ["seed", "name"]
 
 
-def test_settings_default_off_and_profile_can_turn_on() -> None:
+def test_settings_default_off_and_query_overlay_can_turn_on() -> None:
+    """重ねる仕組み(compose_query_settings)の確かめ。
+
+    検索・回答プロファイルは ON / OFF も上限も重ねない(#3523)。
+    """
     from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig, compose_query_settings
 
     settings = Settings()

@@ -1114,8 +1114,8 @@ class Settings(
         ge=1,
         le=20,
         description=(
-            "関係情報で 1 回の検索に足す chunk 数の上限（#2055）。検索・回答プロファイルの"
-            " graph_expansion_max_chunks で上書きできる。"
+            "関係情報で 1 回の検索に足す chunk 数の上限（#2055）。全体設定だけで決め、"
+            "検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_section_expansion_enabled: bool = Field(
@@ -1557,7 +1557,7 @@ class Settings(
         description=(
             "業務ガイドの手順ごとの検索の回数の上限(参照の頁に絞った検索を含む。#2395)。"
             "追加の検索の枠(RAG_EXTRA_RETRIEVAL_MAX_QUERIES)の残りも超えない。"
-            "検索・回答プロファイルで上書きできる。"
+            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_guide_step_chunks_per_step: int = Field(
@@ -1582,6 +1582,7 @@ class Settings(
         description=(
             "業務ガイドの手順ごとの検索の期限(秒。既定 60。#2826)。"
             "過ぎたら次の検索を始めない(#2395)。"
+            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_strategy_reasoning_effort: ReasoningEffortOverride = Field(
