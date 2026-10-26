@@ -224,6 +224,10 @@ claude plugin list   # production-ready-skills@production-ready-suite が ✔ en
 - `AGENTS.md` の大きさの上限（root は 20 KB、root と製品の合計は 32 KB。Codex の `project_doc_max_bytes` の既定 32 KiB に収める）は `scripts/check-agents-md-size.sh` が CI で確かめる
 - Claude Code（2.1.277 以降）と Codex は `AGENTS.md` を直接読み込みます。`CLAUDE.md` は置いていません。
 
+## ライセンスと第三者の部品
+
+自前のコードは [LICENSE](./LICENSE)（MIT）です。3 製品が使う第三者の部品のうち、表示・原文の同梱などの義務があるもの（LGPL・MPL・AGPL の部品、Apache-2.0 の NOTICE、書体の OFL など）と、配備先での入手（`uv sync --locked`・`npm ci`・`dnf`）と再配布の違いは [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md) にまとめています（法的な助言ではありません）。frontend の build は、bundle の npm の package と書体のライセンスを成果物の `licenses/` に出します。
+
 ## CI
 
 `.github/workflows/ci.yml` が変更のあった製品の job だけを実行します（`platform/` の変更時は全製品）。必須 check は `CI OK` です。

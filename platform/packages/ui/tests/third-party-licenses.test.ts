@@ -2,9 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { collectFontLicenses, fontLicenses, fontLicensesIndex } from "../vite/font-licenses.mjs";
+import { collectFontLicenses, fontLicensesIndex, thirdPartyLicenses } from "../vite/third-party-licenses.mjs";
 
-// 書体のライセンスの原文を build の成果物に同梱する plugin（#3392）。合成の package で確かめる。
+// 第三者の部品のライセンスの原文を build の成果物に同梱する plugin（#3392）。合成の package で確かめる。
 const roots: string[] = [];
 
 function makeProduct(packages: Record<string, { license?: string; licenseFile?: string | null }>, extra = {}) {
@@ -44,9 +44,9 @@ describe("collectFontLicenses", () => {
     );
     const items = collectFontLicenses(root);
     expect(items.map((item) => [item.name, item.fileName, item.text])).toEqual([
-      ["@fontsource-variable/font-a", "fonts/licenses/font-a-OFL.txt", "license of @fontsource-variable/font-a\n"],
-      ["@fontsource/dev-only-font-b", "fonts/licenses/dev-only-font-b-OFL.txt", "license of @fontsource/dev-only-font-b\n"],
-      ["@fontsource/font-c", "fonts/licenses/font-c-Apache.txt", "license of @fontsource/font-c\n"],
+      ["@fontsource-variable/font-a", "licenses/fonts/font-a-OFL.txt", "license of @fontsource-variable/font-a\n"],
+      ["@fontsource/dev-only-font-b", "licenses/fonts/dev-only-font-b-OFL.txt", "license of @fontsource/dev-only-font-b\n"],
+      ["@fontsource/font-c", "licenses/fonts/font-c-Apache.txt", "license of @fontsource/font-c\n"],
     ]);
     expect(fontLicensesIndex(items)).toContain("@fontsource-variable/font-a@5.0.0  OFL-1.1  font-a-OFL.txt");
   });
@@ -63,11 +63,17 @@ describe("collectFontLicenses", () => {
   });
 });
 
-describe("fontLicenses（Vite の plugin）", () => {
-  it("build のときだけ動き、原文と一覧を asset として出す", () => {
-    const root = makeProduct({ "@fontsource/font-a": {} });
-    const plugin = fontLicenses();
+describe("thirdPartyLicenses（Vite の plugin）", () => {
+  it("build のときだけ動き、bundle の npm の package の一覧を licenses/javascript.md に出す（製品の指定を優先する）", () => {
+    const plugin = thirdPartyLicenses();
     expect(plugin.apply).toBe("build");
+    expect(plugin.config({})).toEqual({ build: { license: { fileName: "licenses/javascript.md" } } });
+    expect(plugin.config({ build: { license: false } })).toBeUndefined();
+  });
+
+  it("書体の原文と一覧を asset として出す", () => {
+    const root = makeProduct({ "@fontsource/font-a": {} });
+    const plugin = thirdPartyLicenses();
     plugin.configResolved({ root });
     const emitted: Array<{ fileName: string; source: string }> = [];
     plugin.generateBundle.call({
@@ -76,6 +82,6 @@ describe("fontLicenses（Vite の plugin）", () => {
         return file.fileName;
       },
     });
-    expect(emitted.map((file) => file.fileName)).toEqual(["fonts/licenses/font-a-OFL.txt", "fonts/licenses/README.txt"]);
+    expect(emitted.map((file) => file.fileName)).toEqual(["licenses/fonts/font-a-OFL.txt", "licenses/fonts/README.txt"]);
   });
 });

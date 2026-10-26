@@ -25,9 +25,9 @@
     },
     "./tokens.css": "./dist/tokens.css",
     "./styles.css": "./dist/tokens.css",
-    "./vite/font-licenses": {
-      "types": "./vite/font-licenses.d.mts",
-      "default": "./vite/font-licenses.mjs"
+    "./vite/third-party-licenses": {
+      "types": "./vite/third-party-licenses.d.mts",
+      "default": "./vite/third-party-licenses.mjs"
     }
   },
   "main": "./dist/index.js",

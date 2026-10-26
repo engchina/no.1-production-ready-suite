@@ -14,8 +14,9 @@
         既定で dev も出す。
 
   python3 scripts/third-party-notices.py check [--repo DIR] [--notices FILE]
-      THIRD-PARTY-NOTICES.md の表（1 列目が `名前`、2 列目が取得元の PyPI / npm の行）と lockfile を突き合わせる。
-      - 表の PyPI / npm の部品が、どの lockfile にも無い（依存から外れた）ときは失敗にする。
+      THIRD-PARTY-NOTICES.md の表（1 列目が `名前`、2 列目が取得元の PyPI / npm の行。名前は `*` の glob でもよい）と
+      lockfile を突き合わせる。
+      - 表の PyPI / npm の部品が、どの lockfile にも無い（dev を含む依存から外れた）ときは失敗にする。
       - npm の package（dev を含む）で、ライセンスが PERMISSIVE に無いものが表に無いときは失敗にする。
       Python のライセンスは uv.lock に無いので、この検査では見ない（手順は THIRD-PARTY-NOTICES.md の
       「一覧の更新の手順」）。
@@ -25,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import fnmatch
 import json
 import re
 import subprocess
@@ -169,37 +171,43 @@ def is_permissive(expression: str) -> bool:
     return expr in PERMISSIVE
 
 
-ROW = re.compile(r"^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|")
-
-
 def notice_rows(text: str) -> set[tuple[str, str]]:
-    """表の 1 列目が `名前`、2 列目が PyPI / npm の行から (ecosystem, 名前) を集める。"""
+    """表の 1 列目が `名前`（複数・`*` の glob も可）、2 列目が PyPI / npm の行から (ecosystem, 名前) を集める。"""
     rows: set[tuple[str, str]] = set()
     for line in text.splitlines():
-        match = ROW.match(line.strip())
-        if not match:
+        cells = [cell.strip() for cell in line.strip().split("|")]
+        if len(cells) < 4 or cells[0] or not cells[1].startswith("`"):
             continue
-        source = match.group(2).split()[0].lower() if match.group(2).split() else ""
-        ecosystem = NOTICE_ECOSYSTEMS.get(source)
+        ecosystem = NOTICE_ECOSYSTEMS.get(cells[2].lower())
         if ecosystem is None:
             continue
-        for name in match.group(1).split(","):
-            name = name.strip()
+        for name in re.findall(r"`([^`]+)`", cells[1]):
             rows.add((ecosystem, normalize_python_name(name) if ecosystem == "python" else name))
     return rows
 
 
+def _key(entry: Entry) -> tuple[str, str]:
+    if entry.ecosystem == "python":
+        return ("python", normalize_python_name(entry.name))
+    return ("npm", entry.name)
+
+
 def check(repo: Path, notices: Path) -> list[str]:
     rows = notice_rows(notices.read_text(encoding="utf-8"))
-    entries = inventory(repo, include_dev=False)
-    present = {("python", normalize_python_name(e.name)) if e.ecosystem == "python" else ("npm", e.name) for e in entries}
+    entries = inventory(repo, include_dev=True)
+    present = {_key(e) for e in entries}
+
+    def listed(key: tuple[str, str]) -> bool:
+        return any(eco == key[0] and fnmatch.fnmatchcase(key[1], pattern) for eco, pattern in rows)
+
     errors = [
-        f"{notices.name} の {eco} の部品 {name} が、どの lockfile の依存にもありません（表から外してください）"
-        for eco, name in sorted(rows - present)
+        f"{notices.name} の {eco} の部品 {pattern} が、どの lockfile の依存にもありません（表から外してください）"
+        for eco, pattern in sorted(rows)
+        if not any(k[0] == eco and fnmatch.fnmatchcase(k[1], pattern) for k in present)
     ]
     flagged: dict[str, set[str]] = {}
     for e in entries:
-        if e.ecosystem == "npm" and not is_permissive(e.license) and ("npm", e.name) not in rows:
+        if e.ecosystem == "npm" and not is_permissive(e.license) and not listed(_key(e)):
             flagged.setdefault(f"{e.name}（{e.license or 'ライセンスの記載なし'}）", set()).add(e.lockfile)
     for label, locks in sorted(flagged.items()):
         errors.append(
