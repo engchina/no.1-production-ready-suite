@@ -349,10 +349,10 @@ class Settings:
     # token・数秒で終わる。まれにモデルが同じ出力を繰り返して回答の上限まで書き続け、1 回で数分かかって段全体を
     # 待たせるため、役目に合わせて抑え、超えた文書は選ばずに続ける（工程に残す）。0 は抑えない。
     # 条の選択の 2 段目: 1 段目で選んだ条と同じ章の条と、選んだ条の番号を書き出しで名指しする別の章の条（附則の特例・
-    # 読替えなど。#3517）を合わせて article_catalog_refine_candidates 件まで本文の書き出しつきで見せ、足りない論点の条を
-    # 文書ごとに article_catalog_refine_articles 件まで足させる。条の名前が質問の語から遠い条（重なったときの扱い・
-    # 特例など）を拾う。書き出しを注入した呼び出し元（`AnswerDependencies.article_leads`）で
-    # だけ動く。0 は 2 段目を行わない。
+    # 読替えなど。#3517）を合わせて article_catalog_refine_candidates 件まで（名指しの条はその 3 分の 1 まで。#3531）
+    # 本文の書き出しつきで見せ、足りない論点の条を文書ごとに article_catalog_refine_articles 件まで足させる。条の名前が
+    # 質問の語から遠い条（重なったときの扱い・特例など）を拾う。書き出しを注入した呼び出し元
+    # （`AnswerDependencies.article_leads`）でだけ動く。0 は 2 段目を行わない。
     article_catalog_refine_articles: int = 6
     article_catalog_refine_candidates: int = 60
     article_catalog_output_token_cap: int = 4096

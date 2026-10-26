@@ -310,14 +310,15 @@ def referencing_articles(catalog: ArticleCatalog, picked: Sequence[int], pool: S
 def refine_candidates(same_chapter: Sequence[int], referencing: Sequence[int], *, limit: int) -> list[int]:
     """2 段目に見せる候補の行の番号（名指しする条 → 同じ章の条の順。合わせて `limit` 件まで）。
 
-    枠は同じ章の条に 3 分の 2（`limit - limit // 3`）、名指しする条に残りを先に割り当て、片方が枠より少なければ
-    余りをもう片方に回す（どちらかが多くても、もう片方を締め出さない）。名指しする条は書き出しの先頭で名指しする
-    条を先に、同じ章の条は目録の順に取る。
+    枠は同じ章の条に 3 分の 2（`limit - limit // 3`）、名指しする条に残り（`limit // 3`）を割り当てる。名指しする条は
+    同じ章の条が少なくても枠を超えない（改正の附則の施行の条など、番号を挙げるだけの条が余りを埋めるため。#3531）。
+    名指しする条が枠より少なければ、その余りは同じ章の条が使う。名指しする条は書き出しの先頭で名指しする条を先に、
+    同じ章の条は目録の順に取る。
     """
     if limit <= 0:
         return []
-    same = list(same_chapter[: max(limit - limit // 3, limit - len(referencing))])
-    refs = list(referencing[: limit - len(same)])
+    refs = list(referencing[: limit // 3])
+    same = list(same_chapter[: limit - len(refs)])
     return [*refs, *same]
 
 
@@ -367,7 +368,7 @@ def refine_articles(
     条の名前が質問の語から遠い条（重なったときの扱い・特例など）は、目録の行（名前）だけでは選ばれにくい。
     選んだ条の章に絞って書き出しを見せる（粗い選択から細かい選択へ）。本則の条の要件を変える特例・読替え・準用の条は
     附則など別の章にあり、選んだ条の番号を書き出しで名指しするので、その条も候補にする（#3517。番号の照合は目録の行の
-    条の番号で行い、語の一覧は使わない）。候補は合わせて `candidate_limit` 件まで（`refine_candidates` の割り当て）。
+    条の番号で行い、語の一覧は使わない）。候補は合わせて `candidate_limit` 件まで、名指しの条はその 3 分の 1 まで（`refine_candidates`）。
     書き出しは同じ章の条と、別の章の条の行をまとめて 1 回で読む（LLM の呼び出しは増やさない）。
 
     足した条（(section_id, 目録の行)）と、候補にした名指しの条を返す。足す条が無ければ空の結果、LLM の呼び出しに
