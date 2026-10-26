@@ -3839,7 +3839,7 @@ import {
 | `RunProcessDetails` | `title?`（既定「処理の詳細」）・`description?`・`defaultOpen?`・`testId?`（`<details>`）・`summaryTestId?` | 処理の経過に属する技術的な詳細（回答の記録の詳細・識別子・生成した SQL・イベントの記録）を、処理の経過のタイムラインの後ろに既定で閉じて置く `Disclosure` の plain・sm（`data-run-process-details`。#2325）。実行の詳細の「処理の経過」の節と、チャット・RAG 検索の `ChatProgress` の `footer` で同じ部品・名前・位置にする |
 | `RunDetailLayout` | `summary`・`answer?`・`timeline?`・`evidence?`・`feedback?`・`technical?` | 節の順を固定（`data-run-detail`）。`technical` は処理の経過に属さない技術的な節（Agent の監査ログ）だけ。読み込み中は `RunDetailSkeleton` |
 
-- 書式: `formatRunDateTime(iso, { seconds })`・`formatRunDuration(ms)`・`formatRunTokens(n)`。期間: `RUN_PERIODS`・`runPeriodSince(period)`。実行者: `RUN_EXECUTOR_FILTERS`。
+- 書式: `formatRunDateTime(iso, { seconds })`・`formatRunDuration(ms)`・`formatRunTokens(n)`。期間: `RUN_PERIODS`・`DEFAULT_RUN_PERIOD`（既定の過去 7 日。初期値・「条件をクリア」・既定と違う条件の判定に使う。#3386）・`runPeriodSince(period)`。期間だけで絞って 0 件でそれより前の実行があるときは `RunHistoryPeriodEmptyState`（`period`・`onShowAll`・`labels`・`testId`）。実行者: `RUN_EXECUTOR_FILTERS`。
 - 単体テストは `packages/ui/tests/run-history.test.tsx`。
 
 ---
