@@ -108,6 +108,68 @@ def test_build_navigation_tree_reconstructs_hierarchy() -> None:
     assert chapter1.element_ids == []
 
 
+def test_navigation_sections_keep_body_parents_when_toc_comes_first() -> None:
+    """目次の要素が章の見出しを本文より先に持っても、本文の節は本文の章の子になる（#3511）。"""
+    extraction = _extraction(
+        [
+            _element(text="目次", element_id="t0", section_path=["文書", "目次"], order=0, page=1),
+            _element(
+                text="第1章 総則",
+                element_id="t1",
+                section_path=["文書", "第1章 総則"],
+                order=1,
+                page=1,
+            ),
+            _element(
+                text="第2章 手続",
+                element_id="t2",
+                section_path=["文書", "第2章 手続"],
+                order=2,
+                page=1,
+            ),
+            _element(
+                text="1.1 の本文",
+                element_id="b1",
+                section_path=["文書", "第1章 総則", "1.1 目的"],
+                order=3,
+                page=2,
+            ),
+            _element(
+                text="2.1 の本文",
+                element_id="b2",
+                section_path=["文書", "第2章 手続", "2.1 受付"],
+                order=4,
+                page=3,
+            ),
+            _element(
+                text="2.1.1 の本文",
+                element_id="b3",
+                section_path=["文書", "第2章 手続", "2.1 受付", "2.1.1 確認"],
+                order=5,
+                page=3,
+            ),
+        ]
+    )
+
+    nodes = build_navigation_tree(extraction)
+    sections = sections_from_navigation(nodes)
+
+    assert [section.title for section in sections] == [
+        "文書",
+        "目次",
+        "第1章 総則",
+        "1.1 目的",
+        "第2章 手続",
+        "2.1 受付",
+        "2.1.1 確認",
+    ]
+    assert [section.level for section in sections] == [1, 2, 2, 3, 2, 3, 4]
+    # 親子の link は並びと同じ（並びから決まる親と一致する）。
+    by_title = {node.title: node for node in nodes}
+    assert by_title["1.1 目的"].parent_section_id == by_title["第1章 総則"].section_id
+    assert by_title["2.1.1 確認"].parent_section_id == by_title["2.1 受付"].section_id
+
+
 def test_navigation_section_id_is_stable() -> None:
     assert navigation_section_id(("第1章", "概要")) == navigation_section_id(("第1章", "概要"))
     assert navigation_section_id(("第1章",)) != navigation_section_id(("第2章",))

@@ -57,6 +57,10 @@ def build_navigation_tree(extraction: StructuredExtraction) -> list[DocumentNavi
     各 element の section_path の全 prefix を node 化し、祖先 node が leaf だけの文書でも
     欠落しないようにする。element_ids は完全一致 path の node にのみ付与し、page 範囲は
     subtree 全体を覆うよう全 prefix へ伝播する。
+
+    node は木の前順（親の直後にその子孫。根・兄弟は最初に現れた順）に並べる。平らな一覧
+    （``sections_from_navigation``）は並び順と階層で親を決めるので、目次の要素が章の見出しを
+    本文より先に持つ文書でも、本文の節が目次の最後の章の子にならない（#3511）。
     """
     accumulators: dict[tuple[str, ...], _NodeAccumulator] = {}
     order: list[tuple[str, ...]] = []
@@ -86,7 +90,7 @@ def build_navigation_tree(extraction: StructuredExtraction) -> list[DocumentNavi
             parent.child_ids.append(child_id)
 
     nodes: list[DocumentNavigationNode] = []
-    for path in order:
+    for path in _preorder(order):
         acc = accumulators[path]
         nodes.append(
             DocumentNavigationNode(
@@ -102,6 +106,24 @@ def build_navigation_tree(extraction: StructuredExtraction) -> list[DocumentNavi
             )
         )
     return nodes
+
+
+def _preorder(order: Sequence[tuple[str, ...]]) -> list[tuple[str, ...]]:
+    """最初に現れた順の path の列を、木の前順（親の直後に子孫）に並べ直す。"""
+    children: dict[tuple[str, ...], list[tuple[str, ...]]] = {}
+    roots: list[tuple[str, ...]] = []
+    for path in order:
+        if len(path) == 1:
+            roots.append(path)
+        else:
+            children.setdefault(path[:-1], []).append(path)
+    ordered: list[tuple[str, ...]] = []
+    stack = list(reversed(roots))
+    while stack:
+        path = stack.pop()
+        ordered.append(path)
+        stack.extend(reversed(children.get(path, [])))
+    return ordered
 
 
 def _node_source_text(
