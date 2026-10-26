@@ -59,13 +59,7 @@ from app.config import (
 from app.db_degradation import load_or_degrade
 from app.rag.bulk_ingestion import BulkIngestionStore, accept_bulk_ingestion
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
-from app.rag.chunking_small_to_big import (
-    SMALL_TO_BIG_FALLBACK_STRATEGY,
-    SMALL_TO_BIG_STRATEGY,
-    build_parent_child_chunks,
-    mark_small_to_big_fallback,
-    small_to_big_fallback_needed,
-)
+from app.rag.chunking_small_to_big import SMALL_TO_BIG_STRATEGY, build_parent_child_chunks
 from app.rag.chunking_strategy import resolve_small_to_big_params
 from app.rag.document_cleanup import DocumentCleanupOutcome, run_document_cleanup
 from app.rag.document_crop import (
@@ -1475,12 +1469,9 @@ async def preview_document_recipe_chunks(
         (request or DocumentChunkPreviewRequest()).settings_overrides(),
     )
     extraction = StructuredExtraction.model_validate(artifact["extraction_json"])
-    # Docling の解析結果がない文書では、親子階層（small-to-big）の代わりに構造認識で分割する(#300)。
-    small_to_big_fallback = small_to_big_fallback_needed(
-        candidate.rag_chunking_strategy, extraction
-    )
     try:
-        if candidate.rag_chunking_strategy == SMALL_TO_BIG_STRATEGY and not small_to_big_fallback:
+        # 親子階層（small-to-big）は、どの解析の結果でも親子に分割する(#3377)。
+        if candidate.rag_chunking_strategy == SMALL_TO_BIG_STRATEGY:
             chunks = build_parent_child_chunks(
                 extraction,
                 source_name=detail.file_name,
@@ -1489,18 +1480,12 @@ async def preview_document_recipe_chunks(
         else:
             chunks = chunk_extraction_with_strategy(
                 extraction,
-                strategy=(
-                    SMALL_TO_BIG_FALLBACK_STRATEGY
-                    if small_to_big_fallback
-                    else candidate.rag_chunking_strategy
-                ),
+                strategy=candidate.rag_chunking_strategy,
                 chunk_size=candidate.rag_chunk_size,
                 overlap=candidate.rag_chunk_overlap,
                 min_chars=candidate.rag_chunk_min_chars,
                 delimiter=candidate.rag_chunk_delimiter,
             )
-            if small_to_big_fallback:
-                chunks = mark_small_to_big_fallback(chunks)
     except RecordBoundaryError as exc:
         raise HTTPException(status_code=422, detail=record_boundary_failure_message(exc)) from exc
     except ValueError as exc:

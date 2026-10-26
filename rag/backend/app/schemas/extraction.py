@@ -36,6 +36,8 @@ from rag_parser_core.extraction import (
     normalize_document_elements,
     numbered_heading,
     page_marker,
+    section_path_items,
+    strip_formatting_marks,
 )
 
 __all__ = [
@@ -53,6 +55,8 @@ __all__ = [
     "MARKDOWN_HEADING",
     "numbered_heading",
     "page_marker",
+    "section_path_items",
+    "strip_formatting_marks",
     "SEARCHABLE_ELEMENT_KINDS",
     "TABLE_LINE",
     "DocumentElement",

@@ -136,7 +136,7 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
 
 ### 既定の解析エンジン（Docling）で扱える形式と、それ以外の形式の取り込み方（#286）
 
-既定の文書解析エンジン **Docling**（`parser-docling`。親子階層の分割に使うレイアウト解析）は **PDF と画像だけ**を解析する。
+既定の文書解析エンジン **Docling**（`parser-docling`。見出し・表・図の領域を持つレイアウト解析）は **PDF と画像だけ**を解析する。
 
 | 形式 | 既定（Docling）のまま | 取り込み方 |
 |---|---|---|
@@ -213,6 +213,19 @@ ln -s "${NEW}" "${OLD}"
 移行後に backend を起動し、警告ログが出ないこと、既存文書のプレビュー / 再取込ができることを確認してから退避ディレクトリを削除する。
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `RAG_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
+
+## 既存環境の更新手順（#3377 親子階層の分割をどの解析の結果でも行う）
+
+文書分割の親子階層（`small_to_big`。既定）を、Docling のレイアウトの記録（`layout_records`）を持つ文書に限らず、どの解析の結果でも行うようにした（[rag-engine.md の「使い方」2.](./rag-engine.md)）。これまでは、それ以外の文書（標準の解析の Markdown・テキスト、Unstructured・OCI などの解析の結果、構造化レコード JSONL の CSV・Word など）を構造認識（`structure_aware`）へ縮退していた（#300）。
+
+- 変わるもの: 親子階層を選んだ、レイアウトの記録・Excel の行の記録・XML ツリー JSON 以外の文書の分割。子は構造認識と同じ要素の分割を子の目標文字数（`RAG_CHUNK_CHILD_TARGET_CHARS`。表は `RAG_CHUNK_TABLE_CHILD_TARGET_CHARS`）で行い、親は節をまたがずに `RAG_CHUNK_PARENT_TARGET_CHARS` / `RAG_CHUNK_PARENT_MAX_CHILDREN` / `RAG_CHUNK_PARENT_MAX_PAGES` の中でまとめる。構造化レコード JSONL は 1 記録 = 1 子。新しい chunk には `chunk_strategy_fallback_reason` を付けない。取込の trace は `chunk_parent_source` に親子を作った入力を残す。
+- 変わらないもの: Docling のレイアウトの文書（Office→PDF を含む）・Excel の行の記録（1 行 = 1 子。#1349）・XML ツリー JSON（#2024）の親子、親子階層以外の分割方式（`fixed_delimiter` の 1 記録 = 1 chunk を含む）。
+- 構造認識などの本文の分割で、文の途中の chunk の境目に収まらなかった文だけの小さな chunk を作らず、次の chunk の先頭にするようにした（同じ本文の chunk の数と境目が変わることがある）。
+
+schema の変更・migration・DDL は無い。解析の結果（抽出）は変わらないので、再解析は要らない。
+
+1. backend を更新して再起動すると、それ以降に作る Chunk から新しい分割になる。
+2. 既存の chunk は自動では作り直さない（今の chunk のまま検索の対象に残る）。以前に縮退して作った chunk（`chunk_strategy_fallback_reason=layout_missing`）は、文書詳細の Chunk タブに「親子階層で分割されていない Chunk です」と表示する。親子階層にするには、文書の詳細のレシピで Chunk の工程から処理し直す（抽出は使い回す）。chunk が変わるので embedding をやり直す（OCI Generative AI の利用が増える）。
 
 ## 既存環境の更新手順（#3369 音声・動画の取込の削除）
 
@@ -1124,8 +1137,8 @@ SELECT NVL(JSON_VALUE(profile_config, '$.query.answer_engine'), '(継承)') AS a
 新しい回答は、親子で分割した chunk（`small_to_big`。画面の表示名は「親子階層（small-to-big）」）を前提にする。親の本文（見出しの節）を回答の文脈にし、表は行グループごとに列見出しを付けた子で探し、根拠の元の要素（`source_record_refs`）から図の切り出しと要素ごとの強調を行う。そのため、#594 で `RAG_CHUNKING_STRATEGY` の既定を `structure_aware` から `small_to_big` に変えた。
 
 - `backend/.env` に `RAG_CHUNKING_STRATEGY` を書いていない環境（文書分割の画面で保存したことがない環境）では、レシピで分割方式を上書きしていない文書は、次に Chunk を作るときから親子で分割する。既存の chunk は自動では作り直さない。
-- 親子の分割は Docling（PDF と画像）の解析結果を入力にする。解析結果が Docling でない文書（Unstructured・dots.ocr・OCI など）は、今までどおり構造認識で分割し、文書詳細の Chunk タブに「構造認識で分割しました」と表示する（[rag-engine.md の「使い方」2.](./rag-engine.md)）。
-- 構造認識で作った既存の chunk も、そのまま検索と回答に使える（同じまとまりの chunk をつないで親の代わりにする）。ただし、親が節の区切りにならない・表の列見出しを繰り返さない・根拠の図を切り出せない、ため回答の文脈が粗くなる。回答の品質を上げるには、Docling で解析した文書の Chunk を再作成する（chunk が変わるので embedding をやり直す。OCI Generative AI の利用が増える）。
+- 親子の分割はどの解析の結果でも行う（#3377。Docling のレイアウトがあればその記録から、無ければ抽出の見出し・節・頁の構造から親子を作る。[rag-engine.md の「使い方」2.](./rag-engine.md)）。
+- 構造認識で作った既存の chunk も、そのまま検索と回答に使える（同じまとまりの chunk をつないで親の代わりにする）。ただし、親が節の区切りにならない・表の列見出しを繰り返さない、ため回答の文脈が粗くなる。回答の品質を上げるには、文書の Chunk を親子階層で再作成する（chunk が変わるので embedding をやり直す。OCI Generative AI の利用が増える）。
 - 構造認識のまま使う場合は、`backend/.env` に `RAG_CHUNKING_STRATEGY=structure_aware` を書く（取込・検索・回答設定 › 文書分割で構造認識を選んで保存しても同じ）。
 
 ## 既存環境の更新手順（#588 全文検索の分割方式の統合）
@@ -1836,7 +1849,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 
 ## 運用パラメータ
 
-- `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP`: 通常の構造認識・再帰文字・固定長では、既定の 800 / 120 から評価する。親子階層（small-to-big）はこの 2 つを使わず、`RAG_CHUNK_CHILD_TARGET_CHARS` などの 5 項目で分割する(解析結果が Docling でない文書は構造認識へ縮退し、この 2 つを使う。[rag_poc から移植した機能のガイド](./rag-engine.md#設定一覧))。設定可能範囲は chunk size が 200-32,000 文字、overlap が 0-8,000 文字で、overlap は chunk size 未満にする。
+- `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP`: 通常の構造認識・再帰文字・固定長では、既定の 800 / 120 から評価する。親子階層（small-to-big）はこの 2 つを使わず、どの解析の結果でも `RAG_CHUNK_CHILD_TARGET_CHARS` などの 5 項目で分割する([rag_poc から移植した機能のガイド](./rag-engine.md#設定一覧))。設定可能範囲は chunk size が 200-32,000 文字、overlap が 0-8,000 文字で、overlap は chunk size 未満にする。
 - 見出し単位・ページ単位では、見出し/ページを第一境界として保つため 32,000 / 0 を推奨する。32,000 文字は長大な単位だけを同じ境界内で再分割する安全上限であり、chunk を常に大きくする目標値ではない。[Cohere Rerank 4](https://docs.oracle.com/en-us/iaas/Content/generative-ai/cohere-rerank-4-0.htm) の context は 32,000 token だが、文字数上限と token 上限は同一ではない。
 - `RAG_CONTEXT_GROUP_MAX_CHUNKS`: 回答フローが、根拠の child と同じ `chunk_group_id` の兄弟 chunk を文脈（small-to-big）に足す上限（1〜20、既定 4）。根拠の前後から足す child の数は `RAG_NEIGHBOR_CHILD_COUNT`（[rag-engine.md の設定一覧](./rag-engine.md#設定一覧)）。旧 standard の context の設定（`RAG_CONTEXT_WINDOW_CHARS`・`RAG_CONTEXT_DIVERSITY_LAMBDA`・`RAG_CONTEXT_GROUP_EXPANSION_ENABLED`・`RAG_CONTEXT_NEIGHBOR_WINDOW`・`RAG_CONTEXT_COMPRESSION_*`）と `RAG_QUERY_EXPANSION_*`・`RAG_STREAM_REALTIME_ENABLED` は #595 で削除した（上の「既存環境の更新手順（#595）」）。
 - `RAG_MIN_SIMILARITY`: recall を落としすぎないよう、評価セットで確認して調整する。

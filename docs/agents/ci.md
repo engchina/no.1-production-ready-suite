@@ -21,6 +21,7 @@
 - Dependabot は 3 製品の backend（uv）・frontend（npm）、platform の package（uv・npm。lock だけを上げる）、RAG のサービス、actions を対象にする。公開から 5 日の `cooldown` を置き、npm は monthly（lock の変更は e2e の全件になる）、security updates は entry ごとの group にまとめる。patch / minor は `CI OK` の後に自動 merge される。major・一式の更新・group PR の失敗の扱いは `.github/dependabot.yml` の冒頭。
 - Python の整形は `ruff format`（black は使わない。CI は `uv run ruff format --check .`）。整形だけの commit は `.git-blame-ignore-revs` に載せる。pre-commit（`.pre-commit-config.yaml`）は gitleaks と、commit する backend のファイルへの `ruff format --check` / `ruff check`。
 - root の `scripts/` と `.github/` は `Suite / Scripts` が検査する（shellcheck・`scripts/tests/`・workflow の actionlint・zizmor。zizmor の設定と除外の理由は `.github/zizmor.yml`）。
+- **依存を足す・外すときは [THIRD-PARTY-NOTICES.md](../../THIRD-PARTY-NOTICES.md) も同じ PR でそろえる。** `Suite / Scripts` の `scripts/third-party-notices.py check` が、表の部品が lockfile の依存から外れたときと、npm に permissive でないライセンスの package が増えて表に無いときに失敗する（lockfile の変更でも動く。Python のライセンスは lockfile に無いので、手順は同じ文書の「一覧の更新の手順」。#3392）。
 - `AGENTS.md` の大きさは `Suite / Scripts` の `scripts/check-agents-md-size.sh` が確かめる（直下は 20 KiB、直下と各ディレクトリの `AGENTS.md` の合計は 32 KiB まで。`AGENTS.md`・`docs/agents/` の変更でも動く。#2276）。超えたら詳細を `docs/agents/`（製品は `<製品>/docs/agents/`）へ移す。
 
 ## ローカルの検証の範囲

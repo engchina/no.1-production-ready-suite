@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { RetrievedChunk } from "./api";
-import { matchCitation, matchCitationLine, parseAnswerText, parseCitationLine, resolveCitationLine } from "./answer-text";
+import {
+  citationLocation,
+  matchCitation,
+  matchCitationLine,
+  parseAnswerText,
+  parseCitationLine,
+  resolveCitationLine,
+} from "./answer-text";
 
 describe("parseAnswerText", () => {
   it("回答エンジンの本文を要約・節・説明・根拠に分ける", () => {
@@ -163,6 +170,16 @@ function chunk(fileName: string, pageStart?: number, pageEnd?: number): Retrieve
     metadata,
   };
 }
+
+describe("citationLocation", () => {
+  // #3353: 長いファイル名を省略しても、位置（頁・シート）は省略せずに出す。
+  it("ファイル名の後ろの位置を返し、位置が無い・ファイル名が読めないときは undefined", () => {
+    expect(citationLocation("根拠：文書 A.pdf p.3", "文書 A.pdf")).toBe("p.3");
+    expect(citationLocation("根拠：表 B.xlsx シート「集計」A3:D6", "表 B.xlsx")).toBe("シート「集計」A3:D6");
+    expect(citationLocation("根拠：文書 A.pdf", "文書 A.pdf")).toBeUndefined();
+    expect(citationLocation("根拠：文書 A.pdf p.3", null)).toBeUndefined();
+  });
+});
 
 describe("parseCitationLine", () => {
   it("根拠の行のファイル名と頁を読む", () => {

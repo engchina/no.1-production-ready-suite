@@ -941,8 +941,8 @@ class Settings(
         default="small_to_big",
         description=(
             "chunks 段階の分割戦略(Chunking アダプター)。"
-            "small_to_big(既定)は親子階層(small-to-big。Docling の解析結果を使う。"
-            "解析結果が Docling でない文書は structure_aware で分割する)、"
+            "small_to_big(既定)は親子階層(small-to-big。どの解析の結果でも、"
+            "見出し・節・頁の構造から検索用の子と回答の文脈の親を作る)、"
             "structure_aware は element/section/table 認識、recursive_character は固定長、"
             "markdown_heading は章節単位、page_level はページ単位、"
             "fixed_size は章節・文境界を無視した純粋な固定長分割、"

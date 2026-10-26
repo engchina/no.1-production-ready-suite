@@ -14,6 +14,7 @@ import type { RetrievedChunk } from "@/lib/api";
 import { answerPassageLabels, answerPassages } from "@/lib/answer-passages";
 import {
   answerFormat,
+  citationLocation,
   parseAnswerText,
   parseCitationLine,
   resolveCitationLine,
@@ -123,6 +124,7 @@ export function AnswerText({
       : {
           key: citation,
           label: citation,
+          location: citationLocation(citation, ref?.fileName),
           ariaLabel: t("search.answerText.openCitation", { citation }),
           onOpen: () => source.open(target),
         };

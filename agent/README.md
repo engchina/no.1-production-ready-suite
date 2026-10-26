@@ -13,6 +13,8 @@ Skill（SKILL.md・references/・宣言・画面）→ Skill Registry
        └─ Run → 組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI）→ 承認・監査・成果物
 ```
 
+第三者の部品のライセンスの通知（OCI SDK の依存の LGPL の部品・Apache-2.0 の NOTICE・書体など）は root の [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md) にあります。
+
 ## 主要機能
 
 - 業務 Agent: 業務指示、説明、有効状態、`skill_ids`、使うモデル（`model_id`。空なら既定のテキストモデル）。
