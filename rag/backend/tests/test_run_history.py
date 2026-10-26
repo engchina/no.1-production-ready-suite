@@ -38,6 +38,7 @@ from app.rag.request_context import (
     set_audit_request_context,
 )
 from app.rag.run_history import RunRecorder, answer_verification, search_run_conditions
+from app.rag.run_usage import run_usage_totals
 from app.schemas.search import SearchRequest, StorageFailure
 from tests.security_support import enable_production_auth, login, login_configured_admin
 from tests.span_progress_support import RecordingTrace
@@ -1211,8 +1212,79 @@ def test_detail_api_returns_the_model_usage(
     )
     detail = client.get("/api/history/runs/run-usage", headers=viewer)
     assert detail.status_code == 200, detail.text
-    usage = detail.json()["data"]["usage"]
+    data = detail.json()["data"]
+    usage = data["usage"]
     if expected is None:
         assert usage is None
+        assert (data["total_tokens"], data["usage_measurement"]) == (None, None)
     else:
         assert {key: usage[key] for key in expected} == expected
+        # 詳細の一覧の 2 つの値は、読んだ利用量の全体と同じ。
+        assert (data["total_tokens"], data["usage_measurement"]) == (
+            usage["total_tokens"],
+            usage["measurement"],
+        )
+
+
+def test_list_api_returns_the_usage_totals_without_reading_the_stages(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """一覧の行は合計の token と計測の状態を返す（#3466）。
+
+    SQL は `stages_json` の全体を読まず、`JSON_VALUE` で 2 つの値だけを取り出す。記録の無い
+    実行（この機能より前・形の違う記録）は未計測（None。0 にしない）、LLM を呼ばなかった実行は
+    実測の 0、一部の呼び出しの利用量が無い実行は partial。
+    """
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("viewer", ["menu.history"])
+    rows = [
+        _row("run-new", usage_total_tokens=12345, usage_measurement="complete"),
+        _row("run-partial", usage_total_tokens=330, usage_measurement="partial"),
+        _row("run-no-llm", usage_total_tokens=0, usage_measurement="complete"),
+        # 計測の状態だけがあって合計の無い記録は 0（`RunModelUsage` の既定と同じ）。
+        _row("run-no-total", usage_total_tokens=None, usage_measurement="complete"),
+        _row("run-legacy", usage_total_tokens=None, usage_measurement=None),
+        _row("run-broken", usage_total_tokens=5, usage_measurement="unknown"),
+    ]
+    pool = _capture(monkeypatch, [rows, [{"count_value": len(rows)}]])
+
+    response = client.get("/api/history/runs", headers=login(client, "viewer"))
+
+    assert response.status_code == 200, response.text
+    items = response.json()["data"]["items"]
+    assert [
+        (item["run_id"], item["total_tokens"], item["usage_measurement"]) for item in items
+    ] == [
+        ("run-new", 12345, "complete"),
+        ("run-partial", 330, "partial"),
+        ("run-no-llm", 0, "complete"),
+        ("run-no-total", 0, "complete"),
+        ("run-legacy", None, None),
+        ("run-broken", None, None),
+    ]
+    for item in items:
+        assert not {"usage_total_tokens", "usage"} & item.keys()
+    list_sql = pool.connection.calls[0].statement
+    assert "JSON_VALUE(r.stages_json, '$.usage.total_tokens'" in list_sql
+    assert "JSON_VALUE(r.stages_json, '$.usage.measurement'" in list_sql
+    # 処理の段・trace の記録を含む JSON の全体は一覧で読まない（2 つの JSON_VALUE の引数だけ）。
+    assert list_sql.count("stages_json") == 2
+
+
+@pytest.mark.parametrize(
+    ("total", "measurement", "expected"),
+    [
+        (1234, "complete", (1234, "complete")),
+        (1234.0, "partial", (1234, "partial")),
+        (None, "complete", (0, "complete")),
+        (-1, "complete", (0, "complete")),
+        (True, "complete", (0, "complete")),
+        (10, None, (None, None)),
+        (10, "other", (None, None)),
+    ],
+    ids=["int", "float", "no-total", "negative", "bool", "legacy", "unknown"],
+)
+def test_run_usage_totals(
+    total: object, measurement: object, expected: tuple[object, object]
+) -> None:
+    assert run_usage_totals(total, measurement) == expected
