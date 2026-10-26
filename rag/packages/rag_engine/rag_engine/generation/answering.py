@@ -217,6 +217,7 @@ from rag_engine.knowledge.runtime_knowledge import (
 from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput, RerankTextRank
 from rag_engine.models.storage import AdbHybridSearchUnavailable
 from rag_engine.resources.runtime import current_profile
+from rag_engine.resources.tracing import observe_call
 from rag_engine.retrieval.article_catalog import is_added_catalog_article
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.character_forms import fold_model_view, fold_width
@@ -269,6 +270,7 @@ from rag_engine.retrieval.scope import (
     AdbSearchReadiness,
     normalize_retrieval_scope,
 )
+from rag_engine.retrieval.search_stages import ORIGINAL_QUESTION_SEARCH_STAGE
 from rag_engine.retrieval.task_contract import filter_queries, query_rejection_reason, task_contract
 from rag_engine.retrieval.text_search_tokenizer import (
     MAX_TEXT_SEARCH_TOKENS,
@@ -3615,7 +3617,9 @@ def _original_question_children(
     options = {key: value for key, value in search_options.items() if key not in {"extra_text_queries", "vector_only_queries"}}
     options.update(retrieval_queries=[original], vector_only_queries=(original,))
     try:
-        result = search_adb_hybrid_chunks(inquiry_conditions=inquiry_conditions, **options)
+        # 文書の検索の中の段（処理の経過。#3475）。検索の埋め込み・DB の検索はこの段の子になる。
+        with observe_call("stage", ORIGINAL_QUESTION_SEARCH_STAGE):
+            result = search_adb_hybrid_chunks(inquiry_conditions=inquiry_conditions, **options)
     except Exception as exc:
         logger.warning("article catalog original question search failed", exc_info=True)
         # 元の質問の候補を足さずに続けたことを、呼び出し元の診断に残す（#3286）。
@@ -3829,14 +3833,15 @@ def _catalog_article_children(
     if not catalogs:
         # 候補に条で構成された文書が無い質問は、範囲の文書の一覧も読まない（LLM・DB を呼ばない）。
         return list(ranked_children), []
-    # 検索の候補に出ない文書（手続の一般的な規則の文書など）は、範囲の文書の一覧から LLM が選んで足す。
-    known = {catalog.document_id for catalog in catalogs}
-    extra = _scope_catalog_documents(question, settings, known)
-    scope_failed = extra is None
-    extra = extra or []
-    if extra:
-        catalogs += list(load_catalogs(document_ids=extra, limit=len(extra), settings=settings))
     with _execution_step("条の選択", "候補の文書の条の目録から、質問の根拠になる条を選び、その条の根拠を候補に加えます。") as step:
+        # 検索の候補に出ない文書（手続の一般的な規則の文書など）は、範囲の文書の一覧から LLM が選んで足す。文書の選択の
+        # LLM と目録の読み込みはこの工程の中で行う（処理の経過で条の選択の子にする。#3475）。
+        known = {catalog.document_id for catalog in catalogs}
+        extra = _scope_catalog_documents(question, settings, known)
+        scope_failed = extra is None
+        extra = extra or []
+        if extra:
+            catalogs += list(load_catalogs(document_ids=extra, limit=len(extra), settings=settings))
         terms = _catalog_terms(question, settings)
         selected, failed, refined, refine_failed = _select_catalog_articles(question, catalogs, settings, terms=terms)
         if terms:
@@ -3984,7 +3989,7 @@ def _keep_trusted_queries(
 
 
 def _record_runtime_knowledge_load(step: _ExecutionStep, runtime_knowledge: RuntimeKnowledgeContext) -> bool:
-    """用語・ルールの読み込みの失敗を工程に記録する。読めていれば True（工程の結果と詳細を続けて書く）。
+    """用語・同義語と回答ルールの読み込みの失敗を工程に記録する。読めていれば True（工程の結果と詳細を続けて書く）。
 
     詳細の行は例外の型の名前だけ（例外の文は path などを含みうる。#3284）。
     """
@@ -4188,15 +4193,16 @@ def answer_question_result(
             step.add(legacy_notice)
         _record_search_readiness(step, readiness, preferred_engine_ids, chunk_run_id)
 
-    # 戦略の LLM の応答を待つ間に、元の質問の検索を先に読む (#1499)。検索の結果は並行にしないときと同じ。
-    prefetch = _start_original_query_prefetch(
-        normalized_question,
-        query_strategy_value,
-        settings,
-        top_k=chunk_top_k,
-        inquiry_conditions=inquiry_conditions,
-    )
     with _execution_step("質問拡張戦略", "原質問の言い回しでは届きにくい資料の表現を補う検索文を作ります。") as step:
+        # 戦略の LLM の応答を待つ間に、元の質問の検索を先に読む (#1499)。検索の結果は並行にしないときと同じ。
+        # 先読みの thread はこの工程の中で文脈を写す（先読みの埋め込み・DB の検索の span をこの工程の子にする。#3475）。
+        prefetch = _start_original_query_prefetch(
+            normalized_question,
+            query_strategy_value,
+            settings,
+            top_k=chunk_top_k,
+            inquiry_conditions=inquiry_conditions,
+        )
         if caller_planned:
             # 呼び出し元が検索文を作った（#2651）。LLM で言い換えを足さない（先読みも始めていない）。
             expansion = replace(base_expansion, generated_queries=trusted_queries)
@@ -4239,8 +4245,8 @@ def answer_question_result(
             inquiry_conditions,
             keyword_trace=keyword_trace,
         )
-        # 用語・同義語に一致したら、一致した用語と別名だけの検索文を足す（#2163）。原質問の後ろに足しただけの
-        # 検索文（用語・ルールの拡張）は長い質問に別名が埋もれ、規定の用語で書かれた根拠に当たりにくい。
+        # 用語・同義語に一致したら、一致した用語と別名だけの検索文を足す（#2163）。原質問の後ろに語を足しただけの
+        # 検索文（expanded_question）は長い質問に別名が埋もれ、規定の用語で書かれた根拠に当たりにくい。
         term_query = matched_term_query(runtime_knowledge)
         candidate_queries = inquiry_retrieval_queries(
             normalized_question,
@@ -4269,13 +4275,14 @@ def answer_question_result(
             report_degraded("text_search_tokenizer", tokenizer_failure)
         sources = {_dedupe_query_key(normalized_question): "原質問"}
         if runtime_knowledge.expanded_question != runtime_knowledge.original_question:
-            sources.setdefault(_dedupe_query_key(runtime_knowledge.expanded_question), "用語・ルール")
+            # 出どころは実際に語を足したもの（用語・同義語 / 回答ルール / 業務ガイド / 確認で選んだ条件。#3490）。
+            sources.setdefault(_dedupe_query_key(runtime_knowledge.expanded_question), runtime_knowledge.query_source)
         for query in expansion.generated_queries:
             sources.setdefault(_dedupe_query_key(query), "呼び出し元" if caller_planned else "質問拡張")
         for query in lexical_queries:
             sources.setdefault(_dedupe_query_key(query), "語彙の補助")
         if term_query:
-            sources.setdefault(_dedupe_query_key(term_query), "用語・同義語")
+            sources.setdefault(_dedupe_query_key(term_query), "用語・同義語だけ")
         step.result(
             f"検索文 {len(retrieval_queries)} 本",
             *(

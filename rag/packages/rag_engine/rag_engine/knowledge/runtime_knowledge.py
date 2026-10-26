@@ -24,6 +24,14 @@ MAX_MATCHED_TERMS = 8
 MAX_MATCHED_RULES = 6
 MAX_TEXT_CHARS = 800
 
+# 原質問に語を足した出どころの表示名（検索文の出どころ・検索語の元に出す）。設定の「プロファイルの知識」のタブと
+# 処理の経過の段の名前にそろえる（#3451・#3490）。
+TERMS_SOURCE_LABEL = "用語・同義語"
+RULES_SOURCE_LABEL = "回答ルール"
+GUIDE_SOURCE_LABEL = "業務ガイド"
+SCOPE_SOURCE_LABEL = "確認で選んだ条件"
+ORIGINAL_QUESTION_SOURCE_LABEL = "原質問"
+
 
 @dataclass(frozen=True)
 class RuntimeTerm:
@@ -105,7 +113,7 @@ class RuntimeRule:
 
 @dataclass(frozen=True)
 class RuntimeKnowledge:
-    """runtime knowledge JSON から読み込んだ用語・ルールと読込状態を保持します。"""
+    """runtime knowledge JSON から読み込んだ用語・同義語と回答ルールと読込状態を保持します。"""
 
     path: Path
     terms: tuple[RuntimeTerm, ...] = ()
@@ -155,6 +163,8 @@ class RuntimeKnowledgeContext:
     # 業務ガイドの題名と案内の行（窓口・引き継ぐ条件・承認。#2792）。本文の「業務ガイドの案内」の節に資料とは分けて出す。
     guide_title: str = ""
     guide_notices: tuple[str, ...] = ()
+    # 確認の質問で利用者が選んだ条件のうち、検索文に足した語(with_scope)。出どころの表示に使う。
+    scope_search_terms: tuple[str, ...] = ()
 
     def with_scope(self, context: str, search_terms: Sequence[str] = ()) -> RuntimeKnowledgeContext:
         """利用者が選んだ条件を足す。検索に足す語は補助の検索文に加える。"""
@@ -163,7 +173,12 @@ class RuntimeKnowledgeContext:
         if not context and not terms:
             return self
         expanded = self.expanded_question + ("\n" + " ".join(terms) if terms else "")
-        return replace(self, expanded_question=expanded, scope_context=context)
+        return replace(
+            self,
+            expanded_question=expanded,
+            scope_context=context,
+            scope_search_terms=(*self.scope_search_terms, *terms),
+        )
 
     @property
     def registered_count(self) -> int:
@@ -186,11 +201,24 @@ class RuntimeKnowledgeContext:
         return self.has_matches or bool(self.error)
 
     @property
+    def expansion_sources(self) -> tuple[str, ...]:
+        """原質問に語を足した出どころの表示名（用語・同義語 / 回答ルール / 業務ガイド / 確認で選んだ条件）。
+
+        実際に語を足したものだけを、足した順に返す。足していなければ空。
+        """
+        sources = _ordered_unique(
+            source for _, source in _expansion_additions(self.original_question, self.matched_terms, self.matched_rules)
+        )
+        if self.scope_search_terms:
+            sources.append(SCOPE_SOURCE_LABEL)
+        return tuple(sources)
+
+    @property
     def query_source(self) -> str:
-        """検索 query の生成元を UI 表示用ラベルで返します。"""
-        if self.expanded_question != self.original_question:
-            return "原質問 + 実行時用語・ルール"
-        return "原質問のみ"
+        """原質問に語を足した検索文の出どころ（例: 「原質問 + 用語・同義語」）。足していなければ「原質問のみ」。"""
+        if self.expanded_question == self.original_question:
+            return "原質問のみ"
+        return " + ".join((ORIGINAL_QUESTION_SOURCE_LABEL, *self.expansion_sources))
 
     def prompt_context(self) -> str:
         """LLM prompt に追加する補助 context 文字列を返します。"""
@@ -299,7 +327,7 @@ def load_runtime_knowledge(
 
 
 def _load_failure(path: Path, exc: BaseException) -> RuntimeKnowledge:
-    """読めない用語・ルール。記録には例外の型の名前だけを残し、例外の文はログだけに出す（#3284）。"""
+    """読めない用語・同義語と回答ルール。記録には例外の型の名前だけを残し、例外の文はログだけに出す（#3284）。"""
     logger.warning("runtime knowledge load failed (%s)", type(exc).__name__, exc_info=True)
     return RuntimeKnowledge(path=path, loaded=False, error=type(exc).__name__, failure=exc)
 
@@ -312,7 +340,7 @@ def build_runtime_knowledge_context(
     term_limit: int = MAX_MATCHED_TERMS,
     rule_limit: int = MAX_MATCHED_RULES,
 ) -> RuntimeKnowledgeContext:
-    """質問に一致した用語・ルールを検索 query と prompt context 用に抽出します。"""
+    """質問に一致した用語・同義語と回答ルールを検索 query と prompt context 用に抽出します。"""
     original_question = _normalize(question)
     knowledge = load_runtime_knowledge(output_dir, configured_path)
     if knowledge.error:
@@ -538,6 +566,8 @@ def _matched_terms(question: str, terms: Sequence[RuntimeTerm], limit: int) -> l
 
 # 呼び出し元が質問に合うと決めて渡したルール（業務ガイド。#1238）。語の一致に関係なく必ず使う。
 PINNED_RULE_TAG = "pinned"
+# 業務ガイドから作ったルールの印（pinned と一緒に付く）。
+SUPPORT_GUIDE_RULE_TAG = "support_guide"
 
 
 def _matched_rules(question: str, rules: Sequence[RuntimeRule], limit: int) -> list[RuntimeRule]:
@@ -559,26 +589,45 @@ def _matched_rules(question: str, rules: Sequence[RuntimeRule], limit: int) -> l
     return [rule for _, _, rule in sorted(scored, key=lambda item: (-item[0], item[1]))[: max(1, limit)]]
 
 
+def _expansion_additions(
+    question: str,
+    matched_terms: Sequence[RuntimeTerm],
+    matched_rules: Sequence[RuntimeRule],
+) -> list[tuple[str, str]]:
+    """原質問に足す語と、その出どころの表示名の組（重複は先に足した方だけ）。"""
+    additions: list[tuple[str, str]] = []
+    for term in matched_terms:
+        additions.extend((label, TERMS_SOURCE_LABEL) for label in term.labels())
+    for rule in matched_rules:
+        if PINNED_RULE_TAG in rule.tags:
+            # 業務ガイドの trigger は手順の検索の手がかり。検索文に足す（#1238）。
+            source = GUIDE_SOURCE_LABEL if SUPPORT_GUIDE_RULE_TAG in rule.tags else RULES_SOURCE_LABEL
+            additions.extend((trigger, source) for trigger in rule.triggers)
+            continue
+        # trigger は別名ではない。ある条件の一致だけで他条件や業務IDを検索へ流さない。
+        additions.extend((label, RULES_SOURCE_LABEL) for label in rule.labels() if _matches(question, label))
+        if any(_matches(rule.title, label) for label in rule.labels() if _matches(question, label)) and not re.search(
+            r"[A-Za-z]{2,}[\w-]*\d", rule.title
+        ):
+            additions.append((rule.title, RULES_SOURCE_LABEL))
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for word, source in additions:
+        text = _clean_text(word)
+        key = _key(text)
+        if not text or key in seen:
+            continue
+        out.append((text, source))
+        seen.add(key)
+    return out
+
+
 def _expanded_question(
     question: str,
     matched_terms: Sequence[RuntimeTerm],
     matched_rules: Sequence[RuntimeRule],
 ) -> str:
-    additions: list[str] = []
-    for term in matched_terms:
-        additions.extend(term.labels())
-    for rule in matched_rules:
-        if PINNED_RULE_TAG in rule.tags:
-            # 業務ガイドの trigger は手順の検索の手がかり。検索文に足す（#1238）。
-            additions.extend(rule.triggers)
-            continue
-        # trigger は別名ではない。ある条件の一致だけで他条件や業務IDを検索へ流さない。
-        additions.extend(label for label in rule.labels() if _matches(question, label))
-        if any(_matches(rule.title, label) for label in rule.labels() if _matches(question, label)) and not re.search(
-            r"[A-Za-z]{2,}[\w-]*\d", rule.title
-        ):
-            additions.append(rule.title)
-    additions = _ordered_unique(additions)
+    additions = [word for word, _ in _expansion_additions(question, matched_terms, matched_rules)]
     if not additions:
         return question
     return f"{question}\n" + " ".join(additions)

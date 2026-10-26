@@ -368,7 +368,7 @@ async def suggest_search_answer_profile_approved_faq(
     )
 
 
-# --- 用語・ルール(runtime knowledge)-------------------------------------------
+# --- 用語・同義語と回答ルール(runtime knowledge)-------------------------------------------
 
 
 def _runtime_knowledge_data(
@@ -388,7 +388,7 @@ def _runtime_knowledge_data(
     response_model=ApiResponse[RuntimeKnowledgeData],
 )
 async def get_runtime_knowledge(search_answer_profile_id: str) -> ApiResponse[RuntimeKnowledgeData]:
-    """検索・回答プロファイルの用語・ルールを返す。"""
+    """検索・回答プロファイルの用語・同義語と回答ルールを返す。"""
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
     payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
@@ -431,7 +431,7 @@ async def post_runtime_knowledge_edit(
 async def post_runtime_knowledge_preview(
     search_answer_profile_id: str, request: RuntimeKnowledgePreviewRequest
 ) -> ApiResponse[RuntimeKnowledgePreviewData]:
-    """照合テスト: 質問に一致する用語・ルールと拡張後の検索文を返す(保存しない)。"""
+    """照合テスト: 質問に一致する用語・同義語と回答ルールと拡張後の検索文を返す(保存しない)。"""
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
     payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)

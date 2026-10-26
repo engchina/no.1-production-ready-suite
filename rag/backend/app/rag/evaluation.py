@@ -303,7 +303,7 @@ class EvaluationRunner:
         前と最後のケースの後に進捗を渡す（評価 job。#390）。
 
         `search_answer_profile_id` を渡すと、ケースごとに検索・回答と同じ解決（参照 KB・回答の
-        設定・用語・ルール・業務ガイド）をしてから回答する（#1249）。渡さなければ全体の既定（#301）。
+        設定・用語・同義語・回答ルール・業務ガイド）をしてから回答する（#1249）。渡さなければ全体の既定（#301）。
         """
         deadline = _deadline(time_budget_seconds)
         effective_settings = evaluation_settings(self._settings, rag_overrides)
