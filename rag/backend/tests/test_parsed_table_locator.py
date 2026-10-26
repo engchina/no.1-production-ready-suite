@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from rag_engine.parsing.rendering import pdf_text_lines_in_bbox
@@ -354,11 +354,11 @@ def test_table_continued_on_the_next_page_counts_rows_after_the_first_page(
         ("parsed_table", 1, 5, 6, None),
     ]
     # 続きの表の 1 つのデータの行は、表全体の格子の行と元の表の表頭の段のセルを持つ。
-    tables = _layout_tables(
-        _two_page_table_extraction(continuation=continuation).parser_artifacts["layout_records"][
-            "records"
-        ]
+    layout = cast(
+        "dict[str, Any]",
+        _two_page_table_extraction(continuation=continuation).parser_artifacts["layout_records"],
     )
+    tables = _layout_tables(layout["records"])
     piece = tables["docling-p2-1"]
     assert (piece.table_index, piece.grid.row_count, piece.grid.header_rows) == (1, 6, 2)
     gamma = _locator(grid_rows_metadata(piece.grid, piece.table_index, piece.grid_rows([3])))
