@@ -118,8 +118,6 @@ function seedDraftAgent(mockApi: MockApi) {
     instructions: "v1 の指示",
     skill_ids: [],
     model_id: "",
-    migration_required: false,
-    tool_names: [],
     enabled: true,
     source: "runtime",
     versioned: true,

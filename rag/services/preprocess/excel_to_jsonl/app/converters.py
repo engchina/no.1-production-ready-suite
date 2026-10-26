@@ -30,7 +30,8 @@ from rag_parser_core.structured_records import (
 )
 
 CONVERTER_NAME = "excel_to_jsonl"
-CONVERTER_VERSION = "v8"
+# 表の下の注記の行を表にせず注記の記録にした（#3566）ので v9。
+CONVERTER_VERSION = "v9"
 
 __all__ = [
     "CONVERTER_NAME",

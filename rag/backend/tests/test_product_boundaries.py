@@ -67,12 +67,9 @@ FOREIGN_DB_OBJECTS = re.compile(
 # Agent の API（RAG に同じ名前の資源は無い）。
 AGENT_API_PATH = re.compile(r"^/(?:api/)?(?:agents|skills)(?:/|$)")
 
-# 既知の例外（ファイル → Issue）。直したら外す。
-KNOWN_EXCEPTIONS: dict[str, str] = {
-    # 合成資料の再構築の CLI が Agent の管理 API で業務 Agent を作成・公開する（#3545）。
-    "backend/app/rag/test_resources_cli.py": "#3545",
-    "backend/tests/test_test_resources_cli.py": "#3545",
-}
+# 既知の例外（ファイル → Issue）。直したら外す。今は無い（合成資料の再構築の CLI は #3545 で
+# Agent の段を Agent の側の命令へ移した）。
+KNOWN_EXCEPTIONS: dict[str, str] = {}
 
 
 def _files(suffix: str) -> list[Path]:
@@ -221,14 +218,15 @@ def test_python_code_stays_within_rag() -> None:
     assert not unexpected, unexpected
 
 
-@pytest.mark.parametrize("relative", sorted(KNOWN_EXCEPTIONS), ids=lambda value: value)
-def test_known_exceptions_still_need_the_exception(relative: str) -> None:
-    """既知の例外のファイルに違反が無くなったら、例外を外す（Issue が閉じられる状態の印）。"""
-    path = RAG / relative
-    assert path.is_file(), (
-        f"{relative} が無い。KNOWN_EXCEPTIONS から外す（{KNOWN_EXCEPTIONS[relative]}）"
-    )
-    assert _violations(path), f"{relative} に違反が無い。KNOWN_EXCEPTIONS から外す"
+def test_known_exceptions_still_need_the_exception() -> None:
+    """既知の例外のファイルに違反が無くなったら、例外を外す（Issue が閉じられる状態の印）。
+
+    例外が無いときも skip にせず通す（parametrize の空の一覧は skip になる）。
+    """
+    for relative, issue in sorted(KNOWN_EXCEPTIONS.items()):
+        path = RAG / relative
+        assert path.is_file(), f"{relative} が無い。KNOWN_EXCEPTIONS から外す（{issue}）"
+        assert _violations(path), f"{relative} に違反が無い。KNOWN_EXCEPTIONS から外す（{issue}）"
 
 
 def test_manifests_do_not_depend_on_other_products_or_the_suite() -> None:

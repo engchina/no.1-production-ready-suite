@@ -3,7 +3,8 @@
 - 領域の分け方（`split_regions`）: 空の行・空の列で格子を再帰的に分け（XY-cut）、表ごとの領域に
   する。セル 1 つの 1 行の領域（表の題名）は下の表につなぎ、セルが 2 つ以上の 1 行の領域と、
   表頭らしい行で始まらない領域（空の行で区切った表の続き）は上の表につなぐ（#2528）。結合セルの
-  範囲は分けない。
+  範囲は分けない。表の下の注記の行（どの行もセルが 1 つで、注記の印で始まるか長い文）だけの領域は、
+  新しい表にせず上の表につなぐ（#3566。注記にするのは表の読み方 `reader`）。
 - 帳票の判定（`detect_form_layout`）: 結合セルを 1 つの単位にし、構造の特徴（結合セルの割合・
   ラベルのすぐ右の値・行どうしの単位の位置の不揃い・列幅の狭さ）を 0〜1 の点数にする。狭い列は
   加点で、普通の列幅の帳票も判定する。位置のそろった格子（普通の表）は点数を下げる（#2530）。
@@ -23,7 +24,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from collections.abc import Set
+from collections.abc import Sequence, Set
 from dataclasses import dataclass
 
 from .choices import is_choice_mark, read_choice, starts_with_choice_mark
@@ -56,7 +57,28 @@ _CONTINUATION_LOOKAHEAD_ROWS = 5
 # これ以上の空の行で離れた領域は、表の続きにしない（表の中の区切りの空の行は 1 行が多い）。
 _NEW_TABLE_GAP_ROWS = 2
 
+# 表の下の注記（#3566）: 注記の印の無い行を注記とみなす文の長さの下限（文字数）。
+NOTE_MIN_CHARS = 30
+# 番号だけの印（「(1)」「1)」）を作る文字。番号だけの印は表の題名の番号と区別できないので、
+# 題名の位置（下の表に近い 1 行）では注記にしない。
+_NUMBERING_CHARS = frozenset("()（）[]［］.．:：、")
+
 Box = tuple[int, int, int, int]
+
+
+def note_marker(text: str, patterns: Sequence[re.Pattern[str]]) -> str | None:
+    """文の先頭の注記の印（``patterns`` は ``ExcelOptions.note_markers``。無ければ None）。"""
+    stripped = text.strip()
+    for pattern in patterns:
+        match = pattern.match(stripped)
+        if match and match.group(0).strip():
+            return match.group(0).strip()
+    return None
+
+
+def is_numbering(marker: str) -> bool:
+    """番号だけの印（「(1)」「1)」）か。"""
+    return all(char.isdigit() or char in _NUMBERING_CHARS for char in marker if not char.isspace())
 
 
 @dataclass(frozen=True)
@@ -213,6 +235,32 @@ def _starts_new_table(index: _RowIndex, above: Box, below: Box) -> bool:
     )
 
 
+def _note_region(
+    index: _RowIndex, above: Box, below: Box, markers: Sequence[re.Pattern[str]]
+) -> bool:
+    """下の領域が上の表の注記の行だけか（#3566）。
+
+    どの行もセルが 1 つ（横の結合を含む）で、注記の印で始まるか長い文。印の無い長い文と番号だけの
+    印（「(1)」）の行は、表のすぐ下（空の行が ``_NEW_TABLE_GAP_ROWS`` 未満）のときだけ注記にする。
+    """
+    rows = index.rows(below)
+    if not rows:
+        return False
+    near = _gap(above[2], below[0], _skipped_rows(index.grid)) < _NEW_TABLE_GAP_ROWS
+    for row in rows:
+        cols = index.row_columns(below, row)
+        if len(cols) != 1:
+            return False
+        text = index.grid.cells[(row, cols[0])].strip()
+        marker = note_marker(text, markers)
+        if marker is None:
+            if not near or len(text) < NOTE_MIN_CHARS:
+                return False
+        elif is_numbering(marker) and not near:
+            return False
+    return True
+
+
 def _skipped_rows(grid: Grid) -> set[int]:
     return grid.hidden_rows - grid.filter_rows
 
@@ -221,8 +269,17 @@ def _skipped_columns(grid: Grid) -> set[int]:
     return grid.hidden_columns
 
 
-def split_regions(grid: Grid, *, gap_rows: int = 1, gap_columns: int = 1) -> list[Box]:
-    """シートを表ごとの領域（上・左・下・右）に分ける（上から下、左から右の順）。"""
+def split_regions(
+    grid: Grid,
+    *,
+    gap_rows: int = 1,
+    gap_columns: int = 1,
+    note_markers: Sequence[re.Pattern[str]] = (),
+) -> list[Box]:
+    """シートを表ごとの領域（上・左・下・右）に分ける（上から下、左から右の順）。
+
+    ``note_markers`` は表の下の注記の行の先頭の印（#3566）。注記の行だけの領域は上の表につなぐ。
+    """
     # 読まなかった非表示の行・列は、表の区切りの空きにしない（#2526）。
     skipped = (_skipped_rows(grid), _skipped_columns(grid))
     boxes = _xy_cut(_occupied(grid), gap_rows, gap_columns, skipped)
@@ -246,6 +303,22 @@ def split_regions(grid: Grid, *, gap_rows: int = 1, gap_columns: int = 1) -> lis
                 other for other in merged if other[2] < box[0] and _overlaps_columns(box, other)
             ]
             title = len(index.row_columns(box, rows[0])) == 1
+            if title and above and below:
+                # 注記の印で始まる 1 行は、下の表の題名にせず上の表の注記にする（#3566）。番号だけの
+                # 印（「(1)」）は題名の番号と区別できないので、上の表に近いときだけ。
+                target_above = max(above, key=lambda other: other[2])
+                target_below = min(below, key=lambda other: other[0])
+                skipped_rows = _skipped_rows(grid)
+                marker = note_marker(
+                    grid.cells[(rows[0], index.row_columns(box, rows[0])[0])], note_markers
+                )
+                if marker is not None and (
+                    not is_numbering(marker)
+                    or _gap(target_above[2], box[0], skipped_rows)
+                    < _gap(box[2], target_below[0], skipped_rows)
+                ):
+                    merged[merged.index(target_above)] = _union(target_above, box)
+                    continue
             if below and (title or not above):
                 target = min(below, key=lambda other: other[0])
                 pending[pending.index(target)] = _union(box, target)
@@ -261,7 +334,9 @@ def split_regions(grid: Grid, *, gap_rows: int = 1, gap_columns: int = 1) -> lis
         above = [other for other in result if other[2] < box[0] and _overlaps_columns(box, other)]
         if above:
             target = max(above, key=lambda other: other[2])
-            if not _starts_new_table(index, target, box):
+            if _note_region(index, target, box, note_markers) or not _starts_new_table(
+                index, target, box
+            ):
                 result[result.index(target)] = _union(target, box)
                 continue
         result.append(box)

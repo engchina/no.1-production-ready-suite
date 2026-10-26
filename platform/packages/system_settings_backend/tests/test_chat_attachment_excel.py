@@ -116,6 +116,31 @@ def test_title_rows_and_multiple_tables_are_separated() -> None:
     assert section.location is not None and section.location.row_start == 1
 
 
+def test_note_rows_below_a_table_are_a_section_not_a_table() -> None:
+    """表の下の注記の行は別の表・列名にせず、注記の節にする（#3566）。文は合成。"""
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.title = "一覧"
+    worksheet.append(["コード", "数量", "単価"])
+    worksheet.append(["A-1", 3, "1200※1"])
+    worksheet.append(["A-2", 5, 800])
+    worksheet.append([])
+    worksheet.append(["※1 合成の注記の一つ目の文です。"])
+    worksheet.append(["※2 合成の注記の二つ目の文です。"])
+    parsed = parse_document("notes.xlsx", _bytes(workbook), "excel")
+
+    [sheet] = parsed.sheets
+    assert sheet.columns == ["コード", "数量", "単価"]
+    assert len(sheet.rows) == 2
+    [section] = parsed.sections
+    assert section.title == "一覧 の注記"
+    assert section.text == "※1 合成の注記の一つ目の文です。\n※2 合成の注記の二つ目の文です。"
+    assert section.location is not None
+    assert (section.location.row_start, section.location.row_end) == (5, 6)
+    assert section.location.cell_range == "A5:A6"
+
+
 @dataclass(frozen=True)
 class _Principal:
     user_uuid: str

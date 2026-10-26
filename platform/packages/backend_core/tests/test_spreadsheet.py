@@ -398,3 +398,135 @@ def test_columns_keep_the_rows_of_a_multi_row_header() -> None:
     assert sheet.columns[1].name == "区分 / 甲 / 値A"
     (single,) = _sheets(_bytes(workbook), header_row_count=1, header_row=2)
     assert [column.header_path for column in single.columns] == [[], ["値A"], ["値B"], ["値C"]]
+
+
+# ---- 表の下の注記（#3566）。文はすべて合成 -------------------------------------------------
+
+_NOTE_1 = "※1 値は合成の注記の一つ目の文で、表の行の値の条件を説明します。"
+_NOTE_2 = "※2 合成の注記の二つ目の文です。"
+
+
+def _table(worksheet: Worksheet) -> None:
+    worksheet.append(["項目", "値", "区分"])
+    worksheet.append(["項目A", "10※1", "甲"])
+    worksheet.append(["項目B", "20", "乙"])
+    worksheet.append(["項目C", "30※2", "丙"])
+
+
+def test_note_rows_below_a_table_are_notes_not_a_new_table() -> None:
+    """空の行を挟んだ注記の行は、新しい表・表頭にせず上の表の注記にする。"""
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    _table(worksheet)
+    worksheet["A6"] = _NOTE_1
+    worksheet["A7"] = _NOTE_2
+    (sheet,) = _sheets(_bytes(workbook))
+    assert sheet.header_row == 1
+    assert [column.name for column in sheet.columns] == ["項目", "値", "区分"]
+    assert [block.row_start for block in sheet.blocks] == [2, 3, 4]
+    assert [(note.row_number, note.cell_range, note.marker) for note in sheet.notes] == [
+        (6, "A6:A6", "※1"),
+        (7, "A7:A7", "※2"),
+    ]
+    assert [note.text for note in sheet.notes] == [_NOTE_1, _NOTE_2]
+    # 注記の印をセルに含む行は、その注記の文を持つ（1 行 = 1 記録の本文に入る）。
+    assert [block.notes for block in sheet.blocks] == [[_NOTE_1], [], [_NOTE_2]]
+
+
+def test_note_rows_directly_below_and_merged_long_text() -> None:
+    """空の行の無い注記の行（印か、横に結合した長い文）も注記にする。
+
+    短い 1 つのセルの行は表の行のまま。
+    """
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    _table(worksheet)
+    worksheet.append(["小計"])
+    worksheet["A6"] = _NOTE_2
+    _put(
+        worksheet, "A7:C7", "印の無い合成の注記の文で、表の全体の幅に横に結合した長い説明の行です。"
+    )
+    (sheet,) = _sheets(_bytes(workbook))
+    assert [block.row_start for block in sheet.blocks] == [2, 3, 4, 5]
+    assert sheet.blocks[-1].values == {"項目": "小計"}
+    assert [(note.row_number, note.marker, note.cell_range) for note in sheet.notes] == [
+        (6, "※2", "A6:A6"),
+        (7, None, "A7:C7"),
+    ]
+
+
+def test_marked_note_between_tables_is_not_the_next_table_title() -> None:
+    """表と表の間の注記の 1 行は、下の表の題名にせず上の表の注記にする。
+
+    番号だけの行は下の表の題名のまま。
+    """
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    _table(worksheet)
+    worksheet["A6"] = _NOTE_2
+    worksheet["A8"] = "(2) 表の題名"
+    worksheet["A9"], worksheet["B9"] = "列X", "列Y"
+    worksheet["A10"], worksheet["B10"] = "x1", "y1"
+    sheets = _sheets(_bytes(workbook))
+    assert [(sheet.region, sheet.title) for sheet in sheets] == [
+        ("A1:C6", None),
+        ("A8:B10", "(2) 表の題名"),
+    ]
+    assert [note.text for note in sheets[0].notes] == [_NOTE_2]
+    assert sheets[1].notes == []
+    assert [column.name for column in sheets[1].columns] == ["列X", "列Y"]
+
+
+def test_note_markers_are_configurable_and_one_column_lists_are_not_notes() -> None:
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    _table(worksheet)
+    worksheet["A6"] = "† 合成の注記"
+    (default,) = _sheets(_bytes(workbook))
+    assert default.notes == []
+    (custom,) = _sheets(_bytes(workbook), note_markers=["†"])
+    assert [(note.marker, note.text) for note in custom.notes] == [("†", "† 合成の注記")]
+    with pytest.raises(ValidationError):
+        ExcelOptions(note_markers=["("])
+
+    listing = openpyxl.Workbook()
+    sheet = listing.active
+    assert sheet is not None
+    for value in ["手順", "1) 合成の手順の一つ目", "2) 合成の手順の二つ目"]:
+        sheet.append([value])
+    (single,) = _sheets(_bytes(listing))
+    assert single.notes == []
+    assert len(single.blocks) == 2
+
+
+def test_note_reference_does_not_match_inside_words_or_longer_numbers() -> None:
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.append(["項目", "値"])
+    worksheet.append(["受注1", "※10"])
+    worksheet.append(["注1 の行", "※1"])
+    worksheet.append([])
+    worksheet.append(["注1: 合成の注記"])
+    worksheet.append(["※1 合成の注記"])
+    (sheet,) = _sheets(_bytes(workbook))
+    assert [note.marker for note in sheet.notes] == ["注1:", "※1"]
+    assert [block.notes for block in sheet.blocks] == [[], ["注1: 合成の注記", "※1 合成の注記"]]
+
+
+def test_procedure_sheet_keeps_trailing_single_cell_rows_in_the_last_step() -> None:
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.append(["", "作業項目", "作業内容"])
+    worksheet.append([1, "手順A", "内容A"])
+    worksheet.append([2, "手順B", "内容B"])
+    worksheet.append(["", "", "※ 合成の補足"])
+    (sheet,) = _sheets(_bytes(workbook))
+    assert sheet.mode == "procedure"
+    assert sheet.notes == []
+    assert "※ 合成の補足" in sheet.blocks[-1].lines[-1]

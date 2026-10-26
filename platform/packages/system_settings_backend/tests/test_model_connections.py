@@ -20,6 +20,7 @@ from pr_system_settings.model import (
     ENTERPRISE_AI_TERTIARY_API_KEY_ENV,
     MAX_ENTERPRISE_AI_CONNECTIONS,
     EnterpriseAiConfiguredModel,
+    EnterpriseAiModelNotRegisteredError,
     EnterpriseAiModelSettings,
     ModelSettingsTestRequest,
     connection_label,
@@ -192,10 +193,53 @@ def test_resolver_returns_connection_of_each_model(tmp_path: Path) -> None:
         "sk-secondary",
         "ocid1.project.secondary",
     )
-    # 登録モデルにない ID はプライマリ接続
-    assert enterprise_ai_connection_for_model(settings, "unknown").connection_id == "primary"
+    # 登録モデルにない ID はプライマリ接続へ切り替えず、明示の失敗にする（#3240）。
+    with pytest.raises(EnterpriseAiModelNotRegisteredError) as raised:
+        enterprise_ai_connection_for_model(settings, "unknown")
+    assert raised.value.model_id == "unknown"
+    assert raised.value.code == "enterprise_ai_model_not_registered"
+    assert "unknown" in str(raised.value)
+    assert "sk-" not in str(raised.value)
     # API key は repr に出さない
     assert "sk-secondary" not in repr(vision)
+
+
+def test_resolver_uses_the_default_model_for_an_empty_id(tmp_path: Path) -> None:
+    """空の ID は既定のテキストモデルの接続（既定がセカンダリ接続ならセカンダリ。#3240）。"""
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    payload = two_connection_payload()
+    payload["enterprise_ai"]["default_text_model_id"] = "vlm-b"
+    assert (
+        make_client(settings, store).patch("/api/settings/model", json=payload).status_code == 200
+    )
+
+    assert enterprise_ai_connection_for_model(settings, "").connection_id == "secondary"
+    assert enterprise_ai_connection_for_model(settings, "  ").connection_id == "secondary"
+
+
+def test_resolver_keeps_env_only_default_models_on_the_primary_connection() -> None:
+    """`.env` だけで決めた既定のモデル（登録モデルの一覧に無い）は、プライマリ接続で呼ぶ。"""
+    settings = FakeSettings(
+        oci_enterprise_ai_endpoint=PRIMARY_ENDPOINT,
+        oci_enterprise_ai_api_key="sk-primary",
+        oci_enterprise_ai_models=[EnterpriseAiConfiguredModel(model_id="listed")],
+        oci_enterprise_ai_default_text_model="env-text",
+        oci_enterprise_ai_default_vision_model="env-vision",
+    )
+    for model_id in ("env-text", "env-vision", "", "listed"):
+        assert enterprise_ai_connection_for_model(settings, model_id).endpoint == PRIMARY_ENDPOINT
+    with pytest.raises(EnterpriseAiModelNotRegisteredError):
+        enterprise_ai_connection_for_model(settings, "removed-model")
+
+
+def test_resolver_with_no_models_falls_back_only_for_empty_ids() -> None:
+    """モデルを 1 つも設定していなければ、空の ID はプライマリ（未設定の判定は呼び出し側）。"""
+    settings = FakeSettings()
+    assert enterprise_ai_connection_for_model(settings, "").connection_id == "primary"
+    with pytest.raises(EnterpriseAiModelNotRegisteredError):
+        enterprise_ai_connection_for_model(settings, "any-model")
 
 
 def test_resolver_falls_back_to_primary_when_connection_is_gone() -> None:

@@ -104,3 +104,42 @@ def agreement(
         false_pass_rate=false_pass,
         false_fail_rate=false_fail,
     )
+
+
+@dataclass(frozen=True)
+class CalibrationThresholds:
+    """評価器の校正の合否の閾値（holdout の観点ごと。suite と製品の判定器で同じ基準を使う）。
+
+    件数（人手の判定の数）・判定率・Cohen の κ・誤合格の率を見る。誤合格（人手は不合格・評価器は
+    合格）は評価器を合否に使うときにいちばん害が大きいので、κ と別に上限を置く。
+    """
+
+    min_items: int = 50
+    min_kappa: float = 0.6
+    max_false_pass_rate: float = 0.1
+    min_coverage: float = 0.95
+
+    def provenance(self) -> dict[str, object]:
+        return {
+            "split": "holdout",
+            "min_items": self.min_items,
+            "min_kappa": self.min_kappa,
+            "max_false_pass_rate": self.max_false_pass_rate,
+            "min_coverage": self.min_coverage,
+        }
+
+
+def calibration_failures(result: Agreement | None, thresholds: CalibrationThresholds) -> list[str]:
+    """holdout の一致の集計が閾値に届かない理由（空なら合格）。集計が無ければ不合格。"""
+    if result is None:
+        return ["holdout の項目がありません"]
+    failures: list[str] = []
+    if result.total < thresholds.min_items:
+        failures.append(f"holdout の件数 {result.total} < {thresholds.min_items}")
+    if result.coverage is None or result.coverage < thresholds.min_coverage:
+        failures.append(f"判定率 {result.coverage} < {thresholds.min_coverage}")
+    if result.kappa is None or result.kappa < thresholds.min_kappa:
+        failures.append(f"κ {result.kappa} < {thresholds.min_kappa}")
+    if result.false_pass_rate is None or result.false_pass_rate > thresholds.max_false_pass_rate:
+        failures.append(f"誤合格の率 {result.false_pass_rate} > {thresholds.max_false_pass_rate}")
+    return failures
