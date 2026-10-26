@@ -10,6 +10,7 @@ PDF は reportlab で作った合成の表（``fixtures.synthetic_pdf.merged_hea
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ from rag_parser_core.registry import _html_result
 from rag_pipeline_core.chunking import chunk_extraction
 
 from app.mcp.tools import EvidenceLocator, _locator
+from app.rag import pdf_segment_merge
 from app.rag.chunking_small_to_big import _layout_tables, build_parent_child_chunks
 from app.rag.chunking_strategy import SmallToBigParams
 from tests.fixtures.synthetic_pdf import MERGED_HEADER_TABLE_ROWS, merged_header_table_pdf
@@ -93,8 +95,8 @@ def test_docling_table_child_has_the_parsed_grid_rows() -> None:
 
 def test_docling_single_data_row_has_cells_with_header_path_and_region() -> None:
     """1 つのデータの行は、列・2 段の表頭・Docling のセルの領域を持つ（結合セルは左上の行だけ）。"""
-    tables = _layout_tables(_layout_records())
-    table_index, grid = next(iter(tables.values()))
+    table = next(iter(_layout_tables(_layout_records()).values()))
+    table_index, grid = table.table_index, table.grid
     assert (table_index, grid.row_count, grid.header_rows) == (1, 6, 2)
     first = _locator(grid_rows_metadata(grid, table_index, [3]))
     assert (first.row_basis, first.row_start, first.row_end, first.table_row) == (
@@ -118,17 +120,54 @@ def test_docling_single_data_row_has_cells_with_header_path_and_region() -> None
 
 
 def test_docling_structure_chunk_has_rows_only_when_the_text_rows_are_known() -> None:
-    """構造認識の分割: 表全体の chunk は格子の行を持つ。
-
-    HTML の表を行の境目で分けられない部分（文字数で切った部分）は、行を持たない（null）。
-    """
+    """構造認識の分割: 表全体の chunk は格子の行を持つ。"""
     whole = _table_locators(chunk_extraction(_docling_extraction(), chunk_size=2000, overlap=0))
     assert [(loc.row_basis, loc.table_index, loc.row_start, loc.row_end) for loc in whole] == [
         ("parsed_table", 1, 1, 6)
     ]
-    parts = _table_locators(chunk_extraction(_docling_extraction(), chunk_size=300, overlap=0))
-    assert len(parts) > 1
-    assert all(loc.row_basis is None and loc.row_start is None for loc in parts)
+
+
+def _docling_table_chunks(chunk_size: int) -> list[Any]:
+    chunks = chunk_extraction(_docling_extraction(), chunk_size=chunk_size, overlap=0)
+    return [chunk for chunk in chunks if chunk.metadata.get("content_kind") == "table"]
+
+
+def test_docling_structure_splits_a_long_html_table_at_row_boundaries() -> None:
+    """長い HTML の表は tr の境目で分け、各部分は 2 段の表頭を繰り返した表で格子の行を持つ。
+
+    最初の部分は表頭の 2 段を含めて先頭から、続きの部分は繰り返した表頭を数えずにデータの行を
+    数える（#3547）。
+    """
+    chunks = _docling_table_chunks(420)
+    locators = [_locator(chunk.metadata) for chunk in chunks]
+    assert [(loc.row_basis, loc.table_index, loc.row_start, loc.row_end) for loc in locators] == [
+        ("parsed_table", 1, 1, 4),
+        ("parsed_table", 1, 5, 6),
+    ]
+    for chunk in chunks:
+        # 各部分は 1 つの表として閉じ、表頭の 2 段を先頭に持つ。
+        assert chunk.text.startswith('<table><tr><th rowspan="2">Group</th>')
+        assert chunk.text.endswith("</table>") and chunk.text.count("<table") == 1
+        assert "<th>Plan</th><th>Actual</th>" in chunk.text
+    assert [chunk.metadata["table_header_repeated"] for chunk in chunks] == [False, True]
+    assert [
+        (chunk.metadata["table_data_row_start"], chunk.metadata["table_data_row_end"])
+        for chunk in chunks
+    ] == [(1, 2), (3, 4)]
+    # 1 つのデータの行だけの部分はセルの座標を持つ（上の行から結合で続くセルは座標にしない）。
+    single = [_locator(chunk.metadata) for chunk in _docling_table_chunks(300)]
+    assert [(loc.row_start, loc.row_end, loc.table_row) for loc in single] == [
+        (1, 3, 3),
+        (4, 4, 4),
+        (5, 5, 5),
+        (6, 6, 6),
+    ]
+    assert [cell.table_col for cell in single[1].table_cells] == ["B", "C", "D", "E", "F"]
+    assert [(cell.table_col, cell.header_path) for cell in single[2].table_cells][:3] == [
+        ("A", ["Group"]),
+        ("B", ["Item"]),
+        ("C", ["H1", "Plan"]),
+    ]
 
 
 HTML_TABLE = """<html><body><h1>Synthetic report</h1>
@@ -242,3 +281,111 @@ def test_image_table_without_a_parser_grid_has_no_rows(table: ExtractionTable | 
     assert locators[0].table_index is None
     assert locators[0].row_start is None
     assert locators[0].table_cells == []
+
+
+_DOCLING_ROWS = re.compile(r"<tr\b.*?</tr>", re.DOTALL)
+
+
+def _two_page_table_extraction(*, continuation: str, rows: int = 0) -> StructuredExtraction:
+    """記録の Docling の表（表頭 2 段・データの行 4 つ）を、頁 1（データの行 2 つ）と頁 2 に分ける。
+
+    ``continuation``: carried=続きの表は表頭なし（取込が前の表の表頭を付ける）/ repeated=続きの表も
+    同じ表頭を繰り返す / other_columns=続きの表の列の数が違う。``rows`` を渡すと、続きの表を
+    その数の合成のデータの行にする（行のまとまりに分ける大きさ）。取込の文書全体の整理と同じ
+    ``pdf_segment_merge._table_continuation`` で続きの印を付ける（形が合わなければ解析の判定と
+    する）。
+    """
+    payload: dict[str, Any] = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    layout = payload["parser_artifacts"]["layout_records"]
+    layout["pages"].append({**layout["pages"][0], "page": 2})
+    table = next(record for record in layout["records"] if record["category"] == "Table")
+    html_rows = _DOCLING_ROWS.findall(table["text"])
+    header, first, second = html_rows[:2], html_rows[2:4], html_rows[4:]
+    if continuation == "other_columns":
+        second = ["<tr><td>Gamma</td><td>310</td></tr>", "<tr><td>Delta</td><td>410</td></tr>"]
+    if rows:
+        second = [
+            f"<tr><th>G3</th><th>Item {index}</th>"
+            + "".join(f"<td>{index}{col}</td>" for col in range(4))
+            + "</tr>"
+            for index in range(rows)
+        ]
+    table["text"] = "<table><tbody>" + "".join([*header, *first]) + "</tbody></table>"
+    table["raw"]["table_cell_bboxes"] = [
+        entry for entry in table["raw"]["table_cell_bboxes"] if entry["row"] < 4
+    ]
+    continued_rows = [*header, *second] if continuation == "repeated" else second
+    piece = {
+        **table,
+        "id": "docling-p2-1",
+        "page": 2,
+        "seq_no": 1,
+        "text": "<table><tbody>" + "".join(continued_rows) + "</tbody></table>",
+        "raw": {},
+    }
+    pdf_segment_merge._table_continuation(  # noqa: SLF001 - 取込と同じ続きの印を付ける
+        table, piece, known=continuation == "other_columns"
+    )
+    layout["records"].append(piece)
+    return StructuredExtraction.model_validate(payload)
+
+
+def _two_page_locators(continuation: str, rows: int = 0, **params: Any) -> list[tuple[Any, ...]]:
+    chunks = build_parent_child_chunks(
+        _two_page_table_extraction(continuation=continuation, rows=rows),
+        params=SmallToBigParams(**params) if params else None,
+    )
+    return [
+        (loc.row_basis, loc.table_index, loc.row_start, loc.row_end, loc.table_row)
+        for loc in _table_locators(chunks)
+    ]
+
+
+@pytest.mark.parametrize("continuation", ["carried", "repeated"])
+def test_table_continued_on_the_next_page_counts_rows_after_the_first_page(
+    continuation: str,
+) -> None:
+    """頁をまたぐ表は 1 つの表として、続きの表の行を前の頁の行の後ろに続けて数える（#3547）。
+
+    続きの表の先頭の表頭（取込が付けた・繰り返した）は行として数えない。
+    """
+    assert _two_page_locators(continuation) == [
+        ("parsed_table", 1, 1, 4, None),
+        ("parsed_table", 1, 5, 6, None),
+    ]
+    # 続きの表の 1 つのデータの行は、表全体の格子の行と元の表の表頭の段のセルを持つ。
+    tables = _layout_tables(
+        _two_page_table_extraction(continuation=continuation).parser_artifacts["layout_records"][
+            "records"
+        ]
+    )
+    piece = tables["docling-p2-1"]
+    assert (piece.table_index, piece.grid.row_count, piece.grid.header_rows) == (1, 6, 2)
+    gamma = _locator(grid_rows_metadata(piece.grid, piece.table_index, piece.grid_rows([3])))
+    assert (gamma.row_start, gamma.table_row) == (5, 5)
+    assert [(cell.table_col, cell.header_path) for cell in gamma.table_cells][:3] == [
+        ("A", ["Group"]),
+        ("B", ["Item"]),
+        ("C", ["H1", "Plan"]),
+    ]
+
+
+def test_row_groups_of_a_continued_table_use_the_whole_table_rows() -> None:
+    """行のまとまりに分けた続きの表も、表全体の格子の行の番号を持つ（#3547）。"""
+    locators = _two_page_locators("carried", rows=40, table_child_target_chars=300)
+    # 前の頁の表（データの行 2 つ）は 1 つの子、続きの表は行のまとまりの子に分かれる。
+    assert locators[0] == ("parsed_table", 1, 1, 4, None)
+    groups = locators[1:]
+    assert len(groups) > 1
+    assert all(basis == "parsed_table" and index == 1 for basis, index, *_ in groups)
+    # まとまりは続きの表のデータの行（格子の 5〜44 行）を順に隙間なく覆う。
+    assert groups[0][2] == 5 and groups[-1][3] == 44
+    assert all(left[3] + 1 == right[2] for left, right in zip(groups, groups[1:], strict=False))
+
+
+def test_continued_table_of_another_shape_has_no_rows() -> None:
+    """形の合わない続きの表は行を作らない（前の頁の表の行は変わらない）。"""
+    assert _two_page_locators("other_columns") == [
+        ("parsed_table", 1, 1, 4, None),
+        (None, None, None, None, None),
+    ]

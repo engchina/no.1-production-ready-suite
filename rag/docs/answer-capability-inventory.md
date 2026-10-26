@@ -134,7 +134,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 |---|---|---|
 | 行・列の位置 | `EvidenceLocator` の `row_start`・`row_end` の番号の基準は `row_basis`（`sheet`=表計算のシート / `csv`=CSV の記録の番号〔RFC 7111 の行。表頭の記録を 1 として空の行も数える。原本の物理行の範囲は `source_line_start`・`source_line_end`〕 / `word_table`=Word の `table_index` の表の行 / `parsed_table`=解析が PDF・HTML・画像の表から組み立てた格子の行で、原本の座標ではない。表頭の行も数える。#3262・#3429）。`cell_range` は表計算だけ。表計算の 1 つのデータの行と CSV の 1 記録の根拠は、セルの座標の `table_row` と `table_cells`（値のあるセルの列 `table_col` と表頭の段 `header_path`）も持つ（取込で記録した chunk だけ）。Word は 1 つの表だけを含むまとまりが表の番号と行の範囲だけを持つ（セルの座標は無い）。PDF・HTML・画像の表は、解析が格子を出し、格子と本文の行が対応したときだけ `parsed_table` の表の番号と行の範囲を持ち、1 つのデータの行の根拠は `table_cells`（解析が出したときはセルの `bbox`）も持つ | `rag/backend/app/mcp/tools.py::EvidenceLocator`・`rag/backend/app/mcp/tools.py::_table_rows`・`rag/packages/rag_parser_core/rag_parser_core/sheet_records.py::_table_locator_metadata`・`rag/packages/rag_parser_core/rag_parser_core/structured_records.py::_csv_table_metadata`・`rag/packages/rag_parser_core/rag_parser_core/parsed_table.py`・`rag/backend/app/rag/chunking_small_to_big.py::_layout_tables` |
 | 版 | 根拠の版は処理の単位の `chunk_set_id`（取込み直すと変わる。文書の改訂の版ではない）。改訂した文書は別の `document_id` で、置き換えた旧版は `superseded`。文書の改訂の番号は持たない | `rag/backend/app/mcp/tools.py::RagEvidence` |
-| 位置が無いときの見え方 | 位置の項目は空（`null`・空の配列）のまま。精密な位置を持つように見せる値は入れない（`table_cells` は表頭の段を記録していない古い記録から推測せず、壊れた値は空にする。`rag/backend/tests/test_mcp_api.py` が確かめる）。解析が格子を出さなかった表（本文だけの表・VLM・OCR が本文で書いた画像の表・本文から推したセル）・格子と本文の行が合わない表・頁をまたいで分かれた表は、解析の表の行も `null`（`rag/backend/tests/test_parsed_table_locator.py` が確かめる）。Word の表のセルの座標は未対応 | `rag/backend/app/mcp/tools.py::_locator` |
+| 位置が無いときの見え方 | 位置の項目は空（`null`・空の配列）のまま。精密な位置を持つように見せる値は入れない（`table_cells` は表頭の段を記録していない古い記録から推測せず、壊れた値は空にする。`rag/backend/tests/test_mcp_api.py` が確かめる）。解析が格子を出さなかった表（本文だけの表・VLM・OCR が本文で書いた画像の表・本文から推したセル）・格子と本文の行が合わない表・続きの印の無い頁をまたいで分かれた表・形の合わない続きの表は、解析の表の行も `null`（`rag/backend/tests/test_parsed_table_locator.py` が確かめる。長い HTML の表を分けた部分と、続きの印のある頁をまたぐ表は #3547 で行を持つ）。Word の表のセルの座標は未対応 | `rag/backend/app/mcp/tools.py::_locator` |
 
 ## `degraded_steps` の処理の種類
 
@@ -187,4 +187,4 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 - 実 Oracle・実 LLM での失敗の振る舞い（すべて静的確認）。
 - chat の入口（`rag/backend/app/api/routes/chat.py`）の質問の安全チェックの工程の span。
 - 1 行の記録の根拠を複数並べたとき（表計算・CSV の 1 行 = 1 chunk）に、別の行の値の取り違えを根拠をまたいで照合すること（今の検査は 1 つの根拠の本文の中の表だけを見る。`not_checkable` で示す。同じ行・セルの照合の効果は #2594 で測る）。
-- PDF・HTML・画像の表の根拠を、原本の表の行・列へ結び付けること（解析が読んだ表の行の番号は原本の座標ではないので出していない。#3262 の後の段）。Word の表のセルの座標（まとまりが複数の行を含むので、行の範囲だけを出す）。
+- PDF・HTML・画像の表の根拠は、解析が組み立てた表の格子の行（`row_basis=parsed_table`。原本の座標ではない。#3429・#3547）までで、原本の表の行・列には結び付けない。Word の表のセルの座標（まとまりが複数の行を含むので、行の範囲だけを出す。1 行 = 1 記録にするかは #2594 の比較で決める）。

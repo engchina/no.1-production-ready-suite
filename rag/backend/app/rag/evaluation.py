@@ -988,13 +988,18 @@ def evidence_matches_chunk(
     """引用の 1 つの chunk が根拠の条件（文書・ページ・シート・行・章節・本文）をすべて満たすか。
 
     #2065・#2086。`document_id` は chunk の文書の ID の代わりに比べる ID（同じ文書とみなす文書を
-    正解の文書の ID にそろえたもの）。照合は platform の採点の部品（#3240）。
+    正解の文書の ID にそろえたもの）。照合は platform の採点の部品（#3240）。行の条件は MCP の根拠の
+    場所と同じ行の番号の基準と行（`row_basis`・`row_start`・`row_end`）で照合する（#3547。suite の
+    評価と同じ）。
     """
+    # MCP の層は検索・回答の多くを読むので、使うときに読む（循環の import を避ける）。
+    from app.mcp.tools import evidence_row_location
+
     return evidence_matches(
         evidence,
         document_id=document_id if document_id is not None else chunk.document_id,
         text=chunk.text,
-        locator=chunk.metadata,
+        locator={**chunk.metadata, **evidence_row_location(dict(chunk.metadata))},
     )
 
 
