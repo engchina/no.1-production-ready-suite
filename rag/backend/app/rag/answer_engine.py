@@ -779,8 +779,9 @@ class AnswerEngine:
         degraded: DegradedSteps | None = None,
         complete_evidence: bool = True,
     ) -> None:
-        # 回答を作らない検索で、根拠の補い（章節の拡張・要求ごとの探し直し・CRAG）までするか（#3506）。
-        # False は主の文書の検索の後で止める（業務 Agent の根拠の取得。補いは Agent が MCP でする）。
+        # 回答を作らない検索で、根拠の補い（章節の拡張・要求ごとの探し直し・CRAG）までするか
+        # （#3506）。False は主の文書の検索の後で止める（業務 Agent の根拠の取得。補いは Agent が
+        # MCP でする）。
         # RAG 検索の画面は True（チャットと同じ根拠を集め、回答の生成の手前で止める）。
         self._complete_evidence = complete_evidence
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら、回答を作らない検索で、

@@ -202,17 +202,26 @@ const knowledgeStepsSearchStream: TimedChunk[] = [
 
 const retrievalSearch = searchProgressStream("trace-1");
 
-// 回答を作らない検索（検索結果だけ）。処理の経過は検索結果の一覧の上に出す。
+// 回答を作らない検索（検索結果だけ）。処理の経過は検索結果の一覧の上に出す。チャットと同じ流れを回答の生成の手前で
+// 止める（#3506）: 全体は evidence の段、その下に質問の理解などと「根拠検索フロー」、文書検索はその子。
 const retrievalOnlySearchStream: TimedChunk[] = [
   {
     afterMs: 0,
     text: [
       sse("run", { trace_id: "trace-1" }),
       retrievalSearch.start("root", ragSpan.root(false)),
-      retrievalSearch.start("retrieval", ragSpan.stage("retrieval")),
-      retrievalSearch.start("search", ragSpan.step("文書検索", "retrieval")),
+      retrievalSearch.start("evidence", ragSpan.stage("evidence")),
+      retrievalSearch.start("understand", ragSpan.step("質問の理解", "evidence")),
+      retrievalSearch.finish("understand"),
+      retrievalSearch.start("flow", ragSpan.step("根拠検索フロー", "evidence")),
+      retrievalSearch.start("search", ragSpan.step("文書検索", "flow")),
+      retrievalSearch.start("rerank", ragSpan.step("Rerank", "search")),
+      retrievalSearch.finish("rerank"),
       retrievalSearch.finish("search"),
-      retrievalSearch.finish("retrieval"),
+      retrievalSearch.start("coverage", ragSpan.step("要求ごとの根拠の確認", "flow")),
+      retrievalSearch.finish("coverage"),
+      retrievalSearch.finish("flow"),
+      retrievalSearch.finish("evidence"),
       retrievalSearch.finish("root"),
       retrievalSearch.terminal("done"),
       sse("metadata", {
@@ -513,6 +522,24 @@ for (const viewport of [
     const process = page.getByRole("region", { name: "処理の経過" });
     await expect(process).toHaveCount(1);
     await expect(page.getByTestId("search-run-progress-summary")).toContainText("処理の経過（");
+    // チャットと同じ工程名・入れ子（#3506）。全体は「質問の理解から根拠の検索まで」、文書の検索は根拠の検索の子。
+    await page.getByTestId("search-run-progress-summary").click();
+    for (const [key, label, level] of [
+      ["evidence", "質問の理解から根拠の検索まで", null],
+      ["understand", "質問の理解（Query Understanding）", "1"],
+      ["flow", "根拠の検索", "1"],
+      ["search", "文書の検索", "2"],
+      ["rerank", "検索結果の並べ替え", "3"],
+      ["coverage", "要求ごとの根拠の確認", "2"],
+    ] as const) {
+      const row = page.getByTestId(`search-run-progress-step-${spanStepId(key)}`);
+      await expect(row).toBeVisible();
+      await expect(row.locator("[data-run-timeline-label]").first()).toHaveText(label);
+      if (level) await expect(row).toHaveAttribute("data-level", level);
+      else await expect(row).not.toHaveAttribute("data-level", /.+/);
+    }
+    await expect(process.getByText("根拠の検索と回答の作成")).toHaveCount(0);
+    await process.screenshot({ path: `test-results/answer-progress-search-evidence-${viewport.name}.png` });
     const processBox = await process.boundingBox();
     const resultsBox = await results.boundingBox();
     expect(processBox && resultsBox && processBox.y + processBox.height <= resultsBox.y).toBeTruthy();

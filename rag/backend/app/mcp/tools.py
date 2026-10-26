@@ -4708,9 +4708,11 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         return LookupGuidesOutput(guides=[_lookup_item(match) for match in matches])
 
     async def retrieve_evidence(arguments: RetrieveEvidenceInput) -> RetrieveEvidenceOutput:
-        # planning=rag: 検索の画面と同じく質問の理解・拡張・検索・rerank まで行い、回答（CRAG・
-        # 生成）は作らない。planning=caller（#2651）: 呼び出し元の検索文で検索し、質問に応じた
-        # 推論の LLM / VLM も呼ばない（hybrid search・rerank・文脈の取得は同じ）。
+        # planning=rag: 検索の画面・チャットと同じ流れで質問の理解・拡張・文書の検索（rerank
+        # を含む）まで行い、その後の根拠の補い（CRAG・章節の拡張・要求ごとの探し直し）と回答の
+        # 生成はしない（補いは Agent が rag_read_section などで行う。#3506）。planning=caller
+        # （#2651）: 呼び出し元の検索文で検索し、質問に応じた推論の LLM / VLM も呼ばない
+        # （hybrid search・rerank・文脈の取得は同じ）。
         request = _search_request(arguments).model_copy(update={"generate_answer": False})
         enforce_rate_limit("search", http_request)
         echo = {"planning": arguments.planning, "request_id": arguments.request_id}
@@ -4733,9 +4735,14 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     **echo,
                 )
             request, scope = rule
-            result = await _run_search(request, scope=scope, caller_queries=list(arguments.queries))
+            result = await _run_search(
+                request,
+                scope=scope,
+                caller_queries=list(arguments.queries),
+                complete_evidence=False,
+            )
         else:
-            result = await _run_search(request)
+            result = await _run_search(request, complete_evidence=False)
         # 回答を作る呼び出し元へ、元の質問に当たる承認済みのルール・用語の説明を渡す（#2701）。
         knowledge = await _profile_knowledge(arguments)
         logger.info(

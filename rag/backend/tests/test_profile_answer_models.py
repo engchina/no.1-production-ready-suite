@@ -113,6 +113,8 @@ def test_saving_unregistered_model_returns_422_before_database_write(
         ("model-c", "model-a", True, "model-a"),
         ("removed-model", "model-a", True, "model-a"),
         ("removed-model", None, False, "model-a"),
+        # 回答を作らない検索も、根拠を集める LLM はチャットと同じ回答のモデルで呼ぶ（#3506）。
+        ("model-c", None, False, "model-c"),
     ],
 )
 async def test_query_resolution_applies_request_then_profile_then_defaults(

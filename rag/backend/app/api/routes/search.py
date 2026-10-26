@@ -56,7 +56,12 @@ from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
 from app.rag.run_history import RunRecorder, search_run_conditions
 from app.rag.saved_evidence import withhold_saved_answer
-from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
+from app.rag.search_answer_profile_config import (
+    ProfileAnswerModelUnavailableError,
+    SearchAnswerProfileConfig,
+    resolve_search_answer_profile_settings,
+    validate_profile_answer_model,
+)
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.rag.stored_answer import stored_citation_metadata
 from app.rag.support_guide_conditions import (
@@ -215,6 +220,15 @@ def _answer_model_id(request: SearchRequest, settings: Settings) -> str | None:
     return None
 
 
+def _answer_model_registered(settings: Settings, config: SearchAnswerProfileConfig) -> bool:
+    """検索・回答プロファイルの回答のモデルが登録済み（または未指定）か。"""
+    try:
+        validate_profile_answer_model(settings, config)
+    except ProfileAnswerModelUnavailableError:
+        return False
+    return True
+
+
 def _run_model_id(answer_model_id: str | None, settings: Settings) -> str | None:
     """実行履歴に残す回答のモデル（未指定は実行のときの既定のテキストモデルの具体的な ID。#3419）。
 
@@ -329,12 +343,16 @@ async def _resolve_query_context(
             effective_request, from_search_answer_profile=not request.knowledge_base_ids
         )
         profile_config = view.config
-        if request.generate_answer and (
-            explicit_model := _answer_model_id(request, global_settings)
-        ):
+        if explicit_model := _answer_model_id(request, global_settings):
             profile_config = profile_config.model_copy(update={"answer_model_id": explicit_model})
+        # 回答を作らない検索も、根拠を集める LLM（質問拡張・条の選択・CRAG など）はチャットと同じ
+        # 回答のモデルで呼ぶ（#3506。回答の有無でモデルを変えない）。ただし回答を作らない検索は、
+        # 登録を外したモデルを選んだままのプロファイルでも止めず、既定のモデルで根拠を集める。
         settings, applied = resolve_search_answer_profile_settings(
-            settings, profile_config, apply_answer_model=request.generate_answer
+            settings,
+            profile_config,
+            apply_answer_model=request.generate_answer
+            or _answer_model_registered(global_settings, profile_config),
         )
         # 回答の記録に残す検索・回答プロファイルの版（#1276）。
         settings = settings.model_copy(
@@ -683,6 +701,7 @@ async def _run_search_with_timeout(
     run_recorder: RunRecorder | None = None,
     scope: AnswerScope | None = None,
     caller_queries: Sequence[str] | None = None,
+    complete_evidence: bool = True,
 ) -> SearchResponse:
     """検索・回答の pipeline を回答生成の上限（`rag_answer_timeout_seconds`。#375）付きで実行する。
 
@@ -692,6 +711,9 @@ async def _run_search_with_timeout(
     ``scope`` は回答前の確認の答え（MCP の rag_search のルールの確認。#2117）。
     ``caller_queries`` は呼び出し元（業務 Agent）が作った検索文（MCP の rag_retrieve_evidence の
     planning=caller。#2651）。渡すと質問に応じた推論の LLM を呼ばずに検索する（`RagPipeline`）。
+    ``complete_evidence=False`` は回答を作らない検索を主の文書の検索の後で止める（MCP の
+    rag_retrieve_evidence。根拠の補いは呼び出し元がする。#3506）。RAG 検索の画面は既定の True で、
+    チャットと同じ流れで根拠を集めて回答の生成の手前で止める。
     """
     request, settings, applied_kb, applied_view = await _resolve_query_context(
         request, get_settings(), guide_preview=guide_preview
@@ -721,6 +743,7 @@ async def _run_search_with_timeout(
                 scope=scope,
                 answer_notice=current_answer_notice,
                 caller_queries=caller_queries,
+                complete_evidence=complete_evidence,
             ).run(
                 request,
                 trace_id=trace_id,

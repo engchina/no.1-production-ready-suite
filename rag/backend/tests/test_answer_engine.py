@@ -2654,10 +2654,15 @@ async def test_retrieval_only_returns_candidates_without_llm(
     assert audits[0]["outcome"] == "success"
 
 
-async def test_search_without_answer_skips_crag_and_generation(
+async def _run_with_progress(
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """RAG 検索(generate_answer=False)は rerank までで止め、CRAG と回答の生成をしない(#649)。"""
+    request: SearchRequest,
+    *,
+    answer_flow: str,
+    history: list[Any] | None = None,
+    complete_evidence: bool = True,
+) -> tuple[Any, list[tuple[str, str]], list[str], SavingOracle]:
+    """同じ stub の依存で pipeline を 1 回実行し、工程の開始・終了の列と LLM の schema を返す。"""
     import rag_engine.adapters.oci as engine_oci
 
     import app.rag.pipeline as pipeline_module
@@ -2671,31 +2676,98 @@ async def test_search_without_answer_skips_crag_and_generation(
     monkeypatch.setattr(engine_oci, "parse_text_response", record_llm)
     oracle = SavingOracle()
     pipeline = pipeline_module.RagPipeline(
-        settings=Settings(rag_query_strategy="auto_routing", rag_answer_flow="crag"),
+        settings=Settings(rag_query_strategy="auto_routing", rag_answer_flow=answer_flow),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
+        complete_evidence=complete_evidence,
     )
     observed: list[tuple[str, str]] = []
 
     async def capture(progress: Any) -> None:
-        if not progress.stage.startswith("answer_step:"):
-            observed.append((progress.stage, progress.outcome))
+        observed.append((progress.stage, progress.outcome))
 
-    response = await pipeline.run(
+    response = await pipeline.run(request, progress_callback=capture, history=history)
+    return response, observed, schemas, oracle
+
+
+@pytest.mark.parametrize("answer_flow", ["standard_rag", "crag"])
+async def test_search_without_answer_runs_the_chat_evidence_flow(
+    monkeypatch: pytest.MonkeyPatch, answer_flow: str
+) -> None:
+    """RAG 検索(回答オフ)はチャットと同じ工程・入れ子・LLM で根拠を集める(#3506)。
+
+    回答の生成の手前で止める。チャット(会話の最初の質問。履歴は空)と RAG 検索を同じ stub の依存で
+    実行し、根拠を集め終えるまでの工程の列(名前と開始・終了の順 = 入れ子)・LLM の呼び出し・
+    根拠の並びが同じことを確かめる。
+    """
+    chat, chat_steps, chat_llm, _ = await _run_with_progress(
+        monkeypatch, SearchRequest(query="受注の登録方法は？"), answer_flow=answer_flow, history=[]
+    )
+    search, search_steps, search_llm, oracle = await _run_with_progress(
+        monkeypatch,
         SearchRequest(query="受注の登録方法は？", generate_answer=False),
-        progress_callback=capture,
+        answer_flow=answer_flow,
+    )
+
+    # チャットの工程を、回答に添付する画像（回答の生成の最初の工程）の手前で切る。
+    cut = chat_steps.index(("answer_step:回答に添付する画像", "started"))
+    rename = {
+        "answer": "evidence",
+        "answer_step:回答生成フロー": "answer_step:根拠検索フロー",
+    }
+    expected = [(rename.get(stage, stage), outcome) for stage, outcome in chat_steps[:cut]]
+    expected += [
+        ("answer_step:根拠検索フロー", "success"),
+        ("evidence", "success"),
+    ]
+    assert search_steps == expected
+    assert ("answer_step:文書検索", "started") in search_steps or (
+        "answer_step:文書検索（1回目）",
+        "started",
+    ) in search_steps
+    # 根拠を集める LLM（質問拡張・CRAG の根拠確認）は同じ。回答の生成と監査だけがチャットに
+    # 足される。
+    assert search_llm == chat_llm[: len(search_llm)]
+    assert "GroundedDraft" not in search_llm
+    if answer_flow == "crag":
+        assert "CragRetrievalGradeOutput" in search_llm
+    # 根拠の並びも同じ（回答の側は引用した根拠を先にしない）。
+    assert search.answer == ""
+    assert [c.chunk_id for c in search.citations] == [c.chunk_id for c in chat.citations]
+    search_answer = search.diagnostics.answer or {}
+    assert search_answer["answer_flow"] == (chat.diagnostics.answer or {})["answer_flow"]
+    # 回答が無いので回答の記録は保存しない。
+    assert oracle.saved == []
+
+
+async def test_evidence_retrieval_for_agent_stops_after_document_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """業務 Agent の根拠の取得(complete_evidence=False)は主の文書の検索の後で止める(#3506)。
+
+    CRAG も使わない。
+    """
+    response, steps, schemas, oracle = await _run_with_progress(
+        monkeypatch,
+        SearchRequest(query="受注の登録方法は？", generate_answer=False),
+        answer_flow="crag",
+        complete_evidence=False,
     )
 
     assert response.answer == ""
     assert response.citations
-    # 質問の拡張(自動ルーティング)は LLM を使うが、CRAG の評価と回答の生成・監査は呼ばない。
     assert schemas == ["QueryRoutingOutput"]
-    assert observed == [("retrieval", "started"), ("retrieval", "success")]
+    started = [stage for stage, outcome in steps if outcome == "started"]
+    assert started[0] == "evidence"
+    flow = started.index("answer_step:根拠検索フロー")
+    assert started[flow + 1] == "answer_step:文書検索"
+    # 根拠の補い（章節の拡張・要求ごとの根拠の確認）はしない（Agent が MCP でする）。
+    assert "answer_step:要求ごとの根拠の確認" not in started
+    assert "answer_step:根拠確認（1回目）" not in started
     answer = response.diagnostics.answer or {}
     assert answer["answer_flow"] == "standard_rag"
     models = cast(dict[str, Any], answer["models"])
     assert set(models) == {"llm", "attached_images", "embedding", "rerank"}
-    # 回答が無いので回答の記録は保存しない。
     assert oracle.saved == []
 
 
