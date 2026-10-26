@@ -231,7 +231,7 @@ def evaluation_case(status):
         "evidence_items": [{"id": "p1", "text": "※で画面を開く。鉛筆で編集する。"}],
     }
     scope = StandardAnswerScope(
-        requirements=[StandardRequirement(standard_answer_quote="※で開き鉛筆で編集する。", requirement="入口と編集ボタンの説明")],
+        requirements=[StandardRequirement(standard_answer_unit_ids=["S1"], requirement="入口と編集ボタンの説明")],
         excluded_case_data=[],
     )
     proof = "※で画面を開く。" if status in {"supported", "contradicted"} else ""

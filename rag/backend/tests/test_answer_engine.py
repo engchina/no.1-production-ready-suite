@@ -1262,7 +1262,7 @@ def _fake_evaluation_llm(
     if schema is StandardAnswerScope:
         return StandardAnswerScope.model_validate(
             {
-                "requirements": [{"standard_answer_quote": body, "requirement": "登録の手順"}],
+                "requirements": [{"standard_answer_unit_ids": ["S1"], "requirement": "登録の手順"}],
                 "excluded_case_data": [],
             }
         )
