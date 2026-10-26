@@ -913,7 +913,7 @@ class DocumentSection(BaseModel):
     @field_validator("title")
     @classmethod
     def _require_title(cls, value: str) -> str:
-        # 抽出の章節の名前と同じく、書式の飾りの結合の線を除く（線を除く前に保存した修正も。#3434）。
+        # 抽出の章節の名前と同じく書式の飾りの結合の線を除く（線を除く前の保存値も。#3434）。
         cleaned = strip_formatting_marks(value).strip()
         if not cleaned:
             raise ValueError("章節の名前を入力してください。")

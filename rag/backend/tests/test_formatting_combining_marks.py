@@ -8,7 +8,6 @@ from __future__ import annotations
 import unicodedata
 
 import pytest
-
 from rag_engine.generation import section_expansion
 
 from app.clients.oracle import _chunk_search_text
