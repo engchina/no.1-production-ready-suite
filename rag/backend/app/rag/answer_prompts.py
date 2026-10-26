@@ -253,7 +253,9 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "evaluation",
         (
             ("scope", "rag_engine.evaluation.answer_eval:SCOPE_PROMPT"),
-            ("system", "rag_engine.evaluation.answer_eval:SYSTEM_PROMPT"),
+            # 網羅と、段落ごとの主張の裏付け（その段落の出典の根拠だけ）は別の呼び出し（#3576）。
+            ("coverage", "rag_engine.evaluation.answer_eval:COVERAGE_PROMPT"),
+            ("claim", "rag_engine.evaluation.answer_eval:CLAIM_PROMPT"),
             ("correctness", "rag_engine.evaluation.answer_eval:CORRECTNESS_PROMPT"),
         ),
     ),

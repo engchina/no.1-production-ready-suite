@@ -1960,9 +1960,14 @@ def test_summarize_answer_judgement_keeps_judge_diagnostics() -> None:
         "standard_scope_retries": 0,
         "standard_scope_dropped": 1,
         "judge_retries": 1,
-        "retry_reasons": ["judge:InvalidStructuredOutput"],
         # 判定に使ったモデル（#3574）。
         "judge_model_id": "model-judge",
+        "retry_reasons": ["coverage:InvalidStructuredOutput"],
+        # 段落ごとの主張の判定の呼び出しの数・失敗・出典の無い段落の数（#3576）。
+        "judge_calls": 6,
+        "claim_calls": 4,
+        "claim_failures": 1,
+        "uncited_claims": 2,
     }
     completed = summarize_answer_judgement(
         {**_completed_judgement(), "judge_diagnostics": diagnostics}
