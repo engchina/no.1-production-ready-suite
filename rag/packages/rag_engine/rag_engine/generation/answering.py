@@ -3526,6 +3526,9 @@ def _add_text_search_details(step: _ExecutionStep, info: QuestionTextSearchInfo)
     return True
 
 
+# 回答を作らない検索の、根拠を集める流れの工程名（回答を作るときの「回答生成フロー」に当たる。#3506）と根拠の見出し。
+EVIDENCE_FLOW_STEP = "根拠検索フロー"
+EVIDENCE_RESULT_TITLE = "集めた根拠"
 _SEARCH_PURPOSE = "意味の近さ（ベクトル）と語の一致（全文）で探した順位を融合し、上位の根拠とその前後の文脈を集めます。"
 
 
@@ -4083,6 +4086,7 @@ def answer_question_result(
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     classification_filter: ClassificationFilter | None = None,
     generate_answer: bool = True,
+    complete_evidence: bool = True,
     scope: tuple[str, Sequence[str]] | None = None,
     guide_plan: GuidePlan | None = None,
     caller_queries: Sequence[str] | None = None,
@@ -4096,8 +4100,11 @@ def answer_question_result(
     ``guide_plan`` は照合した業務ガイドの手順（分岐で残った手順。#2395）。回答を作るとき、主の検索の後に
     手順ごとに検索し、手順の根拠と参照の頁の根拠を回答の材料に足す。
 
-    ``generate_answer=False`` は検索だけ（RAG 検索の画面）。質問の理解・拡張・検索文の確定までは回答と同じ工程で、
-    その後は CRAG を使わず文書検索（rerank・親子の展開を含む）を 1 回行い、回答を生成せずに根拠を返す（本文は空）。
+    ``generate_answer=False`` は回答を作らない（RAG 検索の画面。#3506）。根拠を集め終えるまで（回答フロー・章節の拡張・
+    業務ガイドの手順ごとの検索・要求ごとの根拠の確認）は回答と同じ 1 つの流れで、工程・入れ子・LLM の呼び出しも同じ。
+    回答に添付する画像と回答の生成の手前で止め、集めた根拠を返す（本文は空）。``complete_evidence=False`` は、その流れの
+    主の文書の検索の後で止める（業務 Agent の根拠の取得。根拠の補い（章節を読む・探し直す）は呼び出し元がする。CRAG も
+    使わない）。``generate_answer=False`` とだけ組み合わせる。
     空質問は ValueError、処理失敗は中断記録付きの AnswerExecutionError を送出する。
     ADB の準備不足や空検索は
     未実行工程を明示した結果を返し、回答 LLM を呼ばない。記録は呼び出しごとに分離する。
@@ -4121,6 +4128,8 @@ def answer_question_result(
     caller_planned = caller_queries is not None
     if caller_planned and generate_answer:
         raise ValueError("呼び出し元の検索文（caller_queries）は回答を作らない検索（generate_answer=False）だけに使います。")
+    if generate_answer and not complete_evidence:
+        raise ValueError("根拠の補いを省く検索（complete_evidence=False）は回答を作らない検索だけに使います。")
     trusted_queries: tuple[str, ...] = ()
     if caller_planned:
         question_key = _dedupe_query_key(normalized_question)
@@ -4143,6 +4152,12 @@ def answer_question_result(
         # flow を分ける前の呼び出し側は strategy で CRAG を指定する。SDK の既定 flow は standard なので、
         # flow の値にかかわらず旧指定を CRAG として扱う。
         selected_answer_flow = CRAG_ANSWER_FLOW
+    if caller_planned:
+        # 呼び出し元が検索文を作った検索（#2651）は、質問に応じた推論の LLM（CRAG の評価・章節の抜き出し）を呼ばない。
+        complete_evidence = False
+    if not complete_evidence:
+        # 主の文書の検索の後で止める検索は、根拠の評価と補正検索（CRAG）をしない（根拠の補いは呼び出し元がする）。
+        selected_answer_flow = STANDARD_ANSWER_FLOW
 
     with _execution_step(
         "質問の理解", "質問の文から、文書名・画面名・エラーコード・日付などの条件を規則で読み取ります（LLM は使いません）。"
@@ -4362,29 +4377,42 @@ def answer_question_result(
         if text_search_info.error:
             step.status = "検索語の抽出に失敗"
 
-    if not generate_answer:
-        return _retrieve_without_answer(
-            normalized_question,
-            run_id,
-            preferred_engine_ids,
-            settings,
-            top_k=chunk_top_k,
-            neighbor_child_count=chunk_neighbor_count,
-            rerank_enabled=effective_rerank_enabled,
+    # 根拠を集める流れは回答を作るか否かで分けない（RAG 検索とチャットで同じ工程・入れ子・LLM の呼び出し。#3506）。
+    # 回答を作らないときは同じ流れの、回答に添付する画像と回答の生成の手前（業務 Agent の根拠の取得は主の文書の検索の
+    # 後）で止める。工程名だけを回答の有無で変える（回答を作らないのに「回答生成」と示さない）。
+    flow_name, flow_purpose = (
+        ("回答生成フロー", "根拠を集めて確かめ、根拠に基づく回答を作ります。")
+        if generate_answer
+        else (EVIDENCE_FLOW_STEP, "回答と同じ方法で根拠を集めて確かめます（回答は生成しません）。")
+    )
+
+    def evidence_result(context: AnswerContext, *, trace: Mapping[str, Any] | None = None) -> AnswerQuestionResult:
+        """回答を作らずに、集めた根拠を返す（本文は空）。根拠の補いの記録は回答と同じ generation_trace に残す。"""
+        return _answer_question_result(
             expansion=expansion,
-            retrieval_queries=retrieval_queries,
-            lexical_queries=lexical_queries,
+            answer="",
+            response=AnswerResponse(answer_text="", generation_trace=dict(trace or {})),
+            records=context.records,
+            evidence_tree=context.evidence_tree,
             text_search_info=text_search_info,
+            answer_flow=selected_answer_flow,
+            crag_attempts=crag_attempts,
             question_plan=question_plan,
             runtime_knowledge=runtime_knowledge,
             inquiry_conditions=inquiry_conditions,
             retrieval_scope=selected_retrieval_scope,
             classification_filter=selected_classification_filter,
-            trusted_queries=trusted_queries,
-            search_notice=legacy_notice,
+            retrieval_queries=crag_attempts[-1].retrieval_queries if crag_attempts else retrieval_queries,
+            lexical_queries=lexical_queries,
+            crag_rewrites=crag_rewrites,
+            retrieval_top_k=chunk_top_k,
+            request_question=request_text,
         )
 
-    with _execution_step("回答生成フロー", "根拠を集めて確かめ、根拠に基づく回答を作ります。") as flow_step:
+    # 根拠の件数の見出し（回答を作らないときに「回答に渡す」と示さない）。
+    evidence_title = "回答に渡す根拠" if generate_answer else EVIDENCE_RESULT_TITLE
+
+    with _execution_step(flow_name, flow_purpose) as flow_step:
         flow_step.field("設定", answer_flow_label(selected_answer_flow))
         crag_attempts: tuple[CragRetrievalAttempt, ...] = ()
         crag_rewrites: tuple[str, ...] = ()
@@ -4446,13 +4474,14 @@ def answer_question_result(
                         classification_filter=selected_classification_filter,
                         runtime_knowledge=runtime_knowledge,
                         vector_only_queries=expansion.vector_only_queries,
+                        trusted_queries=trusted_queries,
                     )
                     retrieval_step.field("検索文", f"{len(retrieval_queries)} 本")
                     _record_search_conditions(retrieval_step, selected_classification_filter, legacy_notice)
-                    _record_search_result(retrieval_step, context)
+                    _record_search_result(retrieval_step, context, title=evidence_title)
         except AdbHybridSearchUnavailable as exc:
             flow_step.status = "中止"
-            flow_step.add("文書検索を続行できません。回答文の生成は未実行です。")
+            flow_step.add("文書検索を続行できません。" + ("回答文の生成は未実行です。" if generate_answer else ""))
             return _answer_question_result(
                 expansion=expansion,
                 answer=f"ADB hybrid search を使用できません: {exc}",
@@ -4469,6 +4498,10 @@ def answer_question_result(
                 crag_rewrites=crag_rewrites,
                 retrieval_top_k=chunk_top_k,
             )
+        if not complete_evidence:
+            # 業務 Agent の根拠の取得: 主の文書の検索の後で止める（根拠の補いは呼び出し元がする）。
+            flow_step.result(f"{EVIDENCE_RESULT_TITLE} {evidence_summary(context.records)}（回答は生成しません）")
+            return evidence_result(context)
         section_state: dict[str, Any] = {}
         # 業務ガイドの手順が参照する文書と頁（#2828）。章節の拡張はこの範囲の起点を先に広げ、回答の「回答に未反映の
         # 関連章節」はこの文書の章節を残す。
@@ -4554,13 +4587,15 @@ def answer_question_result(
         context, section_expansion = complete_sections(context, "guide_steps")
         if not context.records or not context.text.strip():
             flow_step.status = "根拠不足で終了"
-            flow_step.add("回答に使える根拠がありません。回答文の生成は未実行です。")
+            flow_step.add("回答に使える根拠がありません。" + ("回答文の生成は未実行です。" if generate_answer else ""))
             # どの段で 0 件になったか（#2401）。回答の記録から検索をやり直さずに原因の段を追う。
             zero_evidence = zero_evidence_stage(context, crag_attempts)
             flow_step.field("根拠が 0 件になった段", zero_evidence["label"])
             flow_step.field("検索の候補", f"{zero_evidence['candidate_count']} 件")
             if zero_evidence["rejected_count"]:
                 flow_step.field("根拠確認で外した候補", f"{zero_evidence['rejected_count']} 件")
+            if not generate_answer:
+                return evidence_result(context, trace={"zero_evidence": zero_evidence})
             # 空検索では LLM に推測させず、表示本文と保存 payload の不足情報を揃える。
             response = AnswerResponse(
                 answer_text=(
@@ -4633,6 +4668,16 @@ def answer_question_result(
 
         # 不足要求の追加検索も同じ読取記録・時間・入力・抽出呼び出しの予算を使う。
         context, section_expansion = complete_sections(context, "request_coverage")
+        # 根拠の補いの記録（回答の generation_trace と同じ key）。
+        evidence_trace: dict[str, Any] = {
+            "request_coverage": request_coverage,
+            **({"guide_steps": guide_step_trace} if guide_step_trace is not None else {}),
+            **({"section_expansion": section_expansion.trace} if section_expansion is not None else {}),
+        }
+        if not generate_answer:
+            # 回答を作らない検索（RAG 検索の画面）は、回答と同じ方法で集めた根拠をここで返す（#3506）。
+            flow_step.result(f"{EVIDENCE_RESULT_TITLE} {evidence_summary(context.records)}（回答は生成しません）")
+            return evidence_result(context, trace=evidence_trace)
 
         with _execution_step(
             "回答に添付する画像", "回答モデルが画像を読めるとき、根拠の資料の図・画面の画像を回答の入力に添付します。"
@@ -4692,12 +4737,7 @@ def answer_question_result(
         response, context = grounded_answer.response, grounded_answer.context
         response = replace(
             response,
-            generation_trace={
-                **(response.generation_trace or {}),
-                "request_coverage": request_coverage,
-                **({"guide_steps": guide_step_trace} if guide_step_trace is not None else {}),
-                **({"section_expansion": section_expansion.trace} if section_expansion is not None else {}),
-            },
+            generation_trace={**(response.generation_trace or {}), **evidence_trace},
         )
         image_evidence, image_prompt_mode = grounded_answer.image_evidence, grounded_answer.image_prompt_mode
         if legacy_notice:
@@ -4972,80 +5012,6 @@ def _section_evidence_budget(context: AnswerContext, settings: Settings, expansi
         return max(1, min(base or limit, limit))
     # ASCII の原文も、token と文字数を混同して切らない。全量が token 予算内なら全文を渡す。
     return max(base, total + total // 10)
-
-
-def _retrieve_without_answer(
-    question: str,
-    run_id: Any,
-    preferred_engine_ids: list[str],
-    settings: Settings,
-    *,
-    top_k: int,
-    neighbor_child_count: int,
-    rerank_enabled: bool,
-    expansion: QueryExpansionResult,
-    retrieval_queries: Sequence[str],
-    lexical_queries: Sequence[str],
-    text_search_info: QuestionTextSearchInfo,
-    question_plan: QuestionPlan,
-    runtime_knowledge: RuntimeKnowledgeContext,
-    inquiry_conditions: InquiryConditionParse,
-    retrieval_scope: str,
-    classification_filter: ClassificationFilter,
-    trusted_queries: Sequence[str] = (),
-    search_notice: str = "",
-) -> AnswerQuestionResult:
-    """回答の生成をせずに文書検索だけを行う（``answer_question_result(generate_answer=False)``）。
-
-    CRAG（検索結果の評価と補正検索）は回答のための工程なので使わない。検索できないときは理由を本文に入れて返す。
-    ``trusted_queries`` は呼び出し元が作った検索文（#2651。原質問との照合で外さない）。
-    ``search_notice`` は文書検索の工程に示す注記（検索対象外の旧 schema の文書など）。
-    """
-    records: Sequence[AnswerRecord] = ()
-    evidence_tree: Sequence[ContextParentEvidence] = ()
-    answer = ""
-    with _execution_step("文書検索", _SEARCH_PURPOSE) as step:
-        try:
-            context = build_adb_hybrid_answer_context(
-                question,
-                run_id,
-                preferred_engine_ids,
-                settings,
-                top_k=top_k,
-                neighbor_child_count=neighbor_child_count,
-                retrieval_queries=retrieval_queries,
-                rerank_enabled=rerank_enabled,
-                inquiry_conditions=inquiry_conditions,
-                retrieval_scope=retrieval_scope,
-                classification_filter=classification_filter,
-                runtime_knowledge=runtime_knowledge,
-                vector_only_queries=expansion.vector_only_queries,
-                trusted_queries=trusted_queries,
-            )
-        except AdbHybridSearchUnavailable as exc:
-            step.status = "中止"
-            answer = f"ADB hybrid search を使用できません: {exc}"
-        else:
-            records, evidence_tree = context.records, context.evidence_tree
-            step.field("検索文", f"{len(retrieval_queries)} 本")
-            _record_search_conditions(step, classification_filter, search_notice)
-            _record_search_result(step, context, title="検索結果", note="（回答は生成しません）")
-    return _answer_question_result(
-        expansion=expansion,
-        answer=answer,
-        records=records,
-        evidence_tree=evidence_tree,
-        text_search_info=text_search_info,
-        answer_flow=STANDARD_ANSWER_FLOW,
-        question_plan=question_plan,
-        runtime_knowledge=runtime_knowledge,
-        inquiry_conditions=inquiry_conditions,
-        retrieval_scope=retrieval_scope,
-        classification_filter=classification_filter,
-        retrieval_queries=retrieval_queries,
-        lexical_queries=lexical_queries,
-        retrieval_top_k=top_k,
-    )
 
 
 def load_answer_chunks(output_dir: str | Path, run_id: Any, preferred_engines: Iterable[str]) -> list[AnswerRecord]:

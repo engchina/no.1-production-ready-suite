@@ -177,9 +177,11 @@ describe("RAG_TRACE_DETAILS_LABELS（トレースの span の名前）", () => {
   });
 
   it("処理の経過の段の名前と trace の段の名前は同じ関数から作る", () => {
-    for (const stage of ["history_rewrite", "field_filter", "answer", "retrieval", "answer_guardrail", "answer_record_save", "質問の理解", "根拠確認（2回目）"]) {
+    for (const stage of ["history_rewrite", "field_filter", "answer", "evidence", "retrieval", "answer_guardrail", "answer_record_save", "質問の理解", "根拠検索フロー", "根拠確認（2回目）"]) {
       expect(RAG_TRACE_DETAILS_LABELS.stageName?.(stage, "done")).toBe(answerStageName(stage));
     }
+    expect(answerStageName("evidence")).toBe("質問の理解から根拠の検索まで");
+    expect(answerStageName("根拠検索フロー")).toBe("根拠の検索");
     expect(answerStageName("未知の工程")).toBeUndefined();
   });
 });

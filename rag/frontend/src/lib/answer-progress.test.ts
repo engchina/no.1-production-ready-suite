@@ -44,6 +44,10 @@ describe("answer-progress（Issue 375）", () => {
     expect(answerProgressLabel([{ stage: "retrieval", outcome: "started" }])).toBe(
       "回答を生成しています（検索）"
     );
+    // 回答を作らない RAG 検索の全体（#3506）。
+    expect(answerProgressLabel([{ stage: "evidence", outcome: "started" }], { generateAnswer: false })).toBe(
+      "検索しています（質問の理解から根拠の検索まで）"
+    );
     expect(answerStageLabel("unknown_stage")).toBe(t("search.stage.processing"));
   });
 

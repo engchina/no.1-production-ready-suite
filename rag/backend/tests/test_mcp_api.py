@@ -1506,6 +1506,8 @@ def test_retrieve_evidence_with_caller_planning_searches_the_caller_queries(
     assert captured == {
         "scope": None,
         "caller_queries": ["精算 締め日"],
+        # 根拠の補いは Agent がする（主の文書の検索の後で止める。#3506）。
+        "complete_evidence": False,
         "generate_answer": False,
         "query": "経費精算 期限",
     }
@@ -2967,8 +2969,9 @@ def test_evidence_shows_the_section_of_the_chunk(
     )
     other = RetrievedChunk(document_id="d2", chunk_id="d2:0", text="別の文書。", score=0.5)
 
-    async def fake_search(request: SearchRequest) -> SearchResponse:
+    async def fake_search(request: SearchRequest, **options: object) -> SearchResponse:
         del request
+        assert options == {"complete_evidence": False}
         return SearchResponse(answer="", citations=[hit, other], trace_id="t-1", elapsed_ms=1.0)
 
     monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_search)
