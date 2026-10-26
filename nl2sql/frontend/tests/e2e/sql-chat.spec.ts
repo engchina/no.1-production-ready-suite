@@ -1647,7 +1647,7 @@ test("候補の無い確認事項は、自由入力だけの言い方で聞く (
   await expect(question.getByText("答えを書くと押せます。")).toBeVisible();
   await expect(question.getByRole("textbox", { name: "その他（自由入力）" })).toHaveCount(0);
   await expect(question).not.toContainText("選択肢");
-  await page.screenshot({ path: testInfo.outputPath("nl2sql-clarification-free-text.png"), fullPage: true });
+  await question.screenshot({ path: testInfo.outputPath("nl2sql-clarification-free-text.png") });
   await answer.fill("2026 年度（4 月始まり）");
   await question.getByRole("button", { name: "この内容で回答" }).click();
   await expect(turn.getByTestId("nl2sql-clarification-summary")).toBeVisible();

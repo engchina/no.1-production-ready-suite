@@ -578,6 +578,24 @@ export function requirementClarificationLabels(): ClarificationLabels {
 }
 
 /**
+ * 選択肢の無い欄で、確認済みの要件を直す・条件を足すときの欄の文言（#3366）。書くのは確認事項への答えではなく
+ * 直し・足す条件なので、共通の「答え」ではなく何を書くかを名前にする（選択肢があれば「その他（自由入力）」のまま）。
+ */
+function correctionFreeTextLabels(kind: "correct" | "add"): Partial<ClarificationLabels> {
+  return kind === "add"
+    ? {
+        freeText: t("nl2sql.clarification.addText"),
+        freeTextPlaceholder: t("nl2sql.clarification.addPlaceholder"),
+        confirmBlockedFreeText: t("nl2sql.clarification.addBlocked"),
+      }
+    : {
+        freeText: t("nl2sql.clarification.correctionText"),
+        freeTextPlaceholder: t("nl2sql.clarification.correctionPlaceholder"),
+        confirmBlockedFreeText: t("nl2sql.clarification.correctionBlocked"),
+      };
+}
+
+/**
  * 確認のカードの「この内容で回答」を送っている（カードがフォームを答えた内容と経過の行に置き換えている）か。
  * 確認済みの一覧の候補から答えているときは含めない（カードは押せなくするだけ）。
  */
@@ -742,6 +760,7 @@ export function RequirementCard({
           }
           labels={{
             ...baseLabels,
+            ...(correctingItem ? correctionFreeTextLabels(adding ? "add" : "correct") : {}),
             confirm: adding
               ? t("nl2sql.clarification.addSubmit")
               : correctingItem
@@ -796,7 +815,12 @@ export function RequirementCard({
         onConfirm={onApply}
         // 確かめた要件を使わずに、質問のまま SQL を生成する（確認を終える唯一の操作。#2311）。
         onSkip={onSkip}
-        labels={{ ...baseLabels, confirm: applyLabel, confirming: t("nl2sql.clarification.loading.apply") }}
+        labels={{
+          ...baseLabels,
+          ...correctionFreeTextLabels("correct"),
+          confirm: applyLabel,
+          confirming: t("nl2sql.clarification.loading.apply"),
+        }}
         actions={
           <Button
             type="button"
