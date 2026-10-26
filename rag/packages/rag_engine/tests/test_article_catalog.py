@@ -1120,16 +1120,21 @@ def test_refine_without_references_shows_only_the_same_chapter():
 
 
 def test_refine_candidates_share_the_limit_between_the_same_chapter_and_references():
-    """候補は合わせて上限まで。同じ章に 3 分の 2、名指しに残りを先に割り当て、少ない側の余りをもう片方に回す。"""
+    """候補は合わせて上限まで。同じ章に 3 分の 2、名指しに 3 分の 1 を割り当て、名指しの余りだけを同じ章に回す（#3531）。"""
     from rag_engine.retrieval.article_catalog import refine_articles, refine_candidates
 
-    same, refs = list(range(100, 150)), list(range(200, 230))
+    same, refs = list(range(100, 170)), list(range(200, 260))
     shown = refine_candidates(same, refs, limit=60)
     assert len(shown) == 60 and shown[:20] == refs[:20] and shown[20:] == same[:40]
-    # 同じ章の条が少なければ名指しの条が余りを使い、名指しの条が少なければ同じ章の条が使う。
-    assert refine_candidates(same[:5], refs, limit=60) == [*refs, *same[:5]]
-    assert refine_candidates(same, refs[:3], limit=60) == [*refs[:3], *same]
-    assert refine_candidates(same, [], limit=60) == same and refine_candidates(same, refs, limit=0) == []
+    # 同じ章の条が少なくても、名指しの条は 3 分の 1 を超えない（余りは空けたまま）。
+    assert refine_candidates(same[:5], refs, limit=60) == [*refs[:20], *same[:5]]
+    assert refine_candidates([], refs, limit=60) == refs[:20]
+    assert refine_candidates([], refs, limit=30) == refs[:10]
+    # 名指しの条が少なければ、その余りは同じ章の条が使う。
+    assert refine_candidates(same, refs[:3], limit=60) == [*refs[:3], *same[:57]]
+    assert refine_candidates(same, [], limit=60) == same[:60] and refine_candidates(same, refs, limit=0) == []
+    # 上限が 3 未満なら名指しの枠は 0（同じ章の条だけ）。
+    assert refine_candidates(same, refs, limit=2) == same[:2] and refine_candidates([], refs, limit=2) == []
 
     asked = {}
 
