@@ -24,8 +24,6 @@ function seedAgent(mockApi: MockApi, overrides: Record<string, unknown> = {}) {
     instructions: "書類を照合する。",
     skill_ids: [],
     model_id: "",
-    migration_required: false,
-    tool_names: [],
     enabled: true,
     source: "runtime",
     versioned: true,

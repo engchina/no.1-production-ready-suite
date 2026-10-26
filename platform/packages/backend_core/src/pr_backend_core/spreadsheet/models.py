@@ -12,6 +12,8 @@
   （`table_index`・`region`・`title`）。
 - 列の役割（`SheetColumn.role`。#1281）は設定値の表の「説明・既定値・例示・現在値・推奨値・
   設定できる範囲」の列。値の列は本文で列名の後に役割の表示（`column_display_name`）を付ける。
+- 表の下の注記（`SheetRecords.notes`。#3566）は表の記録とは別の文の行にする。注記の印（「※1」など）
+  をセルに含む表の行は、その注記の文を `SheetBlock.notes` にも持つ。
 """
 
 from __future__ import annotations
@@ -106,6 +108,21 @@ def column_display_name(name: str, role: str | None) -> str:
     if not label or name.strip() == label:
         return name
     return f"{name}［{label}］"
+
+
+# 表の下の注記の行の先頭の印（#3566）。行の先頭に当たる正規表現で、当たった文字が注記の印になる。
+# 業務の語ではなく、注記に広く使う記号・書き方だけを置く（資料に合わせて選択肢 `note_markers` で
+# 替えられる）。
+DEFAULT_NOTE_MARKERS: tuple[str, ...] = (
+    r"[※＊*]\s*\d*",
+    r"[(（]\s*注\s*\d*\s*[)）]",
+    r"注\s*\d*\s*[:：.．)）]",
+    r"注\s*\d+",
+    r"(?i:notes?)\s*\d*\s*[:：.)]",
+    r"[(（]\s*\d+\s*[)）]",
+    r"\d+\s*[)）]",
+)
+_NOTE_MARKER_MAX_CHARS = 200
 
 
 class ExcelOptions(BaseModel):
@@ -204,6 +221,34 @@ class ExcelOptions(BaseModel):
         ),
     )
 
+    note_markers: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_NOTE_MARKERS),
+        max_length=50,
+        description=(
+            "表の下の注記の行の先頭の印（正規表現。行の先頭に当てる）。表の後ろの、セルが"
+            "1 つだけの行がこの印で始まれば、表の行ではなく注記にする（#3566）。"
+            "空なら印では決めない（長い文の行だけを注記にする）。"
+        ),
+    )
+
+    @field_validator("note_markers")
+    @classmethod
+    def _valid_note_markers(cls, value: list[str]) -> list[str]:
+        cleaned = [item for item in value if item.strip()]
+        for item in cleaned:
+            if len(item) > _NOTE_MARKER_MAX_CHARS:
+                raise ValueError(f"注記の印は {_NOTE_MARKER_MAX_CHARS} 文字までです: {item[:40]}")
+            try:
+                re.compile(item)
+            except re.error as error:
+                raise ValueError(
+                    f"注記の印の正規表現が正しくありません: {item}（{error}）"
+                ) from error
+        return cleaned
+
+    def note_marker_patterns(self) -> list[re.Pattern[str]]:
+        return [re.compile(item) for item in self.note_markers]
+
     @field_validator("column_roles")
     @classmethod
     def _clean_column_roles(cls, value: dict[str, str]) -> dict[str, str]:
@@ -275,6 +320,12 @@ class SheetPreambleRow(BaseModel):
     )
 
 
+class SheetNoteRow(SheetPreambleRow):
+    """表の下の注記の行（#3566）。``marker`` は先頭の注記の印（印の無い長い文の行は None）。"""
+
+    marker: str | None = None
+
+
 class SheetBlock(BaseModel):
     """記録の単位（表の 1 行・手順書の 1 手順・帳票の 1 項目）。"""
 
@@ -301,6 +352,13 @@ class SheetBlock(BaseModel):
         default_factory=list,
         description="記録のうち、図形・テキストボックスの文字を置いたセル範囲（#2526）。",
     )
+    notes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "表の行のセルが注記の印（例: ※1）で指す、表の下の注記の文（#3566）。1 行 = 1 記録の"
+            "本文に注記を含める。"
+        ),
+    )
 
 
 class SheetDiagnostic(BaseModel):
@@ -324,6 +382,10 @@ class SheetRecords(BaseModel):
     columns: list[SheetColumn] = Field(default_factory=list)
     preamble: list[SheetPreambleRow] = Field(default_factory=list)
     blocks: list[SheetBlock] = Field(default_factory=list)
+    notes: list[SheetNoteRow] = Field(
+        default_factory=list,
+        description="表の下の注記の行（表の行・表頭にしない。#3566）。",
+    )
     diagnostics: list[SheetDiagnostic] = Field(default_factory=list)
 
 

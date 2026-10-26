@@ -14,6 +14,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 import httpx
@@ -42,7 +43,8 @@ class RagSearchIn(_ContractInput):
     query: str
     search_answer_profile_id: str | None = None
     knowledge_base_ids: list[str] | None = None
-    top_k: int | None = Field(default=None, ge=1, le=100)
+    # 既定は契約の既定（#3240）。null は省略と同じ。
+    top_k: int | None = Field(default=50, ge=1, le=100)
     filters: dict[str, str] | None = None
     # 旧版も検索するかは専用の真偽値（#1392。filters の値は文字列だけ）。
     include_superseded: bool = False
@@ -329,361 +331,25 @@ def _job(status: str = "done") -> dict[str, Any]:
     }
 
 
-_LOCATOR = {"section_path": ["契約書", "第5条（更新）"], "page_start": 3, "page_end": 3}
-
-# RAG の `rag_search` の根拠（platform/contracts/mcp/rag-tools.json の evidence。#1219）。
-_EVIDENCE = {
-    "evidence_id": "chunk-1",
-    "document_id": "doc-1",
-    "chunk_id": "chunk-1",
-    "file_name": "契約書.pdf",
-    "chunk_set_id": "cs-1",
-    "recipe_id": "recipe-1",
-    "content_kind": "text",
-    "evidence_type": "text",
-    "image_ref": None,
-    "locator": _LOCATOR,
-    "excerpt": "契約条項",
-    "truncated": False,
-    "text_omitted": False,
-    "text_length": 4,
-    # 本文の範囲と続きの位置（#3321）。
-    "excerpt_range": {"start": 0, "end": 4},
-    "header_range": None,
-    "next_offset": None,
-    "used_in_answer": True,
-    "role": "retrieved_anchor",
-    "score": 0.9,
-    "rerank_score": None,
-    # 検索の順位と本文の由来（#2651）。
-    "retrieval_rank": 1,
-    "origin": "source",
-    # 根拠が属する章節（章節ナビゲーションの章節。#1438）。
-    "section": {
-        "section_id": "sec-5",
-        "title": "第5条（更新）",
-        "level": 2,
-        "page_start": 3,
-        "page_end": 4,
-        "chars": 1200,
-        "chunk_count": 2,
-        "parent_section_id": "sec-ch2",
-        "parent_title": "第2章 契約の期間",
-        "parent_chars": 3400,
-    },
-}
-
-# RAG の MCP の出力の形の版（platform/contracts/mcp/rag-tools.json の schema_version。#1276）。
-# 10: 読み取りのツールの chunks に表計算の場所（sheet_name・row_start・row_end・cell_range）を
-# 足した（#1471）。
-# 11: rag_validate_answer に、監査の判定を再利用した段落の数（reused_claims）を足した（#1527）。
-# 12: rag_recommend_search_answer_profile を足した（#1850）。
-# 13: rag_search の skip_clarification と確認の multiple を足した（#2117）。
-# 14: rag_outline に format（compact の目録）・section_id・lead_chars を足した（#2252）。
-# 17: rag_search に回答の注意書き（notice。API キーの呼び出しだけ）を足した（#2405）。
-# 18: rag_lookup_guides の手順の中身（検索の手がかり・参照の資料と頁など）・分岐・完了の条件
-# （#2396）。
-# 19: rag_validate_answer の claims に audit_status・reference_check を足した（#2622）。
-# 20: rag_validate_answer の claims に classification_check を足した（#2625）。
-# 21: rag_retrieve_evidence の planning・queries・request_id・clarifications と、根拠の
-# retrieval_rank・origin を足した（#2651）。
-# 22: rag_validate_answer の claims に support_check を足した（#2659）。
-# 23: rag_retrieve_evidence に検索・回答プロファイルのルールと用語（profile_knowledge）を足した
-# （#2701）。
-# 24: rag_validate_answer に業務ガイドの手順ごとの説明の充足（guide_steps）と、説明の無い必須の
-# 手順の finding（guide_step_unexplained）を足した（#2708）。
-# 25: rag_validate_answer の status に partial（一部の段落が時間の上限までに監査されなかった）と
-# timed_out を足した（#2700）。
-# 26: rag_lookup_guides の参照に、表計算の資料のシートと行の範囲（sheet_ranges）を足した（#2663）。
-# 27: rag_validate_answer の claims の status に figure_only（図の見た目だけで決まる主張）を
-# 足した（#2678）。
-# 32: 根拠の excerpt を既定で全文にし、応答の予算で本文を省いた根拠（text_omitted）と、1 件の上限で
-# 切った範囲（excerpt_range・header_range・next_offset）を足した（#3321）。
-# 33: 根拠の locator に表の 1 行のセルの座標（table_row・table_cells）を足した（#3262）。
-# 34: 読み取りのツールの本文を文・段落（表は行）の境界で切り、表の続きに付けた見出しの行の位置
-# （header_range）を足した（#3344）。
-# 35: 根拠の locator に行の番号の基準（row_basis）・表の番号（table_index）・CSV の物理行の範囲
-# （source_line_start・source_line_end）、根拠に表の行・列の
-# 対応の検査が読める表か（table_binding）、rag_search・rag_retrieve_evidence に縮退した任意の
-# 補助の処理（degraded_steps）を足した（#3262）。
-# 36: 行の番号の基準に解析の表の格子（parsed_table）を、表のセルに領域（bbox）を足した（#3429）。
-RAG_OUTPUT_SCHEMA_VERSION = 36
+# RAG の MCP のツールの既定の出力（#3240）。契約（platform/contracts/mcp/rag-tools.json）の
+# outputSchema だけで作った共有の合成の例（platform/contracts/mcp/fixtures/rag-tool-outputs.json）を
+# 使い、Agent のテストを RAG の内部の形ではなく公開の契約で動かす（契約との一致は
+# test_rag_contract_usage.py、RAG の出力の型で読めることは rag の
+# test_mcp_contract.py が確かめる）。
+RAG_OUTPUTS_FIXTURE = (
+    Path(__file__).resolve().parents[3] / "platform/contracts/mcp/fixtures/rag-tool-outputs.json"
+)
+_RAG_FIXTURE: dict[str, Any] = json.loads(RAG_OUTPUTS_FIXTURE.read_text(encoding="utf-8"))
+# RAG の MCP の出力の形の版（契約の schema_version。版の経緯は rag の app/mcp/tools.py）。
+RAG_OUTPUT_SCHEMA_VERSION: int = _RAG_FIXTURE["schema_version"]
+RAG_OUTPUTS: dict[str, Any] = _RAG_FIXTURE["outputs"]
+# RAG の `rag_search` の根拠（契約の evidence の 1 件）と場所。
+_EVIDENCE: dict[str, Any] = RAG_OUTPUTS["rag_search"]["evidence"][0]
+_LOCATOR: dict[str, Any] = _EVIDENCE["locator"]
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
-    "rag_search": {
-        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
-        "answer": "根拠付き回答",
-        "trace_id": "rag-trace-1",
-        "guardrail_warnings": [],
-        "outcome": "answered",
-        "requests": [{"id": "Q1", "text": "契約条項", "status": "addressed"}],
-        "conditions": [],
-        "gaps": [],
-        "confirmations": [],
-        "insufficient_reason": None,
-        "needs_human_review": False,
-        "evidence": [_EVIDENCE],
-        "evidence_omitted": 0,
-        # 当たった文書の旧版（旧版を検索しなかったときだけ。#1405）。
-        "older_versions": [],
-    },
-    "rag_read_source": {
-        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
-        "evidence_id": "chunk-1",
-        "document_id": "doc-1",
-        "chunk_id": "chunk-1",
-        "file_name": "契約書.pdf",
-        "chunk_set_id": "cs-1",
-        "recipe_id": "recipe-1",
-        "content_kind": "text",
-        "evidence_type": "text",
-        "image_ref": None,
-        "image": None,
-        "image_url": None,
-        "preview": None,
-        "locator": _LOCATOR,
-        "text": "契約条項の全文",
-        "offset": 0,
-        "text_length": 7,
-        "truncated": False,
-        "next_offset": None,
-        "parent_text": None,
-        "parent_truncated": False,
-    },
-    "rag_outline": {
-        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
-        "document_id": "doc-1",
-        "file_name": "契約書.pdf",
-        "chunk_set_id": "cs-1",
-        "root_section_id": "document",
-        "chunk_count": 2,
-        "chars": 3400,
-        "page_start": 1,
-        "page_end": 4,
-        "sections": [
-            {
-                "section_id": "sec-ch2",
-                "title": "第2章 契約の期間",
-                "level": 1,
-                "parent_section_id": "document",
-                "path": ["第2章 契約の期間"],
-                "page_start": 1,
-                "page_end": 4,
-                "chunk_count": 2,
-                "chars": 3400,
-            },
-            {
-                "section_id": "sec-5",
-                "title": "第5条（更新）",
-                "level": 2,
-                "parent_section_id": "sec-ch2",
-                "path": ["第2章 契約の期間", "第5条（更新）"],
-                "page_start": 3,
-                "page_end": 4,
-                "chunk_count": 2,
-                "chars": 1200,
-            },
-        ],
-        "sections_omitted": 0,
-        "superseded": False,
-    },
-    "rag_read_section": {
-        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
-        "document_id": "doc-1",
-        "file_name": "契約書.pdf",
-        "chunk_set_id": "cs-1",
-        "section": {
-            "section_id": "sec-5",
-            "title": "第5条（更新）",
-            "level": 2,
-            "parent_section_id": "sec-ch2",
-            "path": ["第2章 契約の期間", "第5条（更新）"],
-            "page_start": 3,
-            "page_end": 4,
-            "chunk_count": 2,
-            "chars": 1200,
-        },
-        "child_sections": [],
-        "text": "--- p.3 ---\n契約条項の全文\n\n--- p.4 ---\n更新の条件",
-        "chunks": [
-            {
-                "chunk_id": "chunk-3",
-                "element_locator": None,
-                "section_path": ["契約書", "第5条（更新）"],
-                "page_start": 3,
-                "page_end": 3,
-                "sheet_name": None,
-                "row_basis": None,
-                "table_index": None,
-                "row_start": None,
-                "row_end": None,
-                "source_line_start": None,
-                "source_line_end": None,
-                "cell_range": None,
-                "start": 12,
-                "end": 19,
-                "header_range": None,
-            },
-            {
-                "chunk_id": "chunk-4",
-                "element_locator": None,
-                "section_path": ["契約書", "第5条（更新）"],
-                "page_start": 4,
-                "page_end": 4,
-                "sheet_name": None,
-                "row_basis": None,
-                "table_index": None,
-                "row_start": None,
-                "row_end": None,
-                "source_line_start": None,
-                "source_line_end": None,
-                "cell_range": None,
-                "start": 33,
-                "end": 38,
-                "header_range": None,
-            },
-        ],
-        "section_complete": True,
-        "next_cursor": None,
-        "superseded": False,
-    },
-    "rag_read_document": {
-        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
-        "document_id": "doc-1",
-        "file_name": "契約書.pdf",
-        "chunk_set_id": "cs-1",
-        "text": "--- p.3 ---\n契約条項の全文\n更新の条件",
-        "chunks": [
-            {
-                "chunk_id": "chunk-3",
-                "element_locator": None,
-                "section_path": ["契約書", "第5条（更新）"],
-                "page_start": 3,
-                "page_end": 3,
-                "sheet_name": None,
-                "row_basis": None,
-                "table_index": None,
-                "row_start": None,
-                "row_end": None,
-                "source_line_start": None,
-                "source_line_end": None,
-                "cell_range": None,
-                "start": 12,
-                "end": 19,
-                "header_range": None,
-            },
-            {
-                "chunk_id": "chunk-4",
-                "element_locator": None,
-                "section_path": ["契約書", "第5条（更新）"],
-                "page_start": 3,
-                "page_end": 3,
-                "sheet_name": None,
-                "row_basis": None,
-                "table_index": None,
-                "row_start": None,
-                "row_end": None,
-                "source_line_start": None,
-                "source_line_end": None,
-                "cell_range": None,
-                "start": 20,
-                "end": 25,
-                "header_range": None,
-            },
-        ],
-        "next_cursor": None,
-        "superseded": False,
-    },
-    "rag_recommend_search_answer_profile": {
-        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
-        "recommended_profile_id": "bv-sales",
-        "candidates": [
-            {
-                "id": "bv-sales",
-                "name": "営業の検索・回答プロファイル",
-                "description": "営業部門の文書",
-                "reason": "当たった資料: 契約書.pdf",
-                "score": 1.0,
-                "documents": ["契約書.pdf"],
-            }
-        ],
-    },
-    "rag_list_search_answer_profiles": {
-        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
-        "search_answer_profiles": [
-            {
-                "id": "bv-sales",
-                "name": "営業の検索・回答プロファイル",
-                "description": "営業部門の文書",
-                "status": "ACTIVE",
-                "knowledge_base_count": 2,
-            }
-        ],
-    },
-    "rag_lookup_guides": {
-        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
-        "guides": [
-            {
-                "guide_id": "guide-1",
-                "revision": 1,
-                "title": "契約の更新",
-                "decision": "clarify",
-                "known_conditions": [],
-                "unknown_conditions": [{"id": "kind", "label": "契約の種類", "handling": "ask"}],
-                "expected_result": "契約を更新できる",
-                "score": 2,
-                "clarifications": [
-                    {
-                        "condition_id": "kind",
-                        "label": "契約の種類",
-                        "question": "契約の種類は何ですか？",
-                        "options": ["年間", "月額"],
-                    }
-                ],
-                "steps": [
-                    {"id": "s1", "title": "契約を開く", "depends_on": [], "allowed_tools": []}
-                ],
-                "impact_scope": "individual",
-                "approval_required": False,
-                "handoff_contact": "",
-            }
-        ],
-    },
-    "rag_retrieve_evidence": {
-        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
-        "trace_id": "rag-trace-2",
-        "guardrail_warnings": [],
-        "evidence": [{**_EVIDENCE, "used_in_answer": False}],
-        "evidence_omitted": 0,
-        "older_versions": [],
-        "planning": "caller",
-        "request_id": None,
-        "clarifications": [],
-        "profile_knowledge": None,
-    },
-    # 回答の最終の検証（#1246）。既定は根拠で裏付けられた回答。
-    "rag_validate_answer": {
-        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
-        "valid": True,
-        "status": "completed",
-        "counts": {"supported": 1, "unsupported": 0, "contradicted": 0},
-        "claims": [
-            {
-                "answer_quote": "根拠付き回答",
-                "status": "supported",
-                "chunk_id": "chunk-1",
-                "reason": "根拠の契約条項に書かれている。",
-            }
-        ],
-        "missing_evidence": [],
-        "stale_evidence": [],
-        "evidence_truncated": False,
-        "checks": [],
-        "findings": [],
-        "guide_revision": None,
-        "guide_steps": [],
-        "reused_claims": 0,
-    },
+    # rag_readable_documents は fake が引数と `unreadable_documents` から作る。
+    **{name: output for name, output in RAG_OUTPUTS.items() if name != "rag_readable_documents"},
     "nl2sql_query": _job(),
     "nl2sql_get_job": _job(),
     "nl2sql_list_profiles": {

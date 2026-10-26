@@ -625,6 +625,37 @@ def test_missing_model_settings_fail_the_run(monkeypatch: MonkeyPatch, calls: _C
     assert run.events[-1].payload["error_code"] == "runtime.model_not_configured"
 
 
+def test_unregistered_model_fails_without_switching_connections(monkeypatch: MonkeyPatch) -> None:
+    """登録に無いモデル（登録を消したなど）は、プライマリ接続へ切り替えずに失敗する（#3240）。
+
+    空のモデル（業務 Agent が既定を使う）は、既定のテキストモデルとその接続に決まる。
+    """
+    from pr_system_settings.model import EnterpriseAiConfiguredModel
+
+    from app.settings import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_enterprise_ai_endpoint", "https://primary.example/v1")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_api_key", "k-primary")
+    monkeypatch.setattr(
+        settings,
+        "oci_enterprise_ai_models",
+        [EnterpriseAiConfiguredModel(model_id="registered-3240", display_name="R")],
+    )
+    monkeypatch.setattr(settings, "oci_enterprise_ai_default_text_model", "registered-3240")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_default_vision_model", "")
+
+    with pytest.raises(builtin_runtime.BuiltinRuntimeError) as raised:
+        builtin_runtime.resolve_model_target("removed-3240")
+    assert raised.value.code == "runtime.model_not_registered"
+    assert "removed-3240" in raised.value.message
+
+    assert builtin_runtime.resolve_model_target("").model_id == "registered-3240"
+    assert builtin_runtime.resolve_model_target("registered-3240").endpoint.startswith(
+        "https://primary.example"
+    )
+
+
 def test_cancelled_run_is_not_started(monkeypatch: MonkeyPatch, calls: _Calls) -> None:
     model = _script(monkeypatch, [assistant_message("実行されない")])
     run_id = _create_run()

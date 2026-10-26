@@ -100,7 +100,7 @@ from app.features.agent.tools import (
     ToolPolicyDecision,
     ToolResult,
     mcp_base_tool_name,
-    tool_registry,
+    set_run_finished_check,
 )
 from app.observability import record_runtime_event
 from app.oracle_connection import connect_platform_oracle
@@ -303,6 +303,24 @@ class AgentShareRequest(BaseModel):
     decided_at: datetime | None = None
 
 
+# 業務 Agent に直接は書けないツールの指定（#3240）。業務 Agent が使うツールは、選んだスキルの
+# `mcp_requirements` からだけ決める（`builtin_runtime.agent_mcp_requirements`）。作成・変更の API は
+# これらの項目を黙って捨てずに 422 で拒む（未対応の指定を成功にしない）。
+DIRECT_TOOL_FIELDS: tuple[str, ...] = ("tool_names", "mcp_requirements")
+
+
+def reject_direct_tool_fields(value: Any) -> Any:
+    """作成・変更の要求に、業務 Agent へのツールの直接の指定があれば拒む（#3240）。"""
+    if isinstance(value, Mapping):
+        found = [name for name in DIRECT_TOOL_FIELDS if name in value]
+        if found:
+            raise ValueError(
+                f"業務 Agent にツール（{'・'.join(found)}）は指定できません。"
+                "使うツールはスキルで宣言し、skill_ids でスキルを選んでください。"
+            )
+    return value
+
+
 class AgentProfile(BaseModel):
     id: str = Field(default_factory=lambda: f"agent_{uuid4().hex}")
     name: str
@@ -328,9 +346,9 @@ class AgentProfile(BaseModel):
     skill_policy: SkillPolicy = SKILL_POLICY_PINNED
     # 出力の項目（#2549。key・表示名・型・必須。Run に `record_output` を渡す）。
     output_fields: list[AgentOutputField] = Field(default_factory=list)
-    migration_required: bool = False
-    # Deprecated read compatibility。新規 UI/API は skill_ids だけを書き込む。
-    tool_names: list[str] = Field(default_factory=list)
+    # 使うツールは持たない（スキルの `mcp_requirements` からだけ決める。#3240）。直接の指定は
+    # 作成・変更の API が 422 で拒み（`reject_direct_tool_fields`）、保存済みの旧い値
+    # （`tool_names`・`migration_required`）は読むときに無視する（未リリースのため互換を持たない）。
     enabled: bool = True
     # 由来層: builtin(default)/ runtime(UI/API)。
     source: str = "runtime"
@@ -438,12 +456,12 @@ AGENT_UNPUBLISHED_MESSAGE = (
 def agent_unavailable_reason(agent: AgentProfile | None) -> str | None:
     """利用者の Run（チャット・MCP・自動実行）で使えない理由。使えるなら None（#792）。
 
-    利用者の Run は公開中の版で実行する（#770）ため、無効・移行が要る・公開した版が無い
+    利用者の Run は公開中の版で実行する（#770）ため、無効・公開した版が無い
     業務 Agent は使えない。品質評価と管理者の「下書きで実行」はこの判定を使わない。
     """
     if agent is None:
         return "業務 Agent が見つかりません。"
-    if not agent.enabled or agent.migration_required:
+    if not agent.enabled:
         return "この業務 Agent は実行できない状態です。"
     if agent.published() is None:
         return AGENT_UNPUBLISHED_MESSAGE
@@ -452,6 +470,18 @@ def agent_unavailable_reason(agent: AgentProfile | None) -> str | None:
 
 class AgentPublishRequest(BaseModel):
     note: str = Field(default="", max_length=500)
+
+
+class AgentProfileCreate(AgentProfile):
+    """業務 Agent の作成の要求（`POST /api/agents`）。ツールの直接の指定を拒む（#3240）。
+
+    保存・応答は `AgentProfile`（保存済みの旧い項目は読むときに無視する）。
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_direct_tool_fields(cls, value: Any) -> Any:
+        return reject_direct_tool_fields(value)
 
 
 class AgentProfilePatch(BaseModel):
@@ -468,8 +498,12 @@ class AgentProfilePatch(BaseModel):
     )
     skill_policy: SkillPolicy | None = None
     output_fields: list[AgentOutputField] | None = None
-    tool_names: list[str] | None = None
     enabled: bool | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_direct_tool_fields(cls, value: Any) -> Any:
+        return reject_direct_tool_fields(value)
 
     @field_validator("data_scopes")
     @classmethod
@@ -1422,6 +1456,7 @@ class AgentRuntimeRepositoryContract(Protocol):
     ) -> None: ...
     def record_clarification_cancel(self, run_id: str, records: list[JsonObject]) -> None: ...
     def record_context_compaction(self, run_id: str, payload: JsonObject) -> None: ...
+    def record_undeclared_tool_call(self, run_id: str, payload: JsonObject) -> None: ...
     def set_run_feedback(
         self, run_id: str, feedback: RunFeedback, *, admin: bool = False
     ) -> RunState: ...
@@ -3574,6 +3609,24 @@ class AgentRuntimeRepository:
             run.updated_at = _now()
             self._persist_locked()
 
+    def record_undeclared_tool_call(self, run_id: str, payload: JsonObject) -> None:
+        """モデルに渡していない名前のツールの呼び出しを、理由つきでイベントに残す（#3240）。
+
+        `payload` は `tool_name`（モデルが呼んだ名前）・`call_id`・`reason`
+        （`builtin_runtime.UNDECLARED_CALL_REASONS`）。呼び出しは実行していない。
+        """
+        with self._lock:
+            run = self._require_run(run_id)
+            self._append_event(
+                run,
+                RunEventType.RUNTIME_EVENT,
+                f"渡していないツール「{payload.get('tool_name')}」の呼び出しを実行しませんでした"
+                f"（理由: {payload.get('reason')}）。",
+                {"severity": "warning", "undeclared_tool_call": deepcopy(payload)},
+            )
+            run.updated_at = _now()
+            self._persist_locked()
+
     def record_clarification_cancel(self, run_id: str, records: list[JsonObject]) -> None:
         """利用者が取り消した確認（#1441・#1445）を Run の metadata とイベントに残す。"""
         with self._lock:
@@ -3689,7 +3742,6 @@ class AgentRuntimeRepository:
             if agent.id in self._agents:
                 raise ValueError("同じ ID の業務 Agent があります。")
             self._validate_agent_skills(agent.skill_ids)
-            self._validate_agent_tools(agent.tool_names)
             now = _now()
             agent.created_at = now
             agent.updated_at = now
@@ -3842,13 +3894,9 @@ class AgentRuntimeRepository:
             data: dict[str, Any] = {
                 key: deepcopy(getattr(patch, key)) for key in patch.model_fields_set
             }
-            tool_names = data.get("tool_names")
-            if isinstance(tool_names, list):
-                self._validate_agent_tools(tool_names)
             skill_ids = data.get("skill_ids")
             if isinstance(skill_ids, list):
                 self._validate_agent_skills(skill_ids)
-                data["migration_required"] = False
             before = {field: getattr(agent, field) for field in AGENT_VERSIONED_FIELDS}
             for key, value in data.items():
                 setattr(agent, key, value)
@@ -3899,8 +3947,7 @@ class AgentRuntimeRepository:
     def _replace_state_locked(self, snapshot: AgentRuntimeSnapshot) -> None:
         self._runs = {run.id: run.model_copy(deep=True) for run in snapshot.runs}
         self._agents = {
-            agent.id: _migrate_builtin_agent(_ensure_versioned(_migrate_legacy_agent(agent)))
-            for agent in snapshot.agents
+            agent.id: _migrate_builtin_agent(_ensure_versioned(agent)) for agent in snapshot.agents
         }
         # 保存済みの snapshot に無い組み込みの業務 Agent は足す（#1573 で 3 つにした）。
         for builtin in _builtin_agents():
@@ -4066,13 +4113,6 @@ class AgentRuntimeRepository:
         if run is None:
             raise KeyError(run_id)
         return run
-
-    @staticmethod
-    def _validate_agent_tools(tool_names: list[str]) -> None:
-        registered_tools = set(tool_registry.names())
-        unknown_tools = sorted({name for name in tool_names if name not in registered_tools})
-        if unknown_tools:
-            raise ValueError(f"unknown tool: {', '.join(unknown_tools)}")
 
     @staticmethod
     def _validate_agent_skills(skill_ids: list[str]) -> None:
@@ -4606,9 +4646,7 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
         for run in loaded.runs:
             self._runs[run.id] = run
         for agent in loaded.agents:
-            self._agents[agent.id] = _migrate_builtin_agent(
-                _ensure_versioned(_migrate_legacy_agent(agent))
-            )
+            self._agents[agent.id] = _migrate_builtin_agent(_ensure_versioned(agent))
         self._restore_builtin_agents_locked()
         self._approvals = {
             approval.id: approval for run in self._runs.values() for approval in run.approvals
@@ -6103,7 +6141,6 @@ _LEGACY_DEFAULT_AGENT_NAME = "汎用業務 Agent"
 
 def _builtin_agents() -> list[AgentProfile]:
     """組み込みの業務 Agent（資料・データ・その両方）。並びは BUILTIN_AGENT_IDS と同じ。"""
-    tool_names = tool_registry.names()
     return [
         AgentProfile(
             id=DEFAULT_AGENT_ID,
@@ -6121,7 +6158,6 @@ def _builtin_agents() -> list[AgentProfile]:
                 BUSINESS_RAG_RESEARCH_SKILL_ID,
                 STRUCTURED_DATA_QUERY_SKILL_ID,
             ],
-            tool_names=tool_names,
             source="builtin",
         ),
         AgentProfile(
@@ -6130,7 +6166,6 @@ def _builtin_agents() -> list[AgentProfile]:
             description="社内の資料（業務 RAG）を調べ、根拠の文書と場所を示して答える業務 Agent。",
             instructions="資料の根拠に基づいて答え、根拠の文書名と場所を示す。",
             skill_ids=[BUSINESS_RAG_RESEARCH_SKILL_ID],
-            tool_names=tool_names,
             source="builtin",
         ),
         AgentProfile(
@@ -6139,7 +6174,6 @@ def _builtin_agents() -> list[AgentProfile]:
             description="業務データ（NL2SQL）を照会し、集計の条件と結果を示して答える業務 Agent。",
             instructions="業務データの照会の結果に基づいて答え、集計の条件（期間・対象）を示す。",
             skill_ids=[STRUCTURED_DATA_QUERY_SKILL_ID],
-            tool_names=tool_names,
             source="builtin",
         ),
     ]
@@ -6184,24 +6218,6 @@ def _migrate_builtin_agent(agent: AgentProfile) -> AgentProfile:
             "published_version": published_version,
         },
     )
-
-
-_LEGACY_TOOL_SKILLS: dict[str, str] = {
-    "external_rag_search": BUSINESS_RAG_RESEARCH_SKILL_ID,
-    "external_nl2sql_query": STRUCTURED_DATA_QUERY_SKILL_ID,
-}
-# 削除したツール（#756 / #757）。移行では無視する（Skill の推定にも、移行の失敗にも数えない）。
-_RETIRED_LEGACY_TOOLS: frozenset[str] = frozenset(
-    {
-        "external_rag_chat",
-        "external_rag_list_business_views",
-        "external_nl2sql_get_job",
-        "external_mcp_call",
-        "external_mcp_list_tools",
-        "sandbox_command_run",
-        "agent_skill_run",
-    }
-)
 
 
 def _ensure_versioned(agent: AgentProfile) -> AgentProfile:
@@ -6276,27 +6292,6 @@ def agent_for_run(agent: AgentProfile, run: RunState) -> AgentProfile:
             "caller_planning_allowed": (
                 target.skill_policy == SKILL_POLICY_LATEST or target.skills is not None
             ),
-        },
-    )
-
-
-def _migrate_legacy_agent(agent: AgentProfile) -> AgentProfile:
-    if agent.skill_ids or not agent.tool_names:
-        return agent
-    inferred = {
-        skill_id
-        for tool_name in agent.tool_names
-        if (skill_id := _LEGACY_TOOL_SKILLS.get(tool_name)) is not None
-    }
-    unmapped = sorted(
-        set(agent.tool_names).difference(_LEGACY_TOOL_SKILLS).difference(_RETIRED_LEGACY_TOOLS)
-    )
-    return agent.model_copy(
-        deep=True,
-        update={
-            "skill_ids": sorted(inferred),
-            "migration_required": bool(unmapped),
-            "enabled": agent.enabled and not unmapped,
         },
     )
 
@@ -6443,6 +6438,21 @@ class _LazyRuntimeRepository:
 runtime_repository: AgentRuntimeRepositoryContract = cast(
     AgentRuntimeRepositoryContract, _LazyRuntimeRepository()
 )
+
+
+def _run_finished(run_id: str) -> bool:
+    """Run がキャンセル・終了したか（ツールの層のジョブの待ちが使う。#3240）。"""
+    try:
+        status = runtime_repository.get_run(run_id).status
+    except KeyError:
+        return True
+    except Exception:  # noqa: BLE001 - 保存先の一時的な失敗では待ちを止めない
+        logger.warning("mcp_job_wait_run_status_failed", extra={"run_id": run_id}, exc_info=True)
+        return False
+    return status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
+
+
+set_run_finished_check(_run_finished)
 
 
 def pin_skills(skill_ids: list[str]) -> list[PinnedSkill]:

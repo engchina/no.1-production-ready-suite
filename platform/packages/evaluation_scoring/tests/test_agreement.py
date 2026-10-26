@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from pr_evaluation_scoring import LabelPair, agreement, cohen_kappa
+from pr_evaluation_scoring import (
+    CalibrationThresholds,
+    LabelPair,
+    agreement,
+    calibration_failures,
+    cohen_kappa,
+)
 
 LABELS = ("pass", "fail")
 
@@ -48,3 +54,30 @@ def test_unknown_human_labels_are_rejected_and_unknown_judge_labels_are_unjudged
     result = agreement(_pairs([("pass", "cannot_judge")]), LABELS)
     assert (result.judged, result.unjudged, result.accuracy, result.kappa) == (0, 1, None, None)
     assert result.false_pass_rate is None
+
+
+def test_calibration_failures_check_every_holdout_threshold() -> None:
+    thresholds = CalibrationThresholds(min_items=4, min_kappa=0.5, max_false_pass_rate=0.0)
+    perfect = agreement(
+        _pairs([("pass", "pass"), ("pass", "pass"), ("fail", "fail"), ("fail", "fail")]),
+        LABELS,
+        positive="pass",
+        negative="fail",
+    )
+    assert calibration_failures(perfect, thresholds) == []
+    noisy = agreement(
+        _pairs([("pass", "pass"), ("fail", "pass"), ("fail", None)]),
+        LABELS,
+        positive="pass",
+        negative="fail",
+    )
+    failures = calibration_failures(noisy, thresholds)
+    assert [item.split(" ")[0] for item in failures] == ["holdout", "判定率", "κ", "誤合格の率"]
+    assert calibration_failures(None, thresholds) == ["holdout の項目がありません"]
+    assert CalibrationThresholds().provenance() == {
+        "split": "holdout",
+        "min_items": 50,
+        "min_kappa": 0.6,
+        "max_false_pass_rate": 0.1,
+        "min_coverage": 0.95,
+    }

@@ -5,7 +5,8 @@
 - `evidence`: 必要な根拠と引用の chunk の照合（文書・ページ・シート・行・章節・本文・表の行）。
 - `retrieval`: 正解の文書の順位（MRR）と取れた文書。
 - `aggregate`: 測れたケースだけの平均と分母、閾値の判定、合否。
-- `agreement`: 人手の判定と評価器の判定の一致（一致率・Cohen の κ・混同行列・誤合格 / 誤不合格）。
+- `agreement`: 人手の判定と評価器の判定の一致（一致率・Cohen の κ・混同行列・誤合格 / 誤不合格）と、
+  評価器の校正の合否（holdout の件数・判定率・κ・誤合格の率）。
 
 製品の型（RAG の `SearchResponse` など）は持たない。使う側が自分の型から、ここの関数の入力
 （文書の ID・本文・場所の Mapping・対応の文字列）へ変換する。LLM・HTTP・DB を呼ばない。
@@ -19,7 +20,14 @@ from pr_evaluation_scoring.aggregate import (
     rounded_mean,
     threshold_failures,
 )
-from pr_evaluation_scoring.agreement import Agreement, LabelPair, agreement, cohen_kappa
+from pr_evaluation_scoring.agreement import (
+    Agreement,
+    CalibrationThresholds,
+    LabelPair,
+    agreement,
+    calibration_failures,
+    cohen_kappa,
+)
 from pr_evaluation_scoring.evidence import (
     EvidenceCriteria,
     evidence_matches,
@@ -43,8 +51,10 @@ from pr_evaluation_scoring.text import contains_normalized, normalize_for_match,
 
 __all__ = [
     "Agreement",
+    "CalibrationThresholds",
     "LabelPair",
     "agreement",
+    "calibration_failures",
     "cohen_kappa",
     "DECISIONS",
     "NO_RETRIEVAL_OUTCOMES",

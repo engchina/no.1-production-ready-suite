@@ -465,13 +465,11 @@ export function AgentEditorView({
   // 試すのは保存した下書き。画面の入力と違う内容で試さないよう、未保存の変更があるあいだは送らない（公開と同じ）。
   const tryBlockedReason = !agent
     ? null
-    : agent.migration_required
-      ? t("agent.try.migrationRequired")
-      : !agent.enabled
-        ? t("agent.try.disabled")
-        : formDirty
-          ? t("agent.try.unsaved")
-          : null;
+    : !agent.enabled
+      ? t("agent.try.disabled")
+      : formDirty
+        ? t("agent.try.unsaved")
+        : null;
   const error = createAgent.error ?? patchAgent.error;
   const saveAttemptKey = Math.max(createAgent.submittedAt, patchAgent.submittedAt);
 
@@ -507,7 +505,7 @@ export function AgentEditorView({
                   <Banner
                     severity="warning"
                     action={
-                      formDirty && agent.enabled && !agent.migration_required ? (
+                      formDirty && agent.enabled ? (
                         <Button size="sm" icon={Save} loading={pending} onClick={saveAgent} data-testid="agent-try-save">
                           {t("common.save")}
                         </Button>
@@ -608,7 +606,6 @@ export function AgentEditorView({
                 {t("agent.version.saveBeforePublish")}
               </p>
             ) : null}
-            {agent.migration_required ? <Banner severity="warning">{t("agent.migrationRequired")}</Banner> : null}
             {agent.published_version !== null && agent.skill_updates?.length ? (
               // 公開中の版に固定したスキルが変わった（#1855）。利用者の Run は固定した中身で動く。
               <div data-testid="agent-skills-updated">

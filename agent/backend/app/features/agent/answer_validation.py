@@ -6,7 +6,8 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
 （`tool_registry.invoke` のポリシー・監査、Run の利用者のサービストークン、Run の step）を通す。
 
 - 根拠の id は返した RAG のものなので、根拠を返した MCP 接続ごとに、その接続の根拠で 1 回ずつ
-  呼び、段落（`answer_quote`）ごとに判定をまとめる。
+  呼び、段落（`answer_quote`）ごとに判定をまとめる。判定は RAG が返す段落の位置（`answer_range`）で
+  この回答の段落に結び付ける（`align_claims`。RAG の段落の分け方を写さない。#3240）。
 - 結果は Run の成果物（kind=`answer_validation`・「資料との照合」）に残す（接続ごとの結果は
   `connections`）。状態は `completed`（判定が出た）/ `unvalidated`（確かめられなかった）/
   `skipped`（確かめる対象が無い）。
@@ -72,6 +73,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from app.features.agent.answer_passages import (
+    answer_passage_positions,
     environment_check_passages,
     is_heading,
     is_lookup_note,
@@ -366,16 +368,36 @@ def _cited_in(answer: str, chunk_id: str) -> bool:
     return bool(re.search(re.escape(chunk_id) + r"(?!\d)", answer))
 
 
-# 回答が書いた chunk の id の形（「文書:chunk_set:番号」と、途中を「…」で省いた・先頭の文書の
-# id を落とした・区切りを横線で書いた形）。RAG の最終の検証が段落の ID を根拠に結び付ける規則と
-# 同じ形で数える。
+# 回答が書いた根拠の id（途中を「…」で省いた・先頭の部分を落とした・区切りを横線で書いた形）。
+# 根拠の id は契約では不透明な文字列（rag-tools.json の `chunk_id`）なので、id の形（区切り・桁）を
+# 写さず、渡された根拠の id の値から区切りの文字を決めて照合する（#3240）。
 _ID_DASHES = "‐‑‒–—―-"
-_CITED_ID = re.compile(
-    rf"(?<![0-9A-Za-z])[0-9A-Fa-f]{{6,}}(?:[0-9A-Fa-f:…‥{_ID_DASHES}]|\.{{2,}})*[:{_ID_DASHES}][0-9]+(?![0-9A-Za-z])"
-)
 _ID_ELLIPSIS = re.compile(r"…+|‥+|\.{2,}")
 # 省いて書いた ID の残した先頭の最短の長さ（これより短いと別の根拠と区別しにくい）。
 _MIN_ABBREVIATED_ID_CHARS = 7
+# 候補の語の先頭の英数字の最短の長さ（「第3章」「A-1」のような ID でない語を数えない）。
+_MIN_ID_HEAD_CHARS = 6
+
+
+def _id_separators(chunk_ids: Sequence[str]) -> str:
+    """根拠の id の区切りの文字（英数字・省略の印の「.」以外の文字）と横線。"""
+    found = {
+        char
+        for chunk_id in chunk_ids
+        for char in chunk_id
+        if not (char.isascii() and char.isalnum()) and char != "."
+    }
+    return "".join(sorted(found | set(_ID_DASHES)))
+
+
+def _cited_id_pattern(separators: str) -> re.Pattern[str]:
+    """回答の中の、根拠の id を書いた候補の語（英数字で始まり、区切りか省略の印を挟んで英数字で
+    終わる並び）。"""
+    seps = re.escape(separators)
+    return re.compile(
+        rf"(?<![0-9A-Za-z])[0-9A-Za-z]{{{_MIN_ID_HEAD_CHARS},}}"
+        rf"(?:[0-9A-Za-z…‥{seps}]|\.{{2,}})*[{seps}][0-9A-Za-z]+(?![0-9A-Za-z])"
+    )
 
 
 def _abbreviated_part(written: str, actual: str) -> bool:
@@ -388,11 +410,12 @@ def _abbreviated_part(written: str, actual: str) -> bool:
     return re.fullmatch(".+".join(re.escape(piece) for piece in pieces), actual) is not None
 
 
-def _written_id_matches(written: str, actual: str) -> bool:
-    """回答が省いて書いた chunk の id（`written`）が `actual` を指すか（番号はそのまま一致）。"""
-    # 区切りの横線（「78f40985‑…‑244」）は「:」にし、省略の印の直前の区切りは除く。
-    written = re.sub(r":+(?=…|‥|\.{2,})", "", re.sub(f"[{_ID_DASHES}]", ":", written))
-    written, actual = written.lower(), actual.lower()
+def _written_id_matches(written: str, actual: str, separators: str) -> bool:
+    """回答が省いて書いた根拠の id（`written`）が `actual` を指すか（最後の部分はそのまま一致）。"""
+    # 区切り（横線を含む）は「:」にそろえ、省略の印の直前の区切りは除く。
+    unify = re.compile(f"[{re.escape(separators)}]")
+    written = re.sub(r":+(?=…|‥|\.{2,})", "", unify.sub(":", written)).lower()
+    actual = unify.sub(":", actual).lower()
     if written == actual or (_ID_ELLIPSIS.search(written) and _abbreviated_part(written, actual)):
         return True
     written_parts, actual_parts = written.split(":"), actual.split(":")
@@ -409,8 +432,15 @@ def _written_id_matches(written: str, actual: str) -> bool:
 def cited_chunk_ids(answer: str, chunk_ids: Sequence[str]) -> set[str]:
     """回答が書いた根拠の id（そのままの形と、省いて書いて 1 つの根拠に決まる形）。"""
     cited = {chunk_id for chunk_id in chunk_ids if _cited_in(answer, chunk_id)}
-    for match in dict.fromkeys(item.group(0) for item in _CITED_ID.finditer(answer)):
-        matches = {chunk_id for chunk_id in chunk_ids if _written_id_matches(match, chunk_id)}
+    if not chunk_ids:
+        return cited
+    separators = _id_separators(chunk_ids)
+    for match in dict.fromkeys(
+        item.group(0) for item in _cited_id_pattern(separators).finditer(answer)
+    ):
+        matches = {
+            chunk_id for chunk_id in chunk_ids if _written_id_matches(match, chunk_id, separators)
+        }
         if len(matches) == 1:
             cited |= matches
     return cited
@@ -1046,10 +1076,57 @@ def _paragraph_claim(claims: list[JsonObject]) -> JsonObject:
     return next((claim for claim in claims if claim.get("status") == "supported"), claims[0])
 
 
+def _claim_range(answer: str, claim: JsonObject) -> tuple[int, int] | None:
+    """判定の `answer_range`（契約 rag-tools.json。渡した回答の中の段落の位置）。位置の原文が
+    `answer_quote` と違う・範囲が回答の外の判定は None。"""
+    value = claim.get("answer_range")
+    if not isinstance(value, dict):
+        return None
+    start, end = value.get("start"), value.get("end")
+    if not isinstance(start, int) or not isinstance(end, int):
+        return None
+    if isinstance(start, bool) or isinstance(end, bool) or not 0 <= start < end <= len(answer):
+        return None
+    return (start, end) if answer[start:end] == claim.get("answer_quote") else None
+
+
+def align_claims(answer: str, result: JsonObject) -> JsonObject:
+    """RAG の段落の判定を、この回答の段落（`passage_spans`）に結び付け直した結果（#3240）。
+
+    RAG と Agent の段落の分け方が同じとは限らない（RAG の分け方は RAG の内部の処理で、契約は判定の
+    位置 `answer_range` だけを約束する）。判定の位置と重なる Agent の段落ごとに判定を写し、
+    `answer_quote` をその段落の原文にする（元の段落の原文は `rag_answer_quote`）。RAG の段落が
+    Agent の 2 つの段落にまたがれば両方に同じ判定が付き、Agent の 1 つの段落に RAG の段落が 2 つ
+    入れば 2 つの判定が付いて厳しい方が採られる（`_paragraph_claim`。矛盾を本文に残さない）。
+    位置の無い判定・位置の原文が `answer_quote` と違う判定・表の値を直した判定（`revised_text`。
+    原文を置き換える）は変えない（原文で探す）。
+    """
+    passages = answer_passage_positions(answer)
+    claims: list[object] = []
+    changed = False
+    for claim in result.get("claims") or []:
+        span = _claim_range(answer, claim) if isinstance(claim, dict) else None
+        if span is None or not isinstance(claim, dict) or claim.get("revised_text"):
+            claims.append(claim)
+            continue
+        start, end = span
+        matched = [text for begin, finish, text in passages if begin < end and start < finish]
+        if not matched or matched == [claim.get("answer_quote")]:
+            claims.append(claim)
+            continue
+        changed = True
+        claims.extend(
+            {**claim, "answer_quote": text, "rag_answer_quote": claim.get("answer_quote")}
+            for text in matched
+        )
+    return {**result, "claims": claims} if changed else result
+
+
 def merge_results(results: list[JsonObject]) -> JsonObject:
     """接続ごとの `rag_validate_answer` の結果（判定として使えるもの）を 1 つにまとめる（#1277）。
 
-    どの接続も同じ回答を同じ規則で段落に分けて確かめるので、段落（`answer_quote`）ごとにまとめる。
+    どの接続の判定も同じ回答の段落に結び付けてある（`align_claims`）ので、段落（`answer_quote`）ごとに
+    まとめる。
     接続の中では段落の最も厳しい判定、接続をまたいでは、どれかの接続が矛盾と判定すれば矛盾、
     そうでなくどれかの接続が通せば（裏付けあり・確かめる必要が無い行）その判定、どの接続も
     通さなければ最初の接続の判定（ほかの接続の根拠に無いだけで外さない）。結果が 1 つならそのまま。
@@ -1232,8 +1309,9 @@ def withhold_paragraphs(
     `positions` は、原文ではなく位置（行の番号・行の中の開始の位置）で外す段落（`withheld_labels`
     の項目の名前。同じ原文の段落がほかにあっても、その項目だけを外す。#2692）。
 
-    段落の位置は RAG と同じ規則で分けて決める（文字列の置換では、同じ文を含む別の段落まで
-    削ってしまうため）。段落が無くなった行は消し、続く空行は 1 つにする。段落を外した行に見出し・
+    段落の位置は Agent の段落の分け方（`passage_spans`）で決める（文字列の置換では、同じ文を含む
+    別の段落まで削ってしまうため。RAG の判定は `align_claims` でこの段落に結び付けてある）。
+    段落が無くなった行は消し、続く空行は 1 つにする。段落を外した行に見出し・
     出典だけが残ればその行も消し、中身をすべて外した節の見出しも消す（#1306。番号つきの見出しも
     消す: 中身の無い操作の名前を実行の順の 1 つとして残さない。#2692）。番号つきの一覧の項目を
     外したら、残った項目の番号を詰める（`_renumber`。#1898 の番号の飛びを残さない）。見出し・出典の
@@ -1708,8 +1786,8 @@ def claim_paragraphs(answer: str) -> list[str]:
 def _without_removed(answer: str, quotes: set[str], labels: list[tuple[int, int, str]]) -> str:
     """回答から根拠と矛盾した段落（と、その操作を名前だけで示す項目）を外した本文。
 
-    段落の位置は RAG と同じ規則で決める（`withhold_paragraphs`）。段落の分け方が食い違い位置を
-    決められない段落は、原文の一致で除く（矛盾した内容を本文に残さない）。
+    段落の位置は Agent の段落の分け方で決める（`withhold_paragraphs`）。RAG の判定に位置が無く
+    位置を決められない段落は、原文の一致で除く（矛盾した内容を本文に残さない）。
     """
     located = set(_paragraph_order(answer))
     positions = frozenset((index, begin) for index, begin, _text in labels)
@@ -1989,7 +2067,8 @@ def combine_validations(
             {
                 **item,
                 "result": apply_figure_readings(
-                    item["result"],
+                    # RAG の段落の判定を位置でこの回答の段落に結び付ける（#3240）。
+                    align_claims(answer, item["result"]),
                     (figures or {}).get(
                         _connection_prefix(str(item.get("tool_name") or "")) or "", {}
                     ),

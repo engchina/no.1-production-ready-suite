@@ -912,7 +912,6 @@ export interface AgentProfile {
   skill_ids: string[];
   /** 組み込み Runtime で使うモデル（空なら既定のテキストモデル。#754）。 */
   model_id?: string;
-  migration_required: boolean;
   /** 公開した版（#770）。利用者の Run は公開中の版（published_version）で実行する。 */
   versions: AgentVersion[];
   published_version: number | null;
@@ -936,7 +935,6 @@ export interface AgentProfile {
   clarification_policy?: ClarificationPolicy;
   /** 確認の上限（往復。0 は既定の 3 回、2〜6。NL2SQL の業務プロファイルと同じ）。 */
   clarification_max_rounds?: number;
-  tool_names?: string[];
   enabled: boolean;
   created_at: string;
   updated_at: string;

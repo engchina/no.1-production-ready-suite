@@ -102,6 +102,19 @@ def test_markdown_tables_and_other_tables_binding_the_value() -> None:
     assert unbound_table_values("区分Ⅱは 01 です。", ["区分Ⅰは 01 です。区分Ⅱは 02 です。"]) == []  # 表でない本文は見ない
 
 
+def test_word_table_with_vertical_merge_filled_binds_each_row_to_its_label() -> None:
+    """Word の表の縦の結合の続きを前処理が埋めた表では、続きの行の値もその区分に結び付く（#3565）。"""
+    filled = (
+        "| 分類 | 名称 | 番号 | 設定 |\n| --- | --- | --- | --- |\n"
+        "| 分類 K | 名称 k1 | 101 | 有効 |\n| 分類 K | 名称 k2 | 102 | 無効 |\n"
+        "| 分類 L | 名称 l1 | 201 | 有効 |"
+    )
+    assert unbound_table_values("分類 K の番号は 102 です。", [filled]) == []
+    assert unbound_table_values("分類 K の名称 k2 の番号は 102 です。", [filled]) == []
+    # 別の区分の行の値は今までどおり疑う。
+    assert unbound_table_values("分類 L の番号は 102 です。", [filled]) == [("102", "分類 L")]
+
+
 @pytest.mark.parametrize(
     "number",
     ["5.4", "6.2.1", "step-3", "step‑3", "step−3", "５．４", "-3", "+3", "−3"],

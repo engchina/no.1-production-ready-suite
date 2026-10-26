@@ -14,6 +14,7 @@ from rag_parser_core.registry import run_external_adapter
 from rag_parser_core.sheet_records import (
     SheetBlock,
     SheetColumn,
+    SheetNoteRow,
     SheetPreambleRow,
     SheetRecords,
     SheetRecordsDocument,
@@ -257,6 +258,63 @@ def test_excel_round_trip_keeps_sheet_records_and_elements() -> None:
     assert extraction.parser_artifacts[STRUCTURED_RECORDS_ARTIFACT_KEY] == 1
 
 
+def test_excel_table_notes_round_trip_as_note_records() -> None:
+    """表の下の注記は note の記録になり、注記の印のある行は注記の文を本文に含める（#3566）。"""
+    note = "※1 合成の注記の文。"
+    original = SheetRecordsDocument(
+        source_format="xlsx",
+        sheets=[
+            SheetRecords(
+                name="表",
+                header_row=1,
+                columns=[
+                    SheetColumn(name="名前", column="A", header_path=["名前"]),
+                    SheetColumn(name="値", column="B", header_path=["値"]),
+                ],
+                blocks=[
+                    SheetBlock(
+                        kind="row",
+                        row_start=2,
+                        row_end=2,
+                        cell_range="A2:B2",
+                        values={"名前": "行 A", "値": "10※1"},
+                        notes=[note],
+                    ),
+                    SheetBlock(
+                        kind="row",
+                        row_start=3,
+                        row_end=3,
+                        cell_range="A3:B3",
+                        values={"名前": "行 B", "値": "20"},
+                    ),
+                ],
+                notes=[SheetNoteRow(row_number=5, cell_range="A5:A5", text=note, marker="※1")],
+            )
+        ],
+    )
+    data = dump_structured_records(
+        sheet_records_to_lines(original, converter="excel_to_jsonl", converter_version="v9")
+    )
+    raw = _raw(data)
+    assert [item["record_type"] for item in raw] == ["document", "sheet", "row", "row", "note"]
+    assert raw[2]["notes"] == [note]
+    assert "notes" not in raw[3]
+    assert raw[4]["record_id"] == "sheet-000-r5" and raw[4]["marker"] == "※1"
+    document = parse_structured_records(data)
+    assert isinstance(document, StructuredRecordsDocument)
+    assert structured_records_to_sheet_records(document) == original
+    elements = structured_records_extraction(
+        document, source_parser="s", parser_backend="docling", parser_version="v1"
+    ).elements
+    assert [element.text for element in elements] == [
+        f"名前: 行 A / 値: 10※1\n{note}",
+        "名前: 行 B / 値: 20",
+        note,
+    ]
+    assert elements[2].metadata["sheet_block_kind"] == "note"
+    assert elements[2].metadata[STRUCTURED_RECORD_ID_KEY] == "sheet-000-r5"
+
+
 def _base(**overrides: object) -> dict[str, object]:
     line: dict[str, object] = {
         "schema": "production-ready.structured-records",
@@ -313,6 +371,20 @@ def _row(**overrides: object) -> dict[str, object]:
         (
             _jsonl([_base(source_type="xlsx"), _row(source_type="xlsx")]),
             "parent_missing",
+            2,
+        ),
+        (
+            _jsonl(
+                [
+                    _base(),
+                    {
+                        **{key: value for key, value in _row().items() if key != "fields"},
+                        "record_type": "note",
+                        "text": "※1 注記",
+                    },
+                ]
+            ),
+            "unsupported_record_type",
             2,
         ),
     ],
