@@ -746,6 +746,18 @@ def sdk_max_retries(config: OciEnterpriseAiConfig) -> int:
     return config.oci_enterprise_ai_max_retries if override is None else override
 
 
+# SDK が自分で付けるヘッダー。呼び出し側の同じ名前を大文字・小文字の違いで重ねて送ると、
+# 重複を連結して解釈する gateway が 400 を返す(#3527)。
+_SDK_MANAGED_HEADERS = frozenset({"accept", "content-type"})
+
+
+def _sdk_request_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    """SDK が付けるヘッダーを除き、認証・project のヘッダーだけを SDK に渡す。"""
+    return {
+        name: value for name, value in headers.items() if name.lower() not in _SDK_MANAGED_HEADERS
+    }
+
+
 class _DefaultEnterpriseAiTransport:
     """openai SDK による OpenAI-compatible Enterprise AI transport。
 
@@ -782,7 +794,7 @@ class _DefaultEnterpriseAiTransport:
                 url,
                 cast_to=httpx.Response,
                 body=dict(payload),
-                options={"headers": dict(headers)},
+                options={"headers": _sdk_request_headers(headers)},
             )
             return _json_response_object(response)
 
@@ -802,7 +814,7 @@ class _DefaultEnterpriseAiTransport:
                 url,
                 cast_to=object,
                 body=dict(payload),
-                options={"headers": dict(headers)},
+                options={"headers": _sdk_request_headers(headers)},
                 stream=True,
                 stream_cls=openai.AsyncStream[object],
             )
@@ -835,7 +847,12 @@ class _DefaultEnterpriseAiTransport:
                 cast_to=httpx.Response,
                 body={"purpose": purpose},
                 files=[("file", (file_name, content, mime_type))],
-                options={"headers": {**headers, "Content-Type": "multipart/form-data"}},
+                options={
+                    "headers": {
+                        **_sdk_request_headers(headers),
+                        "Content-Type": "multipart/form-data",
+                    }
+                },
             )
             return _json_response_object(response)
 
@@ -853,7 +870,7 @@ class _DefaultEnterpriseAiTransport:
             response = await client.delete(
                 url,
                 cast_to=httpx.Response,
-                options={"headers": dict(headers)},
+                options={"headers": _sdk_request_headers(headers)},
             )
             return _json_response_object(response)
 
