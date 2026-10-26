@@ -11,7 +11,7 @@ import { Link } from "react-router-dom";
 import type { ReactNode } from "react";
 
 import type { RetrievedChunk } from "@/lib/api";
-import { answerPassageLabels, answerPassages } from "@/lib/answer-passages";
+import { answerPassageLabels, answerPassages, withoutPassageRecordSections } from "@/lib/answer-passages";
 import {
   answerFormat,
   citationLocation,
@@ -72,7 +72,9 @@ export function AnswerText({
   const source = useEvidenceSource<CitationTarget>();
   const format = answerFormat(diagnostics);
   const passages = streaming ? null : answerPassages(diagnostics);
-  const blocks = streaming ? null : (parseAnswerText(text, format) ?? (passages ? plainParagraphs(text) : null));
+  // 本文の末尾の「根拠と矛盾し除いた内容」「確認が必要な点」は記録から共有の部品が作るので、本文の節は描かない（#3488）。
+  const body = passages ? withoutPassageRecordSections(text, format) : text;
+  const blocks = streaming ? null : (parseAnswerText(body, format) ?? (passages ? plainParagraphs(body) : null));
   // 回答エンジンの決まった文言（保存した表示形式の値と同じ段落・説明）は画面の言語で描く（回答の言語の lang を付けない。#3349）。
   const fixedTexts = new Set(Object.values(format ?? {}));
   const fixedLang = (value: string) => (fixedTexts.has(value) ? null : undefined);

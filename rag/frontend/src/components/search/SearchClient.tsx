@@ -60,7 +60,7 @@ import {
 import { isNullableString, isOneOf, useWorkspaceState } from "@/lib/workspace-state";
 import { AnswerNotices } from "./AnswerDetailsPanel";
 import { AnswerProcess } from "./AnswerProcess";
-import { parseAnswerDiagnostics, unreadSectionLinks } from "@/lib/answer-diagnostics";
+import { answerAttachedImages, answerModelHeading, parseAnswerDiagnostics, unreadSectionLinks } from "@/lib/answer-diagnostics";
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { useAuth } from "@/components/security/AuthProvider";
 import { AnswerText } from "./AnswerText";
@@ -465,6 +465,14 @@ export function SearchClient() {
   };
 
   const answerOutcome = parseAnswerDiagnostics(meta?.diagnostics?.answer)?.outcome;
+  // 回答を作ったモデル（チャットの列の見出しと同じ。根拠の画像を添付した回答は「（画像も参照）」。#3488）。
+  const answerModel =
+    phase === "done"
+      ? answerModelHeading(
+          parseAnswerDiagnostics(meta?.diagnostics?.answer)?.models.llm?.label,
+          answerAttachedImages(meta?.diagnostics?.answer, null)
+        )
+      : null;
   const awaitingClarification = answerOutcome === "needs_clarification";
   const noResults = phase === "done" && citations.length === 0 && !awaitingClarification && answerOutcome !== "needs_human";
   const answerMode = run?.generateAnswer ?? false;
@@ -851,6 +859,15 @@ export function SearchClient() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3">
+                    {answerModel ? (
+                      <h3
+                        className="min-w-0 break-words border-b border-border pb-2 text-sm font-semibold text-fg [overflow-wrap:anywhere]"
+                        title={answerModel}
+                        data-testid="search-answer-model-heading"
+                      >
+                        {answerModel}
+                      </h3>
+                    ) : null}
                     {processView}
                     {conditionChips}
                     <AnswerText
