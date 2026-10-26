@@ -71,6 +71,35 @@ describe("parseAnswerText", () => {
     });
   });
 
+  // 印の付いた説明の節（Issue 3394）。
+  it("確かめきれていない説明の節は、確認できた事項の節と分ける（表示形式の無い回答）", () => {
+    const blocks = parseAnswerText(
+      [
+        "資料により確認できた事項",
+        "",
+        "・確かめた説明",
+        "根拠：a.pdf p.1",
+        "",
+        "根拠で確かめきれていない事項",
+        "",
+        "次の説明は根拠で確かめきれていないか、注意が必要です。",
+        "・印の付いた説明",
+        "根拠：b.pdf p.2",
+      ].join("\n")
+    );
+    expect(blocks).toMatchObject([
+      { kind: "section", title: "資料により確認できた事項", entries: [{ kind: "item", text: "確かめた説明" }] },
+      {
+        kind: "section",
+        title: "根拠で確かめきれていない事項",
+        entries: [
+          { kind: "text", text: "次の説明は根拠で確かめきれていないか、注意が必要です。" },
+          { kind: "item", text: "印の付いた説明", citations: ["根拠：b.pdf p.2"] },
+        ],
+      },
+    ]);
+  });
+
   it("参考・未確認・確認することの節も節に分け、参考の節の直下の説明は節の中の文にする", () => {
     const blocks = parseAnswerText(
       [

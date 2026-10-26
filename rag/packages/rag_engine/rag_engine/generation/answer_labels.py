@@ -51,6 +51,9 @@ class AnswerLabels:
     # 設定の窓口・引き継ぐ条件・承認。{title} に業務ガイドの題名、{contact} に窓口、{conditions} に条件、{note} に承認の補足）。
     unsourced_section: str
     unsourced_section_note: str
+    # 印の付いた説明（確かめていない・注意が要る）の節（#3394。「資料により確認できた事項」に入れない）。
+    marked_rules_section: str
+    marked_rules_section_note: str
     guide_notes_section: str
     guide_notes_note_template: str
     guide_handoff_template: str
@@ -138,6 +141,8 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         text("marked_section_note"),
         text("unsourced_section"),
         text("unsourced_section_note"),
+        text("marked_rules_section"),
+        text("marked_rules_section_note"),
         text("guide_notes_section"),
     )
     return AnswerLabels(
@@ -172,6 +177,8 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         marked_section_note=text("marked_section_note"),
         unsourced_section=text("unsourced_section"),
         unsourced_section_note=text("unsourced_section_note"),
+        marked_rules_section=text("marked_rules_section"),
+        marked_rules_section_note=text("marked_rules_section_note"),
         guide_notes_section=text("guide_notes_section"),
         guide_notes_note_template=text("guide_notes_note_template"),
         guide_handoff_template=text("guide_handoff_template"),

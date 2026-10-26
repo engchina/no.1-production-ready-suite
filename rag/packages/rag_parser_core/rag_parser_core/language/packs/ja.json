@@ -2442,6 +2442,8 @@
     "marked_section_note": "次の点は根拠で確かめきれていないか、注意が必要です（内容は回答に載せています）。",
     "unsourced_section": "資料の出典を確かめられない説明",
     "unsourced_section_note": "次の説明は検索した資料の原文と照合できないため、資料の記載としては示していません。",
+    "marked_rules_section": "根拠で確かめきれていない事項",
+    "marked_rules_section_note": "次の説明は根拠で確かめきれていないか、注意が必要です。理由は「確認が必要な点」に示します。",
     "guide_notes_section": "業務ガイドの案内",
     "guide_notes_note_template": "次は業務ガイド「{title}」の案内で、資料の記載ではありません。",
     "guide_handoff_template": "次の場合は{contact}へお問い合わせください: {conditions}",
