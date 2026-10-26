@@ -90,6 +90,19 @@ const historyItems: HistoryRecord[] = [
     owned_by_me: true,
     kind: "chat",
     session_id: "conversation-finance-1",
+    // Select AI Agent（DB の中の呼び出しは計測できない）と Enterprise AI Direct の呼び出しが混ざる実行（#3543）。
+    usage: {
+      models: ["test-text-model"],
+      requests: 2,
+      input_tokens: 12000,
+      output_tokens: 345,
+      total_tokens: 12345,
+      cached_input_tokens: null,
+      reasoning_output_tokens: null,
+      measurement: "partial",
+      measured_requests: 1,
+      unmeasured_sources: ["select_ai_agent"],
+    },
   },
   {
     id: "history-middle",
@@ -107,6 +120,17 @@ const historyItems: HistoryRecord[] = [
     result_row_count: 4,
     result_columns: ["TOTAL_AMOUNT"],
     feedback_comment: "集計条件が違います",
+    // Select AI だけの実行は数を作らず未計測（#3543）。
+    usage: {
+      models: [],
+      requests: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      measurement: "unmeasured",
+      measured_requests: 0,
+      unmeasured_sources: ["select_ai"],
+    },
     actor_user_uuid: "me",
     executed_by_me: true,
     executor_display_name: "システム管理者",
@@ -206,7 +230,15 @@ function historyPage(url: URL, items: readonly HistoryRecord[], othersVisible: b
   const sorted = [...filtered].sort((a, b) => (String(a.created_at) < String(b.created_at) ? 1 : -1));
   const limit = Number(url.searchParams.get("limit") ?? "25");
   const offset = Number(url.searchParams.get("offset") ?? "0");
-  const pageItems = sorted.slice(offset, offset + limit);
+  // 一覧の行は backend と同じく合計の token と計測の状態を持つ（記録の無い行はどちらも null。#3543）。
+  const pageItems = sorted.slice(offset, offset + limit).map((item) => {
+    const usage = item.usage as { total_tokens: number; measurement: string } | undefined;
+    return {
+      ...item,
+      total_tokens: usage && usage.measurement !== "unmeasured" ? usage.total_tokens : null,
+      usage_measurement: usage ? usage.measurement : null,
+    };
+  });
   // 「全 M 件」は種類の範囲で数える（品質評価を含まない種類なら品質評価を除く。#1986）。
   const evaluations = items.filter((item) => item.kind === "evaluation").length;
   const unfilteredTotal = kind === "all" || kind === "evaluation" ? items.length : items.length - evaluations;
@@ -725,6 +757,51 @@ test("詳細は概要 → 処理の経過（処理の詳細を含む）→ SQL �
   await expect(technical.getByTestId("history-detail-generated-sql")).toContainText("PAID_AT IS NULL");
   expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
   await page.screenshot({ path: testInfo.outputPath("history-detail.png"), fullPage: true });
+});
+
+test("一覧の token の列と詳細の概要は、記録した利用量・一部計測・未計測（Select AI・記録なし）を RAG と同じ形で出す（#3543）", { tag: "@responsive" }, async ({ page, isMobile }, testInfo) => {
+  await mockHistory(page);
+  await page.goto("/history");
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+  const usageHeader = table(page).getByRole("columnheader", { name: "token", exact: true });
+  if (isMobile) {
+    // 狭い画面では token の列を出さない（共通の一覧と同じ。詳細の概要で読む）。
+    await expect(usageHeader).toBeHidden();
+  } else {
+    await expect(usageHeader).toBeVisible();
+    await expect(row(page, "history-new")).toContainText("12,345 token");
+    await expect(row(page, "history-new").locator("[data-run-usage-note]")).toHaveText("一部計測");
+    // Select AI だけの実行と、記録の無い行は数を作らず未計測（0 token と出さない）。
+    for (const id of ["history-middle", "history-old"]) {
+      await expect(row(page, id).locator("[data-run-usage-note]")).toHaveText("未計測");
+      await expect(row(page, id)).not.toContainText("0 token");
+    }
+  }
+
+  await titleLink(page, "未入金の顧客を確認").click();
+  const summary = page.getByTestId("history-detail-summary");
+  const fact = (id: string) => summary.locator(`[data-run-fact="${id}"] dd`);
+  await expect(fact("model")).toHaveText("test-text-model");
+  await expect(fact("tokens")).toHaveText("12,345 token（一部計測）");
+  await expect(fact("modelCalls")).toHaveText("2 回（うち 1 回を計測。入力 12,000 / 出力 345 token）");
+  await expect(fact("unmeasuredCalls")).toHaveText("Select AI Agent（データベースの中で呼ぶモデル）");
+  // 並びは RAG の概要と同じ（モデル → token → モデルの呼び出し）。
+  const order = await summary.locator("[data-run-fact]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-run-fact")));
+  expect(order.slice(order.indexOf("model"), order.indexOf("model") + 4)).toEqual(["model", "tokens", "modelCalls", "unmeasuredCalls"]);
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+  await summary.screenshot({ path: testInfo.outputPath("history-detail-usage-partial.png") });
+
+  await page.goto("/history?id=history-middle");
+  await expect(fact("tokens")).toHaveText("未計測");
+  await expect(fact("modelCalls")).toHaveText("未計測");
+  await expect(fact("unmeasuredCalls")).toHaveText("Select AI（データベースの中で呼ぶモデル）");
+  await expect(summary.locator('[data-run-fact="model"]')).toHaveCount(0);
+  await summary.screenshot({ path: testInfo.outputPath("history-detail-usage-select-ai.png") });
+
+  await page.goto("/history?id=history-old");
+  await expect(fact("tokens")).toHaveText("未計測");
+  await expect(fact("modelCalls")).toHaveText("未計測");
+  await expect(summary.locator('[data-run-fact="unmeasuredCalls"]')).toHaveCount(0);
 });
 
 test("ブロックした実行は概要に理由を出し、無い実行・見えない実行は「この実行は見つかりません」", async ({ page }) => {

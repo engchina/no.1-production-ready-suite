@@ -156,11 +156,13 @@ describe("実行履歴の表示の対応表", () => {
       model: "model-a、model-b",
       usage: { tokens: 1500, note: null },
       modelCalls: "4 回（入力 1,200 / 出力 300 token）",
+      unmeasuredCalls: null,
     });
     expect(runUsageView({ model_id: "model-a", usage: { ...usage, measurement: "partial", measured_requests: 3 } })).toEqual({
       model: "model-a、model-b",
       usage: { tokens: 1500, note: "一部計測" },
       modelCalls: "4 回（うち 3 回を計測。入力 1,200 / 出力 300 token）",
+      unmeasuredCalls: null,
     });
     // LLM を呼ばなかった実行は実測の 0（モデルは記録した回答のモデルがあればそれ）。
     const none = { ...usage, models: [], requests: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, measured_requests: 0 };
@@ -168,12 +170,14 @@ describe("実行履歴の表示の対応表", () => {
       model: null,
       usage: { tokens: 0, note: null },
       modelCalls: "0 回（入力 0 / 出力 0 token）",
+      unmeasuredCalls: null,
     });
     // この機能より前の記録: モデルは記録した ID だけ（既定のモデルの文言で置き換えない）、利用量は未計測。
     expect(runUsageView({ model_id: "model-a", usage: null })).toEqual({
       model: "model-a",
       usage: { tokens: null, note: "未計測" },
       modelCalls: "未計測",
+      unmeasuredCalls: null,
     });
     expect(runUsageView({ model_id: null, usage: undefined }).model).toBeNull();
   });
