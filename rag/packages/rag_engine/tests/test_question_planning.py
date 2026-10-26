@@ -23,13 +23,10 @@ from rag_engine.retrieval.question_planning import plan_question
 
 class QuestionPlanningTests(unittest.TestCase):
     def test_plan_keeps_only_what_later_steps_use(self):
-        """後続が使うのは、原画像を添付するかどうかと質問理解だけ。"""
-        visual = plan_question("登録画面の赤枠のボタンはどれですか。")
+        """後続が使うのは質問理解だけ。画像の添付は質問ではなく回答のモデルで決める（#3444）。"""
         plain = plan_question("再発行できない条件を教えてください。")
-        self.assertTrue(visual.requires_visual_context)
-        self.assertFalse(plain.requires_visual_context)
         self.assertIsNotNone(plain.inquiry_conditions)
-        self.assertEqual(set(plain.to_payload()), {"original_question", "requires_visual_context"})
+        self.assertEqual(set(plain.to_payload()), {"original_question"})
 
     def test_answer_result_includes_question_plan_in_display_prompt_and_payload(self):
         from grounded_stub import stub_generation
@@ -94,9 +91,7 @@ class QuestionPlanningTests(unittest.TestCase):
             self.assertNotIn(removed, display)
         self.assertNotIn(QUESTION_PLAN_SEPARATOR, display)
         self.assertNotIn("[Question Plan]", prompt)
-        self.assertEqual(
-            payload["question_plan"], {"original_question": result.question_plan.original_question, "requires_visual_context": False}
-        )
+        self.assertEqual(payload["question_plan"], {"original_question": result.question_plan.original_question})
 
     def test_extract_original_question_strips_question_plan_metadata(self):
         displayed = "\n".join(["元の質問", "", QUESTION_PLAN_SEPARATOR, "実行処理: 画面・画像確認"])

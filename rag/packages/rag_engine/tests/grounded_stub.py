@@ -56,8 +56,8 @@ def stub_generation(testcase, target: str = "rag_engine.generation.answering.syn
                 [i["prompt_path"] for i in images if i.get("prompt_path")],
                 settings,
                 AnswerOutput,
-                provider_id=settings.default_vision_llm,
-            )  # 画像の回は既定の Vision モデル（#649）
+                provider_id=provider,
+            )  # 画像の回も回答のモデル（#3444）
         else:
             output = answering.parse_text_response(grounded.GENERATE_SYSTEM_PROMPT, prompt, settings, AnswerOutput, provider_id=provider)
         response = answering._normalize_answer_response(

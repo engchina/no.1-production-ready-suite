@@ -93,7 +93,6 @@ from app.rag.support_guide_runtime import (
 from app.rag.trace_store import AnswerTrace, TraceSnapshot, TraceTerminal, trace_snapshot
 from app.schemas.chat import (
     ChatAnswerCancelResult,
-    ChatAnswerModel,
     ChatClarificationRecord,
     ChatMessage,
     ChatMessageRequest,
@@ -249,11 +248,9 @@ def _to_chat_message(
             "" if sent_by_owner else (sender_names or {}).get(message.user_id_hash or "", "")
         ),
         attachments=_saved_attachments(message),
-        # 回答の本文を作った Vision モデル（終わった回答だけ。#3439）。
-        answer_vision_model=(
-            ChatAnswerModel.model_validate(message.answer_vision_model)
-            if message.status == "COMPLETE" and message.answer_vision_model
-            else None
+        # 回答のモデルへ添付した根拠の画像の件数（終わった回答だけ。#3444）。
+        answer_attached_images=(
+            message.answer_attached_images if message.status == "COMPLETE" else 0
         ),
         # 段落の印（終わった回答だけ。#2738）。契約の項目だけを返す。
         **(

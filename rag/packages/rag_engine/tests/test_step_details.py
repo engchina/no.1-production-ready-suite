@@ -57,9 +57,12 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
     def run_flow(self, settings=None):
         search_result = _hybrid_result(
             _stored_child(
-                "chunk-docling-c000001", 1, "合成の手順 A の本文", metadata=_hybrid_metadata(["text", "vector"], "1.1 申請の手順")
+                "chunk-docling-c000001",
+                1,
+                "合成の手順 A の本文",
+                metadata=_hybrid_metadata(["keyword:oracle_text", "vector:q1"], "1.1 申請の手順"),
             ),
-            _stored_child("chunk-docling-c000002", 2, "合成の手順 B の本文", metadata=_hybrid_metadata(["vector"], "1.2 申請の期限")),
+            _stored_child("chunk-docling-c000002", 2, "合成の手順 B の本文", metadata=_hybrid_metadata(["vector:q1"], "1.2 申請の期限")),
         )
         with (
             patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", return_value=_chunk_run_stub()),
@@ -130,10 +133,10 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
         coverage = _fields(steps["要求ごとの根拠の確認"])
         # 探し直しをしたか・しなかった理由を、工程を省いても段に残す（1 要求の一部の根拠は探し直す。#2810）。
         self.assertRegex(coverage["根拠が足りない要求の探し直し"], r"^(しない（.+）|\d+ 件の要求で実行)$")
-        self.assertIn("回答で見せる画像はありません", _fields(steps["回答に使う画像の確認"])["結果"])
+        self.assertEqual("根拠に画像がありません", _fields(steps["回答に添付する画像"])["結果"])
         # 記録の文（question_display）からは従来どおり省く。
         result = self.run_flow()
-        self.assertNotIn("回答で見せる画像はありません", result.question_display)
+        self.assertNotIn("根拠に画像がありません", result.question_display)
 
     def test_answer_round_records_audit_counts(self):
         steps = _by_name(self.run_flow())
@@ -237,7 +240,13 @@ class StepDetailsHelpersTest(unittest.TestCase):
                 metadata={"adb_hybrid": {"retrieval_channels": channels}},
             )
 
-        records = [rec(["vector", "text"]), rec(["text"]), rec(["image_vector"]), rec([])]
+        # 経路は検索の実装と backend の検索が書く形（`vector:q1` / `keyword:oracle_text:q2` など。#3443）。
+        records = [
+            rec(["keyword:oracle_text:q2", "vector:q1"]),
+            rec(["keyword:oracle_text"]),
+            rec(["image_vector:q1"]),
+            rec(["profile:file_data_confirmation"]),
+        ]
         self.assertEqual(
             step_details.channel_line(records),
             "ベクトルと全文の両方 1・ベクトルだけ 1・全文だけ 1・そのほか（目録・画面などで加えた候補） 1",

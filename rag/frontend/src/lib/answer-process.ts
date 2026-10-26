@@ -55,7 +55,7 @@ const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
   画面の選択: "answer.step.selectScreens",
   章節の拡張: "answer.step.expandSections",
   要求ごとの根拠の確認: "answer.step.coverRequests",
-  回答に使う画像の確認: "answer.step.checkImages",
+  回答に添付する画像: "answer.step.attachImages",
   回答文の生成と根拠確認: "answer.step.generateAnswer",
   是正: "answer.step.revise",
   是正の打ち切り: "answer.step.stopRevising",

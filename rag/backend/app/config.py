@@ -1300,13 +1300,6 @@ class Settings(
     )
     # 回答は rag_poc の根拠付き回答(質問ルーティング / CRAG / 生成 + 監査ラウンド)だけ
     # にした(#594)。回答エンジンの選択(旧 RAG_ANSWER_ENGINE)は読まない。
-    rag_answer_vision_enabled: bool = Field(
-        default=True,
-        description=(
-            "画像を見て答える必要がある質問では、根拠の図を切り出して既定の Vision モデルへ添付して"
-            "回答する(それ以外は既定のテキストモデル。Vision モデルが未設定なら添付しない。#649)。"
-        ),
-    )
     rag_history_rewrite_enabled: bool = Field(
         default=True,
         description=(

@@ -36,6 +36,8 @@ from pr_backend_core.oracle_pool import (
 )
 from pr_backend_core.oracle_session import init_oracle_session
 from pydantic import ValidationError
+from rag_engine.resources.tracing import observe_call
+from rag_engine.retrieval.search_stages import TEXT_SEARCH_STAGE, VECTOR_SEARCH_STAGE
 from rag_parser_core.xml_tree_json import query_citation_keys
 
 from app.clients.oracle_read_stats import (
@@ -344,10 +346,9 @@ class StoredMessage:
     # 保存せず、回答の記録（rag_answer_records の diagnostics_json）から trace_id で読む。
     # 記録の無い回答（保存の失敗・保存期間の経過・この機能より前の回答）は None。
     passage_record: dict[str, Any] | None = None
-    # 根拠の原画像を添付して回答の本文を作った Vision モデル（ASSISTANT の回答だけ。
-    # 回答の記録の診断の ``models.vision``。``{"model_id", "label"}``。#3439）。
-    # 画像を添付しなかった回答・記録の無い回答は None。
-    answer_vision_model: dict[str, Any] | None = None
+    # 回答のモデルへ添付した根拠の画像の件数（ASSISTANT の回答だけ。回答の記録の診断の
+    # ``models.attached_images``。#3444）。画像を添付しなかった回答・記録の無い回答は 0。
+    answer_attached_images: int = 0
 
 
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
@@ -455,7 +456,9 @@ class OracleClient:
         例: SELECT ... ORDER BY VECTOR_DISTANCE(embedding, :v, COSINE) FETCH FIRST :k ROWS ONLY
         """
         self._validate_embedding_width(embedding, "query embedding")
-        return await self._vector_search_with_oracle(embedding, top_k, filters or {})
+        # 処理の経過の段(文書の検索の中の DB の検索。#3436・#3443)。
+        with observe_call("stage", VECTOR_SEARCH_STAGE):
+            return await self._vector_search_with_oracle(embedding, top_k, filters or {})
 
     async def keyword_search(
         self,
@@ -464,7 +467,8 @@ class OracleClient:
         filters: dict[str, str] | None = None,
     ) -> list[RetrievedChunk]:
         """Oracle Text 相当のキーワード検索を行う。"""
-        return await self._keyword_search_with_oracle(query, top_k, filters or {})
+        with observe_call("stage", TEXT_SEARCH_STAGE):
+            return await self._keyword_search_with_oracle(query, top_k, filters or {})
 
     async def hybrid_search(
         self,
@@ -586,17 +590,26 @@ class OracleClient:
         # (branch ごとの CTE。#1498)は、optimizer が文書の集合の副問い合わせを行ごとの FILTER にし、
         # chunk の全件を走査する計画を選んでいた(検証環境で vector 2 本 20 秒・keyword 4 本 6.5 秒 →
         # 1 本ずつ vector 0.6 秒・keyword 0.1 秒)。
-        reads: list[Awaitable[None]] = [
+        # vector の検索と keyword の検索は、それぞれ処理の経過の段(文書の検索の中の DB の検索)にする
+        # (rag_engine の検索の実装と同じ名前。#3436・#3443)。2 つの段は並行に読むので重なる。
+        vector_reads: list[Awaitable[None]] = [
             self._read_vector_branch(
                 binds[f"embedding_{n}"], top_k=top_k, filters=filters, into=branch_rows[n]
             )
+            for n, kind in enumerate(branch_kinds)
             if kind == "vector"
-            else self._read_keyword_branch(
+        ]
+        keyword_reads: list[Awaitable[None]] = [
+            self._read_keyword_branch(
                 str(binds[f"query_{n}"]), top_k=top_k, filters=filters, into=branch_rows[n]
             )
             for n, kind in enumerate(branch_kinds)
+            if kind == "keyword"
         ]
-        await asyncio.gather(*reads)
+        await asyncio.gather(
+            _observed_reads(VECTOR_SEARCH_STAGE, vector_reads),
+            _observed_reads(TEXT_SEARCH_STAGE, keyword_reads),
+        )
         branch_hits: list[list[RetrievedChunk]] = []
         for kind, rows in zip(branch_kinds, branch_rows, strict=True):
             ordered = [row for _rank, row in sorted(rows, key=lambda item: item[0])]
@@ -4445,8 +4458,8 @@ class OracleClient:
                     AS removed_passages_json,
                 JSON_QUERY(r.diagnostics_json, '$.answer_warnings' RETURNING CLOB)
                     AS answer_warnings_json,
-                JSON_QUERY(r.diagnostics_json, '$.models.vision' RETURNING CLOB)
-                    AS answer_vision_model_json
+                JSON_VALUE(r.diagnostics_json, '$.models.attached_images' RETURNING NUMBER)
+                    AS answer_attached_images
             FROM rag_messages m
             JOIN rag_conversations c
               ON c.conversation_id = m.conversation_id
@@ -14144,23 +14157,8 @@ def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
             else None
         ),
         passage_record=_message_passage_record(row),
-        answer_vision_model=_answer_model_ref(row.get("answer_vision_model_json")),
+        answer_attached_images=max(0, _optional_int(row.get("answer_attached_images")) or 0),
     )
-
-
-def _answer_model_ref(value: object) -> dict[str, str] | None:
-    """回答の診断のモデル（``{"model_id", "label"}``。#3439）。無い・形の違う値は None。"""
-    parsed = _json_object_or_none(value)
-    if parsed is None:
-        return None
-    model_id = parsed.get("model_id")
-    if not isinstance(model_id, str) or not model_id.strip():
-        return None
-    label = parsed.get("label")
-    return {
-        "model_id": model_id.strip(),
-        "label": label.strip() if isinstance(label, str) and label.strip() else model_id.strip(),
-    }
 
 
 _MESSAGE_PASSAGE_COLUMNS = (
@@ -16188,6 +16186,17 @@ def _retrieved_chunk_score_sort_key(
 
 async def _no_citation_hits() -> list[RetrievedChunk]:
     return []
+
+
+async def _observed_reads(stage: str, reads: Sequence[Awaitable[None]]) -> None:
+    """読み取りを並行に読み、全体を 1 つの処理の経過の段(``observe_call("stage", stage)``)にする。
+
+    読むものが無ければ段を出さない(#3443)。
+    """
+    if not reads:
+        return
+    with observe_call("stage", stage):
+        await asyncio.gather(*reads)
 
 
 def _with_citation_hits(

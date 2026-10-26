@@ -179,7 +179,11 @@ def test_renamed_values_match_the_code() -> None:
         "layout_missing",
     } <= news
     assert set(SMALL_TO_BIG_SETTING_FIELDS) <= news
-    assert all(name in Settings.model_fields for name in news if name.startswith("rag_"))
+    # 後で消した設定（書き換えの SQL は適用済みの版のまま残す）。回答の画像の添付は回答の
+    # モデルの能力で決め、設定を持たない(#3444)。
+    removed = {"rag_answer_vision_enabled"}
+    assert all(name in Settings.model_fields for name in news - removed if name.startswith("rag_"))
+    assert not removed & set(Settings.model_fields)
     assert {name for name in news if name in KnowledgeBaseIngestionConfig.model_fields} == {
         name.removeprefix("rag_") for name in SMALL_TO_BIG_SETTING_FIELDS
     }

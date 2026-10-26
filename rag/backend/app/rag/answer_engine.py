@@ -35,7 +35,7 @@ import math
 import re
 import tempfile
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from datetime import date
@@ -292,6 +292,10 @@ class _SearchState:
     """
 
     chunks: dict[str, RetrievedChunk] = field(default_factory=dict)
+    # 検索の経路(chunk_id → 当たった経路。rag_engine の検索の実装と同じ形の ``vector:qN`` /
+    # ``keyword:oracle_text:qN`` / ``citation`` / 質問理解の経路。#3443)。根拠の記録
+    # (``adb_hybrid.retrieval_channels``)と、文書の検索の工程の詳細(候補の経路)に出す。
+    retrieval_channels: dict[str, set[str]] = field(default_factory=dict)
     work_dir: Path | None = None
     sources: dict[str, bytes | None] = field(default_factory=dict)
     # 根拠の画像を切り出した chunk の metadata(engine_metadata_json。画像の無い chunk は None)。
@@ -470,9 +474,27 @@ def _expansion_scope(filters: Mapping[str, str]) -> dict[str, str]:
     return {key: value for key, value in filters.items() if value.strip()}
 
 
-def answer_images_enabled(settings: Settings) -> bool:
-    """回答で根拠の原画像を Vision モデルへ添付するか(設定が有効で、既定の Vision モデルがある)。"""
-    return settings.rag_answer_vision_enabled and bool(enterprise_ai_vision_model_id(settings))
+def answer_model_reads_images(settings: Settings, model_id: str) -> bool:
+    """回答のモデルが画像を読めるか(モデル設定の登録モデルの ``vision_enabled``。#3444)。
+
+    読めるモデルで答える回だけ、根拠の chunk の画像を切り出して回答の入力に添付する。回答の途中で
+    別のモデル(既定の Vision モデル)へ切り替えない。
+    """
+    return any(
+        model.model_id == model_id and model.vision_enabled
+        for model in enterprise_ai_model_catalog(settings)
+    )
+
+
+def _attached_image_count(result: object) -> int:
+    """回答のモデルへ添付した根拠の画像の件数(#3444。添付しなかった回は 0)。"""
+    if getattr(result, "image_prompt_mode", "") != "vision_attachments":
+        return 0
+    return sum(
+        1
+        for item in getattr(result, "image_evidence", ()) or ()
+        if isinstance(item, Mapping) and item.get("prompt_path")
+    )
 
 
 def _reasoning_effort_override(value: str) -> str:
@@ -490,8 +512,10 @@ def build_engine_settings(
     """backend Settings から rag_engine の Settings を作る(env や .env は読まない)。
 
     ``answer_model_id`` を渡すと、回答のモデル(とその接続)をそのモデルにする。チャットの
-    モデル比較で、列ごとのモデルで答えるために使う(#593)。省略時は既定のモデル。Vision の
-    モデルは比較の対象ではないので、常に既定の Vision モデルを使う。
+    モデル比較で、列ごとのモデルで答えるために使う(#593)。省略時は既定のモデル。回答の実行の
+    LLM の呼び出しはすべてこのモデルで行い、根拠の画像はこのモデルが読めるときだけ添付する
+    (#3444)。既定の Vision モデル(``OCI_ENTERPRISE_AI_VLM_*``)は取り込みの処理(図の説明など)
+    だけが使う。
 
     業務 profile の JSON はここでは決まらない。`rag_engine.profiles` が process の環境変数
     `RAG_ENGINE_DOMAIN_PROFILE_FILE`(未指定なら作業ディレクトリの `domain_profile.json`)を
@@ -510,6 +534,10 @@ def build_engine_settings(
         "OCI_ENTERPRISE_AI_API_KEY": answer.api_key,
         "OCI_ENTERPRISE_AI_PROJECT_OCID": answer.project_ocid,
         "OCI_ENTERPRISE_AI_DEFAULT_MODEL": answer_model,
+        # 回答のモデルが画像を読めるか(#3444)。読めるときだけ根拠の画像を回答の入力に添付する。
+        "OCI_ENTERPRISE_AI_DEFAULT_MODEL_VISION": (
+            "1" if answer_model_reads_images(settings, answer_model) else "0"
+        ),
         "OCI_ENTERPRISE_AI_VLM_MODEL": vision_model,
         "OCI_ENTERPRISE_AI_VLM_ENDPOINT": vision.base_url,
         "OCI_ENTERPRISE_AI_VLM_API_KEY": vision.api_key,
@@ -549,8 +577,6 @@ def build_engine_settings(
         "PLATFORM_TIMEZONE": configured_timezone_name(settings),
         "LLM_REQUEST_TIMEOUT_SECONDS": str(int(settings.oci_enterprise_ai_timeout_seconds)),
         "LLM_RETRIES": str(int(settings.oci_enterprise_ai_max_retries)),
-        # 原画像を添付する回だけ既定の Vision モデルで答える(ほかは既定のテキストモデル。#649)。
-        "RAG_ENGINE_ANSWER_IMAGES": "1" if answer_images_enabled(settings) else "0",
         # 画面目録で操作画面を探す(#554)。rag_engine は明示した environ だけを読む。
         "RAG_ENGINE_SCREEN_LINKING": "1" if settings.rag_screen_linking_enabled else "0",
         # 条の目録から根拠の条を選ぶ段(#2254)。
@@ -738,8 +764,8 @@ class AnswerEngine:
         degraded: DegradedSteps | None = None,
     ) -> None:
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら、回答を作らない検索で、
-        # 質問に応じた推論の LLM / VLM（検索戦略の判定・質問拡張・条の目録の選択・画面目録の連携・
-        # 根拠の画像の添付）を設定に関わらず使わない。決定的な工程（規則の質問の理解・用語の別名・
+        # 質問に応じた推論の LLM（検索戦略の判定・質問拡張・条の目録の選択・画面目録の連携）と根拠の
+        # 画像の切り出しを設定に関わらず使わない。決定的な工程（規則の質問の理解・用語の別名・
         # hybrid search・rerank・親子と前後の文脈・交差参照・実体の拡張）は通常の検索と同じ。
         self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
         if self._caller_queries is not None:
@@ -748,7 +774,6 @@ class AnswerEngine:
                     "rag_query_strategy": CALLER_QUERY_STRATEGY,
                     "rag_article_catalog_enabled": False,
                     "rag_screen_linking_enabled": False,
-                    "rag_answer_vision_enabled": False,
                 }
             )
         if not settings.rag_support_guide_enabled:
@@ -766,6 +791,11 @@ class AnswerEngine:
         self._runtime_knowledge_payload = runtime_knowledge_payload
         # 回答のモデル(チャットのモデル比較の列のモデル。#593)。None は既定のモデル。
         self._answer_model_id = answer_model_id or None
+        # 回答のモデルが画像を読めるなら、根拠の chunk の画像を切り出して回答の入力に添付する
+        # (#3444)。回答を作らない検索(呼び出し元の検索文)は切り出さない。
+        self._attach_images = self._caller_queries is None and answer_model_reads_images(
+            settings, self._answer_model_id or enterprise_ai_default_model_id(settings)
+        )
         # 質問から読み取った抽出項目の条件(#652)。手の条件の項目には足さない。
         self._auto_field_conditions = list(auto_field_conditions)
         # 利用者が選んだ類似の承認済み FAQ(質問・承認済みの回答)。選んだときは検索せず、質問と FAQ
@@ -854,7 +884,7 @@ class AnswerEngine:
                     outcome, answer=f"{outcome.answer}\n\n（対象: {self._scope.label}）"
                 )
         outcome.diagnostics["models"] = self._models_used(
-            vision=getattr(result, "image_prompt_mode", "") == "vision_attachments",
+            attached_images=_attached_image_count(result),
             rerank_failed=state.degraded.failed("rerank"),
         )
         # 回答を作ったプロンプトの版（編集した内容とコードのプロンプト。#1276）。
@@ -1068,11 +1098,14 @@ class AnswerEngine:
             context_text=f"類似問: {faq_question}\n承認済みの回答: {faq_answer}",
         )
 
-    def _models_used(self, *, vision: bool = False, rerank_failed: bool = False) -> dict[str, Any]:
+    def _models_used(
+        self, *, attached_images: int = 0, rerank_failed: bool = False
+    ) -> dict[str, Any]:
         """回答フローで使ったモデル(画面に出す。#649)。
 
-        LLM(既定のテキストモデル。比較の列ではその列のモデル)は質問の理解・拡張と回答の生成に使う。
-        根拠の原画像を添付して答えたときは、その回答を既定の Vision モデルで作る(``vision``)。
+        LLM(既定のテキストモデル。比較の列ではその列のモデル)は質問の理解・拡張・回答の生成・
+        監査のすべてに使う(#3444)。``attached_images`` はそのモデルへ添付した根拠の画像の件数
+        (画像を読めないモデル・画像の無い根拠は 0)。
         rerank は実際に並べたときだけモデル名を出す: 無効・未設定(モデルか compartment が無い。
         rag_engine はこのとき rerank を実行しない)なら空。rerank が失敗して取得の順で続けたとき
         (``rerank_failed``)も空にし、rerank で並べたように見せない(失敗は degraded_steps の
@@ -1089,7 +1122,7 @@ class AnswerEngine:
 
         return {
             "llm": model(self._answer_model_id or enterprise_ai_default_model_id(settings)),
-            "vision": model(enterprise_ai_vision_model_id(settings)) if vision else None,
+            "attached_images": attached_images,
             "embedding": settings.oci_genai_embedding_model,
             "rerank": (
                 settings.oci_genai_rerank_model
@@ -1339,6 +1372,9 @@ class AnswerEngine:
                 )
                 for rank, hit in enumerate(hits, start=1):
                     state.chunks.setdefault(hit.chunk_id, hit)
+                    state.retrieval_channels.setdefault(hit.chunk_id, set()).update(
+                        _hit_channels(hit, index)
+                    )
                     fused[hit.chunk_id] = fused.get(hit.chunk_id, 0.0) + weight / (k + rank)
             # 自動で足した条件(質問から読み取った抽出項目の条件 #652・質問が名指しした文書のページと
             # 文書名 #546)で 0 件なら、その条件を段ごとに外して検索し直す(#2401。以降の検索(CRAG の
@@ -1372,9 +1408,10 @@ class AnswerEngine:
                 limit=candidate_limit,
                 profile_enabled=bool(getattr(settings, "profile_channel_enabled", True)),
             )
-            for _channel, channel_weight, ranking in channels:
+            for channel, channel_weight, ranking in channels:
                 for rank, (chunk_id, _score) in enumerate(ranking, start=1):
                     fused[chunk_id] = fused.get(chunk_id, 0.0) + channel_weight / (k + rank)
+                    state.retrieval_channels.setdefault(chunk_id, set()).add(channel)
         ordered = sorted(fused, key=lambda chunk_id: -fused[chunk_id])
         ranked = ordered[:candidate_limit]
         if self._settings.rag_candidate_diversity_depth > 0:
@@ -1450,7 +1487,7 @@ class AnswerEngine:
         )
         if referenced or entity_chunks or graph_chunks:
             await self._load_classifications([*referenced, *entity_chunks, *graph_chunks], state)
-        if answer_images_enabled(self._settings):
+        if self._attach_images:
             for chunk in [*anchors, *siblings, *referenced, *entity_chunks, *graph_chunks]:
                 await self._materialize_image_evidence(chunk, state)
             anchors = [state.chunks[chunk.chunk_id] for chunk in anchors]
@@ -1479,6 +1516,7 @@ class AnswerEngine:
                     rrf_score=fused.get(chunk.chunk_id, 0.0),
                     classification=classifications.get(chunk.document_id),
                     first_page_context=_first_page_context(chunk, state),
+                    retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
                 )
             )
             children.extend(
@@ -1487,6 +1525,7 @@ class AnswerEngine:
                     rrf_score=fused.get(chunk.chunk_id, 0.0) * _REFERENCE_SCORE_DECAY,
                     classification=classifications.get(reference.document_id),
                     first_page_context=_first_page_context(reference, state),
+                    retrieval_channels=state.retrieval_channels.get(reference.chunk_id),
                 )
                 for reference in references.get(chunk.chunk_id, ())
                 if reference.chunk_id not in entity_ids
@@ -1500,6 +1539,7 @@ class AnswerEngine:
                     rrf_score=base_score * _ENTITY_SCORE_DECAY,
                     classification=classifications.get(chunk.document_id),
                     first_page_context=_first_page_context(chunk, state),
+                    retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
                 )
                 for chunk in entity_chunks
             ]
@@ -1512,6 +1552,7 @@ class AnswerEngine:
                     rrf_score=base_score * _GRAPH_SCORE_DECAY,
                     classification=classifications.get(chunk.document_id),
                     first_page_context=_first_page_context(chunk, state),
+                    retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
                 )
                 for chunk in graph_chunks
             ]
@@ -1524,6 +1565,7 @@ class AnswerEngine:
                     rrf_score=0.0,
                     classification=classifications.get(sibling.document_id),
                     first_page_context=_first_page_context(sibling, state),
+                    retrieval_channels=state.retrieval_channels.get(sibling.chunk_id),
                 ),
             )
         if self._attachment_chunks:
@@ -1580,10 +1622,13 @@ class AnswerEngine:
                     "source_chunk_ids": source_ids,
                 }
             score = fused.pop(chunk.chunk_id, 0.0)
+            channels = state.retrieval_channels.get(chunk.chunk_id, set())
             for source_id in source_ids:
                 if (original := state.chunks.get(source_id)) is None:
                     continue
                 fused[source_id] = max(fused.get(source_id, 0.0), score)
+                # 派生の chunk の位置に置いた原文は、派生の chunk が当たった経路を引き継ぐ(#3443)。
+                state.retrieval_channels.setdefault(source_id, set()).update(channels)
                 resolved.setdefault(source_id, original)
         return list(resolved.values())
 
@@ -2389,7 +2434,7 @@ class AnswerEngine:
         # 分類と 1 ページ目の本文は、読んでいない文書・chunk set の分だけをまとめて 1 回で読む。
         await self._load_classifications(chunks, state)
         await self._load_first_page_contexts(chunks, state)
-        if answer_images_enabled(self._settings):
+        if self._attach_images:
             for chunk in chunks:
                 await self._materialize_image_evidence(chunk, state)
             chunks = [state.chunks[chunk.chunk_id] for chunk in chunks]
@@ -2507,7 +2552,7 @@ class AnswerEngine:
             return SectionRead(complete=False, reason="partial_read")
         await self._load_classifications(chunks, state)
         await self._load_first_page_contexts(chunks, state)
-        if answer_images_enabled(self._settings):
+        if self._attach_images:
             for chunk in chunks:
                 await self._materialize_image_evidence(chunk, state)
             chunks = [state.chunks[chunk.chunk_id] for chunk in chunks]
@@ -2695,7 +2740,7 @@ class AnswerEngine:
         chunks = [state.chunks.setdefault(chunk.chunk_id, chunk) for chunk, _ in found]
         await self._load_classifications(chunks, state)
         await self._load_first_page_contexts(chunks, state)
-        if answer_images_enabled(self._settings):
+        if self._attach_images:
             for chunk in chunks:
                 await self._materialize_image_evidence(chunk, state)
             chunks = [state.chunks[chunk.chunk_id] for chunk in chunks]
@@ -2900,6 +2945,25 @@ def _json_list(value: object) -> list[Any]:
             return []
         return decoded if isinstance(decoded, list) else []
     return list(value) if isinstance(value, list) else []
+
+
+def _hit_channels(hit: RetrievedChunk, query_index: int) -> set[str]:
+    """検索文 1 本の当たりの経路(rag_engine の検索の実装と同じ形。#3443)。
+
+    ``vector_rank`` / ``keyword_rank`` / ``citation_rank``(``OracleClient`` の検索の結果の
+    metadata)から決める。順位の無い結果は ``retrieval_mode`` から決める。
+    """
+    metadata = hit.metadata
+    mode = str(metadata.get("retrieval_mode") or "")
+    query = f"q{query_index + 1}"
+    channels: set[str] = set()
+    if "vector_rank" in metadata or mode in {"vector", "hybrid"}:
+        channels.add(f"vector:{query}")
+    if "keyword_rank" in metadata or mode in {"keyword", "hybrid"}:
+        channels.add(f"keyword:oracle_text:{query}")
+    if "citation_rank" in metadata or mode == "citation":
+        channels.add("citation")
+    return channels
 
 
 def _engine_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
@@ -3164,6 +3228,7 @@ def _stored_child(
     rrf_score: float,
     classification: Mapping[str, object] | None = None,
     first_page_context: Mapping[str, object] | None = None,
+    retrieval_channels: Collection[str] | None = None,
 ) -> Any:
     """backend の chunk を rag_engine の子 chunk にする。
 
@@ -3174,11 +3239,16 @@ def _stored_child(
     ``metadata["document"]["first_page_context"]`` を回答の「文書の背景」にする(#557)。
     chunk 自身が持つ値(#557 より前に保存した chunk)があれば、そちらを使う。
     分類と 1 ページ目の本文は chunk の保存内容(埋め込み・検索文)には入れず、回答のときにだけ付ける。
+    ``retrieval_channels`` は検索で当たった経路(``_hit_channels``)。rag_engine の検索の実装と同じ
+    ``adb_hybrid.retrieval_channels`` に書く(根拠の記録と、文書の検索の工程の候補の経路。#3443)。
+    ``adb_hybrid`` には経路だけを書き、並べ替え・文脈の選択に効く値(``rrf_score`` など)は書かない。
     """
     from rag_engine.models.storage import StoredChunk
 
     metadata = _engine_metadata(chunk)
     metadata["rrf_score"] = rrf_score
+    if retrieval_channels:
+        metadata["adb_hybrid"] = {"retrieval_channels": sorted(retrieval_channels)}
     metadata["document_id"] = chunk.document_id
     if classification:
         document = metadata.get("document")

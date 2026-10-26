@@ -679,8 +679,8 @@ class AnswerGenerationTests(unittest.TestCase):
             settings = replace(
                 get_settings(
                     environ={
-                        "RAG_ENGINE_ANSWER_IMAGES": "1",
-                        "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "text-model",
+                        "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "answer-model",
+                        "OCI_ENTERPRISE_AI_DEFAULT_MODEL_VISION": "1",
                         "OCI_ENTERPRISE_AI_VLM_MODEL": "vision-model",
                     },
                     dotenv_path=None,
@@ -718,8 +718,9 @@ class AnswerGenerationTests(unittest.TestCase):
                 ) as multimodal,
                 patch("rag_engine.generation.answering.parse_text_response") as text_parser,
             ):
+                # 画像を読める回答のモデルは、質問が画像を名指ししなくても根拠の画像を添付する（#3444）。
                 result = answer_question_result(
-                    "画像のボタンは？",
+                    "倉庫連携の説明は？",
                     "abcdef",
                     ["docling"],
                     settings,
@@ -730,23 +731,33 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertEqual(result.image_prompt_mode, "vision_attachments")
         self.assertEqual(result.image_evidence[0]["prompt_path"], str(crop))
         self.assertEqual(multimodal.call_args.args[2], [str(crop)])
-        # 画像を添付する生成は既定の Vision モデルで答える（#649）。
-        self.assertEqual(multimodal.call_args.kwargs["provider_id"], settings.default_vision_llm)
-        self.assertEqual(settings.llm_providers[settings.default_vision_llm].model, "vision-model")
+        # 画像を添付する生成も回答のモデルで答え、既定の Vision モデルへ切り替えない（#3444）。
+        self.assertIn(multimodal.call_args.kwargs["provider_id"], (None, settings.default_answer_llm))
+        self.assertNotEqual(multimodal.call_args.kwargs["provider_id"], settings.default_vision_llm)
         text_parser.assert_not_called()
 
-    def test_answer_generation_keeps_image_evidence_text_only_for_nonvisual_questions(self):
+    def test_answer_generation_never_attaches_images_for_text_answer_model(self):
+        """回答のモデルが画像を読めないなら、画像を名指しする質問でも添付せず、Vision モデルも呼ばない（#3444）。"""
         with TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
             crop = output_dir / "abcdef" / "docling" / "vision" / "picture.png"
             crop.parent.mkdir(parents=True)
             crop.write_bytes(b"png")
-            settings = replace(get_settings(), output_dir=output_dir)
+            settings = replace(
+                get_settings(
+                    environ={
+                        "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "text-model",
+                        "OCI_ENTERPRISE_AI_VLM_MODEL": "vision-model",
+                    },
+                    dotenv_path=None,
+                ),
+                output_dir=output_dir,
+            )
             search_result = _hybrid_result(
                 _stored_child(
                     "chunk-docling-c000001",
                     1,
-                    "倉庫連携の説明です。",
+                    "画像内に倉庫連携のボタンがある。",
                     metadata={
                         "active": True,
                         "image_evidence": [
@@ -774,7 +785,7 @@ class AnswerGenerationTests(unittest.TestCase):
                 ) as text_parser,
             ):
                 result = answer_question_result(
-                    "倉庫連携の説明は？",
+                    "画像のボタンは？",
                     "abcdef",
                     ["docling"],
                     settings,
