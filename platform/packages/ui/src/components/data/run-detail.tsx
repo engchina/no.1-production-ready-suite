@@ -1,13 +1,14 @@
-import { CheckCircle2, Circle, CirclePause, CirclePlay, MinusCircle, XCircle, type LucideIcon } from "lucide-react";
-import { useId, useState, type ReactNode } from "react";
+import { CheckCircle2, Circle, CirclePause, CirclePlay, Clock3, MinusCircle, XCircle, type LucideIcon } from "lucide-react";
+import { createContext, useContext, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 
 import { CopyButton } from "../ui/copy-button";
 import type { TraceDetailsLabels } from "../../lib/trace-labels";
 import { useTraceDetailsLabels } from "./trace-labels-provider";
 import { traceTimeline } from "../../lib/trace-tree";
-import { operationTimestampMs } from "../../lib/operation-timing";
+import { operationTimestampMs, type OperationTimestamp } from "../../lib/operation-timing";
 import { cn } from "../../lib/utils";
 import type { ChatProgressStepStatus } from "../feedback/chat-progress";
+import { ProcessingIndicator, useOperationTiming, type ProcessingIndicatorProps } from "../feedback/processing-state";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Disclosure } from "../ui/disclosure";
 import { DisclosureChevron } from "../ui/disclosure-chevron";
@@ -55,8 +56,15 @@ export interface RunDetailLabels {
   /** 取消の入口の表記（`formatRunCancellation`。#3348）。 */
   cancellation: RunCancellationLabels;
   notRecorded: string;
-  /** 処理の経過の要約（「5 ステップ・合計 12.3 秒」）。 */
+  /** 処理の経過の要約（「5 ステップ・合計 12.3 秒」）。終わった実行の閉じた見出し。 */
   timelineSummary: (count: number, duration: string) => string;
+  /**
+   * 実行中の処理の経過の閉じた見出し（「処理中（4 ステップ完了）」。チャットの処理の経過 `ChatProgress` と同じ文言。
+   * 経過時間は見出しの右の時計に出す。#3445）。
+   */
+  timelineRunning: (completed: number) => string;
+  /** 実行中の処理の経過の見出しの右の、処理全体の経過時間の見出し（「経過時間」）。 */
+  timelineElapsed: string;
   /** 段の状態（アイコンに添える読み上げ・失敗とスキップは画面にも出す）。 */
   stepStatus: Record<RunTimelineStepStatus, string>;
   /** 段の詳細（`RunTimelineStep.details`）の長さを切ったときの印。 */
@@ -148,6 +156,8 @@ export const DEFAULT_RUN_DETAIL_LABELS: RunDetailLabels = {
   cancellation: DEFAULT_RUN_CANCELLATION_LABELS,
   notRecorded: "—",
   timelineSummary: (count, duration) => `${count} ステップ・合計 ${duration}`,
+  timelineRunning: (completed) => (completed > 0 ? `処理中（${completed} ステップ完了）` : "処理中"),
+  timelineElapsed: "経過時間",
   stepStatus: {
     pending: "未実行",
     running: "実行中",
@@ -574,6 +584,21 @@ export function runTimelineHasChildren(steps: readonly { level?: number | null }
 }
 
 /**
+ * 今の段（最後に始まった実行中の末端の段。子の段を持たない段）の位置。無ければ -1（#3445）。一覧は開始順に並ぶので、
+ * 後ろから探す。チャットの処理の経過（`ChatProgress`）の今の段階と同じ規則で、実行の詳細の一覧が回す段と、概要の
+ * 進行表示の文言に使う段はこれ 1 つ（並行して実行中の末端の段がほかにあっても、回すのはこの段だけ）。
+ */
+export function runTimelineCurrentStepIndex(
+  steps: readonly { status: string; level?: number | null }[]
+): number {
+  const hasChildren = runTimelineHasChildren(steps);
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    if (steps[index].status === "running" && !hasChildren[index]) return index;
+  }
+  return -1;
+}
+
+/**
  * 回さない実行中の印（子の段を持つ実行中の段（親の工程）と、`spinRunning` が false の一覧の実行中の段。チャットの
  * 処理の経過の、今の段階を包む親の工程）。`RunStatusBadge` の実行中と同じ形（`CirclePlay`）にする。
  */
@@ -687,8 +712,9 @@ export interface RunTimelineProps {
    */
   showBars?: boolean;
   /**
-   * 実行中の末端の段（子の段を持たない段）を `Spinner` で回すか。既定 true。false は回さない実行中の印（`CirclePlay`）
-   * で出す。子の段を持つ実行中の段（親の工程）は、この値にかかわらず回さない（#3436）。チャットの処理の経過
+   * 今の段（最後に始まった実行中の末端の段。`runTimelineCurrentStepIndex`）を `Spinner` で回すか。既定 true。false は
+   * 回さない実行中の印（`CirclePlay`）で出す。子の段を持つ実行中の段（親の工程）と、今の段より前に始まって並行して
+   * 実行中の末端の段は、この値にかかわらず回さない（動くスピナーは 1 つ。#3436 / #3445）。チャットの処理の経過
    * （`ChatProgress`）は、今の段階（最後に始まった実行中の末端の段）の行を自分で描き、その行だけを回す。今の段階を包む実行中の
    * 親の工程は、この一覧の中で開始順の位置に回さずに出す（同じ処理のスピナーは 1 つ。messaging.md §3.7。#2840）。
    */
@@ -733,7 +759,8 @@ export function RunTimeline({
   const traceLabels = useTraceDetailsLabels();
   const labels = resolveRunDetailLabels(labelsInput);
   const bars = runTimelineBars(steps);
-  const hasChildren = runTimelineHasChildren(steps);
+  // 回すのは今の段（最後に始まった実行中の末端の段）1 つだけ（#3445）。
+  const spinIndex = spinRunning ? runTimelineCurrentStepIndex(steps) : -1;
   const idPrefix = useId();
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(
@@ -809,8 +836,8 @@ export function RunTimeline({
                     <StepIcon
                       status={step.status}
                       size={RUN_TIMELINE_CHEVRON_SIZE[size]}
-                      // 回すのは実行中の末端の段だけ。子の段を持つ段（親の工程）は回さない（#3436）。
-                      spin={spinRunning && !hasChildren[index]}
+                      // 回すのは今の段だけ。親の工程（#3436）と並行して実行中のほかの段（#3445）は回さない。
+                      spin={index === spinIndex}
                     />
                   </span>
                   {hasDetails ? (
@@ -903,6 +930,15 @@ export interface RunTimelineSectionProps {
   /** 段の一覧を最初から開く。既定は閉じる（#2473）。 */
   defaultOpen?: boolean;
   /**
+   * 実行中か（#3445）。true の間は閉じた見出しを「処理中（N ステップ完了）」と処理全体の経過時間（`startedAt` から。
+   * 同じ `RunDetailLayout` に概要の進行表示 `RunJobProgress` があれば、経過時間はそちらの 1 か所だけ）にする（チャットの処理の経過と同じ。終わった段の所要時間の合計を「合計」として出さない）。既定 false。実行中の
+   * 実行を詳細に出す製品（Agent の Run）は、実行の状態（終端でない）から渡す。終わった実行だけを出す製品（RAG・NL2SQL
+   * の実行履歴）は渡さない（記録の段の状態からは推し量らない）。
+   */
+  active?: boolean;
+  /** 実行の開始時刻（実行中の経過時間の起点。無ければ最初の段の開始）。 */
+  startedAt?: OperationTimestamp;
+  /**
    * 表に書けなかった span がある（一部だけの記録。#3226）。段の一覧の後ろ（段が無いときは `empty` の後ろ）に案内を
    * 出す。製品は `useTraceProgressSnapshot` の `partial` をそのまま渡す。
    */
@@ -928,12 +964,21 @@ export function RunTimelineSection({
   processDetails,
   processDetailsProps,
   defaultOpen = false,
+  active = false,
+  startedAt,
   partial = false,
   labels: labelsInput,
   testId,
 }: RunTimelineSectionProps) {
   const labels = resolveRunDetailLabels(labelsInput);
   const traceLabels = useTraceDetailsLabels();
+  const [open, setOpen] = useState(defaultOpen);
+  // 開いた一覧が今の段を回している間は、同じ実行の概要の進行表示（`RunJobProgress`）を回さない（#3445）。
+  const timelineSpins = open && steps.length > 0 && runTimelineCurrentStepIndex(steps) >= 0;
+  useReportTimelineSpinning(timelineSpins);
+  // 同じ実行の経過時間は 1 か所（messaging.md §3.7「同じ timer を複数のパネルに重ねない」）。概要の進行表示が出して
+  // いれば、見出しには出さない。
+  const jobProgress = useContext(RunDetailActivityContext)?.jobProgress ?? false;
   const partialNote = partial ? (
     <p className="text-xs text-fg-muted" data-testid={testId ? `${testId}-partial` : undefined}>
       {traceLabels.partial}
@@ -947,16 +992,39 @@ export function RunTimelineSection({
         <Disclosure
           variant="plain"
           size="sm"
-          summary={<span className="tnum">{labels.timelineSummary(steps.length, formatRunDuration(total, labels.notRecorded))}</span>}
+          summary={
+            <span className="tnum">
+              {active
+                ? labels.timelineRunning(steps.filter((step) => FINISHED_STEP_STATUSES.has(step.status)).length)
+                : labels.timelineSummary(steps.length, formatRunDuration(total, labels.notRecorded))}
+            </span>
+          }
+          meta={
+            active && !jobProgress ? (
+              <RunTimelineElapsed
+                startedAt={startedAt ?? firstStepStartedAt(steps)}
+                label={labels.timelineElapsed}
+                testId={testId ? `${testId}-timer` : undefined}
+              />
+            ) : undefined
+          }
           // 失敗した段がある実行は、色だけでなく失敗のアイコンでも伝える（チャットの処理の経過と同じ）。
           icon={failed ? XCircle : undefined}
-          defaultOpen={defaultOpen}
+          open={open}
+          onOpenChange={setOpen}
           summaryClassName={failed ? "text-danger-fg [&>span:first-child]:text-danger-fg" : undefined}
           summaryProps={{ "data-testid": testId ? `${testId}-summary` : undefined, "data-run-progress-summary": "" }}
           contentClassName="grid min-w-0 grid-cols-1 gap-3 pt-2"
           data-run-timeline-section=""
         >
-          <RunTimeline steps={steps} totalDurationMs={totalDurationMs} showSummary={false} labels={labelsInput} />
+          <RunTimeline
+            steps={steps}
+            totalDurationMs={totalDurationMs}
+            showSummary={false}
+            // 実行中は全体の長さが伸び続けるので線を出さない（チャットの実行中の一覧と同じ）。
+            showBars={!active}
+            labels={labelsInput}
+          />
           {partialNote}
           {processDetails != null || traceSummary != null || traceId ? <RunProcessDetails {...processDetailsProps} traceSummary={traceSummary} traceId={traceId}>{processDetails}</RunProcessDetails> : null}
         </Disclosure>
@@ -969,6 +1037,92 @@ export function RunTimelineSection({
       )}
     </RunDetailSection>
   );
+}
+
+const FINISHED_STEP_STATUSES: ReadonlySet<RunTimelineStepStatus> = new Set(["done", "failed", "skipped"]);
+
+function firstStepStartedAt(steps: readonly RunTimelineStep[]): number | undefined {
+  const starts = steps
+    .map((step) => operationTimestampMs(step.startedAt ?? undefined))
+    .filter((value): value is number => value !== null);
+  return starts.length ? Math.min(...starts) : undefined;
+}
+
+/**
+ * 実行中の処理の経過の見出しの右の、処理全体の経過時間（「経過時間 00:12」。#3445）。チャットの処理の経過の見出しの
+ * 時計と同じ形（`role="timer"`・読み上げない・桁をそろえる）。
+ */
+function RunTimelineElapsed({
+  startedAt,
+  label,
+  testId,
+}: {
+  startedAt: OperationTimestamp;
+  label: string;
+  testId?: string;
+}) {
+  const timing = useOperationTiming({ active: true, operationKey: "run-timeline-total", startedAt });
+  return (
+    <span
+      className="ml-auto inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap pl-3 text-xs font-normal leading-5 text-fg-muted"
+      role="timer"
+      aria-live="off"
+      aria-label={`${label} ${timing.elapsedClock}`}
+      data-testid={testId}
+    >
+      <Clock3 size={TEXT_ICON_SIZE.xs} aria-hidden="true" />
+      <span>{label}</span>
+      <span className="min-w-[3.25rem] text-right tabular-nums text-fg">{timing.elapsedClock}</span>
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 動くスピナーの調停（#3445）
+
+/**
+ * 実行の詳細の中で、処理の経過の一覧が今の段を回しているか。`RunDetailLayout` が持ち、`RunTimelineSection` が知らせ、
+ * 概要の進行表示（`RunJobProgress`）が読む（同じ処理の動くスピナーは 1 つ。messaging.md §3.7）。
+ */
+interface RunDetailActivity {
+  timelineSpins: boolean;
+  setTimelineSpins: (spins: boolean) => void;
+  /** 概要の進行表示（`RunJobProgress`）が出ているか。出ていれば処理の経過の見出しに経過時間を重ねない。 */
+  jobProgress: boolean;
+  setJobProgress: (shown: boolean) => void;
+}
+
+const RunDetailActivityContext = createContext<RunDetailActivity | null>(null);
+
+function useReportTimelineSpinning(spins: boolean): void {
+  const setTimelineSpins = useContext(RunDetailActivityContext)?.setTimelineSpins;
+  useEffect(() => {
+    if (!setTimelineSpins) return undefined;
+    setTimelineSpins(spins);
+    return () => setTimelineSpins(false);
+  }, [setTimelineSpins, spins]);
+}
+
+export type RunJobProgressProps = Omit<ProcessingIndicatorProps, "placement" | "activityIcon">;
+
+/**
+ * 実行の詳細の概要の進行表示（durable job。`ProcessingIndicator placement="job"`。#3445）。処理の経過を開いて一覧が今の
+ * 段を回している間は、回さない実行中の印（`activityIcon="static"`）にし、文言・経過時間・遅延の案内だけを出す（動く
+ * スピナーは今の段の 1 つ。閉じている・回す段が無いときは、この表示が回す）。3 製品の実行の詳細の進行表示はこの部品
+ * を使い、`RunDetailLayout` の中に置く。文言は処理の経過の今の段の名前（`runTimelineCurrentStepIndex`）にし、内部名・
+ * 種類のコードを出さない。
+ */
+export function RunJobProgress(props: RunJobProgressProps) {
+  const activity = useContext(RunDetailActivityContext);
+  const timelineSpins = activity?.timelineSpins ?? false;
+  const setJobProgress = activity?.setJobProgress;
+  const shown = props.active;
+  useEffect(() => {
+    if (!setJobProgress) return undefined;
+    setJobProgress(shown);
+    return () => setJobProgress(false);
+  }, [setJobProgress, shown]);
+  return <ProcessingIndicator {...props} placement="job" activityIcon={timelineSpins ? "static" : "spinner"} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -999,15 +1153,23 @@ export interface RunDetailLayoutProps {
  * タブで隠さず、1 枚のページを縦に読む（ページ内検索・印刷・読み上げで全部に届く。run-history.md「詳細」）。
  */
 export function RunDetailLayout({ summary, answer, timeline, evidence, feedback, technical, testId }: RunDetailLayoutProps) {
+  const [timelineSpins, setTimelineSpins] = useState(false);
+  const [jobProgress, setJobProgress] = useState(false);
+  const activity = useMemo(
+    () => ({ timelineSpins, setTimelineSpins, jobProgress, setJobProgress }),
+    [timelineSpins, jobProgress]
+  );
   return (
-    <div className="grid min-w-0 content-start gap-4 [&>*]:min-w-0" data-run-detail="" data-testid={testId}>
-      {summary}
-      {timeline}
-      {answer}
-      {evidence}
-      {feedback}
-      {technical}
-    </div>
+    <RunDetailActivityContext.Provider value={activity}>
+      <div className="grid min-w-0 content-start gap-4 [&>*]:min-w-0" data-run-detail="" data-testid={testId}>
+        {summary}
+        {timeline}
+        {answer}
+        {evidence}
+        {feedback}
+        {technical}
+      </div>
+    </RunDetailActivityContext.Provider>
   );
 }
 

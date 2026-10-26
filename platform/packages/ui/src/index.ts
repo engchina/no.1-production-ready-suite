@@ -770,11 +770,13 @@ export {
   RunProcessDetails,
   RunTimeline,
   RunTimelineSection,
+  RunJobProgress,
   RunDetailLayout,
   RunDetailSkeleton,
   RunFactList,
   runTimelineBars,
   runTimelineHasChildren,
+  runTimelineCurrentStepIndex,
   resolveRunDetailLabels,
   formatRunCancellation,
   DEFAULT_RUN_DETAIL_LABELS,
@@ -793,6 +795,7 @@ export {
   type RunTimelineBar,
   type RunTimelineProps,
   type RunTimelineSectionProps,
+  type RunJobProgressProps,
   type RunDetailLayoutProps,
 } from "./components/data/run-detail";
 export {
