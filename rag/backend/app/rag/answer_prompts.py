@@ -212,6 +212,8 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
             ("instruction", "rag_engine.generation.grounded:SCOPE_PLAN_SYSTEM_PROMPT"),
             ("system", "rag_engine.generation.grounded:GENERATE_SYSTEM_PROMPT"),
             ("assumptionSystem", "rag_engine.generation.grounded:ASSUMPTION_SYSTEM_PROMPT"),
+            # 目録で選んだ条を生成が引かなかったときだけ、支える説明を検討する（#3526）。
+            ("catalogReview", "rag_engine.generation.grounded:CATALOG_REVIEW_SYSTEM_PROMPT"),
         ),
     ),
     PromptStage(
