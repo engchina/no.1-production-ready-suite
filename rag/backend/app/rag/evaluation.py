@@ -33,6 +33,8 @@ from pr_evaluation_scoring import (
     threshold_failures,
     unique_in_order,
 )
+from pydantic import ValidationError
+from rag_engine.evaluation.answer_eval import standard_scope_cache
 from rag_engine.resources.shared_cache import bypass_shared_cache
 
 from app.clients.ai_calls import make_ai_caller
@@ -77,6 +79,7 @@ from app.schemas.evaluation import (
     EvaluationCaseResult,
     EvaluationCategorySummary,
     EvaluationEvidence,
+    EvaluationJudgeDiagnostics,
     EvaluationMetrics,
     EvaluationRagOverrides,
     EvaluationReasoningSummary,
@@ -307,9 +310,11 @@ class EvaluationRunner:
         設定・用語・同義語・回答ルール・業務ガイド）をしてから回答する（#1249）。渡さなければ全体の既定（#301）。
 
         条の選択の process をまたぐ記録（#3507）は読みも書きもしない（同じ質問の再実行でも
-        実際の費用を測る。process の中の記録は回答と同じに使う）。
+        実際の費用を測る。process の中の記録は回答と同じに使う）。標準回答の比較範囲は、
+        同じ評価の中（比較の pass を含む）で質問・標準回答・判定のモデルごとに 1 回だけ
+        固定する（#3570）。
         """
-        with bypass_shared_cache():
+        with bypass_shared_cache(), standard_scope_cache():
             return await self._run(
                 cases,
                 top_k,
@@ -694,13 +699,27 @@ def _settings_judge(settings: Settings) -> AnswerJudge:
     return judge
 
 
+def _judge_diagnostics(evaluation: Mapping[str, object]) -> EvaluationJudgeDiagnostics | None:
+    """判定の診断（比較範囲の使い回し・再試行の回数）。記録が無い・形が違えば None。"""
+    value = evaluation.get("judge_diagnostics")
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return EvaluationJudgeDiagnostics.model_validate(value)
+    except ValidationError:
+        return None
+
+
 def summarize_answer_judgement(evaluation: Mapping[str, object]) -> EvaluationAnswerJudgement:
     """標準回答による評価の結果を、指標に使う要約へ変換する。"""
     status = str(evaluation.get("status") or "error")
     message = evaluation.get("message")
+    diagnostics = _judge_diagnostics(evaluation)
     if status != "completed":
         return EvaluationAnswerJudgement(
-            status=status, message=str(message) if message else ANSWER_JUDGE_ERROR_MESSAGE
+            status=status,
+            message=str(message) if message else ANSWER_JUDGE_ERROR_MESSAGE,
+            judge_diagnostics=diagnostics,
         )
     claims = [
         claim for claim in _mapping_list(evaluation.get("claim_checks")) if claim.get("status")
@@ -719,6 +738,7 @@ def summarize_answer_judgement(evaluation: Mapping[str, object]) -> EvaluationAn
         ),
         missing_content=any(str(check.get("status")) == "missing" for check in coverage_checks),
         message=str(message) if message else None,
+        judge_diagnostics=diagnostics,
     )
 
 

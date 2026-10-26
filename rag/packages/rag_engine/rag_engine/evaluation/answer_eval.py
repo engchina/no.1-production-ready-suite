@@ -11,12 +11,18 @@ import hashlib
 import json
 import logging
 import re
+import threading
+import unicodedata
 from collections import deque
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic.json_schema import SkipJsonSchema
 
+from rag_engine.config import get_llm_provider
 from rag_engine.dependencies import parse_text_response
 from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERATION_GUIDANCE_POLICY
@@ -27,7 +33,7 @@ from rag_engine.generation.grounded import (
     verbatim_quote_lines,
 )
 from rag_engine.generation.operation_audit import answer_passages, is_citation_line, is_heading, list_heading_lines
-from rag_engine.retrieval.character_forms import fold_width
+from rag_engine.retrieval.character_forms import fold_text_with_positions, fold_width
 from rag_engine.retrieval.task_contract import task_contract
 
 logger = logging.getLogger(__name__)
@@ -284,12 +290,55 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+# 引用の照合で同じ文字とみなす句読点・引用符の異体（NFKC の後にも残る和文と欧文の違い）。
+_QUOTE_PUNCTUATION_FOLD = str.maketrans("、。“”「」『』‘’", ",." + chr(34) * 6 + chr(39) * 2)
+# 直前の文字と 1 つの塊になる半角の濁点・半濁点（原文の範囲を塊の途中で切らない）。
+_HALFWIDTH_SOUND_MARKS = frozenset("ﾞﾟ")
+
+
+def _quote_form(text: str) -> tuple[str, list[int]]:
+    """引用の照合の形（NFKC・波線とダッシュの同一視・空白の除去・句読点の異体の統一）と、各文字の元の位置。"""
+    folded, positions = fold_text_with_positions(text)
+    chars: list[str] = []
+    kept: list[int] = []
+    for char, position in zip(folded, positions, strict=True):
+        if char.isspace():
+            continue
+        chars.append(char.translate(_QUOTE_PUNCTUATION_FOLD))
+        kept.append(position)
+    return "".join(chars), kept
+
+
+def grounded_quote(quote: str, source: str) -> str:
+    """モデルの引用を source の原文の連続する範囲に結び付けて、その原文を返す。結び付かなければ空文字。
+
+    LLM-as-judge の引用の接地。モデルは引用を写すときに空白・改行・全角半角・句読点を変えることがあるので、
+    照合の形（``_quote_form``）でそろえて探し、見つかった範囲の原文に差し替える（保存する引用は原文のまま）。
+    文字・数字の違いは受け入れない（そろえた形でも無い引用は拒否する）。
+    """
+    if not quote.strip():
+        return ""
+    if quote in source:
+        return quote
+    wanted, _ = _quote_form(quote)
+    if not wanted:
+        return ""
+    form, positions = _quote_form(source)
+    start = form.find(wanted)
+    if start < 0:
+        return ""
+    stop = positions[start + len(wanted) - 1] + 1
+    while stop < len(source) and (unicodedata.combining(source[stop]) or source[stop] in _HALFWIDTH_SOUND_MARKS):
+        stop += 1
+    return source[positions[start] : stop]
+
+
 def model_request(inputs: dict[str, Any]) -> dict[str, Any]:
     """評価・検証のモデルに渡す入力。根拠（evidence_items）の本文だけを ``fold_width``（全角・半角の違いだけ）の文字の形にそろえる (#1350)。
 
     回答の生成と同じく、資料の全角の ``ＨＲＭ`` と回答の半角の ``HRM`` をモデルが同じ語と読めるようにする。
     根拠の ID（evidence_id。原文から計算する）・目録・記録する原文は元のまま。回答・段落・標準回答も、
-    モデルが返す引用を原文のまま照合する（``answer_quote not in answer_text``）のでそろえない。
+    モデルが返す引用を原文の範囲に結び付けて保存する（``grounded_quote``）のでそろえない。
     """
     items = inputs.get("evidence_items")
     if not items:
@@ -365,12 +414,44 @@ def _next_batch(fixed: dict[str, Any], pending: deque, previous, batch_index: in
     return inputs
 
 
+RetryRecorder = Callable[[Exception], None]
+
+
+def _is_invalid_output(exc: Exception) -> bool:
+    """指摘を付けて出し直させる出力の誤り（schema 違反・構造化出力として読めない・契約違反）か。"""
+    if isinstance(exc, (ValidationError, EvaluationContractError)):
+        return True
+    from rag_engine.adapters.oci import InvalidStructuredOutput
+
+    return isinstance(exc, InvalidStructuredOutput)
+
+
+def _retry_feedback(exc: Exception) -> str:
+    """再試行の依頼に付ける違反の内容。モデルの出力の値・根拠は写さない。"""
+    if isinstance(exc, EvaluationContractError):
+        return str(exc)[:220]
+    if isinstance(exc, ValidationError):
+        return "必須フィールドまたは型がschemaに一致しません。"
+    return "出力を構造化出力の JSON として読めませんでした（途中で終わる・必須フィールドの欠落）。"
+
+
 def _parse_checked(
-    system, inputs, settings, schema, provider_id, check, *, max_input_bytes: int = MAX_EVALUATION_INPUT_BYTES, attempts: int = 2
+    system,
+    inputs,
+    settings,
+    schema,
+    provider_id,
+    check,
+    *,
+    max_input_bytes: int = MAX_EVALUATION_INPUT_BYTES,
+    attempts: int = 2,
+    on_retry: RetryRecorder | None = None,
 ):
     """同じ根拠と採点範囲を保ち、違反内容を指摘して1回だけ再試行する。根拠の本文は ``model_request`` の形で渡す。
 
+    再試行するのは出力の誤り（``_is_invalid_output``）だけ。通信・時間切れは adapter の再試行に任せる。
     attempts=1 は再試行しない（監査し直しのように、最初の判定を補うだけの呼び出し。#2625）。
+    ``on_retry`` は再試行のたびに原因の例外を受け取る（評価の診断に回数を残す）。
     """
     request = dict(model_request(inputs))
     for attempt in range(attempts):
@@ -382,16 +463,17 @@ def _parse_checked(
             output = schema.model_validate(raw.model_dump())
             check(output)
             return output
-        except (ValidationError, EvaluationContractError) as exc:
-            if attempt + 1 >= attempts:
+        except Exception as exc:
+            if attempt + 1 >= attempts or not _is_invalid_output(exc):
                 raise
+            if on_retry is not None:
+                on_retry(exc)
             # 同じ不正出力を繰り返さないため、値や根拠を変更せず契約違反だけを返す。
-            detail = str(exc)[:220] if isinstance(exc, EvaluationContractError) else "必須フィールドまたは型がschemaに一致しません。"
-            request["validation_feedback"] = detail + " 根拠・固定項目は変更せず、この違反を修正して全結果を返してください。"
+            request["validation_feedback"] = _retry_feedback(exc) + " 根拠・固定項目は変更せず、この違反を修正して全結果を返してください。"
     raise AssertionError("unreachable")
 
 
-def _prepare_standard_scope(payload, settings, provider_id):
+def _prepare_standard_scope(payload, settings, provider_id, *, on_retry: RetryRecorder | None = None):
     """質問と標準回答だけで比較範囲を決定する。生成回答・検索根拠は送信しない。"""
     inputs = {key: payload.get(key) for key in ("question", "standard_answer")}
 
@@ -402,24 +484,121 @@ def _prepare_standard_scope(payload, settings, provider_id):
         StandardAnswerScope,
         provider_id,
         lambda scope: _validate_standard_scope(scope, inputs["standard_answer"]),
+        on_retry=on_retry,
     )
 
 
 def _validate_standard_scope(scope, standard_answer):
-    """再利用する範囲も元の標準回答との引用一致・原質問項目の存在を検証する。"""
+    """再利用する範囲も元の標準回答との引用一致・原質問項目の存在を検証する。
+
+    引用は ``grounded_quote`` で標準回答の原文に結び付け、表記の揺れだけの引用は原文に差し替える。
+    """
     if not any(item.relevance == "required" for item in scope.requirements):
         raise EvaluationContractError("原質問に対応する固定項目がありません")
     for item in scope.requirements:
         if not item.requirement.strip() or not item.standard_answer_quote.strip() or not item.relevance_reason.strip():
             raise EvaluationContractError("空の固定項目")
-        if item.standard_answer_quote not in standard_answer:
+        quote = grounded_quote(item.standard_answer_quote, standard_answer)
+        if not quote:
             raise EvaluationContractError("標準回答に存在しない引用")
+        item.standard_answer_quote = quote
     if len({item.requirement for item in scope.requirements}) != len(scope.requirements):
         raise EvaluationContractError("固定項目の重複")
 
 
-def _evaluate_batch(inputs: dict[str, Any], settings, provider_id: str | None) -> AnswerEvaluationOutput:
-    """全固定項目の対応と本文引用を検証し、除外・項目欠落による採点を拒否する。"""
+# 比較範囲の指示の版（指示と schema）。記録した比較範囲を、指示を変えた後に使わない。
+SCOPE_PROMPT_SHA = hashlib.sha256((SCOPE_PROMPT + _json(StandardAnswerScope.model_json_schema())).encode("utf-8")).hexdigest()
+
+
+class _ScopeEntry:
+    """1 つの key の比較範囲と、その固定を 1 回にする lock。"""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.scope: StandardAnswerScope | None = None
+
+
+class StandardScopeCache:
+    """評価の job の中で、比較範囲を（質問・標準回答・判定のモデル・範囲の指示の版）ごとに 1 回だけ固定する。
+
+    比較範囲は質問と標準回答だけで決まる（生成回答・根拠を見ない）ので、同じ job の pass（ナレッジベース /
+    検索・回答プロファイル）とケースで使い回しても採点の条件は変わらない。並行のケースが同じ key を同時に
+    求めたら、1 つが固定し、ほかはその結果を待つ。固定に失敗した key は記録せず、次に求められたときに固定し直す。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: dict[str, _ScopeEntry] = {}
+
+    def get_or_prepare(self, key: str, prepare: Callable[[], StandardAnswerScope]) -> tuple[StandardAnswerScope, bool]:
+        """key の比較範囲（写し）と、記録を使い回したか。無ければ ``prepare`` で固定して記録する。"""
+        with self._lock:
+            entry = self._entries.setdefault(key, _ScopeEntry())
+        with entry.lock:
+            if entry.scope is not None:
+                return entry.scope.model_copy(deep=True), True
+            entry.scope = prepare()
+            return entry.scope.model_copy(deep=True), False
+
+
+_SCOPE_CACHE: ContextVar[StandardScopeCache | None] = ContextVar("rag_standard_scope_cache", default=None)
+
+
+@contextmanager
+def standard_scope_cache() -> Iterator[StandardScopeCache]:
+    """この文脈（とそこから作る task・thread の文脈）の間、比較範囲の記録を共有する（評価の job）。
+
+    既に共有の中なら、その記録をそのまま使う（job の中の pass ごとの評価が job の記録を使う）。
+    """
+    current = _SCOPE_CACHE.get()
+    if current is not None:
+        yield current
+        return
+    cache = StandardScopeCache()
+    token = _SCOPE_CACHE.set(cache)
+    try:
+        yield cache
+    finally:
+        _SCOPE_CACHE.reset(token)
+
+
+def _judge_model(settings, provider_id: str | None) -> str:
+    """判定のモデル（provider と model）。解決できない設定では指定の provider の ID だけ。"""
+    try:
+        provider = get_llm_provider(settings, provider_id or settings.default_answer_llm)
+    except Exception:  # noqa: BLE001 - key の材料。解決できなければ指定の ID で区別する。
+        return str(provider_id or "")
+    return provider.provider_id + ":" + str(provider.model)
+
+
+def _shared_standard_scope(payload, settings, provider_id, on_retry: RetryRecorder) -> tuple[StandardAnswerScope, bool]:
+    """比較範囲と、job の記録を使い回したか。job の外（記録の共有が無い）では毎回固定する。"""
+
+    def prepare() -> StandardAnswerScope:
+        return _prepare_standard_scope(payload, settings, provider_id, on_retry=on_retry)
+
+    cache = _SCOPE_CACHE.get()
+    if cache is None:
+        return prepare(), False
+    key = _json(
+        [
+            str(payload.get("question") or ""),
+            str(payload.get("standard_answer") or ""),
+            _judge_model(settings, provider_id),
+            SCOPE_PROMPT_SHA,
+        ]
+    )
+    return cache.get_or_prepare(hashlib.sha256(key.encode("utf-8")).hexdigest(), prepare)
+
+
+def _evaluate_batch(
+    inputs: dict[str, Any], settings, provider_id: str | None, *, on_retry: RetryRecorder | None = None
+) -> AnswerEvaluationOutput:
+    """全固定項目の対応と本文引用を検証し、除外・項目欠落による採点を拒否する。
+
+    段落 ID の無い引用は ``grounded_quote`` で回答の原文に結び付け、表記の揺れだけの引用は原文に差し替える。
+    """
+    answer_text = inputs.get("answer_text") or ""
 
     def check(output):
         count = len(inputs["standard_answer_scope"]["requirements"])
@@ -435,8 +614,10 @@ def _evaluate_batch(inputs: dict[str, Any], settings, provider_id: str | None) -
                     raise EvaluationContractError("回答段落IDが存在しません")
                 # モデルの言い換えではなく、指定された元の段落を監査記録に採用する。
                 claim.answer_quote = passages[claim.answer_passage_id]
-            if not claim.answer_quote.strip() or claim.answer_quote not in (inputs.get("answer_text") or ""):
+            quote = grounded_quote(claim.answer_quote, answer_text)
+            if not quote:
                 raise EvaluationContractError("主張監査に回答外の引用")
+            claim.answer_quote = quote
         for item in output.coverage_checks:
             if item.answer_passage_id:
                 if item.answer_passage_id not in passages:
@@ -446,10 +627,12 @@ def _evaluate_batch(inputs: dict[str, Any], settings, provider_id: str | None) -
             # missingの配点は0のままで、本文にない引用だけを拒否する。
             if item.status == "missing" and not item.answer_quote:
                 continue
-            if not item.answer_quote.strip() or item.answer_quote not in (inputs.get("answer_text") or ""):
+            quote = grounded_quote(item.answer_quote, answer_text)
+            if not quote:
                 raise EvaluationContractError("生成回答に存在しない引用")
+            item.answer_quote = quote
 
-    return _parse_checked(SYSTEM_PROMPT, inputs, settings, AnswerEvaluationOutput, provider_id, check)
+    return _parse_checked(SYSTEM_PROMPT, inputs, settings, AnswerEvaluationOutput, provider_id, check, on_retry=on_retry)
 
 
 def _coverage_value(checks):
@@ -850,17 +1033,36 @@ def evaluate_answer_payload(
     標準回答未入力は外部呼び出しなし。各呼び出しには既存 adapter の timeout/retry を
     適用する。schema 違反は同じ batch で1回再試行する。途中失敗は部分評価を返さず
     error、分割不能な入力超過は input_too_large。
-    standard_scope 未指定時は質問と標準回答だけから範囲を固定する追加呼び出しを行う。
+    standard_scope 未指定時は質問と標準回答だけから範囲を固定する追加呼び出しを行う。評価の job の中
+    （``standard_scope_cache``）では、同じ質問・標準回答・判定のモデルの範囲を pass・ケースをまたいで 1 回だけ固定する。
     同じ質問・標準回答でモデル比較する場合は同一の事前範囲を再利用できる。required の固定項目への
     対応率を requirement_coverage(0〜1)にする。指標の閾値と合否は backend が付ける(#680)。
     payload は変更せず、接続情報を含み得る例外の詳細も保存しない。
+    judge_diagnostics には、比較範囲を job の記録から使い回したかと、出力の誤りで再試行した回数・原因の型を残す。
     """
+    diagnostics: dict[str, Any] = dict(
+        standard_scope_reused=False,
+        standard_scope_retries=0,
+        judge_retries=0,
+        retry_reasons=[],
+    )
     base = {
         "rubric_version": 11,
         "batch_count": 0,
         "external_data_required": payload.get("external_data_required"),
         "external_data_items": list(payload.get("external_data_items") or []),
+        "judge_diagnostics": diagnostics,
     }
+
+    def retried(stage: str) -> RetryRecorder:
+        counter = "standard_scope_retries" if stage == "standard_scope" else "judge_retries"
+
+        def record(exc: Exception) -> None:
+            diagnostics[counter] += 1
+            diagnostics["retry_reasons"].append(stage + ":" + type(exc).__name__)
+
+        return record
+
     has_standard = bool(str(payload.get("standard_answer") or "").strip())
     if not has_standard and not payload.get("allow_without_standard"):
         return {**base, "status": "no_standard_answer", "message": "標準回答が未入力のため、評価していません。"}
@@ -885,7 +1087,9 @@ def evaluate_answer_payload(
         if not has_standard:
             standard_scope = StandardAnswerScope.model_construct(requirements=[], excluded_case_data=[])
         elif standard_scope is None:
-            standard_scope = _prepare_standard_scope(payload, settings, provider_id)
+            standard_scope, diagnostics["standard_scope_reused"] = _shared_standard_scope(
+                payload, settings, provider_id, retried("standard_scope")
+            )
         else:
             standard_scope = StandardAnswerScope.model_validate(standard_scope.model_dump())
             _validate_standard_scope(standard_scope, payload["standard_answer"])
@@ -905,7 +1109,10 @@ def evaluate_answer_payload(
             catalog.update({item["evidence_id"]: item for item in inputs["evidence_items"]})
             base["evidence_catalog"] = list(catalog.values())
             output = _bind_claims(
-                _evaluate_batch(inputs, settings, provider_id), catalog, fixed["answer_passages"], heading_lines=heading_lines
+                _evaluate_batch(inputs, settings, provider_id, on_retry=retried("judge")),
+                catalog,
+                fixed["answer_passages"],
+                heading_lines=heading_lines,
             )
             accumulated_claims = _merge_claims(accumulated_claims, output.claim_checks)
             batch_audits.append(
@@ -1010,6 +1217,7 @@ def evaluate_answer_payload(
                 AnswerCorrectnessOutput,
                 provider_id,
                 lambda output: None,
+                on_retry=retried("judge"),
             )
             base["answer_correctness"] = {"correct": 1.0, "incorrect": 0.0}.get(correctness.verdict)
             base["correctness_reason"] = correctness.reason

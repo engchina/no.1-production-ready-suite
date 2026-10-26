@@ -21,6 +21,7 @@ from fastapi import (
     status,
 )
 from pr_backend_core.bounded_calls import Attempt, BoundedCallAborted
+from rag_engine.evaluation.answer_eval import standard_scope_cache
 from rag_parser_core.language import current_pack
 from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
 
@@ -439,45 +440,49 @@ async def _execute_run(
         if request.thresholds is not None
         else resolve_evaluation_suite(suite_name)
     )
-    started = time.monotonic()
-    metrics = await EvaluationRunner().run(
-        cases=request.cases,
-        top_k=request.top_k,
-        filters=request.filters,
-        knowledge_base_ids=request.knowledge_base_ids,
-        thresholds=effective_thresholds,
-        rag_overrides=request.rag_overrides,
-        search_answer_profile_id=request.search_answer_profile_id,
-        time_budget_seconds=time_budget_seconds,
-        progress=_offset_progress(progress, offset=0, final=False)
-        if request.compare_search_answer_profile_id
-        else progress,
-    )
-    metrics = metrics.model_copy(update={"evaluation_suite": suite_name})
-    if request.compare_search_answer_profile_id:
-        # 同じケースを検索・回答プロファイルの範囲（参照 KB・業務ガイド・ルール）でも流す（#2402）。
-        # 範囲はプロファイルが決めるため、ナレッジベースの指定は渡さない。
-        compared = await EvaluationRunner().run(
+    # 標準回答の比較範囲は、job の 2 つの pass で同じものを使う（#3570）。
+    with standard_scope_cache():
+        started = time.monotonic()
+        metrics = await EvaluationRunner().run(
             cases=request.cases,
             top_k=request.top_k,
-            filters={
-                key: value for key, value in request.filters.items() if key != "knowledge_base_id"
-            },
-            knowledge_base_ids=[],
+            filters=request.filters,
+            knowledge_base_ids=request.knowledge_base_ids,
             thresholds=effective_thresholds,
             rag_overrides=request.rag_overrides,
-            search_answer_profile_id=request.compare_search_answer_profile_id,
-            time_budget_seconds=max(0.0, time_budget_seconds - (time.monotonic() - started)),
-            progress=_offset_progress(progress, offset=len(request.cases), final=True),
+            search_answer_profile_id=request.search_answer_profile_id,
+            time_budget_seconds=time_budget_seconds,
+            progress=_offset_progress(progress, offset=0, final=False)
+            if request.compare_search_answer_profile_id
+            else progress,
         )
-        metrics = metrics.model_copy(
-            update={
-                "comparison": EvaluationComparison(
-                    search_answer_profile_id=request.compare_search_answer_profile_id,
-                    metrics=compared.model_copy(update={"evaluation_suite": suite_name}),
-                )
-            }
-        )
+        metrics = metrics.model_copy(update={"evaluation_suite": suite_name})
+        if request.compare_search_answer_profile_id:
+            # 同じケースを検索・回答プロファイルの範囲（参照 KB・業務ガイド・ルール）でも流す
+            # （#2402）。範囲はプロファイルが決めるため、ナレッジベースの指定は渡さない。
+            compared = await EvaluationRunner().run(
+                cases=request.cases,
+                top_k=request.top_k,
+                filters={
+                    key: value
+                    for key, value in request.filters.items()
+                    if key != "knowledge_base_id"
+                },
+                knowledge_base_ids=[],
+                thresholds=effective_thresholds,
+                rag_overrides=request.rag_overrides,
+                search_answer_profile_id=request.compare_search_answer_profile_id,
+                time_budget_seconds=max(0.0, time_budget_seconds - (time.monotonic() - started)),
+                progress=_offset_progress(progress, offset=len(request.cases), final=True),
+            )
+            metrics = metrics.model_copy(
+                update={
+                    "comparison": EvaluationComparison(
+                        search_answer_profile_id=request.compare_search_answer_profile_id,
+                        metrics=compared.model_copy(update={"evaluation_suite": suite_name}),
+                    )
+                }
+            )
     evaluation_run_id = await _save_evaluation_artifact(
         request_summary=_run_request_summary(request),
         result_summary=metrics.model_dump(mode="json"),

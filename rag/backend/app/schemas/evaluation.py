@@ -473,6 +473,21 @@ class EvaluationCase(EvaluationHandlingExpectation):
         return ids
 
 
+class EvaluationJudgeDiagnostics(BaseModel):
+    """標準回答による評価の判定の診断（rag_engine の ``judge_diagnostics``）。
+
+    ``standard_scope_reused`` は比較範囲（標準回答の比較項目）を同じ評価の job の記録から
+    使い回したか、``standard_scope_retries`` / ``judge_retries`` は比較範囲の固定 / 照合・
+    監査で出力の誤りを指摘して出し直させた回数、``retry_reasons`` はその段と原因の例外の型
+    （「standard_scope:InvalidStructuredOutput」）。
+    """
+
+    standard_scope_reused: bool = False
+    standard_scope_retries: int = Field(default=0, ge=0)
+    judge_retries: int = Field(default=0, ge=0)
+    retry_reasons: list[str] = Field(default_factory=list)
+
+
 class EvaluationAnswerJudgement(BaseModel):
     """標準回答による評価(評価の基準の指標と閾値による合否・主張の監査・必要な項目の網羅)の要約。
 
@@ -489,6 +504,9 @@ class EvaluationAnswerJudgement(BaseModel):
     # 原質問に必要な項目のうち、説明の無い項目があったか(rag_poc の「必要内容欠落」)。
     missing_content: bool | None = None
     message: str | None = None
+    # 判定の診断（比較範囲を job の記録から使い回したか・出力の誤りで再試行した回数）。
+    # 評価を完了できなかったケースでも残す。判定が記録を返さなかった（時間切れなど）ときは None。
+    judge_diagnostics: EvaluationJudgeDiagnostics | None = None
 
 
 class EvaluationTurnResult(BaseModel):

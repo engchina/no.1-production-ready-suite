@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
+from rag_engine.adapters.oci import InvalidStructuredOutput
 from rag_engine.config import get_settings
 from rag_engine.evaluation.answer_eval import (
     MAX_EVALUATION_INPUT_BYTES,
@@ -21,6 +22,8 @@ from rag_engine.evaluation.answer_eval import (
     _input_bytes,
     _prepare_standard_scope,
     evaluate_answer_payload,
+    grounded_quote,
+    standard_scope_cache,
 )
 from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answering import AnswerQuestionResult, AnswerRecord, answer_evidence_items, parse_answer_response
@@ -746,3 +749,162 @@ def test_six_metrics_audits_claims_without_standard(fixed_scope):
     assert result["claim_checks"][0]["status"] == "unsupported"
     assert parse.call_count == 1
     fixed_scope.assert_not_called()
+
+
+# ---- 判定の出し直し・引用の接地・比較範囲の使い回し（#3570） -----------------------------------
+
+PARSE = "rag_engine.evaluation.answer_eval.parse_text_response"
+
+
+def broken_output():
+    """adapter が構造化出力として読めなかった応答（JSON が閉じない・必須項目の欠落）。"""
+    return InvalidStructuredOutput("構造化出力の JSON が閉じていません。")
+
+
+def scope_or_output(system, prompt, settings, schema, **kwargs):
+    """比較範囲の固定には固定の範囲、照合・監査には固定の評価結果を返す。"""
+    return scope_output() if schema is StandardAnswerScope else output()
+
+
+def test_invalid_structured_output_is_retried_with_feedback_and_scored():
+    with patch(PARSE, side_effect=[broken_output(), output()]) as parse:
+        result = evaluate_answer_payload(payload(), object())
+    assert result["status"] == "completed" and result["requirement_coverage"] == 1.0
+    assert parse.call_count == 2
+    assert "JSON" in json.loads(parse.call_args_list[1].args[1])["validation_feedback"]
+    assert result["judge_diagnostics"]["judge_retries"] == 1
+    assert result["judge_diagnostics"]["retry_reasons"] == ["judge:InvalidStructuredOutput"]
+
+
+def test_scope_stage_retries_invalid_structured_output(fixed_scope):
+    fixed_scope.side_effect = _prepare_standard_scope
+    with patch(PARSE, side_effect=[broken_output(), scope_output(), output()]) as parse:
+        result = evaluate_answer_payload(payload(), object())
+    assert result["status"] == "completed" and parse.call_count == 3
+    diagnostics = result["judge_diagnostics"]
+    assert diagnostics["standard_scope_retries"] == 1 and diagnostics["judge_retries"] == 0
+    assert diagnostics["retry_reasons"] == ["standard_scope:InvalidStructuredOutput"]
+    assert diagnostics["standard_scope_reused"] is False
+
+
+def test_repeated_invalid_structured_output_is_error_with_diagnostics():
+    with patch(PARSE, side_effect=[broken_output(), broken_output()]) as parse:
+        result = evaluate_answer_payload(payload(), object())
+    assert parse.call_count == 2
+    assert result["status"] == "error" and result["error_type"] == "InvalidStructuredOutput"
+    assert result["judge_diagnostics"]["judge_retries"] == 1
+
+
+def test_transport_error_is_not_retried_by_the_judge():
+    # 通信・時間切れの再試行は adapter が持つ。判定の層は出力の誤りだけを出し直させる。
+    with patch(PARSE, side_effect=TimeoutError("timeout")) as parse:
+        result = evaluate_answer_payload(payload(), object())
+    assert parse.call_count == 1 and result["status"] == "error"
+    assert result["judge_diagnostics"]["judge_retries"] == 0
+
+
+@pytest.mark.parametrize(
+    ("quote", "source", "expected"),
+    [
+        ("業務別担当者(J) を選択", "設定画面で業務別担当者（Ｊ）を選択してください。", "業務別担当者（Ｊ）を選択"),
+        ("ログを確認して", "ログを\n確認して原因を特定する。", "ログを\n確認して"),
+        ("ガイド", "ｶﾞｲﾄﾞを開く。", "ｶﾞｲﾄﾞ"),
+        ("手順A、手順B", "手順A，手順B の順に進む。", "手順A，手順B"),
+        ("「設定」を開く", "“設定”を開く。", "“設定”を開く"),
+        ("期限は30日以内", "期限は３０日以内です。", "期限は３０日以内"),
+        ("ログを確認", "ログを確認", "ログを確認"),
+    ],
+    ids=["width-and-space", "line-break", "halfwidth-kana", "comma-variant", "quote-marks", "fullwidth-digits", "exact"],
+)
+def test_grounded_quote_snaps_formatting_variants_to_the_original(quote, source, expected):
+    assert grounded_quote(quote, source) == expected
+    assert expected in source
+
+
+@pytest.mark.parametrize(
+    ("quote", "source"),
+    [
+        ("期限は31日以内", "期限は３０日以内です。"),
+        ("ログを削除して", "ログを確認して原因を特定する。"),
+        ("  ", "ログを確認"),
+        ("、。", "ログを確認"),
+    ],
+    ids=["changed-digit", "changed-word", "blank", "punctuation-only"],
+)
+def test_grounded_quote_rejects_quotes_absent_after_normalization(quote, source):
+    assert grounded_quote(quote, source) == ""
+
+
+def test_scope_quote_with_formatting_variants_is_accepted_and_stored_verbatim():
+    standard = "設定画面で業務別担当者（Ｊ）を\n選択してください。"
+    scope = StandardAnswerScope(
+        requirements=[StandardRequirement(standard_answer_quote="業務別担当者(J)を 選択", requirement="業務別担当者の選択手順")],
+        excluded_case_data=[],
+    )
+    with patch(PARSE, return_value=scope) as parse:
+        result = _prepare_standard_scope(payload() | dict(standard_answer=standard), object(), None)
+    assert parse.call_count == 1
+    assert result.requirements[0].standard_answer_quote == "業務別担当者（Ｊ）を\n選択"
+
+
+def test_scope_quote_with_changed_digits_is_still_rejected():
+    scope = StandardAnswerScope(
+        requirements=[StandardRequirement(standard_answer_quote="受付日より31日以内に返送", requirement="返送の期限")],
+        excluded_case_data=[],
+    )
+    data = payload() | dict(standard_answer="受付日より３０日以内に返送する。")
+    with patch(PARSE, return_value=scope) as parse, pytest.raises(EvaluationContractError, match="標準回答に存在しない引用"):
+        _prepare_standard_scope(data, object(), None)
+    assert parse.call_count == 2
+
+
+def test_answer_quotes_with_formatting_variants_are_snapped_to_the_answer_text():
+    answer = "ログを確認してください。"
+    claim = ClaimCheck(answer_quote="ログを 確認して", status="data_confirmation", source_id="", evidence_quote="", reason="確認案内")
+    # 全角の空白（U+3000）を挟んだ引用。
+    coverage = CoverageCheck(requirement_index=1, status="addressed", answer_quote="ログを" + chr(0x3000) + "確認")
+    evaluated = output().model_copy(update=dict(claim_checks=[claim], coverage_checks=[coverage]))
+    with patch(PARSE, return_value=evaluated) as parse:
+        result = evaluate_answer_payload(payload() | dict(answer_text=answer), object())
+    assert parse.call_count == 1 and result["status"] == "completed"
+    assert result["coverage_checks"][0]["answer_quote"] == "ログを確認"
+    assert result["claim_checks"][0]["answer_quote"] == "ログを確認して"
+
+
+def test_scope_is_fixed_once_per_job_and_reused_across_passes(fixed_scope):
+    fixed_scope.side_effect = _prepare_standard_scope
+    with patch(PARSE, side_effect=scope_or_output) as parse, standard_scope_cache():
+        first = evaluate_answer_payload(payload(), object())
+        # 別の pass（プロファイルの範囲）の同じケース。根拠は違っても比較範囲は同じ。
+        second = evaluate_answer_payload(payload() | dict(evidence_items=[]), object())
+    scope_calls = [call for call in parse.call_args_list if call.args[3] is StandardAnswerScope]
+    assert len(scope_calls) == 1 and fixed_scope.call_count == 1
+    assert first["status"] == second["status"] == "completed"
+    assert first["standard_answer_scope"] == second["standard_answer_scope"]
+    assert first["judge_diagnostics"]["standard_scope_reused"] is False
+    assert second["judge_diagnostics"]["standard_scope_reused"] is True
+
+
+def test_scope_cache_separates_keys_and_does_not_keep_failures(fixed_scope):
+    fixed_scope.side_effect = _prepare_standard_scope
+    other = payload() | dict(standard_answer="ログを確認して再実行する。")
+    responses = [broken_output(), broken_output()] + [scope_output(), output()] * 3
+    with patch(PARSE, side_effect=responses), standard_scope_cache():
+        failed = evaluate_answer_payload(payload(), object())
+        retried = evaluate_answer_payload(payload(), object())
+        separate = evaluate_answer_payload(other, object())
+        other_judge = evaluate_answer_payload(payload(), object(), provider_id="judge-b")
+    assert failed["status"] == "error"
+    assert fixed_scope.call_count == 4
+    for result in (retried, separate, other_judge):
+        assert result["status"] == "completed"
+        assert result["judge_diagnostics"]["standard_scope_reused"] is False
+
+
+def test_scope_is_not_shared_outside_an_evaluation_job(fixed_scope):
+    fixed_scope.side_effect = _prepare_standard_scope
+    with patch(PARSE, side_effect=scope_or_output):
+        evaluate_answer_payload(payload(), object())
+        result = evaluate_answer_payload(payload(), object())
+    assert fixed_scope.call_count == 2
+    assert result["judge_diagnostics"]["standard_scope_reused"] is False
