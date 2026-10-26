@@ -19,6 +19,7 @@ import {
 } from "@production-ready/ui";
 
 import { outcomeBadge, type AnswerOutcome } from "@/lib/answer-diagnostics";
+import { formatNumber } from "@/lib/format";
 import type {
   RunDetail,
   RunExecutorFilter,
@@ -201,4 +202,41 @@ export function runTimeline(snapshot: {
 /** 所要時間（ミリ秒）の表記（共通の書式。「1.2 秒」「2 分 5 秒」、記録なしは「—」）。 */
 export function formatRunElapsed(elapsedMs: number | null | undefined): string {
   return formatRunDuration(elapsedMs, t("history.notRecorded"));
+}
+
+/** 概要の「モデル」「token」「モデルの呼び出し」（Agent の実行の詳細と同じ形。#3419）。 */
+export interface RunUsageView {
+  /** 呼び出したモデルの ID（複数は「、」で並べる）。記録が無ければ null（並べない）。 */
+  model: string | null;
+  usage: { tokens: number | null; note: string | null };
+  modelCalls: string;
+}
+
+/**
+ * 実行のモデルと利用量の表示。モデルは実行のときに記録した具体的な ID だけを出し、今の設定から推測しない。
+ *
+ * - 利用量の記録が無い（この機能より前の記録・trace の始まる前に失敗した実行）: token と呼び出しは「未計測」（0 にしない）。
+ * - 一部の呼び出しの利用量が無い: 計測できた分の数に「一部計測」を添える。
+ * - LLM を呼ばなかった実行: 実測の 0。
+ */
+export function runUsageView(run: Pick<RunDetail, "model_id" | "usage">): RunUsageView {
+  const usage = run.usage ?? null;
+  const models = usage?.models.length ? usage.models : run.model_id ? [run.model_id] : [];
+  const model = models.length ? models.join("、") : null;
+  if (!usage) {
+    const unmeasured = t("history.detail.usageUnmeasured");
+    return { model, usage: { tokens: null, note: unmeasured }, modelCalls: unmeasured };
+  }
+  const partial = usage.measurement === "partial";
+  const values = {
+    requests: formatNumber(usage.requests),
+    measured: formatNumber(usage.measured_requests),
+    input: formatNumber(usage.input_tokens),
+    output: formatNumber(usage.output_tokens),
+  };
+  return {
+    model,
+    usage: { tokens: usage.total_tokens, note: partial ? t("history.detail.usagePartial") : null },
+    modelCalls: t(partial ? "history.detail.modelCallsPartial" : "history.detail.modelCallsValue", values),
+  };
 }

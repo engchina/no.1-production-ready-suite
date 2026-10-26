@@ -215,6 +215,15 @@ def _answer_model_id(request: SearchRequest, settings: Settings) -> str | None:
     return None
 
 
+def _run_model_id(answer_model_id: str | None, settings: Settings) -> str | None:
+    """実行履歴に残す回答のモデル（未指定は実行のときの既定のテキストモデルの具体的な ID。#3419）。
+
+    回答エンジンと同じ規則（`answer_model_id or enterprise_ai_default_model_id`）で、実行の時点に
+    決める。後で既定のモデルを変えても、過去の実行のモデルは変わらない。
+    """
+    return answer_model_id or enterprise_ai_default_model_id(settings) or None
+
+
 @router.get("/models", response_model=ApiResponse[list[dict[str, str]]])
 async def list_answer_models() -> ApiResponse[list[dict[str, str]]]:
     """RAG 検索の回答に選べるモデル(先頭が未選択のときの既定。#675)。"""
@@ -695,9 +704,12 @@ async def _run_search_with_timeout(
     # 処理の経過（共通の span の表に書く。MCP の要求の中では Agent の trace の下に入る。#3226）。
     trace = AnswerTrace(trace_id, owner_user_uuid=current_audit_request_context().user_uuid)
     if run_recorder is not None:
-        run_recorder.model_id = answer_model_id if request.generate_answer else None
-        # 実行履歴の詳細の処理の経過（表を引く trace id と工程の詳細）。
+        run_recorder.model_id = (
+            _run_model_id(answer_model_id, settings) if request.generate_answer else None
+        )
+        # 実行履歴の詳細の処理の経過（表を引く trace id と工程の詳細）とモデルの利用量（#3419）。
         run_recorder.trace_source = trace.record
+        run_recorder.usage_source = trace.model_usage
     # 取り消したときに止まった工程を残す（#2691）。
     stages = StageTracker(_report_tool_progress)
     try:
@@ -883,6 +895,7 @@ async def _stream_search_events_with_timeout(
     trace = AnswerTrace(trace_id, owner_user_uuid=current_audit_request_context().user_uuid)
     if run_recorder is not None:
         run_recorder.trace_source = trace.record
+        run_recorder.usage_source = trace.model_usage
 
     async def emit_progress(stage: SearchStageProgress) -> None:
         await queue.put(
@@ -903,7 +916,9 @@ async def _stream_search_events_with_timeout(
             # 回答を LLM で生成するため、回答生成の上限で打ち切る（#375）。
             answer_model_id = _answer_model_id(request, settings)
             if run_recorder is not None:
-                run_recorder.model_id = answer_model_id if request.generate_answer else None
+                run_recorder.model_id = (
+                    _run_model_id(answer_model_id, settings) if request.generate_answer else None
+                )
             result = await run_answer_with_timeout(
                 lambda tracker: RagPipeline(
                     settings=settings,

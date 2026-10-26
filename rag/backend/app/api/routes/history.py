@@ -20,6 +20,7 @@ from app.api.routes.search import _stored_citation_rows
 from app.clients.oracle import OracleClient
 from app.clients.oracle_run_history import RunHistoryStore, owner_user_uuids
 from app.rag.request_context import current_audit_request_context
+from app.rag.run_usage import parse_run_usage
 from app.rag.saved_evidence import withhold_saved_answer
 from app.rag.trace_store import TraceSnapshot, run_trace_snapshot
 from app.schemas.common import ApiResponse, Page
@@ -121,6 +122,7 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
         "search_conditions": (
             _search_conditions(stages.get("conditions")) if row.get("surface") == "search" else None
         ),
+        "usage": parse_run_usage(stages.get("usage")),
     }
     if detail["answer_generated"]:
         # 回答・引用・診断は回答の記録が正本（保持期間で消えていれば出さない）。

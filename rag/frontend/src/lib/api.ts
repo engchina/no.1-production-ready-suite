@@ -4826,6 +4826,26 @@ export interface RunDetail extends RunSummary {
   feedback: RunFeedback[];
   /** RAG 検索の実行の件数と画面の絞り込み（「RAG 検索で開く」が画面に戻す。#3309）。チャット・古い記録は null。 */
   search_conditions?: RunSearchConditions | null;
+  /**
+   * 実行のモデルの呼び出しの回数と利用量（#3419）。この機能より前の記録・trace の始まる前に失敗した実行は null（未計測）。
+   * LLM を呼ばなかった実行は `requests` が 0 の実測。
+   */
+  usage?: RunModelUsage | null;
+}
+
+/** 1 回の実行のモデルの利用量（#3419）。合計は入力 + 出力（cached は入力、reasoning は出力の内数）。 */
+export interface RunModelUsage {
+  /** 呼び出したモデルの ID（回答のモデルが先頭）。 */
+  models: string[];
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cached_input_tokens: number | null;
+  reasoning_output_tokens: number | null;
+  /** complete: すべての呼び出しを計測した。partial: 一部の呼び出しの利用量が無い。 */
+  measurement: "complete" | "partial";
+  measured_requests: number;
 }
 
 /** RAG 検索の実行の条件（#3309）。`filters` は画面が送れる絞り込み（分類・基準日・抽出項目の値）だけ。 */

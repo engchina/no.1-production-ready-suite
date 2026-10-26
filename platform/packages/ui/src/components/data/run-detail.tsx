@@ -246,7 +246,11 @@ export interface RunSummaryProps {
   /** 対象（業務 Agent・検索・回答プロファイル・業務プロファイル）。見出しは製品が渡す。 */
   target?: { label: string; value: ReactNode } | null;
   model?: string | null;
-  usage?: { tokens?: number | null; cost?: string | null } | null;
+  /**
+   * 利用量。`note` は計測の状態の注記（「一部計測」「未計測」など。翻訳済み）で、`tokens` があれば数の後ろに括弧で、
+   * 無ければ単独で出す（不明を 0 と出さない。#3419）。
+   */
+  usage?: { tokens?: number | null; note?: string | null; cost?: string | null } | null;
   runId: string;
   /** 製品に固有の事実（NL2SQL の実行エンジン・行数など）。共通の事実の後、実行 ID の前に並べる。 */
   extraFacts?: readonly RunFact[];
@@ -308,7 +312,11 @@ export function RunSummary({
   }
   if (target) facts.push({ id: "target", label: target.label, value: target.value });
   if (model) facts.push({ id: "model", label: labels.facts.model, value: model, mono: true });
-  if (usage?.tokens != null) facts.push({ id: "tokens", label: labels.facts.tokens, value: formatRunTokens(usage.tokens) });
+  if (usage?.tokens != null || usage?.note) {
+    const tokens = usage.tokens != null ? formatRunTokens(usage.tokens) : null;
+    const value = tokens && usage.note ? `${tokens}（${usage.note}）` : (tokens ?? usage.note);
+    facts.push({ id: "tokens", label: labels.facts.tokens, value });
+  }
   if (usage?.cost) facts.push({ id: "cost", label: labels.facts.cost, value: usage.cost });
   facts.push(...extraFacts);
   facts.push({ id: "runId", label: labels.facts.runId, value: runId, mono: true });
