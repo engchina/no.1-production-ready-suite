@@ -71,13 +71,15 @@ def test_answer_timeout_message_names_stage_and_retry() -> None:
 
 
 def test_stage_labels_cover_answer_stages() -> None:
-    """進捗の工程は回答の工程・回答側の安全チェック(#1146)・保存(#2342)と検索だけの工程。
+    """進捗の工程は回答の工程・回答側の安全チェック(#1146)・保存(#2342)・会話の添付からの根拠の
+    選択(#3475)と検索だけの工程。
 
     旧 standard の工程は #595 で削除した。
     """
     assert set(ANSWER_STAGE_LABELS) == {
         "retrieval",
         "history_rewrite",
+        "attachment_evidence",
         "field_filter",
         "answer",
         "answer_guardrail",

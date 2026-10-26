@@ -480,7 +480,6 @@ def test_original_question_search_runs_once_vector_only_and_only_when_injected(m
     from types import SimpleNamespace
 
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
-
     from rag_engine.resources.tracing import bind_trace_observer
 
     calls = []
