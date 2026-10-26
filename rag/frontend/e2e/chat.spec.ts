@@ -2707,7 +2707,7 @@ test("処理の経過は回答の trace の span の木で、2 つ目の「ト�
   await page.getByTestId("chat-answer-progress-summary").click();
   // 段は処理の経過と同じ名前、技術の span は日本語の名前とモデル名。入れ子は span の親子（root は行にしない）。
   const labels = progressRegion.locator("[data-run-timeline-label]");
-  await expect(labels).toHaveText(["質問の読み取りから回答の作成まで", "根拠の検索と回答の作成", "モデルの呼び出し · synthetic-model"]);
+  await expect(labels).toHaveText(["質問の理解から回答の作成まで", "根拠の検索と回答の作成", "モデルの呼び出し · synthetic-model"]);
   await expect(progressRegion.locator("[data-run-timeline-step]").nth(2)).toHaveAttribute("data-level", "2");
   await expect(labels.filter({ hasText: /rag\.|gen_ai\./ })).toHaveCount(0);
   // 「処理の詳細」には Trace ID とコピーのボタンを出し、「トレースの詳細」の 2 つ目の表示は無い。

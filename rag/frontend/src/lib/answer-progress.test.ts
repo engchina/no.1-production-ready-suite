@@ -84,7 +84,7 @@ describe("answer-progress（Issue 375）", () => {
     ];
     expect(answerProgressLabel(events)).toBe("回答を生成しています（文書の検索）");
     expect(answerProgressLabel(events.slice(0, 3))).toBe(
-      "回答を生成しています（質問の読み取りから回答の作成まで）"
+      "回答を生成しています（質問の理解から回答の作成まで）"
     );
   });
 });

@@ -355,9 +355,9 @@ for (const viewport of [
     const error = page.getByTestId("evaluation-case-error");
     await expect(page.getByTestId("evaluation-case-question").first()).toContainText("2 行目");
     await expect(error).toContainText("エラー");
-    await expect(error).toContainText("工程: 質問の読み取りから回答の作成まで");
+    await expect(error).toContainText("工程: 質問の理解から回答の作成まで");
     await expect(error).toContainText(
-      "評価ケースの回答生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 質問の読み取りから回答の作成まで）。"
+      "評価ケースの回答生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 質問の理解から回答の作成まで）。"
     );
     await expectNoPageOverflow(page);
   });
@@ -600,7 +600,7 @@ function evaluationMetricsWithTimedOutCase() {
         error_type: "TimeoutError",
         error_stage: "answer",
         error_message:
-          "評価ケースの回答生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 質問の読み取りから回答の作成まで）。trace_id で監査ログを確認してください。",
+          "評価ケースの回答生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 質問の理解から回答の作成まで）。trace_id で監査ログを確認してください。",
       },
       refusal,
     ],

@@ -61,7 +61,7 @@ ANSWER_STAGE_LABELS: dict[str, str] = {
     "retrieval": "検索",
     "history_rewrite": "会話を踏まえた質問の書き換え",
     "field_filter": "検索条件の抽出（Metadata Filter Extraction）",
-    "answer": "質問の読み取りから回答の作成まで",
+    "answer": "質問の理解から回答の作成まで",
     # 回答側の安全チェック(#1146)
     "answer_guardrail": "回答の安全チェック",
     # 回答の記録・会話の回答の保存(#2342)
