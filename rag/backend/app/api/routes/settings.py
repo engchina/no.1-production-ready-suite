@@ -173,7 +173,6 @@ from app.schemas.settings import (
     PreprocessProfileStatusData,
     PreprocessSettingsData,
     PreprocessSettingsUpdate,
-    ProfileGuideSearchDefaultsData,
     QueryHistorySettingsData,
     QueryHistorySettingsUpdate,
     SystemTablesDeleteOrphansRequest,
@@ -488,20 +487,6 @@ async def update_chunking_settings(
     _persist_chunking_settings(candidate)
     _apply_chunking_settings(settings, candidate)
     return ApiResponse(data=_chunking_settings_data(settings))
-
-
-@router.get(
-    "/profile-guide-search-defaults", response_model=ApiResponse[ProfileGuideSearchDefaultsData]
-)
-async def get_profile_guide_search_defaults() -> ApiResponse[ProfileGuideSearchDefaultsData]:
-    """接続情報を含めず、継承する手順検索の既定値だけを返す。"""
-    settings = get_settings()
-    return ApiResponse(
-        data=ProfileGuideSearchDefaultsData(
-            max_queries=settings.rag_guide_step_max_queries,
-            deadline_seconds=settings.rag_guide_step_deadline_seconds,
-        )
-    )
 
 
 @router.get("/answering", response_model=ApiResponse[AnsweringSettingsData])

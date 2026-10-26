@@ -511,14 +511,6 @@ export function usePreviewSectionRules() {
 }
 
 /** 章節の抽出規則の全体の既定（#715）。 */
-export function useProfileGuideSearchDefaults() {
-  return useQuery({
-    queryKey: ["settings", "profile-guide-search-defaults"],
-    queryFn: () => api.getProfileGuideSearchDefaults(),
-    retry: false,
-  });
-}
-
 export function useSectionRulesSettings() {
   return useQuery({
     queryKey: ["settings", "section-rules"] as const,

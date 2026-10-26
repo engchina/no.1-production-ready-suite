@@ -1069,7 +1069,8 @@ export interface KnowledgeBaseQueryConfig {
   screen_linking_enabled?: boolean | null;
   // 根拠の無い要求だけを探し直す(LLM は呼ばない。検索が要求ごとに 1 回増える。#1279)。
   request_coverage_retrieval_enabled?: boolean | null;
-  // 業務ガイドの手順ごとに探し、手順の参照の頁の根拠を入れる(LLM は呼ばない。#2395)。上限は 0〜10。
+  // 業務ガイドの手順ごとに探し、手順の参照の頁の根拠を入れる(LLM は呼ばない。#2395)。ON / OFF と回数・期限の上限は
+  // 全体設定だけで決め、検索・回答プロファイルでは保存しない(#3523)。
   guide_step_retrieval_enabled?: boolean | null;
   guide_step_max_queries?: number | null;
   guide_step_deadline_seconds?: number | null;
@@ -1087,7 +1088,7 @@ export interface KnowledgeBaseQueryConfig {
    * null / 未指定は全体の既定(検索方法の画面。既定は使わない)。
    */
   graph_expansion_enabled?: boolean | null;
-  /** 1 回の検索で加える根拠の上限(1〜20)。null は全体の既定(6)。 */
+  /** 1 回の検索で加える根拠の上限(1〜20)。全体設定だけで決め、検索・回答プロファイルでは保存しない(#3523)。 */
   graph_expansion_max_chunks?: number | null;
   /**
    * 当たった根拠の章節から親の章節へ段階的に広げる(#1436。段ごとに AI の呼び出しが 1 回増える)。
@@ -3273,7 +3274,6 @@ export const api = {
       }`,
       { method: "DELETE" },
     ),
-  getProfileGuideSearchDefaults: () => request<{ max_queries: number; deadline_seconds: number }>("/api/settings/profile-guide-search-defaults"),
 
   previewSectionRules: (documentId: string, body: { recipe_id: string; mode: SectionRulesMode; rules: SectionRule[] }) =>
     request<SectionRulesPreviewData>(`/api/documents/${encodeURIComponent(documentId)}/sections/preview`, {

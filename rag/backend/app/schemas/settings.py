@@ -1011,10 +1011,3 @@ class GuardrailSettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input_enabled: bool
     output_enabled: bool
-
-
-class ProfileGuideSearchDefaultsData(BaseModel):
-    """プロファイルの権限で読める、手順検索の現在の全体の既定値。"""
-
-    max_queries: int
-    deadline_seconds: float

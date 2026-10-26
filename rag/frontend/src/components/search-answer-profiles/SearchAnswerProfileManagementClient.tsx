@@ -88,7 +88,6 @@ import {
   useSearchAnswerProfile,
   useSearchAnswerProfiles,
   useProfileAnswerModels,
-  useProfileGuideSearchDefaults,
   useListTotal,
   useCreateSearchAnswerProfile,
   useUpdateSearchAnswerProfile,
@@ -170,6 +169,18 @@ const MAX_ANCHORS_PER_DOCUMENT_OPTIONS: SelectFieldOption<string>[] = Array.from
   value: String(n),
   label: n === 0 ? t("searchAnswerProfiles.field.maxAnchorsPerDocumentUnlimited") : String(n),
 }));
+/**
+ * 全体設定だけで決める検索方法の項目（backend の PROFILE_GLOBAL_QUERY_FIELDS と同じ。#3053・#3523）。
+ * 検索・回答プロファイルでは表示も保存もせず、古い保存値は読み込みで捨てる。
+ */
+const PROFILE_GLOBAL_QUERY_FIELDS = [
+  "query_strategy", "answer_flow", "neighbor_child_count", "rerank_enabled", "auto_field_filter_enabled",
+  "graph_expansion_enabled", "graph_expansion_max_chunks", "screen_linking_enabled", "request_coverage_retrieval_enabled",
+  "guide_step_retrieval_enabled", "guide_step_max_queries", "guide_step_deadline_seconds",
+  "entity_expansion_enabled", "entity_expansion_max_chunks",
+  "section_expansion_enabled", "section_expansion_max_levels", "section_expansion_input_token_percent",
+] as const satisfies readonly (keyof KnowledgeBaseQueryConfig)[];
+
 function emptyQueryConfig(): KnowledgeBaseQueryConfig {
   return {};
 }
@@ -179,7 +190,7 @@ function normalizeSearchAnswerProfileConfig(config: SearchAnswerProfileConfig): 
   const retained = { ...config };
   delete (retained as Record<string, unknown>).spec_then_contact;
   const query = { ...config.query };
-  for (const key of ["query_strategy", "answer_flow", "neighbor_child_count", "rerank_enabled", "auto_field_filter_enabled", "graph_expansion_enabled", "screen_linking_enabled", "request_coverage_retrieval_enabled", "guide_step_retrieval_enabled", "entity_expansion_enabled", "entity_expansion_max_chunks", "section_expansion_enabled", "section_expansion_max_levels", "section_expansion_input_token_percent"] as const) delete query[key];
+  for (const key of PROFILE_GLOBAL_QUERY_FIELDS) delete query[key];
   return {
     ...retained,
     query,
@@ -664,7 +675,6 @@ function SearchAnswerProfileEditor({
   onArchived: () => void;
 }) {
   const mode: "create" | "edit" = initial ? "edit" : "create";
-  const guideDefaults = useProfileGuideSearchDefaults();
   const answerModels = useProfileAnswerModels();
   const registeredModels = Array.isArray(answerModels.data) ? answerModels.data : [];
   const create = useCreateSearchAnswerProfile();
@@ -976,48 +986,6 @@ function SearchAnswerProfileEditor({
                       className="shrink-0"
                     />
                   </div>
-
-                  {guideDefaults.isError ? <ApiErrorState error={guideDefaults.error} fallback={t("searchAnswerProfiles.field.guideDefaultsError")} onRetry={() => void guideDefaults.refetch()} /> : null}
-                  <QuerySelectRow
-                    id="search-answer-profile-guide-step-max-queries"
-                    label={t("searchAnswerProfiles.field.guideStepMaxQueries")}
-                    helper={guideDefaults.data ? t("searchAnswerProfiles.field.guideStepMaxQueriesHelper", { defaultValue: guideDefaults.data.max_queries }) : t(guideDefaults.isError ? "searchAnswerProfiles.field.guideDefaultsError" : "searchAnswerProfiles.field.guideDefaultsLoading")}
-                    value={
-                      config.query.guide_step_max_queries == null
-                        ? null
-                        : String(config.query.guide_step_max_queries)
-                    }
-                    options={Array.from(new Set([...Array.from({ length: 11 }, (_, n) => n), ...(guideDefaults.data ? [guideDefaults.data.max_queries] : [])])).sort((a, b) => a - b).map((value) => ({ value: String(value), label: String(value) }))}
-                    width="xs"
-                    defaultOnOverride={String(guideDefaults.data?.max_queries ?? "")}
-                    disabled={locked || !guideDefaults.data}
-                    onChange={(value) =>
-                      updateQuery({
-                        guide_step_max_queries: value === null ? null : Number(value),
-                      })
-                    }
-                  />
-                  <QuerySelectRow
-                    id="search-answer-profile-guide-step-deadline"
-                    label={t("searchAnswerProfiles.field.guideStepDeadline")}
-                    helper={guideDefaults.data ? t("searchAnswerProfiles.field.guideStepDeadlineHelper", { defaultValue: guideDefaults.data.deadline_seconds }) : t(guideDefaults.isError ? "searchAnswerProfiles.field.guideDefaultsError" : "searchAnswerProfiles.field.guideDefaultsLoading")}
-                    value={
-                      config.query.guide_step_deadline_seconds == null
-                        ? null
-                        : String(config.query.guide_step_deadline_seconds)
-                    }
-                    options={Array.from(new Set([0, 10, 20, 30, 45, 60, ...(guideDefaults.data ? [guideDefaults.data.deadline_seconds] : [])])).sort((a, b) => a - b).map((value) => ({ value: String(value), label: String(value) }))}
-                    width="xs"
-                    defaultOnOverride={String(guideDefaults.data?.deadline_seconds ?? "")}
-                    disabled={locked || !guideDefaults.data}
-                    onChange={(value) =>
-                      updateQuery({
-                        guide_step_deadline_seconds: value === null ? null : Number(value),
-                      })
-                    }
-                  />
-
-
                 </div>
               </fieldset>
               {/* 回答前の確認（#1839。3 製品で業務の単位に置く設定）。ルールごとの確認は下の「プロファイルの知識」。 */}

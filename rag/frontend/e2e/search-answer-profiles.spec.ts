@@ -10,14 +10,14 @@ import {
 
 const GLOBAL_QUERY_FIELDS = [
   "query_strategy", "answer_flow", "neighbor_child_count", "rerank_enabled", "auto_field_filter_enabled",
-  "graph_expansion_enabled", "screen_linking_enabled", "request_coverage_retrieval_enabled", "guide_step_retrieval_enabled",
+  "graph_expansion_enabled", "graph_expansion_max_chunks", "screen_linking_enabled", "request_coverage_retrieval_enabled",
+  "guide_step_retrieval_enabled", "guide_step_max_queries", "guide_step_deadline_seconds",
 ];
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await mockKnowledgeBases(page);
-  await page.route("**/api/settings/profile-guide-search-defaults", (route) => route.fulfill({ json: { data: { max_queries: 4, deadline_seconds: 60 }, error_messages: [], warning_messages: [] } }));
 });
 
 test("言語資源の上書き（検索・回答の項目だけ）を検索・回答プロファイルに保存できる (#2181)", { tag: "@responsive" }, async ({
@@ -91,8 +91,6 @@ for (const viewport of [
       "1 つの文書から採る根拠の上限",
       "回答モデル",
       "業務ガイドを使用する",
-      "手順ごとの検索の上限",
-      "手順ごとの検索の時間上限（秒）",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
     // 品質評価は検索・回答プロファイルで上書きしない(評価はグローバル設定だけで決まる。#301)。
@@ -103,8 +101,8 @@ for (const viewport of [
     // 回答エンジンの選択は削除した(#594)。
     await expect(settings.getByRole("combobox", { name: "回答エンジン" })).toHaveCount(0);
     // 個別に残すのは文書ごとの根拠上限と回答モデルの2選択欄だけ。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(4);
-    await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(4);
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(2);
+    await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(2);
     await expect(page.getByLabel("回答の役割・口調")).toHaveCount(0);
     await expect(page.getByLabel("既定の回答言語")).toHaveCount(0);
     await expect(settings.getByTestId("answer-prompt-unused-note")).toHaveCount(0);
@@ -216,32 +214,19 @@ test("業務ガイドは既定 OFF の単一スイッチで保存・再表示す
   }
 });
 
-test("手順検索の説明の先頭と上書きの初期値は実際の全体の既定を使う", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  await mockDefaultSearchAnswerProfile(page, () => undefined);
-  await page.route("**/api/settings/profile-guide-search-defaults", (route) => route.fulfill({ json: { data: { max_queries: 7, deadline_seconds: 37.5 }, error_messages: [], warning_messages: [] } }));
-  await page.goto("/search-answer-profiles?id=bv-default");
-  for (const [name, prefix, value] of [["手順ごとの検索の上限", "既定は 7 です。", "7"], ["手順ごとの検索の時間上限（秒）", "既定は 37.5 秒です。", "37.5"]]) {
-    const row = page.getByRole("heading", { name, exact: true }).locator("..");
-    await expect(row.locator("p")).toHaveText(new RegExp(`^${prefix.replaceAll(".", "\\.")}`));
-    await row.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
-    await expect(row.getByRole("combobox")).toHaveText(value);
-    await row.screenshot({ path: testInfo.outputPath(`guide-default-${value}.png`) });
-  }
-  await expectNoPageOverflow(page);
-});
-
-// #3053: 実体・章節の拡張を含む検索方法の項目は全体設定だけで決め、検索・回答プロファイルは表示も保存もしない。
+// #3053・#3523: 実体・章節・関係情報の拡張と業務ガイドの手順ごとの検索（上限・期限を含む）は全体設定だけで決め、
+// 検索・回答プロファイルは表示も保存もしない。
 test("検索方法の全体設定の項目は表示せず、古い個別設定を保存しない", { tag: "@responsive" }, async ({ page }, testInfo) => {
   let body = null as Record<string, unknown> | null;
   await mockDefaultSearchAnswerProfile(page, (value) => { body = value; }, {
     query_strategy: "hyde", answer_flow: "crag", neighbor_child_count: 0,
-    rerank_enabled: false, auto_field_filter_enabled: true, graph_expansion_enabled: true,
+    rerank_enabled: false, auto_field_filter_enabled: true, graph_expansion_enabled: true, graph_expansion_max_chunks: 3,
     screen_linking_enabled: true, request_coverage_retrieval_enabled: false,
     entity_expansion_enabled: false, entity_expansion_max_chunks: 2, section_expansion_enabled: false, section_expansion_max_levels: 2, section_expansion_input_token_percent: 30,
     guide_step_retrieval_enabled: false, guide_step_max_queries: 0, guide_step_deadline_seconds: 10,
   });
   await page.goto("/search-answer-profiles?id=bv-default");
-  for (const name of ["質問の拡張", "回答の生成方式", "根拠の前後から加える数", "回答の検索のオプション"]) {
+  for (const name of ["質問の拡張", "回答の生成方式", "根拠の前後から加える数", "回答の検索のオプション", "手順ごとの検索の上限", "手順ごとの検索の時間上限（秒）"]) {
     await expect(page.getByRole("heading", { name, exact: true })).toHaveCount(0);
   }
   for (const name of ["Rerank で検索候補を並べ替える", "質問から項目の条件を読み取る", "関係情報で根拠を広げる", "画面目録で操作画面を探す", "根拠の無い要求を探し直す", "業務ガイドの手順ごとに探す"]) {

@@ -2158,13 +2158,6 @@ export const ja = {
   "searchAnswerProfiles.field.answerModel": "回答モデル",
   "searchAnswerProfiles.field.answerModelHelper": "この回答設定で使うモデルです。質問でモデルを選んだ場合は、その選択を優先します。",
   "searchAnswerProfiles.field.unavailableModel": "{model}（登録を確認できません）",
-  "searchAnswerProfiles.field.guideDefaultsLoading": "既定値を読み込んでいます。",
-  "searchAnswerProfiles.field.guideDefaultsError": "既定値を取得できませんでした。もう一度読み込んでください。",
-  "searchAnswerProfiles.field.guideStepDeadline": "手順ごとの検索の時間上限（秒）",
-  "searchAnswerProfiles.field.guideStepDeadlineHelper": "既定は {defaultValue} 秒です。この回答設定での上限です。0 は手順検索を開始しません。回答全体の時間上限と検索回数の上限は引き続き適用します。",
-  "searchAnswerProfiles.field.guideStepMaxQueries": "手順ごとの検索の上限",
-  "searchAnswerProfiles.field.guideStepMaxQueriesHelper":
-    "既定は {defaultValue} です。1 回の回答で手順ごとに探す回数の上限です（参照の頁に絞った検索を含む）。主の検索の後に足す検索の合計の枠も超えません。継承時は検索方法の現在の設定を使います。",
   "searchAnswerProfiles.queryStrategy.auto_routing": "自動ルーティング（自動選択）",
   "searchAnswerProfiles.queryStrategy.simple_retrieval": "単純検索（拡張なし）",
   "searchAnswerProfiles.queryStrategy.rag_fusion": "RAG フュージョン（複数の検索質問 + 順位融合）",
