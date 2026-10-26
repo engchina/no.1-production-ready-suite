@@ -85,7 +85,7 @@ import {
   type ChatStreamHandlers,
 } from "@/lib/chat-stream";
 import { formatDateTime } from "@/lib/format";
-import { unreadSectionLinks } from "@/lib/answer-diagnostics";
+import { answerVisionModel, unreadSectionLinks } from "@/lib/answer-diagnostics";
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
@@ -361,17 +361,25 @@ function AssistantColumn({
   const waitingForAnswer = streaming && !answer && !errorMessage && progress !== null;
   const finished = !streaming && !errorMessage && !stoppedMessage;
   const storageNotice = storageFailureNotice(storageFailures, traceId);
+  // 根拠の原画像を添付して答えた回答は、本文を Vision モデルが作る（#649）。見出しに列のモデルと並べて出す（#3439）。
+  const visionModel = finished ? answerVisionModel(answerDiagnostics, passageSource) : null;
+  const heading = label
+    ? visionModel
+      ? t("chat.column.modelWithVision", { name: label, vision: visionModel.label })
+      : t("chat.column.model", { name: label })
+    : null;
   const listId = useId();
   return (
     // 回答の枠は 3 製品共通の ChatAnswer（#1161）。比較（複数モデル）では列ごとに 1 つの枠にし、列の高さをそろえる。
     <ChatAnswer id={messageId ? `message-${messageId}` : undefined} className={cn("h-full", className)}>
-      {label ? (
+      {heading ? (
         // 1 列（既定のモデル）でも、どのモデルの回答かを出す（#649）。
         <h3
           className="truncate border-b border-border pb-2 text-sm font-semibold text-fg"
-          title={label}
+          title={heading}
+          data-testid="chat-answer-model-heading"
         >
-          {t("chat.column.model", { name: label })}
+          {heading}
         </h3>
       ) : null}
       {progress && !finished ? (

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  answerVisionModel,
   unreadSectionLinks,
   confidenceVariant,
   outcomeBadge,
@@ -304,5 +305,26 @@ describe("parseRunStepDetails", () => {
       { fields: [{ label: "結果", value: "根拠 2 件" }] },
       undefined,
     ]);
+  });
+});
+
+// #3439
+describe("answerVisionModel", () => {
+  const vision = { model_id: "vlm-1", label: "VISION 1" };
+  it("作成した直後は配信の診断、保存した回答は会話のメッセージから、本文を作った Vision モデルを読む", () => {
+    expect(answerVisionModel({ models: { vision } }, null)).toEqual({ modelId: "vlm-1", label: "VISION 1" });
+    expect(answerVisionModel(null, { answer_vision_model: vision })).toEqual({ modelId: "vlm-1", label: "VISION 1" });
+    // 名前の無い値は model_id を名前にする。
+    expect(answerVisionModel(null, { answer_vision_model: { model_id: "vlm-1" } })).toEqual({
+      modelId: "vlm-1",
+      label: "vlm-1",
+    });
+  });
+
+  it("画像を添付しなかった回答・記録の無い回答は null", () => {
+    expect(answerVisionModel({ models: { llm: { model_id: "m1" }, vision: null } }, null)).toBeNull();
+    expect(answerVisionModel(null, { answer_vision_model: null })).toBeNull();
+    expect(answerVisionModel(null, null)).toBeNull();
+    expect(answerVisionModel(undefined, { content: "回答" })).toBeNull();
   });
 });
