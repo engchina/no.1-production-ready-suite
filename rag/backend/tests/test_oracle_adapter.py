@@ -2615,7 +2615,12 @@ async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
     assert all(chunk.metadata["context_group_expanded"] is True for chunk in siblings)
     assert len(pool.connection.calls) == 1
     call = pool.connection.calls[0]
-    assert "JSON_VALUE(c.metadata_json, '$.chunk_group_id') = a.chunk_group_id" in call.statement
+    # chunk group の id は起点の文書・chunk_set の chunk ごとに 1 回だけ読み(結合の外の view)、
+    # 起点とはその値で結合する(起点 × chunk の組ごとに CLOB の JSON を解かない。#3461)。
+    assert "SELECT /*+ NO_MERGE */" in call.statement
+    assert "JSON_VALUE(g.metadata_json, '$.chunk_group_id') AS chunk_group_id" in call.statement
+    assert "grp.chunk_group_id = a.chunk_group_id" in call.statement
+    assert "JSON_VALUE(c.metadata_json" not in call.statement
     assert "c.chunk_id <> a.anchor_chunk_id" in call.statement
     assert "PARTITION BY a.anchor_ord" in call.statement
     assert "ABS(c.chunk_index - a.anchor_index) ASC, c.chunk_index ASC, c.chunk_id ASC" in (
