@@ -82,7 +82,7 @@ describe("評価 job の表示（Issue 390）", () => {
         error_message: "評価ケースの回答生成が上限の 10 分以内に終わりませんでした",
       })
     ).toEqual({
-      stageLabel: "質問の読み取りから回答の作成まで",
+      stageLabel: "質問の理解から回答の作成まで",
       message: "評価ケースの回答生成が上限の 10 分以内に終わりませんでした",
     });
     expect(

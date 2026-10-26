@@ -521,7 +521,8 @@ class RagPipeline:
             if self._caller_queries is not None
             else None
         )
-        # 質問に書かれた条件を抽出項目の条件として読み取る(self-query。有効なときだけ。#652)。
+        # 質問に書かれた条件を抽出項目の条件として読み取る
+        # (Metadata Filter Extraction。有効なときだけ。#652)。
         # チャットは会話履歴で書き換えた質問から読む。呼び出し元が検索文を作った検索(#2651)は、
         # 読み取りの LLM を呼ばない(条件は呼び出し元が filters で渡す)。
         auto_field_conditions: list[ExtractionFieldCondition] = []
