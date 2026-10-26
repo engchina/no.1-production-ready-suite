@@ -116,7 +116,7 @@ class ApprovedFaqSuggestionsData(BaseModel):
 
 
 class RuntimeKnowledgeData(BaseModel):
-    """検索・回答プロファイルの用語・ルール(rag_poc runtime knowledge の標準形式)。"""
+    """検索・回答プロファイルの用語・同義語と回答ルール(rag_poc runtime knowledge の標準形式)。"""
 
     search_answer_profile_id: str
     terms: list[dict[str, JsonValue]] = Field(default_factory=list)
@@ -144,7 +144,7 @@ class RuntimeKnowledgePreviewRequest(BaseModel):
 
 
 class RuntimeKnowledgePreviewData(BaseModel):
-    """照合テスト: 一致した用語・ルールと拡張後の検索文。"""
+    """照合テスト: 一致した用語・同義語と回答ルールと拡張後の検索文。"""
 
     expanded_question: str
     matched_terms: list[str] = Field(default_factory=list)

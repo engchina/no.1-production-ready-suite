@@ -3776,7 +3776,7 @@
                     "type": "null"
                   }
                 ],
-                "description": "照合した用語・ルールの登録の版（登録の内容の sha256 の先頭。読めなければ null）。",
+                "description": "照合した用語・同義語と回答ルールの登録の版（登録の内容の sha256 の先頭。読めなければ null）。",
                 "title": "Revision"
               },
               "matched_on": {
@@ -3816,7 +3816,7 @@
               },
               "load_failed": {
                 "default": false,
-                "description": "用語・ルールを読めなかった（rules・terms は空。当たるものが無いとは限らない）。",
+                "description": "用語・同義語と回答ルールを読めなかった（rules・terms は空。当たるものが無いとは限らない）。",
                 "title": "Load Failed",
                 "type": "boolean"
               }

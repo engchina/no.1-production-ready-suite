@@ -4385,7 +4385,7 @@ export interface ApprovedFaqSuggestionsData {
   suggestions: ApprovedFaqSuggestionData[];
 }
 
-// --- 検索・回答プロファイルの知識: 用語・ルール(runtime knowledge) ---
+// --- 検索・回答プロファイルの知識: 用語・同義語と回答ルール(runtime knowledge) ---
 export type RuntimeKnowledgeKind = "terms" | "rules";
 
 export interface RuntimeKnowledgeData {

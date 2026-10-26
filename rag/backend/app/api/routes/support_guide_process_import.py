@@ -6,7 +6,8 @@
    OCI Enterprise AI で業務ガイドの下書きを作り、資料名の解決と検証の結果を返す（保存しない）。
 
 選んだ下書きは、既存の取り込み（``POST .../support-guides/import``）で下書きとして作る。ルールの
-候補は、用語・ルールの編集（``POST .../runtime-knowledge/edit``）で無効のルールとして足す。
+候補は、用語・同義語と回答ルールの編集（``POST .../runtime-knowledge/edit``）で無効のルールとして
+足す。
 """
 
 from __future__ import annotations

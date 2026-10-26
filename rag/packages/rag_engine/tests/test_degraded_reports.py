@@ -1,6 +1,6 @@
 """rag_engine の中の補助の処理の失敗を、呼び出し元の記録（``report_degraded``）に渡す（#3284・#3286）。
 
-補助の処理（要求ごとの根拠の探し直し・用語とルールの読み込み・rerank・追加の検索文の rerank・CRAG の
+補助の処理（要求ごとの根拠の探し直し・用語・同義語と回答ルールの読み込み・rerank・追加の検索文の rerank・CRAG の
 根拠確認・全文検索の語の分割・章節の子の並べ替え・条の目録の元の質問の検索）は、失敗しても縮退して
 回答を続ける。失敗は処理の種類と例外を ``report_degraded`` に渡し、呼び出し元（backend）が回答の
 診断の ``degraded_steps`` に型の名前だけを残す。結果が空なだけのとき（失敗ではない）は渡さない。
@@ -97,7 +97,7 @@ def test_targeted_retrieval_with_new_evidence_is_not_reported() -> None:
     assert reported == []
 
 
-# ---- 用語・ルールの読み込み（#3284） ----
+# ---- 用語・同義語と回答ルールの読み込み（#3284） ----
 
 
 def test_runtime_knowledge_load_error_keeps_only_the_type_name(tmp_path: Path) -> None:
@@ -126,7 +126,7 @@ def test_runtime_knowledge_without_entries_is_not_a_failure(tmp_path: Path, cont
     assert runtime.error == "" and runtime.failure is None
 
 
-# ---- 回答の全体（用語・ルール / CRAG の根拠確認 / 全文検索の語の分割） ----
+# ---- 回答の全体（用語・同義語と回答ルール / CRAG の根拠確認 / 全文検索の語の分割） ----
 
 
 def _answer(settings: Any, side_effect: list[Any], *, answer_flow: str) -> tuple[Any, list[tuple[str, str]]]:

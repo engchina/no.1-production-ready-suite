@@ -1322,7 +1322,7 @@ export function useApprovedFaqMutation<TArgs, TData extends ApprovedFaqListData 
   });
 }
 
-/** 検索・回答プロファイルの用語・ルール。 */
+/** 検索・回答プロファイルの用語・同義語と回答ルール。 */
 export function useRuntimeKnowledge(searchAnswerProfileId: string) {
   return useQuery({
     queryKey: ["search-answer-profiles", searchAnswerProfileId, "runtime-knowledge"],
@@ -1330,7 +1330,7 @@ export function useRuntimeKnowledge(searchAnswerProfileId: string) {
   });
 }
 
-/** 用語・ルールの 1 行追加・更新・削除。 */
+/** 用語・同義語と回答ルールの 1 行追加・更新・削除。 */
 export function useEditRuntimeKnowledge(searchAnswerProfileId: string) {
   const qc = useQueryClient();
   return useMutation({
