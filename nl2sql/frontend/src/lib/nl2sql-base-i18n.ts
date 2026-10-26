@@ -81,7 +81,7 @@ export const ja = {
   "settings.database.selectAiCredential.field.schema": "Oracle schema",
   "settings.database.selectAiCredential.field.region": "Select AI 既定リージョン",
   "settings.database.selectAiCredential.field.regionHelper":
-    "新しい業務 Profile の初期値として使用します。Credential 自体の作成パラメータには含まれません。",
+    "新しい業務プロファイルの初期値として使用します。Credential 自体の作成パラメータには含まれません。",
   "settings.database.selectAiCredential.ociReady":
     "サーバーの OCI 認証材料を利用できます。秘密鍵は Oracle の bind variable だけで渡されます。",
   "settings.database.selectAiCredential.ociMissing":

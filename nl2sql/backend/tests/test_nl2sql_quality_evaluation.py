@@ -442,7 +442,7 @@ def test_submit_validates_engines_repeat_profile_and_attempt_limit(
             content=workbook,
             filename="cases.xlsx",
         )
-    with pytest.raises(QualityEvaluationValidationError, match="profile"):
+    with pytest.raises(QualityEvaluationValidationError, match="業務プロファイル"):
         service.submit(
             profile_id="missing",
             engines=[Nl2SqlEngine.SELECT_AI],

@@ -1649,7 +1649,7 @@ def test_list_profile_source_documents_skips_mismatched_payload_profile(
     listed = service.list_profile_source_documents("sales", limit=10)
 
     assert [source.filename for source in listed] == ["sales-rules.md"]
-    with pytest.raises(RuntimeError, match="profile"):
+    with pytest.raises(RuntimeError, match="業務プロファイル"):
         service._get_source_document(mismatched_source.id, profile_id="sales")  # noqa: SLF001
 
 
@@ -2081,7 +2081,7 @@ def test_build_job_uses_latest_schema_when_published_profile_scope_is_stale(
     assert finished.status == OntologyBuildStatus.SUCCEEDED
     assert not any("公開オントロジー" in warning for warning in finished.warnings_ja)
     assert not any("公開オントロジー" in event.message_ja for event in finished.events)
-    assert any("DB から profile 範囲" in event.message_ja for event in finished.events)
+    assert any("DB から業務プロファイル範囲" in event.message_ja for event in finished.events)
     schema_context = json.loads(client.contexts[0])
     assert {item["object"] for item in schema_context["objects"]} == {"APP.INVOICES"}
     assert runtime.list_profile_proposals("sales") == []
