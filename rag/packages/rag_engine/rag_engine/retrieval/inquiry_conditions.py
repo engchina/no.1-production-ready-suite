@@ -15,6 +15,7 @@ from rag_parser_core.language.markers import marker_patterns
 from rag_parser_core.language.text import alternation, char_class, range_class, text_patterns
 
 from rag_engine.resources.runtime import current_profile
+from rag_engine.retrieval.task_contract import cause_noun_targeted
 
 # 2: 補助の検索文（retrieval_queries）を持たない（#3496）。検索文の追加は質問の言い換えの工程が受け持つ。
 INQUIRY_CONDITION_SCHEMA_VERSION = 2
@@ -419,6 +420,9 @@ def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
     parameter_refs = _parameter_refs(original)
     date_terms = _ordered_unique(match.group(0) for match in _date_pattern().finditer(original))
     decision_types = _match_patterns(original, cues.decisions)
+    if "reason" not in decision_types and cause_noun_targeted(original):
+        # 「原因」「理由」の名詞は、問う形の的のときだけ理由の判断にする（「理由は何文字以上」は項目の名前。#3491）。
+        decision_types = [kind for kind in DECISION_TYPES if kind in {*decision_types, "reason"}]
     requires_file_data_confirmation = _contains_any(comparable, _file_data_terms())
     requires_external_context = _contains_any(comparable, _external_context_terms())
     requires_visual_evidence = _contains_any(comparable, cues.visual_terms)
