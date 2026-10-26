@@ -86,7 +86,6 @@ from pr_system_settings.model import (
     model_payload,
     output_token_budget,
     reasoning_payload,
-    seed_to_send,
 )
 from pr_system_settings.model_test_input import (
     MODEL_TEST_EMBEDDING_INPUT,
@@ -955,11 +954,9 @@ def _model_output_token_budget(settings: EnterpriseAiModelSettings, model_id: st
 def _with_model_reasoning(
     settings: EnterpriseAiModelSettings, model_id: str, payload: dict[str, object]
 ) -> dict[str, object]:
-    """テストするモデルの推論（思考）の量を `reasoning` に、seed を top-level の `seed` に入れる。
+    """テストするモデルの推論（思考）の量を `reasoning` に入れる（#1425。none は送らない）。
 
-    推論の量は #1425（none は送らない）、seed は #1434（全モデルで共通、既定 42）。
-    画面の保存前の値（`settings.models` / `settings.seed`）で呼ぶので、選んだ値をモデルが
-    受け付けるかを確かめられる。
+    画面の保存前の値（`settings.models`）で呼ぶので、選んだ値をモデルが受け付けるかを確かめられる。
     """
     effort = next(
         (model.reasoning_effort for model in settings.models if model.model_id == model_id),
@@ -968,7 +965,6 @@ def _with_model_reasoning(
     reasoning = reasoning_payload(effort)
     if reasoning is not None:
         payload["reasoning"] = reasoning
-    payload["seed"] = seed_to_send(settings.seed)
     return payload
 
 

@@ -91,10 +91,8 @@ from pr_system_settings.model import (
     enterprise_ai_model_catalog,
     enterprise_ai_output_token_budget,
     enterprise_ai_reasoning_effort,
-    enterprise_ai_seed,
     lower_reasoning_effort,
     reasoning_effort_to_send,
-    seed_to_send,
 )
 
 from app.features.agent import (
@@ -381,8 +379,6 @@ class ModelTarget:
     api_key: str
     # 推論（思考）の量（#1425。システム設定 > モデル の登録モデルの値）。none は送らない。
     reasoning_effort: str = ""
-    # LLM の呼び出しの seed（#1434。システム設定 > モデル の共通の値、既定 42）。
-    seed: int = 42
     # 1 回の呼び出しの出力の上限（#1719。システム設定 > モデル の登録モデルの値。既定 32768）。
     max_output_tokens: int = DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS
     # 入力の上限（#2383。prompt と応答の合計。システム設定 > モデル の登録モデルの値。
@@ -430,7 +426,6 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
         project_ocid=connection.project_ocid,
         api_key=connection.api_key,
         reasoning_effort=enterprise_ai_reasoning_effort(settings, resolved),
-        seed=enterprise_ai_seed(settings),
         # モデルの出力の上限と入力の上限の小さい方（#1719。prompt は会話で伸びるので見積もらない）。
         max_output_tokens=enterprise_ai_output_token_budget(settings, resolved),
         max_input_tokens=enterprise_ai_max_input_tokens(settings, resolved),
@@ -448,26 +443,22 @@ def model_accepts_images(settings: Any, model_id: str) -> bool:
 
 
 def model_settings_for(target: ModelTarget) -> ModelSettings:
-    """Run・評価の判定に使う SDK の ModelSettings（#1425 / #1434）。
+    """Run・評価の判定に使う SDK の ModelSettings（#1425）。
 
     - モデルの推論（思考）の量を Responses API の `reasoning: {"effort": ...}` で送る
       （none は送らない。解釈は platform の `reasoning_effort_to_send`）
-    - seed を top-level の `seed` で送る（Responses API に seed の引数が無いため、SDK の
-      `extra_body`。解釈は platform の `seed_to_send`）
     - モデルの出力の上限を `max_output_tokens` で送る（#1719。SDK の `max_tokens`。送らないと
       endpoint の既定の上限になり、推論のあるモデルは推論だけで上限に達することがある）
     """
-    extra_body = {"seed": seed_to_send(target.seed)}
     max_tokens = max(1, int(target.max_output_tokens))
     effort = reasoning_effort_to_send(target.reasoning_effort)
     if not effort:
-        return ModelSettings(store=False, max_tokens=max_tokens, extra_body=extra_body)
+        return ModelSettings(store=False, max_tokens=max_tokens)
     # 値は共通のモデル設定（pr_system_settings）が SDK と同じ候補に絞って保存している。
     return ModelSettings(
         store=False,
         reasoning=Reasoning(effort=cast(ReasoningEffort, effort)),
         max_tokens=max_tokens,
-        extra_body=extra_body,
     )
 
 

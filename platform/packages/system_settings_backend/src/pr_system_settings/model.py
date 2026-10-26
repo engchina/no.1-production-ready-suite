@@ -24,9 +24,6 @@
   未完了（`incomplete` / `max_output_tokens`）の送り直しは `enterprise_ai_retry_output_token_budget`
   でモデルの上限まで広げる。共通の LLM / VLM の出力の上限（#1719 より前の
   `llm_max_output_tokens` / `vlm_max_output_tokens`）は持たない
-- LLM / VLM の呼び出しの seed `seed` を全モデルで共通に 1 つ持つ（#1434。既定 42）。
-  3 製品の呼び出しは `enterprise_ai_seed` / `seed_payload`（解釈はここだけ）で top-level の
-  `seed` を送り、NL2SQL は Select AI の AI profile の `seed` 属性の既定にも使う
 - model-settings.json はモデルの設定だけを持ち、製品固有の設定は置かない（他製品の保存で欠けると
   その製品が読めなくなるため。RAG の文書解析の設定は RAG の parser-settings.json。#1701）
 - モデル単位の接続テスト。実際の呼び出しは製品が `run_model_test` で渡す
@@ -138,15 +135,6 @@ ENTERPRISE_AI_REASONING_EFFORTS: Final[tuple[str, ...]] = (
 DEFAULT_ENTERPRISE_AI_REASONING_EFFORT: Final = "low"
 # 「送らない」の値。
 ENTERPRISE_AI_REASONING_EFFORT_OMIT: Final = "none"
-# LLM / VLM の呼び出しの seed（#1434）。全モデルで共通の 1 つで、既定は 42。
-# Responses API には seed の field が無いため、OpenAI SDK の `extra_body={"seed": ...}` と同じ
-# top-level の `seed` で送る。範囲は 32 bit の符号なしの int の半分（Oracle の Select AI の
-# AI profile の `seed` 属性・chat completions の seed のどちらでも受け付ける範囲）にする。
-# 2026-10-11 の実測（Responses API。#1434）:
-# - claude-opus-5（ターシャリ接続）・openai.gpt-oss-120b・xai.grok-4.3 とも `seed=42` を 200 で
-#   受け付ける。型の違う `"abc"` も 200 なので、endpoint は seed を解釈せずに無視していると推測する
-#   （同じ入力の 2 回の出力は temperature 1 では 3 モデルとも一致しない）。拒むモデルが無いので、
-#   モデルごとの「送らない」は持たない
 # モデルの入力の上限（tokens。#1437）。登録モデルごとに持ち、値が無いとき（#1437 より前の設定・
 # env だけで設定したモデル）は既定の 128000（多くのモデルが受け付ける大きさで、上限の大きい
 # モデルでも安全な側）。範囲は 4096〜2000000。入力の予算（回答の根拠・抽出の 1 回分）は
@@ -164,9 +152,6 @@ ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX: Final = 2_000_000
 DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS: Final = 32_768
 ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MIN: Final = 1
 ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX: Final = 2_000_000
-ENTERPRISE_AI_SEED_MIN: Final = 0
-ENTERPRISE_AI_SEED_MAX: Final = 2_147_483_647
-DEFAULT_ENTERPRISE_AI_SEED: Final = 42
 ModelSettingsTestStatus = Literal["success", "failed"]
 ModelSettingsTestTargetType = Literal["enterprise_text", "enterprise_vision", "embedding", "rerank"]
 ModelTestDetails = dict[str, str | int | float | bool | None]
@@ -329,18 +314,6 @@ class EnterpriseAiModelSettings(BaseModel):
     vision_response_path: str = Field(default="", max_length=1024)
     timeout_seconds: float = Field(default=600.0, gt=0.0, le=600.0)
     max_retries: int = Field(default=3, ge=0, le=5)
-    # LLM / VLM の呼び出しの seed（#1434）。全モデルで共通で、既定は 42。範囲外は検証エラー。
-    seed: int = Field(
-        default=DEFAULT_ENTERPRISE_AI_SEED,
-        ge=ENTERPRISE_AI_SEED_MIN,
-        le=ENTERPRISE_AI_SEED_MAX,
-    )
-
-    @field_validator("seed", mode="before")
-    @classmethod
-    def normalize_seed(cls, value: object) -> object:
-        """None（値なし）は既定の 42 にする。真偽値は int として受け取らない。"""
-        return _seed_input(value)
 
     @model_validator(mode="before")
     @classmethod
@@ -918,49 +891,6 @@ def enterprise_ai_retry_output_token_budget(
     return widened if widened > int(current) else None
 
 
-def _seed_input(value: object) -> object:
-    """seed の入力の前処理（#1434）。
-
-    None は既定にし、真偽値は検証エラーにする（bool は int の部分型のため）。
-    """
-    if value is None:
-        return DEFAULT_ENTERPRISE_AI_SEED
-    if isinstance(value, bool):
-        raise ValueError("seed は整数で入力してください。")
-    return value
-
-
-def seed_to_send(value: object) -> int:
-    """設定の値を、LLM / VLM の呼び出しに送る seed にする（#1434。解釈はここだけ）。
-
-    整数で範囲（0〜2147483647）の中ならその値、値なし・範囲外・整数でない値は既定の 42。
-    保存・読み込みは `EnterpriseAiModelSettings` が検証するので、ここで既定に戻すのは
-    env の直書きなどの値だけ。
-    """
-    if isinstance(value, bool) or value is None:
-        return DEFAULT_ENTERPRISE_AI_SEED
-    try:
-        number = int(str(value).strip())
-    except (TypeError, ValueError):
-        return DEFAULT_ENTERPRISE_AI_SEED
-    if not ENTERPRISE_AI_SEED_MIN <= number <= ENTERPRISE_AI_SEED_MAX:
-        return DEFAULT_ENTERPRISE_AI_SEED
-    return number
-
-
-def enterprise_ai_seed(settings: Any) -> int:
-    """LLM / VLM の呼び出しに送る seed（#1434。システム設定 › モデル の値、既定 42）。"""
-    return seed_to_send(getattr(settings, "oci_enterprise_ai_seed", None))
-
-
-def seed_payload(settings: Any) -> dict[str, int]:
-    """Responses API の payload に足す top-level の `seed`（`{"seed": 42}`）。
-
-    OpenAI SDK では `extra_body` に渡す（Responses API の引数に seed が無いため）。
-    """
-    return {"seed": enterprise_ai_seed(settings)}
-
-
 # --------------------------------------------------------------------------- catalog
 
 
@@ -1239,7 +1169,6 @@ def model_payload(settings: Any) -> ModelSettingsPayload:
             vision_response_path=settings.oci_enterprise_ai_vlm_response_path,
             timeout_seconds=settings.oci_enterprise_ai_timeout_seconds,
             max_retries=settings.oci_enterprise_ai_max_retries,
-            seed=enterprise_ai_seed(settings),
         ),
         generative_ai=GenerativeAiModelSettings(
             embedding_model=settings.oci_genai_embedding_model,
@@ -1271,7 +1200,6 @@ def apply_model_settings(settings: Any, payload: ModelSettingsPayload) -> None:
     settings.oci_enterprise_ai_vlm_response_path = enterprise.vision_response_path
     settings.oci_enterprise_ai_timeout_seconds = enterprise.timeout_seconds
     settings.oci_enterprise_ai_max_retries = enterprise.max_retries
-    _set_if_field(settings, "oci_enterprise_ai_seed", enterprise.seed)
     settings.oci_genai_embedding_model = generative.embedding_model
     settings.oci_genai_embedding_dim = generative.embedding_dim
     settings.oci_genai_rerank_model = generative.rerank_model
@@ -1382,19 +1310,9 @@ class _PersistedEnterpriseAiSettings(BaseModel):
     vision_response_path: str = ""
     timeout_seconds: float = 600.0
     max_retries: int = 3
-    # #1719 より前の `llm_max_output_tokens` / `vlm_max_output_tokens` は、知らない key として
-    # 読み捨てる（出力の上限は登録モデルごとの `max_output_tokens`）。
-    # #1434。値の無い JSON（#1434 より前）は既定の 42。範囲外は読み込みも検証エラー。
-    seed: int = Field(
-        default=DEFAULT_ENTERPRISE_AI_SEED,
-        ge=ENTERPRISE_AI_SEED_MIN,
-        le=ENTERPRISE_AI_SEED_MAX,
-    )
-
-    @field_validator("seed", mode="before")
-    @classmethod
-    def normalize_seed(cls, value: object) -> object:
-        return _seed_input(value)
+    # #1719 より前の `llm_max_output_tokens` / `vlm_max_output_tokens` と、廃止した `seed`
+    # （#3529）は、知らない key として読み捨てる（出力の上限は登録モデルごとの
+    # `max_output_tokens`）。
 
     @field_validator("vlm_input_mode", mode="before")
     @classmethod
@@ -1725,7 +1643,6 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, Any]:
             "vision_response_path": enterprise.vision_response_path,
             "timeout_seconds": enterprise.timeout_seconds,
             "max_retries": enterprise.max_retries,
-            "seed": enterprise.seed,
         },
         "generative_ai": generative.model_dump(),
     }

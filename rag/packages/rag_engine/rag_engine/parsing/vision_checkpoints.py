@@ -102,7 +102,6 @@ class VisionCheckpoints:
                 "project": provider.project_id,
                 "max_tokens": max_tokens,
                 "temperature": 0,
-                "seed": 42,
             }
         )
 

@@ -255,7 +255,6 @@ def _config(**fields: Any) -> JudgeModelConfig:
         "model": "judge-model",
         "api_key": "synthetic-key",
         "project_ocid": "ocid1.synthetic",
-        "seed": 42,
     }
     return JudgeModelConfig(**{**values, **fields})
 
@@ -291,7 +290,7 @@ def test_enterprise_ai_client_posts_the_structured_output_request() -> None:
     assert request.headers["openai-project"] == "ocid1.synthetic"
     body = json.loads(request.content)
     assert body["model"] == "judge-model"
-    assert body["seed"] == 42
+    assert "seed" not in body
     assert body["text"]["format"]["type"] == "json_schema"
     assert body["text"]["format"]["strict"] is True
     assert body["text"]["format"]["schema"] == RUBRIC.output_schema()
@@ -322,14 +321,12 @@ def test_model_config_comes_from_suite_env_without_a_default_model() -> None:
             "SUITE_EVALUATION_JUDGE_ENDPOINT": "https://host.example.invalid/openai/v1",
             "SUITE_EVALUATION_JUDGE_API_KEY": "synthetic-secret",
             "SUITE_EVALUATION_JUDGE_MODEL": "m",
-            "SUITE_EVALUATION_JUDGE_SEED": "7",
         }
     )
     assert config.provenance() == {
         "provider": "oci_enterprise_ai",
         "endpoint_host": "host.example.invalid",
         "model": "m",
-        "seed": 7,
         "max_output_tokens": None,
     }
     assert "synthetic-secret" not in repr(config)

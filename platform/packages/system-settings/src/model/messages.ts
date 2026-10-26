@@ -64,14 +64,6 @@ export const MODEL_MESSAGES = {
   "settings.model.defaults.vision": "既定の画像対応モデル",
   "settings.model.defaults.visionHelp":
     "画像を読み取る処理（文書解析の図・画像の読み取りなど）で使います。画像入力に対応したモデルだけを選べます。",
-  "settings.model.seed.title": "呼び出しの共通の設定",
-  "settings.model.seed.description":
-    "登録したすべてのモデルの呼び出し（LLM・VLM）に使う値です。登録モデルと一緒に保存します。",
-  "settings.model.seed.label": "seed",
-  "settings.model.seed.help":
-    "出力をそろえやすくする乱数の種（0〜2147483647、既定 42）。再現されるかはモデル次第です。NL2SQL の Select AI は業務プロファイルの seed を使います。",
-  "settings.model.seed.invalid":
-    "seed は 0〜2147483647 の整数で入力してください。",
   "settings.model.actions.label": "{section} の操作",
   "settings.model.enterprise.addModel": "追加",
   "settings.model.enterprise.apiKey": "API key",

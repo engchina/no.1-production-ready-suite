@@ -33,7 +33,6 @@ from app.config import (
     enterprise_ai_default_model_id,
     enterprise_ai_output_token_budget,
     enterprise_ai_reasoning_effort_to_send,
-    enterprise_ai_seed,
     enterprise_ai_vision_model_id,
     get_settings,
 )
@@ -64,7 +63,6 @@ def config_from_settings(
     Vision モデルの接続(テキストと違うときだけ `vision_oci_enterprise_ai_*` に入れる)。
     推論(思考)の量(#1425)も、それぞれのモデルの送る値を入れる(none は空 = 送らない。
     解釈は platform の `reasoning_effort_to_send`)。
-    seed(#1434)は全モデルで共通の値(既定 42。解釈は platform の `enterprise_ai_seed`)。
     出力の上限(#1719)も、それぞれのモデルの値(platform の `enterprise_ai_output_token_budget`。
     モデルの出力の上限と入力の上限の小さい方。prompt はここでは見積もらない)を入れる。
     """
@@ -99,7 +97,6 @@ def config_from_settings(
         vision_max_output_tokens=enterprise_ai_output_token_budget(settings, vision_model_id),
         text_reasoning_effort=enterprise_ai_reasoning_effort_to_send(settings, text_model_id),
         vision_reasoning_effort=enterprise_ai_reasoning_effort_to_send(settings, vision_model_id),
-        seed=enterprise_ai_seed(settings),
     )
 
 
