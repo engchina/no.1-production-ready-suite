@@ -1287,19 +1287,25 @@ def build_crag_answer_context(
             attempts[-1] = replace(attempts[-1], recovery_trace=trace)
             if pending_context is not None:
                 continue
-        if attempt_number < CRAG_MAX_RETRIEVAL_ATTEMPTS and best_context.deferred_records:
+        restored = (
+            _restore_deferred_context(
+                question,
+                best_context,
+                settings,
+                top_k=top_k,
+                neighbor_child_count=neighbor_child_count,
+                max_records=max_records,
+                max_chars=max_chars,
+            )
+            if attempt_number < CRAG_MAX_RETRIEVAL_ATTEMPTS and best_context.deferred_records
+            else None
+        )
+        # 戻しても根拠が増えない（後回しの文書は起点〔rerank の上位 top_k〕の外だけ。#3504）なら、評価の回を使わない。
+        if restored is not None and _adds_new_records(best_context, restored):
             # 護欄: 覆盖度による回退 (#1028)。話題違いで改写検索へ進む前に、文書の選択で後回しにした文書を戻して
             # 同じ検索文で再評価する。答えが後回しの文書にあった場合の漏答を、評価枠の中で防ぐ。
             with _execution_step("文書の選択の解除", "根拠が不足したため、後回しにした文書を戻して再評価します。") as step:
-                pending_context = _restore_deferred_context(
-                    question,
-                    best_context,
-                    settings,
-                    top_k=top_k,
-                    neighbor_child_count=neighbor_child_count,
-                    max_records=max_records,
-                    max_chars=max_chars,
-                )
+                pending_context = restored
                 step.result(f"後回しにした {len(best_context.deferred_records)} 件の候補を戻しました")
                 step.field("作り直した根拠", evidence_summary(pending_context.records))
                 add_evidence_lines(step, pending_context.records, title="作り直した根拠")
@@ -1879,6 +1885,12 @@ def _expand_context_from_pool(
         document_selection={**context.document_selection, "restored": True} if mode == "deferred_documents" else context.document_selection,
     )
     return candidate, {"remedy": "context", "mode": mode, "added_chunk_ids": [r.chunk_uid for r in recovered.records]}
+
+
+def _adds_new_records(current: AnswerContext, restored: AnswerContext) -> bool:
+    """戻した context に、今の context に無い根拠（親）があるか。"""
+    known = {record.chunk_uid or record.id for record in current.records}
+    return any((record.chunk_uid or record.id) not in known for record in restored.records)
 
 
 def _deferred_document_records(context: AnswerContext, max_records: int) -> ContextRecovery:

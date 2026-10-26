@@ -224,6 +224,23 @@ class DeferredRestoreTests(unittest.TestCase):
         self.assertIn("pc", [r.id for r in result.records])  # 戻した文書 C の親が根拠に入る
         self.assertEqual(result.deferred_records, ())
 
+    def test_crag_does_not_spend_an_attempt_when_restoring_adds_no_evidence(self):
+        # 後回しの文書は起点（rerank の上位 top_k）の外だけなので、戻しても根拠が同じことがある（#3504）。
+        # そのときは評価の回を使わず、改写検索へ進む。
+        def attempt(number, sufficient, **kw):
+            return a.CragRetrievalAttempt(number, "q", ("q",), sufficient, **kw)
+
+        grades = [attempt(1, False, rewritten_query="登録 別の検索文"), attempt(2, True)]
+        same = replace(self.selected, deferred_records=())
+        with (
+            patch.object(a, "build_adb_hybrid_answer_context", return_value=self.selected),
+            patch.object(a, "_restore_deferred_context", return_value=same),
+            patch.object(a, "_grade_crag_retrieval", side_effect=grades),
+        ):
+            _result, rewrites, attempts = a.build_crag_answer_context("登録条件は", "source", ["docling"], settings())
+        self.assertEqual(rewrites, ("登録 別の検索文",))
+        self.assertNotEqual(attempts[0].stop_reason, "deferred_documents_restored")
+
     def test_generation_side_remedy_adds_the_deferred_document_parents_first(self):
         expanded, trace = a._expand_context_from_pool("登録条件は", self.selected)
         self.assertEqual(trace["mode"], "deferred_documents")
