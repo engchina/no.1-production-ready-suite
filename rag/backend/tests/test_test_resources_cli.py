@@ -9,11 +9,11 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-import fitz  # type: ignore[import-untyped]
 import httpx
 import pytest
 
 from app.rag.test_resources_cli import ManagementApi, Rebuilder, RebuildError, read_fixture
+from tests.fixtures.synthetic_pdf import text_pdf
 
 
 @pytest.fixture
@@ -22,10 +22,7 @@ def corpus(tmp_path: Path) -> Path:
     groups = {}
     for key in ("A", "B"):
         name = f"synthetic-{key}.pdf"
-        pdf = fitz.open()
-        pdf.new_page().insert_text((40, 40), f"Synthetic {key}")
-        pdf.save(tmp_path / name)
-        pdf.close()
+        (tmp_path / name).write_bytes(text_pdf([f"Synthetic {key}"], at=(40, 40)))
         documents.append(
             {
                 "group": key,

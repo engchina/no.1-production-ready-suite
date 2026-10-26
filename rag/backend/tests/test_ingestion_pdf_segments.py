@@ -5,9 +5,8 @@ from __future__ import annotations
 from io import BytesIO
 from typing import Any, cast
 
-import fitz  # type: ignore[import-untyped]
 import pytest
-from pypdf import PdfWriter
+from pypdf import PdfReader, PdfWriter
 from rag_engine.chunking.headings import layout_section_paths
 from rag_parser_core.result import ParserRegistryResult
 
@@ -30,6 +29,7 @@ from app.schemas.extraction import (
     ExtractionTableCell,
     StructuredExtraction,
 )
+from tests.fixtures.synthetic_pdf import text_pdf
 from tests.test_ingestion_strategy import (
     FakeEmbeddingClient,
     FakeObjectStorage,
@@ -45,20 +45,12 @@ CONTINUED_PAGES = {10}
 
 
 def _pdf(pages: int) -> bytes:
-    document = fitz.open()
-    for index in range(pages):
-        document.new_page().insert_text((72, 72), f"page {index + 1}")
-    data = document.tobytes()
-    document.close()
-    return bytes(data)
+    return text_pdf([f"page {index + 1}" for index in range(pages)])
 
 
 def _original_pages(pdf_bytes: bytes) -> list[int]:
-    document = fitz.open(stream=pdf_bytes, filetype="pdf")
-    try:
-        return [int(page.get_text().split()[-1]) for page in document]
-    finally:
-        document.close()
+    reader = PdfReader(BytesIO(pdf_bytes))
+    return [int(page.extract_text().split()[-1]) for page in reader.pages]
 
 
 def _body(original: int) -> str:

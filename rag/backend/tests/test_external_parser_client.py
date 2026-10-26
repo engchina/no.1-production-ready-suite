@@ -7,7 +7,6 @@ import json
 import logging
 from collections.abc import Callable
 
-import fitz  # type: ignore[import-untyped]
 import httpx
 import pytest
 from PIL import Image
@@ -21,6 +20,7 @@ from app.clients.external_parser import (
 )
 from app.config import Settings
 from app.schemas.document import SourceModality, SourceProfile
+from tests.fixtures.synthetic_pdf import text_pdf
 
 
 def _profile(name: str = "scan.pdf", *, content_type: str = "application/pdf") -> SourceProfile:
@@ -51,13 +51,9 @@ def _install_transport(
 
 
 def _pdf(page_count: int = 2) -> bytes:
-    document = fitz.open()
-    for index in range(page_count):
-        page = document.new_page(width=120, height=80)
-        page.insert_text((12, 30), f"page {index + 1}")
-    data = document.tobytes()
-    document.close()
-    return bytes(data)
+    return text_pdf(
+        [f"page {index + 1}" for index in range(page_count)], size=(120, 80), at=(12, 30)
+    )
 
 
 @pytest.mark.parametrize("override", [None, "合成の読み取り指示"])
@@ -306,7 +302,7 @@ def test_dots_300dpi_a4_matches_ai_foundations_lab_observation() -> None:
     lab のように bbox をそのままページ画像の px として使っても 0.5% 未満の差で重なって見える。
     その丸めの差(右下の角で 12px / 9px)も、ここの換算で戻す。
     """
-    width, height = 2480, 3509  # pymupdf で A4(595x842 pt)を 300 dpi で描いた寸法
+    width, height = 2480, 3509  # A4(595x842 pt)を 300 dpi で描いた寸法
     input_width, input_height = _dots_model_input_size(width, height)
     assert (input_width, input_height) == (2492, 3500)
     assert input_width * input_height // (14 * 14) == 44_500
