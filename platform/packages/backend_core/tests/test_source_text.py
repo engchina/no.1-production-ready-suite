@@ -211,7 +211,10 @@ def test_default_budget_holds_the_default_result_sizes() -> None:
     # 既定の分割の大きさ（本文 1000 字・表 3000 字）を、すべての字を CJK として見積もる。
     assert SOURCE_TEXT_ITEM_MAX_TOKENS >= 3000 + 200
     assert SOURCE_TEXT_RESPONSE_BUDGET_TOKENS >= 12 * 1000
-    assert SOURCE_TEXT_PAGE_BUDGET_TOKENS <= 25000
+    # 外部の MCP クライアントの出力の上限（Claude Code の既定 25,000 token）より下に置く。
+    assert SOURCE_TEXT_RESPONSE_BUDGET_TOKENS < 25000
+    # 観測の 1 ページの予算は検索の結果と同じ値（正本は 1 つ）。
+    assert SOURCE_TEXT_PAGE_BUDGET_TOKENS == SOURCE_TEXT_RESPONSE_BUDGET_TOKENS
 
 
 def test_page_returns_full_texts_until_the_page_budget() -> None:

@@ -4022,7 +4022,7 @@
                 "$ref": "#/$defs/EvidenceLocator"
               },
               "excerpt": {
-                "description": "本文（既定は全文）。応答の根拠の合計の予算（token の見積もり 20000）に順位の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
+                "description": "本文（既定は全文）。応答の根拠の合計の予算（token の見積もり 24000）に順位の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
                 "title": "Excerpt",
                 "type": "string"
               },
@@ -5527,7 +5527,7 @@
                 "$ref": "#/$defs/EvidenceLocator"
               },
               "excerpt": {
-                "description": "本文（既定は全文）。応答の根拠の合計の予算（token の見積もり 20000）に順位の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
+                "description": "本文（既定は全文）。応答の根拠の合計の予算（token の見積もり 24000）に順位の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
                 "title": "Excerpt",
                 "type": "string"
               },
