@@ -35,7 +35,7 @@ import math
 import re
 import tempfile
 import time
-from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import date
@@ -3512,6 +3512,7 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
         parent_text = str((source.metadata if source else {}).get("parent_text") or "")
         text = parent_text or "\n\n".join(child.text for child in members)
         metadata = dict(members[0].metadata)
+        _merge_member_metadata(metadata, members)
         metadata.pop("rrf_score", None)
         if element_ids := list(
             dict.fromkeys(
@@ -3555,6 +3556,67 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
             )
         )
     return parents
+
+
+# 子ごとに持つ一覧の metadata。親は今回の子の全員の値を合わせる(先頭の子だけにしない。#3478)。
+_MEMBER_LIST_METADATA_KEYS = ("image_evidence", "table_context", "source_categories")
+
+
+def _merge_member_metadata(metadata: dict[str, Any], members: Sequence[Any]) -> None:
+    """親の metadata の子ごとの一覧(画像・表・注釈の文脈・要素の種類)を、子の全員から合わせる。
+
+    親の本文は子の全員を含むので、図の子が親の先頭でなくても、その図を親の根拠として扱う(回答に
+    添付する画像は親の ``image_evidence`` から選ぶ)。並びは子の関連度(``rrf_score`` の高い順、同じ
+    なら文書の順)で、関連する子の画像を先に置く。同じ画像・表・文脈は 1 回だけ。図の中の文字(OCR)の
+    entry は読むときに持ち主の図にまとめる(``fold_picture_ocr_entries``)ので、そのまま残す。
+    """
+    if len(members) < 2:
+        return
+    ranked = sorted(
+        members, key=lambda child: -(_finite_float(child.metadata.get("rrf_score")) or 0.0)
+    )
+    for key in _MEMBER_LIST_METADATA_KEYS:
+        merged = _merged_metadata_lists(child.metadata.get(key) for child in ranked)
+        if merged:
+            metadata[key] = merged
+    layouts = [child.metadata.get("layout") for child in ranked]
+    layouts = [layout for layout in layouts if isinstance(layout, dict)]
+    if not layouts:
+        return
+    layout: dict[str, Any] = {}
+    for key in dict.fromkeys(key for item in layouts for key in item):
+        values = [item[key] for item in layouts if key in item]
+        if all(isinstance(value, list) for value in values):
+            layout[key] = _merged_metadata_lists(values)
+        elif all(isinstance(value, dict) for value in values):
+            layout[key] = {k: v for value in reversed(values) for k, v in value.items()}
+        else:
+            layout[key] = values[0]
+    metadata["layout"] = layout
+
+
+def _merged_metadata_lists(groups: Iterable[Any]) -> list[Any]:
+    merged: list[Any] = []
+    seen: set[str] = set()
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            key = _metadata_item_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+    return merged
+
+
+def _metadata_item_key(item: Any) -> str:
+    """一覧の要素の同一性。画像・表は種類と ID、ID の無いものは内容。"""
+    if isinstance(item, dict):
+        item_id = str(item.get("image_id") or item.get("table_id") or item.get("record_id") or "")
+        if item_id.strip():
+            return f"{item.get('raw_type') or ''}:{item_id.strip().lower()}"
+    return json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
 
 
 def _answer_use(child: Mapping[str, Any]) -> str | None:
