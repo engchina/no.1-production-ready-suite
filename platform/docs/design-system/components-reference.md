@@ -3681,6 +3681,7 @@ import { ChatAnswer, ChatPendingTurn, ChatTurn } from "@production-ready/ui";
 
 - 単体テストは `packages/ui/tests/chat-turn.test.tsx`。
 - 使う所: RAG `MessageTurn` / `AssistantColumn`、NL2SQL `SqlChatTurn` と送信中の往復、Agent `RunChatTurn` / `PendingTurn`。
+- 回答の本文は `ChatAnswerBody`（#3433）で包み、本文の前に見出し「回答」（既定 h3。`labels.heading`・`headingLevel` で変えられる）を出す。見出しは本文の中の節の見出しと同じ部品 `AnswerHeading`（`text-sm font-semibold text-fg`。`AnswerSections` の節の見出しも同じ）。回答の本文を描くときだけ使い、処理の経過だけの間・失敗・停止だけの枠・回答前の確認のカードには使わない。実行の詳細は `Section` の見出し「回答」を持つので使わない。使う所: RAG `AssistantColumn`、Agent `RunChatTurn`（NL2SQL の回答は SQL・説明・結果で、本文の節の見出しを持たないので使わない）。単体テストは `packages/ui/tests/answer-heading.test.tsx`。
 - 利用者の側が質問の文ではない往復（回答前の確認のカードで答えた往復。#1839）は、`userContent` に `ClarificationRecord`（`variant="bubble"`）を渡す。質問の吹き出しの代わりに出る。
 
 ---
