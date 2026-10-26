@@ -146,21 +146,23 @@ class ParsedTableBinding:
     text_keys: tuple[str, ...]
 
     def chunk_metadata(
-        self, text: str, *, first_text_row: int = 0, header_repeated: bool = False
+        self, text: str, *, first_text_row: int = 0, header_rows: int = 0
     ) -> dict[str, str | int]:
         """chunk の本文が含む格子の行の場所（本文の行が合わなければ空）。
 
         ``first_text_row`` は chunk の最初の行（表頭を繰り返した部分は、表頭の次の行）が要素の本文の
-        何番目の行か。``header_repeated`` の部分は、先頭の行が要素の本文の最初の行（表頭）と同じで
-        あることを確かめてから数えない。
+        何番目の行か。``header_rows`` は部分の先頭に繰り返した表頭の行の数で、要素の本文の先頭の
+        行（表頭）と同じであることを確かめてから数えない（#3547。HTML の表は表頭が複数の行）。
         """
         keys = text_row_keys(text)
         if not keys:
             return {}
-        if header_repeated:
-            if keys[0] != self.text_keys[0]:
+        if header_rows:
+            if len(keys) <= header_rows or tuple(keys[:header_rows]) != tuple(
+                self.text_keys[:header_rows]
+            ):
                 return {}
-            keys = keys[1:]
+            keys = keys[header_rows:]
         end = first_text_row + len(keys)
         if not keys or first_text_row < 0 or end > len(self.text_keys):
             return {}
@@ -391,6 +393,144 @@ class _TableRows(HTMLParser):
         self._row = None
 
 
+@dataclass(frozen=True)
+class HtmlTableLayout:
+    """1 つの HTML の表の本文の部品（行の境目で分けて組み直すため。#3547）。
+
+    ``rows`` は外側の表の ``tr`` の HTML（原文のまま）。``header_rows`` は先頭の表頭の行の数
+    （``thead`` の中か、セルがすべて ``th`` の行が先頭から続く数。すべての行が表頭なら 0）。
+    """
+
+    prefix: str
+    table_open: str
+    caption: str
+    rows: tuple[str, ...]
+    header_rows: int
+    suffix: str
+
+    def part(self, rows: Sequence[str], *, last: bool = False) -> str:
+        """表頭の行と ``rows`` の行だけの表の HTML（最後の部分は表の後ろの本文も付ける）。"""
+        header = "".join(self.rows[: self.header_rows])
+        body = "".join(rows)
+        suffix = self.suffix if last else ""
+        return f"{self.prefix}{self.table_open}{self.caption}{header}{body}</table>{suffix}"
+
+
+class _TableLayoutParser(HTMLParser):
+    """外側の表の ``table`` / ``caption`` / ``tr`` の位置（文字の位置）と行の表頭の印。"""
+
+    def __init__(self, text: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self._line_starts = [0]
+        for match in re.finditer("\n", text):
+            self._line_starts.append(match.end())
+        self.text = text
+        self.depth = 0
+        self.tables = 0
+        self.broken = False
+        self.table_span: tuple[int, int] | None = None
+        self.table_open = ""
+        self.caption: tuple[int, int] | None = None
+        self._caption_start: int | None = None
+        self.rows: list[tuple[int, int, bool]] = []
+        self._row_start: int | None = None
+        self._row_cells: list[str] = []
+        self._in_head = False
+        self._table_start = 0
+
+    def _offset(self) -> int:
+        line, column = self.getpos()
+        return self._line_starts[line - 1] + column
+
+    def _end_of_tag(self, start: int) -> int:
+        end = self.text.find(">", start)
+        if end < 0:
+            self.broken = True
+            return len(self.text)
+        return end + 1
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "table":
+            if self.depth == 0:
+                self.tables += 1
+                self._table_start = self._offset()
+                self.table_open = self.get_starttag_text() or "<table>"
+            self.depth += 1
+            return
+        if self.depth != 1:
+            return
+        if tag == "caption":
+            self._caption_start = self._offset()
+        elif tag == "thead":
+            self._in_head = True
+        elif tag in {"tbody", "tfoot"}:
+            self._in_head = False
+        elif tag == "tr":
+            if self._row_start is not None:
+                # 閉じていない tr（省略した終わりのタグ）は行の境目が決まらない。
+                self.broken = True
+            self._row_start = self._offset()
+            self._row_cells = []
+        elif tag in {"td", "th"} and self._row_start is not None:
+            self._row_cells.append(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "table":
+            if self.depth == 1:
+                if self._row_start is not None:
+                    self.broken = True
+                self.table_span = (self._table_start, self._end_of_tag(self._offset()))
+            self.depth = max(0, self.depth - 1)
+            return
+        if self.depth != 1:
+            return
+        if tag == "caption" and self._caption_start is not None:
+            self.caption = (self._caption_start, self._end_of_tag(self._offset()))
+            self._caption_start = None
+        elif tag == "thead":
+            self._in_head = False
+        elif tag == "tr" and self._row_start is not None:
+            header = bool(self._row_cells) and (
+                self._in_head or all(cell == "th" for cell in self._row_cells)
+            )
+            self.rows.append((self._row_start, self._end_of_tag(self._offset()), header))
+            self._row_start = None
+
+
+def html_table_layout(text: str) -> HtmlTableLayout | None:
+    """1 つの HTML の表の本文を部品に分ける（表が 1 つでない・行の境目が決まらなければ None）。
+
+    分けた部品で組み直す部分の表は ``thead`` / ``tbody`` を持たない（行の ``tr`` は原文のまま）。
+    """
+    if "<table" not in text.casefold():
+        return None
+    parser = _TableLayoutParser(text)
+    try:
+        parser.feed(text)
+        parser.close()
+    except Exception:  # noqa: BLE001 - 読めない HTML は分けない
+        return None
+    if parser.broken or parser.tables != 1 or parser.table_span is None or not parser.rows:
+        return None
+    start, end = parser.table_span
+    header_rows = 0
+    for _row_start, _row_end, header in parser.rows:
+        if not header:
+            break
+        header_rows += 1
+    if header_rows == len(parser.rows):
+        header_rows = 0
+    caption = text[parser.caption[0] : parser.caption[1]] if parser.caption else ""
+    return HtmlTableLayout(
+        prefix=text[:start],
+        table_open=parser.table_open,
+        caption=caption,
+        rows=tuple(text[row_start:row_end] for row_start, row_end, _header in parser.rows),
+        header_rows=header_rows,
+        suffix=text[end:],
+    )
+
+
 def _html_rows(html: str) -> list[list[str]] | None:
     parser = _TableRows()
     try:
@@ -404,6 +544,7 @@ def _html_rows(html: str) -> list[list[str]] | None:
 __all__ = [
     "COLUMN_HEADER_CELL_KEY",
     "HEADER_CELL_KEY",
+    "HtmlTableLayout",
     "PARSED_TABLE_GRID_KEY",
     "PARSED_TABLE_GRID_VERSION",
     "ROW_BASIS_PARSED_TABLE",
@@ -413,6 +554,7 @@ __all__ = [
     "bind_text_rows",
     "grid_from_cells",
     "grid_rows_metadata",
+    "html_table_layout",
     "parsed_table_bindings",
     "text_row_keys",
 ]

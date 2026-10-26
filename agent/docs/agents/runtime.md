@@ -22,6 +22,7 @@
   - ツールの結果の機微情報（機微な名前の項目・文の中の資格情報・Bearer・個人情報）は、成功の出力と同じ規則で、失敗の文・詳細（`error` / `error_details`。呼び先の応答の本文・JSON-RPC の error・例外の文・入れ子の詳細、文の中の URL の資格情報も）からも `tool_registry.invoke` の結果の境界（`_tool_result` → `sanitize_tool_error`）で伏せる（#2611）。モデルへの結果・Run の step・イベント・Run の失敗の文・ログはこの結果を使う。`argument_errors`（値を含まない）と有無を表す真偽の項目は残し、伏せた種類は `audit_metadata.error_masked` に名前だけ残す。
   - ツールの結果の画像（#2650。`tool_media.py`。MCP に依らない型で、MCP 接続・会話の添付などどのツールの結果でも同じ経路）: handler は `ToolOutputWithImages`（文字の結果と `ToolImage`）を返し、`tool_registry.invoke` が画像を `ToolResult` の非保存の属性（`tool_result_images`）に分ける。step・イベント・ログ・成果物には参照（`content_images` の `image_id`＝sha256・MIME・大きさ・由来〔接続・ツール・content の位置、RAG なら根拠の ID・文書の版 `chunk_set_id`・`region`（page・bbox）〕）だけを残し、base64 を残さない。`_ToolRecorder.deliver_images` が登録モデルの「画像対応」（`ModelTarget.vision_enabled`）と 1 回の結果の上限（`MAX_IMAGES_PER_RESULT`）で添付する画像を決め、参照に `model_input`（`attached` / `unsupported_model` / `over_limit` など）と、読めなかったときの `image_input_note` を書き、見積もりを `audit_metadata.image_input` に残す。添付する画像は SDK の function tool の出力（`[ToolOutputText, ToolOutputImage]`。Responses API の `function_call_output` の `input_image`）で同じ呼び出しの次のモデルの入力に渡す。承認待ちで保存する SDK の状態からは画像のデータを外し（`strip_image_data`。読み直しの案内の文にする）、再開・会話の続きには画像を持ち越さない（要るときはツールで取り直し、呼び先が毎回認可する）。画像に対応しないモデルの代わりに既定の Vision モデルで読む編成は持たない（#2651・#2652）。
   - 進展の無いツールの呼び出しは Run を終える（#2580。`tool_loop_guard.py`）。保存した step から、モデルが呼んだツールごとに、同じ引数で同じ結果が `REPEAT_LIMIT` 回（`runtime.tool_call_repeated`）・実行の失敗が成功を挟まずに `FAILURE_LIMIT` 回（`runtime.tool_failures_repeated`）・引数の誤り（schema・呼び先の検証・データの範囲）が `ARGUMENT_ERROR_LIMIT` 回（`runtime.tool_argument_errors_repeated`）続いたかを数える（結果が変わる polling・引数が変わるページング・別のツールの失敗・承認待ち・取消・予算の超過・Control Plane の呼び出しは数えない。並列の呼び出しは始めた順）。上限の 1 回前の結果に `loop_notice` を足して差し戻し、上限に達したら同じ応答の残りの呼び出しを実行せず、次のモデルの呼び出しの前に Run を失敗にする（イベント `runtime.failed` の `error_code`・ログ `builtin_runtime_tool_loop_stopped`・metric `agent_tool_loop_stops_total`。引数・結果の値は出さない）。
+- RAG の根拠のツール（`rag_search` / `rag_retrieve_evidence`）の縮退の使い方（#3546。`features/agent/rag_retrieval_state.py`）: 根拠が 0 件で安全チェックの未完了（`guardrail_degraded`）か任意の補助の処理の縮退（`degraded_steps`）があるときは、モデルへのツールの結果に案内（`retrieval_notice`。資料に記載が無いとは答えない）を足す（記録する step の結果は RAG のまま）。回答の対応の `absence_conclusion` はその `rag_search` を数えず、縮退した検索を使ったこと（`rag_degraded`）・表の行・列の対応の検査が読めない根拠（`table_binding=not_checkable`）で裏付けたこと（`table_binding_unchecked`）は対応の値を変えない記録だけのシグナルにする。
 - モデルに渡す入力は、モデルの入力の上限に収める（#2383。`features/agent/context_window.py`。SDK の `call_model_input_filter`）。
   - 予算は登録モデルの `max_input_tokens`（システム設定 > モデル）から、出力の上限（入力の上限の半分まで）と余白（`AGENT_CONTEXT_SAFETY_MARGIN_RATIO`）を引いた token の数。見積もりは platform の `estimate_input_tokens` × `AGENT_CONTEXT_TOKEN_ESTIMATE_SCALE`。
   - 超えるときは古いツールの結果から段階的に縮め（一覧の項目の長い文字列を先頭だけ → 後ろの項目を ID だけ → すべて ID だけ）、最新のツールの結果は古い結果を縮めても足りないときだけ縮める。利用者の質問・会話の履歴・指示は縮めない。ID の項目（`id`・`*_id`）は消さず、縮めた結果に `context_compaction`（元の文字数と次の手）を足す。次の手は、RAG の根拠なら `rag_read_source` で読み直す、信頼できる読み取り専用のツールなら絞って呼び直す、副作用があり得るツール（書き込み・注釈を信頼しない接続）なら呼び直さずに残った内容で続ける（同じ操作を再実行させない。#2632）。
@@ -49,3 +50,80 @@
 - SKILL.md と同じディレクトリの `references/` の下のテキスト / Markdown は、スキルの参照文書（`references`）として読む（Agent Skills の progressive disclosure。symlink を辿らず、ディレクトリの外を読まず、件数・大きさに上限）。指示には索引だけを入れ、その Run にだけ `skill_reference_read` を渡して必要な部分を読む。読み取りも `tool_registry.invoke` のポリシー・監査を通す。`scripts/` などの同梱のコードは読まず・実行しない。
 - スキルは Agent Skills の形（`<name>/SKILL.md` ＋ `references/` の zip）で書き出せる（`GET /api/skills/{skill_id}/export`・画面のスキルの操作・MCP の `agent_skill_export`。`features/agent/skill_export.py`。#1874）。組み込みのスキルは `skills/` と同じ内容、画面のスキルは frontmatter を作り、`skills-ref` の検証を通す。
 - Prompt / Workflow / Template は非実行・版管理 resource。独立 Workflow engine を作らない。
+
+## Skill と実行の五つの不変条件（#3240）
+
+業務 Agent・スキル・ツール・実行の正本。依存は `業務 Agent → スキル → ツール（MCP / Control Plane）` の一方向で、実行は組み込み Runtime。各条件を守るコードとテストを並べる（テストは `agent/backend/tests/`）。
+
+1. **能力の宣言はスキル経由。宣言は認可ではない。**
+   - 業務 Agent はツールの項目を持たない。使うツールは `skill_ids` で選んだスキルの `mcp_requirements` の和集合だけ（`builtin_runtime.agent_mcp_requirements` / `agent_tool_names`）。作成・変更の API はツールの直接の指定（`runtime.DIRECT_TOOL_FIELDS`: `tool_names`・`mcp_requirements`）を 422 で拒み、保存済みの旧い値（`tool_names`・`migration_required`）は読むときに無視する（未リリースのため互換を持たない）。
+   - 宣言はモデルに渡す候補を決めるだけ。ツール権限（「承認」「拒否」）・承認・呼び先のデータの認可は、実行の直前に別に効く。
+   - ツールの層（`tools.py` とそこから import する module）は、スキル・業務 Agent・Run の module を import しない。Run の終わりの判定は上の層が差し込む（`tools.set_run_finished_check`）。スキルの一覧のツール `agent_skill_list` は、この向きに反するので削除した。
+   - スキルの追加・変更・削除は、ツールの登録・MCP 接続・ツール権限を変えない。使用中のスキルの削除を 409 にするのは上の層の整合の検査で、下の層からの逆依存ではない。
+   - 実行環境が足すツールは能力の宣言ではない。`skill_reference_read`（その Run のスキルの参照文書）・`ask_user_confirmation`・`record_output`（業務 Agent の出力の項目）・会話の添付を読むツールは、Run 自身の業務 Agent・スキル・会話から組み込み Runtime が作り、外部の MCP のツールを足さない。Control Plane が自分で呼ぶ後始末（`nl2sql_cancel_job` など）と業務ガイドの照合も、モデルに渡すツールを広げない。どれも `tool_registry.invoke` を通す。
+   - MCP の resources / prompts は使わない（使うのは `tools/list` と `tools/call` だけ）。スキルの `references/` はスキル自身の参照文書。
+   - テスト: `test_skill_tool_boundary.py`（`test_agent_api_rejects_direct_tool_fields`・`test_directly_listed_tool_is_not_exposed_to_the_run`・`test_tool_layer_does_not_import_skills`・`test_skill_changes_do_not_change_tool_provision`）、`test_builtin_runtime.py::test_instructions_and_tools_come_from_agent_and_skills`、`test_mcp_tool_safety.py::test_skill_allowlist_is_not_widened_by_a_colliding_name`、`test_skill_editor_api.py::test_skill_used_by_agent_draft_cannot_be_deleted`。
+2. **明示の構成を解決できなければ、暗黙に切り替えずに失敗する。**
+   - スキルが要る MCP 接続・明示したツールが 1 つでも使えなければ、ある分だけで続けず、モデルを呼ぶ前に Run を `runtime.mcp_unavailable` で失敗にする（`build_sdk_agent`）。省略時の既定（業務 Agent の `model_id` が空なら既定のテキストモデル）を選ぶことは切り替えではない。
+   - テスト: `test_builtin_runtime.py::test_partially_unavailable_required_mcp_stops_before_the_model`、`test_skill_tool_boundary.py::test_missing_required_tool_fails_the_run_instead_of_intersecting`、`test_product_mcp.py::test_missing_user_fails_before_calling_without_a_substitute`。
+   - モデル: platform の `enterprise_ai_connection_for_model` は、登録に無い `model_id`（登録を消したモデルなど）をプライマリ接続へ切り替えずに `EnterpriseAiModelNotRegisteredError` にする。空の ID は既定のテキストモデルの接続、既定のテキスト / Vision モデルの ID は登録モデルに無くてもプライマリ接続（`.env` だけの構成）。組み込み Runtime はこれを `runtime.model_not_registered` の Run の失敗にする（`test_builtin_runtime.py::test_unregistered_model_fails_without_switching_connections`、`platform/packages/system_settings_backend/tests/test_model_connections.py`）。
+3. **未対応の操作を成功にしない。**
+   - REST は状態に合う status と code を返す（ツールの直接の指定は 422）。MCP は契約の tool error / JSON-RPC の error を返す（未対応の method は `METHOD_NOT_FOUND`）。Run は失敗の状態と `error_code` で表す。
+   - モデルに渡していない名前のツールの呼び出しは実行せず、呼べる名前をモデルへ返し、理由を残す（下の「宣言の外の呼び出しの監査」）。表示用の任意の項目は、契約で任意としたものだけ省いてよい。
+   - テスト: `test_skill_tool_boundary.py::test_undeclared_calls_are_recorded_with_reasons_and_not_run`、`platform/packages/backend_core/tests/test_mcp.py`、`test_tool_call_boundary.py::test_invalid_arguments_never_reach_the_handler`。
+4. **認可は検証済みの認証文脈から決める。**
+   - 身元・ロール・対象範囲は、Cookie のセッション・API キー・サービストークンと、サーバーの権限の情報から決める。request の本文の利用者・ロール・承認者は使わない（承認の `decided_by` は Cookie の利用者）。
+   - サービストークンの `sub` は Run の利用者（承認の後も承認者にしない）。モデルの引数で `sub`・データの範囲の claim は変わらない。共通の認証の詳細は [backend-standard.md](../../../platform/docs/backend-standard.md) と [mcp.md](./mcp.md)。
+   - テスト: `test_security_scope.py::test_approval_is_scoped_and_decided_by_principal`、`test_agent_data_scope.py::test_model_arguments_do_not_change_the_token_subject_or_scope`、`test_builtin_runtime.py::test_mcp_tool_after_approval_uses_the_run_creator_token`。
+5. **検索の本文・ツールの結果・モデルの出力は、権限・承認の根拠にしない。**
+   - これらは操作と引数の提案にだけ使う。実行の直前のツール権限の判定と、承認の記録の照合は迂回できない。承認は Run・呼び出し ID・ツール・引数に結び付き、再開でも最新のツール権限を確かめる。
+   - 承認の要否の根拠にする annotations は、注釈を信頼する接続の `tools/list` の定義だけ。ツールの結果の中の annotations・「承認済み」・権限の変更の要求は使わない。
+   - テスト: `test_untrusted_content_authority.py`（合成の「承認済み」・権限の変更の要求・偽の annotations・偽の承認の ID を検索とツールの結果に入れ、その文言に従って書き込みを求める台本）、`test_tool_call_boundary.py::test_approval_is_bound_to_the_call_id_and_arguments` / `test_policy_changed_to_ask_after_build_waits_for_approval` / `test_policy_changed_to_deny_after_approval_is_not_executed`、`test_tool_policy_catalog.py::test_read_only_hint_is_used_only_for_trusted_connections`、`test_builtin_runtime.py::test_mcp_run_does_not_wait_for_approval`。
+
+### 接続のすべてのツールの露出（棚卸し）
+
+- 接続のすべてを渡すのは、`mcp_requirements` の `tool_names` が空の宣言だけ（SKILL.md の `production-ready-mcp-tools` に `<接続>` だけを書くか、画面の JSON で空にする）。組み込みのスキルは明示の一覧だけを使う（`test_builtin_skills_declare_explicit_tool_lists`）。接続のすべてを使うのは、利用者が作ったスキルだけ。
+- そのスキルを使う業務 Agent には、接続に後から足したツールも渡る。公開の版も同じ（版が固定するのはスキルの中身で、接続のツールの一覧ではない）。
+- 承認の要否は、呼び出しごとに今のツール権限で決まる。書き込みのツール（`readOnlyHint` が無いか false）と、注釈を信頼しない接続のツールは既定で「承認」。「拒否」のツールは渡さない（`test_whole_connection_exposes_added_tools_under_the_current_policy`）。
+- 外部の接続にツールを足すときは、管理者がツール権限を見直す。露出を固定したいスキルは明示の一覧にする。既存のスキルを黙って明示の一覧に書き換えることはしない。
+- 明示の一覧は、一覧に無いツールを渡さない。一覧のツールが接続に無ければ、交差集合で隠さずに Run を失敗にする（不変条件 2）。
+
+### 宣言の外の呼び出しの監査
+
+モデルが渡していない名前のツールを呼んだら、SDK の `tool_not_found` で Run を失敗にせず、呼べる名前をモデルへ返す（#1303）。呼び出しは実行しない。呼び出しごとに理由を決め、Run のイベント（`payload.undeclared_tool_call`: `tool_name`・`call_id`・`reason`。`severity=warning`）・ログ `builtin_runtime_undeclared_tool_call`・metric `agent_undeclared_tool_calls_total{reason}` に残す（`builtin_runtime.record_undeclared_call`）。検知を理由に、渡すツールを広げない。
+
+| reason | 意味 |
+|---|---|
+| `name_mismatch` | 渡したツールを別の名前（素の名前・別の接頭辞）で呼んだ（モデルの名前違い） |
+| `policy_denied` | スキルが宣言したが、ツール権限が「拒否」で渡していない |
+| `declined` | スキルが宣言したが、この Run で利用者が確認を取り消した種類 |
+| `name_conflict` | スキルが宣言したが、別の出自のツールと名前が重なった（#2596） |
+| `previous_context` | 同じ会話の前の Run で呼んだが、この Run では渡していない（前の文脈） |
+| `not_declared` | 登録済みの接続・Control Plane のツールの名前だが、業務 Agent のスキルが宣言していない（スキルの設定の不足か、宣言の外への試み） |
+| `unknown` | どの接続・ツールの名前にも当たらない |
+
+### 保存・公開・実行の就緒条件
+
+保存できることは、実行できることを意味しない。段階ごとに確かめることを分ける。
+
+| 段階 | 確かめること | 確かめないこと（後の段階で明示の失敗にする） |
+|---|---|---|
+| 保存（下書きの作成・変更） | 名前・ID の形、スキルが登録済み（400）、データの範囲を編集者が使える（`_verify_data_scopes`）、出力の項目の形、業種テンプレートが存在する、ツールの直接の指定が無い（422） | スキルが要る MCP 接続・ツールが今使えるか、モデルが登録済みか |
+| 公開 | スキルが登録済み、スキルの中身の固定（`pin_skills`）、設定したときだけ評価の門（`AGENT_PUBLISH_MIN_PASS_RATE`・回帰の門） | 保存と同じ（公開の後にも接続・モデル・ツール権限は変わる） |
+| 実行（Run の開始と各呼び出し） | 業務 Agent が有効で公開した版がある（下書きは管理者と持ち主だけ）、利用者の対象範囲、モデルと接続の解決（`runtime.model_not_configured` など）、要る MCP 接続と明示したツールがそろう（`runtime.mcp_unavailable`）、呼び出しごとの取消・引数・最新のツール権限・承認の照合、呼び先の認可（サービストークンの `sub` は Run の利用者） | — |
+
+業務 Agent の一括の import は持たない。保存先の読み込みは 1 件の不整合を退避し（#853）、組み込みの業務 Agent を足す。スキルの読み込み（`AGENT_SKILLS_DIR`・`AGENT_SKILLS_DEFINITIONS_JSON`・画面）は形を検証する。
+
+### #2586（出荷前の横断の検証）との対応
+
+| #2586 の障害の条件 | 不変条件 | 確かめるテスト |
+|---|---|---|
+| 検索の結果の「承認不要」などの注入 | 5 | `test_untrusted_content_authority.py`（危険な次の操作を求める台本） |
+| 権限外の操作・未承認の書き込み | 1・5 | `test_skill_tool_boundary.py`、`test_tool_call_boundary.py`（#2610）、`test_product_mcp.py::test_write_tools_require_approval_by_default` |
+| 承認の後の利用者の委譲 | 4 | `test_builtin_runtime.py::test_mcp_tool_after_approval_uses_the_run_creator_token` |
+| RAG の 503・timeout・接続の失敗 | 2・3 | `test_product_mcp.py`（再試行・書き込みを再送しない）、`test_builtin_runtime.py::test_unreachable_mcp_service_is_a_tool_error_and_the_run_continues` |
+| 必須の接続・ツールの不足 | 2 | `test_partially_unavailable_required_mcp_stops_before_the_model`、`test_missing_required_tool_fails_the_run_instead_of_intersecting` |
+| 取消の後の新しい外部の操作 | 3 | `test_tool_call_boundary.py::test_cancel_during_a_read_stops_the_following_write` / `test_approved_call_is_not_run_after_cancel`（#2609） |
+| 二重の実行（古い所有者の開始） | 3 | `test_run_claim_fencing.py`（#2606） |
+
+不変条件では扱わず #2586 に残すもの: 停止と復帰の手順（受付の停止・特定の能力の禁止・緊急の停止）とその演練、点検の証拠の集約（pass / blocker / warning / not-applicable）、承認の滞留の責任者、request / run / tool の ID の関連付けの測定、実 OCI / Oracle の隔離環境での確認。

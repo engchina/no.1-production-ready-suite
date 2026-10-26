@@ -29,7 +29,7 @@
 | `skills/` | 組み込みのスキル（Agent Skills の形式 `skills/<name>/SKILL.md`）。Agent が読み、Claude Code・Codex などの外部の Agent にも配る（`.claude-plugin/` の plugin marketplace。#1816。[設計](./agent/docs/agent-control-plane-design.md)） |
 | `terraform/` | OCI Resource Manager の統合 stack（ADB 1 つ＋選んだ製品をすべて入れる 1 台の Compute。[README](./terraform/README.md)） |
 
-- **依存の向きは `platform/` → 各製品・`suite/` の一方向。** platform は製品・suite を、製品は suite を import しない。suite は platform の公開の package だけに依存し、製品の module・DB・保存ファイルを読まない（`suite/evaluation/tests/test_boundaries.py`）。製品同士はコードで依存せず、HTTP API で連携する。Agent → RAG / NL2SQL は呼び先の `POST /api/mcp` を、Run の利用者を `sub` にした短命のサービストークン（署名鍵は `PLATFORM_SERVICE_TOKEN_SECRET`）で呼び、画面用の Cookie / CSRF の API を機械から呼ばない。呼び先は画面と同じ権限・対象範囲で判定する（[backend-standard.md](./platform/docs/backend-standard.md)「製品間の連携（MCP とサービストークン）」）。
+- **依存の向きは `platform/` → 各製品・`suite/` の一方向。** platform は製品・suite を、製品は suite を import しない。suite は platform の公開の package だけに依存し、製品の module・DB・保存ファイルを読まない（`suite/evaluation/tests/test_boundaries.py`）。製品同士はコードで依存せず、HTTP API で連携する（rag は `rag/backend/tests/test_product_boundaries.py`）。Agent → RAG / NL2SQL は呼び先の `POST /api/mcp` を、Run の利用者を `sub` にした短命のサービストークン（署名鍵は `PLATFORM_SERVICE_TOKEN_SECRET`）で呼び、画面用の Cookie / CSRF の API を機械から呼ばない。呼び先は画面と同じ権限・対象範囲で判定する（[backend-standard.md](./platform/docs/backend-standard.md)「製品間の連携（MCP とサービストークン）」）。
 - **外部の MCP クライアント（Claude Code など）は 3 製品の `POST /api/mcp` を、利用者が自分で発行した API キー（`Authorization: Bearer prak_…`）で呼ぶ**（RAG / NL2SQL は調べるツール、Agent は業務 Agent へのチャットのツール。[手順](./platform/docs/mcp-api-keys.md)。#1805・#1874）。RAG / NL2SQL は Agent を呼ばない（向きは外部のクライアント → Agent → RAG / NL2SQL）。
 - 製品は `platform/` を相対パスで参照する（`file:../../platform/packages/ui`・`path = "../../platform/packages/backend_core"`・`../../platform/docs/design-system/…`）。publish や version pin はしない。
 - 各製品の backend / frontend / uv の venv は独立している。配備は 1 台の Compute にまとめる（[docs/agents/deploy.md](./docs/agents/deploy.md)）。
@@ -104,6 +104,7 @@
 
 詳細は [docs/agents/shared-features.md](./docs/agents/shared-features.md) と [docs/agents/naming.md](./docs/agents/naming.md)。
 
+- **Agent の業務 Agent は、スキルが宣言したツールだけを使う**（直接の指定・明示の構成の暗黙の切り替え・未対応の成功扱い・検索の結果を根拠にした承認の省略をしない。五つの不変条件の正本は [agent/docs/agents/runtime.md](./agent/docs/agents/runtime.md)。#3240）。
 - **3 製品で同じ機能は platform に 1 セットだけ置く**（システム設定・ユーザー / ロール管理・API キー・アカウントの画面）。サイドナビの下部の並びと名前、ナビのアイコン、権限管理のメニューの一覧（左のナビが正本）は 3 製品でそろえる。
 - **「AI 活用」の下の機能は、system_admin は全員のデータ、それ以外は自分のデータだけ**を扱う（backend で絞り、他人のデータは 404）。system_admin が他の利用者のデータにできるのは閲覧と運用の操作（停止・削除・承認の判断）だけで、続きの質問・実行・回答・評価は持ち主だけ（#3244）。
 - 共通の設定は `platform/.env`（`PLATFORM_`）、製品だけの設定は製品の `backend/.env`（`RAG_` / `NL2SQL_` / `AGENT_`）。表などの DB object の名前は、共通が `PLATFORM_`、製品固有が `RAG_` / `NL2SQL_` / `AGENT_` で始める。名前を変えるときは旧名との互換を持たない。

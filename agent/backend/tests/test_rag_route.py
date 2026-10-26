@@ -21,6 +21,11 @@ from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime
 from app.features.agent.builtin_runtime import ModelTarget
+from app.features.agent.rag_retrieval_state import (
+    DEGRADED_ZERO_EVIDENCE_HINT,
+    GUARDRAIL_DEGRADED_HINT,
+    retrieval_notice,
+)
 from app.features.agent.runtime import (
     AgentProfile,
     RunCreateRequest,
@@ -245,3 +250,59 @@ def test_answered_rag_result_has_no_next_step(
         "environment_data_required": False,
         "continued_with": [],
     }
+
+
+@pytest.mark.parametrize(
+    ("degraded", "reason", "hint"),
+    [
+        (
+            {"degraded_steps": [{"kind": "reference_load", "count": 1}]},
+            "degraded_steps",
+            DEGRADED_ZERO_EVIDENCE_HINT,
+        ),
+        ({"guardrail_degraded": True}, "guardrail_degraded", GUARDRAIL_DEGRADED_HINT),
+    ],
+    ids=["degraded-steps", "guardrail"],
+)
+def test_degraded_zero_evidence_result_tells_the_model_it_is_not_an_absence(
+    degraded: dict[str, Any], reason: str, hint: str, monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """根拠 0 件が縮退・安全チェックの未完了によるとき、モデルへの結果に案内を足す（#3546）。"""
+    output = _search_output("insufficient_evidence")
+    output.update(evidence=[], **degraded)
+    mcp.outputs["rag_search"] = output
+    model = _script(
+        monkeypatch,
+        [function_call("rag__rag_search", {"query": "契約の更新"}, call_id="c1")],
+        [assistant_message("資料を確かめられませんでした。")],
+    )
+
+    run = _run(AGENT_RAG)
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert _tool_output(model, 1, "c1")["retrieval_notice"] == {
+        "reason": reason,
+        "next_step": hint,
+    }
+    # 記録する step の結果は RAG の結果のまま。
+    search_step = next(
+        step for step in run.steps if step.tool_call and step.tool_call.name == "rag__rag_search"
+    )
+    assert search_step.tool_result is not None
+    assert "retrieval_notice" not in (search_step.tool_result.output or {})
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        # 根拠がある（縮退しても根拠は使える）。
+        {"evidence": [{"chunk_id": "c"}], "degraded_steps": [{"kind": "rerank", "count": 1}]},
+        # 縮退していない 0 件（検索で当たらなかった）。
+        {"evidence": [], "degraded_steps": [], "zero_evidence": {"stage": "retrieval"}},
+        # 形の合わない縮退の記録。
+        {"evidence": [], "degraded_steps": [{"kind": "", "count": 1}], "guardrail_degraded": 1},
+    ],
+    ids=["with-evidence", "no-hit", "malformed"],
+)
+def test_no_retrieval_notice_unless_zero_evidence_is_degraded(output: dict[str, Any]) -> None:
+    assert retrieval_notice(output) is None

@@ -19,7 +19,11 @@ from rag_parser_core.extraction import (
     numbered_heading,
 )
 from rag_parser_core.language.text import text_patterns
-from rag_parser_core.parsed_table import ParsedTableBinding, parsed_table_bindings
+from rag_parser_core.parsed_table import (
+    ParsedTableBinding,
+    html_table_layout,
+    parsed_table_bindings,
+)
 from rag_parser_core.sheet_records import TABLE_LOCATOR_METADATA_KEYS
 from rag_parser_core.structured_records import (
     JSONL_RECORD_BOUNDARY,
@@ -150,12 +154,17 @@ class _ElementSpan:
 
 @dataclass(frozen=True)
 class _TablePart:
-    """長い表を行グループ単位にした chunk 入力。"""
+    """長い表を行グループ単位にした chunk 入力。
+
+    ``row_start`` / ``row_end`` は表頭の後のデータの行の番号（1 始まり）、``header_rows`` は表頭の
+    行の数（Markdown の表は 1。HTML の表は先頭の ``th`` の行の数で 0 もある。#3547）。
+    """
 
     text: str
     row_start: int | None
     row_end: int | None
     header_repeated: bool
+    header_rows: int = 1
 
 
 STRUCTURE_CHUNK_PROFILE = "structure_v1"
@@ -1560,7 +1569,8 @@ def _chunks_from_table_parts(
     """表の行グループ分割結果を Chunk にする。
 
     ``parsed_table`` があれば、各部分が行として含む解析の表の格子の行を付ける（#3429）。部分の
-    データの行 d は要素の本文の d 番目の行（0 番目は表頭）で、表頭を繰り返した部分は表頭を数えない。
+    データの行 d は要素の本文の ``表頭の行の数 + d - 1`` 番目の行で、表頭を繰り返した部分は表頭を
+    数えない。最初の部分（表頭を含む）は要素の本文の先頭から数える（#3547）。
     """
     chunks: list[Chunk] = []
     cursor = start_offset
@@ -1574,11 +1584,12 @@ def _chunks_from_table_parts(
             part_metadata["table_data_row_end"] = part.row_end
         part_metadata["table_header_repeated"] = part.header_repeated
         if parsed_table is not None and part.row_start is not None:
+            continued = part.header_repeated or part.header_rows == 0
             part_metadata.update(
                 parsed_table.chunk_metadata(
                     part.text,
-                    first_text_row=part.row_start if part.header_repeated else 0,
-                    header_repeated=part.header_repeated,
+                    first_text_row=part.header_rows + part.row_start - 1 if continued else 0,
+                    header_rows=part.header_rows if part.header_repeated else 0,
                 )
             )
         chunks.append(
@@ -1999,8 +2010,48 @@ def _with_chunk_group_metadata(
     return grouped
 
 
+def _split_html_table_rows_by_size(text: str, chunk_size: int) -> list[_TablePart] | None:
+    """HTML の表を外側の表の ``tr`` の境目で分け、各部分を表頭の行を繰り返した表にする（#3547）。
+
+    部分は表の開始のタグ・表題（``caption``）・表頭の行・データの行の ``<table>`` で、表の前の本文は
+    各部分に、表の後ろの本文（表の中の画像の補足など）は最後の部分に付ける。1 つの表として行の
+    境目を決められない本文は None（文字数・行で分ける今までの分け方にする）。
+    """
+    layout = html_table_layout(text)
+    if layout is None:
+        return None
+    body = layout.rows[layout.header_rows :]
+    if not body:
+        return None
+    groups: list[list[str]] = []
+    current: list[str] = []
+    for row in body:
+        if current and len(layout.part([*current, row])) > chunk_size:
+            groups.append(current)
+            current = []
+        current.append(row)
+    if current:
+        groups.append(current)
+    parts: list[_TablePart] = []
+    start = 1
+    for index, rows in enumerate(groups):
+        parts.append(
+            _TablePart(
+                text=layout.part(rows, last=index == len(groups) - 1),
+                row_start=start,
+                row_end=start + len(rows) - 1,
+                header_repeated=index > 0 and layout.header_rows > 0,
+                header_rows=layout.header_rows,
+            )
+        )
+        start += len(rows)
+    return parts
+
+
 def _split_table_rows_by_size(text: str, chunk_size: int) -> list[_TablePart]:
     """表は行を壊さず、分割後の各 chunk に表頭を繰り返す。"""
+    if (html_parts := _split_html_table_rows_by_size(text, chunk_size)) is not None:
+        return html_parts
     lines = [line.rstrip() for line in text.splitlines() if line.strip()]
     if not lines:
         return []

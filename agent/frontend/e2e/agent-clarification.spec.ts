@@ -15,8 +15,6 @@ test("業務 Agent の回答前の確認の方針と上限を保存できる", a
     skill_ids: [],
     model_id: "",
     data_scopes: {},
-    migration_required: false,
-    tool_names: [],
     enabled: true,
     source: "runtime",
     versioned: true,

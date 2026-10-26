@@ -1409,6 +1409,48 @@ def test_passages_are_not_split_inside_brackets(case: dict) -> None:
     assert [item["text"] for item in answer_passages(case["line"])] == case["passages"]
 
 
+def test_unverified_section_titles_match_the_builtin_language_pack() -> None:
+    """回答の末尾の節（回答に入れられなかった範囲・省いた処理）の見出しは、共有の語彙
+    （platform/contracts/answer-passages/vocabulary.json の unverified_section_titles）と同じ（#3240。
+    Agent は RAG の言語資源を読まず、契約の語彙でこの節を見分ける）。"""
+    from rag_parser_core.language import builtin_pack
+
+    from rag_engine.generation.answer_passage_vocabulary import vocabulary
+
+    pack = builtin_pack()
+    titles = [pack.text("answer_labels", key) for key in ("gaps_section", "unverified_section", "deadline_section")]
+
+    assert vocabulary()["unverified_section_titles"] == titles
+
+
+def test_passage_ranges_locate_each_passage_in_the_answer() -> None:
+    """段落の位置（``answer_passage_ranges``）は、回答の中のその段落の原文を指す（#3240。MCP の
+    ``rag_validate_answer`` の ``answer_range``）。複数の行・行頭の空白・空の行・600 文字を超える文を含む。"""
+    from rag_engine.generation.operation_audit import answer_passage_ranges, answer_passages
+
+    long_sentence = "あ" * 650 + "。"
+    answer = "\n".join(
+        [
+            *(case["line"] for case in SENTENCE_CASES["cases"]),
+            "",
+            "   見出し",
+            f"  {long_sentence}続きの文です。",
+            "  「引用の文です。引用の続きです。」",
+        ]
+    )
+    passages = answer_passages(answer)
+    ranges = answer_passage_ranges(answer)
+
+    assert [passage_id for passage_id, _start, _end in ranges] == [item["id"] for item in passages]
+    assert [answer[start:end] for _id, start, end in ranges] == [item["text"] for item in passages]
+    assert [answer[start:end] for _id, start, end in ranges][-4:] == [
+        "あ" * 600,
+        "あ" * 50 + "。",
+        "続きの文です。",
+        "「引用の文です。引用の続きです。」",
+    ]
+
+
 def test_quoted_ledger_header_is_audited_as_one_passage() -> None:
     """cmp-pms-severity の「行1〜3（表頭の説明）: 「…。…。」」を 1 つの段落として監査に渡す（#1455）。"""
     line = "  - 行1〜3（表頭の説明）: 「重要度は A・B・C の 3 段階です。A が最も高く、B、C の順に低くなります。」"

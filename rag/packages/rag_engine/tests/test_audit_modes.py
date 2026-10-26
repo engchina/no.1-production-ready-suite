@@ -16,7 +16,7 @@ from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import synthesize_grounded_answer
-from rag_engine.models.llm import GroundedAudit, GroundedFactAudit, GroundedItem, GuideRequirementReview
+from rag_engine.models.llm import GroundedAudit, GroundedCitation, GroundedFactAudit, GroundedItem, GuideRequirementReview
 
 STEP = "一覧表を選択し、処理を選択します。"
 
@@ -198,7 +198,10 @@ def test_none_mode_still_marks_a_quote_that_is_not_in_the_document():
 
 def test_deterministic_requests_follow_the_explanations():
     question = "年次集計の明細一覧表を出力する手順を教えてください"
-    confirmed = grounded.CheckedItem(GroundedItem(kind="operation", text=STEP, quote=STEP, evidence_id="E1"), span={"evidence_id": "E1"})
+    confirmed = grounded.CheckedItem(
+        GroundedItem(kind="operation", text=STEP, citations=[GroundedCitation(quote=STEP, evidence_id="E1")]),
+        span={"evidence_id": "E1"},
+    )
     gap = grounded.CheckedItem(GroundedItem(kind="gap", text="資料に無い"))
 
     def statuses(checked):
@@ -212,7 +215,10 @@ def test_deterministic_requests_follow_the_explanations():
 
 def test_requirement_status_decides_unavailable_scope_by_the_requirement_kind():
     gap = grounded.CheckedItem(GroundedItem(kind="gap", text="対応は資料に記載がありません。"))
-    step = grounded.CheckedItem(GroundedItem(kind="operation", text=STEP, quote=STEP, evidence_id="E1"), span={"evidence_id": "E1"})
+    step = grounded.CheckedItem(
+        GroundedItem(kind="operation", text=STEP, citations=[GroundedCitation(quote=STEP, evidence_id="E1")]),
+        span={"evidence_id": "E1"},
+    )
     checked = [step, gap]
 
     def review(state, indexes):

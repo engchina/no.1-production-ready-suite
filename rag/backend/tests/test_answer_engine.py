@@ -161,7 +161,13 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
         body = "受注番号を入力し、登録ボタンを押します。"
         match = re.search(r"\[(E[0-9]+)\].*?" + re.escape(body), prompt, re.DOTALL)
         items = (
-            [{"kind": "rule", "text": body, "evidence_id": match.group(1), "quote": body}]
+            [
+                {
+                    "kind": "rule",
+                    "text": body,
+                    "citations": [{"evidence_id": match.group(1), "quote": body}],
+                }
+            ]
             if match
             else []
         )
@@ -2552,7 +2558,9 @@ def test_build_engine_settings_uses_answer_model_id(tmp_path: Any) -> None:
     from app.config import enterprise_ai_default_model_id
     from app.rag.answer_engine import build_engine_settings
 
-    settings = Settings()
+    settings = Settings(
+        oci_enterprise_ai_models=[EnterpriseAiConfiguredModel(model_id="model-b")],
+    )
     default = build_engine_settings(settings, output_dir=tmp_path)
     chosen = build_engine_settings(settings, output_dir=tmp_path, answer_model_id="model-b")
 
@@ -2580,9 +2588,10 @@ async def test_pipeline_passes_answer_model_id_to_answer_engine(
         return original(settings, **kwargs)
 
     monkeypatch.setattr(answer_engine, "build_engine_settings", capture)
+    settings = Settings(oci_enterprise_ai_models=[EnterpriseAiConfiguredModel(model_id="model-a")])
     for model_id in ("model-a", None):
         pipeline = RagPipeline(
-            settings=Settings(),
+            settings=settings,
             oracle=FakeOracle(),  # type: ignore[arg-type]
             genai=FakeGenAi(),  # type: ignore[arg-type]
             answer_model_id=model_id,

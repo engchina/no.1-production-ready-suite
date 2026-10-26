@@ -16,6 +16,7 @@ from threading import RLock
 from typing import Any, NoReturn
 from uuid import uuid4
 
+from pr_backend_core.observability.model_usage import RunModelUsage, add_run_usage
 from pydantic import BaseModel, ValidationError
 
 from .object_identity import (
@@ -1010,8 +1011,12 @@ class OntologyQuerySessionService:
         request: QuerySessionCreate,
         *,
         draft: SqlRequirementDraft,
+        usage: RunModelUsage | None = None,
     ) -> QuerySession:
-        """回答前の確認（guided）の session を作る（質問の解釈の intent は持たない。#1439）。"""
+        """回答前の確認（guided）の session を作る（質問の解釈の intent は持たない。#1439）。
+
+        `usage` は下書きの LLM の呼び出しの利用量（#3552）。
+        """
 
         with self._lock:
             view = self._require_profile_view(request.profile_view_id)
@@ -1043,6 +1048,7 @@ class OntologyQuerySessionService:
                 intents=[],
                 clarification_mode=ClarificationMode.GUIDED,
                 requirement=_copy_model(draft),
+                requirement_usage=usage,
                 actor_user_uuid=request.actor_user_uuid,
                 actor_is_system_admin=request.actor_is_system_admin,
                 chat=request.chat,
@@ -1060,8 +1066,12 @@ class OntologyQuerySessionService:
         draft: SqlRequirementDraft,
         answer: RequirementAnswerRecord,
         review_round: int,
+        usage: RunModelUsage | None = None,
     ) -> QuerySession:
-        """回答（と LLM の再検査）で更新した下書きを、新しい版として保存する。"""
+        """回答（と LLM の再検査）で更新した下書きを、新しい版として保存する。
+
+        `usage` は再検査の LLM の呼び出しの利用量で、session の利用量に足す（#3552）。
+        """
 
         with self._lock:
             session = self._require_session(session_id)
@@ -1079,6 +1089,7 @@ class OntologyQuerySessionService:
             session.requirement = _copy_model(draft)
             session.requirement_answers.append(_copy_model(answer))
             session.requirement_review_round = review_round
+            session.requirement_usage = add_run_usage(session.requirement_usage, usage)
             session.current_intent_version = base_version + 1
             session.updated_at = utc_now()
             return _copy_model(session)

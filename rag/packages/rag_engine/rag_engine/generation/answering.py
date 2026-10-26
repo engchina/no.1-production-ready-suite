@@ -2163,7 +2163,8 @@ def synthesize_grounded_answer(
             _execution_step(
                 f"回答文の生成と根拠確認（{number + 1}回目）",
                 (
-                    "主張と原文引用の対で回答を作り、引用を原文と照合します（生成の後の LLM の監査はしません）。"
+                    # 監査の型が none でも、条を出典にした説明だけは事実の監査に掛ける（#3541・#3561）。
+                    "主張と原文引用の対で回答を作り、引用を原文と照合します（生成の後の LLM の監査は、条を出典にした説明だけに掛けます）。"
                     if audit_mode == grounded.AUDIT_MODE_NONE
                     else "主張と原文引用の対で回答を作り、引用を原文と照合してから、別のLLM呼出で適用性を監査します。"
                 )
@@ -2496,7 +2497,7 @@ def synthesize_grounded_answer(
     if actionable:
         # 実行できる説明があっても、監査が未回答とした要求があれば、監査が挙げた根拠のうちまだ示していないものを
         # 手順の後に原文として加える。正しい画面の記載が手元にあるのに示さないことを避ける (#1106)。
-        cited = {entry.span["evidence_id"] for entry in published}
+        cited = {entry.span["evidence_id"] for entry in grounded.cited_entries(published) if entry.span}
         extra = [entry for entry in needed if entry.span["evidence_id"] not in cited] if reviewed_unanswered else []
         shown = [*published, *extra]
         envelope_entries = [*[entry for entry in current.checked if entry.published or (entry.span and not entry.removed)], *extra]
@@ -2619,7 +2620,7 @@ def synthesize_grounded_answer(
             "filtered": bool(problems),
             "citations_synchronized": True,
             "off_goal": off_goal,
-            "retained_evidence_ids": sorted({e.span["evidence_id"] for e in shown if e.span}),
+            "retained_evidence_ids": sorted({e.span["evidence_id"] for e in grounded.cited_entries(shown) if e.span}),
             "retained_passage_ids": [],
             # 段落の印の数（矛盾で外した・未確認・要注意・回答全体の警告。#2738）。
             "passage_mark_counts": mark_counts,
@@ -2647,7 +2648,8 @@ def synthesize_grounded_answer(
     # （まとまり）の参照にし、親の ID で兄弟の子すべてを「回答で引用」にしない。
     shown_ids: list[tuple[grounded.CheckedItem, list[str]]] = []
     shown_uses: dict[str, str] = {}
-    for entry in shown:
+    # 同じ主張の別の出典（#3526）も、出典ごとに回答で引用した箇所にする。
+    for entry in grounded.cited_entries(shown):
         if entry.span is None:
             continue
         exact, _candidates = grounded.citation_children(entry.span, entry.item.quote)
@@ -2702,7 +2704,9 @@ def synthesize_grounded_answer(
             external_data_items=settled.system,
             raw_text=current.draft.model_dump_json(),
             evidence_facts=tuple(
-                {"source_id": e.span["source_id"], "evidence_id": e.span["evidence_id"], "quote": e.item.quote} for e in published
+                {"source_id": e.span["source_id"], "evidence_id": e.span["evidence_id"], "quote": e.item.quote}
+                for e in grounded.cited_entries(published)
+                if e.span
             ),
             generation_trace=trace,
         )

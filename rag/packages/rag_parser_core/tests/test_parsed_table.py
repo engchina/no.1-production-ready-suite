@@ -15,6 +15,7 @@ from rag_parser_core.parsed_table import (
     PARSED_TABLE_GRID_VERSION,
     bind_text_rows,
     grid_from_cells,
+    html_table_layout,
     parsed_table_bindings,
     text_row_keys,
 )
@@ -128,7 +129,7 @@ def test_bindings_number_tables_in_order_and_skip_tables_without_a_grid() -> Non
     }
     # 表頭を繰り返した部分は表頭を数えない。本文が合わない部分は何も返さない。
     part = "| Item | H1 |  |\n| --- | --- | --- |\n| Beta | 20 | 21 |"
-    assert bindings["t2"].chunk_metadata(part, first_text_row=3, header_repeated=True) == {
+    assert bindings["t2"].chunk_metadata(part, first_text_row=3, header_rows=1) == {
         "row_basis": "parsed_table",
         "table_index": 2,
         "table_row_start": 4,
@@ -136,7 +137,7 @@ def test_bindings_number_tables_in_order_and_skip_tables_without_a_grid() -> Non
         "table_row": 4,
         "table_cells_json": '[["A",["Item"]],["B",["H1","Plan"]],["C",["H1","Actual"]]]',
     }
-    assert bindings["t2"].chunk_metadata(part, first_text_row=2, header_repeated=True) == {}
+    assert bindings["t2"].chunk_metadata(part, first_text_row=2, header_rows=1) == {}
 
 
 def test_bindings_skip_tables_split_across_elements_and_record_rows() -> None:
@@ -151,3 +152,58 @@ def test_bindings_skip_tables_split_across_elements_and_record_rows() -> None:
         ],
     )
     assert parsed_table_bindings(extraction) == {}
+
+
+HTML_WITH_HEAD = (
+    '前の本文\n<table class="t"><caption>表題</caption><thead><tr><th>Item</th>'
+    "<td>Note</td></tr></thead><tbody><tr><th>Alpha</th><td>10</td></tr>"
+    "<tr><td>Beta</td><td><table><tr><td>内側</td></tr></table></td></tr></tbody>"
+    "</table>\n後ろの本文"
+)
+
+
+def test_html_table_layout_splits_rows_and_keeps_header_caption_and_text() -> None:
+    """HTML の表の部品（#3547）: thead の行は表頭、表の前の本文・表題・表の後ろの本文を分ける。"""
+    layout = html_table_layout(HTML_WITH_HEAD)
+    assert layout is not None
+    assert (layout.prefix, layout.table_open, layout.caption) == (
+        "前の本文\n",
+        '<table class="t">',
+        "<caption>表題</caption>",
+    )
+    assert layout.header_rows == 1
+    # 入れ子の表は外側のセルの中のまま（外側の行だけを数える）。
+    assert len(layout.rows) == 3 and "内側" in layout.rows[2]
+    assert layout.suffix == "\n後ろの本文"
+    part = layout.part(layout.rows[2:], last=True)
+    assert part.startswith('前の本文\n<table class="t"><caption>表題</caption><tr><th>Item</th>')
+    assert part.endswith("</table>\n後ろの本文")
+    # 組み直した部分は 1 つの表として行を読める（表頭の行と選んだ行）。
+    assert text_row_keys(part) == [
+        text_row_keys(HTML_WITH_HEAD)[0],
+        text_row_keys(HTML_WITH_HEAD)[2],
+    ]
+
+
+def test_html_table_layout_counts_leading_th_rows_as_header() -> None:
+    """thead が無ければ、セルがすべて th の行が先頭から続く数を表頭にする（すべてなら 0）。"""
+    two_level = (
+        "<table><tr><th>A</th><th>B</th></tr><tr><th>a</th><th>b</th></tr>"
+        "<tr><th>r1</th><td>1</td></tr></table>"
+    )
+    layout = html_table_layout(two_level)
+    assert layout is not None and layout.header_rows == 2
+    only_header = "<table><tr><th>A</th></tr><tr><th>B</th></tr></table>"
+    layout = html_table_layout(only_header)
+    assert layout is not None and layout.header_rows == 0
+
+
+def test_html_table_layout_refuses_text_without_clear_row_boundaries() -> None:
+    """表が 1 つでない・閉じていない tr・表でない本文は分けない（None）。"""
+    for text in (
+        "<table><tr><td>a</td></tr></table><table><tr><td>b</td></tr></table>",
+        "<table><tr><td>a</td><tr><td>b</td></tr></table>",
+        "<table></table>",
+        "| a | b |",
+    ):
+        assert html_table_layout(text) is None, text

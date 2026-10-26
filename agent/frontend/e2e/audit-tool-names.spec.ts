@@ -61,7 +61,7 @@ test("MCP 接続のツールをツール名で選んで絞り込める", async (
   // 絞り込んだ後も、ほかのツール（MCP 接続・登録済み）を選び直せる。
   await page.locator("#audit-tool-name").click();
   const listbox = page.locator(`[id="${await page.locator("#audit-tool-name").getAttribute("aria-controls")}"]`);
-  for (const name of ["agent_skill_list", "echo", "nl2sql__nl2sql_query", "rag__rag_search"]) {
+  for (const name of ["echo", "nl2sql__nl2sql_query", "rag__rag_search"]) {
     await expect(listbox.locator(`[role="option"][data-value="${name}"]`)).toBeVisible();
   }
 });

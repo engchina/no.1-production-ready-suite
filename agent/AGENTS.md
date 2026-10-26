@@ -30,6 +30,7 @@
 - ツールの実行は `tool_registry.invoke`（ポリシー・ガードレール・監査・成果物）を必ず通す。「拒否」のツールはモデルに渡さず、「承認」のツールは SDK の `needs_approval` で中断して `waiting_approval` にし、却下したツールは実行しない。
 - 業務 Agent は版を持ち、「公開」した版だけが利用者の Run に使われる（公開の版は使うスキルの中身を固定する）。下書きで実行できるのは Agent 管理（admin）と、個人の業務 Agent の持ち主（`agent.agents.build`。#2523）だけ。
 - 保存先は `AGENT_RUNTIME_REPOSITORY_BACKEND` に従う（Oracle では `AGENT_RUNTIME_*` / `AGENT_CONTROL_PLANE_ITEMS`。テーブルはシステムテーブルが作り、アプリは DDL を実行しない）。MCP 接続の秘密は `app.secret_box` で暗号化し、テストは memory に固定する。
+- **Skill と実行の五つの不変条件**（#3240。正本は runtime.md の同名の節）: ① ツールはスキルの宣言からだけ渡す（業務 Agent への直接の指定は 422。宣言は認可ではない。ツールの層はスキルを import しない）② 明示の構成を解決できなければ暗黙に切り替えずに失敗する ③ 未対応の操作を成功にしない（渡していない名前の呼び出しは実行せず理由を残す）④ 認可は検証済みの認証文脈から ⑤ 検索・ツールの結果を権限・承認の根拠にしない。
 - Agent はスキルだけを持つ（プラグイン・マーケットプレイス・独立 Workflow engine は作り直さない）。スキルの `references/` は読むが、同梱の `scripts/` などのコードは読まず・実行しない。
 
 ## MCP 境界
@@ -38,6 +39,7 @@
 
 - 外部の MCP クライアントには業務 Agent へのチャット（`POST /api/mcp`）を共通の API キーだけで公開し、キーを発行した利用者の権限・対象範囲で判定する。MCP から作った Run は承認の要るツールを呼ばない。RAG は Agent を呼ばない。
 - RAG / NL2SQL / 外部 MCP は「MCP 接続」1 つの仕組みで管理し、ツールは組み込み Runtime から `tool_registry.invoke` を通してだけ呼ぶ（例外は画面の操作の「RAG の図の根拠・根拠の原文を開く」だけ）。外部 API key・token を snapshot、API、ログ、Artifact に出さない。
+- RAG / NL2SQL へは公開の契約（`platform/contracts/`）だけに依存し、内部の module・表・画面の API・内部の規則の一致を前提にしない（#3240。`tests/test_product_boundaries.py`）。
 - 呼び先へのサービストークンの `sub` は Run の利用者（承認後の実行も承認者ではない）。書き込みのツールは、呼び先に届いた後の失敗では再送しない。
 
 ## 技術スタック（Agent 固有の分）
@@ -57,7 +59,7 @@
 
 ## API
 
-- Snapshot 正式版は `agent-control-plane.snapshot.v2`。v1 `tool_names` は Skill を安全に推定する。変換不能 Agent は `migration_required=true`、無効。
+- Snapshot 正式版は `agent-control-plane.snapshot.v2`。業務 Agent はツールの項目を持たない（保存済みの `tool_names`・`migration_required` は読むときに無視する。#3240）。
 - `POST /api/runs` は `agent_id` と `goal`（会話の続きは `thread_id`、確認の取り消しの操作は `clarification_cancel`。#1441・#1445）を受け取り、組み込み Runtime で実行する。旧エンジン（v1 の Run・`tool_calls`・planner・Memory・`X-Agent-API-Version: 1`）は持たない。
 - Skill は instructions と MCP ツールの許可リスト（`mcp_requirements`）だけを持つ。ToolCall のテンプレート（`tool_calls`）・`POST /api/skills/plan`・`agent_skill_run` は持たない。
 

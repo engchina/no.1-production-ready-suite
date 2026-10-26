@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from pr_backend_core.observability.model_usage import run_usage_totals
 from pytest import MonkeyPatch
 from rag_engine.models.llm import GroundedDraft
 from rag_engine.resources.tracing import observe_call
@@ -26,7 +27,7 @@ from app.api.routes import history as history_route
 from app.api.routes.search import _run_model_id, _search_run_recorder
 from app.clients.oracle import OracleClient
 from app.clients.oracle_run_history import RunHistoryStore, run_history_list_where
-from app.config import Settings, get_settings
+from app.config import EnterpriseAiConfiguredModel, Settings, get_settings
 from app.main import app
 from app.rag import run_history as run_history_module
 from app.rag.guardrails import GuardrailResult
@@ -38,7 +39,6 @@ from app.rag.request_context import (
     set_audit_request_context,
 )
 from app.rag.run_history import RunRecorder, answer_verification, search_run_conditions
-from app.rag.run_usage import run_usage_totals
 from app.schemas.search import SearchRequest, StorageFailure
 from tests.security_support import enable_production_auth, login, login_configured_admin
 from tests.span_progress_support import RecordingTrace
@@ -1023,9 +1023,11 @@ async def _record_pipeline_run(
     request: SearchRequest, *, model_id: str, store: RecordingStore
 ) -> RecordingTrace:
     tracker = RecordingTrace(model_id.encode().hex().ljust(32, "0")[:32])
+    # 回答のモデルは登録モデルから接続を引く（登録に無いモデルは失敗にする。#3240）。
+    settings = Settings(oci_enterprise_ai_models=[EnterpriseAiConfiguredModel(model_id=model_id)])
     recorder = RunRecorder(
         surface="chat",
-        settings=Settings(),
+        settings=settings,
         store=store,
         model_id=model_id,
         trace_source=tracker.record,
@@ -1034,7 +1036,7 @@ async def _record_pipeline_run(
     await RagPipeline(
         genai=FakeGenAi(),  # type: ignore[arg-type]
         oracle=_AnswerOracle(),  # type: ignore[arg-type]
-        settings=Settings(),
+        settings=settings,
         answer_model_id=model_id,
         run_recorder=recorder,
     ).run(request, trace=tracker)
@@ -1069,6 +1071,7 @@ async def test_pipeline_records_the_model_usage_of_each_run(monkeypatch: MonkeyP
         "reasoning_output_tokens": None,
         "measurement": "complete",
         "measured_requests": calls,
+        "unmeasured_sources": [],
     }
     assert store.records[0]["model_id"] == "model-a"
 

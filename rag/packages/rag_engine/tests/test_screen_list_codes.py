@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from rag_engine.generation import grounded
-from rag_engine.models.llm import GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedItem
 
 # 合成のコードの一覧の画面の生成説明（コード K0001〜K0008 が並ぶ。画面の ID は SC100000、パラメータは Prm02）。
 SCREEN = (
@@ -22,7 +22,7 @@ def _span(**extra):
 
 
 def _item(text):
-    return GroundedItem(kind="rule", text=text, quote="K0002 名称B", evidence_id="E1")
+    return GroundedItem(kind="rule", text=text, citations=[GroundedCitation(quote="K0002 名称B", evidence_id="E1")])
 
 
 def test_a_listed_row_code_claimed_as_the_target_is_warned():

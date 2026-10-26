@@ -14,7 +14,7 @@ from test_guide_contracts import audit, coverage, review
 from test_guide_step_fulfillment import GUIDE, STEP_A, STEP_B, _ab_context, _ids, _knowledge, _run
 
 from rag_engine.generation import grounded
-from rag_engine.models.llm import GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedItem
 from rag_engine.retrieval.guide_steps import GuidePlan
 
 # 合成の業務ガイドの文（手順の目的）。資料（STEP_A・STEP_B）に無い方針を含む。
@@ -24,7 +24,7 @@ GUIDE_TEXT_CLAIM = "値と区分の対応は資料に無いため、区分を推
 
 def _entry(text: str, quote: str = STEP_A) -> grounded.CheckedItem:
     return grounded.CheckedItem(
-        GroundedItem(kind="rule", text=text, quote=quote, evidence_id="E1"),
+        GroundedItem(kind="rule", text=text, citations=[GroundedCitation(quote=quote, evidence_id="E1")]),
         span={"text": STEP_A, "evidence_id": "E1", "source": "操作説明.pdf", "page": 10, "function": ["設定画面"]},
     )
 

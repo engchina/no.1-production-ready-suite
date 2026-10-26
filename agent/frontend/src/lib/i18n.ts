@@ -987,7 +987,6 @@ const agentJa = {
   "agent.try.empty.hint": "同じ会話の中では、前の質問と回答を踏まえて答えます。設定を直したら保存し、新しい会話で試し直せます。",
   "agent.try.unsaved": "保存していない変更があります。保存すると、変更を反映した下書きで試せます。",
   "agent.try.disabled": "無効の業務 Agent は試せません。有効にしてから試してください。",
-  "agent.try.migrationRequired": "スキルを選んで業務 Agent の移行を完了してから試してください。",
   "agent.version.restore": "この版に戻す",
   "agent.version.restoreTitle": "v{version} に戻しますか?",
   "agent.version.restoreMessage": "この版を公開し直し、下書きもこの版の内容にします。保存していない下書きの変更は失われます。",
@@ -1194,7 +1193,6 @@ const agentJa = {
   "agent.disabled": "無効",
   "agent.skills": "スキル",
   "agent.skillsUnavailable": "利用できるスキルを取得できません。",
-  "agent.migrationRequired": "旧 tool 設定をスキルへ変換できませんでした。スキルを選択して保存してください。",
 
   "run.form.agent": "業務 Agent",
   "run.form.goal": "目標",

@@ -19,7 +19,12 @@
 - `judge`: 保存した観測の回答を LLM で判定し、判定を結果に足す（製品は呼ばない。判定のモデルは呼ぶ。
   接続とモデルは `SUITE_EVALUATION_JUDGE_*`。`--calibration` の校正に通った観点だけ合否を出す）。
 - `calibrate`: 人手の判定（ラベル）と LLM の判定の一致（κ・混同行列・誤合格 / 誤不合格）を集計し、
-  校正の合否を出す（`--judgements` に前の校正の結果を渡すと、モデルを呼ばずに集計だけやり直す）。
+  校正の合否を出す（`--judgements` に前の校正の結果を渡すと、モデルを呼ばずに集計だけやり直す。
+  `--repeats` で同じ項目を複数回判定し、判定の分散を記録する）。
+- `label-template`: 保存した評価の結果の回答から、人手の判定の記入用のブック（.xlsx）と項目の
+  ファイル（`*.items.json`）を書く（`--perturb` で故意に壊した回答の合成の対照を足す）。
+- `label-import`: 記入者のブック（2 つ以上）の一致（κ）と食い違いを出し、裁定用のブックを書くか、
+  裁定（か全員の一致）から `calibrate` が読む人手の判定（LabelSet の JSON）を書く。
 
 終了コード: 0 成功 / 2 入力・接続の失敗（ケースの失敗は結果に記録し、終了コードにしない）。
 """
@@ -63,9 +68,27 @@ from pr_suite_evaluation.judge.client import (
     JudgeConfigError,
     JudgeModelConfig,
 )
-from pr_suite_evaluation.judge.judging import JudgeSettings
+from pr_suite_evaluation.judge.judging import Judgement, JudgeSettings
+from pr_suite_evaluation.judge.labeling import (
+    DEFAULT_HOLDOUT_RATIO,
+    DEFAULT_PERTURB_MAX,
+    DEFAULT_SPLIT_SALT,
+    Annotation,
+    LabelingItems,
+    build_label_set,
+    build_labeling_items,
+    inter_annotator,
+    items_path_for,
+    load_items,
+    read_annotation,
+    write_adjudication,
+    write_json,
+    write_template,
+)
+from pr_suite_evaluation.judge.perturbation import parse_kinds
 from pr_suite_evaluation.judge.rubric import load_rubric
 from pr_suite_evaluation.judge.run import judge_record
+from pr_suite_evaluation.judge.workbook import WorkbookError
 from pr_suite_evaluation.mcp_client import McpClient, TargetError
 from pr_suite_evaluation.report import summarize_result, summary_markdown
 from pr_suite_evaluation.targets import agent_mcp, rag_mcp
@@ -177,7 +200,67 @@ def _build_parser() -> argparse.ArgumentParser:
     calibration.add_argument(
         "--max-evidence-chars", type=int, default=JudgeSettings().max_evidence_chars
     )
+    calibration.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="同じ項目を判定する回数（2 以上で判定の分散を記録する。合否には最初の回を使う）",
+    )
     calibration.add_argument("--output", type=Path, required=True, help="校正の結果の出力先")
+
+    template = commands.add_parser(
+        "label-template", help="人手の判定の記入用のブック（.xlsx）と項目のファイルを書く"
+    )
+    template.add_argument(
+        "records", nargs="+", help="run / score / judge の結果（[<名前>=]<結果の JSON>。複数可）"
+    )
+    template.add_argument("--dataset", type=Path, required=True, help="評価セット（標準回答）")
+    template.add_argument("--document-map", type=Path, help="文書の対応表")
+    template.add_argument("--rubric", type=Path, help="判定の基準（省略時は既定の rubric）")
+    template.add_argument(
+        "--holdout-ratio",
+        type=float,
+        default=DEFAULT_HOLDOUT_RATIO,
+        help=f"holdout にするケースの割合（既定 {DEFAULT_HOLDOUT_RATIO}）",
+    )
+    template.add_argument(
+        "--split-salt", default=DEFAULT_SPLIT_SALT, help="区分を決める hash の salt"
+    )
+    template.add_argument(
+        "--perturb",
+        help="故意に壊した回答を足す（all か swap_values,drop_condition,"
+        "add_unsupported_claim,reverse_steps のカンマ区切り）",
+    )
+    template.add_argument(
+        "--perturb-max",
+        type=int,
+        default=DEFAULT_PERTURB_MAX,
+        help=f"壊し方ごとの合成の項目の上限（既定 {DEFAULT_PERTURB_MAX}）",
+    )
+    template.add_argument("--output", type=Path, required=True, help="記入用のブック（.xlsx）")
+    template.add_argument(
+        "--items-output", type=Path, help="項目のファイル（既定 <ブック>.items.json）"
+    )
+
+    importer = commands.add_parser(
+        "label-import", help="記入したブックから人手の判定（LabelSet の JSON）を作る"
+    )
+    importer.add_argument("--items", type=Path, required=True, help="項目のファイル")
+    importer.add_argument(
+        "--annotations",
+        nargs="+",
+        required=True,
+        help="記入者のブック（[<記入者の ID>=]<ブック>。2 つ以上）",
+    )
+    importer.add_argument("--rubric", type=Path, help="判定の基準（省略時は既定の rubric）")
+    importer.add_argument("--adjudicated", help="裁定したブック（[<裁定者の ID>=]<ブック>）")
+    importer.add_argument(
+        "--adjudication-output",
+        type=Path,
+        help="裁定用のブック（食い違いの行を空けたもの）の出力先",
+    )
+    importer.add_argument("--report", type=Path, help="記入者の間の一致と食い違い（JSON）の出力先")
+    importer.add_argument("--output", type=Path, help="人手の判定（LabelSet の JSON）の出力先")
 
     compare = commands.add_parser("compare", help="suite の結果を比べる表を出す")
     compare.add_argument("results", nargs="+", help="<名前>=<結果の JSON>（例: A=a.json）")
@@ -367,6 +450,8 @@ def _calibrate_command(args: argparse.Namespace) -> int:
         max_false_pass_rate=args.max_false_pass_rate,
         min_coverage=args.min_coverage,
     )
+    if args.repeats < 1:
+        raise CliError("--repeats は 1 以上にしてください。")
     if args.judgements:
         previous = CalibrationReport.model_validate_json(
             args.judgements.read_text(encoding="utf-8")
@@ -374,13 +459,16 @@ def _calibrate_command(args: argparse.Namespace) -> int:
         if (previous.provenance.get("rubric") or {}).get("sha256") != rubric.sha256:
             raise CliError("前の校正の結果の rubric が違います（判定をやり直してください）。")
         judgements = previous.judgements
+        repeats = previous.repeat_judgements
         judge_provenance = previous.provenance.get("judge") or {}
     else:
         config = JudgeModelConfig.from_env()
+        runs: list[list[Judgement]] = []
         with httpx.Client(trust_env=False) as client:
-            judgements = judge_labels(
-                labels, rubric, EnterpriseAiJudgeClient(client, config), settings
-            )
+            judge = EnterpriseAiJudgeClient(client, config)
+            for _ in range(args.repeats):
+                runs.append(judge_labels(labels, rubric, judge, settings))
+        judgements, repeats = runs[0], runs[1:]
         judge_provenance = config.provenance()
     try:
         report = calibrate(
@@ -390,6 +478,7 @@ def _calibrate_command(args: argparse.Namespace) -> int:
             judge_provenance=judge_provenance,
             settings=settings,
             thresholds=thresholds,
+            repeat_judgements=repeats,
         )
     except ValueError as error:
         raise CliError(str(error)) from error
@@ -397,12 +486,118 @@ def _calibrate_command(args: argparse.Namespace) -> int:
     args.output.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
     for aspect_id, item in report.aspects.items():
         holdout = item.splits.get("holdout")
+        synthetic = item.splits.get("synthetic")
+        variance = report.variance.get(aspect_id)
+        extra = ""
+        if synthetic is not None:
+            extra += f" synthetic_false_pass={synthetic.false_pass_rate}"
+        if variance is not None:
+            extra += f" unstable_rate={variance.unstable_rate}"
         print(
             f"{aspect_id}: passed={item.passed} kappa={holdout.kappa if holdout else None} "
-            f"items={holdout.total if holdout else 0} {'; '.join(item.failures)}",
+            f"items={holdout.total if holdout else 0}{extra} {'; '.join(item.failures)}",
             file=sys.stderr,
         )
     print(f"wrote {args.output}", file=sys.stderr)
+    return 0
+
+
+def _named(value: str) -> tuple[str | None, Path]:
+    """`[<名前>=]<path>` を名前と path にする（名前を省くと None）。"""
+    name, separator, path = value.partition("=")
+    if separator and name and path and "/" not in name:
+        return name, Path(path)
+    return None, Path(value)
+
+
+def _label_template_command(args: argparse.Namespace) -> int:
+    loaded = _dataset(args.dataset, args.document_map)
+    rubric = load_rubric(args.rubric)
+    records = []
+    for value in args.records:
+        name, path = _named(value)
+        records.append((name or path.stem, _load_record(path)))
+    try:
+        items = build_labeling_items(
+            records,
+            loaded,
+            rubric,
+            holdout_ratio=args.holdout_ratio,
+            salt=args.split_salt,
+            perturb=parse_kinds(args.perturb),
+            perturb_max=args.perturb_max,
+        )
+    except ValueError as error:
+        raise CliError(str(error)) from error
+    items_path = args.items_output or items_path_for(args.output)
+    write_json(items_path, items)
+    write_template(args.output, items, rubric)
+    human = items.human_items
+    rows = sum(len(item.aspects) for item in human)
+    holdout = sum(1 for item in human if item.split == "holdout")
+    print(
+        f"items={len(human)} (holdout={holdout}) rows={rows} "
+        f"synthetic={len(items.synthetic_items)} skipped={items.skipped}",
+        file=sys.stderr,
+    )
+    print(f"wrote {args.output}", file=sys.stderr)
+    print(f"wrote {items_path}", file=sys.stderr)
+    return 0
+
+
+def _read_annotation(value: str, items: LabelingItems, kind: str = "annotation") -> Annotation:
+    name, path = _named(value)
+    return read_annotation(path, items, annotator=name, kind=kind)
+
+
+def _label_import_command(args: argparse.Namespace) -> int:
+    items = load_items(args.items)
+    rubric = load_rubric(args.rubric)
+    try:
+        items.check_rubric(rubric)
+    except ValueError as error:
+        raise CliError(str(error)) from error
+    annotations = [_read_annotation(value, items) for value in args.annotations]
+    try:
+        report = inter_annotator(items, rubric, annotations)
+    except ValueError as error:
+        raise CliError(str(error)) from error
+    for aspect_id, item in report.aspects.items():
+        kappas = ", ".join(
+            f"{'/'.join(pair.annotators)} κ={pair.kappa} n={pair.compared}" for pair in item.pairs
+        )
+        print(
+            f"{aspect_id}: rows={item.rows} disagreements={item.disagreements} {kappas}",
+            file=sys.stderr,
+        )
+    if args.report:
+        write_json(args.report, report)
+        print(f"wrote {args.report}", file=sys.stderr)
+    if args.adjudication_output:
+        open_rows = write_adjudication(args.adjudication_output, items, rubric, annotations)
+        print(f"wrote {args.adjudication_output} (要裁定 {open_rows} 行)", file=sys.stderr)
+    if args.output:
+        adjudicated = (
+            _read_annotation(args.adjudicated, items, kind="adjudication")
+            if args.adjudicated
+            else None
+        )
+        try:
+            result = build_label_set(
+                items, rubric, annotations, adjudicated=adjudicated, report=report
+            )
+        except ValueError as error:
+            raise CliError(str(error)) from error
+        write_json(args.output, result.labels)
+        origins = [item.origin for item in result.labels.items]
+        print(
+            f"labels: human={origins.count('human')} synthetic={origins.count('synthetic')} "
+            f"dropped(cannot_judge)={len(result.dropped_items)}",
+            file=sys.stderr,
+        )
+        print(f"wrote {args.output}", file=sys.stderr)
+    elif not args.adjudication_output and not args.report:
+        raise CliError("--output・--adjudication-output・--report のどれかを渡してください。")
     return 0
 
 
@@ -455,10 +650,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _judge_command(args)
         if args.command == "calibrate":
             return _calibrate_command(args)
+        if args.command == "label-template":
+            return _label_template_command(args)
+        if args.command == "label-import":
+            return _label_import_command(args)
         return _compare_command(args)
     except (
         CliError,
         DatasetError,
+        WorkbookError,
         JudgeConfigError,
         ValidationError,
         TargetError,

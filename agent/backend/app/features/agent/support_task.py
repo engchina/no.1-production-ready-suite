@@ -1198,10 +1198,6 @@ def unresolved_hops_message(pending: list[JsonObject]) -> str:
     return "\n".join(lines)
 
 
-# 検索する件数（`top_k`）の既定。RAG の契約の `top_k` の `default` は null で、省略すると RAG が
-# 検索の要求の既定の 50 を使う（契約の `rag_retrieve_evidence` の `evidence_limit` の説明
-# 「top_k。省略時 50」。#3512）。契約に整数の `default` があればそちらを使う（#1403）。
-RAG_TOP_K_DEFAULT = 50
 # 根拠のツールの件数の引数（既定より小さい値は既定に引き上げ、上限を超える値は上限に丸める）。
 SEARCH_LIMIT_ARGUMENTS = ("top_k", "evidence_limit")
 SEARCH_LIMIT_SCHEMA_NOTE = (
@@ -1245,8 +1241,8 @@ def adjusted_search_limits(
     多段の質問では、答えの chunk が上位の文書の前置き・前の章の後ろに並ぶことが多く、小さい件数で
     切れて段を取りこぼす（#1335 の評価で、欠けた根拠はすべて上限で切れていた。#1362 の再評価では
     データの範囲を固定した業務 Agent が `top_k` 5 / 10 を渡して台帳の行が検索の結果に出なかった）。
-    既定より小さい値は既定（入力 schema の `default`。`top_k` は契約の default が null なので
-    `RAG_TOP_K_DEFAULT`）に引き上げ、上限（schema の `maximum`）を超える値は上限に丸める
+    既定より小さい値は既定（入力 schema の `default`。RAG の契約が既定を出す。#3240）に引き上げ、
+    上限（schema の `maximum`）を超える値は上限に丸める
     （呼び先の入力検証で失敗させない）。既定以上・上限以下の値と、渡していない引数は変えない。
     戻り値は引数の名前 → `{"requested": モデルの値, "sent": 送る値}`。
     """
@@ -1259,8 +1255,6 @@ def adjusted_search_limits(
         if name not in properties or not isinstance(value, int) or isinstance(value, bool):
             continue
         default, maximum = _integer_spec(input_schema, name)
-        if default is None and name == "top_k":
-            default = RAG_TOP_K_DEFAULT
         sent = value
         if default is not None and sent < default:
             sent = default

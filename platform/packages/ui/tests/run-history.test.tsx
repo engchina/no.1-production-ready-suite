@@ -24,6 +24,8 @@ import {
   formatRunDateTime,
   formatRunDuration,
   formatRunTokens,
+  runListUsage,
+  runUsageView,
   isRunActive,
   runPeriodSince,
   runStatusIcon,
@@ -36,6 +38,7 @@ import {
   hasRunStepDetails,
   setDisplayTimeZone,
   type RunHistoryItem,
+  type RunModelUsageRecord,
   type RunTimelineStep,
 } from "../src";
 
@@ -117,6 +120,65 @@ describe("書式と絞り込みの値", () => {
   it("token は桁区切り", () => {
     expect(formatRunTokens(12345)).toBe("12,345 token");
     expect(formatRunTokens(null)).toBe("—");
+  });
+
+  it("モデルの利用量: 実測・一部計測・未計測（記録なし・計測できない呼び出しだけ）・実測の 0（#3543）", () => {
+    const usage: RunModelUsageRecord = {
+      models: ["model-a", "model-b"],
+      requests: 3,
+      input_tokens: 12000,
+      output_tokens: 345,
+      total_tokens: 12345,
+      measurement: "complete",
+      measured_requests: 3,
+    };
+    expect(runUsageView(usage, { fallbackModel: "model-x" })).toEqual({
+      model: "model-a、model-b",
+      usage: { tokens: 12345, note: null },
+      modelCalls: "3 回（入力 12,000 / 出力 345 token）",
+      unmeasuredCalls: null,
+    });
+    const mixed = runUsageView(
+      { ...usage, measurement: "partial", measured_requests: 2, unmeasured_sources: ["select_ai"] },
+      { sourceLabel: (source) => `出どころ ${source}` }
+    );
+    expect(mixed.usage).toEqual({ tokens: 12345, note: "一部計測" });
+    expect(mixed.modelCalls).toBe("3 回（うち 2 回を計測。入力 12,000 / 出力 345 token）");
+    expect(mixed.unmeasuredCalls).toBe("出どころ select_ai");
+    // 計測できない呼び出しだけ: 数を作らない。
+    const unmeasured = runUsageView({
+      models: [],
+      requests: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      measurement: "unmeasured",
+      measured_requests: 0,
+      unmeasured_sources: ["select_ai"],
+    });
+    expect(unmeasured).toEqual({
+      model: null,
+      usage: { tokens: null, note: "未計測" },
+      modelCalls: "未計測",
+      unmeasuredCalls: "select_ai",
+    });
+    // 記録の無い実行は未計測（0 にしない）。記録の列のモデルは出す。
+    expect(runUsageView(null, { fallbackModel: "model-x" })).toEqual({
+      model: "model-x",
+      usage: { tokens: null, note: "未計測" },
+      modelCalls: "未計測",
+      unmeasuredCalls: null,
+    });
+    expect(runUsageView(usage, { labels: { modelCalls: ({ requests }) => `calls ${requests}` } }).modelCalls).toBe(
+      "calls 3"
+    );
+
+    expect(runListUsage(12345, "complete")).toEqual({ tokens: 12345, note: null });
+    expect(runListUsage(330, "partial")).toEqual({ tokens: 330, note: "一部計測" });
+    expect(runListUsage(null, "complete")).toEqual({ tokens: 0, note: null });
+    expect(runListUsage(null, "unmeasured")).toEqual({ tokens: null, note: "未計測" });
+    expect(runListUsage(undefined, null)).toEqual({ tokens: null, note: "未計測" });
+    expect(runListUsage(1, "partial", { partial: "partial" }).note).toBe("partial");
   });
 
   it("期間の開始は now から引いた ISO、すべては null", () => {

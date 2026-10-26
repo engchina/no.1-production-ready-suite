@@ -69,7 +69,8 @@ from rag_parser_core.structured_records import (
 WordSourceType = Literal["doc", "docx"]
 
 CONVERTER_NAME = "word_to_jsonl"
-CONVERTER_VERSION = "v1"
+# 表の縦の結合の続きを上の行の値で埋めた（#3565）ので v2。
+CONVERTER_VERSION = "v2"
 PROFILE = "word_to_jsonl"
 # OLE2 の複合文書（.doc）と ZIP（.docx）の先頭のバイト。
 _OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
@@ -694,19 +695,31 @@ def _on(value: str | None) -> bool:
 
 
 def _table_grid(table: Any) -> list[tuple[list[str], bool]]:
-    """(行のセルの文字, 表頭の行か)。横の結合は同じ値で埋め、縦の結合の続きは空にする。"""
+    """(行のセルの文字, 表頭の行か)。横の結合は同じ値で埋め、縦の結合の続きは上の行の値で埋める。
+
+    縦の結合（``w:vMerge``）の続きのセルには、同じ列の上の行（結合の始まり）の文字を写す
+    （HTML の ``rowspan`` を覆う行に写すのと同じ読み方。#3565）。空にすると Markdown の表では
+    空欄と区別できず、行の記録がその行の区分を失う。結合は Word の XML で決まるので推測ではない。
+    """
     rows: list[tuple[list[str], bool]] = []
     for row in _table_rows(table):
         trpr = row.find(_w("trPr"))
         header_flag = trpr.find(_w("tblHeader")) if trpr is not None else None
+        above = rows[-1][0] if rows else []
         values = [""] * _int(_val(trpr, "gridBefore"))
         for cell in _row_cells(row):
             tcpr = cell.find(_w("tcPr"))
             span = max(1, _int(_val(tcpr, "gridSpan"), 1))
             merge = tcpr.find(_w("vMerge")) if tcpr is not None else None
             continued = merge is not None and merge.get(_W_VAL) != "restart"
-            text = "" if continued else _cell_text(cell)
-            values.extend([text] * span)
+            if continued:
+                column = len(values)
+                values.extend(
+                    above[index] if index < len(above) else ""
+                    for index in range(column, column + span)
+                )
+            else:
+                values.extend([_cell_text(cell)] * span)
         rows.append((values, header_flag is not None and _on(header_flag.get(_W_VAL))))
     return rows
 
