@@ -5,6 +5,8 @@ A production-ready RAG reference implementation covering data ingestion, chunkin
 特定業務ドメインに固定せず、RAG システムを本番品質で構築するための参照実装として、ドキュメント取込から検索・回答生成・運用品質までを一貫して扱う。
 
 > プロジェクトの開発ルール（技術スタック・規約）は [AGENTS.md](./AGENTS.md) が正本です（Claude Code / Codex 共通）。
+>
+> 第三者の部品のライセンスの通知（PyMuPDF・同梱の native ライブラリ・書体など）は root の [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md) にあります。
 
 ## 技術スタック
 

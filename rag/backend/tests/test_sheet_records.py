@@ -314,9 +314,9 @@ def test_long_record_stays_in_one_chunk() -> None:
 def test_small_to_big_uses_rows_as_children_and_table_parts_as_parents() -> None:
     """親子階層は行を子、同じシートの続く行（表の一部）を親にする。縮退しない（#1349）。"""
     from app.rag.chunking_small_to_big import (
-        CHUNK_STRATEGY_FALLBACK_REASON_KEY,
+        PARENT_SOURCE_SHEET_RECORDS,
         build_parent_child_chunks,
-        small_to_big_fallback_needed,
+        small_to_big_parent_source,
     )
     from app.rag.chunking_strategy import SmallToBigParams
 
@@ -355,7 +355,7 @@ def test_small_to_big_uses_rows_as_children_and_table_parts_as_parents() -> None
         ],
     )
     extraction = _extraction(document)
-    assert small_to_big_fallback_needed("small_to_big", extraction) is False
+    assert small_to_big_parent_source(extraction) == PARENT_SOURCE_SHEET_RECORDS
 
     chunks = build_parent_child_chunks(
         extraction, params=SmallToBigParams(parent_target_chars=6000, parent_max_children=3)
@@ -363,7 +363,7 @@ def test_small_to_big_uses_rows_as_children_and_table_parts_as_parents() -> None
 
     assert [chunk.index for chunk in chunks] == list(range(len(chunks)))
     assert all(chunk.metadata["chunk_strategy"] == "small_to_big" for chunk in chunks)
-    assert all(CHUNK_STRATEGY_FALLBACK_REASON_KEY not in chunk.metadata for chunk in chunks)
+    assert all("chunk_strategy_fallback_reason" not in chunk.metadata for chunk in chunks)
     # 子は 1 行 1 chunk（前書き 1・品目の 5 行・別表の 1 行）。
     assert [chunk.metadata["cell_range"] for chunk in chunks] == [
         "A1:A1",

@@ -3050,7 +3050,7 @@ function DocumentChunksPanel({
     </ol>
   );
   if (!fellBackToStructure) return list;
-  // 親子階層（small-to-big）を選んだが Docling・MinerU のレイアウトがなく、構造認識で分割した(#300)。
+  // 以前の版で親子階層（small-to-big）の代わりに構造認識で分割した chunk(#300)。作り直しを案内する(#3377)。
   return (
     <div className="space-y-3">
       <Banner severity="warning" title={t("flow.chunks.smallToBigFallbackTitle")}>

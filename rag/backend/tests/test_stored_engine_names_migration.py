@@ -161,7 +161,6 @@ def test_renamed_values_match_the_code() -> None:
         ENGINE_SEARCH_TEXT_KEY,
         FIRST_PAGE_CONTEXT_KEY,
         LAYOUT_ARTIFACT,
-        LAYOUT_MISSING_REASON,
         LAYOUT_SOURCE_PARSER,
         SMALL_TO_BIG_STRATEGY,
     )
@@ -174,9 +173,10 @@ def test_renamed_values_match_the_code() -> None:
         ENGINE_SEARCH_TEXT_KEY,
         FIRST_PAGE_CONTEXT_KEY,
         LAYOUT_ARTIFACT,
-        LAYOUT_MISSING_REASON,
         LAYOUT_SOURCE_PARSER,
         CHUNK_METADATA_CONTRACT_INPUT,
+        # 以前の縮退の理由(#300)。新しい chunk には付けず、画面が以前の chunk の案内に読む(#3377)。
+        "layout_missing",
     } <= news
     assert set(SMALL_TO_BIG_SETTING_FIELDS) <= news
     assert all(name in Settings.model_fields for name in news if name.startswith("rag_"))
