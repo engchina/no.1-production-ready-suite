@@ -23,6 +23,7 @@ import {
   OpenRunInputAction,
   type DataTableColumn,
   DEFAULT_PAGE_SIZE,
+  DEFAULT_RUN_PERIOD,
   DataTable,
   InfoTip,
   OffsetPagination,
@@ -40,6 +41,7 @@ import {
   type RunHistoryItem,
   type RunPeriod,
   type RunStatusFilter,
+  RunHistoryPeriodEmptyState,
   RunHistoryTable,
   RunHistoryToolbar,
   RunSummary as RunSummaryCard,
@@ -113,7 +115,8 @@ const INITIAL_VIEW: RunHistoryView = {
   q: "",
   status: "all",
   surface: "all",
-  period: "all",
+  // 期間の既定は 3 製品で共通の過去 7 日（#3386）。明示に選んだ「すべて」は作業状態に残す。
+  period: DEFAULT_RUN_PERIOD,
   executor: "all",
   offset: 0,
   limit: DEFAULT_PAGE_SIZE,
@@ -176,12 +179,11 @@ export function RunHistoryClient() {
   const manualRefresh = useActionPending();
   const page = query.data;
   const items = page?.items ?? [];
-  const filtered =
-    Boolean(view.q) ||
-    view.status !== "all" ||
-    view.surface !== "all" ||
-    view.period !== "all" ||
-    view.executor !== "all";
+  // 期間のほかの検索語・絞り込みがあるか。
+  const otherFiltersActive =
+    Boolean(view.q) || view.status !== "all" || view.surface !== "all" || view.executor !== "all";
+  // 一覧が全件より狭いか（件数の「N 件（全 M 件）」）。既定の過去 7 日も期間で絞っているので数える（#3386）。
+  const filtered = otherFiltersActive || view.period !== "all";
   // 件数の「N 件（全 M 件）」の M（条件を外した、見える範囲の全件）。絞り込み中だけ 1 件ぶんの取得で数える（#1891）。
   const allTotal = useListTotal(
     "run-history",
@@ -325,7 +327,14 @@ export function RunHistoryClient() {
           </div>
         ) : (
           <Card>
-            {filtered ? (
+            {!otherFiltersActive && view.period !== "all" && allTotal.data !== 0 ? (
+              // 期間（既定は過去 7 日）だけで絞り、その中に実行が無くそれより前にはある: 期間を広げる操作を出す（#3386）。
+              <RunHistoryPeriodEmptyState
+                period={view.period}
+                onShowAll={() => update({ period: "all" })}
+                testId="run-history-period-empty"
+              />
+            ) : filtered && allTotal.data !== 0 ? (
               <EmptyState
                 title={t("history.noMatch.title")}
                 hint={t("history.noMatch.hint")}

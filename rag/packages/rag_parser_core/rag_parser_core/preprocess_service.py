@@ -68,7 +68,7 @@ def create_preprocess_app(
 ) -> FastAPI:
     """前処理サービス用の FastAPI app を生成する(converter 注入式)。
 
-    converter は各サービスが重い変換依存(LibreOffice / pymupdf 等)を内包して実装し、
+    converter は各サービスが重い変換依存(LibreOffice 等)を内包して実装し、
     本 factory は HTTP 契約(`POST /convert` / `GET /health`)だけを担う。
     """
     # API ドキュメント（/docs・/redoc・/openapi.json）は公開しない（#748）。
