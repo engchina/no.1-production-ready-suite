@@ -350,6 +350,10 @@ class Settings:
     article_catalog_refine_candidates: int = 60
     article_catalog_output_token_cap: int = 8192
     article_catalog_call_timeout_seconds: float = 180.0
+    # 目録で選んだ条を生成が引かなかったとき、条ごとに原文が支える説明を別の呼び出しで検討させ、その説明の出典に足す
+    # （#3526。`grounded.CATALOG_REVIEW_SYSTEM_PROMPT`）。評価で確かめた説明に根拠の無い条の出典が付いたので既定は無効。
+    # 無効なら検討の呼び出しをしない。
+    article_catalog_review: bool = False
     # 条の選択と範囲の文書の選択の結果を、process をまたいで時間を区切って使う記録の置き場所・有効期間（秒）・件数の
     # 上限（#3507）。key は索引の版（chunk_set）・目録の内容・質問・モデル・選択の設定。ディレクトリが無い・有効期間か
     # 件数が 0 なら process の中の記録だけを使う。選び方は変えない（同じ入力の LLM の結果を使い回すだけ）。
@@ -616,6 +620,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         article_catalog_refine_candidates=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_REFINE_CANDIDATES", 60)),
         article_catalog_output_token_cap=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP", 8192)),
         article_catalog_call_timeout_seconds=max(0.0, _env_float(env, "RAG_ENGINE_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS", 180.0)),
+        article_catalog_review=_env_bool(env, "RAG_ENGINE_ARTICLE_CATALOG_REVIEW", False),
         article_catalog_cache_dir=Path(cache_dir_raw).expanduser() if cache_dir_raw else None,
         article_catalog_cache_ttl_seconds=max(0.0, _env_float(env, "RAG_ENGINE_ARTICLE_CATALOG_CACHE_TTL_SECONDS", 86400.0)),
         article_catalog_cache_max_entries=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_CACHE_MAX_ENTRIES", 4096)),

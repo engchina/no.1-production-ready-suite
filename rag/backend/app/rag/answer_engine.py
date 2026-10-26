@@ -639,6 +639,9 @@ def build_engine_settings(
         "RAG_ENGINE_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS": str(
             settings.rag_article_catalog_call_timeout_seconds
         ),
+        "RAG_ENGINE_ARTICLE_CATALOG_REVIEW": (
+            "1" if settings.rag_article_catalog_review_enabled else "0"
+        ),
         # 条の選択の結果を process をまたいで使う記録(#3507)。置き場所が無ければ process の中だけ。
         "RAG_ENGINE_ARTICLE_CATALOG_CACHE_DIR": str(article_catalog_cache_dir(settings) or ""),
         "RAG_ENGINE_ARTICLE_CATALOG_CACHE_TTL_SECONDS": str(

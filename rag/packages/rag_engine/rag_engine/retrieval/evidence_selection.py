@@ -13,7 +13,7 @@ from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import range_class
 
 from rag_engine.parsing.content_labels import content_labels
-from rag_engine.retrieval.article_catalog import ARTICLE_UNIT_KEY
+from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY, ARTICLE_UNIT_KEY, is_catalog_article
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, definition_windows
 from rag_engine.retrieval.evidence_cues import evidence_cues
@@ -362,6 +362,11 @@ def evidence_spans(
     labels = definition_labels(question)
     from rag_engine.retrieval.metadata_context import answer_metadata_context, document_context_key
 
+    # 条の目録で選んだ条の child（#3526）。その child に重なる根拠に印を付ける。
+    catalog_children = {
+        str(getattr(child, "chunk_uid", "") or getattr(child, "id", "")) for child in scope_records if is_catalog_article(child)
+    }
+
     remaining = max(0, budget)
     context_remaining = max(0, budget // 10)
     seen_documents = set()
@@ -450,6 +455,7 @@ def evidence_spans(
             source_id = getattr(record, "chunk_uid", "") or record.id
             span_id = "E" + hashlib.sha256(f"{source_id}:{start}:{end}:{part}".encode()).hexdigest()[:20]
             pages = {page for a, b, page in located if a <= start and end <= b}
+            child_ranges = _overlapping_child_ranges(provenance, start, end)
             # 親の前置きと連結した窓も、含まれるchildが単一頁の場合だけ頁を確定する。
             if not pages:
                 pages = {
@@ -475,6 +481,8 @@ def evidence_spans(
                     "conversation_attachment": is_attachment_evidence(record),
                     # 条で構成された文書の条の根拠（#3526）。回答はこの根拠を出典にした説明を事実の監査に掛ける。
                     ARTICLE_UNIT_KEY: (getattr(record, "metadata", {}) or {}).get(ARTICLE_UNIT_KEY) is True,
+                    # 条の目録で選んだ条の根拠（#3526）。回答は要求の計画で必ず使うか unrelated かを決める。
+                    ARTICLE_CATALOG_KEY: any(entry["id"] in catalog_children for entry in child_ranges),
                     # 頁の無い根拠（Excel の行の記録）の場所。出典の行・根拠の見出しは頁の代わりにこれを出す（#1224）。
                     "location": record_location_label(record),
                     # 本文位置から頁を確定できない span は親の先頭頁を page に持つ。親は複数頁にまたがるため、
@@ -502,7 +510,7 @@ def evidence_spans(
                 result[-1]["page"] = result[-1]["page_end"] = next(iter(pages))
             # 抜粋の範囲に重なる子と、その子の親の本文の中の範囲（#2710）。出典の行を、引用が実際に入る子へ
             # 結ぶのに使う（親の ID だけでは同じ親・同じ頁の兄弟の子を区別できない）。
-            if child_ranges := _overlapping_child_ranges(provenance, start, end):
+            if child_ranges:
                 result[-1]["child_ranges"] = child_ranges
             # parentの章一覧には隣接する別機能が混在し得る。本文位置と文書・版・
             # 親子関係を照合した単一childだけで、引用そのものの所属を確定する。
@@ -558,6 +566,8 @@ def _merge_adjacent_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
             text = previous["text"] + span["text"]
             if ranges := _merged_child_ranges(previous.get("child_ranges"), span.get("child_ranges")):
                 previous["child_ranges"] = ranges
+            if span.get(ARTICLE_CATALOG_KEY):
+                previous[ARTICLE_CATALOG_KEY] = True
             previous.update(
                 text=text,
                 end=span["end"],

@@ -3949,6 +3949,7 @@ export const ja = {
     "利用者の確認の答えの条件・制約との両立の判定（確認の答えがあるときだけ）",
   "settings.answerPrompts.part.documentSystem": "文書を選ぶ system プロンプト",
   "settings.answerPrompts.part.refineSystem": "同じ章の条を足す system プロンプト",
+  "settings.answerPrompts.part.catalogReview": "条の目録で選んだ条が支える説明を検討する指示（設定で有効にしたとき、生成が条を引かなかったときだけ）",
   "settings.queryHistory.title": "質問履歴",
   "settings.queryHistory.description":
     "回答に成功した質問を検索・回答プロファイルごとに保存し、よく聞かれている質問を RAG 検索の入力欄の下に候補として出します。質問の本文を保存するため、既定では無効です。",
