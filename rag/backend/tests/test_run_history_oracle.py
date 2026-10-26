@@ -43,6 +43,16 @@ async def test_run_history_round_trip_on_real_oracle() -> None:
             all_users_visible=all_users,
         )
 
+    usage = {
+        "models": ["model-a"],
+        "requests": 3,
+        "input_tokens": 12000,
+        "output_tokens": 345,
+        "total_tokens": 12345,
+        "measurement": "partial",
+        "measured_requests": 2,
+    }
+
     await cleanup()
     try:
         for run_id, user in zip(run_ids, ("a", "b"), strict=True):
@@ -59,7 +69,11 @@ async def test_run_history_round_trip_on_real_oracle() -> None:
                         "verification": "verified" if user == "a" else None,
                         "citation_count": 2,
                         "elapsed_ms": 1234.5,
-                        "stages": {"stages": [{"stage": "answer", "outcome": "success"}]},
+                        "stages": {
+                            "stages": [{"stage": "answer", "outcome": "success"}],
+                            # 利用量（#3419）は a の実行だけ。b は記録の無い実行（未計測）。
+                            **({"usage": usage} if user == "a" else {}),
+                        },
                         "citations": None if user == "a" else [{"chunk_id": "c1"}],
                     }
                 )
@@ -112,7 +126,15 @@ async def test_run_history_round_trip_on_real_oracle() -> None:
         assert own["user_uuid"] == "uuid-a"
         assert str(own["question"]).endswith("あ")
         assert len(str(own["question"])) > 300
-        assert own["stages_json"] == {"stages": [{"stage": "answer", "outcome": "success"}]}
+        assert own["stages_json"] == {
+            "stages": [{"stage": "answer", "outcome": "success"}],
+            "usage": usage,
+        }
+        # 一覧は利用量の合計と計測の状態だけを JSON_VALUE で読む（#3466）。記録の無い実行は NULL。
+        own_row = next(row for row in rows if row["run_id"] == run_ids[0])
+        assert (own_row["usage_total_tokens"], own_row["usage_measurement"]) == (12345, "partial")
+        admin_row = next(row for row in admin_rows if row["run_id"] == run_ids[1])
+        assert (admin_row["usage_total_tokens"], admin_row["usage_measurement"]) == (None, None)
         assert [row["run_id"] for row in admin_rows if row["run_id"] in run_ids] == [run_ids[1]]
         assert [row["run_id"] for row in recent_rows] == [run_ids[1]]
         assert (future_rows, future_total) == ([], 0)

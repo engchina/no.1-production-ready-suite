@@ -240,3 +240,18 @@ export function runUsageView(run: Pick<RunDetail, "model_id" | "usage">): RunUsa
     modelCalls: t(partial ? "history.detail.modelCallsPartial" : "history.detail.modelCallsValue", values),
   };
 }
+
+/**
+ * 一覧の「token」の列（#3466）。一覧の API は利用量の全体ではなく合計と計測の状態だけを返す。詳細の概要
+ * （`runUsageView`）と同じ規則: 記録の無い実行は「未計測」（0 にしない）、一部計測は数に「一部計測」を添え、
+ * LLM を呼ばなかった実行は実測の 0。
+ */
+export function runListUsage(
+  run: Pick<RunSummary, "total_tokens" | "usage_measurement">
+): { tokens: number | null; note: string | null } {
+  if (!run.usage_measurement) return { tokens: null, note: t("history.detail.usageUnmeasured") };
+  return {
+    tokens: run.total_tokens ?? 0,
+    note: run.usage_measurement === "partial" ? t("history.detail.usagePartial") : null,
+  };
+}
