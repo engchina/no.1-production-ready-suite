@@ -469,10 +469,11 @@ test("呼び先の製品の span は書いた製品の工程の名前で出し�
   const rag = (parent: string, extra: Record<string, unknown> = {}) => ({startedAt: start, finishedAt: end, parent, product: "rag", ...extra});
   run.progress_events = new ProgressLog(RUN_ID, () => end, start)
     .step("chat-1", "done", {startedAt: start, finishedAt: end, kind: "plan"})
-    .step(tool, "running", {startedAt: start})
+    // ツールの表示名（MCP の title）は、ツールの行と MCP の呼び出しの行の両方に出す（#3468）。
+    .step(tool, "running", {startedAt: start, params: {tool: "rag__rag_retrieve_evidence", title: "合成の根拠の取得"}})
     .step("mcp-init", "done", mcp("initialize"))
     .step("mcp-notify", "done", mcp("notifications/initialized"))
-    .step("mcp-call", "done", mcp("tools/call", {"gen_ai.tool.name": "rag_retrieve_evidence"}))
+    .step("mcp-call", "done", mcp("tools/call", {"gen_ai.tool.name": "rag_retrieve_evidence", "pr.tool.title": "合成の根拠の取得"}))
     .step("rag-server", "done", rag("mcp-call", {name: "mcp.server", root: true}))
     .step("rag-search", "done", rag("rag-server", {name: "rag.search", root: true}))
     .step("rag-retrieval", "done", rag("rag-search", {name: "rag.retrieval", displayName: "検索", attributes: {"pr.stage": "retrieval"}}))
@@ -489,8 +490,8 @@ test("呼び先の製品の span は書いた製品の工程の名前で出し�
   const live = await timelineSnapshot(list);
   expect(live.map((row) => [row.text.replace(/ 完了( [\d.]+ 秒)?$/, ""), row.level])).toEqual([
     ["進め方を決めました", 0],
-    ["処理を実行しました", 0],
-    ["MCP の呼び出し · rag_retrieve_evidence", 1],
+    ["「合成の根拠の取得」を実行しました", 0],
+    ["MCP の呼び出し · 合成の根拠の取得", 1],
     ["検索 RAG", 2],
     ["文書の検索", 3],
     ["埋め込みの作成 · synthetic-embed", 4],

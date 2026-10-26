@@ -173,3 +173,22 @@ def parse_run_usage(value: object) -> RunModelUsage | None:
         return RunModelUsage.model_validate(value)
     except ValueError:
         return None
+
+
+def run_usage_totals(
+    total_tokens: object, measurement: object
+) -> tuple[int | None, UsageMeasurement | None]:
+    """一覧の行の利用量（合計の token と計測の状態。#3466）。
+
+    一覧は `stages_json.usage` の全体を読まず、SQL で取り出した 2 つの値だけを使う。計測の状態が
+    無い・形の違う記録（この機能より前の実行・trace の始まる前に失敗した実行）は未計測（どちらも
+    None。0 にしない）。計測した記録の合計が無ければ 0（`RunModelUsage` の既定と同じ。LLM を
+    呼ばなかった実行は実測の 0）。
+    """
+    if measurement != "complete" and measurement != "partial":
+        return None, None
+    if isinstance(total_tokens, bool) or not isinstance(total_tokens, int | float):
+        return 0, measurement
+    if total_tokens < 0 or not float(total_tokens).is_integer():
+        return 0, measurement
+    return int(total_tokens), measurement

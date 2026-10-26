@@ -3859,7 +3859,7 @@ import {
 | 部品 | 主な props | 説明 |
 |---|---|---|
 | `RunStatusBadge` | `status: RunStatus`・`label?`・`labels?` | 7 つの状態（`RUN_STATUSES`）。`data-run-status`。`isRunActive` は待機中・実行中・応答待ち |
-| `RunHistoryTable<T>` | `rows`・`toItem(row) → RunHistoryItem`・`onOpen`・`showKind`（既定 true）・`showExecutor`・`showUsage`・`extraColumns`（2 つまで）・`actionsFor`・`selectedRunId`・`labels`・`loading`・`empty` | `RunHistoryItem` は `id`・`title`・`target?`・`href`・`status`・`statusLabel?`・`kind?`・`executor?`・`startedAt`・`durationMs?`・`usage?` |
+| `RunHistoryTable<T>` | `rows`・`toItem(row) → RunHistoryItem`・`onOpen`・`showKind`（既定 true）・`showExecutor`・`showUsage`・`extraColumns`（2 つまで）・`actionsFor`・`selectedRunId`・`labels`・`loading`・`empty` | `RunHistoryItem` は `id`・`title`・`target?`・`href`・`status`・`statusLabel?`・`kind?`・`executor?`・`startedAt`・`durationMs?`・`usage?`（`tokens`・`note`〔計測の状態の注記。#3466〕・`cost`） |
 | `RunHistoryToolbar` | `search`・`searchActive`・`status`（`options` は製品が写せる状態）・`kind`・`period`・`executor`・`onClearFilters`・`count`・`labels`・`idPrefix` | 無い絞り込みは飛ばす。3 つ以上で 375px はシート |
 | `RunSummary` | `status`・`question`・`startedAt`・`finishedAt?`・`durationMs?`・`kind?`・`executor?`・`owner?`・`target?`・`model?`・`usage?`・`runId`・`extraFacts?`・`badges?`・`actions?`・`alert?` | 概要のカード（`data-run-summary`） |
 | `RunDetailSection` | `title`・`description?`・`meta?`・`actions?`・`collapsible?`・`open?` / `onOpenChange?` | 節のカード。`collapsible` は既定で閉じた `Disclosure`（開いたときだけ中身を読む節は `open` / `onOpenChange` で受控にする。Agent の監査ログ） |

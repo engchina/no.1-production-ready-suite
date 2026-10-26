@@ -20,7 +20,7 @@ from app.api.routes.search import _stored_citation_rows
 from app.clients.oracle import OracleClient
 from app.clients.oracle_run_history import RunHistoryStore, owner_user_uuids
 from app.rag.request_context import current_audit_request_context
-from app.rag.run_usage import parse_run_usage
+from app.rag.run_usage import parse_run_usage, run_usage_totals
 from app.rag.saved_evidence import withhold_saved_answer
 from app.rag.trace_store import TraceSnapshot, run_trace_snapshot
 from app.schemas.common import ApiResponse, Page
@@ -41,7 +41,13 @@ RUN_NOT_FOUND_MESSAGE = (
 )
 
 
-_INTERNAL_FIELDS = {"user_id_hash", "user_uuid", "conversation_owner_hash"}
+_INTERNAL_FIELDS = {
+    "user_id_hash",
+    "user_uuid",
+    "conversation_owner_hash",
+    "usage_total_tokens",
+    "usage_measurement",
+}
 
 
 def _summary_fields(row: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
@@ -58,6 +64,10 @@ def _summary_fields(row: dict[str, Any], names: dict[str, str]) -> dict[str, Any
     # 実行した人（実行者）の表示名は、見る人を問わず返す（#1954。持ち主の会話で system_admin が
     # 実行した行を、持ち主が「〈名前〉が実行」と読む）。引けない利用者は空文字。
     fields["executor_display_name"] = names.get(str(user_uuid), "") if user_uuid else ""
+    # 一覧の「token」の列（#3466）。SQL で取り出した合計と計測の状態だけを使う。
+    fields["total_tokens"], fields["usage_measurement"] = run_usage_totals(
+        row.get("usage_total_tokens"), row.get("usage_measurement")
+    )
     return fields
 
 
@@ -124,6 +134,10 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
         ),
         "usage": parse_run_usage(stages.get("usage")),
     }
+    # 詳細は利用量の全体を読むので、一覧の 2 つの値もそこから決める（概要と食い違わせない）。
+    usage = detail["usage"]
+    detail["total_tokens"] = usage.total_tokens if usage is not None else None
+    detail["usage_measurement"] = usage.measurement if usage is not None else None
     if detail["answer_generated"]:
         # 回答・引用・診断は回答の記録が正本（保持期間で消えていれば出さない）。
         record = await oracle.get_answer_record(run_id)

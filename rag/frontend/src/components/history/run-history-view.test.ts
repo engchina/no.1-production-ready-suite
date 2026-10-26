@@ -9,6 +9,7 @@ import {
   runConversationOwnerLabel,
   runExecutorLabel,
   runExecutorParam,
+  runListUsage,
   runOutcomeView,
   runProfileLabel,
   runSearchHref,
@@ -175,6 +176,32 @@ describe("実行履歴の表示の対応表", () => {
       modelCalls: "未計測",
     });
     expect(runUsageView({ model_id: null, usage: undefined }).model).toBeNull();
+  });
+
+  it("一覧の token は詳細と同じ規則: 未計測・一部計測・実測の 0（Issue 3466）", () => {
+    expect(runListUsage({ total_tokens: 12345, usage_measurement: "complete" })).toEqual({ tokens: 12345, note: null });
+    expect(runListUsage({ total_tokens: 330, usage_measurement: "partial" })).toEqual({ tokens: 330, note: "一部計測" });
+    expect(runListUsage({ total_tokens: 0, usage_measurement: "complete" })).toEqual({ tokens: 0, note: null });
+    // 記録の無い実行と、利用量を返さない古い backend は未計測（0 にしない）。
+    expect(runListUsage({ total_tokens: null, usage_measurement: null })).toEqual({ tokens: null, note: "未計測" });
+    expect(runListUsage({})).toEqual({ tokens: null, note: "未計測" });
+    // 一覧と詳細の注記の文言は同じ。
+    expect(runListUsage({ total_tokens: 1, usage_measurement: "partial" }).note).toBe(
+      runUsageView({
+        model_id: null,
+        usage: {
+          models: [],
+          requests: 1,
+          input_tokens: 1,
+          output_tokens: 0,
+          total_tokens: 1,
+          cached_input_tokens: null,
+          reasoning_output_tokens: null,
+          measurement: "partial",
+          measured_requests: 0,
+        },
+      }).usage.note
+    );
   });
 });
 

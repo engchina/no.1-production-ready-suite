@@ -55,6 +55,14 @@ describe("span の表示名（#3219。3 製品の 9 画面で共通の規則）"
       "埋め込みの作成 · embed-x", "並べ替え（rerank） · rerank-x", "AI の呼び出し · model-x", "Select AI の呼び出し", "custom.operation",
     ]);
   });
+  it("MCP の呼び出しは呼んだツールの表示名（pr.tool.title）を先に添え、内部名は詳細に残す（#3468）", () => {
+    const steps = traceTimeline({ completeness: "complete", root_span_id: "1".repeat(16), spans: [
+      stage("1", undefined, "op.answer"),
+      stage("2", "1", "mcp.request", { "mcp.method.name": "tools/call", "gen_ai.tool.name": "tool_y", "pr.tool.title": "合成の照合" }),
+    ] }).steps;
+    expect(steps[1].label).toBe("MCP の呼び出し · 合成の照合");
+    expect(steps[1].details?.fields).toContainEqual({ label: "gen_ai.tool.name", value: "tool_y", mono: true });
+  });
   it("段は製品の段の名前（処理の経過と同じ関数）を使い、詳細に元の span の名前と段を残す", () => {
     const seen: [string, string][] = [];
     const labels = createTraceDetailsLabels(key => TRACE_DETAILS_JA[key], {
