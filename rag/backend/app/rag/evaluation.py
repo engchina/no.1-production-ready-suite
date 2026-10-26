@@ -748,7 +748,7 @@ def summarize_case_results(
     *,
     thresholds: EvaluationThresholds | None = None,
 ) -> EvaluationMetrics:
-    """ケースの結果を集計して評価の結果にする（評価ランナーと、外部の回答の採点で共通。#1289）。
+    """ケースの結果を集計して評価の結果にする（評価ランナーと `score_case_answers` で共通）。
 
     指標は成功したケースのうち測れたものだけの平均。失敗したケースや、標準回答で評価できなかった
     ケースがあれば合格にしない。
@@ -804,10 +804,12 @@ def score_case_answers(
     answers: Sequence[tuple[SearchResponse, Mapping[str, str]]],
     judgement: EvaluationAnswerJudgement | None = None,
 ) -> EvaluationCaseResult:
-    """外部で作った回答（Agent の Run など。#1289）を、評価ランナーと同じ採点にかける。
+    """得た RAG の回答を、評価ランナーと同じ採点にかける（ケースの採点の入口）。
 
     `answers` は最初の質問から順の（回答, その発話までに渡した既知の条件）。採点（対応・手順と別解・
     危険な回答・条件・正解の文書・必要な根拠）は `EvaluationRunner.run` のケースと同じ関数で行う。
+    製品横断の評価（業務 Agent の Run の採点）は suite（`suite/evaluation`。#3240）が持ち、ここは
+    RAG の回答（`SearchResponse`）だけを扱う。
     """
     if not answers:
         raise ValueError("採点する回答がありません。")
@@ -826,34 +828,6 @@ def _expected_case_decisions(case: EvaluationCase) -> list[str]:
                 expectation.expected_response_decision, expectation.expected_outcomes
             )
         }
-    )
-
-
-def case_error_result(
-    case: EvaluationCase,
-    *,
-    trace_id: str,
-    elapsed_ms: float,
-    error_type: str,
-    error_message: str,
-    error_stage: str | None = None,
-) -> EvaluationCaseResult:
-    """回答を得られなかったケースの結果（質問の本文は含めない。外部の回答の採点で使う。#1289）。"""
-    return EvaluationCaseResult(
-        case_id=case.id,
-        category=case.category,
-        split=case.split,
-        reasoning_type=case.reasoning_type,
-        hops=case.hops,
-        trace_id=trace_id,
-        status="error",
-        relevant_document_ids=list(case.relevant_document_ids),
-        expected_decisions=_expected_case_decisions(case),
-        failure_reasons=["case_error"],
-        elapsed_ms=elapsed_ms,
-        error_type=error_type,
-        error_stage=error_stage,
-        error_message=error_message,
     )
 
 

@@ -10,8 +10,9 @@
 | `suite/evaluation/` | 製品をまたぐ評価（この project）。独立の uv project で、常駐のサービスは持たない |
 | `platform/packages/evaluation_scoring/` | 製品の評価と suite の評価が同じ意味で使う、決定的な採点の部品（`pr_evaluation_scoring`） |
 
-- suite は platform の公開の package（`pr_evaluation_scoring`）だけに依存する。製品の Python の module・DB の表・保存ファイルを読まない（製品は `POST /api/mcp` を API キーで呼ぶ）。`tests/test_boundaries.py` が import を確かめる。
-- platform は suite・製品を import しない。製品は suite を import しない。
+- suite は platform の公開の package（`pr_evaluation_scoring`・`pr_enterprise_ai`）だけに依存する。製品の Python の module・DB の表・保存ファイル・設定を読まない（製品は `POST /api/mcp` を API キーで呼び、画面の API・Cookie / CSRF を使わない）。
+- platform は suite・製品を import しない。製品は suite を import しない。製品同士はコードで依存しない（RAG は Agent を呼ばない）。
+- 機械的な検査: `tests/test_boundaries.py`（suite の import・製品の path・`/api/mcp` 以外の API・製品の設定と DB の object の名前・依存の閉包〔`uv.lock`〕の自分たちの package・suite が使う platform の package の import・製品と platform の manifest）と、製品の側は `rag/backend/tests/test_product_boundaries.py`（rag の import・他の製品と suite のファイル・使わない契約・Agent の表と API・manifest。既知の例外は Issue つき）。
 
 ## 構成
 
