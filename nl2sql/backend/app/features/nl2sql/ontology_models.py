@@ -11,7 +11,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pr_backend_core.observability.model_usage import RunModelUsage, parse_run_usage
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .ontology_definitions import BusinessDefinition, ConceptCoverage, DefinitionPhase
 
@@ -1321,6 +1322,10 @@ class QuerySession(OntologyContract):
     requirement_answers: list[RequirementAnswerRecord] = Field(default_factory=list)
     requirement_review_round: int = Field(default=0, ge=0)
     requirement_applied_at: datetime | None = None
+    # 回答前の確認の LLM の呼び出しの利用量（下書き・再検査の要求ごとに足す）。反映した要件と一緒に
+    # ジョブへ渡し、実行履歴の行でジョブの利用量と合算する（#3552）。この機能より前の session と
+    # LLM を呼ばなかった session は None。
+    requirement_usage: RunModelUsage | None = None
     # チャットの回答前の確認（#1442）。会話の続き（前のターンの job）と、要件の検査に渡した
     # 会話の履歴。チャットの session はチャットのジョブにだけ、SQL 生成の画面の session は
     # SQL 生成の画面にだけ使う。
@@ -1335,6 +1340,14 @@ class QuerySession(OntologyContract):
     error_code: str = ""
     error_message_ja: str = ""
     cancelled_at: datetime | None = None
+
+    @field_validator("requirement_usage", mode="before")
+    @classmethod
+    def drop_unreadable_requirement_usage(cls, value: Any) -> RunModelUsage | None:
+        """読めない利用量の記録は無いものとする（session そのものは読む。#3552）。"""
+        if isinstance(value, RunModelUsage):
+            return value
+        return parse_run_usage(value)
 
 
 class QuerySessionCreate(OntologyContract):

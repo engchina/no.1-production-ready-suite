@@ -1628,6 +1628,18 @@ class SqlRequirementSpec(BaseModel):
     items: list[SqlRequirementSpecItem] = Field(default_factory=list)
     unresolved_ja: list[str] = Field(default_factory=list)
     summary_ja: str = ""
+    # 回答前の確認の LLM の呼び出しの利用量（session から写す。生成の prompt には入れない）。
+    # 実行履歴の行でジョブの利用量と合算する（#3552）。確認が LLM を呼ばなかった・この機能より前の
+    # session は None。
+    usage: RunModelUsage | None = None
+
+    @field_validator("usage", mode="before")
+    @classmethod
+    def drop_unreadable_usage(cls, value: Any) -> RunModelUsage | None:
+        """読めない利用量の記録は無いものとする（保存したジョブの要求そのものは読む）。"""
+        if isinstance(value, RunModelUsage):
+            return value
+        return parse_run_usage(value)
 
     def prompt_block(self) -> str:
         """直接の LLM の prompt に入れる「必ず守る条件」（物理名で書く）。"""
