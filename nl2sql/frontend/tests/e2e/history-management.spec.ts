@@ -144,12 +144,25 @@ const historyItems: HistoryRecord[] = [
   },
 ];
 
+/**
+ * モックの backend の今の時刻（#3386）。画面は端末の今の時刻から期間の開始（since）を求めるので、モックは
+ * 「今から何 ms 前か」を受け取り、この時刻から同じ幅だけ前を期間の開始として比べる（記録の日時は固定のまま）。
+ */
+const MOCK_HISTORY_NOW = Date.parse("2026-06-25T00:00:00.000Z");
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function mockSince(since: string | null): string | null {
+  if (!since) return null;
+  return new Date(MOCK_HISTORY_NOW - (Date.now() - Date.parse(since))).toISOString();
+}
+
 function manyItems(count: number): HistoryRecord[] {
   return Array.from({ length: count }, (_, index) => ({
     ...historyItems[1],
     id: `history-${String(index + 1).padStart(3, "0")}`,
     question: `ページ確認の質問 ${index + 1}`,
-    created_at: new Date(Date.UTC(2026, 5, 1, 0, 0, count - index)).toISOString(),
+    // 期間の既定（過去 7 日）に入る日時（MOCK_HISTORY_NOW の前日）。
+    created_at: new Date(Date.UTC(2026, 5, 24, 0, 0, count - index)).toISOString(),
   }));
 }
 
@@ -175,7 +188,7 @@ function historyPage(url: URL, items: readonly HistoryRecord[], othersVisible: b
   const q = (url.searchParams.get("q") ?? "").trim().toLocaleLowerCase("ja-JP");
   const status = url.searchParams.get("status") ?? "all";
   const kind = url.searchParams.get("kind") ?? "all";
-  const since = url.searchParams.get("since");
+  const since = mockSince(url.searchParams.get("since"));
   const executor = url.searchParams.get("executor") ?? "all";
   const filtered = items.filter((item) => {
     // 停止の行（#3348）は安全性の判定を持たず、完了・ブロックに数えない。
@@ -260,7 +273,8 @@ test("実行履歴は共通の表で質問・状態・種類・開始日時・�
   await page.goto("/history");
   await expect(page.getByRole("heading", { level: 1, name: "実行履歴" })).toBeVisible();
   await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
-  await expect(page.getByTestId("history-list-count")).toHaveText("全 3 件");
+  // 期間の既定は過去 7 日（#3386）。期間で絞っているので件数は「N 件（全 M 件）」。
+  await expect(page.getByTestId("history-list-count")).toHaveText("3 件（全 3 件）");
 
   const newRow = row(page, "history-new");
   await expect(newRow.locator("[data-run-status]:visible")).toHaveAttribute("data-run-status", "succeeded");
@@ -391,6 +405,11 @@ test("検索・状態・種類・期間の絞り込みはサーバーへ渡し�
   await mockHistory(page, { requests });
   await page.goto("/history");
   await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+  // 期間の既定は 3 製品で共通の過去 7 日（#3386）。既定のままなら「条件をクリア」を出さない。
+  const since = requests.at(-1)?.searchParams.get("since");
+  expect(Date.now() - Date.parse(String(since))).toBeGreaterThan(7 * DAY_MS - 60 * 60 * 1000);
+  expect(Date.now() - Date.parse(String(since))).toBeLessThan(7 * DAY_MS + 60 * 60 * 1000);
+  await expect(page.getByRole("button", { name: "条件をクリア", exact: true })).toHaveCount(0);
 
   await chooseFilter(page, "status", "blocked");
   await expect.poll(() => requests.at(-1)?.searchParams.get("status")).toBe("blocked");
@@ -402,23 +421,56 @@ test("検索・状態・種類・期間の絞り込みはサーバーへ渡し�
   await expect.poll(() => requests.at(-1)?.searchParams.get("kind")).toBe("chat");
   await expect(table(page).locator("[data-run-id]")).toHaveCount(1);
 
-  // 期間は今の時刻からの ISO 8601（since）。モックの記録は古いので 0 件になる。
-  await chooseFilter(page, "period", "7d");
-  await expect.poll(() => requests.at(-1)?.searchParams.get("since") ?? "").toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  // 期間は今の時刻からの ISO 8601（since）。モックの記録は過去 24 時間より古いので 0 件になる。
+  await chooseFilter(page, "period", "24h");
+  await expect
+    .poll(() => Date.now() - Date.parse(String(requests.at(-1)?.searchParams.get("since"))))
+    .toBeLessThan(DAY_MS + 60 * 60 * 1000);
   await expect(page.getByText("条件に一致する実行がありません")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("history-no-results.png"), fullPage: true });
   // 0 件の取り直しの間も、絞り込みの欄を残す（スケルトンに置き換えない。#739）。
   await expect(page.getByTestId("history-toolbar")).toBeVisible();
   await page.getByRole("button", { name: "条件をクリア" }).first().click();
   await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
-  expect(requests.at(-1)?.searchParams.get("since")).toBeNull();
-  // 「条件をクリア」は種類を既定（品質評価以外）へ戻す（#1986）。
+  // 「条件をクリア」は期間を既定（過去 7 日）、種類を既定（品質評価以外。#1986）へ戻す。
+  expect(Date.now() - Date.parse(String(requests.at(-1)?.searchParams.get("since")))).toBeGreaterThan(7 * DAY_MS - 60 * 60 * 1000);
   expect(requests.at(-1)?.searchParams.get("kind")).toBe("not_evaluation");
+
+  // 「すべて」は既定からの変更として数え、since を送らない。
+  await chooseFilter(page, "period", "all");
+  await expect.poll(() => requests.at(-1)?.searchParams.has("since")).toBe(false);
+  await expect(page.getByTestId("history-list-count")).toHaveText("全 3 件");
+  await expect(page.getByRole("button", { name: "条件をクリア", exact: true }).first()).toBeVisible();
 
   // 検索欄（debounce・IME は SearchField）。
   await page.getByRole("searchbox", { name: "実行履歴を検索" }).fill("AUDIT_LOG");
   await expect.poll(() => requests.at(-1)?.searchParams.get("q")).toBe("AUDIT_LOG");
   await expect(table(page).locator("[data-run-id]")).toHaveCount(1);
+});
+
+test("過去 7 日に実行が無く、それより前にはあるときは、期間を「すべて」にする操作を出す（#3386）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const requests: URL[] = [];
+  const old = historyItems.map((item, index) => ({
+    ...item,
+    created_at: new Date(MOCK_HISTORY_NOW - (20 + index) * DAY_MS).toISOString(),
+  }));
+  await mockHistory(page, { items: old, requests });
+  await page.goto("/history");
+  const empty = page.getByTestId("history-period-empty");
+  await expect(empty).toContainText("過去 7 日の実行はありません");
+  await expect(empty).toContainText("期間を「すべて」にすると表示します");
+  await expect(page.getByTestId("history-empty")).toHaveCount(0);
+  await expect(page.getByTestId("history-toolbar")).toBeVisible();
+  await expect(page.getByTestId("history-list-count")).toHaveText("0 件（全 3 件）");
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("history-period-empty.png"), fullPage: true });
+  await empty.getByRole("button", { name: "すべての期間を表示" }).click();
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+  expect(requests.at(-1)?.searchParams.has("since")).toBe(false);
+  // 選んだ「すべて」は再読込の後も残す。
+  await page.reload();
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+  expect(requests.at(-1)?.searchParams.has("since")).toBe(false);
 });
 
 // #1986: Agent の品質評価の Run が MCP で呼んだ実行は既定で隠し、「種類: 品質評価」「すべて」で出す。
@@ -461,7 +513,7 @@ test("品質評価の実行は既定で隠し、種類で品質評価・すべ�
   await expect(table(page).locator("[data-run-id]")).toHaveCount(4);
   await expect(table(page).locator('[data-run-id^="history-eval-"]')).toHaveCount(0);
   expect(requests.at(-1)?.searchParams.get("kind")).toBe("not_evaluation");
-  await expect(page.getByTestId("history-list-count")).toHaveText("全 4 件");
+  await expect(page.getByTestId("history-list-count")).toHaveText("4 件（全 4 件）");
   await expect(page.getByRole("button", { name: "条件をクリア", exact: true })).toHaveCount(0);
   const mcpKind = isMobile ? row(page, "history-mcp").locator("[data-run-history-compact-meta]") : row(page, "history-mcp");
   await expect(mcpKind).toContainText("MCP（Claude Code）");
