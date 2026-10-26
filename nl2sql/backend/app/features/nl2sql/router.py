@@ -33,6 +33,7 @@ from pr_backend_core.api import (
     offset_params,
 )
 from pr_backend_core.chat_history_window import chat_history_days
+from pr_backend_core.observability.model_usage import run_usage_summary_fields
 from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE, SecurityApiError
 from pr_system_settings.auth.visibility import (
     DEFAULT_RUN_EXECUTOR_FILTER,
@@ -2104,6 +2105,7 @@ def _with_history_people(
         executor = item.actor_user_uuid
         owner = item.conversation_owner_user_uuid
         identity = identities.get(executor) if is_system_admin else None
+        total_tokens, usage_measurement = run_usage_summary_fields(item.usage)
         result.append(
             item.model_copy(
                 update={
@@ -2120,6 +2122,9 @@ def _with_history_people(
                     "actor_display_name": identity.display_name if identity else "",
                     # 工程の詳細は処理の経過（`GET /history/{history_id}/trace`）だけが返す。
                     "span_details": {},
+                    # 一覧の「token」の列（合計の token と計測の状態。詳細の概要と同じ値。#3543）。
+                    "total_tokens": total_tokens,
+                    "usage_measurement": usage_measurement,
                     # 取り消した人と入口（停止の行だけ。#3348）。記録の値（利用者・キー・Agent の
                     # Run の ID）は返さず、見ている利用者に合わせた表示に置き換える。
                     "cancellation": _history_cancellation(

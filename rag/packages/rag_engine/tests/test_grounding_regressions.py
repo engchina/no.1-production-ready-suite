@@ -84,7 +84,12 @@ def test_requested_number_spelling_preserves_source_and_grounding(value, instruc
     evidence_id = _grounded_spans(question, ctx, (), None)[0]["evidence_id"]
     text = f"保存件数の上限は{value}件です。"
     model = FakeModel(
-        [draft({"kind": "rule", "request_id": "Q1", "text": text, "evidence_id": evidence_id, "quote": source}, summary=text)],
+        [
+            draft(
+                {"kind": "rule", "request_id": "Q1", "text": text, "citations": [{"evidence_id": evidence_id, "quote": source}]},
+                summary=text,
+            )
+        ],
         [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])],
     )
     result = run(model, ctx, question).response

@@ -61,7 +61,8 @@ REASON_FAILED = "failed"
 RETRYABLE_REASONS = frozenset({REASON_NOT_READ, REASON_UNREAD, REASON_STALE, REASON_FAILED})
 # 文書を先頭から読むときに渡さない、読み始めの位置の引数（`rag_read_document`）。
 _DOCUMENT_START_ARGUMENTS = ("cursor", "locator", "page", "section_id")
-# RAG が続きの位置を古い版のもの・形の違うものとして拒んだときの code。
+# RAG が続きの位置を古い版のもの・形の違うものとして拒んだときの code（契約 rag-tools.json の
+# `errors`）。
 _STALE_CODES = frozenset({"source_stale", "cursor_invalid"})
 
 COVERAGE_COMPLETE = "complete"

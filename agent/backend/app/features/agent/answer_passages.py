@@ -41,9 +41,11 @@
 ください」など）を `environment_check_passages` で判定する（#1317）。こちらは主張のまま（検証で
 確かめ、外す）で、回答の対応（`answer_outcome`）が「現場の確認が要る」の印に使う。
 
-段落の分け方は RAG の `rag_engine.generation.operation_audit.answer_passages` と同じ（`answer_quote`
-はこの段落の原文。製品をまたいで import しないため写す）。括弧の中の「。」では分けない（#1455）。
-両方のテストが platform/contracts/answer-passages/sentence-splits.json の同じ事例で確かめる。
+段落の分け方は Agent が自分の回答を組み立て直す（外す・印を付ける・番号を詰める）ための規則で、
+括弧の中の「。」では分けない（#1455）。規則の事例は RAG と共有の契約
+platform/contracts/answer-passages/sentence-splits.json（段落の見え方を 2 つの製品でそろえる）。
+RAG の `rag_validate_answer` の段落の判定は、分け方の一致を前提にせず、判定の `answer_range`
+（渡した回答の中の位置）で Agent の段落に結び付ける（`answer_validation.align_claims`。#3240）。
 """
 
 from __future__ import annotations
@@ -64,7 +66,7 @@ KIND_TABLE = "table"
 # 作業の経過だけを述べる文（「業務ガイドは見つかりませんでした。」。#1452）。不足の印にはしない。
 KIND_PROCESS = "process_note"
 
-# ---- 段落の分け方（RAG と同じ規則） ----------------------------------------------
+# ---- 段落の分け方（事例は RAG と共有の契約） ------------------------------------
 
 _QUOTE_ONLY_LINE = re.compile(r"\s*(?:・|[0-9]+[.)]\s*)?「.*」\s*")
 _PASSAGE_CHARS = 600
@@ -126,6 +128,19 @@ def passage_spans(line: str) -> list[tuple[int, int, str]]:
             text = value[index : index + _PASSAGE_CHARS]
             spans.append((offset + index, offset + index + len(text), text))
     return spans
+
+
+def answer_passage_positions(answer: str) -> list[tuple[int, int, str]]:
+    """回答の段落の、回答の中の位置（開始・終了）と原文（行ごとの `passage_spans` の位置を回答の
+    位置にしたもの）。"""
+    positions: list[tuple[int, int, str]] = []
+    offset = 0
+    for line in answer.split("\n"):
+        positions.extend(
+            (offset + start, offset + end, text) for start, end, text in passage_spans(line)
+        )
+        offset += len(line) + 1
+    return positions
 
 
 # ---- 主張ではない段落の判定 --------------------------------------------------------
@@ -212,14 +227,12 @@ _CITATION_SECTION = re.compile(
 )
 # 確かめきれない点・除いた内容の節の見出し（Agent の最終の検証が足す「根拠と矛盾し除いた内容」
 # 「確認が必要な点」〔#2738。answer_validation.SECTION_HEADINGS。後者は語の一部に当たらないよう
-# 見出しの全体で比べる〕と、RAG・モデルが付ける同じ意味の見出し）。RAG の回答の見出しは
-# rag_engine の grounded.GAPS_SECTION_TITLE「資料から確認できなかった事項」・
-# UNVERIFIED_SECTION_TITLE「回答に未反映の関連章節」・DEADLINE_SECTION_TITLE
-# 「回答時間の上限により省略した処理」（#2040）。
+# 見出しの全体で比べる〕と、RAG・モデルが付ける同じ意味の見出し）。RAG の回答（`rag_search` の
+# answer）の末尾の節の見出しは、共有の語彙の `unverified_section_titles`（RAG の言語資源を写さない。
+# #2040・#3240）。
 _UNVERIFIED_SECTION = re.compile(
     r"根拠と矛盾し除いた内容|^確認が必要な点$"
-    r"|資料で確認できず除いた内容|資料から確認できなかった事項|回答に未反映の関連章節"
-    r"|回答時間の上限により省略した処理"
+    rf"|資料で確認できず除いた内容|{_v('unverified_section_titles')}"
     r"|確かめられていない点|確かめられない点|確認できていない点|確認できない点|未確認の(?:点|事項)"
     r"|資料からは確認できない点|資料で確かめられない点|不明な点"
 )

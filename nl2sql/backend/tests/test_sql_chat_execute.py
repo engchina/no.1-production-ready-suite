@@ -86,6 +86,9 @@ def test_chat_execute_runs_stored_sql_and_keeps_only_summary(
     assert history["actor_user_uuid"] == "user-1"
     assert history["result_row_count"] == data.results.total
     assert history["generated_sql"] == "SELECT ID FROM APP.ORDERS"
+    # SQL を実行するだけでモデルを呼ばないので、利用量は実測の 0（#3543）。
+    assert history["usage"]["requests"] == history["usage"]["total_tokens"] == 0
+    assert history["usage"]["measurement"] == "complete"
 
     # ターンのジョブには要約だけを残し、行は保存しない。別の worker で開き直しても要約が出る。
     document = repository.get_document("jobs", turn.job_id)

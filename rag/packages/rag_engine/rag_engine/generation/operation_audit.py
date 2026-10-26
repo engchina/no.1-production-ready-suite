@@ -62,21 +62,41 @@ def sentence_ranges(line: str) -> list[tuple[int, int]]:
     return merged
 
 
+_PASSAGE_CHARS = 600
+
+
+def answer_passage_ranges(text: str) -> list[tuple[str, int, int]]:
+    """``answer_passages`` の段落の ID と、``text`` の中の位置（開始・終了。``text[start:end]`` が段落の原文）。
+
+    MCP の ``rag_validate_answer`` は段落の判定にこの位置を付けて返し、呼び出し側は段落の分け方を写さずに
+    位置で段落を特定する（#3240）。
+    """
+    result: list[tuple[str, int, int]] = []
+    offset = 0
+    for line in text.split("\n"):
+        ranges = [(0, len(line))] if _QUOTE_ONLY_LINE.fullmatch(line) else sentence_ranges(line)
+        for begin, end in ranges:
+            piece = line[begin:end]
+            value = piece.strip()
+            if not value:
+                continue
+            lead = begin + len(piece) - len(piece.lstrip())
+            for start in range(0, len(value), _PASSAGE_CHARS):
+                stop = min(start + _PASSAGE_CHARS, len(value))
+                result.append((f"A{len(result) + 1}", offset + lead + start, offset + lead + stop))
+        offset += len(line) + 1
+    return result
+
+
 def answer_passages(text: str) -> list[dict[str, str]]:
     """改写せず文・改行で区切る。長文も600文字の連続範囲として保持する。
 
     句点直後の閉じ括弧は同じ文に含める。括弧の中の「。」では切らない（``sentence_ranges``。#1455）。
     括弧の途中で切ると、検証で前の半分を外したときに閉じ括弧の残る断片が本文に残る。行全体が1つの
     「…」の引用（原文のみ提示の行。表の引用は複数の文を含む）は、引用の途中で切らずに1段落として扱う。
+    段落の位置は ``answer_passage_ranges``。
     """
-    result = []
-    for line in text.split("\n"):
-        pieces = [line] if _QUOTE_ONLY_LINE.fullmatch(line) else [line[begin:end] for begin, end in sentence_ranges(line)]
-        for piece in pieces:
-            value = piece.strip()
-            for start in range(0, len(value), 600):
-                result.append({"id": f"A{len(result) + 1}", "text": value[start : start + 600]})
-    return result
+    return [{"id": passage_id, "text": text[start:end]} for passage_id, start, end in answer_passage_ranges(text)]
 
 
 # 見出しの記法（Markdown の見出し・【…】・太字だけの行）と、その語。

@@ -1,5 +1,5 @@
 {
-  "description": "回答の段落の分け方の語（RAG の rag_engine.generation.operation_audit と Agent の answer_passages が同じ語から規則を組み立てる。#2197）。語の中の空白は「空白が 0 個以上」として扱う。",
+  "description": "回答の段落の分け方の語（RAG の rag_engine.generation.operation_audit と Agent の answer_passages が同じ語から規則を組み立てる。#2197）。語の中の空白は「空白が 0 個以上」として扱う。 unverified_section_titles は RAG の回答（rag_search の answer）の末尾の、回答に入れられなかった範囲・省いた処理を示す節の見出し（RAG の既定の言語資源の answer_labels の gaps_section・unverified_section・deadline_section。#3240）で、Agent はこの見出しの節の行を主張として確かめない。RAG のテストが言語資源の既定と一致することを確かめる。",
   "heading_end_words": [
     "根拠",
     "補足",
@@ -257,5 +257,10 @@
   "table_lead_in_labels": [
     "表",
     "一覧"
+  ],
+  "unverified_section_titles": [
+    "資料から確認できなかった事項",
+    "回答に未反映の関連章節",
+    "回答時間の上限により省略した処理"
   ]
 }

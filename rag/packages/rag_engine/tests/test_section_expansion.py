@@ -658,7 +658,7 @@ def test_unread_sections_make_the_answer_conditional():
     draft = {
         "summary": "空調の点検の項目です。",
         "confidence": "high",
-        "items": [{"kind": "rule", "text": quote, "evidence_id": evidence_id, "quote": quote}],
+        "items": [{"kind": "rule", "text": quote, "citations": [{"evidence_id": evidence_id, "quote": quote}]}],
     }
     audit = {
         "goal_alignment": "aligned",
@@ -962,7 +962,7 @@ def test_answer_hides_unread_sections_of_documents_it_does_not_cite():
     draft = {
         "summary": "空調の点検の項目です。",
         "confidence": "high",
-        "items": [{"kind": "rule", "text": quote, "evidence_id": evidence_id, "quote": quote}],
+        "items": [{"kind": "rule", "text": quote, "citations": [{"evidence_id": evidence_id, "quote": quote}]}],
     }
     audit = {
         "goal_alignment": "aligned",

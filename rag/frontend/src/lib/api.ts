@@ -18,6 +18,7 @@ import {
   type ApiErrorPresentable,
   type ApiErrorPresentation,
   type ApiTransportRequest,
+  type RunModelUsageRecord,
 } from "@production-ready/ui";
 // Cookie セッションの CSRF と 401 / 403 の通知は3製品共通（platform の共有パッケージ。#220 / #214）。
 import { csrfHeader, notifyAuthResponse, notifyAuthStatus } from "@production-ready/system-settings";
@@ -4844,20 +4845,8 @@ export interface RunDetail extends RunSummary {
   usage?: RunModelUsage | null;
 }
 
-/** 1 回の実行のモデルの利用量（#3419）。合計は入力 + 出力（cached は入力、reasoning は出力の内数）。 */
-export interface RunModelUsage {
-  /** 呼び出したモデルの ID（回答のモデルが先頭）。 */
-  models: string[];
-  requests: number;
-  input_tokens: number;
-  output_tokens: number;
-  total_tokens: number;
-  cached_input_tokens: number | null;
-  reasoning_output_tokens: number | null;
-  /** complete: すべての呼び出しを計測した。partial: 一部の呼び出しの利用量が無い。 */
-  measurement: "complete" | "partial";
-  measured_requests: number;
-}
+/** 1 回の実行のモデルの利用量（#3419）。形は 3 製品で共通（`@production-ready/ui` の `RunModelUsageRecord`）。 */
+export type RunModelUsage = RunModelUsageRecord;
 
 /** RAG 検索の実行の条件（#3309）。`filters` は画面が送れる絞り込み（分類・基準日・抽出項目の値）だけ。 */
 export interface RunSearchConditions {

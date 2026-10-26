@@ -55,6 +55,11 @@ from pr_backend_core.chat_progress import (
     ChatProgressStepDetails,
     chat_progress_details,
 )
+from pr_backend_core.observability.model_usage import (
+    ModelUsageCollector,
+    RunModelUsage,
+    add_run_usage,
+)
 from pr_backend_core.observability.request_context import bind_log_context
 from pr_backend_core.observability.tracing import (
     SpanDisplay,
@@ -66,6 +71,7 @@ from pr_backend_core.observability.tracing import (
     observed_span,
     operation_trace,
     record_span,
+    snapshot_operation_trace,
     validated_trace_context,
 )
 from pr_backend_core.oracle_errors import oracle_error_codes
@@ -4111,6 +4117,25 @@ def _job_trace_dropped(job: StoredJob) -> int:
     return max(job.trace_dropped_spans, trace_span_dropped(job.trace_id))
 
 
+def _with_requirement_usage(
+    usage: RunModelUsage | None, request: JobCreateRequest
+) -> RunModelUsage | None:
+    """ジョブの利用量に、回答前の確認の LLM の呼び出しの利用量を足す（#3552）。
+
+    確認の要求はジョブの trace の外なので、確認の session が集めた利用量を反映した要件
+    （`sql_requirement.usage`）で受け取る。確認を経ないジョブと、確認の利用量の記録が無いジョブ
+    （この機能より前の session）は、ジョブの利用量のまま。ジョブの記録が無い（trace の始まる前に
+    止まった）ときは、確認の分だけを一部計測として残す（ジョブの呼び出しは数えていない）。
+    """
+
+    requirement = request.sql_requirement.usage if request.sql_requirement is not None else None
+    if requirement is None:
+        return usage
+    if usage is None:
+        return requirement.model_copy(update={"measurement": "partial"})
+    return add_run_usage(usage, requirement)
+
+
 _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -4871,6 +4896,9 @@ class Nl2SqlService:
             )
         }
         self._jobs: dict[str, StoredJob] = {}
+        # 実行中のジョブのモデルの利用量（この process の worker が実行している試行だけ。実行履歴の
+        # 行に残す。#3543）。
+        self._job_model_usage: dict[str, ModelUsageCollector] = {}
         # チャットのジョブの中で実行した結果の行（repository が無い構成だけ。受け取るまで。#1176）。
         self._chat_results: dict[str, dict[str, Any]] = {}
         self._history: list[HistoryItem] = []
@@ -5811,6 +5839,9 @@ class Nl2SqlService:
             trace_id=job.trace_id,
             trace_dropped_spans=_job_trace_dropped(job),
             span_details=dict(job.span_details),
+            # 止めるまでのモデルの呼び出し（応答の返らなかった呼び出しは一部計測。#3543）と、
+            # 回答前の確認の呼び出し（#3552）。
+            usage=_with_requirement_usage(self._job_usage(job.job_id), request),
             generation_only=request.generation_only,
             business_release_id=job.business_release_id,
             id=str(uuid.uuid4()),
@@ -10060,6 +10091,9 @@ class Nl2SqlService:
             created_at=data.executed_at,
             elapsed_ms=data.elapsed_ms,
             stage_timings=[StageTiming(stage="execute_sql", elapsed_ms=data.elapsed_ms)],
+            # 生成した SQL を実行するだけで、モデルを呼ばない（安全性の確認・修正案も規則だけ）。
+            # 利用量は実測の 0（#3543）。
+            usage=RunModelUsage(),
             profile_id=profile.id,
             profile_name=profile.name,
             profile_category=profile.category,
@@ -23522,7 +23556,12 @@ class Nl2SqlService:
             return bool(job is not None and job.cancel_requested)
 
     def _job_progress_listener(
-        self, job_id: str, *, owner_user_uuid: str, attempt: int
+        self,
+        job_id: str,
+        *,
+        owner_user_uuid: str,
+        attempt: int,
+        usage: ModelUsageCollector | None = None,
     ) -> SpanListener | None:
         """実行の span の listener（#3226 の案 A）。
 
@@ -23531,7 +23570,8 @@ class Nl2SqlService:
         ジョブに置き、続く保存（段の切り替え・完了・失敗。保存の往復は増やさない。#904）で出す。
         実行所有権を失った（別の worker が引き継いだ）ジョブには置かない。span は worker の thread
         の
-        ほか、生成の中の thread からも知らされる。
+        ほか、生成の中の thread からも知らされる。`usage` は同じ知らせからモデルの呼び出しの回数と
+        利用量を集める（実行履歴の行に残す。#3543）。
         """
 
         def keep_details(update: SpanUpdate) -> None:
@@ -23551,7 +23591,27 @@ class Nl2SqlService:
                 operation_id=job_id, owner_user_uuid=owner_user_uuid, attempt=attempt
             ),
             keep_details,
+            usage.observe if usage is not None else None,
         )
+
+    def _job_usage(
+        self, job_id: str, *, primary_model: str | None = None, truncated: bool | None = None
+    ) -> RunModelUsage | None:
+        """実行中のジョブのモデルの利用量（実行履歴の行に残す。#3543）。
+
+        この process の worker が実行していないジョブ（集めていない）は None（未計測）。
+        `truncated` を渡さなければ、今の trace が記録の上限で span を切ったかを見る（切った trace は
+        呼び出しを数えきれていないので一部計測）。
+        """
+
+        with self._lock:
+            collector = self._job_model_usage.get(job_id)
+        if collector is None:
+            return None
+        if truncated is None:
+            snapshot = snapshot_operation_trace()
+            truncated = snapshot is not None and snapshot.truncated
+        return collector.summary(primary_model=primary_model, truncated=truncated)
 
     def _run_job_safely(self, job_id: str) -> None:
         with self._lock:
@@ -23564,27 +23624,37 @@ class Nl2SqlService:
                 # 引き継いだ実行（2 回目以降の claim）は span の木を作り直す（前の試行の詳細を
                 # 残さない）。
                 pending_trace.span_details = {}
-        with (
-            bind_log_context(job_id=job_id),
-            attach_trace_context(carrier),
-            operation_trace(
-                "nl2sql.execute",
-                operation_id=job_id,
-                attributes={"pr.attempt": trace_attempt},
-                listener=self._job_progress_listener(
-                    job_id,
-                    owner_user_uuid=owner,
-                    attempt=max(0, trace_attempt - 1),
-                ),
-                links=trace_links(link_carrier),
-            ) as summary,
-        ):
+            # モデルの利用量は試行ごとに集める（引き継いだ実行は span の木と一緒に作り直す。
+            # #3543）。
+            usage = ModelUsageCollector()
+            self._job_model_usage[job_id] = usage
+        try:
+            with (
+                bind_log_context(job_id=job_id),
+                attach_trace_context(carrier),
+                operation_trace(
+                    "nl2sql.execute",
+                    operation_id=job_id,
+                    attributes={"pr.attempt": trace_attempt},
+                    listener=self._job_progress_listener(
+                        job_id,
+                        owner_user_uuid=owner,
+                        attempt=max(0, trace_attempt - 1),
+                        usage=usage,
+                    ),
+                    links=trace_links(link_carrier),
+                ) as summary,
+            ):
+                with self._lock:
+                    running = self._jobs.get(job_id)
+                    if running is not None and summary.telemetry_trace_id:
+                        # 画面は記録の trace id で span の表を読む（最初の保存で出る）。
+                        running.trace_id = summary.telemetry_trace_id
+                self._run_job_attempt_safely(job_id)
+        finally:
             with self._lock:
-                running = self._jobs.get(job_id)
-                if running is not None and summary.telemetry_trace_id:
-                    # 画面は記録の trace id で span の表を読む（最初の保存で出る）。
-                    running.trace_id = summary.telemetry_trace_id
-            self._run_job_attempt_safely(job_id)
+                if self._job_model_usage.get(job_id) is usage:
+                    del self._job_model_usage[job_id]
 
     def _run_job_attempt_safely(self, job_id: str) -> None:
         try:
@@ -24433,18 +24503,30 @@ class Nl2SqlService:
         # 実行の全体の span を閉じる（最終の状態の正本はジョブの状態。#3226 の案 A）。書けなかった
         # span の数と工程の詳細は、ジョブと実行履歴の行の両方に残す（実行履歴の詳細も同じ span を
         # 読む）。
-        finish_operation_trace(
+        trace_summary = finish_operation_trace(
             job_id, status="done" if final_status == JobStatus.DONE else "failed"
         )
         with self._lock:
             trace_id = job.trace_id
             trace_dropped = _job_trace_dropped(job)
             span_details = dict(job.span_details)
+        # 実行を確定した後に集める（生成のモデルを先頭にする。記録の上限で span を切った trace は
+        # 一部計測。#3543）。
+        model = result.engine_meta.get("model")
+        usage = _with_requirement_usage(
+            self._job_usage(
+                job_id,
+                primary_model=model if isinstance(model, str) else None,
+                truncated=trace_summary is not None and trace_summary.truncated,
+            ),
+            request,
+        )
         history_item = HistoryItem(
             job_id=job_id,
             trace_id=trace_id,
             trace_dropped_spans=trace_dropped,
             span_details=span_details,
+            usage=usage,
             generation_only=request.generation_only,
             business_release_id=business_release_id,
             id=history_id,

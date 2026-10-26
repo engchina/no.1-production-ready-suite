@@ -4,7 +4,7 @@ import pytest
 
 from rag_engine.generation.number_notation import format_draft_numbers
 from rag_engine.generation.value_grounding import unsupported_document_value_claim
-from rag_engine.models.llm import GroundedDraft, GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
 QUESTION = "上限は何件ですか。半角の算用数字と万・千を組み合わせた表記で答えてください。"
 SOURCE = "上限は二万四千件です。"
@@ -12,7 +12,9 @@ SOURCE = "上限は二万四千件です。"
 
 def draft(text):
     return GroundedDraft(
-        summary=text, confidence="high", items=[GroundedItem(kind="rule", text=text, quote=SOURCE, condition=SOURCE, evidence_id="E1")]
+        summary=text,
+        confidence="high",
+        items=[GroundedItem(kind="rule", text=text, citations=[GroundedCitation(quote=SOURCE, evidence_id="E1")], condition=SOURCE)],
     )
 
 

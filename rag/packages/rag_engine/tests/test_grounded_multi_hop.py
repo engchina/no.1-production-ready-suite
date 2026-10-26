@@ -9,7 +9,7 @@
 from test_grounded_answer import FakeModel, audit, context, draft, ids, item, record, run
 
 from rag_engine.generation import grounded
-from rag_engine.models.llm import GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedItem
 
 QUESTION = "人事給与システムの変更の承認者と、承認の期限を教えてください。"
 LEDGER = "システムID: SYS-111 / 正式名: 人事給与システム / 略称・別表記: HRP / 担当部署: 労 / 重要度: A / 機密区分: 社外秘"
@@ -194,7 +194,10 @@ def test_rule_quote_with_a_miscopied_trailing_sentence_binds_to_its_verbatim_fir
 
     def bound(kind, text):
         return grounded.resolve_evidence(
-            GroundedItem(kind=kind, text=text, evidence_id="E1", quote="略号「労」: 労務部。研究本部に属します。"), spans
+            GroundedItem(
+                kind=kind, text=text, citations=[GroundedCitation(evidence_id="E1", quote="略号「労」: 労務部。研究本部に属します。")]
+            ),
+            spans,
         )
 
     assert bound("rule", "略号「労」は労務部です。") == (spans[0], "略号「労」: 労務部。")
@@ -206,7 +209,9 @@ def test_miscopied_sentence_needs_a_verbatim_first_sentence_in_the_named_evidenc
     spans = [{"evidence_id": "E1", "label": "E1", "text": CODES}, {"evidence_id": "E2", "label": "E2", "text": APPROVERS}]
 
     def miscopied(evidence_id, quote):
-        return grounded.miscopied_sentence(GroundedItem(kind="rule", text="t", evidence_id=evidence_id, quote=quote), spans)
+        return grounded.miscopied_sentence(
+            GroundedItem(kind="rule", text="t", citations=[GroundedCitation(evidence_id=evidence_id, quote=quote)]), spans
+        )
 
     assert miscopied("E1", "略号「労」: 労務部。生産本部に属します。") == {
         "quoted": "生産本部に属します。",
@@ -234,14 +239,17 @@ def test_prompts_tell_generation_and_audit_how_to_treat_intermediate_hops():
 
 def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
     """同じ内容を述べた規則の原文と手順書の両方を出典にし、出典を 1 つに絞る言い方を残さない（#3526）。"""
-    from rag_engine.models.llm import RequestCoverage, RequestEvidenceScope
+    from rag_engine.models.llm import GroundedItem, RequestCoverage, RequestEvidenceScope
 
     generate = grounded.GENERATE_SYSTEM_PROMPT
     section = generate.split("4.10 出典の網羅", 1)[1].split("## 5.", 1)[0]
     assert "挙げた文書ごとに" in section
     assert "言い換えていても省かず" in section
-    assert "その quote が支える範囲だけ" in section
-    assert "説明の内容を支えない原文は、質問に関係していても引かない" in section
+    assert "説明の内容を支えない原文は、質問に関係していても出典にしない" in section
+    # 1 つの説明に文書ごとの出典を並べ、各出典がそれだけで説明を支える（規則は応答の schema の 1 か所）。
+    citations = GroundedItem.model_json_schema()["properties"]["citations"]["description"]
+    assert "各出典の原文はそれだけで text の全体を支える" in citations
+    assert "item を分けずに文書ごとの出典を並べる" in citations
     assert "重複する item をまとめ" not in generate
     assert "同じ根拠の同じ内容の item をまとめ" in generate
     relation = RequestEvidenceScope.model_json_schema()["properties"]["relation"]["description"]

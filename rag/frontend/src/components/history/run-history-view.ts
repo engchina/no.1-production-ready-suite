@@ -9,6 +9,9 @@
 import {
   formatRunDuration,
   chatProgressTimelineStep,
+  runListUsage as sharedRunListUsage,
+  runUsageView as sharedRunUsageView,
+  type RunUsageView,
   type ChatProgressStep,
   type RunExecutorFilter as SharedRunExecutorFilter,
   type RunStatus as SharedRunStatus,
@@ -204,54 +207,32 @@ export function formatRunElapsed(elapsedMs: number | null | undefined): string {
   return formatRunDuration(elapsedMs, t("history.notRecorded"));
 }
 
-/** 概要の「モデル」「token」「モデルの呼び出し」（Agent の実行の詳細と同じ形。#3419）。 */
-export interface RunUsageView {
-  /** 呼び出したモデルの ID（複数は「、」で並べる）。記録が無ければ null（並べない）。 */
-  model: string | null;
-  usage: { tokens: number | null; note: string | null };
-  modelCalls: string;
+/** 利用量の文言（RAG の i18n。表示の規則は 3 製品で共通の `runUsageView` / `runListUsage`。#3419・#3543）。 */
+function usageLabels() {
+  return {
+    unmeasured: t("history.detail.usageUnmeasured"),
+    partial: t("history.detail.usagePartial"),
+    modelCalls: (values: { requests: string; input: string; output: string }) =>
+      t("history.detail.modelCallsValue", values),
+    modelCallsPartial: (values: { requests: string; measured: string; input: string; output: string }) =>
+      t("history.detail.modelCallsPartial", values),
+  };
 }
 
 /**
- * 実行のモデルと利用量の表示。モデルは実行のときに記録した具体的な ID だけを出し、今の設定から推測しない。
- *
- * - 利用量の記録が無い（この機能より前の記録・trace の始まる前に失敗した実行）: token と呼び出しは「未計測」（0 にしない）。
- * - 一部の呼び出しの利用量が無い: 計測できた分の数に「一部計測」を添える。
- * - LLM を呼ばなかった実行: 実測の 0。
+ * 概要の「モデル」「token」「モデルの呼び出し」（Agent の実行の詳細と同じ形。#3419）。モデルは実行のときに記録した具体的な
+ * ID だけを出し、今の設定から推測しない。規則（未計測・一部計測・実測の 0）は共通の `runUsageView`。
  */
 export function runUsageView(run: Pick<RunDetail, "model_id" | "usage">): RunUsageView {
-  const usage = run.usage ?? null;
-  const models = usage?.models.length ? usage.models : run.model_id ? [run.model_id] : [];
-  const model = models.length ? models.join("、") : null;
-  if (!usage) {
-    const unmeasured = t("history.detail.usageUnmeasured");
-    return { model, usage: { tokens: null, note: unmeasured }, modelCalls: unmeasured };
-  }
-  const partial = usage.measurement === "partial";
-  const values = {
-    requests: formatNumber(usage.requests),
-    measured: formatNumber(usage.measured_requests),
-    input: formatNumber(usage.input_tokens),
-    output: formatNumber(usage.output_tokens),
-  };
-  return {
-    model,
-    usage: { tokens: usage.total_tokens, note: partial ? t("history.detail.usagePartial") : null },
-    modelCalls: t(partial ? "history.detail.modelCallsPartial" : "history.detail.modelCallsValue", values),
-  };
+  return sharedRunUsageView(run.usage, { fallbackModel: run.model_id, labels: usageLabels() });
 }
 
 /**
- * 一覧の「token」の列（#3466）。一覧の API は利用量の全体ではなく合計と計測の状態だけを返す。詳細の概要
- * （`runUsageView`）と同じ規則: 記録の無い実行は「未計測」（0 にしない）、一部計測は数に「一部計測」を添え、
- * LLM を呼ばなかった実行は実測の 0。
+ * 一覧の「token」の列（#3466）。一覧の API は利用量の全体ではなく合計と計測の状態だけを返す。規則は詳細の概要と同じ
+ * （共通の `runListUsage`）。
  */
 export function runListUsage(
   run: Pick<RunSummary, "total_tokens" | "usage_measurement">
 ): { tokens: number | null; note: string | null } {
-  if (!run.usage_measurement) return { tokens: null, note: t("history.detail.usageUnmeasured") };
-  return {
-    tokens: run.total_tokens ?? 0,
-    note: run.usage_measurement === "partial" ? t("history.detail.usagePartial") : null,
-  };
+  return sharedRunListUsage(run.total_tokens, run.usage_measurement, usageLabels());
 }

@@ -10,7 +10,7 @@ from rag_parser_core.language import bind_pack, builtin_pack, resolve
 
 from rag_engine.generation import grounded
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
-from rag_engine.models.llm import GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedItem
 from rag_engine.retrieval.context_builder import ContextParentEvidence
 from rag_engine.retrieval.request_coverage import (
     CoverageBudget,
@@ -265,7 +265,12 @@ def test_select_new_parents_keeps_shared_cap_for_missing_requests() -> None:
 
 def _entry(request_id: str, text: str, page: int) -> grounded.CheckedItem:
     span = {"evidence_id": f"E{page}", "source": "manual.pdf", "page": page, "function": ("doc", "f"), "document_scope": ["doc"]}
-    return grounded.CheckedItem(GroundedItem(kind="rule", text=text, quote=text, request_id=request_id, applies="matched"), span=span)
+    return grounded.CheckedItem(
+        GroundedItem(
+            kind="rule", text=text, citations=[GroundedCitation(evidence_id="", quote=text)], request_id=request_id, applies="matched"
+        ),
+        span=span,
+    )
 
 
 def test_answer_is_split_by_subquestion_heading_and_only_unsupported_is_gap() -> None:

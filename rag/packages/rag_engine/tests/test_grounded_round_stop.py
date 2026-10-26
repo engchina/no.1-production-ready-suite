@@ -21,7 +21,12 @@ def _drafts(model):
 
 
 def _gap(request_id):
-    return {"kind": "gap", "text": "資料に抽出条件の記載がありません。", "evidence_id": "", "quote": "", "request_id": request_id}
+    return {
+        "kind": "gap",
+        "text": "資料に抽出条件の記載がありません。",
+        "citations": [{"evidence_id": "", "quote": ""}],
+        "request_id": request_id,
+    }
 
 
 def _adopted(*kinds_and_requests):
