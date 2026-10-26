@@ -391,7 +391,7 @@ class ProfileSyncService:
                         "status": ProfileSyncJobStatus.CANCELLED,
                         "phase": ProfileSyncJobPhase.CANCELLED,
                         "error_code": "PROFILE_DELETED",
-                        "error_message_ja": "業務 Profile が削除されたため同期を中止しました。",
+                        "error_message_ja": "業務プロファイルが削除されたため同期を中止しました。",
                         "finished_at": _now(),
                     }
                 )
@@ -571,7 +571,7 @@ class ProfileSyncService:
         profile = self._service.get_profile(job.profile_id)
         if job.profile_etag and profile.etag != job.profile_etag:
             raise RuntimeError(
-                "業務 Profile が同期受付後に更新されました。最新版から再試行してください。"
+                "業務プロファイルが同期受付後に更新されました。最新版から再試行してください。"
             )
 
     @staticmethod

@@ -77,7 +77,12 @@ const ANSWER = [
   "根拠：文書 A.pdf p.3",
 ].join("\n");
 
-async function ask(page: Page, citations: unknown[], format?: Record<string, string>) {
+async function ask(
+  page: Page,
+  citations: unknown[],
+  format?: Record<string, string>,
+  { text = ANSWER, passages }: { text?: string; passages?: Record<string, unknown> } = {}
+) {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (route) => {
@@ -99,10 +104,10 @@ async function ask(page: Page, citations: unknown[], format?: Record<string, str
           diagnostics: {
             search_answer_profile_applied: PROFILE.id,
             retrieval_strategy: "hybrid",
-            answer: { confidence: "high", execution_steps: [], evidence_tree: [], answer_format: format },
+            answer: { confidence: "high", execution_steps: [], evidence_tree: [], answer_format: format, ...passages },
           },
         })}\n\n`,
-        `event: delta\ndata: ${JSON.stringify({ text: format ? ANSWER.replaceAll("資料により確認できた事項", format.rules_section).replaceAll("根拠：", format.citation_prefix).replaceAll("・", format.item_bullet).replaceAll("p.3", "頁[3]") : ANSWER })}\n\n`,
+        `event: delta\ndata: ${JSON.stringify({ text: format && text === ANSWER ? ANSWER.replaceAll("資料により確認できた事項", format.rules_section).replaceAll("根拠：", format.citation_prefix).replaceAll("・", format.item_bullet).replaceAll("p.3", "頁[3]") : text })}\n\n`,
         `event: citations\ndata: ${JSON.stringify(citations)}\n\n`,
         `event: done\ndata: ${JSON.stringify({ trace_id: "trace-provenance" })}\n\n`,
       ].join(""),
@@ -115,7 +120,7 @@ async function ask(page: Page, citations: unknown[], format?: Record<string, str
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("合成の質問");
   await page.getByRole("button", { name: "検索", exact: true }).click();
   const answer = page.getByTestId("answer-text");
-  await expect(answer.getByRole("heading", { name: format?.rules_section ?? "資料により確認できた事項" })).toBeVisible();
+  await expect(answer.getByRole("heading", { name: format?.rules_section ?? "資料により確認できた事項" }).first()).toBeVisible();
   return answer;
 }
 
@@ -215,4 +220,54 @@ test("保存した表示形式の回答でも原文を開ける", { tag: "@respo
   await closeSheet(page);
   await expectNoPageOverflow(page);
   await page.screenshot({ path: test.info().outputPath("custom-answer-format.png"), fullPage: true });
+});
+
+// issue 3394: 印の付いた説明は「資料により確認できた事項」に入れず、別の節に置く（見出しと印の意味を合わせる）。
+test("印の付いた説明は確認できた事項と別の節に出す", { tag: "@responsive" }, async ({ page }) => {
+  const note = "次の説明は根拠で確かめきれていないか、注意が必要です。理由は「確認が必要な点」に示します。";
+  const marked = "・合成の操作を行います。";
+  const text = [
+    "結果 C は右の枠に出ます。",
+    "",
+    "資料により確認できた事項",
+    "",
+    "・左の枠に値 B を入れると、右の枠に結果 C が出ます。",
+    "根拠：文書 A.pdf p.3",
+    "",
+    "根拠で確かめきれていない事項",
+    "",
+    note,
+    marked,
+    "根拠：文書 A.pdf p.3",
+  ].join("\n");
+  const format = {
+    rules_section: "資料により確認できた事項",
+    marked_rules_section: "根拠で確かめきれていない事項",
+    marked_rules_section_note: note,
+    citation_prefix: "根拠：",
+    item_bullet: "・",
+    page_location: "p.{page}",
+  };
+  const passages = {
+    passage_marks: [
+      { text: marked, state: "unverified", reasons: [{ code: "unassessed", label: "確かめが終わっていない", detail: "" }] },
+    ],
+    removed_passages: [],
+    answer_warnings: [],
+  };
+  const answer = await ask(page, RESOLVED, format, { text, passages });
+  await expect(answer.getByRole("heading", { name: "根拠で確かめきれていない事項" })).toBeVisible();
+  const confirmed = answer.getByRole("heading", { name: "資料により確認できた事項" });
+  await expect(confirmed).toHaveCount(1);
+  // 印の付いた説明は、確認できた事項の節ではなく、確かめきれていない事項の節の中にある。
+  const [confirmedBox, markedHeadingBox, markedBox] = await Promise.all([
+    confirmed.boundingBox(),
+    answer.getByRole("heading", { name: "根拠で確かめきれていない事項" }).boundingBox(),
+    answer.getByText("合成の操作を行います。", { exact: true }).first().boundingBox(),
+  ]);
+  expect(confirmedBox!.y).toBeLessThan(markedHeadingBox!.y);
+  expect(markedHeadingBox!.y).toBeLessThan(markedBox!.y);
+  await expect(answer.getByText(note)).toBeVisible();
+  await expectNoPageOverflow(page);
+  await answer.screenshot({ path: test.info().outputPath(`marked-rules-section-${test.info().project.name}.png`) });
 });

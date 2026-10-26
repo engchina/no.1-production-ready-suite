@@ -6647,7 +6647,7 @@ test("DeepSec 条件グループ: OR・括弧・関連条件・草稿復元と�
   await nested.getByLabel("値", { exact: true }).fill("SALES");
   await nested.getByRole("button", { name: "関連テーブル条件を追加" }).click();
   const related = page.getByTestId("scope-related-0-1-1");
-  await chooseSelectFieldOption(related.getByLabel("候補を選ぶ Profile"), "hr");
+  await chooseSelectFieldOption(related.getByLabel("候補を選ぶ業務プロファイル"), "hr");
   await chooseSelectFieldOption(related.getByLabel("関連テーブル", { exact: true }), "HR.DEPARTMENTS");
   await chooseSelectFieldOption(related.getByLabel("関連キーの設定方法"), "HR.FK_DEPT");
   await expectSelectFieldValue(related.getByLabel("対象テーブルの列"), "DEPARTMENT_CODE");
@@ -6712,7 +6712,7 @@ test("DeepSec 関連条件: 候補の読込・失敗再試行と手動複合キ�
   await fulfill(pending!, "関連候補を取得できませんでした", 503);
   await expect(related.getByText("関連候補を取得できませんでした", { exact: true })).toBeVisible();
   await related.getByRole("button", { name: "再試行", exact: true }).click();
-  await chooseSelectFieldOption(related.getByLabel("候補を選ぶ Profile"), "hr");
+  await chooseSelectFieldOption(related.getByLabel("候補を選ぶ業務プロファイル"), "hr");
   await chooseSelectFieldOption(related.getByLabel("関連テーブル", { exact: true }), "HR.DEPARTMENTS");
   await expectSelectFieldValue(related.getByLabel("関連キーの設定方法"), "");
   await chooseSelectFieldOption(related.getByLabel("対象テーブルの列"), "DEPARTMENT_CODE");
@@ -6844,7 +6844,7 @@ test("DeepSec 修正回帰: 関連 VIEW と TABLE の実種別で列と送信内
   await chooseSelectFieldOption(page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類"), "LOGIN_USER_ID");
   await page.getByRole("button", { name: "関連テーブル条件を追加", exact: true }).click();
   const related = page.getByTestId("scope-related-0-1");
-  await chooseSelectFieldOption(related.getByLabel("候補を選ぶ Profile"), "hr");
+  await chooseSelectFieldOption(related.getByLabel("候補を選ぶ業務プロファイル"), "hr");
   for (const target of objects) {
     await chooseSelectFieldOption(related.getByLabel("関連テーブル", { exact: true }), target);
     await chooseSelectFieldOption(related.getByLabel("対象テーブルの列"), "DEPARTMENT_CODE");
@@ -6907,7 +6907,7 @@ async function openReviewedRelatedCondition(page: Page) {
   await chooseSelectFieldOption(page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類"), "LOGIN_USER_ID");
   await page.getByRole("button", { name: "関連テーブル条件を追加", exact: true }).click();
   const related = page.getByTestId("scope-related-0-1");
-  await chooseSelectFieldOption(related.getByLabel("候補を選ぶ Profile"), "hr");
+  await chooseSelectFieldOption(related.getByLabel("候補を選ぶ業務プロファイル"), "hr");
   await chooseSelectFieldOption(related.getByLabel("関連テーブル", { exact: true }), "HR.DEPARTMENTS");
   await chooseSelectFieldOption(related.getByLabel("対象テーブルの列"), "DEPARTMENT_CODE");
   await chooseSelectFieldOption(related.getByLabel("関連テーブルの列"), "CODE");
@@ -6953,7 +6953,7 @@ test("DeepSec 再取得修正: 関連メタデータを更新し草稿保持と�
   await expect(related.getByLabel("値", { exact: true })).toHaveValue("東京");
   await expectSelectFieldValue(related.getByLabel("対象テーブルの列"), "DEPARTMENT_CODE");
   await expect.poll(() => selectFieldOptionLabels(related.getByLabel("列", { exact: true }))).toContain("REGION · VARCHAR2");
-  await expect(related.getByText("Profile または対象が変更されました。関連条件を再選択してください。", { exact: true })).toBeVisible();
+  await expect(related.getByText("業務プロファイルまたは対象が変更されました。関連条件を再選択してください。", { exact: true })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "実行確認語" })).toHaveValue("");
   await page.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
   await page.getByTestId("security-deepsec-sql-preview-generate").click();
@@ -7013,7 +7013,7 @@ test("DeepSec フォーカス修正: 条件・入れ子グループ・関連カ�
   await add(nested.locator(":scope > div").last(), "条件を追加");
   await expect(page.getByTestId("security-deepsec-scope-filter-0-2-1").getByLabel("列", { exact: true })).toBeFocused();
   await add(actions, "関連テーブル条件を追加");
-  await expect(page.getByTestId("scope-related-0-3").getByLabel("候補を選ぶ Profile")).toBeFocused();
+  await expect(page.getByTestId("scope-related-0-3").getByLabel("候補を選ぶ業務プロファイル")).toBeFocused();
   await expectNoPageHorizontalScroll(page);
 });
 
@@ -7361,7 +7361,7 @@ test("DeepSec 関連テーブル条件は引用名の表を Profile の候補か
   await chooseSelectFieldOption(page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類"), "LOGIN_USER_ID");
   await page.getByRole("button", { name: "関連テーブル条件を追加", exact: true }).click();
   const related = page.getByTestId("scope-related-0-1");
-  const profileSelect = related.getByLabel("候補を選ぶ Profile");
+  const profileSelect = related.getByLabel("候補を選ぶ業務プロファイル");
   // 大文字の同名表だけを含む Profile は、引用名の表の関連候補に出さない。
   await expect.poll(() => selectFieldOptionLabels(profileSelect)).toContain("営業（引用名）");
   const profileLabels = await selectFieldOptionLabels(profileSelect);
@@ -7394,7 +7394,7 @@ test("DeepSec 関連テーブル条件は引用名の表を Profile の候補か
   await chooseSelectFieldOption(relatedColumn, { label: nameLabel! });
   await expectSelectFieldValue(relatedColumn, '"Name"');
   await related.getByLabel("値", { exact: true }).fill("関東");
-  await expect(related.getByText("Profile または対象が変更されました。", { exact: false })).toHaveCount(0);
+  await expect(related.getByText("業務プロファイルまたは対象が変更されました。", { exact: false })).toHaveCount(0);
 
   await page.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
   await page.getByTestId("security-deepsec-sql-preview-generate").click();

@@ -1046,6 +1046,10 @@ export const ja = {
   "settings.language.field.unsourced_section.help": "検索した資料の原文と照合できない説明・業務ガイドの文から来た説明を、資料の出典を付けずに並べる節の見出しです。",
   "settings.language.field.unsourced_section_note": "出典を確かめられない説明の節の説明",
   "settings.language.field.unsourced_section_note.help": "出典を確かめられない説明の節の見出しの下に書く 1 文です。",
+  "settings.language.field.marked_rules_section": "確かめきれていない説明の節の見出し",
+  "settings.language.field.marked_rules_section.help": "根拠で確かめきれていない説明・注意が必要な説明を、資料により確認できた事項と分けて並べる節の見出しです。",
+  "settings.language.field.marked_rules_section_note": "確かめきれていない説明の節の説明",
+  "settings.language.field.marked_rules_section_note.help": "確かめきれていない説明の節の見出しの下に書く 1 文です。",
   "settings.language.field.guide_notes_section": "業務ガイドの案内の節の見出し",
   "settings.language.field.guide_notes_section.help": "業務ガイドの設定の窓口・引き継ぐ条件・承認を、資料の記載と分けて並べる節の見出しです。",
   "settings.language.field.guide_notes_note_template": "業務ガイドの案内の節の説明の型",
@@ -2383,6 +2387,7 @@ export const ja = {
     "「{name}」をアーカイブします。参照先のナレッジベース・文書は削除されません。",
   "searchAnswerProfiles.scope.label": "検索・回答プロファイル",
   "searchAnswerProfiles.scope.required": "対象の検索・回答プロファイルを選択してください。",
+  "search.prefill.profileUnavailable": "元の検索・回答プロファイルは使えません。選び直してください。",
   "searchAnswerProfiles.scope.noKnowledgeBases":
     "この検索・回答プロファイルには参照するナレッジベースがありません。検索・回答プロファイルの設定でナレッジベースを追加してください。",
   "searchAnswerProfileSelect.placeholder": "検索・回答プロファイルを検索して選択…",
