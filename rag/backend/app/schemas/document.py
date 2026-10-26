@@ -12,6 +12,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from rag_parser_core.extraction import strip_formatting_marks
 from rag_parser_core.source import SourceModality, SourcePreviewKind, SourceProfile
 
 from app.config import (
@@ -912,7 +913,8 @@ class DocumentSection(BaseModel):
     @field_validator("title")
     @classmethod
     def _require_title(cls, value: str) -> str:
-        cleaned = value.strip()
+        # 抽出の章節の名前と同じく書式の飾りの結合の線を除く（線を除く前の保存値も。#3434）。
+        cleaned = strip_formatting_marks(value).strip()
         if not cleaned:
             raise ValueError("章節の名前を入力してください。")
         return cleaned
