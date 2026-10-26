@@ -389,7 +389,7 @@ function AssistantColumn({
       {heading ? (
         // 1 列（既定のモデル）でも、どのモデルの回答かを出す（#649）。
         <h3
-          className="truncate border-b border-border pb-2 text-sm font-semibold text-fg"
+          className="min-w-0 break-words border-b border-border pb-2 text-sm font-semibold text-fg [overflow-wrap:anywhere]"
           title={heading}
           data-testid="chat-answer-model-heading"
         >

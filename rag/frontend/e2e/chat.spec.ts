@@ -2824,7 +2824,8 @@ for (const viewport of [
 ]) {
   test(`画像を添付して答えた回答の見出しに Vision モデルを出し、開き直しても同じ (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    const vision = { model_id: "vlm-1", label: "VISION 1" };
+    // 長いモデルの名前でも見出しを切らずに折り返す（375px）。
+    const vision = { model_id: "vlm-1", label: "vision-model-with-a-long-identifier-1" };
     const visionReply = { ...assistantMessage, answer_vision_model: vision };
     const textReply = { ...assistantMessage, message_id: "a2", trace_id: "t2", reply_to_message_id: "u2", answer_vision_model: null };
     const streamBody = [
@@ -2851,8 +2852,10 @@ for (const viewport of [
     const history = await openChatHistory(page);
     await history.getByRole("button", { name: /^経費の上限は？ 4件/ }).click();
     const headings = page.getByTestId("chat-answer-model-heading");
-    await expect(headings).toHaveText(["回答モデル: MODEL 1（画像を見て回答: VISION 1）", "回答モデル: MODEL 1"]);
-    await expect(headings.first()).toHaveAttribute("title", "回答モデル: MODEL 1（画像を見て回答: VISION 1）");
+    // 保存した回答の列のモデルは model_id（モデルの一覧の mock は空）。
+    await expect(headings).toHaveText(["回答モデル: m1（画像を見て回答: vision-model-with-a-long-identifier-1）", "回答モデル: m1"]);
+    await expect(headings.first()).toHaveAttribute("title", "回答モデル: m1（画像を見て回答: vision-model-with-a-long-identifier-1）");
+    expect(await headings.first().evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     await headings.first().scrollIntoViewIfNeeded();
     await page.screenshot({ path: `test-results/chat-answer-vision-heading-saved-${viewport.name}.png`, fullPage: false });
     await expectNoPageOverflow(page);
@@ -2861,7 +2864,7 @@ for (const viewport of [
     await page.getByRole("button", { name: "新しい会話" }).click();
     await page.getByRole("textbox").fill(userMessage.content);
     await page.getByRole("button", { name: "送信" }).click();
-    await expect(page.getByTestId("chat-answer-model-heading")).toHaveText(["回答モデル: MODEL 1（画像を見て回答: VISION 1）"]);
+    await expect(page.getByTestId("chat-answer-model-heading")).toHaveText(["回答モデル: MODEL 1（画像を見て回答: vision-model-with-a-long-identifier-1）"]);
     await expectNoPageOverflow(page);
   });
 }
