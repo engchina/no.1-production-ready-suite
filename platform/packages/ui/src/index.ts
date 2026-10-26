@@ -319,6 +319,7 @@ export {
 export {
   DEFAULT_CLARIFICATION_LABELS,
   clarificationLabels,
+  type ClarificationAnswerKind,
   type ClarificationLabels,
   type ClarificationNouns,
 } from "./components/chat/clarification-labels";
@@ -608,6 +609,8 @@ export {
 
 // --- data ---
 export {
+  DEFAULT_ROADMAP_LABEL,
+  RoadmapBadge,
   StatusBadge,
   type StatusVariant,
 } from "./components/data/status-badge";

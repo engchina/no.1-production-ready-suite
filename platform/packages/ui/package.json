@@ -14,7 +14,8 @@
     "**/*.css"
   ],
   "files": [
-    "dist"
+    "dist",
+    "vite"
   ],
   "exports": {
     ".": {
@@ -23,7 +24,11 @@
       "default": "./dist/index.js"
     },
     "./tokens.css": "./dist/tokens.css",
-    "./styles.css": "./dist/tokens.css"
+    "./styles.css": "./dist/tokens.css",
+    "./vite/third-party-licenses": {
+      "types": "./vite/third-party-licenses.d.mts",
+      "default": "./vite/third-party-licenses.mjs"
+    }
   },
   "main": "./dist/index.js",
   "module": "./dist/index.js",

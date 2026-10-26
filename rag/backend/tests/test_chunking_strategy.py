@@ -209,7 +209,10 @@ def test_structure_overlap_stays_inside_element_group_and_skips_table_boundary()
 
 def test_min_chars_absorbs_small_chunks() -> None:
     """min_chars 未満の微小 chunk は同一 group 内の隣接 chunk へ吸収する。"""
-    extraction = _sample_extraction()
+    # 節の末尾の短い文だけが残る本文(収まらなかった文は次の chunk の先頭にする。#3380)。
+    extraction = StructuredExtraction(
+        raw_text="# 概要\n本文の長い一文目の文章です。短い。本文の長い三文目の文章です。短い。"
+    )
     without_absorb = chunk_extraction_with_strategy(
         extraction,
         strategy="recursive_character",

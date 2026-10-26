@@ -1,8 +1,10 @@
 """KB 単位構築設定(kb_adapter_config)の単体テスト。"""
 
 import pytest
+from pydantic import ValidationError
 
 from app.config import get_settings
+from app.main import app
 from app.rag.kb_adapter_config import (
     KbAdapterConfigError,
     KnowledgeBaseAdapterConfig,
@@ -15,6 +17,8 @@ from app.rag.kb_adapter_config import (
     resolve_effective_adapter_config,
     resolve_effective_settings,
 )
+from app.schemas.document import DocumentProcessingConfig, DocumentProcessingConfigInput
+from tests.support import AsgiTestClient
 
 
 def _config(**raw: object) -> KnowledgeBaseAdapterConfig:
@@ -187,6 +191,48 @@ def test_removed_parser_engine_in_saved_config_inherits_global_default(removed: 
     assert effective.rag_parser_adapter_backend == settings.rag_parser_adapter_backend
     dumped = dump_adapter_config(config)
     assert removed not in str(dumped)
+
+
+def test_saved_roadmap_parser_engine_inherits_global_default() -> None:
+    """保存済みのレシピに準備中(ロードマップ)のエンジンが残っても global 既定を継承する(#3374)。
+
+    画面・取込を壊さず、取込の経路は準備中のエンジンを選ばない。他の上書きは保つ。
+    """
+    saved = DocumentProcessingConfig.model_validate(
+        {"parser_adapter_backend": "oci_document_understanding", "chunking_strategy": "page_level"}
+    )
+
+    assert saved.parser_adapter_backend is None
+    assert saved.chunking_strategy == "page_level"
+    config = KnowledgeBaseAdapterConfig(ingestion=saved)
+    assert "rag_parser_adapter_backend" not in config.settings_overrides("ingestion")
+
+
+def test_recipe_input_rejects_roadmap_parser_engine_with_reason() -> None:
+    """処理レシピの保存の入力で準備中のエンジンを選ぶと、理由の分かる検証のエラーにする(#3374)。"""
+    with pytest.raises(ValidationError, match="準備中（ロードマップ）"):
+        DocumentProcessingConfigInput.model_validate(
+            {"parser_adapter_backend": "oci_document_understanding"}
+        )
+    # 使える解析エンジンと継承(None)はそのまま受ける。
+    assert (
+        DocumentProcessingConfigInput.model_validate(
+            {"parser_adapter_backend": "docling"}
+        ).parser_adapter_backend
+        == "docling"
+    )
+    assert DocumentProcessingConfigInput.model_validate({}).parser_adapter_backend is None
+
+
+def test_recipe_put_rejects_roadmap_parser_engine_before_saving() -> None:
+    """``PUT /api/documents/{id}/recipes/{recipe_id}`` は保存する前に 422 にする(#3374)。"""
+    resp = AsgiTestClient(app).put(
+        "/api/documents/doc-a/recipes/recipe-a",
+        json={"parser_adapter_backend": "oci_document_understanding"},
+    )
+
+    assert resp.status_code == 422
+    assert "準備中（ロードマップ）" in resp.text
 
 
 def test_ingestion_scope_overlays_advanced_axes() -> None:

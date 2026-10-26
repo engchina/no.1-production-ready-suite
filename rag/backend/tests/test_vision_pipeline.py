@@ -288,8 +288,14 @@ async def test_segment_vision_progress_is_aggregated_while_parsing(
     """先に読んでいる段の Vision の件数を足して出し、解析の途中は解析の段のままにする。"""
     from app.rag.ingestion_progress import IngestionProgressReporter, track_ingestion_progress
 
-    _install(monkeypatch, Runner(delay=1.0))
     seen: list[tuple[IngestionVisionProgress, str | None]] = []
+
+    def vision_seen_while_parsing() -> bool:
+        return any(v.segments_total and stage == "parse" for v, stage in seen)
+
+    # 最後の段の解析は、先に解析した段の Vision の進捗が解析の段のうちに届くまで終えない（#3390。
+    # 実時間の待ちに頼らず、CI の負荷によらず解析の途中の更新を確かめる）。
+    _install(monkeypatch, Runner(hold=lambda number: number < 3 or vision_seen_while_parsing()))
     original = IngestionProgressReporter.update_vision
 
     def record(self: IngestionProgressReporter, vision: IngestionVisionProgress) -> None:

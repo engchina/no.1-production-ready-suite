@@ -26,8 +26,10 @@ Google Sans Code に日本語は含まれないため Noto Sans JP（無い字�
 業務数字の桁揃えが必要な場合は `tabular-nums` を併用する。
 別の `font-family` を画面ごとに追加せず、この二つの共通スタックを使用する。
 
-フォントのライセンス原文は `public/fonts/licenses/` に保管し、production build にも同梱する。
-更新時は package / lockfile とライセンス原文を合わせて更新する。
+フォントのライセンス原文は、`npm run build` が `@fontsource*` の package の `LICENSE` から
+`dist/licenses/fonts/<書体>-OFL.txt`（一覧は `dist/licenses/fonts/README.txt`）に出す（platform の共有の Vite の plugin
+`@production-ready/ui/vite/third-party-licenses`。3 製品で同じ。#3392）。原文を repo に手で置かない。
+第三者の部品の通知の全体は root の [THIRD-PARTY-NOTICES.md](../../THIRD-PARTY-NOTICES.md)。
 
 検証:
 

@@ -57,7 +57,12 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 ## 使い方（推奨の流れ）
 
 1. **解析**：文書解析を Docling にする。図や画面キャプチャが多い文書では、文書のレシピで Vision（図・画像を AI で読み取る）を有効にする（Docling 以外の解析エンジンでも使える）。有効にすると、画像 1 枚ごとに Vision モデルの呼び出しと時間がかかる。
-2. **分割**：文書分割は既定で親子階層（`small_to_big`。#594 で既定にした）。親子の分割は Docling の解析結果（`parser_artifacts.layout_records`）を入力にする（PDF と画像のとき）。解析結果が Docling でない文書（Unstructured・dots.ocr・OCI の解析結果など）では、失敗させずに「構造認識」（`structure_aware`。chunk size・overlap・最小文字数は文書分割の設定値）で分割する（#300）。縮退したことは各 chunk の metadata（`chunk_strategy=structure_aware`、`chunk_strategy_requested=small_to_big`、`chunk_strategy_fallback_reason=layout_missing`）と取込の trace（`effective_chunk_strategy`）に残り、文書詳細の Chunk タブと分割プレビューに「構造認識で分割しました」と表示する。親子で分割するには、文書解析を Docling にして再解析し、Chunk を作り直す。子・親の大きさは同じ画面の「戦略別パラメータ」で変えられる（下の設定一覧）。
+2. **分割**：文書分割は既定で親子階層（`small_to_big`。#594 で既定にした）。親は回答の文脈に渡す大きい単位、子は検索に当てる小さい単位（LangChain の ParentDocumentRetriever・LlamaIndex の階層の分割と同じ考え方）で、**どの解析の結果でも親子に分割する**（#3377。解析エンジンの名前では選ばず、抽出の形で親子の作り方を選ぶ。取込の trace の `chunk_parent_source`）。
+   - 解析の結果がレイアウトの記録（`parser_artifacts.layout_records`。Docling の PDF・画像）を持つ文書は、その記録から親子を作る（`layout_records`。見出し・表・図の領域と根拠の元の要素を保つ）。
+   - Excel の行の記録は行を子・表の一部を親（`sheet_records`。#1349）、XML ツリー JSON は段落を子・番号つきの単位を親にする（`xml_tree_units`。#2024）。
+   - それ以外の抽出（標準の解析の Markdown・テキスト、Unstructured・OCI などの解析の結果、構造化レコード JSONL の CSV・Word など）は、抽出の構造から親子を作る（`extraction_structure`）。子は構造認識と同じ要素の分割（同じ節・同じ種類の要素だけをつなぐ）を子の目標文字数で行い、表は表の子の目標文字数で行のまとまりに分けて列見出しを繰り返す。見出しだけの子は作らず、続く本文の子の先頭に入れる。構造化レコード JSONL は 1 記録 = 1 子（#2457）。親は続く子を、節（文書を 2 つ以上に分ける最初の見出しの段。題が 1 つの文書はその下の段）をまたがず、親の目標文字数・子の数・ページ数の上限の中でまとめる。見出しの無い文書は順と大きさだけでまとめる。子の metadata は Docling の親子と同じ（`chunk_strategy=small_to_big`・`parent_chunk_id` / `chunk_group_id`・`chunk_group_kind=small_to_big_parent`・`parent_text`・`section_path`・頁・`element_ids`）で、回答は同じ経路で親の本文を文脈にする。
+   - 以前（#300〜#3377）は、レイアウトの記録が無い文書を「構造認識」（`structure_aware`）へ縮退し、chunk に `chunk_strategy_fallback_reason=layout_missing` を残していた。その chunk は文書詳細の Chunk タブに「親子階層で分割されていない Chunk です」と表示し、Chunk を作り直すと親子階層で分割する（再解析は要らない）。
+   子・親の大きさは同じ画面の「戦略別パラメータ」で変えられる（下の設定一覧）。
 3. **確認**：文書詳細の抽出タブで、次を確認できる。
    - 要素の種別と bbox
    - 表のテキスト化
@@ -500,8 +505,8 @@ LlamaIndex AutoMerging 風の分割方式「親子階層」は削除し、一覧
 
 - 保存済みの `hierarchical_parent_child`（`backend/.env` の `RAG_CHUNKING_STRATEGY`、文書・レシピの処理設定、KB の構築設定）は、読み込み時に `small_to_big` として扱う。子サイズ `chunk_child_size` / `RAG_CHUNK_CHILD_SIZE` は読まない。DB の移行は不要で、次に保存すると新しい値だけが残る（文書分割の設定を保存すると `.env` から `RAG_CHUNK_CHILD_SIZE` の行も消える）。
 - 親子階層で作った配信中の chunk はそのまま検索対象に残り、自動では作り直さない。レシピ一覧の「再処理が必要」は設定の revision で判定するため、読み替えだけでは表示しない（文書単位の処理設定の保存 API と、その応答の差分（drift）は #488 で削除した）。親子階層（small-to-big）で作り直すには、その文書の Chunk を再作成する。
-- 親子階層（small-to-big）は Docling の解析結果で親子に分割する。旧「親子階層」は Docling 以外の解析結果でも動いていたため、そうした文書の Chunk を作り直すと、失敗させずに構造認識で分割する（上の「使い方」2.。#300 より前は失敗していた）。親子で分割したい文書は、文書解析を Docling にして再解析する。
-- 既存環境の更新手順：`backend/.env` の `RAG_CHUNKING_STRATEGY=hierarchical_parent_child` と `RAG_CHUNK_CHILD_SIZE` は、そのままでも起動する（前者は親子階層（small-to-big）として読み、後者は無視する）。Docling を使わない環境では、Chunk は構造認識で作られる。最初から構造認識として扱いたい場合は `RAG_CHUNKING_STRATEGY` を `structure_aware` へ変えておく。
+- 親子階層（small-to-big）はどの解析の結果でも親子に分割する（上の「使い方」2.。#3377。#300〜#3377 は Docling 以外の解析結果を構造認識へ縮退していた）。
+- 既存環境の更新手順：`backend/.env` の `RAG_CHUNKING_STRATEGY=hierarchical_parent_child` と `RAG_CHUNK_CHILD_SIZE` は、そのままでも起動する（前者は親子階層（small-to-big）として読み、後者は無視する）。構造認識として扱いたい場合は `RAG_CHUNKING_STRATEGY` を `structure_aware` へ変えておく。
 
 ## rag_poc との差分
 

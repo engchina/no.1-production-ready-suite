@@ -10,6 +10,8 @@ export type RequirementStage =
   | "limit"
   | "minimum"
   | "multi_select"
+  // #3366: needs_answer の期間の質問に候補が無い（自由入力だけで答える確認事項）。
+  | "free_text_question"
   | "applied"
   // 確認が要らない（SELECT・FROM が明確で、足りない・あいまいな情報が無く、まだ何も聞いていない。#1442）。
   | "clear"
@@ -594,6 +596,7 @@ function stateFor(stage: RequirementStage, items: Record<string, unknown>[]) {
       : stage === "needs_answer" ||
           stage === "minimum" ||
           stage === "multi_select" ||
+          stage === "free_text_question" ||
           stage === "clear" ||
           stage === "target_choice" ||
           stage === "select_all_table" ||
@@ -628,6 +631,8 @@ function itemsFor(stage: RequirementStage): Record<string, unknown>[] {
       return [fromItem, selectItem, joinItem, periodQuestion, groupItem, orderItem];
     case "multi_select":
       return [fromItem, selectItem, joinItem, statusQuestion, groupItem, orderItem];
+    case "free_text_question":
+      return [fromItem, selectItem, joinItem, { ...periodQuestion, candidates: [] }, groupItem, orderItem];
     case "ready":
     case "applied":
       return [fromItem, selectItem, joinItem, periodAnswered, groupItem, orderItem];

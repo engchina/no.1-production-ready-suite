@@ -26,6 +26,10 @@ RAG_MICROSERVICES=(
 # 「起動」（enable --now）で起動でき、以後は最後に操作した状態（enable / disable）を保つ。
 # XML ツリー JSON は使用エンジンに選んだときだけ使う（RAG_PARSER_XML_TREE_JSON_ENABLED の既定 false と同じ。#2453）。
 RAG_DEFAULT_STOPPED_SERVICES=(parser-xml-tree-json)
+# 準備中（ロードマップ）のサービス（#3374）。実装は repo に残すが、配備・登録しない（init_script.sh は
+# rag_services.txt にあっても読み飛ばし、以前の配備の unit は「配備しなくなった unit」として止めて消す。
+# rag-services.sh も選べない）。backend の catalog の availability="roadmap" と同じ（テストで照合する）。
+RAG_ROADMAP_SERVICES=(parser-oci-document-understanding)
 RAG_UNIT_PREFIX="production-ready-rag-"
 # 画面から操作する unit に、systemctl / journalctl だけを許可する sudoers（backend の app.services.systemd と同じ argv）。
 RAG_SUDOERS_FILE_NAME="production-ready-rag-services"
@@ -66,6 +70,18 @@ rag_service_default_stopped() {
   local stopped
   for stopped in "${RAG_DEFAULT_STOPPED_SERVICES[@]}"; do
     if [ "${stopped}" = "${id}" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# 準備中（ロードマップ）で配備しないサービスなら 0。
+rag_service_roadmap() {
+  local id="$1"
+  local roadmap
+  for roadmap in "${RAG_ROADMAP_SERVICES[@]}"; do
+    if [ "${roadmap}" = "${id}" ]; then
       return 0
     fi
   done

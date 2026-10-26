@@ -16,15 +16,14 @@ from app.clients.oracle import _chunk_search_text
 from app.config import Settings
 from app.main import app
 from app.rag.chunking_small_to_big import (
-    CHUNK_STRATEGY_FALLBACK_REASON_KEY,
-    CHUNK_STRATEGY_REQUESTED_KEY,
     ENGINE_SEARCH_TEXT_KEY,
     FIRST_PAGE_CONTEXT_KEY,
-    LayoutRecordsMissingError,
+    PARENT_SOURCE_LAYOUT,
+    PARENT_SOURCE_STRUCTURE,
     build_parent_child_chunks,
     has_layout_records,
     small_to_big_chunking_config,
-    small_to_big_fallback_needed,
+    small_to_big_parent_source,
 )
 from app.rag.chunking_strategy import SmallToBigParams, normalize_chunking_strategy
 from app.rag.ingestion import IngestionPipeline, IngestionUserError
@@ -32,6 +31,9 @@ from app.rag.ingestion_quality import build_ingestion_quality_report
 from app.schemas.document import DocumentDetail, FileStatus
 from app.schemas.extraction import StructuredExtraction
 from tests.support import AsgiTestClient
+
+# 以前(#300)に構造認識へ縮退した chunk の metadata の key。新しい chunk には付けない(#3377)。
+FALLBACK_REASON_KEY = "chunk_strategy_fallback_reason"
 
 
 def _record(seq: int, category: str, text: str, bbox: list[float]) -> dict[str, object]:
@@ -129,12 +131,15 @@ def test_small_to_big_figure_records_whether_vlm_wrote_text(
     assert images[0]["bbox"] == [100, 200, 700, 900]
 
 
-def test_small_to_big_strategy_requires_docling_layout() -> None:
+def test_small_to_big_builds_parents_without_docling_layout() -> None:
+    """Docling のレイアウトが無い抽出も、失敗させず抽出の構造から親子に分割する(#3377)。"""
     assert normalize_chunking_strategy("small_to_big") == "small_to_big"
     plain = StructuredExtraction(raw_text="本文")
     assert not has_layout_records(plain)
-    with pytest.raises(LayoutRecordsMissingError):
-        build_parent_child_chunks(plain)
+    chunks = build_parent_child_chunks(plain)
+    assert [chunk.text for chunk in chunks] == ["本文"]
+    assert chunks[0].metadata["chunk_strategy"] == "small_to_big"
+    assert chunks[0].metadata["parent_text"] == "本文"
 
 
 def test_small_to_big_first_page_context_is_kept_once_without_picture_ocr_and_truncated() -> None:
@@ -244,15 +249,6 @@ def test_small_to_big_parent_limits_split_parents() -> None:
     assert many > few
 
 
-def test_missing_layout_error_is_shown_to_user() -> None:
-    """Docling 以外の解析結果で選んだときの失敗理由は、取込ジョブにそのまま表示する。"""
-    with pytest.raises(LayoutRecordsMissingError) as info:
-        build_parent_child_chunks(StructuredExtraction(raw_text="本文"))
-
-    assert getattr(info.value, "safe_for_user", False) is True
-    assert "Docling" in str(info.value)
-
-
 def test_drift_compares_small_to_big_params_only_for_small_to_big() -> None:
     """親子階層（small-to-big）の 5 項目の差分は、その方式のときだけ見る。
 
@@ -347,31 +343,28 @@ async def test_ingestion_chunking_does_not_use_http(
     assert all(chunk.text.strip() for chunk in chunks)
 
 
-def test_small_to_big_fallback_needed_only_for_small_to_big_without_layout() -> None:
-    assert small_to_big_fallback_needed("small_to_big", _plain_extraction()) is True
-    assert small_to_big_fallback_needed("small_to_big", _extraction()) is False
-    assert small_to_big_fallback_needed("structure_aware", _plain_extraction()) is False
+def test_small_to_big_parent_source_follows_extraction_shape() -> None:
+    """親子の入力は抽出の形で選ぶ(解析エンジンの名前では選ばない。#3377)。"""
+    assert small_to_big_parent_source(_plain_extraction()) == PARENT_SOURCE_STRUCTURE
+    assert small_to_big_parent_source(_extraction()) == PARENT_SOURCE_LAYOUT
 
 
-async def test_ingestion_falls_back_to_structure_aware_without_docling_layout() -> None:
-    """Docling 以外の解析結果で親子階層（small-to-big）を選んでも失敗させず、構造認識で分割する
-    (#300)。
+async def test_ingestion_builds_parents_without_docling_layout() -> None:
+    """Docling 以外の解析結果で親子階層（small-to-big）を選ぶと、抽出の構造から親子に分割する
+    (#3377)。
 
-    以前は LayoutRecordsMissingError で Chunk 作成のジョブが失敗していた。
-    どの方式で分割したかは chunk の metadata に残す。
+    以前は構造認識へ縮退し(#300)、chunk に縮退の印を付けていた。
     """
     chunks = await _ingestion_chunks("small_to_big", _plain_extraction())
 
     assert chunks
     for chunk in chunks:
-        assert chunk.metadata["chunk_strategy"] == "structure_aware"
-        assert chunk.metadata[CHUNK_STRATEGY_REQUESTED_KEY] == "small_to_big"
-        assert chunk.metadata[CHUNK_STRATEGY_FALLBACK_REASON_KEY] == "layout_missing"
-        assert ENGINE_SEARCH_TEXT_KEY not in chunk.metadata
-    # 縮退後の分割は、同じ設定で構造認識を選んだときと同じ本文になる。
-    direct = await _ingestion_chunks("structure_aware", _plain_extraction())
-    assert [chunk.text for chunk in chunks] == [chunk.text for chunk in direct]
-    assert CHUNK_STRATEGY_FALLBACK_REASON_KEY not in direct[0].metadata
+        assert chunk.metadata["chunk_strategy"] == "small_to_big"
+        assert chunk.metadata["chunk_group_kind"] == "small_to_big_parent"
+        assert chunk.metadata["chunk_group_id"] == chunk.metadata["parent_chunk_id"]
+        assert chunk.text in str(chunk.metadata["parent_text"])
+        assert FALLBACK_REASON_KEY not in chunk.metadata
+        assert "chunk_strategy_requested" not in chunk.metadata
 
 
 async def test_ingestion_uses_small_to_big_when_docling_layout_exists() -> None:
@@ -380,7 +373,7 @@ async def test_ingestion_uses_small_to_big_when_docling_layout_exists() -> None:
 
     assert chunks
     assert all(chunk.metadata["chunk_strategy"] == "small_to_big" for chunk in chunks)
-    assert all(CHUNK_STRATEGY_FALLBACK_REASON_KEY not in chunk.metadata for chunk in chunks)
+    assert all(FALLBACK_REASON_KEY not in chunk.metadata for chunk in chunks)
 
 
 class _PreviewOracle:
@@ -412,21 +405,15 @@ class _PreviewOracle:
 
 
 @pytest.mark.parametrize(
-    ("extraction", "expected_strategy", "fallback"),
-    [
-        (_plain_extraction(), "structure_aware", True),
-        (_extraction(), "small_to_big", False),
-    ],
+    "extraction", [_plain_extraction(), _extraction()], ids=["structure", "docling_layout"]
 )
-def test_chunk_preview_small_to_big_falls_back_without_docling_layout(
+def test_chunk_preview_small_to_big_builds_parents_for_any_parser(
     monkeypatch: pytest.MonkeyPatch,
     extraction: StructuredExtraction,
-    expected_strategy: str,
-    fallback: bool,
 ) -> None:
-    """分割プレビューも取込と同じく、Docling の解析結果がなければ構造認識で分割する(#300)。
+    """分割プレビューも取込と同じく、どの解析の結果でも親子で分割する(#3377)。
 
-    以前は「親子階層（small-to-big）には Docling の解析結果が必要です。」の 422 だった。
+    以前は Docling の解析結果が無いと構造認識へ縮退していた(#300)。
     """
     monkeypatch.setattr(documents_route, "OracleClient", lambda: _PreviewOracle(extraction))
 
@@ -440,12 +427,9 @@ def test_chunk_preview_small_to_big_falls_back_without_docling_layout(
     assert chunks
     for chunk in chunks:
         metadata = chunk["metadata"]
-        assert metadata["chunk_strategy"] == expected_strategy
-        if fallback:
-            assert metadata[CHUNK_STRATEGY_REQUESTED_KEY] == "small_to_big"
-            assert metadata[CHUNK_STRATEGY_FALLBACK_REASON_KEY] == "layout_missing"
-        else:
-            assert CHUNK_STRATEGY_FALLBACK_REASON_KEY not in metadata
+        assert metadata["chunk_strategy"] == "small_to_big"
+        assert metadata["parent_text"]
+        assert FALLBACK_REASON_KEY not in metadata
 
 
 @pytest.mark.parametrize("category", ["Text", "Page-header"])

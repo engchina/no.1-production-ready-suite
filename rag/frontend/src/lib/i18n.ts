@@ -216,6 +216,8 @@ export const ja = {
   "settings.parserAdapters.legacyBackendNotice":
     "旧『local』設定です。未選択時は既定の Docling で解析します(内蔵フォールバックは廃止)。下から解析方式を選ぶと上書きされます。",
   "settings.parserAdapters.serviceBackend.unconfigured": "未設定",
+  "settings.parserAdapters.roadmap.badge": "準備中（ロードマップ）",
+  "settings.parserAdapters.roadmap.reason": "準備中（ロードマップ）のため、まだ選べません。",
   "settings.parserAdapters.serviceBackend.note":
     "GPU 解析エンジンは外部 API を直接呼びます。この画面から解析エンジンのサーバーの構築や起動は行いません。",
   "settings.parserAdapters.backend.structured_records_jsonl": "構造化レコード JSONL",
@@ -1455,7 +1457,7 @@ export const ja = {
     "章節→文→文字の順に固定長で分割(LangChain 風)",
   "settings.chunking.strategy.small_to_big": "親子階層（small-to-big）",
   "settings.chunking.strategy.small_to_big.description":
-    "Docling の解析結果から見出し・表・図を保ったまま子を切り出して索引し、親の節を回答文脈に使う（文書解析が Docling の PDF・画像だけ。それ以外の文書は構造認識で分割します。既定）",
+    "解析の結果の構造（見出し・節・頁・表）を保ったまま子を切り出して索引し、親の節を回答文脈に使う（どの文書解析の結果でも使えます。既定）",
   "settings.chunking.strategy.markdown_heading": "見出し単位",
   "settings.chunking.strategy.markdown_heading.description":
     "見出しを境界にまとめ、長大な章節だけ見出し内で再分割",
@@ -1472,7 +1474,7 @@ export const ja = {
   "settings.chunking.params.description":
     "選択中の分割方式で使うパラメータだけを設定します。",
   "settings.chunking.params.smallToBigDescription":
-    "親子階層（small-to-big）で使う子 chunk と親 chunk の大きさを設定します。親は番号付きの機能見出しもまたぎません。",
+    "親子階層（small-to-big）で使う子 chunk と親 chunk の大きさを設定します。親は節（見出しの区切り）をまたぎません。",
   "settings.chunking.params.chunkChildTargetChars": "子チャンク目標文字数",
   "settings.chunking.params.chunkChildTargetCharsHint":
     "検索に使う子の大きさ（300〜1,600、既定 1,000）。超える本文は文末で分けます。",
@@ -1626,7 +1628,7 @@ export const ja = {
   "settings.services.cpuNote":
     "「既定で使用」は文書解析の全体設定で選んだエンジンです。処理レシピでエンジンを指定しない取込で使うため、取込時は起動してください。その他のエンジンは、処理レシピで選んだ場合に使います。",
   "settings.services.ociNote":
-    "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。起動/停止はこのプロキシに対して行います。「縮退」は OCI 設定不足が原因です — Document Understanding は「OCI 認証」+「Object Storage」で設定すると稼働中になります。",
+    "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。OCI Document Understanding は準備中（ロードマップ）のため、まだ配備・起動できません。",
   "settings.services.status.running": "稼働中",
   "settings.services.status.degraded": "縮退",
   "settings.services.status.starting":
@@ -1637,6 +1639,9 @@ export const ja = {
   "settings.services.status.not_installed":
     "未登録",
   "settings.services.status.unconfigured": "未設定",
+  "settings.services.status.roadmap": "準備中（ロードマップ）",
+  "settings.services.roadmapHint":
+    "このサービスは準備中（ロードマップ）です。まだ配備・起動できません（実装は今後の版で使えるようにします）。",
   "settings.services.status.loading": "確認中",
   "settings.services.status.error": "取得失敗",
   "settings.services.modelCache.label": "モデルキャッシュ",
@@ -3094,9 +3099,9 @@ export const ja = {
   "flow.chunks.downloadJsonAria": "保存済みの Chunk の JSON をダウンロード",
   "flow.chunks.empty": "chunk はまだ作成されていません。",
   "flow.chunks.listLabel": "chunk の一覧（{count} 件）。一覧の中で縦にスクロールできます。",
-  "flow.chunks.smallToBigFallbackTitle": "構造認識で分割しました",
+  "flow.chunks.smallToBigFallbackTitle": "親子階層で分割されていない Chunk です",
   "flow.chunks.smallToBigFallback":
-    "親子階層（small-to-big）を選んでいますが、この文書の解析結果は Docling のレイアウトではないため、構造認識で分割しました。親子で分割するには、文書解析を Docling にして再解析し、Chunk を作り直してください。",
+    "この Chunk は、親子階層（small-to-big）を選んだときに構造認識で作られています（以前の版の分割）。Chunk を作り直すと、解析の結果の構造から親子階層で分割します。",
   "flow.chunks.loadError": "chunk を取得できません",
   "flow.chunks.loadErrorHint": "索引状態を確認して再読み込みしてください。",
   "flow.chunks.noElements": "element 未紐付け",
