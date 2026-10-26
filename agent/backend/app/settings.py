@@ -137,9 +137,6 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oci_enterprise_ai_max_retries: int = 3
     # 出力の上限は登録モデルごとの `max_output_tokens`（#1719。platform の
     # `enterprise_ai_output_token_budget`）。共通の LLM / VLM の出力の上限は持たない。
-    # LLM / VLM の呼び出しの seed（#1434。共通のモデル設定）。
-    # 解釈は pr_system_settings の enterprise_ai_seed。
-    oci_enterprise_ai_seed: int = Field(default=42, ge=0, le=2_147_483_647)
     # チャットで同じ会話の前のターンを LLM に渡す予算（共通の設定。#1818）。
     # 解釈は pr_backend_core.chat_history（新しいターンから詰め、古いターンを落とす）。
     chat_history_max_turns: int = Field(

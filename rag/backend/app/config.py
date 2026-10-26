@@ -70,7 +70,6 @@ from pr_system_settings.model import (
 from pr_system_settings.model import (
     enterprise_ai_reasoning_effort_to_send as enterprise_ai_reasoning_effort_to_send,
 )
-from pr_system_settings.model import enterprise_ai_seed as enterprise_ai_seed
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
 from pydantic import (
     BaseModel,
@@ -638,9 +637,6 @@ class Settings(
     oci_enterprise_ai_max_retries: int = Field(default=3, ge=0, le=5)
     # 出力の上限は登録モデルごとの `max_output_tokens`(#1719。platform の
     # `enterprise_ai_output_token_budget`)。共通の LLM / VLM の出力の上限は持たない。
-    # LLM / VLM の呼び出しの seed（#1434。共通のモデル設定）。
-    # 解釈は pr_system_settings の enterprise_ai_seed。
-    oci_enterprise_ai_seed: int = Field(default=42, ge=0, le=2_147_483_647)
     # チャットで同じ会話の前のターンを LLM に渡す予算（共通の設定。#1818）。
     # 解釈は pr_backend_core.chat_history（新しいターンから詰め、古いターンを落とす）。
     chat_history_max_turns: int = Field(
@@ -1431,7 +1427,7 @@ class Settings(
         ),
     )
     rag_article_catalog_output_token_cap: int = Field(
-        default=4096,
+        default=8192,
         ge=0,
         le=32768,
         description=(
@@ -1442,7 +1438,7 @@ class Settings(
         ),
     )
     rag_article_catalog_call_timeout_seconds: float = Field(
-        default=90.0,
+        default=180.0,
         ge=0.0,
         le=600.0,
         description=(
