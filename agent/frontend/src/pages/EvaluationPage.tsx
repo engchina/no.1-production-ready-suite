@@ -108,7 +108,7 @@ export function EvaluationPage() {
 
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   const usableAgents = useMemo(
-    () => (agents.data?.agents ?? []).filter((agent) => agent.enabled && !agent.migration_required),
+    () => (agents.data?.agents ?? []).filter((agent) => agent.enabled),
     [agents.data]
   );
   const selectedAgentId = usableAgents.some((agent) => agent.id === agentId) ? agentId : (usableAgents[0]?.id ?? "");

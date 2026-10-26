@@ -113,8 +113,8 @@ side sheet、詳細の差分・「スキルの更新だけを公開」・品質�
 `POST /evaluation-sets/from-template` でテンプレートの評価ケースの評価セットを作れる。フィードバック・Run の詳細の
 「評価ケースに追加」は `GET /runs/{id}/evaluation-case`（質問・管理者のコメント・呼んだツールの下書き）と
 `POST /evaluation-sets/{id}/cases`（同じ質問・50 件の上限は 409。出どころの `source_run_id` を残す）を使う。
-MCP、Tool、Runtime を Agent に埋め込まない。`tool_names` は移行リリースの読取互換だけである
-（`command_allowed_prefixes` は #756 で削除した）。
+MCP、Tool、Runtime を Agent に埋め込まない。業務 Agent はツールの項目を持たず、作成・変更の API はツールの直接の指定
+（`tool_names` など）を 422 で拒む（#3240。保存済みの旧い値は読むときに無視する。`command_allowed_prefixes` は #756 で削除した）。
 
 ### Skill
 
@@ -265,7 +265,7 @@ Agent はプラグインを持たず、スキルだけを持つ（#1798 でマ�
 
 ## 3. ツールとポリシー
 
-Control Plane のツール（`echo` / `agent_skill_list`）は `tool_registry` に登録する。MCP 接続のツールは登録せず、
+Control Plane のツール（`echo`）は `tool_registry` に登録する。MCP 接続のツールは登録せず、
 Run ごとに `tools/list` から作ったツール定義を `tool_registry.invoke` に渡し、ToolPolicy、PII/secret masking、
 audit metadata、成果物の保存を再利用する（#757）。外部 Runtime 向けの Binding MCP（`/api/mcp/{binding_id}`）
 と adapter 契約（`probe_capabilities / sync_binding / submit_run / ...`）は #754 で削除した。

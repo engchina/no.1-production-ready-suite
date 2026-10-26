@@ -197,7 +197,7 @@ def _empty_result(step: RunStep) -> bool:
 def is_grounding_tool(name: str) -> bool:
     """根拠・データのツールか（MCP 接続のツール。一覧・推薦・Control Plane が呼ぶものを除く）。
 
-    Control Plane のツール（`agent_skill_list`・`skill_reference_read` など。名前に接続の
+    Control Plane のツール（`echo`・`skill_reference_read` など。名前に接続の
     区切りが無い）は数えない。例外は添付を読むツール（`ATTACHMENT_READ_TOOLS`。#2517）。
     """
     if name in ATTACHMENT_READ_TOOLS:

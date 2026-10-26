@@ -101,6 +101,13 @@ TOOL_LOOP_STOPS_TOTAL = Counter(
     "Agent runs stopped after repeated tool calls without progress.",
     ("reason",),
 )
+# モデルに渡していない名前のツールの呼び出し（宣言の閉包の外の呼び出し）の数（#3240。組み込み
+# Runtime の `record_undeclared_call`）。reason は `builtin_runtime.UNDECLARED_CALL_REASONS`。
+UNDECLARED_TOOL_CALLS_TOTAL = Counter(
+    "agent_undeclared_tool_calls_total",
+    "Agent tool calls to names not exposed to the run (not executed).",
+    ("reason",),
+)
 ARTIFACTS_TOTAL = Counter(
     "agent_artifacts_total",
     "Agent artifact count.",
