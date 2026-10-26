@@ -160,7 +160,6 @@ def test_document_selection_does_not_defer_entity_expansion():
         get_settings(environ={}, dotenv_path=None),
         document_selection_enabled=True,
         document_selection_score_ratio=0.5,
-        document_selection_min_hits=2,
     )
     children = [
         _child("a1", source="a.pdf", score=0.9),
@@ -169,14 +168,14 @@ def test_document_selection_does_not_defer_entity_expansion():
         _child("c1", source="c.pdf", score=0.1),
     ]
 
-    kept, deferred, _ = select_documents(children, settings)
+    kept, deferred, _ = select_documents(children, settings, top_k=2)
 
     assert [record.id for record in kept] == ["a1", "a2", "ledger"]
     assert [record.id for record in deferred] == ["c1"]
 
     # 関連度が下限未満の拡張の根拠は、印の無い根拠と同じく後回しにする（#1390）。
     weak = [*children[:2], _child("org", source="org.pdf", expansion=True, score=0.05), children[3]]
-    kept, deferred, _ = select_documents(weak, settings)
+    kept, deferred, _ = select_documents(weak, settings, top_k=2)
     assert [record.id for record in kept] == ["a1", "a2"]
     assert [record.id for record in deferred] == ["org", "c1"]
 

@@ -217,10 +217,9 @@ def test_attachment_evidence_survives_document_selection_through_engine_records(
         engine_settings(environ={}, dotenv_path=None),
         document_selection_enabled=True,
         document_selection_score_ratio=0.5,
-        document_selection_min_hits=2,
         max_anchors_per_document=1,
     )
-    kept, deferred, trace = select_documents(records, settings)
+    kept, deferred, trace = select_documents(records, settings, top_k=1)
     assert attached in kept and attached not in deferred
     assert trace["deferred"] == []
     assert cap_anchors_per_document([rule, attached], settings, top_k=2) == [rule, attached]

@@ -260,6 +260,7 @@ from rag_engine.retrieval.request_coverage import (
     select_new_parents,
     within_extra_budget,
 )
+from rag_engine.retrieval.rerank_scores import best_rerank_score, question_rerank_score, rerank_first_key, rerank_score
 from rag_engine.retrieval.scope import (
     RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
@@ -468,8 +469,10 @@ def _best_rerank_ranks(
             if score is not None and (best.get(rank.index) is None or score > (best[rank.index] or 0.0)):
                 best[rank.index] = score
     step.add(f"関連度は原質問と検索文 {used} 本の最高値で比べます。")
+    # 原質問だけの関連度も残す（文書の絞り込みが原質問の点数でも比べる。#3504）。
+    question_scores = {rank.index: rank.relevance_score for rank in ranks}
     return [
-        RerankTextRank(index=index, relevance_score=score)
+        RerankTextRank(index=index, relevance_score=score, question_relevance_score=question_scores.get(index))
         for index, score in sorted(best.items(), key=lambda item: -(item[1] if item[1] is not None else -1.0))
     ]
 
@@ -634,19 +637,17 @@ def build_chunk_answer_context(
 
 
 def select_documents(
-    ranked_children: Sequence[AnswerRecord], settings: Settings | None, step: Any | None = None
+    ranked_children: Sequence[AnswerRecord], settings: Settings | None, step: Any | None = None, *, top_k: int
 ) -> tuple[list[AnswerRecord], list[AnswerRecord], dict[str, Any]]:
-    """rerank 後の child を文書ごとに集約し、分数が明らかに低い文書の child を後回し（deferred）にする (#1028)。
+    """rerank 後の child を文書ごとに集約し、rerank の点数が明らかに低い文書の child を後回し（deferred）にする (#1028)。
 
-    粗→細の検索の「粗」の側。文書級の要約や索引は作らず、chunk の rerank 分数（relevance_score。無い候補は
-    順位の逆数）の文書ごとの最高値（best）を命中数と併せて見る。除外するのは、best が最上位の文書の best の
-    `document_selection_score_ratio` 倍未満で、かつ命中数が `document_selection_min_hits` 未満の文書だけ
-    （分数落差の護欄。分数が近い文書は全部残す）。集約は rerank が見た範囲、すなわち候補全件で行う (#1084)。
-    後回しにした child は落とさず `AnswerContext.deferred_records` に残し、不足時に戻す。無効なら何もしない。
-
-    合計で比べると章の多い説明書が中程度の分数を多数集め、rerank 1 位の候補を持つ命中 1 件の文書まで後回しに
-    していた（#1057）。落差は候補の質（best）で測り、章数では測らない。rerank 分数が無い候補の順位の逆数は差が
-    小さく閾値に掛からないので、rerank 無効時は実質後回しは起きない（分数が無ければ落差を判断できない）。
+    粗→細の検索の「粗」の側。文書級の要約や索引は作らず、文書の点数は文書の chunk の rerank の点数の最高値
+    （MaxP。#3504）。後回しにするのは、並べ替えの点数（原質問と検索文の最高値。#2161）でも原質問だけの点数でも
+    最上位の文書の `document_selection_score_ratio` 倍未満で、かつ rerank の上位 `top_k` 件（起点）に chunk を
+    持たない文書だけ。命中の件数は判定に使わない（件数は長い文書・繰り返しの多い文書に偏り、点数の高い 1 件の
+    文書を、点数の低い候補を多く持つ文書より後ろにしていた。#3504）。集約は rerank が見た範囲、すなわち候補
+    全件で行う (#1084)。後回しにした child は落とさず `AnswerContext.deferred_records` に残し、不足時に戻す。
+    rerank の点数が無い（rerank が動かなかった）ときは落差を判断できないので後回しにしない。無効なら何もしない。
     """
     from rag_engine.retrieval.metadata_context import document_context_key  # 循環 import を避けて関数内で読む
 
@@ -655,28 +656,54 @@ def select_documents(
     if not enabled or not ranked_children:
         return list(ranked_children), [], trace
     ratio = float(getattr(settings, "document_selection_score_ratio", 0.5))
-    min_hits = int(getattr(settings, "document_selection_min_hits", 2))
-    scores: dict[tuple[str, ...], float] = {}
+    head = max(0, int(top_k or 0))
+    scores: dict[tuple[str, ...], float | None] = {}
+    question_scores: dict[tuple[str, ...], float | None] = {}
+    best_ranks: dict[tuple[str, ...], int] = {}
     hits: dict[tuple[str, ...], int] = {}
     sources: dict[tuple[str, ...], str] = {}
-    for position, record in enumerate(ranked_children):
+
+    def higher(current: float | None, value: float | None) -> float | None:
+        return value if current is None or (value is not None and value > current) else current
+
+    for position, record in enumerate(ranked_children, start=1):
         if is_added_catalog_article(record) or is_attachment_evidence(record):
             # 会話の添付は利用者が明示した入力なので、文書間の関連度の比較に数えない。
             # 目録で選んで加えた条（#2254）は文書の分数に数えない（加えた条の関連度で他の文書を後回しにしない）。
             continue
         key = document_context_key(record)
-        rerank = record.metadata.get("rerank") if isinstance(record.metadata, dict) else None
-        score = rerank.get("relevance_score") if isinstance(rerank, dict) else None
-        weight = float(score) if isinstance(score, (int, float)) and not isinstance(score, bool) else 1.0 / (60 + position)
-        scores[key] = max(scores.get(key, 0.0), weight)
+        scores[key] = higher(scores.get(key), rerank_score(record))
+        question_scores[key] = higher(question_scores.get(key), question_rerank_score(record))
+        best_ranks.setdefault(key, position)
         hits[key] = hits.get(key, 0) + 1
         sources.setdefault(key, str(record.source or ""))
     if not scores:
         return list(ranked_children), [], trace
-    top = max(scores.values())
-    excluded = {key for key in scores if scores[key] < top * ratio and hits[key] < min_hits}
-    for key in sorted(scores, key=lambda k: -scores[k]):
-        entry = {"source": sources[key], "score": round(scores[key], 4), "hits": hits[key]}
+    scored = any(score is not None for score in scores.values())
+    top = max((score for score in scores.values() if score is not None), default=0.0)
+    top_question = max((score for score in question_scores.values() if score is not None), default=0.0)
+
+    def low(score: float | None, best: float) -> bool:
+        return score is None or score < best * ratio
+
+    excluded = (
+        {key for key in scores if best_ranks[key] > head and low(scores[key], top) and low(question_scores[key], top_question)}
+        if scored
+        else set()
+    )
+    # 表示の順: 原質問との点数、並べ替えの点数、最上位の候補の順位。命中の件数は同点の順だけ。
+    order = sorted(
+        scores,
+        key=lambda k: (*rerank_first_key(question_scores[k]), *rerank_first_key(scores[k]), best_ranks[k], -hits[k]),
+    )
+    for key in order:
+        entry = {
+            "source": sources[key],
+            "score": None if scores[key] is None else round(float(scores[key] or 0.0), 4),
+            "question_score": None if question_scores[key] is None else round(float(question_scores[key] or 0.0), 4),
+            "best_rank": best_ranks[key],
+            "hits": hits[key],
+        }
         trace["deferred" if key in excluded else "selected"].append(entry)
     # 実体の 1 段の拡張で足した根拠（#1362）は、文書の分数が低くても後回しにしない（橋渡しの行）。関連度が
     # 下限未満の拡張の根拠は、印の無い候補と同じに扱う（#1390）。
@@ -690,20 +717,41 @@ def select_documents(
     kept = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) not in excluded or keep]
     deferred = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) in excluded and not keep]
     if step is not None:
-        # 文書ごとの最高の関連度と命中数、残す / 後回しを示す（処理の経過の段を開いて見る。#2341）。
-        step.field("判定の基準", f"最上位の文書の {ratio:g} 倍未満の関連度で、命中が {min_hits} 件未満の文書を後回し")
+        # 文書ごとの点数と出所、残す / 後回しを示す（処理の経過の段を開いて見る。#2341・#3504）。
+        step.field("判定の基準", _document_selection_rule(ratio, head, scored=scored))
         step.field("文書", f"{len(scores)} 文書（残す {len(scores) - len(excluded)}・後回し {len(excluded)}）")
         step.add(
             *numbered(
                 [
                     f"{'後回し' if index >= len(trace['selected']) else '残す'}: {Path(entry['source']).name or entry['source']}"
-                    f"（最高 {entry['score']:.3f}・命中 {entry['hits']} 件）"
+                    f"（{_document_score_label(entry)}）"
                     for index, entry in enumerate([*trace["selected"], *trace["deferred"]])
                 ],
                 limit=8,
             )
         )
     return kept, deferred, trace
+
+
+def _document_selection_rule(ratio: float, top_k: int, *, scored: bool) -> str:
+    """文書の絞り込みの判定の基準の文（処理の経過に出す。#3504）。"""
+    if not scored:
+        return "rerank の点数が無いため、どの文書も後回しにしません（取得の順位で並べます）"
+    return (
+        "文書の点数は、文書の候補の rerank の点数（元の質問との点数と、検索文を含む並べ替えの点数）の最高値。"
+        f"どちらも最上位の文書の {ratio:g} 倍未満で、上位 {top_k} 件の起点に候補が無い文書を後回し（命中の件数は判定に使いません）"
+    )
+
+
+def _document_score_label(entry: Mapping[str, Any]) -> str:
+    """文書の行の点数の表示（元の質問との点数・並べ替えの点数・最上位の順位・命中の件数）。"""
+    score, question = entry.get("score"), entry.get("question_score")
+    tail = f"最上位 {entry['best_rank']} 位・命中 {entry['hits']} 件"
+    if score is None:
+        return f"rerank の点数なし・{tail}"
+    if question is None or abs(float(question) - float(score)) < 0.0005:
+        return f"元の質問との並べ替えの点数 {float(score):.3f}・{tail}"
+    return f"元の質問との点数 {float(question):.3f}・検索文を含む並べ替えの点数 {float(score):.3f}・{tail}"
 
 
 def cap_anchors_per_document(
@@ -932,14 +980,16 @@ def build_adb_hybrid_answer_context(
 
         ranked_children = reserve_linked_screens(ranked_children, linked_screens, reserve_rank)
     if getattr(settings, "document_selection_enabled", False):
-        with _execution_step("文書の選択", "候補を文書ごとに集約し、分数が明らかに低い文書を後回しにします。") as step:
-            kept_children, deferred_children, selection = select_documents(ranked_children, settings, step)
+        with _execution_step(
+            "文書の選択", "候補を文書ごとに集約し、元の質問との並べ替え（rerank）の点数が明らかに低い文書を後回しにします。"
+        ) as step:
+            kept_children, deferred_children, selection = select_documents(ranked_children, settings, step, top_k=top_k)
             step.result(
                 f"{len(selection['selected'])} 文書を起点にします"
                 + (f"、{len(selection['deferred'])} 文書は後回し" if selection["deferred"] else "")
             )
     else:
-        kept_children, deferred_children, selection = select_documents(ranked_children, settings)
+        kept_children, deferred_children, selection = select_documents(ranked_children, settings, top_k=top_k)
     if int(getattr(settings, "max_anchors_per_document", 0) or 0) > 0:
         with _execution_step("文書ごとの起点の上限", "同じ文書の候補が起点を占めないよう、超えた候補を後ろへ回します。") as step:
             kept_children = cap_anchors_per_document(kept_children, settings, top_k=top_k, step=step)
@@ -1305,13 +1355,11 @@ _ENUMERATION_QUESTION = re.compile(
 
 
 def _top_rerank_score(context: AnswerContext) -> float | None:
-    """rerank の最上位の候補の score。rerank していない（score が無い）ときは None。"""
-    for record in context.ranked_candidates[:1]:
-        rerank = (record.metadata or {}).get("rerank") if isinstance(record.metadata, dict) else None
-        score = rerank.get("relevance_score") if isinstance(rerank, dict) else None
-        if isinstance(score, (int, float)):
-            return float(score)
-    return None
+    """候補の rerank の点数の最高値。rerank していない（score が無い）ときは None。
+
+    先頭の候補とは限らない（画面名の先頭寄せ・交差参照の参照先・位置を保つ候補が先頭に来る。#3504）。
+    """
+    return best_rerank_score(context.ranked_candidates)
 
 
 def _crag_grade_skip(question: str, context: AnswerContext, settings: Settings) -> dict[str, Any] | None:

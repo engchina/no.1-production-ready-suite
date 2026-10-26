@@ -592,6 +592,9 @@ def _records_by_rerank_ranks(
                 candidate_index=_original_candidate_index(index, candidate_indices),
                 rank=rank_position,
                 relevance_score=rank.relevance_score,
+                question_relevance_score=(
+                    question if (question := getattr(rank, "question_relevance_score", None)) is not None else rank.relevance_score
+                ),
                 min_relevance_score=min_score,
             )
         )
@@ -625,12 +628,15 @@ def _record_with_rerank_metadata(
     rank: int,
     relevance_score: float | None,
     min_relevance_score: float,
+    question_relevance_score: float | None = None,
 ) -> AnswerRecord:
     metadata = dict(record.metadata) if isinstance(record.metadata, dict) else {}
     metadata["rerank"] = {
         "candidate_index": candidate_index,
         "rank": rank,
+        # 並べ替えの点数（原質問と検索文ごとの rerank の最高値。#2161）と、原質問だけの点数（#3504）。
         "relevance_score": relevance_score,
+        "question_relevance_score": question_relevance_score,
         "min_relevance_score": min_relevance_score,
         "filtered": False,
     }

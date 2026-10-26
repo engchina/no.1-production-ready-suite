@@ -104,7 +104,6 @@ def test_document_selection_does_not_defer_followed_reference():
         get_settings(environ={}, dotenv_path=None),
         document_selection_enabled=True,
         document_selection_score_ratio=0.5,
-        document_selection_min_hits=2,
     )
     children = follow_reference_sources(
         [
@@ -115,7 +114,7 @@ def test_document_selection_does_not_defer_followed_reference():
         ]
     )
 
-    kept, deferred, _ = select_documents(children, settings)
+    kept, deferred, _ = select_documents(children, settings, top_k=2)
 
     assert _ids(kept) == ["window", "plan2", "a"]
     assert _ids(deferred) == ["c1"]

@@ -2589,6 +2589,8 @@ class AnswerGenerationTests(unittest.TestCase):
         with patch("rag_engine.generation.answering.rerank_text_with_scores", side_effect=fake_rerank):
             ranks = _best_rerank_ranks("長い事例の質問", ["要求の一部", "失敗する検索文", "長い事例の質問"], ["a", "b", "c"], None, step)
         self.assertEqual([(rank.index, rank.relevance_score) for rank in ranks], [(1, 0.95), (0, 0.9), (2, 0.3)])
+        # 原質問だけの点数も残す（文書の絞り込みが原質問の点数でも比べる。#3504）。
+        self.assertEqual([rank.question_relevance_score for rank in ranks], [0.4, 0.9, 0.3])
 
     def test_question_display_separator_prevents_generated_query_accumulation(self):
         previous_display = "\n".join(

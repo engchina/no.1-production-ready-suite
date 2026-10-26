@@ -24,6 +24,7 @@ from rag_engine.retrieval.evidence_selection import evidence_relevance
 from rag_engine.retrieval.metadata_context import answer_metadata_context, document_context_key, with_child_contexts
 from rag_engine.retrieval.operation_context import mentions_operation_section, operation_labels, operation_target_score
 from rag_engine.retrieval.reference_follow import is_followed_reference, reference_source_uid
+from rag_engine.retrieval.rerank_scores import best_rerank_score, rerank_first_key
 from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests
 
 DEFAULT_MAX_RECORD_TEXT_CHARS = 1200
@@ -666,13 +667,19 @@ def _finalize_parent_evidence(
 
 
 def _parent_group_sort_key(group: _ParentEvidenceBuilder) -> tuple[Any, ...]:
-    anchor_ranks = [
-        child.retrieval_rank for child in group.children.values() if child.role == "retrieved_anchor" and child.retrieval_rank is not None
-    ]
+    """親の並び（`max_records` の切り・根拠の予算の配分・評価器に渡す順が引き継ぐ）。
+
+    主キーは起点の rerank の点数の最高値（MaxP。#3504）。rerank の点数の無い親（rerank が動かなかった・
+    rerank しなかった候補だけの親）は、点数のある親の後ろに最上位の起点の順位（取得の順）で置く。起点の数・
+    前後の chunk の数・RRF などの合成の点数は同点の順だけに使う（件数で、点数の高い 1 件の親を下げない）。
+    """
+    anchor_children = [child for child in group.children.values() if child.role == "retrieved_anchor"]
+    anchor_ranks = [child.retrieval_rank for child in anchor_children if child.retrieval_rank is not None]
     best_rank = min(anchor_ranks) if anchor_ranks else 1_000_000
     return (
-        -_parent_group_evidence_score(group),
+        *rerank_first_key(best_rerank_score(child.record for child in anchor_children)),
         best_rank,
+        -_parent_group_evidence_score(group),
         _record_page(group.record),
         _record_chunk_seq(group.record),
         record_context_key(group.record),
