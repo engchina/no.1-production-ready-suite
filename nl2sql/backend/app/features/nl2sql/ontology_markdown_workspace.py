@@ -243,7 +243,7 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
         prepared = self.runtime.prepare_build_schema_context(profile_id)
         if prepared.errors:
             raise OntologyGateBlockedError(
-                "ONTOLOGY_SCOPE_INVALID", "Profile の Schema を確認してください。"
+                "ONTOLOGY_SCOPE_INVALID", "業務プロファイルの Schema を確認してください。"
             )
         schema = str(prepared.schema_context)
         return (

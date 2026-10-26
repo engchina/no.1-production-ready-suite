@@ -1281,7 +1281,7 @@ class DeepSecService:
 
             profiles = [p for p in scope_profiles() if p["id"] == profile_id]
             if not profiles:
-                raise SecurityApiError(404, "有効な Profile が見つかりません。")
+                raise SecurityApiError(404, "有効な業務プロファイルが見つかりません。")
             names = profiles[0]["objects"]
             terms = []
             for i, name in enumerate(names):

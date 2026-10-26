@@ -845,6 +845,66 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(page.locator("#search-query")).toHaveValue(question);
     expect(searchRequests).toEqual([]);
   });
+
+  test("詳細: 検索・回答プロファイルが削除済みの実行の「RAG 検索で開く」は質問だけを入れ、選び直しを案内する（Issue 3355）", async ({
+    page,
+  }, testInfo) => {
+    await mockDatabaseReady(page);
+    await mockAuthUser(page, { permissions: ["menu.chat", "menu.search", "menu.history"] });
+    const question = "合成の質問 B の手順は？";
+    await mockRuns(page, [
+      run(2, { question, search_answer_profile_id: "deleted-profile", search_answer_profile_name: null }),
+    ]);
+    const profileRequests: string[] = [];
+    await page.route("**/api/search-answer-profiles**", async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname.includes("deleted-profile")) profileRequests.push(pathname);
+      if (pathname.endsWith("/query-suggestions") || pathname.endsWith("/approved-faq/suggest")) {
+        await route.fulfill({ json: apiEnvelope({ suggestions: [] }) });
+        return;
+      }
+      await route.fulfill({
+        json: apiEnvelope({
+          items: [
+            {
+              id: "profile-a",
+              name: "プロファイル A",
+              description: null,
+              status: "ACTIVE",
+              knowledge_base_count: 1,
+              created_at: "2026-10-01T00:00:00Z",
+              updated_at: "2026-10-01T00:00:00Z",
+              archived_at: null,
+            },
+          ],
+          total: 1,
+          limit: 50,
+          offset: 0,
+          has_next: false,
+        }),
+      });
+    });
+
+    await page.goto("/history/run-2");
+    await page.getByTestId("run-history-open-search").click();
+
+    await expect(page).toHaveURL(/\/search$/);
+    await expect(page.locator("#search-query")).toHaveValue(question);
+    const notice = page.getByTestId("search-prefill-profile-unavailable");
+    await expect(notice).toHaveText("元の検索・回答プロファイルは使えません。選び直してください。");
+    // 別の検索・回答プロファイルへ黙って切り替えない。
+    await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).not.toContainText("プロファイル A");
+    // 使えない検索・回答プロファイルの API は呼ばない。
+    expect(profileRequests).toEqual([]);
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath("search-profile-unavailable.png"), fullPage: true });
+
+    // 選び直すと案内を消す。
+    await page.getByRole("button", { name: /検索・回答プロファイル/ }).click();
+    await page.getByRole("option", { name: /プロファイル A/ }).click();
+    await expect(notice).toHaveCount(0);
+    await expect(page.locator("#search-query")).toHaveValue(question);
+  });
 });
 
 test.describe("実行履歴の処理の経過（共通の span の表。#3226）", { tag: "@responsive" }, () => {

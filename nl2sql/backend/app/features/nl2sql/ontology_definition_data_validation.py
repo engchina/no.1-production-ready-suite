@@ -309,7 +309,7 @@ def check_data(
                 if table_key not in allowed:
                     raise OntologyGateBlockedError(
                         "ACCEPTANCE_SQL_SCOPE",
-                        "受入 SQL は Profile の OWNER.TABLE を明記してください。",
+                        "受入 SQL は業務プロファイルの OWNER.TABLE を明記してください。",
                     )
             if execution_guard:
                 execution_guard()
@@ -455,7 +455,7 @@ def run_validation_job(runtime: Any, job_id: str) -> None:
             runtime._strict_profile(bundle.profile_id).model_dump(mode="json")
         ):
             raise OntologyVersionConflictError(
-                "VALIDATION_SCOPE_CHANGED", "検証中に Profile が変更されました。"
+                "VALIDATION_SCOPE_CHANGED", "検証中に業務プロファイルが変更されました。"
             )
         if bundle.schema_context_fingerprint != definition_fingerprint(
             str(runtime.prepare_build_schema_context(bundle.profile_id).schema_context)

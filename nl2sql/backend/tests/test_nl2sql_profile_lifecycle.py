@@ -150,12 +150,12 @@ def test_profile_name_conflict_returns_422_field_error(
     detail = cast(dict[str, Any], exc_info.value.detail)
     assert detail == {
         "code": "NL2SQL_PROFILE_NAME_CONFLICT",
-        "message_ja": "業務 profile 名「SALES_PROFILE」は既に使用されています。",
+        "message_ja": "業務プロファイル名「SALES_PROFILE」は既に使用されています。",
         "field_errors": [
             {
                 "pointer": "/name",
                 "code": "profile_name_conflict",
-                "message": "業務 profile 名「SALES_PROFILE」は既に使用されています。",
+                "message": "業務プロファイル名「SALES_PROFILE」は既に使用されています。",
             }
         ],
     }
@@ -614,5 +614,5 @@ def test_profile_delete_oracle_cleanup_failure_returns_502(
         nl2sql_router.delete_profile("default", _anon_request())
 
     assert exc.value.status_code == 502
-    assert "業務 profile は削除していません" in str(exc.value.detail)
+    assert "業務プロファイルは削除していません" in str(exc.value.detail)
     assert service.get_profile("default").id == "default"

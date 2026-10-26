@@ -264,7 +264,7 @@ async function mockProfileManagement(
         await route.fulfill({
           status: 404,
           contentType: "application/json",
-          body: JSON.stringify({ detail: "指定された profile が見つかりません。" }),
+          body: JSON.stringify({ detail: "指定された業務プロファイルが見つかりません。" }),
         });
       }
       return;
@@ -280,7 +280,7 @@ async function mockProfileManagement(
       await route.fulfill({
         status: 404,
         contentType: "application/json",
-        body: JSON.stringify({ detail: "指定された profile が見つかりません。" }),
+        body: JSON.stringify({ detail: "指定された業務プロファイルが見つかりません。" }),
       });
       return;
     }
@@ -418,7 +418,7 @@ test("URL 深リンクでエディタを直接開ける", async ({ page }) => {
   await expect(page.getByLabel("名称")).toHaveValue("");
 
   await page.goto("/profiles?profile=missing");
-  await expect(page.getByText("指定された profile が見つかりません。", { exact: true })).toBeVisible();
+  await expect(page.getByText("指定された業務プロファイルが見つかりません。", { exact: true })).toBeVisible();
   await expect(page).toHaveURL(/profile=missing/);
   await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
   await expect(page.locator("#profile-management-panel-list")).toBeVisible();
