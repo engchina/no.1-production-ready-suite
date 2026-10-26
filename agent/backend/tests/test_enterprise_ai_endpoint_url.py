@@ -73,7 +73,10 @@ def test_runtime_calls_endpoint_as_is(
         builtin_runtime,
         "AsyncOpenAI",
         lambda **kwargs: AsyncOpenAI(
-            http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)), **kwargs
+            **{
+                **kwargs,
+                "http_client": httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
+            }
         ),
     )
 

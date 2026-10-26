@@ -56,7 +56,13 @@ from agents import (
 from agents.items import ModelResponse
 from agents.run_config import CallModelData, ModelInputData, ToolErrorFormatterArgs
 from agents.tool_context import ToolContext
-from openai import DEFAULT_MAX_RETRIES, APIStatusError, AsyncOpenAI, BadRequestError
+from openai import (
+    DEFAULT_MAX_RETRIES,
+    APIStatusError,
+    AsyncOpenAI,
+    BadRequestError,
+    DefaultAsyncHttpxClient,
+)
 from openai.types.shared import Reasoning, ReasoningEffort
 from opentelemetry import trace
 from pr_backend_core.chat_history import (
@@ -64,6 +70,7 @@ from pr_backend_core.chat_history import (
     ChatHistoryBudget,
     build_chat_history,
 )
+from pr_backend_core.llm_request_params_httpx import asend_dropping_parameters
 from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.mcp_trace import traceparent_links
 from pr_backend_core.observability.request_context import bind_log_context
@@ -924,6 +931,25 @@ class OciResponsesModel(OpenAIResponsesModel):
         )
 
 
+class _ParameterDroppingHttpClient(DefaultAsyncHttpxClient):
+    """SDK の既定（timeout・接続の上限・redirect）の client に、受け付けない引数の扱いを足す。
+
+    モデルが受け付けない引数（temperature など）の 400 は、外して 1 回だけ送り直し、以後この
+    モデルには送らない（#3539。判定と記憶は platform の部品）。
+    """
+
+    async def send(self, request: Any, *args: Any, **kwargs: Any) -> Any:
+        parent = super().send
+        return await asend_dropping_parameters(lambda item: parent(item, *args, **kwargs), request)
+
+
+def enterprise_ai_http_client(timeout: float | None = None) -> DefaultAsyncHttpxClient:
+    """Enterprise AI を呼ぶ `AsyncOpenAI` の HTTP の client（`timeout` が無ければ SDK の既定）。"""
+    if timeout is None:
+        return _ParameterDroppingHttpClient()
+    return _ParameterDroppingHttpClient(timeout=timeout)
+
+
 def _default_model_factory(target: ModelTarget) -> Model:
     headers = {"OpenAI-Project": target.project_ocid} if target.project_ocid else None
     client = AsyncOpenAI(
@@ -933,6 +959,7 @@ def _default_model_factory(target: ModelTarget) -> Model:
         max_retries=(
             DEFAULT_MAX_RETRIES if target.sdk_max_retries is None else target.sdk_max_retries
         ),
+        http_client=enterprise_ai_http_client(),
     )
     model = OciResponsesModel(model=target.model_id, openai_client=client)
     # 上限つきの並行の実行器を通す呼び出し（SDK の再試行 0）は、送り直しを実行器に任せる（#2023）。

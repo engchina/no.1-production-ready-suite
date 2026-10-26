@@ -17,6 +17,7 @@ from contextlib import ExitStack
 from typing import Any, Protocol, cast
 
 import httpx
+from pr_backend_core.llm_request_params_httpx import send_dropping_parameters
 from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.tracing import observed_span
 from pr_system_settings.enterprise_ai_errors import (
@@ -509,7 +510,12 @@ class OciEnterpriseAiDirectClient:
                         )
                     )
                     try:
-                        response = client.post(url, headers=headers, json=dict(payload))
+                        # モデルが受け付けない引数（temperature など）の 400 は、外して 1 回だけ
+                        # 送り直し、以後このモデルには送らない（#3539。platform の部品）。
+                        response = send_dropping_parameters(
+                            client.send,
+                            client.build_request("POST", url, headers=headers, json=dict(payload)),
+                        )
                     except httpx.TimeoutException as exc:
                         call_span.set_attributes({"error.type": type(exc).__name__})
                         call_span.set_status("failed")

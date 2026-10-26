@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import stat
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 from dotenv import dotenv_values
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pr_backend_core.llm_request_params import note_dropped_parameters
 from pydantic import Field
 
 from pr_system_settings import model as shared_model
@@ -267,6 +269,35 @@ def test_model_test_requires_model_id(tmp_path: Path) -> None:
     data = make_client(settings, store).post("/api/settings/model/test", json=request).json()
     assert data["data"]["status"] == "failed"
     assert data["data"]["raw_error"] == "テストするモデル ID を入力してください。"
+
+
+def test_model_test_reports_dropped_parameters(tmp_path: Path) -> None:
+    """受け付けない引数を外して送ったら、詳細と成功の文に出す（#3539。worker thread も）。"""
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    request = {"settings": PAYLOAD, "target_type": "enterprise_text", "model_id": "llm-a"}
+
+    async def dropped(_candidate: Any, _request: ModelSettingsTestRequest) -> dict[str, Any]:
+        await asyncio.to_thread(note_dropped_parameters, ("temperature",))
+        note_dropped_parameters(("top_p",))
+        return {"response_chars": 2, "surface": "llm"}
+
+    data = (
+        make_client(settings, store, run_model_test=dropped)
+        .post("/api/settings/model/test", json=request)
+        .json()["data"]
+    )
+    assert data["status"] == "success"
+    assert data["details"] == {
+        "response_chars": 2,
+        "surface": "llm",
+        "dropped_parameters": "temperature, top_p",
+    }
+    assert "受け付けない引数（temperature, top_p）は外して送りました" in data["message"]
+
+    plain = make_client(settings, store).post("/api/settings/model/test", json=request).json()
+    assert "dropped_parameters" not in plain["data"]["details"]
+    assert "外して送りました" not in plain["data"]["message"]
 
 
 def test_saved_key_overrides_process_environment_key(

@@ -52,6 +52,7 @@ from pr_backend_core.chat_history_window import (
     within_chat_history,
 )
 from pr_backend_core.chat_progress import CHAT_PROGRESS_SSE_HEADERS
+from pr_backend_core.llm_request_params_httpx import asend_dropping_parameters
 from pr_backend_core.logging import safe_exception_fields
 from pr_system_settings.answer_notice import build_answer_notice_router
 from pr_system_settings.auth.visibility import (
@@ -1036,7 +1037,11 @@ async def _post_enterprise_ai(
     if connection.project_ocid:
         headers["OpenAI-Project"] = connection.project_ocid
     async with httpx.AsyncClient(timeout=settings.timeout_seconds) as client:
-        response = await client.post(url, headers=headers, json=dict(payload))
+        # モデルが受け付けない引数（temperature など）の 400 は、外して 1 回だけ送り直し、
+        # 以後このモデルには送らない（#3539。外した引数は結果の詳細に出る）。
+        response = await asend_dropping_parameters(
+            client.send, client.build_request("POST", url, headers=headers, json=dict(payload))
+        )
     if response.is_error:
         # 受け付けない推論の量（#1425）などの 400 は、応答の本文に理由があるので結果の詳細に出す。
         raise ValueError(f"OCI Enterprise AI HTTP {response.status_code}: {response.text[:500]}")

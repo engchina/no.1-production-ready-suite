@@ -21,6 +21,7 @@ isolate_env_files_for_tests("AGENT_")
 os.environ["AGENT_RUNTIME_REPOSITORY_BACKEND"] = "memory"
 
 import pytest  # noqa: E402
+from pr_backend_core.llm_request_params import reset_dropped_parameters  # noqa: E402
 from pr_system_settings.database_status import clear_database_status_cache  # noqa: E402
 
 from app.features.agent import (  # noqa: E402
@@ -65,6 +66,14 @@ def _fresh_database_status_cache() -> Iterator[None]:
     clear_database_status_cache()
     yield
     clear_database_status_cache()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_dropped_llm_parameters() -> Iterator[None]:
+    """モデルが受け付けない引数の記憶（#3539。プロセスの間の状態）をテストごとに捨てる。"""
+    reset_dropped_parameters()
+    yield
+    reset_dropped_parameters()
 
 
 @pytest.fixture(autouse=True)

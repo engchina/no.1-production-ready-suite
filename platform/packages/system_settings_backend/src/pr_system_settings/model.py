@@ -49,6 +49,7 @@ from uuid import uuid4
 
 from dotenv import dotenv_values
 from fastapi import APIRouter, HTTPException, params
+from pr_backend_core.llm_request_params import collect_dropped_parameters
 from pr_backend_core.schemas import ApiResponse
 
 # 入力 token の見積もりは backend_core の 1 つ（検索の結果の本文の予算と共有する。#3321）。
@@ -1829,7 +1830,9 @@ async def run_model_settings_test(
     try:
         if not request.model_id:
             raise ValueError("テストするモデル ID を入力してください。")
-        details = await run_model_test(candidate, request)
+        # モデルが受け付けない引数（#3539）を外して送ったら、結果の詳細と文に出す。
+        with collect_dropped_parameters() as dropped:
+            details = await run_model_test(candidate, request)
     except Exception as exc:  # noqa: BLE001 - 外部 SDK/API の多様な例外を表示用に握る
         raw_error = sanitize_model_test_error(
             str(exc),
@@ -1847,13 +1850,26 @@ async def run_model_settings_test(
             error_type=type(exc).__name__,
             elapsed_ms=_elapsed_ms(started),
         )
+    message = _model_test_success_message(request.target_type, request.model_id)
+    if dropped:
+        names = ", ".join(sorted(dropped))
+        details = {**details, "dropped_parameters": names}
+        message += _dropped_parameters_message(names)
     return ModelSettingsTestResult(
         status="success",
         target_type=request.target_type,
         model_id=request.model_id,
-        message=_model_test_success_message(request.target_type, request.model_id),
+        message=message,
         elapsed_ms=_elapsed_ms(started),
         details=details,
+    )
+
+
+def _dropped_parameters_message(names: str) -> str:
+    """受け付けない引数を外して送ったときに、成功の文に足す文（#3539）。"""
+    return (
+        f"このモデルが受け付けない引数（{names}）は外して送りました"
+        "（backend を再起動するまで、このモデルには送りません）。"
     )
 
 
