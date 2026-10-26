@@ -456,8 +456,8 @@ function CurrentStepRow({
             {activityIndicator ? <Spinner size={TEXT_ICON_SIZE.xs} className="text-accent-fg" /> : <Clock3 size={TEXT_ICON_SIZE.xs} className="text-fg-muted" aria-hidden />}
           </span>
           <span className="min-w-0 break-words [overflow-wrap:anywhere]">
-            {step?.product ? <RunTimelineProduct product={step.product} /> : null}
             <span className="font-medium text-fg" data-run-timeline-label="">{label}</span>
+            {step?.product ? <RunTimelineProduct product={step.product} /> : null}
             {detail ? <span className="text-fg-muted">{`（${detail}）`}</span> : null}
             <span className="sr-only">{` ${labels.status.running}`}</span>
           </span>

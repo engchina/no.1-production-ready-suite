@@ -97,6 +97,31 @@ function toolStep(id: string, name: string, status: string, extra: Record<string
   };
 }
 
+/**
+ * 入れ子の深さごとに字下げが違い（深い段ほど右）、どの行も名前は状態の印から同じ距離で始まる（製品名で名前がずれない。
+ * #3447）。
+ */
+async function expectNestedIndent(list: ReturnType<Page["getByTestId"]>) {
+  const rows = await list.evaluate((node) =>
+    Array.from(node.querySelectorAll("[data-run-timeline-step]"), (row) => {
+      const icon = row.querySelector(".pr-icon-line")!.getBoundingClientRect();
+      const label = row.querySelector("[data-run-timeline-label]")!.getBoundingClientRect();
+      return {level: Number(row.getAttribute("data-level") ?? 0), icon: Math.round(icon.left), gap: Math.round(label.left - icon.left)};
+    })
+  );
+  const byLevel = new Map<number, number>();
+  for (const row of rows) {
+    const known = byLevel.get(row.level);
+    if (known !== undefined) expect(row.icon).toBe(known);
+    byLevel.set(row.level, row.icon);
+  }
+  const levels = [...byLevel.keys()].sort((a, b) => a - b);
+  for (let index = 1; index < levels.length; index += 1) {
+    expect(byLevel.get(levels[index])!).toBeGreaterThan(byLevel.get(levels[index - 1])!);
+  }
+  expect(new Set(rows.map((row) => row.gap)).size).toBe(1);
+}
+
 for (const viewport of VIEWPORTS) {
   test(`終わったツールの段は、段の終わりのイベントの詳細で、後の段の実行中から開ける（#2373） (${viewport.name})`, async ({ page, mockApi }) => {
     const { progress: log } = seedRunningRun(mockApi);
@@ -393,6 +418,14 @@ test("実行中の Run の詳細は処理の経過を開いても動くスピナ
     .step("rag-stage", "running", rag("rag-retrieval", {name: "rag.engine.stage", kind: "answer_step", params: {name: "文書検索"}, displayName: "文書の検索", attributes: {"pr.stage": "文書検索"}}))
     .step("rag-vector", "running", rag("rag-stage", {name: "rag.engine.stage", kind: "answer_step", params: {name: "ベクトル検索"}, displayName: "ベクトル検索", attributes: {"pr.stage": "ベクトル検索"}}))
     .step("rag-text", "running", rag("rag-stage", {name: "rag.engine.stage", kind: "answer_step", params: {name: "全文検索"}, displayName: "全文検索", attributes: {"pr.stage": "全文検索"}})).events;
+  // チャットの実行中の処理の経過も、MCP → RAG の入れ子を深さごとに字下げする（#3447）。
+  await page.goto("/chat");
+  await openThread(page);
+  const live = page.getByTestId("chat-progress");
+  await expect(live.getByTestId("chat-progress-current")).toContainText("全文検索");
+  await expectNestedIndent(live);
+  await expectNoHorizontalOverflow(page);
+  await live.screenshot({path: testInfo.outputPath("chat-progress-nested-running.png")});
   await page.goto(`/runs?id=${RUN_ID}`);
   const progress = page.getByTestId("run-progress");
   await expect(progress.locator("[data-processing-label]")).toHaveText("全文検索");
@@ -445,6 +478,7 @@ test("呼び先の製品の span は書いた製品の工程の名前で出し�
     .step("rag-retrieval", "done", rag("rag-search", {name: "rag.retrieval", displayName: "検索", attributes: {"pr.stage": "retrieval"}}))
     .step("rag-stage", "done", rag("rag-retrieval", {name: "rag.engine.stage", kind: "answer_step", params: {name: "文書検索"}, displayName: "文書の検索", attributes: {"pr.stage": "文書検索"}}))
     .step("rag-embed", "done", rag("rag-stage", {name: "gen_ai.embeddings", attributes: {"gen_ai.request.model": "synthetic-embed"}}))
+    .step("rag-vector", "done", rag("rag-stage", {name: "rag.engine.stage", kind: "answer_step", params: {name: "ベクトル検索"}, displayName: "ベクトル検索", attributes: {"pr.stage": "ベクトル検索"}}))
     .step(tool, "done", {finishedAt: end})
     .step("chat-2", "done", {startedAt: start, finishedAt: end, kind: "respond"}).terminal("done").events;
   run.events = [{id: "end", run_id: RUN_ID, type: "run.completed", message: "", payload: {}, created_at: end}];
@@ -457,13 +491,16 @@ test("呼び先の製品の span は書いた製品の工程の名前で出し�
     ["進め方を決めました", 0],
     ["処理を実行しました", 0],
     ["MCP の呼び出し · rag_retrieve_evidence", 1],
-    ["RAG · 検索", 2],
+    ["検索 RAG", 2],
     ["文書の検索", 3],
     ["埋め込みの作成 · synthetic-embed", 4],
+    ["ベクトル検索", 4],
     ["回答を作りました", 0],
   ]);
   await expect(list.getByTestId("chat-progress-step-mcp-init")).toHaveCount(0);
-  await expect(list.locator("[data-run-timeline-product]")).toHaveText(["RAG · "]);
+  // 製品名は名前の後ろのタグ（名前の前に置かず、名前の左端を兄弟の段とそろえる。#3447）。
+  await expect(list.locator("[data-run-timeline-product]")).toHaveText(["RAG"]);
+  await expectNestedIndent(list);
   await expectNoHorizontalOverflow(page);
   await list.screenshot({path: testInfo.outputPath("chat-process-products.png")});
   await page.goto(`/runs?id=${RUN_ID}`);

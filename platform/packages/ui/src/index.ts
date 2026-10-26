@@ -777,6 +777,7 @@ export {
   runTimelineBars,
   runTimelineHasChildren,
   runTimelineCurrentStepIndex,
+  RUN_TIMELINE_MAX_VISIBLE_DEPTH,
   resolveRunDetailLabels,
   formatRunCancellation,
   DEFAULT_RUN_DETAIL_LABELS,
