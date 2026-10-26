@@ -4227,6 +4227,8 @@ class OracleNl2SqlAdapter:
         作れなければ、RUN_TOOL に切り替えずに失敗を返す（RUN_TOOL は team の agent・task の
         指示を通らず、利用者が選んだ方式と違う結果になるため）。RUN_TEAM の引数は公式の文書の
         ``(team_name, user_prompt, params)`` で、conversation_id は ``params`` の JSON に入れる。
+        team の profile が消えて RUN_TOOL に切り替えるときは、RUN_TEAM の span を失敗で閉じてから
+        RUN_TOOL を呼ぶ（2 つの呼び出しを生成の工程の下の兄弟にする。#3477）。
         """
         with observed_span(
             "oracle.select_ai",
@@ -4235,7 +4237,7 @@ class OracleNl2SqlAdapter:
                 "db.system.name": "oracle.db",
                 "db.operation.name": "SELECT_AI",
             },
-        ):
+        ) as team_trace:
             active_conversation_id = (conversation_id or "").strip()
             if not active_conversation_id:
                 active_conversation_id = self.create_agent_conversation(
@@ -4271,22 +4273,24 @@ class OracleNl2SqlAdapter:
                     message = str(exc)
                     if not self._looks_like_agent_profile_loss(message):
                         raise self._agent_runtime_error(exc) from exc
-            # team が参照する profile（AGENT$<team>）が消えたときだけ、tool を直接呼んで復旧する。
-            # conversation_id は直接実行の名前になり、service が復旧を記録する。
-            fallback_tool = tool_name or self._tool_name_from_team_name(team_name)
-            logger.warning(
-                "Select AI Agent team の profile が見つからないため RUN_TOOL に切り替えます。",
-                extra={
-                    "event": "select_ai_agent_run_tool_fallback",
-                    "team_name": team_name,
-                    "tool_name": fallback_tool,
-                },
-            )
-            return self.run_select_ai_agent_tool(
-                tool_name=fallback_tool,
-                question=question,
-                call_timeout_seconds=call_timeout_seconds,
-            )
+                    team_trace.set_attributes({"error.type": type(exc).__name__})
+                    team_trace.set_status("failed")
+        # team が参照する profile（AGENT$<team>）が消えたときだけ、tool を直接呼んで復旧する。
+        # conversation_id は直接実行の名前になり、service が復旧を記録する。
+        fallback_tool = tool_name or self._tool_name_from_team_name(team_name)
+        logger.warning(
+            "Select AI Agent team の profile が見つからないため RUN_TOOL に切り替えます。",
+            extra={
+                "event": "select_ai_agent_run_tool_fallback",
+                "team_name": team_name,
+                "tool_name": fallback_tool,
+            },
+        )
+        return self.run_select_ai_agent_tool(
+            tool_name=fallback_tool,
+            question=question,
+            call_timeout_seconds=call_timeout_seconds,
+        )
 
     def run_select_ai_agent_tool(
         self,

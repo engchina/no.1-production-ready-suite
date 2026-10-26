@@ -66,10 +66,21 @@ STAGE_DISPLAY_NAMES: dict[str, str] = {
 }
 
 
+# MCP の `nl2sql_query` の回答前の確認（#1441）の工程。ジョブの外の工程なので NL2SQL の画面の処理の
+# 経過（ジョブの span）には出ず、呼び出し元（Agent の実行の詳細）だけが出す。確認の LLM の呼び出しは
+# この span の子にする（#3477）。名前は 3 製品の総称（platform の UX 契約
+# confirm-before-answer.md）。
+REQUIREMENT_STAGE = "requirement"
+REQUIREMENT_SPAN = "nl2sql.requirement"
+MCP_STAGE_DISPLAY_NAMES: dict[str, str] = {REQUIREMENT_STAGE: "回答前の確認"}
+
+
 def span_display_name(update: SpanUpdate) -> str | None:
     """NL2SQL の span の利用者向けの名前（工程の span だけ。技術の span・知らない段は None）。"""
     stage = update.attributes.get("pr.stage")
-    return STAGE_DISPLAY_NAMES.get(stage) if isinstance(stage, str) else None
+    if not isinstance(stage, str):
+        return None
+    return STAGE_DISPLAY_NAMES.get(stage) or MCP_STAGE_DISPLAY_NAMES.get(stage)
 
 
 class TraceSpanReadError(RuntimeError):

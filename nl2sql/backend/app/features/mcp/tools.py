@@ -47,6 +47,7 @@ from typing import Any, Literal
 
 from fastapi import HTTPException, Request
 from pr_backend_core.mcp import McpServer, McpTool, McpToolError
+from pr_backend_core.observability.tracing import ObservedSpan, SpanDisplay, observed_span
 from pr_system_settings.auth.dependencies import service_token_profile_scope
 from pr_system_settings.auth.errors import SecurityApiError
 from pr_system_settings.auth.service_token import (
@@ -106,6 +107,7 @@ from app.features.nl2sql.service import (
     nl2sql_service,
 )
 from app.features.nl2sql.sql_requirement import RequirementAiUnavailableError
+from app.features.nl2sql.trace_spans import REQUIREMENT_SPAN, REQUIREMENT_STAGE
 from app.security.permissions import (
     PROFILE_READ_PERMISSION,
     QUERY_GENERATE_PERMISSION,
@@ -1104,106 +1106,129 @@ def build_mcp_server(request: Request) -> McpServer:
                 ),
             )
 
-        started = time.monotonic()
-        try:
-            data = await run_sync_io(requirement_step)
-        except RequirementAiUnavailableError as exc:
-            if exc.code != REQUIREMENT_AI_NOT_CONFIGURED_CODE or arguments.requirement_session_id:
-                raise
-            # OCI Enterprise AI を設定していない構成（Select AI だけ・ローカルの決定論）は、
-            # SQL の生成前の確認をせずに SQL を作る。確かめていないことを requirement で返す。
-            result = await start_and_wait(
-                JobCreateRequest(
-                    question=arguments.question,
-                    profile_id=profile_id,
-                    row_limit=arguments.row_limit,
-                ),
-                arguments.wait_seconds,
-            )
-            result.requirement = RequirementOutput(
-                session_id="", status="skipped", message=_REQUIREMENT_SKIPPED_MESSAGE
-            )
-            return result
-        if data.session.requirement_applied_at is None:
-            # 業務プロファイルの方針が「前提を示して SQL を生成する」か、利用者が「確認せずに
-            # SQL を生成」を選んだ（skip_clarification）なら聞かない（#1839）。要件を反映できる
-            # （確認事項が無い・再検査の上限で残りを AI に任せられる）なら反映し、できないなら
-            # 確認を使わずに作る（画面の「確認せずに SQL を生成」と同じ）。
-            assume = arguments.skip_clarification or await run_sync_io(_profile_assumes, profile_id)
-            state = data.requirement_state
-            if (
-                assume
-                and not _requirement_ready(data)
-                and not (state is not None and state.can_apply)
-            ):
-                if data.session.status not in _CLOSED_SESSION_STATUSES:
-                    await run_sync_io(runtime.cancel_session, data.session.id)
-                remaining = max(0, arguments.wait_seconds - int(time.monotonic() - started))
-                result = await start_and_wait(
+        async def confirm_requirement(
+            requirement_trace: ObservedSpan,
+        ) -> Nl2SqlJobResult | tuple[JobCreateRequest, RequirementOutput]:
+            """回答前の確認の工程（#1441）。SQL を作らずに返す結果か、作るジョブと確認の結果を返す。
+
+            ジョブは呼び出し元が確認の span の外で作る（確認の工程とジョブの工程を兄弟にする。
+            #3477）。
+            """
+            try:
+                data = await run_sync_io(requirement_step)
+            except RequirementAiUnavailableError as exc:
+                if (
+                    exc.code != REQUIREMENT_AI_NOT_CONFIGURED_CODE
+                    or arguments.requirement_session_id
+                ):
+                    raise
+                # OCI Enterprise AI を設定していない構成（Select AI だけ・ローカルの決定論）は、
+                # SQL の生成前の確認をせずに SQL を作る。確かめていないことを requirement で返す。
+                requirement_trace.set_status("skipped")
+                return (
                     JobCreateRequest(
                         question=arguments.question,
                         profile_id=profile_id,
                         row_limit=arguments.row_limit,
                     ),
-                    remaining,
-                )
-                result.requirement = RequirementOutput(
-                    session_id="",
-                    status="skipped",
-                    message=(
-                        _REQUIREMENT_USER_SKIPPED_MESSAGE
-                        if arguments.skip_clarification
-                        else _REQUIREMENT_ASSUMED_MESSAGE
+                    RequirementOutput(
+                        session_id="", status="skipped", message=_REQUIREMENT_SKIPPED_MESSAGE
                     ),
                 )
-                return result
-            if not _requirement_ready(data) and not assume:
-                requirement = _requirement_output(data)
-                if requirement.question is not None:
-                    # 確認の要る項目がある: SQL を作らずに 1 問だけ返す。
-                    return Nl2SqlJobResult(
-                        status=QueryStatus.NEEDS_CLARIFICATION,
-                        profile_id=profile_id,
-                        requirement=requirement,
-                    )
-                # 聞く項目が無いのに SELECT / FROM が決まらない・範囲で答えられない: 閉じて返す。
-                if data.session.status not in _CLOSED_SESSION_STATUSES:
-                    await run_sync_io(runtime.cancel_session, data.session.id)
-                return Nl2SqlJobResult(
-                    status=QueryStatus.UNANSWERABLE,
-                    profile_id=profile_id,
-                    error_code=REQUIREMENT_UNANSWERABLE_CODE,
-                    error_message=requirement.message or None,
-                    requirement=requirement.model_copy(update={"status": "unanswerable"}),
+            if data.session.requirement_applied_at is None:
+                # 業務プロファイルの方針が「前提を示して SQL を生成する」か、利用者が「確認せずに
+                # SQL を生成」を選んだ（skip_clarification）なら聞かない（#1839）。要件を反映できる
+                # （確認事項が無い・再検査の上限で残りを AI に任せられる）なら反映し、できないなら
+                # 確認を使わずに作る（画面の「確認せずに SQL を生成」と同じ）。
+                assume = arguments.skip_clarification or await run_sync_io(
+                    _profile_assumes, profile_id
                 )
-            data = await run_sync_io(
-                runtime.apply_requirement,
-                data.session.id,
-                RequirementApplyRequest(base_version=data.session.current_intent_version),
+                state = data.requirement_state
+                if (
+                    assume
+                    and not _requirement_ready(data)
+                    and not (state is not None and state.can_apply)
+                ):
+                    if data.session.status not in _CLOSED_SESSION_STATUSES:
+                        await run_sync_io(runtime.cancel_session, data.session.id)
+                    return (
+                        JobCreateRequest(
+                            question=arguments.question,
+                            profile_id=profile_id,
+                            row_limit=arguments.row_limit,
+                        ),
+                        RequirementOutput(
+                            session_id="",
+                            status="skipped",
+                            message=(
+                                _REQUIREMENT_USER_SKIPPED_MESSAGE
+                                if arguments.skip_clarification
+                                else _REQUIREMENT_ASSUMED_MESSAGE
+                            ),
+                        ),
+                    )
+                if not _requirement_ready(data) and not assume:
+                    requirement = _requirement_output(data)
+                    if requirement.question is not None:
+                        # 確認の要る項目がある: SQL を作らずに 1 問だけ返す。
+                        return Nl2SqlJobResult(
+                            status=QueryStatus.NEEDS_CLARIFICATION,
+                            profile_id=profile_id,
+                            requirement=requirement,
+                        )
+                    # 聞く項目が無いのに SELECT / FROM が決まらない・範囲で答えられない: 閉じて
+                    # 返す。
+                    if data.session.status not in _CLOSED_SESSION_STATUSES:
+                        await run_sync_io(runtime.cancel_session, data.session.id)
+                    return Nl2SqlJobResult(
+                        status=QueryStatus.UNANSWERABLE,
+                        profile_id=profile_id,
+                        error_code=REQUIREMENT_UNANSWERABLE_CODE,
+                        error_message=requirement.message or None,
+                        requirement=requirement.model_copy(update={"status": "unanswerable"}),
+                    )
+                data = await run_sync_io(
+                    runtime.apply_requirement,
+                    data.session.id,
+                    RequirementApplyRequest(base_version=data.session.current_intent_version),
+                )
+            draft = data.session.requirement
+            if draft is None:  # pragma: no cover - guided の session は必ず下書きを持つ
+                raise HTTPException(status_code=409, detail="回答前の確認の要件がありません。")
+            # 画面と同じく、確かめた要件（構造化した要件と書き直した質問の文）で job を作る。質問の
+            # 文は利用者の質問のままにし、書き直した文は生成にだけ使う（`generation_question`。
+            # #1727）。生成の方式は指定せず、ジョブの作成が業務プロファイルの既定の生成方式にする
+            # （#1524）。use_ontology_context 等は画面と同じく JobCreateRequest の既定で作る。
+            # row_limit は必ず渡す（None だと全件を取得する）。
+            job_request = _with_requirement(
+                JobCreateRequest(
+                    question=data.session.original_question,
+                    profile_id=profile_id,
+                    row_limit=arguments.row_limit,
+                    requirement_session_id=data.session.id,
+                ),
+                getattr(request.state, "principal", None),
             )
-        draft = data.session.requirement
-        if draft is None:  # pragma: no cover - guided の session は必ず下書きを持つ
-            raise HTTPException(status_code=409, detail="回答前の確認の要件がありません。")
-        # 画面と同じく、確かめた要件（構造化した要件と書き直した質問の文）で job を作る。質問の文は
-        # 利用者の質問のままにし、書き直した文は生成にだけ使う（`generation_question`。#1727）。
-        # 生成の方式は指定せず、ジョブの作成が業務プロファイルの既定の生成方式にする（#1524）。
-        # use_ontology_context 等は画面と同じく JobCreateRequest の既定で作る。
-        # row_limit は必ず渡す（None だと全件を取得する）。
-        job_request = _with_requirement(
-            JobCreateRequest(
-                question=data.session.original_question,
-                profile_id=profile_id,
-                row_limit=arguments.row_limit,
-                requirement_session_id=data.session.id,
-            ),
-            getattr(request.state, "principal", None),
-        )
+            return job_request, _requirement_output(data)
+
+        started = time.monotonic()
+        # 回答前の確認（LLM の要件の下書き・見直し）は工程の span の中で行う。呼び出し元（Agent）の
+        # 処理の経過で、確認の LLM の呼び出しがこの工程の子になる（#3477）。
+        with observed_span(
+            REQUIREMENT_SPAN,
+            attributes={"pr.stage": REQUIREMENT_STAGE},
+            display=SpanDisplay(kind=REQUIREMENT_STAGE),
+        ) as requirement_trace:
+            decided = await confirm_requirement(requirement_trace)
+        if isinstance(decided, Nl2SqlJobResult):
+            return decided
+        job_request, requirement = decided
         # SQL の生成前の確認（LLM）にかかった分だけ、ジョブを待つ秒数を減らす（1 回の呼び出しの
         # 長さを「SQL の生成前の確認 + wait_seconds」にしない。終わらなければ job_id を返し、
         # 続きは nl2sql_get_job）。
         remaining = max(0, arguments.wait_seconds - int(time.monotonic() - started))
         result = await start_and_wait(job_request, remaining)
-        result.requirement = _requirement_output(data)
+        result.requirement = requirement
         return result
 
     @_translate_domain_errors
