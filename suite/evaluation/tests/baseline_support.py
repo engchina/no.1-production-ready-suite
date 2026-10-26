@@ -1,9 +1,9 @@
 """製品横断の評価の基線（`fixtures/agent_baseline/`）の再生（テストの補助）。
 
-共有の fixture `platform/contracts/mcp/fixtures/agent-evaluation-baseline.json` の公開の Agent MCP の
-出力（Agent の `tests/test_evaluation_baseline_observation.py` が本物の MCP の入口で作り、契約に合う
-ことを確かめる）を `httpx.MockTransport` で再生し、suite の Target・Evaluator・Report に流す。再生の
-条件は fixture の README.md「再生の条件」。
+共有の fixture `platform/contracts/mcp/fixtures/agent-evaluation-baseline.json` の公開の
+Agent MCP の出力（Agent の `tests/test_evaluation_baseline_observation.py` が本物の MCP の入口で
+作り、契約に合うことを確かめる）を `httpx.MockTransport` で再生し、suite の Target・Evaluator・
+Report に流す。再生の条件は fixture の README.md「再生の条件」。
 """
 
 from __future__ import annotations

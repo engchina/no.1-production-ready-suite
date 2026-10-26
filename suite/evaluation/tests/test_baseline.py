@@ -76,8 +76,8 @@ SCORE_FIELDS: tuple[str, ...] = (
     "error_stage",
 )
 # 段 2 の結果にあり、suite に無い項目（RAG の評価の項目。Agent の経路ではいつも空）。
-RAG_ONLY_SCORE_FIELDS = {"answer_evaluation": None, "guardrail_warnings": []}
-RAG_ONLY_METRIC_FIELDS = {"evaluation_suite": "standard", "comparison": None}
+RAG_ONLY_SCORE_FIELDS: dict[str, Any] = {"answer_evaluation": None, "guardrail_warnings": []}
+RAG_ONLY_METRIC_FIELDS: dict[str, Any] = {"evaluation_suite": "standard", "comparison": None}
 # 旧形式の推定を選んだときに、段 2 から意図して変わる値（README.md「意図して作り直した値」）。
 STAGE2_DIFFS: dict[str, dict[str, tuple[Any, Any]]] = {
     # Run を作れなかった往復にも、失敗した往復の段を付ける。
@@ -360,13 +360,14 @@ def test_rescoring_saved_observations_reproduces_the_report(
     same = rescore(saved, result.dataset, scorer)
     assert same.report == result.record.report
     assert same.provenance["observed_dataset"] == result.record.provenance["dataset"]
-    legacy = rescore(saved, result.dataset, ScorerConfig(infer_missing_outcome=True, run_timeout_seconds=2.0))
+    legacy = rescore(
+        saved, result.dataset, ScorerConfig(infer_missing_outcome=True, run_timeout_seconds=2.0)
+    )
     expected = replay(fixtures, suite.get("thresholds"), infer_missing_outcome=True).record.report
     assert legacy.report == expected
     assert legacy.provenance["scorer"]["metrics_version"] == LEGACY_VERSION
     assert (
-        legacy.provenance["scorer"]["config_sha256"]
-        != same.provenance["scorer"]["config_sha256"]
+        legacy.provenance["scorer"]["config_sha256"] != same.provenance["scorer"]["config_sha256"]
     )
 
 
