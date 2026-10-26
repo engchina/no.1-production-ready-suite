@@ -1915,7 +1915,7 @@ jobs:
 
       # shellcheck は GitHub の ubuntu の runner に入っている。
       - name: Shellcheck
-        run: shellcheck scripts/*.sh scripts/tests/*.sh .github/scripts/*.sh
+        run: shellcheck scripts/*.sh scripts/tests/*.sh .github/scripts/*.sh .github/actions/*/*.sh
 
       - name: Test pr-merge-check
         run: bash scripts/tests/pr-merge-check.test.sh
@@ -1923,6 +1923,10 @@ jobs:
       # 実 Oracle の結合テストの skip の監視（oracle-integration.yml。#1595）。runner の python3 で動く。
       - name: Test pytest-skip-gate
         run: bash scripts/tests/pytest-skip-gate.test.sh
+
+      # Playwright の OS の依存を、時間の上限と retry を付けて入れる script（.github/actions/playwright-browsers。#3489）。
+      - name: Test playwright-browsers install
+        run: bash scripts/tests/playwright-install.test.sh
 
       # AGENTS.md の大きさ（直下は 20 KiB、直下と各ディレクトリの AGENTS.md の合計は 32 KiB まで。#2276）。
       # Codex は合計が project_doc_max_bytes（既定 32 KiB）を超えた分を読まない。
