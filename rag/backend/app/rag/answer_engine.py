@@ -237,6 +237,11 @@ def answer_step_stage(name: str) -> str:
     return f"{ANSWER_STEP_STAGE_PREFIX}{name}"
 
 
+# 回答の本文を根拠と照合する工程の名前（回答フローの最後の検証と MCP の
+# rag_validate_answer。#3470）。
+ANSWER_VALIDATION_STEP = "資料との照合"
+
+
 def _answer_step_span(name: str) -> AbstractContextManager[ObservedSpan]:
     """回答フローの外で行う回答の工程（資料との照合・承認済み FAQ からの回答）の span（#3226）。
 
@@ -966,7 +971,7 @@ class AnswerEngine:
         # answer_validation は engine の設定変換も使うため、循環 import を避けてここで読む。
         from app.rag.answer_validation import EvidenceRef, validate_answer
 
-        name = "資料との照合"
+        name = ANSWER_VALIDATION_STEP
         started = time.monotonic()
         if step_callback is not None:
             await step_callback(name, "started", 0.0, {})

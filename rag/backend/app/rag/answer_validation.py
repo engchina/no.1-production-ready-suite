@@ -38,6 +38,7 @@ from typing import Any
 
 from rag_engine.evaluation.answer_validation import MAX_DATA_RESULTS, MAX_PREMISES, is_premise_id
 from rag_engine.resources.deadline import remaining_seconds
+from rag_engine.resources.tracing import bind_trace_observer, observe_call
 
 from app.clients.oracle import OracleClient
 from app.clients.support_guide_store import SupportGuideStore
@@ -266,6 +267,13 @@ async def audited_answer_lines(
     return audited
 
 
+# 資料との照合の中の工程の名前（処理の経過の段。#3470）。名前は利用者向けの名詞（画面に
+# そのまま出る）。
+GUIDE_LOAD_STAGE = "業務ガイドの読み込み"
+EVIDENCE_LOAD_STAGE = "根拠の本文の読み込み"
+CLAIM_AUDIT_STAGE = "回答の段落の監査"
+
+
 async def validate_answer(
     question: str,
     answer: str,
@@ -280,6 +288,44 @@ async def validate_answer(
     premises: Sequence[Mapping[str, str]] = (),
     data_results: Sequence[Mapping[str, str]] = (),
 ) -> AnswerValidation:
+    """回答の本文を根拠と照合する（MCP の `rag_validate_answer` と回答フローの「資料との照合」）。
+
+    中の工程（業務ガイドの読み込み・根拠の本文の読み込み・回答の段落の監査）とモデルの呼び出し
+    は、検索・回答と同じ回答エンジンの観測（`_observe_engine_call`）で span にする（#3470。MCP の
+    呼び出しはパイプラインを通らないので、ここで結ぶ）。
+    """
+    from app.rag.pipeline import _observe_engine_call
+
+    with bind_trace_observer(_observe_engine_call):
+        return await _validate_answer(
+            question,
+            answer,
+            refs,
+            settings,
+            oracle=oracle,
+            requests=requests,
+            gaps=gaps,
+            guide=guide,
+            answer_trace_ids=answer_trace_ids,
+            premises=premises,
+            data_results=data_results,
+        )
+
+
+async def _validate_answer(
+    question: str,
+    answer: str,
+    refs: Sequence[EvidenceRef],
+    settings: Settings,
+    *,
+    oracle: OracleClient | None,
+    requests: Sequence[Mapping[str, str]] | None,
+    gaps: Sequence[str],
+    guide: GuideCheckRef | None,
+    answer_trace_ids: Sequence[str],
+    premises: Sequence[Mapping[str, str]],
+    data_results: Sequence[Mapping[str, str]],
+) -> AnswerValidation:
     started = time.monotonic()
     limit = float(settings.rag_answer_validation_timeout_seconds)
     oracle = oracle or OracleClient()
@@ -292,9 +338,10 @@ async def validate_answer(
         checks.append("requests")
     guide_content: SupportGuideContent | None = None
     if guide is not None:
-        guide_items, guide_checks, guide_revision, guide_content = await _guide_findings(
-            oracle, answer, guide
-        )
+        with observe_call("stage", GUIDE_LOAD_STAGE):
+            guide_items, guide_checks, guide_revision, guide_content = await _guide_findings(
+                oracle, answer, guide
+            )
         findings += guide_items
         checks += guide_checks
     deterministic: dict[str, Any] = {
@@ -308,26 +355,35 @@ async def validate_answer(
     documents: dict[str, str] = {}
     missing: list[EvidenceRef] = []
     stale: list[EvidenceRef] = []
-    for ref in dict.fromkeys(refs):
-        chunk = await oracle.retrievable_chunk(ref.document_id, ref.chunk_id)
-        if chunk is None:
-            exists = await oracle.accessible_chunk_exists(ref.document_id, ref.chunk_id)
-            (stale if exists else missing).append(ref)
-            continue
-        metadata = dict(chunk.metadata)
-        # 図の根拠には種類を付ける（図の見た目だけで決まる主張を本文の照合と分ける。#2678）。
-        figure = figure_evidence_type(metadata)
-        documents[chunk.chunk_id] = chunk.document_id
-        items.append(
-            {
-                "id": chunk.chunk_id,
-                "source": chunk.file_name or chunk.document_id,
-                "page_start": metadata.get("page_start"),
-                "page_end": metadata.get("page_end"),
-                **evidence_location(metadata),
-                **({"evidence_type": figure} if figure else {}),
-                "text": chunk.text,
-            }
+    with observe_call("stage", EVIDENCE_LOAD_STAGE):
+        for ref in dict.fromkeys(refs):
+            chunk = await oracle.retrievable_chunk(ref.document_id, ref.chunk_id)
+            if chunk is None:
+                exists = await oracle.accessible_chunk_exists(ref.document_id, ref.chunk_id)
+                (stale if exists else missing).append(ref)
+                continue
+            metadata = dict(chunk.metadata)
+            # 図の根拠には種類を付ける（図の見た目だけで決まる主張を本文の照合と分ける。#2678）。
+            figure = figure_evidence_type(metadata)
+            documents[chunk.chunk_id] = chunk.document_id
+            items.append(
+                {
+                    "id": chunk.chunk_id,
+                    "source": chunk.file_name or chunk.document_id,
+                    "page_start": metadata.get("page_start"),
+                    "page_end": metadata.get("page_end"),
+                    **evidence_location(metadata),
+                    **({"evidence_type": figure} if figure else {}),
+                    "text": chunk.text,
+                }
+            )
+        # RAG の回答の監査を通った説明と本文・根拠が同じ段落は、その判定を使う（#1527）。
+        audited = (
+            await audited_answer_lines(
+                oracle, answer_trace_ids, {item["id"]: item for item in items}
+            )
+            if answer_trace_ids and items
+            else {}
         )
     conditions = dict(guide.conditions) if guide is not None else {}
     if not items:
@@ -342,13 +398,6 @@ async def validate_answer(
             stale_evidence=stale,
             **deterministic,
         )
-
-    # RAG の回答の監査を通った説明と本文・根拠が同じ段落は、その判定を使う（#1527）。
-    audited = (
-        await audited_answer_lines(oracle, answer_trace_ids, {item["id"]: item for item in items})
-        if answer_trace_ids
-        else {}
-    )
 
     usage: dict[str, Any] = {}
     loop = asyncio.get_running_loop()
@@ -400,18 +449,21 @@ async def validate_answer(
     left = limit - (time.monotonic() - started)
     result: dict[str, Any] = {"status": STATUS_TIMED_OUT}
     if left > 0:
-        try:
-            # 検証の専用の thread で動かし、呼び出し側の打ち切り・取り消しを thread に
-            # 伝える(#1422・#2700)。
-            async with asyncio.timeout(
-                left + ANSWER_DEADLINE_GRACE_SECONDS + VALIDATION_FINALIZE_SECONDS
-            ):
-                result = await run_answer_in_thread(
-                    run, timeout_seconds=left, executor=validation_executor()
-                )
-        except TimeoutError:
-            # thread が期限の後に確かめ終わった分をまとめられなかった（期限は取り消し済み）。
-            result = {"status": STATUS_TIMED_OUT}
+        # モデルの呼び出し（段落のまとまりごとの監査）はこの段の子の span になる（thread は文脈を
+        # 引き継ぐ。#3470）。
+        with observe_call("stage", CLAIM_AUDIT_STAGE):
+            try:
+                # 検証の専用の thread で動かし、呼び出し側の打ち切り・取り消しを thread に
+                # 伝える(#1422・#2700)。
+                async with asyncio.timeout(
+                    left + ANSWER_DEADLINE_GRACE_SECONDS + VALIDATION_FINALIZE_SECONDS
+                ):
+                    result = await run_answer_in_thread(
+                        run, timeout_seconds=left, executor=validation_executor()
+                    )
+            except TimeoutError:
+                # thread が期限の後に確かめ終わった分をまとめられなかった（期限は取り消し済み）。
+                result = {"status": STATUS_TIMED_OUT}
     counts = {str(key): int(value) for key, value in (result.get("counts") or {}).items()}
     status = str(result.get("status") or "error")
     if "guide_step_results" not in result and guide_content is not None:
