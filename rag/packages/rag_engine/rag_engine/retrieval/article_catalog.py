@@ -17,11 +17,14 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel, Field
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.text import alternation, char_class, parse_number, text_patterns
 
 from rag_engine.dependencies import report_degraded
 
@@ -60,8 +63,9 @@ ARTICLE_REFINE_SYSTEM_PROMPT = (
     "\n"
     "1. JSON だけを返す。\n"
     "2. 利用者の質問（question）について、先に目録から選んだ条"
-    "（selected）と、それと同じ章の条（candidates。番号"
-    "つきの行。条の名前と本文の書き出し）を見せる。\n"
+    "（selected）と、候補の条（candidates。番号つきの行。条"
+    "の名前と本文の書き出し）を見せる。候補は selected と同じ章"
+    "の条と、selected の条を本文で番号で名指しする別の章の条。\n"
     "3. selected で足りない論点の根拠になる条を candid"
     "ates から選び、論点（issues）ごとに行の番号を重要な順に返"
     "す（全体で max_lines 行まで）。\n"
@@ -227,6 +231,104 @@ def chapter_members(catalog: ArticleCatalog, picked: Sequence[int], *, limit: in
     return sorted(members)[:limit]
 
 
+_article_references: dict[str, re.Pattern[str]] = {}
+
+
+def _article_reference() -> re.Pattern[str]:
+    """条の番号の参照（「第N〈条〉」「第N〈条〉のM」）。
+
+    番号の前置き・数・条の単位・枝番のつなぎ・枝番にしない字（「の一部」の「部」など）は言語資源（#2181）。
+    枝番は長く読む（「第三条の二」は「第三条」の参照にしない）。言語資源の hash ごとに 1 回だけ作る。
+    """
+    pack = current_pack()
+    cached = _article_references.get(pack.hash)
+    if cached is not None:
+        return cached
+    text = text_patterns(pack)
+    connector = alternation(pack.words("numbers", "branch_connectors"))
+    stop = char_class(pack.words("numbers", "branch_stop_chars"))
+    pattern = re.compile(
+        rf"{text.prefix}\s*(?P<number>{text.number})\s*{text.article_units}"
+        rf"(?P<branches>(?:{connector}{text.number}(?!{stop}))*)"
+    )
+    if len(_article_references) >= 16:
+        _article_references.clear()
+    _article_references[pack.hash] = pattern
+    return pattern
+
+
+def _article_key(match: re.Match[str]) -> tuple[int, ...] | None:
+    """参照を照合の key（番号と枝番の数の組。漢数字と算用数字の書き方は同じ key）にする。読めなければ None。"""
+    number = parse_number(match["number"])
+    if number is None:
+        return None
+    key = [number]
+    for branch in re.findall(text_patterns().number, match["branches"] or ""):
+        value = parse_number(branch)
+        if value is None:
+            return None
+        key.append(value)
+    return tuple(key)
+
+
+def article_number_key(title: str) -> tuple[int, ...] | None:
+    """目録の行の条の番号の key（行の先頭が「第N〈条〉〔のM〕」のときだけ。章・節の見出しなどは None）。"""
+    match = _article_reference().match(title.strip())
+    return _article_key(match) if match else None
+
+
+def article_reference_keys(text: str) -> list[tuple[int, ...]]:
+    """文の中の条の番号の参照の key（出てくる順。重複なし）。"""
+    keys: list[tuple[int, ...]] = []
+    for match in _article_reference().finditer(text):
+        key = _article_key(match)
+        if key is not None and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def referencing_articles(catalog: ArticleCatalog, picked: Sequence[int], pool: Sequence[int], leads: Mapping[str, str]) -> list[int]:
+    """`pool` の行のうち、本文の書き出しが選んだ条（`picked`）の番号を名指しする条の行の番号。
+
+    特例・読替え・準用の条は、本則の条を番号で名指しして別の章（附則など）に置かれることが多く、名前が質問の語から
+    遠い。書き出しの先頭が選んだ条の参照で始まる行を先に、ほかは目録の順に並べる。
+    """
+    numbers = {key for index in picked if (key := article_number_key(catalog.lines[index].split("｜", 1)[0])) is not None}
+    if not numbers:
+        return []
+    leading: list[int] = []
+    rest: list[int] = []
+    for index in pool:
+        lead = str(leads.get(catalog.section_ids[index]) or "").strip()
+        if not lead or not numbers.intersection(article_reference_keys(lead)):
+            continue
+        first = _article_reference().match(lead)
+        (leading if first is not None and _article_key(first) in numbers else rest).append(index)
+    return [*leading, *rest]
+
+
+def refine_candidates(same_chapter: Sequence[int], referencing: Sequence[int], *, limit: int) -> list[int]:
+    """2 段目に見せる候補の行の番号（名指しする条 → 同じ章の条の順。合わせて `limit` 件まで）。
+
+    枠は同じ章の条に 3 分の 2（`limit - limit // 3`）、名指しする条に残りを先に割り当て、片方が枠より少なければ
+    余りをもう片方に回す（どちらかが多くても、もう片方を締め出さない）。名指しする条は書き出しの先頭で名指しする
+    条を先に、同じ章の条は目録の順に取る。
+    """
+    if limit <= 0:
+        return []
+    same = list(same_chapter[: max(limit - limit // 3, limit - len(referencing))])
+    refs = list(referencing[: limit - len(same)])
+    return [*refs, *same]
+
+
+@dataclass(frozen=True)
+class ArticleRefinement:
+    """条の選択の 2 段目の結果: 足した条と、候補に見せた名指しの条（どちらも (section_id, 目録の行)）。"""
+
+    added: list[tuple[str, str]] = field(default_factory=list)
+    referencing: tuple[tuple[str, str], ...] = ()
+
+
 def refine_prompt(
     question: str,
     catalog: ArticleCatalog,
@@ -258,23 +360,43 @@ def refine_articles(
     limit: int,
     candidate_limit: int,
     terms: Sequence[CatalogTerm] = (),
-) -> list[tuple[str, str]] | None:
-    """条の選択の 2 段目: 選んだ条と同じ章の条を本文の書き出しつきで見せ、足りない論点の条を足させる。
+) -> ArticleRefinement | None:
+    """条の選択の 2 段目: 選んだ条と同じ章の条と、選んだ条を名指しする別の章の条を書き出しつきで見せ、足りない論点の
+    条を足させる。
 
     条の名前が質問の語から遠い条（重なったときの扱い・特例など）は、目録の行（名前）だけでは選ばれにくい。
-    選んだ条の章に絞って書き出しを見せる（粗い選択から細かい選択へ）。足した条（(section_id, 目録の行)）だけを返す。
-    足す条が無ければ空のリスト、LLM の呼び出しに失敗したら None を返す（失敗は「足す条が無い」と分けて診断に残し、
-    呼び出し元は 1 段目の条で続けて、その結果を cache しない。#3285）。
+    選んだ条の章に絞って書き出しを見せる（粗い選択から細かい選択へ）。本則の条の要件を変える特例・読替え・準用の条は
+    附則など別の章にあり、選んだ条の番号を書き出しで名指しするので、その条も候補にする（#3517。番号の照合は目録の行の
+    条の番号で行い、語の一覧は使わない）。候補は合わせて `candidate_limit` 件まで（`refine_candidates` の割り当て）。
+    書き出しは同じ章の条と、別の章の条の行をまとめて 1 回で読む（LLM の呼び出しは増やさない）。
+
+    足した条（(section_id, 目録の行)）と、候補にした名指しの条を返す。足す条が無ければ空の結果、LLM の呼び出しに
+    失敗したら None を返す（失敗は「足す条が無い」と分けて診断に残し、呼び出し元は 1 段目の条で続けて、その結果を
+    cache しない。#3285）。
     """
     if not chosen or limit <= 0 or candidate_limit <= 0:
-        return []
+        return ArticleRefinement()
     index_of = {section_id: index for index, section_id in enumerate(catalog.section_ids)}
     picked = [index_of[section_id] for section_id, _ in chosen if section_id in index_of]
-    members = chapter_members(catalog, picked, limit=candidate_limit)
+    same_chapter = chapter_members(catalog, picked, limit=candidate_limit)
+    titles = {index: catalog.lines[index].strip().split("｜", 1)[0] for index in range(len(catalog.lines))}
+    excluded = {*picked, *same_chapter}
+    picked_numbers = any(article_number_key(titles[index]) is not None for index in picked)
+    # 別の章の条の行（選んだ条に番号が無ければ名指しを探さない）。
+    pool = (
+        [index for index in range(len(catalog.lines)) if index not in excluded and article_number_key(titles[index]) is not None]
+        if picked_numbers
+        else []
+    )
+    if not same_chapter and not pool:
+        return ArticleRefinement()
+    leads = load_leads({catalog.section_ids[index]: titles[index] for index in [*same_chapter, *pool]})
+    referencing = referencing_articles(catalog, picked, pool, leads)
+    members = refine_candidates(same_chapter, referencing, limit=candidate_limit)
     if not members:
-        return []
-    titles = {index: catalog.lines[index].strip().split("｜", 1)[0] for index in members}
-    leads = load_leads({catalog.section_ids[index]: titles[index] for index in members})
+        return ArticleRefinement()
+    shown = set(members)
+    referenced = tuple((catalog.section_ids[index], catalog.lines[index].strip()) for index in referencing if index in shown)
     candidates: dict[int, str] = {}
     for index in members:
         title = titles[index]
@@ -299,7 +421,7 @@ def refine_articles(
             added.append(item)
         if len(added) >= limit:
             break
-    return added
+    return ArticleRefinement(added=added, referencing=referenced)
 
 
 def document_prompt(question: str, documents: Sequence[tuple[str, str]], *, limit: int) -> str:
@@ -384,9 +506,12 @@ __all__ = [
     "ArticleCatalog",
     "ArticleIssue",
     "ArticleIssueSelection",
+    "ArticleRefinement",
     "ArticleSelection",
     "CatalogTerm",
     "SelectedArticle",
+    "article_number_key",
+    "article_reference_keys",
     "catalog_article_info",
     "catalog_prompt",
     "chapter_members",
@@ -395,7 +520,9 @@ __all__ = [
     "is_added_catalog_article",
     "is_catalog_article",
     "refine_articles",
+    "refine_candidates",
     "refine_prompt",
+    "referencing_articles",
     "select_articles",
     "select_documents",
 ]
