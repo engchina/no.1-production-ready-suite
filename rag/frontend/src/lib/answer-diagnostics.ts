@@ -97,10 +97,11 @@ export type AnswerDiagnostics = {
    */
   graphExpansion: { addedCount: number; status: string; graphAvailable: boolean | null; plannedCount: number; skippedExistingCount: number; entities: { name: string; addedCount: number }[] } | null;
   /**
-   * 使ったモデル（#649）。LLM（既定のテキストモデル）は質問の理解・拡張と回答の生成、vision は根拠の原画像を
-   * 添付して答えたときの既定の Vision モデル（添付しなければ null）、rerank は無効なら空。
+   * 使ったモデル（#649）。LLM（選んだ回答モデル）は質問の理解・拡張・回答の生成・監査のすべてに使う（#3444）。
+   * attachedImages はそのモデルへ添付した根拠の画像の件数（画像を読めないモデル・画像の無い根拠は 0）、rerank は
+   * 無効なら空。
    */
-  models: { llm: ModelRef | null; vision: ModelRef | null; embedding: string; rerank: string };
+  models: { llm: ModelRef | null; attachedImages: number; embedding: string; rerank: string };
   steps: {
     name: string;
     status: string;
@@ -340,20 +341,25 @@ function parseModelRef(value: unknown): ModelRef | null {
   return modelId ? { modelId, label: String(raw.label ?? "") || modelId } : null;
 }
 
+function imageCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
 /**
- * 根拠の原画像を添付して回答の本文を作った Vision モデル（#649・#3439）。作成した直後の回答は配信の診断の
- * `models.vision`、保存した回答は会話のメッセージの `answer_vision_model`（回答の記録の診断の同じ値）から読む。
- * 画像を添付しなかった回答・記録の無い回答は null。
+ * 回答モデルへ添付した根拠の画像の件数（#3444）。作成した直後の回答は配信の診断の `models.attached_images`、
+ * 保存した回答は会話のメッセージの `answer_attached_images`（回答の記録の診断の同じ値）から読む。
+ * 画像を添付しなかった回答・記録の無い回答は 0。
  */
-export function answerVisionModel(diagnostics: unknown, savedMessage: unknown): ModelRef | null {
-  return parseAnswerDiagnostics(diagnostics)?.models.vision ?? parseModelRef(record(savedMessage).answer_vision_model);
+export function answerAttachedImages(diagnostics: unknown, savedMessage: unknown): number {
+  const live = parseAnswerDiagnostics(diagnostics)?.models.attachedImages ?? 0;
+  return Math.max(live, imageCount(record(savedMessage).answer_attached_images));
 }
 
 function parseModels(value: unknown): AnswerDiagnostics["models"] {
   const raw = record(value);
   return {
     llm: parseModelRef(raw.llm),
-    vision: parseModelRef(raw.vision),
+    attachedImages: imageCount(raw.attached_images),
     embedding: String(raw.embedding ?? ""),
     rerank: String(raw.rerank ?? ""),
   };

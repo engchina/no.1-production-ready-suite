@@ -1481,7 +1481,7 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
     evidence_tree: [],
     models: {
       llm: { model_id: "m1", label: "MODEL 1" },
-      vision: { model_id: "vlm-1", label: "VISION 1" },
+      attached_images: 2,
       embedding: "cohere.embed-v4.0",
       rerank: "cohere.rerank-v4.0-fast",
     },
@@ -1538,12 +1538,13 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await expect(panel.getByTestId("answer-outcome-badge")).toHaveText("現場のデータが必要");
   await expect(panel.getByTestId("answer-guide-badge")).toHaveText("業務ガイド: 経費の上限を確かめる（版 3）");
   // 1 列（既定のモデル）でも、どのモデルの回答か・使ったモデルを出す（#649）。
-  // 根拠の原画像を添付して答えた回答（診断の models.vision）は、本文を作った Vision モデルも見出しに出す（#3439）。
-  await expect(page.getByRole("heading", { name: "回答モデル: MODEL 1（画像を見て回答: VISION 1）", exact: true })).toBeVisible();
+  // 回答モデルへ根拠の画像を添付した回答（診断の models.attached_images）は、見出しにそのことを添える（#3444）。
+  await expect(page.getByRole("heading", { name: "回答モデル: MODEL 1（画像も参照）", exact: true })).toBeVisible();
   const models = panel.getByTestId("answer-models");
   await expect(models).toContainText("使用したモデル");
   await expect(models).toContainText("MODEL 1");
-  await expect(models).toContainText("VISION 1");
+  await expect(models).toContainText("添付した画像");
+  await expect(models).toContainText("2 件（回答モデルが参照）");
   await expect(models).toContainText("cohere.embed-v4.0");
   await expect(models).toContainText("cohere.rerank-v4.0-fast");
   // rag_poc の回答 viewer と同じ情報（判断理由・外部データの確認・問い合わせ型）と本文の構成（#651）。
@@ -1880,7 +1881,7 @@ for (const viewport of [
       answer_source: "approved_faq",
       approved_faq_question: "経費精算の上限はいくらですか？",
       approved_faq_answer: "1 回の申請の上限は 10 万円です。\n超える場合は部長の承認が必要です。",
-      models: { llm: { model_id: "m1", label: "MODEL 1" }, vision: null, embedding: "", rerank: "" },
+      models: { llm: { model_id: "m1", label: "MODEL 1" }, attached_images: 0, embedding: "", rerank: "" },
     };
     const streamBody = [
       sseStart,
@@ -2816,18 +2817,17 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   await page.getByTestId("run-history-timeline").screenshot({path: testInfo.outputPath("history-process.png")});
 });
 
-// #3439: 根拠の原画像を添付して Vision モデルで作った回答は、見出しに列のモデルと Vision モデルを並べる。作成した直後
-// （配信の診断の models.vision）と、会話を開き直したとき（会話のメッセージの answer_vision_model）で同じ見出しにする。
+// #3444: 回答は列のモデルだけで作る。そのモデルへ根拠の画像を添付した回答は、見出しに「画像も参照」を添える。作成した直後
+// （配信の診断の models.attached_images）と、会話を開き直したとき（会話のメッセージの answer_attached_images）で同じ見出しにする。
 for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`画像を添付して答えた回答の見出しに Vision モデルを出し、開き直しても同じ (${viewport.name})`, async ({ page }) => {
+  test(`画像を添付して答えた回答の見出しに画像も参照と出し、開き直しても同じ (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    // 長いモデルの名前でも見出しを切らずに折り返す（375px）。
-    const vision = { model_id: "vlm-1", label: "vision-model-with-a-long-identifier-1" };
-    const visionReply = { ...assistantMessage, answer_vision_model: vision };
-    const textReply = { ...assistantMessage, message_id: "a2", trace_id: "t2", reply_to_message_id: "u2", answer_vision_model: null };
+    const imageReply = { ...assistantMessage, answer_attached_images: 2 };
+    const textReply = { ...assistantMessage, message_id: "a2", trace_id: "t2", reply_to_message_id: "u2", answer_attached_images: 0 };
+    const llm = { model_id: "m1", label: "MODEL 1" };
     const streamBody = [
       sseStart,
       `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: assistantMessage.content })}\n\n`,
@@ -2837,34 +2837,35 @@ for (const viewport of [
         trace_id: "t1",
         elapsed_ms: 5,
         guardrail_warnings: [],
-        answer_diagnostics: { models: { llm: { model_id: "m1", label: "MODEL 1" }, vision, embedding: "", rerank: "" } },
+        answer_diagnostics: { models: { llm, attached_images: 1, embedding: "", rerank: "" } },
       })}\n\n`,
       `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
     ].join("");
-    await mockChat(page, "ready", [userMessage, visionReply, { ...userMessage, message_id: "u2" }, textReply], {
+    await mockChat(page, "ready", [userMessage, imageReply, { ...userMessage, message_id: "u2" }, textReply], {
       streamBody,
-      sentMessages: [userMessage, visionReply],
+      sentMessages: [userMessage, imageReply],
     });
     await page.goto("/chat");
     await selectSearchAnswerProfile(page, "経理アシスタント");
 
-    // 会話を開き直したとき: 画像を添付した回答は Vision モデルも、画像を添付しなかった回答は列のモデルだけ。
+    // 会話を開き直したとき: 画像を添付した回答は「画像も参照」、添付しなかった回答は列のモデルだけ。
     const history = await openChatHistory(page);
     await history.getByRole("button", { name: /^経費の上限は？ 4件/ }).click();
     const headings = page.getByTestId("chat-answer-model-heading");
     // 保存した回答の列のモデルは model_id（モデルの一覧の mock は空）。
-    await expect(headings).toHaveText(["回答モデル: m1（画像を見て回答: vision-model-with-a-long-identifier-1）", "回答モデル: m1"]);
-    await expect(headings.first()).toHaveAttribute("title", "回答モデル: m1（画像を見て回答: vision-model-with-a-long-identifier-1）");
-    expect(await headings.first().evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await expect(headings).toHaveText(["回答モデル: m1（画像も参照）", "回答モデル: m1"]);
+    await expect(headings.first()).toHaveAttribute("title", "回答モデル: m1（画像も参照）");
     await headings.first().scrollIntoViewIfNeeded();
-    await page.screenshot({ path: `test-results/chat-answer-vision-heading-saved-${viewport.name}.png`, fullPage: false });
+    await page.screenshot({ path: `test-results/chat-answer-images-heading-saved-${viewport.name}.png`, fullPage: false });
     await expectNoPageOverflow(page);
 
-    // 作成した直後: 配信の診断の Vision モデルを見出しに出す。
+    // 作成した直後: 配信の診断の添付の件数で見出しに出す（Vision モデルの名前は出さない）。
     await page.getByRole("button", { name: "新しい会話" }).click();
     await page.getByRole("textbox").fill(userMessage.content);
     await page.getByRole("button", { name: "送信" }).click();
-    await expect(page.getByTestId("chat-answer-model-heading")).toHaveText(["回答モデル: MODEL 1（画像を見て回答: vision-model-with-a-long-identifier-1）"]);
+    const live = page.getByTestId("chat-answer-model-heading");
+    await expect(live).toHaveText(["回答モデル: MODEL 1（画像も参照）"]);
+    expect(await live.first().evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     await expectNoPageOverflow(page);
   });
 }

@@ -1432,10 +1432,10 @@ export interface ChatMessage {
   removed_passages?: AnswerRemovedPassageData[];
   answer_warnings?: AnswerPassageReasonData[];
   /**
-   * 根拠の原画像を添付して回答の本文を作った Vision モデル（ASSISTANT の完了した回答。回答の記録の診断の
-   * `models.vision`。#3439）。画像を添付しなかった回答・記録の無い回答は null / 未指定。
+   * 回答モデルへ添付した根拠の画像の件数（ASSISTANT の完了した回答。回答の記録の診断の `models.attached_images`。
+   * #3444）。画像を添付しなかった回答・記録の無い回答は 0 / 未指定。
    */
-  answer_vision_model?: { model_id: string; label: string } | null;
+  answer_attached_images?: number;
 }
 
 /** 段落の印・外した段落・回答全体の注意の理由（#2738）。label は利用者に見せる短い文（backend の文をそのまま出す）。 */

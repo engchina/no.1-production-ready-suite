@@ -86,7 +86,7 @@ import {
   type ChatStreamHandlers,
 } from "@/lib/chat-stream";
 import { formatDateTime } from "@/lib/format";
-import { answerVisionModel, unreadSectionLinks } from "@/lib/answer-diagnostics";
+import { answerAttachedImages, unreadSectionLinks } from "@/lib/answer-diagnostics";
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
@@ -362,11 +362,11 @@ function AssistantColumn({
   const waitingForAnswer = streaming && !answer && !errorMessage && progress !== null;
   const finished = !streaming && !errorMessage && !stoppedMessage;
   const storageNotice = storageFailureNotice(storageFailures, traceId);
-  // 根拠の原画像を添付して答えた回答は、本文を Vision モデルが作る（#649）。見出しに列のモデルと並べて出す（#3439）。
-  const visionModel = finished ? answerVisionModel(answerDiagnostics, passageSource) : null;
+  // 回答は列のモデルだけで作る（#3444）。そのモデルへ根拠の画像を添付した回答は、見出しにそのことを添える。
+  const attachedImages = finished ? answerAttachedImages(answerDiagnostics, passageSource) : 0;
   const heading = label
-    ? visionModel
-      ? t("chat.column.modelWithVision", { name: label, vision: visionModel.label })
+    ? attachedImages > 0
+      ? t("chat.column.modelWithImages", { name: label })
       : t("chat.column.model", { name: label })
     : null;
   const listId = useId();
