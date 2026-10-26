@@ -72,6 +72,19 @@ test.describe("Agent の処理の経過の定義（desktop）", () => {
     expect(items[3].label).toBe(`モデルの呼び出し · ${SYNTHETIC_MODEL}`);
   });
 
+  test("ツールの中の MCP の呼び出しは、ツールの表示名（MCP の title）で出す（#3468）", () => {
+    const log = newLog()
+      .step("tool:rag__rag_validate_answer", "running", { kind: "tool", params: { tool: "rag__rag_validate_answer", title: "合成の照合" } })
+      .step("mcp-1", "running", {
+        parent: "tool:rag__rag_validate_answer",
+        attributes: { "mcp.method.name": "tools/call", "gen_ai.tool.name": "rag_validate_answer", "pr.tool.title": "合成の照合" },
+      });
+    const items = steps(log);
+    expect(items[0].label).toBe("「合成の照合」を実行しています");
+    expect(items[1]).toMatchObject({ label: "MCP の呼び出し · 合成の照合", level: 1 });
+    expect(items.map((step) => step.label).join(" ")).not.toContain("rag_validate_answer");
+  });
+
   test("承認の待ちは、再開の区間で待ったツール名と一緒に出す", () => {
     const log = newLog().step("chat-1", "done", { kind: "plan" }).pause();
     // 待っている間は待ちの行を出さない（見出しと承認のカードで示す）。

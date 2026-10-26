@@ -326,6 +326,7 @@ from app.features.agent.tools import (
     mcp_tool_handler,
     tool_registry,
     tool_result_images,
+    tool_title_scope,
     with_tool_result_images,
 )
 from app.features.agent.trace_spans import run_trace_owner, trace_spans
@@ -2139,18 +2140,18 @@ class _ToolRecorder:
         # ツールの呼び出しの span（処理の経過のツールの行。#3226）。回答前の確認のツールは
         # 利用者の答えを返すだけなので span にしない（待ちの区間の span が表す）。実行中も
         # 呼んだ引数を開いて見られる。
+        titles = runtime_repository.builtin_tool_titles(self.run_id)
         scope: AbstractContextManager[ObservedSpan | None] = (
             nullcontext(None)
             if call.name == CONFIRMATION_TOOL
             else observed_span(
                 EXECUTE_TOOL_SPAN,
                 attributes=tool_attributes(call.name, call.trace_id),
-                display=tool_display(
-                    call, runtime_repository.builtin_tool_titles(self.run_id), run_step=step_id
-                ),
+                display=tool_display(call, titles, run_step=step_id),
             )
         )
-        with scope as tool_span:
+        # ツールの中の MCP の呼び出しの行も、ツールの行と同じ表示名で出す（#3468）。
+        with scope as tool_span, tool_title_scope(call.name, titles.get(call.name)):
             result = await self._execute_handler(
                 step_id,
                 call,
