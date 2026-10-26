@@ -1,4 +1,5 @@
 import react from "@vitejs/plugin-react";
+import { thirdPartyLicenses } from "@production-ready/ui/vite/third-party-licenses";
 import { defineConfig } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileURLToPath, URL } from "node:url";
@@ -49,6 +50,8 @@ export default defineConfig(({ command, isPreview }) => {
         : "/",
     plugins: [
       react(),
+      // 書体（@fontsource）の OFL の原文と bundle の npm の package のライセンスを dist/licenses/ に出す（#3392）。
+      thirdPartyLicenses(),
       {
         name: "nl2sql-playwright-hermetic-api",
         configureServer(server) {

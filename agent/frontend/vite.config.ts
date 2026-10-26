@@ -1,4 +1,5 @@
 import react from "@vitejs/plugin-react";
+import { thirdPartyLicenses } from "@production-ready/ui/vite/third-party-licenses";
 import { defineConfig, type Connect } from "vite";
 import { fileURLToPath, URL } from "node:url";
 
@@ -44,6 +45,8 @@ export default defineConfig(() => {
     base: frontendBasePath(process.env.FRONTEND_BASE_PATH),
     plugins: [
       react(),
+      // 書体（@fontsource）の OFL の原文と bundle の npm の package のライセンスを dist/licenses/ に出す（#3392）。
+      thirdPartyLicenses(),
       {
         name: "agent-playwright-hermetic-api",
         configureServer(server) {
