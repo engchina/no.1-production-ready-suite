@@ -92,6 +92,7 @@ from pr_system_settings.enterprise_ai_errors import (
 from pr_system_settings.model import (
     DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
     DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
+    EnterpriseAiModelNotRegisteredError,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
     enterprise_ai_max_input_tokens,
@@ -420,7 +421,12 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
             "使うモデルが決まっていません。"
             "システム設定 > モデル で既定のテキストモデルを設定してください。",
         )
-    connection = enterprise_ai_connection_for_model(settings, resolved)
+    try:
+        connection = enterprise_ai_connection_for_model(settings, resolved)
+    except EnterpriseAiModelNotRegisteredError as exc:
+        # 業務 Agent が選んだモデルが登録に無い（登録を消したなど）。別のモデル・接続へ暗黙に
+        # 切り替えずに失敗させる（#3240 の不変条件 2）。
+        raise BuiltinRuntimeError("runtime.model_not_registered", str(exc)) from exc
     if not connection.is_configured():
         raise BuiltinRuntimeError(
             "runtime.model_connection_not_configured",

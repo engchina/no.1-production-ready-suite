@@ -1,4 +1,9 @@
-"""合成 PDF の KB・検索回答プロファイル・Agent を管理 API で再構築する。"""
+"""合成 PDF の KB・検索・回答プロファイルを管理 API で再構築し、文書を取り込む。
+
+RAG が持つもの（KB・検索・回答プロファイル・文書の取込）だけを作る。RAG は Agent を呼ばない
+（#3545）。業務 Agent は、この命令が `--state` に残す検索・回答プロファイルの ID を使い、Agent の
+backend の命令で作成・公開する（手順は rag/examples/test-pdfs-ja/README.md）。
+"""
 
 from __future__ import annotations
 
@@ -34,6 +39,10 @@ def read_fixture(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     if manifest.get("synthetic") is not True or resources.get("version") != 1:
         raise RebuildError("合成資料の manifest / 構成の版を確認してください。")
     DocumentProcessingConfig.model_validate(resources["recipe"])
+    # グループは RAG が持つもの（KB・検索・回答プロファイル）だけを定義する。業務 Agent の定義は
+    # Agent の側に置く（#3545）。知らない項目は黙って無視せずに止める。
+    if any(set(group) != {"knowledge_base", "profile"} for group in resources["groups"].values()):
+        raise RebuildError("構成のグループは knowledge_base と profile だけを定義してください。")
     names: set[str] = set()
     for row in manifest["documents"]:
         path = root / row["file"]
@@ -115,7 +124,6 @@ class Rebuilder:
     def __init__(
         self,
         rag: ManagementApi,
-        agent: ManagementApi,
         root: Path,
         state_path: Path,
         *,
@@ -131,7 +139,7 @@ class Rebuilder:
         if namespace and not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", namespace):
             raise RebuildError("名前の区分は英数字・_・- の 32 字以内にしてください。")
         self.namespace = namespace
-        self.rag, self.agent, self.root, self.state_path = rag, agent, root, state_path
+        self.rag, self.root, self.state_path = rag, root, state_path
         self.timeout, self.interval, self.clock, self.sleep, self.log = (
             timeout,
             interval,
@@ -139,7 +147,12 @@ class Rebuilder:
             sleep,
             log,
         )
-        self.state: dict[str, Any] = {"complete": False, "groups": {}, "documents": {}}
+        self.state: dict[str, Any] = {
+            "complete": False,
+            "namespace": namespace,
+            "groups": {},
+            "documents": {},
+        }
 
     def save(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -245,14 +258,13 @@ class Rebuilder:
         if self.namespace:
             prefix = f"テスト_{self.namespace}_"
             for definition in config["groups"].values():
-                for kind in ("knowledge_base", "profile", "agent"):
+                for kind in ("knowledge_base", "profile"):
                     definition[kind]["name"] = prefix + definition[kind]["name"].removeprefix(
                         "テスト_"
                     )
             for row in manifest["documents"]:
                 row["remote_file"] = prefix + row["file"].removeprefix("テスト_")
         self.save()
-        self.agent.call("GET", "/skills/business-rag-research")
         for key, definition in config["groups"].items():
             kb = self.named(self.rag, "/knowledge-bases", definition["knowledge_base"])
             profile_payload = {
@@ -267,7 +279,12 @@ class Rebuilder:
                 profile["config"]
             ) != SearchAnswerProfileConfig.model_validate(profile_payload["config"]):
                 raise RebuildError("同名プロファイルの設定が異なります。変更せず停止します。")
-            self.state["groups"][key] = {"kb_id": kb["id"], "profile_id": profile["id"]}
+            # 業務 Agent のデータの範囲に渡す ID（グループごとに 1 件で、既定も同じ）。
+            self.state["groups"][key] = {
+                "kb_id": kb["id"],
+                "profile_ids": [profile["id"]],
+                "default_profile_id": profile["id"],
+            }
             self.save()
             for row in manifest["documents"]:
                 if row["group"] == key:
@@ -279,43 +296,6 @@ class Rebuilder:
             if {row["id"] for row in members} != expected:
                 raise RebuildError("KB の文書の所属が構成と異なります。既存文書は外しません。")
         self.wait_documents()
-        for key, definition in config["groups"].items():
-            profile_id = self.state["groups"][key]["profile_id"]
-            payload = {
-                **definition["agent"],
-                "data_scopes": {
-                    "rag": {"profile_ids": [profile_id], "default_profile_id": profile_id},
-                },
-            }
-            agents = self.agent.call("GET", "/agents")["agents"]
-            agent = _only(agents, payload["name"])
-            if agent is None:
-                agent = self.agent.call("POST", "/agents", json=payload)
-            if not _matches(agent, payload):
-                raise RebuildError("同名 Agent の定義が異なります。上書きせず停止します。")
-            if not agent.get("published_version"):
-                agent = self.agent.call(
-                    "POST",
-                    f"/agents/{agent['id']}/publish",
-                    json={"note": "合成資料の検索・回答の確認用"},
-                )
-            published = next(
-                (
-                    v
-                    for v in agent.get("versions", [])
-                    if v["version"] == agent["published_version"]
-                ),
-                None,
-            )
-            version_fields = {k: v for k, v in payload.items() if k != "enabled"}
-            if not published or not _matches(published, version_fields) or not agent["enabled"]:
-                raise RebuildError(
-                    "Agent の公開中の版が構成と異なります。公開状態を確認してください。"
-                )
-            self.state["groups"][key].update(
-                agent_id=agent["id"], published_version=agent["published_version"]
-            )
-            self.save()
         self.state["complete"] = True
         self.save()
         return self.state
@@ -325,7 +305,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture-dir", type=Path, required=True)
     parser.add_argument("--rag-api", required=True, help="RAG の /api までの URL")
-    parser.add_argument("--agent-api", required=True, help="Agent の /api までの URL")
     parser.add_argument("--state", type=Path, required=True, help="環境固有 ID のローカル保存先")
     parser.add_argument("--timeout", type=float, default=3600)
     parser.add_argument("--poll-interval", type=float, default=5)
@@ -337,19 +316,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         user = os.environ.get("SUITE_TEST_LOGIN_USER") or input("ログイン ID: ")
         password = os.environ.get("SUITE_TEST_PASSWORD") or getpass.getpass("パスワード: ")
         verify = ssl.create_default_context(cafile=args.ca_file)
-        with (
-            httpx.Client(verify=verify, timeout=120, follow_redirects=False) as rag_client,
-            httpx.Client(verify=verify, timeout=120, follow_redirects=False) as agent_client,
-        ):
-            rag, agent = (
-                ManagementApi(rag_client, args.rag_api),
-                ManagementApi(agent_client, args.agent_api),
-            )
-            for api in (rag, agent):
-                api.call("POST", "/auth/login", json={"login_user_id": user, "password": password})
+        with httpx.Client(verify=verify, timeout=120, follow_redirects=False) as client:
+            rag = ManagementApi(client, args.rag_api)
+            rag.call("POST", "/auth/login", json={"login_user_id": user, "password": password})
             result = Rebuilder(
                 rag,
-                agent,
                 args.fixture_dir,
                 args.state,
                 timeout=args.timeout,
@@ -357,7 +328,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 namespace=args.namespace,
             ).run()
             print(
-                f"完了: KB・プロファイル・Agent {len(result['groups'])} 組、"
+                f"完了: KB・検索・回答プロファイル {len(result['groups'])} 組、"
                 f"索引済み文書 {len(result['documents'])} 件"
             )
         return 0

@@ -92,13 +92,29 @@ uv run suite-evaluation compare A=../../tmp/eval/a.json C=../../tmp/eval/c.json 
 | `judge/client.py` | OCI Enterprise AI の Responses API（`{Endpoint URL}/responses`。URL の規則と HTTP の失敗の分類は platform の `pr_enterprise_ai`。FastAPI を入れない）を構造化出力（JSON schema・strict）で呼ぶ |
 | `judge/judging.py` | 1 件の判定（Pydantic で出力を確かめ、形が違えば呼び直し、それでも違えば評価不能）、観点ごとの集計、校正の照合 |
 | `judge/run.py` | 保存した観測の回答を判定する（製品は呼ばない） |
-| `judge/calibration.py` | 人手の判定の形（`LabelSet`）と、一致の集計（platform の `pr_evaluation_scoring.agreement`: 一致率・Cohen の κ・混同行列・誤合格 / 誤不合格）・合否 |
+| `judge/calibration.py` | 人手の判定の形（`LabelSet`。人手 / 合成の別・記入者ごとの元の判定）と、一致の集計（platform の `pr_evaluation_scoring.agreement`: 一致率・Cohen の κ・混同行列・誤合格 / 誤不合格）・合否（閾値も platform の `CalibrationThresholds`）・判定の分散（`--repeats`） |
+| `judge/labeling.py`・`judge/workbook.py` | 人手の判定を集める: 記入用のブック（.xlsx。1 行 = 項目 × 観点）と項目のファイルの書き出し（`label-template`。区分は層ごとの hash で決める）、記入者の間の一致と食い違い・裁定用のブック・LabelSet の書き出し（`label-import`） |
+| `judge/perturbation.py` | 故意に壊した回答（合成の対照）: 数値の入れ替え・条件の文の削除・根拠に無い断定の追加・手順の逆順。壊した観点を fail とし、人手の判定と分けて集計する |
 
 判定のモデルと接続は環境変数で決める（既定のモデルは持たない）: `SUITE_EVALUATION_JUDGE_ENDPOINT`・`SUITE_EVALUATION_JUDGE_API_KEY`・`SUITE_EVALUATION_JUDGE_MODEL`（必須）、`SUITE_EVALUATION_JUDGE_PROJECT_OCID`・`SUITE_EVALUATION_JUDGE_MAX_OUTPUT_TOKENS`・`SUITE_EVALUATION_JUDGE_TIMEOUT_SECONDS`（任意）。
 
+**人手の判定の集め方と校正の手順（ケースの作り方・記入・裁定・校正・記録・目標の件数・時間の目安）は [docs/judge-calibration.md](./docs/judge-calibration.md)。**
+
 ```bash
-# 1. 人手の判定で校正する（holdout の観点ごとに κ・件数・判定率・誤合格の率を閾値と比べる）
-uv run suite-evaluation calibrate ../../tmp/eval/labels.json --output ../../tmp/eval/calibration.json
+# 0. 人手の判定を集める（記入用のブック → 2 人が記入 → 一致と裁定 → LabelSet）
+uv run suite-evaluation label-template A=../../tmp/eval/a.json C=../../tmp/eval/c.json \
+    D=../../tmp/eval/d.json --dataset "$SET" --document-map "$MAP" --perturb all \
+    --output ../../tmp/eval/labels.xlsx
+uv run suite-evaluation label-import --items ../../tmp/eval/labels.items.json \
+    --annotations a1=../../tmp/eval/a1.xlsx a2=../../tmp/eval/a2.xlsx \
+    --report ../../tmp/eval/iaa.json --adjudication-output ../../tmp/eval/adjudication.xlsx
+uv run suite-evaluation label-import --items ../../tmp/eval/labels.items.json \
+    --annotations a1=../../tmp/eval/a1.xlsx a2=../../tmp/eval/a2.xlsx \
+    --adjudicated adj1=../../tmp/eval/adjudication.xlsx --output ../../tmp/eval/labels.json
+# 1. 人手の判定で校正する（holdout の観点ごとに κ・件数・判定率・誤合格の率を閾値と比べる。
+#    --repeats で同じ項目を複数回判定し、判定の分散を記録する）
+uv run suite-evaluation calibrate ../../tmp/eval/labels.json --repeats 3 \
+    --output ../../tmp/eval/calibration.json
 #    人手の判定を直したら、モデルを呼ばずに集計だけやり直す
 uv run suite-evaluation calibrate ../../tmp/eval/labels.json --judgements ../../tmp/eval/calibration.json \
     --output ../../tmp/eval/calibration.v2.json
@@ -110,8 +126,10 @@ uv run suite-evaluation compare A=../../tmp/eval/a.judged.json C=../../tmp/eval/
 
 - 校正の既定の閾値（holdout の観点ごと）: 件数 50 以上・判定率 0.95 以上・κ 0.6 以上・誤合格の率 0.1 以下（`--min-items` などで変えられ、結果に記録する）。
 - 校正の結果は rubric の sha256 と判定のモデルに結ぶ。どちらかが違えば、判定は合否に使わない（`calibration_status=mismatch`）。
-- 検索の評価器の校正（RAG の `rag_engine.evaluation.crag_grader_eval`）とは対象が違うので分ける。一致の集計の部品だけ platform で共有する。
-- テストの人手の判定と判定の応答は合成（`tests/fixtures/judge_calibration/`）で、合否の閾値に届かない件数にしてある（実の校正は利用者の人手の判定で行う）。
+- 判定のモデルの seed は使わない（#3529 で LLM の呼び出しから外した）。再現の条件は、判定のモデルの ID・rubric の sha256・指示と出力の形の sha256（`prompt_sha256`）を記録し、`--repeats` で測った判定の分散（観点ごとに回の間で判定が変わった項目の率 `variance.<観点>.unstable_rate`）を添えて示す。
+- 故意に壊した回答（`label-template --perturb`）は `origin=synthetic` の合成の対照で、holdout の合否に入れず `synthetic` の区分として別に集計する（壊した回答の誤合格の率）。
+- 検索の評価器の校正（RAG の `rag_engine.evaluation.crag_grader_eval`）とは対象が違うので分ける。一致の集計と校正の閾値の部品は platform で共有し、RAG の回答の評価器（`rag_engine.evaluation.answer_eval`）は同じ LabelSet を RAG の `app.rag.answer_judge_calibration` で校正する。
+- テストの人手の判定と判定の応答は合成（`tests/fixtures/judge_calibration/`・`tests/test_labeling.py` の中の合成の記入）で、合否の閾値に届かない件数にしてある（実の校正は利用者の人手の判定で行う）。
 
 ## 版と記録
 

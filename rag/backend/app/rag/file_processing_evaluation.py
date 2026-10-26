@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TypeGuard
 
 from pydantic import ValidationError
+from rag_parser_core.parsed_table import html_table_layout
 from rag_parser_core.source import template_for_source_profile
 
 from app.rag.chunking import Chunk, chunk_extraction
@@ -1865,7 +1866,12 @@ def _chunk_pages_from_metadata(metadata: Mapping[str, object]) -> set[int]:
 
 
 def _table_header_signature(text: str) -> tuple[str, ...]:
-    """表 chunk 先頭の header 行を比較用に正規化する。"""
+    """表 chunk 先頭の header 行を比較用に正規化する。
+
+    HTML の表は先頭の表頭の行（``tr``。#3547 で HTML の表も行の境目で分けて表頭を繰り返す）。
+    """
+    if (layout := html_table_layout(text)) is not None:
+        return tuple(row.strip() for row in layout.rows[: layout.header_rows])
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines or not _looks_like_table_row(lines[0]):
         return ()

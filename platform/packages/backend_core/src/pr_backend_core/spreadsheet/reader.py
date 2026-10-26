@@ -30,6 +30,10 @@ xlrd は関数の中で読み、使う側が依存に入れる。読み方は en
   TRUE/FALSE。
 - 表頭は選択肢の `header_row` を優先し、無ければ先頭の行から採点して選ぶ（信頼度と理由を残し、
   低いときは警告）。表頭より上の行（説明など）は preamble として残す。
+- 表の下の注記（#3566）: 表の後ろの、セルが 1 つ（横の結合を含む）で注記の印（「※1」など。
+  選択肢 `note_markers`）で始まるか長い文の行は、表の行・表頭にせず `notes` に残す。注記の印を
+  セルに含む行は、その注記の文を記録（`SheetBlock.notes`）にも持つ。手順書は今までどおり手順の
+  続きの行として読む。
 - 空行を消す前に元の行番号を持つ。結合セルは、表頭の中では結合の範囲を埋め、データでは同じ行の
   横の結合だけを埋める（縦の結合の値を後の行へ漏らさない。手順の境目を増やさない）。普通の空のセルは
   埋めない。既定は表示されているシートだけを読み、選択肢でシートの指定・除外と列の除外ができる。
@@ -50,12 +54,19 @@ import datetime as _dt
 import io
 import re
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Mapping, Set
 from dataclasses import dataclass
 from typing import Any, cast
 
 from .grid import Grid, cell_ref, column_letter, is_textual
-from .layout import detect_form_layout, form_blocks, split_regions
+from .layout import (
+    NOTE_MIN_CHARS,
+    detect_form_layout,
+    form_blocks,
+    is_numbering,
+    note_marker,
+    split_regions,
+)
 from .models import (
     COLUMN_ROLE_NONE,
     ColumnRole,
@@ -66,6 +77,7 @@ from .models import (
     SheetBlock,
     SheetColumn,
     SheetDiagnostic,
+    SheetNoteRow,
     SheetPreambleRow,
     SheetRecords,
     SheetRecordsDocument,
@@ -1037,25 +1049,6 @@ def _sheet_records(grid: Grid, options: ExcelOptions) -> SheetRecords | None:
     data_start = header_row + header_count
     _apply_merges(grid, header_rows)
 
-    used_columns = sorted(
-        {col for (row, col), value in grid.cells.items() if row >= header_row and value.strip()}
-    )
-    excludes = {item.strip().casefold() for item in options.exclude_columns if item.strip()}
-    raw_names: list[tuple[int, str, str]] = []
-    header_paths: dict[str, list[str]] = {}
-    for col in used_columns:
-        letter = column_letter(col)
-        parts: list[str] = []
-        for row in header_rows:
-            value = grid.cells.get((row, col), "").strip()
-            if value and (not parts or parts[-1] != value):
-                parts.append(value)
-        name = " / ".join(parts)
-        if not _excluded(name, letter, excludes):
-            raw_names.append((col, letter, name))
-            header_paths[letter] = parts
-    names = dict(zip([col for col, _, _ in raw_names], _column_names(raw_names), strict=True))
-    columns = [col for col, _, _ in raw_names]
     detect_roles = options.column_role_detection == "auto"
     if (
         detect_roles
@@ -1065,18 +1058,9 @@ def _sheet_records(grid: Grid, options: ExcelOptions) -> SheetRecords | None:
         # 表頭が確かでないシートでは、表頭の語で列の役割を決めない（指定の役割だけを使う）。
         detect_roles = False
         diagnostics.append(SheetDiagnostic(code="column_roles_skipped_low_header_confidence"))
-    sheet_columns, role_diagnostics = _column_roles(
-        [(col, column_letter(col), names[col], header) for col, _, header in raw_names],
-        options.column_roles,
-        detect=detect_roles,
-    )
-    # 表頭の段の文字（「 / 」でつないだ列名からは、セルの中の「 / 」と区別して戻せない）。
-    sheet_columns = [
-        item.model_copy(update={"header_path": header_paths.get(item.column, [])})
-        for item in sheet_columns
-    ]
-    diagnostics.extend(role_diagnostics)
-    roles = {item.name: item.role for item in sheet_columns if item.role}
+    layout = _sheet_columns(grid, header_row, header_rows, options, detect_roles=detect_roles)
+    # 列の役割の診断の位置（表の下の注記を除いて列を決め直したときも同じ位置に置く）。
+    role_diagnostics_at = len(diagnostics)
 
     preamble: list[SheetPreambleRow] = []
     for row in nonempty_rows:
@@ -1099,11 +1083,8 @@ def _sheet_records(grid: Grid, options: ExcelOptions) -> SheetRecords | None:
             )
         )
 
-    data_rows = [
-        row
-        for row in nonempty_rows
-        if row >= data_start and any(grid.cells.get((row, col), "").strip() for col in columns)
-    ]
+    columns = layout.columns
+    data_rows = _data_rows(grid, nonempty_rows, data_start, columns)
     procedure = _procedure_columns(grid, header_row, data_rows, columns) if columns else None
     mode = options.mode
     if mode == "auto":
@@ -1115,26 +1096,209 @@ def _sheet_records(grid: Grid, options: ExcelOptions) -> SheetRecords | None:
                 if _density(grid, data_rows, columns) >= TABLE_DENSITY_THRESHOLD
                 else "procedure"
             )
+    notes: list[SheetNoteRow] = []
     if mode == "procedure" and procedure is not None:
-        display = {col: column_display_name(name, roles.get(name)) for col, name in names.items()}
+        # 手順書は、表の後ろの 1 つのセルの行も手順の続きの行として読む（注記に分けない）。
+        display = {
+            col: column_display_name(name, layout.roles.get(name))
+            for col, name in layout.names.items()
+        }
         blocks = _procedure_blocks(grid, data_rows, columns, display, *procedure)
     else:
         # 番号と題名の列が無い手順書は、no.1-rag と同じく表として 1 行ずつ読む。
         if mode == "procedure":
             diagnostics.append(SheetDiagnostic(code="procedure_columns_not_found"))
         mode = "table"
-        blocks = _table_blocks(grid, data_rows, columns, names)
+        notes = _table_notes(grid, data_rows, columns, options.note_marker_patterns())
+        if notes:
+            # 注記の行は表の行・列にしない（注記だけが使う列を列名にしない）。
+            note_rows = {note.row_number for note in notes}
+            layout = _sheet_columns(
+                grid,
+                header_row,
+                header_rows,
+                options,
+                detect_roles=detect_roles,
+                skip_rows=note_rows,
+            )
+            columns = layout.columns
+            data_rows = [
+                row
+                for row in _data_rows(grid, nonempty_rows, data_start, columns)
+                if row not in note_rows
+            ]
+        blocks = _table_blocks(grid, data_rows, columns, layout.names)
+        _attach_notes(blocks, notes)
+    diagnostics[role_diagnostics_at:role_diagnostics_at] = layout.role_diagnostics
     return SheetRecords(
         name=grid.name,
         header_row=header_row,
         header_row_count=header_count,
         header_detection=detection,
         mode=mode,
-        columns=sheet_columns,
+        columns=layout.sheet_columns,
         preamble=preamble,
         blocks=blocks,
+        notes=notes,
         diagnostics=diagnostics,
     )
+
+
+@dataclass(frozen=True)
+class _SheetColumns:
+    """表の列（列番号・列名・役割）。"""
+
+    columns: list[int]
+    names: dict[int, str]
+    sheet_columns: list[SheetColumn]
+    roles: dict[str, str]
+    role_diagnostics: list[SheetDiagnostic]
+
+
+def _sheet_columns(
+    grid: Grid,
+    header_row: int,
+    header_rows: range,
+    options: ExcelOptions,
+    *,
+    detect_roles: bool,
+    skip_rows: Set[int] = frozenset(),
+) -> _SheetColumns:
+    """表頭の行から下の値のある列を表の列にする（``skip_rows`` の行の値は列にしない）。"""
+    used_columns = sorted(
+        {
+            col
+            for (row, col), value in grid.cells.items()
+            if row >= header_row and row not in skip_rows and value.strip()
+        }
+    )
+    excludes = {item.strip().casefold() for item in options.exclude_columns if item.strip()}
+    raw_names: list[tuple[int, str, str]] = []
+    header_paths: dict[str, list[str]] = {}
+    for col in used_columns:
+        letter = column_letter(col)
+        parts: list[str] = []
+        for row in header_rows:
+            value = grid.cells.get((row, col), "").strip()
+            if value and (not parts or parts[-1] != value):
+                parts.append(value)
+        name = " / ".join(parts)
+        if not _excluded(name, letter, excludes):
+            raw_names.append((col, letter, name))
+            header_paths[letter] = parts
+    names = dict(zip([col for col, _, _ in raw_names], _column_names(raw_names), strict=True))
+    sheet_columns, role_diagnostics = _column_roles(
+        [(col, column_letter(col), names[col], header) for col, _, header in raw_names],
+        options.column_roles,
+        detect=detect_roles,
+    )
+    # 表頭の段の文字（「 / 」でつないだ列名からは、セルの中の「 / 」と区別して戻せない）。
+    sheet_columns = [
+        item.model_copy(update={"header_path": header_paths.get(item.column, [])})
+        for item in sheet_columns
+    ]
+    return _SheetColumns(
+        columns=[col for col, _, _ in raw_names],
+        names=names,
+        sheet_columns=sheet_columns,
+        roles={item.name: item.role for item in sheet_columns if item.role},
+        role_diagnostics=role_diagnostics,
+    )
+
+
+def _data_rows(
+    grid: Grid, nonempty_rows: list[int], data_start: int, columns: list[int]
+) -> list[int]:
+    return [
+        row
+        for row in nonempty_rows
+        if row >= data_start and any(grid.cells.get((row, col), "").strip() for col in columns)
+    ]
+
+
+# ---- 表の下の注記（#3566）--------------------------------------------------------------
+
+
+def _table_notes(
+    grid: Grid, data_rows: list[int], columns: list[int], patterns: list[re.Pattern[str]]
+) -> list[SheetNoteRow]:
+    """表の後ろの注記の行（表の行・表頭にしない）。
+
+    表の最後の行から上へ、セルが 1 つ（横の結合を含む）で、注記の印（``ExcelOptions.note_markers``）
+    で始まるか長い文（``NOTE_MIN_CHARS`` 以上）の行を続けて集める。印の無い長い文の行は、横に結合
+    しているか、表との間に空の行があるときだけ注記にする（データの行の 1 つの長いセルと区別する）。
+    1 列の表と、表の行が残らないときは注記にしない。
+    """
+    if len(columns) < 2:
+        return []
+    candidates: list[tuple[int, str, str | None, list[int]]] = []
+    for row in reversed(data_rows):
+        cols = grid.row_columns(row)
+        units = [col for col in cols if (row, col) not in grid.merge_filled]
+        if len(units) != 1:
+            break
+        text = grid.cells[(row, units[0])].strip()
+        marker = note_marker(text, patterns)
+        if marker is None and len(text) < NOTE_MIN_CHARS:
+            break
+        candidates.insert(0, (row, text, marker, cols))
+    while candidates:
+        table_rows = [row for row in data_rows if row < candidates[0][0]]
+        if not table_rows:
+            return []
+        separated = candidates[0][0] - table_rows[-1] > 1
+        weak = [
+            position
+            for position, (_, _, marker, cols) in enumerate(candidates)
+            if marker is None and len(cols) < 2 and not separated
+        ]
+        if not weak:
+            break
+        candidates = candidates[weak[-1] + 1 :]
+    return [
+        SheetNoteRow(
+            row_number=row,
+            cell_range=_row_range(cols, row, row),
+            text=text,
+            marker=marker,
+            shape_cells=grid.shape_refs(row, cols[0], row, cols[-1]),
+        )
+        for row, text, marker, cols in candidates
+    ]
+
+
+def _note_reference(marker: str | None) -> re.Pattern[str] | None:
+    """表のセルから注記を指す印の照合（数字の付いた記号・語の印だけ。例: ※1、注2）。
+
+    番号だけの印（「(1)」「1)」）と数字の無い印（「※」）は、セルの中の番号・記号と区別できない
+    ので行に付けない（表の注記の記録には残る）。
+    """
+    if not marker:
+        return None
+    reference = "".join(
+        char for char in marker if not char.isspace() and char not in "()（）[]［］"
+    ).rstrip(":：.．、")
+    if not any(char.isdigit() for char in reference) or is_numbering(reference):
+        return None
+    # 語で始まる印（「注1」）は語の途中（「…注1」）に当てない。数字の続き（「※10」）にも当てない。
+    before = r"(?<!\w)" if re.match(r"\w", reference) else ""
+    return re.compile(before + re.escape(reference) + r"(?!\d)")
+
+
+def _attach_notes(blocks: list[SheetBlock], notes: list[SheetNoteRow]) -> None:
+    """注記の印をセルに含む表の行に、その注記の文を付ける（1 行 = 1 記録の本文に注記を含める）。"""
+    references = [
+        (pattern, note.text)
+        for note in notes
+        if (pattern := _note_reference(note.marker)) is not None
+    ]
+    if not references:
+        return
+    for block in blocks:
+        cells = ["".join(value.split()) for value in block.values.values()]
+        block.notes = [
+            text for pattern, text in references if any(pattern.search(cell) for cell in cells)
+        ]
 
 
 # ---- 版式（帳票・1 シートの複数の表。#2516）------------------------------------------------
@@ -1269,7 +1433,12 @@ def sheet_tables(grid: Grid, options: ExcelOptions) -> list[SheetRecords]:
     detected = _detect(grid, options) if options.mode == "auto" else None
     whole_form = options.mode == "form" or (detected is not None and detected[0])
     regions = (
-        split_regions(grid, gap_rows=options.table_gap_rows, gap_columns=options.table_gap_columns)
+        split_regions(
+            grid,
+            gap_rows=options.table_gap_rows,
+            gap_columns=options.table_gap_columns,
+            note_markers=options.note_marker_patterns(),
+        )
         if options.split_tables and options.header_row is None and not whole_form
         else []
     )
