@@ -2526,7 +2526,7 @@ export interface ChunkingSettingsUpdate {
   chunk_parent_max_children: number;
 }
 
-/** 回答の検索と生成の全体既定(検索・回答プロファイルで上書きできる。#593)。 */
+/** 回答の検索と生成の全体既定(全体設定だけで決め、検索・回答プロファイルでは上書きしない。#593)。 */
 export interface AnsweringSettingsData {
   query_strategy: QueryStrategyName;
   answer_flow: AnswerFlowName;
