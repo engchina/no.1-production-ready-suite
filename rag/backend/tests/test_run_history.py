@@ -1269,6 +1269,9 @@ def test_list_api_returns_the_usage_totals_without_reading_the_stages(
     assert "JSON_VALUE(r.stages_json, '$.usage.measurement'" in list_sql
     # 処理の段・trace の記録を含む JSON の全体は一覧で読まない（2 つの JSON_VALUE の引数だけ）。
     assert list_sql.count("stages_json") == 2
+    # ページ（並べ替えと件数の切り出し）は run_id だけで決め、列はページの行だけで読む。
+    assert "WITH run_page AS ( SELECT r.run_id FROM rag_run_history r WHERE" in list_sql
+    assert "JOIN run_page pg ON pg.run_id = r.run_id" in list_sql
 
 
 @pytest.mark.parametrize(

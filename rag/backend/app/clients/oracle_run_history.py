@@ -322,13 +322,22 @@ class RunHistoryStore:
         where, binds = run_history_list_where(
             query=query, surface=surface, status=status, executor=executor, since=since
         )
+        # ページの実行（run_id）を先に決め、列（質問の先頭・利用量の JSON_VALUE・名前の
+        # 結合）はページの行だけで読む（#3466）。1 つの SELECT にすると、並べ替えが全行の
+        # `stages_json`（処理の段・trace の記録）を抱えて運び、行が増えるほど重くなる。
         rows = await self._oracle._fetch_all(  # noqa: SLF001
             f"""
+            WITH run_page AS (
+                SELECT r.run_id
+                FROM {RUN_HISTORY_TABLE} r
+                WHERE {where}
+                ORDER BY r.created_at DESC, r.run_id DESC
+                {offset_fetch_clause()}
+            )
             SELECT {_LIST_COLUMNS}
             {_FROM}
-            WHERE {where}
+            JOIN run_page pg ON pg.run_id = r.run_id
             ORDER BY r.created_at DESC, r.run_id DESC
-            {offset_fetch_clause()}
             """,
             {**binds, **offset_fetch_binds(offset=offset, limit=limit)},
         )
