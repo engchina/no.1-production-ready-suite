@@ -2041,6 +2041,30 @@
                 "default": null,
                 "title": "Row End"
               },
+              "source_line_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Source Line Start"
+              },
+              "source_line_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Source Line End"
+              },
               "cell_range": {
                 "anyOf": [
                   {

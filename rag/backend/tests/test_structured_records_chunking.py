@@ -494,7 +494,7 @@ def _locators(chunks: list[Chunk]) -> dict[int, dict[str, Any]]:
 
 @pytest.mark.parametrize("strategy", ["structure_aware", "small_to_big", "fixed_delimiter"])
 def test_csv_rows_cite_lines_and_cells_from_ingest_to_locator(strategy: str) -> None:
-    """CSV の前処理の変換から根拠の locator まで、物理行・セルの列・原本の表頭が保たれる。
+    """CSV の前処理の変換から根拠の locator まで、記録の番号・物理行・セル・原本の表頭が保たれる。
 
     重複した表頭（列名は補う）・空の値・引用符の中の改行（複数の物理行）を含む合成の CSV。
     """
@@ -505,24 +505,28 @@ def test_csv_rows_cite_lines_and_cells_from_ingest_to_locator(strategy: str) -> 
     assert extraction is not None
     chunks = _chunks_of(StructuredExtraction.model_validate(extraction.model_dump()), strategy)
     locators = _locators(chunks)
-    assert sorted(locators) == [2, 3, 5]
-    first, multiline, last = locators[2], locators[3], locators[5]
+    # 行は記録の番号（RFC 7111 の行。表頭の記録が 1）。物理行は別に持つ。
+    assert sorted(locators) == [2, 3, 4]
+    first, multiline, last = locators[2], locators[3], locators[4]
     assert (first["row_basis"], first["row_start"], first["row_end"], first["table_row"]) == (
         "csv",
         2,
         2,
         2,
     )
+    assert (first["source_line_start"], first["source_line_end"]) == (2, 2)
     # 空の値のセルは入らない。
     assert first["table_cells"] == [
         {"table_col": "A", "header_path": ["区分"]},
         {"table_col": "B", "header_path": ["値"]},
     ]
-    # 引用符の中の改行を含む記録は物理行の範囲だけ（1 つの行の座標にしない）。
-    assert (multiline["row_start"], multiline["row_end"], multiline["table_row"]) == (3, 4, None)
-    assert multiline["table_cells"] == []
-    # 重複した表頭の列（列名は「値_1」）の表頭は、原本の文字のまま。
-    assert last["table_row"] == 5
+    # 引用符の中の改行を含む記録も 1 つの行（記録の番号 3）で、物理行は 3〜4。
+    assert (multiline["row_start"], multiline["row_end"], multiline["table_row"]) == (3, 3, 3)
+    assert (multiline["source_line_start"], multiline["source_line_end"]) == (3, 4)
+    assert [cell["table_col"] for cell in multiline["table_cells"]] == ["A", "B", "C"]
+    # 後ろの記録は、記録の番号（4）と物理行（5）がずれる。重複した表頭の列（列名は「値_1」）の
+    # 表頭は、原本の文字のまま。
+    assert (last["table_row"], last["source_line_start"]) == (4, 5)
     assert last["table_cells"][2] == {"table_col": "C", "header_path": ["値"]}
     for locator in locators.values():
         assert (locator["sheet_name"], locator["cell_range"], locator["table_index"]) == (

@@ -152,13 +152,10 @@ def test_round_trip_and_csv_extraction() -> None:
     assert first.metadata[STRUCTURED_RECORD_ID_KEY] == "row-000001"
     assert (first.metadata["row_start"], first.metadata["row_end"]) == (2, 3)
     assert first.metadata["csv_header_row"] == 1
-    # 行の番号は原本の物理行（#3262）。引用符の中の改行を含む記録（2〜3 行）はセルの座標を持たず、
-    # 表頭のセルの文字を記録していない記録（header が None）は行だけを持つ。
+    # 記録の番号（record）を記録していない古い記録は、物理行の範囲だけを持つ（#3262）。
     assert first.metadata["row_basis"] == "csv"
-    assert "table_row" not in first.metadata
-    second = extraction.elements[1]
-    assert (second.metadata["row_basis"], second.metadata["table_row"]) == ("csv", 5)
-    assert "table_cells_json" not in second.metadata
+    assert (first.metadata["source_line_start"], first.metadata["source_line_end"]) == (2, 3)
+    assert not {"table_row", "table_row_start", "table_cells_json"} & set(first.metadata)
     assert extraction.parser_artifacts[STRUCTURED_RECORDS_ARTIFACT_KEY] == 1
     assert extraction.parser_artifacts["structured_records_converter"] == "csv_to_jsonl"
 
@@ -171,7 +168,7 @@ def test_column_letters(position: int, letters: str) -> None:
 
 
 def test_csv_row_cells_cite_the_original_header_text() -> None:
-    """CSV の 1 物理行の記録は、値のあるセルの列の記号と表頭のセルの文字を持つ（#3262）。
+    """CSV の記録は、記録の番号・物理行と、値のあるセルの列の記号・表頭のセルの文字を持つ（#3262）。
 
     空・重複の表頭は記録の列名では補った名前になるが、表頭の段には原本の文字（空は空）を使う。
     表頭より右の列（列の多い行）は表頭の文字が無い。
@@ -188,7 +185,8 @@ def test_csv_row_cells_cite_the_original_header_text() -> None:
         RowLine(
             record_id="row-000001",
             source_type="csv",
-            location=RecordLocation(row_start=2, row_end=2),
+            # 前に引用符の中の改行を含む記録があり、物理行（4）と記録の番号（3）がずれる。
+            location=RecordLocation(row_start=4, row_end=5, record=3),
             fields=[
                 RecordField(name="項目", position=1, value="値 A"),
                 RecordField(name="col_2", position=2, value="値 B"),
@@ -203,7 +201,13 @@ def test_csv_row_cells_cite_the_original_header_text() -> None:
     (element,) = structured_records_extraction(
         document, source_parser="s", parser_backend="docling", parser_version="v1"
     ).elements
-    assert element.metadata["table_row"] == 2
+    # 行は記録の番号（RFC 7111 の行）。複数の物理行の記録もセルの座標を持つ。
+    assert (
+        element.metadata["table_row"],
+        element.metadata["table_row_start"],
+        element.metadata["table_row_end"],
+    ) == (3, 3, 3)
+    assert (element.metadata["source_line_start"], element.metadata["source_line_end"]) == (4, 5)
     assert json.loads(str(element.metadata["table_cells_json"])) == [
         ["A", ["項目"]],
         ["B", []],

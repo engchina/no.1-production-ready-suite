@@ -8,6 +8,9 @@ pydantic）のみで完結し、重い変換依存（LibreOffice など）を持
 
 - 表頭は最初の空でない行。空・重複の列名は決定論で補う（`col_<位置>`・`<名前>_<n>`）。表頭の
   セルの文字（補う前）は `document` の `header` に残す（根拠のセルの表頭。#3262）。
+- 記録の番号（`location.record`）は RFC 7111 の行（表頭の記録を含め、空の行も 1 記録として先頭から
+  数える。表計算のソフトで開いたときの行）。物理行の範囲（`row_start` / `row_end`）とは引用符の中の
+  改行を含む記録の後ろでずれる（#3262）。
 - 表頭より列の多い行は、余った値を `col_<位置>` の列にして捨てない
   （診断 `csv_row_wider_than_header`）。
 - 空の行は記録にしない（元の行番号は振り直さない）。
@@ -81,14 +84,19 @@ def _sniff_delimiter(sample: str) -> str:
         return ","
 
 
-def _read_rows(text: str, delimiter: str) -> list[tuple[int, int, list[str]]]:
-    """CSV の行を、原本の物理行の範囲（1 始まり）と一緒に読む。"""
+def _read_rows(text: str, delimiter: str) -> list[tuple[int, int, int, list[str]]]:
+    """CSV の記録を、記録の番号と原本の物理行の範囲（どちらも 1 始まり）と一緒に読む。
+
+    記録の番号は RFC 7111 の行（表頭の記録を含め、空の行も 1 つの記録として先頭から数える。
+    表計算のソフトで開いたときの行と同じ）。引用符の中の改行を含む記録は 1 つの記録で、物理行は
+    複数になる。
+    """
     # newline="" で \r\n / \r / \n を行の区切りにし、引用符の中の改行は値に残す。
     reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
-    rows: list[tuple[int, int, list[str]]] = []
+    rows: list[tuple[int, int, int, list[str]]] = []
     previous = 0
-    for row in reader:
-        rows.append((previous + 1, reader.line_num, row))
+    for number, row in enumerate(reader, start=1):
+        rows.append((number, previous + 1, reader.line_num, row))
         previous = reader.line_num
     return rows
 
@@ -104,17 +112,17 @@ def _csv_to_records(source_bytes: bytes) -> ConvertOutcome:
         rows = _read_rows(text, delimiter)
     except csv.Error:
         return ConvertOutcome.passthrough(reason="csv_parse_failed")
-    rows = [item for item in rows if any(cell.strip() for cell in item[2])]
+    rows = [item for item in rows if any(cell.strip() for cell in item[3])]
     if not rows:
         return ConvertOutcome.passthrough(reason="csv_no_rows")
 
-    header_start, _, header = rows[0]
+    _, header_start, _, header = rows[0]
     header_cells = [cell.strip() for cell in header]
     # ヘッダが空/重複のときは決定論で列名を補完(col_1, col_2, ...)。
     columns = _resolve_columns(header_cells)
     wide_rows: list[int] = []
     records: list[ContentLine] = []
-    for index, (row_start, row_end, row) in enumerate(rows[1:], start=1):
+    for index, (number, row_start, row_end, row) in enumerate(rows[1:], start=1):
         if len(row) > len(columns):
             wide_rows.append(row_start)
             columns = _resolve_columns([*columns, *("" for _ in range(len(row) - len(columns)))])
@@ -122,7 +130,7 @@ def _csv_to_records(source_bytes: bytes) -> ConvertOutcome:
             RowLine(
                 record_id=f"row-{index:06d}",
                 source_type="csv",
-                location=RecordLocation(row_start=row_start, row_end=row_end),
+                location=RecordLocation(row_start=row_start, row_end=row_end, record=number),
                 fields=[
                     RecordField(
                         name=column,

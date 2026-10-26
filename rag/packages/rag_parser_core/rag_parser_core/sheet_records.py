@@ -86,8 +86,9 @@ TABLE_ROW_KEY = "table_row"
 TABLE_CELLS_KEY = "table_cells_json"
 # 行の番号の基準（根拠の locator の row_basis。#3262）と、その基準の行の範囲
 # （``table_row_start`` / ``table_row_end``）。表計算は ``sheet_name`` から決まり、行の範囲は
-# ``row_start`` / ``row_end`` なので記録しない。CSV は原本の物理行、Word は 1 つの表だけを含む
-# まとまりの ``table_index`` の表の行。
+# ``row_start`` / ``row_end`` なので記録しない。CSV は記録の番号（RFC 7111 の行）で、原本の物理行の
+# 範囲を ``source_line_start`` / ``source_line_end`` に持つ。Word は 1 つの表だけを含むまとまりの
+# ``table_index`` の表の行。
 ROW_BASIS_KEY = "row_basis"
 ROW_BASIS_SHEET: Final = "sheet"
 ROW_BASIS_CSV: Final = "csv"
@@ -95,6 +96,8 @@ ROW_BASIS_WORD_TABLE: Final = "word_table"
 TABLE_INDEX_KEY = "table_index"
 TABLE_ROW_START_KEY = "table_row_start"
 TABLE_ROW_END_KEY = "table_row_end"
+SOURCE_LINE_START_KEY = "source_line_start"
+SOURCE_LINE_END_KEY = "source_line_end"
 TABLE_LOCATOR_METADATA_KEYS: tuple[str, ...] = (
     TABLE_ROW_KEY,
     TABLE_CELLS_KEY,
@@ -102,6 +105,8 @@ TABLE_LOCATOR_METADATA_KEYS: tuple[str, ...] = (
     TABLE_INDEX_KEY,
     TABLE_ROW_START_KEY,
     TABLE_ROW_END_KEY,
+    SOURCE_LINE_START_KEY,
+    SOURCE_LINE_END_KEY,
 )
 
 
@@ -346,6 +351,8 @@ __all__ = [
     "SHEET_RECORDS_FORMAT",
     "SHEET_RECORDS_FORMAT_VERSION",
     "SHEET_RECORD_CONTENT_KIND",
+    "SOURCE_LINE_END_KEY",
+    "SOURCE_LINE_START_KEY",
     "ROW_BASIS_CSV",
     "ROW_BASIS_KEY",
     "ROW_BASIS_SHEET",

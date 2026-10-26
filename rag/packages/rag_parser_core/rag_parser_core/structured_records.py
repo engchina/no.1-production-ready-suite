@@ -29,8 +29,8 @@ CSV・Excel・Word の前処理は、原本を 1 行 1 オブジェクトの JSO
     を持つ。位置（``WordLocation``）は本文の順の番号で、原本に無いページ番号は持たない。
   CSV・Excel の記録は ``parent_id`` で文脈の行（Excel は ``sheet``）を指し、``location``
   （元の行番号・セル範囲）と ``section_path`` を持つ。Excel の記録のうち図形・テキストボックスの
-  文字を置いたセル範囲は ``shape_cells`` に持つ（#2526）。CSV の行番号は原本の物理行（引用符の中の
-  改行を含む記録は複数行）。
+  文字を置いたセル範囲は ``shape_cells`` に持つ（#2526）。CSV の ``row_start`` / ``row_end`` は
+  原本の物理行（引用符の中の改行を含む記録は複数行）で、``record`` は記録の番号（RFC 7111 の行）。
 - 読み取り（`parse_structured_records`）は厳格にし、不正な JSON・オブジェクトでない行・空行・BOM・
   未知の schema・未対応の版・record_id の重複・document の行の欠落・存在しない parent_id を、行番号
   つきの診断で拒否する（任意の JSONL を構造化レコードとみなさない）。
@@ -65,6 +65,8 @@ from rag_parser_core.sheet_records import (
     ROW_BASIS_KEY,
     ROW_BASIS_WORD_TABLE,
     SHEET_RECORD_CONTENT_KIND,
+    SOURCE_LINE_END_KEY,
+    SOURCE_LINE_START_KEY,
     TABLE_CELLS_KEY,
     TABLE_INDEX_KEY,
     TABLE_ROW_END_KEY,
@@ -216,6 +218,15 @@ class RecordLocation(BaseModel):
     row_start: int = Field(ge=1)
     row_end: int = Field(ge=1)
     cell_range: str | None = Field(default=None, description="Excel のセル範囲（例: A5:F5）。")
+    record: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "CSV の記録の番号（RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から"
+            "数える。表計算のソフトで開いたときの行）。None は記録していない（この項目より前の"
+            "変換器の記録）。"
+        ),
+    )
 
 
 class RecordField(BaseModel):
@@ -802,20 +813,23 @@ def _csv_row_text(line: RowLine, *, max_chars: int | None = _RECORD_TEXT_MAX_CHA
 def _csv_table_metadata(line: RowLine, header: list[str] | None) -> dict[str, str | int]:
     """CSV の 1 データ行の場所の基準とセルの座標（#3262）。
 
-    行の番号は原本の物理行。``row_start`` / ``row_end`` と同じ値を ``table_row_start`` /
-    ``table_row_end`` にも入れる（表計算の場所の key を持たない分割でも chunk に引き継ぐため）。
-    セルの座標（``table_row`` と列の記号・表頭）は 1 物理行の記録だけが持ち、引用符の中の改行を
-    含む記録（複数行）には付けない。表頭のセルの文字を記録していない古い記録（``header`` が None）
-    からは、補った列名で表頭を作らない。
+    行の番号は記録の番号（RFC 7111 の行。表頭の記録を含めて先頭から数え、表計算のソフトで開いた
+    ときの行）で、``table_row`` と ``table_row_start`` / ``table_row_end`` にする（引用符の中の
+    改行を含む記録も 1 行）。原本の物理行の範囲は ``source_line_start`` / ``source_line_end``。
+    記録の番号を記録していない古い記録は行の番号もセルの座標も持たず、表頭のセルの文字を記録して
+    いない古い記録（``header`` が None）からは、補った列名で表頭を作らない。
     """
     metadata: dict[str, str | int] = {
         ROW_BASIS_KEY: ROW_BASIS_CSV,
-        TABLE_ROW_START_KEY: line.location.row_start,
-        TABLE_ROW_END_KEY: line.location.row_end,
+        SOURCE_LINE_START_KEY: line.location.row_start,
+        SOURCE_LINE_END_KEY: line.location.row_end,
     }
-    if line.location.row_start != line.location.row_end:
+    record = line.location.record
+    if record is None:
         return metadata
-    metadata[TABLE_ROW_KEY] = line.location.row_start
+    metadata[TABLE_ROW_KEY] = record
+    metadata[TABLE_ROW_START_KEY] = record
+    metadata[TABLE_ROW_END_KEY] = record
     if header is None:
         return metadata
     cells = [

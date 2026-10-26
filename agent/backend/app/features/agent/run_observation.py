@@ -69,6 +69,8 @@ LOCATOR_FIELDS = (
     "table_index",
     "row_start",
     "row_end",
+    "source_line_start",
+    "source_line_end",
     "cell_range",
     "element_locator",
     "table_row",
@@ -166,7 +168,16 @@ def _locator(value: Mapping[str, Any]) -> dict[str, Any]:
     sections = value.get("section_path")
     if isinstance(sections, list):
         locator["section_path"] = [item for item in sections if isinstance(item, str)]
-    for key in ("page_start", "page_end", "row_start", "row_end", "table_row", "table_index"):
+    for key in (
+        "page_start",
+        "page_end",
+        "row_start",
+        "row_end",
+        "source_line_start",
+        "source_line_end",
+        "table_row",
+        "table_index",
+    ):
         number = _int(value.get(key))
         if number is not None:
             locator[key] = number

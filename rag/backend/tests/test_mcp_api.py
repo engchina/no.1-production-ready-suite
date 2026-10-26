@@ -788,6 +788,8 @@ def test_search_maps_evidence_and_uses_token_user_context(
         "table_index": None,
         "row_start": None,
         "row_end": None,
+        "source_line_start": None,
+        "source_line_end": None,
         "cell_range": None,
         "page_label_start": "2-1",
         "page_label_end": "2-2",
@@ -863,6 +865,8 @@ def test_search_evidence_locates_spreadsheet_rows(
         "table_index": None,
         "row_start": 3,
         "row_end": 6,
+        "source_line_start": None,
+        "source_line_end": None,
         "cell_range": "A3:C6",
         "page_label_start": None,
         "page_label_end": None,
@@ -940,10 +944,13 @@ def test_search_evidence_of_a_split_sheet_table_returns_the_table_index(
     assert (locator["row_basis"], locator["table_index"], locator["row_start"]) == ("sheet", 2, 12)
 
 
-def test_search_evidence_of_a_csv_row_cites_the_line_and_cells(
+def test_search_evidence_of_a_csv_record_cites_the_record_lines_and_cells(
     auth: ProductionAuth, monkeypatch: MonkeyPatch
 ) -> None:
-    """CSV の 1 物理行の記録は、原本の物理行と値のあるセルの列・表頭を返す（#3262）。"""
+    """CSV の記録は、記録の番号（RFC 7111 の行）・原本の物理行・値のあるセルを返す（#3262）。
+
+    引用符の中の改行を含む記録（物理行 5〜6）も 1 つの行（記録の番号 4）のセルの座標を持つ。
+    """
     cells = [["A", ["列 1"]], ["C", []]]
     locator = _locator_of(
         auth,
@@ -953,18 +960,23 @@ def test_search_evidence_of_a_csv_row_cites_the_line_and_cells(
         csv_header_row=1,
         row_basis="csv",
         row_start=5,
-        row_end=5,
-        table_row=5,
+        row_end=6,
+        source_line_start=5,
+        source_line_end=6,
+        table_row_start=4,
+        table_row_end=4,
+        table_row=4,
         table_cells_json=json.dumps(cells, ensure_ascii=False),
     )
-    assert (locator["row_basis"], locator["row_start"], locator["row_end"]) == ("csv", 5, 5)
+    assert (locator["row_basis"], locator["row_start"], locator["row_end"]) == ("csv", 4, 4)
+    assert (locator["source_line_start"], locator["source_line_end"]) == (5, 6)
     # CSV はシートでもセル範囲でもない。
     assert (locator["sheet_name"], locator["cell_range"], locator["table_index"]) == (
         None,
         None,
         None,
     )
-    assert locator["table_row"] == 5
+    assert locator["table_row"] == 4
     assert locator["table_cells"] == [
         {"table_col": "A", "header_path": ["列 1"]},
         {"table_col": "C", "header_path": []},
@@ -972,31 +984,28 @@ def test_search_evidence_of_a_csv_row_cites_the_line_and_cells(
 
 
 @pytest.mark.parametrize(
-    ("metadata", "expected"),
+    "metadata",
     [
-        # 基準を記録する前の CSV の chunk: 表頭の行から基準が決まり、物理行を返す（セルは無い）。
-        ({"csv_header_row": 1, "row_start": 4, "row_end": 4}, ("csv", 4, 4, None)),
-        # 引用符の中の改行を含む記録（複数の物理行）は 1 つの行の座標を持たない。
-        (
-            {"row_basis": "csv", "csv_header_row": 1, "row_start": 4, "row_end": 6},
-            ("csv", 4, 6, None),
-        ),
+        # 基準を記録する前の CSV の chunk: 表頭の行から基準が決まり、物理行だけを返す。
+        {"csv_header_row": 1, "row_start": 4, "row_end": 6},
+        # 記録の番号を記録していない記録（前処理をやり直していない）: 物理行だけ。
+        {"row_basis": "csv", "source_line_start": 4, "source_line_end": 6},
     ],
-    ids=["before-basis", "multiline-record"],
+    ids=["before-basis", "no-record-number"],
 )
-def test_search_evidence_of_a_csv_record_without_cells(
-    auth: ProductionAuth,
-    monkeypatch: MonkeyPatch,
-    metadata: dict[str, Any],
-    expected: tuple[Any, ...],
+def test_search_evidence_of_a_csv_record_without_record_number(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch, metadata: dict[str, Any]
 ) -> None:
+    """記録の番号が分からない CSV の根拠は、物理行を記録の番号として返さない（#3262）。"""
     locator = _locator_of(auth, monkeypatch, content_kind="record", **metadata)
     assert (
         locator["row_basis"],
         locator["row_start"],
         locator["row_end"],
         locator["table_row"],
-    ) == expected
+        locator["source_line_start"],
+        locator["source_line_end"],
+    ) == ("csv", None, None, None, 4, 6)
     assert locator["table_cells"] == []
 
 
@@ -2107,8 +2116,10 @@ def test_read_source_of_table_evidence_keeps_the_document_version_and_position(
             record_kind="row",
             row_basis="csv",
             csv_header_row=1,
-            row_start=row,
-            row_end=row,
+            row_start=row + 1,
+            row_end=row + 2,
+            source_line_start=row + 1,
+            source_line_end=row + 2,
             table_row_start=row,
             table_row_end=row,
             table_row=row,

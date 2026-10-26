@@ -86,6 +86,8 @@ from rag_parser_core.sheet_records import (
     ROW_BASIS_KEY,
     ROW_BASIS_SHEET,
     ROW_BASIS_WORD_TABLE,
+    SOURCE_LINE_END_KEY,
+    SOURCE_LINE_START_KEY,
     TABLE_CELLS_KEY,
     TABLE_INDEX_KEY,
     TABLE_ROW_END_KEY,
@@ -288,7 +290,8 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     文字数に入る最後の文・段落（表は行）の境界で切るようにした。表の続きは先頭に見出しの行を
 #     付け、その位置（rag_read_source と読み取りの chunks の header_range）を足した（#3344）。
 # 35: 根拠の場所（locator・読み取りの chunks）に行の番号の基準（row_basis。表計算のシート・CSV の
-#     物理行・Word の表の行）と表の番号（table_index）を足し、CSV の 1 行の根拠にセルの座標
+#     記録の番号・Word の表の行）と表の番号（table_index）、CSV の原本の物理行の範囲
+#     （source_line_start・source_line_end）を足し、CSV の 1 行の根拠にセルの座標
 #     （table_row・table_cells）、Word の 1 つの表の根拠に表の行の範囲を入れた。根拠に、表の行・
 #     列の対応の検査が読める表か（table_binding）を、rag_search・rag_retrieve_evidence に、失敗して
 #     縮退した任意の補助の処理（degraded_steps）を足した（#3262）。
@@ -1133,10 +1136,16 @@ class ExcerptRange(BaseModel):
 RowBasis = Literal["sheet", "csv", "word_table"]
 ROW_BASIS_DESCRIPTION = (
     "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の"
-    "原本の物理行 / word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた"
-    "部分は先頭に繰り返した表頭を数えない）。原本の行の位置が分からない根拠（PDF・HTML・画像の表"
-    "など）は null。"
+    "記録の番号〔RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から数える。表計算の"
+    "ソフトで開いたときの行〕/ word_table=Word の table_index の表の行。表頭の行も数え、大きい表を"
+    "分けた部分は先頭に繰り返した表頭を数えない）。原本の行の位置が分からない根拠（PDF・HTML・"
+    "画像の表など）は null。"
 )
+SOURCE_LINE_START_DESCRIPTION = (
+    "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録は"
+    "source_line_end と違う）。"
+)
+SOURCE_LINE_END_DESCRIPTION = "原本のテキストの終了の物理行（row_basis=csv だけ）。"
 TABLE_INDEX_DESCRIPTION = (
     "表の番号（1 始まり。row_basis=word_table は本文の表の順、sheet は 1 シートを複数の表に"
     "分けたときの表の順）。無ければ null。"
@@ -1159,6 +1168,8 @@ class ReadDocumentChunk(BaseModel):
         default=None, description="開始の行（1 始まり。番号の基準は row_basis）。"
     )
     row_end: int | None = Field(default=None, description="終了の行。")
+    source_line_start: int | None = Field(default=None, description=SOURCE_LINE_START_DESCRIPTION)
+    source_line_end: int | None = Field(default=None, description=SOURCE_LINE_END_DESCRIPTION)
     cell_range: str | None = Field(default=None, description="セル範囲（例: A3:F7）。")
     start: int = Field(description="返した本文の中の開始の位置（文字数）。")
     end: int = Field(description="返した本文の中の終了の位置（文字数）。")
@@ -1261,6 +1272,8 @@ class EvidenceLocator(BaseModel):
         default=None, description="開始の行（1 始まり。番号の基準は row_basis）。"
     )
     row_end: int | None = Field(default=None, description="終了の行。")
+    source_line_start: int | None = Field(default=None, description=SOURCE_LINE_START_DESCRIPTION)
+    source_line_end: int | None = Field(default=None, description=SOURCE_LINE_END_DESCRIPTION)
     cell_range: str | None = Field(
         default=None, description="表計算のセル範囲（例: A3:F7。row_basis=sheet だけ）。"
     )
@@ -1286,7 +1299,7 @@ class EvidenceLocator(BaseModel):
     table_row: int | None = Field(
         default=None,
         description=(
-            "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 物理行）のとき、その行の"
+            "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 記録）のとき、その行の"
             "番号（row_basis の番号）。複数行の根拠・行の番号を原本で決められない表（PDF・HTML・"
             "画像・Word）は null。"
         ),
@@ -2331,7 +2344,9 @@ def _table_rows(
     """行の番号の基準・表の番号・行の範囲（#3262）。原本の行の位置が無い根拠は None。
 
     表計算はシート名があれば、CSV は表頭の行（``csv_header_row``）があれば、基準を記録する前の
-    chunk でも基準が決まる。Word は 1 つの表だけを含むまとまりで取込が記録したときだけ。
+    chunk でも基準が決まる。CSV の行は記録の番号（RFC 7111 の行）で、記録の番号を記録する前の
+    chunk は行を返さない（物理行は ``_source_lines``）。Word は 1 つの表だけを含むまとまりで取込が
+    記録したときだけ。
     """
     basis = _metadata_str(metadata, ROW_BASIS_KEY)
     if sheet_name:
@@ -2344,8 +2359,10 @@ def _table_rows(
     if basis == ROW_BASIS_CSV or (
         basis is None and _metadata_int(metadata, "csv_header_row") is not None
     ):
-        start = _metadata_int(metadata, TABLE_ROW_START_KEY) or _metadata_int(metadata, "row_start")
-        end = _metadata_int(metadata, TABLE_ROW_END_KEY) or _metadata_int(metadata, "row_end")
+        start = _metadata_int(metadata, TABLE_ROW_START_KEY)
+        end = _metadata_int(metadata, TABLE_ROW_END_KEY)
+        if start is None or end is None or end < start:
+            return ROW_BASIS_CSV, None, None, None
         return ROW_BASIS_CSV, None, start, end
     if basis == ROW_BASIS_WORD_TABLE:
         table_index = _metadata_int(metadata, TABLE_INDEX_KEY)
@@ -2355,6 +2372,17 @@ def _table_rows(
             return None
         return ROW_BASIS_WORD_TABLE, table_index, start, end
     return None
+
+
+def _source_lines(metadata: dict[str, Any]) -> tuple[int | None, int | None]:
+    """CSV の根拠の原本の物理行の範囲（記録する前の chunk は ``row_start`` / ``row_end``）。"""
+    start = _metadata_int(metadata, SOURCE_LINE_START_KEY)
+    end = _metadata_int(metadata, SOURCE_LINE_END_KEY)
+    if start is None:
+        start, end = _metadata_int(metadata, "row_start"), _metadata_int(metadata, "row_end")
+    if start is None or end is None or end < start:
+        return None, None
+    return start, end
 
 
 def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
@@ -2370,6 +2398,7 @@ def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
     sheet_name = _metadata_str(metadata, "sheet_name")
     rows = _table_rows(metadata, sheet_name)
     basis, table_index, row_start, row_end = rows if rows is not None else (None, None, None, None)
+    source_lines = _source_lines(metadata) if basis == ROW_BASIS_CSV else (None, None)
     # セルの座標は表計算・CSV の 1 行の記録だけが持つ（取込で記録したときだけ。推測しない）。
     table_row = (
         _metadata_int(metadata, TABLE_ROW_KEY)
@@ -2385,6 +2414,8 @@ def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
         table_index=table_index,
         row_start=row_start,
         row_end=row_end,
+        source_line_start=source_lines[0],
+        source_line_end=source_lines[1],
         cell_range=_metadata_str(metadata, "cell_range") if basis == ROW_BASIS_SHEET else None,
         page_label_start=_metadata_str(metadata, "page_label_start") if page_start else None,
         page_label_end=_metadata_str(metadata, "page_label_end") if page_start else None,
@@ -3475,6 +3506,8 @@ async def read_section_tool(arguments: ReadSectionInput) -> ReadSectionOutput:
                     table_index=locator.table_index,
                     row_start=locator.row_start,
                     row_end=locator.row_end,
+                    source_line_start=locator.source_line_start,
+                    source_line_end=locator.source_line_end,
                     cell_range=locator.cell_range,
                     start=start,
                     end=length,
@@ -3654,6 +3687,8 @@ async def read_document(arguments: ReadDocumentInput) -> ReadDocumentOutput:
                     table_index=locator.table_index,
                     row_start=locator.row_start,
                     row_end=locator.row_end,
+                    source_line_start=locator.source_line_start,
+                    source_line_end=locator.source_line_end,
                     cell_range=locator.cell_range,
                     start=start,
                     end=length,

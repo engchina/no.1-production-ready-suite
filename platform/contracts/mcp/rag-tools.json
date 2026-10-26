@@ -1158,7 +1158,7 @@
                   }
                 ],
                 "default": null,
-                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の原本の物理行 / word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない）。原本の行の位置が分からない根拠（PDF・HTML・画像の表など）は null。",
+                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の記録の番号〔RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から数える。表計算のソフトで開いたときの行〕/ word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない）。原本の行の位置が分からない根拠（PDF・HTML・画像の表など）は null。",
                 "title": "Row Basis"
               },
               "table_index": {
@@ -1199,6 +1199,32 @@
                 "default": null,
                 "description": "終了の行。",
                 "title": "Row End"
+              },
+              "source_line_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
+                "title": "Source Line Start"
+              },
+              "source_line_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
+                "title": "Source Line End"
               },
               "cell_range": {
                 "anyOf": [
@@ -1600,7 +1626,7 @@
                   }
                 ],
                 "default": null,
-                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の原本の物理行 / word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない）。原本の行の位置が分からない根拠（PDF・HTML・画像の表など）は null。",
+                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の記録の番号〔RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から数える。表計算のソフトで開いたときの行〕/ word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない）。原本の行の位置が分からない根拠（PDF・HTML・画像の表など）は null。",
                 "title": "Row Basis"
               },
               "table_index": {
@@ -1641,6 +1667,32 @@
                 "default": null,
                 "description": "終了の行。",
                 "title": "Row End"
+              },
+              "source_line_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
+                "title": "Source Line Start"
+              },
+              "source_line_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
+                "title": "Source Line End"
               },
               "cell_range": {
                 "anyOf": [
@@ -2079,7 +2131,7 @@
                   }
                 ],
                 "default": null,
-                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の原本の物理行 / word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない）。原本の行の位置が分からない根拠（PDF・HTML・画像の表など）は null。",
+                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の記録の番号〔RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から数える。表計算のソフトで開いたときの行〕/ word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない）。原本の行の位置が分からない根拠（PDF・HTML・画像の表など）は null。",
                 "title": "Row Basis"
               },
               "table_index": {
@@ -2120,6 +2172,32 @@
                 "default": null,
                 "description": "終了の行。",
                 "title": "Row End"
+              },
+              "source_line_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
+                "title": "Source Line Start"
+              },
+              "source_line_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
+                "title": "Source Line End"
               },
               "cell_range": {
                 "anyOf": [
@@ -2212,7 +2290,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 物理行）のとき、その行の番号（row_basis の番号）。複数行の根拠・行の番号を原本で決められない表（PDF・HTML・画像・Word）は null。",
+                "description": "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 記録）のとき、その行の番号（row_basis の番号）。複数行の根拠・行の番号を原本で決められない表（PDF・HTML・画像・Word）は null。",
                 "title": "Table Row"
               },
               "table_cells": {
@@ -3197,7 +3275,7 @@
                   }
                 ],
                 "default": null,
-                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の原本の物理行 / word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない）。原本の行の位置が分からない根拠（PDF・HTML・画像の表など）は null。",
+                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の記録の番号〔RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から数える。表計算のソフトで開いたときの行〕/ word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない）。原本の行の位置が分からない根拠（PDF・HTML・画像の表など）は null。",
                 "title": "Row Basis"
               },
               "table_index": {
@@ -3238,6 +3316,32 @@
                 "default": null,
                 "description": "終了の行。",
                 "title": "Row End"
+              },
+              "source_line_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
+                "title": "Source Line Start"
+              },
+              "source_line_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
+                "title": "Source Line End"
               },
               "cell_range": {
                 "anyOf": [
@@ -3330,7 +3434,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 物理行）のとき、その行の番号（row_basis の番号）。複数行の根拠・行の番号を原本で決められない表（PDF・HTML・画像・Word）は null。",
+                "description": "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 記録）のとき、その行の番号（row_basis の番号）。複数行の根拠・行の番号を原本で決められない表（PDF・HTML・画像・Word）は null。",
                 "title": "Table Row"
               },
               "table_cells": {
@@ -4629,7 +4733,7 @@
                   }
                 ],
                 "default": null,
-                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の原本の物理行 / word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない）。原本の行の位置が分からない根拠（PDF・HTML・画像の表など）は null。",
+                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の記録の番号〔RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から数える。表計算のソフトで開いたときの行〕/ word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない）。原本の行の位置が分からない根拠（PDF・HTML・画像の表など）は null。",
                 "title": "Row Basis"
               },
               "table_index": {
@@ -4670,6 +4774,32 @@
                 "default": null,
                 "description": "終了の行。",
                 "title": "Row End"
+              },
+              "source_line_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
+                "title": "Source Line Start"
+              },
+              "source_line_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
+                "title": "Source Line End"
               },
               "cell_range": {
                 "anyOf": [
@@ -4762,7 +4892,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 物理行）のとき、その行の番号（row_basis の番号）。複数行の根拠・行の番号を原本で決められない表（PDF・HTML・画像・Word）は null。",
+                "description": "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 記録）のとき、その行の番号（row_basis の番号）。複数行の根拠・行の番号を原本で決められない表（PDF・HTML・画像・Word）は null。",
                 "title": "Table Row"
               },
               "table_cells": {
