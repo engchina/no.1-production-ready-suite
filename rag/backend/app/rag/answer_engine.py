@@ -70,6 +70,7 @@ from app.config import (
     Settings,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
+    enterprise_ai_judge_model_id,
     enterprise_ai_max_input_tokens,
     enterprise_ai_model_catalog,
     enterprise_ai_output_token_budget,
@@ -4216,23 +4217,41 @@ def _evaluation_input(result: Any) -> dict[str, Any] | None:
     return stored_evaluation_input({key: payload.get(key) for key in EVALUATION_INPUT_KEYS})
 
 
+def answer_model_of(diagnostics: Mapping[str, Any] | None) -> str:
+    """回答の診断(``models.llm.model_id``)から、回答を作ったモデルの ID。無ければ空。"""
+    models = (diagnostics or {}).get("models")
+    llm = models.get("llm") if isinstance(models, Mapping) else None
+    model_id = llm.get("model_id") if isinstance(llm, Mapping) else None
+    return model_id.strip() if isinstance(model_id, str) else ""
+
+
 def evaluate_answer_record(
     evaluation_input: Mapping[str, Any],
     standard_answer: str,
     settings: Settings,
     *,
     citations: Sequence[RetrievedChunk],
+    judge_model_id: str | None = None,
 ) -> dict[str, Any]:
     """保存した回答を標準回答で評価する。
 
     LLM(rag_engine の evaluate_answer_payload)が標準回答の項目の照合と主張の監査を行い、
     評価の基準の指標と閾値で合否を付ける(#680)。``citations`` は回答の引用(決定的な指標に使う)。
     同期関数で、LLM を複数回呼ぶ。呼び出し側は worker thread で動かす。
+
+    ``judge_model_id`` は判定のモデル(#3574。呼び出し側が回答を作ったモデルから
+    `enterprise_ai_judge_model_id` で解決した ID)。省略時は回答のモデルが分からないものとして
+    解決する。
+    判定の LLM はそのモデルの接続・入力の上限・推論の量で呼び(回答のモデルの切り替えと同じ
+    ``build_engine_settings``)、使ったモデルを ``judge_diagnostics.judge_model_id`` に残す。
     """
     from rag_engine.evaluation.answer_eval import evaluate_answer_payload
 
+    judge_model = (judge_model_id or "").strip() or enterprise_ai_judge_model_id(settings)
     with tempfile.TemporaryDirectory(prefix="rag-engine-eval-") as work:
-        engine_settings = build_engine_settings(settings, output_dir=Path(work))
+        engine_settings = build_engine_settings(
+            settings, output_dir=Path(work), answer_model_id=judge_model
+        )
         evaluation = evaluate_answer_payload(
             {
                 **evaluation_input,
@@ -4242,6 +4261,14 @@ def evaluate_answer_record(
             },
             engine_settings,
         )
+    diagnostics = evaluation.get("judge_diagnostics")
+    evaluation = {
+        **evaluation,
+        "judge_diagnostics": {
+            **(diagnostics if isinstance(diagnostics, Mapping) else {}),
+            "judge_model_id": judge_model,
+        },
+    }
     return score_answer_evaluation(
         evaluation,
         answer=str(evaluation_input.get("answer_text") or ""),

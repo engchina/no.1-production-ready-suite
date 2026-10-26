@@ -48,6 +48,8 @@ function createModelSettings({
         ],
         default_text_model_id: textModel,
         default_vision_model_id: "enterprise-vision",
+        // 既定の判定モデル（#3574）。空 = 既定のテキストモデル。
+        default_judge_model_id: "",
         api_path: "/responses",
         vlm_input_mode: "files_api",
         text_payload_template: '{"input":{"messages":"${messages}","params":"${parameters}"}}',
@@ -78,7 +80,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 720, collapseSidebar: false },
   { name: "mobile", width: 375, height: 812, collapseSidebar: true },
 ]) {
-  test(`モデル設定は Enterprise AI の複数 LLM と既定のモデル 2 つを表示する (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
+  test(`モデル設定は Enterprise AI の複数 LLM と既定のモデル（テキスト・画像対応・判定）を表示する (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapseSidebar) {
       await page.addInitScript(() => {
@@ -125,6 +127,20 @@ for (const viewport of [
       await expect(field).toHaveAttribute("aria-required", "true");
       await expect(page.locator(`label[for="${id}"]`)).toContainText("必須");
     }
+    // 既定の判定モデル（#3574）は Vision の後ろに置く任意の欄で、既定は「既定のテキストモデル」。
+    const judgeDefault = page.getByRole("combobox", { name: "既定の判定モデル" });
+    await expect(judgeDefault).toContainText("既定のテキストモデル");
+    await expect(judgeDefault).not.toHaveAttribute("aria-required", "true");
+    await expectTextBeforeVision(visionDefault, judgeDefault);
+    await judgeDefault.scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: test.info().outputPath(`model-settings-default-models-${viewport.name}.png`),
+    });
+    await expect(
+      page.getByText("自分の回答は高く判定されやすいため、モデルの比較では別のモデルに固定してください。", {
+        exact: false,
+      })
+    ).toBeVisible();
     // 共有画面（NL2SQL と同じ。#103）は詳細項目・構成状態・プレビューを表示しない。
     await expect(page.getByLabel("API パス")).toHaveCount(0);
     await expect(page.getByRole("combobox", { name: "VLM 入力方式" })).toHaveCount(0);
@@ -276,6 +292,46 @@ for (const viewport of [
     expect(patches.at(-1)).toEqual({ base_revision: "rev-2" });
   });
 }
+
+test("既定の判定モデルは「既定のテキストモデル」→「回答と同じモデル」→ 登録モデルの順に選べ、選んだ値を保存する (#3574)", async ({
+  page,
+}) => {
+  const patches: Array<{ enterprise_ai: { default_judge_model_id?: string } }> = [];
+  await mockModelSettings(page, (payload) =>
+    patches.push(payload as { enterprise_ai: { default_judge_model_id?: string } })
+  );
+  await page.goto("/settings/model");
+
+  const judge = page.getByRole("combobox", { name: "既定の判定モデル" });
+  await expect(judge).toContainText("既定のテキストモデル");
+  await judge.click();
+  const options = page.getByRole("listbox", { name: "既定の判定モデル" }).getByRole("option");
+  await expect(options).toHaveCount(4);
+  await expect(options.nth(0)).toContainText("既定のテキストモデル");
+  // 今の既定のテキストモデルを説明に出す。
+  await expect(options.nth(0)).toContainText("標準 LLM");
+  await expect(options.nth(1)).toContainText("回答と同じモデル");
+  await expect(options.nth(2)).toContainText("標準 LLM");
+  await expect(options.nth(3)).toContainText("Vision LLM");
+
+  // 「回答と同じモデル」は明示の値（same_as_answer）で保存する。
+  await options.nth(1).click();
+  await expect(judge).toContainText("回答と同じモデル");
+  await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+  await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
+  expect(patches.at(-1)?.enterprise_ai.default_judge_model_id).toBe("same_as_answer");
+
+  // 登録モデルを選ぶと、そのモデルの ID を保存する。
+  await judge.click();
+  await page
+    .getByRole("listbox", { name: "既定の判定モデル" })
+    .getByRole("option", { name: /enterprise-llm/ })
+    .click();
+  await expect(judge).toContainText("標準 LLM");
+  await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+  await expect.poll(() => patches.at(-1)?.enterprise_ai.default_judge_model_id).toBe("enterprise-llm");
+  await expectNoPageOverflow(page);
+});
 
 for (const scheme of ["light", "dark"] as const) {
   test(`既定のモデルは Vision 対応のモデルだけを選べ、不正な選択は保存前にフィールドで止める (${scheme})`, async ({

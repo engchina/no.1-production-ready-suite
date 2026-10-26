@@ -126,6 +126,8 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
     oci_enterprise_ai_default_text_model: str = ""
     oci_enterprise_ai_default_vision_model: str = ""
+    # 品質評価の判定のモデル（#3574。共通のモデル設定の保存で持つ。RAG の品質評価だけが読む）。
+    oci_enterprise_ai_default_judge_model: str = ""
     oci_enterprise_ai_llm_path: str = "/responses"
     oci_enterprise_ai_vlm_path: str = "/responses"
     oci_enterprise_ai_vlm_input_mode: str = "auto"

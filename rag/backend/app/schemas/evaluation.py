@@ -488,6 +488,8 @@ class EvaluationJudgeDiagnostics(BaseModel):
     standard_scope_dropped: int = Field(default=0, ge=0)
     judge_retries: int = Field(default=0, ge=0)
     retry_reasons: list[str] = Field(default_factory=list)
+    # 判定に使ったモデルの ID（#3574。共通のモデル設定の既定の判定モデルで解決した ID）。
+    judge_model_id: str | None = None
 
 
 class EvaluationAnswerJudgement(BaseModel):
@@ -509,6 +511,8 @@ class EvaluationAnswerJudgement(BaseModel):
     # 判定の診断（比較範囲を job の記録から使い回したか・出力の誤りで再試行した回数）。
     # 評価を完了できなかったケースでも残す。判定が記録を返さなかった（時間切れなど）ときは None。
     judge_diagnostics: EvaluationJudgeDiagnostics | None = None
+    # 判定のモデルの ID（#3574）。判定を完了できなかった（時間切れ・失敗）ケースにも残す。
+    judge_model_id: str | None = None
 
 
 class EvaluationTurnResult(BaseModel):

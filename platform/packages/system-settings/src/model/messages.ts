@@ -44,6 +44,8 @@ export const MODEL_MESSAGES = {
   "settings.model.connection.unsaved": "未保存",
   "settings.model.defaults.description":
     "処理の種類ごとに使うモデルを登録モデルから選びます。",
+  "settings.model.defaults.error.judgeRemoved":
+    "「{model}」は登録モデルにありません。登録モデルから選び直してください。",
   "settings.model.defaults.error.noVisionModel":
     "画像入力に対応したモデルがありません。登録モデルの 1 つ以上で「画像入力に対応」をオンにしてください。",
   "settings.model.defaults.error.textRemoved":
@@ -56,6 +58,11 @@ export const MODEL_MESSAGES = {
     "「{model}」は登録モデルにありません。登録モデルから選び直してください。",
   "settings.model.defaults.error.visionRequired":
     "既定の画像対応モデルを選択してください。",
+  "settings.model.defaults.judge": "既定の判定モデル",
+  "settings.model.defaults.judgeDefaultText": "既定のテキストモデル",
+  "settings.model.defaults.judgeHelp":
+    "RAG の品質評価の判定に使います。自分の回答は高く判定されやすいため、モデルの比較では別のモデルに固定してください。",
+  "settings.model.defaults.judgeSameAsAnswer": "回答と同じモデル",
   "settings.model.defaults.placeholder": "モデルを選んでください",
   "settings.model.defaults.text": "既定のテキストモデル",
   "settings.model.defaults.textHelp":
