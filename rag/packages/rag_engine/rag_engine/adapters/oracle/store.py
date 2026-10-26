@@ -56,6 +56,7 @@ from rag_engine.parsing.decorative_pictures import (
     INLINE_ICON_VISUAL_ROLE,
     visual_role_from_ref,
 )
+from rag_engine.parsing.picture_text import fold_picture_ocr_entries
 from rag_engine.resources.tracing import observe_call
 from rag_engine.retrieval.inquiry_conditions import (
     InquiryConditionParse,
@@ -1184,9 +1185,8 @@ def _chunk_image_evidence(chunk: DocumentChunk) -> list[dict[str, Any]]:
 
     filtered: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for image in images:
-        if str(image.get("raw_type") or "") == "picture_ocr_text":
-            continue
+    # 図の中の文字（OCR）の entry は持ち主の図にまとめる（同じ図を 2 回数えない。#3455）。
+    for image in fold_picture_ocr_entries(images):
         if visual_role_from_ref(image) in {DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE}:
             continue
         if _bool_value(image.get("rag_excluded"), default=False):

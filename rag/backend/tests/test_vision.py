@@ -327,6 +327,25 @@ def test_unstructured_bbox_matches_ai_foundations_lab() -> None:
     )
 
 
+def test_figure_ocr_record_names_its_picture() -> None:
+    """図の中の文字の record は、図と同じ bbox に加えて持ち主の図の id を持つ(#3455)。"""
+    from app.rag.vision import _adapter_records
+
+    layout = _adapter_records(
+        _figure_extraction([166, 300, 820, 600]),
+        engine="mineru",
+        parser_backend="mineru",
+        pages=[LAB_A4_PAGE],
+        source_is_image=False,
+    )
+
+    picture, ocr = (record for record in layout.records if record.category == "Picture")
+    assert picture.raw_type == "picture"
+    assert ocr.raw_type == "picture_ocr_text"
+    assert ocr.bbox == picture.bbox
+    assert ocr.raw == {"source_picture_ref": picture.id}
+
+
 @pytest.mark.parametrize(
     ("system", "bbox", "size"),
     [

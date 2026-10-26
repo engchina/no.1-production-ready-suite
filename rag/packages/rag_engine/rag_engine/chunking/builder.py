@@ -87,7 +87,7 @@ from rag_engine.parsing.decorative_pictures import (
     classify_picture_record,
     mark_picture_record_role,
 )
-from rag_engine.parsing.picture_text import picture_ocr_text_label
+from rag_engine.parsing.picture_text import link_picture_ocr_records, picture_ocr_text_label
 from rag_engine.retrieval.inquiry_conditions import (
     INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
     build_inquiry_chunk_metadata,
@@ -722,6 +722,8 @@ def _records_by_engine(
         for raw_record in raw_records
         if isinstance(raw_record, dict) and str(raw_record.get("engine") or "") in selected
     ]
+    # 図の中の文字（OCR）の record を持ち主の図に結び付け、分割で図と同じ group にする（#3455）。
+    link_picture_ocr_records(candidates)
     records: dict[str, list[dict[str, Any]]] = {engine_id: [] for engine_id in selected_engine_ids}
     excluded_picture_groups: set[tuple[Any, ...]] = set()
     for raw_record in candidates:

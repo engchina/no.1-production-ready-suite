@@ -14,6 +14,7 @@ from rag_engine.chunking.records import (
     _record_text_for_chunk,
 )
 from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
+from rag_engine.parsing.picture_text import fold_picture_ocr_entries
 
 
 def _source_record_ref(record: dict[str, Any]) -> dict[str, Any]:
@@ -43,6 +44,7 @@ def _source_record_ref(record: dict[str, Any]) -> dict[str, Any]:
         "visual_artifact_type",
         "visual_kind",
         "picture_kind",
+        "picture_record_id",
     ):
         value = raw.get(key)
         if value:
@@ -83,11 +85,9 @@ def _image_evidence(
 ) -> list[dict[str, Any]]:
     images: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for ref in refs:
-        if str(ref.get("category") or "") != "Picture":
-            continue
-        if str(ref.get("raw_type") or "") == "picture_ocr_text":
-            continue
+    # 図の中の文字（OCR）の ref は持ち主の図にまとめる。図が同じ chunk に無い OCR も、その図の画像として
+    # 数える（#3455）。
+    for ref in fold_picture_ocr_entries([ref for ref in refs if str(ref.get("category") or "") == "Picture"]):
         if visual_role_from_ref(ref) in {DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE}:
             continue
         record_id = str(ref.get("record_id") or "").strip()
@@ -109,6 +109,7 @@ def _image_evidence(
                 "bbox": ref.get("bbox") if isinstance(ref.get("bbox"), list) else [],
                 "raw_type": str(ref.get("raw_type") or ""),
                 "text_preview": str(ref.get("text_preview") or ""),
+                **({"ocr_text": str(ref["ocr_text"])} if ref.get("ocr_text") else {}),
                 "asset_kind": "crop" if crop_path else "page_region",
                 "crop_path": crop_path,
                 "context_crop_path": context_crop_path,

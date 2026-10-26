@@ -94,9 +94,11 @@ def _visual_evidence_anchors(
             body = record.text.split("Child text:\n", 1)[-1].strip()
             if not body or len(body) > 4000:
                 continue
+            # 図の中の文字（OCR）の ref は持ち主の図の id（picture_record_id）でも照合する（#3455）。
             if any(
-                (record.source_run_id, record.source, parent.record.chunk_id, ref.get("record_id")) in selected
+                (record.source_run_id, record.source, parent.record.chunk_id, ref_id) in selected
                 for ref in record.source_record_refs
+                for ref_id in {ref.get("record_id"), ref.get("picture_record_id")} - {None, ""}
             ):
                 anchors.append(record)
     return anchors[:4]
@@ -121,9 +123,8 @@ def answer_image_evidence(
         metadata = record.metadata if isinstance(record.metadata, dict) else {}
         raw_images = _metadata_image_evidence(metadata)
         for raw in raw_images:
+            # 図の中の文字（OCR）の entry は _metadata_image_evidence が持ち主の図にまとめている（#3455）。
             if not isinstance(raw, dict):
-                continue
-            if str(raw.get("raw_type") or "") == "picture_ocr_text":
                 continue
             if visual_role_from_ref(raw) in {DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE}:
                 continue
