@@ -27,8 +27,9 @@ from rag_engine.knowledge.runtime_knowledge import (
     RUNTIME_KNOWLEDGE_FILE_NAME,
     build_runtime_knowledge_context,
     load_runtime_knowledge,
-    runtime_knowledge_status,
     runtime_retrieval_queries,
+    runtime_rules_status,
+    runtime_terms_status,
 )
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizationResult
 
@@ -124,19 +125,30 @@ class RuntimeKnowledgeTests(unittest.TestCase):
     def test_status_guides_to_the_profile_knowledge_screen(self):
         with TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
-            missing = runtime_knowledge_status(build_runtime_knowledge_context("概要は？", output_dir))
+            missing = build_runtime_knowledge_context("概要は？", output_dir)
             (output_dir / RUNTIME_KNOWLEDGE_FILE_NAME).write_text(
-                json.dumps({"schema_version": 1, "terms": [{"term": "古い用語", "status": "deprecated"}], "rules": []}),
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "terms": [{"term": "古い用語", "status": "deprecated"}],
+                        "rules": [{"id": "r1", "title": "下書き", "triggers": ["古い用語"], "content": "x", "status": "draft"}],
+                    }
+                ),
                 encoding="utf-8",
             )
-            inactive = runtime_knowledge_status(build_runtime_knowledge_context("古い用語は？", output_dir))
+            inactive = build_runtime_knowledge_context("古い用語は？", output_dir)
 
-        # 案内の行き先は、今の画面にある検索・回答プロファイルの「プロファイルの知識」（#3071）。
-        self.assertTrue(missing.startswith("未登録："))
-        self.assertTrue(inactive.startswith("有効な登録なし："))
-        for status in (missing, inactive):
-            self.assertIn("検索・回答プロファイルの「プロファイルの知識」", status)
-            self.assertNotIn("用語・ルール管理", status)
+        # 案内の行き先は、今の画面にある検索・回答プロファイルの「プロファイルの知識」の各タブ（#3071 / #3451）。
+        for status_of, tab in ((runtime_terms_status, "用語・同義語"), (runtime_rules_status, "回答ルール")):
+            with self.subTest(tab=tab):
+                self.assertTrue(status_of(missing).startswith("未登録："))
+                self.assertTrue(status_of(inactive).startswith("有効な登録なし："))
+                for status in (status_of(missing), status_of(inactive)):
+                    self.assertIn(f"検索・回答プロファイルの「プロファイルの知識」の「{tab}」", status)
+                    self.assertNotIn("用語・ルール管理", status)
+        self.assertEqual((inactive.registered_term_count, inactive.active_term_count), (1, 0))
+        self.assertEqual((inactive.registered_rule_count, inactive.active_rule_count), (1, 0))
+        self.assertEqual((inactive.registered_count, inactive.active_count), (2, 0))
 
     def test_settings_reads_runtime_knowledge_path(self):
         with patch.dict(os.environ, {"RUNTIME_KNOWLEDGE_PATH": "~/runtime-rules.json"}, clear=True), patch("rag_engine.config.load_dotenv"):
@@ -221,8 +233,12 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         self.assertIn("[Runtime Glossary / Rules]", prompt)
         self.assertIn("再発行条件", prompt)
         self.assertIn(QUESTION_DISPLAY_METADATA_SEPARATOR, result.question_display)
-        self.assertIn("結果: 一致: 用語 納品書、ルール 再発行条件", result.question_display)
-        self.assertIn("影響: 一致した用語の別名を補助の検索文に加え", result.question_display)
+        self.assertIn("用語・同義語の確認", result.question_display)
+        self.assertIn("結果: 一致: 納品書", result.question_display)
+        self.assertIn("影響: 一致した用語の別名を補助の検索文に加えます。", result.question_display)
+        self.assertIn("回答ルールの確認", result.question_display)
+        self.assertIn("結果: 一致: 再発行条件", result.question_display)
+        self.assertIn("影響: 一致した回答ルールを回答時の参考情報として渡します。", result.question_display)
         self.assertIn("[用語・ルール] ", result.question_display)
         self.assertNotIn(RUNTIME_KNOWLEDGE_SEPARATOR, result.question_display)
         self.assertNotIn("パス:", result.question_display)

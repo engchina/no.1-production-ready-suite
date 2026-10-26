@@ -133,8 +133,11 @@ class RuntimeKnowledgeContext:
     error: str = ""
     assume_unconfirmed: bool = False
     unconfirmed_conditions: tuple[dict[str, Any], ...] = ()
-    registered_count: int = 0
-    active_count: int = 0
+    # 登録の数（一致の上限を当てる前）。用語・同義語と回答ルールは別の工程で示すので種類ごとに持つ。
+    registered_term_count: int = 0
+    active_term_count: int = 0
+    registered_rule_count: int = 0
+    active_rule_count: int = 0
     expansion_decisions: tuple[dict[str, Any], ...] = ()
     # 利用者が確認の質問で選んだ条件と対象範囲(チャットの確認。#717)。
     scope_context: str = ""
@@ -161,6 +164,16 @@ class RuntimeKnowledgeContext:
             return self
         expanded = self.expanded_question + ("\n" + " ".join(terms) if terms else "")
         return replace(self, expanded_question=expanded, scope_context=context)
+
+    @property
+    def registered_count(self) -> int:
+        """用語・同義語と回答ルールの登録の合計。"""
+        return self.registered_term_count + self.registered_rule_count
+
+    @property
+    def active_count(self) -> int:
+        """用語・同義語と回答ルールの有効な登録の合計。"""
+        return self.active_term_count + self.active_rule_count
 
     @property
     def has_matches(self) -> bool:
@@ -339,31 +352,41 @@ def build_runtime_knowledge_context(
         matched_terms=tuple(matched_terms),
         matched_rules=tuple(matched_rules),
         loaded=knowledge.loaded,
-        registered_count=len(knowledge.terms) + len(knowledge.rules),
-        active_count=sum(item.active for item in (*knowledge.terms, *knowledge.rules)),
+        registered_term_count=len(knowledge.terms),
+        active_term_count=sum(term.active for term in knowledge.terms),
+        registered_rule_count=len(knowledge.rules),
+        active_rule_count=sum(rule.active for rule in knowledge.rules),
         assume_unconfirmed=knowledge.assume_unconfirmed,
         unconfirmed_conditions=knowledge.unconfirmed_conditions,
         expansion_decisions=tuple(decisions),
     )
 
 
-def runtime_knowledge_status(context: RuntimeKnowledgeContext) -> str:
-    """管理画面と実行記録で未登録・無効・一致なし・読込失敗を区別する。"""
+def runtime_terms_status(context: RuntimeKnowledgeContext) -> str:
+    """工程「用語・同義語の確認」の結果。未登録・無効・一致なし・読込失敗を区別する。"""
     if context.error:
         return f"読込エラー: {context.error}（補助情報なしで続行）"
-    parts = []
     if context.matched_terms:
-        parts.append("用語 " + " / ".join(term.term for term in context.matched_terms))
+        return "一致: " + " / ".join(term.term for term in context.matched_terms)
+    return _unmatched_status(context.loaded, context.registered_term_count, context.active_term_count, "用語・同義語")
+
+
+def runtime_rules_status(context: RuntimeKnowledgeContext) -> str:
+    """工程「回答ルールの確認」の結果。未登録・無効・一致なし・読込失敗を区別する。"""
+    if context.error:
+        return f"読込エラー: {context.error}（補助情報なしで続行）"
     if context.matched_rules:
-        parts.append("ルール " + " / ".join(rule.title or rule.rule_id for rule in context.matched_rules))
-    if parts:
-        return "一致: " + "、".join(parts)
+        return "一致: " + " / ".join(rule.title or rule.rule_id for rule in context.matched_rules)
+    return _unmatched_status(context.loaded, context.registered_rule_count, context.active_rule_count, "回答ルール")
+
+
+def _unmatched_status(loaded: bool, registered: int, active: int, tab: str) -> str:
     # 登録先は検索・回答プロファイルの「プロファイルの知識」のタブ（用語・同義語、回答ルール）。
-    if not context.loaded or not context.registered_count:
-        return "未登録：検索・回答プロファイルの「プロファイルの知識」で用語・同義語と回答ルールを登録できます"
-    if not context.active_count:
-        return "有効な登録なし：検索・回答プロファイルの「プロファイルの知識」で各登録の「回答で使う」を確認してください"
-    return "一致なし：登録済みの有効な用語・ルールに一致しませんでした"
+    if not loaded or not registered:
+        return f"未登録：検索・回答プロファイルの「プロファイルの知識」の「{tab}」で登録できます"
+    if not active:
+        return f"有効な登録なし：検索・回答プロファイルの「プロファイルの知識」の「{tab}」で各登録の「回答で使う」を確認してください"
+    return f"一致なし：登録済みの有効な{tab}に一致しませんでした"
 
 
 def format_runtime_knowledge_context(context: RuntimeKnowledgeContext) -> list[str]:

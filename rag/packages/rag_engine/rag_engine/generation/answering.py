@@ -211,7 +211,8 @@ from rag_engine.knowledge.prompt_files import (
 from rag_engine.knowledge.runtime_knowledge import (
     RuntimeKnowledgeContext,
     build_runtime_knowledge_context,
-    runtime_knowledge_status,
+    runtime_rules_status,
+    runtime_terms_status,
 )
 from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput, RerankTextRank
 from rag_engine.models.storage import AdbHybridSearchUnavailable
@@ -3982,6 +3983,18 @@ def _keep_trusted_queries(
     )
 
 
+def _record_runtime_knowledge_load(step: _ExecutionStep, runtime_knowledge: RuntimeKnowledgeContext) -> bool:
+    """用語・ルールの読み込みの失敗を工程に記録する。読めていれば True（工程の結果と詳細を続けて書く）。
+
+    詳細の行は例外の型の名前だけ（例外の文は path などを含みうる。#3284）。
+    """
+    if not runtime_knowledge.error:
+        return True
+    step.add(f"読込エラー: {runtime_knowledge.error}")
+    step.status = "補助情報なしで続行"
+    return False
+
+
 @_record_answer_execution
 def answer_question_result(
     question: str,
@@ -4066,32 +4079,43 @@ def answer_question_result(
         inquiry_conditions = question_plan.inquiry_conditions or parse_inquiry_conditions(normalized_question)
         _record_question_understanding(step, normalized_question, question_plan, inquiry_conditions)
 
-    with _execution_step("用語・ルールの確認", "登録済みの用語・ルールを質問に当て、別名の検索と回答の補助に使います。") as step:
+    # 検索・回答プロファイルの知識の「用語・同義語」と「回答ルール」は使い道が違うので、別の工程（別の span）で示す
+    # （#3451）。登録は 1 回だけ読み、最初の工程で読み込みと照合をして、次の工程は同じ結果の回答ルールを示す。
+    with _execution_step("用語・同義語の確認", "登録済みの用語・同義語を質問に当て、別名を検索に使います。") as step:
         runtime_knowledge = build_runtime_knowledge_context(
             normalized_question,
             settings.output_dir,
             settings.runtime_knowledge_path,
         )
-        if runtime_knowledge.error:
-            # 詳細の行は例外の型の名前だけ（例外の文は path などを含みうる。#3284）。
-            step.add(f"読込エラー: {runtime_knowledge.error}")
-            step.status = "補助情報なしで続行"
-            if runtime_knowledge.failure is not None:
-                report_degraded("runtime_knowledge", runtime_knowledge.failure)
-        else:
-            step.result(runtime_knowledge_status(runtime_knowledge))
-            # 登録の数と、一致した用語の別名・ルールを見出しと値で示す（#2341）。
+        if runtime_knowledge.error and runtime_knowledge.failure is not None:
+            report_degraded("runtime_knowledge", runtime_knowledge.failure)
+        if _record_runtime_knowledge_load(step, runtime_knowledge):
+            step.result(runtime_terms_status(runtime_knowledge))
             if runtime_knowledge.loaded:
-                step.field("有効な登録", f"{runtime_knowledge.active_count} 件（登録 {runtime_knowledge.registered_count} 件）")
+                step.field(
+                    "有効な登録",
+                    f"{runtime_knowledge.active_term_count} 件（登録 {runtime_knowledge.registered_term_count} 件）",
+                )
             step.field(
                 "一致した用語",
                 join_values(
                     term.term + (f"（別名: {'・'.join(term.aliases)}）" if term.aliases else "") for term in runtime_knowledge.matched_terms
                 ),
             )
-            step.field("一致したルール", join_values(rule.title or rule.rule_id for rule in runtime_knowledge.matched_rules))
-            if runtime_knowledge.has_matches:
-                step.impact("一致した用語の別名を補助の検索文に加え、一致したルールを回答時の参考情報として渡します。")
+            if runtime_knowledge.matched_terms:
+                step.impact("一致した用語の別名を補助の検索文に加えます。")
+
+    with _execution_step("回答ルールの確認", "登録済みの回答ルールを質問に当て、回答の参考にします。") as step:
+        if _record_runtime_knowledge_load(step, runtime_knowledge):
+            step.result(runtime_rules_status(runtime_knowledge))
+            if runtime_knowledge.loaded:
+                step.field(
+                    "有効な登録",
+                    f"{runtime_knowledge.active_rule_count} 件（登録 {runtime_knowledge.registered_rule_count} 件）",
+                )
+            step.field("一致した回答ルール", join_values(rule.title or rule.rule_id for rule in runtime_knowledge.matched_rules))
+            if runtime_knowledge.matched_rules:
+                step.impact("一致した回答ルールを回答時の参考情報として渡します。")
         if scope is not None:
             runtime_knowledge = runtime_knowledge.with_scope(*scope)
             step.add(f"確認で選んだ条件: {runtime_knowledge.scope_context}")
