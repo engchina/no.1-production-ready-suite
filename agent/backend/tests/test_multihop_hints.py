@@ -51,7 +51,6 @@ from app.features.agent.support_task import (
     MAX_RECORD_CODES,
     MAX_REFERENCES,
     MAX_SECTION_READS,
-    RAG_TOP_K_DEFAULT,
     RECORD_CODE_HINT,
     REFERENCE_READ_HINT,
     REPEATED_QUERY_HINT,
@@ -362,7 +361,7 @@ def _contract_schema(tool_name: str) -> dict[str, Any]:
 def test_search_limits_follow_the_rag_contract(
     arguments: dict[str, Any], expected: dict[str, Any]
 ) -> None:
-    # 既定と上限は RAG の契約から取る（top_k は契約の default が null なので 50。#1403・#3512）。
+    # 既定と上限は RAG の契約から取る（#1403・#3240）。
     schema = _contract_schema("rag_retrieve_evidence")
     assert adjusted_search_limits(arguments, schema) == expected
 
@@ -375,16 +374,18 @@ def test_rag_search_evidence_limit_default_stays_at_the_contract_value() -> None
     }
 
 
-def test_contract_top_k_default_matches_rag_top_k_default() -> None:
-    # 契約の top_k の default は null で、RAG は省略時に 50 を使う（evidence_limit の説明にある）。
-    # RAG がこの既定を変えたら RAG_TOP_K_DEFAULT も合わせる（#3512）。
+def test_search_limits_use_the_top_k_default_of_the_contract() -> None:
+    """件数の既定は契約の `default` から取り、RAG の内部の既定を写さない（#3240）。契約の既定が
+    変われば、引き上げる値もそれに従う。"""
     schema = _contract_schema("rag_retrieve_evidence")
-    assert schema["properties"]["top_k"]["default"] is None
-    assert RAG_TOP_K_DEFAULT == 50
-    assert (
-        f"top_k。省略時 {RAG_TOP_K_DEFAULT}"
-        in schema["properties"]["evidence_limit"]["description"]
-    )
+    default = schema["properties"]["top_k"]["default"]
+    assert isinstance(default, int) and default > 5
+    assert adjusted_search_limits({"top_k": 5}, schema) == {
+        "top_k": {"requested": 5, "sent": default}
+    }
+    changed = json.loads(json.dumps(schema))
+    changed["properties"]["top_k"]["default"] = 30
+    assert adjusted_search_limits({"top_k": 5}, changed) == {"top_k": {"requested": 5, "sent": 30}}
 
 
 def test_search_limit_schema_tells_the_model_to_omit_the_limits() -> None:

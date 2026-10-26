@@ -82,7 +82,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 36,
+            "default": 37,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -692,7 +692,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 36,
+            "default": 37,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -862,7 +862,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 36,
+            "default": 37,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1274,7 +1274,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 36,
+            "default": 37,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1743,7 +1743,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 36,
+            "default": 37,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2045,6 +2045,7 @@
               },
               "path": {
                 "description": "url の path（RAG の公開の起点に付け替えるときに使う）。",
+                "pattern": "^/api/figures/",
                 "title": "Path",
                 "type": "string"
               },
@@ -2350,6 +2351,7 @@
               "page_path_template": {
                 "anyOf": [
                   {
+                    "pattern": "^/api/source-previews/",
                     "type": "string"
                   },
                   {
@@ -2367,6 +2369,7 @@
               },
               "content_path": {
                 "description": "content_url の path。",
+                "pattern": "^/api/source-previews/",
                 "title": "Content Path",
                 "type": "string"
               },
@@ -2527,7 +2530,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 36,
+            "default": 37,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2776,7 +2779,7 @@
       "outputSchema": {
         "properties": {
           "schema_version": {
-            "default": 36,
+            "default": 37,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2910,7 +2913,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 36,
+            "default": 37,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3007,7 +3010,7 @@
                 "type": "null"
               }
             ],
-            "default": null,
+            "default": 50,
             "description": "検索する件数。",
             "title": "Top K"
           },
@@ -4247,7 +4250,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 36,
+            "default": 37,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4427,7 +4430,7 @@
                 "type": "null"
               }
             ],
-            "default": null,
+            "default": 50,
             "description": "検索する件数。",
             "title": "Top K"
           },
@@ -5774,7 +5777,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 36,
+            "default": 37,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -6292,12 +6295,43 @@
             "title": "EvidenceRefInput",
             "type": "object"
           },
+          "ExcerptRange": {
+            "description": "本文の中の範囲（文字の位置。[start, end)）。",
+            "properties": {
+              "start": {
+                "title": "Start",
+                "type": "integer"
+              },
+              "end": {
+                "title": "End",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "title": "ExcerptRange",
+            "type": "object"
+          },
           "ValidatedClaim": {
             "properties": {
               "answer_quote": {
                 "description": "回答の段落（原文）。",
                 "title": "Answer Quote",
                 "type": "string"
+              },
+              "answer_range": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ExcerptRange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "渡した answer の中の段落の位置（文字の位置。answer の [start, end) が answer_quote）。段落の分け方は呼び出し側に写さず、この位置で回答の段落を特定する。位置を決められない段落は null。"
               },
               "status": {
                 "description": "supported=根拠で裏付けられる / unsupported=根拠で確かめられない / contradicted=根拠と矛盾 / data_confirmation=実データの確認を促すだけ / citation_error=出典を照合できない / unassessed=監査されなかった / figure_only=図の見た目（配置・矢印・つながり・所属）だけで決まり、図の本文では確かめられない（chunk_id はその図。図の画像を読んで確かめたかは呼び出し側が決める）",
@@ -6513,7 +6547,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 36,
+            "default": 37,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -6622,6 +6656,80 @@
         "title": "ValidateAnswerOutput",
         "type": "object"
       }
+    }
+  ],
+  "errors": [
+    {
+      "code": "MCP_TOOL_ARGUMENTS_INVALID",
+      "description": "引数が inputSchema に合わない（details.errors に項目ごとの誤り）。"
+    },
+    {
+      "code": "MCP_TOOL_FORBIDDEN",
+      "description": "呼び出した利用者にツールの権限が無い。"
+    },
+    {
+      "code": "MCP_TOOL_INTERNAL_ERROR",
+      "description": "ツールの処理が想定外の理由で失敗した（理由は返さない）。"
+    },
+    {
+      "code": "PROFILE_SCOPE_FORBIDDEN",
+      "description": "検索・回答プロファイル・ナレッジベース・文書が、呼び出し元のデータの範囲の外にある。"
+    },
+    {
+      "code": "RAG_ANSWER_AI_API_FAILED",
+      "description": "回答の生成の AI の呼び出しが失敗した。"
+    },
+    {
+      "code": "cursor_invalid",
+      "description": "続きの位置（next_cursor）の形が違う（message に直し方）。"
+    },
+    {
+      "code": "image_not_available",
+      "description": "根拠に図の画像が無い（図の根拠でない・領域が分からない）。"
+    },
+    {
+      "code": "image_source_missing",
+      "description": "図の元のファイルが保存先に無い。"
+    },
+    {
+      "code": "image_too_large",
+      "description": "図の画像が 1 回の応答の上限を超える。"
+    },
+    {
+      "code": "image_url_not_allowed",
+      "description": "図を開く URL をこの呼び出しでは作れない（画面の操作だけ）。"
+    },
+    {
+      "code": "image_url_unavailable",
+      "description": "図を開く URL を今は作れない（一時的）。"
+    },
+    {
+      "code": "preview_file_missing",
+      "description": "原文のプレビューのファイルが保存先に無い。"
+    },
+    {
+      "code": "preview_not_allowed",
+      "description": "原文のプレビューをこの呼び出しでは作れない（画面の操作だけ）。"
+    },
+    {
+      "code": "preview_unavailable",
+      "description": "原文のプレビューを今は作れない（一時的）。"
+    },
+    {
+      "code": "search_answer_profile_not_found",
+      "description": "検索・回答プロファイルが無いか使えない（message に使える候補と次の手）。"
+    },
+    {
+      "code": "section_not_found",
+      "description": "章節が無いか、本文が無い。"
+    },
+    {
+      "code": "source_not_found",
+      "description": "根拠・文書・頁・処理レシピが見つからない（定位子の形の誤りを含む）。"
+    },
+    {
+      "code": "source_stale",
+      "description": "文書の版（chunk_set）が作り直され、根拠の id・定位子・続きの位置が古い。"
     }
   ]
 }

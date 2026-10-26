@@ -240,6 +240,7 @@ def test_mcp_validate_answer(auth: Any, monkeypatch: MonkeyPatch) -> None:  # no
             claim_checks=[
                 {
                     "answer_quote": "30 日です。",
+                    "answer_passage_id": "A1",
                     "status": "supported",
                     "source_id": "c1",
                     "reason": "記載",
@@ -318,6 +319,15 @@ def test_mcp_validate_answer(auth: Any, monkeypatch: MonkeyPatch) -> None:  # no
         "contradicted",
         "audit_id_invalid",
     )
+    # 回答の中の段落の位置（#3240）: 段落の ID の位置、ID が無ければ回答に 1 回だけ現れる位置。
+    # 回答に無い原文の段落は null。
+    assert [claim["answer_range"] for claim in body["claims"]] == [
+        {"start": 0, "end": 7},
+        {"start": 7, "end": 16},
+        None,
+        None,
+        None,
+    ]
     chatter = auth.user_with_permissions("chatter", ["menu.chat"])
     denied = _call(
         "rag_validate_answer",
