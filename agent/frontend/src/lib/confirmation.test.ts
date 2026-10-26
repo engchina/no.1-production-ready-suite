@@ -145,8 +145,29 @@ describe("記録の表示", () => {
     expect(responseRecord(response)).toEqual({
       key: "confirmation_9",
       outcome: "answered",
-      entries: [{ id: "role", prompt: "どの立場ですか？", selected: ["管理者"], otherText: undefined }],
+      entries: [{ id: "role", prompt: "どの立場ですか？", selected: ["管理者"], otherText: undefined, freeTextOnly: false }],
     });
     expect(responseRecord(run())).toBeNull();
+  });
+
+  it("ツールの結果の確認の記録は、選択肢の無い確認事項の答えを自由入力だけの答えとして渡す", () => {
+    const response = run({
+      metadata: {
+        clarification_response: {
+          confirmation_id: "confirmation_9",
+          source: "nl2sql",
+          action: "answer",
+          entries: [
+            { item_id: "name", prompt: "対象の名前は？", selected: [], other_text: "名前 A", free_text_only: true },
+            { item_id: "role", prompt: "どの立場ですか？", selected: [], other_text: "立場 B", free_text_only: false },
+          ],
+        },
+      },
+    });
+    expect(responseRecord(response)?.entries).toEqual([
+      { id: "name", prompt: "対象の名前は？", selected: [], otherText: "名前 A", freeTextOnly: true },
+      // 選択肢のある確認事項の自由入力は「その他: 」を付けたまま（共通の ClarificationRecord）。
+      { id: "role", prompt: "どの立場ですか？", selected: [], otherText: "立場 B", freeTextOnly: false },
+    ]);
   });
 });

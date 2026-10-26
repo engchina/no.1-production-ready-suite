@@ -302,6 +302,31 @@ test.describe("回答前の確認のカード", { tag: "@responsive" }, () => {
     await expectNoHorizontalOverflow(page);
   });
 
+  test("選択肢の無いツールの結果の確認に答えた記録は、答えに「その他: 」を付けない", async ({ page, mockApi }, testInfo) => {
+    const freeText = {
+      ...NL2SQL_CONFIRMATION,
+      id: "confirmation_nl2sql_free",
+      items: [{ id: "item-name", prompt: "対象の名前を教えてください。", reason: "", selection: "single", options: [] }],
+    };
+    seedRun(mockApi, "run-sql-free", {
+      artifacts: answer("run-sql-free", "SQL を作る前に確認します。"),
+      confirmations: [freeText],
+    });
+    await openSeedThread(page);
+    const card = page.getByTestId("chat-turn-run-sql-free").getByTestId("chat-confirmation");
+    await card.getByRole("textbox", { name: "答え", exact: true }).fill("名前 A");
+    await card.getByRole("button", { name: "この内容で回答" }).click();
+    await expect
+      .poll(() => mockApi.lastRequest("POST", "/api/runs/run-sql-free/confirmations/confirmation_nl2sql_free")?.body)
+      .toEqual({ action: "answer", answers: [{ item_id: "item-name", option_ids: [], other_text: "名前 A" }] });
+    const record = page.getByTestId("chat-turn-run-chat-2").getByTestId("chat-confirmation-record-run-chat-2");
+    await expect(record.getByText("対象の名前を教えてください。")).toBeVisible();
+    await expect(record.getByText("名前 A", { exact: true })).toBeVisible();
+    await expect(record).not.toContainText("その他");
+    await expectNoHorizontalOverflow(page);
+    await record.screenshot({ path: testInfo.outputPath("tool-free-text-record.png") });
+  });
+
   test("NL2SQL の確認も「確認せずに回答」で次の回答を作り、確認せずに回答したことを残す", async ({ page, mockApi }) => {
     seedRun(mockApi, "run-sql-1", {
       artifacts: answer("run-sql-1", "SQL を作る前に確認します。"),

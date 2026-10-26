@@ -591,6 +591,7 @@ function MessageTurn({
             prompt: entry.prompt,
             selected: entry.selected ?? [],
             otherText: entry.other_text ?? "",
+            freeTextOnly: entry.free_text_only === true,
           }))}
           testId="chat-clarification-record"
         />
