@@ -1327,7 +1327,6 @@ const agentJa = {
   "run.waitingApproval": "承認待ち",
   "run.progress.queued": "実行の開始を待っています",
   "run.progress.running": "実行しています",
-  "run.progress.runningStep": "実行しています（{step}）",
   "run.progress.waitingApproval": "承認を待っています",
   "run.progress.waitingConfirmation": "回答前の確認の答えを待っています",
   "run.createdToast": "実行を作成しました",

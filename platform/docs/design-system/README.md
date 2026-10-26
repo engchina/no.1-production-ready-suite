@@ -377,7 +377,7 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 
 旧実装（トラック 25%）のトラック / 地はライト 1.39〜1.41:1、ダーク 1.59〜1.62:1。
 
-**動くスピナーは同じ処理に 1 つだけ（UX 契約 messaging §3.7）。** 起点の `Button` が `loading` を出している間、同じ処理の `ProcessingIndicator` / `TimedLoadingState` は `activityIcon="none"`（ラベル・経過時間・時間がかかる案内だけ）にする。`ProcessingIndicator` がボタンの状態を自動で読み取る仕組みは持たない（同じ処理かどうかは画面にしか分からないため、呼び出し側が `activityIcon` で指定する）。
+**動くスピナーは同じ処理に 1 つだけ（UX 契約 messaging §3.7）。** 起点の `Button` が `loading` を出している間、同じ処理の `ProcessingIndicator` / `TimedLoadingState` は `activityIcon="none"`（ラベル・経過時間・時間がかかる案内だけ）にする。`ProcessingIndicator` がボタンの状態を自動で読み取る仕組みは持たない（同じ処理かどうかは画面にしか分からないため、呼び出し側が `activityIcon` で指定する）。同じ処理のスピナーを別の場所の行が回している間は `activityIcon="static"`（回さない実行中の印 `CirclePlay`。印の場所を空けないので文言の位置が動かない）にする。実行の詳細の概要の進行表示（`RunJobProgress`）は、開いた処理の経過が今の段を回している間、`RunDetailLayout` の調停で自動的に `static` になる（#3445）。
 
 ### タッチ端末の当たり判定（新設）— ★ 見た目は変えず 44px（#364）
 

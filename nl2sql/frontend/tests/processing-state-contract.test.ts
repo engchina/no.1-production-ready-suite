@@ -20,7 +20,8 @@ test("shared processing state exposes the common hook and loading components", (
   assert.match(processingSource, /export function ProcessingIndicator/u);
   assert.match(processingSource, /export function TimedLoadingState/u);
   assert.match(processingSource, /export type ProcessingPlacement/u);
-  assert.match(processingSource, /export type ProcessingActivityIcon = "spinner" \| "none"/u);
+  // "static" は回さない実行中の印（同じ処理のスピナーを別の場所が回している間。#3445）。
+  assert.match(processingSource, /export type ProcessingActivityIcon = "spinner" \| "static" \| "none"/u);
   assert.match(processingSource, /DEFAULT_SLOW_AFTER_MS = 10_000/u);
 });
 
@@ -52,7 +53,8 @@ test("processing activity icon defaults protect result areas from duplicate spin
   assert.match(processingSource, /const effectiveActivityIcon = activityIcon \?\? \(placement === "result" \? "none" : "spinner"\)/u);
   assert.match(processingSource, /const showActivityIcon = activityIcon === "spinner"/u);
   assert.match(processingSource, /timing\.active && showActivityIcon/u);
-  assert.match(processingSource, /!timing\.active && showActivityIcon/u);
+  assert.match(processingSource, /timing\.active && activityIcon === "static"/u);
+  assert.match(processingSource, /!timing\.active && activityIcon !== "none"/u);
   assert.match(processingSource, /activityIcon=\{effectiveActivityIcon\}/u);
   assert.doesNotMatch(stateViewsSource, /activityIcon = "spinner"/u);
   assert.match(stateViewsSource, /placement = "panel",\s*activityIcon,/u);
