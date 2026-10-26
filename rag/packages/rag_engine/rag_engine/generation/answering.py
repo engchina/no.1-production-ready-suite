@@ -267,7 +267,15 @@ from rag_engine.retrieval.scope import (
     normalize_retrieval_scope,
 )
 from rag_engine.retrieval.search_stages import ORIGINAL_QUESTION_SEARCH_STAGE
-from rag_engine.retrieval.task_contract import filter_queries, goal_retrieval_queries, query_rejection_reason, task_contract
+from rag_engine.retrieval.task_contract import (
+    COUNT_REQUEST,
+    LIST_REQUEST,
+    explicit_requests,
+    filter_queries,
+    goal_retrieval_queries,
+    query_rejection_reason,
+    task_contract,
+)
 from rag_engine.retrieval.text_search_tokenizer import (
     MAX_TEXT_SEARCH_TOKENS,
     TEXT_SEARCH_TOKENIZER_HYBRID,
@@ -828,7 +836,7 @@ def build_adb_hybrid_answer_context(
 ) -> AnswerContext:
     """ADB hybrid search で回答用 context を構築する。
 
-    trusted_queries は retrieval_queries のうち呼び出し元が作った検索文（#2651）。質問の目的の照合
+    trusted_queries は retrieval_queries のうち呼び出し元が作った検索文（#2651）。原質問との照合
     （LLM の言い換えの逸脱を外す）で外さない。
 
     page_ranges は検索を絞る文書の頁の範囲（{document_id, page_start, page_end} の列。業務ガイドの手順の参照。
@@ -1334,7 +1342,7 @@ def _crag_grade_skip_check(question: str, context: AnswerContext, settings: Sett
     if contract["error_messages"] or _error_question().search(unicodedata.normalize("NFKC", question)):
         return {"skip": False, "reason": "エラー文を問う質問"}
     # 列挙・網羅・件数の質問は、取得した根拠で網羅できたかを語の一致では確かめられない (#1503)。
-    if contract.get("goal") in {"count", "recipient_list"} or contract.get("enumeration") or _ENUMERATION_QUESTION.search(question):
+    if explicit_requests(question) & {COUNT_REQUEST, LIST_REQUEST} or contract.get("enumeration") or _ENUMERATION_QUESTION.search(question):
         return {"skip": False, "reason": "列挙・網羅・件数を問う質問"}
     if exclusion := _crag_exclusion_needed(context):
         return {"skip": False, "reason": exclusion}
@@ -1667,7 +1675,8 @@ def _grounded_spans(
     records = [
         with_child_contexts(r, [c.record for p in context.evidence_tree if p.record is r for c in p.children]) for r in context.records
     ]
-    labels = definition_labels(question) if task_contract(question)["goal"] == "rule" else []
+    # 意味を尋ねる項目が質問にあれば、その定義の行を根拠の anchor にする（質問の目的の分類は使わない。#3498）。
+    labels = definition_labels(question)
     children = [child.record for parent in context.evidence_tree for child in parent.children]
     anchors = [
         c
@@ -3457,9 +3466,6 @@ def _add_text_search_details(step: _ExecutionStep, info: QuestionTextSearchInfo)
     return True
 
 
-_GOAL_LABELS = {"procedure": "操作方法", "rule": "規則・定義・可否", "count": "件数", "recipient_list": "対象者・明細の一覧"}
-
-
 _SEARCH_PURPOSE = "意味の近さ（ベクトル）と語の一致（全文）で探した順位を融合し、上位の根拠とその前後の文脈を集めます。"
 
 
@@ -3467,7 +3473,8 @@ def _record_question_understanding(step: _ExecutionStep, question: str, plan: Qu
     """質問から読み取った内容のうち、検索や回答を実際に変えるものだけを示す。"""
     contract = task_contract(question)
     units = [unit for unit in contract["request_units"] if unit.get("text") and unit.get("kind") != "context"]
-    results = [f"質問の目的は「{_GOAL_LABELS.get(contract['goal'], contract['goal'])}」"]
+    # 質問を 1 つの目的に分類した結果は示さない（語の一致の推定を確定した事実のように見せない。#3498）。
+    results: list[str] = []
     if len(units) > 1:
         results.append(f"答える要求は {len(units)} 件")
         results.extend(f"{number}) {unit['text']}" for number, unit in enumerate(units, 1))
@@ -3977,7 +3984,7 @@ def _keep_trusted_queries(
     rejected: Sequence[dict[str, str]],
     trusted: Sequence[str],
 ) -> tuple[tuple[str, ...], tuple[dict[str, str], ...]]:
-    """質問の目的の照合で外した検索文のうち、呼び出し元が作ったものを候補の順のまま戻す（#2651）。
+    """原質問との照合で外した検索文のうち、呼び出し元が作ったものを候補の順のまま戻す（#2651）。
 
     照合は RAG の LLM が作った言い換えの逸脱を外すためのもので、呼び出し元が明示した検索文には当てない。
     """
@@ -4221,7 +4228,7 @@ def answer_question_result(
             if added_queries := [*expansion.generated_queries, *expansion.provision_queries]:
                 step.add("言い換えた検索文:", *numbered([_display_query(query) for query in added_queries], limit=8))
             if expansion.rejected_queries:
-                step.field("使わなかった検索文", f"{len(expansion.rejected_queries)} 本（質問の目的から外れる）")
+                step.field("使わなかった検索文", f"{len(expansion.rejected_queries)} 本（原質問から外れる）")
             if query_strategy_id(query_strategy_value) != SIMPLE_RETRIEVAL_STRATEGY and (
                 note := llm_reasoning_effort_note(settings, LLM_PURPOSE_STRATEGY, answer_llm_provider)
             ):
@@ -4271,11 +4278,11 @@ def answer_question_result(
             sources.setdefault(_dedupe_query_key(query), "語彙の補助")
         if term_query:
             sources.setdefault(_dedupe_query_key(term_query), "用語・同義語だけ")
-        # 規定の書き方の検索文は質問拡張の LLM が作り、質問の目的の検索文は経緯と目的が混ざった質問から目的を取り出す。
+        # 規定の書き方の検索文は質問拡張の LLM が作り、希望する結果の検索文は経緯と希望が混ざった質問から希望の部分を取り出す。
         for query in expansion.provision_queries:
             sources.setdefault(_dedupe_query_key(query), "質問拡張")
         for query in goal_retrieval_queries(expansion.original_question):
-            sources.setdefault(_dedupe_query_key(query), "質問の目的")
+            sources.setdefault(_dedupe_query_key(query), "希望する結果")
         step.result(
             f"検索文 {len(retrieval_queries)} 本",
             *(
@@ -4284,7 +4291,7 @@ def answer_question_result(
             ),
         )
         if rejected:
-            step.add(f"      質問の目的から外れるため使わない検索文: {len(rejected)} 本")
+            step.add(f"      原質問から外れるため使わない検索文: {len(rejected)} 本")
         if note := _text_search_limit_note(_text_search_variants(retrieval_queries, expansion), settings):
             step.add(note)
         if text_search_info.target_text_queries:
@@ -4932,7 +4939,7 @@ def _retrieve_without_answer(
     """回答の生成をせずに文書検索だけを行う（``answer_question_result(generate_answer=False)``）。
 
     CRAG（検索結果の評価と補正検索）は回答のための工程なので使わない。検索できないときは理由を本文に入れて返す。
-    ``trusted_queries`` は呼び出し元が作った検索文（#2651。質問の目的の照合で外さない）。
+    ``trusted_queries`` は呼び出し元が作った検索文（#2651。原質問との照合で外さない）。
     ``search_notice`` は文書検索の工程に示す注記（検索対象外の旧 schema の文書など）。
     """
     records: Sequence[AnswerRecord] = ()

@@ -16,7 +16,15 @@ from rag_engine.parsing.content_labels import content_labels
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, definition_windows
 from rag_engine.retrieval.evidence_cues import evidence_cues
-from rag_engine.retrieval.task_contract import current_request_text, goal_retrieval_queries, task_contract
+from rag_engine.retrieval.task_contract import (
+    COUNT_REQUEST,
+    LIST_REQUEST,
+    STEPS_REQUEST,
+    current_request_text,
+    explicit_requests,
+    goal_retrieval_queries,
+    task_contract,
+)
 
 
 def _record_page_end(record: Any) -> int:
@@ -58,14 +66,15 @@ def evidence_relevance(question: str, text: str) -> float:
     # 一致する操作説明を画面のサンプル値より優先する。無関係な操作には加点しない。
     if matches:
         score *= 1 + 0.18 * min(3, len(re.findall(operation_text, text)))
-    if task_contract(question)["goal"] == "procedure" and matches:
+    requests = explicit_requests(question)
+    if STEPS_REQUEST in requests and matches:
         if re.search(rf"(?m)^\s*[{cues.chars('heading_bullet_chars')}]", text):
             score += 80
         if content_labels().index_line.match(text):
             score *= 0.2
     if re.search(alt["default_question_cues"], question, re.I):
         score += 10 * len(set(re.findall(alt["default_text_cues"], text)))
-    if task_contract(question)["goal"] == "recipient_list":
+    if requests & {LIST_REQUEST, COUNT_REQUEST} == {LIST_REQUEST}:
         # 表名一致だけでは集計値の説明が名簿の操作を押し出す。原質問の出力対象で
         # 補正し、検索用ラベルの反復より一覧の選択・抽出・実行を残す。
         list_terms = set(re.findall(alt["list_text_cues"], normalized))
@@ -117,7 +126,8 @@ def evidence_excerpt(
     # 長い表全体は必須にせず、実際の操作を含む原文行を保護する。
     steps = []
     step_number = rf"\s*(?:[0-9０-９]+\s*[{cues.chars('step_number_closers')}]|{range_class(cues.words['step_circled_numbers'])})"
-    if task_contract(question)["goal"] in {"procedure", "recipient_list"}:
+    requests = explicit_requests(question)
+    if STEPS_REQUEST in requests or requests & {LIST_REQUEST, COUNT_REQUEST} == {LIST_REQUEST}:
         for match in re.finditer(r"(?m)^[^\n]+", text):
             numbered = re.match(step_number, match.group())
             conditional = cues.has("step_condition_cues", match.group())
@@ -125,7 +135,7 @@ def evidence_excerpt(
                 steps.append(match.span())
     # 短い節名の直後に箇条書きの条件が続く場合、節名と条件を同じ窓にする。
     # 片方の処理区分名だけが落ちると、同ページの別モードへ条件を誤配属する。
-    if task_contract(question)["goal"] == "procedure":
+    if STEPS_REQUEST in requests:
         lines = list(re.finditer(r"(?m)^[^\n]*(?:\n|$)", text))
         for index, line in enumerate(lines[:-1]):
             heading = line.group().strip()

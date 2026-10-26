@@ -608,16 +608,15 @@ def function_key(span: dict) -> tuple[str, ...]:
 
 def tag_spans(question: str, spans: Sequence[dict]) -> list[dict]:
     """入力を変更せず、タグ・機能キー・必須根拠を付けた写しを返す。"""
-    goal = task_contract(question)["goal"]
-    wanted = "definition" if goal == "rule" else "operation_entry"
+    # 必須根拠は根拠の種類で決める。定義の行（質問が意味を尋ねた項目）と操作の入口（質問が名指しした操作の見出し）は、
+    # どちらもタグの時点で質問との一致を確かめている。質問の目的の分類では選ばない（#3498）。
+    wanted = {"definition", "operation_entry"}
     tagged, pinned = [], 0
     for span in spans:
         tags = set().union(*(tagger(question, span) for tagger in SPAN_TAGGERS))
         # 図の OCR 集約（項目名が 1 行ずつ並ぶ断片）は質問の語を含んでも必須根拠にしない。原文として補うと
         # 判読できない 600 文字が「資料の記載」に出る (#723)。検索・生成の根拠としては残す。
-        is_pinned = bool(
-            wanted and wanted in tags and "image_generated" not in tags and pinned < MAX_PINNED and not _label_list_like(span["text"])
-        )
+        is_pinned = bool(wanted & tags and "image_generated" not in tags and pinned < MAX_PINNED and not _label_list_like(span["text"]))
         pinned += is_pinned
         tagged.append({**span, "tags": sorted(tags), "function": function_key(span), "pinned": is_pinned, "label": f"E{len(tagged) + 1}"})
     _unify_prefixed_function_labels(tagged)
