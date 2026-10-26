@@ -57,9 +57,9 @@ def test_lists_mcp_connection_tools_with_the_default_decision(
     data = response.json()["data"]
     tools = _tools(data)
     # Control Plane のツール。
-    assert tools["agent_skill_list"]["server_id"] == "control-plane"
-    assert tools["agent_skill_list"]["default_decision"] == "allow"
-    assert tools["agent_skill_list"]["default_reason"] == "read_only"
+    assert tools["echo"]["server_id"] == "control-plane"
+    assert tools["echo"]["default_decision"] == "allow"
+    assert tools["echo"]["default_reason"] == "read_only"
     # NL2SQL の標準の接続: nl2sql_query は readOnlyHint=false でも既定で自動実行（#1832）。
     query = tools["nl2sql__nl2sql_query"]
     assert (query["server_id"], query["default_decision"], query["available"]) == (

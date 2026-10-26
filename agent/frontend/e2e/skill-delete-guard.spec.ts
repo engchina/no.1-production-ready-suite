@@ -36,8 +36,6 @@ test("業務 Agent が使うスキルの削除は理由を出して断り、ス�
     instructions: "",
     skill_ids: ["skill_926"],
     model_id: "",
-    migration_required: false,
-    tool_names: [],
     enabled: true,
     source: "runtime",
     versioned: true,

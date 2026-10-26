@@ -2,6 +2,11 @@
 
 Control Plane のツール（`tool_registry`）と、MCP 接続のツール（RAG / NL2SQL / 外部 MCP。#757）を
 同じポリシー・ガードレール・監査で呼ぶ。業務 RAG / NL2SQL はこのプロジェクト内で実装しない。
+
+依存は「業務 Agent → スキル → ツール」の一方向（#3240）。この module（とここから import する
+module）はスキルの定義・ID・一覧を import・参照しない。どのツールを Run に渡すかはスキルの側
+（`builtin_runtime.agent_mcp_requirements` / `agent_tool_names`）が決める
+（`tests/test_skill_tool_boundary.py`）。
 """
 
 from __future__ import annotations
@@ -48,10 +53,6 @@ from app.features.agent.config import (
 )
 from app.features.agent.mcp_url import mask_url_credentials, mask_urls_in_text
 from app.features.agent.profile_name_migration import migrate_rag_call
-from app.features.agent.skills import (
-    AgentSkillListOutput,
-    skill_registry,
-)
 from app.features.agent.tool_arguments import (
     INVALID_ARGUMENTS_CODE,
     INVALID_ARGUMENTS_MESSAGE,
@@ -1221,20 +1222,8 @@ def _oauth_http_error_message(status_code: int) -> str:
     return f"{prefix}。"
 
 
-def _schema(model: type[BaseModel]) -> JsonObject:
-    return model.model_json_schema()
-
-
 def _echo_tool(arguments: JsonObject, _context: ToolInvocationContext) -> JsonObject:
     return {"echo": arguments}
-
-
-def _agent_skill_list(_arguments: JsonObject, _context: ToolInvocationContext) -> JsonObject:
-    skills = skill_registry.list()
-    return AgentSkillListOutput(
-        skills=skills,
-        metadata={"count": len(skills)},
-    ).model_dump()
 
 
 _SENSITIVE_KEY_PATTERN = re.compile(
@@ -1874,20 +1863,23 @@ def _job_wait_budget_seconds() -> float:
     return max(0.0, float(get_settings().agent_nl2sql_job_wait_seconds))
 
 
+# Run がキャンセル・終了したかの判定（ジョブの完了を待つのをやめる）。Run の保存先を持つ上の層
+# （`runtime`）が import のときに差し込む（ツールの層は Run・スキルの module を import しない。
+# #3240。`tests/test_skill_tool_boundary.py`）。差し込まれていなければ終わっていない扱い。
+_run_finished_check: Callable[[str], bool] | None = None
+
+
+def set_run_finished_check(check: Callable[[str], bool] | None) -> None:
+    """Run が終わったかの判定を差し込む（`runtime` が呼ぶ）。"""
+    global _run_finished_check
+    _run_finished_check = check
+
+
 def _run_is_finished(run_id: str | None) -> bool:
     """Run がキャンセル・終了していれば True（ジョブの完了を待つのをやめる）。"""
-    if not run_id:
+    if not run_id or _run_finished_check is None:
         return False
-    from app.features.agent.runtime import RunStatus, runtime_repository
-
-    try:
-        status = runtime_repository.get_run(run_id).status
-    except KeyError:
-        return True
-    except Exception:  # noqa: BLE001 - 保存先の一時的な失敗では待ちを止めない
-        logger.warning("mcp_job_wait_run_status_failed", extra={"run_id": run_id}, exc_info=True)
-        return False
-    return status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
+    return _run_finished_check(run_id)
 
 
 def _job_in_flight(result: JsonObject) -> str | None:
@@ -2053,18 +2045,4 @@ tool_registry.register(
         audit_tags=["debug"],
     ),
     _echo_tool,
-)
-tool_registry.register(
-    ToolDefinition(
-        name="agent_skill_list",
-        description="Agent Runtime に登録された Skill 一覧を返す。",
-        input_schema={"type": "object", "additionalProperties": False},
-        output_schema=_schema(AgentSkillListOutput),
-        permission_level=ToolPermissionLevel.READ,
-        side_effects=False,
-        timeout_seconds=1.0,
-        max_retries=0,
-        audit_tags=["agent", "skill", "discovery"],
-    ),
-    _agent_skill_list,
 )
