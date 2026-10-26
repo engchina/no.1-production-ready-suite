@@ -6,6 +6,8 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
+from app.rag.pdf_backend import PdfSource, SourceOpenError, TextLine
+
 _SOURCE_CHARACTER_PAIRS = frozenset({("\N{COMBINING LOW LINE}", "_"), ("\u301c", "\uff5e")})
 _SUSPECT_CHARACTERS = frozenset(parsed for parsed, _ in _SOURCE_CHARACTER_PAIRS)
 
@@ -41,29 +43,28 @@ def correct_docling_pdf_text(records: list[dict[str, Any]], source_bytes: bytes)
     if not candidates or not source_bytes.startswith(b"%PDF"):
         return set()
     try:
-        import fitz as pymupdf  # type: ignore[import-untyped]
-
-        document = pymupdf.open(stream=source_bytes, filetype="pdf")
-    except Exception:  # noqa: BLE001 - 読めない原本から訂正しない。
+        document = PdfSource(source_bytes)
+    except SourceOpenError:  # 読めない原本から訂正しない。
         return set()
     corrected: set[str] = set()
-    pages: dict[int, Mapping[str, Any]] = {}
+    pages: dict[int, list[TextLine]] = {}
     try:
         for record in candidates:
             try:
                 page_number = int(record.get("page") or 0)
-                if not 1 <= page_number <= len(document):
+                if not 1 <= page_number <= document.page_count:
                     continue
-                page = document[page_number - 1]
-                if page.rotation:
+                index = page_number - 1
+                if document.rotation(index):
                     continue
                 box = record.get("bbox")
                 if record.get("coord_system") != "image_top_left" or not isinstance(box, list):
                     continue
                 if len(box) != 4:
                     continue
-                sx = page.rect.width / float(record.get("page_width") or 0)
-                sy = page.rect.height / float(record.get("page_height") or 0)
+                page_width, page_height = document.page_size(index)
+                sx = page_width / float(record.get("page_width") or 0)
+                sy = page_height / float(record.get("page_height") or 0)
                 left, top, right, bottom = (
                     float(value) * scale for value, scale in zip(box, (sx, sy, sx, sy), strict=True)
                 )
@@ -72,11 +73,9 @@ def correct_docling_pdf_text(records: list[dict[str, Any]], source_bytes: bytes)
                 if left >= right or top >= bottom:
                     continue
                 if page_number not in pages:
-                    # 画像データを含めず、直前の 1 ページだけ保持する。
+                    # 直前の 1 ページの行だけ保持する。
                     pages.clear()
-                    pages[page_number] = page.get_text(
-                        "rawdict", flags=pymupdf.TEXTFLAGS_RAWDICT & ~pymupdf.TEXT_PRESERVE_IMAGES
-                    )
+                    pages[page_number] = document.text_lines(index)
                 original = _text_in_box(pages[page_number], (left, top, right, bottom))
             except Exception:  # noqa: BLE001 - 位置や文字層を読めない record は変更しない。
                 original = ""
@@ -94,19 +93,16 @@ def correct_docling_pdf_text(records: list[dict[str, Any]], source_bytes: bytes)
     return corrected
 
 
-def _text_in_box(payload: Mapping[str, Any], box: tuple[float, ...]) -> str:
+def _text_in_box(lines: list[TextLine], box: tuple[float, ...]) -> str:
     """文字の中心が record の位置に入る文字だけを、PDF の行順に取り出す。"""
     left, top, right, bottom = box
     parts: list[str] = []
-    for block in payload.get("blocks", []):
-        for line in block.get("lines", []):
-            direction = line.get("dir", (1.0, 0.0))
-            if abs(direction[1]) > 0.1 or direction[0] <= 0:
-                continue
-            for span in line.get("spans", []):
-                for char in span.get("chars", []):
-                    x0, y0, x1, y1 = char["bbox"]
-                    if left <= (x0 + x1) / 2 <= right and top <= (y0 + y1) / 2 <= bottom:
-                        parts.append(char["c"])
-            parts.append("\n")
+    for line in lines:
+        if abs(line.dir[1]) > 0.1 or line.dir[0] <= 0:
+            continue
+        for char in line.chars:
+            x0, y0, x1, y1 = char.bbox
+            if left <= (x0 + x1) / 2 <= right and top <= (y0 + y1) / 2 <= bottom:
+                parts.append(char.c)
+        parts.append("\n")
     return "".join(parts)

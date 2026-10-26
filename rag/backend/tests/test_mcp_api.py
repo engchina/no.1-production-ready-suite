@@ -2623,16 +2623,13 @@ def test_evidence_shows_the_section_of_the_chunk(
 
 
 def _figure_pdf() -> bytes:
-    import fitz  # type: ignore[import-untyped]
+    from tests.fixtures.synthetic_pdf import SyntheticPdf
 
-    document = fitz.open()
-    document.new_page(width=600, height=800)
+    document = SyntheticPdf()
+    document.page(600, 800)
     # 図は 2 頁目にある。
-    page = document.new_page(width=600, height=800)
-    page.draw_rect(fitz.Rect(60, 80, 300, 200), color=(0, 0, 1), fill=(0, 0, 1))
-    data: bytes = document.tobytes()
-    document.close()
-    return data
+    document.page(600, 800).rect((60, 80, 300, 200), fill=(0, 0, 1))
+    return document.to_bytes()
 
 
 class _FigureSourceOracle(_SourceOracle):
@@ -2696,10 +2693,12 @@ def figure_source(monkeypatch: MonkeyPatch) -> type[_FigureSourceOracle]:
 
 
 def _png_size(data: bytes) -> tuple[int, int]:
-    import fitz
+    import io
 
-    pixmap = fitz.Pixmap(data)
-    return pixmap.width, pixmap.height
+    from PIL import Image
+
+    with Image.open(io.BytesIO(data)) as image:
+        return image.width, image.height
 
 
 def test_read_source_returns_bounded_figure_image_rechecked_on_every_read(
