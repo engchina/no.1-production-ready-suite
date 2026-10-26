@@ -384,8 +384,10 @@ test("詳細条件は条件を設定したままでも閉じられ、閉じる�
   await expect(page.getByRole("combobox", { name: "候補取得数" })).toHaveAccessibleDescription(/文書内の箇所（テキスト断片）の基準件数/);
   await expect(page.getByText(/文書数や回答の引用数ではなく/)).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("retrieval-candidate-help.png") });
+  // 既定は 50（#3512）。既定と違う値を選ぶと条件が効いている。
+  await expect(page.getByRole("combobox", { name: "候補取得数" })).toContainText("50");
   await page.getByRole("combobox", { name: "候補取得数" }).click();
-  await page.getByRole("option", { name: "50", exact: true }).click();
+  await page.getByRole("option", { name: "100", exact: true }).click();
 
   // 条件があっても閉じられる。閉じている間は「設定中」で条件が効いていることを示す。
   await advanced.click();
@@ -397,7 +399,7 @@ test("詳細条件は条件を設定したままでも閉じられ、閉じる�
   await advanced.focus();
   await page.keyboard.press("Space");
   await expect(advanced).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByRole("combobox", { name: "候補取得数" })).toContainText("50");
+  await expect(page.getByRole("combobox", { name: "候補取得数" })).toContainText("100");
   await expect(advanced).not.toContainText("設定中");
   await page.keyboard.press("Enter");
   await expect(advanced).toHaveAttribute("aria-expanded", "false");

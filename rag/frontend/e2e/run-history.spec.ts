@@ -923,7 +923,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
         search_answer_profile_id: "profile-a",
         search_answer_profile_name: "プロファイル A",
         answer_generated: true,
-        search_conditions: { top_k: 10, filters: { large_category: "分類 A", as_of: "2026-04-01" } },
+        search_conditions: { top_k: 100, filters: { large_category: "分類 A", as_of: "2026-04-01" } },
       }),
       // system_admin が見る他の人の RAG 検索の実行（#3244）には出さない。
       run(4, { executed_by_me: false, executor_display_name: "利用者 B" }),
@@ -982,7 +982,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("プロファイル A");
     await expect(page.getByRole("switch", { name: "LLM で回答を生成する" })).toHaveAttribute("aria-checked", "true");
     // 記録の条件が入り、詳細条件が開いて見える。
-    await expect(page.locator("#search-top-k")).toContainText("10");
+    await expect(page.locator("#search-top-k")).toContainText("100");
     await expect(page.locator("#search-as_of")).toHaveValue("2026-04-01");
     await expect(page.locator("#search-classification-filters")).toContainText("分類 A");
     await expectNoPageOverflow(page);
