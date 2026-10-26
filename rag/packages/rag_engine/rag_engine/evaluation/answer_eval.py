@@ -33,7 +33,13 @@ from rag_engine.generation.grounded import (
     quote_in_text,
     verbatim_quote_lines,
 )
-from rag_engine.generation.operation_audit import answer_passages, is_citation_line, is_heading, list_heading_lines
+from rag_engine.generation.operation_audit import (
+    answer_passages,
+    is_citation_line,
+    is_heading,
+    list_heading_lines,
+    standard_answer_unit_ranges,
+)
 from rag_engine.retrieval.character_forms import fold_text_with_positions, fold_width
 from rag_engine.retrieval.task_contract import task_contract
 
@@ -41,13 +47,16 @@ logger = logging.getLogger(__name__)
 
 
 class StandardRequirement(BaseModel):
-    """標準回答から残す非データ部分と、その原文引用。"""
+    """標準回答から残す非データ部分と、その根拠の標準回答の単位。"""
 
     model_config = ConfigDict(extra="forbid")
-    standard_answer_quote: str = Field(min_length=1)
+    standard_answer_unit_ids: list[str] = Field(min_length=1)
     requirement: str = Field(min_length=1)
     relevance: Literal["required", "follow_up"] = "required"
     relevance_reason: str = "原質問への回答に必要"
+    # 単位（standard_answer_unit_ids）の原文をつないだ引用（システムが付ける。モデルに渡す schema には出さない。#3575）。
+    # 照合・監査のモデルの入力と評価の記録はこの原文を使う。
+    standard_answer_quote: SkipJsonSchema[str] = ""
 
 
 class StandardAnswerScope(BaseModel):
@@ -56,7 +65,7 @@ class StandardAnswerScope(BaseModel):
     model_config = ConfigDict(extra="forbid")
     requirements: list[StandardRequirement] = Field(min_length=1)
     excluded_case_data: list[str]
-    # 引用が標準回答に結び付かずに外した項目の数（システムが付ける診断。モデルに渡す schema には出さない）。
+    # 単位の ID がどれも標準回答に無いので外した項目の数（システムが付ける診断。モデルに渡す schema には出さない）。
     dropped_requirements: SkipJsonSchema[int] = 0
 
 
@@ -165,12 +174,15 @@ SCOPE_PROMPT = (
     "網羅（requirement_coverage）」の分母になる。\n"
     "\n"
     "## 2. 比較項目（requirements）\n"
+    "- 標準回答は standard_answer_units（id と text）に分けて渡す。"
+    "\n"
     "- 標準回答にある再利用可能な知識、全ての操作手順、画面・ボタン・パ"
     "ラメータ、選択条件、規則、確認方法を requirements に列"
     "挙する。\n"
-    "- 各項目の standard_answer_quote は標準回答"
-    "からそのまま抜き出した連続する引用とし、requirement は比"
+    "- 各項目の standard_answer_unit_ids に、その項目"
+    "が基づく単位の id を 1 つ以上書き、requirement は比"
     "較すべき説明を具体的に書く。\n"
+    "- 項目の根拠は標準回答の単位だけ。質問の文を項目にしない。\n"
     "- requirements は事実としての正しさの認定ではなく、標"
     "準回答が期待する説明の一覧。資料に記載がない可能性は除外理由にならな"
     "い。\n"
@@ -386,7 +398,9 @@ def _form_span(wanted: str, form: str, offset: int) -> tuple[int, int] | None:
 def grounded_quote(quote: str, source: str) -> str:
     """モデルの引用を source の原文の連続する範囲に結び付けて、その原文を返す。結び付かなければ空文字。
 
-    LLM-as-judge の引用の接地。モデルは引用を写すときに空白・改行・全角半角・句読点・Markdown の記号を変え、
+    LLM-as-judge の引用の接地。照合・監査の判定が段落 ID（``answer_passage_id``）を付けずに書いた生成回答の
+    引用（claim_checks / coverage_checks の ``answer_quote``）に使う（標準回答の比較範囲は単位の ID で指すので
+    使わない。#3575）。モデルは引用を写すときに空白・改行・全角半角・句読点・Markdown の記号を変え、
     重複した語を省き、見出しの語を前に付け、離れた箇所を省略の印（「…」）でつなぐことがある。照合の形
     （``_quote_form``）でそろえて探し、完全に一致しなければ近似の照合（``_aligned_window``）で原文の 1 つの範囲に
     結び付け、見つかった範囲の原文に差し替える（保存する引用は原文のまま）。省略の印でつないだ引用は、断片を
@@ -421,8 +435,9 @@ def model_request(inputs: dict[str, Any]) -> dict[str, Any]:
     """評価・検証のモデルに渡す入力。根拠（evidence_items）の本文だけを ``fold_width``（全角・半角の違いだけ）の文字の形にそろえる (#1350)。
 
     回答の生成と同じく、資料の全角の ``ＨＲＭ`` と回答の半角の ``HRM`` をモデルが同じ語と読めるようにする。
-    根拠の ID（evidence_id。原文から計算する）・目録・記録する原文は元のまま。回答・段落・標準回答も、
-    モデルが返す引用を原文の範囲に結び付けて保存する（``grounded_quote``）のでそろえない。
+    根拠の ID（evidence_id。原文から計算する）・目録・記録する原文は元のまま。回答・段落は、モデルが返す
+    引用を原文の範囲に結び付けて保存する（``grounded_quote``）のでそろえない。標準回答の単位はモデルが ID で
+    指し、引用はコードが単位の原文から組み立てる。
     """
     items = inputs.get("evidence_items")
     if not items:
@@ -564,46 +579,87 @@ def _parse_checked(
     raise AssertionError("unreachable")
 
 
-def _prepare_standard_scope(payload, settings, provider_id, *, on_retry: RetryRecorder | None = None):
-    """質問と標準回答だけで比較範囲を決定する。生成回答・検索根拠は送信しない。"""
-    inputs = {key: payload.get(key) for key in ("question", "standard_answer")}
+def standard_answer_units(standard_answer: str) -> list[dict[str, str]]:
+    """比較範囲の固定でモデルに渡す標準回答の単位（id と原文）。分け方は ``standard_answer_unit_ranges``。"""
+    return [{"id": unit_id, "text": standard_answer[start:end]} for unit_id, start, end in standard_answer_unit_ranges(standard_answer)]
 
-    return _parse_checked(
+
+# 単位を省いてつないだ引用の区切り（省略の印。続く単位は原文の範囲のまま 1 つにする）。
+_UNIT_QUOTE_GAP = "…"
+
+
+def _unit_quote(positions: list[int], ranges: list[tuple[str, int, int]], standard_answer: str) -> str:
+    """単位（``ranges`` の位置の番号）の原文をつないだ引用。続く単位は間の改行・空白も含む原文の 1 つの範囲にする。"""
+    runs: list[list[int]] = []
+    for position in sorted(set(positions)):
+        if runs and position == runs[-1][-1] + 1:
+            runs[-1].append(position)
+        else:
+            runs.append([position])
+    return _UNIT_QUOTE_GAP.join(standard_answer[ranges[run[0]][1] : ranges[run[-1]][2]] for run in runs)
+
+
+def _unit_id(value: str) -> str:
+    """モデルが書いた単位の ID の表記の揺れ（全角・小文字・前後の空白）をそろえる。"""
+    return unicodedata.normalize("NFKC", value).strip().upper()
+
+
+def _prepare_standard_scope(
+    payload: dict[str, Any], settings: Any, provider_id: str | None, *, on_retry: RetryRecorder | None = None
+) -> StandardAnswerScope:
+    """質問と標準回答の単位だけで比較範囲を決定する。生成回答・検索根拠は送信しない。"""
+    standard_answer = str(payload.get("standard_answer") or "")
+    inputs = {"question": payload.get("question"), "standard_answer_units": standard_answer_units(standard_answer)}
+
+    return _parse_checked(  # type: ignore[no-any-return]
         SCOPE_PROMPT,
         inputs,
         settings,
         StandardAnswerScope,
         provider_id,
-        lambda scope: _validate_standard_scope(scope, inputs["standard_answer"]),
+        lambda scope: _validate_standard_scope(scope, standard_answer),
         on_retry=on_retry,
     )
 
 
-def _validate_standard_scope(scope, standard_answer):
-    """再利用する範囲も元の標準回答との引用一致・原質問項目の存在を検証する。
+def _validate_standard_scope(scope: StandardAnswerScope, standard_answer: str) -> None:
+    """再利用する範囲も、単位の ID が元の標準回答にあることと原質問項目の存在を検証する。
 
-    引用は ``grounded_quote`` で標準回答の原文に結び付け、表記の揺れだけの引用は原文に差し替える。標準回答に
-    結び付かない引用の項目（質問の文・言い換えの引用）は標準回答の比較項目ではないので外し、外した数を
-    ``dropped_requirements`` に残す。外すと原質問の項目が無くなるとき・半分を超える項目を外すときは、範囲の
-    固定の誤りとして契約違反にする（違反の項目の番号を指摘して出し直させる）。
+    各項目の単位の ID を標準回答の単位（``standard_answer_unit_ranges``）に結び付け、引用
+    （``standard_answer_quote``）を単位の原文から組み立てる。一部の ID が単位に無い項目は契約違反にして、項目の
+    番号を指摘して出し直させる。ID がどれも単位に無い項目は標準回答の比較項目ではないので外し、外した数を
+    ``dropped_requirements`` に残す。外すと原質問の項目が無くなるとき・半分を超える項目を外すときは契約違反にする。
     """
     if not any(item.relevance == "required" for item in scope.requirements):
         raise EvaluationContractError("原質問に対応する固定項目がありません")
     for item in scope.requirements:
-        if not item.requirement.strip() or not item.standard_answer_quote.strip() or not item.relevance_reason.strip():
+        if not item.requirement.strip() or not item.relevance_reason.strip():
             raise EvaluationContractError("空の固定項目")
-    grounded = [grounded_quote(item.standard_answer_quote, standard_answer) for item in scope.requirements]
-    kept = [item for item, quote in zip(scope.requirements, grounded, strict=True) if quote]
-    dropped = [index for index, quote in enumerate(grounded, 1) if not quote]
-    if dropped and (2 * len(dropped) > len(grounded) or not any(item.relevance == "required" for item in kept)):
+    ranges = standard_answer_unit_ranges(standard_answer)
+    positions = {unit_id: position for position, (unit_id, _, _) in enumerate(ranges)}
+    resolved: list[list[str]] = []
+    unknown: list[int] = []
+    dropped: list[int] = []
+    for index, item in enumerate(scope.requirements, 1):
+        ids = list(dict.fromkeys(_unit_id(value) for value in item.standard_answer_unit_ids))
+        known = [unit_id for unit_id in ids if unit_id in positions]
+        resolved.append(known)
+        if not known:
+            dropped.append(index)
+        elif len(known) != len(ids):
+            unknown.append(index)
+    kept = [item for item, known in zip(scope.requirements, resolved, strict=True) if known]
+    if unknown or (dropped and (2 * len(dropped) > len(resolved) or not any(item.relevance == "required" for item in kept))):
+        last = ranges[-1][0] if ranges else "S1"
         raise EvaluationContractError(
-            "標準回答に存在しない引用（requirements の "
-            + "・".join(map(str, dropped))
-            + " 番目）。standard_answer_quote には標準回答の本文の連続する文をそのまま写し、質問の文は引用しないでください。"
+            "standard_answer_units に無い ID（requirements の "
+            + "・".join(map(str, sorted(unknown + dropped)))
+            + f" 番目）。standard_answer_unit_ids には S1〜{last} の id だけを書き、質問の文を項目にしないでください。"
         )
-    for item, quote in zip(scope.requirements, grounded, strict=True):
-        if quote:
-            item.standard_answer_quote = quote
+    for item, known in zip(scope.requirements, resolved, strict=True):
+        if known:
+            item.standard_answer_unit_ids = sorted(known, key=positions.__getitem__)
+            item.standard_answer_quote = _unit_quote([positions[unit_id] for unit_id in known], ranges, standard_answer)
     scope.requirements = kept
     scope.dropped_requirements += len(dropped)
     if len({item.requirement for item in scope.requirements}) != len(scope.requirements):
@@ -1159,7 +1215,7 @@ def evaluate_answer_payload(
     同じ質問・標準回答でモデル比較する場合は同一の事前範囲を再利用できる。required の固定項目への
     対応率を requirement_coverage(0〜1)にする。指標の閾値と合否は backend が付ける(#680)。
     payload は変更せず、接続情報を含み得る例外の詳細も保存しない。
-    judge_diagnostics には、比較範囲を job の記録から使い回したかと、引用が標準回答に結び付かずに外した比較項目の数、
+    judge_diagnostics には、比較範囲を job の記録から使い回したかと、単位の ID が標準回答に無いので外した比較項目の数、
     出力の誤りで再試行した回数・原因の型を残す。1 回の入力の上限は判定のモデルの入力の上限から決める
     （``evaluation_input_budget``）。
     """
@@ -1219,7 +1275,10 @@ def evaluate_answer_payload(
             standard_scope = StandardAnswerScope.model_validate(standard_scope.model_dump())
             _validate_standard_scope(standard_scope, payload["standard_answer"])
         diagnostics["standard_scope_dropped"] = standard_scope.dropped_requirements
-        fixed["standard_answer_scope"] = standard_scope.model_dump(exclude={"dropped_requirements"})
+        # 照合・監査のモデルは標準回答の単位を見ないので、単位の ID は渡さない（引用の原文を渡す）。
+        fixed["standard_answer_scope"] = standard_scope.model_dump(
+            exclude={"dropped_requirements": True, "requirements": {"__all__": {"standard_answer_unit_ids"}}}
+        )
         # 暗黙の配列位置を数え直させず、出力と同じ番号を各固定項目へ明示する。
         for index, item in enumerate(fixed["standard_answer_scope"]["requirements"], 1):
             item["requirement_index"] = index

@@ -23,6 +23,7 @@ from rag_engine.evaluation.answer_eval import (
     _prepare_standard_scope,
     evaluate_answer_payload,
     grounded_quote,
+    standard_answer_units,
     standard_scope_cache,
 )
 from rag_engine.generation.answer_labels import answer_labels
@@ -39,7 +40,13 @@ def fixed_scope():
 
 def scope_output():
     return StandardAnswerScope(
-        requirements=[StandardRequirement(standard_answer_quote="ログを確認", requirement="文書にあるログ確認手順")],
+        requirements=[
+            StandardRequirement(
+                standard_answer_unit_ids=["S1"],
+                standard_answer_quote="ログを確認して原因を特定する。",
+                requirement="文書にあるログ確認手順",
+            )
+        ],
         excluded_case_data=["実際の原因"],
     )
 
@@ -326,20 +333,32 @@ def test_unfinished_evaluation_preserves_original_review_state(status):
 def test_scope_preparation_never_receives_answer_or_retrieved_evidence():
     standard = "設定画面で業務別担当者(J)を選択してください。今回は主担当が設定されていました。"
     scope = StandardAnswerScope(
-        requirements=[StandardRequirement(standard_answer_quote="業務別担当者(J)を選択", requirement="業務別担当者(J)の選択手順")],
+        requirements=[StandardRequirement(standard_answer_unit_ids=["S1"], requirement="業務別担当者(J)の選択手順")],
         excluded_case_data=["今回の設定値"],
     )
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=scope) as parse:
         result = _prepare_standard_scope(payload() | {"standard_answer": standard}, object(), "enterprise-ai-vision")
-    assert result == scope
-    assert json.loads(parse.call_args.args[1]) == {"question": payload()["question"], "standard_answer": standard}
+    assert result.requirements[0].standard_answer_unit_ids == ["S1"] and result.excluded_case_data == ["今回の設定値"]
+    # 標準回答は単位（id と原文）で渡し、原文の全体・生成回答・根拠は渡さない。
+    assert json.loads(parse.call_args.args[1]) == {
+        "question": payload()["question"],
+        "standard_answer_units": [
+            {"id": "S1", "text": "設定画面で業務別担当者(J)を選択してください。"},
+            {"id": "S2", "text": "今回は主担当が設定されていました。"},
+        ],
+    }
     assert parse.call_args.args[3] is StandardAnswerScope
+    assert result.requirements[0].standard_answer_quote == "設定画面で業務別担当者(J)を選択してください。"
 
 
-def test_scope_quote_not_in_standard_answer_retries_then_fails():
+def test_scope_unit_id_not_in_standard_answer_retries_then_fails():
+    scope = StandardAnswerScope(
+        requirements=[StandardRequirement(standard_answer_unit_ids=["S2"], requirement="業務別担当者(J)の選択手順")],
+        excluded_case_data=[],
+    )
     with (
-        patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=scope_output()) as parse,
-        pytest.raises(EvaluationContractError),
+        patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=scope) as parse,
+        pytest.raises(EvaluationContractError, match="standard_answer_units に無い ID"),
     ):
         _prepare_standard_scope({"question": "質問", "standard_answer": "業務別担当者(J)を選択"}, object(), None)
     assert parse.call_count == 2
@@ -366,7 +385,9 @@ def test_invalid_fixed_check_or_answer_quote_is_retried_without_publishing_score
 
 @pytest.mark.parametrize("state,expected", [("missing", 0), ("partial", 0.5), ("addressed", 1)])
 def test_absent_document_evidence_cannot_remove_expected_procedure(state, expected, fixed_scope):
-    required = StandardRequirement(standard_answer_quote="業務別担当者(J)を選択", requirement="業務別担当者(J)の選択手順")
+    required = StandardRequirement(
+        standard_answer_unit_ids=["S1"], standard_answer_quote="業務別担当者(J)を選択。", requirement="業務別担当者(J)の選択手順"
+    )
     fixed_scope.return_value = StandardAnswerScope(requirements=[required], excluded_case_data=["今回の主担当設定値"])
     evaluated = output().model_copy(
         update={
@@ -416,9 +437,13 @@ def test_real_scope_stage_then_evaluation_keeps_procedure_without_document_suppo
 
 
 def test_partial_coverage_is_not_lost_and_followup_is_still_reported(fixed_scope):
-    required = StandardRequirement(standard_answer_quote="ログを確認", requirement="ログ確認")
+    required = StandardRequirement(standard_answer_unit_ids=["S1"], standard_answer_quote="ログを確認", requirement="ログ確認")
     extra = StandardRequirement(
-        standard_answer_quote="別の相談", requirement="履歴の出力", relevance="follow_up", relevance_reason="原質問にない追加相談"
+        standard_answer_unit_ids=["S2"],
+        standard_answer_quote="別の相談",
+        requirement="履歴の出力",
+        relevance="follow_up",
+        relevance_reason="原質問にない追加相談",
     )
     fixed_scope.return_value = StandardAnswerScope(
         requirements=[required, extra, extra.model_copy(update={"requirement": "別日付の出力"})], excluded_case_data=[]
@@ -455,7 +480,7 @@ def test_prepared_scope_is_reused_without_another_scope_call(fixed_scope):
     assert parse.call_count == 1
     assert result["standard_answer_scope"] == scope_output().model_dump()
     invalid = scope_output()
-    invalid.requirements[0].standard_answer_quote = "他の標準回答にだけある内容"
+    invalid.requirements[0].standard_answer_unit_ids = ["S9"]
     with patch("rag_engine.evaluation.answer_eval.parse_text_response") as parse:
         result = evaluate_answer_payload(payload(), object(), standard_scope=invalid)
     parse.assert_not_called()
@@ -835,27 +860,24 @@ def test_grounded_quote_rejects_quotes_absent_after_normalization(quote, source)
     assert grounded_quote(quote, source) == ""
 
 
-def test_scope_quote_with_formatting_variants_is_accepted_and_stored_verbatim():
-    standard = "設定画面で業務別担当者（Ｊ）を\n選択してください。"
+def test_scope_quote_is_rebuilt_from_the_original_text_of_the_units():
+    # 続く単位は間の改行も含む原文の 1 つの範囲、離れた単位は省略の印でつなぐ。ID の表記の揺れはそろえる。
+    standard = "設定画面で業務別担当者（Ｊ）を\n選択してください。\n\n今回は主担当でした。\n受付日より３０日以内に返送する。"
     scope = StandardAnswerScope(
-        requirements=[StandardRequirement(standard_answer_quote="業務別担当者(J)を 選択", requirement="業務別担当者の選択手順")],
-        excluded_case_data=[],
+        requirements=[
+            StandardRequirement(standard_answer_unit_ids=[" s2", "S1", "S1"], requirement="業務別担当者の選択手順"),
+            StandardRequirement(standard_answer_unit_ids=["Ｓ4", "S1"], requirement="選択と返送の期限"),
+        ],
+        excluded_case_data=["今回の主担当"],
     )
     with patch(PARSE, return_value=scope) as parse:
         result = _prepare_standard_scope(payload() | dict(standard_answer=standard), object(), None)
     assert parse.call_count == 1
-    assert result.requirements[0].standard_answer_quote == "業務別担当者（Ｊ）を\n選択"
-
-
-def test_scope_quote_with_changed_digits_is_still_rejected():
-    scope = StandardAnswerScope(
-        requirements=[StandardRequirement(standard_answer_quote="受付日より31日以内に返送", requirement="返送の期限")],
-        excluded_case_data=[],
-    )
-    data = payload() | dict(standard_answer="受付日より３０日以内に返送する。")
-    with patch(PARSE, return_value=scope) as parse, pytest.raises(EvaluationContractError, match="標準回答に存在しない引用"):
-        _prepare_standard_scope(data, object(), None)
-    assert parse.call_count == 2
+    first, second = result.requirements
+    assert first.standard_answer_unit_ids == ["S1", "S2"]
+    assert first.standard_answer_quote == "設定画面で業務別担当者（Ｊ）を\n選択してください。"
+    assert second.standard_answer_unit_ids == ["S1", "S4"]
+    assert second.standard_answer_quote == "設定画面で業務別担当者（Ｊ）を…受付日より３０日以内に返送する。"
 
 
 def test_answer_quotes_with_formatting_variants_are_snapped_to_the_answer_text():
@@ -994,23 +1016,53 @@ def test_grounded_quote_still_rejects_changed_numbers_and_text_not_in_the_source
     assert grounded_quote(quote, _SOURCE) == ""
 
 
-def _scope_with(*quotes):
+def _scope_with(*unit_ids):
     return StandardAnswerScope(
         requirements=[
-            StandardRequirement(standard_answer_quote=quote, requirement="比較項目" + str(index)) for index, quote in enumerate(quotes)
+            StandardRequirement(standard_answer_unit_ids=list(ids), requirement="比較項目" + str(index))
+            for index, ids in enumerate(unit_ids)
         ],
         excluded_case_data=[],
     )
 
 
+def test_standard_answer_units_split_lines_sentences_tables_and_lists():
+    text = "\n".join(
+        [
+            "## 手順",
+            "",
+            "- 画面Aを開く。保存を押す。",
+            "- 確認する！続けますか？はい。",
+            "| 項目 | 値。注記 |",
+            "  ",
+            "1. 「中の。文」を選ぶ。",
+            "「引用の行。二つ目。」",
+        ]
+    )
+    units = standard_answer_units(text)
+    assert units == [
+        {"id": "S1", "text": "## 手順"},
+        {"id": "S2", "text": "- 画面Aを開く。"},
+        {"id": "S3", "text": "保存を押す。"},
+        {"id": "S4", "text": "- 確認する！"},
+        {"id": "S5", "text": "続けますか？"},
+        {"id": "S6", "text": "はい。"},
+        {"id": "S7", "text": "| 項目 | 値。注記 |"},
+        {"id": "S8", "text": "1. 「中の。文」を選ぶ。"},
+        {"id": "S9", "text": "「引用の行。二つ目。」"},
+    ]
+    # 単位は原文のまま（並べると空白・改行を除いて元の本文になる）。
+    assert all(unit["text"] in text for unit in units)
+    assert "".join("".join(unit["text"].split()) for unit in units) == "".join(text.split())
+    # 長い行は回答の段落と同じ字数で連続した範囲に分ける。
+    assert [len(unit["text"]) for unit in standard_answer_units("あ" * 1300)] == [600, 600, 100]
+
+
 def test_scope_items_quoting_the_question_are_dropped_and_counted(fixed_scope):
     fixed_scope.side_effect = _prepare_standard_scope
     data = payload() | dict(question="窓口の対応が継続していても同じ扱いになりますか。", standard_answer=_SOURCE)
-    scope = _scope_with(
-        "資料Aの第1章は、窓口で申請を受け付けると定めています。",
-        "窓口の対応が継続していても同じ扱いになりますか。",
-        "文書X_規程集第5条は、申請書の受付と審査の手順を定めています。",
-    )
+    # 2 番目の項目は標準回答に無い ID だけを指す（質問の文を項目にした）。
+    scope = _scope_with(["S4"], ["Q1"], ["S6"])
     with patch(
         PARSE,
         side_effect=[
@@ -1038,21 +1090,53 @@ def test_scope_items_quoting_the_question_are_dropped_and_counted(fixed_scope):
     judged = json.loads(parse.call_args_list[1].args[1])["standard_answer_scope"]
     assert "dropped_requirements" not in judged and len(judged["requirements"]) == 2
     assert "dropped_requirements" not in json.dumps(StandardAnswerScope.model_json_schema())
+    # 照合・監査のモデルに渡す比較項目の形は変えない（単位の ID は渡さず、引用の原文を渡す）。
+    assert [set(item) for item in judged["requirements"]] == [
+        {"standard_answer_quote", "requirement", "relevance", "relevance_reason", "requirement_index"}
+    ] * 2
+    assert [item["standard_answer_quote"] for item in judged["requirements"]] == quotes
+    stored = result["standard_answer_scope"]["requirements"]
+    assert [item["standard_answer_unit_ids"] for item in stored] == [["S4"], ["S6"]]
 
 
-def test_scope_with_mostly_ungrounded_quotes_is_retried_with_the_item_numbers():
+def test_scope_with_mostly_unknown_unit_ids_is_retried_with_the_item_numbers():
     data = payload() | dict(question="窓口の対応が継続していても同じ扱いになりますか。", standard_answer=_SOURCE)
-    bad = _scope_with(
-        "窓口の対応が継続していても同じ扱いになりますか。",
-        "資料Aの第1章は、窓口で申請を受け付けると定めています。",
-        "結果は二週間程度で通知されます。",
-    )
-    good = _scope_with("資料Aの第1章は、窓口で申請を受け付けると定めています。")
+    bad = _scope_with(["Q1"], ["S4"], ["S99"])
+    good = _scope_with(["S4"])
     with patch(PARSE, side_effect=[bad, good]) as parse:
         scope = _prepare_standard_scope(data, object(), None)
     assert parse.call_count == 2 and scope.dropped_requirements == 0
     feedback = json.loads(parse.call_args_list[1].args[1])["validation_feedback"]
-    assert "1・3 番目" in feedback and "質問の文は引用しない" in feedback
+    assert "1・3 番目" in feedback and "S1" in feedback and "S12" in feedback and "質問の文を項目にしない" in feedback
+
+
+def test_scope_item_with_some_unknown_unit_ids_is_retried_with_the_item_number():
+    # 一部の ID だけが単位に無い項目は外さず、項目の番号を指摘して出し直させる。
+    data = payload() | dict(standard_answer=_SOURCE)
+    bad = _scope_with(["S4"], ["S5", "S13"], ["S6"])
+    good = _scope_with(["S4"], ["S5"], ["S6"])
+    with patch(PARSE, side_effect=[bad, good]) as parse:
+        scope = _prepare_standard_scope(data, object(), None)
+    assert parse.call_count == 2 and scope.dropped_requirements == 0
+    assert [item.standard_answer_unit_ids for item in scope.requirements] == [["S4"], ["S5"], ["S6"]]
+    feedback = json.loads(parse.call_args_list[1].args[1])["validation_feedback"]
+    assert "requirements の 2 番目" in feedback
+
+
+def test_scope_schema_and_prompt_refer_to_unit_ids_only():
+    from rag_engine.evaluation.answer_eval import SCOPE_PROMPT
+
+    schema = StandardAnswerScope.model_json_schema()
+    requirement = schema["$defs"]["StandardRequirement"]
+    # モデルが返すのは単位の ID。引用の原文はシステムが単位から組み立てる（schema に出さない）。
+    assert set(requirement["properties"]) == {"standard_answer_unit_ids", "requirement", "relevance", "relevance_reason"}
+    assert requirement["required"] == ["standard_answer_unit_ids", "requirement"]
+    assert requirement["properties"]["standard_answer_unit_ids"]["minItems"] == 1
+    assert set(schema["properties"]) == {"requirements", "excluded_case_data"}
+    # 指示は入力の単位（standard_answer_units）と schema の項目を名指しし、原文の写しを求めない。
+    assert "standard_answer_units" in SCOPE_PROMPT and "standard_answer_unit_ids" in SCOPE_PROMPT
+    assert "standard_answer_quote" not in SCOPE_PROMPT
+    assert "質問の文を項目にしない" in SCOPE_PROMPT
 
 
 def test_judge_input_budget_follows_the_model_input_limit():

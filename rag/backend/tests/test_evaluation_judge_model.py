@@ -233,7 +233,7 @@ def _fake_evaluation_llm(calls: list[LlmCall]) -> Callable[..., Any]:
         if schema is StandardAnswerScope:
             return StandardAnswerScope.model_validate(
                 {
-                    "requirements": [{"standard_answer_quote": BODY, "requirement": "手順"}],
+                    "requirements": [{"standard_answer_unit_ids": ["S1"], "requirement": "手順"}],
                     "excluded_case_data": [],
                 }
             )
