@@ -777,7 +777,12 @@ class AnswerEngine:
         attachment_chunks: Sequence[RetrievedChunk] = (),
         caller_queries: Sequence[str] | None = None,
         degraded: DegradedSteps | None = None,
+        complete_evidence: bool = True,
     ) -> None:
+        # 回答を作らない検索で、根拠の補い（章節の拡張・要求ごとの探し直し・CRAG）までするか（#3506）。
+        # False は主の文書の検索の後で止める（業務 Agent の根拠の取得。補いは Agent が MCP でする）。
+        # RAG 検索の画面は True（チャットと同じ根拠を集め、回答の生成の手前で止める）。
+        self._complete_evidence = complete_evidence
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら、回答を作らない検索で、
         # 質問に応じた推論の LLM（検索戦略の判定・質問拡張・条の目録の選択・画面目録の連携）と根拠の
         # 画像の切り出しを設定に関わらず使わない。決定的な工程（規則の質問の理解・用語の別名・
@@ -1293,8 +1298,10 @@ class AnswerEngine:
                 answer_flow=self._settings.rag_answer_flow,
                 rerank_enabled=self._settings.rag_rerank_enabled,
                 retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
-                # RAG 検索の画面は回答を作らない(CRAG も使わない。#649)。
+                # RAG 検索の画面は回答を作らない(#649)。根拠はチャットと同じ流れで集め、回答の生成の
+                # 手前で止める(#3506)。業務 Agent の根拠の取得は主の文書の検索の後で止める。
                 generate_answer=request.generate_answer,
+                complete_evidence=request.generate_answer or self._complete_evidence,
                 # 絞り込み自体は _search の hybrid_search(request.filters)が行う。
                 # ここでは回答のプロンプトと実行記録に条件を載せるために渡す。
                 classification_filter=classification_filter_from_values(

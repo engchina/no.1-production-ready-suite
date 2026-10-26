@@ -123,6 +123,9 @@ type SearchStageProgressCallback = Callable[[SearchStageProgress], Awaitable[Non
 
 # 回答の記録の保存の工程（#2342）。失敗しても回答は返し、処理の経過で失敗にする。
 ANSWER_RECORD_SAVE_STAGE: StorageFailureStep = "answer_record_save"
+# 回答を作らない RAG 検索の全体の工程（質問の理解から根拠の検索まで。#3506）。KB の検索テストの
+# 「retrieval」（回答フローを通らない検索だけ）とは分ける。
+EVIDENCE_STAGE = "evidence"
 
 
 def storage_failure(step: StorageFailureStep, exc: BaseException) -> StorageFailure:
@@ -275,6 +278,7 @@ class RagPipeline:
         answer_notice: AnswerNoticeSource | None = None,
         attachment_conversation_id: str | None = None,
         caller_queries: Sequence[str] | None = None,
+        complete_evidence: bool = True,
     ) -> None:
         self._settings = settings or get_settings()
         if not self._settings.rag_support_guide_enabled:
@@ -304,6 +308,9 @@ class RagPipeline:
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら回答を作らない検索だけに
         # 使い、質問に応じた推論の LLM（抽出項目の条件の読み取り・質問拡張など）を呼ばない。
         self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
+        # 回答を作らない検索で根拠の補いまでするか（#3506。`AnswerEngine` の同名の引数）。False は
+        # 業務 Agent の根拠の取得（MCP の rag_retrieve_evidence）だけが渡す。
+        self._complete_evidence = complete_evidence
         # 処理の経過の記録（`run(trace=...)`。回答の記録に trace id と工程の詳細を残す。#3226）。
         self._trace: AnswerTrace | None = None
 
@@ -567,6 +574,7 @@ class RagPipeline:
             attachment_chunks=attachment_chunks,
             caller_queries=caller_queries,
             degraded=degraded,
+            complete_evidence=self._complete_evidence,
         )
 
         async def emit_step(
@@ -585,7 +593,8 @@ class RagPipeline:
 
         # 回答エンジンは検索と回答の生成（LLM）を中で行う。
         # 進捗には全体を 1 工程（#375）とし、その中の各工程（質問の理解・文書検索など）も
-        # 入れ子の工程として出す（#593）。回答を作らない RAG 検索は「検索」の工程にする（#649）。
+        # 入れ子の工程として出す（#593）。回答を作らない RAG 検索は同じ流れを回答の生成の手前で止め、
+        # 全体の工程を「質問の理解から根拠の検索まで」（evidence）にする（#649・#3506）。
         if request.generate_answer and guide.get("short_answer") and self._approved_faq is None:
             # 業務ガイドの必要な条件が分からず、確かめるか人へ引き継ぐ（#1238）。
             # 回答（モデル）は作らない。
@@ -593,7 +602,7 @@ class RagPipeline:
         else:
             outcome = await _observe_stage(
                 trace_id,
-                "answer" if request.generate_answer else "retrieval",
+                "answer" if request.generate_answer else EVIDENCE_STAGE,
                 engine.run(
                     request, step_callback=emit_step if progress_callback is not None else None
                 ),
