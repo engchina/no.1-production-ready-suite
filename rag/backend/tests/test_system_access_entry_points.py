@@ -70,6 +70,9 @@ OTHER_ENTRY_POINTS: dict[str, str] = {
     "app.main": "API。要求ごとに middleware と認証の dependency が利用者の context を作る",
     "app.rag.legacy_export": "旧テーブルを生の接続で書き出すだけ（範囲の条件を通らない）",
     "app.rag.answer_verify_cli": "backend の API を HTTP で呼ぶ。DB は読まない（判定の設定だけ）",
+    "app.rag.answer_judge_calibration": (
+        "人手の判定の項目を回答の評価器（LLM）にかけて集計するだけ。DB は読まない（設定だけ）"
+    ),
 }
 
 # API の process の起動時に要求の外で動く処理（`app.main.lifespan`）と分類。

@@ -9,6 +9,7 @@
 | `evidence` | 必要な根拠と引用の chunk の照合（`evidence_matches`。文書・ページ・シート・行・章節・本文。表は行ごとに照合する）。場所は RAG の `EvidenceLocator` と同じ名前の Mapping で受け取る。行は同じ行の番号の基準（`row_basis`）の中だけで照合し、評価セットの行（原本の行）を解析の表の格子の行（`parsed_table`）に一致させない |
 | `retrieval` | 正解の文書の順位の逆数（`reciprocal_rank`）・取れた文書（`document_hits`） |
 | `aggregate` | 測れたケースだけの平均と分母（`MetricAggregate`）、閾値の判定（`threshold_failures`）、合否（`overall_passed`） |
+| `agreement` | 人手の判定と評価器の判定の一致（`agreement`: 一致率・Cohen の κ・混同行列・誤合格 / 誤不合格）と、評価器の校正の合否（`CalibrationThresholds`・`calibration_failures`: holdout の件数・判定率・κ・誤合格の率）。suite の LLM による判定と RAG の回答の評価器が同じ基準で校正する（#3418） |
 
 ## 置くもの・置かないもの
 
