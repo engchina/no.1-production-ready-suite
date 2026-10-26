@@ -35,7 +35,7 @@ import math
 import re
 import tempfile
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from datetime import date
@@ -292,6 +292,10 @@ class _SearchState:
     """
 
     chunks: dict[str, RetrievedChunk] = field(default_factory=dict)
+    # 検索の経路(chunk_id → 当たった経路。rag_engine の検索の実装と同じ形の ``vector:qN`` /
+    # ``keyword:oracle_text:qN`` / ``citation`` / 質問理解の経路。#3443)。根拠の記録
+    # (``adb_hybrid.retrieval_channels``)と、文書の検索の工程の詳細(候補の経路)に出す。
+    retrieval_channels: dict[str, set[str]] = field(default_factory=dict)
     work_dir: Path | None = None
     sources: dict[str, bytes | None] = field(default_factory=dict)
     # 根拠の画像を切り出した chunk の metadata(engine_metadata_json。画像の無い chunk は None)。
@@ -1339,6 +1343,9 @@ class AnswerEngine:
                 )
                 for rank, hit in enumerate(hits, start=1):
                     state.chunks.setdefault(hit.chunk_id, hit)
+                    state.retrieval_channels.setdefault(hit.chunk_id, set()).update(
+                        _hit_channels(hit, index)
+                    )
                     fused[hit.chunk_id] = fused.get(hit.chunk_id, 0.0) + weight / (k + rank)
             # 自動で足した条件(質問から読み取った抽出項目の条件 #652・質問が名指しした文書のページと
             # 文書名 #546)で 0 件なら、その条件を段ごとに外して検索し直す(#2401。以降の検索(CRAG の
@@ -1372,9 +1379,10 @@ class AnswerEngine:
                 limit=candidate_limit,
                 profile_enabled=bool(getattr(settings, "profile_channel_enabled", True)),
             )
-            for _channel, channel_weight, ranking in channels:
+            for channel, channel_weight, ranking in channels:
                 for rank, (chunk_id, _score) in enumerate(ranking, start=1):
                     fused[chunk_id] = fused.get(chunk_id, 0.0) + channel_weight / (k + rank)
+                    state.retrieval_channels.setdefault(chunk_id, set()).add(channel)
         ordered = sorted(fused, key=lambda chunk_id: -fused[chunk_id])
         ranked = ordered[:candidate_limit]
         if self._settings.rag_candidate_diversity_depth > 0:
@@ -1479,6 +1487,7 @@ class AnswerEngine:
                     rrf_score=fused.get(chunk.chunk_id, 0.0),
                     classification=classifications.get(chunk.document_id),
                     first_page_context=_first_page_context(chunk, state),
+                    retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
                 )
             )
             children.extend(
@@ -1487,6 +1496,7 @@ class AnswerEngine:
                     rrf_score=fused.get(chunk.chunk_id, 0.0) * _REFERENCE_SCORE_DECAY,
                     classification=classifications.get(reference.document_id),
                     first_page_context=_first_page_context(reference, state),
+                    retrieval_channels=state.retrieval_channels.get(reference.chunk_id),
                 )
                 for reference in references.get(chunk.chunk_id, ())
                 if reference.chunk_id not in entity_ids
@@ -1500,6 +1510,7 @@ class AnswerEngine:
                     rrf_score=base_score * _ENTITY_SCORE_DECAY,
                     classification=classifications.get(chunk.document_id),
                     first_page_context=_first_page_context(chunk, state),
+                    retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
                 )
                 for chunk in entity_chunks
             ]
@@ -1512,6 +1523,7 @@ class AnswerEngine:
                     rrf_score=base_score * _GRAPH_SCORE_DECAY,
                     classification=classifications.get(chunk.document_id),
                     first_page_context=_first_page_context(chunk, state),
+                    retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
                 )
                 for chunk in graph_chunks
             ]
@@ -1524,6 +1536,7 @@ class AnswerEngine:
                     rrf_score=0.0,
                     classification=classifications.get(sibling.document_id),
                     first_page_context=_first_page_context(sibling, state),
+                    retrieval_channels=state.retrieval_channels.get(sibling.chunk_id),
                 ),
             )
         if self._attachment_chunks:
@@ -1580,10 +1593,13 @@ class AnswerEngine:
                     "source_chunk_ids": source_ids,
                 }
             score = fused.pop(chunk.chunk_id, 0.0)
+            channels = state.retrieval_channels.get(chunk.chunk_id, set())
             for source_id in source_ids:
                 if (original := state.chunks.get(source_id)) is None:
                     continue
                 fused[source_id] = max(fused.get(source_id, 0.0), score)
+                # 派生の chunk の位置に置いた原文は、派生の chunk が当たった経路を引き継ぐ(#3443)。
+                state.retrieval_channels.setdefault(source_id, set()).update(channels)
                 resolved.setdefault(source_id, original)
         return list(resolved.values())
 
@@ -2902,6 +2918,25 @@ def _json_list(value: object) -> list[Any]:
     return list(value) if isinstance(value, list) else []
 
 
+def _hit_channels(hit: RetrievedChunk, query_index: int) -> set[str]:
+    """検索文 1 本の当たりの経路(rag_engine の検索の実装と同じ形。#3443)。
+
+    ``vector_rank`` / ``keyword_rank`` / ``citation_rank``(``OracleClient`` の検索の結果の
+    metadata)から決める。順位の無い結果は ``retrieval_mode`` から決める。
+    """
+    metadata = hit.metadata
+    mode = str(metadata.get("retrieval_mode") or "")
+    query = f"q{query_index + 1}"
+    channels: set[str] = set()
+    if "vector_rank" in metadata or mode in {"vector", "hybrid"}:
+        channels.add(f"vector:{query}")
+    if "keyword_rank" in metadata or mode in {"keyword", "hybrid"}:
+        channels.add(f"keyword:oracle_text:{query}")
+    if "citation_rank" in metadata or mode == "citation":
+        channels.add("citation")
+    return channels
+
+
 def _engine_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
     raw = chunk.metadata.get("engine_metadata_json")
     if isinstance(raw, str) and raw.strip():
@@ -3164,6 +3199,7 @@ def _stored_child(
     rrf_score: float,
     classification: Mapping[str, object] | None = None,
     first_page_context: Mapping[str, object] | None = None,
+    retrieval_channels: Collection[str] | None = None,
 ) -> Any:
     """backend の chunk を rag_engine の子 chunk にする。
 
@@ -3174,11 +3210,16 @@ def _stored_child(
     ``metadata["document"]["first_page_context"]`` を回答の「文書の背景」にする(#557)。
     chunk 自身が持つ値(#557 より前に保存した chunk)があれば、そちらを使う。
     分類と 1 ページ目の本文は chunk の保存内容(埋め込み・検索文)には入れず、回答のときにだけ付ける。
+    ``retrieval_channels`` は検索で当たった経路(``_hit_channels``)。rag_engine の検索の実装と同じ
+    ``adb_hybrid.retrieval_channels`` に書く(根拠の記録と、文書の検索の工程の候補の経路。#3443)。
+    ``adb_hybrid`` には経路だけを書き、並べ替え・文脈の選択に効く値(``rrf_score`` など)は書かない。
     """
     from rag_engine.models.storage import StoredChunk
 
     metadata = _engine_metadata(chunk)
     metadata["rrf_score"] = rrf_score
+    if retrieval_channels:
+        metadata["adb_hybrid"] = {"retrieval_channels": sorted(retrieval_channels)}
     metadata["document_id"] = chunk.document_id
     if classification:
         document = metadata.get("document")

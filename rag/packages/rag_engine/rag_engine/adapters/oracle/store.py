@@ -68,18 +68,13 @@ from rag_engine.retrieval.scope import (
     AdbSearchReadiness,
     normalize_retrieval_scope,
 )
+from rag_engine.retrieval.search_stages import CHUNK_POOL_LOAD_STAGE, TEXT_SEARCH_STAGE, VECTOR_SEARCH_STAGE
 from rag_engine.retrieval.text_search_tokenizer import (
     MAX_ORACLE_TEXT_QUERY_CHARS,
     MAX_TEXT_SEARCH_TOKENS,
     TextSearchTokenizerConfig,
     oracle_text_query_for_question,
 )
-
-# 文書の検索の中の DB の検索の工程の名前（処理の経過の段。#3436）。埋め込み・並べ替えと同じく span だけを足し、工程の
-# 記録（回答の記録の文・`execution_steps`）には書かない。名前は利用者向けの名詞（画面にそのまま出る）。
-VECTOR_SEARCH_STAGE = "ベクトル検索"
-TEXT_SEARCH_STAGE = "全文検索"
-CHUNK_POOL_LOAD_STAGE = "検索対象のチャンクの読み込み"
 
 # 原質問以外の検索文（用語補助・LLM拡張・語彙・質問理解・CRAGの書き換え）全体の票の合計。
 # 各検索文を 1.0 で足すと、検索文が10本前後のとき原質問の票が1割になり、無関係な
