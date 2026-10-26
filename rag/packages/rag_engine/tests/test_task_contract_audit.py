@@ -4,7 +4,8 @@ import json
 from unittest.mock import patch
 
 import pytest
-from test_evidence_first_answering import evaluation_case
+from judge_stub import judge
+from test_evidence_first_answering import PARSE, evaluation_case
 
 from rag_engine.evaluation.answer_eval import _evidence_fragments, evaluate_answer_payload
 from rag_engine.generation.answering import (
@@ -125,21 +126,21 @@ def test_identical_retry_stops_before_another_grade_call():
     assert attempts[-1].stop_reason == "no_new_evidence" and result.records
 
 
-def test_missing_audit_is_reported():
+def test_uncited_passage_is_judged_unsupported_without_the_model():
     data, scope, output = evaluation_case("data_confirmation")
-    data["answer_text"] += "主档を変更する。"
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=output):
+    data["answer_text"] += "\n\n主档を変更する。"
+    with patch(PARSE, side_effect=judge(output)):
         result = evaluate_answer_payload(data, object(), standard_scope=scope)
-    assert result["status"] == "completed" and result["missing_audit_passage_ids"] == ["A2"]
+    assert result["status"] == "completed" and result["missing_audit_passage_ids"] == []
+    uncited = next(claim for claim in result["claim_checks"] if claim["answer_quote"] == "主档を変更する。")
+    assert (uncited["status"], uncited["reference_check"]) == ("unsupported", "uncited")
 
 
 def test_evaluation_binds_source_text_by_stable_id():
     data, scope, output = evaluation_case("supported")
     span = list(_evidence_fragments(data["evidence_items"]))[0]
     output.claim_checks[0].evidence_id = span["evidence_id"]
-    output.claim_checks[0].source_id = ""
-    output.claim_checks[0].evidence_quote = ""
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=output):
+    with patch(PARSE, side_effect=judge(output)):
         result = evaluate_answer_payload(data, object(), standard_scope=scope)
     assert result["claim_checks"][0]["evidence_quote"] == data["evidence_items"][0]["text"]
     assert result["claim_checks"][0]["status"] == "supported"
@@ -149,12 +150,11 @@ def test_missing_coverage_can_cite_refusal_without_getting_credit():
     from rag_engine.evaluation.answer_eval import CoverageCheck
 
     data, scope, output = evaluation_case("supported")
-    output.coverage_checks = [
-        CoverageCheck(requirement_index=1, status="missing", answer_quote=data["answer_text"], answer_passage_id="A1")
-    ]
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=output):
+    output.coverage_checks = [CoverageCheck(requirement_index=1, status="missing", answer_quote="", answer_passage_id="A1")]
+    with patch(PARSE, side_effect=judge(output)):
         result = evaluate_answer_payload(data, object(), standard_scope=scope)
     assert result["status"] == "completed" and result["requirement_coverage"] == 0
+    assert result["coverage_checks"][0]["answer_passage_id"] == "A1"
 
 
 def test_recipient_goal_reserves_list_operations_over_repeated_report_labels():
@@ -172,25 +172,25 @@ def test_recipient_goal_reserves_list_operations_over_repeated_report_labels():
 
 
 def test_extra_coverage_item_is_retried_with_explicit_fixed_ids_and_feedback():
-    from rag_engine.evaluation.answer_eval import CoverageCheck
+    from rag_engine.evaluation.answer_eval import CoverageJudgement, CoverageOutput
 
     data, scope, valid = evaluation_case("supported")
-    invalid = valid.model_copy(
-        update={"coverage_checks": [*valid.coverage_checks, CoverageCheck(requirement_index=2, status="missing", answer_quote="")]}
-    )
+    fake = judge(valid)
     calls = []
 
-    def parse(system, prompt, *args, **kwargs):
+    def parse(system, prompt, settings, schema, **kwargs):
+        if schema is not CoverageOutput:
+            return fake(system, prompt, settings, schema, **kwargs)
         inputs = json.loads(prompt)
         calls.append(inputs)
-        assert inputs["standard_answer_scope"]["requirements"][0]["requirement_index"] == 1
+        assert [item["requirement_index"] for item in inputs["requirements"]] == [1]
         if len(calls) == 1:
-            return invalid
-        assert "1〜1" in inputs["validation_feedback"]
-        assert inputs["evidence_items"] == calls[0]["evidence_items"]
-        return valid
+            extra = CoverageJudgement(requirement_index=2, reason="理由", status="missing")
+            return CoverageOutput(coverage_checks=[*fake(system, prompt, settings, schema).coverage_checks, extra])
+        assert "（1）" in inputs["validation_feedback"]
+        return fake(system, prompt, settings, schema)
 
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+    with patch(PARSE, side_effect=parse):
         result = evaluate_answer_payload(data, object(), standard_scope=scope)
     assert result["status"] == "completed" and len(result["coverage_checks"]) == 1
     assert len(calls) == 2 and len(result["standard_answer_scope"]["requirements"]) == 1

@@ -199,14 +199,24 @@ def test_evaluation_catalog_exposes_only_current_evaluation_stages() -> None:
     assert (
         next(stage for stage in PROMPT_STAGES if stage.id == "answer_validation").phase == "audit"
     )
-    assert {part for part, _ in stages["evaluation"].parts} == {"scope", "correctness", "system"}
+    assert {part for part, _ in stages["evaluation"].parts} == {
+        "scope",
+        "coverage",
+        "claim",
+        "correctness",
+    }
 
 
 def test_catalog_separates_independent_preparation_and_orders_evaluation_calls() -> None:
     stages = {stage.id: stage for stage in PROMPT_STAGES}
     assert stages["raptor_summary"].phase == "indexing"
     assert stages["support_guide_draft"].phase == "knowledge"
-    assert [part for part, _ in stages["evaluation"].parts] == ["scope", "system", "correctness"]
+    assert [part for part, _ in stages["evaluation"].parts] == [
+        "scope",
+        "coverage",
+        "claim",
+        "correctness",
+    ]
     assert [part for part, _ in stages["audit"].parts] == [
         "detailedSystem",
         "factSystem",

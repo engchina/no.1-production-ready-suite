@@ -481,6 +481,10 @@ class EvaluationJudgeDiagnostics(BaseModel):
     監査で出力の誤りを指摘して出し直させた回数、``retry_reasons`` はその段と原因の例外の型
     （「standard_scope:InvalidStructuredOutput」）。``standard_scope_dropped`` は、指した
     標準回答の単位の ID がどれも標準回答に無いので比較範囲から外した項目の数。
+    ``judge_calls`` は網羅・正確性・主張の判定の LLM の呼び出しの数（再試行を含む。比較範囲の
+    固定を除く）、``claim_calls`` はそのうち段落ごとの主張の判定の数、``claim_failures`` は判定を
+    完了できず unassessed にした段落の数、``uncited_claims`` は出典が無くモデルを呼ばずに
+    unsupported にした段落の数（#3576）。
     """
 
     standard_scope_reused: bool = False
@@ -490,6 +494,10 @@ class EvaluationJudgeDiagnostics(BaseModel):
     retry_reasons: list[str] = Field(default_factory=list)
     # 判定に使ったモデルの ID（#3574。共通のモデル設定の既定の判定モデルで解決した ID）。
     judge_model_id: str | None = None
+    judge_calls: int = Field(default=0, ge=0)
+    claim_calls: int = Field(default=0, ge=0)
+    claim_failures: int = Field(default=0, ge=0)
+    uncited_claims: int = Field(default=0, ge=0)
 
 
 class EvaluationAnswerJudgement(BaseModel):
