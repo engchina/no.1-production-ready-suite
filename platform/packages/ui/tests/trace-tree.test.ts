@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { traceTimeline } from "../src/lib/trace-tree";
+import { traceSpanFields, traceTimeline } from "../src/lib/trace-tree";
 import { TRACE_DETAILS_JA, createTraceDetailsLabels } from "../src/lib/trace-labels";
 import { runTimelineDuration } from "../src/components/data/run-detail";
 const at = (n: number) => new Date(Date.UTC(2026, 0, 1) + n).toISOString();
@@ -66,5 +66,79 @@ describe("span の表示名（#3219。3 製品の 9 画面で共通の規則）"
     const fields = steps[2].details?.fields ?? [];
     expect(fields).toContainEqual({ label: "Span name", value: "op.engine.stage", mono: true });
     expect(fields).toContainEqual({ label: "pr.stage", value: "工程 A", mono: true });
+  });
+});
+describe("モデルの呼び出しの入力の文脈の記録と利用量（#2583）", () => {
+  const context = {
+    "gen_ai.request.model": "model-x",
+    "gen_ai.usage.input_tokens": 1200,
+    "gen_ai.usage.output_tokens": 30,
+    "gen_ai.usage.cache_read.input_tokens": 0,
+    "pr.context.instructions.static_fingerprint": "0123456789abcdef",
+    "pr.context.instructions.fingerprint": "fedcba9876543210",
+    "pr.context.tools.fingerprint": "00112233aabbccdd",
+    "pr.context.tools.count": 4,
+    "pr.context.input.items": 7,
+    "pr.context.estimate.static_instructions_tokens": 300,
+    "pr.context.estimate.dynamic_state_tokens": 40,
+    "pr.context.estimate.tool_definitions_tokens": 500,
+    "pr.context.estimate.history_tokens": 200,
+    "pr.context.estimate.tool_outputs_tokens": 150,
+    "pr.context.estimate.input_tokens": 1190,
+    "pr.context.budget.input_tokens": 100000,
+    "pr.context.budget.remaining_tokens": 98810,
+    "pr.context.compaction.tokens_before": 5000,
+    "pr.context.compaction.tokens_after": 1190,
+    "pr.context.compaction.outputs": 2,
+    prompt: "private-payload",
+  };
+  it("利用量と文脈の値を日本語の見出しで、識別子 → 利用量 → 見積もり → 予算 → 圧縮 → 指紋の順に出す", () => {
+    expect(traceSpanFields(undefined, "gen_ai.chat", context)).toEqual([
+      { label: "Span name", value: "gen_ai.chat", mono: true },
+      { label: "gen_ai.request.model", value: "model-x", mono: true },
+      { label: "入力トークン", value: "1200", mono: true },
+      { label: "出力トークン", value: "30", mono: true },
+      { label: "キャッシュから読んだ入力", value: "0", mono: true },
+      { label: "入力の見積もり（指示・固定）", value: "300", mono: true },
+      { label: "入力の見積もり（動的な状態）", value: "40", mono: true },
+      { label: "入力の見積もり（ツールの定義）", value: "500", mono: true },
+      { label: "入力の見積もり（履歴）", value: "200", mono: true },
+      { label: "入力の見積もり（ツールの結果）", value: "150", mono: true },
+      { label: "入力の見積もり（合計）", value: "1190", mono: true },
+      { label: "入力の項目数", value: "7", mono: true },
+      { label: "文脈の予算", value: "100000", mono: true },
+      { label: "文脈の予算の残り", value: "98810", mono: true },
+      { label: "圧縮の前", value: "5000", mono: true },
+      { label: "圧縮の後", value: "1190", mono: true },
+      { label: "圧縮したツールの結果の数", value: "2", mono: true },
+      { label: "指示の指紋（固定）", value: "0123456789abcdef", mono: true },
+      { label: "指示の指紋（全体）", value: "fedcba9876543210", mono: true },
+      { label: "ツール定義の指紋", value: "00112233aabbccdd", mono: true },
+      { label: "ツール定義の数", value: "4", mono: true },
+    ]);
+  });
+  it("キャッシュの値が無いときは 0 と区別して「不明」、利用量そのものが無いときは「未計測」にする", () => {
+    const { "gen_ai.usage.cache_read.input_tokens": _cache, ...withoutCache } = context;
+    expect(traceSpanFields(undefined, "gen_ai.chat", withoutCache)).toContainEqual({ label: "キャッシュから読んだ入力", value: "不明", mono: false });
+    expect(traceSpanFields(undefined, "gen_ai.chat", context)).toContainEqual({ label: "キャッシュから読んだ入力", value: "0", mono: true });
+    expect(traceSpanFields(undefined, "gen_ai.chat", {}).filter(field => !field.mono)).toEqual([
+      { label: "入力トークン", value: "未計測", mono: false },
+      { label: "出力トークン", value: "未計測", mono: false },
+      { label: "キャッシュから読んだ入力", value: "未計測", mono: false },
+    ]);
+  });
+  it("文脈の記録の無い span（RAG / NL2SQL・モデル以外の呼び出し）には文脈の行を足さない", () => {
+    const labels = traceSpanFields(undefined, "gen_ai.embeddings", { "gen_ai.request.model": "embed-x" }).map(field => field.label);
+    expect(labels).toEqual(["Span name", "gen_ai.request.model"]);
+    // 予算・圧縮の無い呼び出し（Run の外の呼び出し）は、その行を出さない。
+    const outside = traceSpanFields(undefined, "gen_ai.chat", { "gen_ai.usage.input_tokens": 1, "gen_ai.usage.output_tokens": 1, "pr.context.estimate.input_tokens": 9 }).map(field => field.label);
+    expect(outside).toContain("入力の見積もり（合計）");
+    expect(outside.some(label => label.startsWith("文脈の予算") || label.startsWith("圧縮"))).toBe(false);
+  });
+  it("見出しは製品の辞書（createTraceDetailsLabels の t）から付ける", () => {
+    const labels = createTraceDetailsLabels(key => (key.startsWith("trace.field.") ? `訳:${key}` : TRACE_DETAILS_JA[key]));
+    const fields = traceTimeline({ completeness: "complete", spans: [{ ...span("1"), operation_name: "gen_ai.chat", attributes: context }] }, labels).steps[0].details?.fields ?? [];
+    expect(fields).toContainEqual({ label: "訳:trace.field.budget.remaining", value: "98810", mono: true });
+    expect(JSON.stringify(fields)).not.toContain("private-payload");
   });
 });
