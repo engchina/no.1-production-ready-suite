@@ -87,7 +87,7 @@ def echo_model(system, prompt, settings, schema, **options):
         match = re.search(r"\[(E[0-9]+)\][^\n]*\n([^\n]+)", prompt)
         # 長い根拠の行には行番号（`1| `）が付く（#2830）。番号を外した原文を引く。
         line = re.sub(r"^[0-9]+\| ", "", match.group(2)) if match else ""
-        items = [{"kind": "rule", "text": line, "evidence_id": match.group(1), "quote": line}] if match else []
+        items = [{"kind": "rule", "text": line, "citations": [{"evidence_id": match.group(1), "quote": line}]}] if match else []
         return GroundedDraft.model_validate({"summary": "answer", "items": items, "confidence": "high"})
     # 通常の回答の監査（#2795）は事実の監査の schema で呼ぶ。
     if schema in (GroundedAudit, GroundedFactAudit):

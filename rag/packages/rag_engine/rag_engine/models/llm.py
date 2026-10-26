@@ -249,12 +249,31 @@ class TextOutput(_StrictModel):
 # 生成・監査の出力契約は Field(description) に置き、構造化出力の JSON schema としてモデルへ渡す (#986)。
 # 項目の順序は strict schema の生成順でもあるため、根拠（request_coverage / items、reviews）→ 結論（summary /
 # confidence、goal_alignment）の順に並べ、結論を先に書かせない。行動方針は GENERATE_SYSTEM_PROMPT / AUDIT_SYSTEM_PROMPT。
-class GroundedItem(_StrictModel):
-    """回答の1主張と、それを支える連続した原文引用の対。
+class GroundedCitation(_StrictModel):
+    """item の出典 1 つ（根拠の番号と引用する行）。引用の原文はシステムが取り出す（#2830）。"""
 
-    gap 以外は evidence_id と quote が必須。quote は決定的に原文照合され、
-    一致しない item は公開されない。text は利用者向けの言い換えで、監査で
-    不支持になると破棄され quote だけが逐語表示される。
+    evidence_id: str = Field(description="根拠の先頭にある [E1] 形式の番号（角括弧なし）。")
+    lines: str = Field(
+        default="",
+        max_length=20,
+        description="引用する行の範囲。行番号（`3| `）の付いた根拠では必ず、text を支える行の番号か範囲（例: 3、3-5）を書く。"
+        "text が述べる操作・値をすべて含む行にする。行番号の無い根拠は空（根拠の全文が引用になる）。",
+    )
+    # 引用の原文。モデルには出力させず（応答の schema に出さない）、evidence_id と lines からシステムが取り出す（#2830）。
+    quote: SkipJsonSchema[str] = Field(
+        default="", max_length=600, description="引用の原文（システムが evidence_id と lines から取り出す。応答の schema には出さない）。"
+    )
+
+
+class GroundedItem(_StrictModel):
+    """回答の1主張と、それを支える出典（連続した原文の引用）の対。
+
+    gap 以外は出典が 1 つ以上必須。1 つの主張は、同じ内容を述べた別の文書の原文（規則の条項と、それを説明する
+    手順書など）を出典に並べられる（#3526。ALCE・Anthropic Citations の形）。各出典は決定的に原文照合され、
+    一致しない出典は公開されない。text は利用者向けの言い換えで、監査で不支持になると印が付く。
+
+    検査の工程（``grounded.verify`` の後）では、1 つの item は出典を 1 つだけ持ち、``evidence_id`` / ``lines`` /
+    ``quote`` はその出典を読む。同じ主張の別の出典は ``CheckedItem.also`` に持つ。
     """
 
     request_id: str = Field(
@@ -266,24 +285,45 @@ class GroundedItem(_StrictModel):
     text: str = Field(
         min_length=1,
         max_length=600,
-        description="quote が支持する範囲だけを質問の言葉で説明する。quote にない画面名・ボタン・値・効果・原因・成功保証を足さない。",
+        description="出典の原文が支持する範囲だけを質問の言葉で説明する。原文にない画面名・ボタン・値・効果・原因・成功保証を足さない。",
     )
-    evidence_id: str = Field(default="", description="根拠の先頭にある [E1] 形式の番号（角括弧なし）。gap 以外は必須。")
-    lines: str = Field(
-        default="",
-        max_length=20,
-        description="引用する行の範囲。行番号（`3| `）の付いた根拠では必ず、text を支える行の番号か範囲（例: 3、3-5）を書く。"
-        "text が述べる操作・値をすべて含む行にする。行番号の無い根拠は空（根拠の全文が引用になる）。",
-    )
-    # 引用の原文。モデルには出力させず（応答の schema に出さない）、evidence_id と lines からシステムが取り出す（#2830）。
-    quote: SkipJsonSchema[str] = Field(
-        default="", max_length=600, description="引用の原文（システムが evidence_id と lines から取り出す。応答の schema には出さない）。"
+    citations: list[GroundedCitation] = Field(
+        default_factory=list,
+        description="text を支える出典。gap 以外は 1 つ以上必須、gap は空。各出典の原文はそれだけで text の全体を支える。"
+        "同じ内容を述べた原文が複数の文書にあれば（規則・要件を定めた条項と、それを説明・運用する手順書など）、item を分けずに文書ごとの出典を並べる。"
+        "同じ文書の同じ原文を重ねない。",
     )
     applies: Literal["matched", "conditional", "unverified"] = Field(
         default="matched",
         description="matched=通常。conditional=原文に適用条件・限定が明記され、質問からその成立を確認できない。unverified はシステムが付ける値で出力しない。",
     )
     condition: str = Field(default="", description="applies=conditional のとき、原文の条件の語句をそのまま写す。原文にない前提は作らない。")
+
+    @property
+    def evidence_id(self) -> str:
+        """最初の出典の根拠の番号（出典が無ければ空）。"""
+        return self.citations[0].evidence_id if self.citations else ""
+
+    @property
+    def lines(self) -> str:
+        """最初の出典の引用する行の範囲。"""
+        return self.citations[0].lines if self.citations else ""
+
+    @property
+    def quote(self) -> str:
+        """最初の出典の引用の原文。"""
+        return self.citations[0].quote if self.citations else ""
+
+    def with_citation(self, **update: str) -> GroundedItem:
+        """最初の出典を ``update``（evidence_id / lines / quote）で置き換えた写し。出典が無ければ作る。"""
+        first = self.citations[0].model_copy(update=update) if self.citations else GroundedCitation(**{"evidence_id": "", **update})
+        return self.model_copy(update={"citations": [first, *self.citations[1:]]})
+
+    def single_citations(self) -> list[GroundedItem]:
+        """出典ごとに 1 つの出典だけを持つ写し（gap・出典の無い item は自身だけ）。"""
+        if len(self.citations) <= 1:
+            return [self]
+        return [self.model_copy(update={"citations": [citation]}) for citation in self.citations]
 
 
 class GroundedApplication(_StrictModel):

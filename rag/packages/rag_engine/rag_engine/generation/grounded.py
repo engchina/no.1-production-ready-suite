@@ -59,7 +59,15 @@ from rag_engine.generation.table_binding import table_mismatch_notes, unbound_ta
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
 from rag_engine.generation.value_grounding import ABSENT_VALUE_REASON, CURRENT_VALUE_REASON, unsupported_document_value_claim
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
-from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedFactAudit, GroundedItem, RequestCoverage, RequestScopePlan
+from rag_engine.models.llm import (
+    GroundedAudit,
+    GroundedCitation,
+    GroundedDraft,
+    GroundedFactAudit,
+    GroundedItem,
+    RequestCoverage,
+    RequestScopePlan,
+)
 from rag_engine.parsing.content_labels import content_labels
 from rag_engine.resources.deadline import (
     ANSWER_FINALIZE_RESERVE_SECONDS,
@@ -70,6 +78,7 @@ from rag_engine.resources.deadline import (
     deadline_cut_short,
 )
 from rag_engine.resources.llm_usage import usage_delta, usage_line, usage_snapshot
+from rag_engine.retrieval.article_catalog import ARTICLE_UNIT_KEY
 from rag_engine.retrieval.character_forms import fold_model_view, fold_text, fold_text_with_positions, fold_width
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
 from rag_engine.retrieval.evidence_cues import evidence_cues
@@ -106,11 +115,11 @@ GENERATE_SYSTEM_PROMPT = (
 - 質問契約: 変更してはいけない目的・条件（request_units の id と kind、requested_granularity など）。
 - 必須根拠（pinned）: 質問に適用できる限り必ず item に使う Evidence の ID。
 - 機能別の根拠: BEGIN_UNTRUSTED_RETRIEVED_CONTEXT と END_UNTRUSTED_RETRIEVED_CONTEXT の間。`=== 機能 F1: 文書名 / 版 / 機能見出し ===` の見出しで機能ごとに分かれ、各 Evidence は `[E1] p.頁 origin=… tags=… pinned` の行で始まる。機能見出しは文書の節名であり、開く画面やメニューとは限らない。
-- 前回の草稿の検査結果（是正時のみ）: 指摘を直し、支持済みの item は同じ evidence_id・lines のまま保持する。
+- 前回の草稿の検査結果（是正時のみ）: 指摘を直し、支持済みの item は同じ citations のまま保持する。
 - 添付原画像と根拠レコードの対応（画像がある場合）: 各画像の bbox / context_bbox / target_highlight / asset_kind。
 - 業務ガイドがある場合は、目的・必要な根拠・終わりの条件を満たす説明を、前提の手順から順に items にする。業務ガイドの手順は質問で分かっている条件に合わせて選んであるので、すべて説明し、利用者が自分で行えない手順も省かない。資料で裏付けられない要件は gap にする。
 - 業務ガイドは答え方の指示で、資料ではない。items の text には quote の原文が裏付ける内容だけを書き、業務ガイドの文（確認先・方針）を写さない。業務ガイドの窓口と引き継ぐ条件は、システムが「業務ガイドの案内」として本文に出す。
-- この指示の quote は、evidence_id と lines が指す根拠の原文を意味する。quote を別に生成するのではなく、その原文が支える内容を書く。
+- この指示の quote は、citations の各出典（evidence_id と lines）が指す根拠の原文を意味する。quote を別に生成するのではなく、その原文が支える内容を書く。
 2.2 Evidence の見出し行
 - origin（見出し行では `origin=` と表記）: document_text は解析された本文、image_extraction は画像からの生成説明・OCR、unclassified は未分類。
 - tags は原文の性質を示す。
@@ -182,8 +191,8 @@ GENERATE_SYSTEM_PROMPT = (
 - result には当てはめの結果（要求への答え）を書く。当てはめで答えた要求は、summary にその結果を書いてよい（items の規則と applications の当てはめでつないだ結論）。
 - 規則の原文が質問と別の制度・手続・対象（機能見出し・文書名で分かる）のものなら、当てはめに使わない。reasoning・result に items の index・根拠の番号（「規則0」「E12」など）を書かず、規則の中身の言葉で書く。
 4.10 出典の網羅
-- 根拠の計画（request_coverage）に挙げた文書ごとに、その文書の原文を quote にした item を作る。規則・要件・定義を定めた原文（規程・法令の条項など）は、手順書・解説が同じ内容を言い換えていても省かず、規則の出典として item にする。
-- 各 item の text は、その quote が支える範囲だけを書く（別の文書の内容を足さない）。同じ文書の同じ原文を重ねて引かない。説明の内容を支えない原文は、質問に関係していても引かない。
+- 根拠の計画（request_coverage）に挙げた文書ごとに、その文書の原文を出典にする。規則・要件・定義を定めた原文（規程・法令の条項など）は、手順書・解説が同じ内容を言い換えていても省かず、規則の出典にする。
+- 説明の内容を支えない原文は、質問に関係していても出典にしない。
 
 ## 5. 出力
 5.1 方針と items の対応
@@ -197,7 +206,7 @@ GENERATE_SYSTEM_PROMPT = (
 - items は最大40件、text は600字以内。超える出力は形式エラーで全体が破棄されるため、同じ根拠の同じ内容の item をまとめ、質問に必要なものを優先する。
 5.3 item の書き方
 - 1 item は1つの操作・規則・確認方法。operation は実施順に並べ、画面→対象→入力→確定の各段階を省略しない。
-- text は引用（evidence_id と lines が指す原文）が支持する範囲だけを質問の言葉で説明する。
+- text は出典（citations）の原文が支持する範囲だけを質問の言葉で説明する。
 - 1つの手順に別機能の item を混ぜない。複数の処理区分が並ぶ原文は区分を選ばず、区分ごとに text=quote（逐語）の item にする。必須根拠（pinned）は質問に適用できる限り必ず item に使う。
 - 通常は applies=matched。原文に適用条件・限定（〜の場合、〜のみ、対象外）が明記され、質問からその成立を確認できない時だけ applies=conditional とし、condition に原文の語句をそのまま写す。applies=unverified は監査の結果からシステムが付ける値で、あなたは出力しない。
 - request_units の各 id に対して、答えられる item を request_id 付きで出す。根拠がない要求は kind=gap にする。kind=context の要求単位は経緯・背景・回答の書き方の指示で、item も gap も作らない。
@@ -1380,6 +1389,9 @@ class CheckedItem:
     unmatched: bool = False  # 引用が原文と照合できなかった item（是正の指摘は dropped に出す。#2738）
     document_value_issue: bool = False  # 資料の値を今回の実値として述べた説明。是正後も同じ検査で確かめる。
     table_conflict: str = ""  # 根拠の表の対応の取り違えで外した item の、表の正しい対応（#2998・#3005）
+    # 同じ主張の別の出典（#3526）。出典ごとに原文照合・決定的な検査（と監査）を通った、出典を 1 つだけ持つ item。
+    # 本文では主張を 1 回だけ出し、出典行を出典ごとに並べる。
+    also: list[CheckedItem] = field(default_factory=list)
 
     def mark(self, code: str, detail: str = "", *, reason: str = "") -> None:
         """言い換えを本文に残したまま、段落に印（``code`` は契約の語彙）を付ける。``reason`` は trace・是正の指摘の文。"""
@@ -1429,6 +1441,16 @@ def answer_use(entry: CheckedItem) -> str:
     if entry.quote_only or entry.state or entry.removed or entry.item.kind == "gap" or entry.item.applies == "unverified":
         return ANSWER_USE_REFERENCE
     return ANSWER_USE_CONFIRMED
+
+
+def item_citations(entry: CheckedItem) -> list[CheckedItem]:
+    """説明の出典ごとの item（自身と、同じ主張の別の出典 ``also``。#3526）。"""
+    return [entry, *entry.also]
+
+
+def cited_entries(entries: Sequence[CheckedItem]) -> list[CheckedItem]:
+    """説明の並びを、出典ごとの item の並びに広げる（出典行・回答に使った根拠の一覧が使う。#3526）。"""
+    return [cited for entry in entries for cited in item_citations(entry)]
 
 
 def primary_procedure_document(checked: Sequence[CheckedItem]) -> tuple[str, ...]:
@@ -1489,7 +1511,8 @@ def check_view(span: dict) -> dict:
 
 def _check_item(item: GroundedItem) -> GroundedItem:
     """検査用の item の写し。引用（原文の範囲）と説明・条件を ``check_view`` と同じ文字の形にそろえる。"""
-    return item.model_copy(update={"text": fold_width(item.text), "quote": fold_width(item.quote), "condition": fold_width(item.condition)})
+    folded = item.model_copy(update={"text": fold_width(item.text), "condition": fold_width(item.condition)})
+    return folded.with_citation(quote=fold_width(item.quote)) if item.citations else folded
 
 
 def item_question(question: str, request_id: str) -> str:
@@ -1587,11 +1610,7 @@ def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, 
             ):
                 labels.add(label)
     labels.update(label for plan in draft.guide_coverage for label in plan.evidence_ids)
-    allowed = {
-        str(candidate["evidence_id"])
-        for label in labels
-        for candidate in _named_spans(item.model_copy(update={"evidence_id": label}), spans)
-    }
+    allowed = {str(candidate["evidence_id"]) for label in labels for candidate in _label_spans(label, spans)}
     return str(span["evidence_id"]) not in allowed
 
 
@@ -1635,6 +1654,70 @@ def _plan_undecided_errors(draft: GroundedDraft, spans: Sequence[dict]) -> list[
         ):
             errors.append(f"{item.request_id or '-'}: {item.evidence_id} の対象を計画で照合できませんでした。")
     return list(dict.fromkeys(errors))
+
+
+# 1 つの説明に付ける出典の上限（#3526）。超えた分は照合しない（出典ごとに検査・監査するため）。
+MAX_ITEM_CITATIONS = 4
+
+CitationCheck = tuple[CheckedItem | None, list[dict], dict[str, str]]
+
+
+def _citation_dropped(note: Mapping[str, Any]) -> dict:
+    """主張を別の出典で公開したときに外した出典の記録。是正の指摘・問題の数・要約の保留に数えない（trace 用）。"""
+    kept = {key: value for key, value in note.items() if key not in {"scope_excluded", "kept"}}
+    return {**kept, "ignored": True, "citation_dropped": True}
+
+
+def merge_citations(
+    index: int, item: GroundedItem, results: Sequence[CitationCheck]
+) -> tuple[list[CheckedItem], list[dict], dict[str, str]]:
+    """出典ごとに照合・検査した結果を、1 つの主張にまとめる（#3526）。
+
+    印の無い（確かめた）出典が 1 つでもあれば、最初のものを主の出典にし、ほかの確かめた出典を ``also`` に並べる。
+    照合できない・計画の外・検査の印が付いた出典は外し、指摘は trace にだけ残す（根拠の無い出典を公開しない）。
+    確かめた出典が無ければ、根拠に結べた最初の出典だけで今までどおり扱う（印を付けて残す・計画の外なら外す）。
+    同じ根拠を指す出典は 1 つにする。
+    """
+    if len(results) <= 1:
+        entry, notes, subs = results[0] if results else (None, [], {})
+        return ([entry] if entry is not None else []), list(notes), dict(subs)
+    confirmed = [result for result in results if result[0] is not None and result[0].confirmed]
+    if confirmed:
+        primary, primary_notes, primary_subs = confirmed[0]
+        assert primary is not None
+        seen = {primary.span["evidence_id"]} if primary.span else set()
+        notes = list(primary_notes)
+        for entry, own_notes, _subs in results:
+            if entry is primary:
+                continue
+            if entry is not None and entry.confirmed and entry.span and entry.span["evidence_id"] not in seen:
+                seen.add(entry.span["evidence_id"])
+                primary.also.append(entry)
+                notes.extend(own_notes)
+                continue
+            notes.extend(_citation_dropped(note) for note in own_notes)
+            if entry is not None and not own_notes:
+                notes.append(
+                    _citation_dropped(
+                        {
+                            "index": index,
+                            "evidence_id": entry.span["evidence_id"] if entry.span else "",
+                            "text": item.text,
+                            "quote": entry.item.quote,
+                            "reason": "; ".join(entry.reasons) or "同じ根拠を指す出典",
+                        }
+                    )
+                )
+        return [primary], notes, dict(primary_subs)
+    chosen = next(
+        (result for result in results if result[0] is not None and result[0].span is not None and not result[0].unmatched),
+        next((result for result in results if result[0] is not None), results[0]),
+    )
+    notes = list(chosen[1])
+    for result in results:
+        if result is not chosen:
+            notes.extend(_citation_dropped(note) for note in result[1])
+    return ([chosen[0]] if chosen[0] is not None else []), notes, dict(chosen[2])
 
 
 def verify(
@@ -1685,34 +1768,11 @@ def verify(
             }
         return check_contexts[text]
 
-    for index, item in enumerate(draft.items):
-        if item.kind != "gap":
-            item = _inline_evidence(item, spans)
-        scoped_question = item_question(question, item.request_id)
-        local = check_context(scoped_question)
-        if item.kind == "gap":
-            if item.request_id in context_ids:
-                # 背景文（kind=context）は答える対象ではない。それに対する gap は利用者に意味がない (#650)。
-                # ignored: 次の生成に直させる指摘ではないので、問題数にも是正の指摘にも数えない。
-                dropped.append(
-                    {
-                        "index": index,
-                        "evidence_id": "",
-                        "reason": "背景文への gap は公開しない",
-                        "text": item.text,
-                        "quote": "",
-                        "ignored": True,
-                    }
-                )
-                continue
-            if _EVIDENCE_LABEL.search(item.text):
-                # 「E5 は…参照できません」は prompt の話で文書の話ではない。利用者に見せない (#642)。
-                dropped.append(
-                    {"index": index, "evidence_id": "", "reason": "根拠ラベルを参照する gap は公開しない", "text": item.text, "quote": ""}
-                )
-                continue
-            checked.append(CheckedItem(item.model_copy(update={"evidence_id": "", "quote": "", "applies": "matched", "condition": ""})))
-            continue
+    def check_citation(index: int, item: GroundedItem, scoped_question: str, local: dict[str, Any]) -> CitationCheck:
+        """出典が 1 つの item を原文と照合し、決定的な検査の印を付ける（公開する item・指摘・別対象の置き換え）。"""
+        result: CheckedItem | None = None
+        notes: list[dict] = []
+        subs: dict[str, str] = {}
         # 行の範囲で指した引用は、その原文を quote にする（#2830）。
         item, cite_error = cited_quote(item, spans)
         match: dict = {}
@@ -1735,14 +1795,14 @@ def verify(
                 }
             # 言い換えは削除せず本文に残して印を付ける（#2738。以前は削除し、近い原文を原文のみ提示にしていた）。
             if kept := _unmatched_item(item, index, spans, match, quote):
-                checked.append(kept)
+                result = kept
                 entry["kept"] = True
-            dropped.append(entry)
-            continue
+            notes.append(entry)
+            return result, notes, subs
         scope_unsettled = False
         if _outside_request_plan(item, span, draft, spans):
             scope_unsettled = bool(plan_unsettled) and not _plan_marks_unrelated(item, span, draft, spans)
-            dropped.append(
+            notes.append(
                 {
                     "index": index,
                     "evidence_id": span["evidence_id"],
@@ -1755,10 +1815,10 @@ def verify(
                 }
             )
             if not scope_unsettled:
-                continue
+                return result, notes, subs
         view = views.get(id(span)) or check_view(span)
         candidate = CheckedItem(
-            _normalized(item.model_copy(update={"evidence_id": span["evidence_id"], "quote": quote}), view),
+            _normalized(item.with_citation(evidence_id=span["evidence_id"], quote=quote), view),
             span,
             quote_match=match.get("kind", "exact"),
             draft_index=index,
@@ -1789,7 +1849,7 @@ def verify(
             _mark_check(entry, GENERATED_VALUE_CHECK, "生成説明の値『" + "』『".join(conflicting) + "』が同じ機能の本文にない")
         for asked, other in _substituted_objects(local["objects"], entry.item.text):
             _mark_check(entry, QUESTION_TARGET_CHECK, f"質問の対象『{asked}』は根拠になく、別の対象『{other}』の説明")
-            substituted.setdefault(asked, other)
+            subs.setdefault(asked, other)
         if (
             local["missing_errors"]
             and entry.item.kind in {"operation", "confirmation", "rule"}
@@ -1825,13 +1885,49 @@ def verify(
             # 質問の操作対象（「社印」）が根拠のどこにもない。資料にある別の対象（「角印」）の手順を適用扱いにしない (#700)。
             _mark_check(entry, QUESTION_TARGET_CHECK, "質問の対象『" + "』『".join(local["targets"]) + "』は根拠になく、別の箇所の手順")
             for asked in local["targets"]:
-                substituted.setdefault(asked, "")
+                subs.setdefault(asked, "")
         for asked in _claims_about_absent_object([*local["objects"], *local["targets"]], entry.item):
             # 「地区別売上集計表は…CSV として出力して作成します」のように、資料にない対象を主語に
             # 資料の別内容を結び付けた定義。引用が述部を支持していても対象の話ではない (#673)。
             _mark_check(entry, QUESTION_TARGET_CHECK, f"質問の対象『{asked}』は根拠になく、その対象についての説明")
-            substituted.setdefault(asked, "")
-        checked.append(entry)
+            subs.setdefault(asked, "")
+        return entry, notes, subs
+
+    for index, item in enumerate(draft.items):
+        if item.kind != "gap":
+            item = _inline_evidence(item, spans)
+        scoped_question = item_question(question, item.request_id)
+        local = check_context(scoped_question)
+        if item.kind == "gap":
+            if item.request_id in context_ids:
+                # 背景文（kind=context）は答える対象ではない。それに対する gap は利用者に意味がない (#650)。
+                # ignored: 次の生成に直させる指摘ではないので、問題数にも是正の指摘にも数えない。
+                dropped.append(
+                    {
+                        "index": index,
+                        "evidence_id": "",
+                        "reason": "背景文への gap は公開しない",
+                        "text": item.text,
+                        "quote": "",
+                        "ignored": True,
+                    }
+                )
+                continue
+            if _EVIDENCE_LABEL.search(item.text):
+                # 「E5 は…参照できません」は prompt の話で文書の話ではない。利用者に見せない (#642)。
+                dropped.append(
+                    {"index": index, "evidence_id": "", "reason": "根拠ラベルを参照する gap は公開しない", "text": item.text, "quote": ""}
+                )
+                continue
+            checked.append(CheckedItem(item.model_copy(update={"citations": [], "applies": "matched", "condition": ""})))
+            continue
+        # 出典ごとに照合・検査し、通った出典を 1 つの主張にまとめる（#3526）。
+        results = [check_citation(index, cited, scoped_question, local) for cited in item.single_citations()[:MAX_ITEM_CITATIONS]]
+        kept_entries, notes, subs = merge_citations(index, item, results)
+        checked.extend(kept_entries)
+        dropped.extend(notes)
+        for asked, other in subs.items():
+            substituted.setdefault(asked, other)
     for asked in substituted:
         # 別対象の手順で答えた item には警告を付け、質問の対象が資料にないことを本文で伝える (#642)。
         checked.append(CheckedItem(GroundedItem(kind="gap", text=f"『{asked}』は取得した資料に記載がありません。")))
@@ -1858,8 +1954,8 @@ def verify(
         proviso = _following_proviso(entry) if entry.span and not entry.added else ""
         if proviso and not any(e.span and _compact(proviso) in _compact(e.item.quote) for e in checked):
             checked.append(_quote_item(entry.span, proviso, "引用直後の但し書き"))
-    used = {entry.span["evidence_id"] for entry in checked if entry.span}
-    texts = "\n".join(entry.item.text + entry.item.quote for entry in checked)
+    used = {entry.span["evidence_id"] for entry in cited_entries(checked) if entry.span}
+    texts = "\n".join(entry.item.text + entry.item.quote for entry in cited_entries(checked))
     for span in spans:
         # 採用した操作と同じ根拠にある確定操作が落ちた場合は、原文のまま補う。
         match = check_cues().completion.search(span["text"]) if span["evidence_id"] in used else None
@@ -1936,8 +2032,7 @@ def _unmatched_item(item: GroundedItem, index: int, spans: Sequence[dict], match
         span, quote, code = nearest["span"], nearest["quote"], "quote_unmatched"
     else:
         span, quote, code = None, item.quote, "citation_error"
-    update: dict[str, Any] = {"quote": quote, "evidence_id": span["evidence_id"] if span else ""}
-    copied = item.model_copy(update=update)
+    copied = item.with_citation(quote=quote, evidence_id=span["evidence_id"] if span else "")
     entry = CheckedItem(
         _normalized(copied, check_view(span)) if span else copied.model_copy(update={"applies": "matched", "condition": ""}),
         span,
@@ -1966,10 +2061,10 @@ def _inline_evidence(item: GroundedItem, spans: Sequence[dict]) -> GroundedItem:
         if label.group() not in codes
     ]
     text = _clean_evidence_labels(item.text, spans)
-    evidence_id = item.evidence_id
+    item = item.model_copy(update={"text": text})
     if not _named_spans(item, spans) and len(set(labels)) == 1:
-        evidence_id = labels[0]
-    return item.model_copy(update={"text": text, "evidence_id": evidence_id})
+        item = item.with_citation(evidence_id=labels[0])
+    return item
 
 
 def _clean_evidence_labels(text: str, spans: Sequence[dict]) -> str:
@@ -2006,7 +2101,7 @@ def recover_audited_quotes(
         quote = _original_quote(review.support_quote, entry.span["text"])
         if not quote:
             continue
-        item = entry.item.model_copy(update={"quote": quote, "lines": "", "evidence_id": entry.span["evidence_id"]})
+        item = entry.item.with_citation(quote=quote, lines="", evidence_id=entry.span["evidence_id"])
         verified, _ = verify(question, GroundedDraft(items=[item], summary="", confidence="low"), spans, guide_sources=guide_sources)
         replacement = next((candidate for candidate in verified if candidate.draft_index == 0), None)
         if replacement is None or replacement.unmatched or replacement.removed:
@@ -2663,7 +2758,7 @@ def without_redundant_quotes(checked: Sequence[CheckedItem]) -> list[CheckedItem
     根拠と矛盾して外した item（removed）は「根拠と矛盾し除いた内容」の節に出すので残し、重複の判定には使わない。
     同じ引用・同じ説明の item が重なれば、印の無い（確かめた）item を残す（#2738）。
     """
-    verified = [e for e in checked if e.span and e.published]
+    verified = [cited for e in checked if e.span and e.published for cited in item_citations(e)]
     kept: list[CheckedItem] = []
     for entry in checked:
         if entry.removed:
@@ -2757,7 +2852,14 @@ def carry_over(candidate: Sequence[CheckedItem], previous: Sequence[CheckedItem]
         ):
             # 撤回（withdrawn）はその round の監査の判定なので、引き継いだ複製では数え直す（#2738）。
             kept.append(
-                replace(entry, reasons=list(entry.reasons), marks=[dict(mark) for mark in entry.marks], carried=True, withdrawn=False)
+                replace(
+                    entry,
+                    reasons=list(entry.reasons),
+                    marks=[dict(mark) for mark in entry.marks],
+                    carried=True,
+                    withdrawn=False,
+                    also=list(entry.also),
+                )
             )
     return kept
 
@@ -2822,8 +2924,7 @@ def _quote_item(span: dict, quote: str, reason: str) -> CheckedItem:
     item = GroundedItem(
         kind="rule" if "definition" in span.get("tags", ()) else "operation",
         text=quote,
-        evidence_id=span["evidence_id"],
-        quote=quote,
+        citations=[GroundedCitation(evidence_id=span["evidence_id"], quote=quote)],
         applies="unverified",
     )
     return CheckedItem(item, span, quote_only=True, reasons=[reason], added=True)
@@ -2865,6 +2966,77 @@ def mentions_output_fields(text: str) -> bool:
 def output_field_claim(fields: Any, text: str) -> Any:
     """照合を当てる出力項目の判定。モデルが列を主張したと申告し、文も出力物の列・項目を述べるときだけ返す（#2821）。"""
     return fields if fields is not None and fields.asserts_output_fields and mentions_output_fields(text) else None
+
+
+def _article_unit(span: Mapping[str, Any] | None) -> bool:
+    """条で構成された文書の条の根拠か（文書の構造で決める。#3526）。"""
+    return bool(span and span.get(ARTICLE_UNIT_KEY))
+
+
+def _accepted_review(review: Any) -> bool:
+    """出典が説明を支え、質問に当てはまらないとは判定されなかったか。"""
+    return review.support == "supported" and review.applicability != "not_applicable"
+
+
+def settle_citation_reviews(
+    checked: Sequence[CheckedItem],
+    audit: GroundedAudit,
+    also_audited: Sequence[tuple[int, CheckedItem, CheckedItem]],
+    dropped: list[dict],
+) -> GroundedAudit:
+    """同じ主張の別の出典（``also``）の監査を出典ごとに反映する（#3526）。
+
+    支持された別の出典だけを残し、支持されなかった出典は外して ``dropped`` に記録する（根拠の無い出典を公開しない）。
+    主の出典が支持されず、別の出典が支持されたら、その出典を主にして主張を公開できる形にする。別の出典の判定は
+    reviews から外す（主張の判定は主の出典の index に 1 つ）。業務ガイドの要件の判定が指す別の出典の index は、主の
+    出典の index に移す。
+    """
+    if not also_audited:
+        return audit
+    positions = {id(entry): index for index, entry in enumerate(checked)}
+    reviews = {review.index: review for review in audit.reviews}
+    primary_of = {index: positions.get(id(entry), -1) for index, entry, _other in also_audited}
+    promoted: dict[int, Any] = {}
+
+    def drop(entry: CheckedItem, other: CheckedItem, reason: str) -> None:
+        entry.also = [cited for cited in entry.also if cited is not other]
+        dropped.append(
+            _citation_dropped(
+                {
+                    "index": entry.draft_index if entry.draft_index is not None else -1,
+                    "evidence_id": other.span["evidence_id"] if other.span else "",
+                    "text": other.item.text,
+                    "quote": other.item.quote,
+                    "reason": reason,
+                }
+            )
+        )
+
+    for index, entry, other in also_audited:
+        review = reviews.get(index)
+        if review is None or other not in entry.also:
+            continue
+        if not _accepted_review(review):
+            drop(entry, other, f"監査: {review.support}/{review.applicability} {review.reason}")
+            continue
+        primary_index = primary_of[index]
+        own = reviews.get(primary_index)
+        if own is not None and not _accepted_review(own) and primary_index not in promoted:
+            # 主の出典が支持されなかった。支持された別の出典を主にし、主だった出典を外す。
+            former = replace(entry, also=[])
+            entry.also = [cited for cited in entry.also if cited is not other]
+            entry.item, entry.span, entry.quote_match, entry.hints = other.item, other.span, other.quote_match, list(other.hints)
+            drop(entry, former, f"監査: {own.support}/{own.applicability} {own.reason}")
+            promoted[primary_index] = review.model_copy(update={"index": primary_index})
+    return audit.model_copy(
+        update={
+            "reviews": [promoted.get(review.index, review) for review in audit.reviews if review.index not in primary_of],
+            "guide_requirement_reviews": [
+                review.model_copy(update={"item_indexes": list(dict.fromkeys(primary_of.get(i, i) for i in review.item_indexes))})
+                for review in audit.guide_requirement_reviews
+            ],
+        }
+    )
 
 
 def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
@@ -2924,6 +3096,18 @@ def _citation(span: dict) -> str:
     # 頁の無い根拠（Excel の行の記録）はシートとセル範囲を出す（#1224）。
     location = span.get("location") or answer_labels().page(span.get("page", ""))
     return f"{answer_labels().citation_prefix}{span.get('source', '')} {location}"
+
+
+def _cited_line(entry: CheckedItem) -> str:
+    """出典ごとの item の出典行（根拠が無ければ空）。"""
+    return _citation(entry.span) if entry.span else ""
+
+
+def _citation_keys(entry: CheckedItem) -> list[str]:
+    """説明の出典行（出典の順。同じ出典・頁は 1 行。#3526）。根拠の無い説明は空。"""
+    if entry.span is None:
+        return []
+    return list(dict.fromkeys(line for cited in item_citations(entry) if (line := _cited_line(cited))))
 
 
 def is_structural_line(text: str) -> bool:
@@ -3247,7 +3431,16 @@ def withhold_superseded(checked: Sequence[CheckedItem], superseded: set[str]) ->
     """
     count = 0
     for entry in checked:
-        if entry.span and entry.published and entry.span.get("evidence_id") in superseded:
+        if not (entry.span and entry.published):
+            continue
+        # 同じ主張の別の出典（#3526）は、今の版の出典だけを残す。主の出典が旧版なら今の版の出典を主にする。
+        if entry.also:
+            current = [cited for cited in item_citations(entry) if cited.span and cited.span.get("evidence_id") not in superseded]
+            if current and current[0] is not entry:
+                first = current[0]
+                entry.item, entry.span, entry.quote_match, entry.hints = first.item, first.span, first.quote_match, list(first.hints)
+            entry.also = current[1:]
+        if entry.span and entry.span.get("evidence_id") in superseded:
             entry.mark("superseded", SUPERSEDED_REASON + "：" + _span_title(entry.span).strip(), reason=SUPERSEDED_REASON)
             count += 1
     return count
@@ -3445,12 +3638,15 @@ def render_answer(
             if entry.state and (mark := passage_marks.passage_mark(line, entry.marks)):
                 marks.append(mark)
             following = entries[number] if number < len(entries) else None
-            if entry.span:
+            keys = _citation_keys(entry)
+            if keys:
                 pending.append(entry)
-            # 同じ出典・頁が続く間は出典行を繰り返さない。行にまとめた説明の根拠はすべて残す（#2710）。
-            if entry.span and (following is None or following.span is None or _citation(following.span) != _citation(entry.span)):
-                out.append(_citation(entry.span))
-                citation_entries.append(pending)
+            # 同じ出典・頁が続く間は出典行を繰り返さない。行にまとめた説明の根拠はすべて残す（#2710）。出典が複数の
+            # 説明（#3526）は出典ごとに出典行を並べる。
+            if keys and (following is None or _citation_keys(following) != keys):
+                for key in keys:
+                    out.append(key)
+                    citation_entries.append([cited for done in pending for cited in item_citations(done) if _cited_line(cited) == key])
                 pending = []
         return out
 
@@ -3767,7 +3963,7 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem
     if not units:
         return item, ""
     if not _numbered(text, units):
-        return item.model_copy(update={"quote": text[units[0][0] : units[-1][1]].strip()}), ""
+        return item.with_citation(quote=text[units[0][0] : units[-1][1]].strip()), ""
     found = _CITE_RANGE.match(item.lines or "")
     listed = _CITE_LIST.match(item.lines or "")
     if found:
@@ -3782,7 +3978,7 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem
         return item, f"行番号の付いた根拠は lines に引用する行の番号か範囲（1〜{len(units)}）を書く"
     if not 1 <= first <= last <= len(units):
         return item, f"lines の範囲 {item.lines} が根拠の行（1〜{len(units)}）の外にある"
-    return item.model_copy(update={"quote": text[units[first - 1][0] : units[last - 1][1]].strip()}), ""
+    return item.with_citation(quote=text[units[first - 1][0] : units[last - 1][1]].strip()), ""
 
 
 def _retrieved_heading_context(spans: Sequence[dict]) -> list[dict]:
@@ -4041,6 +4237,16 @@ class Round:
                     "kind": e.item.kind,
                     "text": e.item.text,
                     "quote": e.item.quote,
+                    # 同じ主張の別の出典（#3526）。
+                    **(
+                        {
+                            "other_evidence_refs": [
+                                {"evidence_id": o.span["evidence_id"], "text": o.span["text"][:80]} for o in e.also if o.span
+                            ]
+                        }
+                        if e.also
+                        else {}
+                    ),
                 }
                 for e in self.checked
                 if e.confirmed
@@ -4076,6 +4282,8 @@ class Round:
                     "hints": e.hints,
                     "carried": e.carried,
                     "withdrawn": e.withdrawn,
+                    # 同じ主張の別の出典（#3526）。
+                    **({"also": [{"evidence_id": o.item.evidence_id, "quote": o.item.quote} for o in e.also]} if e.also else {}),
                     **({"marks": [dict(mark) for mark in e.marks]} if e.marks else {}),
                     **({"removed": True} if e.removed else {}),
                 }
@@ -4884,6 +5092,7 @@ def detach_unsourced(checked: Sequence[CheckedItem]) -> int:
     for entry in checked:
         if entry.span is not None and not entry.removed and any(mark["code"] in UNSOURCED_MARK_CODES for mark in entry.marks):
             entry.span = None
+            entry.also = []
             count += 1
     return count
 
@@ -5131,7 +5340,9 @@ def run_round(
             for span in spans
             if any(
                 not _outside_request_plan(
-                    GroundedItem(kind="rule", request_id=plan.request_id, text=span["text"], evidence_id=span["label"]),
+                    GroundedItem(
+                        kind="rule", request_id=plan.request_id, text=span["text"], citations=[GroundedCitation(evidence_id=span["label"])]
+                    ),
                     span,
                     planned,
                     spans,
@@ -5262,10 +5473,23 @@ def run_round(
     # 印の付いた説明も監査する（根拠と矛盾すれば外す。#2738）。システムが補った原文・外した説明は監査しない。
     auditable = [(index, entry) for index, entry in enumerate(checked) if entry.span and entry.published]
     audit_index = {id(entry): index for index, entry in auditable}
-    if spans and audit_mode != AUDIT_MODE_NONE:
+    # 監査なしの型でも、条で構成された文書の条を出典にした説明だけは事実の監査（standard）に掛ける（#3526）。
+    # 規則の出典が増えても、条の原文が支えない説明に条の出典を付けて公開しない（出典の適合率を守る）。
+    audited = (
+        [(index, entry) for index, entry in auditable if any(_article_unit(cited.span) for cited in item_citations(entry))]
+        if audit_mode == AUDIT_MODE_NONE
+        else auditable
+    )
+    # 同じ主張の別の出典（#3526）も出典ごとに監査する。index は items・業務ガイドの案内の後ろに続ける。
+    also_base = len(checked) + len(guide_notices)
+    also_audited = [(also_base + offset, entry, other) for offset, (entry, other) in enumerate((e, o) for _, e in audited for o in e.also)]
+    if spans and audited and audit_mode == AUDIT_MODE_NONE:
+        timing["article_audit_items"] = len(audited)
+    if spans and (audit_mode != AUDIT_MODE_NONE or audited):
         # 未使用根拠の基準は草稿の items。システムが補った原文のみ提示（必須根拠・確定操作・但し書き）は草稿が
         # 使っていないので未使用に含め、gap だけの草稿でも見落とした根拠を監査に見せる (#1014)。
-        used = {entry.span["evidence_id"] for entry in checked if entry.span and not entry.added}
+        used = {entry.span["evidence_id"] for entry in cited_entries(checked) if entry.span and not entry.added}
+        audit_entries = [*audited, *((index, other) for index, _entry, other in also_audited)]
         inputs = {
             "question": question,
             "task_contract": _contract_view(question),
@@ -5292,21 +5516,23 @@ def run_round(
                     "heading": " > ".join(str(h) for h in e.span.get("section_path", []) or []),
                     "function_limits": e.span.get("limits", []),
                 }
-                for index, e in auditable
+                for index, e in audit_entries
             ],
             # item が引用した根拠そのものの本文。quote は根拠の一部を切り出した抜粋で、item の主張の
             # 一部しか含まないことが多い。画面の生成説明が根拠のときは function_context が空になる
             # （同じ機能の「別の」span の、生成説明を「除いた」本文という定義のため）ので、引用元を
             # 見せないと監査は根拠に書かれている操作まで「根拠にない」と判定する (#1086)。
-            "evidence": {e.span["evidence_id"]: e.span.get("text", "")[:AUDIT_EVIDENCE_TEXT_CHARS] for _, e in auditable},
+            "evidence": {e.span["evidence_id"]: e.span.get("text", "")[:AUDIT_EVIDENCE_TEXT_CHARS] for _, e in audit_entries},
             # 同じ機能の本文（生成説明を除く）。決定的検査（#676/#698）と同じく、隣の span にある手順を
             # text が書いただけで「引用にない操作」と判定させない (#706)。機能ごとに 1 回だけ載せる。
             "function_context": {
-                _function_label(e.span): _audit_function_context(e.span) for _, e in auditable if e.span.get("function_texts")
+                _function_label(e.span): _audit_function_context(e.span) for _, e in audit_entries if e.span.get("function_texts")
             },
             "gaps": [e.item.text for e in checked if e.item.kind == "gap"],
             # 規則を質問の事実に当てはめた結果（#2155）。item_indexes は上の items の index。
-            "applications": application_audit_view(applications, lambda item: audit_index.get(id(item))),
+            "applications": application_audit_view(applications, lambda item: audit_index.get(id(item)))
+            if audit_mode != AUDIT_MODE_NONE
+            else [],
             "known_gaps": known_gap_labels(known_gaps),
         }
         if glossary:
@@ -5380,6 +5606,7 @@ def run_round(
         if audit_usage := usage_delta(usage_before):
             timing["audit_usage"] = audit_usage
         if audit is not None:
+            audit = settle_citation_reviews(checked, audit, also_audited, dropped)
             recovered = recover_audited_quotes(
                 question, checked, audit, spans, guide_sources=[source for _id, _title, sources in guide_steps for source in sources]
             )
@@ -5396,6 +5623,12 @@ def run_round(
         "unmatched": sum(e.unmatched for e in procedures),
     }
     if audit_mode == AUDIT_MODE_NONE:
+        if audited and audit is None:
+            # 条の出典の説明の監査が時間の上限で切れた・応答が空だった（#3526）。原文との照合だけを済ませた未確認の説明。
+            detail = "回答の時間の上限までに監査が終わらなかった" if audit_cut else "監査の応答が得られなかった"
+            for _index, entry in audited:
+                if not entry.carried:
+                    entry.mark("unassessed", detail)
         # 監査なしの型（#2800）: 要求の充足は説明の有無で決め、主張の支持・目的・要約は決定的な検査だけにする。
         audit = deterministic_audit(question, checked)
         timing["audit"] = AUDIT_MODE_NONE

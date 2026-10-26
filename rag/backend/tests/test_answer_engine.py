@@ -161,7 +161,13 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
         body = "受注番号を入力し、登録ボタンを押します。"
         match = re.search(r"\[(E[0-9]+)\].*?" + re.escape(body), prompt, re.DOTALL)
         items = (
-            [{"kind": "rule", "text": body, "evidence_id": match.group(1), "quote": body}]
+            [
+                {
+                    "kind": "rule",
+                    "text": body,
+                    "citations": [{"evidence_id": match.group(1), "quote": body}],
+                }
+            ]
             if match
             else []
         )

@@ -30,6 +30,9 @@ from rag_engine.dependencies import report_degraded
 
 # 候補の record の metadata に付ける印（選んだ順・文書・目録の行）。
 ARTICLE_CATALOG_KEY = "article_catalog"
+# 条で構成された文書（XML ツリー JSON の段落）の根拠の印（record の metadata と、回答の根拠 span の key。#3526）。
+# 文書の構造で決める（語の一覧を持たない）。回答はこの根拠を出典にした説明を事実の監査に掛ける。
+ARTICLE_UNIT_KEY = "article_unit"
 
 ARTICLE_SELECTION_SYSTEM_PROMPT = (
     "あなたは条で構成された文書（法令・規程・約款など）の調査担当です。\n"

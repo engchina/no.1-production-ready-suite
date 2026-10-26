@@ -205,7 +205,13 @@ def deterministic_parse_text_response(
         items = []
         if evidence:
             evidence_id, quote = evidence
-            items = [{"kind": "rule", "text": quote, "evidence_id": evidence_id, "quote": quote}]
+            items = [
+                {
+                    "kind": "rule",
+                    "text": quote,
+                    "citations": [{"evidence_id": evidence_id, "quote": quote}],
+                }
+            ]
         return GroundedDraft.model_validate(
             {"summary": "決定論スタブの回答", "items": items, "confidence": "high"}
         )

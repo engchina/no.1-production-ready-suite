@@ -23,7 +23,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from rag_engine.generation import grounded
-from rag_engine.models.llm import GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedItem
 from rag_engine.retrieval.guide_steps import GuidePlan, GuideStep
 
 # 監査が離れた 2 か所の原文をつなぐ印（`ValidationClaimCheck.evidence_quote` の説明）。
@@ -104,7 +104,11 @@ def _items(claims: Sequence[Mapping[str, Any]], spans: Sequence[dict]) -> tuple[
                 continue
             checked.append(
                 grounded.CheckedItem(
-                    GroundedItem(kind="operation", text=paragraph[:_MAX_ITEM_CHARS], quote=quote[:_MAX_ITEM_CHARS]),
+                    GroundedItem(
+                        kind="operation",
+                        text=paragraph[:_MAX_ITEM_CHARS],
+                        citations=[GroundedCitation(evidence_id="", quote=quote[:_MAX_ITEM_CHARS])],
+                    ),
                     span=span,
                 )
             )

@@ -16,8 +16,7 @@ def rule_item(eid):
         "kind": "rule",
         "request_id": "Q1",
         "text": "延滞料は延滞日数に100円を掛けた額です。",
-        "evidence_id": eid,
-        "quote": "延滞料は、延滞日数に100円を掛けた額とする。",
+        "citations": [{"evidence_id": eid, "quote": "延滞料は、延滞日数に100円を掛けた額とする。"}],
     }
 
 

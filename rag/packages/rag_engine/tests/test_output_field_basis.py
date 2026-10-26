@@ -4,7 +4,7 @@ import pytest
 
 from rag_engine.evaluation.answer_validation import ValidationClaimCheck, _enforce_support
 from rag_engine.generation import grounded
-from rag_engine.models.llm import GroundedAudit, GroundedItem
+from rag_engine.models.llm import GroundedAudit, GroundedCitation, GroundedItem
 
 QUOTE = "ファイル A の列は区分と年度です。"
 
@@ -23,7 +23,8 @@ def test_both_audits_require_the_definition_and_output_identity(quote, matches, 
     fields = {"asserts_output_fields": True, "definition_quote": quote, "output_artifact_matches": matches}
     text = "ファイル A に区分列があります。"
     entry = grounded.CheckedItem(
-        GroundedItem(kind="operation", text=text, quote=QUOTE, evidence_id="E1"), {"text": QUOTE, "evidence_id": "E1"}
+        GroundedItem(kind="operation", text=text, citations=[GroundedCitation(quote=QUOTE, evidence_id="E1")]),
+        {"text": QUOTE, "evidence_id": "E1"},
     )
     review = {"index": 0, "support": "supported", "applicability": "matched", "reason": "合成の判定", "output_fields": fields}
     grounded.apply_audit([entry], GroundedAudit(reviews=[review], summary_supported=True, goal_alignment="aligned"))
@@ -51,7 +52,11 @@ def test_both_audits_require_the_definition_and_output_identity(quote, matches, 
 def test_screen_filter_is_not_a_definition_even_for_a_carried_item(carried):
     quote = "画面 A の抽出条件: 区分"
     entry = grounded.CheckedItem(
-        GroundedItem(kind="operation", text="出力データ A の区分列で絞り込みます。", quote=quote, evidence_id="E1"),
+        GroundedItem(
+            kind="operation",
+            text="出力データ A の区分列で絞り込みます。",
+            citations=[GroundedCitation(quote=quote, evidence_id="E1")],
+        ),
         {"text": quote, "evidence_id": "E1"},
         carried=carried,
     )
@@ -76,7 +81,11 @@ def test_screen_filter_is_not_a_definition_even_for_a_carried_item(carried):
 def test_invented_definition_is_not_supported_by_either_audit():
     fields = {"asserts_output_fields": True, "definition_quote": "ファイル A に年度列があります。", "output_artifact_matches": True}
     quote = "抽出条件は年度です。"
-    item = GroundedItem(kind="operation", text="ファイル A の年度列で絞ります。", quote=quote, evidence_id="E1")
+    item = GroundedItem(
+        kind="operation",
+        text="ファイル A の年度列で絞ります。",
+        citations=[GroundedCitation(quote=quote, evidence_id="E1")],
+    )
     entry = grounded.CheckedItem(item, {"text": quote, "evidence_id": "E1"})
     audit = GroundedAudit(
         reviews=[{"index": 0, "support": "supported", "applicability": "matched", "reason": "合成", "output_fields": fields}],
@@ -95,7 +104,8 @@ def test_invented_definition_is_not_supported_by_either_audit():
 def test_confirmed_export_operation_is_retained_and_unsupported_summary_is_detected():
     quote = "一覧 A を選びファイル出力を実行します。"
     entry = grounded.CheckedItem(
-        GroundedItem(kind="operation", text=quote, quote=quote, evidence_id="E1"), {"text": quote, "evidence_id": "E1"}
+        GroundedItem(kind="operation", text=quote, citations=[GroundedCitation(quote=quote, evidence_id="E1")]),
+        {"text": quote, "evidence_id": "E1"},
     )
     audit = GroundedAudit(
         reviews=[{"index": 0, "support": "supported", "applicability": "matched", "reason": "出力操作", "output_fields": None}],
@@ -128,7 +138,9 @@ def test_paragraph_without_column_claim_keeps_supported_with_an_empty_object():
     )
     assert result[0].status == "supported"
     entry = grounded.CheckedItem(
-        GroundedItem(kind="operation", text=quote, quote=quote, evidence_id="E1"), {"text": quote, "evidence_id": "E1"}, carried=True
+        GroundedItem(kind="operation", text=quote, citations=[GroundedCitation(quote=quote, evidence_id="E1")]),
+        {"text": quote, "evidence_id": "E1"},
+        carried=True,
     )
     audit = GroundedAudit(
         reviews=[{"index": 0, "support": "unsupported", "applicability": "matched", "reason": "揺れ", "output_fields": fields}],
@@ -171,7 +183,8 @@ def test_operation_paragraph_is_not_checked_even_when_the_model_claims_columns(t
     result = _enforce_support([claim], [{"id": "A1", "text": text}], {"E1": {"id": "c1", "text": text}}, {"c1": text}, [text])
     assert result[0].status == "supported"
     entry = grounded.CheckedItem(
-        GroundedItem(kind="operation", text=text, quote=text, evidence_id="E1"), {"text": text, "evidence_id": "E1"}
+        GroundedItem(kind="operation", text=text, citations=[GroundedCitation(quote=text, evidence_id="E1")]),
+        {"text": text, "evidence_id": "E1"},
     )
     review = {"index": 0, "support": "supported", "applicability": "matched", "reason": "合成", "output_fields": fields}
     audit = GroundedAudit(reviews=[review], summary_supported=True, goal_alignment="aligned")

@@ -37,8 +37,8 @@ def _draft(labels: dict[str, str]) -> dict:
     return {
         "request_coverage": [],
         "items": [
-            {"kind": "rule", "request_id": "Q1", "text": INTRO_ITEM, "quote": INTRO, "evidence_id": labels[INTRO]},
-            {"kind": "rule", "request_id": "Q1", "text": OUTLINE_ITEM, "quote": OUTLINE, "evidence_id": labels[OUTLINE]},
+            {"kind": "rule", "request_id": "Q1", "text": INTRO_ITEM, "citations": [{"quote": INTRO, "evidence_id": labels[INTRO]}]},
+            {"kind": "rule", "request_id": "Q1", "text": OUTLINE_ITEM, "citations": [{"quote": OUTLINE, "evidence_id": labels[OUTLINE]}]},
         ],
         "summary": "",
         "confidence": "high",

@@ -13,6 +13,7 @@ from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import range_class
 
 from rag_engine.parsing.content_labels import content_labels
+from rag_engine.retrieval.article_catalog import ARTICLE_UNIT_KEY
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, definition_windows
 from rag_engine.retrieval.evidence_cues import evidence_cues
@@ -472,6 +473,8 @@ def evidence_spans(
                     "superseded": (getattr(record, "metadata", {}) or {}).get("document_superseded") is True,
                     # 会話の添付から選んだ根拠（利用者が明示した入力。#3228）。要求の根拠計画の照合に掛けない。
                     "conversation_attachment": is_attachment_evidence(record),
+                    # 条で構成された文書の条の根拠（#3526）。回答はこの根拠を出典にした説明を事実の監査に掛ける。
+                    ARTICLE_UNIT_KEY: (getattr(record, "metadata", {}) or {}).get(ARTICLE_UNIT_KEY) is True,
                     # 頁の無い根拠（Excel の行の記録）の場所。出典の行・根拠の見出しは頁の代わりにこれを出す（#1224）。
                     "location": record_location_label(record),
                     # 本文位置から頁を確定できない span は親の先頭頁を page に持つ。親は複数頁にまたがるため、
