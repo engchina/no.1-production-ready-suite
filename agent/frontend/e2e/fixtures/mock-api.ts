@@ -1659,7 +1659,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     // 種類（きっかけ）と期間（`since` 以後に始めた Run。#1955）。
     const kind = query.get("kind");
     const since = query.get("since");
-    const sinceMs = since ? Date.parse(since) : null;
+    // 画面は端末の今の時刻から期間の開始を求める。モックの記録は MOCK_NOW の時刻なので、backend の時計が
+    // MOCK_NOW にあるとみなし、今から同じ幅だけ前を期間の開始として比べる（既定の過去 7 日。#3386）。
+    const sinceMs = since ? Date.parse(MOCK_NOW) - (Date.now() - Date.parse(since)) : null;
     const matched = visible.filter(
       (run) =>
         runStatusMatches(String(run.status), status) &&
