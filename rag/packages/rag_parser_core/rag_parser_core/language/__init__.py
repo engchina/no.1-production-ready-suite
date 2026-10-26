@@ -360,7 +360,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     ),
     *_fields("search_terms", _CR, "kanji_chars", "katakana_chars", "hiragana_chars", ingest=False),
     *_fields("search_terms", _WM, "en_irregular_forms", ingest=False),
-    # 質問の理解の手がかりの語（質問の目的・条件・経緯・対象を見分ける。検索・回答のときだけ使う）。
+    # 質問の理解の手がかりの語（質問で求める内容・条件・経緯・対象を見分ける。検索・回答のときだけ使う）。
     *_fields(
         "question_cues",
         _W,

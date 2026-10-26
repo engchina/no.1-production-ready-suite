@@ -6,23 +6,25 @@ from test_rag_evidence_recovery import rec
 
 from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
 from rag_engine.retrieval.operation_context import alternative_operation_queries, operation_labels
-from rag_engine.retrieval.task_contract import task_contract
+from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests, task_contract
 
 
 @pytest.mark.parametrize(
-    "question,expected",
+    "question,steps",
     [
-        ("文言で「，」を「、」に変更したい。", "procedure"),
-        ("タイトルを修正したい", "procedure"),
-        ("文言を変えたい", "procedure"),
-        ("変更履歴を知りたい", "rule"),
-        ("変更内容を知りたい", "rule"),
-        ("摘要欄に注記を表示させたい", "procedure"),
+        ("文言で「，」を「、」に変更したい。", True),
+        ("タイトルを修正したい", True),
+        ("文言を変えたい", True),
+        ("変更履歴を知りたい", False),
+        ("変更内容を知りたい", False),
+        ("摘要欄に注記を表示させたい", True),
     ],
 )
-def test_change_intent(question, expected):
-    assert task_contract(question)["goal"] == expected
-    assert ("procedure" in task_contract(question)["required_aspects"]) is (expected == "procedure")
+def test_change_intent(question, steps):
+    # 「変更履歴」のような説明の要求は、値を変える操作の要求（手順の要求）にしない。
+    assert (STEPS_REQUEST in explicit_requests(question)) is steps
+    assert ("procedure" in task_contract(question)["required_aspects"]) is steps
+    assert "goal" not in task_contract(question)
 
 
 def test_numbered_functions_do_not_match_shared_subheadings():

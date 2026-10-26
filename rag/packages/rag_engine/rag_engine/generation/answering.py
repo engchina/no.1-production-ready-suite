@@ -3474,9 +3474,8 @@ def _record_question_understanding(step: _ExecutionStep, question: str, plan: Qu
     contract = task_contract(question)
     units = [unit for unit in contract["request_units"] if unit.get("text") and unit.get("kind") != "context"]
     # 質問を 1 つの目的に分類した結果は示さない（語の一致の推定を確定した事実のように見せない。#3498）。
-    results: list[str] = []
+    results = [f"答える要求は {max(1, len(units))} 件"]
     if len(units) > 1:
-        results.append(f"答える要求は {len(units)} 件")
         results.extend(f"{number}) {unit['text']}" for number, unit in enumerate(units, 1))
     if contract["definition_targets"]:
         # definition_targets は id / request_id / label / marker を持つ構造化データ。表示はラベルだけを取り出す。

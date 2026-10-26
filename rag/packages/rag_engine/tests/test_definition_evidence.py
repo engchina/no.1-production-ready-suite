@@ -12,7 +12,7 @@ from rag_engine.generation.answering import AnswerRecord
 from rag_engine.generation.operation_audit import answer_passages
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, label_mentioned
 from rag_engine.retrieval.evidence_selection import evidence_excerpt, evidence_spans, format_evidence_packet
-from rag_engine.retrieval.task_contract import task_contract
+from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests, task_contract
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig, tokenize_text_search_query
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures/definition_short_labels.json").read_text())
@@ -47,8 +47,8 @@ def test_explicit_definition_targets(question, expected):
     contract = task_contract(question)
     assert [t["label"] for t in contract["definition_targets"]] == expected
     assert contract["request_units"][0]["id"] == "Q1"
+    assert "goal" not in contract
     if expected:
-        assert contract["goal"] == "rule"
         assert all(t["id"].startswith("Q1.D") for t in contract["definition_targets"])
 
 
@@ -130,5 +130,15 @@ def alleged_audit(answer, spans):
     )
 
 
-def test_definition_with_operation_request_retains_operation_goal():
-    assert task_contract("「登録」列の意味と変更方法を教えてください")["goal"] == "procedure"
+def test_definition_with_operation_request_keeps_both_requests():
+    # 意味と変更方法の両方を尋ねる質問は、定義の項目と手順の要求の両方を持つ（1 つの目的に寄せない。#3498）。
+    question = "「登録」列の意味と変更方法を教えてください"
+    assert [t["label"] for t in task_contract(question)["definition_targets"]] == ["登録"]
+    assert STEPS_REQUEST in explicit_requests(question)
+
+
+@pytest.mark.parametrize("question", ["「登録」列の意味は？", "「入力」欄の意味は？"])
+def test_cue_word_inside_a_defined_item_is_not_a_steps_request(question):
+    # 意味を尋ねる項目の名前の中の語（「登録」）は、操作の手がかりにしない。
+    assert STEPS_REQUEST not in explicit_requests(question)
+    assert "procedure" not in task_contract(question)["required_aspects"]
