@@ -375,7 +375,10 @@ def test_multi_turn_case_follows_the_thread() -> None:
     # 観測は公開の出力そのものを保存する（採点し直せる）。
     turn = record.observations[0].turns[1]
     assert turn.payload["agent_get_run"]["run_id"] == "run-2"
-    assert turn.output_versions == {"agent_get_run": 4, "agent_get_run_observation": 2}
+    assert turn.output_versions == {
+        "agent_get_run": 4,
+        "agent_get_run_observation": OBSERVATION_SCHEMA_VERSION,
+    }
 
 
 def test_pre_answer_confirmation_is_answered_with_the_next_reply() -> None:
