@@ -1320,6 +1320,115 @@ def test_retrieve_evidence_returns_the_degraded_optional_steps(
         {"kind": "rerank", "count": 1},
         {"kind": "reference_load", "count": 2},
     ]
+    # 根拠があれば 0 件の診断は無い。安全チェックは完了している。
+    assert (body["zero_evidence"], body["guardrail_degraded"]) == (None, False)
+
+
+_ZERO_EVIDENCE_RECORD = {
+    "stage": "filter",
+    "label": "文書検索（自動で足した検索条件で候補が 0 件）",
+    "candidate_count": 0,
+    "rejected_count": 0,
+    "crag_attempt_count": 1,
+    "stop_reason": "",
+    # 検索の条件の項目・自動の条件・検索の記録は公開しない（質問・文書の内容を含みうる）。
+    "request_filter_keys": ["category"],
+    "automatic_filters": ["question_file"],
+    "relaxed": [],
+    "searches": [{"queries": 2, "candidates": 0}],
+    "degraded_steps": [{"kind": "reference_load", "count": 1, "exc_type": "OSError"}],
+}
+
+
+@pytest.mark.parametrize("tool", ["rag_search", "rag_retrieve_evidence"])
+def test_zero_evidence_returns_the_stage_and_counts_only(
+    tool: str, auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """根拠 0 件の段と件数を返し、縮退と並べて「当たらなかった」と「読めなかった」を分ける。
+
+    検索の条件の値・検索の記録・例外の型の名前は出さない（#3546）。
+    """
+
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
+        del request
+        return SearchResponse(
+            answer="根拠が無いため回答できません。",
+            citations=[],
+            trace_id="trace-z",
+            guardrail_warnings=[],
+            elapsed_ms=1.0,
+            diagnostics=SearchDiagnostics(
+                answer={
+                    "zero_evidence": _ZERO_EVIDENCE_RECORD,
+                    "degraded_steps": _ZERO_EVIDENCE_RECORD["degraded_steps"],
+                }
+            ),
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call(tool, {"query": "規程"}, _token(user.user_uuid))["structuredContent"]
+    assert body["evidence"] == []
+    assert body["zero_evidence"] == {"stage": "filter", "candidate_count": 0, "rejected_count": 0}
+    assert body["degraded_steps"] == [{"kind": "reference_load", "count": 1}]
+    assert body["guardrail_degraded"] is False
+    text = json.dumps(body, ensure_ascii=False)
+    assert "OSError" not in text and "question_file" not in text and "category" not in text
+
+
+@pytest.mark.parametrize(
+    "record",
+    [{"stage": "unknown", "candidate_count": 1}, "retrieval", {"candidate_count": 3}],
+    ids=["unknown-stage", "not-a-record", "no-stage"],
+)
+def test_zero_evidence_of_another_shape_is_null(
+    record: object, auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """知らない段・形の合わない 0 件の記録は返さない（精密な段のように見せない）。"""
+
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
+        del request
+        return SearchResponse(
+            answer="",
+            citations=[],
+            trace_id="trace-z",
+            guardrail_warnings=[],
+            elapsed_ms=1.0,
+            diagnostics=SearchDiagnostics(answer={"zero_evidence": record}),
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call("rag_retrieve_evidence", {"query": "規程"}, _token(user.user_uuid))[
+        "structuredContent"
+    ]
+    assert body["zero_evidence"] is None
+
+
+@pytest.mark.parametrize("tool", ["rag_search", "rag_retrieve_evidence"])
+def test_guardrail_degraded_is_returned_when_the_safety_check_could_not_finish(
+    tool: str, auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """安全チェックを完了できず止めた応答は guardrail_degraded=true（資料が無いと区別する）。"""
+
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
+        del request
+        return SearchResponse(
+            answer="この検索リクエストは安全ポリシーにより処理できませんでした。",
+            citations=[],
+            trace_id="trace-g",
+            guardrail_warnings=["OCI Guardrails を利用できないため、処理を停止しました。"],
+            elapsed_ms=1.0,
+            diagnostics=SearchDiagnostics(
+                retrieval_strategy_adapter="blocked", guardrail_degraded=True
+            ),
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call(tool, {"query": "規程"}, _token(user.user_uuid))["structuredContent"]
+    assert body["guardrail_degraded"] is True
+    assert body["evidence"] == [] and body["zero_evidence"] is None
 
 
 def test_retrieve_evidence_fits_full_texts_to_the_response_budget_in_rank_order(

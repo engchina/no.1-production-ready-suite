@@ -82,7 +82,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 37,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -692,7 +692,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 37,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -862,7 +862,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 37,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1274,7 +1274,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 37,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1743,7 +1743,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 37,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2530,7 +2530,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 37,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2779,7 +2779,7 @@
       "outputSchema": {
         "properties": {
           "schema_version": {
-            "default": 37,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2913,7 +2913,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 37,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4246,11 +4246,44 @@
             ],
             "title": "RagEvidence",
             "type": "object"
+          },
+          "ZeroEvidence": {
+            "description": "根拠が 0 件になった段。",
+            "properties": {
+              "stage": {
+                "description": "retrieval=検索の候補が 0 件 / filter=質問から自動で足した検索条件（項目の値・文書名・頁）が効いたまま候補が 0 件 / evidence_check=根拠確認が候補をすべて質問と別の話題と判定 / context=候補はあるが回答に渡す根拠が 0 件。",
+                "enum": [
+                  "retrieval",
+                  "filter",
+                  "evidence_check",
+                  "context"
+                ],
+                "title": "Stage",
+                "type": "string"
+              },
+              "candidate_count": {
+                "description": "検索の候補の件数。",
+                "title": "Candidate Count",
+                "type": "integer"
+              },
+              "rejected_count": {
+                "description": "根拠確認で外した候補の件数。",
+                "title": "Rejected Count",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "stage",
+              "candidate_count",
+              "rejected_count"
+            ],
+            "title": "ZeroEvidence",
+            "type": "object"
           }
         },
         "properties": {
           "schema_version": {
-            "default": 37,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4266,6 +4299,12 @@
             "title": "Guardrail Warnings",
             "type": "array"
           },
+          "guardrail_degraded": {
+            "default": false,
+            "description": "安全チェック（質問・回答の検査）を完了できず、処理を止めたか。true のとき資料は調べていない（answer は停止の文・evidence は空）か回答を止めており、資料に根拠が無いことを意味しない。",
+            "title": "Guardrail Degraded",
+            "type": "boolean"
+          },
           "degraded_steps": {
             "description": "失敗して縮退した任意の補助の処理（rerank・章節の目録・参照先の読み込みなど）。その処理を使わずに続けた結果（例: rerank の失敗は検索の順のまま）で、空なら縮退していない。必須の能力（主の検索・回答の生成・有効な安全チェック）の失敗は縮退せずエラーで返る。",
             "items": {
@@ -4273,6 +4312,18 @@
             },
             "title": "Degraded Steps",
             "type": "array"
+          },
+          "zero_evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ZeroEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "根拠が 0 件のとき、0 件になった段と件数（根拠があれば null）。degraded_steps が空でなければ、補助の処理の失敗で候補を読めなかった可能性があり、資料に記載が無いとは限らない。"
           },
           "evidence": {
             "description": "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）と、実体からたどった根拠（role=entity_expansion。候補の中の位置の順）を先に、前後の文脈（neighbor_context など）をその後ろに並べる。実体からたどった根拠（前後の文脈の役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで上限の内に入れる。条の目録で選んだ条（role=catalog_article）は evidence_limit に数えず、選んだ順に末尾に足す（件数はサーバーの設定で上限がある）。回答は作らないので used_in_answer は false。",
@@ -5773,11 +5824,44 @@
             ],
             "title": "RemovedPassage",
             "type": "object"
+          },
+          "ZeroEvidence": {
+            "description": "根拠が 0 件になった段。",
+            "properties": {
+              "stage": {
+                "description": "retrieval=検索の候補が 0 件 / filter=質問から自動で足した検索条件（項目の値・文書名・頁）が効いたまま候補が 0 件 / evidence_check=根拠確認が候補をすべて質問と別の話題と判定 / context=候補はあるが回答に渡す根拠が 0 件。",
+                "enum": [
+                  "retrieval",
+                  "filter",
+                  "evidence_check",
+                  "context"
+                ],
+                "title": "Stage",
+                "type": "string"
+              },
+              "candidate_count": {
+                "description": "検索の候補の件数。",
+                "title": "Candidate Count",
+                "type": "integer"
+              },
+              "rejected_count": {
+                "description": "根拠確認で外した候補の件数。",
+                "title": "Rejected Count",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "stage",
+              "candidate_count",
+              "rejected_count"
+            ],
+            "title": "ZeroEvidence",
+            "type": "object"
           }
         },
         "properties": {
           "schema_version": {
-            "default": 37,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -5796,6 +5880,12 @@
             },
             "title": "Guardrail Warnings",
             "type": "array"
+          },
+          "guardrail_degraded": {
+            "default": false,
+            "description": "安全チェック（質問・回答の検査）を完了できず、処理を止めたか。true のとき資料は調べていない（answer は停止の文・evidence は空）か回答を止めており、資料に根拠が無いことを意味しない。",
+            "title": "Guardrail Degraded",
+            "type": "boolean"
           },
           "outcome": {
             "description": "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / needs_environment_data=利用者に聞いても分からない現場の値・記録の確認が要る / insufficient_evidence=資料から答えられない。needs_clarification / needs_human は利用者への確認・人への引き継ぎ。利用者に聞けば分かる条件（対象・ロール・承認など）だけを確かめる回答は conditional（conditions に載る。#1453）。",
@@ -5912,6 +6002,18 @@
             },
             "title": "Degraded Steps",
             "type": "array"
+          },
+          "zero_evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ZeroEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "根拠が 0 件のとき、0 件になった段と件数（根拠があれば null）。degraded_steps が空でなければ、補助の処理の失敗で候補を読めなかった可能性があり、資料に記載が無いとは限らない。"
           },
           "evidence": {
             "description": "AI に渡した資料の箇所。回答で引用した箇所（used_in_answer。回答で引用した順）を先に、検索で当たった根拠（role=retrieved_anchor と、実体からたどった role=entity_expansion。関連度の順）、前後の文脈（neighbor_context など）の順。実体からたどった根拠（前後の文脈の役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで上限の内に入れる。",
@@ -6547,7 +6649,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 37,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

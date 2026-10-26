@@ -26,7 +26,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | `RT` | rag_engine の結果の trace だけ（backend の診断に写していない） | `rag/packages/rag_engine/rag_engine/generation/answering.py` |
 | `LOG` | ログだけ（診断では「無効・該当なし」と同じ値） | — |
 
-- MCP の応答（`rag_search`・`rag_retrieve_evidence`）は `DS` の処理の種類と回数を `degraded_steps` に出す（例外の型の名前は出さない。#3262。`rag/backend/app/mcp/tools.py::_degraded_steps`）。`ZE`・`GD` は今は出していない。MCP は回答の診断の `needs_human_review` から `outcome=conditional` を決める（`rag/backend/app/mcp/tools.py::_answer_fields`）。
+- MCP の応答（`rag_search`・`rag_retrieve_evidence`）は `DS` の処理の種類と回数を `degraded_steps` に出す（例外の型の名前は出さない。#3262。`rag/backend/app/mcp/tools.py::_degraded_steps`）。`ZE` は段と件数だけを `zero_evidence`（`stage`・`candidate_count`・`rejected_count`。検索の条件の項目・値・検索の記録は出さない）に、`GD` を `guardrail_degraded` に出す（#3546。`rag/backend/app/mcp/tools.py::_zero_evidence`・`_guardrail_degraded`）。Agent の組み込み Runtime は、根拠 0 件で `guardrail_degraded` か `degraded_steps` があるとき、モデルへのツールの結果に案内（`retrieval_notice`）を足し、回答の対応の `absence_conclusion` に数えない。`agent_get_run_observation` はツールの呼び出しごとに `degraded_steps`・`guardrail_degraded`・`zero_evidence_stage` を、根拠ごとに `table_binding` を写す（`agent/backend/app/features/agent/run_observation.py`）。MCP は回答の診断の `needs_human_review` から `outcome=conditional` を決める（`rag/backend/app/mcp/tools.py::_answer_fields`）。
 - `SearchDiagnostics.answer` は自由な dict で、REST の schema には `DS` などの形を持たない。
 
 ## 能力の一覧
@@ -180,7 +180,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 - **任意の能力**は、上の表のとおり縮退して回答を続ける。縮退した結果を「確かめた」「精密な位置」として見せる経路は、静的確認の範囲では見当たらない。`models.rerank` は rerank が失敗したとき空にした（#3286）。
 - **記録が足りない縮退**: #3286 の表の処理（rerank・追加の検索文の rerank・CRAG の判定・会話の書き換え・抽出項目の条件の読み取り・会話の添付・Sudachi・章節の子の並べ替え・条の目録の元の質問の検索）は `DS` に入れた。条の目録の範囲の文書の選択と 2 段目の失敗は `DS` に数え、cache しない（#3285。#3278 と同じ種類）。例外ではない縮退（書き換えの安全チェックの拒否・抽出項目の条件の読めない出力・呼び出し元の検索文の拒否）は `DS` に入れない。
 - **診断に例外の文が残る経路**: 要求ごとの根拠の探し直しと、用語・同義語と回答ルールの読み込みは、例外の型の名前だけにした（#3284）。
-- **呼び出し元が判断できない点**: MCP の応答には `ZE`・`GD` が無い（`DS` は種類と回数を `degraded_steps` に出す。#3262）。表の行・列の対応の検査が根拠を読めるかは根拠の `table_binding` に出すが、回答の中で検査が段落を外した・直したかは `rag_validate_answer` の claims（`support_check`）だけにある。
+- **呼び出し元が判断できない点**: MCP の応答は `DS`（種類と回数）・`ZE`（段と件数）・`GD` を出す（#3262・#3546）。表の行・列の対応の検査が根拠を読めるかは根拠の `table_binding` に出すが、回答の中で検査が段落を外した・直したかは `rag_validate_answer` の claims（`support_check`）だけにある。
 
 ## 未確認の事項
 

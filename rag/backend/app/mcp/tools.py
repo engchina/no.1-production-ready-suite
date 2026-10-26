@@ -313,7 +313,10 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 37: rag_validate_answer の claims に、渡した answer の中の段落の位置（answer_range）を足した。
 #     rag_search・rag_retrieve_evidence の top_k の既定（省略時の件数）を契約に出した。契約に
 #     ツールの失敗の code の一覧（errors）を足した（#3240）。
-MCP_OUTPUT_SCHEMA_VERSION = 37
+# 38: rag_search・rag_retrieve_evidence に、安全チェックを完了できず止めたか
+#     （guardrail_degraded）と、根拠 0 件のときに 0 件になった段と件数（zero_evidence）を足した
+#     （#3546。#3262 の残り）。
+MCP_OUTPUT_SCHEMA_VERSION = 38
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
 # 値と決め方は pr_backend_core.source_text。#3321）。
 EVIDENCE_TEXT_ITEM_MAX_TOKENS = SOURCE_TEXT_ITEM_MAX_TOKENS
@@ -1831,10 +1834,41 @@ DEGRADED_STEPS_DESCRIPTION = (
 )
 
 
+# 根拠 0 件の診断（回答の診断の zero_evidence）の公開の形（#3546）。検索の条件の値・検索文・
+# 例外の文は出さない（段と件数だけ）。
+ZeroEvidenceStage = Literal["retrieval", "filter", "evidence_check", "context"]
+
+
+class ZeroEvidence(BaseModel):
+    """根拠が 0 件になった段。"""
+
+    stage: ZeroEvidenceStage = Field(
+        description=(
+            "retrieval=検索の候補が 0 件 / filter=質問から自動で足した検索条件（項目の値・文書名・"
+            "頁）が効いたまま候補が 0 件 / evidence_check=根拠確認が候補をすべて質問と別の話題と"
+            "判定 / context=候補はあるが回答に渡す根拠が 0 件。"
+        )
+    )
+    candidate_count: int = Field(description="検索の候補の件数。")
+    rejected_count: int = Field(description="根拠確認で外した候補の件数。")
+
+
+ZERO_EVIDENCE_DESCRIPTION = (
+    "根拠が 0 件のとき、0 件になった段と件数（根拠があれば null）。degraded_steps が空でなければ、"
+    "補助の処理の失敗で候補を読めなかった可能性があり、資料に記載が無いとは限らない。"
+)
+GUARDRAIL_DEGRADED_DESCRIPTION = (
+    "安全チェック（質問・回答の検査）を完了できず、処理を止めたか。true のとき資料は調べて"
+    "いない（answer は停止の文・evidence は空）か回答を止めており、資料に根拠が無いことを意味"
+    "しない。"
+)
+
+
 class SearchOutput(VersionedOutput):
     answer: str
     trace_id: str
     guardrail_warnings: list[str]
+    guardrail_degraded: bool = Field(default=False, description=GUARDRAIL_DEGRADED_DESCRIPTION)
     outcome: AnswerOutcome = Field(
         description=(
             "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / "
@@ -1886,6 +1920,7 @@ class SearchOutput(VersionedOutput):
     degraded_steps: list[DegradedStep] = Field(
         default_factory=list, description=DEGRADED_STEPS_DESCRIPTION
     )
+    zero_evidence: ZeroEvidence | None = Field(default=None, description=ZERO_EVIDENCE_DESCRIPTION)
     evidence: list[RagEvidence] = Field(
         description=(
             "AI に渡した資料の箇所。回答で引用した箇所（used_in_answer。回答で引用した順）を先に、"
@@ -2081,9 +2116,11 @@ class ProfileKnowledge(BaseModel):
 class RetrieveEvidenceOutput(VersionedOutput):
     trace_id: str
     guardrail_warnings: list[str]
+    guardrail_degraded: bool = Field(default=False, description=GUARDRAIL_DEGRADED_DESCRIPTION)
     degraded_steps: list[DegradedStep] = Field(
         default_factory=list, description=DEGRADED_STEPS_DESCRIPTION
     )
+    zero_evidence: ZeroEvidence | None = Field(default=None, description=ZERO_EVIDENCE_DESCRIPTION)
     evidence: list[RagEvidence] = Field(
         description=(
             "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）と、実体からたどった"
@@ -3136,6 +3173,7 @@ def _answer_fields(result: SearchResponse, evidence_limit: int) -> dict[str, Any
         "answer": result.answer,
         "trace_id": result.trace_id,
         "guardrail_warnings": list(result.guardrail_warnings),
+        "guardrail_degraded": _guardrail_degraded(result),
         "outcome": outcome,
         "requests": [
             request
@@ -3157,6 +3195,7 @@ def _answer_fields(result: SearchResponse, evidence_limit: int) -> dict[str, Any
             answer if any(key in answer for key in PASSAGE_MARK_RECORD_KEYS) else envelope
         ),
         "degraded_steps": _degraded_steps(answer),
+        "zero_evidence": _zero_evidence(answer, result),
         "evidence": [],
         "evidence_omitted": max(0, len(ordered) - evidence_limit),
         "provenance": _provenance(answer.get("provenance")),
@@ -3179,6 +3218,37 @@ def _degraded_steps(answer: Mapping[str, Any]) -> list[DegradedStep]:
         ):
             counts[kind] = counts.get(kind, 0) + max(0, count)
     return [DegradedStep(kind=kind, count=count) for kind, count in counts.items() if count]
+
+
+def _guardrail_degraded(result: SearchResponse) -> bool:
+    """安全チェック（OCI Guardrails）を完了できず止めたか（検索の診断の guardrail_degraded）。"""
+    diagnostics = result.diagnostics
+    return diagnostics is not None and diagnostics.guardrail_degraded
+
+
+def _zero_evidence(answer: Mapping[str, Any], result: SearchResponse) -> ZeroEvidence | None:
+    """根拠 0 件の診断（#2401）の段と件数だけ（根拠があれば None）。
+
+    検索の条件の項目・値、検索ごとの記録は出さない（質問・文書の内容を含みうる）。縮退した補助の
+    処理は ``degraded_steps`` に別に出す。
+    """
+    if result.citations:
+        return None
+    raw = answer.get("zero_evidence")
+    if not isinstance(raw, Mapping):
+        return None
+    stage = raw.get("stage")
+    if stage not in get_args(ZeroEvidenceStage):
+        return None
+    return ZeroEvidence(
+        stage=cast(ZeroEvidenceStage, stage),
+        candidate_count=_count(raw.get("candidate_count")),
+        rejected_count=_count(raw.get("rejected_count")),
+    )
+
+
+def _count(value: object) -> int:
+    return max(0, value) if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 def _provenance(value: object) -> dict[str, Any] | None:
@@ -4871,7 +4941,9 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         output = RetrieveEvidenceOutput(
             trace_id=result.trace_id,
             guardrail_warnings=list(result.guardrail_warnings),
+            guardrail_degraded=_guardrail_degraded(result),
             degraded_steps=_degraded_steps(_answer_diagnostics(result)),
+            zero_evidence=_zero_evidence(_answer_diagnostics(result), result),
             evidence=[],
             evidence_omitted=max(0, len(hits) - limit),
             older_versions=await _older_versions(arguments, request, result.citations),
