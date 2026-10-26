@@ -617,6 +617,9 @@ def build_engine_settings(
         "RAG_ENGINE_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS": str(
             settings.rag_article_catalog_call_timeout_seconds
         ),
+        "RAG_ENGINE_ARTICLE_CATALOG_REVIEW": (
+            "1" if settings.rag_article_catalog_review_enabled else "0"
+        ),
         # 回答の最終の検証の入力の上限。
         "RAG_ENGINE_ANSWER_VALIDATION_MAX_INPUT_BYTES": str(
             settings.rag_answer_validation_max_input_bytes

@@ -5555,9 +5555,14 @@ def run_round(
         # 作り直しても残った不整合（#3228）。計画が決まらない説明は外さずに印を付けて残す（verify）。
         plan_unsettled = _request_plan_errors(draft, spans)
     catalog_review: dict[str, Any] = {}
-    if any(item.kind != "gap" for item in draft.items) and (unreviewed := unreviewed_catalog_spans(draft, spans)):
-        # 目録で選んだ条を、生成が引かなかったまま捨てない（#3526）。条ごとに、原文が支える説明があるかを別に検討させ、
-        # 支える説明の出典に足す（出典は verify の照合と条の出典の監査に掛ける）。生成の作り直しでは検討しなかった。
+    if (
+        getattr(settings, "article_catalog_review", False)
+        and any(item.kind != "gap" for item in draft.items)
+        and (unreviewed := unreviewed_catalog_spans(draft, spans))
+    ):
+        # 目録で選んだ条を、生成が引かなかったまま捨てない（#3526。設定で有効なときだけ）。条ごとに、原文が支える説明が
+        # あるかを別に検討させ、支える説明の出典に足す（出典は verify の照合と条の出典の監査に掛ける）。生成の作り直しでは
+        # 検討しなかった。
         review_started = monotonic()
         try:
             reviews = parse_text(

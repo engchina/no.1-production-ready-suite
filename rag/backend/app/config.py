@@ -1415,6 +1415,14 @@ class Settings(
             "0 は 2 段目を行わない。"
         ),
     )
+    rag_article_catalog_review_enabled: bool = Field(
+        default=False,
+        description=(
+            "条の目録で選んだ条を回答の生成が引かなかったとき、条ごとに原文が支える説明を別の LLM の"
+            "呼び出しで検討し、その説明の出典に足す(#3526)。足した出典も原文照合と条の出典の監査に掛ける。"
+            "評価で確かめた説明に根拠の無い条の出典が付いたので既定は無効。無効なら検討の呼び出しをしない。"
+        ),
+    )
     rag_article_catalog_refine_candidates: int = Field(
         default=60,
         ge=0,

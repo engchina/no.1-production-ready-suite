@@ -235,6 +235,7 @@ def test_engine_settings_pass_the_article_catalog_options(tmp_path: Any) -> None
         rag_article_catalog_output_token_cap=1024,
         rag_article_catalog_call_timeout_seconds=20,
         rag_article_catalog_refine_articles=0,
+        rag_article_catalog_review_enabled=True,
     )
     engine_settings = build_engine_settings(
         settings, output_dir=tmp_path, runtime_knowledge_path=None
@@ -244,6 +245,10 @@ def test_engine_settings_pass_the_article_catalog_options(tmp_path: Any) -> None
     assert engine_settings.article_catalog_output_token_cap == 1024
     assert engine_settings.article_catalog_call_timeout_seconds == 20.0
     assert engine_settings.article_catalog_refine_articles == 0
+    assert engine_settings.article_catalog_review is True
+    assert build_engine_settings(
+        Settings(), output_dir=tmp_path, runtime_knowledge_path=None
+    ).article_catalog_review is False
     assert engine_settings.article_catalog_refine_candidates == 60
     assert engine_settings.article_catalog_context_records == 4
     assert json.loads(json.dumps(engine_settings.article_catalog_max_documents)) == 16

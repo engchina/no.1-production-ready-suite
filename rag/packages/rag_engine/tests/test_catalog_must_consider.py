@@ -1,8 +1,8 @@
-"""条の目録で選んだ条を、回答の生成で必ず検討する（#3526）。
+"""条の目録で選んだ条を、回答の生成に印を付けて渡し、設定で有効なら引かなかった条を検討する（#3526）。
 
-目録の段が選んだ条の child に重なる根拠に印（catalog）を付けて生成に渡す。草稿の説明が引かず、計画も unrelated と
-しなかった条は、条ごとに原文が支える説明があるかを別に検討させ、支える説明の出典に足す。足した出典も原文照合と
-条の出典の監査に掛け、通らなければ外す（引用は強いない）。
+目録の段が選んだ条の child に重なる根拠に印（catalog）を付けて生成に渡す。設定（``article_catalog_review``。既定は
+無効）で有効なら、草稿の説明が引かず、計画も unrelated としなかった条を、条ごとに原文が支える説明があるかを別に
+検討させ、支える説明の出典に足す。足した出典も原文照合と条の出典の監査に掛け、通らなければ外す（引用は強いない）。
 """
 
 from __future__ import annotations
@@ -101,11 +101,11 @@ class _Model:
         return [name for name, _prompt in self.prompts]
 
 
-def _run(model, mode=grounded.AUDIT_MODE_NONE):
+def _run(model, mode=grounded.AUDIT_MODE_NONE, *, review=False):
     def unused(*a, **k):
         raise AssertionError("unexpected I/O")
 
-    settings = replace(get_settings(), answer_audit_mode=mode)
+    settings = replace(get_settings(), answer_audit_mode=mode, article_catalog_review=review)
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         return synthesize_grounded_answer(QUESTION, _context(), settings, image_prompt_mode="text_only").response
 
@@ -160,7 +160,7 @@ def test_a_chosen_article_the_draft_did_not_cite_is_reviewed_and_cited_where_it_
     draft = _draft([_claim(labels["guide"])], [(labels["guide"], "direct")], [labels["guide"]])
     model = _Model([draft], [_audit("supported", "matched", "")], [_review((0, ""))])
 
-    result = _run(model)
+    result = _run(model, review=True)
 
     assert model.names() == ["GroundedDraft", "CatalogEvidenceReviews", "GroundedFactAudit"]
     review_input = json.loads(model.prompts[1][1])
@@ -181,7 +181,7 @@ def test_an_article_supporting_no_claim_is_not_cited():
     )
     model = _Model([draft], [], [_review()])
 
-    result = _run(model)
+    result = _run(model, review=True)
 
     assert model.names() == ["GroundedDraft", "CatalogEvidenceReviews"]
     assert _sources(result) == {"手順書B.pdf"}
@@ -205,7 +205,7 @@ def test_a_citation_added_by_the_review_is_dropped_when_the_audit_does_not_suppo
 
     model = _Model([draft], [audit_by_source], [_review((0, ""))])
 
-    result = _run(model)
+    result = _run(model, review=True)
 
     assert _sources(result) == {"手順書B.pdf"}
     assert not result.envelope["passage_marks"]
@@ -219,10 +219,24 @@ def test_articles_cited_or_judged_unrelated_are_not_reviewed():
     ):
         model = _Model([draft], [_audit("supported", "matched", "")])
 
-        result = _run(model)
+        result = _run(model, review=True)
 
         assert "CatalogEvidenceReviews" not in model.names()
         assert "catalog_review" not in _timing(result)
+
+
+def test_the_review_is_off_by_default_and_makes_no_call():
+    """既定（設定が無効）では、引かなかった条があっても検討の呼び出しをしない。印は付ける。"""
+    assert get_settings().article_catalog_review is False
+    labels = _labels()
+    model = _Model([_draft([_claim(labels["guide"])], [(labels["guide"], "direct")], [labels["guide"]])], [], [_review((0, ""))])
+
+    result = _run(model)
+
+    assert model.names() == ["GroundedDraft"]
+    assert "catalog_review" not in _timing(result)
+    assert _sources(result) == {"手順書B.pdf"}
+    assert any(line.endswith(" catalog") for line in model.prompts[0][1].splitlines() if line.startswith("[E"))
 
 
 def _sources(result) -> set[str]:
