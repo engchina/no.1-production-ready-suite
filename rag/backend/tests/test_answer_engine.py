@@ -1257,7 +1257,6 @@ def _fake_evaluation_llm(
         StandardAnswerScope,
     )
 
-    body = "受注番号を入力し、登録ボタンを押します。"
     if schema is AnswerCorrectnessOutput:
         return AnswerCorrectnessOutput(verdict="correct", reason="標準回答と一致")
     if schema is StandardAnswerScope:
