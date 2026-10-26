@@ -287,3 +287,63 @@ def test_identifier_with_unicode_dash_is_not_a_different_row_label(dash: str) ->
     table = f"| id | value |\n| row-a | 10 |\n| row{dash}b | 20 |\n| row-c | 30 |"
     reason = f"CSV に row{dash}b の value が 20 と記載されています。"
     assert unbound_table_values(reason, [table]) == []
+
+
+def _figure_description() -> str:
+    """合成の画面例の図の生成説明（Vision の欄の形）と図の中の文字（OCR）。保存の形のとおり空行を詰める。"""
+    from rag_engine.parsing.picture_descriptions import vision_description_text
+    from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
+
+    description = vision_description_text(
+        {
+            "retrieval_text": "画面 A では番号と状態が表示され、下部に保存・承認・差し戻し・一時保存のボタンがある。",
+            "visual_kind": "screenshot",
+            "menu_route": "左メニュー → 画面 A",
+            "visible_screen_names": ["画面 A"],
+            "visible_buttons": ["保存", "承認", "差し戻し", "一時保存"],
+            "visible_fields": ["番号", "状態"],
+        }
+    )
+    ocr = format_docling_picture_ocr_text("画面 A\n番号: X-01\n状態: 確認待ち\n保存\n差し戻し")
+    return "\n".join(line for line in f"{description}\n{ocr}".split("\n") if line.strip())
+
+
+def test_figure_description_fields_are_not_table_rows() -> None:
+    """図の生成説明の欄（画面名・ボタン）は 1 つの図の属性で、表の行ではない（#3482）。"""
+    figure = _figure_description()
+    claim = "画面 A の下部に差し戻しボタンがあります。"
+    assert unbound_table_values(claim, [figure]) == []
+    # 本文の段落と同じ親の本文（要素の間は空行）でも、生成説明の欄だけを表にしない。
+    parent = f"1.3 画面 A\n画面 A の下に操作のボタンが並びます。\n\n{figure}\n\n- 区分A：x01\n- 区分B：y02"
+    assert unbound_table_values(claim, [parent]) == []
+    # 生成説明の後の本文の「名前：値」の並びは、今までどおり照合する。
+    assert unbound_table_values("区分Bは x01 です。", [parent]) == [("x01", "区分B")]
+
+
+def test_real_tables_in_figure_descriptions_are_still_checked() -> None:
+    """生成説明の抜粋の根拠でも、本当の表の構造（Markdown・HTML の表）の取り違えは検出する。"""
+    figure = _figure_description() + "\n" + TABLE
+    assert unbound_table_values("区分Ⅱの選択肢の値は 01 です。", [figure], line_pairs=False) == [("01", "区分Ⅱ")]
+    # 見出しの無い抜粋（画像の生成説明の途中）の「名前：値」は、line_pairs=False では表にしない。
+    excerpt = "\n".join(_figure_description().split("\n")[4:])
+    assert evidence_tables(excerpt, line_pairs=False) == []
+
+
+def test_grounded_item_about_a_figure_button_is_kept() -> None:
+    """図の生成説明を根拠にした正しい説明を、表の対応の取り違えとして外さない（#3482）。"""
+    question = "画面 A の差し戻しボタンはどこにありますか？"
+    figure = _figure_description()
+    spans = grounded.tag_spans(
+        question, [{"evidence_id": "E1", "source_id": "c1", "source": "m.pdf", "page": 1, "text": figure, "section_path": []}]
+    )
+    assert "image_generated" in spans[0]["tags"]
+    item = GroundedItem(
+        kind="operation",
+        text="画面 A の下部に差し戻しボタンがあります。",
+        evidence_id="E1",
+        quote="ボタン: 保存 / 承認 / 差し戻し / 一時保存",
+    )
+    entries, _ = grounded.verify(question, GroundedDraft(summary="", confidence="high", items=[item]), spans)
+    entry = next(entry for entry in entries if entry.item.text == item.text)
+    assert not entry.table_conflict
+    assert "contradicted" not in [mark["code"] for mark in entry.marks]

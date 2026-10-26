@@ -1108,8 +1108,16 @@ def _table_binding_conflict(item: GroundedItem, span: dict) -> str:
     区分Ⅱ の値として区分Ⅰ の行の値を書いた説明は、語と値が根拠にあっても表が否定した対応で、根拠と矛盾する。
     表の行と列で決定的に確かめる (#2659・#2998)。
     """
-    pairs = unbound_table_values(item.text, [span["text"]])
-    return "、".join(table_mismatch_notes(pairs, [span["text"]])) if pairs else ""
+    line_pairs = _table_line_pairs(span)
+    pairs = unbound_table_values(item.text, [span["text"]], line_pairs=line_pairs)
+    return "、".join(table_mismatch_notes(pairs, [span["text"]], line_pairs=line_pairs)) if pairs else ""
+
+
+def _table_line_pairs(span: dict) -> bool:
+    """根拠の「名前：値」の行を表として照合するか。画像の生成説明・OCR の根拠（見出しの無い抜粋を含む）は、
+    1 つの図の属性の欄で表の行ではないので、本当の表の構造（HTML・Markdown の表）だけで照合する（#3482）。
+    """
+    return "image_generated" not in span.get("tags", ())
 
 
 def _check_verbatim_conditions(question: str, item: GroundedItem, span: dict) -> str:
@@ -1883,7 +1891,7 @@ def revise_table_conflicts(checked: Sequence[CheckedItem], parse: ParseText) -> 
     for entry in checked:
         if not entry.removed or not entry.table_conflict or entry.span is None:
             continue
-        result = revise_table_passage(entry.item.text, [entry.span["text"]], parse)
+        result = revise_table_passage(entry.item.text, [entry.span["text"]], parse, line_pairs=_table_line_pairs(entry.span))
         if result is not None:
             entry.correct(result.text, result.note)
             revised += 1
