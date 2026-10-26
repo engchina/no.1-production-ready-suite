@@ -373,6 +373,14 @@ async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPat
     assert all(step.status == "done" for step in engine_steps)
     understand = next(s for s in engine_steps if (s.params or {}).get("name") == "質問の理解")
     assert (understand.span or {}).get("parent_id") == answer_span.step_id
+    # 用語・同義語と回答ルールは別の工程の span で、回答の段の子としてこの順に並ぶ（#3451）。
+    engine_names = [str((s.params or {}).get("name")) for s in engine_steps]
+    terms_index = engine_names.index("用語・同義語の確認")
+    assert engine_names[terms_index + 1] == "回答ルールの確認"
+    assert "用語・ルールの確認" not in engine_names
+    for step in engine_steps[terms_index : terms_index + 2]:
+        assert (step.span or {}).get("parent_id") == answer_span.step_id
+        assert step.details is not None and "結果" in {field.label for field in step.details.fields}
     # 工程の詳細（目的・結果など）は終わった工程の span に付く。
     search = next(
         s for s in engine_steps if str((s.params or {}).get("name")).startswith("文書検索")

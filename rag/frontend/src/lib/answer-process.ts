@@ -38,7 +38,8 @@ const PLAIN_STEP_STATUSES = new Set(["", "complete", "completed", "done", "ok", 
  */
 const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
   質問の理解: "answer.step.understandQuestion",
-  "用語・ルールの確認": "answer.step.glossary",
+  "用語・同義語の確認": "answer.step.terms",
+  回答ルールの確認: "answer.step.rules",
   検索の準備確認: "answer.step.checkSearchReady",
   質問拡張戦略: "answer.step.expandQuestion",
   検索文と検索語の確定: "answer.step.decideQueries",

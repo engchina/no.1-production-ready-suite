@@ -138,6 +138,68 @@ const slowSearchStream: TimedChunk[] = [
   },
 ];
 
+const knowledgeSearch = searchProgressStream("trace-1");
+
+/** 用語・同義語の確認 → 回答ルールの確認 を別の工程（別の span）で進む検索の SSE（#3451）。 */
+const knowledgeStepsSearchStream: TimedChunk[] = [
+  {
+    afterMs: 0,
+    text: [
+      sse("run", { trace_id: "trace-1" }),
+      knowledgeSearch.start("root", ragSpan.root()),
+      knowledgeSearch.start("answer", ragSpan.stage("answer")),
+      knowledgeSearch.start("terms", ragSpan.step("用語・同義語の確認")),
+      knowledgeSearch.finish("terms", "done", {
+        details: {
+          fields: [
+            { label: "目的", value: "登録済みの用語・同義語を質問に当て、別名を検索に使います。" },
+            { label: "結果", value: "一致: 用語 A" },
+            { label: "有効な登録", value: "1 件（登録 1 件）" },
+            { label: "一致した用語", value: "用語 A（別名: 別名 A）" },
+            { label: "影響", value: "一致した用語の別名を補助の検索文に加えます。" },
+          ],
+        },
+      }),
+      knowledgeSearch.start("rules", ragSpan.step("回答ルールの確認")),
+    ].join(""),
+  },
+  {
+    afterMs: 1500,
+    text: [
+      knowledgeSearch.finish("rules", "done", {
+        details: {
+          fields: [
+            { label: "目的", value: "登録済みの回答ルールを質問に当て、回答の参考にします。" },
+            { label: "結果", value: "一致: 回答ルール A" },
+            { label: "有効な登録", value: "1 件（登録 2 件）" },
+            { label: "一致した回答ルール", value: "回答ルール A" },
+            { label: "影響", value: "一致した回答ルールを回答時の参考情報として渡します。" },
+          ],
+        },
+      }),
+      knowledgeSearch.finish("answer"),
+      knowledgeSearch.finish("root"),
+      knowledgeSearch.terminal("done"),
+      sse("metadata", {
+        trace_id: "trace-1",
+        elapsed_ms: 1600,
+        guardrail_warnings: [],
+        diagnostics: {
+          retrieval_strategy: "hybrid",
+          retrieval_strategy_adapter: "grounded",
+          filter_keys: [],
+          knowledge_base_count: 1,
+          config_fingerprint: "fp-1",
+          answer: { confidence: "high", needs_human_review: false },
+        },
+      }),
+      sse("delta", { text: "合成の回答です。" }),
+      sse("citations", [citation]),
+      sse("done", { trace_id: "trace-1" }),
+    ].join(""),
+  },
+];
+
 const retrievalSearch = searchProgressStream("trace-1");
 
 // 回答を作らない検索（検索結果だけ）。処理の経過は検索結果の一覧の上に出す。
@@ -398,6 +460,43 @@ for (const viewport of [
     expect(answerBox && processBox && processBox.y < answerBox.y).toBeTruthy();
     // 「処理の詳細」はチャットと同じ回答の記録の詳細だけで、開始・トレース ID は出さない（#2118）。
     await expect(process.getByText("トレース ID")).toHaveCount(0);
+    await expectNoPageOverflow(page);
+  });
+
+  test(`用語・同義語の確認と回答ルールの確認を別の工程で順に出す (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockSearchPage(page, [knowledgeStepsSearchStream]);
+
+    await enableSearchAnswer(page);
+    await page.getByRole("textbox", { name: "RAG 検索" }).fill("合成の質問");
+    await page.getByRole("button", { name: "検索", exact: true }).click();
+
+    // 実行中: 用語・同義語の確認が終わり、回答ルールの確認が今の工程（#3451）。
+    const current = page.getByTestId("search-run-progress-current");
+    await expect(current).toContainText("回答ルールの確認");
+    await expect(current).toHaveAttribute("data-step-id", spanStepId("rules"));
+    const terms = page.getByTestId(`search-run-progress-step-${spanStepId("terms")}`);
+    await expect(terms).toContainText("用語・同義語の確認");
+    await page.getByTestId(`search-run-progress-step-${spanStepId("terms")}-toggle`).click();
+    const termsDetails = page.getByTestId(`search-run-progress-step-${spanStepId("terms")}-details`);
+    await expect(termsDetails).toContainText("用語 A（別名: 別名 A）");
+    await expect(termsDetails).toContainText("一致した用語の別名を補助の検索文に加えます。");
+
+    // 完了後: 2 つの工程はこの順に別の行で、回答ルールの詳細は回答ルールの工程だけに出す。
+    const summary = page.getByTestId("search-run-progress-summary");
+    await expect(summary).toContainText("処理の経過（3 ステップ", { timeout: 4_000 });
+    await summary.click();
+    const process = page.getByRole("region", { name: "処理の経過" });
+    const termsBox = await terms.boundingBox();
+    const rulesBox = await page.getByTestId(`search-run-progress-step-${spanStepId("rules")}`).boundingBox();
+    expect(termsBox && rulesBox && termsBox.y < rulesBox.y).toBeTruthy();
+    await expect(process.getByText("用語・ルールの確認")).toHaveCount(0);
+    await page.getByTestId(`search-run-progress-step-${spanStepId("rules")}-toggle`).click();
+    const rulesDetails = page.getByTestId(`search-run-progress-step-${spanStepId("rules")}-details`);
+    await expect(rulesDetails).toContainText("一致した回答ルール");
+    await expect(rulesDetails).toContainText("一致した回答ルールを回答時の参考情報として渡します。");
+    await expect(rulesDetails).not.toContainText("一致した用語");
+    await process.screenshot({ path: `test-results/answer-progress-terms-rules-${viewport.name}.png` });
     await expectNoPageOverflow(page);
   });
 
