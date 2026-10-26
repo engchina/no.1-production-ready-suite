@@ -28,6 +28,7 @@ error の finding があれば valid にしない。
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import tempfile
 import time
@@ -37,8 +38,17 @@ from pathlib import Path
 from typing import Any
 
 from rag_engine.evaluation.answer_validation import MAX_DATA_RESULTS, MAX_PREMISES, is_premise_id
+from rag_engine.generation.table_records import TABLE_RECORD_KEY
 from rag_engine.resources.deadline import remaining_seconds
 from rag_engine.resources.tracing import bind_trace_observer, observe_call
+from rag_parser_core.sheet_records import (
+    ROW_BASIS_CSV,
+    ROW_BASIS_KEY,
+    ROW_BASIS_SHEET,
+    TABLE_CELLS_KEY,
+    TABLE_INDEX_KEY,
+    TABLE_ROW_KEY,
+)
 
 from app.clients.oracle import OracleClient
 from app.clients.support_guide_store import SupportGuideStore
@@ -63,6 +73,11 @@ from app.rag.guide_step_validation import guide_step_embed, guide_step_findings
 from app.schemas.support_guide import SupportGuideContent
 
 logger = logging.getLogger(__name__)
+
+# 1 行の記録の根拠を同じ表に組み直す行の番号の基準（#2594）。本文が「列名: 値」の 1 行の
+# 記録の表計算・CSV だけ（Word の表はまとまりで、解析の表の行は本文が表の形なので、検査が
+# 本文の表をそのまま読む）。
+_TABLE_RECORD_BASES = frozenset({ROW_BASIS_SHEET, ROW_BASIS_CSV})
 
 # 期限の後、thread が確かめ終わった組の判定をまとめて返すまでに待つ秒数（#2700。
 # LLM は呼ばない処理だけ）。業務ガイドの手順の意味の判定の embedding（1 回）は、期限の残りが
@@ -147,6 +162,47 @@ def evidence_location(metadata: Mapping[str, Any]) -> dict[str, Any]:
     if sheet is not None:
         location.update(sheet)
     return location
+
+
+def _metadata_int(metadata: Mapping[str, Any], key: str) -> int | None:
+    value = metadata.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def table_record(document_id: str, metadata: Mapping[str, Any]) -> dict[str, Any] | None:
+    """表の 1 行の記録の根拠の、同じ表の印・行の番号・値のあるセル（#2594）。
+
+    検査が同じ表の 1 行の記録の根拠を 1 つの表に組み直すのに使う
+    （``rag_engine.generation.table_records``）。同じ表は、同じ文書・処理の版（``chunk_set_id``）・
+    行の番号の基準・シート・表の番号。セルの座標（``table_row``・``table_cells_json``。#3262）を
+    記録した根拠だけで、記録していない根拠は None。
+    """
+    row = _metadata_int(metadata, TABLE_ROW_KEY)
+    raw = metadata.get(TABLE_CELLS_KEY)
+    if row is None or not isinstance(raw, str) or not raw:
+        return None
+    sheet = metadata.get("sheet_name")
+    sheet_name = sheet if isinstance(sheet, str) and sheet else None
+    basis = ROW_BASIS_SHEET if sheet_name else metadata.get(ROW_BASIS_KEY)
+    if basis not in _TABLE_RECORD_BASES:
+        return None
+    try:
+        cells = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(cells, list):
+        return None
+    table_index = _metadata_int(metadata, "sheet_table_index" if sheet_name else TABLE_INDEX_KEY)
+    group = json.dumps(
+        [document_id, metadata.get("chunk_set_id"), basis, sheet_name, table_index],
+        ensure_ascii=False,
+    )
+    # セルは [列, 表頭の段]（解析の表は bbox が続く。検査は列と表頭の段だけを使う）。
+    return {
+        "group": group,
+        "row": row,
+        "cells": [cell[:2] for cell in cells if isinstance(cell, list)],
+    }
 
 
 def is_valid(status: str, counts: dict[str, int], *, unreadable: int) -> bool:
@@ -366,6 +422,9 @@ async def _validate_answer(
             # 図の根拠には種類を付ける（図の見た目だけで決まる主張を本文の照合と分ける。#2678）。
             figure = figure_evidence_type(metadata)
             documents[chunk.chunk_id] = chunk.document_id
+            # 表の 1 行の記録の根拠は、検査が同じ表に組み直すための位置を持つ（#2594。
+            # モデルには渡さない）。
+            record = table_record(chunk.document_id, metadata)
             items.append(
                 {
                     "id": chunk.chunk_id,
@@ -374,6 +433,7 @@ async def _validate_answer(
                     "page_end": metadata.get("page_end"),
                     **evidence_location(metadata),
                     **({"evidence_type": figure} if figure else {}),
+                    **({TABLE_RECORD_KEY: record} if record else {}),
                     "text": chunk.text,
                 }
             )

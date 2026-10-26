@@ -352,3 +352,33 @@ def test_grounded_item_about_a_figure_button_is_kept() -> None:
     entry = next(entry for entry in entries if entry.item.text == item.text)
     assert not entry.table_conflict
     assert "contradicted" not in [mark["code"] for mark in entry.marks]
+
+
+def test_index_column_is_not_the_label_column() -> None:
+    """先頭が行の番号の列の表は、次の列を区分・名前の列として照合する（#3564）。"""
+    table = (
+        "| 項番 | 名称 | 数量 | 単価 |\n|---|---|---|---|\n"
+        "| 1 | 部品 1 | 3 | 10 |\n| 2 | 部品 2 | 1 | 20 |\n| 3 | 部品 3 | 2 | 30 |\n| 4 | 部品 4 | 3 | 40 |"
+    )
+    # 名前の中の数字（「部品 1」の「1」）は値として読まず、名前の列を別の列の値と疑わない。
+    for claim in (
+        "部品 1 の単価は 10 です。",
+        "部品 2 の数量は 1 です。",
+        "部品 4 の数量は 3 です。",
+        "部品 1 と部品 4 の数量はどちらも 3 です。",
+    ):
+        assert unbound_table_values(claim, [table]) == [], claim
+    assert unbound_table_values("部品 3 の単価は 40 です。", [table]) == [("40", "部品 3")]
+    assert evidence_tables(table)[0].header == ("名称", "数量", "単価")
+    # 番号が上から増えない先頭の列は、今までどおり先頭の列として読む。
+    unordered = "| 区分 | 値 | 備考 |\n|---|---|---|\n| 3 | 区分甲 | x1 |\n| 1 | 区分乙 | x2 |"
+    assert len(evidence_tables(unordered)[0].header) == 3
+
+
+def test_short_value_inside_a_stated_name_is_not_a_separate_value() -> None:
+    """述べた名前の中にだけ現れる短い値は、別の行の値として疑わない（#3564）。"""
+    table = "| 名称 | 数量 |\n|---|---|\n| 区分 1 | 3 |\n| 区分 2 | 1 |\n| 区分 3 | 2 |"
+    assert unbound_table_values("区分 1 の数量は 3 です。", [table]) == []
+    assert unbound_table_values("区分 3 の数量は 2 です。", [table]) == []
+    # 名前の外で述べた値は、今までどおり照合する。
+    assert unbound_table_values("区分 3 の数量は 1 です。", [table]) == [("1", "区分 3")]
