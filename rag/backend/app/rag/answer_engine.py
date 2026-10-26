@@ -652,7 +652,7 @@ def build_engine_settings(
         "RAG_ENGINE_GUIDE_STEP_CHUNKS_PER_STEP": str(settings.rag_guide_step_chunks_per_step),
         "RAG_ENGINE_GUIDE_REFERENCE_MAX_CHUNKS": str(settings.rag_guide_reference_max_chunks),
         "RAG_ENGINE_GUIDE_STEP_DEADLINE_SECONDS": str(settings.rag_guide_step_deadline_seconds),
-        # 当たった chunk の章節から親の章節へ段階的に広げる(#1436。検索・回答プロファイルで選ぶ)。
+        # 当たった chunk の章節から親の章節へ段階的に広げる(#1436。検索方法の全体設定で選ぶ)。
         "RAG_ENGINE_SECTION_EXPANSION": "1" if settings.rag_section_expansion_enabled else "0",
         "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS": str(settings.rag_section_expansion_max_levels),
         "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT": str(

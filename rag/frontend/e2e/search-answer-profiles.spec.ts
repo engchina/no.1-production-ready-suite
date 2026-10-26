@@ -230,7 +230,7 @@ test("手順検索の説明の先頭と上書きの初期値は実際の全体�
   await expectNoPageOverflow(page);
 });
 
-// #1388: 実体の 1 段の拡張は検索・回答プロファイルで選ぶ（既定 off。全体の環境変数は持たない）。
+// #3053: 実体・章節の拡張を含む検索方法の項目は全体設定だけで決め、検索・回答プロファイルは表示も保存もしない。
 test("検索方法の全体設定の項目は表示せず、古い個別設定を保存しない", { tag: "@responsive" }, async ({ page }, testInfo) => {
   let body = null as Record<string, unknown> | null;
   await mockDefaultSearchAnswerProfile(page, (value) => { body = value; }, {
