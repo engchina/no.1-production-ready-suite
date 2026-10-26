@@ -389,7 +389,7 @@ for (const viewport of [
     const current = page.getByTestId("search-run-progress-current");
     const timer = page.getByTestId("search-run-progress-timer");
     // 処理の経過（#2096。チャットと同じ ChatProgress）: 回答の中の工程（LLM）の間も今の工程と経過時間を出す。
-    await expect(current).toContainText("質問の条件の読み取り");
+    await expect(current).toContainText("Query Understanding（質問の理解）");
     await expect(timer).toContainText("経過時間");
     const firstElapsed = await timer.textContent();
     await expect(current).toContainText("文書の検索", { timeout: 4_000 });

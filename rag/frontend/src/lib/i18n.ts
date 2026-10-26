@@ -4217,7 +4217,7 @@ export const ja = {
   "answer.notice.label": "回答の注意書き",
   "answer.process.details": "処理の詳細",
   // 回答の工程の利用者向けの名前（backend の工程名 → 画面の名前。#2096。lib/answer-process.ts）。
-  "answer.step.understandQuestion": "質問の条件の読み取り",
+  "answer.step.understandQuestion": "Query Understanding（質問の理解）",
   "answer.step.terms": "用語・同義語の確認",
   "answer.step.rules": "回答ルールの確認",
   "answer.step.checkSearchReady": "検索の準備の確認",
