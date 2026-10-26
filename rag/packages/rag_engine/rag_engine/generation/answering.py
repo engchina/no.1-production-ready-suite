@@ -260,6 +260,7 @@ from rag_engine.retrieval.request_coverage import (
     select_new_parents,
     within_extra_budget,
 )
+from rag_engine.retrieval.rerank_scores import best_rerank_score, question_rerank_score, rerank_first_key, rerank_score
 from rag_engine.retrieval.scope import (
     RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
@@ -468,8 +469,10 @@ def _best_rerank_ranks(
             if score is not None and (best.get(rank.index) is None or score > (best[rank.index] or 0.0)):
                 best[rank.index] = score
     step.add(f"関連度は原質問と検索文 {used} 本の最高値で比べます。")
+    # 原質問だけの関連度も残す（文書の絞り込みが原質問の点数でも比べる。#3504）。
+    question_scores = {rank.index: rank.relevance_score for rank in ranks}
     return [
-        RerankTextRank(index=index, relevance_score=score)
+        RerankTextRank(index=index, relevance_score=score, question_relevance_score=question_scores.get(index))
         for index, score in sorted(best.items(), key=lambda item: -(item[1] if item[1] is not None else -1.0))
     ]
 
@@ -634,19 +637,17 @@ def build_chunk_answer_context(
 
 
 def select_documents(
-    ranked_children: Sequence[AnswerRecord], settings: Settings | None, step: Any | None = None
+    ranked_children: Sequence[AnswerRecord], settings: Settings | None, step: Any | None = None, *, top_k: int
 ) -> tuple[list[AnswerRecord], list[AnswerRecord], dict[str, Any]]:
-    """rerank 後の child を文書ごとに集約し、分数が明らかに低い文書の child を後回し（deferred）にする (#1028)。
+    """rerank 後の child を文書ごとに集約し、rerank の点数が明らかに低い文書の child を後回し（deferred）にする (#1028)。
 
-    粗→細の検索の「粗」の側。文書級の要約や索引は作らず、chunk の rerank 分数（relevance_score。無い候補は
-    順位の逆数）の文書ごとの最高値（best）を命中数と併せて見る。除外するのは、best が最上位の文書の best の
-    `document_selection_score_ratio` 倍未満で、かつ命中数が `document_selection_min_hits` 未満の文書だけ
-    （分数落差の護欄。分数が近い文書は全部残す）。集約は rerank が見た範囲、すなわち候補全件で行う (#1084)。
-    後回しにした child は落とさず `AnswerContext.deferred_records` に残し、不足時に戻す。無効なら何もしない。
-
-    合計で比べると章の多い説明書が中程度の分数を多数集め、rerank 1 位の候補を持つ命中 1 件の文書まで後回しに
-    していた（#1057）。落差は候補の質（best）で測り、章数では測らない。rerank 分数が無い候補の順位の逆数は差が
-    小さく閾値に掛からないので、rerank 無効時は実質後回しは起きない（分数が無ければ落差を判断できない）。
+    粗→細の検索の「粗」の側。文書級の要約や索引は作らず、文書の点数は文書の chunk の rerank の点数の最高値
+    （MaxP。#3504）。後回しにするのは、並べ替えの点数（原質問と検索文の最高値。#2161）でも原質問だけの点数でも
+    最上位の文書の `document_selection_score_ratio` 倍未満で、かつ rerank の上位 `top_k` 件（起点）に chunk を
+    持たない文書だけ。命中の件数は判定に使わない（件数は長い文書・繰り返しの多い文書に偏り、点数の高い 1 件の
+    文書を、点数の低い候補を多く持つ文書より後ろにしていた。#3504）。集約は rerank が見た範囲、すなわち候補
+    全件で行う (#1084)。後回しにした child は落とさず `AnswerContext.deferred_records` に残し、不足時に戻す。
+    rerank の点数が無い（rerank が動かなかった）ときは落差を判断できないので後回しにしない。無効なら何もしない。
     """
     from rag_engine.retrieval.metadata_context import document_context_key  # 循環 import を避けて関数内で読む
 
@@ -655,28 +656,54 @@ def select_documents(
     if not enabled or not ranked_children:
         return list(ranked_children), [], trace
     ratio = float(getattr(settings, "document_selection_score_ratio", 0.5))
-    min_hits = int(getattr(settings, "document_selection_min_hits", 2))
-    scores: dict[tuple[str, ...], float] = {}
+    head = max(0, int(top_k or 0))
+    scores: dict[tuple[str, ...], float | None] = {}
+    question_scores: dict[tuple[str, ...], float | None] = {}
+    best_ranks: dict[tuple[str, ...], int] = {}
     hits: dict[tuple[str, ...], int] = {}
     sources: dict[tuple[str, ...], str] = {}
-    for position, record in enumerate(ranked_children):
+
+    def higher(current: float | None, value: float | None) -> float | None:
+        return value if current is None or (value is not None and value > current) else current
+
+    for position, record in enumerate(ranked_children, start=1):
         if is_added_catalog_article(record) or is_attachment_evidence(record):
             # 会話の添付は利用者が明示した入力なので、文書間の関連度の比較に数えない。
             # 目録で選んで加えた条（#2254）は文書の分数に数えない（加えた条の関連度で他の文書を後回しにしない）。
             continue
         key = document_context_key(record)
-        rerank = record.metadata.get("rerank") if isinstance(record.metadata, dict) else None
-        score = rerank.get("relevance_score") if isinstance(rerank, dict) else None
-        weight = float(score) if isinstance(score, (int, float)) and not isinstance(score, bool) else 1.0 / (60 + position)
-        scores[key] = max(scores.get(key, 0.0), weight)
+        scores[key] = higher(scores.get(key), rerank_score(record))
+        question_scores[key] = higher(question_scores.get(key), question_rerank_score(record))
+        best_ranks.setdefault(key, position)
         hits[key] = hits.get(key, 0) + 1
         sources.setdefault(key, str(record.source or ""))
     if not scores:
         return list(ranked_children), [], trace
-    top = max(scores.values())
-    excluded = {key for key in scores if scores[key] < top * ratio and hits[key] < min_hits}
-    for key in sorted(scores, key=lambda k: -scores[k]):
-        entry = {"source": sources[key], "score": round(scores[key], 4), "hits": hits[key]}
+    scored = any(score is not None for score in scores.values())
+    top = max((score for score in scores.values() if score is not None), default=0.0)
+    top_question = max((score for score in question_scores.values() if score is not None), default=0.0)
+
+    def low(score: float | None, best: float) -> bool:
+        return score is None or score < best * ratio
+
+    excluded = (
+        {key for key in scores if best_ranks[key] > head and low(scores[key], top) and low(question_scores[key], top_question)}
+        if scored
+        else set()
+    )
+    # 表示の順: 原質問との点数、並べ替えの点数、最上位の候補の順位。命中の件数は同点の順だけ。
+    order = sorted(
+        scores,
+        key=lambda k: (*rerank_first_key(question_scores[k]), *rerank_first_key(scores[k]), best_ranks[k], -hits[k]),
+    )
+    for key in order:
+        entry = {
+            "source": sources[key],
+            "score": None if scores[key] is None else round(float(scores[key] or 0.0), 4),
+            "question_score": None if question_scores[key] is None else round(float(question_scores[key] or 0.0), 4),
+            "best_rank": best_ranks[key],
+            "hits": hits[key],
+        }
         trace["deferred" if key in excluded else "selected"].append(entry)
     # 実体の 1 段の拡張で足した根拠（#1362）は、文書の分数が低くても後回しにしない（橋渡しの行）。関連度が
     # 下限未満の拡張の根拠は、印の無い候補と同じに扱う（#1390）。
@@ -690,20 +717,41 @@ def select_documents(
     kept = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) not in excluded or keep]
     deferred = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) in excluded and not keep]
     if step is not None:
-        # 文書ごとの最高の関連度と命中数、残す / 後回しを示す（処理の経過の段を開いて見る。#2341）。
-        step.field("判定の基準", f"最上位の文書の {ratio:g} 倍未満の関連度で、命中が {min_hits} 件未満の文書を後回し")
+        # 文書ごとの点数と出所、残す / 後回しを示す（処理の経過の段を開いて見る。#2341・#3504）。
+        step.field("判定の基準", _document_selection_rule(ratio, head, scored=scored))
         step.field("文書", f"{len(scores)} 文書（残す {len(scores) - len(excluded)}・後回し {len(excluded)}）")
         step.add(
             *numbered(
                 [
                     f"{'後回し' if index >= len(trace['selected']) else '残す'}: {Path(entry['source']).name or entry['source']}"
-                    f"（最高 {entry['score']:.3f}・命中 {entry['hits']} 件）"
+                    f"（{_document_score_label(entry)}）"
                     for index, entry in enumerate([*trace["selected"], *trace["deferred"]])
                 ],
                 limit=8,
             )
         )
     return kept, deferred, trace
+
+
+def _document_selection_rule(ratio: float, top_k: int, *, scored: bool) -> str:
+    """文書の絞り込みの判定の基準の文（処理の経過に出す。#3504）。"""
+    if not scored:
+        return "rerank の点数が無いため、どの文書も後回しにしません（取得の順位で並べます）"
+    return (
+        "文書の点数は、文書の候補の rerank の点数（元の質問との点数と、検索文を含む並べ替えの点数）の最高値。"
+        f"どちらも最上位の文書の {ratio:g} 倍未満で、上位 {top_k} 件の起点に候補が無い文書を後回し（命中の件数は判定に使いません）"
+    )
+
+
+def _document_score_label(entry: Mapping[str, Any]) -> str:
+    """文書の行の点数の表示（元の質問との点数・並べ替えの点数・最上位の順位・命中の件数）。"""
+    score, question = entry.get("score"), entry.get("question_score")
+    tail = f"最上位 {entry['best_rank']} 位・命中 {entry['hits']} 件"
+    if score is None:
+        return f"rerank の点数なし・{tail}"
+    if question is None or abs(float(question) - float(score)) < 0.0005:
+        return f"元の質問との並べ替えの点数 {float(score):.3f}・{tail}"
+    return f"元の質問との点数 {float(question):.3f}・検索文を含む並べ替えの点数 {float(score):.3f}・{tail}"
 
 
 def cap_anchors_per_document(
@@ -932,14 +980,16 @@ def build_adb_hybrid_answer_context(
 
         ranked_children = reserve_linked_screens(ranked_children, linked_screens, reserve_rank)
     if getattr(settings, "document_selection_enabled", False):
-        with _execution_step("文書の選択", "候補を文書ごとに集約し、分数が明らかに低い文書を後回しにします。") as step:
-            kept_children, deferred_children, selection = select_documents(ranked_children, settings, step)
+        with _execution_step(
+            "文書の選択", "候補を文書ごとに集約し、元の質問との並べ替え（rerank）の点数が明らかに低い文書を後回しにします。"
+        ) as step:
+            kept_children, deferred_children, selection = select_documents(ranked_children, settings, step, top_k=top_k)
             step.result(
                 f"{len(selection['selected'])} 文書を起点にします"
                 + (f"、{len(selection['deferred'])} 文書は後回し" if selection["deferred"] else "")
             )
     else:
-        kept_children, deferred_children, selection = select_documents(ranked_children, settings)
+        kept_children, deferred_children, selection = select_documents(ranked_children, settings, top_k=top_k)
     if int(getattr(settings, "max_anchors_per_document", 0) or 0) > 0:
         with _execution_step("文書ごとの起点の上限", "同じ文書の候補が起点を占めないよう、超えた候補を後ろへ回します。") as step:
             kept_children = cap_anchors_per_document(kept_children, settings, top_k=top_k, step=step)
@@ -1237,19 +1287,25 @@ def build_crag_answer_context(
             attempts[-1] = replace(attempts[-1], recovery_trace=trace)
             if pending_context is not None:
                 continue
-        if attempt_number < CRAG_MAX_RETRIEVAL_ATTEMPTS and best_context.deferred_records:
+        restored = (
+            _restore_deferred_context(
+                question,
+                best_context,
+                settings,
+                top_k=top_k,
+                neighbor_child_count=neighbor_child_count,
+                max_records=max_records,
+                max_chars=max_chars,
+            )
+            if attempt_number < CRAG_MAX_RETRIEVAL_ATTEMPTS and best_context.deferred_records
+            else None
+        )
+        # 戻しても根拠が増えない（後回しの文書は起点〔rerank の上位 top_k〕の外だけ。#3504）なら、評価の回を使わない。
+        if restored is not None and _adds_new_records(best_context, restored):
             # 護欄: 覆盖度による回退 (#1028)。話題違いで改写検索へ進む前に、文書の選択で後回しにした文書を戻して
             # 同じ検索文で再評価する。答えが後回しの文書にあった場合の漏答を、評価枠の中で防ぐ。
             with _execution_step("文書の選択の解除", "根拠が不足したため、後回しにした文書を戻して再評価します。") as step:
-                pending_context = _restore_deferred_context(
-                    question,
-                    best_context,
-                    settings,
-                    top_k=top_k,
-                    neighbor_child_count=neighbor_child_count,
-                    max_records=max_records,
-                    max_chars=max_chars,
-                )
+                pending_context = restored
                 step.result(f"後回しにした {len(best_context.deferred_records)} 件の候補を戻しました")
                 step.field("作り直した根拠", evidence_summary(pending_context.records))
                 add_evidence_lines(step, pending_context.records, title="作り直した根拠")
@@ -1305,13 +1361,11 @@ _ENUMERATION_QUESTION = re.compile(
 
 
 def _top_rerank_score(context: AnswerContext) -> float | None:
-    """rerank の最上位の候補の score。rerank していない（score が無い）ときは None。"""
-    for record in context.ranked_candidates[:1]:
-        rerank = (record.metadata or {}).get("rerank") if isinstance(record.metadata, dict) else None
-        score = rerank.get("relevance_score") if isinstance(rerank, dict) else None
-        if isinstance(score, (int, float)):
-            return float(score)
-    return None
+    """候補の rerank の点数の最高値。rerank していない（score が無い）ときは None。
+
+    先頭の候補とは限らない（画面名の先頭寄せ・交差参照の参照先・位置を保つ候補が先頭に来る。#3504）。
+    """
+    return best_rerank_score(context.ranked_candidates)
 
 
 def _crag_grade_skip(question: str, context: AnswerContext, settings: Settings) -> dict[str, Any] | None:
@@ -1831,6 +1885,12 @@ def _expand_context_from_pool(
         document_selection={**context.document_selection, "restored": True} if mode == "deferred_documents" else context.document_selection,
     )
     return candidate, {"remedy": "context", "mode": mode, "added_chunk_ids": [r.chunk_uid for r in recovered.records]}
+
+
+def _adds_new_records(current: AnswerContext, restored: AnswerContext) -> bool:
+    """戻した context に、今の context に無い根拠（親）があるか。"""
+    known = {record.chunk_uid or record.id for record in current.records}
+    return any((record.chunk_uid or record.id) not in known for record in restored.records)
 
 
 def _deferred_document_records(context: AnswerContext, max_records: int) -> ContextRecovery:
@@ -3466,6 +3526,9 @@ def _add_text_search_details(step: _ExecutionStep, info: QuestionTextSearchInfo)
     return True
 
 
+# 回答を作らない検索の、根拠を集める流れの工程名（回答を作るときの「回答生成フロー」に当たる。#3506）と根拠の見出し。
+EVIDENCE_FLOW_STEP = "根拠検索フロー"
+EVIDENCE_RESULT_TITLE = "集めた根拠"
 _SEARCH_PURPOSE = "意味の近さ（ベクトル）と語の一致（全文）で探した順位を融合し、上位の根拠とその前後の文脈を集めます。"
 
 
@@ -4023,6 +4086,7 @@ def answer_question_result(
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     classification_filter: ClassificationFilter | None = None,
     generate_answer: bool = True,
+    complete_evidence: bool = True,
     scope: tuple[str, Sequence[str]] | None = None,
     guide_plan: GuidePlan | None = None,
     caller_queries: Sequence[str] | None = None,
@@ -4036,8 +4100,11 @@ def answer_question_result(
     ``guide_plan`` は照合した業務ガイドの手順（分岐で残った手順。#2395）。回答を作るとき、主の検索の後に
     手順ごとに検索し、手順の根拠と参照の頁の根拠を回答の材料に足す。
 
-    ``generate_answer=False`` は検索だけ（RAG 検索の画面）。質問の理解・拡張・検索文の確定までは回答と同じ工程で、
-    その後は CRAG を使わず文書検索（rerank・親子の展開を含む）を 1 回行い、回答を生成せずに根拠を返す（本文は空）。
+    ``generate_answer=False`` は回答を作らない（RAG 検索の画面。#3506）。根拠を集め終えるまで（回答フロー・章節の拡張・
+    業務ガイドの手順ごとの検索・要求ごとの根拠の確認）は回答と同じ 1 つの流れで、工程・入れ子・LLM の呼び出しも同じ。
+    回答に添付する画像と回答の生成の手前で止め、集めた根拠を返す（本文は空）。``complete_evidence=False`` は、その流れの
+    主の文書の検索の後で止める（業務 Agent の根拠の取得。根拠の補い（章節を読む・探し直す）は呼び出し元がする。CRAG も
+    使わない）。``generate_answer=False`` とだけ組み合わせる。
     空質問は ValueError、処理失敗は中断記録付きの AnswerExecutionError を送出する。
     ADB の準備不足や空検索は
     未実行工程を明示した結果を返し、回答 LLM を呼ばない。記録は呼び出しごとに分離する。
@@ -4061,6 +4128,8 @@ def answer_question_result(
     caller_planned = caller_queries is not None
     if caller_planned and generate_answer:
         raise ValueError("呼び出し元の検索文（caller_queries）は回答を作らない検索（generate_answer=False）だけに使います。")
+    if generate_answer and not complete_evidence:
+        raise ValueError("根拠の補いを省く検索（complete_evidence=False）は回答を作らない検索だけに使います。")
     trusted_queries: tuple[str, ...] = ()
     if caller_planned:
         question_key = _dedupe_query_key(normalized_question)
@@ -4083,6 +4152,12 @@ def answer_question_result(
         # flow を分ける前の呼び出し側は strategy で CRAG を指定する。SDK の既定 flow は standard なので、
         # flow の値にかかわらず旧指定を CRAG として扱う。
         selected_answer_flow = CRAG_ANSWER_FLOW
+    if caller_planned:
+        # 呼び出し元が検索文を作った検索（#2651）は、質問に応じた推論の LLM（CRAG の評価・章節の抜き出し）を呼ばない。
+        complete_evidence = False
+    if not complete_evidence:
+        # 主の文書の検索の後で止める検索は、根拠の評価と補正検索（CRAG）をしない（根拠の補いは呼び出し元がする）。
+        selected_answer_flow = STANDARD_ANSWER_FLOW
 
     with _execution_step(
         "質問の理解", "質問の文から、文書名・画面名・エラーコード・日付などの条件を規則で読み取ります（LLM は使いません）。"
@@ -4302,29 +4377,42 @@ def answer_question_result(
         if text_search_info.error:
             step.status = "検索語の抽出に失敗"
 
-    if not generate_answer:
-        return _retrieve_without_answer(
-            normalized_question,
-            run_id,
-            preferred_engine_ids,
-            settings,
-            top_k=chunk_top_k,
-            neighbor_child_count=chunk_neighbor_count,
-            rerank_enabled=effective_rerank_enabled,
+    # 根拠を集める流れは回答を作るか否かで分けない（RAG 検索とチャットで同じ工程・入れ子・LLM の呼び出し。#3506）。
+    # 回答を作らないときは同じ流れの、回答に添付する画像と回答の生成の手前（業務 Agent の根拠の取得は主の文書の検索の
+    # 後）で止める。工程名だけを回答の有無で変える（回答を作らないのに「回答生成」と示さない）。
+    flow_name, flow_purpose = (
+        ("回答生成フロー", "根拠を集めて確かめ、根拠に基づく回答を作ります。")
+        if generate_answer
+        else (EVIDENCE_FLOW_STEP, "回答と同じ方法で根拠を集めて確かめます（回答は生成しません）。")
+    )
+
+    def evidence_result(context: AnswerContext, *, trace: Mapping[str, Any] | None = None) -> AnswerQuestionResult:
+        """回答を作らずに、集めた根拠を返す（本文は空）。根拠の補いの記録は回答と同じ generation_trace に残す。"""
+        return _answer_question_result(
             expansion=expansion,
-            retrieval_queries=retrieval_queries,
-            lexical_queries=lexical_queries,
+            answer="",
+            response=AnswerResponse(answer_text="", generation_trace=dict(trace or {})),
+            records=context.records,
+            evidence_tree=context.evidence_tree,
             text_search_info=text_search_info,
+            answer_flow=selected_answer_flow,
+            crag_attempts=crag_attempts,
             question_plan=question_plan,
             runtime_knowledge=runtime_knowledge,
             inquiry_conditions=inquiry_conditions,
             retrieval_scope=selected_retrieval_scope,
             classification_filter=selected_classification_filter,
-            trusted_queries=trusted_queries,
-            search_notice=legacy_notice,
+            retrieval_queries=crag_attempts[-1].retrieval_queries if crag_attempts else retrieval_queries,
+            lexical_queries=lexical_queries,
+            crag_rewrites=crag_rewrites,
+            retrieval_top_k=chunk_top_k,
+            request_question=request_text,
         )
 
-    with _execution_step("回答生成フロー", "根拠を集めて確かめ、根拠に基づく回答を作ります。") as flow_step:
+    # 根拠の件数の見出し（回答を作らないときに「回答に渡す」と示さない）。
+    evidence_title = "回答に渡す根拠" if generate_answer else EVIDENCE_RESULT_TITLE
+
+    with _execution_step(flow_name, flow_purpose) as flow_step:
         flow_step.field("設定", answer_flow_label(selected_answer_flow))
         crag_attempts: tuple[CragRetrievalAttempt, ...] = ()
         crag_rewrites: tuple[str, ...] = ()
@@ -4386,13 +4474,14 @@ def answer_question_result(
                         classification_filter=selected_classification_filter,
                         runtime_knowledge=runtime_knowledge,
                         vector_only_queries=expansion.vector_only_queries,
+                        trusted_queries=trusted_queries,
                     )
                     retrieval_step.field("検索文", f"{len(retrieval_queries)} 本")
                     _record_search_conditions(retrieval_step, selected_classification_filter, legacy_notice)
-                    _record_search_result(retrieval_step, context)
+                    _record_search_result(retrieval_step, context, title=evidence_title)
         except AdbHybridSearchUnavailable as exc:
             flow_step.status = "中止"
-            flow_step.add("文書検索を続行できません。回答文の生成は未実行です。")
+            flow_step.add("文書検索を続行できません。" + ("回答文の生成は未実行です。" if generate_answer else ""))
             return _answer_question_result(
                 expansion=expansion,
                 answer=f"ADB hybrid search を使用できません: {exc}",
@@ -4409,6 +4498,10 @@ def answer_question_result(
                 crag_rewrites=crag_rewrites,
                 retrieval_top_k=chunk_top_k,
             )
+        if not complete_evidence:
+            # 業務 Agent の根拠の取得: 主の文書の検索の後で止める（根拠の補いは呼び出し元がする）。
+            flow_step.result(f"{EVIDENCE_RESULT_TITLE} {evidence_summary(context.records)}（回答は生成しません）")
+            return evidence_result(context)
         section_state: dict[str, Any] = {}
         # 業務ガイドの手順が参照する文書と頁（#2828）。章節の拡張はこの範囲の起点を先に広げ、回答の「回答に未反映の
         # 関連章節」はこの文書の章節を残す。
@@ -4494,13 +4587,15 @@ def answer_question_result(
         context, section_expansion = complete_sections(context, "guide_steps")
         if not context.records or not context.text.strip():
             flow_step.status = "根拠不足で終了"
-            flow_step.add("回答に使える根拠がありません。回答文の生成は未実行です。")
+            flow_step.add("回答に使える根拠がありません。" + ("回答文の生成は未実行です。" if generate_answer else ""))
             # どの段で 0 件になったか（#2401）。回答の記録から検索をやり直さずに原因の段を追う。
             zero_evidence = zero_evidence_stage(context, crag_attempts)
             flow_step.field("根拠が 0 件になった段", zero_evidence["label"])
             flow_step.field("検索の候補", f"{zero_evidence['candidate_count']} 件")
             if zero_evidence["rejected_count"]:
                 flow_step.field("根拠確認で外した候補", f"{zero_evidence['rejected_count']} 件")
+            if not generate_answer:
+                return evidence_result(context, trace={"zero_evidence": zero_evidence})
             # 空検索では LLM に推測させず、表示本文と保存 payload の不足情報を揃える。
             response = AnswerResponse(
                 answer_text=(
@@ -4573,6 +4668,16 @@ def answer_question_result(
 
         # 不足要求の追加検索も同じ読取記録・時間・入力・抽出呼び出しの予算を使う。
         context, section_expansion = complete_sections(context, "request_coverage")
+        # 根拠の補いの記録（回答の generation_trace と同じ key）。
+        evidence_trace: dict[str, Any] = {
+            "request_coverage": request_coverage,
+            **({"guide_steps": guide_step_trace} if guide_step_trace is not None else {}),
+            **({"section_expansion": section_expansion.trace} if section_expansion is not None else {}),
+        }
+        if not generate_answer:
+            # 回答を作らない検索（RAG 検索の画面）は、回答と同じ方法で集めた根拠をここで返す（#3506）。
+            flow_step.result(f"{EVIDENCE_RESULT_TITLE} {evidence_summary(context.records)}（回答は生成しません）")
+            return evidence_result(context, trace=evidence_trace)
 
         with _execution_step(
             "回答に添付する画像", "回答モデルが画像を読めるとき、根拠の資料の図・画面の画像を回答の入力に添付します。"
@@ -4632,12 +4737,7 @@ def answer_question_result(
         response, context = grounded_answer.response, grounded_answer.context
         response = replace(
             response,
-            generation_trace={
-                **(response.generation_trace or {}),
-                "request_coverage": request_coverage,
-                **({"guide_steps": guide_step_trace} if guide_step_trace is not None else {}),
-                **({"section_expansion": section_expansion.trace} if section_expansion is not None else {}),
-            },
+            generation_trace={**(response.generation_trace or {}), **evidence_trace},
         )
         image_evidence, image_prompt_mode = grounded_answer.image_evidence, grounded_answer.image_prompt_mode
         if legacy_notice:
@@ -4912,80 +5012,6 @@ def _section_evidence_budget(context: AnswerContext, settings: Settings, expansi
         return max(1, min(base or limit, limit))
     # ASCII の原文も、token と文字数を混同して切らない。全量が token 予算内なら全文を渡す。
     return max(base, total + total // 10)
-
-
-def _retrieve_without_answer(
-    question: str,
-    run_id: Any,
-    preferred_engine_ids: list[str],
-    settings: Settings,
-    *,
-    top_k: int,
-    neighbor_child_count: int,
-    rerank_enabled: bool,
-    expansion: QueryExpansionResult,
-    retrieval_queries: Sequence[str],
-    lexical_queries: Sequence[str],
-    text_search_info: QuestionTextSearchInfo,
-    question_plan: QuestionPlan,
-    runtime_knowledge: RuntimeKnowledgeContext,
-    inquiry_conditions: InquiryConditionParse,
-    retrieval_scope: str,
-    classification_filter: ClassificationFilter,
-    trusted_queries: Sequence[str] = (),
-    search_notice: str = "",
-) -> AnswerQuestionResult:
-    """回答の生成をせずに文書検索だけを行う（``answer_question_result(generate_answer=False)``）。
-
-    CRAG（検索結果の評価と補正検索）は回答のための工程なので使わない。検索できないときは理由を本文に入れて返す。
-    ``trusted_queries`` は呼び出し元が作った検索文（#2651。原質問との照合で外さない）。
-    ``search_notice`` は文書検索の工程に示す注記（検索対象外の旧 schema の文書など）。
-    """
-    records: Sequence[AnswerRecord] = ()
-    evidence_tree: Sequence[ContextParentEvidence] = ()
-    answer = ""
-    with _execution_step("文書検索", _SEARCH_PURPOSE) as step:
-        try:
-            context = build_adb_hybrid_answer_context(
-                question,
-                run_id,
-                preferred_engine_ids,
-                settings,
-                top_k=top_k,
-                neighbor_child_count=neighbor_child_count,
-                retrieval_queries=retrieval_queries,
-                rerank_enabled=rerank_enabled,
-                inquiry_conditions=inquiry_conditions,
-                retrieval_scope=retrieval_scope,
-                classification_filter=classification_filter,
-                runtime_knowledge=runtime_knowledge,
-                vector_only_queries=expansion.vector_only_queries,
-                trusted_queries=trusted_queries,
-            )
-        except AdbHybridSearchUnavailable as exc:
-            step.status = "中止"
-            answer = f"ADB hybrid search を使用できません: {exc}"
-        else:
-            records, evidence_tree = context.records, context.evidence_tree
-            step.field("検索文", f"{len(retrieval_queries)} 本")
-            _record_search_conditions(step, classification_filter, search_notice)
-            _record_search_result(step, context, title="検索結果", note="（回答は生成しません）")
-    return _answer_question_result(
-        expansion=expansion,
-        answer=answer,
-        records=records,
-        evidence_tree=evidence_tree,
-        text_search_info=text_search_info,
-        answer_flow=STANDARD_ANSWER_FLOW,
-        question_plan=question_plan,
-        runtime_knowledge=runtime_knowledge,
-        inquiry_conditions=inquiry_conditions,
-        retrieval_scope=retrieval_scope,
-        classification_filter=classification_filter,
-        retrieval_queries=retrieval_queries,
-        lexical_queries=lexical_queries,
-        retrieval_top_k=top_k,
-    )
 
 
 def load_answer_chunks(output_dir: str | Path, run_id: Any, preferred_engines: Iterable[str]) -> list[AnswerRecord]:

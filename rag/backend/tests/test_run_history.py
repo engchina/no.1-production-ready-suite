@@ -285,7 +285,7 @@ async def test_pipeline_records_search_answer_and_blocked_runs(monkeypatch: Monk
     assert search_only["question"] == "受注の登録方法は？"
     assert search_only["verification"] is None
     assert search_only["citation_count"] == len(search_only["citations"]) > 0
-    assert {"rag.search", "rag.retrieval"} <= span_names(0)
+    assert {"rag.search", "rag.evidence"} <= span_names(0)
     assert answered["answer_generated"] is True
     assert answered["citations"] is None
     assert answered["verification"] in {"verified", "partial", "unverified"}

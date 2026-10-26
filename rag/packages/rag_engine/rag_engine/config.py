@@ -237,10 +237,10 @@ class Settings:
     rerank_retry_initial_wait_seconds: float
     rerank_retry_max_wait_seconds: float
     rerank_min_relevance_score: float
-    # 粗→細の検索: rerank 後の候補を文書ごとに集約し、分数が明らかに低い文書を後回しにする (#1028)。既定 on (#1040)。
+    # 粗→細の検索: rerank 後の候補を文書ごとに集約し、rerank の点数が明らかに低い文書を後回しにする (#1028)。既定 on (#1040)。
+    # 命中の件数は判定に使わない（#3504）。
     document_selection_enabled: bool
     document_selection_score_ratio: float
-    document_selection_min_hits: int
     # 質問から操作すべき画面を画面目録で選び、その画面の根拠を検索候補に加える (#1108)。1 質問につき LLM 呼出が
     # 1 回増える。効果を 83 問で確かめるまで既定 off。
     screen_linking_enabled: bool
@@ -559,7 +559,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         ),
         document_selection_enabled=_env_bool(env, "RAG_ENGINE_DOCUMENT_SELECTION", True),
         document_selection_score_ratio=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_DOCUMENT_SELECTION_SCORE_RATIO", 0.5))),
-        document_selection_min_hits=max(1, _env_int(env, "RAG_ENGINE_DOCUMENT_SELECTION_MIN_HITS", 2)),
         screen_linking_enabled=_env_bool(env, "RAG_ENGINE_SCREEN_LINKING", False),
         screen_linking_reserve_rank=max(0, _env_int(env, "RAG_ENGINE_SCREEN_LINKING_RESERVE_RANK", 0)),
         embedding_region=env.get("EMBEDDING_REGION", DEFAULT_EMBEDDING_REGION).strip() or DEFAULT_EMBEDDING_REGION,

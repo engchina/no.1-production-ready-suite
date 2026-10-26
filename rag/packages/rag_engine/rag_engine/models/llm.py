@@ -11,10 +11,15 @@ from pydantic.json_schema import SkipJsonSchema
 
 @dataclass(frozen=True)
 class RerankTextRank:
-    """rerank 結果の元 document index と relevance score を保持します。"""
+    """rerank 結果の元 document index と relevance score を保持します。
+
+    question_relevance_score は原質問だけとの関連度（検索文ごとの最高値で並べたとき。#3504）。None なら
+    relevance_score が原質問の関連度。
+    """
 
     index: int
     relevance_score: float | None = None
+    question_relevance_score: float | None = None
 
 
 class _StrictModel(BaseModel):

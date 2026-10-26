@@ -556,8 +556,11 @@ LlamaIndex AutoMerging 風の分割方式「親子階層」は削除し、一覧
 - CRAG は最低範囲を補ってから再判定し、不足時にだけ上の章節へ進む。補完前の十分判定は最終判定にしない。
 - 同じ ID でも本文が抜粋なら読了とせず原文へ戻す。部分取得、権限による欠落、読取失敗、抽出した抜粋は
   全量の読了にしない。評価器が十分と返しても、未確認の範囲を消さず条件つきの回答にする。
-- `generate_answer=False` の検索専用経路（MCP の根拠取得を含む）は自動補完しない。返された章節・chunk の ID から
-  呼び出し側が `rag_read_section(up=...)` を使う。回答生成する RAG 内部と Agent 側で二重に読む契約にしない。
+- RAG 検索の画面の回答を作らない検索（`generate_answer=False`）は、チャットと同じ流れでこの補完まで行い、回答の
+  生成の手前で止める（#3506。処理の経過の工程・入れ子・LLM の呼び出しもチャットと同じ）。
+- MCP の根拠取得（`rag_retrieve_evidence`。`complete_evidence=False`）は同じ流れの主の文書の検索の後で止め、
+  自動補完しない。返された章節・chunk の ID から呼び出し側が `rag_read_section(up=...)` を使う。回答生成する
+  RAG 内部と Agent 側で二重に読む契約にしない。
 
 診断は `section_expansion.stop_reason`（`disabled` / `not_configured` / `no_sections` / `scope_read` / 各上限など）、
 `minimum_scope_complete`、`judgement`（`llm` / `not_requested`）、`completed_sections`、`unmapped_seeds`、
