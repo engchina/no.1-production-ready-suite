@@ -635,7 +635,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("質問の読み取りから回答の作成まで");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toHaveAttribute("data-level", "1");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("0.3 秒");
-    await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("Query Understanding（質問の理解）（LLM 1 回・送信 2 回）");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("質問の理解（Query Understanding）（LLM 1 回・送信 2 回）");
     await expect(timeline.locator("[data-run-timeline-step]").nth(3)).toContainText("回答の安全チェック");
     if (!isNarrow(page)) await expect(timeline.locator("[data-run-timeline-bar]").first()).toBeVisible();
     // 段の詳細（#2341）: 行を開くと工程の詳細と技術の値（span の名前）を出す（既定で閉じる）。
@@ -1070,7 +1070,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await page.goto(`/history/${row.run_id}`);
     await page.getByTestId("run-history-timeline-summary").click();
     const steps = page.getByTestId("run-history-timeline").locator("[data-run-timeline-step]");
-    // 包む段 → Query Understanding（質問の理解） → 用語・同義語の確認 → 回答ルールの確認（同じ段の子でこの順）。
+    // 包む段 → 質問の理解（Query Understanding） → 用語・同義語の確認 → 回答ルールの確認（同じ段の子でこの順）。
     await expect(steps).toHaveCount(4);
     await expect(steps.nth(2)).toContainText("用語・同義語の確認");
     await expect(steps.nth(3)).toContainText("回答ルールの確認");

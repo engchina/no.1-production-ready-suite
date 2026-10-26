@@ -4205,7 +4205,7 @@ export const ja = {
   // 工程の名前は backend の時間切れの文言（app/rag/span_display.py の ANSWER_STAGE_LABELS）と揃える（#375）。
   "search.stage.processing": "処理中",
   "search.stage.historyRewrite": "会話を踏まえた質問の書き換え",
-  "search.stage.fieldFilter": "検索条件の読み取り",
+  "search.stage.fieldFilter": "検索条件の抽出（Self-Query）",
   "search.stage.answer": "質問の読み取りから回答の作成まで",
   "search.stage.answerGuardrail": "回答の安全チェック",
   "search.stage.retrieval": "検索",
@@ -4217,7 +4217,7 @@ export const ja = {
   "answer.notice.label": "回答の注意書き",
   "answer.process.details": "処理の詳細",
   // 回答の工程の利用者向けの名前（backend の工程名 → 画面の名前。#2096。lib/answer-process.ts）。
-  "answer.step.understandQuestion": "Query Understanding（質問の理解）",
+  "answer.step.understandQuestion": "質問の理解（Query Understanding）",
   "answer.step.terms": "用語・同義語の確認",
   "answer.step.rules": "回答ルールの確認",
   "answer.step.checkSearchReady": "検索の準備の確認",
