@@ -189,13 +189,13 @@ test.describe("作業状態の保持", () => {
     await page.locator("#search-query").fill("交通費の上限");
     await page.getByText("詳細条件", { exact: true }).click();
     await page.getByRole("combobox", { name: "候補取得数" }).click();
-    await page.getByRole("option", { name: "50", exact: true }).click();
+    await page.getByRole("option", { name: "100", exact: true }).click();
     await page.getByRole("switch", { name: "LLM で回答を生成する" }).click();
 
     const expectRestored = async () => {
       await expect(page.locator("#search-query")).toHaveValue("交通費の上限");
       await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("経理ビュー");
-      await expect(page.getByRole("combobox", { name: "候補取得数" })).toContainText("50");
+      await expect(page.getByRole("combobox", { name: "候補取得数" })).toContainText("100");
       await expect(page.getByRole("switch", { name: "LLM で回答を生成する" })).toHaveAttribute(
         "aria-checked",
         "true"

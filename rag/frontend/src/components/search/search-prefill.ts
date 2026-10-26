@@ -15,8 +15,9 @@ import {
  * 検索はしない（利用者が「検索」を押す）。今は使えない検索・回答プロファイル・項目は、画面の通常の検証に任せる。
  */
 
-export const TOP_K_OPTIONS = ["5", "10", "20", "50"] as const;
-export const DEFAULT_TOP_K = "20";
+// 検索する件数の選択肢と既定（backend の SearchRequest の既定 50・上限 100 と同じ。#3512）。
+export const TOP_K_OPTIONS = ["25", "50", "100"] as const;
+export const DEFAULT_TOP_K = "50";
 export type TopKOption = (typeof TOP_K_OPTIONS)[number];
 
 /** 文書の分類（完全一致）と有効期間の基準日。backend の検索 filters のキーと同じ名前。 */

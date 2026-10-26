@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.config import AnswerFlow, EvaluationSuite, QueryStrategy, ReasoningEffortOverride
 from app.schemas.search import (
+    SEARCH_TOP_K_DEFAULT,
+    SEARCH_TOP_K_MAX,
     SearchDiagnostics,
     format_search_id_filter,
     normalize_query_text,
@@ -693,7 +695,8 @@ class EvaluationRunRequest(BaseModel):
     """
 
     cases: list[EvaluationCase] = Field(..., min_length=1)
-    top_k: int = Field(default=20, ge=1, le=100)
+    # 省略時はチャット・RAG 検索と同じ既定(#3512)。
+    top_k: int = Field(default=SEARCH_TOP_K_DEFAULT, ge=1, le=SEARCH_TOP_K_MAX)
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
     thresholds: EvaluationThresholds | None = None

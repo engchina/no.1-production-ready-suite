@@ -110,8 +110,8 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
   // 検索の方式と Rerank の件数は回答エンジンが使わないため選ばせない（#595）。
   await expect(page.getByRole("combobox", { name: "Rerank 採用数" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "ハイブリッド" })).toHaveCount(0);
-  await topKSelect.click();
-  await page.getByRole("option", { name: "50", exact: true }).click();
+  // 候補取得数の既定は 50（#3512）。選ばなければ既定で検索する。
+  await expect(topKSelect).toContainText("50");
 
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("交通費の上限");
   await page.getByRole("button", { name: "検索", exact: true }).click();

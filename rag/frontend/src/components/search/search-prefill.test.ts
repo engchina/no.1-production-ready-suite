@@ -38,7 +38,7 @@ describe("RAG 検索の画面に入れる初期値（Issue 3309）", () => {
       question,
       searchAnswerProfileId: "profile-a",
       generateAnswer: true,
-      topK: 10,
+      topK: 100,
       filters: {
         large_category: "分類 A",
         as_of: "2026-04-01",
@@ -57,7 +57,7 @@ describe("RAG 検索の画面に入れる初期値（Issue 3309）", () => {
       question,
       searchAnswerProfileId: "profile-a",
       generateAnswer: true,
-      topK: "10",
+      topK: "100",
       classification: { ...EMPTY_CLASSIFICATION_FILTERS, large_category: "分類 A", as_of: "2026-04-01" },
     });
     // 抽出項目の条件は編集の行に戻り、画面が作り直す条件は記録と同じになる。
@@ -69,7 +69,7 @@ describe("RAG 検索の画面に入れる初期値（Issue 3309）", () => {
   });
 
   it("記録に無い条件は既定に戻し、前の作業の条件を混ぜない", () => {
-    const href = searchPrefillHref({ question: "q", searchAnswerProfileId: null, generateAnswer: false, topK: 20 });
+    const href = searchPrefillHref({ question: "q", searchAnswerProfileId: null, generateAnswer: false, topK: 50 });
     const { params } = paramsOf(href);
     // 既定の件数・空の絞り込み・プロファイルの無い実行は URL に入れない。
     expect([...params.keys()]).toEqual(["question", "generate_answer"]);

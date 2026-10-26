@@ -167,13 +167,15 @@ test("検索条件の候補取得数も同じドロップダウン UI で選択�
   // 候補取得数は「詳細条件」ディスクロージャ内にあるため展開してから操作する。
   await page.getByRole("button", { name: "詳細条件" }).click();
   const topK = page.getByRole("combobox", { name: "候補取得数" });
+  // 既定は 50、選択肢は 25 / 50 / 100（#3512）。
+  await expect(topK).toContainText("50");
   await topK.click();
 
   const listbox = page.getByRole("listbox", { name: "候補取得数" });
-  await expect(listbox.getByRole("option")).toHaveText(["5", "10", "20", "50"]);
+  await expect(listbox.getByRole("option")).toHaveText(["25", "50", "100"]);
 
-  await listbox.getByRole("option", { name: "50" }).click();
-  await expect(topK).toContainText("50");
+  await listbox.getByRole("option", { name: "100" }).click();
+  await expect(topK).toContainText("100");
 });
 
 // ── #352: Portal・反転・typeahead・選択肢のスクロール ──────────────────────────

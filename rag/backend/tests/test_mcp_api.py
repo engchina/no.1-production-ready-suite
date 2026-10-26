@@ -39,7 +39,13 @@ from app.rag.section_chunk_map import (
     build_section_chunk_map,
 )
 from app.schemas.document import DocumentSection
-from app.schemas.search import RetrievedChunk, SearchDiagnostics, SearchRequest, SearchResponse
+from app.schemas.search import (
+    SEARCH_TOP_K_DEFAULT,
+    RetrievedChunk,
+    SearchDiagnostics,
+    SearchRequest,
+    SearchResponse,
+)
 from app.security.permissions import SCOPE_FORBIDDEN_CODE, permission_for_route
 from tests.security_support import ProductionAuth, enable_production_auth, login
 from tests.support import AsgiTestClient
@@ -1763,12 +1769,12 @@ def test_retrieve_evidence_returns_retrieved_anchors_before_context(
     assert body["evidence_omitted"] == 3
 
 
-def _ledger_citations() -> list[Any]:
+def _ledger_citations(ledger_rows: int = 8) -> list[Any]:
     """#1335 の再評価の D の取りこぼしの形（#1365）。
 
     「勤怠管理システム 変更 受付 承認 営業日」の検索で、運用要領の章が関連度 1〜12 位に当たり、
-    答えの台帳の行（system-ledger.xlsx の 1 行 = 1 chunk）は 13〜20 位。文書のかたまりの順の
-    citations では、運用要領の前後の文脈が当たった chunk の間に入る。
+    答えの台帳の行（system-ledger.xlsx の 1 行 = 1 chunk）は 13 位以降（ledger_rows 件）。文書の
+    かたまりの順の citations では、運用要領の前後の文脈が当たった chunk の間に入る。
     """
     citations = []
     for index in range(12):
@@ -1780,7 +1786,7 @@ def _ledger_citations() -> list[Any]:
             )
         )
         citations.append(_chunk(f"guide-context-{index + 1}", evidence_role="neighbor_context"))
-    for index in range(8):
+    for index in range(ledger_rows):
         citations.append(
             _chunk(
                 f"ledger-row-{index + 1}",
@@ -1796,13 +1802,18 @@ def _ledger_citations() -> list[Any]:
 def test_retrieve_evidence_returns_all_retrieved_anchors_by_default(
     auth: ProductionAuth, monkeypatch: MonkeyPatch
 ) -> None:
-    """既定の evidence_limit（20）で、関連度 13〜20 位の台帳の行も返る（#1365）。"""
+    """既定の evidence_limit（検索する件数の既定）で、関連度 13 位以降の台帳の行も返る（#1365）。"""
     captured: list[SearchRequest] = []
+    # 当たった chunk が既定の件数ちょうど（運用要領 12 件 + 台帳の行）。
+    ledger_rows = mcp_tools.RETRIEVE_EVIDENCE_LIMIT_DEFAULT - 12
 
     async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         captured.append(request)
         return SearchResponse(
-            answer="", citations=_ledger_citations(), trace_id="trace-l", elapsed_ms=1.0
+            answer="",
+            citations=_ledger_citations(ledger_rows),
+            trace_id="trace-l",
+            elapsed_ms=1.0,
         )
 
     monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
@@ -1813,33 +1824,34 @@ def test_retrieve_evidence_returns_all_retrieved_anchors_by_default(
         _token(user.user_uuid),
     )["structuredContent"]
     chunk_ids = [item["chunk_id"] for item in body["evidence"]]
-    # 当たった chunk を全部（運用要領の 12 件と台帳の行 8 件）、関連度の順に返す。
+    # 当たった chunk を全部（運用要領の 12 件と台帳の行）、関連度の順に返す。
     assert chunk_ids == [f"guide-{n}" for n in range(1, 13)] + [
-        f"ledger-row-{n}" for n in range(1, 9)
+        f"ledger-row-{n}" for n in range(1, ledger_rows + 1)
     ]
-    assert [item["content_kind"] for item in body["evidence"][12:]] == ["record"] * 8
+    assert [item["content_kind"] for item in body["evidence"][12:]] == ["record"] * ledger_rows
     # 切ったのは前後の文脈だけ。
     assert body["evidence_omitted"] == 12
     # 既定は検索する件数（top_k の既定）と同じ。
     assert SearchRequest.model_fields["top_k"].default == mcp_tools.RETRIEVE_EVIDENCE_LIMIT_DEFAULT
+    assert mcp_tools.RETRIEVE_EVIDENCE_LIMIT_DEFAULT == SEARCH_TOP_K_DEFAULT == 50
     assert captured[0].top_k == mcp_tools.RETRIEVE_EVIDENCE_LIMIT_DEFAULT
 
 
 @pytest.mark.parametrize(
     ("arguments", "expected"),
     [
-        ({"top_k": 30}, 30),
-        ({"top_k": 10}, 20),
+        ({"top_k": 10}, mcp_tools.RETRIEVE_EVIDENCE_LIMIT_DEFAULT),
         ({"top_k": 100}, mcp_tools.EVIDENCE_LIMIT_MAX),
         ({"top_k": 30, "evidence_limit": 12}, 12),
         ({"evidence_limit": 5}, 5),
     ],
-    ids=["top-k-larger", "top-k-smaller", "top-k-over-max", "explicit-limit", "explicit-small"],
+    ids=["top-k-smaller", "top-k-over-max", "explicit-limit", "explicit-small"],
 )
 def test_retrieve_evidence_limit_follows_top_k_unless_given(
     arguments: dict[str, Any], expected: int
 ) -> None:
-    """evidence_limit を省略して top_k を広げたら、当たった chunk を top_k まで返す（#1365）。"""
+    """evidence_limit を省略したら既定（検索する件数の既定）を下限に top_k まで返す（上限は
+    EVIDENCE_LIMIT_MAX。#1365）。渡した evidence_limit はそのまま使う。"""
     parsed = mcp_tools.RetrieveEvidenceInput.model_validate({"query": "台帳", **arguments})
     assert mcp_tools.retrieve_evidence_limit(parsed) == expected
 
@@ -1848,7 +1860,7 @@ def test_rag_search_keeps_its_evidence_limit_default() -> None:
     """回答を作る rag_search は回答に使った根拠が先に並ぶので、既定は 12 のまま（#1365）。"""
     assert mcp_tools.SearchInput.model_validate({"query": "台帳"}).evidence_limit == 12
     retrieve = mcp_tools.RetrieveEvidenceInput.model_validate({"query": "台帳"})
-    assert retrieve.evidence_limit == 20
+    assert retrieve.evidence_limit == SEARCH_TOP_K_DEFAULT
 
 
 def test_search_orders_used_then_anchors_then_context(

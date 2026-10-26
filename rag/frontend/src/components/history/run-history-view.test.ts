@@ -122,12 +122,12 @@ describe("実行履歴の表示の対応表", () => {
       question: "合成の質問 A",
       search_answer_profile_id: "profile-a",
       answer_generated: false,
-      search_conditions: { top_k: 50, filters: { middle_category: "分類 B" } },
+      search_conditions: { top_k: 100, filters: { middle_category: "分類 B" } },
     };
     const href = runSearchHref(run, { canOpenSearch: true });
     expect(href).toBe(
       "/search?question=%E5%90%88%E6%88%90%E3%81%AE%E8%B3%AA%E5%95%8F+A&search_answer_profile_id=profile-a" +
-        "&generate_answer=false&top_k=50&middle_category=%E5%88%86%E9%A1%9E+B"
+        "&generate_answer=false&top_k=100&middle_category=%E5%88%86%E9%A1%9E+B"
     );
     // 条件の記録の無い古い実行は、質問・プロファイル・回答の生成の有無だけ。
     expect(runSearchHref({ ...run, search_conditions: null }, { canOpenSearch: true })).toBe(
