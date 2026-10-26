@@ -28,7 +28,11 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from rag_parser_core.extraction import StructuredExtraction, is_derived_content
+from rag_parser_core.extraction import (
+    StructuredExtraction,
+    is_derived_content,
+    strip_formatting_marks,
+)
 from rag_parser_core.sheet_records import SHEET_RECORD_CONTENT_KIND
 from rag_parser_core.xml_tree_json import is_xml_tree_json_extraction
 from rag_pipeline_core.chunking import (
@@ -211,6 +215,11 @@ def build_parent_child_chunks(
             "文書解析を Docling にして再解析するか、別の分割方式を選んでください。"
         )
     records = [dict(record) for record in _items(layout.get("records")) if isinstance(record, dict)]
+    for record in records:
+        # 要素の本文と同じく、書式の飾りの結合の線を分割と索引の本文に入れない(#3354)。
+        # 保存済みの抽出を分割し直すときにも当てる(record の raw は解析の出力のまま)。
+        if isinstance(record.get("text"), str):
+            record["text"] = strip_formatting_marks(record["text"])
     pages = [dict(page) for page in _items(layout.get("pages")) if isinstance(page, dict)]
     engines = sorted({str(record.get("engine") or "docling") for record in records})
     payload: dict[str, Any] = {
