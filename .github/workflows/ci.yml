@@ -227,6 +227,9 @@ jobs:
             suite_evaluation:
               - "suite/evaluation/**"
               - "platform/packages/evaluation_scoring/**"
+              # LLM による判定が使う OCI Enterprise AI の呼び方（#3418）。
+              - "platform/packages/system_settings_backend/src/pr_system_settings/model.py"
+              - "platform/packages/system_settings_backend/src/pr_system_settings/enterprise_ai_errors.py"
               - "platform/contracts/mcp/agent-tools.json"
               - "platform/contracts/mcp/rag-tools.json"
               - "platform/contracts/mcp/fixtures/**"

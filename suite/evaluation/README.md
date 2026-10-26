@@ -78,8 +78,39 @@ uv run suite-evaluation compare A=../../tmp/eval/a.json C=../../tmp/eval/c.json 
   - `outcome_missing`: `outcome` の無い完了の Run。判断の正しさは測らず、引用も無ければ検索の指標も測らない（`--infer-missing-outcome` で旧形式の推定を選べる）。
   - `evidence_text_omitted`: 場所の条件に合う根拠の本文が省かれていて（`text_omitted`）、本文の条件を照合できない。
   - `evidence_withheld`: 見る人の今の権限で見られない根拠があり（`withheld_evidence_count`）、取れなかった根拠・1 位でない順位がその根拠のせいかを確かめられない。
-  - `answer_judge_unavailable`: 標準回答はあるが、suite は回答の判定（LLM）を行わない。
+  - `answer_judge_unavailable`: 標準回答はあるが、決定的な採点では回答の判定（LLM）を行わない（LLM による判定は下の「LLM による判定と校正」で別に記録する）。
 - 閾値を付けた指標に評価不能のケースがあれば、測れたケースだけで合格にしない（`passed=null`）。
+
+## LLM による判定と校正（#3418・#2577。draft）
+
+回答の正しさ・必要な論点の充足・根拠への忠実性は、決定的な採点では測れない（決定的な report では `answer_judge_unavailable` として評価不能に数える）。LLM による判定（LLM-as-judge）は、決定的な採点と**分けて**結果のファイルの `judge` に記録し、人手の判定で校正に通った観点だけを合否に使う。
+
+| module | 内容 |
+|---|---|
+| `judge/rubric.py`・`judge/rubrics/answer_quality_v1.json` | 判定の基準（指示・観点・ラベル）。観点は `requirement_coverage`（必要な論点の充足）・`answer_correctness`（事実・推論の正しさ。対象・属性・数量・期間・条件の保持、手順の前後関係）・`claim_support`（根拠への忠実性）。ラベルは pass / fail / cannot_judge。内容の sha256 を記録する |
+| `judge/client.py` | OCI Enterprise AI の Responses API（`{Endpoint URL}/responses`。URL の規則と HTTP の失敗の分類は platform の `pr_system_settings`）を構造化出力（JSON schema・strict）で呼ぶ |
+| `judge/judging.py` | 1 件の判定（Pydantic で出力を確かめ、形が違えば呼び直し、それでも違えば評価不能）、観点ごとの集計、校正の照合 |
+| `judge/run.py` | 保存した観測の回答を判定する（製品は呼ばない） |
+| `judge/calibration.py` | 人手の判定の形（`LabelSet`）と、一致の集計（platform の `pr_evaluation_scoring.agreement`: 一致率・Cohen の κ・混同行列・誤合格 / 誤不合格）・合否 |
+
+判定のモデルと接続は環境変数で決める（既定のモデルは持たない）: `SUITE_EVALUATION_JUDGE_ENDPOINT`・`SUITE_EVALUATION_JUDGE_API_KEY`・`SUITE_EVALUATION_JUDGE_MODEL`（必須）、`SUITE_EVALUATION_JUDGE_PROJECT_OCID`・`SUITE_EVALUATION_JUDGE_SEED`・`SUITE_EVALUATION_JUDGE_MAX_OUTPUT_TOKENS`・`SUITE_EVALUATION_JUDGE_TIMEOUT_SECONDS`（任意）。
+
+```bash
+# 1. 人手の判定で校正する（holdout の観点ごとに κ・件数・判定率・誤合格の率を閾値と比べる）
+uv run suite-evaluation calibrate ../../tmp/eval/labels.json --output ../../tmp/eval/calibration.json
+#    人手の判定を直したら、モデルを呼ばずに集計だけやり直す
+uv run suite-evaluation calibrate ../../tmp/eval/labels.json --judgements ../../tmp/eval/calibration.json \
+    --output ../../tmp/eval/calibration.v2.json
+# 2. 保存した観測の回答を判定する（校正に通った観点だけ合否を出す。ほかは参考値）
+uv run suite-evaluation judge ../../tmp/eval/d.json --dataset "$SET" --document-map "$MAP" \
+    --calibration ../../tmp/eval/calibration.json --output ../../tmp/eval/d.judged.json
+uv run suite-evaluation compare A=../../tmp/eval/a.judged.json C=../../tmp/eval/c.judged.json D=../../tmp/eval/d.judged.json
+```
+
+- 校正の既定の閾値（holdout の観点ごと）: 件数 50 以上・判定率 0.95 以上・κ 0.6 以上・誤合格の率 0.1 以下（`--min-items` などで変えられ、結果に記録する）。
+- 校正の結果は rubric の sha256 と判定のモデルに結ぶ。どちらかが違えば、判定は合否に使わない（`calibration_status=mismatch`）。
+- 検索の評価器の校正（RAG の `rag_engine.evaluation.crag_grader_eval`）とは対象が違うので分ける。一致の集計の部品だけ platform で共有する。
+- テストの人手の判定と判定の応答は合成（`tests/fixtures/judge_calibration/`）で、合否の閾値に届かない件数にしてある（実の校正は利用者の人手の判定で行う）。
 
 ## 版と記録
 

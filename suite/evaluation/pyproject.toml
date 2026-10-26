@@ -10,6 +10,8 @@ dependencies = [
   "httpx==0.28.1",
   "pydantic>=2.11",
   "production-ready-evaluation-scoring",
+  # LLM による判定の OCI Enterprise AI の呼び方（URL の規則・HTTP の失敗の分類）を 3 製品と共有する（#3418）。
+  "production-ready-system-settings-backend",
 ]
 
 [project.scripts]
@@ -17,6 +19,8 @@ suite-evaluation = "pr_suite_evaluation.cli:main"
 
 [tool.uv.sources]
 production-ready-evaluation-scoring = { path = "../../platform/packages/evaluation_scoring", editable = true }
+production-ready-system-settings-backend = { path = "../../platform/packages/system_settings_backend", editable = true }
+production-ready-backend-core = { path = "../../platform/packages/backend_core", editable = true }
 
 [dependency-groups]
 dev = [

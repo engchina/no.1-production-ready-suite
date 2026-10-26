@@ -2,10 +2,11 @@
 
 製品の module・DB・保存ファイルを読まない。
 
-- suite の src は標準 library・httpx・pydantic・platform の `pr_evaluation_scoring`・自分だけを
-  import する（製品の `app.*`・`rag_*`・`nl2sql`・Agent の package を import しない）。
-- suite の src は製品の DB の driver（`oracledb`）を import せず、製品のディレクトリの path を
-  書かない。
+- suite の src は標準 library・httpx・pydantic・platform の `pr_evaluation_scoring`
+  /`pr_system_settings`（OCI Enterprise AI の呼び方）・自分だけを import する（製品の `app.*`・
+  `rag_*`・`nl2sql`・Agent の package を import しない）。
+- suite の src は製品の DB の driver（`oracledb`）を import せず、製品のディレクトリの path を書か
+  ない。
 - platform の採点の部品は、標準 library と自分だけを import する（製品・suite を import しない）。
 - 製品と platform の package は suite に依存しない。
 """
@@ -22,7 +23,13 @@ import pytest
 SUITE_SRC = Path(__file__).resolve().parents[1] / "src" / "pr_suite_evaluation"
 REPO = Path(__file__).resolve().parents[3]
 PLATFORM_SCORING_SRC = REPO / "platform" / "packages" / "evaluation_scoring" / "src"
-SUITE_ALLOWED = {"httpx", "pydantic", "pr_evaluation_scoring", "pr_suite_evaluation"}
+SUITE_ALLOWED = {
+    "httpx",
+    "pydantic",
+    "pr_evaluation_scoring",
+    "pr_system_settings",
+    "pr_suite_evaluation",
+}
 SCORING_ALLOWED = {"pr_evaluation_scoring"}
 # 製品のディレクトリの path（実行時に製品の保存ファイル・設定を読まない）。
 PRODUCT_PATH = re.compile(r"""["'](?:\.\./)*(?:rag|nl2sql|agent)/(?:backend|frontend|packages)""")

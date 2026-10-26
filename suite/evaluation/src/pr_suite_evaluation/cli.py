@@ -16,6 +16,10 @@
   観測を保存して採点する。どの Target も同じ Evaluator・Report で採点する。
 - `score`: 保存した観測を、モデル・製品を呼ばずに採点し直す（規則・期待を直したとき）。
 - `compare`: suite の結果を比べる表を出す（同じ評価セットの結果どうしだけ）。
+- `judge`: 保存した観測の回答を LLM で判定し、判定を結果に足す（製品は呼ばない。判定のモデルは呼ぶ。
+  接続とモデルは `SUITE_EVALUATION_JUDGE_*`。`--calibration` の校正に通った観点だけ合否を出す）。
+- `calibrate`: 人手の判定（ラベル）と LLM の判定の一致（κ・混同行列・誤合格 / 誤不合格）を集計し、
+  校正の合否を出す（`--judgements` に前の校正の結果を渡すと、モデルを呼ばずに集計だけやり直す）。
 
 終了コード: 0 成功 / 2 入力・接続の失敗（ケースの失敗は結果に記録し、終了コードにしない）。
 """
@@ -47,6 +51,21 @@ from pr_suite_evaluation.experiment import (
     rescore,
     run_experiment,
 )
+from pr_suite_evaluation.judge.calibration import (
+    CalibrationReport,
+    CalibrationThresholds,
+    calibrate,
+    judge_labels,
+    load_labels,
+)
+from pr_suite_evaluation.judge.client import (
+    EnterpriseAiJudgeClient,
+    JudgeConfigError,
+    JudgeModelConfig,
+)
+from pr_suite_evaluation.judge.judging import JudgeSettings
+from pr_suite_evaluation.judge.rubric import load_rubric
+from pr_suite_evaluation.judge.run import judge_record
 from pr_suite_evaluation.mcp_client import McpClient, TargetError
 from pr_suite_evaluation.report import summarize_result, summary_markdown
 from pr_suite_evaluation.targets import agent_mcp, rag_mcp
@@ -128,6 +147,37 @@ def _build_parser() -> argparse.ArgumentParser:
     score.add_argument("--case", action="append", default=[], help="採点するケースの id")
     score.add_argument("--infer-missing-outcome", action="store_true")
     score.add_argument("--output", type=Path, required=True, help="採点し直した結果の出力先")
+
+    judge = commands.add_parser("judge", help="保存した観測の回答を LLM で判定する")
+    judge.add_argument("record", type=Path, help="run の結果（JSON）")
+    judge.add_argument("--dataset", type=Path, required=True, help="評価セット（標準回答を読む）")
+    judge.add_argument("--document-map", type=Path, help="文書の対応表")
+    judge.add_argument("--rubric", type=Path, help="判定の基準（省略時は既定の rubric）")
+    judge.add_argument(
+        "--calibration", type=Path, help="calibrate の結果（合否に使える観点を決める）"
+    )
+    judge.add_argument("--max-attempts", type=int, default=JudgeSettings().max_attempts)
+    judge.add_argument("--max-evidence-chars", type=int, default=JudgeSettings().max_evidence_chars)
+    judge.add_argument("--output", type=Path, required=True, help="判定を足した結果の出力先")
+
+    calibration = commands.add_parser("calibrate", help="LLM の判定を人手の判定で校正する")
+    calibration.add_argument("labels", type=Path, help="人手の判定（JSON）")
+    calibration.add_argument("--rubric", type=Path, help="判定の基準（省略時は既定の rubric）")
+    calibration.add_argument(
+        "--judgements", type=Path, help="前の calibrate の結果（モデルを呼ばずに集計だけやり直す）"
+    )
+    defaults = CalibrationThresholds()
+    calibration.add_argument("--min-items", type=int, default=defaults.min_items)
+    calibration.add_argument("--min-kappa", type=float, default=defaults.min_kappa)
+    calibration.add_argument(
+        "--max-false-pass-rate", type=float, default=defaults.max_false_pass_rate
+    )
+    calibration.add_argument("--min-coverage", type=float, default=defaults.min_coverage)
+    calibration.add_argument("--max-attempts", type=int, default=JudgeSettings().max_attempts)
+    calibration.add_argument(
+        "--max-evidence-chars", type=int, default=JudgeSettings().max_evidence_chars
+    )
+    calibration.add_argument("--output", type=Path, required=True, help="校正の結果の出力先")
 
     compare = commands.add_parser("compare", help="suite の結果を比べる表を出す")
     compare.add_argument("results", nargs="+", help="<名前>=<結果の JSON>（例: A=a.json）")
@@ -271,8 +321,93 @@ def _score_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _judge_settings(args: argparse.Namespace) -> JudgeSettings:
+    try:
+        return JudgeSettings(
+            max_attempts=args.max_attempts, max_evidence_chars=args.max_evidence_chars
+        )
+    except ValueError as error:
+        raise CliError(str(error)) from error
+
+
+def _judge_command(args: argparse.Namespace) -> int:
+    record = _load_record(args.record)
+    loaded = _dataset(args.dataset, args.document_map)
+    rubric = load_rubric(args.rubric)
+    settings = _judge_settings(args)
+    calibration = (
+        json.loads(args.calibration.read_text(encoding="utf-8")) if args.calibration else None
+    )
+    config = JudgeModelConfig.from_env()
+    target = record.provenance.get("target") or {}
+    target = target if isinstance(target, Mapping) else {}
+    scorer = ScorerConfig(target_kind=str(target.get("kind") or agent_mcp.TARGET_KIND))
+    with httpx.Client(trust_env=False) as client:
+        judged = judge_record(
+            record,
+            loaded,
+            scorer=scorer,
+            rubric=rubric,
+            client=EnterpriseAiJudgeClient(client, config),
+            judge_provenance=config.provenance(),
+            settings=settings,
+            calibration=calibration,
+        )
+    _write(args.output, judged)
+    return 0
+
+
+def _calibrate_command(args: argparse.Namespace) -> int:
+    labels = load_labels(args.labels)
+    rubric = load_rubric(args.rubric)
+    settings = _judge_settings(args)
+    thresholds = CalibrationThresholds(
+        min_items=args.min_items,
+        min_kappa=args.min_kappa,
+        max_false_pass_rate=args.max_false_pass_rate,
+        min_coverage=args.min_coverage,
+    )
+    if args.judgements:
+        previous = CalibrationReport.model_validate_json(
+            args.judgements.read_text(encoding="utf-8")
+        )
+        if (previous.provenance.get("rubric") or {}).get("sha256") != rubric.sha256:
+            raise CliError("前の校正の結果の rubric が違います（判定をやり直してください）。")
+        judgements = previous.judgements
+        judge_provenance = previous.provenance.get("judge") or {}
+    else:
+        config = JudgeModelConfig.from_env()
+        with httpx.Client(trust_env=False) as client:
+            judgements = judge_labels(
+                labels, rubric, EnterpriseAiJudgeClient(client, config), settings
+            )
+        judge_provenance = config.provenance()
+    try:
+        report = calibrate(
+            labels,
+            rubric,
+            judgements=judgements,
+            judge_provenance=judge_provenance,
+            settings=settings,
+            thresholds=thresholds,
+        )
+    except ValueError as error:
+        raise CliError(str(error)) from error
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    for aspect_id, item in report.aspects.items():
+        holdout = item.splits.get("holdout")
+        print(
+            f"{aspect_id}: passed={item.passed} kappa={holdout.kappa if holdout else None} "
+            f"items={holdout.total if holdout else 0} {'; '.join(item.failures)}",
+            file=sys.stderr,
+        )
+    print(f"wrote {args.output}", file=sys.stderr)
+    return 0
+
+
 def _compare_command(args: argparse.Namespace) -> int:
-    summaries: dict[str, Mapping[str, Any]] = {}
+    summaries: dict[str, dict[str, Any]] = {}
     datasets: dict[str, str] = {}
     for item in args.results:
         label, separator, path = item.partition("=")
@@ -287,6 +422,15 @@ def _compare_command(args: argparse.Namespace) -> int:
             "target_kind": target.get("kind") if isinstance(target, Mapping) else None,
             "metrics_version": record.report.metrics_version,
         }
+        if record.judge is not None:
+            summaries[label]["judge"] = {
+                aspect_id: {
+                    "pass_rate": item.pass_rate,
+                    "calibrated": item.calibrated,
+                    "unevaluable": item.unevaluable,
+                }
+                for aspect_id, item in record.judge.summary.aspects.items()
+            }
     if len(set(datasets.values())) > 1:
         # 違う評価セット（ケース・期待・文書の対応）の結果は、同じ採点器でも比べられない。
         raise CliError(
@@ -307,10 +451,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_command(args)
         if args.command == "score":
             return _score_command(args)
+        if args.command == "judge":
+            return _judge_command(args)
+        if args.command == "calibrate":
+            return _calibrate_command(args)
         return _compare_command(args)
     except (
         CliError,
         DatasetError,
+        JudgeConfigError,
+        ValidationError,
         TargetError,
         OSError,
         json.JSONDecodeError,

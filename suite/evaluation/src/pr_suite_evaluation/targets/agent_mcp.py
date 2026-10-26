@@ -36,7 +36,7 @@ from pr_evaluation_scoring import OUTCOMES, normalize_for_match
 from pr_suite_evaluation.dataset import Case
 from pr_suite_evaluation.mcp_client import McpClient, TargetError
 from pr_suite_evaluation.observation import CaseObservation, TurnObservation
-from pr_suite_evaluation.targets.agent_legacy import infer_outcome
+from pr_suite_evaluation.targets.agent_legacy import answer_body, infer_outcome
 from pr_suite_evaluation.views import CaseFailure, CaseView, Citation, TurnView
 
 TARGET_KIND = "agent_mcp"
@@ -497,6 +497,7 @@ def _completed_view(turn: TurnObservation, *, infer_missing_outcome: bool) -> Tu
         _int(observation.get("withheld_evidence_count")) or 0,
         _int(run.get("withheld_evidence_count")) or 0,
     )
+    text = run.get("answer")
     return TurnView(
         turn=turn.turn,
         trace_id=str(turn.refs.get("run_id") or ""),
@@ -505,6 +506,7 @@ def _completed_view(turn: TurnObservation, *, infer_missing_outcome: bool) -> Tu
         outcome_source=source,
         citations=citations,
         withheld_evidence_count=withheld,
+        answer=answer_body(text) if isinstance(text, str) else "",
     )
 
 
