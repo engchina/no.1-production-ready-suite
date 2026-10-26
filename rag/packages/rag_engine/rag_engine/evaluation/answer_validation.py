@@ -49,7 +49,7 @@ from rag_engine.generation.table_binding import table_mismatch_notes, unbound_ta
 from rag_engine.generation.table_revision import revise_table_passage
 from rag_engine.models.llm import OutputFieldEvidence
 from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline, current_deadline
-from rag_engine.retrieval.task_contract import task_contract
+from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests, task_contract
 
 # 2: 複数の根拠を合わせて裏付ける主張の evidence_id の書き方を足した（#1364）。
 # 3: evidence_id を省かずに書く指示を足し、省いて書いた ID も根拠に結び付けるようにした（#1391）。
@@ -573,7 +573,7 @@ def premise_conflicts(
     # 状況説明がある質問と、具体的な操作を案内する操作要求を検査の起点にする。
     contract = task_contract(question)
     has_question_constraints = any(unit.get("kind") == "context" for unit in contract["request_units"]) or (
-        contract["goal"] == "procedure" and any(is_operation_instruction(passage["text"]) for passage in passages)
+        STEPS_REQUEST in explicit_requests(question) and any(is_operation_instruction(passage["text"]) for passage in passages)
     )
     if (not answers and not has_question_constraints) or not passages or _deadline_passed():
         return set()

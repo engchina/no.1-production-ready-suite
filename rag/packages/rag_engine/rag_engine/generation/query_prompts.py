@@ -107,7 +107,6 @@ def _query_expansion_details(expansion: QueryExpansionResult, *, original_query_
 # 検索文生成のプロンプトへ渡す契約の項目。原質問の写し（original_question / current_request / request_units /
 # user_assertions）はプロンプトの「原質問」と重複し、intent_parts / required_aspects は回答生成・監査用なので渡さない (#917)。
 _PROMPT_CONTRACT_KEYS = (
-    "goal",
     "asks_cause",
     "requested_actions",
     "action_targets",

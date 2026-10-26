@@ -247,7 +247,8 @@ class AnswerExecutionTests(unittest.TestCase):
     def test_mayor_intent_is_combined_and_understanding_adds_no_query(self):
         result = self.run_answer("倉庫を移転したので、拠点名を変更する方法を教えてほしい")
         display = result.question_display
-        self.assertIn("結果: 質問の目的は「操作方法」", display)
+        # 質問を 1 つの目的に分類した結果は表示しない（#3498）。
+        self.assertNotIn("質問の目的", display)
         self.assertNotIn("回答方針", display)
         # 質問の理解は検索文を作らない（#3496）。検索文は確定の工程に、番号と由来付きで1回だけ出る。
         self.assertNotIn("補助の検索文", display)
@@ -267,8 +268,8 @@ class AnswerExecutionTests(unittest.TestCase):
         finally:
             generation._execution_lines.reset(token)
         display = "\n".join(lines)
-        self.assertIn("結果: 質問の目的は「操作方法」", display)
-        self.assertIn("答える要求は", display)
+        self.assertNotIn("質問の目的", display)
+        self.assertIn("結果: 答える要求は", display)
         self.assertIn("影響: 回答後、要求ごとに答えたかを確認します", display)
         self.assertNotIn("NLU", display)
 

@@ -14,7 +14,7 @@ from rag_engine.generation.grounding_cues import grounding_cues
 from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
 from rag_engine.retrieval.context_builder import ContextParentEvidence
 from rag_engine.retrieval.evidence_selection import evidence_excerpt, evidence_relevance
-from rag_engine.retrieval.task_contract import goal_retrieval_queries, task_contract
+from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests, goal_retrieval_queries
 
 MAX_ANSWER_IMAGE_ATTACHMENTS = 4
 
@@ -117,7 +117,7 @@ def answer_image_evidence(
     selected: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     root = Path(output_dir)
-    procedure = bool(question and task_contract(question)["goal"] == "procedure")
+    procedure = bool(question and STEPS_REQUEST in explicit_requests(question))
     focus = " ".join(goal_retrieval_queries(question)) or question
     for record in records:
         metadata = record.metadata if isinstance(record.metadata, dict) else {}

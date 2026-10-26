@@ -24,7 +24,7 @@ from rag_engine.retrieval.evidence_selection import evidence_relevance
 from rag_engine.retrieval.metadata_context import answer_metadata_context, document_context_key, with_child_contexts
 from rag_engine.retrieval.operation_context import mentions_operation_section, operation_labels, operation_target_score
 from rag_engine.retrieval.reference_follow import is_followed_reference, reference_source_uid
-from rag_engine.retrieval.task_contract import task_contract
+from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests
 
 DEFAULT_MAX_RECORD_TEXT_CHARS = 1200
 DEFAULT_MIN_SNIPPET_CHARS = 80
@@ -399,7 +399,7 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
     }
     chapters = {label.split("-(", 1)[0] for group in primary for label in _operation_labels(group.record) if "-(" in label}
     alternative_ids = set()
-    for parent in parents.values() if task_contract(request.question)["goal"] == "procedure" else ():
+    for parent in parents.values() if STEPS_REQUEST in explicit_requests(request.question) else ():
         labels = _operation_labels(parent)
         if (
             (_record_scope_context_key(parent), str(getattr(parent, "chunk_uid", "") or "").partition(":")[0]) not in scopes

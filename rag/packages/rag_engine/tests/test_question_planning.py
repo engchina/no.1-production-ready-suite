@@ -86,7 +86,8 @@ class QuestionPlanningTests(unittest.TestCase):
         # 工程ごとに、目的・結果と、後続を変える場合だけ影響を示す。表示専用だった方針ラベルは出さない。
         self.assertIn("\n1. 質問の理解\n", display)
         self.assertIn("目的: 質問の文から、文書名・画面名・エラーコード・日付などの条件を規則で読み取ります（LLM は使いません）", display)
-        self.assertIn("結果: 質問の目的は「", display)
+        self.assertIn("結果: 答える要求は ", display)
+        self.assertNotIn("質問の目的", display)
         for removed in ("回答方針を決定", "判定方法", "方針の用途", "rule_lookup", " 開始", " 終了"):
             self.assertNotIn(removed, display)
         self.assertNotIn(QUESTION_PLAN_SEPARATOR, display)

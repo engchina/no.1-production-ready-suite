@@ -2,13 +2,14 @@
 
 from rag_engine.retrieval.evidence_selection import evidence_excerpt
 from rag_engine.retrieval.result_granularity import aggregate_only_evidence
-from rag_engine.retrieval.task_contract import task_contract
+from rag_engine.retrieval.task_contract import LIST_REQUEST, explicit_requests, task_contract
 
 
 def test_member_request_requires_method_and_population_boundary():
     contract = task_contract("月次集計に計上されている取引明細を確認したい。")
     units = contract["request_units"]
-    assert contract["goal"] == "recipient_list"
+    assert LIST_REQUEST in explicit_requests("月次集計に計上されている取引明細を確認したい。")
+    assert "procedure" in contract["required_aspects"]
     assert {"member_details", "population_membership"} <= set(contract["required_aspects"])
     assert {u["id"] for u in units} >= {"Q1.M1", "Q1.M2"}
     assert "最終集計" in next(u["text"] for u in units if u["id"] == "Q1.M2")

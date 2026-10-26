@@ -1368,7 +1368,7 @@ class AnswerGenerationTests(unittest.TestCase):
             self.assertEqual(prompt.count(question), 1)
             for key in ("user_assertions", "request_units", "required_aspects", "intent_parts", "original_question", "hypotheses"):
                 self.assertNotIn(f'"{key}"', prompt)
-            self.assertIn('"goal": "procedure"', prompt)
+            self.assertNotIn('"goal"', prompt)
             self.assertIn('"business_objects": ["地区別売上集計表"]', prompt)
             self.assertIn('"output_formats": ["csv"]', prompt)
         history = _build_query_routing_prompt("以前は帳票を出力できましたが、今回は出力ボタンが押せません。原因を教えてください。")
@@ -1786,7 +1786,7 @@ class AnswerGenerationTests(unittest.TestCase):
         ordered_sections = [
             QUESTION_DISPLAY_METADATA_SEPARATOR,
             heading("質問の理解"),
-            "結果: 質問の目的は「",
+            "結果: 答える要求は ",
             heading("質問拡張戦略"),
             "本の検索文を追加）",
             heading("検索文と検索語の確定"),
@@ -1835,7 +1835,8 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertIn("[Fine-grained Query Understanding]", final_prompt)
         self.assertIn("nlu_tasks: Intent Classification, Slot Filling", final_prompt)
         self.assertIn(QUESTION_DISPLAY_METADATA_SEPARATOR, result.question_display)
-        self.assertIn("結果: 質問の目的は「操作方法」", result.question_display)
+        self.assertIn("結果: 答える要求は 1 件", result.question_display)
+        self.assertNotIn("質問の目的", result.question_display)
         self.assertNotIn("補助の検索文", result.question_display)
         self.assertNotIn("[質問理解]", result.question_display)
         self.assertNotIn("Intent Classification", result.question_display)

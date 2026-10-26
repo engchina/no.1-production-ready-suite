@@ -77,7 +77,7 @@ from rag_engine.retrieval.evidence_scope import evidence_scope_error, unsupporte
 from rag_engine.retrieval.evidence_selection import evidence_relevance
 from rag_engine.retrieval.operation_context import operation_labels, operation_target_score
 from rag_engine.retrieval.result_granularity import aggregate_only_evidence
-from rag_engine.retrieval.task_contract import task_contract
+from rag_engine.retrieval.task_contract import explicit_requests, task_contract
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ GENERATE_SYSTEM_PROMPT = (
 
 ## 2. 入力
 2.1 user message の構成
-- 質問契約: 変更してはいけない目的・条件（goal、request_units の id と kind、requested_granularity など）。
+- 質問契約: 変更してはいけない目的・条件（request_units の id と kind、requested_granularity など）。
 - 必須根拠（pinned）: 質問に適用できる限り必ず item に使う Evidence の ID。
 - 機能別の根拠: BEGIN_UNTRUSTED_RETRIEVED_CONTEXT と END_UNTRUSTED_RETRIEVED_CONTEXT の間。`=== 機能 F1: 文書名 / 版 / 機能見出し ===` の見出しで機能ごとに分かれ、各 Evidence は `[E1] p.頁 origin=… tags=… pinned` の行で始まる。機能見出しは文書の節名であり、開く画面やメニューとは限らない。
 - 前回の草稿の検査結果（是正時のみ）: 指摘を直し、支持済みの item は同じ evidence_id・lines のまま保持する。
@@ -220,8 +220,7 @@ AUDIT_SYSTEM_PROMPT = (
         "\n"
         "## 2. 入力（JSON）\n"
         "- question / task_contract: 原質問と、変"
-        "更してはいけない目的・条件（goal、current_request"
-        "、request_units など）。\n"
+        "更してはいけない目的・条件（current_request、request_units など）。\n"
         "- summary: 草稿の結論。\n"
         "- items: 監査対象。index、request_id、kin"
         "d、text（言い換え）、applies、condition、quo"
@@ -463,7 +462,7 @@ AUDIT_SYSTEM_PROMPT = (
         "ue。つなぐ段のどれかが supported な item に無けれ"
         "ば false。\n"
         "- goal_alignment: items 全体が task_c"
-        "ontract の goal と current_request に"
+        "ontract の current_request に"
         "答えていれば aligned。目的の一部にしか答えていない、または背"
         "景・仮説の説明が中心なら partial。別の対象・業務・目的に答え"
         "ていれば off_target。個案の最終判断に必要な実データが未閲"
@@ -608,16 +607,16 @@ def function_key(span: dict) -> tuple[str, ...]:
 
 def tag_spans(question: str, spans: Sequence[dict]) -> list[dict]:
     """入力を変更せず、タグ・機能キー・必須根拠を付けた写しを返す。"""
-    goal = task_contract(question)["goal"]
-    wanted = "definition" if goal == "rule" else "operation_entry"
+    # 必須根拠は根拠の種類と質問に明示された要求で決め、質問を 1 つの目的に分類した既定値では選ばない（#3498）。
+    # 定義の行はタグの時点で質問が意味を尋ねた項目と照合済み。操作の入口は、手順・一覧・件数のどれかを求める質問だけ
+    # （事実を尋ねる質問で、語が多く一致した表の行などを必須にしない）。
+    wanted = {"definition"} | ({"operation_entry"} if explicit_requests(question) else set())
     tagged, pinned = [], 0
     for span in spans:
         tags = set().union(*(tagger(question, span) for tagger in SPAN_TAGGERS))
         # 図の OCR 集約（項目名が 1 行ずつ並ぶ断片）は質問の語を含んでも必須根拠にしない。原文として補うと
         # 判読できない 600 文字が「資料の記載」に出る (#723)。検索・生成の根拠としては残す。
-        is_pinned = bool(
-            wanted and wanted in tags and "image_generated" not in tags and pinned < MAX_PINNED and not _label_list_like(span["text"])
-        )
+        is_pinned = bool(wanted & tags and "image_generated" not in tags and pinned < MAX_PINNED and not _label_list_like(span["text"]))
         pinned += is_pinned
         tagged.append({**span, "tags": sorted(tags), "function": function_key(span), "pinned": is_pinned, "label": f"E{len(tagged) + 1}"})
     _unify_prefixed_function_labels(tagged)
@@ -3809,7 +3808,6 @@ def _contract_view(question: str) -> dict:
     return {
         key: contract[key]
         for key in (
-            "goal",
             "current_request",
             "request_units",
             "definition_targets",

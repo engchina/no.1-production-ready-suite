@@ -639,7 +639,7 @@ export const ja = {
   "settings.language.field.en_irregular_forms": "英語の不規則な変化",
   "settings.language.field.en_irregular_forms.help": "英語の変化した形と元の形の対応です。「変化した形=元の形」で書きます（例: went=go）。",
   "settings.language.section.question_cues": "質問の理解の手がかり",
-  "settings.language.section.question_cues.help": "質問の目的（手順・一覧・件数・原因など）・条件・経緯・対象を見分ける語です。検索・回答のときだけ使い、保存するとすぐ次の質問から反映します（文書の分割し直しは要りません）。",
+  "settings.language.section.question_cues.help": "質問で求める内容（手順・一覧・件数・原因など）・条件・経緯・対象を見分ける語です。検索・回答のときだけ使い、保存するとすぐ次の質問から反映します（文書の分割し直しは要りません）。",
   "settings.language.field.object_suffixes": "対象の種別の語",
   "settings.language.field.object_suffixes.help": "この語で終わる名詞句を、質問が名指しする対象（画面・帳票など）とみなします（例: 画面、台帳、一覧）。",
   "settings.language.field.document_kind_chars": "書類の種別の字",
