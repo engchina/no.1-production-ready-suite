@@ -2731,9 +2731,14 @@ async def test_search_without_answer_runs_the_chat_evidence_flow(
     assert "GroundedDraft" not in search_llm
     if answer_flow == "crag":
         assert "CragRetrievalGradeOutput" in search_llm
-    # 根拠の並びも同じ（回答の側は引用した根拠を先にしない）。
+    # 根拠も同じ。回答は引用した根拠を先頭に出すので、それ以外の根拠の並びを比べる。
     assert search.answer == ""
-    assert [c.chunk_id for c in search.citations] == [c.chunk_id for c in chat.citations]
+    assert {c.chunk_id for c in search.citations} == {c.chunk_id for c in chat.citations}
+    used = {c.chunk_id for c in chat.citations if c.metadata.get("evidence_model_used")}
+    assert [c.chunk_id for c in search.citations if c.chunk_id not in used] == [
+        c.chunk_id for c in chat.citations if c.chunk_id not in used
+    ]
+    assert not any(c.metadata.get("evidence_model_used") for c in search.citations)
     search_answer = search.diagnostics.answer or {}
     assert search_answer["answer_flow"] == (chat.diagnostics.answer or {})["answer_flow"]
     # 回答が無いので回答の記録は保存しない。
