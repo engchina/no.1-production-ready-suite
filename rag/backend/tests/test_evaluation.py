@@ -1952,10 +1952,11 @@ async def test_evaluation_runner_shares_one_standard_scope_record_across_cases()
 
 
 def test_summarize_answer_judgement_keeps_judge_diagnostics() -> None:
-    """判定の診断（比較範囲の使い回し・再試行の回数）は、採点できなかったケースにも残す（#3570）。"""
+    """判定の診断（比較範囲の使い回し・外した項目の数・再試行の回数）は、採点できなかったケースにも残す（#3570）。"""
     diagnostics: dict[str, object] = {
         "standard_scope_reused": True,
         "standard_scope_retries": 0,
+        "standard_scope_dropped": 1,
         "judge_retries": 1,
         "retry_reasons": ["judge:InvalidStructuredOutput"],
     }

@@ -908,3 +908,203 @@ def test_scope_is_not_shared_outside_an_evaluation_job(fixed_scope):
         result = evaluate_answer_payload(payload(), object())
     assert fixed_scope.call_count == 2
     assert result["judge_diagnostics"]["standard_scope_reused"] is False
+
+
+# 以下は #3570 の続き（実モデルの判定で比較範囲の固定が失敗した引用の形）を合成の文で再現する。
+_WIDE_SPACE = chr(0x3000)
+_STRONG = chr(0x2A) * 2
+_BAR = chr(0x7C)
+_SOURCE = (
+    "結論" + chr(10) + "申請できます。" + chr(10) + "根拠" + chr(10) + "資料Aの第1章は、窓口で申請を受け付けると定めています。" + chr(10)
+)
+_SOURCE += "資料Bの第2章は、申請は受付から14日以内に審査すると定めています。" + chr(10)
+_SOURCE += "文書X_規程集の規程集第5条は、申請書の受付と審査の手順を定めています。" + chr(10)
+_SOURCE += "文書Y_要領集の要領集第2条も、同じ手順を定めています。" + chr(10)
+_SOURCE += "確認項目" + chr(10) + "書類の写しがあるか" + chr(10) + "署名と押印があるか" + chr(10)
+_SOURCE += _BAR + " 申請 " + _BAR + " 受付から30日以内 " + _BAR + chr(10) + _STRONG + "申請書" + _STRONG + "を提出する。"
+
+
+@pytest.mark.parametrize(
+    ("quote", "expected"),
+    [
+        (
+            "文書X_規程集第5条は、申請書の受付と審査の手順を定めています。",
+            "文書X_規程集の規程集第5条は、申請書の受付と審査の手順を定めています。",
+        ),
+        (
+            "根拠" + _WIDE_SPACE + "資料Bの第2章は、申請は受付から14日以内に審査すると定めています。",
+            "資料Bの第2章は、申請は受付から14日以内に審査すると定めています。",
+        ),
+        (
+            "文書X_規程集第5条は、申請書の受付と審査の手順を定めています。 文書Y_要領集第2条も、同じ手順を定めています。",
+            "文書X_規程集の規程集第5条は、申請書の受付と審査の手順を定めています。"
+            + chr(10)
+            + "文書Y_要領集の要領集第2条も、同じ手順を定めています。",
+        ),
+        (
+            "確認項目" + chr(0x2424) + "書類の写しがあるか" + chr(0x2424) + "署名と押印があるか",
+            "確認項目" + chr(10) + "書類の写しがあるか" + chr(10) + "署名と押印があるか",
+        ),
+        ("申請 受付から30日以内", "申請 " + _BAR + " 受付から30日以内"),
+        ("申請書を提出する", "申請書" + _STRONG + "を提出する"),
+        (
+            "資料Aの第1章は、窓口で申請を受け付けると定めています。…14日以内に審査すると定めています。",
+            "資料Aの第1章は、窓口で申請を受け付けると定めています。"
+            + chr(10)
+            + "資料Bの第2章は、申請は受付から14日以内に審査すると定めています。",
+        ),
+    ],
+    ids=[
+        "elided-repeated-phrase",
+        "distant-heading-prefix",
+        "joined-lines-with-elisions",
+        "newline-control-picture",
+        "table-syntax",
+        "markdown-emphasis",
+        "ellipsis-fragments",
+    ],
+)
+def test_grounded_quote_aligns_near_verbatim_quotes_to_one_original_span(quote, expected):
+    assert grounded_quote(quote, _SOURCE) == expected
+    assert expected in _SOURCE
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "資料Bの第2章は、申請は受付から15日以内に審査すると定めています。",
+        "資料Bの第2章は、申請は受付から十四日以内に審査すると定めています。",
+        "窓口の対応が継続していても同じ扱いになりますか。",
+        "申請が受理されれば、受付から二週間程度で結果が通知されると定めています。",
+        "資料Bの第2章は、申請を窓口で受け付けた日に却下すると定めています。",
+        "14日以内に審査すると定めています。…資料Aの第1章は、窓口で申請を受け付けると定めています。",
+        "申請書を返却する",
+    ],
+    ids=[
+        "changed-digit",
+        "digit-as-kanji-numeral",
+        "question-text",
+        "paraphrase",
+        "changed-words",
+        "fragments-out-of-order",
+        "short-changed",
+    ],
+)
+def test_grounded_quote_still_rejects_changed_numbers_and_text_not_in_the_source(quote):
+    assert grounded_quote(quote, _SOURCE) == ""
+
+
+def _scope_with(*quotes):
+    return StandardAnswerScope(
+        requirements=[
+            StandardRequirement(standard_answer_quote=quote, requirement="比較項目" + str(index)) for index, quote in enumerate(quotes)
+        ],
+        excluded_case_data=[],
+    )
+
+
+def test_scope_items_quoting_the_question_are_dropped_and_counted(fixed_scope):
+    fixed_scope.side_effect = _prepare_standard_scope
+    data = payload() | dict(question="窓口の対応が継続していても同じ扱いになりますか。", standard_answer=_SOURCE)
+    scope = _scope_with(
+        "資料Aの第1章は、窓口で申請を受け付けると定めています。",
+        "窓口の対応が継続していても同じ扱いになりますか。",
+        "文書X_規程集第5条は、申請書の受付と審査の手順を定めています。",
+    )
+    with patch(
+        PARSE,
+        side_effect=[
+            scope,
+            output().model_copy(
+                update=dict(
+                    coverage_checks=[
+                        CoverageCheck(requirement_index=1, status="addressed", answer_quote="回答"),
+                        CoverageCheck(requirement_index=2, status="missing", answer_quote=""),
+                    ]
+                )
+            ),
+        ],
+    ) as parse:
+        result = evaluate_answer_payload(data, object())
+    assert parse.call_count == 2 and result["status"] == "completed"
+    quotes = [item["standard_answer_quote"] for item in result["standard_answer_scope"]["requirements"]]
+    assert quotes == [
+        "資料Aの第1章は、窓口で申請を受け付けると定めています。",
+        "文書X_規程集の規程集第5条は、申請書の受付と審査の手順を定めています。",
+    ]
+    assert result["judge_diagnostics"]["standard_scope_dropped"] == 1
+    assert result["judge_diagnostics"]["standard_scope_retries"] == 0
+    # 外した数はシステムの診断。照合・監査のモデルには渡さない。
+    judged = json.loads(parse.call_args_list[1].args[1])["standard_answer_scope"]
+    assert "dropped_requirements" not in judged and len(judged["requirements"]) == 2
+    assert "dropped_requirements" not in json.dumps(StandardAnswerScope.model_json_schema())
+
+
+def test_scope_with_mostly_ungrounded_quotes_is_retried_with_the_item_numbers():
+    data = payload() | dict(question="窓口の対応が継続していても同じ扱いになりますか。", standard_answer=_SOURCE)
+    bad = _scope_with(
+        "窓口の対応が継続していても同じ扱いになりますか。",
+        "資料Aの第1章は、窓口で申請を受け付けると定めています。",
+        "結果は二週間程度で通知されます。",
+    )
+    good = _scope_with("資料Aの第1章は、窓口で申請を受け付けると定めています。")
+    with patch(PARSE, side_effect=[bad, good]) as parse:
+        scope = _prepare_standard_scope(data, object(), None)
+    assert parse.call_count == 2 and scope.dropped_requirements == 0
+    feedback = json.loads(parse.call_args_list[1].args[1])["validation_feedback"]
+    assert "1・3 番目" in feedback and "質問の文は引用しない" in feedback
+
+
+def test_judge_input_budget_follows_the_model_input_limit():
+    from types import SimpleNamespace
+
+    from rag_engine.evaluation.answer_eval import evaluation_input_budget
+
+    assert evaluation_input_budget(object()) == MAX_EVALUATION_INPUT_BYTES
+    assert evaluation_input_budget(SimpleNamespace(answer_max_input_tokens=128_000)) == 128_000
+    assert evaluation_input_budget(SimpleNamespace(answer_max_input_tokens=16_000)) == 16_000
+    assert evaluation_input_budget(SimpleNamespace(answer_max_input_tokens=0)) == MAX_EVALUATION_INPUT_BYTES
+    # 長い回答（固定入力が既定の上限を超える）も、モデルの上限の中なら 1 回で評価する。
+    long_answer = "回答の段落。" * 1500
+    data = payload() | dict(answer_text=long_answer)
+    with patch(PARSE, return_value=output().model_copy(update=dict(claim_checks=[]))) as parse:
+        small = evaluate_answer_payload(data, object())
+        large = evaluate_answer_payload(data, SimpleNamespace(answer_max_input_tokens=128_000))
+    assert small["status"] == "input_too_large"
+    assert large["status"] == "completed" and large["batch_count"] == 1
+    # 既定の上限では範囲の固定の前に止め、モデルの上限では 1 回の照合・監査で終える。
+    assert parse.call_count == 1
+
+
+def test_cumulative_evaluation_is_leaned_when_no_room_is_left_for_evidence():
+    from collections import deque
+
+    from rag_engine.evaluation.answer_eval import _MIN_EVIDENCE_ROOM_BYTES, _compact_previous, _next_batch
+
+    claims = [
+        ClaimCheck(
+            answer_quote="回答",
+            answer_passage_id="P" + str(i),
+            status="supported",
+            evidence_id="E1",
+            source_id="",
+            evidence_quote="",
+            reason="理由" * 60,
+        )
+        for i in range(40)
+    ]
+    previous = _compact_previous(output().model_copy(update=dict(claim_checks=claims, evidence_summary="摘要" * 1500)))
+    full = dict(previous_evaluation=previous, batch_index=2, is_final_batch=False, evidence_items=[])
+    budget = _input_bytes(full) + _MIN_EVIDENCE_ROOM_BYTES // 2
+    item = dict(id="c1", text="根拠の本文" * 400, fragment_start=0, fragment_end=2000)
+    inputs = _next_batch(dict(), deque([item]), previous, 2, budget)
+    sent = inputs["previous_evaluation"]
+    assert len(sent["claim_checks"]) == 40 and all("reason" not in check for check in sent["claim_checks"])
+    assert len(sent["evidence_summary"]) == 1000 and sent["summary_truncated"] is True
+    assert inputs["evidence_items"] and _input_bytes(inputs) <= budget
+
+
+def test_near_verbatim_quote_with_a_changed_word_is_stored_as_the_original_text():
+    # 1 語だけ写し違えた長い引用は、原文の範囲に結び付けて原文を保存する（写し違えた語は記録に残らない）。
+    quote = "資料Bの第2章は、申請は受付から14日以内に却下すると定めています。"
+    assert grounded_quote(quote, _SOURCE) == "資料Bの第2章は、申請は受付から14日以内に審査すると定めています。"

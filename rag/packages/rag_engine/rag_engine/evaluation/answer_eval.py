@@ -7,6 +7,7 @@ claim_support_rate ほか)と閾値による合否は backend が計算する(#6
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import logging
@@ -55,6 +56,8 @@ class StandardAnswerScope(BaseModel):
     model_config = ConfigDict(extra="forbid")
     requirements: list[StandardRequirement] = Field(min_length=1)
     excluded_case_data: list[str]
+    # 引用が標準回答に結び付かずに外した項目の数（システムが付ける診断。モデルに渡す schema には出さない）。
+    dropped_requirements: SkipJsonSchema[int] = 0
 
 
 class CoverageCheck(BaseModel):
@@ -124,9 +127,31 @@ CORRECTNESS_PROMPT = (
 
 
 # UTF-8 bytes は tokenizer に依存しない保守的な入力予算。system prompt と schema も含める。
+# モデルの入力の上限（``answer_max_input_tokens``）を持たない設定の既定（``evaluation_input_budget``）。
 MAX_EVALUATION_INPUT_BYTES = 48000
 EVALUATION_RETRY_RESERVE_BYTES = 1024
 EVIDENCE_FRAGMENT_CHARS = 2000
+# 判定の 1 回の入力の上限は、判定のモデルの入力の上限（tokens）に対するこの割合（回答の根拠の上限と同じ 50%。
+# 残りは出力と推論に残す）。
+EVALUATION_INPUT_TOKEN_PERCENT = 50
+# 入力の tokens の見積もり（``estimate_tokens``）は UTF-8 で 2 bytes 以上の文字を 1 字 1 token、ASCII を 4 字
+# 1 token と数えるので、bytes の半分は見積もりの tokens を下回らない。
+_BYTES_PER_ESTIMATED_TOKEN = 2
+# 累積評価を渡しても根拠の断片 1 つ（和文で 2000 字）が入る余地。足りなければ累積評価の理由と摘要を縮める。
+_MIN_EVIDENCE_ROOM_BYTES = 3 * EVIDENCE_FRAGMENT_CHARS
+
+
+def evaluation_input_budget(settings: Any) -> int:
+    """判定の 1 回の入力の上限（UTF-8 の bytes。指示・schema を含む）。
+
+    判定のモデルの入力の上限（``answer_max_input_tokens``。backend が共通のモデル設定の登録値を渡す）の
+    ``EVALUATION_INPUT_TOKEN_PERCENT`` %。上限を持たない設定では ``MAX_EVALUATION_INPUT_BYTES``。
+    """
+    tokens = getattr(settings, "answer_max_input_tokens", None)
+    if not isinstance(tokens, int) or isinstance(tokens, bool) or tokens <= 0:
+        return MAX_EVALUATION_INPUT_BYTES
+    return _BYTES_PER_ESTIMATED_TOKEN * tokens * EVALUATION_INPUT_TOKEN_PERCENT // 100
+
 
 # 評価用の system prompt。番号付きの節で構成し、UI に読み取り専用で表示する (#934)。規則は 1 行 1 項目。
 SCOPE_PROMPT = (
@@ -292,45 +317,104 @@ def _json(value: Any) -> str:
 
 # 引用の照合で同じ文字とみなす句読点・引用符の異体（NFKC の後にも残る和文と欧文の違い）。
 _QUOTE_PUNCTUATION_FOLD = str.maketrans("、。“”「」『』‘’", ",." + chr(34) * 6 + chr(39) * 2)
+# 引用の照合で読み飛ばす Markdown・表の記号（強調・コード・表の区切り・見出し・引用の印・下線）と、改行などの
+# 制御文字を表す記号（U+2400〜U+243F。モデルが改行を「␤」と写すことがある）。
+_QUOTE_MARKUP = frozenset("*`|#>_") | frozenset(map(chr, range(0x2400, 0x2440)))
 # 直前の文字と 1 つの塊になる半角の濁点・半濁点（原文の範囲を塊の途中で切らない）。
 _HALFWIDTH_SOUND_MARKS = frozenset("ﾞﾟ")
+# 引用の中の省略の印（離れた箇所をつないだ引用）。印で分けた断片を原文の中で順に探す。
+_QUOTE_ELLIPSIS = re.compile(r"…+|‥+|\.{3,}|・{3,}")
+# 近似の照合（引用の写し違い）の条件。短い引用は近似で結び付けない（別の箇所と区別しにくい）。
+# 引用の文字の 9 割以上が原文の 1 つの範囲と順に一致し、その範囲の文字の 85% 以上が引用の文字であること。
+_FUZZY_QUOTE_MIN_CHARS = 12
+_FUZZY_QUOTE_COVERAGE = 0.9
+_FUZZY_SPAN_PRECISION = 0.85
+# 数の並び（算用数字・漢数字）。近似で結び付けるときも、引用と原文の範囲で数の並びが同じことを求める。
+_NUMBER_RUN = re.compile(r"[0-9〇一二三四五六七八九十百千万億兆]+")
 
 
 def _quote_form(text: str) -> tuple[str, list[int]]:
-    """引用の照合の形（NFKC・波線とダッシュの同一視・空白の除去・句読点の異体の統一）と、各文字の元の位置。"""
+    """引用の照合の形（NFKC・波線とダッシュの同一視・空白と Markdown の記号の除去・句読点の異体の統一）と、各文字の元の位置。"""
     folded, positions = fold_text_with_positions(text)
     chars: list[str] = []
     kept: list[int] = []
     for char, position in zip(folded, positions, strict=True):
-        if char.isspace():
+        if char.isspace() or char in _QUOTE_MARKUP:
             continue
         chars.append(char.translate(_QUOTE_PUNCTUATION_FOLD))
         kept.append(position)
     return "".join(chars), kept
 
 
+def _aligned_window(wanted: str, form: str, offset: int) -> tuple[int, int] | None:
+    """照合の形の引用 ``wanted`` に近い ``form[offset:]`` の範囲（照合の形の位置）。条件に合わなければ None。
+
+    文字の並びを順に対応させ（``SequenceMatcher``）、原文の中で近くに集まった一致の塊ごとに、引用の文字の
+    一致の割合（coverage）と範囲の文字の一致の割合（precision）を測る。数の並びが変わった引用は受け入れない。
+    """
+    if len(wanted) < _FUZZY_QUOTE_MIN_CHARS:
+        return None
+    blocks = [b for b in difflib.SequenceMatcher(None, wanted, form[offset:], autojunk=False).get_matching_blocks() if b.size >= 2]
+    max_gap = max(2, len(wanted) // 4)
+    clusters: list[list[Any]] = []
+    for block in blocks:
+        if clusters and block.b - (clusters[-1][-1].b + clusters[-1][-1].size) <= max_gap:
+            clusters[-1].append(block)
+        else:
+            clusters.append([block])
+    best: tuple[int, int, int] | None = None
+    for cluster in clusters:
+        matched = sum(block.size for block in cluster)
+        start, stop = offset + cluster[0].b, offset + cluster[-1].b + cluster[-1].size
+        if matched < _FUZZY_QUOTE_COVERAGE * len(wanted) or matched < _FUZZY_SPAN_PRECISION * (stop - start):
+            continue
+        if _NUMBER_RUN.findall(wanted) != _NUMBER_RUN.findall(form[start:stop]):
+            continue
+        if best is None or matched > best[0]:
+            best = (matched, start, stop)
+    return None if best is None else (best[1], best[2])
+
+
+def _form_span(wanted: str, form: str, offset: int) -> tuple[int, int] | None:
+    """照合の形で ``form[offset:]`` の中の引用の範囲を探す（そろえた形で完全に一致、無ければ近似）。"""
+    start = form.find(wanted, offset)
+    if start >= 0:
+        return start, start + len(wanted)
+    return _aligned_window(wanted, form, offset)
+
+
 def grounded_quote(quote: str, source: str) -> str:
     """モデルの引用を source の原文の連続する範囲に結び付けて、その原文を返す。結び付かなければ空文字。
 
-    LLM-as-judge の引用の接地。モデルは引用を写すときに空白・改行・全角半角・句読点を変えることがあるので、
-    照合の形（``_quote_form``）でそろえて探し、見つかった範囲の原文に差し替える（保存する引用は原文のまま）。
-    文字・数字の違いは受け入れない（そろえた形でも無い引用は拒否する）。
+    LLM-as-judge の引用の接地。モデルは引用を写すときに空白・改行・全角半角・句読点・Markdown の記号を変え、
+    重複した語を省き、見出しの語を前に付け、離れた箇所を省略の印（「…」）でつなぐことがある。照合の形
+    （``_quote_form``）でそろえて探し、完全に一致しなければ近似の照合（``_aligned_window``）で原文の 1 つの範囲に
+    結び付け、見つかった範囲の原文に差し替える（保存する引用は原文のまま）。省略の印でつないだ引用は、断片を
+    原文の中で順に探し、最初の断片から最後の断片までの原文の範囲にする。数の並びの違いと、近似の条件に届かない
+    言い換え・別の文（質問の文など）は受け入れない。
     """
     if not quote.strip():
         return ""
     if quote in source:
         return quote
-    wanted, _ = _quote_form(quote)
-    if not wanted:
-        return ""
     form, positions = _quote_form(source)
-    start = form.find(wanted)
-    if start < 0:
+    spans: list[tuple[int, int]] = []
+    offset = 0
+    for fragment in _QUOTE_ELLIPSIS.split(quote):
+        wanted, _ = _quote_form(fragment)
+        if not wanted:
+            continue
+        span = _form_span(wanted, form, offset)
+        if span is None:
+            return ""
+        spans.append(span)
+        offset = span[1]
+    if not spans:
         return ""
-    stop = positions[start + len(wanted) - 1] + 1
+    stop = positions[spans[-1][1] - 1] + 1
     while stop < len(source) and (unicodedata.combining(source[stop]) or source[stop] in _HALFWIDTH_SOUND_MARKS):
         stop += 1
-    return source[positions[start] : stop]
+    return source[positions[spans[0][0]] : stop]
 
 
 def model_request(inputs: dict[str, Any]) -> dict[str, Any]:
@@ -388,15 +472,22 @@ class EvaluationInputTooLarge(ValueError):
     """根拠分割では解消できない固定入力または累積評価の予算超過。"""
 
 
-def _next_batch(fixed: dict[str, Any], pending: deque, previous, batch_index: int) -> dict[str, Any]:
-    """累積評価込みで予算に収まる根拠を取り出す。本文は切り捨てない。"""
+def _next_batch(fixed: dict[str, Any], pending: deque, previous, batch_index: int, budget: int | None = None) -> dict[str, Any]:
+    """累積評価込みで予算に収まる根拠を取り出す。本文は切り捨てない。
+
+    累積評価を渡すと根拠の断片 1 つ分の余地が残らないときは、累積評価の理由を外し摘要を縮めて渡す
+    （細かく分けた batch で呼び出しの数が増えて時間切れになるのを避ける）。``budget`` の既定は ``MAX_EVALUATION_INPUT_BYTES``。
+    """
+    budget = MAX_EVALUATION_INPUT_BYTES if budget is None else budget
     inputs = {**fixed, "previous_evaluation": previous, "batch_index": batch_index, "is_final_batch": False, "evidence_items": []}
-    if _input_bytes(inputs) > MAX_EVALUATION_INPUT_BYTES:
+    if previous is not None and _input_bytes(inputs) > budget - _MIN_EVIDENCE_ROOM_BYTES:
+        inputs["previous_evaluation"] = _lean_previous(previous)
+    if _input_bytes(inputs) > budget:
         raise EvaluationInputTooLarge
     while pending:
         item = {**pending[0], "evidence_id": _span_id(pending[0])}
         candidate = {**inputs, "evidence_items": [*inputs["evidence_items"], item]}
-        if _input_bytes(candidate) <= MAX_EVALUATION_INPUT_BYTES:
+        if _input_bytes(candidate) <= budget:
             inputs = candidate
             pending.popleft()
         elif inputs["evidence_items"]:
@@ -491,17 +582,30 @@ def _prepare_standard_scope(payload, settings, provider_id, *, on_retry: RetryRe
 def _validate_standard_scope(scope, standard_answer):
     """再利用する範囲も元の標準回答との引用一致・原質問項目の存在を検証する。
 
-    引用は ``grounded_quote`` で標準回答の原文に結び付け、表記の揺れだけの引用は原文に差し替える。
+    引用は ``grounded_quote`` で標準回答の原文に結び付け、表記の揺れだけの引用は原文に差し替える。標準回答に
+    結び付かない引用の項目（質問の文・言い換えの引用）は標準回答の比較項目ではないので外し、外した数を
+    ``dropped_requirements`` に残す。外すと原質問の項目が無くなるとき・半分を超える項目を外すときは、範囲の
+    固定の誤りとして契約違反にする（違反の項目の番号を指摘して出し直させる）。
     """
     if not any(item.relevance == "required" for item in scope.requirements):
         raise EvaluationContractError("原質問に対応する固定項目がありません")
     for item in scope.requirements:
         if not item.requirement.strip() or not item.standard_answer_quote.strip() or not item.relevance_reason.strip():
             raise EvaluationContractError("空の固定項目")
-        quote = grounded_quote(item.standard_answer_quote, standard_answer)
-        if not quote:
-            raise EvaluationContractError("標準回答に存在しない引用")
-        item.standard_answer_quote = quote
+    grounded = [grounded_quote(item.standard_answer_quote, standard_answer) for item in scope.requirements]
+    kept = [item for item, quote in zip(scope.requirements, grounded, strict=True) if quote]
+    dropped = [index for index, quote in enumerate(grounded, 1) if not quote]
+    if dropped and (2 * len(dropped) > len(grounded) or not any(item.relevance == "required" for item in kept)):
+        raise EvaluationContractError(
+            "標準回答に存在しない引用（requirements の "
+            + "・".join(map(str, dropped))
+            + " 番目）。standard_answer_quote には標準回答の本文の連続する文をそのまま写し、質問の文は引用しないでください。"
+        )
+    for item, quote in zip(scope.requirements, grounded, strict=True):
+        if quote:
+            item.standard_answer_quote = quote
+    scope.requirements = kept
+    scope.dropped_requirements += len(dropped)
     if len({item.requirement for item in scope.requirements}) != len(scope.requirements):
         raise EvaluationContractError("固定項目の重複")
 
@@ -592,7 +696,12 @@ def _shared_standard_scope(payload, settings, provider_id, on_retry: RetryRecord
 
 
 def _evaluate_batch(
-    inputs: dict[str, Any], settings, provider_id: str | None, *, on_retry: RetryRecorder | None = None
+    inputs: dict[str, Any],
+    settings,
+    provider_id: str | None,
+    *,
+    on_retry: RetryRecorder | None = None,
+    max_input_bytes: int = MAX_EVALUATION_INPUT_BYTES,
 ) -> AnswerEvaluationOutput:
     """全固定項目の対応と本文引用を検証し、除外・項目欠落による採点を拒否する。
 
@@ -632,7 +741,9 @@ def _evaluate_batch(
                 raise EvaluationContractError("生成回答に存在しない引用")
             item.answer_quote = quote
 
-    return _parse_checked(SYSTEM_PROMPT, inputs, settings, AnswerEvaluationOutput, provider_id, check, on_retry=on_retry)
+    return _parse_checked(
+        SYSTEM_PROMPT, inputs, settings, AnswerEvaluationOutput, provider_id, check, max_input_bytes=max_input_bytes, on_retry=on_retry
+    )
 
 
 def _coverage_value(checks):
@@ -1025,6 +1136,16 @@ def _compact_previous(output):
     }
 
 
+def _lean_previous(previous: dict[str, Any]) -> dict[str, Any]:
+    """長い回答で根拠の余地が無いときの累積評価（判定の理由を外し、摘要を 1000 字にする）。"""
+    summary = previous["evidence_summary"]
+    return {
+        "evidence_summary": summary[:1000],
+        "summary_truncated": previous["summary_truncated"] or len(summary) > 1000,
+        "claim_checks": [{key: value for key, value in check.items() if key != "reason"} for check in previous["claim_checks"]],
+    }
+
+
 def evaluate_answer_payload(
     payload: dict[str, Any], settings, *, provider_id: str | None = None, standard_scope: StandardAnswerScope | None = None
 ) -> dict[str, Any]:
@@ -1038,14 +1159,18 @@ def evaluate_answer_payload(
     同じ質問・標準回答でモデル比較する場合は同一の事前範囲を再利用できる。required の固定項目への
     対応率を requirement_coverage(0〜1)にする。指標の閾値と合否は backend が付ける(#680)。
     payload は変更せず、接続情報を含み得る例外の詳細も保存しない。
-    judge_diagnostics には、比較範囲を job の記録から使い回したかと、出力の誤りで再試行した回数・原因の型を残す。
+    judge_diagnostics には、比較範囲を job の記録から使い回したかと、引用が標準回答に結び付かずに外した比較項目の数、
+    出力の誤りで再試行した回数・原因の型を残す。1 回の入力の上限は判定のモデルの入力の上限から決める
+    （``evaluation_input_budget``）。
     """
     diagnostics: dict[str, Any] = dict(
         standard_scope_reused=False,
         standard_scope_retries=0,
+        standard_scope_dropped=0,
         judge_retries=0,
         retry_reasons=[],
     )
+    budget = evaluation_input_budget(settings)
     base = {
         "rubric_version": 11,
         "batch_count": 0,
@@ -1082,7 +1207,7 @@ def evaluate_answer_payload(
     fixed["task_contract"] = task_contract(str(payload.get("question") or ""))
     try:
         # 大きな生成回答も範囲抽出前に止め、不要なネットワーク呼び出しを避ける。
-        if _input_bytes(fixed) > MAX_EVALUATION_INPUT_BYTES:
+        if _input_bytes(fixed) > budget:
             raise EvaluationInputTooLarge
         if not has_standard:
             standard_scope = StandardAnswerScope.model_construct(requirements=[], excluded_case_data=[])
@@ -1093,7 +1218,8 @@ def evaluate_answer_payload(
         else:
             standard_scope = StandardAnswerScope.model_validate(standard_scope.model_dump())
             _validate_standard_scope(standard_scope, payload["standard_answer"])
-        fixed["standard_answer_scope"] = standard_scope.model_dump()
+        diagnostics["standard_scope_dropped"] = standard_scope.dropped_requirements
+        fixed["standard_answer_scope"] = standard_scope.model_dump(exclude={"dropped_requirements"})
         # 暗黙の配列位置を数え直させず、出力と同じ番号を各固定項目へ明示する。
         for index, item in enumerate(fixed["standard_answer_scope"]["requirements"], 1):
             item["requirement_index"] = index
@@ -1105,11 +1231,11 @@ def evaluate_answer_payload(
         batch_audits = []
         base["batch_audits"] = batch_audits
         while True:
-            inputs = _next_batch(fixed, pending, previous, base["batch_count"] + 1)
+            inputs = _next_batch(fixed, pending, previous, base["batch_count"] + 1, budget)
             catalog.update({item["evidence_id"]: item for item in inputs["evidence_items"]})
             base["evidence_catalog"] = list(catalog.values())
             output = _bind_claims(
-                _evaluate_batch(inputs, settings, provider_id, on_retry=retried("judge")),
+                _evaluate_batch(inputs, settings, provider_id, on_retry=retried("judge"), max_input_bytes=budget),
                 catalog,
                 fixed["answer_passages"],
                 heading_lines=heading_lines,
@@ -1217,6 +1343,7 @@ def evaluate_answer_payload(
                 AnswerCorrectnessOutput,
                 provider_id,
                 lambda output: None,
+                max_input_bytes=budget,
                 on_retry=retried("judge"),
             )
             base["answer_correctness"] = {"correct": 1.0, "incorrect": 0.0}.get(correctness.verdict)
