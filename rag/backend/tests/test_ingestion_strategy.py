@@ -1421,22 +1421,30 @@ def test_partition_source_preflight_blocks_unsupported_format(
     assert "対応形式: PDF・画像" in str(exc_info.value)
 
 
-def test_partition_source_preflight_blocks_service_backend_unsupported(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("content_kind", ["pdf", "office"], ids=["pdf", "office"])
+def test_partition_source_blocks_roadmap_engine_before_any_call(
+    monkeypatch: pytest.MonkeyPatch, content_kind: str
 ) -> None:
-    """OCI Document Understanding × Office も HTTP 前に停止する(sentinel を返さない)。"""
+    """準備中(ロードマップ)の OCI Document Understanding は、対応形式でも呼ばずに止める(#3374)。"""
     from app.clients.parser_service import ParserServiceUnavailableError
 
     pipeline = _preflight_pipeline("oci_document_understanding", monkeypatch)
+    profile = (
+        _pdf_source_profile(file_size_bytes=10)
+        if content_kind == "pdf"
+        else _office_source_profile()
+    )
 
     with pytest.raises(ParserServiceUnavailableError) as exc_info:
         pipeline._partition_source(
-            parse_bytes=b"docx-bytes",
-            source_profile=_office_source_profile(),
-            content_type=_office_source_profile().content_type,
+            parse_bytes=b"source-bytes",
+            source_profile=profile,
+            content_type=profile.content_type,
         )
 
-    assert exc_info.value.reason == "adapter_source_unsupported"
+    assert exc_info.value.reason == "engine_roadmap"
+    assert exc_info.value.warning_code == "parser_engine_roadmap"
+    assert "準備中（ロードマップ）" in str(exc_info.value)
 
 
 def test_partition_source_blocks_historical_removed_engine(

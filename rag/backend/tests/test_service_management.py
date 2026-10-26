@@ -991,6 +991,56 @@ def test_control_unknown_service_is_404(monkeypatch: MonkeyPatch) -> None:
     assert fake.calls == []
 
 
+ROADMAP_SERVICE_ID = "parser-oci-document-understanding"
+
+
+def test_catalog_marks_roadmap_service_as_unavailable() -> None:
+    """OCI Document Understanding は準備中(ロードマップ)。カタログが roadmap を返す(#3374)。"""
+    resp = client.get("/api/services/catalog")
+    assert resp.status_code == 200
+    by_id = {item["service_id"]: item for item in resp.json()["data"]["services"]}
+    assert by_id[ROADMAP_SERVICE_ID]["availability"] == "roadmap"
+    assert {item["availability"] for sid, item in by_id.items() if sid != ROADMAP_SERVICE_ID} == {
+        "available"
+    }
+
+
+def test_roadmap_service_status_is_roadmap_without_probe(monkeypatch: MonkeyPatch) -> None:
+    """準備中のサービスは systemd・/health を問い合わせず roadmap を返す(エラーにしない。#3374)。"""
+    fake = _FakeSystemd().install(monkeypatch)
+    resp = client.get(f"/api/services/{ROADMAP_SERVICE_ID}/status")
+    assert resp.status_code == 200
+    assert resp.json()["data"]["status"] == "roadmap"
+    assert resp.json()["data"]["availability"] == "roadmap"
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("action", ["start", "restart"], ids=["start", "restart"])
+def test_control_rejects_starting_roadmap_service(monkeypatch: MonkeyPatch, action: str) -> None:
+    """準備中のサービスは起動・再起動を 409 で拒否し、systemctl を実行しない(#3374)。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_service_control_enabled", True)
+    fake = _FakeSystemd().install(monkeypatch)
+    resp = client.post(f"/api/services/{ROADMAP_SERVICE_ID}/{action}")
+    assert resp.status_code == 409
+    assert "準備中（ロードマップ）" in resp.text
+    assert fake.calls == []
+
+
+def test_control_can_stop_roadmap_service_left_by_old_deployment(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """以前の配備に残った準備中のサービスの unit は止められる(disable --now。#3374)。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_service_control_enabled", True)
+    fake = _FakeSystemd().install(monkeypatch)
+    resp = client.post(f"/api/services/{ROADMAP_SERVICE_ID}/stop")
+    assert resp.status_code == 200
+    assert resp.json()["data"]["status"] == "roadmap"
+    unit = f"{SYSTEMD_UNIT_PREFIX}{ROADMAP_SERVICE_ID}.service"
+    assert systemctl_action_argv("stop", unit) in fake.calls
+
+
 def test_docker_build_and_remove_endpoints_are_gone(monkeypatch: MonkeyPatch) -> None:
     """Docker のイメージ build / コンテナ削除の操作は無くした(#286)。"""
     settings = get_settings()

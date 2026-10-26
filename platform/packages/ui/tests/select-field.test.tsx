@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_ROADMAP_LABEL, RoadmapBadge } from "../src/components/data/status-badge";
 import { computeFloatingMenuLayout, floatingLayerZIndex } from "../src/components/ui/floating-menu";
 import {
   findTypeaheadIndex,
@@ -234,6 +235,37 @@ describe("SelectField の aria（互換）", () => {
     expect(html).toContain('aria-haspopup="listbox"');
     expect(html).toMatch(/aria-describedby="region-[^"]*-hint"/);
     expect(html).not.toContain('role="listbox"');
+    expect(html).toContain(">B<");
+  });
+});
+
+describe("準備中（ロードマップ）のバッジ", () => {
+  it("既定のラベルを中立色のバッジとアイコンで出し、目印の data 属性を付ける", () => {
+    const html = renderToStaticMarkup(<RoadmapBadge />);
+    expect(DEFAULT_ROADMAP_LABEL).toBe("準備中（ロードマップ）");
+    expect(html).toContain("data-roadmap-badge");
+    expect(html).toContain('data-status-variant="neutral"');
+    expect(html).toContain(DEFAULT_ROADMAP_LABEL);
+    expect(html).toContain("<svg");
+  });
+
+  it("翻訳済みのラベルで上書きできる", () => {
+    expect(renderToStaticMarkup(<RoadmapBadge label="Roadmap" />)).toContain("Roadmap");
+  });
+
+  it("閉じた選択欄は、無効の選択肢を選んでいても値のラベルを出す（保存済みの値の表示）", () => {
+    const html = renderToStaticMarkup(
+      <SelectField
+        id="engine"
+        label="エンジン"
+        value="b"
+        options={[
+          { value: "a", label: "A" },
+          { value: "b", label: "B", disabled: true, disabledReason: "理由", badge: DEFAULT_ROADMAP_LABEL },
+        ]}
+        onValueChange={() => {}}
+      />
+    );
     expect(html).toContain(">B<");
   });
 });
