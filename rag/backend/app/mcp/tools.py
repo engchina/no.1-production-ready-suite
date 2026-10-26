@@ -1733,8 +1733,9 @@ AUTO_SELECTED_PROFILE_DESCRIPTION = (
 )
 
 
+# 回答の診断の degraded_steps（#3259）の公開の形（#3262）。
 class DegradedStep(BaseModel):
-    """失敗して縮退した任意の補助の処理（#3259 の回答の診断の degraded_steps。#3262）。"""
+    """失敗して縮退した任意の補助の処理。"""
 
     kind: str = Field(description="処理の種類（例: rerank・section_outline・reference_load）。")
     count: int = Field(description="失敗した回数。")

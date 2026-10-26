@@ -3041,7 +3041,7 @@
             "type": "object"
           },
           "DegradedStep": {
-            "description": "失敗して縮退した任意の補助の処理（#3259 の回答の診断の degraded_steps。#3262）。",
+            "description": "失敗して縮退した任意の補助の処理。",
             "properties": {
               "kind": {
                 "description": "処理の種類（例: rerank・section_outline・reference_load）。",
@@ -4473,7 +4473,7 @@
             "type": "object"
           },
           "DegradedStep": {
-            "description": "失敗して縮退した任意の補助の処理（#3259 の回答の診断の degraded_steps。#3262）。",
+            "description": "失敗して縮退した任意の補助の処理。",
             "properties": {
               "kind": {
                 "description": "処理の種類（例: rerank・section_outline・reference_load）。",

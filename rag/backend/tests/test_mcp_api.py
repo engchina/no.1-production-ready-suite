@@ -2089,6 +2089,66 @@ def test_read_source_table_continuation_repeats_the_header_rows(
         assert window["text"].endswith("</tr>")
 
 
+def test_read_source_of_table_evidence_keeps_the_document_version_and_position(
+    auth: ProductionAuth, source_oracle: type[_SourceOracle]
+) -> None:
+    """表の根拠を原文で読むと、根拠と同じ文書・版・表の位置を返す（#3262）。
+
+    同じファイル名の別の文書の表・取込み直す前の版の chunk の id では、この表を読まない
+    （名前や古い ID で別の表・別の版の位置を引用しない）。
+    """
+
+    def table_row(document_id: str, chunk_id: str, chunk_set_id: str, row: int) -> Any:
+        chunk = _chunk(
+            chunk_id,
+            text=f"列 1: 値 {row} / 列 2: 値 {row}",
+            chunk_set_id=chunk_set_id,
+            content_kind="record",
+            record_kind="row",
+            row_basis="csv",
+            csv_header_row=1,
+            row_start=row,
+            row_end=row,
+            table_row_start=row,
+            table_row_end=row,
+            table_row=row,
+            table_cells_json='[["A", ["列 1"]], ["B", ["列 2"]]]',
+        )
+        return chunk.model_copy(update={"document_id": document_id, "file_name": "表 A.csv"})
+
+    current = table_row("d1", "d1:cs-2:3", "cs-2", 4)
+    # 同じファイル名の別の文書の、別の行の表。
+    other = table_row("d2", "d2:cs-9:3", "cs-9", 7)
+    source_oracle.visible[("d1", current.chunk_id)] = current
+    source_oracle.visible[("d2", other.chunk_id)] = other
+    # 取込み直す前の版（cs-1）の同じ行の chunk。
+    source_oracle.stale.add(("d1", "d1:cs-1:3"))
+    user = auth.user_with_permissions("searcher", ["menu.search"], knowledge_base_ids=["kb-1"])
+    headers = _token(user.user_uuid)
+
+    body = _call("rag_read_source", {"document_id": "d1", "chunk_id": current.chunk_id}, headers)[
+        "structuredContent"
+    ]
+    assert (body["document_id"], body["chunk_id"], body["chunk_set_id"]) == (
+        "d1",
+        current.chunk_id,
+        "cs-2",
+    )
+    assert body["locator"] == mcp_tools._locator(dict(current.metadata)).model_dump()
+    assert (body["locator"]["row_basis"], body["locator"]["table_row"]) == ("csv", 4)
+
+    # 別の文書の id と組み合わせた chunk の id・古い版の chunk の id では読まない。
+    crossed = _call("rag_read_source", {"document_id": "d2", "chunk_id": current.chunk_id}, headers)
+    assert crossed["structuredContent"]["error_code"] == mcp_tools.SOURCE_NOT_FOUND_CODE
+    stale = _call("rag_read_source", {"document_id": "d1", "chunk_id": "d1:cs-1:3"}, headers)
+    assert stale["structuredContent"]["error_code"] == mcp_tools.SOURCE_STALE_CODE
+    # 同じ名前の別の文書は、その文書の表の位置を返す（名前で取り違えない）。
+    found = _call("rag_read_source", {"document_id": "d2", "chunk_id": other.chunk_id}, headers)[
+        "structuredContent"
+    ]
+    assert (found["chunk_set_id"], found["locator"]["table_row"]) == ("cs-9", 7)
+
+
 def test_read_source_distinguishes_missing_and_stale(
     auth: ProductionAuth, source_oracle: type[_SourceOracle]
 ) -> None:
