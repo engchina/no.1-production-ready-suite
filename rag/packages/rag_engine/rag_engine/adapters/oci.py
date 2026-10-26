@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pr_backend_core.llm_request_params_httpx import ParameterDroppingClient
 from pydantic import BaseModel
 
 from rag_engine.config import (
@@ -150,15 +151,20 @@ def _openai_client(
     そのまま使えるようにします。
     """
     try:
-        from openai import OpenAI
+        from openai import DEFAULT_CONNECTION_LIMITS, OpenAI
     except ImportError as exc:
         raise RuntimeError("OpenAI Python SDK が未インストールです。`openai` をインストールしてください。") from exc
+    timeout = max(1, int(timeout_seconds))
     return OpenAI(
         base_url=base_url,
         api_key=api_key,
         project=project_id or None,
-        timeout=max(1, int(timeout_seconds)),
+        timeout=timeout,
         max_retries=max(0, int(max_retries)),
+        # モデルが受け付けない引数（temperature など）の 400 は、外して 1 回だけ送り直し、以後この
+        # モデルには送らない（#3539。platform の部品）。受け付けるモデルには temperature 0 を送り続ける。
+        # timeout・接続の上限・redirect は SDK の既定の client と同じにする。
+        http_client=ParameterDroppingClient(timeout=timeout, limits=DEFAULT_CONNECTION_LIMITS, follow_redirects=True),
     )
 
 

@@ -16,6 +16,9 @@ name: CI
 # frontend が読む frontend の外のファイル・backend が読む frontend のファイルが filter に入っていることは
 # platform/scripts/ci_frontend_paths.py が確かめる。
 # MCP ツールの契約（platform/contracts/mcp/）は 3 製品の backend のテストだけが読むので、backend の job だけを動かす（#1531）。
+# RAG の job は、RAG が読む契約（rag_contracts: rag-tools.json と、Agent の回答の節の事例を除く answer-passages）の
+# 変更でだけ動く。Agent・NL2SQL の MCP の契約と Agent の評価の共有の fixture は RAG が読まない（#3240。
+# rag/backend/tests/test_product_boundaries.py が rag のコードから読まないことを確かめる）。
 # 製品横断の評価（suite/evaluation。独立の uv project）は Suite / Evaluation が、platform の採点の部品
 # （platform/packages/evaluation_scoring）は Platform / evaluation_scoring と、それを使う RAG / Backend・Suite / Evaluation が
 # 確かめる（#3240）。採点の部品は platform_other から外し、ほかの製品の job は動かさない。
@@ -122,11 +125,14 @@ jobs:
         ${{ steps.filter.outputs.platform_frontend == 'true' || steps.filter.outputs.platform_backend == 'true'
         || steps.filter.outputs.ci == 'true' || steps.filter.outputs.platform_other == 'true' }}
       nl2sql_frontend_contract: ${{ steps.filter.outputs.nl2sql_frontend_contract }}
-      # RAG / Engine・RAG / Backend・Agent / Backend のテストが読む、回答の段落の判定の共通の事例（#1370・#1488）。
+      # Agent / Backend のテストが読む、回答の段落の判定の共通の事例（#1370・#1488。RAG の job は rag_contracts）。
       # platform_other から外しているので、これだけの変更では frontend・e2e・配備の検証は動かない。
       answer_passages_contract: ${{ steps.filter.outputs.answer_passages_contract }}
-      # 3 製品の backend のテストが読む MCP ツールの契約（#248）。platform_other から外している（#1531）。
+      # NL2SQL / Backend・Agent / Backend のテストが読む MCP ツールの契約（#248。RAG の job は rag_contracts）。
+      # platform_other から外している（#1531）。
       mcp_contract: ${{ steps.filter.outputs.mcp_contract }}
+      # RAG / Engine・RAG / Backend が読む契約（RAG の MCP と回答の段落の事例。#3240）。
+      rag_contracts: ${{ steps.filter.outputs.rag_contracts }}
       # 製品の frontend の job（Frontend・E2E smoke）を動かす変更（#1531）。
       rag_frontend: ${{ steps.filter.outputs.rag_frontend }}
       nl2sql_frontend: ${{ steps.filter.outputs.nl2sql_frontend }}
@@ -252,12 +258,18 @@ jobs:
             nl2sql_frontend_contract:
               - "platform/packages/system_settings_backend/src/pr_system_settings/model.py"
               - "platform/packages/system_settings_backend/src/pr_system_settings/database.py"
-            # RAG / Engine・RAG / Backend・Agent / Backend のテストが読む、回答の出典の行・段落の分け方・「資料で確認できず除いた内容」の節の事例（#1370・#1455・#1456）と、
+            # RAG / Engine・RAG / Backend（rag_contracts）・Agent / Backend のテストが読む、回答の出典の行・段落の分け方・Agent の回答の節の事例（#1370・#1455・#1456）と、
             # 両方の backend が実行のときに読む段落の分け方の語（vocabulary.json。#2197）。
             answer_passages_contract:
               - "platform/contracts/answer-passages/**"
             mcp_contract:
               - "platform/contracts/mcp/**"
+            # RAG が読む契約（#3240）。Agent の回答の節の事例（unverified-section.json）は Agent と suite だけが読み、
+            # RAG は Agent の回答の形式を持たない。
+            rag_contracts:
+              - "platform/contracts/mcp/rag-tools.json"
+              - "platform/contracts/answer-passages/**"
+              - "!platform/contracts/answer-passages/unverified-section.json"
             # 製品の backend（frontend を除く製品のすべて。#1592）。
             rag_backend:
               - "rag/**"
@@ -834,11 +846,11 @@ jobs:
     name: RAG / Backend
     needs: changes
     # 回答の段落の判定の共通の事例（platform/contracts/answer-passages/）と MCP ツールの契約
-    # （platform/contracts/mcp/rag-tools.json。#1531）を読む。評価ランナーは platform の採点の部品を使う（#3240）。
+    # （platform/contracts/mcp/rag-tools.json。#1531）を読む（rag_contracts。Agent の契約では動かさない。#3240）。
+    # 評価ランナーは platform の採点の部品を使う（#3240）。
     if: >-
       needs.changes.outputs.rag_backend == 'true' || needs.changes.outputs.platform_backend == 'true'
-      || needs.changes.outputs.answer_passages_contract == 'true' || needs.changes.outputs.mcp_contract == 'true'
-      || needs.changes.outputs.platform_evaluation_scoring == 'true'
+      || needs.changes.outputs.rag_contracts == 'true' || needs.changes.outputs.platform_evaluation_scoring == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
@@ -918,7 +930,7 @@ jobs:
   rag-engine:
     name: RAG / Engine
     needs: changes
-    if: needs.changes.outputs.rag_backend == 'true' || needs.changes.outputs.answer_passages_contract == 'true'
+    if: needs.changes.outputs.rag_backend == 'true' || needs.changes.outputs.rag_contracts == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:

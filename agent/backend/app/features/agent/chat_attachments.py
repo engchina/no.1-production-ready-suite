@@ -92,12 +92,15 @@ def _image_reader(
     async def read(data: bytes, media_type: str) -> str:
         from openai import AsyncOpenAI
 
+        from app.features.agent.builtin_runtime import enterprise_ai_http_client
+
         headers = {"OpenAI-Project": connection.project_ocid} if connection.project_ocid else None
         client = AsyncOpenAI(
             base_url=connection.base_url,
             api_key=connection.api_key,
             default_headers=headers,
             timeout=IMAGE_READ_TIMEOUT_SECONDS,
+            http_client=enterprise_ai_http_client(IMAGE_READ_TIMEOUT_SECONDS),
         )
         image_url = f"data:{media_type};base64,{base64.b64encode(data).decode('ascii')}"
         extra: dict[str, Any] = {}

@@ -194,6 +194,16 @@ def _fresh_database_status_cache() -> Iterator[None]:
     clear_database_status_cache()
 
 
+@pytest.fixture(autouse=True)
+def _fresh_dropped_llm_parameters() -> Iterator[None]:
+    """モデルが受け付けない引数の記憶（#3539。プロセスの間の状態）をテストごとに捨てる。"""
+    from pr_backend_core.llm_request_params import reset_dropped_parameters
+
+    reset_dropped_parameters()
+    yield
+    reset_dropped_parameters()
+
+
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",

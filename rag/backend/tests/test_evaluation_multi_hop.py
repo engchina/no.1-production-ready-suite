@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from app.rag.evaluation import case_error_result, score_case_answers, summarize_case_results
+from app.rag.evaluation import _case_error_result, score_case_answers, summarize_case_results
 from app.rag.evaluation_handling import contains_normalized
 from app.schemas.evaluation import (
     EvaluationCase,
@@ -385,12 +385,11 @@ def test_evidence_chain_complete_rate_counts_cases_with_all_evidence() -> None:
         _chain_case("clarify", "table_lookup", 1),
         _response([], answer="どのシステムですか？", outcome="needs_clarification"),
     )
-    failed = case_error_result(
-        _chain_case("error", "bridge", 2),
+    failed = _case_error_result(
+        case=_chain_case("error", "bridge", 2),
         trace_id="t",
-        elapsed_ms=0.0,
-        error_type="RuntimeError",
-        error_message="失敗",
+        elapsed=0.0,
+        error=RuntimeError("失敗"),
     )
 
     assert complete.required_evidence_recall == 1.0
@@ -455,14 +454,13 @@ def test_reasoning_and_hops_breakdowns() -> None:
         EvaluationCase(id="s1", query="q", required_answer_points=["x"]),
         _response([("ledger", "x")], answer="x"),
     )
-    failed = case_error_result(
-        _chain_case(
+    failed = _case_error_result(
+        case=_chain_case(
             "b3", "bridge", 3, required_evidence=[{"id": f"e{i}", "text": "t"} for i in range(3)]
         ),
         trace_id="t",
-        elapsed_ms=0.0,
-        error_type="RuntimeError",
-        error_message="失敗",
+        elapsed=0.0,
+        error=RuntimeError("失敗"),
     )
     metrics = summarize_case_results([bridge_ok, bridge_miss, comparison, single, failed])
 

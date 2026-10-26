@@ -294,3 +294,24 @@ API は 422 で「既定のテキストモデルを選択してください。�
 `seed` 属性にも、seed を入れない。設定・画面の欄も持たない。seed を受け付けないモデル（未知の引数を拒む endpoint）では、すべての
 呼び出しが HTTP 400（`Unknown parameter: 'seed'`）になるため。受け付けるモデルでも出力の再現性はモデル側の対応次第だった。
 保存済みの `model-settings.json` の `enterprise_ai.seed` は読み込みで読み捨てる。
+
+## モデルが受け付けない引数は外して送り直す（#3539）
+
+3 製品の Enterprise AI の呼び出しは、受け付けるモデルには今までどおり `temperature`（主に 0。同じ入力から同じ出力を
+得やすくする）を送る。サンプリングの引数を受け付けない推論モデル（OpenAI の推論モデルは推論の量が `none` 以外のとき
+`temperature`・`top_p`・`top_logprobs` などを受け付けない）が HTTP 400 で「受け付けない引数」
+（`Unsupported parameter: 'temperature'` / `Unknown parameter: 'X'`）を返したら、その引数を外して 1 回だけ送り直す
+（業界の型: LiteLLM の `drop_params`）。
+
+- 判定と記憶は `pr_backend_core.llm_request_params`（標準 library だけ）。引数の名前は `error.param`、無ければ message の
+  引用から読む。外すのは許可の一覧（サンプリングと生成の調整: `temperature`・`top_p`・`top_k`・`frequency_penalty`・
+  `presence_penalty`・`logprobs`・`top_logprobs`・`logit_bias`・`seed`。引数そのものを受け付けないときの
+  `reasoning` / `reasoning_effort`）の top-level の引数だけ。`model`・`input`・応答の形式・`tools`・出力の上限などの
+  400 と、推論の量の値を拒む 400（`Unsupported value`。選んだ値の誤り）は今までどおり失敗にする。
+- 外した引数は（接続の URL, モデル ID）ごとに backend のプロセスの間だけ覚え、次の呼び出しから最初に外す（再起動で
+  忘れる）。初めて外したときに WARNING の log を 1 回だけ残す（payload は出さない）。
+- 組み込みは `pr_backend_core.llm_request_params_httpx`（httpx の client の `send` を包む。環境のプロキシの扱いは
+  変えない）: RAG は OpenAI SDK の `http_client`（`ParameterDroppingClient` / `AsyncParameterDroppingClient`）、
+  NL2SQL とモデルの接続テスト（Agent）は `send_dropping_parameters` / `asend_dropping_parameters`、Agent の組み込み
+  Runtime・チャットの添付の画像の読み取りは SDK の既定の client に同じ扱いを足した client。
+- 「システム設定 › モデル」のモデルのテストは、外した引数を結果の詳細（`dropped_parameters`）と成功の文に出す。

@@ -25,6 +25,7 @@ from typing import Any, Protocol
 import httpx
 import openai
 from charset_normalizer import from_bytes
+from pr_backend_core.llm_request_params_httpx import AsyncParameterDroppingClient
 from pydantic import ValidationError
 
 from rag_parser_core.extraction import StructuredExtraction
@@ -767,6 +768,14 @@ class _DefaultEnterpriseAiTransport:
             base_url=self._config.oci_enterprise_ai_endpoint.strip() or None,
             max_retries=sdk_max_retries(self._config),
             timeout=timeout,
+            # モデルが受け付けない引数(temperature など)の 400 は、外して 1 回だけ送り直し、以後
+            # このモデルには送らない(#3539。platform の部品)。timeout・接続の上限・redirect は
+            # SDK の既定と同じ。
+            http_client=AsyncParameterDroppingClient(
+                timeout=timeout,
+                limits=openai.DEFAULT_CONNECTION_LIMITS,
+                follow_redirects=True,
+            ),
         )
 
     async def post_json(
