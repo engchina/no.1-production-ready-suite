@@ -106,6 +106,42 @@ test("一覧は共通の列の順で、状態は共通の値と Agent の言い�
   await expect(waiting).toContainText("—");
 });
 
+// #3427: 「操作」の列は、行の操作が無い（終わった実行だけの）ページでも見出しを 1 行で出し、操作のある行の
+// メニューのボタンが入る幅を保つ（ページ・再取得で列の幅が変わらない）。操作の無い行のセルは空のまま。
+test("「操作」の見出しは 1 行で、操作の無い実行だけのページでもメニューのボタンの幅を保つ (1440px)", async ({ page, mockApi }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  seedRun(mockApi);
+  seedRun(mockApi, "run-done-2");
+  await page.goto("/runs");
+  const table = page.getByRole("table", { name: "実行履歴" });
+  const header = table.getByRole("columnheader", { name: "操作" });
+  await expect(header).toBeVisible();
+  const lineCount = () =>
+    header.evaluate((element) => {
+      const label = element.querySelector("span") ?? element;
+      const lineHeight = Number.parseFloat(getComputedStyle(label).lineHeight);
+      return Math.round(label.getBoundingClientRect().height / lineHeight);
+    });
+  expect(await lineCount()).toBe(1);
+  await expect(page.getByTestId("run-row-run-layout").locator("td").last()).toBeEmpty();
+  const emptyWidth = (await header.boundingBox())!.width;
+
+  // 操作のある行（承認待ち）が入っても、列の幅は変わらない。
+  seedRun(mockApi, "run-waiting", "waiting_approval");
+  await page.reload();
+  const trigger = page.getByTestId("run-row-actions-run-waiting-trigger");
+  await expect(trigger).toBeVisible();
+  expect(await lineCount()).toBe(1);
+  const withActionsWidth = (await header.boundingBox())!.width;
+  expect(Math.abs(withActionsWidth - emptyWidth)).toBeLessThanOrEqual(1);
+  const triggerBox = (await trigger.boundingBox())!;
+  const headerBox = (await header.boundingBox())!;
+  expect(triggerBox.x).toBeGreaterThanOrEqual(headerBox.x);
+  expect(triggerBox.x + triggerBox.width).toBeLessThanOrEqual(headerBox.x + headerBox.width + 1);
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+  await table.screenshot({ path: testInfo.outputPath("runs-actions-column-1440.png") });
+});
+
 test("狭い画面では題名の下に状態・日時・所要時間をまとめ、横にあふれない", async ({ page, mockApi }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   seedRun(mockApi);
