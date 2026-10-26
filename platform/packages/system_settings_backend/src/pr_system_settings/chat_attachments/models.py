@@ -28,7 +28,8 @@ CellValue = str | int | float | bool | None
 
 # Excel の読み方の版（#2544）。解析の結果（`PARSED_JSON` / `OUTLINE_JSON`）の中に置き、古い版で
 # 解析した Excel の添付は、使うときに原本から解析し直す（DB の列は足さない）。
-EXCEL_PARSER_VERSION = 2
+# 3: 表の下の注記の行を表にせず「注記」の節にした（#3566）。
+EXCEL_PARSER_VERSION = 3
 
 
 class SourceLocation(BaseModel):

@@ -596,6 +596,24 @@ def _parse_xlsx(file_name: str, data: bytes) -> ParsedAttachment:
                     name,
                 )
             )
+        if records.notes:
+            # 表の下の注記の行（#3566）。表の行にしない。
+            first_note, last_note = records.notes[0], records.notes[-1]
+            section_items.append(
+                (
+                    f"{name} の注記",
+                    "\n".join(row.text for row in records.notes),
+                    SourceLocation(
+                        row_start=first_note.row_number,
+                        row_end=last_note.row_number,
+                        cell_range=(
+                            f"{first_note.cell_range.split(':')[0]}:"
+                            f"{last_note.cell_range.split(':')[-1]}"
+                        ),
+                    ),
+                    name,
+                )
+            )
         if records.mode == "procedure":
             for index, block in enumerate(records.blocks, start=1):
                 title = " / ".join(block.section_path) or f"{name} 手順 {index}"
