@@ -36,7 +36,7 @@ import re
 import tempfile
 import time
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
@@ -47,7 +47,17 @@ from pr_backend_core.timezones import configured_timezone_name
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
 from rag_engine.resources.deadline import check_deadline, current_deadline
+from rag_engine.resources.tracing import observe_call
 from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
+from rag_engine.retrieval.search_stages import (
+    CONTEXT_SIBLINGS_STAGE,
+    DERIVED_SOURCE_STAGE,
+    DOCUMENT_INFO_STAGE,
+    ENTITY_EXPANSION_STAGE,
+    GRAPH_EXPANSION_STAGE,
+    IMAGE_EVIDENCE_STAGE,
+    REFERENCE_EXPANSION_STAGE,
+)
 
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
@@ -1442,11 +1452,13 @@ class AnswerEngine:
             known = state.fused_ranks.get(chunk_id)
             if known is None or rank < known[0]:
                 state.fused_ranks[chunk_id] = (rank, fused[chunk_id])
-        siblings = original_chunks(
-            await self._oracle.context_group_siblings(
-                anchors, max_chunks_per_group=max(1, self._settings.rag_context_group_max_chunks)
+        with _search_stage(CONTEXT_SIBLINGS_STAGE, active=bool(anchors)):
+            siblings = original_chunks(
+                await self._oracle.context_group_siblings(
+                    anchors,
+                    max_chunks_per_group=max(1, self._settings.rag_context_group_max_chunks),
+                )
             )
-        )
         for sibling in siblings:
             state.chunks.setdefault(sibling.chunk_id, sibling)
         # 上位の候補が本文で参照する節の chunk(#1280)。起点の候補の直後に置き、rerank に任せる。
@@ -1454,47 +1466,49 @@ class AnswerEngine:
         # 前後の文脈は rerank にかからず、下位の候補は文脈に入らないため)。上位の起点はそのまま。
         # 起点は統合の上位 5 件と、その外で回答の文脈に入りうる上位(top_k)の参照を持つ候補(#1549)。
         source_ids = {chunk.chunk_id for chunk in anchors[:_REFERENCE_SOURCE_ANCHORS]}
-        references = (
-            await self._reference_expansion(
-                request,
-                state,
-                anchors,
-                existing=source_ids,
-                question=(queries[0], embeddings[0]) if embeddings else None,
-                scores=fused,
-            )
-            if expand_references
-            else {}
-        )
+        references: dict[str, list[RetrievedChunk]] = {}
+        if expand_references and self._settings.rag_reference_expansion_enabled:
+            with _search_stage(REFERENCE_EXPANSION_STAGE, active=bool(anchors)):
+                references = await self._reference_expansion(
+                    request,
+                    state,
+                    anchors,
+                    existing=source_ids,
+                    question=(queries[0], embeddings[0]) if embeddings else None,
+                    scores=fused,
+                )
         referenced = [chunk for chunks in references.values() for chunk in chunks]
         promoted = {chunk.chunk_id for chunk in referenced}
         # 質問と上位の候補の実体から、実体の表との join で関連する chunk を 1 段だけ足す(#1362)。
-        entity_chunks = (
-            await self._entity_expansion(request, state, anchors) if expand_references else []
-        )
+        entity_chunks: list[RetrievedChunk] = []
+        if expand_references and self._settings.rag_entity_expansion_enabled:
+            with _search_stage(ENTITY_EXPANSION_STAGE, active=bool(anchors)):
+                entity_chunks = await self._entity_expansion(request, state, anchors)
         entity_ids = {chunk.chunk_id for chunk in entity_chunks}
         # 関係情報(#2055)で、上位の候補と同じ狭い章節・表の chunk と、質問に見出しの語が含まれる
         # 章節の chunk を足す。候補・前後の文脈・参照先・実体の拡張にある chunk は足さない。
-        graph_chunks = (
-            await self._graph_expansion(
-                request,
-                state,
-                anchors,
-                exclude={
-                    *ranked,
-                    *(chunk.chunk_id for chunk in siblings),
-                    *promoted,
-                    *entity_ids,
-                },
-            )
-            if expand_references
-            else []
-        )
-        if referenced or entity_chunks or graph_chunks:
-            await self._load_classifications([*referenced, *entity_chunks, *graph_chunks], state)
+        graph_chunks: list[RetrievedChunk] = []
+        if expand_references and self._settings.rag_graph_expansion_enabled:
+            with _search_stage(GRAPH_EXPANSION_STAGE, active=bool(anchors)):
+                graph_chunks = await self._graph_expansion(
+                    request,
+                    state,
+                    anchors,
+                    exclude={
+                        *ranked,
+                        *(chunk.chunk_id for chunk in siblings),
+                        *promoted,
+                        *entity_ids,
+                    },
+                )
         if self._attach_images:
-            for chunk in [*anchors, *siblings, *referenced, *entity_chunks, *graph_chunks]:
-                await self._materialize_image_evidence(chunk, state)
+            evidence = [*anchors, *siblings, *referenced, *entity_chunks, *graph_chunks]
+            with _search_stage(
+                IMAGE_EVIDENCE_STAGE,
+                active=any(_needs_image_materialization(chunk, state) for chunk in evidence),
+            ):
+                for chunk in evidence:
+                    await self._materialize_image_evidence(chunk, state)
             anchors = [state.chunks[chunk.chunk_id] for chunk in anchors]
             siblings = [state.chunks.get(chunk.chunk_id, chunk) for chunk in siblings]
             references = {
@@ -1503,9 +1517,20 @@ class AnswerEngine:
             }
             entity_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in entity_chunks]
             graph_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in graph_chunks]
-        await self._load_first_page_contexts(
-            [*anchors, *siblings, *referenced, *entity_chunks, *graph_chunks], state
-        )
+        added = [*referenced, *entity_chunks, *graph_chunks]
+        evidence = [*anchors, *siblings, *added]
+        # 文書の分類(足した根拠の文書)と文書の背景(1 ページ目の本文)は短い読み取りなので 1 つの段に
+        # まとめる。読むものが無ければ段を出さない(#3464)。
+        with _search_stage(
+            DOCUMENT_INFO_STAGE,
+            active=bool(
+                _missing_classifications(added, state)
+                or _missing_first_page_contexts(evidence, state)
+            ),
+        ):
+            if added:
+                await self._load_classifications(added, state)
+            await self._load_first_page_contexts(evidence, state)
         classifications = state.classifications
         children = []
         for chunk in anchors:
@@ -1607,6 +1632,19 @@ class AnswerEngine:
         """
         if not any(is_derived_chunk(chunk) for chunk in anchors):
             return list(anchors)
+        # 派生の chunk の原文を読む工程(処理の経過の段。#3464)。
+        with _search_stage(DERIVED_SOURCE_STAGE):
+            return await self._resolve_original_anchors(state, anchors, fused, filters=filters)
+
+    async def _resolve_original_anchors(
+        self,
+        state: _SearchState,
+        anchors: Sequence[RetrievedChunk],
+        fused: dict[str, float],
+        *,
+        filters: Mapping[str, str],
+    ) -> list[RetrievedChunk]:
+        """``_original_anchors`` の本体(派生の chunk を原文の chunk に置き換える)。"""
         resolved: dict[str, RetrievedChunk] = {}
         for chunk in anchors:
             if not is_derived_chunk(chunk):
@@ -2769,7 +2807,7 @@ class AnswerEngine:
         self, chunks: Sequence[RetrievedChunk], state: _SearchState
     ) -> None:
         """まだ読んでいない文書の分類を、ヒットした document_id でまとめて 1 回で読む(#545)。"""
-        missing = sorted({chunk.document_id for chunk in chunks} - state.loaded_classification_ids)
+        missing = _missing_classifications(chunks, state)
         if not missing:
             return
         state.classifications.update(await self._oracle.document_classifications(missing))
@@ -2779,8 +2817,7 @@ class AnswerEngine:
         self, chunks: Sequence[RetrievedChunk], state: _SearchState
     ) -> None:
         """まだ読んでいない chunk set の 1 ページ目の本文を、まとめて 1 回で読む(#557)。"""
-        chunk_set_ids = {str(chunk.metadata.get("chunk_set_id") or "") for chunk in chunks}
-        missing = sorted(chunk_set_ids - {""} - state.loaded_first_page_chunk_set_ids)
+        missing = _missing_first_page_contexts(chunks, state)
         if not missing:
             return
         state.first_page_contexts.update(await self._oracle.chunk_set_first_page_contexts(missing))
@@ -2950,6 +2987,36 @@ def _json_list(value: object) -> list[Any]:
             return []
         return decoded if isinstance(decoded, list) else []
     return list(value) if isinstance(value, list) else []
+
+
+def _search_stage(name: str, *, active: bool = True) -> AbstractContextManager[object]:
+    """文書の検索の中の工程の段(``observe_call("stage", name)``。#3464)。
+
+    DB の検索の段(``OracleClient`` のベクトル検索・全文検索)と同じ仕組みで、回答の工程の span
+    (「文書の検索」)の子の段になる。行うことの無い工程(``active`` が偽)は段を出さない。
+    """
+    return observe_call("stage", name) if active else nullcontext()
+
+
+def _missing_classifications(chunks: Sequence[RetrievedChunk], state: _SearchState) -> list[str]:
+    """まだ分類を読んでいない文書の id(``_load_classifications`` が読む文書)。"""
+    return sorted({chunk.document_id for chunk in chunks} - state.loaded_classification_ids)
+
+
+def _missing_first_page_contexts(
+    chunks: Sequence[RetrievedChunk], state: _SearchState
+) -> list[str]:
+    """まだ 1 ページ目の本文を読んでいない chunk set の id(``_load_first_page_contexts``)。"""
+    chunk_set_ids = {str(chunk.metadata.get("chunk_set_id") or "") for chunk in chunks}
+    return sorted(chunk_set_ids - {""} - state.loaded_first_page_chunk_set_ids)
+
+
+def _needs_image_materialization(chunk: RetrievedChunk, state: _SearchState) -> bool:
+    """根拠の図を切り出す(まだ切り出していない、図の根拠を持つ)chunk か。"""
+    if chunk.chunk_id in state.materialized_images or state.work_dir is None:
+        return False
+    raw = chunk.metadata.get("engine_metadata_json")
+    return isinstance(raw, str) and "image_evidence" in raw
 
 
 def _hit_channels(hit: RetrievedChunk, query_index: int) -> set[str]:
