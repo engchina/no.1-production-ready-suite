@@ -110,6 +110,7 @@ ParserAdapterBackend = Literal[
     "dots_ocr",
     # service 系 backend。oci_document_understanding は OCI Document Understanding の
     # 非同期 processor job で OCR/表抽出する(parser-oci-document-understanding へ委譲する)。
+    # 準備中(ロードマップ)で、まだ選べない(ROADMAP_PARSER_ADAPTER_BACKENDS。#3374)。
     "oci_document_understanding",
 ]
 # 削除した文書解析エンジン(#270: Marker / Unlimited-OCR / GLM-OCR、#2042: OCI Generative AI
@@ -121,6 +122,37 @@ REMOVED_PARSER_ADAPTER_BACKENDS = frozenset(
 )
 # 既定の文書解析エンジン(#286: Unstructured から Docling へ変更)。Unstructured は明示選択で使える。
 DEFAULT_PARSER_ADAPTER_BACKEND: Literal["docling"] = "docling"
+# 準備中(ロードマップ)の文書解析エンジン(#3374)。client・parser のサービスの実装は残すが、
+# まだ選べない。
+# - 選ぶ操作(文書解析の全体設定の API・RAG_PARSER_ADAPTER_BACKEND・処理レシピの保存)は
+#   検証のエラーにする。
+# - 保存済みの値(parser-settings.json・文書レシピ・取込ジョブ)は読み込み時に既定エンジン /
+#   global の継承へ寄せる(画面・取込を壊さない)。取込の経路は選ばれていても呼ばずに止める
+#   (ingestion._partition_source)。
+ROADMAP_PARSER_ADAPTER_BACKENDS: dict[str, str] = {
+    "oci_document_understanding": "OCI Document Understanding",
+}
+
+
+def is_roadmap_parser_adapter_backend(value: object) -> bool:
+    """準備中(ロードマップ)で、まだ選べない文書解析エンジンか。"""
+    return isinstance(value, str) and value.strip().casefold() in ROADMAP_PARSER_ADAPTER_BACKENDS
+
+
+def roadmap_parser_adapter_backend_message(value: object) -> str:
+    """準備中の文書解析エンジンを選んだときの検証のエラーの文言。"""
+    label = ROADMAP_PARSER_ADAPTER_BACKENDS.get(str(value).strip().casefold(), str(value))
+    return (
+        f"{label} の解析は準備中（ロードマップ）のため、まだ選べません。"
+        "Docling などの使える解析エンジンを選んでください。"
+    )
+
+
+def reject_roadmap_parser_adapter_backend(value: object) -> object:
+    """準備中の文書解析エンジンなら ValueError(理由の分かる文言)にする。それ以外はそのまま返す。"""
+    if is_roadmap_parser_adapter_backend(value):
+        raise ValueError(roadmap_parser_adapter_backend_message(value))
+    return value
 
 
 def normalize_parser_adapter_backend_value(value: object) -> object:
@@ -335,9 +367,19 @@ class _PersistedParserAdapterSettings(BaseModel):
     # Vision の既定は backend/.env の RAG_VISION_ENABLED で決める。#528)は
     # 既定の extra=ignore で読み捨てる。
     # adapter_backend に削除済みエンジンが残っていれば既定エンジンへ寄せる(#270)。
+    # 準備中(ロードマップ)のエンジンが残っていても既定エンジンへ寄せる(#3374。以前の版が画面から
+    # 保存した値。起動を止めず、ログに出す。次に保存すると消える)。
     @field_validator("adapter_backend", mode="before")
     @classmethod
     def normalize_adapter_backend(cls, value: object) -> object:
+        if is_roadmap_parser_adapter_backend(value):
+            logging.getLogger(__name__).warning(
+                "parser-settings.json の解析エンジン %s は準備中（ロードマップ）のため使わず、"
+                "既定の %s にします。",
+                value,
+                DEFAULT_PARSER_ADAPTER_BACKEND,
+            )
+            return DEFAULT_PARSER_ADAPTER_BACKEND
         return normalize_parser_adapter_backend_value(value)
 
 
@@ -2147,9 +2189,10 @@ class Settings(
         default=DEFAULT_PARSER_ADAPTER_BACKEND,
         description=(
             "文書解析 backend の明示選択。既定は Docling(#286)。Unstructured は明示選択で使う。"
-            "Docling/Unstructured/構造化レコード JSONL/XML ツリー JSON/各 OCR/"
-            "Document Understanding は対応 parser マイクロサービスまたは API へ HTTP 委譲する。"
+            "Docling/Unstructured/構造化レコード JSONL/XML ツリー JSON/各 OCR は"
+            "対応 parser マイクロサービスまたは API へ HTTP 委譲する。"
             "in-process 解析・local fallback は持たない。"
+            "OCI Document Understanding は準備中（ロードマップ）で、まだ選べない(#3374)。"
         ),
     )
     rag_parser_docling_enabled: bool = Field(
@@ -2513,8 +2556,9 @@ class Settings(
         ``local`` は **正規化しない**。advanced diagnostics(scorecard/staging golden gate)が
         「常時利用可能な baseline」概念として扱う。runtime では ingestion._partition_source が
         ``local`` を既定エンジン(``docling``)のサービスへマップし、in-process 解析は実行しない。
+        準備中(ロードマップ)のエンジン(#3374)は理由の分かる検証のエラーにする(``.env`` で選べない)。
         """
-        return normalize_parser_adapter_backend_value(value)
+        return reject_roadmap_parser_adapter_backend(normalize_parser_adapter_backend_value(value))
 
     @field_validator("rag_preprocess_profile", mode="before")
     @classmethod

@@ -61,6 +61,8 @@ from app.clients.oci_enterprise_ai import (
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.clients.parser_service import (
+    PARSER_ENGINE_ROADMAP_REASON,
+    PARSER_ENGINE_ROADMAP_WARNING,
     STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_REASON,
     ParserServiceClient,
     ParserServiceUnavailableError,
@@ -75,6 +77,7 @@ from app.config import (
     enterprise_ai_default_model_id,
     enterprise_ai_max_input_tokens,
     get_settings,
+    is_roadmap_parser_adapter_backend,
 )
 from app.rag.audit import record_rag_ingestion_audit
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
@@ -669,6 +672,14 @@ class IngestionPipeline:
                 unsupported_reason=unsupported_reason,
             )
         backend = self._selected_parser_backend()
+        # 準備中(ロードマップ)のエンジン(#3374)は選べない。保存済みの値・上書きに残っていても
+        # 呼ばずに止める。
+        if is_roadmap_parser_adapter_backend(backend):
+            raise ParserServiceUnavailableError(
+                backend,
+                PARSER_ENGINE_ROADMAP_REASON,
+                warning_code=PARSER_ENGINE_ROADMAP_WARNING,
+            )
         if backend not in ADAPTER_CAPABILITIES and backend not in SERVICE_ADAPTER_BACKENDS:
             raise ParserServiceUnavailableError(
                 backend,

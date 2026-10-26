@@ -84,7 +84,7 @@ health の確認）への HTTP は、`HTTP_PROXY` を設定していてもプロ
 | parser-unstructured（既定では配備しない。Docling が扱えない形式を取り込む場合） | `services/parsers/unstructured` | 18022 |
 | parser-structured-records-jsonl（構造化レコード JSONL の解析エンジン。既定で配備・起動。#2457） | `services/parsers/structured_records_jsonl` | 18023 |
 | parser-xml-tree-json（XML ツリー JSON の解析エンジン。既定で配備し、既定は停止。#2024・#2042・#2453） | `services/parsers/xml_tree_json` | 18021 |
-| parser-oci-document-understanding（OCI Document Understanding） | `services/parsers/oci_document_understanding` | 18028 |
+| parser-oci-document-understanding（OCI Document Understanding。**準備中（ロードマップ）で配備しない**。#3374） | `services/parsers/oci_document_understanding` | 18028 |
 
 音声・動画は取り込まない（アップロードで止める。#3369）。GPU の ASR の parser と、OCI Generative AI（Vision）の parser は
 #2042 で削除した。ファイル準備の「PDF を画像として読み直す」（`preprocess-pdf-to-page-images`、18011）は #3347 で、
@@ -112,7 +112,6 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
    ```bash
    scripts/rag-services.sh install            # 前処理 4 つと既定の CPU parser（docling・structured-records-jsonl・xml-tree-json）
    scripts/rag-services.sh install --unstructured  # Unstructured（Docling が扱えない形式を取り込む場合）
-   scripts/rag-services.sh install --oci      # OCI Document Understanding の parser も足す
    scripts/rag-services.sh status             # unit の状態
    scripts/rag-services.sh render /tmp/units  # 登録せずに unit と sudoers の中身だけ確かめる
    scripts/rag-services.sh uninstall          # unit と sudoers を消す
@@ -1685,7 +1684,7 @@ ADB（Oracle Autonomous AI Database）と Wallet も stack が用意し（NL2SQL
 | Python | `uv python install 3.12`（`/opt/uv/python`。`ragsvc` も読める）。各サービスの venv は `uv sync --locked --no-dev --python 3.12` |
 | backend | `production-ready-rag-backend.service`（gunicorn + UvicornWorker、`127.0.0.1:8000`、workers 2、`RAG_ENVIRONMENT=prod`、in-process の取込 worker は無効） |
 | 取込 worker | `production-ready-rag-ingestion-worker.service`（`python -m app.rag.ingestion_worker`、`KillMode=mixed`、`RAG_INGESTION_QUEUE_SHUTDOWN_GRACE_SECONDS=60`、`TimeoutStopSec=90`。停止は下の「取込 worker の lease と停止」） |
-| 前処理 / parser | `production-ready-rag-<service>.service`（サービスごとの venv の gunicorn、`127.0.0.1:<port>`）。対象は stack の `rag_services`（前処理 4 つ・parser-docling・parser-structured-records-jsonl・parser-xml-tree-json と、選べば parser-unstructured・parser-oci-document-understanding）。parser-xml-tree-json は既定は停止で、初めて配備しても起動しない（#2453）。GPU の parser は配備しない |
+| 前処理 / parser | `production-ready-rag-<service>.service`（サービスごとの venv の gunicorn、`127.0.0.1:<port>`）。対象は stack の `rag_services`（前処理 4 つ・parser-docling・parser-structured-records-jsonl・parser-xml-tree-json と、選べば parser-unstructured。準備中〔ロードマップ〕の parser-oci-document-understanding は配備しない。#3374）。parser-xml-tree-json は既定は停止で、初めて配備しても起動しない（#2453）。GPU の parser は配備しない |
 | frontend | host の Node.js 24 で `platform` と `rag/frontend` を build し、Nginx が `rag/frontend/dist` を配信して `/api/` を backend へ proxy する |
 | upload の上限 | Nginx の `client_max_body_size` は backend の `RAG_MAX_UPLOAD_BYTES`（`backend/.env`。既定 200 MiB）+ 10 MiB（MiB で切り上げ。Refs #306） |
 | 設定 | `platform/.env`（`PLATFORM_*`）と `rag/backend/.env`（`RAG_*`）。どちらも `ragsvc` だけが読める 0600。OCI parser の unit は両方を EnvironmentFile で読む |

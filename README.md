@@ -107,6 +107,7 @@ sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-restart.sh
 | [`agent/`](./agent/) | Production Control Plane for AI Agents — Business Agent・Skill・Runtime の管理 |
 | [`skills/`](./skills/) | 組み込みのスキル（Agent Skills の形式 `skills/<name>/SKILL.md`）。Agent が読み、外部の Agent にも入れられる |
 
+- 準備中（ロードマップ）の機能は各製品の README の「ロードマップ」にあります（RAG: OCI Document Understanding の解析は準備中で、まだ選べません。[rag/README.md](./rag/README.md#ロードマップ)）。
 - 依存は `platform/` → 各製品の一方向です。各製品は `platform/` を相対パスで参照し、backend / frontend / 実行環境（uv の venv）/ 配備はそれぞれ独立しています。
 - 開発・起動方法は各ディレクトリの `README.md` を参照してください。
 

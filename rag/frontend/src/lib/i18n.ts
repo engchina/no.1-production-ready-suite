@@ -216,6 +216,8 @@ export const ja = {
   "settings.parserAdapters.legacyBackendNotice":
     "旧『local』設定です。未選択時は既定の Docling で解析します(内蔵フォールバックは廃止)。下から解析方式を選ぶと上書きされます。",
   "settings.parserAdapters.serviceBackend.unconfigured": "未設定",
+  "settings.parserAdapters.roadmap.badge": "準備中（ロードマップ）",
+  "settings.parserAdapters.roadmap.reason": "準備中（ロードマップ）のため、まだ選べません。",
   "settings.parserAdapters.serviceBackend.note":
     "GPU 解析エンジンは外部 API を直接呼びます。この画面から解析エンジンのサーバーの構築や起動は行いません。",
   "settings.parserAdapters.backend.structured_records_jsonl": "構造化レコード JSONL",
@@ -1626,7 +1628,7 @@ export const ja = {
   "settings.services.cpuNote":
     "「既定で使用」は文書解析の全体設定で選んだエンジンです。処理レシピでエンジンを指定しない取込で使うため、取込時は起動してください。その他のエンジンは、処理レシピで選んだ場合に使います。",
   "settings.services.ociNote":
-    "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。起動/停止はこのプロキシに対して行います。「縮退」は OCI 設定不足が原因です — Document Understanding は「OCI 認証」+「Object Storage」で設定すると稼働中になります。",
+    "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。OCI Document Understanding は準備中（ロードマップ）のため、まだ配備・起動できません。",
   "settings.services.status.running": "稼働中",
   "settings.services.status.degraded": "縮退",
   "settings.services.status.starting":
@@ -1637,6 +1639,9 @@ export const ja = {
   "settings.services.status.not_installed":
     "未登録",
   "settings.services.status.unconfigured": "未設定",
+  "settings.services.status.roadmap": "準備中（ロードマップ）",
+  "settings.services.roadmapHint":
+    "このサービスは準備中（ロードマップ）です。まだ配備・起動できません（実装は今後の版で使えるようにします）。",
   "settings.services.status.loading": "確認中",
   "settings.services.status.error": "取得失敗",
   "settings.services.modelCache.label": "モデルキャッシュ",
