@@ -104,6 +104,8 @@ test("NL2SQL の確認の下に「データベースの検索は不要」を出�
 
   const turn = page.getByTestId("chat-turn-run-nl2sql-1");
   await expect(turn.getByText("SALES のどの日付の列で期間を絞りますか？（受注日 / 出荷日）")).toBeVisible();
+  // 回答の本文が利用者への問い返しの文でも、回答の本文なので見出し「回答」を出す（#3433）。
+  await expect(turn.getByRole("heading", { level: 3, name: "回答", exact: true })).toBeVisible();
   // NL2SQL の確認（回答前の確認。旧名「AI要件確認」）を始めるボタンは置かない。取り消しの操作だけを確認の質問のそばに出す。
   await expect(page.getByRole("button", { name: /回答前の確認|AI要件確認/ })).toHaveCount(0);
   const actions = turn.getByRole("group", { name: "確認の取り消し" });
