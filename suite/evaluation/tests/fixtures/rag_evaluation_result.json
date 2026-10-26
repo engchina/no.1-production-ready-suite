@@ -1,0 +1,321 @@
+{
+  "data": {
+    "metrics_version": "six_metrics_v1",
+    "case_count": 2,
+    "error_count": 0,
+    "evaluation_suite": "standard",
+    "required_evidence_recall": 0.75,
+    "mrr": null,
+    "answer_correctness": null,
+    "requirement_coverage": null,
+    "claim_support_rate": null,
+    "response_decision_accuracy": null,
+    "metric_case_counts": {
+      "required_evidence_recall": 2,
+      "mrr": 0,
+      "answer_correctness": 0,
+      "requirement_coverage": 0,
+      "claim_support_rate": 0,
+      "response_decision_accuracy": 0
+    },
+    "passed": true,
+    "threshold_failures": [],
+    "failure_reason_counts": {
+      "evidence_miss": 1
+    },
+    "category_breakdown": {},
+    "split_breakdown": {
+      "dev": {
+        "case_count": 1,
+        "error_count": 0,
+        "metrics": {
+          "required_evidence_recall": 1.0,
+          "mrr": null,
+          "answer_correctness": null,
+          "requirement_coverage": null,
+          "claim_support_rate": null,
+          "response_decision_accuracy": null
+        },
+        "metric_case_counts": {
+          "required_evidence_recall": 1,
+          "mrr": 0,
+          "answer_correctness": 0,
+          "requirement_coverage": 0,
+          "claim_support_rate": 0,
+          "response_decision_accuracy": 0
+        },
+        "failure_reason_counts": {},
+        "reasoning_type_breakdown": {
+          "bridge": {
+            "case_count": 1,
+            "error_count": 0,
+            "metrics": {
+              "required_evidence_recall": 1.0,
+              "mrr": null,
+              "answer_correctness": null,
+              "requirement_coverage": null,
+              "claim_support_rate": null,
+              "response_decision_accuracy": null
+            },
+            "metric_case_counts": {
+              "required_evidence_recall": 1,
+              "mrr": 0,
+              "answer_correctness": 0,
+              "requirement_coverage": 0,
+              "claim_support_rate": 0,
+              "response_decision_accuracy": 0
+            }
+          }
+        },
+        "hops_breakdown": {
+          "2": {
+            "case_count": 1,
+            "error_count": 0,
+            "metrics": {
+              "required_evidence_recall": 1.0,
+              "mrr": null,
+              "answer_correctness": null,
+              "requirement_coverage": null,
+              "claim_support_rate": null,
+              "response_decision_accuracy": null
+            },
+            "metric_case_counts": {
+              "required_evidence_recall": 1,
+              "mrr": 0,
+              "answer_correctness": 0,
+              "requirement_coverage": 0,
+              "claim_support_rate": 0,
+              "response_decision_accuracy": 0
+            }
+          }
+        }
+      },
+      "holdout": {
+        "case_count": 1,
+        "error_count": 0,
+        "metrics": {
+          "required_evidence_recall": 0.5,
+          "mrr": null,
+          "answer_correctness": null,
+          "requirement_coverage": null,
+          "claim_support_rate": null,
+          "response_decision_accuracy": null
+        },
+        "metric_case_counts": {
+          "required_evidence_recall": 1,
+          "mrr": 0,
+          "answer_correctness": 0,
+          "requirement_coverage": 0,
+          "claim_support_rate": 0,
+          "response_decision_accuracy": 0
+        },
+        "failure_reason_counts": {
+          "evidence_miss": 1
+        },
+        "reasoning_type_breakdown": {
+          "comparison": {
+            "case_count": 1,
+            "error_count": 0,
+            "metrics": {
+              "required_evidence_recall": 0.5,
+              "mrr": null,
+              "answer_correctness": null,
+              "requirement_coverage": null,
+              "claim_support_rate": null,
+              "response_decision_accuracy": null
+            },
+            "metric_case_counts": {
+              "required_evidence_recall": 1,
+              "mrr": 0,
+              "answer_correctness": 0,
+              "requirement_coverage": 0,
+              "claim_support_rate": 0,
+              "response_decision_accuracy": 0
+            }
+          }
+        },
+        "hops_breakdown": {
+          "1": {
+            "case_count": 1,
+            "error_count": 0,
+            "metrics": {
+              "required_evidence_recall": 0.5,
+              "mrr": null,
+              "answer_correctness": null,
+              "requirement_coverage": null,
+              "claim_support_rate": null,
+              "response_decision_accuracy": null
+            },
+            "metric_case_counts": {
+              "required_evidence_recall": 1,
+              "mrr": 0,
+              "answer_correctness": 0,
+              "requirement_coverage": 0,
+              "claim_support_rate": 0,
+              "response_decision_accuracy": 0
+            }
+          }
+        }
+      }
+    },
+    "reasoning_type_breakdown": {
+      "bridge": {
+        "case_count": 1,
+        "error_count": 0,
+        "metrics": {
+          "required_evidence_recall": 1.0,
+          "mrr": null,
+          "answer_correctness": null,
+          "requirement_coverage": null,
+          "claim_support_rate": null,
+          "response_decision_accuracy": null
+        },
+        "metric_case_counts": {
+          "required_evidence_recall": 1,
+          "mrr": 0,
+          "answer_correctness": 0,
+          "requirement_coverage": 0,
+          "claim_support_rate": 0,
+          "response_decision_accuracy": 0
+        }
+      },
+      "comparison": {
+        "case_count": 1,
+        "error_count": 0,
+        "metrics": {
+          "required_evidence_recall": 0.5,
+          "mrr": null,
+          "answer_correctness": null,
+          "requirement_coverage": null,
+          "claim_support_rate": null,
+          "response_decision_accuracy": null
+        },
+        "metric_case_counts": {
+          "required_evidence_recall": 1,
+          "mrr": 0,
+          "answer_correctness": 0,
+          "requirement_coverage": 0,
+          "claim_support_rate": 0,
+          "response_decision_accuracy": 0
+        }
+      }
+    },
+    "hops_breakdown": {
+      "1": {
+        "case_count": 1,
+        "error_count": 0,
+        "metrics": {
+          "required_evidence_recall": 0.5,
+          "mrr": null,
+          "answer_correctness": null,
+          "requirement_coverage": null,
+          "claim_support_rate": null,
+          "response_decision_accuracy": null
+        },
+        "metric_case_counts": {
+          "required_evidence_recall": 1,
+          "mrr": 0,
+          "answer_correctness": 0,
+          "requirement_coverage": 0,
+          "claim_support_rate": 0,
+          "response_decision_accuracy": 0
+        }
+      },
+      "2": {
+        "case_count": 1,
+        "error_count": 0,
+        "metrics": {
+          "required_evidence_recall": 1.0,
+          "mrr": null,
+          "answer_correctness": null,
+          "requirement_coverage": null,
+          "claim_support_rate": null,
+          "response_decision_accuracy": null
+        },
+        "metric_case_counts": {
+          "required_evidence_recall": 1,
+          "mrr": 0,
+          "answer_correctness": 0,
+          "requirement_coverage": 0,
+          "claim_support_rate": 0,
+          "response_decision_accuracy": 0
+        }
+      }
+    },
+    "decision_breakdown": {},
+    "case_results": [
+      {
+        "case_id": "b1",
+        "trace_id": "trace",
+        "category": null,
+        "split": "dev",
+        "reasoning_type": "bridge",
+        "hops": 2,
+        "status": "success",
+        "retrieved_document_ids": [
+          "ledger",
+          "org"
+        ],
+        "relevant_document_ids": [],
+        "hit_document_ids": [],
+        "required_evidence_recall": 1.0,
+        "mrr": null,
+        "answer_correctness": null,
+        "requirement_coverage": null,
+        "claim_support_rate": null,
+        "response_decision_accuracy": null,
+        "expected_decisions": [],
+        "observed_outcome": "answered",
+        "outcome_source": "inferred",
+        "missing_evidence": [],
+        "turn_results": [],
+        "answer_evaluation": null,
+        "guardrail_warnings": [],
+        "failure_reasons": [],
+        "diagnostics": {},
+        "elapsed_ms": 1.0,
+        "error_type": null,
+        "error_stage": null,
+        "error_message": null
+      },
+      {
+        "case_id": "s1",
+        "trace_id": "trace",
+        "category": null,
+        "split": "holdout",
+        "reasoning_type": "comparison",
+        "hops": 1,
+        "status": "success",
+        "retrieved_document_ids": [
+          "ledger"
+        ],
+        "relevant_document_ids": [],
+        "hit_document_ids": [],
+        "required_evidence_recall": 0.5,
+        "mrr": null,
+        "answer_correctness": null,
+        "requirement_coverage": null,
+        "claim_support_rate": null,
+        "response_decision_accuracy": null,
+        "expected_decisions": [],
+        "observed_outcome": "answered",
+        "outcome_source": "inferred",
+        "missing_evidence": [
+          "org"
+        ],
+        "turn_results": [],
+        "answer_evaluation": null,
+        "guardrail_warnings": [],
+        "failure_reasons": [
+          "evidence_miss"
+        ],
+        "diagnostics": {},
+        "elapsed_ms": 1.0,
+        "error_type": null,
+        "error_stage": null,
+        "error_message": null
+      }
+    ],
+    "comparison": null
+  }
+}

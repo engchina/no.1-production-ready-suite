@@ -1,5 +1,5 @@
 {
-  "description": "Agent の最終の検証が回答の末尾に足す節の見出しと事例（#1456・#2738）。Agent（app.features.agent.answer_validation.SECTION_HEADINGS / publish_answer）と RAG（app.rag.answer_metrics.agent_system_headings / grounding_text）の両方のテストがこのファイルを読む。RAG の品質評価は faithfulness の計算で、見出し（太字か Markdown の見出しの行）から次の見出しの前までを回答の本文から除く。Agent が足す節は headings の 2 つ（「根拠と矛盾し除いた内容」「確認が必要な点」。RAG の回答の本文の末尾の節と同じ見出し）で、事例は examples（answer は回答、body は節を除いた本文）。#2738 の前の節（「資料で確認できず除いた内容」）は保存済みの回答のために RAG が見出しを持ち続ける（このファイルには置かない）。",
+  "description": "Agent の最終の検証が回答の末尾に足す節の見出しと事例（#1456・#2738）。Agent（app.features.agent.answer_validation.SECTION_HEADINGS / publish_answer）と製品横断の評価の Agent の adapter（suite/evaluation の pr_suite_evaluation.targets.agent_legacy.answer_body。#3240）の両方のテストがこのファイルを読む。評価は見出し（太字か Markdown の見出しの行）から次の見出しの前までを回答の本文から除く。Agent が足す節は headings の 2 つ（「根拠と矛盾し除いた内容」「確認が必要な点」。RAG の回答の本文の末尾の節と同じ見出し）で、事例は examples（answer は回答、body は節を除いた本文）。#2738 の前の節（「資料で確認できず除いた内容」）は保存済みの回答のために suite の Agent の adapter が見出しを持つ（このファイルには置かない）。RAG は Agent の回答の形式を持たない。",
   "headings": [
     "根拠と矛盾し除いた内容",
     "確認が必要な点"

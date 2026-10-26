@@ -476,6 +476,21 @@ def test_main_keeps_old_versions_active_when_asked(
     assert "document_versions" not in resolved
 
 
+def test_main_writes_the_document_map_for_the_suite_evaluation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--document-map-output は取り込んだファイル名 → 文書 ID の対応表を書く（#3240）。"""
+    document_map = tmp_path / "document-map.json"
+    code, _api, _resolved = _run_main_with_api(
+        tmp_path, monkeypatch, "--document-map-output", str(document_map)
+    )
+
+    assert code == 0
+    assert json.loads(document_map.read_text(encoding="utf-8")) == {
+        "documents": {"rules.pdf": "doc-rules.pdf", "rules-2023.pdf": "doc-rules-2023.pdf"}
+    }
+
+
 def test_loader_skips_approve_when_the_gate_already_moved(tmp_path: Path) -> None:
     """読んだ後に自動で次の工程へ進んだゲートの承認（HTTP 409）は失敗にせず、次の読み取りで進む。"""
     (tmp_path / "manual.pdf").write_bytes(b"%PDF-1.4")

@@ -48,61 +48,43 @@ uv run python -m app.rag.evaluation_cli /tmp/business-support.resolved.json \
 |---|---|---|
 | A | 業務ガイドなし（全体の既定とナレッジベースの指定） | `evaluation_cli` に `--output` の評価セット |
 | C | 業務ガイドあり（検索・回答プロファイルを指定した評価。#1249） | `evaluation_cli` に `--guided-output` の評価セット |
-| D | C と同じ検索・回答プロファイルを使う業務 Agent（スキル `business-rag-research`）の Run | `agent_evaluation_cli run` |
+| D | C と同じ検索・回答プロファイルを使う業務 Agent（スキル `business-rag-research`）の Run | 製品横断の評価 `suite-evaluation run`（`suite/evaluation`。#3240） |
 
 `evaluation_corpus_cli` に `--guides` を渡すと、資料を取り込んだナレッジベースを参照する検索・回答プロファイルを作り、
 `support-guides.json`（参照の `file:` は取り込んだ文書の ID に置き換える）を取り込んで公開し、そのプロファイルで評価する
-評価セットを `--guided-output` に書きます。
+評価セットを `--guided-output` に書きます。`--document-map-output` は、取り込んだファイル名 → 文書 ID の対応表を書きます
+（D の評価が評価セットの `file:` を解決する）。
 
 ```bash
 cd rag/backend
 uv run python -m app.rag.evaluation_corpus_cli ../evaluation/business-support/business-support.json \
-  --api-base-url http://127.0.0.1:8000 --output /tmp/bs.resolved.json \
-  --guides ../evaluation/business-support/support-guides.json --guided-output /tmp/bs.guided.json
+  --api-base-url http://127.0.0.1:8000 --output ../../tmp/eval/bs.resolved.json \
+  --document-map-output ../../tmp/eval/document-map.json \
+  --guides ../evaluation/business-support/support-guides.json --guided-output ../../tmp/eval/bs.guided.json
 # A / C（RAG の評価 job）
-uv run python -m app.rag.evaluation_cli /tmp/bs.resolved.json --api-base-url http://127.0.0.1:8000 --output /tmp/a.json
-uv run python -m app.rag.evaluation_cli /tmp/bs.guided.json --api-base-url http://127.0.0.1:8000 --output /tmp/c.json
-# D（Agent の Run。公開済みの業務 Agent を ID で指定する。業務 Agent は画面で、C と同じ検索・回答プロファイルを
+uv run python -m app.rag.evaluation_cli ../../tmp/eval/bs.resolved.json --api-base-url http://127.0.0.1:8000 --output ../../tmp/eval/a.json
+uv run python -m app.rag.evaluation_cli ../../tmp/eval/bs.guided.json --api-base-url http://127.0.0.1:8000 --output ../../tmp/eval/c.json
+# D（業務 Agent の Run。公開済みの業務 Agent を ID で指定する。業務 Agent は画面で、C と同じ検索・回答プロファイルを
 # データの範囲にしてスキル business-rag-research を付けて作り、公開しておく）
-export RAG_EVALUATION_AGENT_API_KEY=prak_...   # アカウントの画面の「API キー」のタブで発行したキー（使える製品に agent）
-uv run python -m app.rag.agent_evaluation_cli run /tmp/bs.resolved.json \
+cd ../../suite/evaluation
+export SUITE_EVALUATION_API_KEY=prak_...   # アカウントの画面の「API キー」のタブで発行したキー（使える製品に agent）
+uv run suite-evaluation run ../../rag/evaluation/business-support/business-support.json \
+  --document-map ../../tmp/eval/document-map.json \
   --agent-mcp-url http://127.0.0.1:8020/api/mcp --agent-id <公開済みの業務 Agent> \
-  --guides ../evaluation/business-support/support-guides.json --output /tmp/d.json
+  --guides ../../rag/evaluation/business-support/support-guides.json --output ../../tmp/eval/d.json
 # 比べる表（docs/answer-baseline-2026-10.md に貼る）
-uv run python -m app.rag.agent_evaluation_cli summarize A=/tmp/a.json C=/tmp/c.json D=/tmp/d.json
+uv run suite-evaluation compare A=../../tmp/eval/a.json C=../../tmp/eval/c.json D=../../tmp/eval/d.json
 ```
 
 `evaluation_cli` は閾値を下回ると終了コード 1 を返しますが、結果の JSON は書きます。
 
-D の採点は、RAG の評価ランナーと同じ関数（`app.rag.evaluation.score_case_answers` / `summarize_case_results`）で
-行います。この CLI は RAG の backend にあり、Agent は公開の MCP（`POST /api/mcp`。`agent_chat`・`agent_get_run`・
-`agent_get_run_observation`・`agent_cancel_run`）だけを、利用者が発行した API キーで呼びます（Agent の画面の API・
-Run の内部の記録・Agent のコードには依存しません。#3240）。業務 Agent の作成・公開の MCP のツールは無いので、
-公開済みの業務 Agent を `--agent-id` で指定し、結果の `agent.agent_versions` に使った公開の版を残します。
-Agent の Run を、RAG の採点が読む応答の形にするときの違いは次のとおりです。
-
-- 回答は `agent_get_run` の `answer`（最終の検証の後の本文）。引用は `agent_get_run_observation` の `evidence[]`
-  （その Run の `rag_search` / `rag_retrieve_evidence` が返した根拠と、読み取りのツールで読んだ chunk の全件。
-  `next_cursor` をたどって読む）です。根拠の本文は生成に渡した本文そのもの（RAG の MCP の根拠の本文の規則。#3321）で、
-  1 件でページの予算を超えて本文を省かれた根拠は `agent.runs[].evidence_text_omitted` に数えます。
-- 対応（outcome）は `agent_get_run` の `outcome` です（結果の `outcome_source=agent_answer`。#1305）。
-  Agent の Control Plane が、最後の `rag_search` の対応・確認の質問だけの回答か・最終の検証の結果・回答の段落の判定・
-  現場のデータの道具の結果から、モデルを呼ばずに RAG の回答の記録と同じ語彙で決めます（決め方は
-  `agent/docs/agent-control-plane-design.md` の「回答の対応」）。対応の無い完了の Run（#1305 より前の Agent）だけ、
-  回答の最後の行（最終の検証が足す定型の注記を除く）が問い（？）なら確認の質問、それ以外は RAG の評価と同じ推定
-  （根拠の無い回答・拒答の文は拒答）にします（`outcome_source=inferred`）。結果の `agent.outcome_sources` に
-  出所ごとの Run の数を残すので、推定が混じっていないかを確かめてから A / C と比べます。
-- 往復のあるケースの返答は、同じ会話（`thread_id`）の次の `agent_chat` として送ります。ケースの既知の条件
-  （`conditions`）は Agent に構造化して渡す口が無いため、最初の質問の後ろに「（既知の条件: 付与先は「グループ」）」の
-  文で足します。
-- 1 Run の待ちの上限は `--run-timeout`（既定 900 秒。待ちは MCP の `wait_seconds` に任せて呼び出しの回数を減らす）。
-  終わらない Run と回答前の確認で止まった Run は `agent_cancel_run` で取り消してケースの失敗にします。承認待ちで
-  止まった Run と、承認の要るツールを呼ばずに答えた Run（MCP の Run は承認の要るツールを呼ばない。
-  `skipped_approval_tools`）もケースの失敗です（#3240 の Q7。採点の版は `six_metrics_v1+agent_v2`）。結果の
-  `agent.runs` に Run ごとの状態・時間・対応・最終の検証の状態・モデルの呼び出しの回数・ツールの呼び出しの回数・
-  取消の結果があります。
-- API キーの上限（1 分あたりの呼び出し・直近 24 時間の Run の数。`platform/docs/mcp-api-keys.md`）に数えられます。
-  評価は 1 回 5 問ずつ流します（`--case`）。
+D は製品横断の評価（`suite/evaluation`。[README](../../../suite/evaluation/README.md)）が、業務 Agent の公開の MCP
+（`agent_chat`・`agent_get_run`・`agent_answer_confirmation`・`agent_get_run_observation`・`agent_cancel_run`）だけを、
+利用者が発行した API キーで呼んで流します。採点は RAG の評価ランナーと同じ六指標で、照合・順位・判断は platform の
+採点の部品（`pr_evaluation_scoring`）を共有します。回答の対応（`outcome`）の無い Run・本文を省かれた根拠・
+見られない根拠は推測で埋めず「評価不能」と理由を残します（採点の規則と版は suite の README）。
+API キーの上限（1 分あたりの呼び出し・直近 24 時間の Run の数。`platform/docs/mcp-api-keys.md`）に数えられます。
+評価は 1 回 5 問ずつ流します（`--case`）。
 
 ## 採点の考え方
 

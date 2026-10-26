@@ -61,7 +61,7 @@ export default [
 
 ## CI / 検証コマンド
 
-CI の job は `Platform / UI`・`Platform / backend_core`・`Platform / system_settings_backend` と、影響を受ける全製品の job（root の [docs/agents/ci.md](../docs/agents/ci.md)）。ローカルでは変更した package の command を実行し、製品の全件の検査は CI の job の結果を引用してよい。
+CI の job は `Platform / UI`・`Platform / backend_core`・`Platform / system_settings_backend`・`Platform / evaluation_scoring` と、影響を受ける全製品の job（root の [docs/agents/ci.md](../docs/agents/ci.md)）。ローカルでは変更した package の command を実行し、製品の全件の検査は CI の job の結果を引用してよい。
 
 ```bash
 # frontend（共有 UI）— platform/ で実行

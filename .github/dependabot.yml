@@ -42,13 +42,15 @@
 #   - root の GitHub Actions と .github/actions/* の composite action。
 version: 2
 updates:
-  # 3 製品の backend: uv ecosystem は pyproject.toml と uv.lock を直接扱う（PR はディレクトリごと）。
+  # 3 製品の backend と製品横断の評価（suite/evaluation。#3240）: uv ecosystem は pyproject.toml と uv.lock を
+  # 直接扱う（PR はディレクトリごと）。
   # 注意: pyproject.toml に version 制約が無い依存は lock 更新の PR が作られない。
   - package-ecosystem: uv
     directories:
       - /rag/backend
       - /nl2sql/backend
       - /agent/backend
+      - /suite/evaluation
     schedule:
       interval: weekly
       day: monday
@@ -96,6 +98,7 @@ updates:
     directories:
       - /platform/packages/backend_core
       - /platform/packages/system_settings_backend
+      - /platform/packages/evaluation_scoring
     schedule:
       interval: weekly
       day: monday

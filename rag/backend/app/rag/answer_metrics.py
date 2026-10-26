@@ -21,22 +21,13 @@ UNSUPPORTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted"})
 REFERENCE_ONLY_METRICS: frozenset[str] = frozenset()
 
 
-# #2738 より前に Agent の最終の検証が回答の末尾に足していた「資料で確認できず除いた内容」の
-# 節の見出し（#1456）。保存済みの回答の faithfulness のために持ち続ける。今の Agent の節の見出しは
-# platform/contracts/answer-passages/unverified-section.json の headings（RAG の回答の節と
-# 同じ見出し）。
-AGENT_UNVERIFIED_HEADING = "資料で確認できず除いた内容"
+def system_section_headings() -> frozenset[str]:
+    """回答の本文の末尾の、主張ではない節の見出し（言語資源の answer_labels。#2738）。
 
-
-def agent_system_headings() -> frozenset[str]:
-    """Agent の最終の検証が回答の末尾に足す節の見出し（#1456・#2738）。
-
-    以前の「資料で確認できず除いた内容」と、根拠と矛盾して外した内容・確認が必要な点の節（RAG の
-    回答と同じ見出し。言語資源の answer_labels）。どれも外した段落・本文の印の段落の引用と理由で、
-    本文の主張ではない。
+    根拠と矛盾して外した内容・確認が必要な点の節で、外した段落・印の段落の引用と理由を持つ。
     """
     labels = answer_labels()
-    return frozenset({AGENT_UNVERIFIED_HEADING, labels.removed_section, labels.marked_section})
+    return frozenset({labels.removed_section, labels.marked_section})
 
 
 # 見出しの行（Markdown の見出し・太字だけの行。後ろの「：」は許す）。
@@ -50,14 +41,13 @@ def _heading_title(line: str) -> str | None:
     return (match.group("md") or match.group("bold") or "").strip().strip("*").strip()
 
 
-def without_unverified_section(answer: str) -> str:
-    """Agent の最終の検証が足した節（``agent_system_headings``。次の見出しの前まで）を除く。
+def without_system_sections(answer: str) -> str:
+    """主張ではない節（``system_section_headings``。次の見出しの前まで）を除く。
 
-    節は回答の本文ではなく、検証が外した段落・印の段落の原文と理由なので、忠実さ（語句の一致）に
-    数えない（#1456。外した段落が多い Run ほど faithfulness が下がり、A と D の比較を歪めていた）。
-    印の段落そのものは本文に残るので数える（#2738）。
+    節は外した段落・印の段落の原文と理由なので、忠実さ（語句の一致）に数えない。印の段落そのものは
+    本文に残るので数える（#2738）。
     """
-    headings = agent_system_headings()
+    headings = system_section_headings()
     kept: list[str] = []
     inside = False
     for line in answer.splitlines():
@@ -73,10 +63,11 @@ def grounding_text(answer: str) -> str:
     """忠実さの照合に使う回答の本文。
 
     回答生成が付けた見出し・出典行・定型文（「参考情報」の節の直下の説明を含む。#2040）と、
-    「根拠と矛盾し除いた内容」「確認が必要な点」の節（#2738）と、Agent の最終の検証が足した節
-    （#1456）は主張ではないので外す。印の付いた段落は本文の主張として数える（#2738）。
+    「根拠と矛盾し除いた内容」「確認が必要な点」の節（#2738）は主張ではないので外す。印の付いた
+    段落は本文の主張として数える（#2738）。Agent の回答の節（旧形式を含む）の扱いは suite の
+    Agent の adapter（`suite/evaluation`。#3240）にあり、RAG は Agent の回答の形式を持たない。
     """
-    body = without_unverified_section(answer)
+    body = without_system_sections(answer)
     # 読めなかった章節・時間の上限で省いた処理の行もシステムの案内なので外す（#2040）。
     generated = generated_section_lines(body)
     return "\n".join(

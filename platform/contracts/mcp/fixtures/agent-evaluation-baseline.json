@@ -1,5 +1,5 @@
 {
-  "description": "製品横断の評価の基線（#3240）の合成の Run と、その Run を公開の Agent MCP で読んだ出力。source は段 1 の合成の Run の記録（Agent の内部の形。Agent のテストの入力で、rag は読まない）。agent_get_run・agent_get_run_observation・agent_cancel_run（終わっていない Run だけ）は agent/backend/tests/test_evaluation_baseline_observation.py が本物の MCP の入口で作り、契約（agent-tools.json の outputSchema）に合うことを確かめる。rag/backend/tests/test_agent_evaluation_baseline.py は公開の出力だけで評価の CLI の採点を再生する。書き直しは UPDATE_AGENT_EVALUATION_BASELINE=1（agent/backend）。内容はすべて合成。",
+  "description": "製品横断の評価の基線（#3240）の合成の Run と、その Run を公開の Agent MCP で読んだ出力。source は段 1 の合成の Run の記録（Agent の内部の形。Agent のテストの入力で、suite は読まない）。agent_get_run・agent_get_run_observation・agent_cancel_run（終わっていない Run だけ）は agent/backend/tests/test_evaluation_baseline_observation.py が本物の MCP の入口で作り、契約（agent-tools.json の outputSchema）に合うことを確かめる。suite/evaluation/tests/test_baseline.py は公開の出力だけで製品横断の評価の採点を再生する。書き直しは UPDATE_AGENT_EVALUATION_BASELINE=1（agent/backend）。内容はすべて合成。",
   "runs": [
     {
       "run_id": "run-answered-agent-outcome-0",
