@@ -17,7 +17,8 @@ from rag_parser_core.language.text import alternation, char_class, range_class, 
 from rag_engine.resources.runtime import current_profile
 from rag_engine.retrieval.task_contract import cause_noun_targeted
 
-INQUIRY_CONDITION_SCHEMA_VERSION = 1
+# 2: 補助の検索文（retrieval_queries）を持たない（#3496）。検索文の追加は質問の言い換えの工程が受け持つ。
+INQUIRY_CONDITION_SCHEMA_VERSION = 2
 INQUIRY_PROFILE_SCHEMA_VERSION = 1
 INQUIRY_CHUNK_METADATA_SCHEMA_VERSION = 3
 QUERY_UNDERSTANDING_PROCESS_NAME = "Fine-grained Query Understanding"
@@ -287,7 +288,6 @@ class InquiryConditionParse:
     requires_visual_evidence: bool = False
     requires_condition_answer: bool = False
     search_terms: tuple[str, ...] = ()
-    retrieval_queries: tuple[str, ...] = ()
     active_profiles: tuple[str, ...] = ()
     metadata_filter: InquiryMetadataFilter = InquiryMetadataFilter()
 
@@ -331,7 +331,6 @@ class InquiryConditionParse:
             "requires_visual_evidence": self.requires_visual_evidence,
             "requires_condition_answer": self.requires_condition_answer,
             "search_terms": list(self.search_terms),
-            "retrieval_queries": list(self.retrieval_queries),
             "active_profiles": list(self.active_profiles),
             "metadata_filter": self.metadata_filter.to_payload(),
         }
@@ -452,7 +451,6 @@ def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
         requires_condition_answer=requires_condition_answer,
         requires_visual_evidence=requires_visual_evidence,
     )
-    retrieval_queries = _retrieval_queries(original, search_terms, active_profiles)
     metadata_filter = InquiryMetadataFilter(
         source_file_terms=tuple(source_file_terms),
         metadata_terms=tuple([*business_domains, *document_kinds]),
@@ -475,7 +473,6 @@ def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
         requires_visual_evidence=requires_visual_evidence,
         requires_condition_answer=requires_condition_answer,
         search_terms=tuple(search_terms),
-        retrieval_queries=tuple(retrieval_queries),
         active_profiles=tuple(active_profiles),
         metadata_filter=metadata_filter,
     )
@@ -495,19 +492,6 @@ def _question_business_domains(question: str) -> list[str]:
         # 値は候補の大分類と完全一致で比べる（`_same_business_records`）ため、表記を変えずに重複だけ除く。
         return list(dict.fromkeys(str(value) for value in injected if str(value).strip()))
     return _match_patterns(question, current_profile().business_patterns)
-
-
-def inquiry_retrieval_queries(
-    original_question: str,
-    runtime_expanded_question: str,
-    expansion_queries: Sequence[str],
-    conditions: InquiryConditionParse | None,
-) -> tuple[str, ...]:
-    """問い合わせ条件を反映した追加 retrieval query を生成します。"""
-    values = [original_question, runtime_expanded_question, *expansion_queries]
-    if conditions is not None:
-        values.extend(conditions.retrieval_queries)
-    return tuple(_ordered_unique(_clean_text(value) for value in values if _clean_text(value)))
 
 
 def build_inquiry_chunk_metadata(
@@ -693,21 +677,6 @@ def _active_profiles(
     if requires_file_data_confirmation:
         profiles.append(FILE_DATA_PROFILE)
     return _ordered_unique(profiles)
-
-
-def _retrieval_queries(original: str, search_terms: Sequence[str], active_profiles: Sequence[str]) -> list[str]:
-    queries: list[str] = []
-    high_value_terms = [term for term in search_terms if len(_comparable(term)) >= 2][:12]
-    if high_value_terms:
-        queries.append(" ".join(high_value_terms[:8]))
-    for profile_id in active_profiles:
-        profile = _PROFILE_BY_ID.get(profile_id)
-        if profile is None:
-            continue
-        overlap = [term for term in high_value_terms if _comparable(term) in {_comparable(t) for t in _trigger_terms(profile)}]
-        if overlap:
-            queries.append(" ".join(overlap + high_value_terms[:6]))
-    return [query for query in _ordered_unique(queries) if _comparable(query) != _comparable(original)]
 
 
 def _page_numbers(text: str) -> tuple[int, ...]:

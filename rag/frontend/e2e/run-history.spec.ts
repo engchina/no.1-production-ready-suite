@@ -1158,6 +1158,99 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await page.getByTestId("run-history-timeline").screenshot({ path: testInfo.outputPath("terms-rules-steps.png") });
     await expectNoPageOverflow(page);
   });
+
+  test("質問の理解と検索文の決定の段は、補助の検索文の無い新しい記録も、補助の検索文を含む保存済みの記録もそのまま開ける（#3496）", async ({
+    page,
+  }, testInfo) => {
+    await mockLocalAuth(page);
+    const current = run(1);
+    const saved = run(2);
+    await mockRuns(page, [current, saved]);
+    const understandFields = [
+      { label: "目的", value: "質問の文から、文書名・画面名・エラーコード・日付などの条件を規則で読み取ります（LLM は使いません）。" },
+      { label: "結果", value: "質問の目的は「操作方法」" },
+      { label: "答える要求", value: "1 件" },
+      { label: "読み取ったファイル", value: "sample.pdf" },
+      { label: "読み取ったコード・エラー", value: "E1234" },
+    ];
+    const progress = (runId: string, legacy: boolean) =>
+      savedSpanProgress(
+        runId,
+        [
+          { key: "root", spec: ragSpan.root(), at: [0, 0.6] },
+          { key: "answer", spec: ragSpan.stage("answer"), at: [0, 0.5] },
+          {
+            key: "understand",
+            spec: ragSpan.step("質問の理解"),
+            at: [0, 0.1],
+            details: {
+              fields: legacy
+                ? [
+                    ...understandFields,
+                    { label: "補助の検索文", value: "1 本" },
+                    { label: "影響", value: "絞り込みに合う文書だけを検索します。補助の検索文を 1 本追加します。" },
+                  ]
+                : [...understandFields, { label: "影響", value: "絞り込みに合う文書だけを検索します。" }],
+            },
+          },
+          {
+            key: "queries",
+            spec: ragSpan.step("検索文と検索語の確定"),
+            at: [0.1, 0.2],
+            details: {
+              fields: [
+                { label: "目的", value: "意味の近さで探す検索文と、全文検索に使うキーワードを確定します。" },
+                { label: "結果", value: legacy ? "検索文 3 本" : "検索文 2 本" },
+                { label: "全文検索のキーワード", value: "語 A / 語 B" },
+              ],
+              lines: [
+                "1. [原質問] 合成の質問",
+                "2. [質問拡張] 言い換えた検索文",
+                ...(legacy ? ["3. [質問理解] 語 A 語 B sample.pdf"] : []),
+              ],
+            },
+          },
+        ],
+        { base: "2026-10-15T00:00:00Z" }
+      );
+    await mockTraceApi(page, {
+      [current.run_id]: progress(current.run_id, false),
+      [saved.run_id]: progress(saved.run_id, true),
+    });
+
+    for (const [row, legacy] of [
+      [current, false],
+      [saved, true],
+    ] as const) {
+      await page.goto(`/history/${row.run_id}`);
+      await page.getByTestId("run-history-timeline-summary").click();
+      const steps = page.getByTestId("run-history-timeline").locator("[data-run-timeline-step]");
+      // 包む段 → 質問の理解 → 検索文と検索語の決定。
+      await expect(steps).toHaveCount(3);
+
+      await steps.nth(1).locator("[data-run-timeline-toggle]").click();
+      const understand = steps.nth(1).locator("[data-run-timeline-details]");
+      await expect(understand).toContainText("読み取ったコード・エラー");
+      await expect(understand).toContainText("E1234");
+      await expect(understand).toContainText("絞り込みに合う文書だけを検索します。");
+      await steps.nth(2).locator("[data-run-timeline-toggle]").click();
+      const queries = steps.nth(2).locator("[data-run-timeline-details]");
+      await expect(queries).toContainText("[原質問] 合成の質問");
+      await expect(queries).toContainText("[質問拡張] 言い換えた検索文");
+      if (legacy) {
+        // 保存済みの記録は書き換えず、保存したとおりに出す。
+        await expect(understand).toContainText("補助の検索文");
+        await expect(queries).toContainText("[質問理解] 語 A 語 B sample.pdf");
+      } else {
+        await expect(understand).not.toContainText("補助の検索文");
+        await expect(queries).not.toContainText("[質問理解]");
+      }
+      await page
+        .getByTestId("run-history-timeline")
+        .screenshot({ path: testInfo.outputPath(`understanding-queries-${legacy ? "saved" : "current"}.png`) });
+      await expectNoPageOverflow(page);
+    }
+  });
 });
 
 test.describe("実行履歴の詳細の権限の無い根拠（#3252）", { tag: "@responsive" }, () => {

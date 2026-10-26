@@ -244,14 +244,15 @@ class AnswerExecutionTests(unittest.TestCase):
                     generation.answer_result_payload(result, answer_id="a1", run_id="abcdef")["question_display"], result.question_display
                 )
 
-    def test_mayor_intent_is_combined_and_auxiliary_query_is_visible(self):
+    def test_mayor_intent_is_combined_and_understanding_adds_no_query(self):
         result = self.run_answer("倉庫を移転したので、拠点名を変更する方法を教えてほしい")
         display = result.question_display
         self.assertIn("結果: 質問の目的は「操作方法」", display)
         self.assertNotIn("回答方針", display)
-        queries = result.inquiry_conditions.retrieval_queries
-        self.assertIn(f"影響: 補助の検索文を {len(queries)} 本追加します。", display)
-        for query in queries:  # 検索文は確定の工程に、番号と由来付きで1回だけ出る
+        # 質問の理解は検索文を作らない（#3496）。検索文は確定の工程に、番号と由来付きで1回だけ出る。
+        self.assertNotIn("補助の検索文", display)
+        self.assertNotIn("[質問理解]", display)
+        for query in result.retrieval_query_plan["vector_queries"][1:]:  # 先頭は原質問（質問の表示にも出る）
             self.assertEqual(display.count(generation._display_query(query)), 1)
         self.assertIn("1. [原質問] ", display)
 

@@ -300,7 +300,6 @@ class RetrievalQueryPlan:
     llm_expansion_queries: tuple[str, ...] = ()
     lexical_queries: tuple[str, ...] = ()
     target_text_queries: tuple[str, ...] = ()  # 対象語の部分語の Oracle Text フレーズ検索式 (#730)
-    inquiry_queries: tuple[str, ...] = ()
     crag_rewrites: tuple[str, ...] = ()
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN
     top_k: int = DEFAULT_RETRIEVAL_TOP_K
@@ -320,7 +319,6 @@ class RetrievalQueryPlan:
             "llm_expansion_queries": list(self.llm_expansion_queries),
             "lexical_queries": list(self.lexical_queries),
             "target_text_queries": list(self.target_text_queries),
-            "inquiry_queries": list(self.inquiry_queries),
             "crag_rewrites": list(self.crag_rewrites),
             "retrieval_scope": self.retrieval_scope,
             "top_k": self.top_k,

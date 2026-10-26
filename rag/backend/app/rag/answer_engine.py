@@ -308,7 +308,7 @@ class _SearchState:
 
     chunks: dict[str, RetrievedChunk] = field(default_factory=dict)
     # 検索の経路(chunk_id → 当たった経路。rag_engine の検索の実装と同じ形の ``vector:qN`` /
-    # ``keyword:oracle_text:qN`` / ``citation`` / 質問理解の経路。#3443)。根拠の記録
+    # ``keyword:oracle_text:qN`` / ``citation`` / 質問理解の profile の経路。#3443)。根拠の記録
     # (``adb_hybrid.retrieval_channels``)と、文書の検索の工程の詳細(候補の経路)に出す。
     retrieval_channels: dict[str, set[str]] = field(default_factory=dict)
     work_dir: Path | None = None
