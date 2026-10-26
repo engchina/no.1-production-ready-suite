@@ -1620,7 +1620,8 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertEqual(ready.call_args.kwargs["retrieval_scope"], RETRIEVAL_SCOPE_KNOWLEDGE_BASE)
         self.assertEqual(search.call_args.kwargs["retrieval_scope"], RETRIEVAL_SCOPE_KNOWLEDGE_BASE)
         self.assertEqual(search.call_args.kwargs["classification_filter"], classification_filter)
-        self.assertIn("検索範囲: Knowledge Base（全登録ファイル）", result.question_display)
+        # 既定の検索範囲は示さず、指定した分類フィルタだけを文書検索の工程に示す（#3495）。
+        self.assertNotIn("検索範囲:", result.question_display)
         self.assertIn("分類フィルタ: 大分類=20_在庫管理 / 中分類=20_操作説明書", result.question_display)
         self.assertEqual(payload["retrieval_scope"], RETRIEVAL_SCOPE_KNOWLEDGE_BASE)
         self.assertEqual(payload["classification_filter"]["large_category"], "20_在庫管理")
@@ -1785,7 +1786,6 @@ class AnswerGenerationTests(unittest.TestCase):
             QUESTION_DISPLAY_METADATA_SEPARATOR,
             heading("質問の理解"),
             "結果: 質問の目的は「",
-            "検索範囲:",
             heading("質問拡張戦略"),
             "本の検索文を追加）",
             heading("検索文と検索語の確定"),
@@ -2443,7 +2443,6 @@ class AnswerGenerationTests(unittest.TestCase):
         ordered_sections = [
             QUESTION_DISPLAY_METADATA_SEPARATOR,
             heading("質問の理解"),
-            "検索範囲:",
             heading("質問拡張戦略"),
             "本の検索文を追加）",
             heading("検索文と検索語の確定"),

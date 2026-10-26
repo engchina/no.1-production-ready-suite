@@ -29,6 +29,7 @@ from rag_engine.generation.answering import (
     CragRetrievalGradeOutput,
     answer_question_result,
 )
+from rag_engine.knowledge.classification import ClassificationFilter
 
 
 def _fields(step: dict) -> dict[str, str]:
@@ -54,7 +55,7 @@ def _hybrid_metadata(channels: list[str], heading: str) -> dict:
 class StandardFlowStepDetailsTest(unittest.TestCase):
     """通常の回答フロー: 検索の実装と並べ替え・回答の生成だけを差し替えて、工程ごとの詳細を確かめる。"""
 
-    def run_flow(self, settings=None):
+    def run_flow(self, settings=None, **options):
         search_result = _hybrid_result(
             _stored_child(
                 "chunk-docling-c000001",
@@ -82,6 +83,7 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
                 query_strategy=SIMPLE_RETRIEVAL_LABEL,
                 rerank_enabled=True,
                 answer_flow=STANDARD_ANSWER_FLOW_LABEL,
+                **options,
             )
 
     def test_every_step_records_bounded_details(self):
@@ -103,15 +105,21 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
         self.assertIn("結果", understanding)
         self.assertIn("結果", _fields(steps["用語・同義語の確認"]))
         self.assertIn("結果", _fields(steps["回答ルールの確認"]))
-        readiness = _fields(steps["検索の準備確認"])
-        self.assertEqual(readiness["チャンクの実行"], "abcdef-1234567890ab")
-        self.assertIn("準備済み", readiness["検索用データ"])
+        # 検索の前提の確認は工程にしない（#3495）。普段どおりの検索範囲・準備の状態は示さない。
+        self.assertNotIn("検索の準備確認", steps)
+        self.assertNotIn("分類フィルタ", _fields(steps["文書検索"]))
         self.assertEqual(_fields(steps["質問拡張戦略"])["設定"], SIMPLE_RETRIEVAL_LABEL)
         queries = steps["検索文と検索語の確定"]
         self.assertRegex(_fields(queries)["結果"], r"^検索文 \d+ 本$")
         self.assertIn("全文検索のキーワード", _fields(queries))
         self.assertTrue(any(line.startswith("1. [原質問]") for line in _lines(queries)))
         self.assertEqual(_fields(steps["回答生成フロー"])["設定"], STANDARD_ANSWER_FLOW_LABEL)
+
+    def test_classification_filter_is_shown_on_search_step_only_when_set(self):
+        """分類フィルタを指定したときだけ、文書検索の工程に示す（#3495）。"""
+        steps = _by_name(self.run_flow(classification_filter=ClassificationFilter(large_category="分類 A")))
+        self.assertNotIn("検索の準備確認", steps)
+        self.assertEqual(_fields(steps["文書検索"])["分類フィルタ"], "大分類=分類 A")
 
     def test_search_and_rerank_steps_show_routes_scores_and_top_documents(self):
         steps = _by_name(self.run_flow())
