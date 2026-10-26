@@ -3,6 +3,7 @@ import {
   ChatComposer,
   ChatReadOnlyNotice,
   ChatAnswer,
+  ChatAnswerBody,
   ChatHistoryList,
   chatHistoryWindowLabels,
   ChatLayout,
@@ -369,6 +370,19 @@ function AssistantColumn({
       : t("chat.column.model", { name: label })
     : null;
   const listId = useId();
+  const answerBody = (
+    <AnswerText
+      text={answer}
+      streaming={streaming}
+      citations={citations}
+      unreadSections={canOpenSections ? unreadSectionLinks(answerDiagnostics) : []}
+      diagnostics={finished ? (answerDiagnostics ?? passageSource) : null}
+      live
+      cursor={
+        streaming ? <span className="ml-0.5 inline-block animate-pulse motion-reduce:animate-none">▍</span> : null
+      }
+    />
+  );
   return (
     // 回答の枠は 3 製品共通の ChatAnswer（#1161）。比較（複数モデル）では列ごとに 1 つの枠にし、列の高さをそろえる。
     <ChatAnswer id={messageId ? `message-${messageId}` : undefined} className={cn("h-full", className)}>
@@ -452,19 +466,11 @@ function AssistantColumn({
               testId="chat-answer-storage-failure"
             />
           ) : null}
-          <AnswerText
-            text={answer}
-            streaming={streaming}
-            citations={citations}
-            unreadSections={canOpenSections ? unreadSectionLinks(answerDiagnostics) : []}
-            diagnostics={finished ? (answerDiagnostics ?? passageSource) : null}
-            live
-            cursor={
-              streaming ? (
-                <span className="ml-0.5 inline-block animate-pulse motion-reduce:animate-none">▍</span>
-              ) : null
-            }
-          />
+          {/*
+            回答の本文が届いたら、本文の前に見出し「回答」を出す（本文の中の節の見出しと同じ書式。3 製品共通の
+            ChatAnswerBody。#3433）。本文の届く前（カーソルだけ）は出さない。
+          */}
+          {answer.trim() ? <ChatAnswerBody testId="chat-answer-body">{answerBody}</ChatAnswerBody> : answerBody}
           {/* 回答を読むときに要る案内（資料では決まらない値など）は回答の本文の直下に出す（#2096）。 */}
           {finished && (answerDiagnostics || passageSource) ? (
             <AnswerNotices diagnostics={answerDiagnostics} passageSource={passageSource} />

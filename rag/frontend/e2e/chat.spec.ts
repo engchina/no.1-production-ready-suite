@@ -1557,6 +1557,29 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await expect(panel.getByRole("status").filter({ hasText: "業務システムで確かめる値" })).toHaveCount(0);
   const answerText = page.getByTestId("answer-text");
   await expect(answerText.getByRole("heading", { name: "資料により確認できた事項" })).toBeVisible();
+  // 処理の経過と回答の本文の間に、節の見出しと同じ書式の見出し「回答」（h3）を出す（#3433）。本文の領域の名前にもなる。
+  const answerBody = page.getByRole("region", { name: "回答", exact: true });
+  const answerHeading = answerBody.getByRole("heading", { level: 3, name: "回答", exact: true });
+  await expect(answerHeading).toBeVisible();
+  await expect(answerBody.getByTestId("answer-text")).toBeVisible();
+  const [processBox, answerHeadingBox, answerTextBox] = await Promise.all([
+    process.boundingBox(),
+    answerHeading.boundingBox(),
+    answerText.boundingBox(),
+  ]);
+  expect(answerHeadingBox!.y).toBeGreaterThan(processBox!.y);
+  expect(answerTextBox!.y).toBeGreaterThan(answerHeadingBox!.y);
+  const headingStyles = await page.evaluate(() => {
+    const style = (selector: string) => {
+      const element = document.querySelector(selector);
+      if (!element) return null;
+      const { fontSize, fontWeight, color, lineHeight } = getComputedStyle(element);
+      return { fontSize, fontWeight, color, lineHeight };
+    };
+    return { answer: style('[data-testid="chat-answer-heading"]'), section: style('[data-testid="answer-text"] section h4') };
+  });
+  expect(headingStyles.answer).not.toBeNull();
+  expect(headingStyles.answer).toEqual(headingStyles.section);
   // 節の見出しの前は段落の間（0.75rem）より広い 1.25rem（17.5px）を空け、要約の段落と節を見分けられる（#2325）。
   const headingGap = await answerText.evaluate((element) => {
     const paragraph = element.querySelector(":scope > p");
@@ -2177,6 +2200,8 @@ for (const viewport of [
     const live = page.getByTestId("chat-live-turn");
     await expect(live.locator('[data-status="sending"]')).toHaveText("経費の上限は？");
     await expect(live.getByTestId("chat-answer-progress")).toBeVisible();
+    // 処理の経過だけの間（回答の本文が届く前）は見出し「回答」を出さない（#3433）。
+    await expect(live.getByTestId("chat-answer-heading")).toHaveCount(0);
     await expect(empty).toHaveCount(0);
     await expect(page.getByRole("log", { name: "会話" })).toContainText("経費の上限は？");
     await expect(composer).toHaveValue("");
@@ -2197,6 +2222,8 @@ for (const viewport of [
     // 回答が届いたら同じ場所に流し込み、取り直した会話でも質問を二重に出さない。
     stream.open();
     await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
+    // 回答の本文が届いたら、本文の前に見出し「回答」を出す（#3433）。
+    await expect(page.getByTestId("chat-answer-heading")).toHaveText("回答");
     await expect(page.getByTestId("chat-live-turn")).toHaveCount(0);
     const messages = page.getByTestId("chat-messages");
     await expect(messages.getByText("経費の上限は？", { exact: true })).toHaveCount(1);
@@ -2448,6 +2475,8 @@ for (const viewport of [
       await expect(details).toContainText(value);
     }
     await expect(failure.getByRole("button", { name: "もう一度送信" })).toBeVisible();
+    // 失敗だけの枠には見出し「回答」を出さない（#3433）。
+    await expect(page.getByTestId("chat-answer-heading")).toHaveCount(0);
     // 処理の経過は失敗した段を ✗ で残す。
     await expect(page.getByTestId("chat-answer-progress").locator('[data-status="failed"]').first()).toBeVisible();
     await expectNoPageOverflow(page);

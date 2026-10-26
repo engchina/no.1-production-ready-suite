@@ -193,6 +193,23 @@ for (const viewport of VIEWPORTS) {
     await expect(body.locator("p").first()).toHaveText("合成の質問 A の答えは次のとおりです。");
     const sections = body.getByTestId("answer-section");
     await expect(sections.locator("h4")).toHaveText(["資料により確認できた事項", "資料から確認できなかった事項"]);
+    // 処理の経過と回答の本文の間に、節の見出しと同じ書式の見出し「回答」（h3）を出す（#3433）。
+    const answerHeading = turn.getByRole("heading", { level: 3, name: "回答", exact: true });
+    await expect(answerHeading).toBeVisible();
+    await expect(turn.getByRole("region", { name: "回答", exact: true }).getByTestId(`chat-answer-${RUN_ID}`)).toBeVisible();
+    const [progressBox, answerHeadingBox, bodyBox] = await Promise.all([
+      turn.getByTestId("chat-progress").boundingBox(),
+      answerHeading.boundingBox(),
+      body.boundingBox(),
+    ]);
+    expect(answerHeadingBox!.y).toBeGreaterThan(progressBox!.y);
+    expect(bodyBox!.y).toBeGreaterThan(answerHeadingBox!.y);
+    const headingStyle = (locator: typeof answerHeading) =>
+      locator.evaluate((element) => {
+        const { fontSize, fontWeight, color, lineHeight } = getComputedStyle(element);
+        return { fontSize, fontWeight, color, lineHeight };
+      });
+    expect(await headingStyle(answerHeading)).toEqual(await headingStyle(sections.nth(0).locator("h4")));
     const confirmed = sections.nth(0).getByRole("listitem");
     await expect(confirmed).toHaveCount(2);
     // 根拠の ID の印は文字で出さず、根拠の行（「根拠：文書 p.N」）にする。

@@ -120,8 +120,10 @@ for (const viewport of VIEWPORTS) {
         await page.getByRole("dialog", { name: "会話の履歴" }).getByText(QUESTION).click();
       }
       const answer = page.getByTestId(`chat-answer-${RUN_ID}`);
-      // チャットの画面にはページの見出しの下の見出しが無いため、回答の見出しは h2。
-      await expectMarkdownAnswer(page, answer, `chat-answer-${RUN_ID}`, 2);
+      // 回答の本文の前に見出し「回答」（h3。会話の名前 h2 の下。#3433）を出し、回答の中の見出しはその下の h4 から。
+      const body = page.getByTestId(`chat-answer-body-${RUN_ID}`);
+      await expect(body.getByRole("heading", { level: 3, name: "回答", exact: true })).toBeVisible();
+      await expectMarkdownAnswer(page, answer, `chat-answer-${RUN_ID}`, 4);
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`chat-${viewport.name}-${theme}.png`), fullPage: true });
     });

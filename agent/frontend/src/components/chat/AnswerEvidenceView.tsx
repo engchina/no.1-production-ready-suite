@@ -121,12 +121,15 @@ export function StructuredAnswer({
   blocks,
   evidence,
   passages = null,
+  markdownHeadingLevel = 2,
   testId,
 }: {
   runId: string;
   blocks: StructuredBlock[];
   evidence: AnswerEvidenceData | null;
   passages?: AnswerPassageRecords | null;
+  /** Markdown の塊の最上位の見出しの段（置く場所の見出しの下。チャットは見出し「回答」h3 の下の 4。#3433）。 */
+  markdownHeadingLevel?: 2 | 3 | 4;
   testId: string;
 }) {
   const source = useEvidenceSource<number>();
@@ -163,7 +166,7 @@ export function StructuredAnswer({
       return {
         kind: "content",
         key: block.key,
-        content: <AnswerBody text={block.text} headingLevel={2} />,
+        content: <AnswerBody text={block.text} headingLevel={markdownHeadingLevel} />,
         citations: citations(block.chunkIds),
         passageText: block.raw ?? block.text,
       };
