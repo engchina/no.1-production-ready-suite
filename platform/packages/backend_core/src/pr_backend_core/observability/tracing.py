@@ -64,6 +64,9 @@ _SAFE_ATTRIBUTES = frozenset(
         "gen_ai.usage.output_tokens",
         "gen_ai.usage.cache_read.input_tokens",
         "gen_ai.usage.reasoning.output_tokens",
+        # アプリが利用量を受け取れないモデルの呼び出しの出どころ（Select AI など。`model_usage`。
+        # #3543）。
+        "pr.gen_ai.unmeasured_source",
         "mcp.method.name",
         # MCP の呼び出しで呼ぶツールの表示名（MCP の `title`。画面の行の名前。#3468）。
         "pr.tool.title",

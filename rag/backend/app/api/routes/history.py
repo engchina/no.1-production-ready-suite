@@ -13,6 +13,11 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pr_backend_core.api import DEFAULT_PAGE_LIMIT, OffsetParams, offset_params, paginate
+from pr_backend_core.observability.model_usage import (
+    parse_run_usage,
+    run_usage_summary_fields,
+    run_usage_totals,
+)
 from pr_system_settings.auth.visibility import DEFAULT_RUN_EXECUTOR_FILTER, RunExecutorFilter
 from starlette.concurrency import run_in_threadpool
 
@@ -20,7 +25,6 @@ from app.api.routes.search import _stored_citation_rows
 from app.clients.oracle import OracleClient
 from app.clients.oracle_run_history import RunHistoryStore, owner_user_uuids
 from app.rag.request_context import current_audit_request_context
-from app.rag.run_usage import parse_run_usage, run_usage_totals
 from app.rag.saved_evidence import withhold_saved_answer
 from app.rag.trace_store import TraceSnapshot, run_trace_snapshot
 from app.schemas.common import ApiResponse, Page
@@ -135,9 +139,7 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
         "usage": parse_run_usage(stages.get("usage")),
     }
     # 詳細は利用量の全体を読むので、一覧の 2 つの値もそこから決める（概要と食い違わせない）。
-    usage = detail["usage"]
-    detail["total_tokens"] = usage.total_tokens if usage is not None else None
-    detail["usage_measurement"] = usage.measurement if usage is not None else None
+    detail["total_tokens"], detail["usage_measurement"] = run_usage_summary_fields(detail["usage"])
     if detail["answer_generated"]:
         # 回答・引用・診断は回答の記録が正本（保持期間で消えていれば出さない）。
         record = await oracle.get_answer_record(run_id)
