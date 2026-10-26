@@ -115,3 +115,17 @@ def test_top_rerank_score_is_the_highest_score_not_the_first_candidate():
     ]
     assert a._top_rerank_score(_context((), candidates)) == 0.9
     assert a._top_rerank_score(_context((), [child("u", 1, "x", "c", "pc")])) is None
+
+
+def test_evidence_items_without_a_tree_are_ordered_by_rerank_score_before_rrf():
+    """根拠の木の無い根拠の一覧は、回答に使った順の次に rerank の点数の順。RRF は同点の順だけ。"""
+    from rag_engine.generation.answer_payload import answer_evidence_items
+
+    def record(name, rerank, rrf):
+        metadata = {"adb_hybrid": {"rrf_score": rrf}}
+        if rerank is not None:
+            metadata["rerank"] = {"relevance_score": rerank}
+        return replace(parent(name, 1, f"{name} の本文", f"{name}.pdf"), metadata=metadata)
+
+    items = answer_evidence_items([record("high_rrf", 0.2, 0.9), record("high_rerank", 0.9, 0.1), record("unscored", None, 0.95)])
+    assert [item["id"] for item in items] == ["high_rerank", "high_rrf", "unscored"]

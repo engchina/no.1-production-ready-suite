@@ -590,6 +590,8 @@ def _evidence_item_sort_key(index_and_item: tuple[int, dict[str, Any]]) -> tuple
     return (
         0 if model_used else 1,
         _ascending_number_sort_key(item.get("model_usage_rank")) if model_used else (1, 0.0),
+        # rerank の点数を主キーにし、RRF・経路の点数・語の一致は同点の順と rerank の無い根拠の順だけ（#3504）。
+        _descending_number_sort_key(item.get("rerank_score")),
         _descending_number_sort_key(item.get("hybrid_score")),
         _descending_number_sort_key(_best_mapping_number(item.get("channel_scores"))),
         _descending_number_sort_key(item.get("profile_score")),
