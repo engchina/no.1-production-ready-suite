@@ -81,7 +81,7 @@ function searchProgressStream(traceId: string) {
 const slowSearch = searchProgressStream("trace-1");
 
 /**
- * 質問の読み取りから回答の作成まで（answer の段）の中を、質問の理解 → 文書検索 と時間をおいて進む検索の SSE。
+ * 質問の理解から回答の作成まで（answer の段）の中を、質問の理解 → 文書検索 と時間をおいて進む検索の SSE。
  * 中の各工程は段の span の子の span として届く（#3226）。
  */
 const slowSearchStream: TimedChunk[] = [
@@ -400,9 +400,9 @@ for (const viewport of [
     await expect(understand).toContainText(/1\.[5-9] 秒/);
     // 今の工程は実行中の span（文書検索）。
     await expect(current).toHaveAttribute("data-step-id", spanStepId("search"));
-    // 包む段（質問の読み取りから回答の作成まで）も実行中の行で、中の工程はその子（字下げ）。
+    // 包む段（質問の理解から回答の作成まで）も実行中の行で、中の工程はその子（字下げ）。
     await expect(page.getByTestId(`search-run-progress-step-${spanStepId("answer")}`)).toContainText(
-      "質問の読み取りから回答の作成まで"
+      "質問の理解から回答の作成まで"
     );
     // 終わった工程の詳細は、後の工程の実行中から開ける（回答の完了を待たない。#2373）。計測値も実行中から出す。
     await expect(current).toContainText("文書の検索");
@@ -425,7 +425,7 @@ for (const viewport of [
     });
 
     const summary = page.getByTestId("search-run-progress-summary");
-    // 包む段（質問の読み取りから回答の作成まで）も span の行になる（実行の全体の span は行にしない。#3226）。
+    // 包む段（質問の理解から回答の作成まで）も span の行になる（実行の全体の span は行にしない。#3226）。
     await expect(summary).toHaveText(/^処理の経過（4 ステップ・3\.6 秒）$/, { timeout: 4_000 });
     await expect(page.getByText("銀行の得点は 82 点です。").first()).toBeVisible();
     // 完了したら一覧を閉じ（チャットと同じ。#2118）、押すと開く。
@@ -895,7 +895,7 @@ const nestedProgress = chatProgressStream("a3");
 
 /**
  * 回答フローの中の文書の検索で、子の段（埋め込み → ベクトル検索 → 子が途切れた間 → 全文検索）が順に進むチャットの SSE。
- * 子の段を持つ親の工程（質問の読み取りから回答の作成まで・根拠の検索と回答の作成・文書の検索）は回さず、実行中の
+ * 子の段を持つ親の工程（質問の理解から回答の作成まで・根拠の検索と回答の作成・文書の検索）は回さず、実行中の
  * 末端の段だけが回ることを確かめる。最後の chunk は送らない（確かめる間は作成中のまま）。
  */
 const nestedChatStream: TimedChunk[] = [

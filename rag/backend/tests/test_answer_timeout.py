@@ -51,7 +51,7 @@ def test_answer_timeout_message_names_stage_and_retry() -> None:
     assert "会話を踏まえた質問の書き換え" in message
     assert "もう一度送信してください" in message
     assert "90 秒" in answer_timeout_message("answer", 90)
-    assert "質問の読み取りから回答の作成まで" in answer_timeout_message("answer", 90)
+    assert "質問の理解から回答の作成まで" in answer_timeout_message("answer", 90)
     # 開始前・未知の工程・工程の中の時間切れ（上限の秒数は出さない）。
     assert "検索の準備" in answer_timeout_message(None, 30)
     assert "（時間切れになった工程: 処理）" in answer_timeout_message("unknown_stage", 30)
@@ -165,7 +165,7 @@ async def test_search_reports_started_stages_as_mcp_progress(
     await search_route._report_tool_progress(_progress("answer_guardrail", "started"))
     # 終わった工程は知らせない。名前は時間切れの文言と同じ（answer_stage_label）。
     assert reported == [
-        "質問の読み取りから回答の作成まで",
+        "質問の理解から回答の作成まで",
         "根拠の確認（1 回目）",
         "回答の安全チェック",
     ]
