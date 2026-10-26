@@ -236,4 +236,48 @@ def test_a_citation_quoting_only_the_section_heading_is_dropped():
 
     assert _sources(result) == {"手順書B.pdf"}
     dropped = result.generation_trace["rounds"][0]["dropped"]
-    assert [entry["reason"] for entry in dropped if entry.get("citation_dropped")] == ["引用が節の見出しだけの出典"]
+    assert [entry["reason"] for entry in dropped if entry.get("citation_dropped")] == [grounded.HEADING_ONLY_REASON]
+
+
+def test_a_claim_citing_only_the_section_heading_is_marked_like_an_unfound_quote():
+    """出典が見出しだけの説明は確かめた説明にしない: 原文に無い引用と同じ印を付け、出典行を付けない（#3544）。"""
+    heading = "第三条 提出期限"
+    rule = record(0, f"{heading}\n{QUOTE}", heading, page=1, source="規則A.xml")
+    ctx = context(rule)
+    labels = ids(ctx, QUESTION)
+    model = FakeModel([draft(_cite((labels[rule.text], heading)))], [])
+
+    result = _run(model, ctx)
+
+    assert marks(result)[CLAIM] == ["quote_unmatched"]
+    assert not _citation_lines(result.answer_text)
+    assert {entry["answer_use"] for entry in result.cited_evidence} <= {"reference"}
+    dropped = result.generation_trace["rounds"][0]["dropped"]
+    # 是正の指摘（ignored ではない）に直し方を返す。
+    assert [(entry["reason"], entry.get("kept"), entry.get("ignored")) for entry in dropped] == [(grounded.HEADING_ONLY_REASON, True, None)]
+
+
+def test_a_claim_citing_the_body_line_under_the_heading_is_confirmed():
+    heading = "第三条 提出期限"
+    rule = record(0, f"{heading}\n{QUOTE}", heading, page=1, source="規則A.xml")
+    ctx = context(rule)
+    labels = ids(ctx, QUESTION)
+    model = FakeModel([draft(_cite((labels[rule.text], QUOTE)))], [])
+
+    result = _run(model, ctx)
+
+    assert not marks(result)
+    assert len(_citation_lines(result.answer_text)) == 1
+
+
+def test_heading_only_quotes_are_decided_by_the_section_path_alone():
+    span = {"section_path": ["第2章 手続", "2.8 期限が重なる場合"]}
+    assert grounded.heading_only_quote("2.8 期限が重なる場合", span)
+    assert grounded.heading_only_quote("期限が重なる場合", span)
+    # 見出しに番号・記号だけを足した 1 行も見出し。`>` でつないだ見出しも同じ。
+    assert grounded.heading_only_quote("【2.8 期限が重なる場合】", {"section_path": ["期限が重なる場合"]})
+    assert grounded.heading_only_quote("第2章 手続 > 2.8 期限が重なる場合", span)
+    # 見出しに無い文字を含む行・複数行は本文。
+    assert not grounded.heading_only_quote("期限が重なる場合は、先の期限を優先する。", span)
+    assert not grounded.heading_only_quote("2.8 期限が重なる場合\n先の期限を優先する。", span)
+    assert not grounded.heading_only_quote("期限が重なる場合", {"section_path": []})
