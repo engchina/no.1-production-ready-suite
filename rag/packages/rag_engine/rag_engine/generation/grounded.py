@@ -1668,17 +1668,37 @@ def _citation_dropped(note: Mapping[str, Any]) -> dict:
     return {**kept, "ignored": True, "citation_dropped": True}
 
 
-def _heading_only(entry: CheckedItem) -> bool:
-    """引用が根拠の節の見出しだけの出典か（見出しは説明を支えない。#3541）。"""
-    quote = _compact(entry.item.quote)
-    headings = [_compact(str(heading)) for heading in (entry.span or {}).get("section_path") or ()]
-    single_line = len([line for line in entry.item.quote.splitlines() if line.strip()]) <= 1
-    return bool(quote) and single_line and any(quote in heading for heading in headings)
+# 引用が節の見出しだけの出典の指摘（#3544）。原文に無い引用と同じく印を付けて残し、次の生成に直し方を返す。
+HEADING_ONLY_DETAIL = "引用が節の見出しだけで、説明を支える本文ではありません。"
+HEADING_ONLY_REASON = "引用が節の見出しだけの出典。見出しではなく、説明を支える本文の行を lines に書いてください。"
+
+
+def heading_only_quote(quote: str, span: Mapping[str, Any]) -> bool:
+    """引用が根拠の節の見出し（``section_path`` の要素）だけか（見出しは説明を支えない。#3541・#3544）。
+
+    文書の構造だけで決める: 1 行の引用が見出し（`>` でつないだ末尾を含む）の一部か、見出しに番号・記号（文字を
+    含まない部分）を足しただけのもの。
+    """
+    if len([line for line in quote.splitlines() if line.strip()]) > 1:
+        return False
+    text = _canonical(quote)[0]
+    if not text:
+        return False
+    path = [str(heading) for heading in span.get("section_path") or () if str(heading).strip()]
+    for heading in [*path, *(" > ".join(path[-count:]) for count in range(2, len(path) + 1))]:
+        core = _canonical(heading)[0]
+        if not core:
+            continue
+        if text in core:
+            return True
+        if core in text and not any(unicodedata.category(char).startswith("L") for char in text.replace(core, "", 1)):
+            return True
+    return False
 
 
 def _supports(entry: CheckedItem | None) -> bool:
-    """出典として残せるか: 印の無い（確かめた）説明で、引用が節の見出しだけではない。"""
-    return entry is not None and entry.confirmed and not _heading_only(entry)
+    """出典として残せるか: 印の無い（確かめた）説明。見出しだけの引用は照合の段で印が付く。"""
+    return entry is not None and entry.confirmed
 
 
 def merge_citations(
@@ -1718,8 +1738,7 @@ def merge_citations(
                             "evidence_id": entry.span["evidence_id"] if entry.span else "",
                             "text": item.text,
                             "quote": entry.item.quote,
-                            "reason": "; ".join(entry.reasons)
-                            or ("引用が節の見出しだけの出典" if _heading_only(entry) else "同じ根拠を指す出典"),
+                            "reason": "; ".join(entry.reasons) or "同じ根拠を指す出典",
                         }
                     )
                 )
@@ -1832,6 +1851,27 @@ def verify(
             if not scope_unsettled:
                 return result, notes, subs
         view = views.get(id(span)) or check_view(span)
+        if heading_only_quote(quote, span):
+            # 見出しは説明を支えない。原文に無い引用と同じく、言い換えを残して印を付け、出典にしない（#3544）。
+            entry = CheckedItem(
+                _normalized(item.with_citation(evidence_id=span["evidence_id"], quote=quote), view),
+                span,
+                quote_match="unmatched",
+                draft_index=index,
+                unmatched=True,
+            )
+            entry.mark("quote_unmatched", HEADING_ONLY_DETAIL, reason=HEADING_ONLY_REASON)
+            notes.append(
+                {
+                    "index": index,
+                    "evidence_id": span["evidence_id"],
+                    "reason": HEADING_ONLY_REASON,
+                    "text": item.text,
+                    "quote": quote,
+                    "kept": True,
+                }
+            )
+            return entry, notes, subs
         candidate = CheckedItem(
             _normalized(item.with_citation(evidence_id=span["evidence_id"], quote=quote), view),
             span,
