@@ -3655,6 +3655,11 @@ _CITE_SENTENCE_END = re.compile(r"(?<=[。！？])")
 # lines の番号・範囲。モデルが行の表示の形（`numbered_text` の `3| 本文`）を写したときは、先頭の番号・範囲だけを読む
 # （行の文の写しは照合に使わない。#3002）。
 _CITE_RANGE = re.compile(r"^\s*(\d+)\s*(?:[-~〜–]\s*(\d+))?\s*(?:\|.*)?$", re.DOTALL)
+# lines を番号の列（`[1,2,3]`・`2, 4`）で書いたときは、最初から最後までの行を引く。
+_CITE_LIST = re.compile(r"^\s*(?:\[\s*\d+(?:\s*[,、]\s*\d+)*\s*\]|\d+(?:\s*[,、]\s*\d+)+)\s*$")
+# lines が空のとき、説明の文に最もよく重なる連続した行を引用にする窓の行数と、説明の文字の 2-gram の重なりの下限。
+_CLAIM_UNIT_WINDOW = 3
+_CLAIM_UNIT_MIN_SHARE = 0.5
 
 
 def citation_units(text: str) -> list[tuple[int, int]]:
@@ -3700,10 +3705,53 @@ def numbered_text(text: str) -> str:
     return "\n".join(f"{number}| {text[start:end]}" for number, (start, end) in enumerate(units, 1))
 
 
+def _lines_text_units(lines: str, text: str, units: Sequence[tuple[int, int]]) -> tuple[int, int] | None:
+    """lines に行番号ではなく原文の書き出しが入ったとき、その書き出しを含む行の範囲（1 始まり）。
+
+    モデルが行の番号の代わりに引用の原文を写すことがある（応答の schema の長さの上限で途中まで）。指した根拠の本文に
+    照合の形（``_canonical``）で 1 か所だけ見つかるときだけ、その位置に重なる行を引用にする。短すぎる・見つからない・
+    複数の位置に見つかるときは None（推測で行を選ばない）。
+    """
+    needle, _ = _canonical(lines or "")
+    if len(needle) < _QUOTE_SENTENCE_MIN_CHARS:
+        return None
+    haystack, positions = _canonical(text)
+    start = haystack.find(needle)
+    if start < 0 or haystack.find(needle, start + 1) >= 0:
+        return None
+    begin, end = positions[start], positions[start + len(needle) - 1] + 1
+    hits = [number for number, (a, b) in enumerate(units, 1) if a < end and begin < b]
+    return (hits[0], hits[-1]) if hits else None
+
+
+def _claim_units(claim: str, text: str, units: Sequence[tuple[int, int]]) -> tuple[int, int] | None:
+    """lines が空のとき、説明（text）に最もよく重なる連続した行の範囲（1 始まり。最大 ``_CLAIM_UNIT_WINDOW`` 行）。
+
+    説明の文字の 2-gram のうち行に含まれる割合で選び（同じ割合なら短い・前の範囲）、``_CLAIM_UNIT_MIN_SHARE`` に
+    届かなければ None（行を推測で選ばない）。引用は指した根拠の原文の範囲なので、説明との照合は従来の検査に任せる。
+    """
+
+    def grams(value: str) -> set[str]:
+        canonical, _ = _canonical(value)
+        return {canonical[index : index + 2] for index in range(len(canonical) - 1)}
+
+    wanted = grams(claim)
+    if not wanted:
+        return None
+    windows = [
+        (len(wanted & grams(text[units[first][0] : units[last][1]])) / len(wanted), first + 1, last + 1)
+        for first in range(len(units))
+        for last in range(first, min(len(units), first + _CLAIM_UNIT_WINDOW))
+    ]
+    share, first, last = max(windows, key=lambda window: (round(window[0], 9), window[1] - window[2], -window[1]))
+    return (first, last) if share >= _CLAIM_UNIT_MIN_SHARE else None
+
+
 def cited_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem, str]:
     """evidence_id と lines が指す原文を quote にした item と、範囲が不正なときの理由（#2830）。
 
-    行番号の無い根拠は全文、行番号の付いた根拠は lines の範囲を引く。gap・根拠が決まらない item と、lines の無い
+    行番号の無い根拠は全文、行番号の付いた根拠は lines の範囲を引く。lines が番号の列なら最初から最後まで、原文の
+    書き出しならそれを含む行、空なら説明に最もよく重なる行を引く（#3534）。gap・根拠が決まらない item と、lines の無い
     item に quote が既にあるとき（システムが補った引用・前の組の引き継ぎ）は変えない（従来の照合に任せる）。
     """
     if item.kind == "gap" or (item.quote.strip() and not item.lines.strip()):
@@ -3718,10 +3766,17 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem
     if not _numbered(text, units):
         return item.model_copy(update={"quote": text[units[0][0] : units[-1][1]].strip()}), ""
     found = _CITE_RANGE.match(item.lines or "")
-    if not found:
+    listed = _CITE_LIST.match(item.lines or "")
+    if found:
+        first = int(found.group(1))
+        last = int(found.group(2) or first)
+    elif listed:
+        numbers = [int(value) for value in re.findall(r"\d+", listed.group(0))]
+        first, last = min(numbers), max(numbers)
+    elif located := _lines_text_units(item.lines, text, units) if item.lines.strip() else _claim_units(item.text, text, units):
+        first, last = located
+    else:
         return item, f"行番号の付いた根拠は lines に引用する行の番号か範囲（1〜{len(units)}）を書く"
-    first = int(found.group(1))
-    last = int(found.group(2) or first)
     if not 1 <= first <= last <= len(units):
         return item, f"lines の範囲 {item.lines} が根拠の行（1〜{len(units)}）の外にある"
     return item.model_copy(update={"quote": text[units[first - 1][0] : units[last - 1][1]].strip()}), ""
