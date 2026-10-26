@@ -341,7 +341,7 @@ export function RuntimeKnowledgeManager({
               ? t("searchAnswerProfiles.runtime.editTitle", { name: form.selected })
               : t("searchAnswerProfiles.runtime.addTitle", { kind: kindLabel })}
           </h4>
-          {/* 編集の欄（#1891）: 用語・ルール ID・ルール名は名前の幅（md）、別名・内容は文章（全幅）。 */}
+          {/* 編集の欄（#1891）: 用語、ルール ID、ルール名は名前の幅（md）、別名・内容は文章（全幅）。 */}
           <FormGrid columns={1}>
           <TextField
             id="runtime-knowledge-name"

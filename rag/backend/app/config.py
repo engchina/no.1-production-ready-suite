@@ -1856,7 +1856,7 @@ class Settings(
     rag_runtime_knowledge: dict[str, object] = Field(
         default_factory=dict,
         description=(
-            "リクエスト単位で検索・回答プロファイルから解決する用語・ルール"
+            "リクエスト単位で検索・回答プロファイルから解決する用語・同義語と回答ルール"
             "(rag_poc runtime knowledge payload)。"
             "回答フローだけが使う。"
         ),

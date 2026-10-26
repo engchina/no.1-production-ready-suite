@@ -198,7 +198,7 @@ export function SupportGuideProcessImport({
       if (guides.length > 0) {
         created = (await importGuides.mutateAsync(guides)).created.length;
       }
-      // ルールの候補は無効のルールとして足す（用語・ルールの画面で確かめてから有効にする）。
+      // ルールの候補は無効のルールとして足す（回答ルールの画面で確かめてから有効にする）。
       for (const rule of rules) {
         await editKnowledge.mutateAsync({
           kind: "rules",

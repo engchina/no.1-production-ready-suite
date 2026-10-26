@@ -103,7 +103,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 能力 | (a) | (b) 使えない・失敗のとき | (c) 記録 | (d) 精密に見せるか | コード |
 |---|---|---|---|---|---|
 | 質問の理解（規則。LLM なし） | 必須 | 例外は送出 → **エラー**（try が無い） | `SP` | 見せない | `rag/packages/rag_engine/rag_engine/retrieval/question_planning.py::plan_question` |
-| 用語・ルール（runtime knowledge） | 任意 | 読めない → 補助情報なしで続ける | `DS`（`runtime_knowledge`）・`ST`（status「補助情報なしで続行」と詳細の「読込エラー: 例外の型の名前」。例外の文はログだけ。#3284） | 見せない | `rag/packages/rag_engine/rag_engine/knowledge/runtime_knowledge.py::load_runtime_knowledge`・`_load_failure` |
+| 用語・同義語と回答ルール（runtime knowledge） | 任意 | 読めない → 補助情報なしで続ける | `DS`（`runtime_knowledge`）・`ST`（status「補助情報なしで続行」と詳細の「読込エラー: 例外の型の名前」。例外の文はログだけ。#3284） | 見せない | `rag/packages/rag_engine/rag_engine/knowledge/runtime_knowledge.py::load_runtime_knowledge`・`_load_failure` |
 | 質問の拡張（`RAG_QUERY_STRATEGY`） | 任意 | 戦略の判定・検索文の生成の LLM の失敗 → 単純検索（拡張なし）で続ける | `DX`（`strategy` が実際に使った戦略）・`ST`（理由の文。型の名前だけ） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_query_expansion`・`_degraded_query_expansion` |
 | CRAG の根拠確認（`RAG_ANSWER_FLOW=crag`） | 任意（設定） | 評価器の失敗 → 取得済みの根拠で生成へ進む（足りるとはしない） | `DS`（`crag_grade`）・`ST`（status「評価に失敗」）・`RT`（`CragRetrievalAttempt.grade_error`） | 見せない（生成の監査・最終の検証は通常どおり） | `rag/packages/rag_engine/rag_engine/generation/answering.py::_grade_crag_retrieval`・`rag/packages/rag_engine/rag_engine/generation/answer_models.py::CragRetrievalAttempt` |
 | 要求ごとの根拠の探し直し（#1279） | 任意（`RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED`） | 再検索の失敗 → 既存の根拠で回答する | `DS`（`request_coverage_retrieval`）・`DX`（`request_coverage.re_retrieval.queries[].error`。例外の型の名前だけ。#3284） | 見せない | `rag/packages/rag_engine/rag_engine/retrieval/request_coverage.py::run_targeted_retrievals` |
@@ -167,7 +167,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | `chat_attachments` | 会話の添付の読み込み・解析（回答エンジンの前の段） | `rag/backend/app/rag/chat_attachments.py::conversation_toolset`・`attachment_units`・`attachment_evidence` |
 | `chat_attachment_rerank` | 会話の添付の箇所の rerank（回答エンジンの前の段） | `rag/backend/app/rag/chat_attachments.py::select_attachment_units` |
 | `text_search_tokenizer` | 全文検索の語の分割（Sudachi。rag_engine） | `rag/packages/rag_engine/rag_engine/retrieval/text_search_tokenizer.py::_content_terms`・`rag/packages/rag_engine/rag_engine/generation/answering.py::answer_question_result` |
-| `runtime_knowledge` | 用語・ルールの読み込み（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/answering.py::answer_question_result` |
+| `runtime_knowledge` | 用語・同義語と回答ルールの読み込み（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/answering.py::answer_question_result` |
 | `rerank` | 原質問の rerank（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/answering.py::_rerank_records` |
 | `rerank_extra_query` | 追加の検索文の rerank（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/answering.py::_best_rerank_ranks` |
 | `crag_grade` | CRAG の根拠確認の評価器（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_crag_answer_context` |
@@ -179,7 +179,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 - **必須の能力**（失敗すると回答がエラー・拒否になる）: 有効なときの安全チェック（入力・出力。fail-closed）、質問の embedding、vector 検索、全文検索の SQL、引用ラベルの検索、前後の文脈・分類・1 頁目の読み込み、派生の chunk の原文の読み込み、質問の理解（規則）、回答の生成の 1 組目、生成の監査（期限の打ち切りを除く）、承認済み FAQ からの回答。主の検索の失敗は 0 件にせずエラーにする（#3259 のテスト）。
 - **任意の能力**は、上の表のとおり縮退して回答を続ける。縮退した結果を「確かめた」「精密な位置」として見せる経路は、静的確認の範囲では見当たらない。`models.rerank` は rerank が失敗したとき空にした（#3286）。
 - **記録が足りない縮退**: #3286 の表の処理（rerank・追加の検索文の rerank・CRAG の判定・会話の書き換え・抽出項目の条件の読み取り・会話の添付・Sudachi・章節の子の並べ替え・条の目録の元の質問の検索）は `DS` に入れた。条の目録の範囲の文書の選択と 2 段目の失敗は `DS` に数え、cache しない（#3285。#3278 と同じ種類）。例外ではない縮退（書き換えの安全チェックの拒否・抽出項目の条件の読めない出力・呼び出し元の検索文の拒否）は `DS` に入れない。
-- **診断に例外の文が残る経路**: 要求ごとの根拠の探し直しと、用語・ルールの読み込みは、例外の型の名前だけにした（#3284）。
+- **診断に例外の文が残る経路**: 要求ごとの根拠の探し直しと、用語・同義語と回答ルールの読み込みは、例外の型の名前だけにした（#3284）。
 - **呼び出し元が判断できない点**: MCP の応答には `ZE`・`GD` が無い（`DS` は種類と回数を `degraded_steps` に出す。#3262）。表の行・列の対応の検査が根拠を読めるかは根拠の `table_binding` に出すが、回答の中で検査が段落を外した・直したかは `rag_validate_answer` の claims（`support_check`）だけにある。
 
 ## 未確認の事項

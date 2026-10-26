@@ -15048,7 +15048,8 @@ def _pem_file_is_encrypted(path: Path) -> bool:
 def oracle_search_answer_profile_knowledge_schema_sql(
     table_name: str = "rag_search_answer_profile_knowledge",
 ) -> str:
-    """検索・回答プロファイル単位の知識(ドメインキーワード / Approved FAQ / 用語・ルール)の DDL。
+    """検索・回答プロファイル単位の知識(ドメインキーワード / Approved FAQ / 用語・同義語 /
+    回答ルール)の DDL。
 
     rag_poc の JSON payload 形式をそのまま 1 行 1 種別で保持する。
     """

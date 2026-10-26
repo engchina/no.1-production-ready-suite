@@ -424,7 +424,7 @@ def _faq_file(payload: Mapping[str, object] | None) -> Iterator[Path]:
         yield path
 
 
-# --- 用語・ルール(runtime knowledge)-------------------------------------------
+# --- 用語・同義語と回答ルール(runtime knowledge)-------------------------------------------
 
 RUNTIME_KNOWLEDGE_KIND = "runtime_knowledge"
 
@@ -432,7 +432,7 @@ RUNTIME_KNOWLEDGE_KIND = "runtime_knowledge"
 async def load_runtime_knowledge_payload(
     store: SearchAnswerProfileKnowledgeStore, search_answer_profile_id: str
 ) -> dict[str, object]:
-    """検索・回答プロファイルの用語・ルール payload を返す(未登録は空の標準形式)。"""
+    """検索・回答プロファイルの用語・同義語と回答ルールの payload を返す(未登録は空の標準形式)。"""
     payload = await store.get_search_answer_profile_knowledge(
         search_answer_profile_id, RUNTIME_KNOWLEDGE_KIND
     )
@@ -479,7 +479,7 @@ async def edit_runtime_knowledge(
 def preview_runtime_knowledge(
     payload: Mapping[str, object], question: str
 ) -> RuntimeKnowledgeContext:
-    """質問に一致する用語・ルールと拡張後の検索文を返す(保存しない)。"""
+    """質問に一致する用語・同義語と回答ルールと拡張後の検索文を返す(保存しない)。"""
     with _runtime_knowledge_dir(payload) as (work_dir, path):
         return build_runtime_knowledge_context(question, work_dir, path)
 
@@ -487,7 +487,7 @@ def preview_runtime_knowledge(
 def match_runtime_knowledge(
     payload: Mapping[str, object], question: str
 ) -> RuntimeKnowledgeContext:
-    """質問に当たる有効な用語・ルールを、一致の強い順にすべて返す(件数で切らない。保存しない)。
+    """質問に当たる有効な用語・同義語と回答ルールを、一致の強い順にすべて返す(件数で切らない。保存しない)。
 
     照合と有効の判定(承認済み・見直し待ちだけ)は回答生成と同じ。件数・字数で切って省いた数を
     示すのは呼び出し元(MCP の根拠の取得。#2701)。

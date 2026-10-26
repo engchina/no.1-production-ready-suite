@@ -239,7 +239,12 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         self.assertIn("回答ルールの確認", result.question_display)
         self.assertIn("結果: 一致: 再発行条件", result.question_display)
         self.assertIn("影響: 一致した回答ルールを回答時の参考情報として渡します。", result.question_display)
-        self.assertIn("[用語・ルール] ", result.question_display)
+        # 検索文の出どころは、原質問に語を足したもの（用語・同義語と回答ルール）と、用語と別名だけの検索文を分ける（#3490）。
+        self.assertIn("[原質問 + 用語・同義語 + 回答ルール] ", result.question_display)
+        self.assertIn("[用語・同義語だけ] 納品書 出荷業務 nouhinsho", result.question_display)
+        self.assertNotIn("用語・ルール", result.question_display)
+        self.assertEqual(payload["runtime_knowledge"]["query_source"], "原質問 + 用語・同義語 + 回答ルール")
+        self.assertTrue(payload["text_search_query_source"].startswith("原質問 + 用語・同義語 + 回答ルール"))
         self.assertNotIn(RUNTIME_KNOWLEDGE_SEPARATOR, result.question_display)
         self.assertNotIn("パス:", result.question_display)
         self.assertIn("text_search_queries", payload)
