@@ -288,16 +288,45 @@ def test_select_documents_keeps_listed_documents_in_order():
     assert select_documents("届出の補正は", [], parse, None, limit=2) == []
 
 
+def _stage_recorder():
+    """開いている処理の経過の段（``observe_call("stage", …)``）の列を数える observer（#3475）。"""
+    from contextlib import contextmanager
+
+    from rag_engine.resources.tracing import _NoObservation
+
+    open_stages = []
+
+    @contextmanager
+    def observer(operation, model):
+        if operation != "stage":
+            yield _NoObservation()
+            return
+        open_stages.append(model)
+        try:
+            yield _NoObservation()
+        finally:
+            open_stages.pop()
+
+    return observer, open_stages
+
+
 def test_catalog_article_children_adds_documents_chosen_from_the_scope_list():
-    """候補に出ない文書も、範囲の文書の一覧から LLM が選べば目録を読む（候補の文書の後ろ）。"""
+    """候補に出ない文書も、範囲の文書の一覧から LLM が選べば目録を読む（候補の文書の後ろ）。
+
+    文書の選択の LLM と、選んだ文書の目録の読み込みは「条の選択」の段の中で行う（#3475）。
+    """
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.resources.tracing import bind_trace_observer
     from rag_engine.retrieval.article_catalog import ArticleSelection as Selection
 
     calls = []
     general = replace(CATALOG, document_id="doc-g", file_name="架空手続通則.json", chunk_set_id="cs-g")
+    observer, open_stages = _stage_recorder()
+    stages_at = {}
 
     def article_catalogs(*, document_ids, limit, settings):
         calls.append(("catalogs", list(document_ids), limit))
+        stages_at[f"catalogs:{','.join(document_ids)}"] = list(open_stages)
         return [CATALOG] if "doc-a" in document_ids else [general]
 
     asked = []
@@ -306,6 +335,7 @@ def test_catalog_article_children_adds_documents_chosen_from_the_scope_list():
         body = json.loads(prompt)
         if "documents" in body:
             asked.append(body["max_lines"])
+            stages_at["select_documents"] = list(open_stages)
             return Selection(lines=[1, 0])
         return _articles([2])
 
@@ -327,9 +357,13 @@ def test_catalog_article_children_adds_documents_chosen_from_the_scope_list():
     answering._ARTICLE_SELECTION_CACHE.clear()
     answering._ARTICLE_DOCUMENT_CACHE.clear()
 
-    with bind_dependencies(dependencies):
+    with bind_dependencies(dependencies), bind_trace_observer(observer):
         answering._catalog_article_children("届出の補正は", ranked, settings)
 
+    assert stages_at["select_documents"] == ["条の選択"]
+    assert stages_at["catalogs:doc-g"] == ["条の選択"]
+    # 候補の文書の目録の有無は段を開く前に確かめる（条で構成された文書が無ければ段を出さない）。
+    assert stages_at["catalogs:doc-a"] == []
     # 一覧から選んだ doc-g・doc-a のうち、候補の文書（doc-a）に無い doc-g だけを足して読む。
     assert calls[0] == ("catalogs", ["doc-a"], 8)
     assert calls[1] == ("catalogs", ["doc-g"], 1)
@@ -446,11 +480,16 @@ def test_original_question_search_runs_once_vector_only_and_only_when_injected(m
     from types import SimpleNamespace
 
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.resources.tracing import bind_trace_observer
 
     calls = []
+    observer, open_stages = _stage_recorder()
+    searched_in = []
 
     def search(**kwargs):
         calls.append(kwargs)
+        # 元の質問の検索は「元の質問の検索」の段の中（処理の経過。#3475）。
+        searched_in.append(list(open_stages))
         return SimpleNamespace(child_chunks=[_stored("o1", "架空政令.json", document_id="order")])
 
     monkeypatch.setattr(answering, "search_adb_hybrid_chunks", search)
@@ -470,9 +509,10 @@ def test_original_question_search_runs_once_vector_only_and_only_when_injected(m
             article_question=lambda: original,
         )
 
-    with bind_dependencies(deps("取引先から届いた書類の補正を求めるべきか")):
+    with bind_dependencies(deps("取引先から届いた書類の補正を求めるべきか")), bind_trace_observer(observer):
         found = answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, settings)
     assert [record.chunk_uid for record in found] == ["o1"]
+    assert searched_in == [["元の質問の検索"]]
     assert calls[0]["retrieval_queries"] == ["取引先から届いた書類の補正を求めるべきか"]
     assert calls[0]["vector_only_queries"] == ("取引先から届いた書類の補正を求めるべきか",)
     assert "extra_text_queries" not in calls[0]
