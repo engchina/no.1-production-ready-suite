@@ -348,8 +348,8 @@ class Settings:
     # だけ動く。0 は 2 段目を行わない。
     article_catalog_refine_articles: int = 6
     article_catalog_refine_candidates: int = 60
-    article_catalog_output_token_cap: int = 4096
-    article_catalog_call_timeout_seconds: float = 90.0
+    article_catalog_output_token_cap: int = 8192
+    article_catalog_call_timeout_seconds: float = 180.0
     # 回答の最終の検証（rag_validate_answer）でモデルに渡す入力の上限（UTF-8 の bytes。指示・質問・回答・根拠を含む）。
     # 根拠は渡された順に収まるだけ渡し、収まらない根拠は検証に使わない（結果の evidence_truncated）。品質評価の
     # 主張の監査の予算（`MAX_EVALUATION_INPUT_BYTES`）とは別。
@@ -607,8 +607,8 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         article_catalog_original_question_search=_env_bool(env, "RAG_ENGINE_ARTICLE_CATALOG_ORIGINAL_QUESTION_SEARCH", True),
         article_catalog_refine_articles=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_REFINE_ARTICLES", 6)),
         article_catalog_refine_candidates=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_REFINE_CANDIDATES", 60)),
-        article_catalog_output_token_cap=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP", 4096)),
-        article_catalog_call_timeout_seconds=max(0.0, _env_float(env, "RAG_ENGINE_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS", 90.0)),
+        article_catalog_output_token_cap=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP", 8192)),
+        article_catalog_call_timeout_seconds=max(0.0, _env_float(env, "RAG_ENGINE_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS", 180.0)),
         answer_validation_max_input_bytes=max(16_000, _env_int(env, "RAG_ENGINE_ANSWER_VALIDATION_MAX_INPUT_BYTES", 96_000)),
         strategy_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_STRATEGY_REASONING_EFFORT")),
         judge_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_JUDGE_REASONING_EFFORT")),
