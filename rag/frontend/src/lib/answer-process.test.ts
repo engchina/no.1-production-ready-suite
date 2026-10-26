@@ -57,6 +57,10 @@ describe("answerStepDisplayName", () => {
     expect(answerStepDisplayName("文書検索（2回目）")).toBe("文書の検索（2 回目）");
     expect(answerStepDisplayName("回答文の生成と根拠確認（1回目）")).toBe("回答の作成と根拠の確認（1 回目）");
     expect(answerStepDisplayName("検索語の再確定（書き換え後）")).toBe("検索語の決め直し");
+    // 用語・同義語と回答ルールは別の工程（設定画面のタブの名前と同じ語。#3451）。
+    expect(answerStepDisplayName("用語・同義語の確認")).toBe("用語・同義語の確認");
+    expect(answerStepDisplayName("回答ルールの確認")).toBe("回答ルールの確認");
+    expect(answerStageName("回答ルールの確認")).toBe("回答ルールの確認");
     expect(answerStepDisplayName("新しい工程")).toBe("新しい工程");
     expect(answerStepDisplayName("新しい工程（2回目）")).toBe("新しい工程（2回目）");
   });
