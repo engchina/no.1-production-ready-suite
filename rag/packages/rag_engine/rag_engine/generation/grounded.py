@@ -1668,20 +1668,34 @@ def _citation_dropped(note: Mapping[str, Any]) -> dict:
     return {**kept, "ignored": True, "citation_dropped": True}
 
 
+def _heading_only(entry: CheckedItem) -> bool:
+    """引用が根拠の節の見出しだけの出典か（見出しは説明を支えない。#3541）。"""
+    quote = _compact(entry.item.quote)
+    headings = [_compact(str(heading)) for heading in (entry.span or {}).get("section_path") or ()]
+    single_line = len([line for line in entry.item.quote.splitlines() if line.strip()]) <= 1
+    return bool(quote) and single_line and any(quote in heading for heading in headings)
+
+
+def _supports(entry: CheckedItem | None) -> bool:
+    """出典として残せるか: 印の無い（確かめた）説明で、引用が節の見出しだけではない。"""
+    return entry is not None and entry.confirmed and not _heading_only(entry)
+
+
 def merge_citations(
     index: int, item: GroundedItem, results: Sequence[CitationCheck]
 ) -> tuple[list[CheckedItem], list[dict], dict[str, str]]:
     """出典ごとに照合・検査した結果を、1 つの主張にまとめる（#3526）。
 
     印の無い（確かめた）出典が 1 つでもあれば、最初のものを主の出典にし、ほかの確かめた出典を ``also`` に並べる。
-    照合できない・計画の外・検査の印が付いた出典は外し、指摘は trace にだけ残す（根拠の無い出典を公開しない）。
+    照合できない・計画の外・検査の印が付いた出典と、引用が節の見出しだけの出典は外し、指摘は trace にだけ残す
+    （根拠の無い出典を公開しない）。
     確かめた出典が無ければ、根拠に結べた最初の出典だけで今までどおり扱う（印を付けて残す・計画の外なら外す）。
     同じ根拠を指す出典は 1 つにする。
     """
     if len(results) <= 1:
         entry, notes, subs = results[0] if results else (None, [], {})
         return ([entry] if entry is not None else []), list(notes), dict(subs)
-    confirmed = [result for result in results if result[0] is not None and result[0].confirmed]
+    confirmed = [result for result in results if _supports(result[0])]
     if confirmed:
         primary, primary_notes, primary_subs = confirmed[0]
         assert primary is not None
@@ -1690,7 +1704,7 @@ def merge_citations(
         for entry, own_notes, _subs in results:
             if entry is primary:
                 continue
-            if entry is not None and entry.confirmed and entry.span and entry.span["evidence_id"] not in seen:
+            if _supports(entry) and entry is not None and entry.span and entry.span["evidence_id"] not in seen:
                 seen.add(entry.span["evidence_id"])
                 primary.also.append(entry)
                 notes.extend(own_notes)
@@ -1704,7 +1718,8 @@ def merge_citations(
                             "evidence_id": entry.span["evidence_id"] if entry.span else "",
                             "text": item.text,
                             "quote": entry.item.quote,
-                            "reason": "; ".join(entry.reasons) or "同じ根拠を指す出典",
+                            "reason": "; ".join(entry.reasons)
+                            or ("引用が節の見出しだけの出典" if _heading_only(entry) else "同じ根拠を指す出典"),
                         }
                     )
                 )

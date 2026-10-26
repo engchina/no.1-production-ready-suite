@@ -222,3 +222,18 @@ def test_without_article_citations_the_audit_mode_none_calls_no_audit():
 
     assert [name for name, _prompt in model.prompts] == ["GroundedDraft"]
     assert "article_audit_items" not in result.generation_trace["rounds"][0]["timing"]
+
+
+def test_a_citation_quoting_only_the_section_heading_is_dropped():
+    """節の見出しだけを引いた出典は説明を支えないので外し、本文を引いた出典を主にする（#3541）。"""
+    heading = "第三条 提出期限"
+    rule = record(0, f"{heading}\n{QUOTE}", heading, page=1, source="規則A.xml")
+    ctx = context(rule, record(1, GUIDE, "提出の手順", page=4, source="手順書B.pdf"))
+    labels = ids(ctx, QUESTION)
+    model = FakeModel([draft(_cite((labels[rule.text], heading), (labels[GUIDE], QUOTE)))], [])
+
+    result = _run(model, ctx)
+
+    assert _sources(result) == {"手順書B.pdf"}
+    dropped = result.generation_trace["rounds"][0]["dropped"]
+    assert [entry["reason"] for entry in dropped if entry.get("citation_dropped")] == ["引用が節の見出しだけの出典"]
