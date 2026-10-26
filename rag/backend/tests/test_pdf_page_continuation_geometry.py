@@ -1,6 +1,6 @@
 """ページの境目の段落の続きの判定の行の位置と、図・表の読み飛ばし(#2273)。
 
-PDF は PyMuPDF で書いた合成の文字の層(内容は意味の無い文字の並び)。record の bbox は
+PDF は reportlab で書いた合成の文字の層(内容は意味の無い文字の並び)。record の bbox は
 ページ画像の px(このテストはページの pt と同じ寸法にする)。
 """
 
@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-import fitz  # type: ignore[import-untyped]
 import pytest
 
 from app.config import Settings
@@ -18,6 +17,7 @@ from app.rag.pdf_segment_merge import (
     consolidate_document_extraction,
 )
 from app.schemas.extraction import DocumentElement, StructuredExtraction
+from tests.fixtures.synthetic_pdf import SyntheticPage, SyntheticPdf, blank_pdf
 
 PAGE = (600.0, 800.0)
 LEFT = 100.0
@@ -31,20 +31,16 @@ PREVIOUS_TEXT = "前のページの本文は文の途中で"
 CURRENT_TEXT = "次のページへ続きます。"
 
 
-def _write_lines(page: Any, top: float, lines: list[tuple[float, int]]) -> None:
+def _write_lines(page: SyntheticPage, top: float, lines: list[tuple[float, int]]) -> None:
     for index, (indent, count) in enumerate(lines):
-        page.insert_text((LEFT + indent, top + index * LINE_STEP), "x" * count, fontsize=FONT)
+        page.text(LEFT + indent, top + index * LINE_STEP, "x" * count, size=FONT)
 
 
 def _pdf(previous: list[tuple[float, int]], current: list[tuple[float, int]]) -> bytes:
-    document = fitz.open()
-    first = document.new_page(width=PAGE[0], height=PAGE[1])
-    _write_lines(first, 700.0, previous)
-    second = document.new_page(width=PAGE[0], height=PAGE[1])
-    _write_lines(second, 60.0, current)
-    data = bytes(document.tobytes())
-    document.close()
-    return data
+    document = SyntheticPdf()
+    _write_lines(document.page(*PAGE), 700.0, previous)
+    _write_lines(document.page(*PAGE), 60.0, current)
+    return document.to_bytes()
 
 
 def _record(page: int, seq: int, category: str, text: str, bbox: list[float]) -> dict[str, Any]:
@@ -153,11 +149,7 @@ def test_tolerance_comes_from_settings() -> None:
 
 
 def test_pdf_without_text_layer_uses_sentence_rule_only() -> None:
-    document = fitz.open()
-    document.new_page(width=PAGE[0], height=PAGE[1])
-    document.new_page(width=PAGE[0], height=PAGE[1])
-    pdf = bytes(document.tobytes())
-    document.close()
+    pdf = blank_pdf(PAGE, PAGE)
 
     result = consolidate_document_extraction(_paragraph_pair(), source_bytes=pdf)
 

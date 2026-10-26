@@ -10,7 +10,7 @@ parse の **前** に原本を一度だけ canonical な中間物へ変換し(`�
 - `ConvertOutcome` / `ConvertResponse` / `ConvertHealth`: マイクロサービスの HTTP 契約。
 - `create_preprocess_app`: 1 つの前処理サービス用 FastAPI app factory(converter 注入式)。
 
-重い変換依存(LibreOffice / pymupdf 等)は本 package には持たせず、各サービス側へ隔離する。
+重い変換依存(LibreOffice 等)は本 package には持たせず、各サービス側へ隔離する。
 core 本体の依存は pydantic + charset-normalizer のみに保つ。
 """
 

@@ -56,6 +56,11 @@ describe("AnswerSections", () => {
     expect(items[2].className).toContain("list-none");
     const link = container.querySelector('[data-testid="answer-citation-link"]') as HTMLButtonElement;
     expect(link.getAttribute("aria-label")).toBe("根拠：文書 A p.3 を表示");
+    // #3353: 文言は span に入れ、Button の `[&>span]:truncate` で長い名前を 1 行に省略する（行は幅に収める）。
+    expect(link.querySelector(":scope > span")?.textContent).toBe("根拠：文書 A p.3");
+    expect(link.parentElement?.className).toContain("min-w-0");
+    // 省略していないときは全文の Tooltip を出さない。
+    expect(link.getAttribute("data-truncated")).toBeNull();
     act(() => link.click());
     expect(onOpen).toHaveBeenCalledTimes(1);
     expect(Array.from(container.querySelectorAll('[data-testid="answer-citation-text"]')).map((node) => node.textContent)).toEqual([
@@ -63,6 +68,31 @@ describe("AnswerSections", () => {
       "根拠：文書 C",
     ]);
     expect(container.querySelector('[data-testid="table"]')).not.toBeNull();
+  });
+
+  // #3353: 押せる根拠の行は、名前（省略してよい）と位置（省略しない）を別の span に分ける。
+  it("押せる根拠の行の位置（location）は名前と別の span に分け、label の末尾と合わないときは分けない", () => {
+    const onOpen = vi.fn();
+    act(() =>
+      root.render(
+        <AnswerSections
+          blocks={[
+            { kind: "paragraph", key: "p1", content: "段落 1。", citations: [{ key: "c1", label: "根拠：文書 A.pdf p.3", location: "p.3", onOpen }] },
+            { kind: "paragraph", key: "p2", content: "段落 2。", citations: [{ key: "c2", label: "根拠：文書 B.pdf p.4", location: "p.9", onOpen }] },
+          ]}
+        />,
+      ),
+    );
+    const links = host.querySelectorAll('[data-testid="answer-citation-link"]');
+    expect(Array.from(links[0].querySelectorAll(":scope > span")).map((node) => node.textContent)).toEqual([
+      "根拠：文書 A.pdf",
+      " p.3",
+    ]);
+    expect(links[0].textContent).toBe("根拠：文書 A.pdf p.3");
+    expect(links[0].querySelectorAll(":scope > span")[1].className).toContain("shrink-0");
+    expect(Array.from(links[1].querySelectorAll(":scope > span")).map((node) => node.textContent)).toEqual([
+      "根拠：文書 B.pdf p.4",
+    ]);
   });
 
   // #2361: 項目の多い節は「ほか N 件」で切らず、先頭だけを出して「すべて表示」で同じ書式のまま残りを開く。

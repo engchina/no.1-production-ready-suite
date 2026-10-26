@@ -25,6 +25,15 @@ import {
 // - 詳細: RunDetailLayout（概要 → 処理の経過〔タイムラインと処理の詳細〕→ 回答 → 根拠 → フィードバック）をタブ無しの 1 枚で。
 
 const PAGE_SIZE = 25;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+/** 一覧の行の既定の開始の基準（期間の既定の過去 7 日に入る、直近の時刻。#3386）。 */
+const RECENT_BASE_MS = Date.now() - 2 * HOUR_MS;
+
+/** 期間の開始（since）が今から何 ms 前か。 */
+function sinceAgeMs(since: string | null | undefined) {
+  return Date.now() - Date.parse(since as string);
+}
 
 interface RunRow {
   run_id: string;
@@ -59,6 +68,8 @@ interface RunRow {
   withheld_evidence_count?: number;
   /** 詳細だけの項目（RAG 検索の件数と絞り込み。「RAG 検索で開く」が画面に戻す。#3309）。 */
   search_conditions?: { top_k: number | null; filters: Record<string, string> } | null;
+  /** 詳細だけの項目（回答の本文。既定は 1 文）。 */
+  answer?: string | null;
 }
 
 function run(index: number, overrides: Partial<RunRow> = {}): RunRow {
@@ -81,7 +92,8 @@ function run(index: number, overrides: Partial<RunRow> = {}): RunRow {
     model_id: null,
     conversation_id: chat ? `conv-${index}` : null,
     message_id: chat ? `msg-${index}` : null,
-    created_at: `2026-10-15T0${index % 10}:00:00Z`,
+    // 期間の既定（過去 7 日）に入る直近の時刻（行の番号が大きいほど 1 分ずつ古い）。
+    created_at: new Date(RECENT_BASE_MS - index * 60 * 1000).toISOString(),
     executed_by_me: true,
     executor_display_name: "ローカル利用者",
     ...overrides,
@@ -108,7 +120,7 @@ function detail(row: RunRow) {
           : null,
     owned_by_me: row.owned_by_me !== undefined ? row.owned_by_me : row.conversation_id ? true : null,
     error_type: row.error_type !== undefined ? row.error_type : row.status === "error" ? "TimeoutError" : null,
-    answer: row.answer_generated ? "受注番号を入力して登録します。" : null,
+    answer: row.answer !== undefined ? row.answer : row.answer_generated ? "受注番号を入力して登録します。" : null,
     answer_available: row.answer_generated,
     citations: row.citations ?? [CITATION],
     withheld_evidence_count: row.withheld_evidence_count ?? 0,
@@ -330,7 +342,11 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     }
     await expectScrollsInsideTable(page, page.getByRole("region", { name: "実行履歴" }));
     expect(listRequests().at(-1)?.get("limit")).toBe(String(PAGE_SIZE));
-    expect(listRequests().at(-1)?.get("since")).toBeNull();
+    // 期間の既定は 3 製品で共通の過去 7 日（#3386）。
+    const since = listRequests().at(-1)?.get("since");
+    expect(since).toBeTruthy();
+    expect(sinceAgeMs(since)).toBeGreaterThan(7 * DAY_MS - HOUR_MS);
+    expect(sinceAgeMs(since)).toBeLessThan(7 * DAY_MS + HOUR_MS);
 
     const pagination = page.getByTestId("run-history-pagination");
     await expect(pagination).toContainText("1–25 / 55 件");
@@ -396,21 +412,26 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(page.locator("#run-history-executor")).toHaveCount(0);
   });
 
-  test("絞り込み: 状態・種類・期間・検索はサーバーで絞り、条件で 0 件なら「絞り込みをクリア」、ツールバーの「条件をクリア」で既定へ戻す", async ({
+  test("絞り込み: 期間の既定は過去 7 日。状態・種類・期間・検索はサーバーで絞り、条件で 0 件なら「絞り込みをクリア」、ツールバーの「条件をクリア」で既定へ戻す", async ({
     page,
   }) => {
     await mockLocalAuth(page);
-    const recent = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const recent = new Date(Date.now() - HOUR_MS).toISOString();
     const { listRequests } = await mockRuns(page, [
       run(1, { created_at: recent }),
       run(2, { status: "error", question: "失敗した質問", created_at: recent }),
-      run(3, { created_at: "2026-09-01T00:00:00Z" }),
+      run(3, { created_at: new Date(Date.now() - 20 * DAY_MS).toISOString() }),
     ]);
 
     await page.goto("/history");
     await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
+    // 既定の過去 7 日より前の実行は出さず、件数で全件があることを伝える。既定のままなら「条件をクリア」を出さない（#3386）。
+    await expect(page.getByTestId("run-history-row-run-3")).toHaveCount(0);
+    expect(sinceAgeMs(listRequests().at(-1)?.get("since"))).toBeGreaterThan(7 * DAY_MS - HOUR_MS);
     const toolbar = page.getByTestId("run-history-toolbar");
+    await expect(toolbar).toContainText("2 件（全 3 件）");
     await expect(toolbar.getByRole("button", { name: "条件をクリア" })).toHaveCount(0);
+    if (!isNarrow(page)) await expect(page.getByRole("combobox", { name: "期間" })).toContainText("過去 7 日");
 
     await chooseFilter(page, "状態", "失敗");
     await expect(page.getByTestId("run-history-row-run-2")).toBeVisible();
@@ -427,17 +448,26 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     // 期間は開始の時刻（ISO 8601）を since で送る。
     await chooseFilter(page, "期間", "過去 24 時間");
     const since = listRequests().at(-1)?.get("since");
-    expect(since).toBeTruthy();
-    const ageMs = Date.now() - Date.parse(since as string);
-    expect(ageMs).toBeGreaterThan(23 * 60 * 60 * 1000);
-    expect(ageMs).toBeLessThan(25 * 60 * 60 * 1000);
+    expect(sinceAgeMs(since)).toBeGreaterThan(23 * HOUR_MS);
+    expect(sinceAgeMs(since)).toBeLessThan(25 * HOUR_MS);
     await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
     await expect(page.getByTestId("run-history-row-run-3")).toHaveCount(0);
 
-    // 条件をすべて既定へ戻す（ツールバーの「条件をクリア」）。
+    // 条件をすべて既定へ戻す（ツールバーの「条件をクリア」）。期間は過去 7 日へ戻る。
     await toolbar.getByRole("button", { name: "条件をクリア" }).click();
-    await expect(page.getByTestId("run-history-row-run-3")).toBeVisible();
+    await expect(page.getByTestId("run-history-row-run-2")).toBeVisible();
+    await expect(page.getByTestId("run-history-row-run-3")).toHaveCount(0);
     expect(listRequests().at(-1)?.get("surface")).toBeNull();
+    expect(sinceAgeMs(listRequests().at(-1)?.get("since"))).toBeGreaterThan(7 * DAY_MS - HOUR_MS);
+
+    // 「すべて」は既定からの変更として「条件をクリア」を出し、再読込の後も残す。
+    await chooseFilter(page, "期間", "すべて");
+    await expect(page.getByTestId("run-history-row-run-3")).toBeVisible();
+    expect(listRequests().at(-1)?.get("since")).toBeNull();
+    await expect(toolbar).toContainText("全 3 件");
+    await expect(toolbar.getByRole("button", { name: "条件をクリア" })).toBeVisible();
+    await page.reload();
+    await expect(page.getByTestId("run-history-row-run-3")).toBeVisible();
     expect(listRequests().at(-1)?.get("since")).toBeNull();
 
     // 実行 ID でも探せる。
@@ -451,7 +481,22 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     expect(listRequests().at(-1)?.get("q")).toBe("存在しない");
     await page.getByRole("button", { name: "絞り込みをクリア" }).click();
     await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
+    await expect(page.getByTestId("run-history-row-run-3")).toHaveCount(0);
     await expectNoPageOverflow(page);
+  });
+
+  test("過去 7 日に実行が無く、それより前にはあるときは、期間を「すべて」にする操作を出す（#3386）", async ({ page }) => {
+    await mockLocalAuth(page);
+    const { listRequests } = await mockRuns(page, [run(1, { created_at: new Date(Date.now() - 20 * DAY_MS).toISOString() })]);
+    await page.goto("/history");
+    const empty = page.getByTestId("run-history-period-empty");
+    await expect(empty).toContainText("過去 7 日の実行はありません");
+    await expect(empty).toContainText("期間を「すべて」にすると表示します");
+    await expect(page.getByText("実行はまだありません")).toHaveCount(0);
+    await expectNoPageOverflow(page);
+    await empty.getByRole("button", { name: "すべての期間を表示" }).click();
+    await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
+    expect(listRequests().at(-1)?.get("since")).toBeNull();
   });
 
   test("実行がまだ無いときの空の状態", async ({ page }) => {
@@ -459,6 +504,55 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await mockRuns(page, []);
     await page.goto("/history");
     await expect(page.getByText("実行はまだありません")).toBeVisible();
+    await expectNoPageOverflow(page);
+  });
+
+  test("詳細: 長いファイル名の根拠の行は名前を省略して頁は残し、回答のカードが横にはみ出さない（#3353）", async ({ page }, testInfo) => {
+    await mockLocalAuth(page);
+    const longName = "合成の文書_長いファイル名の例_第03版_項目の一覧と確認の方法_2026年度_改訂.pdf";
+    const answer = [
+      "合成の手続きは 2 段階です。",
+      "",
+      "資料により確認できた事項",
+      "",
+      "・対象の行の終了日を入力します。",
+      `根拠：${longName} p.12`,
+      "・新しい開始日の行を追加します。",
+      `根拠：${longName} p.13`,
+    ].join("\n");
+    const citation = { ...CITATION, file_name: longName, metadata: { page: 12 } };
+    await mockRuns(page, [run(1, { answer, citations: [citation] })]);
+
+    await page.goto("/history/run-1");
+    const card = page.getByTestId("run-history-answer");
+    const link = card.getByTestId("answer-citation-link").first();
+    await expect(link).toBeVisible();
+    // 全文は読み上げの名前に残す（省略しても何の根拠か分かる。省略したときは全文の Tooltip も出す）。
+    await expect(link).toHaveAccessibleName(new RegExp(`${longName} p\\.12`));
+    // 根拠の行はカードの幅に収め、長い名前は末尾を省略する（本文は折り返す）。
+    const metrics = await card.evaluate((element) => {
+      const cardBox = element.getBoundingClientRect();
+      const button = element.querySelector<HTMLElement>('[data-testid="answer-citation-link"]')!;
+      const label = button.querySelector<HTMLElement>("span") ?? button;
+      const location = button.querySelector<HTMLElement>(":scope > span:last-child") ?? button;
+      const locationBox = location.getBoundingClientRect();
+      return {
+        locationVisible: locationBox.width > 0 && locationBox.right <= cardBox.right + 1 && location.scrollWidth <= location.clientWidth + 1,
+        cardOverflow: element.scrollWidth - element.clientWidth,
+        buttonRight: button.getBoundingClientRect().right - cardBox.right,
+        truncated: label.scrollWidth > label.clientWidth,
+      };
+    });
+    expect(metrics.cardOverflow).toBeLessThanOrEqual(1);
+    expect(metrics.buttonRight).toBeLessThanOrEqual(1);
+    expect(metrics.locationVisible).toBe(true);
+    // 頁は省略しない（名前だけを省略する）。
+    await expect(link.locator(":scope > span").last()).toHaveText("p.12");
+    if (isNarrow(page)) {
+      expect(metrics.truncated).toBe(true);
+      await expect(link).toHaveAttribute("data-truncated", "true");
+    }
+    await card.screenshot({ path: testInfo.outputPath("answer-long-citations.png") });
     await expectNoPageOverflow(page);
   });
 

@@ -6,7 +6,7 @@ import {
   DATABASE_STATUS_QUERY_KEY,
   SYSTEM_TABLES_QUERY_KEY,
 } from "@production-ready/system-settings";
-import { runPeriodSince, type RunPeriod } from "@production-ready/ui";
+import { DEFAULT_RUN_PERIOD, runPeriodSince, type RunPeriod } from "@production-ready/ui";
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -1492,7 +1492,7 @@ export function useSavedAnswerTraceIds(searchAnswerProfileId: string | null, tra
 /** 保存された回答 1 件。traceId が null の間は取得しない。 */
 /** 実行履歴の一覧（チャット・RAG 検索の実行。#1890）。サーバー側で絞り込み・ページングする。 */
 export function useRunHistory({
-  period = "all",
+  period = DEFAULT_RUN_PERIOD,
   ...params
 }: Omit<RunHistoryListParams, "since"> & { period?: RunPeriod }) {
   return useQuery({

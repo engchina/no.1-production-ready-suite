@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import fitz  # type: ignore[import-untyped]
 import httpx
 import pytest
 
@@ -32,6 +31,7 @@ from app.schemas.document import (
     IngestionSegment,
     IngestionVisionProgress,
 )
+from tests.fixtures.synthetic_pdf import text_pdf
 
 
 class _Writer:
@@ -334,12 +334,7 @@ class _SegmentOracle:
 
 
 def _pdf(pages: int) -> bytes:
-    document = fitz.open()
-    for index in range(pages):
-        document.new_page().insert_text((72, 72), f"page {index + 1}")
-    data = document.tobytes()
-    document.close()
-    return bytes(data)
+    return text_pdf([f"page {index + 1}" for index in range(pages)])
 
 
 async def test_segments_created_after_whole_document_parse_are_running() -> None:

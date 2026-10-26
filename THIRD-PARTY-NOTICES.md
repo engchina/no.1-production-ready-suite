@@ -26,9 +26,7 @@ No.1 Production Ready Suite（`platform/`・`rag/`・`nl2sql/`・`agent/`）が�
 
 ## 強い copyleft・制限のある部品
 
-| 部品 | 取得元 | ライセンス | 場所 | 使い方と注記 |
-|---|---|---|---|---|
-| `pymupdf` | PyPI | AGPL-3.0 または Artifex の商用ライセンス | `rag/backend` | PDF の読み取りに process の中で使う。AGPL-3.0 §13 は、改変した版をネットワーク越しに提供するときに利用者へソースを提供することを求める。許可の緩いライブラリ（`pypdfium2` など）への置き換えを #3343 で評価中（置き換えの draft PR #3388 は main に未反映）。商用の提供・納品では、置き換えか商用ライセンスを検討する |
+なし。以前の `rag/backend` は PDF の読み取りに `pymupdf`（AGPL-3.0 または Artifex の商用ライセンス）を使っていたが、#3343 で `pypdfium2`（下の「PDFium」）と Pillow に置き換え、依存から外した。
 
 ## 弱い copyleft の部品（同梱のライブラリを含む）
 

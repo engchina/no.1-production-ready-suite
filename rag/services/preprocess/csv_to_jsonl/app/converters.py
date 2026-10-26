@@ -4,7 +4,7 @@ CSV を決定論で構造化レコードの JSONL（`rag_parser_core.structured_
 1 記録にし、表頭の列名つきの値（`fields`）と原本の物理行の位置（`location.row_start` / `row_end`。
 引用符の中の改行を含む記録は複数行）を持つ。入力の列の区切り（`,`・タブ・`;`・`|`）と JSONL の行の
 区切り（LF）と chunk の境界は別のもので、入力の区切りは JSONL に残さない。純 Python（`csv` +
-pydantic）のみで完結し、重い変換依存（LibreOffice / PyMuPDF）を持たない軽量サービス。
+pydantic）のみで完結し、重い変換依存（LibreOffice など）を持たない軽量サービス。
 
 - 表頭は最初の空でない行。空・重複の列名は決定論で補う（`col_<位置>`・`<名前>_<n>`）。
 - 表頭より列の多い行は、余った値を `col_<位置>` の列にして捨てない

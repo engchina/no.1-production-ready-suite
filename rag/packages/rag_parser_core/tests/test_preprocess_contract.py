@@ -1,6 +1,6 @@
 """前処理(Preprocess)サービス app factory と HTTP 契約(ConvertResponse 往復)の検証。
 
-実変換依存(LibreOffice/PyMuPDF)に依らず、converter を決定論スタブへ差し替えて
+実変換依存(LibreOffice 等)に依らず、converter を決定論スタブへ差し替えて
 `POST /convert` が base64 派生 bytes を JSON で往復できることを確認する。
 """
 
