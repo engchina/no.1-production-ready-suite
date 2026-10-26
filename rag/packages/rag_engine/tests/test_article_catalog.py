@@ -622,7 +622,7 @@ def test_article_catalog_call_limits_come_from_the_environment():
         environ={"RAG_ENGINE_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP": "1024", "RAG_ENGINE_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS": "20"},
         dotenv_path=None,
     )
-    assert (defaults.article_catalog_output_token_cap, defaults.article_catalog_call_timeout_seconds) == (4096, 90.0)
+    assert (defaults.article_catalog_output_token_cap, defaults.article_catalog_call_timeout_seconds) == (8192, 180.0)
     assert (custom.article_catalog_output_token_cap, custom.article_catalog_call_timeout_seconds) == (1024, 20.0)
 
 

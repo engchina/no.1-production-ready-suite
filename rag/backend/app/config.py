@@ -1426,7 +1426,7 @@ class Settings(
         ),
     )
     rag_article_catalog_output_token_cap: int = Field(
-        default=4096,
+        default=8192,
         ge=0,
         le=32768,
         description=(
@@ -1437,7 +1437,7 @@ class Settings(
         ),
     )
     rag_article_catalog_call_timeout_seconds: float = Field(
-        default=90.0,
+        default=180.0,
         ge=0.0,
         le=600.0,
         description=(
