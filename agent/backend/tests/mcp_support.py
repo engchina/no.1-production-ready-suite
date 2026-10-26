@@ -55,8 +55,8 @@ class RagSearchIn(_ContractInput):
 
 
 class RagRetrieveEvidenceIn(RagSearchIn):
-    # 根拠の収集は検索する件数（top_k の既定 20）と同じ件数を既定で返す（#1365）。
-    evidence_limit: int = Field(default=20, ge=1, le=50)
+    # 根拠の収集は検索する件数（top_k の既定 50。#3512）と同じ件数を既定で返す（#1365）。
+    evidence_limit: int = Field(default=50, ge=1, le=50)
     # 検索文を作る主体と、呼び出し元の検索文・追跡 ID（#2651）。
     planning: Literal["rag", "caller"] = "rag"
     queries: list[str] = Field(default_factory=list, max_length=5)

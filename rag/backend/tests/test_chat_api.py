@@ -40,7 +40,12 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
-from app.schemas.search import RetrievedChunk, SearchResponse, StorageFailure
+from app.schemas.search import (
+    SEARCH_TOP_K_DEFAULT,
+    RetrievedChunk,
+    SearchResponse,
+    StorageFailure,
+)
 from tests.span_progress_support import answer_step, answer_trace, pipeline_stage
 from tests.support import AsgiTestClient
 from tests.trace_store_support import FakeTraceDb
@@ -622,6 +627,8 @@ class _FakePipeline:
     # 作られた pipeline に渡した確認の条件と、検索の絞り込み(#717)。
     scopes: list[object] = []
     filters: list[dict[str, str]] = []
+    # 作られた pipeline に渡した検索する件数(#3512)。
+    top_ks: list[int] = []
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         self._llm = kwargs.get("llm")
@@ -642,6 +649,7 @@ class _FakePipeline:
     ):
         assert token_callback is None
         _FakePipeline.filters.append(dict(request.filters))
+        _FakePipeline.top_ks.append(request.top_k)
         # 本物の pipeline と同じく、実行の全体の span を処理の経過に流す（#3226）。
         with answer_trace(trace, trace_id=trace_id or "trace"):
             return self._response(request, trace_id)
@@ -724,6 +732,22 @@ def test_stream_message_single_model_persists_and_streams(monkeypatch: MonkeyPat
     # 引用は画面が使う項目だけを保存する（親の本文・索引の内部の項目を持たない。#1371）。
     assert [citation["metadata"] for citation in assistant.citations] == [{"page_start": 1}]
     assert assistant.citations[0]["text"] == "根拠"
+
+
+def test_stream_message_searches_with_the_search_top_k_default(monkeypatch: MonkeyPatch) -> None:
+    """チャットの画面は top_k を送らず、RAG 検索と同じ既定(50)で検索する。上限は 100(#3512)。"""
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-k")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    monkeypatch.setattr(_FakePipeline, "top_ks", [])
+
+    url = "/api/chat/conversations/conv-k/messages/stream"
+    assert client.post(url, json={"content": "質問 A"}).status_code == 200
+    assert client.post(url, json={"content": "質問 B", "top_k": 100}).status_code == 200
+    assert client.post(url, json={"content": "質問 C", "top_k": 101}).status_code == 422
+
+    assert SEARCH_TOP_K_DEFAULT == 50
+    assert _FakePipeline.top_ks == [SEARCH_TOP_K_DEFAULT, 100]
 
 
 def _chat_conversation(fake: FakeChatOracle, conversation_id: str) -> None:

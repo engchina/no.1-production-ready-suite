@@ -850,8 +850,8 @@ Agent が編成する根拠の取得（#2651）: RAG を使う標準のスキル
 （`unread_sections`。conditional）にする。
 段の検索の決定的な補助（#1351。#1335 の評価で、Agent が `evidence_limit=5` を選んで答えの chunk が上限で切れ、同じ話題の
 言い換えを繰り返して予算に達した）: (1) モデルが `rag_search`・`rag_retrieve_evidence` の `evidence_limit` を既定（ツールの
-入力 schema の `default`。RAG の契約の `rag_search` は 12、`rag_retrieve_evidence` は検索する件数と同じ 20〔#1365〕）より
-小さくしたら、Control Plane が既定に引き上げて呼ぶ（step には送った値を残す。既定より大きい値は変えない）。検索する件数の `top_k` も同じく（#1403。#1362 の再評価で、データの範囲で検索・回答プロファイルを固定した業務 Agent が `top_k` 5 / 10 を渡し、台帳の行が検索の結果に出ずに段を取りこぼした）、既定（契約の `top_k` の `default` は null で、RAG は省略時に 20 を使うので 20。`RAG_TOP_K_DEFAULT`）より小さい値を既定に引き上げる。上限（入力 schema の `maximum`。`top_k` 100・`evidence_limit` 50）を超える値は上限に丸め、呼び先の入力検証で失敗させない。直したときはモデルへの結果に、直した値（`requested`・`sent`）と次から件数を省略する案内（`adjusted_limits`）を足し、モデルに見せるツールの schema の件数の説明に「多段の質問では省略する」を足す（`search_limit_schema`。実行の定義は契約のまま。`adjusted_search_limits`）。(2) 同じ Run で、同じツール・同じ範囲（検索・回答プロファイル・ナレッジベース・
+入力 schema の `default`。RAG の契約の `rag_search` は 12、`rag_retrieve_evidence` は検索する件数と同じ 50〔#1365・#3512〕）より
+小さくしたら、Control Plane が既定に引き上げて呼ぶ（step には送った値を残す。既定より大きい値は変えない）。検索する件数の `top_k` も同じく（#1403。#1362 の再評価で、データの範囲で検索・回答プロファイルを固定した業務 Agent が `top_k` 5 / 10 を渡し、台帳の行が検索の結果に出ずに段を取りこぼした）、既定（契約の `top_k` の `default` は null で、RAG は省略時に 50 を使うので 50〔#3512〕。`RAG_TOP_K_DEFAULT`）より小さい値を既定に引き上げる。上限（入力 schema の `maximum`。`top_k` 100・`evidence_limit` 50）を超える値は上限に丸め、呼び先の入力検証で失敗させない。直したときはモデルへの結果に、直した値（`requested`・`sent`）と次から件数を省略する案内（`adjusted_limits`）を足し、モデルに見せるツールの schema の件数の説明に「多段の質問では省略する」を足す（`search_limit_schema`。実行の定義は契約のまま。`adjusted_search_limits`）。(2) 同じ Run で、同じツール・同じ範囲（検索・回答プロファイル・ナレッジベース・
 フィルター・条件）の成功した検索と query が同じかほぼ同じ（NFKC・大文字小文字・空白・句読点と記号・助詞を除いて、
 文字の 2-gram の Jaccard 係数が 0.8 以上。`repeated_query_note`）なら、モデルへの結果に繰り返しを止める案内
 （`repeated_query`。回数・似た query・次の手）を足す（記録する step の結果は RAG の結果のまま。呼び出しは止めない）。

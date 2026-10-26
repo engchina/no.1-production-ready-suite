@@ -215,6 +215,8 @@ from app.schemas.document import DocumentPreprocessArtifact
 from app.schemas.search import (
     INCLUDE_SUPERSEDED_FILTER_KEY,
     PAGE_RANGES_FILTER_KEY,
+    SEARCH_TOP_K_DEFAULT,
+    SEARCH_TOP_K_MAX,
     RetrievedChunk,
     SearchRequest,
     SearchResponse,
@@ -312,9 +314,10 @@ EVIDENCE_TEXT_BUDGET_TOKENS = SOURCE_TEXT_RESPONSE_BUDGET_TOKENS
 EVIDENCE_LIMIT_DEFAULT = 12
 EVIDENCE_LIMIT_MAX = 50
 # rag_retrieve_evidence（回答を作らない根拠の収集）の既定の件数。検索する件数（SearchRequest の
-# top_k の既定 20）と同じにし、検索で当たった chunk を既定で全部返す（#1365）。rag_search は回答に
-# 使った根拠が先に並ぶので 12 のまま。
-RETRIEVE_EVIDENCE_LIMIT_DEFAULT = 20
+# top_k の既定。#3512 で 50）と同じにし、検索で当たった chunk を既定で全部返す（#1365）。
+# rag_search は回答に使った根拠が先に並ぶので 12 のまま。返す本文の合計は
+# EVIDENCE_TEXT_BUDGET_TOKENS で抑える。
+RETRIEVE_EVIDENCE_LIMIT_DEFAULT = min(SEARCH_TOP_K_DEFAULT, EVIDENCE_LIMIT_MAX)
 # rag_retrieve_evidence の planning=caller（呼び出し元が検索文を作る。#2651）で query に足せる
 # 検索文の本数と 1 本の長さの上限（全文検索に使う検索文の本数の上限 6 に、query を合わせて収める）。
 CALLER_QUERIES_MAX = 5
@@ -513,7 +516,7 @@ class SearchInput(BaseModel):
             "呼び出し元にデータの範囲があるときは、検索・回答プロファイルの参照先の中だけ。"
         ),
     )
-    top_k: int | None = Field(default=None, ge=1, le=100, description="検索する件数。")
+    top_k: int | None = Field(default=None, ge=1, le=SEARCH_TOP_K_MAX, description="検索する件数。")
     filters: dict[str, str] = Field(
         default_factory=dict,
         description=(
@@ -638,7 +641,8 @@ class RetrieveEvidenceInput(SearchInput):
         le=EVIDENCE_LIMIT_MAX,
         description=(
             "返す根拠の最大件数。検索で当たった根拠（関連度の順）、前後の文脈の順に並べてから切る。"
-            "省略時は検索する件数（top_k。省略時 20）と同じで、検索で当たった根拠を全部返す。"
+            f"省略時は検索する件数（top_k。省略時 {SEARCH_TOP_K_DEFAULT}）と同じで、"
+            "検索で当たった根拠を全部返す。"
         ),
     )
 

@@ -1199,9 +1199,9 @@ def unresolved_hops_message(pending: list[JsonObject]) -> str:
 
 
 # 検索する件数（`top_k`）の既定。RAG の契約の `top_k` の `default` は null で、省略すると RAG が
-# 検索の要求の既定の 20 を使う（契約の `rag_retrieve_evidence` の `evidence_limit` の説明
-# 「top_k。省略時 20」）。契約に整数の `default` があればそちらを使う（#1403）。
-RAG_TOP_K_DEFAULT = 20
+# 検索の要求の既定の 50 を使う（契約の `rag_retrieve_evidence` の `evidence_limit` の説明
+# 「top_k。省略時 50」。#3512）。契約に整数の `default` があればそちらを使う（#1403）。
+RAG_TOP_K_DEFAULT = 50
 # 根拠のツールの件数の引数（既定より小さい値は既定に引き上げ、上限を超える値は上限に丸める）。
 SEARCH_LIMIT_ARGUMENTS = ("top_k", "evidence_limit")
 SEARCH_LIMIT_SCHEMA_NOTE = (
