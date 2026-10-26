@@ -2004,7 +2004,8 @@ class ProfileKnowledge(BaseModel):
     search_answer_profile_id: str
     revision: str | None = Field(
         description=(
-            "照合した用語・ルールの登録の版（登録の内容の sha256 の先頭。読めなければ null）。"
+            "照合した用語・同義語と回答ルールの登録の版（登録の内容の sha256 の先頭。"
+            "読めなければ null）。"
         )
     )
     matched_on: Literal["original_question", "query"] = Field(
@@ -2021,7 +2022,8 @@ class ProfileKnowledge(BaseModel):
     load_failed: bool = Field(
         default=False,
         description=(
-            "用語・ルールを読めなかった（rules・terms は空。当たるものが無いとは限らない）。"
+            "用語・同義語と回答ルールを読めなかった（rules・terms は空。"
+            "当たるものが無いとは限らない）。"
         ),
     )
 

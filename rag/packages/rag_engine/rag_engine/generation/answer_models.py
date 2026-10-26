@@ -47,6 +47,8 @@ QUERY_UNDERSTANDING_SEPARATOR = "--- 細粒度クエリ理解（Intent Classific
 
 QUESTION_PLAN_SEPARATOR = "--- 質問処理計画 ---"
 
+# 旧形式の質問の表示から元の質問を取り出すための区切り（今の表示には書かない）。旧形式の記録と一致させるため
+# 文字列は変えない（表示の名前は「用語・同義語」「回答ルール」。#3490）。
 RUNTIME_KNOWLEDGE_SEPARATOR = "--- 実行時用語・ルール ---"
 
 INQUIRY_CONDITIONS_SEPARATOR = QUERY_UNDERSTANDING_SEPARATOR

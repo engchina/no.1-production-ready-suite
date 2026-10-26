@@ -45,7 +45,7 @@ def _text_search_query_source(
 ) -> str:
     parts = ["原質問"]
     if runtime_knowledge.expanded_question != runtime_knowledge.original_question:
-        parts.append("実行時用語・ルール")
+        parts.extend(runtime_knowledge.expansion_sources)
     if expansion.generated_queries:
         parts.append("拡張検索文")
     if crag_rewrites:

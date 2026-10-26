@@ -1,6 +1,7 @@
 import { hasRunStepDetails, type RunStepDetailField, type RunStepDetails } from "@production-ready/ui";
 
 import type { ExtractionFieldCondition } from "@/components/search/extraction-field-filters";
+import { t } from "@/lib/i18n";
 
 /** 回答フローの診断(backend の diagnostics.answer)。 */
 /** 回答の対応（#1235。backend の diagnostics.answer.outcome）。 */
@@ -353,6 +354,15 @@ function imageCount(value: unknown): number {
 export function answerAttachedImages(diagnostics: unknown, savedMessage: unknown): number {
   const live = parseAnswerDiagnostics(diagnostics)?.models.attachedImages ?? 0;
   return Math.max(live, imageCount(record(savedMessage).answer_attached_images));
+}
+
+/**
+ * 回答の見出し（「回答モデル: {名前}」。根拠の画像を添付した回答は「（画像も参照）」を添える。#3439・#3444）。
+ * チャットの列と RAG 検索の回答で同じ文言にする（#3488）。名前が無ければ null。
+ */
+export function answerModelHeading(label: string | null | undefined, attachedImages: number): string | null {
+  if (!label) return null;
+  return attachedImages > 0 ? t("chat.column.modelWithImages", { name: label }) : t("chat.column.model", { name: label });
 }
 
 function parseModels(value: unknown): AnswerDiagnostics["models"] {

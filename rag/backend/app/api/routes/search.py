@@ -344,7 +344,7 @@ async def _resolve_query_context(
         domain_keywords = await load_domain_keywords(oracle, view.id)
         if domain_keywords:
             settings = settings.model_copy(update={"rag_domain_keywords": domain_keywords})
-        # 用語・ルールは回答エンジンだけが使う。
+        # 用語・同義語と回答ルールは回答エンジンだけが使う。
         runtime_knowledge = await oracle.get_search_answer_profile_knowledge(
             view.id, RUNTIME_KNOWLEDGE_KIND
         )

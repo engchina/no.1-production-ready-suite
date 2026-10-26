@@ -283,7 +283,7 @@ class AnswerExecutionTests(unittest.TestCase):
                 self.assertIn("意味を尋ねている項目: " + " / ".join(labels), display)
                 self.assertNotIn("request_id", display)
                 # 「質問の理解」で中断せず、外部呼出を伴う後続工程まで進む。
-                self.assert_order(display, "質問の理解", "検索の準備確認", "文書検索")
+                self.assert_order(display, "質問の理解", "文書検索")
 
     def test_keyword_display_includes_later_queries_and_more_than_ten_terms(self):
         info = generation.QuestionTextSearchInfo(
@@ -333,7 +333,11 @@ class AnswerExecutionTests(unittest.TestCase):
     def test_missing_chunks_does_not_claim_strategy_or_flow_ran(self):
         with patch.object(generation, "load_latest_or_source_chunk_run", return_value=None):
             result = self.run_answer(query_strategy=generation.AUTO_ROUTING_LABEL)
-        self.assert_order(result.question_display, heading("検索の準備確認"), "状態: 中止")
+        # 検索の前提が無いときだけ、検索せずに中止したことを「文書検索」の工程に残す（#3495）。
+        self.assertNotRegex(result.question_display, heading("検索の準備確認"))
+        self.assert_order(result.question_display, heading("文書検索"), "状態: 中止")
+        self.assertIn("検索対象のチャンクがありません。", result.question_display)
+        self.assertIn("chunk run がありません", result.answer_text)
         self.assertNotRegex(result.question_display, heading("質問拡張戦略"))
         self.assertNotRegex(result.question_display, heading("回答生成フロー"))
         self.search.assert_not_called()
@@ -372,9 +376,12 @@ class AnswerExecutionTests(unittest.TestCase):
     def test_adb_preflight_failure_does_not_run_expansion(self):
         with patch.object(generation, "check_adb_hybrid_search_ready", side_effect=generation.AdbHybridSearchUnavailable("not ready")):
             result = self.run_answer()
-        self.assert_order(result.question_display, heading("検索の準備確認"), "状態: 中止")
+        self.assertNotRegex(result.question_display, heading("検索の準備確認"))
+        self.assert_order(result.question_display, heading("文書検索"), "状態: 中止")
+        self.assertIn("not ready", result.answer_text)
         self.assertNotRegex(result.question_display, heading("質問拡張戦略"))
         self.parse.assert_not_called()
+        self.search.assert_not_called()
 
     def test_rerank_failure_reports_fallback_without_reordering(self):
         lines = []

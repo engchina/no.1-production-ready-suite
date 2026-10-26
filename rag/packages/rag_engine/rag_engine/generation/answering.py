@@ -111,7 +111,6 @@ from rag_engine.generation.answer_models import (
     merge_answer_use,
     query_strategy_id,
     query_strategy_label,
-    retrieval_scope_label,
 )
 from rag_engine.generation.answer_payload import (
     _answer_record_identity_keys,
@@ -987,11 +986,13 @@ def build_crag_answer_context(
     classification_filter: ClassificationFilter | None = None,
     runtime_knowledge: RuntimeKnowledgeContext | None = None,
     vector_only_queries: Sequence[str] = (),
+    search_notice: str = "",
 ) -> tuple[AnswerContext, tuple[str, ...], tuple[CragRetrievalAttempt, ...]]:
     """最大3回の評価で検索改写・局所拡張を選び、回答用根拠と回復traceを返す。
 
     評価には選択されたproviderを使う。文脈回復は既取得poolのみで実行し、
     空振り時は再検索する。評価エラー時は取得済み根拠を保って終了する。
+    ``search_notice`` は 1 回目の文書検索の工程に示す注記（検索対象外の旧 schema の文書など）。
     """
     max_records = _max_context_records(settings) if max_records is None else max_records
     base_queries = _retrieval_queries(question, base_retrieval_queries)
@@ -1017,6 +1018,8 @@ def build_crag_answer_context(
                     f"検索文: 確定済みの {len(retrieval_queries) - len(added)} 本" + (f" + 今回追加した {len(added)} 本" if added else "")
                 )
                 step.add(*(f"  {number}. {_display_query(query)}" for number, query in enumerate(added, 1)))
+                if attempt_number == 1:
+                    _record_search_conditions(step, classification_filter, search_notice)
                 context = build_adb_hybrid_answer_context(
                     question,
                     run_id,
@@ -3064,14 +3067,23 @@ def _legacy_schema_notice(document_count: int) -> str:
     )
 
 
-def _record_search_readiness(step: _ExecutionStep, readiness: Any, engine_ids: Sequence[str], chunk_run_id: str) -> None:
-    """検索の準備の確認の結果を見出しと値で示す（#2341）。"""
-    step.field("検索用データ", "準備済み（意味の近さと語の一致の両方で検索します）")
-    step.field("対象の解析", join_values(engine_ids))
-    step.field("チャンクの実行", chunk_run_id)
-    legacy = readiness.legacy_document_count if isinstance(readiness, AdbSearchReadiness) else 0
-    if legacy:
-        step.field("検索の対象外の文書（旧 schema）", f"{legacy} 件")
+def _record_search_not_ready(classification_filter: ClassificationFilter, reason: str) -> None:
+    """検索の前提が無く検索せずに中止したことを、「文書検索」の工程に残す（#3495）。"""
+    with _execution_step("文書検索", _SEARCH_PURPOSE) as step:
+        step.status = "中止"
+        _record_search_conditions(step, classification_filter)
+        step.result(reason + "質問拡張戦略・回答生成フローは未実行です。")
+
+
+def _record_search_conditions(step: _ExecutionStep, classification_filter: ClassificationFilter | None, notice: str = "") -> None:
+    """普段と違う検索の条件（指定した分類フィルタ・検索対象外の旧 schema の文書）だけを文書の検索の工程に示す。
+
+    既定の検索範囲・準備できていることは示さない（#3495）。
+    """
+    if classification_filter is not None and (line := _format_classification_filter(classification_filter)):
+        step.field("分類フィルタ", line)
+    if notice:
+        step.add(notice)
 
 
 def _format_classification_filter(classification_filter: ClassificationFilter) -> str:
@@ -3978,7 +3990,7 @@ def _keep_trusted_queries(
 
 
 def _record_runtime_knowledge_load(step: _ExecutionStep, runtime_knowledge: RuntimeKnowledgeContext) -> bool:
-    """用語・ルールの読み込みの失敗を工程に記録する。読めていれば True（工程の結果と詳細を続けて書く）。
+    """用語・同義語と回答ルールの読み込みの失敗を工程に記録する。読めていれば True（工程の結果と詳細を続けて書く）。
 
     詳細の行は例外の型の名前だけ（例外の文は path などを含みうる。#3284）。
     """
@@ -4119,22 +4131,14 @@ def answer_question_result(
     # 検索語は質問拡張後に確定する。準備不足で中止した場合は検索していないため記録しない。
     text_search_info = QuestionTextSearchInfo(query_source=runtime_knowledge.query_source)
 
-    with _execution_step("検索の準備確認", "検索対象の文書に検索用データ（Embedding）が保存されているかを確認します。") as step:
-        step.result(f"検索範囲: {retrieval_scope_label(selected_retrieval_scope)}")
-        classification_line = _format_classification_filter(selected_classification_filter)
-        if classification_line:
-            step.add(f"分類フィルタ: {classification_line}")
-        preferred_engine_ids = list(preferred_engines)
-        chunk_run_id = ""
-        if selected_retrieval_scope == RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN:
-            chunk_run = load_latest_or_source_chunk_run(settings.output_dir, run_id)
-            if chunk_run is not None:
-                chunk_run_id = chunk_run.chunk_run_id
-        else:
-            chunk_run = None
-        if selected_retrieval_scope == RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN and chunk_run is None:
-            step.status = "中止"
-            step.add("検索対象のチャンクがありません。質問拡張戦略・回答生成フローは未実行です。")
+    # 検索の前提（チャンクの実行・検索用データ）は工程を開かずに確かめる（#3495）。普段どおりなら何も示さず、
+    # 中止したときだけ「文書検索」の工程に理由を残す。backend は何もしない確認を注入する。
+    preferred_engine_ids = list(preferred_engines)
+    chunk_run_id = ""
+    if selected_retrieval_scope == RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN:
+        chunk_run = load_latest_or_source_chunk_run(settings.output_dir, run_id)
+        if chunk_run is None:
+            _record_search_not_ready(selected_classification_filter, "検索対象のチャンクがありません。")
             return _answer_question_result(
                 expansion=base_expansion,
                 answer=(
@@ -4150,37 +4154,34 @@ def answer_question_result(
                 classification_filter=selected_classification_filter,
                 retrieval_top_k=chunk_top_k,
             )
+        chunk_run_id = chunk_run.chunk_run_id
 
-        try:
-            readiness = check_adb_hybrid_search_ready(
-                chunk_run_id=chunk_run_id,
-                settings=settings,
-                preferred_engine_ids=preferred_engine_ids,
-                retrieval_scope=selected_retrieval_scope,
-                classification_filter=selected_classification_filter,
-            )
-        except AdbHybridSearchUnavailable as exc:
-            step.status = "中止"
-            step.add("ADB hybrid search を利用できません。質問拡張戦略・回答生成フローは未実行です。")
-            return _answer_question_result(
-                expansion=base_expansion,
-                answer=f"ADB hybrid search を使用できません: {exc}",
-                text_search_info=text_search_info,
-                answer_flow=selected_answer_flow,
-                question_plan=question_plan,
-                runtime_knowledge=runtime_knowledge,
-                inquiry_conditions=inquiry_conditions,
-                retrieval_scope=selected_retrieval_scope,
-                classification_filter=selected_classification_filter,
-                retrieval_top_k=chunk_top_k,
-            )
+    try:
+        readiness = check_adb_hybrid_search_ready(
+            chunk_run_id=chunk_run_id,
+            settings=settings,
+            preferred_engine_ids=preferred_engine_ids,
+            retrieval_scope=selected_retrieval_scope,
+            classification_filter=selected_classification_filter,
+        )
+    except AdbHybridSearchUnavailable as exc:
+        _record_search_not_ready(selected_classification_filter, "ADB hybrid search を利用できません。")
+        return _answer_question_result(
+            expansion=base_expansion,
+            answer=f"ADB hybrid search を使用できません: {exc}",
+            text_search_info=text_search_info,
+            answer_flow=selected_answer_flow,
+            question_plan=question_plan,
+            runtime_knowledge=runtime_knowledge,
+            inquiry_conditions=inquiry_conditions,
+            retrieval_scope=selected_retrieval_scope,
+            classification_filter=selected_classification_filter,
+            retrieval_top_k=chunk_top_k,
+        )
 
-        # 旧 schema の文書は検索 SQL の版条件で除外される。件数を工程記録と回答本文に出す (#948)。
-        # 戻り値を返さない差し替え実装でも動くよう、型を確認してから使う。
-        legacy_notice = _legacy_schema_notice(readiness.legacy_document_count if isinstance(readiness, AdbSearchReadiness) else 0)
-        if legacy_notice:
-            step.add(legacy_notice)
-        _record_search_readiness(step, readiness, preferred_engine_ids, chunk_run_id)
+    # 旧 schema の文書は検索 SQL の版条件で除外される。件数を回答本文に出す (#948)。
+    # 戻り値を返さない差し替え実装でも動くよう、型を確認してから使う。
+    legacy_notice = _legacy_schema_notice(readiness.legacy_document_count if isinstance(readiness, AdbSearchReadiness) else 0)
 
     with _execution_step("質問拡張戦略", "原質問の言い回しでは届きにくい資料の表現を補う検索文を作ります。") as step:
         # 戦略の LLM の応答を待つ間に、元の質問の検索を先に読む (#1499)。検索の結果は並行にしないときと同じ。
@@ -4233,8 +4234,8 @@ def answer_question_result(
             runtime_knowledge.expanded_question,
             keyword_trace=keyword_trace,
         )
-        # 用語・同義語に一致したら、一致した用語と別名だけの検索文を足す（#2163）。原質問の後ろに足しただけの
-        # 検索文（用語・ルールの拡張）は長い質問に別名が埋もれ、規定の用語で書かれた根拠に当たりにくい。
+        # 用語・同義語に一致したら、一致した用語と別名だけの検索文を足す（#2163）。原質問の後ろに語を足しただけの
+        # 検索文（expanded_question）は長い質問に別名が埋もれ、規定の用語で書かれた根拠に当たりにくい。
         term_query = matched_term_query(runtime_knowledge)
         candidate_queries = _merge_retrieval_queries(
             normalized_question,
@@ -4262,13 +4263,14 @@ def answer_question_result(
             report_degraded("text_search_tokenizer", tokenizer_failure)
         sources = {_dedupe_query_key(normalized_question): "原質問"}
         if runtime_knowledge.expanded_question != runtime_knowledge.original_question:
-            sources.setdefault(_dedupe_query_key(runtime_knowledge.expanded_question), "用語・ルール")
+            # 出どころは実際に語を足したもの（用語・同義語 / 回答ルール / 業務ガイド / 確認で選んだ条件。#3490）。
+            sources.setdefault(_dedupe_query_key(runtime_knowledge.expanded_question), runtime_knowledge.query_source)
         for query in expansion.generated_queries:
             sources.setdefault(_dedupe_query_key(query), "呼び出し元" if caller_planned else "質問拡張")
         for query in lexical_queries:
             sources.setdefault(_dedupe_query_key(query), "語彙の補助")
         if term_query:
-            sources.setdefault(_dedupe_query_key(term_query), "用語・同義語")
+            sources.setdefault(_dedupe_query_key(term_query), "用語・同義語だけ")
         # 規定の書き方の検索文は質問拡張の LLM が作り、質問の目的の検索文は経緯と目的が混ざった質問から目的を取り出す。
         for query in expansion.provision_queries:
             sources.setdefault(_dedupe_query_key(query), "質問拡張")
@@ -4313,6 +4315,7 @@ def answer_question_result(
             retrieval_scope=selected_retrieval_scope,
             classification_filter=selected_classification_filter,
             trusted_queries=trusted_queries,
+            search_notice=legacy_notice,
         )
 
     with _execution_step("回答生成フロー", "根拠を集めて確かめ、根拠に基づく回答を作ります。") as flow_step:
@@ -4336,6 +4339,7 @@ def answer_question_result(
                     classification_filter=selected_classification_filter,
                     runtime_knowledge=runtime_knowledge,
                     vector_only_queries=expansion.vector_only_queries,
+                    search_notice=legacy_notice,
                 )
                 if crag_attempts:
                     with _execution_step("検索語の再確定（書き換え後）") as keyword_step:
@@ -4378,6 +4382,7 @@ def answer_question_result(
                         vector_only_queries=expansion.vector_only_queries,
                     )
                     retrieval_step.field("検索文", f"{len(retrieval_queries)} 本")
+                    _record_search_conditions(retrieval_step, selected_classification_filter, legacy_notice)
                     _record_search_result(retrieval_step, context)
         except AdbHybridSearchUnavailable as exc:
             flow_step.status = "中止"
@@ -4922,11 +4927,13 @@ def _retrieve_without_answer(
     retrieval_scope: str,
     classification_filter: ClassificationFilter,
     trusted_queries: Sequence[str] = (),
+    search_notice: str = "",
 ) -> AnswerQuestionResult:
     """回答の生成をせずに文書検索だけを行う（``answer_question_result(generate_answer=False)``）。
 
     CRAG（検索結果の評価と補正検索）は回答のための工程なので使わない。検索できないときは理由を本文に入れて返す。
     ``trusted_queries`` は呼び出し元が作った検索文（#2651。質問の目的の照合で外さない）。
+    ``search_notice`` は文書検索の工程に示す注記（検索対象外の旧 schema の文書など）。
     """
     records: Sequence[AnswerRecord] = ()
     evidence_tree: Sequence[ContextParentEvidence] = ()
@@ -4955,6 +4962,7 @@ def _retrieve_without_answer(
         else:
             records, evidence_tree = context.records, context.evidence_tree
             step.field("検索文", f"{len(retrieval_queries)} 本")
+            _record_search_conditions(step, classification_filter, search_notice)
             _record_search_result(step, context, title="検索結果", note="（回答は生成しません）")
     return _answer_question_result(
         expansion=expansion,
