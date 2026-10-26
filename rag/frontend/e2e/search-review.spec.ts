@@ -764,7 +764,7 @@ test("RAG 検索の処理の経過は span の木で、2 つ目の「トレー�
   await page.getByTestId("search-run-progress-summary").click();
   const process = page.getByTestId("search-run-progress");
   // 段の名前と技術の span の日本語の名前・モデル名。入れ子は span の親子（root は行にしない）。
-  await expect(process.locator("[data-run-timeline-label]")).toHaveText(["検索条件の抽出（Self-Query）", "モデルの呼び出し · synthetic-model"]);
+  await expect(process.locator("[data-run-timeline-label]")).toHaveText(["検索条件の抽出（Metadata Filter Extraction）", "モデルの呼び出し · synthetic-model"]);
   await expect(process.locator("[data-run-timeline-step]").nth(1)).toHaveAttribute("data-level", "1");
   await expect(process.locator("[data-run-timeline-step]").nth(1)).toContainText("2.0 秒");
   const details = page.locator("[data-run-process-details]");

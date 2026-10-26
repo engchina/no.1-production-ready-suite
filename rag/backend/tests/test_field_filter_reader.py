@@ -1,4 +1,4 @@
-"""質問から抽出項目の条件を読み取る(self-query。#652)。"""
+"""質問から抽出項目の条件を読み取る(Metadata Filter Extraction。#652)。"""
 
 from __future__ import annotations
 

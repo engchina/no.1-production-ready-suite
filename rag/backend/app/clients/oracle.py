@@ -6656,15 +6656,24 @@ class OracleClient:
             for position, target in enumerate(targets)
             if _metadata_str(target[0].metadata.get("chunk_set_id")) is not None
         ]
-        for start in range(0, len(batched), _CONTEXT_ANCHOR_BATCH_SIZE):
-            batch = batched[start : start + _CONTEXT_ANCHOR_BATCH_SIZE]
-            with read_rows_per_round_trip(_SEARCH_FETCH_ROWS):
-                rows = await self._fetch_all(
-                    *_context_group_siblings_batch_sql(
-                        [target for _position, target in batch],
-                        max_chunks_per_group=max_chunks_per_group,
+        batches = [
+            batched[start : start + _CONTEXT_ANCHOR_BATCH_SIZE]
+            for start in range(0, len(batched), _CONTEXT_ANCHOR_BATCH_SIZE)
+        ]
+        # 起点が 1 回の SQL の上限を超えたときの複数回の SQL は、並行に読む(#3461)。
+        with read_rows_per_round_trip(_SEARCH_FETCH_ROWS):
+            batch_rows = await asyncio.gather(
+                *(
+                    self._fetch_all(
+                        *_context_group_siblings_batch_sql(
+                            [target for _position, target in batch],
+                            max_chunks_per_group=max_chunks_per_group,
+                        )
                     )
+                    for batch in batches
                 )
+            )
+        for batch, rows in zip(batches, batch_rows, strict=True):
             ranked: dict[int, list[tuple[int, dict[str, object]]]] = {}
             for row in rows:
                 for anchor_ord, context_rank in _anchor_positions(row.get("anchor_positions")):
@@ -13267,6 +13276,11 @@ def _context_group_siblings_batch_sql(
         ):
             binds[f"ca_{name}_{ordinal}"] = value
     binds["max_chunks_per_group"] = max_chunks_per_group
+    # chunk group の id(metadata_json の JSON_VALUE)は、起点の文書・chunk_set の chunk ごとに
+    # 1 回だけ読む(``grp``。NO_MERGE で結合の外に置く)。結合の条件に書くと(起点 × 同じ文書の
+    # chunk)の組ごとに CLOB の JSON を解き、起点 150 件で数秒かかっていた(#3461)。起点の表は
+    # WITH にせず 2 か所に書く(WITH にすると optimizer が同じ遅い計画を選んだ)。検索の条件・
+    # 並び・件数は変えない。
     statement = _render_sql(
         """
         SELECT
@@ -13298,12 +13312,23 @@ def _context_group_siblings_batch_sql(
                             c.chunk_id ASC
                     ) AS context_rank
                 FROM ({anchor_rows}) a
-                JOIN rag_chunks c
-                  ON c.document_id = a.document_id
-                 AND c.chunk_set_id = a.chunk_set_id
+                JOIN (
+                    SELECT /*+ NO_MERGE */
+                        g.chunk_id,
+                        g.document_id,
+                        g.chunk_set_id,
+                        JSON_VALUE(g.metadata_json, '$.chunk_group_id') AS chunk_group_id
+                    FROM rag_chunks g
+                    WHERE (g.document_id, g.chunk_set_id) IN (
+                        SELECT x.document_id, x.chunk_set_id FROM ({anchor_rows}) x
+                    )
+                ) grp
+                  ON grp.document_id = a.document_id
+                 AND grp.chunk_set_id = a.chunk_set_id
+                 AND grp.chunk_group_id = a.chunk_group_id
+                JOIN rag_chunks c ON c.chunk_id = grp.chunk_id
                 JOIN rag_documents d ON d.document_id = c.document_id
                 WHERE {where_sql}
-                  AND JSON_VALUE(c.metadata_json, '$.chunk_group_id') = a.chunk_group_id
                   AND c.chunk_id <> a.anchor_chunk_id
             )
             WHERE context_rank <= :max_chunks_per_group

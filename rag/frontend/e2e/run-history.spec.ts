@@ -635,9 +635,9 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(timeline.locator("details[data-run-timeline-section]")).not.toHaveAttribute("open", "");
     await expect(timeline.locator("[data-run-timeline-step]").first()).toBeHidden();
     await timelineSummary.click();
-    // 行は span の木（#3226）: 包む段（質問の読み取りから回答の作成まで）と、その子の工程（字下げ）。
+    // 行は span の木（#3226）: 包む段（質問の理解から回答の作成まで）と、その子の工程（字下げ）。
     await expect(timeline.locator("[data-run-timeline-step]")).toHaveCount(4);
-    await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("質問の読み取りから回答の作成まで");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("質問の理解から回答の作成まで");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toHaveAttribute("data-level", "1");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("0.3 秒");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("質問の理解（Query Understanding）（LLM 1 回・送信 2 回）");
