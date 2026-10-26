@@ -93,7 +93,7 @@ uv run suite-evaluation compare A=../../tmp/eval/a.json C=../../tmp/eval/c.json 
 | `judge/run.py` | 保存した観測の回答を判定する（製品は呼ばない） |
 | `judge/calibration.py` | 人手の判定の形（`LabelSet`）と、一致の集計（platform の `pr_evaluation_scoring.agreement`: 一致率・Cohen の κ・混同行列・誤合格 / 誤不合格）・合否 |
 
-判定のモデルと接続は環境変数で決める（既定のモデルは持たない）: `SUITE_EVALUATION_JUDGE_ENDPOINT`・`SUITE_EVALUATION_JUDGE_API_KEY`・`SUITE_EVALUATION_JUDGE_MODEL`（必須）、`SUITE_EVALUATION_JUDGE_PROJECT_OCID`・`SUITE_EVALUATION_JUDGE_SEED`・`SUITE_EVALUATION_JUDGE_MAX_OUTPUT_TOKENS`・`SUITE_EVALUATION_JUDGE_TIMEOUT_SECONDS`（任意）。
+判定のモデルと接続は環境変数で決める（既定のモデルは持たない）: `SUITE_EVALUATION_JUDGE_ENDPOINT`・`SUITE_EVALUATION_JUDGE_API_KEY`・`SUITE_EVALUATION_JUDGE_MODEL`（必須）、`SUITE_EVALUATION_JUDGE_PROJECT_OCID`・`SUITE_EVALUATION_JUDGE_MAX_OUTPUT_TOKENS`・`SUITE_EVALUATION_JUDGE_TIMEOUT_SECONDS`（任意）。
 
 ```bash
 # 1. 人手の判定で校正する（holdout の観点ごとに κ・件数・判定率・誤合格の率を閾値と比べる）

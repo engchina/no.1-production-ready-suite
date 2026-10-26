@@ -10,7 +10,6 @@ import {
   DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
   DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
   DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
-  DEFAULT_ENTERPRISE_AI_SEED,
   ENTERPRISE_AI_CONNECTION_IDS,
   type EnterpriseAiConfiguredModel,
   type EnterpriseAiConnectionId,
@@ -346,8 +345,6 @@ export function normalizeModelSettings(
     enterprise_ai: {
       ...rest,
       vlm_input_mode: enterprise.vlm_input_mode ?? "auto",
-      // 値の無い応答（#1434 より前の backend）は既定の seed。
-      seed: enterprise.seed ?? DEFAULT_ENTERPRISE_AI_SEED,
       connections,
       models: enterprise.models.map((model) => {
         // 値の無いモデルは既定の入力の上限（#1437）。

@@ -57,9 +57,7 @@ from pr_system_settings.model import enterprise_ai_model_catalog as enterprise_a
 from pr_system_settings.model import (
     enterprise_ai_reasoning as enterprise_ai_reasoning,
 )
-from pr_system_settings.model import enterprise_ai_seed as enterprise_ai_seed
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
-from pr_system_settings.model import seed_payload as seed_payload
 from pydantic import Field, field_validator, model_validator
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -141,9 +139,6 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oci_enterprise_ai_max_retries: int = 3
     # 出力の上限は登録モデルごとの `max_output_tokens`（#1719。既定 32768）。共通の LLM / VLM の
     # 上限は持たない（呼び出しは pr_system_settings の enterprise_ai_output_token_budget）。
-    # LLM / VLM の呼び出しの seed（#1434。共通のモデル設定）。
-    # 解釈は pr_system_settings の enterprise_ai_seed。
-    oci_enterprise_ai_seed: int = Field(default=42, ge=0, le=2_147_483_647)
     # チャットで同じ会話の前のターンを LLM に渡す予算（共通の設定。#1818）。
     # 解釈は pr_backend_core.chat_history（新しいターンから詰め、古いターンを落とす）。
     chat_history_max_turns: int = Field(

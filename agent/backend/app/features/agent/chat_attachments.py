@@ -37,7 +37,6 @@ from pr_system_settings.model import (
     enterprise_ai_output_token_budget,
     enterprise_ai_reasoning,
     enterprise_ai_vision_model_id,
-    seed_payload,
 )
 
 from app.features.agent.tool_media import CONTENT_IMAGES_KEY, ToolImage, ToolOutputWithImages
@@ -118,7 +117,6 @@ def _image_reader(
             ],
             max_output_tokens=enterprise_ai_output_token_budget(settings, model_id),
             store=False,
-            extra_body=seed_payload(settings),
             **extra,
         )
         return str(response.output_text or "")
