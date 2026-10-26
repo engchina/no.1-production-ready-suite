@@ -1349,19 +1349,23 @@ class Settings(
         ),
     )
     rag_article_catalog_max_documents: int = Field(
-        default=8,
+        default=16,
         ge=0,
-        le=10,
+        le=32,
         description=(
             "条の目録を読む文書の上限(検索の候補の文書の、候補の順位の逆数の合計の大きい順。"
-            "#2254・#2261)。0 は選ばない。"
+            "#2254・#2261)。0 は選ばない。既定は評価で必要だった文書の順位(最大 8)に"
+            "余裕を持たせた値(#3518)。文書ごとに LLM を 2 回呼ぶ。"
         ),
     )
     rag_article_catalog_max_articles: int = Field(
-        default=12,
+        default=8,
         ge=0,
         le=20,
-        description="条の目録から 1 つの文書で選ぶ条の上限(#2254)。",
+        description=(
+            "条の目録から 1 つの文書で選ぶ条の上限(#2254)。既定は評価で根拠の条が選ばれた"
+            "位置(最大 6)に余裕を持たせた値(#3518)。"
+        ),
     )
     rag_article_catalog_context_records: int = Field(
         default=6,

@@ -95,7 +95,7 @@ def test_catalog_articles_are_not_deferred_by_document_selection():
 def test_engine_settings_default_and_env():
     defaults = get_settings(environ={}, dotenv_path=None)
     assert defaults.article_catalog_enabled is True
-    assert (defaults.article_catalog_max_documents, defaults.article_catalog_max_articles) == (8, 12)
+    assert (defaults.article_catalog_max_documents, defaults.article_catalog_max_articles) == (16, 8)
     assert defaults.article_catalog_context_records == 6
     assert defaults.article_catalog_original_question_search is True
     environ = {
@@ -184,7 +184,7 @@ def test_catalog_article_children_reads_catalogs_and_chunks_from_injected_depend
     # 候補にあった条は印だけ（検索の根拠として扱う）、加えた条は added。
     assert [r.metadata.get(ARTICLE_CATALOG_KEY, {}).get("added") for r in children] == [None, None, True]
     assert [r.chunk_uid for r in expansion] == ["hit", "new", "new:p"]
-    assert calls[0] == ("catalogs", ["doc-m", "doc-a"], 8)
+    assert calls[0] == ("catalogs", ["doc-m", "doc-a"], settings.article_catalog_max_documents)
     assert calls[1] == ("chunks", ["s2", "s3"])
     assert [c[0] for c in calls].count("catalogs") == 2  # 目録は呼び出し元が回答ごとに持つ
 
@@ -365,7 +365,7 @@ def test_catalog_article_children_adds_documents_chosen_from_the_scope_list():
     # 候補の文書の目録の有無は段を開く前に確かめる（条で構成された文書が無ければ段を出さない）。
     assert stages_at["catalogs:doc-a"] == []
     # 一覧から選んだ doc-g・doc-a のうち、候補の文書（doc-a）に無い doc-g だけを足して読む。
-    assert calls[0] == ("catalogs", ["doc-a"], 8)
+    assert calls[0] == ("catalogs", ["doc-a"], settings.article_catalog_max_documents)
     assert calls[1] == ("catalogs", ["doc-g"], 1)
     # 候補の文書と重なる分（doc-a の 1 つ）だけ多く頼む（既定の 2 + 1）。
     assert asked == [3]
