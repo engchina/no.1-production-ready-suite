@@ -138,6 +138,8 @@ jobs:
       # platform の採点の部品（#3240）。RAG / Backend と Suite / Evaluation も動かす。
       platform_evaluation_scoring: >-
         ${{ steps.filter.outputs.platform_evaluation_scoring == 'true' || steps.filter.outputs.ci == 'true' }}
+      platform_enterprise_ai_deps: >-
+        ${{ steps.filter.outputs.platform_enterprise_ai_deps == 'true' || steps.filter.outputs.ci == 'true' }}
       platform_evaluation_scoring_deps: >-
         ${{ steps.filter.outputs.platform_evaluation_scoring_deps == 'true' || steps.filter.outputs.ci == 'true' }}
       # 製品横断の評価（suite/evaluation。#3240）と、そのテストが読む platform・製品の評価セットのファイル。
@@ -216,9 +218,14 @@ jobs:
             platform_backend:
               - "platform/packages/backend_core/**"
               - "platform/packages/system_settings_backend/**"
+              # OCI Enterprise AI の呼び方の共通の規則（pr_system_settings が使う。#3418）。
+              - "platform/packages/enterprise_ai/**"
             # 製品の評価と suite の評価が共有する採点の部品（#3240）。使うのは RAG の backend と suite だけ。
             platform_evaluation_scoring:
               - "platform/packages/evaluation_scoring/**"
+            platform_enterprise_ai_deps:
+              - "platform/packages/enterprise_ai/uv.lock"
+              - "platform/packages/enterprise_ai/pyproject.toml"
             platform_evaluation_scoring_deps:
               - "platform/packages/evaluation_scoring/uv.lock"
               - "platform/packages/evaluation_scoring/pyproject.toml"
@@ -227,6 +234,8 @@ jobs:
             suite_evaluation:
               - "suite/evaluation/**"
               - "platform/packages/evaluation_scoring/**"
+              # LLM による判定が使う OCI Enterprise AI の呼び方（#3418）。
+              - "platform/packages/enterprise_ai/**"
               - "platform/contracts/mcp/agent-tools.json"
               - "platform/contracts/mcp/rag-tools.json"
               - "platform/contracts/mcp/fixtures/**"
@@ -447,6 +456,7 @@ jobs:
               - "!platform/packages/backend_core/**"
               - "!platform/packages/system_settings_backend/**"
               - "!platform/packages/evaluation_scoring/**"
+              - "!platform/packages/enterprise_ai/**"
               - "!platform/docs/design-system/**"
               - "!platform/package.json"
               - "!platform/package-lock.json"
@@ -765,6 +775,57 @@ jobs:
 
       - name: Dependency audit
         if: needs.changes.outputs.platform_evaluation_scoring_deps == 'true'
+        run: uv run pip-audit --skip-editable
+
+  # OCI Enterprise AI の呼び方の共通の規則（#3418）。標準 library だけ。pr_system_settings と suite が使う。
+  platform-enterprise-ai:
+    name: Platform / enterprise_ai (pr_enterprise_ai)
+    needs: changes
+    if: needs.changes.outputs.platform_backend == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: platform/packages/enterprise_ai
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        with:
+          enable-cache: true
+          prune-cache: true
+          cache-dependency-glob: platform/packages/enterprise_ai/uv.lock
+          save-cache: ${{ github.event_name == 'push' }}
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check
+        run: uv run mypy src
+
+      - name: Test
+        run: uv run pytest -n auto --durations=20
+
+      - name: Security scan
+        run: uv run bandit -r src
+
+      - name: Dependency audit
+        if: needs.changes.outputs.platform_enterprise_ai_deps == 'true'
         run: uv run pip-audit --skip-editable
 
   # ---------------------------------------------------------------- rag
@@ -1949,6 +2010,7 @@ jobs:
       - platform-backend-core
       - platform-system-settings-backend
       - platform-evaluation-scoring
+      - platform-enterprise-ai
       - rag-backend
       - rag-engine
       - services-scripts-lint

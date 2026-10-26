@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from pr_suite_evaluation.dataset import Case, LoadedDataset, canonical_sha256
 from pr_suite_evaluation.evaluators import EVALUATORS_VERSION, CaseScore, score_case
+from pr_suite_evaluation.judge.judging import JudgeRun
 from pr_suite_evaluation.observation import CaseObservation
 from pr_suite_evaluation.report import Report, build_report
 from pr_suite_evaluation.targets import agent_mcp, rag_mcp
@@ -109,6 +110,8 @@ class ExperimentRecord(BaseModel):
     observations: list[CaseObservation] = Field(default_factory=list)
     report: Report
     target: dict[str, Any] = Field(default_factory=dict)
+    # LLM による判定（決定的な採点 report と分けて置く。`suite-evaluation judge` が足す。#3418）。
+    judge: JudgeRun | None = None
 
 
 def _package_version() -> str:

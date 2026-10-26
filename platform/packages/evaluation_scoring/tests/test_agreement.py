@@ -1,0 +1,50 @@
+"""判定の一致の集計（#3418・#2577）。"""
+
+from __future__ import annotations
+
+import pytest
+
+from pr_evaluation_scoring import LabelPair, agreement, cohen_kappa
+
+LABELS = ("pass", "fail")
+
+
+def _pairs(rows: list[tuple[str, str | None]]) -> list[LabelPair]:
+    return [LabelPair(item_id=f"i{index}", human=h, judge=j) for index, (h, j) in enumerate(rows)]
+
+
+def test_agreement_counts_confusion_kappa_and_false_rates() -> None:
+    rows: list[tuple[str, str | None]] = [
+        ("pass", "pass"),
+        ("pass", "pass"),
+        ("pass", "fail"),
+        ("fail", "fail"),
+        ("fail", "pass"),
+        ("fail", "fail"),
+        ("fail", None),
+    ]
+    result = agreement(_pairs(rows), LABELS, positive="pass", negative="fail")
+    assert (result.total, result.judged, result.unjudged) == (7, 6, 1)
+    assert result.coverage == round(6 / 7, 4)
+    assert result.accuracy == round(4 / 6, 4)
+    assert result.confusion == {"pass": {"pass": 2, "fail": 1}, "fail": {"pass": 1, "fail": 2}}
+    # 観測の一致 4/6、偶然の一致 0.5 → κ = (0.6667 - 0.5) / 0.5。
+    assert result.kappa == round((4 / 6 - 0.5) / 0.5, 4)
+    assert result.false_pass_rate == round(1 / 3, 4)
+    assert result.false_fail_rate == round(1 / 3, 4)
+
+
+def test_kappa_edge_cases() -> None:
+    assert cohen_kappa([], LABELS) is None
+    # 人手も評価器も 1 つのラベルだけなら、偶然の一致が 1 で κ は決められない。
+    assert cohen_kappa([("pass", "pass"), ("pass", "pass")], LABELS) is None
+    assert cohen_kappa([("pass", "pass"), ("fail", "fail")], LABELS) == 1.0
+    assert cohen_kappa([("pass", "fail"), ("fail", "pass")], LABELS) == -1.0
+
+
+def test_unknown_human_labels_are_rejected_and_unknown_judge_labels_are_unjudged() -> None:
+    with pytest.raises(ValueError, match="語彙"):
+        agreement(_pairs([("maybe", "pass")]), LABELS)
+    result = agreement(_pairs([("pass", "cannot_judge")]), LABELS)
+    assert (result.judged, result.unjudged, result.accuracy, result.kappa) == (0, 1, None, None)
+    assert result.false_pass_rate is None

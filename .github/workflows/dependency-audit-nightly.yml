@@ -27,6 +27,7 @@ jobs:
           - { name: "Platform / backend_core", dir: platform/packages/backend_core, args: "" }
           - { name: "Platform / system_settings_backend", dir: platform/packages/system_settings_backend, args: "" }
           - { name: "Platform / evaluation_scoring", dir: platform/packages/evaluation_scoring, args: "" }
+          - { name: "Platform / enterprise_ai", dir: platform/packages/enterprise_ai, args: "" }
           - { name: "Suite / Evaluation", dir: suite/evaluation, args: "" }
           - { name: "RAG / Backend", dir: rag/backend, args: "" }
           # OCI SDK が cryptography を <47.0.0 に制約し、GHSA-537c-gmf6-5ccf の修正版は 48.0.1（ci.yml と同じ）。

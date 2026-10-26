@@ -394,6 +394,17 @@ def summary_markdown(summaries: Mapping[str, Mapping[str, Any]]) -> str:
             values = [summaries[label].get("unevaluable", {}).get(metric) for label in labels]
             if any(values):
                 row(f"評価不能のケース: {name}", values)
+    judged = [summaries[label].get("judge") or {} for label in labels]
+    for aspect_id in _ordered_names(judged):
+        rates: list[object] = []
+        for item in judged:
+            aspect = item.get(aspect_id)
+            if not aspect or aspect.get("pass_rate") is None:
+                rates.append(None)
+                continue
+            mark = "" if aspect.get("calibrated") else "（参考）"
+            rates.append(f"{aspect['pass_rate']:.2f}{mark}")
+        row(f"LLM の判定: {aspect_id} の合格の率", rates)
     row("危険な回答のケース", [summaries[label].get("dangerous_case_count") for label in labels])
     row("失敗したケース", [summaries[label].get("error_count") for label in labels])
     row(

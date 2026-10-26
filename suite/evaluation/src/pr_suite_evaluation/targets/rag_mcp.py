@@ -231,6 +231,7 @@ def _turn_view(turn: TurnObservation) -> TurnView:
         outcome=known,
         outcome_source=OUTCOME_SOURCE_ANSWER if known else None,
         citations=evidence_citations(output),
+        answer=str(output.get("answer") or ""),
     )
 
 

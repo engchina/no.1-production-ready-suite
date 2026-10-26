@@ -474,6 +474,24 @@ wheels = [
 ]
 
 [[package]]
+name = "production-ready-enterprise-ai"
+version = "0.1.0"
+source = { editable = "../../platform/packages/enterprise_ai" }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "bandit", specifier = ">=1.8" },
+    { name = "mypy", specifier = ">=1.14" },
+    { name = "pip-audit", specifier = ">=2.9" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-timeout", specifier = ">=2.3" },
+    { name = "pytest-xdist", specifier = ">=3.8" },
+    { name = "ruff", specifier = ">=0.9" },
+]
+
+[[package]]
 name = "production-ready-evaluation-scoring"
 version = "0.1.0"
 source = { editable = "../../platform/packages/evaluation_scoring" }
@@ -497,6 +515,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
+    { name = "production-ready-enterprise-ai" },
     { name = "production-ready-evaluation-scoring" },
     { name = "pydantic" },
 ]
@@ -515,6 +534,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = "==0.28.1" },
+    { name = "production-ready-enterprise-ai", editable = "../../platform/packages/enterprise_ai" },
     { name = "production-ready-evaluation-scoring", editable = "../../platform/packages/evaluation_scoring" },
     { name = "pydantic", specifier = ">=2.11" },
 ]
