@@ -3775,6 +3775,7 @@ export const ja = {
   "search.answerModel.infoLabel": "回答するモデルの説明",
   "search.answerModel.help": "未選択ならテキストモデルで回答し、根拠の図や画像を読むときだけ画像対応モデルを使います。画像対応モデルを選ぶと、回答全体をそのモデルで作ります。",
   "chat.column.model": "回答モデル: {name}",
+  "chat.column.modelWithVision": "回答モデル: {name}（画像を見て回答: {vision}）",
   "search.answerDetails.confidence": "信頼度: {value}",
   "search.answerDetails.outcome.conditional": "条件付きの回答",
   "search.answerDetails.outcome.needs_clarification": "確認が必要",

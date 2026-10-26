@@ -64,6 +64,13 @@ class ChatClarificationRecord(BaseModel):
     entries: list[ChatClarificationRecordEntry] = Field(default_factory=list)
 
 
+class ChatAnswerModel(BaseModel):
+    """回答に使ったモデル（回答の診断の ``models`` の 1 つ。#3439）。"""
+
+    model_id: str
+    label: str
+
+
 class ChatMessage(BaseModel):
     """会話中の 1 メッセージ。ASSISTANT は引用・モデル・trace を含む。"""
 
@@ -97,6 +104,10 @@ class ChatMessage(BaseModel):
     passage_marks: list[dict[str, Any]] = Field(default_factory=list)
     removed_passages: list[dict[str, Any]] = Field(default_factory=list)
     answer_warnings: list[dict[str, Any]] = Field(default_factory=list)
+    # 根拠の原画像を添付して回答の本文を作った Vision モデル（ASSISTANT の終わった回答だけ。
+    # 回答の記録の診断の ``models.vision``。#649・#3439）。列のモデル（``model``）と並べて
+    # 回答の見出しに出す。画像を添付しなかった回答・記録の無い回答は None。
+    answer_vision_model: ChatAnswerModel | None = None
 
 
 class ChatAnswerCancelResult(BaseModel):

@@ -340,6 +340,15 @@ function parseModelRef(value: unknown): ModelRef | null {
   return modelId ? { modelId, label: String(raw.label ?? "") || modelId } : null;
 }
 
+/**
+ * 根拠の原画像を添付して回答の本文を作った Vision モデル（#649・#3439）。作成した直後の回答は配信の診断の
+ * `models.vision`、保存した回答は会話のメッセージの `answer_vision_model`（回答の記録の診断の同じ値）から読む。
+ * 画像を添付しなかった回答・記録の無い回答は null。
+ */
+export function answerVisionModel(diagnostics: unknown, savedMessage: unknown): ModelRef | null {
+  return parseAnswerDiagnostics(diagnostics)?.models.vision ?? parseModelRef(record(savedMessage).answer_vision_model);
+}
+
 function parseModels(value: unknown): AnswerDiagnostics["models"] {
   const raw = record(value);
   return {
