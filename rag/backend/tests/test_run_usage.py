@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import pytest
 from pr_backend_core.observability.genai import record_genai_usage
+from pr_backend_core.observability.model_usage import RunModelUsage, parse_run_usage
 from pr_backend_core.observability.tracing import observed_span
 from rag_engine.resources.tracing import observe_call
 
-from app.rag.run_usage import RunModelUsage, parse_run_usage
 from app.rag.trace_store import AnswerTrace
 from tests.span_progress_support import answer_step, answer_trace
 

@@ -75,7 +75,9 @@ def format_draft_numbers(question: str, draft: GroundedDraft, spans: Sequence[Ma
 
     by_id = {str(span.get("evidence_id")): span for span in spans}
     items = [
-        item if "multi_condition" in by_id.get(item.evidence_id, {}).get("tags", ()) else item.model_copy(update={"text": text(item.text)})
+        item
+        if any("multi_condition" in by_id.get(citation.evidence_id, {}).get("tags", ()) for citation in item.citations)
+        else item.model_copy(update={"text": text(item.text)})
         for item in draft.items
     ]
     return draft.model_copy(update={"summary": text(draft.summary), "items": items})

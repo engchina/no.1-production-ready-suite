@@ -174,6 +174,13 @@ def test_fake_product_mcp_follows_the_input_contracts() -> None:
             schema = tool.input_model.model_json_schema()
             assert set(schema.get("required", [])) == set(contract[name].get("required", [])), name
             assert set(schema["properties"]) <= set(contract[name]["properties"]), name
+            # 既定（Agent が契約の既定から件数を決める。#3240）も契約と同じ。
+            for key, spec in schema["properties"].items():
+                if "default" in spec and "default" in contract[name]["properties"][key]:
+                    assert spec["default"] == contract[name]["properties"][key]["default"], (
+                        name,
+                        key,
+                    )
             checked += 1
     # + nl2sql_list_profiles / nl2sql_recommend_profile / nl2sql_cancel_requirement（#1441）・
     # nl2sql_cancel_job（#3318）と、画面が保存した根拠を確かめ直す内部のツール

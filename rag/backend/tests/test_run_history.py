@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from pr_backend_core.observability.model_usage import run_usage_totals
 from pytest import MonkeyPatch
 from rag_engine.models.llm import GroundedDraft
 from rag_engine.resources.tracing import observe_call
@@ -38,7 +39,6 @@ from app.rag.request_context import (
     set_audit_request_context,
 )
 from app.rag.run_history import RunRecorder, answer_verification, search_run_conditions
-from app.rag.run_usage import run_usage_totals
 from app.schemas.search import SearchRequest, StorageFailure
 from tests.security_support import enable_production_auth, login, login_configured_admin
 from tests.span_progress_support import RecordingTrace
@@ -1069,6 +1069,7 @@ async def test_pipeline_records_the_model_usage_of_each_run(monkeypatch: MonkeyP
         "reasoning_output_tokens": None,
         "measurement": "complete",
         "measured_requests": calls,
+        "unmeasured_sources": [],
     }
     assert store.records[0]["model_id"] == "model-a"
 

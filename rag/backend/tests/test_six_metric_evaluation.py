@@ -139,15 +139,14 @@ def test_removed_thresholds_are_rejected(name: str) -> None:
 
 
 def test_failed_case_stays_in_expected_decision_breakdown() -> None:
-    from app.rag.evaluation import case_error_result
+    from app.rag.evaluation import _case_error_result
 
     case = EvaluationCase(id="failed", query="合成の質問", expected_response_decision="hold")
-    failed = case_error_result(
-        case,
+    failed = _case_error_result(
+        case=case,
         trace_id="synthetic",
-        elapsed_ms=1,
-        error_type="TimeoutError",
-        error_message="合成の失敗",
+        elapsed=1,
+        error=TimeoutError("合成の失敗"),
     )
     result = summarize_case_results([failed])
     breakdown = result.decision_breakdown["hold"]

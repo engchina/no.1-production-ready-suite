@@ -48,6 +48,8 @@ from pr_backend_core.api import OffsetParams
 from pr_backend_core.api.validation import validation_tool_errors
 from pr_backend_core.mcp import (
     TOOL_ARGUMENTS_INVALID_CODE,
+    TOOL_FORBIDDEN_CODE,
+    TOOL_INTERNAL_ERROR_CODE,
     McpServer,
     McpTool,
     McpToolError,
@@ -63,6 +65,7 @@ from pr_backend_core.source_text import (
     read_source_window,
 )
 from pr_backend_core.token_estimate import estimate_input_tokens
+from pr_system_settings.auth.service_token import PROFILE_SCOPE_FORBIDDEN_CODE
 from pydantic import (
     AfterValidator,
     BaseModel,
@@ -72,6 +75,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from rag_engine.generation.operation_audit import answer_passage_ranges
 from rag_engine.generation.table_binding import evidence_tables
 from rag_engine.knowledge.runtime_knowledge import (
     MAX_MATCHED_RULES,
@@ -306,7 +310,10 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 36: 行の番号の基準に、解析が組み立てた表の格子（parsed_table。PDF・HTML・画像の表。原本の座標では
 #     ない）を足し、その根拠に表の番号・格子の行の範囲、1 つのデータの行の根拠にセルの座標と、
 #     解析が出したときはセルの領域（table_cells の bbox）を入れた（#3429）。
-MCP_OUTPUT_SCHEMA_VERSION = 36
+# 37: rag_validate_answer の claims に、渡した answer の中の段落の位置（answer_range）を足した。
+#     rag_search・rag_retrieve_evidence の top_k の既定（省略時の件数）を契約に出した。契約に
+#     ツールの失敗の code の一覧（errors）を足した（#3240）。
+MCP_OUTPUT_SCHEMA_VERSION = 37
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
 # 値と決め方は pr_backend_core.source_text。#3321）。
 EVIDENCE_TEXT_ITEM_MAX_TOKENS = SOURCE_TEXT_ITEM_MAX_TOKENS
@@ -371,6 +378,35 @@ IMAGE_URL_UNAVAILABLE_CODE = "image_url_unavailable"
 PREVIEW_NOT_ALLOWED_CODE = "preview_not_allowed"
 PREVIEW_UNAVAILABLE_CODE = "preview_unavailable"
 PREVIEW_FILE_MISSING_CODE = "preview_file_missing"
+# ツールの失敗（`isError: true` の結果の `error_code`）の一覧と意味（#3240）。呼び出し側
+# （Agent など）はここに載せた code だけで分岐する。一覧は契約（rag-tools.json の `errors`）に
+# 書き出し、`*_CODE` の定数とツールが raise する code がすべて載ることをテストで確かめる。
+MCP_ERROR_CODES: dict[str, str] = {
+    TOOL_ARGUMENTS_INVALID_CODE: (
+        "引数が inputSchema に合わない（details.errors に項目ごとの誤り）。"
+    ),
+    TOOL_FORBIDDEN_CODE: "呼び出した利用者にツールの権限が無い。",
+    TOOL_INTERNAL_ERROR_CODE: "ツールの処理が想定外の理由で失敗した（理由は返さない）。",
+    PROFILE_SCOPE_FORBIDDEN_CODE: (
+        "検索・回答プロファイル・ナレッジベース・文書が、呼び出し元のデータの範囲の外にある。"
+    ),
+    SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE: (
+        "検索・回答プロファイルが無いか使えない（message に使える候補と次の手）。"
+    ),
+    ANSWER_API_FAILED_ERROR_CODE: "回答の生成の AI の呼び出しが失敗した。",
+    SOURCE_NOT_FOUND_CODE: "根拠・文書・頁・処理レシピが見つからない（定位子の形の誤りを含む）。",
+    SOURCE_STALE_CODE: "文書の版（chunk_set）が作り直され、根拠の id・定位子・続きの位置が古い。",
+    SECTION_NOT_FOUND_CODE: "章節が無いか、本文が無い。",
+    CURSOR_INVALID_CODE: "続きの位置（next_cursor）の形が違う（message に直し方）。",
+    IMAGE_NOT_AVAILABLE_CODE: "根拠に図の画像が無い（図の根拠でない・領域が分からない）。",
+    IMAGE_TOO_LARGE_CODE: "図の画像が 1 回の応答の上限を超える。",
+    IMAGE_SOURCE_MISSING_CODE: "図の元のファイルが保存先に無い。",
+    IMAGE_URL_NOT_ALLOWED_CODE: "図を開く URL をこの呼び出しでは作れない（画面の操作だけ）。",
+    IMAGE_URL_UNAVAILABLE_CODE: "図を開く URL を今は作れない（一時的）。",
+    PREVIEW_NOT_ALLOWED_CODE: "原文のプレビューをこの呼び出しでは作れない（画面の操作だけ）。",
+    PREVIEW_UNAVAILABLE_CODE: "原文のプレビューを今は作れない（一時的）。",
+    PREVIEW_FILE_MISSING_CODE: "原文のプレビューのファイルが保存先に無い。",
+}
 # ブラウザで開く URL（図・原文のプレビュー）を作ってよい呼び出し（Agent の画面の操作）の、
 # サービストークンの
 # claim `purpose` の値。Run の中でモデルが呼んだ token（purpose 無し）では作らない。
@@ -516,7 +552,10 @@ class SearchInput(BaseModel):
             "呼び出し元にデータの範囲があるときは、検索・回答プロファイルの参照先の中だけ。"
         ),
     )
-    top_k: int | None = Field(default=None, ge=1, le=SEARCH_TOP_K_MAX, description="検索する件数。")
+    # 既定を契約に出す（#3240。呼び出し側が説明の文から既定を写さない）。null は省略と同じ。
+    top_k: int | None = Field(
+        default=SEARCH_TOP_K_DEFAULT, ge=1, le=SEARCH_TOP_K_MAX, description="検索する件数。"
+    )
     filters: dict[str, str] = Field(
         default_factory=dict,
         description=(
@@ -1395,7 +1434,11 @@ class EvidenceImageUrl(BaseModel):
     """
 
     url: str = Field(description="図の画像の URL（MCP の呼び出しを受けた RAG の起点から作る）。")
-    path: str = Field(description="url の path（RAG の公開の起点に付け替えるときに使う）。")
+    # path の始まりを契約に出す（#3240。呼び出し側は付け替えてよい path をこれで確かめる）。
+    path: str = Field(
+        pattern=f"^{FIGURE_URL_PATH_PREFIX}/",
+        description="url の path（RAG の公開の起点に付け替えるときに使う）。",
+    )
     expires_at: str = Field(description="期限（ISO 8601、UTC）。")
     expires_in_seconds: int = Field(description="発行からの有効な秒数。")
 
@@ -1437,6 +1480,7 @@ class EvidencePreview(BaseModel):
     )
     page_path_template: str | None = Field(
         default=None,
+        pattern=f"^{SOURCE_PREVIEW_PATH_PREFIX}/",
         description="page_url_template の path（RAG の公開の起点に付け替えるときに使う）。",
     )
     content_url: str = Field(
@@ -1445,7 +1489,9 @@ class EvidencePreview(BaseModel):
             "disposition=attachment でダウンロード）。"
         )
     )
-    content_path: str = Field(description="content_url の path。")
+    content_path: str = Field(
+        pattern=f"^{SOURCE_PREVIEW_PATH_PREFIX}/", description="content_url の path。"
+    )
     highlight_metadata: dict[str, Any] = Field(
         default_factory=dict,
         description=(
@@ -2087,6 +2133,14 @@ class RetrieveEvidenceOutput(VersionedOutput):
 
 class ValidatedClaim(BaseModel):
     answer_quote: str = Field(description="回答の段落（原文）。")
+    answer_range: ExcerptRange | None = Field(
+        default=None,
+        description=(
+            "渡した answer の中の段落の位置（文字の位置。answer の [start, end) が answer_quote）。"
+            "段落の分け方は呼び出し側に写さず、この位置で回答の段落を特定する。位置を決められない"
+            "段落は null。"
+        ),
+    )
     status: str = Field(
         description=(
             "supported=根拠で裏付けられる / unsupported=根拠で確かめられない / contradicted=根拠と"
@@ -2649,6 +2703,26 @@ def _table_binding(text: str, metadata: dict[str, Any]) -> TableBinding | None:
     return "not_checkable" if _is_table_evidence(metadata) else None
 
 
+def _answer_range(
+    claim: Mapping[str, Any], passage_ranges: Mapping[str, tuple[int, int]], answer: str
+) -> ExcerptRange | None:
+    """段落の判定の、回答の中の位置（段落の ID の位置。ID が無ければ原文が回答に 1 回だけ
+    現れる位置）。
+
+    位置の原文が段落の原文と違えば null（呼び出し側は原文で探す）。
+    """
+    quote = str(claim.get("answer_quote") or "")
+    if not quote:
+        return None
+    span = passage_ranges.get(str(claim.get("answer_passage_id") or ""))
+    if span is None and answer.count(quote) == 1:
+        start = answer.find(quote)
+        span = (start, start + len(quote))
+    if span is None or answer[span[0] : span[1]] != quote:
+        return None
+    return ExcerptRange(start=span[0], end=span[1])
+
+
 def _excerpt_range(value: object) -> ExcerptRange | None:
     start, end = getattr(value, "start", None), getattr(value, "end", None)
     if not isinstance(start, int) or not isinstance(end, int):
@@ -3034,7 +3108,11 @@ def retrieve_evidence_limit(arguments: RetrieveEvidenceInput) -> int:
     evidence_limit を省略して top_k を既定より大きくしたときは top_k まで返す（検索で当たった
     chunk を全部返す。上限は EVIDENCE_LIMIT_MAX）。渡した evidence_limit はそのまま使う。
     """
-    if "evidence_limit" in arguments.model_fields_set or arguments.top_k is None:
+    if (
+        "evidence_limit" in arguments.model_fields_set
+        or "top_k" not in arguments.model_fields_set
+        or arguments.top_k is None
+    ):
         return arguments.evidence_limit
     return min(max(arguments.evidence_limit, arguments.top_k), EVIDENCE_LIMIT_MAX)
 
@@ -4001,7 +4079,7 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
         payload["filters"] = {**arguments.filters, INCLUDE_SUPERSEDED_FILTER_KEY: "true"}
     if arguments.search_answer_profile_id is not None:
         payload["search_answer_profile_id"] = arguments.search_answer_profile_id
-    if arguments.top_k is not None:
+    if "top_k" in arguments.model_fields_set and arguments.top_k is not None:
         payload["top_k"] = arguments.top_k
     # ルールの確認の答え（rule:）は業務ガイドの条件ではない（rag_search が前提にする。#2117）。
     conditions = {
@@ -4856,6 +4934,10 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         except GuideProfileNotFoundError as exc:
             assert guide is not None  # 業務ガイドを渡したときだけ起きる
             raise await profile_not_found_error(guide.search_answer_profile_id) from exc
+        passage_ranges = {
+            passage_id: (start, end)
+            for passage_id, start, end in answer_passage_ranges(arguments.answer)
+        }
         return ValidateAnswerOutput(
             valid=result.valid,
             status=result.status,
@@ -4863,6 +4945,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             claims=[
                 ValidatedClaim(
                     answer_quote=str(claim.get("answer_quote") or ""),
+                    # 段落の位置（#3240。呼び出し側が段落の分け方を写さずに段落を特定する）。
+                    answer_range=_answer_range(claim, passage_ranges, arguments.answer),
                     status=str(claim.get("status") or ""),
                     chunk_id=_claim_chunk_id(claim.get("source_id")),
                     reason=str(claim.get("reason") or ""),

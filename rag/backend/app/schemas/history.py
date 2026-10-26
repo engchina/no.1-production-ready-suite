@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
+from pr_backend_core.observability.model_usage import RunModelUsage, UsageMeasurement
 from pydantic import BaseModel, Field
 
-from app.rag.run_usage import RunModelUsage, UsageMeasurement
 from app.schemas.common import JsonValue
 from app.schemas.search import RetrievedChunk, StorageFailure
 

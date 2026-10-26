@@ -3839,6 +3839,8 @@ def generation_spec(
         items=items,
         unresolved_ja=unresolved,
         summary_ja=requirement_summary(draft),
+        # 確認の LLM の利用量をジョブへ写す（実行履歴の行で合算する。#3552）。
+        usage=session.requirement_usage,
     )
 
 

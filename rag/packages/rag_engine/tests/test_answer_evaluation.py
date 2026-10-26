@@ -462,13 +462,13 @@ def test_prepared_scope_is_reused_without_another_scope_call(fixed_scope):
 def _rendered_items_answer():
     """回答生成（items 方式）の render() が実際に組み立てる本文。全種類の見出しと出典行を含む。"""
     from rag_engine.generation.grounded import CheckedItem, render
-    from rag_engine.models.llm import GroundedItem
+    from rag_engine.models.llm import GroundedCitation, GroundedItem
 
     def span(function, page):
         return {"source": "manual.pdf", "page": page, "function": ("manual.pdf", function)}
 
     def item(kind, text, **extra):
-        return GroundedItem(kind=kind, text=text, evidence_id="E1", quote=text, **extra)
+        return GroundedItem(kind=kind, text=text, citations=[GroundedCitation(evidence_id="E1", quote=text)], **extra)
 
     return render(
         "結論です。",

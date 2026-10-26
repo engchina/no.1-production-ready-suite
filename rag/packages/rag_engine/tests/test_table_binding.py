@@ -5,7 +5,7 @@ import pytest
 from rag_engine.generation import grounded
 from rag_engine.generation.answer_policy import RELATION_SUPPORT_RULES
 from rag_engine.generation.table_binding import evidence_tables, unbound_table_values
-from rag_engine.models.llm import GroundedDraft, GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
 # 区分と選択肢の値の表（見出しは <th>）。区分の名前はローマ数字だけが違う。
 TABLE = (
@@ -145,8 +145,12 @@ def test_grounded_item_with_a_value_from_another_row_is_removed_with_the_right_v
     spans = grounded.tag_spans(
         question, [{"evidence_id": "E1", "source_id": "c1", "source": "m.pdf", "page": 1, "text": TABLE, "section_path": []}]
     )
-    wrong = GroundedItem(kind="rule", text="区分Ⅱの選択肢の値は 01 です。", evidence_id="E1", quote="区分Ⅱ 02")
-    right = GroundedItem(kind="rule", text="区分Ⅱの選択肢の値は 02 です。", evidence_id="E1", quote="区分Ⅱ 02")
+    wrong = GroundedItem(
+        kind="rule", text="区分Ⅱの選択肢の値は 01 です。", citations=[GroundedCitation(evidence_id="E1", quote="区分Ⅱ 02")]
+    )
+    right = GroundedItem(
+        kind="rule", text="区分Ⅱの選択肢の値は 02 です。", citations=[GroundedCitation(evidence_id="E1", quote="区分Ⅱ 02")]
+    )
 
     def checked(item: GroundedItem) -> grounded.CheckedItem:
         entries, _ = grounded.verify(question, GroundedDraft(summary="", confidence="high", items=[item]), spans)
@@ -178,7 +182,9 @@ def test_grounded_item_listing_values_of_several_rows_is_kept() -> None:
     spans = grounded.tag_spans(
         question, [{"evidence_id": "E1", "source_id": "c1", "source": "m.pdf", "page": 1, "text": PRICE_TABLE, "section_path": []}]
     )
-    listed = GroundedItem(kind="rule", text="単価の列に 254・253・300 が表示されます。", evidence_id="E1", quote="254")
+    listed = GroundedItem(
+        kind="rule", text="単価の列に 254・253・300 が表示されます。", citations=[GroundedCitation(evidence_id="E1", quote="254")]
+    )
     entries, _ = grounded.verify(question, GroundedDraft(summary="", confidence="high", items=[listed]), spans)
     entry = next(entry for entry in entries if entry.item.text == listed.text)
     assert not any("表の別の行の値" in reason for reason in entry.reasons)
@@ -340,8 +346,7 @@ def test_grounded_item_about_a_figure_button_is_kept() -> None:
     item = GroundedItem(
         kind="operation",
         text="画面 A の下部に差し戻しボタンがあります。",
-        evidence_id="E1",
-        quote="ボタン: 保存 / 承認 / 差し戻し / 一時保存",
+        citations=[GroundedCitation(evidence_id="E1", quote="ボタン: 保存 / 承認 / 差し戻し / 一時保存")],
     )
     entries, _ = grounded.verify(question, GroundedDraft(summary="", confidence="high", items=[item]), spans)
     entry = next(entry for entry in entries if entry.item.text == item.text)

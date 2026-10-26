@@ -19,7 +19,7 @@ from rag_engine.generation.answering import (
     _prompt_safe_warnings,
     synthesize_grounded_answer,
 )
-from rag_engine.models.llm import GroundedDraft, GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
 LIST_TEXT = "●集計表出力\n一覧表を選択し、処理を選択します。\n実行ボタンを押して完了します。"
 LIMIT_TEXT = "帳票印刷\nファイル出力は顧客名簿にのみ適用されます。"
@@ -73,7 +73,7 @@ def ids(ctx, question=QUESTION):
 
 
 def item(evidence_id, text, quote, **extra):
-    return {"kind": "operation", "text": text, "evidence_id": evidence_id, "quote": quote, **extra}
+    return {"kind": "operation", "text": text, "citations": [{"evidence_id": evidence_id, "quote": quote}], **extra}
 
 
 def draft(*items, summary="集計表出力から明細一覧を出力できます。", confidence="high"):
@@ -199,7 +199,9 @@ class GroundedAnswerTest(unittest.TestCase):
         # 該当が未確認の説明・資料から確認できなかった事項の説明は参考、条件つきは該当を確認した説明（#2040）。
         def checked(kind="rule", applies="matched", quote_only=False):
             return grounded.CheckedItem(
-                GroundedItem(kind=kind, text="t", evidence_id="E1", quote="q", applies=applies), span={}, quote_only=quote_only
+                GroundedItem(kind=kind, text="t", citations=[GroundedCitation(evidence_id="E1", quote="q")], applies=applies),
+                span={},
+                quote_only=quote_only,
             )
 
         self.assertEqual(grounded.answer_use(checked()), grounded.ANSWER_USE_CONFIRMED)
@@ -282,7 +284,9 @@ class GroundedAnswerTest(unittest.TestCase):
         quote = (
             "①営業所を選択します。②納品先一覧に登録済みの納品先が表示されるので、選択します。③納品先名を変更します。④実行ボタンを押します。"
         )
-        resolved, matched = grounded.resolve_evidence(GroundedItem(kind="operation", text="t", evidence_id="E1", quote=quote), [span])
+        resolved, matched = grounded.resolve_evidence(
+            GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="E1", quote=quote)]), [span]
+        )
         self.assertEqual(resolved["evidence_id"], "E1")
         self.assertEqual(
             matched,
@@ -295,15 +299,23 @@ class GroundedAnswerTest(unittest.TestCase):
                 GroundedItem(
                     kind="operation",
                     text="t",
-                    evidence_id="E1",
-                    quote="②納品先一覧に登録済みの納品先が表示されるので、選択します。①営業所を選択します。",
+                    citations=[
+                        GroundedCitation(
+                            evidence_id="E1", quote="②納品先一覧に登録済みの納品先が表示されるので、選択します。①営業所を選択します。"
+                        )
+                    ],
                 ),
                 [span],
             )[0]
         )
         self.assertIsNone(
             grounded.resolve_evidence(
-                GroundedItem(kind="operation", text="t", evidence_id="E1", quote="①営業所を選択します。②保存ボタンを押します。"), [span]
+                GroundedItem(
+                    kind="operation",
+                    text="t",
+                    citations=[GroundedCitation(evidence_id="E1", quote="①営業所を選択します。②保存ボタンを押します。")],
+                ),
+                [span],
             )[0]
         )
         # 「1.」「(1)」の番号でも分割する。
@@ -311,7 +323,11 @@ class GroundedAnswerTest(unittest.TestCase):
         span2 = {"evidence_id": "E2", "source_id": "uid-b", "start": 0, "end": len(text2), "text": text2}
         self.assertEqual(
             grounded.resolve_evidence(
-                GroundedItem(kind="operation", text="t", evidence_id="E2", quote="1. 参照ボタンを押します。 2. 実行ボタンを押します。"),
+                GroundedItem(
+                    kind="operation",
+                    text="t",
+                    citations=[GroundedCitation(evidence_id="E2", quote="1. 参照ボタンを押します。 2. 実行ボタンを押します。")],
+                ),
                 [span2],
             )[1],
             "1. 参照ボタンを押します。 … 2. 実行ボタンを押します。",
@@ -344,12 +360,16 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertNotIn(step["text"], by["E3"]["function_texts"])  # 兄弟の機能は含めない
         self.assertNotIn(other_doc["text"], by["E1"]["function_texts"])  # 別文書は含めない
         item = GroundedItem(
-            kind="operation", text="取引先登録画面で取引先名を変更し、実行ボタンを押す。", evidence_id="E1", quote=overview["text"]
+            kind="operation",
+            text="取引先登録画面で取引先名を変更し、実行ボタンを押す。",
+            citations=[GroundedCitation(evidence_id="E1", quote=overview["text"])],
         )
         self.assertEqual(grounded._check_button_names(question, item, by["E1"]), "")
         self.assertEqual(grounded._check_interaction(question, item, by["E1"]), "")
         item = GroundedItem(
-            kind="operation", text="納品先登録画面で納品先名を変更し、登録ボタンを押す。", evidence_id="E2", quote=step["text"]
+            kind="operation",
+            text="納品先登録画面で納品先名を変更し、登録ボタンを押す。",
+            citations=[GroundedCitation(evidence_id="E2", quote=step["text"])],
         )
         self.assertEqual(grounded._check_button_names(question, item, by["E2"]), "根拠にないボタン名: 登録")
 
@@ -391,7 +411,11 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertNotEqual(by["E1"]["function"], by["E3"]["function"])
         self.assertIn(continued["text"], by["E1"]["function_texts"])
         self.assertNotIn(sibling["text"], by["E1"]["function_texts"])
-        item = GroundedItem(kind="operation", text="取引先名を変更し、実行ボタンを押す。", evidence_id="E1", quote=step["text"])
+        item = GroundedItem(
+            kind="operation",
+            text="取引先名を変更し、実行ボタンを押す。",
+            citations=[GroundedCitation(evidence_id="E1", quote=step["text"])],
+        )
         self.assertEqual(grounded._check_button_names(question, item, by["E1"]), "")
         # 出所が無い旧データは従来どおり全要素で判定する
         legacy = {**continued, "section_path_sources": []}
@@ -423,11 +447,19 @@ class GroundedAnswerTest(unittest.TestCase):
         by = {s["evidence_id"]: s for s in grounded.tag_spans(question, [step, continued, sibling, far])}
         self.assertEqual(by["E1"]["adjacent_texts"], [continued["text"]])
         self.assertNotIn(continued["text"], by["E1"]["function_texts"])
-        item = GroundedItem(kind="operation", text="取引先名を変更し、実行ボタンを押す。", evidence_id="E1", quote=step["text"])
+        item = GroundedItem(
+            kind="operation",
+            text="取引先名を変更し、実行ボタンを押す。",
+            citations=[GroundedCitation(evidence_id="E1", quote=step["text"])],
+        )
         self.assertEqual(grounded._check_button_names(question, item, by["E1"]), "")
         self.assertEqual(grounded._check_interaction(question, item, by["E1"]), "")
         for name in ("登録", "確認"):
-            item = GroundedItem(kind="operation", text=f"取引先名を変更し、{name}ボタンを押す。", evidence_id="E1", quote=step["text"])
+            item = GroundedItem(
+                kind="operation",
+                text=f"取引先名を変更し、{name}ボタンを押す。",
+                citations=[GroundedCitation(evidence_id="E1", quote=step["text"])],
+            )
             self.assertEqual(grounded._check_button_names(question, item, by["E1"]), f"根拠にないボタン名: {name}")
 
     def test_button_listed_in_the_screen_description_is_not_an_unsupported_button(self):
@@ -458,13 +490,23 @@ class GroundedAnswerTest(unittest.TestCase):
         by = {s["evidence_id"]: s for s in grounded.tag_spans(question, [step, screen])}
         self.assertIn(screen["text"], by["E1"]["screen_texts"])
         self.assertNotIn(screen["text"], by["E1"]["function_texts"])  # 原文照合には従来どおり使わない
-        item = GroundedItem(kind="operation", text="取引先名を変更し、実行ボタンを押す。", evidence_id="E1", quote=step["text"])
+        item = GroundedItem(
+            kind="operation",
+            text="取引先名を変更し、実行ボタンを押す。",
+            citations=[GroundedCitation(evidence_id="E1", quote=step["text"])],
+        )
         self.assertEqual(grounded._check_button_names(question, item, by["E1"]), "")
         # field に無いボタンは従来どおり降格する
-        item = GroundedItem(kind="operation", text="取引先名を変更し、登録ボタンを押す。", evidence_id="E1", quote=step["text"])
+        item = GroundedItem(
+            kind="operation",
+            text="取引先名を変更し、登録ボタンを押す。",
+            citations=[GroundedCitation(evidence_id="E1", quote=step["text"])],
+        )
         self.assertEqual(grounded._check_button_names(question, item, by["E1"]), "根拠にないボタン名: 登録")
         # 値: field の値はボタン名として受け入れない
-        item = GroundedItem(kind="operation", text="架空商事ボタンを押す。", evidence_id="E1", quote=step["text"])
+        item = GroundedItem(
+            kind="operation", text="架空商事ボタンを押す。", citations=[GroundedCitation(evidence_id="E1", quote=step["text"])]
+        )
         self.assertEqual(grounded._check_button_names(question, item, by["E1"]), "根拠にないボタン名: 架空商事")
 
     def test_number_found_elsewhere_in_the_same_document_is_not_an_unsupported_number(self):
@@ -496,11 +538,12 @@ class GroundedAnswerTest(unittest.TestCase):
         item = GroundedItem(
             kind="operation",
             text="マスタ管理⇒マスタ管理 2 タブの取引先登録画面で設定を変更します。",
-            evidence_id="E1",
-            quote=overview["text"],
+            citations=[GroundedCitation(evidence_id="E1", quote=overview["text"])],
         )
         self.assertEqual(grounded._check_numbers(question, item, tagged[0]), "")
-        item = GroundedItem(kind="rule", text="取引先名の有効期限は 90 日です。", evidence_id="E1", quote=overview["text"])
+        item = GroundedItem(
+            kind="rule", text="取引先名の有効期限は 90 日です。", citations=[GroundedCitation(evidence_id="E1", quote=overview["text"])]
+        )
         self.assertEqual(grounded._check_numbers(question, item, tagged[0]), "引用と質問にない数値: 90")
 
     def test_quote_of_a_section_heading_resolves_to_the_first_span_of_that_section(self):
@@ -517,27 +560,36 @@ class GroundedAnswerTest(unittest.TestCase):
             span("E4", "uid-b", 0, "得意先区分を通常に変更します。", ["２． 「エラー」の対処方法", ERROR_UNIT_7]),
         ]
         heading = f"{ERROR_HEADING_15} > 【修正方法１ 在庫を振り替える場合】"
-        resolved, quote = grounded.resolve_evidence(GroundedItem(kind="operation", text="t", evidence_id="E2", quote=heading), spans)
+        resolved, quote = grounded.resolve_evidence(
+            GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="E2", quote=heading)]), spans
+        )
         self.assertEqual((resolved["evidence_id"], quote), ("E1", heading))
         # 末尾 1 要素だけの引用（空白の違いは無視）も同じ節の最初の span に結び付く。
         resolved, _ = grounded.resolve_evidence(
-            GroundedItem(kind="operation", text="t", evidence_id="", quote="【修正方法１　在庫を振り替える場合】"), spans
+            GroundedItem(
+                kind="operation", text="t", citations=[GroundedCitation(evidence_id="", quote="【修正方法１　在庫を振り替える場合】")]
+            ),
+            spans,
         )
         self.assertEqual(resolved["evidence_id"], "E1")
         # 上位の見出しは両方の根拠（uid-a, uid-b）にあるので引用元を特定しない。
         self.assertEqual(
-            grounded.resolve_evidence(GroundedItem(kind="operation", text="t", evidence_id="", quote="２． 「エラー」の対処方法"), spans)[
-                1
-            ],
+            grounded.resolve_evidence(
+                GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="", quote="２． 「エラー」の対処方法")]),
+                spans,
+            )[1],
             "quote が複数の Evidence に一致し、引用元を特定できない",
         )
         # 指名された根拠があればその根拠の側に結び付く。
         resolved, _ = grounded.resolve_evidence(
-            GroundedItem(kind="operation", text="t", evidence_id="E4", quote="２． 「エラー」の対処方法"), spans
+            GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="E4", quote="２． 「エラー」の対処方法")]),
+            spans,
         )
         self.assertEqual(resolved["evidence_id"], "E4")
         self.assertIsNone(
-            grounded.resolve_evidence(GroundedItem(kind="operation", text="t", evidence_id="", quote="（８）得意先重複"), spans)[0]
+            grounded.resolve_evidence(
+                GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="", quote="（８）得意先重複")]), spans
+            )[0]
         )
 
     def test_quote_spanning_adjacent_spans_of_the_same_evidence_resolves_to_the_first_span(self):
@@ -556,22 +608,29 @@ class GroundedAnswerTest(unittest.TestCase):
             span("E6", "uid-b", 100, step4),
         ]
         resolved, quote = grounded.resolve_evidence(
-            GroundedItem(kind="operation", text="t", evidence_id="E2", quote=step3 + step4), spans[:4]
+            GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="E2", quote=step3 + step4)]), spans[:4]
         )
         self.assertEqual((resolved["evidence_id"], quote), ("E2", step3 + "\n" + step4))
         # 原文位置が続かない span（⑤）や別の根拠（uid-b）をまたぐ引用は従来どおり落とす。
         self.assertIsNone(
             grounded.resolve_evidence(
-                GroundedItem(kind="operation", text="t", evidence_id="E3", quote=step4 + "⑤実行ボタンを押します。"), spans
+                GroundedItem(
+                    kind="operation", text="t", citations=[GroundedCitation(evidence_id="E3", quote=step4 + "⑤実行ボタンを押します。")]
+                ),
+                spans,
             )[0]
         )
         self.assertIsNone(
-            grounded.resolve_evidence(GroundedItem(kind="operation", text="t", evidence_id="E5", quote=step3 + step4), spans[4:])[0]
+            grounded.resolve_evidence(
+                GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="E5", quote=step3 + step4)]), spans[4:]
+            )[0]
         )
         # 同じ連結が 2 つの根拠にある場合は引用元を推測しない。
         both = spans[:4] + [span("E7", "uid-b", 0, step3), span("E8", "uid-b", len(step3), step4)]
         self.assertEqual(
-            grounded.resolve_evidence(GroundedItem(kind="operation", text="t", evidence_id="", quote=step3 + step4), both)[1],
+            grounded.resolve_evidence(
+                GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="", quote=step3 + step4)]), both
+            )[1],
             "quote が複数の Evidence に一致し、引用元を特定できない",
         )
 
@@ -657,7 +716,7 @@ class GroundedAnswerTest(unittest.TestCase):
 
         def checked(text, **span):
             return grounded.CheckedItem(
-                GroundedItem(kind="operation", text=text, evidence_id="E1", quote=text),
+                GroundedItem(kind="operation", text=text, citations=[GroundedCitation(evidence_id="E1", quote=text)]),
                 {"source": "m.pdf", "page": 1, "function": ("m.pdf", "f"), **span},
                 quote_only=True,
             )
@@ -678,7 +737,9 @@ class GroundedAnswerTest(unittest.TestCase):
         used = GroundedDraft(
             summary="約1週間です。",
             confidence="high",
-            items=[GroundedItem(kind="rule", text="約1週間で登録完了となります。", evidence_id="B", quote=body)],
+            items=[
+                GroundedItem(kind="rule", text="約1週間で登録完了となります。", citations=[GroundedCitation(evidence_id="B", quote=body)])
+            ],
         )
         entries, _ = grounded.verify("自動支払依頼書の登録はどのくらいかかりますか？", used, spans)
         self.assertEqual([entry.span["evidence_id"] for entry in entries], ["B"])  # 表題だけの根拠は補わない
@@ -923,7 +984,7 @@ class GroundedAnswerTest(unittest.TestCase):
         from typing import get_args
 
         from rag_engine.generation.answering import _answer_image_metadata
-        from rag_engine.models.llm import ExternalDataItem, GroundedApplication, GroundedItem
+        from rag_engine.models.llm import ExternalDataItem, GroundedApplication, GroundedCitation, GroundedItem
         from rag_engine.retrieval.task_contract import task_contract
 
         # extra="forbid" のため、スキーマに無い欄を指示どおり出力すると検証エラーになる。
@@ -931,6 +992,7 @@ class GroundedAnswerTest(unittest.TestCase):
         known = (
             set(GroundedDraft.model_fields)
             | set(GroundedItem.model_fields)
+            | set(GroundedCitation.model_fields)
             | set(GroundedApplication.model_fields)
             | set(task_contract(QUESTION))
             | set(ExternalDataItem.model_fields)
@@ -951,7 +1013,7 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertEqual(named - known - values, set())
 
     def test_prompts_state_the_size_limits_the_schema_enforces(self):
-        from rag_engine.models.llm import GroundedAudit, GroundedItem
+        from rag_engine.models.llm import GroundedAudit, GroundedCitation, GroundedItem
 
         def limit(model, name):
             return next(m.max_length for m in model.model_fields[name].metadata if hasattr(m, "max_length"))
@@ -960,7 +1022,7 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertIn(
             f"items は最大{limit(GroundedDraft, 'items')}件、text は{limit(GroundedItem, 'text')}字以内", grounded.GENERATE_SYSTEM_PROMPT
         )
-        self.assertIn(f"{limit(GroundedItem, 'quote')}字以内", grounded.GENERATE_SYSTEM_PROMPT)
+        self.assertIn(f"{limit(GroundedCitation, 'quote')}字以内", grounded.GENERATE_SYSTEM_PROMPT)
         self.assertIn(f"最大{limit(GroundedAudit, 'unused_evidence_ids')}件", grounded.AUDIT_SYSTEM_PROMPT)
 
     def test_generation_prompt_explains_every_tag_shown_with_the_evidence(self):
@@ -1383,8 +1445,12 @@ class GroundedAnswerTest(unittest.TestCase):
         question = "10連休中、窓口は利用できますか。"
         eid = ids(ctx, question)[source]
         quote = "窓口は4月27日（土）～5月6日（月）はご利用いただけません。"
-        good = {"kind": "rule", "text": "窓口は4月27日から5月6日まで利用できません。", "evidence_id": eid, "quote": quote}
-        wrong_year = {"kind": "rule", "text": "2020年4月27日から5月6日まで利用できません。", "evidence_id": eid, "quote": quote}
+        good = {"kind": "rule", "text": "窓口は4月27日から5月6日まで利用できません。", "citations": [{"evidence_id": eid, "quote": quote}]}
+        wrong_year = {
+            "kind": "rule",
+            "text": "2020年4月27日から5月6日まで利用できません。",
+            "citations": [{"evidence_id": eid, "quote": quote}],
+        }
         model = FakeModel([draft(good, wrong_year)], [audit((0, "supported", "matched", ""), (1, "unsupported", "matched", ""))])
         result = run(model, ctx, question).response
         text = result.answer_text
@@ -2040,8 +2106,7 @@ class ObjectSubstitutionGuardTest(unittest.TestCase):
         leaked = {
             "kind": "gap",
             "text": "E5 は操作入口に関する情報ですが、具体的な手順のテキストが提供されていません。",
-            "evidence_id": "",
-            "quote": "",
+            "citations": [{"evidence_id": "", "quote": ""}],
         }
         model = FakeModel([draft(item(eid, step, step), leaked)], [audit((0, "supported", "matched", ""))])
         result = run(model, ctx).response
@@ -2332,7 +2397,9 @@ class RenderStepOrderTest(unittest.TestCase):
     @staticmethod
     def entry(text, function):
         span = {"function": ("fictional", function), "source": "架空設定手順.pdf", "page": 1}
-        return grounded.CheckedItem(GroundedItem(kind="operation", text=text, quote=text), span=span)
+        return grounded.CheckedItem(
+            GroundedItem(kind="operation", text=text, citations=[GroundedCitation(evidence_id="", quote=text)]), span=span
+        )
 
     def test_steps_that_return_to_the_first_function_keep_their_order(self):
         body = grounded.render(
@@ -2667,8 +2734,9 @@ class ReferenceSectionQuoteTest(unittest.TestCase):
 
     SPAN = {"evidence_id": "E1", "source": "規程.pdf", "page": 3}
 
-    def render(self, **fields):
-        entry = grounded.CheckedItem(GroundedItem(kind="rule", **fields), span=self.SPAN, quote_only=fields.get("applies") is None)
+    def render(self, *, quote, **fields):
+        item = GroundedItem(kind="rule", citations=[GroundedCitation(evidence_id="E1", quote=quote)], **fields)
+        entry = grounded.CheckedItem(item, span=self.SPAN, quote_only=fields.get("applies") is None)
         return grounded.render("要約。", [entry]).split(grounded.answer_labels().quote_only_note)[1]
 
     def test_unverified_item_is_shown_as_quote_not_model_text(self):
@@ -2694,7 +2762,9 @@ class DocumentGroupedProcedureTest(unittest.TestCase):
     @staticmethod
     def entry(text, function, source):
         span = {"function": ("doc-" + source, function), "document_scope": ["doc-" + source], "source": source, "page": 1}
-        return grounded.CheckedItem(GroundedItem(kind="operation", text=text, quote=text), span=span)
+        return grounded.CheckedItem(
+            GroundedItem(kind="operation", text=text, citations=[GroundedCitation(evidence_id="", quote=text)]), span=span
+        )
 
     def test_render_puts_the_primary_document_first_and_never_interleaves_documents(self):
         a1 = self.entry("対象を選択します。", "出力様式設定", "架空変更手順.pdf")
@@ -2911,7 +2981,11 @@ class OperationHintFeedbackTest(unittest.TestCase):
     def test_partially_supported_operation_is_told_to_split_the_item(self):
         """引用が text の一部しか支持しない降格には、item を分ける指示を添える (#1076)。"""
         entry = grounded.CheckedItem(
-            GroundedItem(kind="operation", text="開始ボタンを押し、日付を入力し、実行ボタンを押す。", quote="開始ボタンを押します。"),
+            GroundedItem(
+                kind="operation",
+                text="開始ボタンを押し、日付を入力し、実行ボタンを押す。",
+                citations=[GroundedCitation(evidence_id="", quote="開始ボタンを押します。")],
+            ),
             span={"text": "開始ボタンを押します。"},
             quote_only=True,
             reasons=["監査: unsupported/matched 引用文は開始ボタン押下のみを示しており、日付の入力は裏付けられていない。"],
@@ -2941,7 +3015,7 @@ class OperationHintFeedbackTest(unittest.TestCase):
 
     def test_items_downgraded_for_other_reasons_get_no_hint(self):
         entry = grounded.CheckedItem(
-            GroundedItem(kind="operation", text="x", quote="実行ボタンを押します。"),
+            GroundedItem(kind="operation", text="x", citations=[GroundedCitation(evidence_id="", quote="実行ボタンを押します。")]),
             span={"text": "実行ボタンを押します。"},
             quote_only=True,
             reasons=["引用直後の但し書き"],
@@ -2959,14 +3033,22 @@ class ConditionClauseTest(unittest.TestCase):
 
     def test_whole_sentence_condition_is_cut_to_the_clause(self):
         item = GroundedItem(
-            kind="rule", text="欄が空白なら設定しません。", quote=self.SENTENCE, applies="conditional", condition=self.SENTENCE
+            kind="rule",
+            text="欄が空白なら設定しません。",
+            citations=[GroundedCitation(evidence_id="", quote=self.SENTENCE)],
+            applies="conditional",
+            condition=self.SENTENCE,
         )
         normalized = grounded._normalized(item, {"text": self.SENTENCE})
         self.assertEqual((normalized.applies, normalized.condition), ("conditional", "「拠点倉庫名」欄が空白"))
 
     def test_sentence_without_a_condition_clause_is_not_a_condition(self):
         item = GroundedItem(
-            kind="rule", text="管理者に確認してから作業します。", quote=self.NOTICE, applies="conditional", condition=self.NOTICE
+            kind="rule",
+            text="管理者に確認してから作業します。",
+            citations=[GroundedCitation(evidence_id="", quote=self.NOTICE)],
+            applies="conditional",
+            condition=self.NOTICE,
         )
         normalized = grounded._normalized(item, {"text": self.NOTICE})
         self.assertEqual((normalized.applies, normalized.condition), ("matched", ""))
@@ -3037,8 +3119,7 @@ class ContextRequestUnitTest(unittest.TestCase):
         gap = {
             "kind": "gap",
             "text": "「取引先名が変わった」という事実は情報であり、具体的な操作手順は資料にありません。",
-            "evidence_id": "",
-            "quote": "",
+            "citations": [{"evidence_id": "", "quote": ""}],
             "request_id": "Q1",
         }
         model = FakeModel([draft(op, gap)], [audit((0, "supported", "matched", ""), requests=(("Q1", "missing"), ("Q2", "addressed")))])
@@ -3156,7 +3237,9 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         }
         match: dict = {}
         resolved, matched = grounded.resolve_evidence(
-            GroundedItem(kind="operation", text="t", evidence_id="E9", quote=quote), [span, other], match=match
+            GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="E9", quote=quote)]),
+            [span, other],
+            match=match,
         )
         self.assertIs(resolved, span)
         self.assertEqual(
@@ -3169,13 +3252,18 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         # 8 割程度しか似ていない言い換えは受け入れない
         self.assertIsNone(
             grounded.resolve_evidence(
-                GroundedItem(kind="operation", text="t", evidence_id="E1", quote="地区を選んで倉庫番号を入れて探す。"), [span, other]
+                GroundedItem(
+                    kind="operation", text="t", citations=[GroundedCitation(evidence_id="E1", quote="地区を選んで倉庫番号を入れて探す。")]
+                ),
+                [span, other],
             )[0]
         )
         # 同じ文が別の span にもあれば引用元を推測しない
         twin = {**span, "evidence_id": "E3", "label": "E3", "source_id": "s2"}
         self.assertEqual(
-            grounded.resolve_evidence(GroundedItem(kind="operation", text="t", evidence_id="", quote=quote), [span, other, twin])[1],
+            grounded.resolve_evidence(
+                GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="", quote=quote)]), [span, other, twin]
+            )[1],
             "quote が複数の Evidence に一致し、引用元を特定できない",
         )
 
@@ -3200,7 +3288,7 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         match: dict = {}
 
         found, reason = grounded.resolve_evidence(
-            GroundedItem(kind="operation", text="t", evidence_id="E1", quote=quote), [span], match=match
+            GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="E1", quote=quote)]), [span], match=match
         )
 
         self.assertIsNone(found)  # 言い換えは公開しない
@@ -3222,7 +3310,9 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         }
         match = {}
         found, reason = grounded.resolve_evidence(
-            GroundedItem(kind="operation", text="t", evidence_id="E2", quote=quote), [other, span], match=match
+            GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="E2", quote=quote)]),
+            [other, span],
+            match=match,
         )
         self.assertIsNone(found)
         self.assertEqual(reason, "quote がどの Evidence の原文とも一致しない")
@@ -3248,14 +3338,14 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         loose = "出荷倉庫登録画面で、倉庫欄の横の虫眼鏡アイコンを押し倉庫検索を開き、地区を選び倉庫番号を入力し検索する。"  # 類似度 0.88
         # id が指す span では 0.8〜0.9 の言い換え（助詞・活用の差だけ）が結び付く
         resolved, matched = grounded.resolve_evidence(
-            GroundedItem(kind="operation", text="t", evidence_id="E1", quote=loose), [span, other]
+            GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="E1", quote=loose)]), [span, other]
         )
         self.assertIs(resolved, span)
         self.assertTrue(matched.startswith("出荷倉庫登録画面では、倉庫欄の横にある虫眼鏡アイコンを押して"))
         # id が指さなければ結び付けず、最も近い原文を原文のみ提示の候補にする
         match: dict = {}
         resolved, reason = grounded.resolve_evidence(
-            GroundedItem(kind="operation", text="t", evidence_id="", quote=loose), [span, other], match=match
+            GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="", quote=loose)]), [span, other], match=match
         )
         self.assertIsNone(resolved)
         self.assertIn("最も近い原文", reason)
@@ -3265,12 +3355,18 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
             "出荷倉庫登録画面では、倉庫欄の横にある虫眼鏡アイコンを押して倉庫検索画面を開き、地区を選択して支店番号を入力して検索する。"
         )
         self.assertIsNone(
-            grounded.resolve_evidence(GroundedItem(kind="operation", text="t", evidence_id="E1", quote=swapped), [span, other])[0]
+            grounded.resolve_evidence(
+                GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="E1", quote=swapped)]), [span, other]
+            )[0]
         )
         # 近い原文がなければ従来どおり削除
         self.assertEqual(
             grounded.resolve_evidence(
-                GroundedItem(kind="operation", text="t", evidence_id="E1", quote="全く別の文章で、ここには対応する原文がありません。"),
+                GroundedItem(
+                    kind="operation",
+                    text="t",
+                    citations=[GroundedCitation(evidence_id="E1", quote="全く別の文章で、ここには対応する原文がありません。")],
+                ),
                 [span, other],
             )[1],
             "quote がどの Evidence の原文とも一致しない",
@@ -3308,7 +3404,9 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         other_function = span("E3", ["１．操作手順", "（２）納品先登録"])
         other_document = span("E4", ["１．操作手順", "（１）取引先登録"], source="架空別冊.pdf")
         question = "取引先名を変更するにはどこから操作すればよいか。"
-        item = GroundedItem(kind="operation", text="取引先名を変更する。", evidence_id="", quote="①取引先名等を変更します。")
+        item = GroundedItem(
+            kind="operation", text="取引先名を変更する。", citations=[GroundedCitation(evidence_id="", quote="①取引先名等を変更します。")]
+        )
 
         by = {s["evidence_id"]: s for s in grounded.tag_spans(question, [same_a, same_b])}
         bound, _quote = grounded.resolve_evidence(item, [by["E1"], by["E2"]])

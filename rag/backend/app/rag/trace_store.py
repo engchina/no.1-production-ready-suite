@@ -36,6 +36,7 @@ from pr_backend_core.observability.mcp_trace import (
     mcp_server_trace,
     operation_trace_parent,
 )
+from pr_backend_core.observability.model_usage import ModelUsageCollector, RunModelUsage
 from pr_backend_core.observability.trace_store import (
     TraceSpanOwner,
     TraceSpanWriter,
@@ -47,7 +48,6 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.config import Settings
 from app.rag.request_context import current_audit_request_context
-from app.rag.run_usage import ModelUsageCollector, RunModelUsage
 from app.rag.span_display import span_display_name
 
 logger = logging.getLogger(__name__)

@@ -98,7 +98,11 @@ def test_check_view_folds_span_text_fields_for_checks():
     assert span["text"] == "ＯＫボタンを押します。"
     # 説明の「OKボタン」は根拠の「ＯＫボタン」と同じボタン名として扱う。
     checked_item = grounded._check_item(
-        grounded.GroundedItem(kind="operation", text="OKボタンを押します。", evidence_id="e1", quote="ＯＫボタンを押します。")
+        grounded.GroundedItem(
+            kind="operation",
+            text="OKボタンを押します。",
+            citations=[grounded.GroundedCitation(evidence_id="e1", quote="ＯＫボタンを押します。")],
+        )
     )
     assert grounded._check_button_names("", checked_item, view) == ""
 

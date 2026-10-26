@@ -3,12 +3,12 @@
 import pytest
 
 from rag_engine.generation import grounded
-from rag_engine.models.llm import GroundedAudit, GroundedItem
+from rag_engine.models.llm import GroundedAudit, GroundedCitation, GroundedItem
 
 
 def entry(text="対象を送信します。", *, quote=None):
     return grounded.CheckedItem(
-        GroundedItem(kind="operation", text=text, quote=quote or text),
+        GroundedItem(kind="operation", text=text, citations=[GroundedCitation(evidence_id="", quote=quote or text)]),
         span={"text": quote or text, "evidence_id": "a"},
     )
 
