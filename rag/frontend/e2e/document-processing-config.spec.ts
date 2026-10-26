@@ -101,8 +101,10 @@ async function mockWorkspace(
     putFails?: boolean;
     previewFails?: boolean;
     recipeCount?: number;
-    /** プレビュー結果の chunk に足す metadata(例: 親子階層から構造認識への縮退の印)。 */
+    /** プレビュー結果の chunk に足す metadata(例: 親子階層の親の ID と本文)。 */
     previewChunkMetadata?: Record<string, string>;
+    /** 保存済みの chunk を 1 件返し、その metadata に足す値(例: 以前の版の縮退の印)。 */
+    storedChunkMetadata?: Record<string, string>;
     /** 設定を保存するまで、レシピの処理の投入を 409 にする文(#2639)。 */
     enqueueConflictUntilSaved?: string;
   } = {}
@@ -204,7 +206,29 @@ async function mockWorkspace(
     return route.fulfill({ json: ok([]) });
   });
   await page.route("**/api/documents/doc-1/recipes/recipe-1/chunks", (route) =>
-    route.fulfill({ json: ok([]) })
+    route.fulfill({
+      json: ok(
+        options.storedChunkMetadata
+          ? [
+              {
+                document_id: "doc-1",
+                chunk_id: "doc-1:recipe-1:0",
+                chunk_index: 0,
+                text: "保存済みの合成の本文です。",
+                page_start: 1,
+                page_end: 1,
+                bbox: null,
+                section_path: "節 A",
+                content_kind: "text",
+                chunk_group_id: null,
+                source_parser: "markdown",
+                element_ids: ["e0"],
+                metadata: { ...options.storedChunkMetadata },
+              },
+            ]
+          : []
+      ),
+    })
   );
   await page.route("**/api/documents/doc-1/recipes/recipe-1/chunk-preview", (route) => {
     previewPosts += 1;
@@ -336,12 +360,13 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
   await panel.getByRole("combobox", { name: "文書解析" }).click();
   // 解析エンジンの選択肢は文書解析の画面のカードと同じ並び（XML ツリー JSON を含む。#2042）。
   // 構造化レコード JSONL は Unstructured の後、XML ツリー JSON の前（#2457）。
+  // OCI Document Understanding は準備中（ロードマップ。#3374）の印と理由つきで、選べない選択肢として並ぶ。
   await expect(page.getByRole("option")).toHaveText([
     "Docling",
     "Unstructured",
     "構造化レコード JSONL",
     "XML ツリー JSON",
-    "OCI Document Understanding",
+    /^OCI Document Understanding準備中（ロードマップ）準備中（ロードマップ）のため、まだ選べません。$/,
     "Dots.OCR",
   ]);
   await page.getByRole("option", { name: "Dots.OCR" }).click();
@@ -773,6 +798,51 @@ test("保存失敗時は編集値を保持する", async ({ page }) => {
   await expect(panel).toContainText("取込ジョブの実行中は設定を変更できません");
   await expect(panel.getByRole("combobox", { name: "文書解析" })).toContainText("Dots.OCR");
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(
+    `準備中（ロードマップ）の解析エンジンは、処理レシピの選択肢に灰色で出て選べない (${viewport.name})`,
+    { tag: "@responsive" },
+    async ({ page }, testInfo) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await mockWorkspace(page);
+      await page.goto("/documents/doc-1");
+
+      const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
+      await panel.getByRole("button", { name: "処理設定を編集" }).click();
+      await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
+      const combobox = panel.getByRole("combobox", { name: "文書解析" });
+      await combobox.click();
+      const roadmap = page.getByRole("option", { name: /OCI Document Understanding/ });
+      await expect(roadmap).toHaveAttribute("aria-disabled", "true");
+      await expect(roadmap).toContainText("準備中（ロードマップ）のため、まだ選べません。");
+      await expect(page.getByRole("option", { name: "Docling", exact: true })).not.toHaveAttribute(
+        "aria-disabled",
+        "true"
+      );
+      await expectNoPageOverflow(page);
+      await page.screenshot({
+        path: testInfo.outputPath(`recipe-parser-roadmap-${viewport.name}.png`),
+        fullPage: false,
+      });
+      // 押しても選ばれず、一覧は開いたまま（値は変わらない）。
+      const before = await combobox.getAttribute("data-value");
+      // aria-disabled の選択肢は Playwright が押せないものとして待つため、押す操作を強制して確かめる。
+      await roadmap.click({ force: true });
+      await expect(page.getByRole("listbox")).toBeVisible();
+      await expect(combobox).toHaveAttribute("data-value", before ?? "");
+      // キーボードでも選べない: 強調して Enter を押しても値は変わらない。
+      await roadmap.hover({ force: true });
+      await page.keyboard.press("Enter");
+      await expect(combobox).toHaveAttribute("data-value", before ?? "");
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("listbox")).toHaveCount(0);
+    }
+  );
+}
 
 for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
@@ -1246,16 +1316,18 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`Docling 以外の解析結果で親子階層（small-to-big）を選ぶと、構造認識で分割したことを示す (${viewport.name})`, async ({
+  test(`Docling 以外の解析結果でも親子階層（small-to-big）のプレビューに縮退の表示を出さない (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockWorkspace(page, {
       documentStatus: "REVIEW",
       previewChunkMetadata: {
-        chunk_strategy: "structure_aware",
-        chunk_strategy_requested: "small_to_big",
-        chunk_strategy_fallback_reason: "layout_missing",
+        chunk_strategy: "small_to_big",
+        chunk_group_kind: "small_to_big_parent",
+        parent_chunk_id: "parent-1",
+        parent_text: "経費申請は部門長の承認後、経理部が確認します。",
+        source_parser: "markdown",
       },
     });
     await page.goto("/documents/doc-1");
@@ -1266,11 +1338,35 @@ for (const viewport of [
     await page.getByRole("option", { name: "親子階層（small-to-big）" }).click();
     await preview.getByRole("button", { name: "プレビュー実行" }).click();
 
-    // 失敗させず構造認識で分割し、その事実と親子で分割する方法を Chunk 一覧の上に出す(#300)。
-    const notice = page.getByRole("status").filter({ hasText: "構造認識で分割しました" });
-    await expect(notice).toBeVisible();
-    await expect(notice).toContainText("文書解析を Docling にして再解析");
+    // どの解析の結果でも親子で分割する(#3377)。構造認識へ切り替えた案内は出さない。
     await expect(page.getByText("経費申請は部門長の承認後、経理部が確認します。")).toBeVisible();
+    await expect(page.getByText("構造認識で分割しました")).toHaveCount(0);
+    await expect(page.getByText("親子階層で分割されていない Chunk です")).toHaveCount(0);
+    await expect(page.getByRole("status").filter({ hasText: "Docling" })).toHaveCount(0);
+    await expectNoPageOverflow(page);
+  });
+
+  test(`以前の版で構造認識に切り替えて作った chunk には、作り直しを案内する (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockWorkspace(page, {
+      documentStatus: "INDEXED",
+      storedChunkMetadata: {
+        chunk_strategy: "structure_aware",
+        chunk_strategy_requested: "small_to_big",
+        chunk_strategy_fallback_reason: "layout_missing",
+      },
+    });
+    await page.goto("/documents/doc-1");
+    await page.getByRole("tab", { name: "Chunk" }).click();
+
+    const notice = page.getByRole("status").filter({ hasText: "親子階層で分割されていない Chunk です" });
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText("Chunk を作り直すと、解析の結果の構造から親子階層で分割します。");
+    // 解析エンジンの名前を出さない(#3377)。
+    await expect(notice).not.toContainText("Docling");
+    await expect(page.getByText("保存済みの合成の本文です。")).toBeVisible();
     await expectNoPageOverflow(page);
   });
 }
@@ -1283,7 +1379,7 @@ test("親子階層（small-to-big）で分割した chunk には縮退の表示�
   await preview.getByRole("button", { name: "プレビュー実行" }).click();
 
   await expect(page.getByText("経費申請は部門長の承認後、経理部が確認します。")).toBeVisible();
-  await expect(page.getByText("構造認識で分割しました")).toHaveCount(0);
+  await expect(page.getByText("親子階層で分割されていない Chunk です")).toHaveCount(0);
 });
 
 test("分割プレビュー失敗を画面内に表示する", async ({ page }) => {

@@ -157,15 +157,22 @@ class VisionConcurrencyTests(unittest.TestCase):
         self.assertEqual(stats.succeeded, 8)
         self.assertEqual(again.prompts, {})
 
-    def test_concurrent_is_faster_than_sequential_with_slow_vlm(self):
-        started = time.monotonic()
-        self.run_vision(_Describer(delay=0.05), "slow-seq")
-        sequential = time.monotonic() - started
-        started = time.monotonic()
-        self.run_vision(_ConcurrentDescriber(max_concurrency=4, delay=0.05), "slow-con")
-        concurrent = time.monotonic() - started
-        # 8 件・4 ページ(各 2 件)・並行 4 → 2 件分の時間(順番は 8 件分)。
-        self.assertLess(concurrent, sequential)
+    def test_concurrent_calls_pages_at_the_same_time(self):
+        # 4 ページ(各 2 件)・並行 4 → 4 ページの 1 つ目の図を同時に呼ぶ(順番なら 1 件ずつ)。経過時間を順番の実行と
+        # 比べると CI の負荷で逆転した(#3398)ため、4 件が同時に呼ばれたことを Barrier で確かめる(同時でなければ timeout)。
+        describer = _ConcurrentDescriber(max_concurrency=4)
+        barrier = threading.Barrier(4, timeout=30)
+        original = describer.describe
+
+        def gated(*args, _original=original, **kwargs):
+            if args[1]["record_id"].endswith("-1"):
+                barrier.wait()
+            return _original(*args, **kwargs)
+
+        describer.describe = gated
+        stats, _ = self.run_vision(describer, "simultaneous")
+        self.assertFalse(barrier.broken)
+        self.assertEqual((stats.succeeded, stats.failed), (8, 0))
 
 
 if __name__ == "__main__":

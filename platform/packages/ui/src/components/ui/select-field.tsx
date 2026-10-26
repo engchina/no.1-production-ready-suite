@@ -11,6 +11,7 @@ import {
 import { createPortal } from "react-dom";
 
 import { cn } from "../../lib/utils";
+import { StatusBadge } from "../data/status-badge";
 
 import { useFieldWidthScope } from "./field-width-scope";
 import { CONTROL_HEIGHT_CLASS, type ControlSize, type FieldWidth, labeledFieldWidthClasses } from "./control-size";
@@ -22,6 +23,19 @@ export interface SelectFieldOption<T extends string = string> {
   value: T;
   label: string;
   description?: string;
+  /**
+   * 選べない選択肢（#3374。準備中の機能など）。一覧には灰色で出し、キー操作で強調して読み上げられるが、
+   * クリック・Enter・Space では選ばれない（`aria-disabled="true"`。W3C APG の listbox の無効の選択肢）。
+   * 隠さずに出し、選べない理由を `disabledReason` で伝える。
+   */
+  disabled?: boolean;
+  /**
+   * 選べない理由（翻訳済み）。`disabled` のときだけ、選択肢の下の行に出す（`Tabs` の `disabledReason` と同じ考え方。
+   * 一覧の中では Tooltip を出せないため、文字で常に見せる）。
+   */
+  disabledReason?: string;
+  /** ラベルの後ろに出す短い印（翻訳済み。例: `DEFAULT_ROADMAP_LABEL`）。中立色のバッジで出す。 */
+  badge?: string;
 }
 
 interface SelectFieldProps<T extends string> {
@@ -332,6 +346,8 @@ export function SelectField<T extends string>({
   }
 
   function selectOption(option: SelectFieldOption<T>) {
+    // 無効の選択肢は強調・読み上げだけで、選ばない（一覧は閉じない。#3374）。
+    if (option.disabled) return;
     onValueChange(option.value);
     closeList();
     window.requestAnimationFrame(() => buttonRef.current?.focus({ preventScroll: true }));
@@ -457,6 +473,8 @@ export function SelectField<T extends string>({
               const highlighted = index === activeIndex;
               // 「未選択」の選択肢は、値の選択肢と区別できるよう文字を控えめの色にする（選択中・強調中は他と同じ）。
               const emptyChoice = hasEmptyOption && index === 0;
+              const optionDisabled = Boolean(option.disabled);
+              const disabledReason = optionDisabled ? option.disabledReason : undefined;
               return (
                 <li
                   key={option.value}
@@ -465,8 +483,9 @@ export function SelectField<T extends string>({
                   // e2e が値で選択肢を選べるように、値を data 属性に出す（表示には使わない）。
                   data-value={option.value}
                   aria-selected={selected}
+                  aria-disabled={optionDisabled || undefined}
                   // 淡青の面の上の補足（description）を 4.5:1 にする（tokens/colors.css。#1671）。
-                  data-surface-tint={selected || highlighted ? "accent" : undefined}
+                  data-surface-tint={!optionDisabled && (selected || highlighted) ? "accent" : undefined}
                   onMouseEnter={() => {
                     revealHighlightRef.current = false;
                     setHighlightedIndex(index);
@@ -474,14 +493,20 @@ export function SelectField<T extends string>({
                   // pointerdown で選ぶとタッチで一覧をスクロールしただけで選ばれるため、click で選ぶ。
                   onClick={() => selectOption(option)}
                   className={cn(
-                    "flex min-h-10 cursor-pointer items-center gap-2 rounded px-2.5 py-2 text-sm transition-colors",
-                    selected
-                      ? "bg-accent-muted font-medium text-accent-fg-strong"
-                      : emptyChoice
-                        ? "text-fg-muted"
-                        : "text-fg",
-                    highlighted && "bg-accent-subtle text-fg",
-                    selected && highlighted && "bg-accent-muted text-accent-fg-strong"
+                    "flex min-h-10 items-center gap-2 rounded px-2.5 py-2 text-sm transition-colors",
+                    optionDisabled
+                      ? // 無効の選択肢は灰色の文字と禁止のカーソル。強調は地だけで示す（選べそうに見せない）。
+                        cn("cursor-not-allowed text-fg-disabled", highlighted && "bg-surface-hover")
+                      : cn(
+                          "cursor-pointer",
+                          selected
+                            ? "bg-accent-muted font-medium text-accent-fg-strong"
+                            : emptyChoice
+                              ? "text-fg-muted"
+                              : "text-fg",
+                          highlighted && "bg-accent-subtle text-fg",
+                          selected && highlighted && "bg-accent-muted text-accent-fg-strong"
+                        )
                   )}
                 >
                   <Check
@@ -490,10 +515,19 @@ export function SelectField<T extends string>({
                     aria-hidden
                   />
                   <span className="min-w-0">
-                    <span className="block truncate">{option.label}</span>
+                    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="block truncate">{option.label}</span>
+                      {option.badge ? <StatusBadge variant="neutral" icon={false} label={option.badge} /> : null}
+                    </span>
                     {option.description ? (
                       <span className="mt-0.5 block truncate text-xs font-normal text-fg-muted">
                         {option.description}
+                      </span>
+                    ) : null}
+                    {disabledReason ? (
+                      // 理由は読める濃さ（fg-muted。4.5:1）にし、折り返して全文を見せる（一覧の中では Tooltip を出せない）。
+                      <span className="mt-0.5 block whitespace-normal text-xs font-normal text-fg-muted" data-option-disabled-reason="">
+                        {disabledReason}
                       </span>
                     ) : null}
                   </span>

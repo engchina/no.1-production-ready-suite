@@ -34,12 +34,15 @@ export function overlapLabelKey(strategy: ChunkingStrategyName): I18nKey {
 
 export const SMALL_TO_BIG_STRATEGY: ChunkingStrategyName = "small_to_big";
 
-/** Docling のレイアウト(layout_records)がなく、親子階層（small-to-big）の代わりに構造認識で分割したときの理由(#300)。 */
+/**
+ * 以前の版(#300)で、親子階層（small-to-big）の代わりに構造認識で分割した chunk の理由。
+ * 今の分割はどの解析の結果でも親子にする(#3377)ので、新しい chunk には付かない。
+ */
 export const LAYOUT_MISSING_REASON = "layout_missing";
 
 /**
- * 親子階層（small-to-big）を選んだが、解析結果が Docling のレイアウトでないため構造認識で分割した chunk を含むか。
- * backend が chunk metadata の `chunk_strategy_fallback_reason` に残した縮退の印を見る。
+ * 以前の版で親子階層（small-to-big）の代わりに構造認識で分割した chunk を含むか(作り直しの案内に使う)。
+ * backend が chunk metadata の `chunk_strategy_fallback_reason` に残した印を見る。
  */
 export function smallToBigFellBack(chunks: readonly Pick<DocumentChunkView, "metadata">[]): boolean {
   return chunks.some(

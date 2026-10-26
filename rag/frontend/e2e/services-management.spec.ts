@@ -8,7 +8,8 @@ type ServiceStatus =
   | "failed"
   | "stopped"
   | "not_installed"
-  | "unconfigured";
+  | "unconfigured"
+  | "roadmap";
 
 interface ServiceRow {
   service_id: string;
@@ -18,6 +19,7 @@ interface ServiceRow {
   execution_policy: "selected_adapter" | "default_adapter";
   status: ServiceStatus;
   configured: boolean;
+  availability?: "available" | "roadmap";
 }
 
 function defaultServices(): ServiceRow[] {
@@ -73,8 +75,10 @@ function defaultServices(): ServiceRow[] {
       profile: "oci",
       label_key: "settings.services.item.parserOciDocumentUnderstanding",
       execution_policy: "selected_adapter",
-      status: "unconfigured",
-      configured: false,
+      // 準備中（ロードマップ。#3374）。backend は状態を問い合わせず roadmap を返す。
+      status: "roadmap",
+      configured: true,
+      availability: "roadmap",
     },
   ];
 }
@@ -100,6 +104,7 @@ async function mockServices(
       label_key: service.label_key,
       execution_policy: service.execution_policy,
       configured: service.configured,
+      availability: service.availability ?? "available",
       systemd_unit: `production-ready-rag-${service.service_id}.service`,
       model_cache:
         service.service_id === "parser-docling"
@@ -475,7 +480,6 @@ for (const viewport of [
       "parser-unstructured": "停止",
       "parser-structured-records-jsonl": "停止",
       "parser-xml-tree-json": "起動",
-      "parser-oci-document-understanding": "起動",
     };
     for (const [serviceId, primary] of Object.entries(expected)) {
       const row = page.getByTestId(`service-row-${serviceId}`);
@@ -502,6 +506,42 @@ for (const viewport of [
     await page.getByRole("button", { name: "Docling の操作" }).click();
     await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["ログ"]);
     await page.keyboard.press("Escape");
+  });
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`準備中（ロードマップ）の OCI Document Understanding は灰色で、操作を出さず状態も問い合わせない (${viewport.name})`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const statusRequests: string[] = [];
+    page.on("request", (request) => {
+      const match = request.url().match(/\/api\/services\/([^/]+)\/(status|start|stop|restart)/);
+      if (match) statusRequests.push(`${decodeURIComponent(match[1])}:${match[2]}`);
+    });
+    await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+
+    await page.goto("/settings/services");
+    const row = page.getByTestId("service-row-parser-oci-document-understanding");
+    await expect(row).toBeVisible();
+    await expect(row).toHaveAttribute("data-availability", "roadmap");
+    await expect(row.locator("[data-roadmap-badge]")).toHaveText("準備中（ロードマップ）");
+    await expect(row).toContainText("まだ配備・起動できません");
+    // 起動・停止・操作メニューを出さない。
+    await expect(row.getByRole("button")).toHaveCount(0);
+    await expect(page.getByTestId("service-row-parser-docling").getByRole("button")).toHaveCount(2);
+    expect(statusRequests.filter((entry) => entry.startsWith("parser-oci-document-understanding"))).toEqual(
+      []
+    );
+    await expectNoHorizontalOverflow(page);
+    await row.scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: testInfo.outputPath(`services-roadmap-${viewport.name}.png`),
+      fullPage: true,
+    });
   });
 }
 

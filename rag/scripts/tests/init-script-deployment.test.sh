@@ -294,11 +294,12 @@ EOF
 )
 
 # --- 配備する前処理 / parser（CPU / OCI だけ。提供しないサービスは読み飛ばし、必ず配備する parser は足す） ---
-# stack が配備してよい一覧は、提供するサービス（rag-systemd.sh の RAG_MICROSERVICES）と同じ並び。
+# stack が配備してよい一覧は、提供するサービス（rag-systemd.sh の RAG_MICROSERVICES）から準備中（ロードマップ）の
+# サービス（RAG_ROADMAP_SERVICES。#3374）を除いたものと同じ並び。
 allowed_order="$(RAG_INIT_TEST_MODE=true bash -c 'source "$1/init_script.sh"; printf "%s\n" "${ALLOWED_RAG_SERVICES[*]}"' _ "${REPO_DIR}")"
-provided_order="$(bash -c 'source "$1/scripts/rag-systemd.sh"; for e in "${RAG_MICROSERVICES[@]}"; do printf "%s " "${e%%|*}"; done' _ "${REPO_DIR}")"
+provided_order="$(bash -c 'source "$1/scripts/rag-systemd.sh"; for e in "${RAG_MICROSERVICES[@]}"; do id="${e%%|*}"; rag_service_roadmap "${id}" || printf "%s " "${id}"; done' _ "${REPO_DIR}")"
 test "${allowed_order} " = "${provided_order}" \
-  || fail "init_script.sh の ALLOWED_RAG_SERVICES が rag-systemd.sh の RAG_MICROSERVICES と一致しない: ${allowed_order}"
+  || fail "init_script.sh の ALLOWED_RAG_SERVICES が rag-systemd.sh の RAG_MICROSERVICES（準備中を除く）と一致しない: ${allowed_order}"
 run_services_case services-default "preprocess-office-to-pdf parser-unstructured parser-docling parser-structured-records-jsonl parser-xml-tree-json"
 test "$(cat "${TEST_TMP_DIR}/services-default/result")" = "ok" || fail "既定の service が拒否された"
 test "$(cat "${TEST_TMP_DIR}/services-default/services")" = \
@@ -526,8 +527,9 @@ test "${main_order}" = "load_rag_services configure_systemd " \
 run_redeploy_case
 redeploy_dir="${TEST_TMP_DIR}/redeploy"
 redeploy_log="${redeploy_dir}/systemctl.log"
+# 準備中（ロードマップ）の parser-oci-document-understanding（#3374）は以前の一覧にあっても書き戻さない。
 test "$(cat "${redeploy_dir}/app/props/rag_services.txt")" = \
-  "preprocess-office-to-pdf parser-docling parser-oci-document-understanding parser-structured-records-jsonl parser-xml-tree-json preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl" \
+  "preprocess-office-to-pdf parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl" \
   || fail "再配備で rag_services.txt を今の一覧に書き戻していない: $(cat "${redeploy_dir}/app/props/rag_services.txt")"
 test "$(stat -c '%a' "${redeploy_dir}/app/props/rag_services.txt")" = "640" \
   || fail "rag_services.txt の書き戻しで mode が変わった"
@@ -568,6 +570,22 @@ done
 grep -Fq '/usr/bin/systemctl enable --now production-ready-rag-parser-xml-tree-json.service' \
   "${redeploy_dir}/sudoers.d/production-ready-rag-services" \
   || fail "再配備の sudoers が parser-xml-tree-json の操作を許可していない"
+# 準備中（ロードマップ）の parser-oci-document-understanding（#3374）: 以前の配備で起動していた unit を、再配備で
+# 止めて（disable --now）消し、sudoers からも外す。起動・再起動はしない。
+roadmap_unit="production-ready-rag-parser-oci-document-understanding.service"
+grep -Fqx "[rag-init] Skipping RAG service that is on the roadmap (not available yet): parser-oci-document-understanding" \
+  "${redeploy_dir}/load.log" \
+  || fail "準備中の parser-oci-document-understanding を読み飛ばしたことを log に出していない"
+grep -qx "disable --now ${roadmap_unit}" "${redeploy_log}" \
+  || fail "再配備で準備中の parser-oci-document-understanding を止めていない"
+if grep -Eq "^(enable|start|restart)( --now)? ${roadmap_unit}$" "${redeploy_log}"; then
+  fail "再配備で準備中の parser-oci-document-understanding を起動した"
+fi
+test ! -e "${redeploy_dir}/units/${roadmap_unit}" \
+  || fail "再配備で準備中の parser-oci-document-understanding の unit が残っている"
+if grep -Fq "${roadmap_unit}" "${redeploy_dir}/sudoers.d/production-ready-rag-services"; then
+  fail "再配備の sudoers が準備中の parser-oci-document-understanding を許可している"
+fi
 # rag_services.txt を書けなくても配備は続ける（読み込みで毎回直す）。
 (
   case_dir="${TEST_TMP_DIR}/redeploy-readonly"

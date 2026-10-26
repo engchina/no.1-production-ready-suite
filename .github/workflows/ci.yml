@@ -297,6 +297,7 @@ jobs:
             # root の scripts/（monorepo の開発の補助。setup-worktree.sh・pr-merge-check.sh）と .github/
             # （workflow の actionlint、.github/scripts の shellcheck。#1525。以前は ci.yml 以外の workflow の変更で
             # 何も検査しなかった）。AGENTS.md と docs/agents/ の変更でも動かし、AGENTS.md の大きさを確かめる（#2276）。
+            # THIRD-PARTY-NOTICES.md と lockfile の変更でも動かし、通知の表と依存を突き合わせる（#3392）。
             scripts:
               - "scripts/**"
               - ".github/**"
@@ -304,6 +305,9 @@ jobs:
               - "**/AGENTS.md"
               - "docs/agents/**"
               - "*/docs/agents/**"
+              - "THIRD-PARTY-NOTICES.md"
+              - "**/uv.lock"
+              - "**/package-lock.json"
             platform_backend_core_deps:
               - "platform/packages/backend_core/uv.lock"
               - "platform/packages/backend_core/pyproject.toml"
@@ -1693,7 +1697,7 @@ jobs:
 
   # ---------------------------------------------------------------- root の scripts/
 
-  # monorepo の開発の補助のスクリプト（setup-worktree.sh・pr-merge-check.sh・check-agents-md-size.sh。#1328・#2276）を shellcheck と、
+  # monorepo の開発の補助のスクリプト（setup-worktree.sh・pr-merge-check.sh・check-agents-md-size.sh・third-party-notices.py。#1328・#2276・#3392）を shellcheck と、
   # 偽の gh・一時的な git リポジトリのテスト（scripts/tests/）で検査する。テストは GitHub に接続しない。
   # .github/ の workflow（actionlint。run の script は shellcheck も通す）と .github/scripts も検査する（#1525）。
   # workflow の安全の検査（zizmor。設定は .github/zizmor.yml。#1594）も行う。
@@ -1727,6 +1731,14 @@ jobs:
 
       - name: Test check-agents-md-size
         run: bash scripts/tests/check-agents-md-size.test.sh
+
+      # THIRD-PARTY-NOTICES.md の表と、git が管理する uv.lock / package-lock.json の依存を突き合わせる（#3392）。
+      # 表の部品が依存から外れたとき、npm に permissive でないライセンスの package が増えて表に無いときに失敗する。
+      - name: Check third-party notices
+        run: python3 scripts/third-party-notices.py check
+
+      - name: Test third-party-notices
+        run: bash scripts/tests/third-party-notices.test.sh
 
       # 版を固定し、release の checksum で確かめてから使う。shellcheck は runner のものを使う。
       - name: Actionlint

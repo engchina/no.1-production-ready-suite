@@ -34,11 +34,9 @@ from rag_pipeline_core.chunking import (
 
 from app.clients.oracle import _chunk_search_text
 from app.rag.chunking_small_to_big import (
-    SMALL_TO_BIG_FALLBACK_STRATEGY,
     SMALL_TO_BIG_STRATEGY,
     build_parent_child_chunks,
     engine_search_text,
-    small_to_big_fallback_needed,
 )
 from app.rag.vision import read_figures_with_vision
 from app.schemas.extraction import DocumentElement, ExtractionPage, StructuredExtraction
@@ -211,11 +209,9 @@ def _read(extraction: StructuredExtraction, backend: str) -> StructuredExtractio
 
 
 def _chunks(extraction: StructuredExtraction, strategy: str) -> list[Chunk]:
-    # 取込(``IngestionPipeline``)と同じく、layout_records がない文書の親子階層（small-to-big）は
-    # 構造認識で分割する(#300)。
-    if small_to_big_fallback_needed(strategy, extraction):
-        strategy = SMALL_TO_BIG_FALLBACK_STRATEGY
-    elif strategy == SMALL_TO_BIG_STRATEGY:
+    # 取込(``IngestionPipeline``)と同じく、親子階層（small-to-big）はどの解析の結果でも親子に
+    # 分割する(#3377)。
+    if strategy == SMALL_TO_BIG_STRATEGY:
         return build_parent_child_chunks(extraction, source_name="manual.pdf")
     return chunk_extraction_with_strategy(
         extraction, strategy=strategy, chunk_size=800, overlap=120, min_chars=0

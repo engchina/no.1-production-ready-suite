@@ -45,6 +45,8 @@ from app.schemas.extraction import (
     ExtractionPage,
     ExtractionTable,
     StructuredExtraction,
+    section_path_items,
+    strip_formatting_marks,
 )
 
 LAYOUT_ARTIFACT = "layout_records"
@@ -352,14 +354,11 @@ def elements_with_layout_section_paths(
 
 
 def _section_path(items: Sequence[str]) -> list[str]:
-    """``DocumentElement.section_path`` の検証と同じ正規化(空白の詰め・1 項目 80 文字まで)。
+    """``DocumentElement.section_path`` の検証と同じ正規化(``section_path_items``)。
 
     ``model_copy`` は検証を通らないため、解析サービスが返す要素と同じ形にそろえる。
     """
-    # 検証は保存・読み戻しのたびに通るため、切った後の末尾の空白も除いた形が保存の値になる。
-    return [
-        re.sub(r"\s+", " ", str(item)).strip()[:80].strip() for item in items if str(item).strip()
-    ]
+    return section_path_items(str(item) for item in items)
 
 
 def _list(value: object) -> list[Any]:
@@ -507,6 +506,11 @@ def consolidate_document_extraction(
         return extraction
     records = [_copy_record(record) for record in raw_records]
     corrected_text = correct_docling_pdf_text(records, source_bytes)
+    # 原文で裏付けて戻した後に、残る書式の飾りの結合の線を除く(#3354)。record の text は章節の
+    # 道・見出しの深さ・親子分割の入力になる。record の raw は診断のため解析の出力のまま残す。
+    for layout_record in records:
+        if isinstance(layout_record.get("text"), str):
+            layout_record["text"] = strip_formatting_marks(layout_record["text"])
     outline = pdf_outline_entries(source_bytes)
     outline_headings = _apply_outline_levels(records, outline)
     resolved_geometry = geometry or ContinuationGeometry()
@@ -530,7 +534,8 @@ def consolidate_document_extraction(
         metadata = dict(element.metadata)
         updates: dict[str, Any] = {}
         if element.element_id in corrected_text:
-            updates["text"] = str(record["text"])
+            # model_copy は検証を通らないため、要素の本文の検証と同じ規則を当てる(#3354)。
+            updates["text"] = strip_formatting_marks(str(record["text"])).strip()
             metadata["pdf_text_correction"] = raw["pdf_text_correction"]
         continues = raw.get("continues_record_id")
         if isinstance(continues, str) and continues:

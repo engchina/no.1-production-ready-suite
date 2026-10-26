@@ -37,6 +37,9 @@ const regions: ClarificationItem = {
   ],
 };
 
+// 選択肢の無い（自由入力だけで答える）確認事項（#3366）。
+const freeOnly: ClarificationItem = { id: "unit", prompt: "金額の単位は？", options: [] };
+
 beforeEach(() => {
   host = document.createElement("div");
   document.body.appendChild(host);
@@ -150,6 +153,35 @@ describe("ClarificationCard", () => {
     type(otherField("regions"), "沖縄");
     click(byTestId("clarification-card-confirm"));
     expect(onConfirm).toHaveBeenLastCalledWith([{ itemId: "regions", optionIds: ["west"], otherText: "沖縄" }]);
+  });
+
+  it("選択肢の無い確認事項は、自由入力だけの言い方にする（「その他」「選択肢」と言わない）", () => {
+    const onConfirm = render({ items: [freeOnly] });
+    const card = byTestId("clarification-card");
+    const field = otherField("unit");
+    expect(card.querySelector(`label[for="${field.id}"]`)?.textContent).toContain("答え");
+    expect(field.placeholder).toBe("答えを書いてください");
+    expect(byTestId("clarification-card-blocked").textContent).toBe("答えを書くと押せます。");
+    expect(card.textContent).not.toContain("その他");
+    expect(card.textContent).not.toContain("選択肢");
+    type(field, "千円");
+    click(byTestId("clarification-card-confirm"));
+    expect(onConfirm).toHaveBeenLastCalledWith([{ itemId: "unit", optionIds: [], otherText: "千円" }]);
+  });
+
+  it("複数の確認事項の押せない理由は、答えていない確認事項の答え方で言い方を変える", () => {
+    render({ items: [freeOnly, { ...freeOnly, id: "scale", prompt: "桁は？" }] });
+    expect(byTestId("clarification-card-blocked").textContent).toBe(
+      "すべての確認事項で答えを書くと押せます（残り 2 件）。"
+    );
+    act(() => root.render(<ClarificationCard items={[period, freeOnly]} onConfirm={vi.fn()} />));
+    expect(byTestId("clarification-card-blocked").textContent).toBe("すべての確認事項に答えると押せます（残り 2 件）。");
+    // 選択肢のある確認事項の欄は「その他（自由入力）」のまま。
+    expect(host.querySelector(`label[for="${otherField("period").id}"]`)?.textContent).toContain("その他（自由入力）");
+    click(optionInput("period", "month"));
+    expect(byTestId("clarification-card-blocked").textContent).toBe(
+      "すべての確認事項で答えを書くと押せます（残り 1 件）。"
+    );
   });
 
   it("複数の確認事項は、すべてに答えると確定を押せ、残りの件数を理由に出す", () => {
@@ -390,5 +422,9 @@ describe("ClarificationRecord", () => {
   it("答えの文を組む", () => {
     expect(clarificationRecordAnswerText(entries[1])).toBe("東日本、西日本、その他: 沖縄");
     expect(clarificationRecordAnswerText({ id: "x", prompt: "?", selected: [], otherText: "  " })).toBe("（答えなし）");
+    // 選択肢の無い確認事項の答えは「その他: 」を付けない（#3366）。
+    expect(clarificationRecordAnswerText({ id: "u", prompt: "?", selected: [], otherText: "千円", freeTextOnly: true })).toBe(
+      "千円"
+    );
   });
 });
