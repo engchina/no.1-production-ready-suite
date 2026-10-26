@@ -479,8 +479,8 @@ class EvaluationJudgeDiagnostics(BaseModel):
     ``standard_scope_reused`` は比較範囲（標準回答の比較項目）を同じ評価の job の記録から
     使い回したか、``standard_scope_retries`` / ``judge_retries`` は比較範囲の固定 / 照合・
     監査で出力の誤りを指摘して出し直させた回数、``retry_reasons`` はその段と原因の例外の型
-    （「standard_scope:InvalidStructuredOutput」）。``standard_scope_dropped`` は、引用が
-    標準回答に結び付かず（質問の文・言い換えの引用）比較範囲から外した項目の数。
+    （「standard_scope:InvalidStructuredOutput」）。``standard_scope_dropped`` は、指した
+    標準回答の単位の ID がどれも標準回答に無いので比較範囲から外した項目の数。
     """
 
     standard_scope_reused: bool = False
