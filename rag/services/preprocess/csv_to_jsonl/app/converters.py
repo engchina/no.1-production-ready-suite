@@ -6,7 +6,8 @@ CSV を決定論で構造化レコードの JSONL（`rag_parser_core.structured_
 区切り（LF）と chunk の境界は別のもので、入力の区切りは JSONL に残さない。純 Python（`csv` +
 pydantic）のみで完結し、重い変換依存（LibreOffice など）を持たない軽量サービス。
 
-- 表頭は最初の空でない行。空・重複の列名は決定論で補う（`col_<位置>`・`<名前>_<n>`）。
+- 表頭は最初の空でない行。空・重複の列名は決定論で補う（`col_<位置>`・`<名前>_<n>`）。表頭の
+  セルの文字（補う前）は `document` の `header` に残す（根拠のセルの表頭。#3262）。
 - 表頭より列の多い行は、余った値を `col_<位置>` の列にして捨てない
   （診断 `csv_row_wider_than_header`）。
 - 空の行は記録にしない（元の行番号は振り直さない）。
@@ -33,7 +34,7 @@ from rag_parser_core.structured_records import (
 )
 
 CONVERTER_NAME = "csv_to_jsonl"
-CONVERTER_VERSION = "v2"
+CONVERTER_VERSION = "v3"
 # CSV として扱える上限デリミタ候補(Sniffer 失敗時の決定論フォールバックはカンマ)。
 _DELIMITER_CANDIDATES = ",\t;|"
 
@@ -108,8 +109,9 @@ def _csv_to_records(source_bytes: bytes) -> ConvertOutcome:
         return ConvertOutcome.passthrough(reason="csv_no_rows")
 
     header_start, _, header = rows[0]
+    header_cells = [cell.strip() for cell in header]
     # ヘッダが空/重複のときは決定論で列名を補完(col_1, col_2, ...)。
-    columns = _resolve_columns([cell.strip() for cell in header])
+    columns = _resolve_columns(header_cells)
     wide_rows: list[int] = []
     records: list[ContentLine] = []
     for index, (row_start, row_end, row) in enumerate(rows[1:], start=1):
@@ -145,6 +147,7 @@ def _csv_to_records(source_bytes: bytes) -> ConvertOutcome:
         converter=CONVERTER_NAME,
         converter_version=CONVERTER_VERSION,
         header_row=header_start,
+        header=header_cells,
         diagnostics=diagnostics,
     )
     return ConvertOutcome(
