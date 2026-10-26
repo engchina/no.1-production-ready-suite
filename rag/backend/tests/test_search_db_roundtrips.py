@@ -9,11 +9,17 @@
 """
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from typing import Any
 
 import pytest
+from rag_engine.generation import step_details
+from rag_engine.generation.answer_records import _stored_chunk_answer_record
+from rag_engine.resources.tracing import bind_trace_observer
+from rag_engine.retrieval.search_stages import TEXT_SEARCH_STAGE, VECTOR_SEARCH_STAGE
 
+import app.rag.answer_engine as answer_engine_module
 import app.rag.pipeline as pipeline_module
 from app.clients import oracle as oracle_module
 from app.clients.oracle import OracleClient
@@ -823,3 +829,109 @@ async def test_vector_only_queries_have_their_own_vote() -> None:
     assert scores["c-0"] == scores["c-3"]
     assert scores["c-1"] == scores["c-2"]
     assert scores["c-1"] < scores["c-0"]
+
+
+class _QueryGenAi:
+    """検索文ごとに決まった埋め込み(代役の DB の vector の候補の key)を返す。"""
+
+    def __init__(self, vectors: Mapping[str, float]) -> None:
+        self._vectors = vectors
+
+    async def embed(
+        self, texts: list[str], *, input_type: str = "SEARCH_DOCUMENT"
+    ) -> list[list[float]]:
+        return [[self._vectors[text]] for text in texts]
+
+
+class _Observation:
+    def usage(self, value: object) -> None:
+        pass
+
+    def display(self, *args: object, **kwargs: object) -> None:
+        pass
+
+
+async def test_injected_search_reports_db_search_stages_and_channels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回答に注入する検索(``AnswerEngine._search`` を回答の thread から ``_run_on_loop`` で呼ぶ)は、
+    実の ``OracleClient.search_many`` の DB の検索を処理の経過の段(ベクトル検索・全文検索)にし、
+    候補に検索の経路(``adb_hybrid.retrieval_channels``)を書く(#3443)。"""
+    monkeypatch.setattr(
+        oracle_module,
+        "resolve_vector_index_adapter",
+        lambda settings: type("Params", (), {"target_accuracy": 95})(),
+    )
+    client = OracleClient(settings=_search_settings())
+    monkeypatch.setattr(client, "_fetch_all", _fake_search_db)
+
+    async def no_classifications(document_ids: list[str]) -> dict[str, Any]:
+        return {}
+
+    async def no_first_pages(chunk_set_ids: list[str]) -> dict[str, Any]:
+        return {}
+
+    async def no_siblings(
+        anchors: list[RetrievedChunk], *, max_chunks_per_group: int
+    ) -> list[RetrievedChunk]:
+        return []
+
+    monkeypatch.setattr(client, "document_classifications", no_classifications)
+    monkeypatch.setattr(client, "chunk_set_first_page_contexts", no_first_pages)
+    monkeypatch.setattr(client, "context_group_siblings", no_siblings)
+    engine = AnswerEngine(
+        Settings(),
+        oracle=client,
+        genai=_QueryGenAi({"規程": 1.0, "保管": 2.0}),  # type: ignore[arg-type]
+    )
+    observed: list[tuple[str, str, str]] = []
+
+    @contextmanager
+    def observer(operation: str, model: str) -> Iterator[_Observation]:
+        observed.append(("start", operation, model))
+        try:
+            yield _Observation()
+        finally:
+            observed.append(("end", operation, model))
+
+    loop = asyncio.get_running_loop()
+
+    def in_answer_thread() -> Any:
+        # 回答は thread で動き、注入した検索を event loop で実行して待つ(`_answer_sync`)。
+        with bind_trace_observer(observer):
+            return answer_engine_module._run_on_loop(
+                lambda: engine._search(
+                    SearchRequest(query="規程", filters={"knowledge_base_id": "kb-1"}),
+                    _SearchState(),
+                    retrieval_queries=["規程", "保管"],
+                    candidate_limit=6,
+                    expand_references=False,
+                ),
+                loop,
+            )
+
+    result = await asyncio.to_thread(in_answer_thread)
+
+    # vector と keyword の検索は並行に読み、それぞれ 1 つの段になる(段は重なる)。
+    stages = sorted([VECTOR_SEARCH_STAGE, TEXT_SEARCH_STAGE])
+    assert sorted(entry[2] for entry in observed if entry[0] == "start") == stages
+    assert sorted(entry[2] for entry in observed if entry[0] == "end") == stages
+    assert {entry[1] for entry in observed} == {"stage"}
+
+    channels = {
+        chunk.chunk_uid: chunk.metadata["adb_hybrid"]["retrieval_channels"]
+        for chunk in result.child_chunks
+    }
+    # 「規程」(q1) の vector と keyword の両方と「保管」(q2) の vector、keyword だけ、q2 の両方。
+    assert channels["c-1"] == ["keyword:oracle_text:q1", "vector:q1", "vector:q2"]
+    assert channels["c-7"] == ["keyword:oracle_text:q1"]
+    assert channels["c-4"] == ["keyword:oracle_text:q2", "vector:q2"]
+    # 並べ替えに効く値は書かない(文脈の選択の点数を変えない)。
+    assert all(
+        set(chunk.metadata["adb_hybrid"]) == {"retrieval_channels"} for chunk in result.child_chunks
+    )
+    records = [_stored_chunk_answer_record(chunk) for chunk in result.child_chunks]
+    line = step_details.channel_line(records)
+    assert "そのほか" not in line
+    assert "ベクトルと全文の両方" in line
+    assert "全文だけ" in line
