@@ -9,6 +9,7 @@
   （プライマリ接続）・`PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY`（セカンダリ接続）・
   `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_API_KEY`（ターシャリ接続）だけに保存し、JSON には書かない
 - それ以外は `model-settings.json`（`version: 4`）へ保存し、起動時と mtime の変化時に読み込む
+- 登録に無いモデルは、別の接続へ切り替えずに失敗させる（#3240）
 - 登録モデルごとに推論（思考）の量 `reasoning_effort` を持つ（#1425。既定は low。#3004）。
   3 製品の呼び出しは `enterprise_ai_reasoning`（送る値の解釈はここだけ。none は送らない）で
   モデルから引き、Responses API の `reasoning: {"effort": ...}` を送る
@@ -682,20 +683,47 @@ def enterprise_ai_connection(settings: Any, connection_id: str) -> EnterpriseAiC
     return connections[0]
 
 
+class EnterpriseAiModelNotRegisteredError(ValueError):
+    """明示したモデルがモデル設定に登録されていない（#3240）。
+
+    別のモデル・接続へ暗黙に切り替えずに、呼び出しの前に失敗させる。文はそのまま利用者に見せてよい
+    （モデル ID だけを含み、secret を含まない）。
+    """
+
+    code: Final = "enterprise_ai_model_not_registered"
+    safe_for_user: Final = True
+
+    def __init__(self, model_id: str) -> None:
+        self.model_id = model_id
+        super().__init__(
+            f"モデル「{model_id}」はシステム設定 > モデル に登録されていません。"
+            "モデルを登録するか、登録済みのモデルを選んでください。"
+        )
+
+
 def enterprise_ai_connection_for_model(settings: Any, model_id: str) -> EnterpriseAiConnection:
     """モデルを呼ぶときに使う接続（#533）。3 製品の呼び出し・接続テストはすべてこれで引く。
 
-    登録モデルにない ID（env だけで設定した場合など）はプライマリ接続を使う。
+    - 空の ID は既定のテキストモデル（`enterprise_ai_default_model_id`）の接続。
+    - 登録モデルの ID はそのモデルの接続。
+    - 既定のテキスト / Vision モデルの ID は、登録モデルに無くてもプライマリ接続（`.env` だけで
+      既定のモデルを設定した環境）。
+    - それ以外（登録していない・登録を消したモデル）は `EnterpriseAiModelNotRegisteredError`。
+      プライマリ接続へ暗黙に切り替えない（#3240 の不変条件 2）。
     """
-    normalized = model_id.strip()
+    normalized = model_id.strip() or enterprise_ai_default_model_id(settings)
+    catalog = enterprise_ai_model_catalog(settings)
     connection_id = next(
-        (
-            model.connection_id
-            for model in enterprise_ai_model_catalog(settings)
-            if model.model_id == normalized
-        ),
-        ENTERPRISE_AI_PRIMARY_CONNECTION_ID,
+        (model.connection_id for model in catalog if model.model_id == normalized), None
     )
+    if connection_id is None:
+        defaults = {
+            _setting_text(settings, "oci_enterprise_ai_default_text_model"),
+            _setting_text(settings, "oci_enterprise_ai_default_vision_model"),
+        }
+        if normalized and normalized not in defaults:
+            raise EnterpriseAiModelNotRegisteredError(normalized)
+        connection_id = ENTERPRISE_AI_PRIMARY_CONNECTION_ID
     return enterprise_ai_connection(settings, connection_id)
 
 

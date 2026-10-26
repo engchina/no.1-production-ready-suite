@@ -65,7 +65,7 @@
 2. **明示の構成を解決できなければ、暗黙に切り替えずに失敗する。**
    - スキルが要る MCP 接続・明示したツールが 1 つでも使えなければ、ある分だけで続けず、モデルを呼ぶ前に Run を `runtime.mcp_unavailable` で失敗にする（`build_sdk_agent`）。省略時の既定（業務 Agent の `model_id` が空なら既定のテキストモデル）を選ぶことは切り替えではない。
    - テスト: `test_builtin_runtime.py::test_partially_unavailable_required_mcp_stops_before_the_model`、`test_skill_tool_boundary.py::test_missing_required_tool_fails_the_run_instead_of_intersecting`、`test_product_mcp.py::test_missing_user_fails_before_calling_without_a_substitute`。
-   - 未解決: 登録外の `model_id` は、platform の `enterprise_ai_connection_for_model` がプライマリ接続で呼ぶ（3 製品で共通の振る舞い）。明示の失敗への変更は利用者の確認を待つ（#3240 の draft の PR）。
+   - モデル: platform の `enterprise_ai_connection_for_model` は、登録に無い `model_id`（登録を消したモデルなど）をプライマリ接続へ切り替えずに `EnterpriseAiModelNotRegisteredError` にする。空の ID は既定のテキストモデルの接続、既定のテキスト / Vision モデルの ID は登録モデルに無くてもプライマリ接続（`.env` だけの構成）。組み込み Runtime はこれを `runtime.model_not_registered` の Run の失敗にする（`test_builtin_runtime.py::test_unregistered_model_fails_without_switching_connections`、`platform/packages/system_settings_backend/tests/test_model_connections.py`）。
 3. **未対応の操作を成功にしない。**
    - REST は状態に合う status と code を返す（ツールの直接の指定は 422）。MCP は契約の tool error / JSON-RPC の error を返す（未対応の method は `METHOD_NOT_FOUND`）。Run は失敗の状態と `error_code` で表す。
    - モデルに渡していない名前のツールの呼び出しは実行せず、呼べる名前をモデルへ返し、理由を残す（下の「宣言の外の呼び出しの監査」）。表示用の任意の項目は、契約で任意としたものだけ省いてよい。

@@ -854,11 +854,12 @@ async def _run_model_settings_test(
     """
     payload = model_payload(settings)
     enterprise_ai = payload.enterprise_ai
-    connection = enterprise_ai_connection_for_model(settings, request.model_id)
-    if request.target_type == "enterprise_text":
-        text = await _run_enterprise_text_model_test(enterprise_ai, connection)
-        return {"response_chars": len(text), "surface": "llm"}
-    if request.target_type == "enterprise_vision":
+    if request.target_type in {"enterprise_text", "enterprise_vision"}:
+        # 接続は Enterprise AI のモデルだけで引く（埋め込み・リランクの ID は登録モデルに無い）。
+        connection = enterprise_ai_connection_for_model(settings, request.model_id)
+        if request.target_type == "enterprise_text":
+            text = await _run_enterprise_text_model_test(enterprise_ai, connection)
+            return {"response_chars": len(text), "surface": "llm"}
         text = await _run_enterprise_vision_model_test(enterprise_ai, connection)
         return {"response_chars": len(text), "surface": "vision"}
     if request.target_type == "embedding":
