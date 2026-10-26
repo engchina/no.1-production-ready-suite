@@ -333,6 +333,23 @@ def test_guide_clarification_record_for_the_conversation() -> None:
     assert guide_clarification_record(GUIDES, "guide:missing:target", None) is None
 
 
+def test_guide_clarification_record_marks_free_text_conditions() -> None:
+    """決まった選択肢の無い条件（text）の答えは、記録に `free_text_only` を残す（#3410）。"""
+    guide = grant_guide(
+        conditions=[{"id": "name", "label": "対象の名前", "type": "text", "question": "名前は？"}]
+    )
+    record = guide_clarification_record([("g-text", 1, guide)], "guide:g-text:name", [], " 名前 A ")
+    assert record == {
+        "outcome": "answered",
+        "entries": [
+            {"prompt": "名前は？", "selected": [], "other_text": "名前 A", "free_text_only": True}
+        ],
+    }
+    # 選択肢のある条件（enum・boolean）は付けない（自由入力の答えは「その他: 」のまま）。
+    enum = guide_clarification_record(GUIDES, "guide:g-grant:target", [], "その他の値")
+    assert enum is not None and "free_text_only" not in enum["entries"][0]
+
+
 # ---- 適用範囲・条件の出所・矛盾・分岐の絞り込み（#1278） ---------------------------------
 
 

@@ -1448,13 +1448,16 @@ function decideConfirmation(state: MockApiState, run: Json, confirmationId: stri
   const entries = items.map((item) => {
     const answer = answers.find((candidate) => candidate.item_id === item.id);
     const optionIds = (answer?.option_ids as string[] | undefined) ?? [];
-    const labels = new Map(((item.options as Json[] | undefined) ?? []).map((option) => [option.id, option.label]));
+    const options = (item.options as Json[] | undefined) ?? [];
+    const labels = new Map(options.map((option) => [option.id, option.label]));
     return {
       item_id: item.id,
       prompt: item.prompt,
       selected: optionIds.map((id) => String(labels.get(id) ?? "")),
       option_ids: optionIds,
       other_text: String(answer?.other_text ?? ""),
+      // backend の `record_entries` と同じく、選択肢の無い確認事項を残す（#3410）。
+      free_text_only: options.length === 0,
     };
   });
   const id = `run-chat-${state.runs.length + 1}`;

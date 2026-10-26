@@ -1538,7 +1538,8 @@ export interface ClarificationAnswer {
 /** 回答前に確認した内容（USER のメッセージに付く。#1839）。 */
 export interface ChatClarificationRecord {
   outcome: "answered" | "skipped";
-  entries: { prompt: string; selected?: string[]; other_text?: string }[];
+  /** `free_text_only` は選択肢の無い（自由入力だけで答える）確認事項（答えに「その他: 」を付けない。#3410）。 */
+  entries: { prompt: string; selected?: string[]; other_text?: string; free_text_only?: boolean }[];
 }
 
 /** 回答に選べるモデル（既定のテキストモデルと既定の Vision モデルだけ。先頭が既定。#675）。 */
