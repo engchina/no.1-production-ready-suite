@@ -243,13 +243,12 @@ def test_chunk_preview_reuses_review_extraction_without_state_change(
     )
 
 
-def test_chunk_preview_small_to_big_falls_back_without_docling_layout(
+def test_chunk_preview_small_to_big_builds_parents_without_docling_layout(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """Docling 以外の解析結果で親子階層（small-to-big）をプレビューすると、構造認識で分割する
-    (#300)。
+    """Docling 以外の解析結果でも、親子階層（small-to-big）のプレビューは親子で分割する(#3377)。
 
-    以前は理由付きの 422 だった。縮退したことは chunk の metadata で示し、範囲外の値は 422 のまま。
+    以前は構造認識へ縮退していた(#300)。範囲外の値は 422 のまま。
     """
     _enable_review_gate(monkeypatch)
     document_id = _upload_sample()
@@ -272,9 +271,10 @@ def test_chunk_preview_small_to_big_falls_back_without_docling_layout(
     chunks = response.json()["data"]["chunks"]
     assert chunks
     for chunk in chunks:
-        assert chunk["metadata"]["chunk_strategy"] == "structure_aware"
-        assert chunk["metadata"]["chunk_strategy_requested"] == "small_to_big"
-        assert chunk["metadata"]["chunk_strategy_fallback_reason"] == "layout_missing"
+        assert chunk["metadata"]["chunk_strategy"] == "small_to_big"
+        assert chunk["metadata"]["chunk_group_kind"] == "small_to_big_parent"
+        assert chunk["metadata"]["parent_text"]
+        assert "chunk_strategy_fallback_reason" not in chunk["metadata"]
 
 
 def test_chunk_preview_rejects_recipe_without_review_artifact(

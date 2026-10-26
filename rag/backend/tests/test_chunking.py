@@ -20,6 +20,24 @@ def test_chunk_text_respects_overlap_and_offsets() -> None:
     assert chunks[1].text.startswith(chunks[0].text[-4:])
 
 
+def test_sentence_that_does_not_fit_starts_next_chunk_instead_of_its_own() -> None:
+    """収まらなかった短い文は次の chunk の先頭にし、その文だけの chunk を作らない(#3380)。"""
+    sentence = "これは合成の本文の文です。"
+    chunks = chunk_extraction(
+        StructuredExtraction(
+            raw_text=sentence * 80,
+            elements=[DocumentElement(kind="text", text=sentence * 80)],
+        ),
+        chunk_size=300,
+        overlap=0,
+    )
+
+    assert len(chunks) > 1
+    assert all(len(chunk.text) > len(sentence) * 2 for chunk in chunks[:-1])
+    assert all(len(chunk.text) <= 300 for chunk in chunks)
+    assert "".join(chunk.text.replace(" ", "") for chunk in chunks) == sentence * 80
+
+
 def test_chunk_text_does_not_apply_overlap_twice_to_long_sentence() -> None:
     chunks = chunk_text("ABCDEFGHIJKLMNOPQRSTUV", chunk_size=10, overlap=2)
 

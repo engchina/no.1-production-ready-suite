@@ -258,13 +258,18 @@ def chunk_extraction(
     extraction: StructuredExtraction,
     chunk_size: int = 800,
     overlap: int = 120,
+    *,
+    table_chunk_size: int | None = None,
 ) -> list[Chunk]:
     """構造化抽出 element を優先して分割する。
 
     Docling / Marker / Unstructured / RAGFlow 系の「要素単位を壊さずに RAG index 化する」
     方針を、外部 parser 依存なしで本プロジェクトの `StructuredExtraction` に再マップする。
+    ``table_chunk_size`` は表を行のまとまりに分ける目標(None は ``chunk_size``)。親子階層の
+    子は表だけ別の目標で分ける(#3377)。
     """
     _validate_chunk_settings(chunk_size, overlap)
+    table_size = table_chunk_size or chunk_size
     spans = [
         span
         for span in _element_spans(extraction.elements)
@@ -295,7 +300,7 @@ def chunk_extraction(
     for span in spans:
         if span.content_kind == "table":
             flush_buffer()
-            chunks.extend(_chunk_table_span(span, chunk_size=chunk_size, start_index=len(chunks)))
+            chunks.extend(_chunk_table_span(span, chunk_size=table_size, start_index=len(chunks)))
             continue
         if span.xml_tree_metadata:
             # XML ツリー JSON の段落（#2024）は段落ごとに chunk にする。長い段落は
@@ -329,6 +334,7 @@ def chunk_extraction(
             ),
             chunk_size=chunk_size,
             overlap=overlap,
+            table_chunk_size=table_size,
         )
     )
 
@@ -884,6 +890,12 @@ def _chunk_normalized_text(
                     metadata=dict(metadata),
                 )
             )
+        if len(sentence) <= chunk_size:
+            # 収まらなかった文は次の chunk の先頭にする(文だけの小さな chunk にしない。#3380)。
+            buffer = sentence
+            buffer_start = cursor
+            cursor += len(sentence) + 1
+            continue
         for part in _split_long_sentence(sentence, chunk_size, 0):
             chunks.append(
                 Chunk(
@@ -1822,14 +1834,23 @@ def _with_chunk_size_compliance_metadata(
     *,
     chunk_size: int,
     overlap: int,
+    table_chunk_size: int | None = None,
 ) -> list[Chunk]:
-    """Adaptive chunking 評価向けに size compliance metadata を付ける。"""
-    limit = chunk_size + max(0, overlap)
+    """Adaptive chunking 評価向けに size compliance metadata を付ける。
+
+    表の chunk の目標は ``table_chunk_size``(None は ``chunk_size``)。
+    """
     annotated: list[Chunk] = []
     for chunk in chunks:
+        target = (
+            table_chunk_size
+            if table_chunk_size and chunk.metadata.get("content_kind") == "table"
+            else chunk_size
+        )
+        limit = target + max(0, overlap)
         metadata = {
             **chunk.metadata,
-            "chunk_size_target": chunk_size,
+            "chunk_size_target": target,
             "chunk_size_limit": limit,
         }
         text_chars = len(chunk.text)
