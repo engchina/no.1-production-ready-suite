@@ -1447,6 +1447,34 @@ class Settings(
             "超えた文書は選ばずに続ける。0 は抑えない。"
         ),
     )
+    rag_article_catalog_cache_dir: str = Field(
+        default="",
+        max_length=1024,
+        description=(
+            "条の選択と範囲の文書の選択の結果を、process をまたいで使う記録の置き場所(#3507)。"
+            "空は PLATFORM_LOCAL_STORAGE_DIR の下の cache/rag-article-catalog。"
+            "同じ Compute の backend の worker が同じ場所を読み書きする。"
+        ),
+    )
+    rag_article_catalog_cache_ttl_seconds: int = Field(
+        default=86400,
+        ge=0,
+        le=30 * 86400,
+        description=(
+            "条の選択の記録の有効期間(秒)。key は索引の版(chunk_set)・目録の内容・質問・"
+            "モデル・選択の設定で、同じ入力の LLM の結果だけを使い回す。"
+            "0 は process をまたぐ記録を使わない(process の中の記録だけ)。"
+        ),
+    )
+    rag_article_catalog_cache_max_entries: int = Field(
+        default=4096,
+        ge=0,
+        le=100_000,
+        description=(
+            "条の選択の記録の件数の上限(1 件は文書 1 つの選択か範囲の文書の選択 1 回)。"
+            "超えたら古い記録から消す。0 は process をまたぐ記録を使わない。"
+        ),
+    )
     rag_answer_validation_max_input_bytes: int = Field(
         default=96_000,
         ge=16_000,
