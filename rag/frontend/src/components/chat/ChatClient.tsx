@@ -86,7 +86,7 @@ import {
   type ChatStreamHandlers,
 } from "@/lib/chat-stream";
 import { formatDateTime } from "@/lib/format";
-import { answerAttachedImages, unreadSectionLinks } from "@/lib/answer-diagnostics";
+import { answerAttachedImages, answerModelHeading, unreadSectionLinks } from "@/lib/answer-diagnostics";
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
@@ -364,11 +364,7 @@ function AssistantColumn({
   const storageNotice = storageFailureNotice(storageFailures, traceId);
   // 回答は列のモデルだけで作る（#3444）。そのモデルへ根拠の画像を添付した回答は、見出しにそのことを添える。
   const attachedImages = finished ? answerAttachedImages(answerDiagnostics, passageSource) : 0;
-  const heading = label
-    ? attachedImages > 0
-      ? t("chat.column.modelWithImages", { name: label })
-      : t("chat.column.model", { name: label })
-    : null;
+  const heading = answerModelHeading(label, attachedImages);
   const listId = useId();
   const answerBody = (
     <AnswerText
