@@ -335,8 +335,9 @@ class Settings:
     # 足す（検索の根拠を減らさない）。目録と chunk を注入した呼び出し元（`AnswerDependencies.article_catalogs` /
     # `article_chunks`）でだけ動き、条で構成された文書が候補に無ければ LLM を呼ばない。
     article_catalog_enabled: bool = True
-    article_catalog_max_documents: int = 8
-    article_catalog_max_articles: int = 12
+    # 既定は評価の実測（必要な文書の順位は最大 8・条の 1 段目の位置は最大 6）に余裕を持たせた 2 のべき（#3518）。
+    article_catalog_max_documents: int = 16
+    article_catalog_max_articles: int = 8
     article_catalog_context_records: int = 6
     # 検索の範囲の条で構成された文書の一覧から LLM が選ぶ文書の数（候補の文書の外。手続の一般的な規則の文書など）。
     # 0 は候補の文書だけを読む。一覧を注入した呼び出し元（`AnswerDependencies.article_documents`）でだけ動く。
@@ -606,8 +607,8 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         answer_max_input_tokens=max(1, _env_int(env, "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS", 128_000)),
         section_extraction_concurrency=max(1, _env_int(env, "RAG_ENGINE_SECTION_EXTRACTION_CONCURRENCY", 4)),
         article_catalog_enabled=_env_bool(env, "RAG_ENGINE_ARTICLE_CATALOG", True),
-        article_catalog_max_documents=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_MAX_DOCUMENTS", 8)),
-        article_catalog_max_articles=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_MAX_ARTICLES", 12)),
+        article_catalog_max_documents=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_MAX_DOCUMENTS", 16)),
+        article_catalog_max_articles=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_MAX_ARTICLES", 8)),
         article_catalog_context_records=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_CONTEXT_RECORDS", 6)),
         article_catalog_scope_documents=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_SCOPE_DOCUMENTS", 2)),
         article_catalog_original_question_search=_env_bool(env, "RAG_ENGINE_ARTICLE_CATALOG_ORIGINAL_QUESTION_SEARCH", True),
