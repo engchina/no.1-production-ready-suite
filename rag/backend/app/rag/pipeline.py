@@ -543,11 +543,17 @@ class RagPipeline:
         if self._attachment_conversation_id and self._approved_faq is None:
             from app.rag.chat_attachments import attachment_evidence
 
-            attachment_chunks = await attachment_evidence(
-                request.query,
-                self._attachment_conversation_id,
-                rerank=self._genai.rerank if self._settings.rag_rerank_enabled else None,
-                report_degraded=degraded.record_degraded,
+            # 添付の読み込みと rerank を 1 つの工程の span にする(処理の経過の段。#3475)。
+            attachment_chunks = await _observe_stage(
+                trace_id,
+                "attachment_evidence",
+                attachment_evidence(
+                    request.query,
+                    self._attachment_conversation_id,
+                    rerank=self._genai.rerank if self._settings.rag_rerank_enabled else None,
+                    report_degraded=degraded.record_degraded,
+                ),
+                progress_callback=stage_callback,
             )
         engine = AnswerEngine(
             self._settings,
