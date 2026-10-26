@@ -46,6 +46,7 @@ from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERAT
 from rag_engine.generation.grounded import output_field_claim, quote_in_text
 from rag_engine.generation.operation_audit import is_non_claim_passage, is_operation_instruction, list_heading_lines, table_header_lines
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
+from rag_engine.generation.table_records import record_tables
 from rag_engine.generation.table_revision import revise_table_passage
 from rag_engine.models.llm import OutputFieldEvidence
 from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline, current_deadline
@@ -1110,7 +1111,8 @@ def validate_answer_claims(
     """回答の主張を根拠で監査する。
 
     evidence_items は ``{id, source, page_start, page_end, text}``（id は chunk の id）に、分かるときは場所の
-    ``section_path``・``sheet_name``・``row_start``・``row_end``・``cell_range`` を足したもの（#1450）。
+    ``section_path``・``sheet_name``・``row_start``・``row_end``・``cell_range`` を足したもの（#1450）。表の 1 行の
+    記録の根拠は、同じ表の印と行・セルの ``table_record``（`table_records`。モデルには渡さない）も持てる（#2594）。
     戻り値は status（completed / partial / timed_out / no_claims / input_too_large）・claim_checks・件数・切り詰め。
     見出し・出典の行・表の区切りと見出しの行・利用者への質問の段落は監査せず、claim_checks にも含めない（#1306 / #1317）。
     監査に渡した段落をモデルが not_a_claim と返したら、その段落だけで 1 回監査し直す（``reaudited_passage_ids``。
@@ -1234,17 +1236,20 @@ def validate_answer_claims(
             if passage["id"] not in checked
         ],
     ]
+    # 表の対応の検査は、根拠の本文の表と、同じ表の 1 行の記録の根拠を組み直した表を読む（#2594。表計算・CSV の
+    # 1 行の記録は 1 つの根拠に 1 行しか無く、別の行の根拠の値を結び付けた段落を根拠ごとには見つけられない）。
+    table_texts = [str(item.get("text") or "") for item in evidence_items] + record_tables(evidence_items)
     # supported は、写した原文が根拠にあり・対象が同じで・表の行の対応に反しないものだけ（#2659・#2657・#2653）。
     claims = _enforce_support(
         claims,
         passages,
         catalog,
         {str(item.get("chunk_uid") or item.get("id") or ""): str(item.get("text") or "") for item in sources},
-        [str(item.get("text") or "") for item in evidence_items],
+        table_texts,
         premise_conflicts=premise_conflicts(question, passages, premises, settings, provider_id),
     )
     # 根拠の表の対応と取り違えた段落は、表の正しい値に直せれば直した文を返す（#3005。直せなければ矛盾のまま）。
-    claims = _revise_table_claims(claims, [str(item.get("text") or "") for item in evidence_items], settings, provider_id)
+    claims = _revise_table_claims(claims, table_texts, settings, provider_id)
     # 図の項目だけで裏付けた supported は、図の見た目だけで決まる主張でないかを確かめ直す（#2678）。
     claims, figure_rechecked = _recheck_figure_supported(claims, fixed, passages, evidence, catalog, settings, provider_id)
     counts: dict[str, int] = {}
