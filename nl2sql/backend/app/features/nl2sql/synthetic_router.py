@@ -81,7 +81,7 @@ def get_results(
         if run.request.get("profile_id") and (
             not principal or not principal.can_use_profile(run.request["profile_id"])
         ):
-            raise HTTPException(403, "Profile の利用権限が変更されています。")
+            raise HTTPException(403, "業務プロファイルの利用権限が変更されています。")
         return ApiResponse(data=service.preview.results(run, table_name, limit))
     identity = service.adapter._db_admin_identity(table_name)
     with service.adapter.connection() as conn, conn.cursor() as cur:

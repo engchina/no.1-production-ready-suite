@@ -47,7 +47,7 @@ def authorize_definition_operation(
             else {permission}
         )
     ):
-        raise HTTPException(403, "この Profile の操作権限がありません。")
+        raise HTTPException(403, "この業務プロファイルの操作権限がありません。")
     return actor.user_uuid if actor else "auth-disabled"
 
 
@@ -184,7 +184,7 @@ class ProfileOntologyWorkspaceService(ProfileOntologyDefinitionService):
             item = definition.model_copy(deep=True)
             if item.id and item.id not in old:
                 raise OntologyGateBlockedError(
-                    "FOREIGN_DEFINITION_ID", "別の版または Profile の ID は使用できません。"
+                    "FOREIGN_DEFINITION_ID", "別の版または業務プロファイルの ID は使用できません。"
                 )
             item.id = item.id or stable_ontology_id(
                 "profile_concept", profile_id, item.kind, item.api_name
@@ -238,7 +238,7 @@ class ProfileOntologyWorkspaceService(ProfileOntologyDefinitionService):
         prepared = self.runtime.prepare_build_schema_context(profile_id)
         if prepared.errors:
             raise OntologyGateBlockedError(
-                "SCHEMA_UNAVAILABLE", "Profile の Schema を取得できません。"
+                "SCHEMA_UNAVAILABLE", "業務プロファイルの Schema を取得できません。"
             )
         context = str(prepared.schema_context)
         previous_report = bundle.validation_report
@@ -438,7 +438,7 @@ class ProfileOntologyWorkspaceService(ProfileOntologyDefinitionService):
         ):
             raise OntologyGateBlockedError(
                 "SCOPE_REVALIDATION_REQUIRED",
-                "Profile または Schema が変更されました。再検証してください。",
+                "業務プロファイルまたは Schema が変更されました。再検証してください。",
             )
         report = bundle.validation_report
         if (

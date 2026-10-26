@@ -103,7 +103,7 @@ def test_http_exception_problem_keeps_structured_field_errors() -> None:
                     Any,
                     {
                         "code": "NL2SQL_PROFILE_NAME_CONFLICT",
-                        "message_ja": "業務 profile 名「SALES_PROFILE」は既に使用されています。",
+                        "message_ja": "業務プロファイル名「SALES_PROFILE」は既に使用されています。",
                         "field_errors": [
                             {
                                 "pointer": "/name",
