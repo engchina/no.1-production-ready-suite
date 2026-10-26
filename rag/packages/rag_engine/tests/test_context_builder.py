@@ -8,7 +8,7 @@ from rag_engine.retrieval.context_builder import (
     ContextBuildRequest,
     build_chunk_context_bundle,
     context_bundle_from_records,
-    should_include_image_evidence,
+    record_has_image_evidence,
 )
 
 
@@ -339,7 +339,8 @@ class ContextBuilderTests(unittest.TestCase):
         self.assertEqual(bundle.status, "insufficient")
         self.assertIn("no active child chunks", bundle.insufficient_reason)
 
-    def test_image_evidence_is_included_only_for_visual_questions(self):
+    def test_image_evidence_does_not_depend_on_question(self):
+        """根拠の画像の有無は根拠の metadata だけで決め、質問の語を見ない（#3444）。"""
         record = _chunk_record(
             "target",
             "child",
@@ -352,8 +353,7 @@ class ContextBuilderTests(unittest.TestCase):
             },
         )
 
-        self.assertTrue(should_include_image_evidence("画像のボタンは？", records=[record]))
-        self.assertFalse(should_include_image_evidence("倉庫連携の説明は？", records=[record]))
+        self.assertTrue(record_has_image_evidence(record))
 
     def test_table_visual_evidence_counts_as_image_evidence(self):
         record = _chunk_record(
@@ -379,7 +379,7 @@ class ContextBuilderTests(unittest.TestCase):
             },
         )
 
-        self.assertTrue(should_include_image_evidence("表内の画像は？", records=[record]))
+        self.assertTrue(record_has_image_evidence(record))
 
     def test_ocr_aggregate_evidence_does_not_count_as_image_evidence(self):
         record = _chunk_record(
@@ -406,7 +406,7 @@ class ContextBuilderTests(unittest.TestCase):
             },
         )
 
-        self.assertFalse(should_include_image_evidence("画像の内容は？", records=[record]))
+        self.assertFalse(record_has_image_evidence(record))
 
 
 def _chunk_record(

@@ -45,8 +45,6 @@ ChildEvidenceRole = Literal[
 ]
 ParentEvidenceRole = Literal["synthesis_parent", "child_fallback"]
 
-# 画像の根拠を求める語は言語資源（evidence_cues.visual_question_words。#2181）。
-
 
 def _function_number() -> str:
     """番号付きの機能見出しの番号（「〜-(1)」。線の字は言語資源の evidence_cues）。"""
@@ -901,31 +899,6 @@ def context_bundle_from_records(
     )
 
 
-def should_include_image_evidence(
-    question: str,
-    *,
-    question_plan: Any | None = None,
-    inquiry_conditions: Any | None = None,
-    records: Sequence[Any] = (),
-) -> bool:
-    """質問と根拠の性質から画像 evidence を prompt 添付すべきか判定します。"""
-    if not any(record_has_image_evidence(record) for record in records):
-        return False
-    if bool(getattr(question_plan, "requires_visual_context", False)):
-        return True
-    if bool(getattr(inquiry_conditions, "requires_visual_evidence", False)):
-        return True
-    if _looks_visual_question(question):
-        return True
-    # 操作に関する問いは「画像」と明記しなくても、同じ根拠のボタン配置が必要になる。
-    operation_question = any(term in question.casefold() for term in evidence_cues().words["operation_question_words"])
-    return operation_question and any(
-        record_has_image_evidence(record)
-        and any(term in str(getattr(record, "text", "")) for term in evidence_cues().words["image_control_words"])
-        for record in records
-    )
-
-
 def record_has_image_evidence(record: Any) -> bool:
     """record metadata に利用可能な画像 evidence があるかを判定します。"""
     metadata = getattr(record, "metadata", None)
@@ -1127,8 +1100,3 @@ def _record_page_end(record: Any) -> int:
         return int(value if value is not None else _record_page(record))
     except (TypeError, ValueError):
         return _record_page(record)
-
-
-def _looks_visual_question(question: str) -> bool:
-    normalized = str(question or "").lower()
-    return any(term.lower() in normalized for term in evidence_cues().words["visual_question_words"])

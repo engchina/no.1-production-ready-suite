@@ -344,10 +344,9 @@ class StoredMessage:
     # 保存せず、回答の記録（rag_answer_records の diagnostics_json）から trace_id で読む。
     # 記録の無い回答（保存の失敗・保存期間の経過・この機能より前の回答）は None。
     passage_record: dict[str, Any] | None = None
-    # 根拠の原画像を添付して回答の本文を作った Vision モデル（ASSISTANT の回答だけ。
-    # 回答の記録の診断の ``models.vision``。``{"model_id", "label"}``。#3439）。
-    # 画像を添付しなかった回答・記録の無い回答は None。
-    answer_vision_model: dict[str, Any] | None = None
+    # 回答のモデルへ添付した根拠の画像の件数（ASSISTANT の回答だけ。回答の記録の診断の
+    # ``models.attached_images``。#3444）。画像を添付しなかった回答・記録の無い回答は 0。
+    answer_attached_images: int = 0
 
 
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
@@ -4445,8 +4444,8 @@ class OracleClient:
                     AS removed_passages_json,
                 JSON_QUERY(r.diagnostics_json, '$.answer_warnings' RETURNING CLOB)
                     AS answer_warnings_json,
-                JSON_QUERY(r.diagnostics_json, '$.models.vision' RETURNING CLOB)
-                    AS answer_vision_model_json
+                JSON_VALUE(r.diagnostics_json, '$.models.attached_images' RETURNING NUMBER)
+                    AS answer_attached_images
             FROM rag_messages m
             JOIN rag_conversations c
               ON c.conversation_id = m.conversation_id
@@ -14144,23 +14143,8 @@ def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
             else None
         ),
         passage_record=_message_passage_record(row),
-        answer_vision_model=_answer_model_ref(row.get("answer_vision_model_json")),
+        answer_attached_images=max(0, _optional_int(row.get("answer_attached_images")) or 0),
     )
-
-
-def _answer_model_ref(value: object) -> dict[str, str] | None:
-    """回答の診断のモデル（``{"model_id", "label"}``。#3439）。無い・形の違う値は None。"""
-    parsed = _json_object_or_none(value)
-    if parsed is None:
-        return None
-    model_id = parsed.get("model_id")
-    if not isinstance(model_id, str) or not model_id.strip():
-        return None
-    label = parsed.get("label")
-    return {
-        "model_id": model_id.strip(),
-        "label": label.strip() if isinstance(label, str) and label.strip() else model_id.strip(),
-    }
 
 
 _MESSAGE_PASSAGE_COLUMNS = (

@@ -828,9 +828,49 @@ def _figure_oracle() -> FakeOracle:
     return oracle
 
 
-async def test_answer_engine_attaches_cropped_evidence_images_when_vision_enabled(
-    monkeypatch: pytest.MonkeyPatch,
+def _model_settings(**overrides: Any) -> Settings:
+    """回答のモデルの候補: テキストだけのモデル 2 つと画像を読めるモデル 2 つ(既定の Vision)。"""
+    values: dict[str, Any] = {
+        "oci_enterprise_ai_default_text_model": "text-model",
+        "oci_enterprise_ai_default_vision_model": "vision-model",
+        **overrides,
+    }
+    return Settings(
+        _env_file=None,
+        oci_enterprise_ai_models=[
+            EnterpriseAiConfiguredModel(model_id="text-model", display_name="Text A"),
+            EnterpriseAiConfiguredModel(model_id="text-model-b", display_name="Text B"),
+            EnterpriseAiConfiguredModel(
+                model_id="vlm-answer", display_name="VLM A", vision_enabled=True
+            ),
+            EnterpriseAiConfiguredModel(
+                model_id="vision-model", display_name="Vision", vision_enabled=True
+            ),
+        ],
+        **values,
+    )
+
+
+def _resolved_model(settings: Any, options: dict[str, Any]) -> str:
+    """rag_engine が呼ぶ provider のモデル(None は回答のモデル)。"""
+    from rag_engine.config import get_llm_provider
+
+    provider_id = options.get("provider_id") or settings.default_answer_llm
+    return get_llm_provider(settings, provider_id).model
+
+
+@pytest.mark.parametrize(
+    ("answer_model_id", "model"),
+    [(None, "vlm-answer"), ("vlm-answer", "vlm-answer")],
+    ids=["default-model", "column-model"],
+)
+async def test_answer_engine_attaches_evidence_images_for_vision_answer_model(
+    monkeypatch: pytest.MonkeyPatch, answer_model_id: str | None, model: str
 ) -> None:
+    """回答のモデルが画像を読めるなら、根拠の chunk の画像を切り出してそのモデルへ添付する(#3444)。
+
+    質問は画像を名指ししない。既定の Vision モデルへは切り替えず、診断のモデルも 1 つだけ。
+    """
     import rag_engine.adapters.oci as engine_oci
 
     import app.rag.answer_engine as engine_module
@@ -842,7 +882,11 @@ async def test_answer_engine_attaches_cropped_evidence_images_when_vision_enable
         return _pdf_with_figure()
 
     images_seen: list[list[str]] = []
-    providers_seen: list[str | None] = []
+    called: list[str] = []
+
+    def fake_text(system: str, prompt: str, settings: Any, schema: type, **kw: Any) -> Any:
+        called.append(_resolved_model(settings, kw))
+        return _fake_llm(system, prompt, settings, schema, **kw)
 
     def fake_multimodal(
         system: str, prompt: str, image_paths: list[Any], settings: Any, schema: type, **kw: Any
@@ -850,65 +894,111 @@ async def test_answer_engine_attaches_cropped_evidence_images_when_vision_enable
         from pathlib import Path
 
         images_seen.append([str(path) for path in image_paths])
-        providers_seen.append(kw.get("provider_id"))
+        called.append(_resolved_model(settings, kw))
         assert all(Path(path).read_bytes().startswith(b"\x89PNG") for path in image_paths)
         return _fake_llm(system, prompt, settings, schema, **kw)
 
     monkeypatch.setattr(engine_module, "load_parsed_source", fake_source)
-    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    monkeypatch.setattr(engine_oci, "parse_text_response", fake_text)
     monkeypatch.setattr(engine_oci, "parse_multimodal_response", fake_multimodal)
+    overrides = {} if answer_model_id else {"oci_enterprise_ai_default_text_model": "vlm-answer"}
     engine = AnswerEngine(
-        Settings(
-            rag_answer_vision_enabled=True,
-            oci_enterprise_ai_default_text_model="text-model",
-            oci_enterprise_ai_default_vision_model="vision-model",
-        ),
+        _model_settings(**overrides),
         oracle=_figure_oracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
+        answer_model_id=answer_model_id,
     )
 
-    outcome = await engine.run(SearchRequest(query="受注登録画面のボタンは？"))
+    outcome = await engine.run(SearchRequest(query="受注登録の手順を教えてください"))
 
     assert loaded == ["doc-1"]
     assert images_seen and images_seen[0][0].endswith("crops/docling-p1-5.png")
     assert "登録ボタン" in outcome.answer
-    # 画像を添付する回答は既定の Vision モデルで作り、診断にも出す(#649)。
-    assert providers_seen == ["enterprise-ai-vision"]
+    # 回答の実行の LLM の呼び出しは、すべて回答のモデル(既定の Vision モデルを呼ばない)。
+    assert called and set(called) == {model}
     models = outcome.diagnostics["models"]
-    assert models["llm"]["model_id"] == "text-model"
-    assert models["vision"]["model_id"] == "vision-model"
+    assert models["llm"]["model_id"] == model
+    assert models["attached_images"] == 1
+    assert "vision" not in models
 
 
 @pytest.mark.parametrize(
-    "settings",
+    ("settings", "answer_model_id", "model"),
     [
-        Settings(rag_answer_vision_enabled=False, oci_enterprise_ai_default_vision_model="vlm"),
-        # 有効でも既定の Vision モデルが無ければ添付しない(テキストモデルへ画像を送らない。#649)。
-        Settings(_env_file=None, rag_answer_vision_enabled=True),
+        (_model_settings(), None, "text-model"),
+        # 比較の列のモデル(テキストだけのモデル)。既定の Vision モデルがあっても切り替えない。
+        (_model_settings(), "text-model-b", "text-model-b"),
+        # 既定の Vision モデルが無い環境。
+        (
+            Settings(_env_file=None, oci_enterprise_ai_default_text_model="text-model"),
+            None,
+            "text-model",
+        ),
     ],
-    ids=["disabled", "no-vision-model"],
+    ids=["default-text-model", "column-text-model", "no-vision-model"],
 )
-async def test_answer_engine_does_not_crop_when_vision_disabled(
-    monkeypatch: pytest.MonkeyPatch, settings: Settings
+async def test_answer_engine_never_attaches_images_for_text_answer_model(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings, answer_model_id: str | None, model: str
 ) -> None:
+    """回答のモデルが画像を読めないなら、画像を名指しする質問でも画像を添付しない(#3444)。
+
+    原本からの切り出しも、既定の Vision モデルの呼び出しもしない。
+
+    図の内容は取り込み時に作った文字の説明(根拠の本文)で答える。
+    """
     import rag_engine.adapters.oci as engine_oci
 
     import app.rag.answer_engine as engine_module
 
     async def fail_source(oracle: object, document_id: str) -> bytes:
-        raise AssertionError("vision disabled では原本を読まない")
+        raise AssertionError("画像を読めない回答のモデルでは原本を読まない")
+
+    def fail_multimodal(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("画像を読めない回答のモデルへ画像を添付しない")
+
+    called: list[str] = []
+
+    def fake_text(system: str, prompt: str, settings: Any, schema: type, **kw: Any) -> Any:
+        called.append(_resolved_model(settings, kw))
+        return _fake_llm(system, prompt, settings, schema, **kw)
 
     monkeypatch.setattr(engine_module, "load_parsed_source", fail_source)
-    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    monkeypatch.setattr(engine_oci, "parse_text_response", fake_text)
+    monkeypatch.setattr(engine_oci, "parse_multimodal_response", fail_multimodal)
     engine = AnswerEngine(
         settings,
         oracle=_figure_oracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
+        answer_model_id=answer_model_id,
     )
 
-    outcome = await engine.run(SearchRequest(query="受注登録画面のボタンは？"))
+    outcome = await engine.run(SearchRequest(query="受注登録画面のボタンの画像は？"))
 
     assert "登録ボタン" in outcome.answer
+    assert called and set(called) == {model}
+    models = outcome.diagnostics["models"]
+    assert models["llm"]["model_id"] == model
+    assert models["attached_images"] == 0
+
+
+def test_engine_settings_pass_the_answer_model_image_capability() -> None:
+    """rag_engine の回答のモデルが画像を読めるかは、登録モデルの vision_enabled で決める(#3444)。"""
+    from pathlib import Path
+
+    from rag_engine.config import answer_model_reads_images
+
+    from app.rag.answer_engine import build_engine_settings
+
+    settings = _model_settings()
+    for model_id, expected in (("text-model", False), ("vlm-answer", True)):
+        engine_settings = build_engine_settings(
+            settings, output_dir=Path("unused"), answer_model_id=model_id
+        )
+        assert answer_model_reads_images(engine_settings) is expected
+    # 既定(テキストだけのモデル)は読めない。既定の Vision モデルは取り込み用に残る。
+    default = build_engine_settings(settings, output_dir=Path("unused"))
+    assert answer_model_reads_images(default) is False
+    assert default.vision_model == "vision-model"
 
 
 def _nfkc(text: str) -> str:
@@ -2594,7 +2684,7 @@ async def test_search_without_answer_skips_crag_and_generation(
     answer = response.diagnostics.answer or {}
     assert answer["answer_flow"] == "standard_rag"
     models = cast(dict[str, Any], answer["models"])
-    assert set(models) == {"llm", "vision", "embedding", "rerank"}
+    assert set(models) == {"llm", "attached_images", "embedding", "rerank"}
     # 回答が無いので回答の記録は保存しない。
     assert oracle.saved == []
 
@@ -2619,7 +2709,7 @@ async def test_answer_diagnostics_include_models(monkeypatch: pytest.MonkeyPatch
     outcome = await engine.run(SearchRequest(query="受注の登録方法は？"))
     assert outcome.diagnostics["models"] == {
         "llm": {"model_id": "model-a", "label": "Model A"},
-        "vision": None,
+        "attached_images": 0,
         "embedding": settings.oci_genai_embedding_model,
         "rerank": "",
     }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from app.api.routes import chat as chat_route
 from app.clients.oracle import StoredMessage, _message_passage_record, _stored_message_from_row
@@ -50,35 +51,25 @@ def test_chat_message_carries_the_marks_of_a_finished_answer() -> None:
     assert chat_route._to_chat_message(_message("COMPLETE", None)).passage_marks == []
 
 
-def test_chat_message_carries_the_vision_model_that_wrote_the_answer() -> None:
-    """画像を添付して Vision モデルで作った回答は、そのモデルを見出し用に返す（#3439）。"""
-    vision = {"model_id": "vision-model-a", "label": "Vision モデル A"}
+def test_chat_message_carries_the_number_of_attached_images() -> None:
+    """回答のモデルへ根拠の画像を添付した回答は、その件数を見出し用に返す（#3444）。"""
     row = {
         "message_id": "m1",
         "conversation_id": "c1",
         "role": "ASSISTANT",
         "status": "COMPLETE",
         "created_at": datetime.now(UTC),
-        "answer_vision_model_json": json.dumps(vision, ensure_ascii=False),
+        "answer_attached_images": Decimal(2),
     }
     stored = _stored_message_from_row(row)
-    assert stored.answer_vision_model == vision
-    message = chat_route._to_chat_message(stored)
-    assert message.answer_vision_model is not None
-    assert message.answer_vision_model.model_dump() == vision
-    # 名前の無い記録は model_id を名前にする。
-    # 画像を添付しなかった回答（null）・壊れた値・記録の無い回答は None。
-    unnamed = _stored_message_from_row(
-        {**row, "answer_vision_model_json": {"model_id": "vision-model-a"}}
-    )
-    assert unnamed.answer_vision_model == {"model_id": "vision-model-a", "label": "vision-model-a"}
-    for value in (None, "null", "{壊れた", {"label": "名前だけ"}):
-        assert (
-            _stored_message_from_row({**row, "answer_vision_model_json": value}).answer_vision_model
-            is None
-        )
+    assert stored.answer_attached_images == 2
+    assert chat_route._to_chat_message(stored).answer_attached_images == 2
+    # 画像を添付しなかった回答・記録の無い回答（null）は 0。
+    for value in (None, 0, -1):
+        stored = _stored_message_from_row({**row, "answer_attached_images": value})
+        assert stored.answer_attached_images == 0
     # 作成中の回答には出さない。
     streaming = chat_route._to_chat_message(
         _stored_message_from_row({**row, "status": "STREAMING"})
     )
-    assert streaming.answer_vision_model is None
+    assert streaming.answer_attached_images == 0

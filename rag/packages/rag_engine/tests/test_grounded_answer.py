@@ -1191,7 +1191,7 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertIn("適用する版を確認してください", result.answer_text)
         self.assertTrue(result.needs_human_review)
 
-    def _run_missing_content_remedy(self, images_enabled):
+    def _run_missing_content_remedy(self, answer_reads_images):
         """要求が partial のまま残り、pool からの根拠追加が使えない状況で是正を走らせる。"""
         import tempfile
         from unittest.mock import patch
@@ -1224,8 +1224,8 @@ class GroundedAnswerTest(unittest.TestCase):
             with bind_dependencies(AnswerDependencies(unused, unused, text_model, vision, unused)):
                 settings = get_settings(
                     environ={
-                        "RAG_ENGINE_ANSWER_IMAGES": "1" if images_enabled else "0",
-                        "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "text-model",
+                        "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "answer-model",
+                        "OCI_ENTERPRISE_AI_DEFAULT_MODEL_VISION": "1" if answer_reads_images else "0",
                         "OCI_ENTERPRISE_AI_VLM_MODEL": "vision-model",
                     },
                     dotenv_path=None,
@@ -1234,16 +1234,17 @@ class GroundedAnswerTest(unittest.TestCase):
         return result, calls, image.name
 
     def test_missing_content_attaches_source_images_once_for_vision_model(self):
-        """テキストモデルで答えた後、原画像を添付する是正は既定の Vision モデルで作り直す（#649）。"""
+        """画像を読める回答のモデルは、原画像を添付する是正も同じモデルで作り直す（#3444）。"""
         result, calls, path = self._run_missing_content_remedy(True)
-        self.assertEqual(calls, [([path], "enterprise-ai-vision")])
+        # provider_id の None は回答のモデル（default_answer_llm）。既定の Vision モデルへ切り替えない。
+        self.assertEqual(calls, [([path], None)])
         self.assertEqual(result.image_prompt_mode, "vision_attachments")
         decision = result.response.generation_trace["image_fallback"]
         self.assertEqual((decision["reason"], decision["source_provider"]), ("accepted", "enterprise-ai"))
         self.assertLessEqual(result.response.generation_trace["llm_calls"], 6)
 
     def test_missing_content_does_not_switch_non_vision_model_to_another_provider(self):
-        """画像の添付が無効なら Vision モデルへ切替えず、指摘の反映だけで是正する。"""
+        """回答のモデルが画像を読めないなら Vision モデルへ切替えず、指摘の反映だけで是正する（#3444）。"""
         result, calls, _ = self._run_missing_content_remedy(False)
         self.assertEqual(calls, [])
         self.assertEqual(result.image_prompt_mode, "text_only")

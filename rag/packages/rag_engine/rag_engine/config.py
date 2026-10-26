@@ -264,11 +264,11 @@ class Settings:
     text_search_tokenizer_latin_stemmer: str
     llm_api_mode: str
     llm_providers: dict[str, LlmProviderSettings]
+    # 画像を読む取り込みの処理（図の説明・解析の VLM）の既定のモデル。回答には使わない（#3444）。
     default_vision_llm: str
+    # 回答のモデル。回答の実行の LLM の呼び出しはすべてこのモデルで行い、根拠の画像を添付するかは
+    # このモデルが画像を読めるか（`supports_vision`）で決める（#3444）。
     default_answer_llm: str
-    # 回答で根拠の原画像を添付するか。添付する回だけ既定の Vision モデル（default_vision_llm）で答え、
-    # それ以外は既定のテキストモデル（default_answer_llm）で答える（#649）。
-    answer_images_enabled: bool = False
 
     # None は保存済み辞書、空 tuple は評価用の辞書無効化を表す。共有ファイルは変更しない。
     domain_keywords_override: tuple[str, ...] | None = None
@@ -475,6 +475,8 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             project_id=project,
             api_key=api_key,
             model=answer_model,
+            # 回答のモデルが画像を読めるか(#3444。backend がモデル設定の登録モデルの vision_enabled で決めて渡す)。
+            supports_vision=_env_bool(env, "OCI_ENTERPRISE_AI_DEFAULT_MODEL_VISION", False),
             endpoint=endpoint,
             reasoning_effort=answer_reasoning,
             max_output_tokens=answer_output_tokens,
@@ -652,7 +654,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         llm_providers=llm_providers,
         default_vision_llm=default_vision_llm,
         default_answer_llm=default_answer_llm,
-        answer_images_enabled=_env_bool(env, "RAG_ENGINE_ANSWER_IMAGES", False),
         timezone=env.get("PLATFORM_TIMEZONE", "").strip() or DEFAULT_TIMEZONE,
     )
 
@@ -740,6 +741,15 @@ def get_llm_provider(settings: Settings, provider_id: str | None, default: str =
     if provider is None:
         raise RuntimeError(f"Unknown LLM provider: {provider_id}")
     return provider
+
+
+def answer_model_reads_images(settings: Settings, provider_id: str | None = None) -> bool:
+    """回答のモデル(``provider_id``。None は既定の回答のモデル)が画像を読めるか(#3444)。"""
+    try:
+        provider = get_llm_provider(settings, provider_id or settings.default_answer_llm)
+    except RuntimeError:
+        return False
+    return bool(provider.supports_vision and provider.model)
 
 
 def llm_output_token_limit(settings: Settings, provider: Any) -> int:

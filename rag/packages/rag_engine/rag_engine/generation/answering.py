@@ -31,6 +31,7 @@ from rag_engine.config import (
     LLM_PURPOSE_JUDGE,
     LLM_PURPOSE_STRATEGY,
     Settings,
+    answer_model_reads_images,
     llm_reasoning_effort_note,
     settings_for_llm_purpose,
 )
@@ -225,7 +226,7 @@ from rag_engine.retrieval.context_builder import (
     build_chunk_context_bundle,
     context_bundle_from_parent_evidence,
     context_bundle_from_records,
-    should_include_image_evidence,
+    record_has_image_evidence,
 )
 from rag_engine.retrieval.context_recovery import ContextRecovery, recover_context_records, recover_definition_records
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
@@ -2108,7 +2109,6 @@ def synthesize_grounded_answer(
                     prompt=prompt,
                     provider_id=provider,
                     audit_settings=audit_settings,
-                    image_provider_id=settings.default_vision_llm,
                     parse_text=parse_text_response,
                     parse_images=parse_multimodal_response,
                     previous=best[0].checked if best is not None else (),
@@ -2209,13 +2209,13 @@ def synthesize_grounded_answer(
             else:
                 context = candidate
         image_candidates: tuple[dict[str, Any], ...] = ()
-        if remedy is None and needs_content and mode != "vision_attachments":
+        if remedy is None and needs_content and mode != "vision_attachments" and answer_model_reads_images(settings, provider):
             candidates = tuple(
                 i for i in answer_image_evidence(context.records, settings.output_dir, question=question) if i.get("prompt_path")
             )
-            # 画像の添付が無効（または Vision モデルが無い）なら、文字の説明で答えられる範囲に留めて
-            # 次の是正（指摘の反映）へ進む。添付する回は既定の Vision モデルで答える（#649）。
-            if candidates and _image_prompt_mode(candidates, settings) == "vision_attachments":
+            # 画像を添付する是正は、回答のモデルが画像を読めるときだけ行い、モデルは変えない（#3444）。読めない
+            # モデルは文字の説明で答えられる範囲に留めて、次の是正（指摘の反映）へ進む。
+            if candidates and _image_prompt_mode(candidates, settings, provider) == "vision_attachments":
                 image_candidates = candidates
                 remedy = {"remedy": "images", "image_ids": [i["image_id"] for i in candidates]}
         if remedy is None:
@@ -3502,8 +3502,6 @@ def _record_question_understanding(step: _ExecutionStep, question: str, plan: Qu
         impacts.append("絞り込みに合う文書だけを検索します")
     if conditions.retrieval_queries:
         impacts.append(f"補助の検索文を {len(conditions.retrieval_queries)} 本追加します")
-    if plan.requires_visual_context or conditions.requires_visual_evidence:
-        impacts.append("根拠に画像があれば回答時に原画像を添付します")
     step.impact("。".join(impacts) + "。" if impacts else "")
 
 
@@ -4545,41 +4543,37 @@ def answer_question_result(
         context, section_expansion = complete_sections(context, "request_coverage")
 
         with _execution_step(
-            "回答に使う画像の確認", "根拠に含まれる画面・図を、回答するモデルへ原画像のまま見せるかを決めます。"
+            "回答に添付する画像", "回答モデルが画像を読めるとき、根拠の資料の図・画面の画像を回答の入力に添付します。"
         ) as image_step:
+            # 回答は選んだ回答モデルだけで作る（#3444）。画像を読めるモデルなら根拠の chunk に結び付いた画像を添付し、
+            # 読めないモデルは根拠の本文（取り込み時に作った図の説明を含む）だけで答える。質問の語で要否を決めない。
+            has_images = any(record_has_image_evidence(record) for record in context.records)
+            reads_images = answer_model_reads_images(settings, answer_llm_provider)
             image_evidence = (
                 answer_image_evidence(context.records, settings.output_dir, question=normalized_question)
-                if should_include_image_evidence(
-                    normalized_question,
-                    question_plan=question_plan,
-                    inquiry_conditions=inquiry_conditions,
-                    records=context.records,
-                )
+                if has_images and reads_images
                 else ()
             )
-            image_prompt_mode = _image_prompt_mode(image_evidence, settings)
-            if not image_evidence:
+            image_prompt_mode = _image_prompt_mode(image_evidence, settings, answer_llm_provider)
+            attached = [item for item in image_evidence if item.get("prompt_path")] if image_prompt_mode == "vision_attachments" else []
+            if not has_images:
                 # 記録の文からは省くが、処理の経過の段は出るので理由を残す（#2341）。
                 image_step.hide()
-                image_step.result("回答で見せる画像はありません（質問が画像を要しないか、根拠に画像がありません）")
+                image_step.result("根拠に画像がありません")
+            elif not reads_images:
+                image_step.result("回答モデルが画像を読めないため、画像は添付しません（図の内容は取り込み時に作った文字の説明で読みます）")
+            elif not attached:
+                image_step.result("根拠の画像のファイルが無いため、画像は添付しません（図の内容は取り込み時に作った文字の説明で読みます）")
             else:
-                image_step.result(
-                    f"画像 {len(image_evidence)} 件を"
-                    + (
-                        "原画像のまま添付し、既定の Vision モデルで回答します"
-                        if image_prompt_mode == "vision_attachments"
-                        else "文字の説明として使います（画像の添付が無効か、Vision モデルか画像ファイルがありません）"
-                    )
-                )
-                image_step.field("画像ファイルのある画像", f"{sum(1 for item in image_evidence if item.get('prompt_path'))} 件")
+                image_step.result(f"画像 {len(attached)} 件を添付して回答します")
                 image_step.add(
-                    "回答に使う画像:",
+                    "添付する画像:",
                     *numbered(
                         [
                             f"{Path(str(item.get('source') or '')).name or item.get('image_id')}"
                             + (f"（p.{item['page']}）" if item.get("page") else "")
                             + (f" {item['visual_kind']}" if item.get("visual_kind") else "")
-                            for item in image_evidence
+                            for item in attached
                         ]
                     ),
                 )

@@ -11,7 +11,6 @@ from rag_engine.retrieval.context_builder import (
     ContextBuildRequest,
     build_chunk_context_bundle,
     record_has_image_evidence,
-    should_include_image_evidence,
 )
 
 
@@ -59,7 +58,6 @@ def test_oracle_json_keeps_images_coordinates_and_children(encode):
     assert chunk.metadata["layout"]["display_regions"]
     assert chunk.metadata["table_context"] == meta["table_context"]
     assert record_has_image_evidence(chunk)
-    assert should_include_image_evidence("該当する項目がないので入力したい", records=[chunk])
     chunk.metadata["image_evidence"].clear()
     assert len(meta["image_evidence"]) == 1
 
