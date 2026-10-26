@@ -743,10 +743,10 @@ async def export_label_set(label_set_id: str) -> Response:
     )
 
 
-@router.delete("/label-sets/{label_set_id}", status_code=204)
-async def delete_label_set(label_set_id: str) -> Response:
+@router.delete("/label-sets/{label_set_id}", response_model=ApiResponse[dict[str, bool]])
+async def delete_label_set(label_set_id: str) -> ApiResponse[dict[str, bool]]:
     """記入の集合を消す（項目・判定・校正の結果も消える）。"""
     store = get_calibration_store()
     if not await store.delete_label_set(label_set_id):
         raise HTTPException(status_code=404, detail=LABEL_SET_NOT_FOUND)
-    return Response(status_code=204)
+    return ApiResponse(data=dict(deleted=True))

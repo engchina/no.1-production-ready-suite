@@ -34,7 +34,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { listCountProps, useClientListPaging } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
@@ -111,6 +111,8 @@ import {
   EvaluationJobPanel,
   EvaluationResultSkeleton,
 } from "./EvaluationJobPanel";
+import { JudgeCalibrationBadge } from "./calibration/JudgeCalibrationBadge";
+import { JudgeCalibrationTab } from "./calibration/JudgeCalibrationTab";
 import { EvaluationProcessDrafts } from "./EvaluationProcessDrafts";
 import {
   EVALUATION_UPLOAD_ID,
@@ -124,6 +126,8 @@ const COMPARE_PROFILE_ID = "evaluation-compare-profile";
 /** アップロードの上限（backend の `EVALUATION_EXCEL_MAX_ROWS` / `_BYTES`。検証の前の案内に出す）。 */
 const EVALUATION_EXCEL_MAX_ROWS = 200;
 const EVALUATION_EXCEL_MAX_MEGABYTES = 10;
+const PAGE_TABS_PREFIX = "evaluation-page";
+type PageTab = "run" | "calibration";
 
 /**
  * 品質評価（改善・運用 › 品質評価。#2065）。評価するナレッジベース（必須）と評価リクエストの Excel
@@ -131,6 +135,15 @@ const EVALUATION_EXCEL_MAX_MEGABYTES = 10;
  * 表示だけする。評価は job で動き（#390）、結果は Excel の行（質問・期待する根拠）に合わせて出す。
  */
 export function EvaluationClient() {
+  // 評価の実行と判定の校正（#3578）のタブ。`?tab=calibration` で判定の校正を直接開ける。
+  const [searchParams, setSearchParams] = useSearchParams();
+  const pageTab: PageTab = searchParams.get("tab") === "calibration" ? "calibration" : "run";
+  const changePageTab = (value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value === "calibration") next.set("tab", "calibration");
+    else next.delete("tab");
+    setSearchParams(next, { replace: true });
+  };
   const runMutation = useSubmitRunEvaluationJob();
   const importMutation = useImportEvaluationCases();
   const settingsQuery = useEvaluationSettings();
@@ -332,8 +345,28 @@ export function EvaluationClient() {
 
   return (
     <div>
-      <PageHeader wide title={t("nav.evaluation")} subtitle={t("evaluation.subtitle")} />
+      <PageHeader
+        wide
+        title={t("nav.evaluation")}
+        subtitle={t("evaluation.subtitle")}
+        tabs={
+          <Tabs
+            idPrefix={PAGE_TABS_PREFIX}
+            ariaLabel={t("evaluation.tabs.label")}
+            value={pageTab}
+            onChange={changePageTab}
+            items={[
+              { id: "run", label: t("evaluation.tabs.run") },
+              { id: "calibration", label: t("evaluation.tabs.calibration") },
+            ]}
+          />
+        }
+      />
       <PageBody wide>
+        <TabPanel id="calibration" value={pageTab} idPrefix={PAGE_TABS_PREFIX}>
+          <JudgeCalibrationTab />
+        </TabPanel>
+        <TabPanel id="run" value={pageTab} idPrefix={PAGE_TABS_PREFIX} className="grid min-w-0 gap-6">
         {/* 評価の基準を先に読み、条件を選んで実行する順に、縦に全幅で並べる（#3295。間隔は PageBody の gap）。 */}
         <SuiteSummary query={settingsQuery} />
         <Card className="min-w-0" data-testid="evaluation-conditions">
@@ -472,6 +505,7 @@ export function EvaluationClient() {
             </CardContent>
           </Card>
         )}
+        </TabPanel>
       </PageBody>
     </div>
   );
@@ -1038,6 +1072,8 @@ function MetricGroup({
                   {failedMetrics.has(metric) ? (
                     <StatusBadge variant="warning" label={t("evaluation.metric.belowThreshold")} />
                   ) : null}
+                  {/* 観点の判定が今の評価器で校正済みか（#3578。指標の値は変えない）。 */}
+                  <JudgeCalibrationBadge metric={metric} />
                 </div>
               </CardContent>
             </Card>

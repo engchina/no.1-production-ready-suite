@@ -37,20 +37,27 @@ export function EvaluationJobPanel({
   job,
   onCancel,
   cancelling,
+  title = t("evaluation.job.title.run"),
+  testPrefix = "evaluation-run-job",
+  currentLabel,
 }: {
   job: EvaluationJob;
   onCancel: (job: EvaluationJob) => void;
   cancelling: boolean;
+  /** 見出し（判定の校正の job は「校正の実行状況」。#3578）。 */
+  title?: string;
+  testPrefix?: string;
+  /** 実行中の対象の文言（省略時は評価のケースの行。null なら出さない）。 */
+  currentLabel?: string | null;
 }) {
   const active = isEvaluationJobActive(job);
-  const currentCase = evaluationJobCurrentCaseLabel(job);
-  const testPrefix = "evaluation-run-job";
+  const currentCase = currentLabel === undefined ? evaluationJobCurrentCaseLabel(job) : currentLabel;
   return (
     <Card className="min-w-0" data-testid={testPrefix}>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <ListChecks size={16} className="text-accent-fg" aria-hidden />
-          {t("evaluation.job.title.run")}
+          {title}
         </CardTitle>
       </CardHeader>
       <CardContent className="grid min-w-0 gap-4">

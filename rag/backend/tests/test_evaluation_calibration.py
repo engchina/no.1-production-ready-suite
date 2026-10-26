@@ -517,7 +517,7 @@ async def test_sources_and_delete(
     )
     assert missing.status_code == 422
     label_set_id = await _create(first)
-    assert (await first.delete(_set(label_set_id))).status_code == 204
+    assert (await first.delete(_set(label_set_id))).status_code == 200
     assert (await first.get(_set(label_set_id))).status_code == 404
 
 
