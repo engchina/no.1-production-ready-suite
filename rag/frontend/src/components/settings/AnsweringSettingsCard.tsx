@@ -39,9 +39,10 @@ const QUERY_STRATEGY_OPTIONS: SelectFieldOption<QueryStrategyName>[] = (
     "hyde",
   ] as const
 ).map((value) => ({ value, label: t(`searchAnswerProfiles.queryStrategy.${value}`) }));
+// 既定（標準 RAG）を先頭に置く。CRAG は AI の呼び出しが増えるので、明示して選んだときだけ使う（#3509）。
 const ANSWER_FLOW_OPTIONS: SelectFieldOption<AnswerFlowName>[] = [
-  { value: "crag", label: t("searchAnswerProfiles.answerFlow.crag") },
   { value: "standard_rag", label: t("searchAnswerProfiles.answerFlow.standard_rag") },
+  { value: "crag", label: t("searchAnswerProfiles.answerFlow.crag") },
 ];
 // 0〜20（backend の rag_neighbor_child_count と同じ範囲）。SelectField は文字列値を扱う。
 const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 }, (_, n) => ({
@@ -72,7 +73,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
 
 /**
  * 回答の検索と生成の全体既定（質問の拡張・回答の生成方式・根拠の前後の数・rerank・画面目録。#593）。
- * 検索・回答プロファイルの「検索・回答設定」で上書きできる。検索・回答プロファイルを指定しない呼び出し(MCP など)もこの値を使う。
+ * 検索・回答プロファイルでは上書きしない（`PROFILE_GLOBAL_QUERY_FIELDS`）。検索・回答プロファイルを指定しない呼び出し(MCP など)もこの値を使う。
  */
 export function AnsweringSettingsCard() {
   const query = useAnsweringSettings();

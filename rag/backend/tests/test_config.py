@@ -130,6 +130,19 @@ def test_evaluation_suite_defaults_to_standard() -> None:
     assert Settings().rag_evaluation_suite == "standard"
 
 
+def test_answer_flow_defaults_to_standard_rag_in_every_layer() -> None:
+    """回答の生成方式の既定は標準 RAG。CRAG は明示して選んだときだけ使う(#3509)。
+
+    backend の全体設定・.env.example・rag_engine の既定(answer_flow を省いた呼び出し)をそろえる。
+    """
+    from rag_engine.generation.answer_models import DEFAULT_ANSWER_FLOW, STANDARD_ANSWER_FLOW
+
+    assert Settings.model_fields["rag_answer_flow"].default == "standard_rag"
+    assert DEFAULT_ANSWER_FLOW == STANDARD_ANSWER_FLOW == "standard_rag"
+    example = (config_module.BACKEND_ROOT / ".env.example").read_text(encoding="utf-8")
+    assert "RAG_ANSWER_FLOW=standard_rag" in example.splitlines()
+
+
 def test_unknown_evaluation_suite_is_rejected() -> None:
     with pytest.raises(ValidationError):
         Settings(rag_evaluation_suite="autorag_tuner")

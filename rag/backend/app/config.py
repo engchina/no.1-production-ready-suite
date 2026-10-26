@@ -1315,8 +1315,9 @@ class Settings(
     rag_answer_flow: AnswerFlow = Field(
         default="standard_rag",
         description=(
-            "回答の生成方式。crag(CRAG)は検索結果を評価して必要なら補正検索し、"
-            "standard_rag(標準 RAG)は補正しない。"
+            "回答の生成方式。standard_rag(標準 RAG。既定)は補正しない。"
+            "crag(CRAG)は検索結果を評価して必要なら補正検索する"
+            "(AI の呼び出しと時間が増えるので明示して選ぶ。#3509)。"
         ),
     )
     rag_neighbor_child_count: int = Field(
