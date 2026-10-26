@@ -3,6 +3,7 @@
 //
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
 import {
+  DEFAULT_RUN_PERIOD,
   runPeriodSince,
   RUN_EXECUTOR_FILTERS,
   RUN_PERIODS,
@@ -52,11 +53,15 @@ export const DEFAULT_HISTORY_FILTERS: HistoryFilters = {
   search: "",
   status: "all",
   kind: DEFAULT_HISTORY_KIND,
-  period: "all",
+  // 期間の既定は 3 製品で共通の過去 7 日（#3386）。明示に選んだ「すべて」は作業状態に残す。
+  period: DEFAULT_RUN_PERIOD,
   executor: "all",
 };
 
-/** 保存していた値が壊れていても（古い版の `mine` など）、既定（種類は「品質評価以外」、ほかは「すべて」）として読む。 */
+/**
+ * 保存していた値が壊れていても（古い版の `mine` など）、既定（種類は「品質評価以外」、期間は過去 7 日、ほかは
+ * 「すべて」）として読む。
+ */
 export function normalizeHistoryFilters(value: unknown): HistoryFilters {
   const record = value && typeof value === "object" ? (value as Partial<Record<keyof HistoryFilters, unknown>>) : {};
   const pick = <T extends string>(raw: unknown, allowed: readonly T[], fallback: T): T =>
@@ -65,20 +70,29 @@ export function normalizeHistoryFilters(value: unknown): HistoryFilters {
     search: typeof record.search === "string" ? record.search : "",
     status: pick<RunStatusFilter>(record.status, ["all", ...HISTORY_RUN_STATUSES], "all"),
     kind: pick(record.kind, HISTORY_KIND_FILTERS, DEFAULT_HISTORY_KIND),
-    period: pick(record.period, RUN_PERIODS, "all"),
+    period: pick(record.period, RUN_PERIODS, DEFAULT_RUN_PERIOD),
     executor: pick(record.executor, RUN_EXECUTOR_FILTERS, "all"),
   };
 }
 
-/** 検索語か絞り込みのどれかが既定と違う（「条件をクリア」・「N 件（全 M 件）」）。 */
-export function hasActiveHistoryFilters(filters: HistoryFilters) {
+/** 期間のほかの検索語・絞り込みのどれかが既定と違う。 */
+export function hasActiveNonPeriodHistoryFilters(filters: HistoryFilters) {
   return (
     Boolean(filters.search.trim()) ||
     filters.status !== "all" ||
     filters.kind !== DEFAULT_HISTORY_KIND ||
-    filters.period !== "all" ||
     filters.executor !== "all"
   );
+}
+
+/** 検索語か絞り込みのどれかが既定（期間は過去 7 日）と違う（「条件をクリア」）。 */
+export function hasActiveHistoryFilters(filters: HistoryFilters) {
+  return hasActiveNonPeriodHistoryFilters(filters) || filters.period !== DEFAULT_RUN_PERIOD;
+}
+
+/** 一覧が全件より狭いか（件数の「N 件（全 M 件）」）。既定の過去 7 日も期間で絞っているので数える（#3386）。 */
+export function isHistoryListNarrowed(filters: HistoryFilters) {
+  return hasActiveNonPeriodHistoryFilters(filters) || filters.period !== "all";
 }
 
 /** backend の「実行者」の値（`mine` / `others`。#1954）。 */

@@ -10,6 +10,7 @@ import {
   HISTORY_KIND_FILTERS,
   HISTORY_RUN_STATUSES,
   hasActiveHistoryFilters,
+  hasActiveNonPeriodHistoryFilters,
   historyCancellation,
   historyConversationHref,
   historyDetailPath,
@@ -20,9 +21,10 @@ import {
   historyRequestUrl,
   historyRunStatus,
   historySqlGenerationHref,
+  isHistoryListNarrowed,
   normalizeHistoryFilters,
 } from "../src/features/nl2sql/historyManagementState.ts";
-import { formatRunCancellation } from "@production-ready/ui";
+import { DEFAULT_RUN_PERIOD, formatRunCancellation } from "@production-ready/ui";
 import { prefillFromSearchParams } from "../src/features/nl2sql/queryPrefillState.ts";
 import type { HistoryItem } from "../src/features/nl2sql/types.ts";
 
@@ -49,10 +51,11 @@ test("history request URL maps the common filters to the backend parameters", ()
   assert.equal(
     historyRequestUrl({ offset: 0, limit: 25, filters: DEFAULT_HISTORY_FILTERS }, now),
     // 種類の既定は「品質評価以外」（品質評価の Run が MCP で呼んだ実行を既定で隠す。#1986）。
-    "/api/nl2sql/history?limit=25&offset=0&kind=not_evaluation"
+    // 期間の既定は 3 製品で共通の過去 7 日（#3386）。
+    "/api/nl2sql/history?limit=25&offset=0&kind=not_evaluation&since=2026-10-08T12%3A00%3A00.000Z"
   );
   assert.equal(
-    historyRequestUrl({ offset: 0, limit: 25, filters: { ...DEFAULT_HISTORY_FILTERS, kind: "all" } }, now),
+    historyRequestUrl({ offset: 0, limit: 25, filters: { ...DEFAULT_HISTORY_FILTERS, kind: "all", period: "all" } }, now),
     "/api/nl2sql/history?limit=25&offset=0"
   );
   const url = new URL(
@@ -84,7 +87,17 @@ test("stored filters fall back to the defaults when an old or broken value is re
   );
   assert.equal(hasActiveHistoryFilters(DEFAULT_HISTORY_FILTERS), false);
   assert.equal(hasActiveHistoryFilters({ ...DEFAULT_HISTORY_FILTERS, search: "  " }), false);
-  assert.equal(hasActiveHistoryFilters({ ...DEFAULT_HISTORY_FILTERS, period: "7d" }), true);
+  // 期間は既定（過去 7 日）が基準。「すべて」を選ぶと既定からの変更として数える（#3386）。
+  assert.equal(DEFAULT_HISTORY_FILTERS.period, DEFAULT_RUN_PERIOD);
+  assert.equal(DEFAULT_RUN_PERIOD, "7d");
+  assert.equal(normalizeHistoryFilters({}).period, "7d");
+  assert.equal(normalizeHistoryFilters({ period: "all" }).period, "all");
+  assert.equal(hasActiveHistoryFilters({ ...DEFAULT_HISTORY_FILTERS, period: "7d" }), false);
+  assert.equal(hasActiveHistoryFilters({ ...DEFAULT_HISTORY_FILTERS, period: "all" }), true);
+  assert.equal(hasActiveNonPeriodHistoryFilters({ ...DEFAULT_HISTORY_FILTERS, period: "all" }), false);
+  // 件数の「N 件（全 M 件）」は期間で絞っていれば既定の 7 日でも出し、「すべて」なら出さない。
+  assert.equal(isHistoryListNarrowed(DEFAULT_HISTORY_FILTERS), true);
+  assert.equal(isHistoryListNarrowed({ ...DEFAULT_HISTORY_FILTERS, period: "all" }), false);
   // 種類は既定（品質評価以外）が基準。「すべて」を選ぶと絞り込みとして数える（#1986）。
   assert.equal(DEFAULT_HISTORY_FILTERS.kind, DEFAULT_HISTORY_KIND);
   assert.equal(hasActiveHistoryFilters({ ...DEFAULT_HISTORY_FILTERS, kind: "all" }), true);
