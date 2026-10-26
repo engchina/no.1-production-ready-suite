@@ -1084,8 +1084,9 @@ def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, 
 RUBRIC_VERSION = 12
 # 1 件の評価で同時に行う判定の呼び出しの数（網羅・正確性・段落ごとの主張）。
 JUDGE_MAX_CONCURRENCY = 4
-# 網羅を比較項目ごとに 1 回ずつ判定するか（偽は全項目を 1 回で判定する）。
-COVERAGE_PER_REQUIREMENT = False
+# 網羅を比較項目ごとに 1 回ずつ判定するか（偽は全項目を 1 回で判定する）。実モデルで同じ比較範囲を 2 回ずつ判定すると、
+# 項目ごとの方が実行ごとの網羅の値の差が小さかった（平均 0.04 と 0.10。#3576）。呼び出しは並行なので時間は変わらない。
+COVERAGE_PER_REQUIREMENT = True
 # 主張の判定に根拠と並べて渡す質問の文（資料ではない）。質問の事実をそのまま述べる段落と、資料の規則を質問の事実に
 # 当てはめた結論を裏付ける（最終の回答の検証と同じ扱い）。判定の記録では source_id が QUESTION_SOURCE_ID になる。
 QUESTION_EVIDENCE_ID = "Q"
@@ -1509,7 +1510,7 @@ def _decided_claim(passage: Mapping[str, str], status: str, reason: str, referen
     return ClaimCheck(
         answer_quote=passage["text"],
         answer_passage_id=passage["id"],
-        status=status,  # type: ignore[arg-type]
+        status=status,
         source_id="",
         evidence_quote="",
         reason=reason,
@@ -1662,8 +1663,8 @@ def evaluate_answer_payload(
 
         results = _run_parallel(tasks, JUDGE_MAX_CONCURRENCY)
         # 期限切れ・網羅と正確性の失敗は評価全体の失敗（部分評価を返さない）。
-        for slot, result in enumerate(results):
-            fatal = slot in coverage_slots or slot == correctness_slot
+        for position, result in enumerate(results):
+            fatal = position in coverage_slots or position == correctness_slot
             if isinstance(result, DeadlineExceeded) or (isinstance(result, Exception) and fatal):
                 raise result
         base["batch_count"] = 1
@@ -1671,11 +1672,11 @@ def evaluate_answer_payload(
         base["missing_audit_passage_ids"] = []
         catalog: dict[str, dict[str, Any]] = dict()
         claim_checks: list[ClaimCheck] = []
-        for passage, slot in zip(passages, claims, strict=True):
-            if isinstance(slot, ClaimCheck):
-                claim_checks.append(slot)
+        for passage, decided in zip(passages, claims, strict=True):
+            if isinstance(decided, ClaimCheck):
+                claim_checks.append(decided)
                 continue
-            result = results[slot]
+            result = results[decided]
             if isinstance(result, Exception):
                 logger.warning("answer claim judgement failed", exc_info=result)
                 claim_checks.append(_decided_claim(passage, "unassessed", CLAIM_FAILED_REASON))

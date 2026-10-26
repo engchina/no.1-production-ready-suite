@@ -426,7 +426,8 @@ def test_expired_deadline_stops_judge_calls():
     assert result["status"] == "error" and result["error_type"] == "DeadlineExceeded"
 
 
-def test_coverage_can_be_judged_one_requirement_per_call(fixed_scope):
+@pytest.mark.parametrize("per_requirement", [True, False], ids=["per-requirement", "all-at-once"])
+def test_coverage_is_judged_per_requirement_or_at_once(per_requirement, fixed_scope):
     calls = []
     fixed_scope.return_value = StandardAnswerScope(
         requirements=[
@@ -443,10 +444,11 @@ def test_coverage_can_be_judged_one_requirement_per_call(fixed_scope):
             ]
         )
     )
-    with patch("rag_engine.evaluation.answer_eval.COVERAGE_PER_REQUIREMENT", True), patch(PARSE, side_effect=judge(evaluated, calls=calls)):
+    mode = patch("rag_engine.evaluation.answer_eval.COVERAGE_PER_REQUIREMENT", per_requirement)
+    with mode, patch(PARSE, side_effect=judge(evaluated, calls=calls)):
         result = evaluate_answer_payload(cited_payload(), object())
     sent = sorted(item["requirement_index"] for inputs in calls_of(calls, CoverageOutput) for item in inputs["requirements"])
-    assert len(calls_of(calls, CoverageOutput)) == 2 and sent == [1, 2]
+    assert len(calls_of(calls, CoverageOutput)) == (2 if per_requirement else 1) and sent == [1, 2]
     assert result["requirement_coverage"] == 0.5
     assert [item["requirement_index"] for item in result["coverage_checks"]] == [1, 2]
 

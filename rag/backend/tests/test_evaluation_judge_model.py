@@ -7,7 +7,7 @@
 入力の上限で呼び、使ったモデルを判定の診断と評価の結果に残す。
 """
 
-import re
+import json
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -217,7 +217,8 @@ def _fake_evaluation_llm(calls: list[LlmCall]) -> Callable[..., Any]:
     from rag_engine.config import get_llm_provider
     from rag_engine.evaluation.answer_eval import (
         AnswerCorrectnessOutput,
-        AnswerEvaluationOutput,
+        ClaimJudgement,
+        CoverageOutput,
         StandardAnswerScope,
     )
 
@@ -237,26 +238,22 @@ def _fake_evaluation_llm(calls: list[LlmCall]) -> Callable[..., Any]:
                     "excluded_case_data": [],
                 }
             )
-        if schema is AnswerEvaluationOutput:
-            passage = re.search(r'"id": "(P[0-9]+)"', prompt)
-            return AnswerEvaluationOutput.model_validate(
+        if schema is CoverageOutput:
+            passage = json.loads(prompt)["answer_passages"][0]["id"]
+            return CoverageOutput.model_validate(
                 {
                     "coverage_checks": [
-                        {"requirement_index": 1, "status": "addressed", "answer_quote": BODY}
-                    ],
-                    "claim_checks": [
                         {
-                            "answer_quote": BODY,
-                            "answer_passage_id": passage.group(1) if passage else "",
-                            "status": "not_a_claim",
-                            "source_id": "",
-                            "evidence_quote": "",
+                            "requirement_index": 1,
                             "reason": "手順の説明",
+                            "status": "addressed",
+                            "answer_passage_id": passage,
                         }
-                    ],
-                    "evidence_summary": "",
+                    ]
                 }
             )
+        if schema is ClaimJudgement:
+            return ClaimJudgement(reason="手順の確認の案内", status="data_confirmation")
         raise AssertionError(f"unexpected schema: {schema.__name__}")
 
     return fake
