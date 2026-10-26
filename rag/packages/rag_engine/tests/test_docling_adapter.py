@@ -821,3 +821,76 @@ class OrderedListTextTests(unittest.TestCase):
     def test_original_disambiguates_a_marker_from_numbered_body_text(self):
         item = {"label": "list_item", "marker": "2.1", "text": "2.1.1 Section A", "orig": "2.1 2.1.1 Section A"}
         self.assertEqual(_item_text(item, "List-item", {}), item["orig"])
+
+
+def _pdf_with_image(path: Path, image_box: tuple[float, float, float, float]) -> Path:
+    """100×100 point の 1 ページに、画像を ``image_box``（左上原点の left, top, right, bottom）に描いた合成の PDF。"""
+    import pypdfium2 as pdfium
+    from PIL import Image
+
+    left, top, right, bottom = image_box
+    document = pdfium.PdfDocument.new()
+    page = document.new_page(100, 100)
+    image = pdfium.PdfImage.new(document)
+    image.set_bitmap(pdfium.PdfBitmap.from_pil(Image.new("RGB", (8, 8), "white")))
+    image.set_matrix(pdfium.PdfMatrix().scale(right - left, bottom - top).translate(left, 100 - bottom))
+    page.insert_obj(image)
+    page.gen_content()
+    document.save(str(path))
+    page.close()
+    document.close()
+    return path
+
+
+def _picture_page_payload(picture_box: list[int], texts: list[tuple[str, str, list[int]]]) -> dict:
+    return {
+        "texts": [
+            {**_item(text, label, 1, bbox), "self_ref": f"#/texts/{index}", "parent": {"$ref": "#/body"}, "children": []}
+            for index, (text, label, bbox) in enumerate(texts)
+        ],
+        "pictures": [_picture("#/pictures/0", picture_box, [])],
+    }
+
+
+def test_pdf_image_object_bounds_reads_the_placement(tmp_path: Path) -> None:
+    from rag_engine.parsing.rendering import pdf_image_object_bounds
+
+    pdf = _pdf_with_image(tmp_path / "source.pdf", (20, 10, 80, 70))
+
+    ((left, bottom, right, top),) = pdf_image_object_bounds(pdf, 1)
+    assert [round(value) for value in (left, bottom, right, top)] == [20, 30, 80, 90]
+
+
+def test_text_inside_the_picture_image_but_outside_the_picture_bbox_is_picture_text(tmp_path: Path) -> None:
+    """Docling の図の bbox が画像より狭くても、画像の中のタイトル・目盛りは図の文字（#3485）。"""
+    settings = replace(get_settings(), docling_keep_picture_child_text=False)
+    context = replace(_context(), pdf_path=_pdf_with_image(tmp_path / "source.pdf", (20, 10, 80, 70)))
+    payload = _picture_page_payload(
+        [22, 20, 78, 72],
+        [
+            ("3.1 章の題", "section_header", [10, 2, 40, 7]),  # 画像の外の見出しは残す
+            ("グラフの題（件）", "section_header", [25, 12, 50, 17]),  # 画像の中・図の bbox の上
+            ("200", "text", [20, 18, 24, 23]),  # 図の bbox の端にまたがる目盛り
+            ("グラフの説明です。", "text", [30, 40, 60, 45]),  # 画像の中でも文は本文に残す（#655）
+            ("図 1 グラフの例", "text", [30, 80, 70, 85]),  # 画像の下（外）の文字は残す
+        ],
+    )
+
+    records = DoclingAdapter(settings)._records_from_payload(payload, context)
+
+    ordinary = [(record.category, record.text) for record in records if record.category != "Picture"]
+    assert ordinary == [("Section-header", "3.1 章の題"), ("Text", "グラフの説明です。"), ("Text", "図 1 グラフの例")]
+    aggregate = next(record for record in records if record.raw_type == "picture_ocr_text")
+    assert "グラフの題（件）" in aggregate.text and "200" in aggregate.text
+
+
+def test_a_full_page_image_does_not_widen_the_picture(tmp_path: Path) -> None:
+    """全ページの画像（スキャン）は図の画像とみなさず、図の外のラベルは今までどおり残す。"""
+    settings = replace(get_settings(), docling_keep_picture_child_text=False)
+    context = replace(_context(), pdf_path=_pdf_with_image(tmp_path / "source.pdf", (0, 0, 100, 100)))
+    payload = _picture_page_payload([20, 20, 60, 60], [("ラベル", "text", [65, 65, 75, 70])])
+
+    records = DoclingAdapter(settings)._records_from_payload(payload, context)
+
+    assert [record.text for record in records if record.category == "Text"] == ["ラベル"]
+    assert not any(record.raw_type == "picture_ocr_text" for record in records)
