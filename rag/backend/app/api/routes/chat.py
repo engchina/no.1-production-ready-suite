@@ -841,9 +841,11 @@ async def _generate_chat_answer(
         store=RunHistoryStore(oracle),
         conversation_id=turn.conversation_id,
         message_id=message_id,
-        model_id=model_id or None,
-        # 実行履歴の詳細の処理の経過（会話の回答と同じ trace。#3226）。
+        # 列のモデル（未指定は実行のときの既定のテキストモデルの具体的な ID。#3419）。
+        model_id=model_id or enterprise_ai_default_model_id(turn.settings) or None,
+        # 実行履歴の詳細の処理の経過（会話の回答と同じ trace。#3226）とモデルの利用量（#3419）。
         trace_source=trace.record if trace is not None else None,
+        usage_source=trace.model_usage if trace is not None else None,
     )
     started_at = perf_counter()
     try:

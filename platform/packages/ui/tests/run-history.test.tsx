@@ -382,6 +382,22 @@ describe("RunSummary", () => {
     expect(container.querySelector("[data-run-summary-heading]")?.textContent).toBe("概要");
     expect(container.textContent).not.toContain("合成の追加バッジ");
   });
+
+  it("token の計測の状態の注記は数の後ろに括弧で、数が無ければ注記だけを出す（#3419）", () => {
+    const tokens = () => container.querySelector("[data-run-fact='tokens'] dd")?.textContent;
+    const summary = (usage: { tokens?: number | null; note?: string | null } | null) => (
+      <RunSummary status="succeeded" question="合成の質問" startedAt="2026-10-15T00:12:05.000Z" usage={usage} runId="run-1" />
+    );
+    render(summary({ tokens: 1200, note: "一部計測" }));
+    expect(tokens()).toBe("1,200 token（一部計測）");
+    render(summary({ tokens: null, note: "未計測" }));
+    expect(tokens()).toBe("未計測");
+    // LLM を呼ばなかった実行の実測の 0 は 0 と出す（注記なし）。
+    render(summary({ tokens: 0 }));
+    expect(tokens()).toBe("0 token");
+    render(summary(null));
+    expect(container.querySelector("[data-run-fact='tokens']")).toBeNull();
+  });
 });
 
 describe("取消の事実（#3348）", () => {

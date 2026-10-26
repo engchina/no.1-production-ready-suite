@@ -68,14 +68,22 @@ def load_public_runs() -> dict[str, dict[str, Any]]:
 CASE_FIXTURES = load_case_fixtures()
 PUBLIC_RUNS = load_public_runs()
 SUMMARIES: list[dict[str, Any]] = load_json("summaries.json")["suites"]
-AGENT_TOOLS: dict[str, dict[str, Any]] = {
-    tool["name"]: tool for tool in json.loads(AGENT_CONTRACT.read_text(encoding="utf-8"))["tools"]
-}
+RAG_CONTRACT = CONTRACTS / "rag-tools.json"
 
 
-def check_arguments(tool: str, arguments: Mapping[str, Any]) -> None:
-    """送る引数が契約（agent-tools.json の inputSchema）に合う。"""
-    schema = AGENT_TOOLS[tool]["inputSchema"]
+def _tools(path: Path) -> dict[str, dict[str, Any]]:
+    return {tool["name"]: tool for tool in json.loads(path.read_text(encoding="utf-8"))["tools"]}
+
+
+AGENT_TOOLS = _tools(AGENT_CONTRACT)
+RAG_TOOLS = _tools(RAG_CONTRACT)
+
+
+def check_arguments(
+    tool: str, arguments: Mapping[str, Any], tools: Mapping[str, Mapping[str, Any]] = AGENT_TOOLS
+) -> None:
+    """送る引数が契約（agent-tools.json / rag-tools.json の inputSchema）に合う。"""
+    schema = tools[tool]["inputSchema"]
     properties: dict[str, Any] = schema["properties"]
     assert set(schema.get("required", [])) <= set(arguments), (tool, arguments)
     assert set(arguments) <= set(properties), (tool, arguments)
@@ -98,6 +106,13 @@ def check_arguments(tool: str, arguments: Mapping[str, Any]) -> None:
                 matched = matched or low <= value <= high
             elif kind == "array" and isinstance(value, list):
                 matched = matched or len(value) <= option.get("maxItems", len(value))
+            elif kind == "boolean" and isinstance(value, bool):
+                matched = True
+            elif kind == "object" and isinstance(value, dict):
+                limit = option.get("maxProperties", len(value))
+                matched = matched or (
+                    len(value) <= limit and all(isinstance(item, str) for item in value.values())
+                )
         assert matched, (tool, name, value)
 
 

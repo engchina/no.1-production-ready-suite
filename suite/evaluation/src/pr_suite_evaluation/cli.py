@@ -1,19 +1,21 @@
-"""製品横断の評価の CLI（`suite-evaluation`。#3240）。
+"""製品横断の評価の CLI（`suite-evaluation`。#3240・#3417）。
 
-    export SUITE_EVALUATION_API_KEY=prak_...   # 使える製品に agent を含む API キー
-    uv run suite-evaluation run ../../rag/evaluation/business-support/business-support.json \\
-        --document-map ../../tmp/eval/document-map.json \\
-        --agent-mcp-url http://127.0.0.1:8020/api/mcp --agent-id <公開済みの業務 Agent> \\
-        --guides ../../rag/evaluation/business-support/support-guides.json \\
-        --output ../../tmp/eval/d.json
-    uv run suite-evaluation score ../../tmp/eval/d.json \\
-        --dataset ../../rag/evaluation/business-support/business-support.json \\
-        --document-map ../../tmp/eval/document-map.json --output ../../tmp/eval/d.rescored.json
-    uv run suite-evaluation compare A=../../tmp/eval/a.json D=../../tmp/eval/d.json
+    export SUITE_EVALUATION_API_KEY=prak_...   # 使える製品に rag と agent を含む API キー
+    # A: RAG（ナレッジベースを指定）・C: RAG（検索・回答プロファイルを指定）・D: 業務 Agent
+    uv run suite-evaluation run <評価セット> --document-map <対応表> --target rag-mcp \\
+        --mcp-url http://127.0.0.1:8000/api/mcp --knowledge-base-id <ID> --output a.json
+    uv run suite-evaluation run <評価セット> --document-map <対応表> --target rag-mcp \\
+        --mcp-url http://127.0.0.1:8000/api/mcp --search-answer-profile-id <ID> --output c.json
+    uv run suite-evaluation run <評価セット> --document-map <対応表> --target agent-mcp \\
+        --mcp-url http://127.0.0.1:8020/api/mcp --agent-id <公開済みの業務 Agent> --output d.json
+    uv run suite-evaluation score d.json --dataset <評価セット> --document-map <対応表> \\
+        --output d.rescored.json
+    uv run suite-evaluation compare A=a.json C=c.json D=d.json
 
-- `run`: 評価セットを Target（今は業務 Agent の公開の MCP）に流し、観測を保存して採点する。
+- `run`: 評価セットを Target（RAG の公開の MCP の `rag_search`、業務 Agent の公開の MCP）に流し、
+  観測を保存して採点する。どの Target も同じ Evaluator・Report で採点する。
 - `score`: 保存した観測を、モデル・製品を呼ばずに採点し直す（規則・期待を直したとき）。
-- `compare`: 評価の結果（製品の評価の結果か、suite の結果）を比べる表を出す。
+- `compare`: suite の結果を比べる表を出す（同じ評価セットの結果どうしだけ）。
 
 終了コード: 0 成功 / 2 入力・接続の失敗（ケースの失敗は結果に記録し、終了コードにしない）。
 """
@@ -41,22 +43,19 @@ from pr_suite_evaluation.dataset import (
 from pr_suite_evaluation.experiment import (
     ExperimentRecord,
     ScorerConfig,
+    Target,
     rescore,
     run_experiment,
 )
 from pr_suite_evaluation.mcp_client import McpClient, TargetError
 from pr_suite_evaluation.report import summarize_result, summary_markdown
-from pr_suite_evaluation.targets.agent_mcp import (
-    DEFAULT_RUN_TIMEOUT_SECONDS,
-    MAX_WAIT_SECONDS,
-    REQUEST_TIMEOUT_SECONDS,
-    AgentEvaluationError,
-    AgentMcp,
-    AgentMcpTarget,
-    AgentTargetConfig,
-)
+from pr_suite_evaluation.targets import agent_mcp, rag_mcp
 
-DEFAULT_AGENT_MCP_URL = "http://localhost:8020/api/mcp"
+TARGETS = {"agent-mcp": agent_mcp.TARGET_KIND, "rag-mcp": rag_mcp.TARGET_KIND}
+DEFAULT_MCP_URLS = {
+    agent_mcp.TARGET_KIND: "http://localhost:8020/api/mcp",
+    rag_mcp.TARGET_KIND: "http://localhost:8000/api/mcp",
+}
 # API キーを読む環境変数（キーを引数に書かない。シェルの履歴・プロセスの一覧に残さない）。
 DEFAULT_API_KEY_ENV = "SUITE_EVALUATION_API_KEY"
 
@@ -71,7 +70,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
-    run = commands.add_parser("run", help="評価セットを業務 Agent の公開の MCP に流して採点する")
+    run = commands.add_parser("run", help="評価セットを製品の公開の MCP に流して採点する")
     run.add_argument("dataset", type=Path, help="評価セット（JSON）")
     run.add_argument(
         "--document-map",
@@ -81,27 +80,46 @@ def _build_parser() -> argparse.ArgumentParser:
             '（{"documents": {...}}）'
         ),
     )
-    run.add_argument(
-        "--agent-mcp-url", default=DEFAULT_AGENT_MCP_URL, help="Agent の MCP（POST /api/mcp）"
-    )
-    run.add_argument(
-        "--agent-id", required=True, help="使う業務 Agent（公開済み。agent_list の id）"
-    )
+    run.add_argument("--target", choices=sorted(TARGETS), default="agent-mcp", help="評価の対象")
+    run.add_argument("--mcp-url", help="対象の MCP（POST /api/mcp）。既定は対象ごとの localhost")
     run.add_argument(
         "--api-key-env",
         default=DEFAULT_API_KEY_ENV,
         help=f"MCP を呼ぶ API キーを読む環境変数（既定 {DEFAULT_API_KEY_ENV}）",
     )
-    run.add_argument("--guides", type=Path, help="既知の条件の名前に使う業務ガイド（JSON）")
     run.add_argument("--case", action="append", default=[], help="流すケースの id（複数可）")
     run.add_argument("--split", choices=["dev", "holdout"], help="流す区分")
-    run.add_argument("--run-timeout", type=float, default=DEFAULT_RUN_TIMEOUT_SECONDS)
-    run.add_argument(
+    run.add_argument("--output", type=Path, required=True, help="結果（JSON）の出力先")
+    agent = run.add_argument_group("agent-mcp（業務 Agent）")
+    agent.add_argument("--agent-id", help="使う業務 Agent（公開済み。agent_list の id）")
+    agent.add_argument("--guides", type=Path, help="既知の条件の名前に使う業務ガイド（JSON）")
+    agent.add_argument("--run-timeout", type=float, default=agent_mcp.DEFAULT_RUN_TIMEOUT_SECONDS)
+    agent.add_argument(
         "--infer-missing-outcome",
         action="store_true",
         help="outcome の無い完了の Run を回答の文から推定する（旧形式の互換。既定は評価不能）",
     )
-    run.add_argument("--output", type=Path, required=True, help="結果（JSON）の出力先")
+    rag = run.add_argument_group("rag-mcp（RAG の検索・回答）")
+    rag.add_argument(
+        "--knowledge-base-id",
+        action="append",
+        default=[],
+        help="検索するナレッジベース（A。複数可）",
+    )
+    rag.add_argument("--search-answer-profile-id", help="検索・回答プロファイル（C）")
+    rag.add_argument("--top-k", type=int, help="検索する件数（省略時はプロファイル・既定）")
+    rag.add_argument(
+        "--evidence-limit",
+        type=int,
+        default=rag_mcp.DEFAULT_EVIDENCE_LIMIT,
+        help=f"返す根拠の上限（既定 {rag_mcp.DEFAULT_EVIDENCE_LIMIT}。契約の上限）",
+    )
+    rag.add_argument(
+        "--request-timeout",
+        type=float,
+        default=rag_mcp.DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        help="rag_search の 1 回の待ちの上限（秒）",
+    )
 
     score = commands.add_parser("score", help="保存した観測を採点し直す（製品を呼ばない）")
     score.add_argument("record", type=Path, help="run の結果（JSON）")
@@ -111,7 +129,7 @@ def _build_parser() -> argparse.ArgumentParser:
     score.add_argument("--infer-missing-outcome", action="store_true")
     score.add_argument("--output", type=Path, required=True, help="採点し直した結果の出力先")
 
-    compare = commands.add_parser("compare", help="評価の結果を比べる表を出す")
+    compare = commands.add_parser("compare", help="suite の結果を比べる表を出す")
     compare.add_argument("results", nargs="+", help="<名前>=<結果の JSON>（例: A=a.json）")
     compare.add_argument("--json", action="store_true", help="表ではなく JSON で出す")
     return parser
@@ -121,7 +139,7 @@ def _api_key(name: str) -> str:
     key = os.environ.get(name, "").strip()
     if not key:
         raise CliError(
-            f"環境変数 {name} に MCP の API キー（使える製品に agent を含むキー）を"
+            f"環境変数 {name} に MCP の API キー（使える製品に対象の製品を含むキー）を"
             "設定してください。"
         )
     return key
@@ -145,34 +163,71 @@ def _selected(loaded: LoadedDataset, case_ids: Sequence[str], split: str | None)
     return LoadedDataset(dataset=dataset, name=loaded.name, sha256=loaded.sha256)
 
 
-def _run_command(args: argparse.Namespace) -> int:
-    loaded = _selected(_dataset(args.dataset, args.document_map), args.case, args.split)
+def _agent_target(
+    args: argparse.Namespace, client: httpx.Client, url: str, api_key: str
+) -> tuple[Target, dict[str, Any], ScorerConfig]:
+    if not args.agent_id:
+        raise CliError("--target agent-mcp には --agent-id を渡してください。")
     labels = (
         condition_labels(json.loads(args.guides.read_text(encoding="utf-8"))) if args.guides else {}
     )
-    api_key = _api_key(args.api_key_env)
-    config = AgentTargetConfig(
-        mcp_url=args.agent_mcp_url, agent_id=args.agent_id, run_timeout_seconds=args.run_timeout
+    config = agent_mcp.AgentTargetConfig(
+        mcp_url=url, agent_id=args.agent_id, run_timeout_seconds=args.run_timeout
     )
+    mcp = McpClient(
+        client, url, api_key=api_key, label="Agent", error_class=agent_mcp.AgentEvaluationError
+    )
+    target = agent_mcp.AgentMcpTarget(agent_mcp.AgentMcp(mcp), config, labels=labels)
     scorer = ScorerConfig(
-        infer_missing_outcome=args.infer_missing_outcome, run_timeout_seconds=args.run_timeout
+        target_kind=agent_mcp.TARGET_KIND,
+        infer_missing_outcome=args.infer_missing_outcome,
+        run_timeout_seconds=args.run_timeout,
     )
-    # Run の待ちは MCP の wait_seconds（最大 300 秒）なので、HTTP の timeout はそれより長くする。
-    with httpx.Client(
-        timeout=MAX_WAIT_SECONDS + REQUEST_TIMEOUT_SECONDS, trust_env=False
-    ) as client:
-        mcp = McpClient(
-            client,
-            args.agent_mcp_url,
-            api_key=api_key,
-            label="Agent",
-            error_class=AgentEvaluationError,
+    return target, config.provenance(), scorer
+
+
+def _rag_target(
+    args: argparse.Namespace, client: httpx.Client, url: str, api_key: str
+) -> tuple[Target, dict[str, Any], ScorerConfig]:
+    try:
+        config = rag_mcp.RagTargetConfig(
+            mcp_url=url,
+            knowledge_base_ids=tuple(args.knowledge_base_id),
+            search_answer_profile_id=args.search_answer_profile_id,
+            top_k=args.top_k,
+            evidence_limit=args.evidence_limit,
         )
-        target = AgentMcpTarget(AgentMcp(mcp), config, labels=labels)
+    except ValueError as error:
+        raise CliError(str(error)) from error
+    mcp = McpClient(
+        client, url, api_key=api_key, label="RAG", error_class=rag_mcp.RagEvaluationError
+    )
+    return (
+        rag_mcp.RagMcpTarget(mcp, config),
+        config.provenance(),
+        ScorerConfig(target_kind=rag_mcp.TARGET_KIND),
+    )
+
+
+def _run_command(args: argparse.Namespace) -> int:
+    loaded = _selected(_dataset(args.dataset, args.document_map), args.case, args.split)
+    kind = TARGETS[args.target]
+    url = args.mcp_url or DEFAULT_MCP_URLS[kind]
+    api_key = _api_key(args.api_key_env)
+    # Agent の Run の待ちは MCP の wait_seconds（最大 300 秒）、rag_search は回答まで同期で
+    # 返すので、HTTP の timeout はそれより長くする。
+    timeout = (
+        agent_mcp.MAX_WAIT_SECONDS + agent_mcp.REQUEST_TIMEOUT_SECONDS
+        if kind == agent_mcp.TARGET_KIND
+        else args.request_timeout
+    )
+    with httpx.Client(timeout=timeout, trust_env=False) as client:
+        build = _agent_target if kind == agent_mcp.TARGET_KIND else _rag_target
+        target, target_config, scorer = build(args, client, url, api_key)
         record = run_experiment(
             loaded,
             target,
-            target_config=config.provenance(),
+            target_config=target_config,
             scorer=scorer,
             log=lambda line: print(line, file=sys.stderr),
         )
@@ -180,11 +235,17 @@ def _run_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _score_command(args: argparse.Namespace) -> int:
+def _load_record(path: Path) -> ExperimentRecord:
     try:
-        record = ExperimentRecord.model_validate_json(args.record.read_text(encoding="utf-8"))
+        return ExperimentRecord.model_validate_json(path.read_text(encoding="utf-8"))
     except ValidationError as error:
-        raise CliError(f"結果のファイルの形が不正です: {error.error_count()} 件") from error
+        raise CliError(
+            f"suite の結果のファイルの形ではありません（{error.error_count()} 件）: {path.name}"
+        ) from error
+
+
+def _score_command(args: argparse.Namespace) -> int:
+    record = _load_record(args.record)
     loaded = _dataset(args.dataset, args.document_map)
     if args.case:
         record = record.model_copy(
@@ -193,17 +254,16 @@ def _score_command(args: argparse.Namespace) -> int:
             }
         )
     target = record.provenance.get("target") or {}
-    timeout = target.get("run_timeout_seconds") if isinstance(target, Mapping) else None
-    scorer = ScorerConfig(
-        target_kind=str(target.get("kind") or "agent_mcp")
-        if isinstance(target, Mapping)
-        else "agent_mcp",
-        infer_missing_outcome=args.infer_missing_outcome,
-        run_timeout_seconds=float(timeout)
-        if isinstance(timeout, int | float)
-        else DEFAULT_RUN_TIMEOUT_SECONDS,
-    )
+    target = target if isinstance(target, Mapping) else {}
+    timeout = target.get("run_timeout_seconds")
     try:
+        scorer = ScorerConfig(
+            target_kind=str(target.get("kind") or agent_mcp.TARGET_KIND),
+            infer_missing_outcome=args.infer_missing_outcome,
+            run_timeout_seconds=float(timeout)
+            if isinstance(timeout, int | float)
+            else agent_mcp.DEFAULT_RUN_TIMEOUT_SECONDS,
+        )
         rescored = rescore(record, loaded, scorer)
     except ValueError as error:
         raise CliError(str(error)) from error
@@ -211,24 +271,28 @@ def _score_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def load_result(path: Path) -> Mapping[str, Any]:
-    """評価の結果（suite の結果の report、製品の評価の結果の data、またはその中身）。"""
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(payload, Mapping):
-        for key in ("report", "data"):
-            if isinstance(payload.get(key), Mapping):
-                return payload[key]  # type: ignore[no-any-return]
-        return payload
-    raise CliError(f"評価の結果の形が読めません: {path.name}")
-
-
 def _compare_command(args: argparse.Namespace) -> int:
     summaries: dict[str, Mapping[str, Any]] = {}
+    datasets: dict[str, str] = {}
     for item in args.results:
         label, separator, path = item.partition("=")
         if not separator or not label or not path:
             raise CliError(f"<名前>=<結果の JSON> の形で渡してください: {item}")
-        summaries[label] = summarize_result(load_result(Path(path)))
+        record = _load_record(Path(path))
+        dataset = record.provenance.get("dataset") or {}
+        datasets[label] = str(dataset.get("sha256") if isinstance(dataset, Mapping) else "")
+        target = record.provenance.get("target") or {}
+        summaries[label] = {
+            **summarize_result(record.report.model_dump(mode="json")),
+            "target_kind": target.get("kind") if isinstance(target, Mapping) else None,
+            "metrics_version": record.report.metrics_version,
+        }
+    if len(set(datasets.values())) > 1:
+        # 違う評価セット（ケース・期待・文書の対応）の結果は、同じ採点器でも比べられない。
+        raise CliError(
+            "評価セットの内容（provenance.dataset.sha256）が違う結果は比べられません: "
+            + ", ".join(f"{label}={value[:12]}" for label, value in datasets.items())
+        )
     if args.json:
         print(json.dumps(summaries, ensure_ascii=False, indent=2))
     else:

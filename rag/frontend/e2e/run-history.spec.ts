@@ -70,6 +70,18 @@ interface RunRow {
   search_conditions?: { top_k: number | null; filters: Record<string, string> } | null;
   /** 詳細だけの項目（回答の本文。既定は 1 文）。 */
   answer?: string | null;
+  /** 詳細だけの項目（モデルの呼び出しの回数と利用量。記録の無い実行は null。#3419）。 */
+  usage?: {
+    models: string[];
+    requests: number;
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+    cached_input_tokens: number | null;
+    reasoning_output_tokens: number | null;
+    measurement: "complete" | "partial";
+    measured_requests: number;
+  } | null;
 }
 
 function run(index: number, overrides: Partial<RunRow> = {}): RunRow {
@@ -729,6 +741,77 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
 
     await page.goto("/history/run-missing");
     await expect(page.getByText("実行が見つかりません。")).toBeVisible();
+  });
+
+  test("詳細: 概要にモデル・token・モデルの呼び出しを Agent と同じ形で出し、不明は未計測・一部計測と出す（Issue 3419）", async ({
+    page,
+  }, testInfo) => {
+    await mockLocalAuth(page);
+    const usage = {
+      models: ["model-a", "model-rewrite"],
+      requests: 4,
+      input_tokens: 12000,
+      output_tokens: 1500,
+      total_tokens: 13500,
+      cached_input_tokens: 2000,
+      reasoning_output_tokens: 600,
+      measurement: "complete" as const,
+      measured_requests: 4,
+    };
+    await mockRuns(page, [
+      // チャット（既定のモデルも実行のときの具体的な ID）。会話の履歴の書き換えのモデルも並べる。
+      run(1, { model_id: "model-a", usage }),
+      // RAG 検索（回答を作る）。一部の呼び出しの利用量が無い。
+      run(2, {
+        answer_generated: true,
+        model_id: "model-a",
+        usage: { ...usage, models: ["model-a"], requests: 3, total_tokens: 9000, measurement: "partial", measured_requests: 2 },
+      }),
+      // 回答を作らない RAG 検索で LLM を呼ばなかった実行は実測の 0。
+      run(4, {
+        usage: { ...usage, models: [], requests: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, measured_requests: 0 },
+      }),
+      // この機能より前の記録: 既定のモデルの文言を出さず、利用量は未計測。
+      run(6, { answer_generated: true }),
+    ]);
+    const summary = page.getByTestId("run-history-summary");
+    const fact = (id: string) => summary.locator(`[data-run-fact="${id}"] dd`);
+    const factOrder = () =>
+      summary.locator("[data-run-fact]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-run-fact")));
+
+    await page.goto("/history/run-1");
+    await expect(fact("model")).toHaveText("model-a、model-rewrite");
+    await expect(fact("tokens")).toHaveText("13,500 token");
+    await expect(fact("modelCalls")).toHaveText("4 回（入力 12,000 / 出力 1,500 token）");
+    expect(await factOrder()).toEqual(
+      expect.arrayContaining(["target", "model", "tokens", "modelCalls", "citations", "runId"])
+    );
+    const order = await factOrder();
+    expect(order.indexOf("model")).toBe(order.indexOf("target") + 1);
+    expect(order.slice(order.indexOf("model"), order.indexOf("model") + 3)).toEqual(["model", "tokens", "modelCalls"]);
+    await expectNoPageOverflow(page);
+    await summary.screenshot({ path: testInfo.outputPath("summary-usage-chat.png") });
+
+    await page.goto("/history/run-2");
+    await expect(fact("kind")).toHaveText("RAG 検索");
+    await expect(fact("model")).toHaveText("model-a");
+    await expect(fact("tokens")).toHaveText("9,000 token（一部計測）");
+    await expect(fact("modelCalls")).toHaveText("3 回（うち 2 回を計測。入力 12,000 / 出力 1,500 token）");
+    await expectNoPageOverflow(page);
+    await summary.screenshot({ path: testInfo.outputPath("summary-usage-search.png") });
+
+    await page.goto("/history/run-4");
+    await expect(fact("kind")).toHaveText("RAG 検索");
+    await expect(summary.locator('[data-run-fact="model"]')).toHaveCount(0);
+    await expect(fact("tokens")).toHaveText("0 token");
+    await expect(fact("modelCalls")).toHaveText("0 回（入力 0 / 出力 0 token）");
+
+    await page.goto("/history/run-6");
+    await expect(fact("kind")).toHaveText("RAG 検索");
+    await expect(summary.locator('[data-run-fact="model"]')).toHaveCount(0);
+    await expect(summary).not.toContainText("既定のテキストモデル");
+    await expect(fact("tokens")).toHaveText("未計測");
+    await expect(fact("modelCalls")).toHaveText("未計測");
   });
 
   test("詳細: 持ち主の会話で system_admin が実行した実行は、持ち主に実行者と会話の持ち主を出し、会話を開ける", async ({
