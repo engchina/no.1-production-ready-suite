@@ -3647,9 +3647,96 @@ def _linked_screen_children(
         return [_stored_chunk_answer_record(chunk) for chunk in added], links, expansion
 
 
-# 目録での条の選択（質問・文書・chunk_set・上限・モデル → 選んだ (section_id, 行)）。CRAG の各回と要求ごとの再検索で
-# 同じ質問の同じ文書を選び直さない。1 段目・2 段目の LLM に失敗した結果は cache しない（次の回で選び直す。#3285）。
+# 目録での条の選択（質問・文書・chunk_set・目録の内容・上限・モデル → 選んだ (section_id, 行)）。CRAG の各回と要求ごとの
+# 再検索で同じ質問の同じ文書を選び直さない。1 段目・2 段目の LLM に失敗した結果は cache しない（次の回で選び直す。#3285）。
+# process の中の記録の後ろに、process をまたいで時間で切れる記録（`article_catalog_cache_*`。#3507）を置く。
 _ARTICLE_SELECTION_CACHE: dict[tuple[object, ...], list[tuple[str, str]]] = {}
+_ARTICLE_CACHE_SIZE = 256
+# process をまたぐ記録の key の版。key の形・選択の入力の作り方（目録の prompt・2 段目の候補）を変えたら上げる。
+# 2: 質問を NFKC で揃えてから空白を詰める。
+_ARTICLE_RECORD_VERSION = 2
+# 記録の出どころ（工程「条の選択」に残す）。
+ARTICLE_SOURCE_LLM = "llm"
+ARTICLE_SOURCE_PROCESS = "process"
+ARTICLE_SOURCE_SHARED = "shared"
+
+
+def _article_cache_store(settings: Settings) -> Any:
+    """process をまたぐ条の選択の記録（設定が無い・0 なら None。#3507）。"""
+    from rag_engine.resources.shared_cache import shared_result_cache
+
+    return shared_result_cache(
+        getattr(settings, "article_catalog_cache_dir", None),
+        ttl_seconds=float(getattr(settings, "article_catalog_cache_ttl_seconds", 0.0) or 0.0),
+        max_entries=int(getattr(settings, "article_catalog_cache_max_entries", 0) or 0),
+    )
+
+
+def _article_inputs_key(settings: Settings) -> tuple[object, ...]:
+    """選択の結果を決める、質問と文書の外の入力: 記録の版・選択の指示・回答のモデル（provider・model・推論の量）・言語資源。
+
+    process をまたいで記録を使うので、モデル・指示・言語資源（2 段目の名指しの条の番号の照合）を変えたら選び直す。
+    """
+    from rag_engine.config import get_llm_provider
+    from rag_engine.retrieval.article_catalog import (
+        ARTICLE_DOCUMENT_SELECTION_SYSTEM_PROMPT,
+        ARTICLE_REFINE_SYSTEM_PROMPT,
+        ARTICLE_SELECTION_SYSTEM_PROMPT,
+    )
+
+    instructions = (ARTICLE_SELECTION_SYSTEM_PROMPT, ARTICLE_REFINE_SYSTEM_PROMPT, ARTICLE_DOCUMENT_SELECTION_SYSTEM_PROMPT)
+    prompts = hashlib.sha256("\n\0".join(instructions).encode("utf-8")).hexdigest()[:16]
+    provider_id = str(getattr(settings, "default_answer_llm", "") or "")
+    try:
+        provider = get_llm_provider(settings, provider_id or None)
+        model: tuple[str, ...] = (provider_id, provider.model, provider.reasoning_effort)
+    except Exception:  # noqa: BLE001 - provider の無い設定（テストの設定など）は provider の id だけで分ける。
+        model = (provider_id,)
+    try:
+        pack = current_pack().hash
+    except Exception:  # noqa: BLE001 - 言語資源を読めないときは版を分けない。
+        pack = ""
+    return (_ARTICLE_RECORD_VERSION, prompts, model, pack)
+
+
+def _normalized_catalog_question(question: str) -> str:
+    """記録の key の質問: NFKC で揃え（全角・半角の英数字や記号の違い）、前後と連続の空白を詰める。
+
+    同じ文の再実行を同じ key にする。LLM に渡す質問は変えない。
+    """
+    return " ".join(unicodedata.normalize("NFKC", question).split())
+
+
+def _catalog_digest(catalog: Any) -> str:
+    """目録の内容（文書名・行・章節の id）の hash。同じ chunk_set でも目録の作り方が変われば選び直す。"""
+    payload = json.dumps([catalog.file_name, list(catalog.lines), list(catalog.section_ids)], ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _remember(cache: dict[tuple[object, ...], Any], key: tuple[object, ...], value: Any) -> None:
+    """process の中の記録に入れる（上限を超えたら全部捨てる。今までと同じ）。"""
+    if key not in cache and len(cache) >= _ARTICLE_CACHE_SIZE:
+        cache.clear()
+    cache[key] = value
+
+
+def _recorded_articles(value: Any) -> list[tuple[str, str]] | None:
+    """process をまたぐ記録の値を条の選択に戻す。形が違えば None（記録が無いのと同じ）。"""
+    if not isinstance(value, list):
+        return None
+    articles: list[tuple[str, str]] = []
+    for item in value:
+        if not (isinstance(item, list) and len(item) == 2 and all(isinstance(part, str) for part in item)):
+            return None
+        articles.append((item[0], item[1]))
+    return articles
+
+
+def _recorded_documents(value: Any) -> list[str] | None:
+    """process をまたぐ記録の値を文書の選択に戻す。形が違えば None。"""
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return None
+    return list(value)
 
 
 def _catalog_document_ids(*rankings: Sequence[AnswerRecord]) -> list[str]:
@@ -3724,7 +3811,12 @@ class _CatalogReferences:
 
 
 def _select_catalog_articles(
-    question: str, catalogs: Sequence[Any], settings: Settings, *, terms: Sequence[Any] = ()
+    question: str,
+    catalogs: Sequence[Any],
+    settings: Settings,
+    *,
+    terms: Sequence[Any] = (),
+    sources: dict[str, int] | None = None,
 ) -> tuple[list[Any], list[tuple[str, str]], int, list[str], list[_CatalogReferences]]:
     """文書ごとに目録から条を選び（並行に呼ぶ）、文書を順に回した順・選べなかった文書（名前, 理由）・2 段目で足した条の
     数・2 段目に失敗した文書の名前・名指しの条を候補にした文書を返す（#2254・#3517）。
@@ -3740,6 +3832,11 @@ def _select_catalog_articles(
     並行の呼び出しをすべて待つ段全体が数分止まるため。1 段目で超えた文書は選ばずに続け（同じ入力は温度 0 で同じ出力
     になるので送り直さない）、記録にも残さない（次の質問では呼び直す）。2 段目で失敗したら 1 段目の条だけを使い、
     その結果も記録に残さない（#3285）。
+
+    記録は process の中（L1）と、process をまたいで時間で切れる記録（L2。`article_catalog_cache_*`。#3507）の順に引く。
+    key は質問（NFKC で揃えて空白を詰めたもの）・文書・chunk_set・目録の内容・上限・用語・2 段目の設定・モデル・指示の版で、同じ入力の
+    LLM の結果だけを使い回す（選び方は変えない）。`sources` を渡すと、文書ごとの出どころ（LLM / process の記録 /
+    共有の記録）の数を入れる。
     """
     from rag_engine.adapters.oci import IncompleteResponse, bind_output_cap
     from rag_engine.dependencies import injected_article_leads, llm_call_count
@@ -3756,11 +3853,37 @@ def _select_catalog_articles(
     # 登録の用語を変えたら選び直す（用語は選択の入力）。
     term_key = tuple((term.term, tuple(term.aliases), term.description) for term in terms)
     refine_key = (refine_limit, refine_candidates) if load_leads is not None else (0, 0)
-    keys = [
-        (question, catalog.document_id, catalog.chunk_set_id, len(catalog.lines), limit, model, term_key, refine_key)
+    inputs = _article_inputs_key(settings)
+    normalized = _normalized_catalog_question(question)
+    keys: list[tuple[object, ...]] = [
+        (
+            "article_selection",
+            normalized,
+            catalog.document_id,
+            catalog.chunk_set_id,
+            len(catalog.lines),
+            _catalog_digest(catalog),
+            limit,
+            model,
+            term_key,
+            refine_key,
+            inputs,
+        )
         for catalog in catalogs
     ]
-    missing = [index for index, key in enumerate(keys) if key not in _ARTICLE_SELECTION_CACHE]
+    store = _article_cache_store(settings)
+    cached: dict[int, list[tuple[str, str]]] = {}
+    origin: dict[int, str] = {}
+    for index, key in enumerate(keys):
+        hit = _ARTICLE_SELECTION_CACHE.get(key)
+        if hit is not None:
+            cached[index], origin[index] = hit, ARTICLE_SOURCE_PROCESS
+            continue
+        recorded = _recorded_articles(store.get(key)) if store is not None else None
+        if recorded is not None:
+            _remember(_ARTICLE_SELECTION_CACHE, key, recorded)
+            cached[index], origin[index] = recorded, ARTICLE_SOURCE_SHARED
+    missing = [index for index in range(len(keys)) if index not in cached]
     failures: dict[int, str] = {}
     refine_failures: set[int] = set()
     results: dict[int, list[tuple[str, str]]] = {}
@@ -3834,13 +3957,19 @@ def _select_catalog_articles(
             results = {index: future.result() for index, future in futures.items()}
         # 並行の呼び出しは thread の文脈で数えるので、呼び出し元の文脈の LLM の呼び出しの数に足す。
         llm_call_count.set(llm_call_count.get() + sum(calls.values()))
-        if len(_ARTICLE_SELECTION_CACHE) + len(missing) > 256:
+        if len(_ARTICLE_SELECTION_CACHE) + len(missing) > _ARTICLE_CACHE_SIZE:
             _ARTICLE_SELECTION_CACHE.clear()
         for index, chosen in results.items():
+            origin[index] = ARTICLE_SOURCE_LLM
             if index not in failures and index not in refine_failures:
                 _ARTICLE_SELECTION_CACHE[keys[index]] = chosen
+                if store is not None:
+                    store.put(keys[index], [list(item) for item in chosen])
+    if sources is not None:
+        for value in origin.values():
+            sources[value] = sources.get(value, 0) + 1
     # 2 段目に失敗した文書は cache しないが、この回は 1 段目の条で続ける。
-    selections = [results[index] if index in results else _ARTICLE_SELECTION_CACHE.get(key, []) for index, key in enumerate(keys)]
+    selections = [results[index] if index in results else cached.get(index, []) for index in range(len(keys))]
     failed = [(catalogs[index].file_name, failures[index]) for index in sorted(failures)]
     refine_failed = [catalogs[index].file_name for index in sorted(refine_failures)]
     referenced = [references[index] for index in sorted(references)]
@@ -3872,29 +4001,65 @@ def _scope_catalog_documents(question: str, settings: Settings, exclude: set[str
     件まで返す（選んだ文書が候補の文書と重なっても枠を使い切る。#2261）。一覧の注入が無い・件数が 0・一覧が空なら
     選ばない（LLM を呼ばない）。選択の LLM に失敗したら None を返し、cache しない（次の回で選び直す。#3285）。
     """
+    return _scope_catalog_documents_with_source(question, settings, exclude)[0]
+
+
+def _scope_catalog_documents_with_source(question: str, settings: Settings, exclude: set[str]) -> tuple[list[str] | None, str]:
+    """`_scope_catalog_documents` と、選択の出どころ（LLM / process の記録 / 共有の記録。選ばなければ空。#3507）。"""
     from rag_engine.dependencies import injected_article_documents
     from rag_engine.retrieval.article_catalog import select_documents
 
     limit = int(getattr(settings, "article_catalog_scope_documents", 0) or 0)
     load = injected_article_documents()
     if load is None or limit <= 0:
-        return []
+        return [], ""
     documents = [(str(document_id), str(name)) for document_id, name in load(settings=settings)]
     if not documents:
-        return []
+        return [], ""
     overlap = sum(1 for document_id, _ in documents if document_id in exclude)
     ask = limit + overlap
     digest = hashlib.sha256(json.dumps(documents, ensure_ascii=False).encode("utf-8")).hexdigest()
-    key = (question, digest, ask, str(getattr(settings, "default_answer_llm", "") or ""))
+    key: tuple[object, ...] = (
+        "article_documents",
+        _normalized_catalog_question(question),
+        digest,
+        ask,
+        str(getattr(settings, "default_answer_llm", "") or ""),
+        _article_inputs_key(settings),
+    )
+    source = ARTICLE_SOURCE_PROCESS
     chosen = _ARTICLE_DOCUMENT_CACHE.get(key)
+    store = _article_cache_store(settings) if chosen is None else None
+    if chosen is None and store is not None:
+        chosen = _recorded_documents(store.get(key))
+        if chosen is not None:
+            source = ARTICLE_SOURCE_SHARED
+            _remember(_ARTICLE_DOCUMENT_CACHE, key, chosen)
     if chosen is None:
+        source = ARTICLE_SOURCE_LLM
         chosen = select_documents(question, documents, parse_text_response, settings, limit=ask)
         if chosen is None:
-            return None
-        if len(_ARTICLE_DOCUMENT_CACHE) >= 256:
-            _ARTICLE_DOCUMENT_CACHE.clear()
-        _ARTICLE_DOCUMENT_CACHE[key] = chosen
-    return [document_id for document_id in chosen if document_id not in exclude][:limit]
+            return None, source
+        _remember(_ARTICLE_DOCUMENT_CACHE, key, chosen)
+        if store is not None:
+            store.put(key, list(chosen))
+    return [document_id for document_id in chosen if document_id not in exclude][:limit], source
+
+
+_ARTICLE_SOURCE_LABELS = {
+    ARTICLE_SOURCE_LLM: "LLM",
+    ARTICLE_SOURCE_PROCESS: "同じ process の記録",
+    ARTICLE_SOURCE_SHARED: "共有の記録",
+}
+
+
+_ARTICLE_SHARED_BYPASS_LABEL = "共有の記録を使わない（評価）"
+
+
+def _article_sources_label(sources: Mapping[str, int]) -> str:
+    """文書ごとの条の選択の出どころの数（例: 「LLM 2 文書・共有の記録 8 文書」）。"""
+    parts = [f"{label} {sources[key]} 文書" for key, label in _ARTICLE_SOURCE_LABELS.items() if sources.get(key)]
+    return "・".join(parts) if parts else "なし"
 
 
 def _catalog_article_children(
@@ -3932,13 +4097,24 @@ def _catalog_article_children(
         # 検索の候補に出ない文書（手続の一般的な規則の文書など）は、範囲の文書の一覧から LLM が選んで足す。文書の選択の
         # LLM と目録の読み込みはこの工程の中で行う（処理の経過で条の選択の子にする。#3475）。
         known = {catalog.document_id for catalog in catalogs}
-        extra = _scope_catalog_documents(question, settings, known)
+        extra, scope_source = _scope_catalog_documents_with_source(question, settings, known)
         scope_failed = extra is None
         extra = extra or []
         if extra:
             catalogs += list(load_catalogs(document_ids=extra, limit=len(extra), settings=settings))
         terms = _catalog_terms(question, settings)
-        selected, failed, refined, refine_failed, referenced = _select_catalog_articles(question, catalogs, settings, terms=terms)
+        sources: dict[str, int] = {}
+        selected, failed, refined, refine_failed, referenced = _select_catalog_articles(
+            question, catalogs, settings, terms=terms, sources=sources
+        )
+        # 選択を LLM で行ったか、記録（同じ process・process をまたぐ共有の記録）から使ったか（#3507）。品質評価は
+        # 共有の記録を使わないことも残す（同じ質問の再実行でも実際の費用を測る）。
+        from rag_engine.resources.shared_cache import shared_cache_bypassed
+
+        bypass = (_ARTICLE_SHARED_BYPASS_LABEL,) if shared_cache_bypassed() else ()
+        step.field("条の選択の出どころ", "・".join((_article_sources_label(sources), *bypass)))
+        if scope_source:
+            step.field("範囲の文書の選択の出どころ", "・".join((_ARTICLE_SOURCE_LABELS[scope_source], *bypass)))
         if terms:
             step.field("選択に渡した用語", join_values(term.term for term in terms))
         if refined:

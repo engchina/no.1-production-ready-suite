@@ -1885,3 +1885,35 @@ def test_trend_includes_split_breakdown_and_evidence_recall() -> None:
     )
     assert trend["required_evidence_recall"] == 0.5
     assert trend["split_breakdown"]["holdout"]["metrics"] == {"mrr": 1.0}
+
+
+async def test_evaluation_runner_does_not_use_the_shared_article_catalog_record() -> None:
+    """品質評価の回答は、条の選択の process をまたぐ記録を使わない（#3507。実際の費用を測る）。"""
+    from rag_engine.resources.shared_cache import shared_cache_bypassed
+
+    seen: list[bool] = []
+
+    class RecordingPipeline(StubPipeline):
+        async def run(
+            self,
+            request: SearchRequest,
+            trace_id: str | None = None,
+            progress_callback: SearchStageProgressCallback | None = None,
+        ) -> SearchResponse:
+            seen.append(shared_cache_bypassed())
+            return await super().run(request, trace_id, progress_callback)
+
+    runner = EvaluationRunner(pipeline=RecordingPipeline())
+    assert shared_cache_bypassed() is False
+
+    await runner.run(
+        cases=[
+            EvaluationCase(id="case-1", query="承認条件"),
+            EvaluationCase(id="case-2", query="申請の期限"),
+        ],
+        top_k=5,
+    )
+
+    assert seen == [True, True]
+    # 評価の外（検索・チャット）では使う。
+    assert shared_cache_bypassed() is False
