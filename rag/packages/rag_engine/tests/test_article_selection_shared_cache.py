@@ -303,6 +303,62 @@ def test_whitespace_only_differences_in_the_question_share_the_record(tmp_path):
     assert len(parse.calls) == 1
 
 
+def test_full_width_and_half_width_questions_share_the_record_and_the_llm_gets_the_original(tmp_path):
+    """質問は NFKC で揃えてから key にする（全角・半角の英数字と記号、全角の空白）。LLM には元の文を渡す。"""
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+
+    questions = []
+    parse = _counting(lambda payload: questions.append(payload["question"]) or _articles([3]))
+    settings = _settings(tmp_path)
+
+    def unused(*args, **kwargs):
+        raise AssertionError("呼ばない")
+
+    with bind_dependencies(AnswerDependencies(search=unused, check_ready=unused, rerank=unused, parse_images=unused, parse_text=parse)):
+        first = answering._select_catalog_articles("ＡＢＣ－１２３の届出（様式２）は", [CATALOG], settings)
+        _new_process()
+        # 先頭の全角の空白（NFKC で半角の空白になり、前後の空白として詰める）。
+        second = answering._select_catalog_articles("　ABC-123の届出(様式2)は", [CATALOG], settings)
+        # 揃えても違う文は別の記録。
+        _new_process()
+        answering._select_catalog_articles("ABC-124の届出(様式2)は", [CATALOG], settings)
+
+    assert len(parse.calls) == 2
+    assert second[0] == first[0]
+    assert questions == ["ＡＢＣ－１２３の届出（様式２）は", "ABC-124の届出(様式2)は"]
+
+
+def test_evaluation_neither_reads_nor_writes_the_shared_record_but_keeps_the_process_record(tmp_path):
+    """品質評価（`bypass_shared_cache`）は共有の記録を読みも書きもしない。process の中の記録は今までどおり使う。"""
+    from rag_engine.resources.shared_cache import bypass_shared_cache, shared_cache_bypassed
+
+    parse = _counting(lambda payload: _articles([3]))
+    settings = _settings(tmp_path)
+
+    # 評価の外で書いた共有の記録があっても、評価では読まない。
+    _select(parse, settings, [CATALOG])
+    assert len(list(tmp_path.glob("*.json"))) == 1
+    _new_process()
+    other = replace(CATALOG, document_id="doc-b", file_name="架空細則.json", chunk_set_id="cs-b")
+    with bypass_shared_cache():
+        assert shared_cache_bypassed() is True
+        sources: dict[str, int] = {}
+        _select(parse, settings, [CATALOG, other], sources=sources)
+        assert sources == {"llm": 2} and len(parse.calls) == 3
+        # 評価で選んだ結果は共有の記録に書かない。
+        assert len(list(tmp_path.glob("*.json"))) == 1
+        # 同じ process の記録は使う。
+        sources = {}
+        _select(parse, settings, [CATALOG, other], sources=sources)
+        assert sources == {"process": 2} and len(parse.calls) == 3
+    assert shared_cache_bypassed() is False
+    # 評価の後は共有の記録を使う（評価で選んだ文書は記録に無い）。
+    _new_process()
+    sources = {}
+    _select(parse, settings, [CATALOG, other], sources=sources)
+    assert sources == {"shared": 1, "llm": 1}
+
+
 def test_failed_selections_are_not_recorded(tmp_path):
     """1 段目・2 段目に失敗した文書は記録に残さず、別の process でも LLM で選び直す（#3285 と同じ）。"""
     from rag_engine.adapters import oci
@@ -465,6 +521,19 @@ def test_catalog_step_shows_whether_the_selection_came_from_the_llm_or_a_record(
     assert calls == 0
     assert fields["条の選択の出どころ"] == "同じ process の記録 2 文書"
     assert fields["範囲の文書の選択の出どころ"] == "同じ process の記録"
+
+
+def test_catalog_step_shows_that_evaluation_does_not_use_the_shared_record(tmp_path):
+    from rag_engine.resources.shared_cache import bypass_shared_cache
+
+    settings = _settings(tmp_path)
+    _catalog_step(settings)
+    _new_process()
+    with bypass_shared_cache():
+        fields, calls = _catalog_step(settings)
+    assert calls == 3
+    assert fields["条の選択の出どころ"] == "LLM 2 文書・共有の記録を使わない（評価）"
+    assert fields["範囲の文書の選択の出どころ"] == "LLM・共有の記録を使わない（評価）"
 
 
 def test_cache_settings_come_from_the_environment(tmp_path):

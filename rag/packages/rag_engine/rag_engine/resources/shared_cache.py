@@ -19,7 +19,9 @@ import json
 import logging
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
@@ -32,6 +34,23 @@ _SUFFIX = ".json"
 _TEMP_PREFIX = ".tmp-"
 # 書き込みの途中で process が止まって残った一時ファイルを消すまでの時間（秒）。
 _STALE_TEMP_SECONDS = 3600.0
+# process をまたぐ記録を読みも書きもしない実行（品質評価。同じ質問の再実行でも実際の費用を測る）。
+_BYPASS: ContextVar[bool] = ContextVar("rag_engine_shared_cache_bypass", default=False)
+
+
+@contextmanager
+def bypass_shared_cache() -> Iterator[None]:
+    """この文脈（とそこから作る task・thread の文脈）の間、process をまたぐ記録を使わない（品質評価。#3507）。"""
+    token = _BYPASS.set(True)
+    try:
+        yield
+    finally:
+        _BYPASS.reset(token)
+
+
+def shared_cache_bypassed() -> bool:
+    """今の文脈で process をまたぐ記録を使わないか。"""
+    return _BYPASS.get()
 
 
 def cache_key_digest(key: object) -> str:
@@ -136,7 +155,7 @@ class SharedResultCache:
 
 
 def shared_result_cache(directory: Path | str | None, *, ttl_seconds: float, max_entries: int) -> SharedResultCache | None:
-    """設定から記録を作る。ディレクトリが無い・有効期間か件数が 0 なら None（process の中の記録だけを使う）。"""
-    if directory is None or not str(directory).strip() or ttl_seconds <= 0 or max_entries <= 0:
+    """設定から記録を作る。ディレクトリが無い・有効期間か件数が 0・使わない文脈なら None（process の中の記録だけを使う）。"""
+    if _BYPASS.get() or directory is None or not str(directory).strip() or ttl_seconds <= 0 or max_entries <= 0:
         return None
     return SharedResultCache(Path(directory).expanduser(), ttl_seconds=ttl_seconds, max_entries=max_entries)

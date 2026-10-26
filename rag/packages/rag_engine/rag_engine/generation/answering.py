@@ -3648,8 +3648,9 @@ def _linked_screen_children(
 # process の中の記録の後ろに、process をまたいで時間で切れる記録（`article_catalog_cache_*`。#3507）を置く。
 _ARTICLE_SELECTION_CACHE: dict[tuple[object, ...], list[tuple[str, str]]] = {}
 _ARTICLE_CACHE_SIZE = 256
-# process をまたぐ記録の key の版。選択の入力の作り方（目録の prompt・2 段目の候補）を変えたら上げる。
-_ARTICLE_RECORD_VERSION = 1
+# process をまたぐ記録の key の版。key の形・選択の入力の作り方（目録の prompt・2 段目の候補）を変えたら上げる。
+# 2: 質問を NFKC で揃えてから空白を詰める。
+_ARTICLE_RECORD_VERSION = 2
 # 記録の出どころ（工程「条の選択」に残す）。
 ARTICLE_SOURCE_LLM = "llm"
 ARTICLE_SOURCE_PROCESS = "process"
@@ -3695,8 +3696,11 @@ def _article_inputs_key(settings: Settings) -> tuple[object, ...]:
 
 
 def _normalized_catalog_question(question: str) -> str:
-    """記録の key の質問: 前後と連続の空白だけを詰める（同じ文の再実行を同じ key にする。LLM に渡す質問は変えない）。"""
-    return " ".join(question.split())
+    """記録の key の質問: NFKC で揃え（全角・半角の英数字や記号の違い）、前後と連続の空白を詰める。
+
+    同じ文の再実行を同じ key にする。LLM に渡す質問は変えない。
+    """
+    return " ".join(unicodedata.normalize("NFKC", question).split())
 
 
 def _catalog_digest(catalog: Any) -> str:
@@ -3826,7 +3830,7 @@ def _select_catalog_articles(
     その結果も記録に残さない（#3285）。
 
     記録は process の中（L1）と、process をまたいで時間で切れる記録（L2。`article_catalog_cache_*`。#3507）の順に引く。
-    key は質問（空白を詰めたもの）・文書・chunk_set・目録の内容・上限・用語・2 段目の設定・モデル・指示の版で、同じ入力の
+    key は質問（NFKC で揃えて空白を詰めたもの）・文書・chunk_set・目録の内容・上限・用語・2 段目の設定・モデル・指示の版で、同じ入力の
     LLM の結果だけを使い回す（選び方は変えない）。`sources` を渡すと、文書ごとの出どころ（LLM / process の記録 /
     共有の記録）の数を入れる。
     """
@@ -4045,6 +4049,9 @@ _ARTICLE_SOURCE_LABELS = {
 }
 
 
+_ARTICLE_SHARED_BYPASS_LABEL = "共有の記録を使わない（評価）"
+
+
 def _article_sources_label(sources: Mapping[str, int]) -> str:
     """文書ごとの条の選択の出どころの数（例: 「LLM 2 文書・共有の記録 8 文書」）。"""
     parts = [f"{label} {sources[key]} 文書" for key, label in _ARTICLE_SOURCE_LABELS.items() if sources.get(key)]
@@ -4096,10 +4103,14 @@ def _catalog_article_children(
         selected, failed, refined, refine_failed, referenced = _select_catalog_articles(
             question, catalogs, settings, terms=terms, sources=sources
         )
-        # 選択を LLM で行ったか、記録（同じ process・process をまたぐ共有の記録）から使ったか（#3507）。
-        step.field("条の選択の出どころ", _article_sources_label(sources))
+        # 選択を LLM で行ったか、記録（同じ process・process をまたぐ共有の記録）から使ったか（#3507）。品質評価は
+        # 共有の記録を使わないことも残す（同じ質問の再実行でも実際の費用を測る）。
+        from rag_engine.resources.shared_cache import shared_cache_bypassed
+
+        bypass = (_ARTICLE_SHARED_BYPASS_LABEL,) if shared_cache_bypassed() else ()
+        step.field("条の選択の出どころ", "・".join((_article_sources_label(sources), *bypass)))
         if scope_source:
-            step.field("範囲の文書の選択の出どころ", _ARTICLE_SOURCE_LABELS[scope_source])
+            step.field("範囲の文書の選択の出どころ", "・".join((_ARTICLE_SOURCE_LABELS[scope_source], *bypass)))
         if terms:
             step.field("選択に渡した用語", join_values(term.term for term in terms))
         if refined:
