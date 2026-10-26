@@ -17,7 +17,8 @@ name: CI
 # platform/scripts/ci_frontend_paths.py が確かめる。
 # MCP ツールの契約（platform/contracts/mcp/）は 3 製品の backend のテストだけが読むので、backend の job だけを動かす（#1531）。
 # RAG の job は、RAG が読む契約（rag_contracts: rag-tools.json と、Agent の回答の節の事例を除く answer-passages）の
-# 変更でだけ動く。Agent・NL2SQL の MCP の契約と Agent の評価の共有の fixture は RAG が読まない（#3240。
+# 変更と、RAG の出力の合成の例（fixtures/rag-tool-outputs.json）の変更でだけ動く。Agent・NL2SQL の MCP の契約と
+# Agent の評価の共有の fixture は RAG が読まない（#3240。
 # rag/backend/tests/test_product_boundaries.py が rag のコードから読まないことを確かめる）。
 # 製品横断の評価（suite/evaluation。独立の uv project）は Suite / Evaluation が、platform の採点の部品
 # （platform/packages/evaluation_scoring）は Platform / evaluation_scoring と、それを使う RAG / Backend・Suite / Evaluation が
@@ -268,6 +269,8 @@ jobs:
             # RAG は Agent の回答の形式を持たない。
             rag_contracts:
               - "platform/contracts/mcp/rag-tools.json"
+              # RAG の出力の合成の例（Agent の fake が使い、RAG のテストが RAG の出力の型で読めることを確かめる）。
+              - "platform/contracts/mcp/fixtures/rag-tool-outputs.json"
               - "platform/contracts/answer-passages/**"
               - "!platform/contracts/answer-passages/unverified-section.json"
             # 製品の backend（frontend を除く製品のすべて。#1592）。
