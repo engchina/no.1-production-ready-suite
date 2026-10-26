@@ -52,7 +52,7 @@ describe("CHAT_PROGRESS_DEFINITIONS", () => {
     expect(steps.map((item) => [item.label, item.status, item.meta ?? null])).toEqual([
       ["会話を踏まえた質問の書き換え", "done", null],
       ["文書の検索", "running", null],
-      ["Query Understanding（質問の理解）", "failed", "該当なし · LLM 1 回・送信 2 回"],
+      ["質問の理解（Query Understanding）", "failed", "該当なし · LLM 1 回・送信 2 回"],
     ]);
     expect(steps[0]).toMatchObject({ startedAt: "2026-10-04T00:00:00.000Z", finishedAt: "2026-10-04T00:00:01.000Z" });
   });

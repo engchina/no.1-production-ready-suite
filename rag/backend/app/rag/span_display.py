@@ -60,7 +60,7 @@ ANSWER_STAGE_LABELS: dict[str, str] = {
     # 検索だけ(KB の検索テスト・レシピの検索比較。#593)
     "retrieval": "検索",
     "history_rewrite": "会話を踏まえた質問の書き換え",
-    "field_filter": "検索条件の読み取り",
+    "field_filter": "検索条件の抽出（Self-Query）",
     "answer": "質問の読み取りから回答の作成まで",
     # 回答側の安全チェック(#1146)
     "answer_guardrail": "回答の安全チェック",
@@ -73,7 +73,7 @@ ANSWER_STAGE_LABELS: dict[str, str] = {
 # 同じ名前にする（frontend の `answer-process.test.ts` が照合する）。工程名はログ・記録の識別に
 # 使うので変えない。
 ANSWER_STEP_DISPLAY_NAMES: dict[str, str] = {
-    "質問の理解": "Query Understanding（質問の理解）",
+    "質問の理解": "質問の理解（Query Understanding）",
     "用語・同義語の確認": "用語・同義語の確認",
     "回答ルールの確認": "回答ルールの確認",
     "検索の準備確認": "検索の準備の確認",
