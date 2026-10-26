@@ -564,22 +564,6 @@ def test_evaluation_cli_surfaces_chain_rate_and_breakdowns(tmp_path: Path) -> No
     assert {case["reasoning_type"] for case in loaded["cases"]} >= {"bridge"}
 
 
-def test_agent_evaluation_summary_shows_reasoning_rows() -> None:
-    from app.rag.agent_evaluation_cli import summarize_result, summary_markdown
-
-    data = _metrics_with_breakdowns().model_dump(mode="json")
-    summary = summarize_result(data)
-    assert summary["required_evidence_recall"] == 0.75
-    assert summary["reasoning_types"]["bridge"]["required_evidence_recall"] == 1.0
-    assert summary["hops"]["1"]["required_evidence_recall"] == 0.5
-    assert summary["splits"]["dev"]["reasoning_types"]["bridge"]["case_count"] == 1
-    table = summary_markdown({"A": summary, "D": summary})
-    assert "| 必要な根拠の取得率 | 0.75 | 0.75 |" in table
-    assert "| bridge: 必要な根拠の取得率 | 1.00 | 1.00 |" in table
-    assert "| 2 段: 必要な根拠の取得率 | 1.00 | 1.00 |" in table
-    assert "| dev / bridge: 必要な根拠の取得率 | 1.00 | 1.00 |" in table
-
-
 # ---- 資料の生成 ----------------------------------------------------------------------------
 
 

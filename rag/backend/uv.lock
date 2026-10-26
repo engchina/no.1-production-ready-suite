@@ -2218,6 +2218,24 @@ dev = [
 ]
 
 [[package]]
+name = "production-ready-evaluation-scoring"
+version = "0.1.0"
+source = { editable = "../../platform/packages/evaluation_scoring" }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "bandit", specifier = ">=1.8" },
+    { name = "mypy", specifier = ">=1.14" },
+    { name = "pip-audit", specifier = ">=2.9" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-timeout", specifier = ">=2.3" },
+    { name = "pytest-xdist", specifier = ">=3.8" },
+    { name = "ruff", specifier = ">=0.9" },
+]
+
+[[package]]
 name = "production-ready-rag-backend"
 version = "0.1.0"
 source = { editable = "." }
@@ -2230,6 +2248,7 @@ dependencies = [
     { name = "oci" },
     { name = "oracledb" },
     { name = "production-ready-backend-core" },
+    { name = "production-ready-evaluation-scoring" },
     { name = "production-ready-system-settings-backend" },
     { name = "prometheus-client" },
     { name = "pydantic" },
@@ -2286,6 +2305,7 @@ requires-dist = [
     { name = "oci", specifier = ">=2.168" },
     { name = "oracledb", specifier = ">=3.4" },
     { name = "production-ready-backend-core", editable = "../../platform/packages/backend_core" },
+    { name = "production-ready-evaluation-scoring", editable = "../../platform/packages/evaluation_scoring" },
     { name = "production-ready-system-settings-backend", editable = "../../platform/packages/system_settings_backend" },
     { name = "prometheus-client", specifier = ">=0.24" },
     { name = "pydantic", specifier = ">=2.11" },

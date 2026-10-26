@@ -118,7 +118,7 @@ def test_faithfulness_is_reference_only_and_ignores_generated_boilerplate() -> N
 def test_grounding_text_keeps_marked_passages_and_drops_the_system_sections() -> None:
     """faithfulness は印の段落を本文として数え、外した段落・確認が必要な点の節は数えない。
 
-    #2738。RAG 自身の回答の節。Agent の回答の節は test_answer_metrics_legacy_agent.py。
+    #2738。RAG 自身の回答の節（Agent の回答の節は suite の Agent の adapter。#3240）。
     """
     from rag_engine.generation.answer_labels import answer_labels
 
@@ -151,12 +151,10 @@ def test_grounding_text_keeps_marked_passages_and_drops_the_system_sections() ->
     ]
 
 
-# 回答の節の基線（#3240 の段 1）。RAG 自身の回答の節だけを持つ（旧 Agent の回答の節は
-# test_answer_metrics_legacy_agent.py）。
+# RAG 自身の回答の節の基線（#3240 の段 1）。Agent の回答の節（旧形式を含む）は suite の
+# Agent の adapter のテスト（suite/evaluation/tests/test_agent_legacy.py）。
 ANSWER_SECTIONS: dict[str, Any] = json.loads(
-    (
-        Path(__file__).resolve().parent / "fixtures/agent_evaluation_baseline/answer_sections.json"
-    ).read_text("utf-8")
+    (Path(__file__).resolve().parent / "fixtures/answer_sections.json").read_text("utf-8")
 )
 
 
