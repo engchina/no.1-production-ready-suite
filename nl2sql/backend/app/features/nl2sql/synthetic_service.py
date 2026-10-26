@@ -149,7 +149,7 @@ class SyntheticService:
     def create(self, request: SyntheticRunRequest, principal: Principal | None) -> SyntheticRun:
         actor = authorize(principal)
         if request.profile_id and not actor.can_use_profile(request.profile_id):
-            raise HTTPException(403, "この Profile を利用する権限がありません。")
+            raise HTTPException(403, "この業務プロファイルを利用する権限がありません。")
         source = [request.table_name] if request.table_name.strip() else request.object_list
         names = list(
             dict.fromkeys(
@@ -158,7 +158,7 @@ class SyntheticService:
         )
         if not request.profile_name.strip():
             # 画面の「Profile」の必須と同じ規則・文言で、欄を指す 422 にする（#540）。
-            message = "Profile を選択してください。"
+            message = "業務プロファイルを選択してください。"
             raise HTTPException(
                 422,
                 {
@@ -170,7 +170,9 @@ class SyntheticService:
                 },
             )
         if not names or len(names) > 100:
-            raise HTTPException(400, "Profile と 1〜100 件の対象テーブルを指定してください。")
+            raise HTTPException(
+                400, "業務プロファイルと 1〜100 件の対象テーブルを指定してください。"
+            )
         expected = (
             {names[0], names[0].split(".", 1)[-1]}
             if request.table_name.strip()
@@ -247,7 +249,7 @@ class SyntheticService:
             if run.request.get("profile_id") and not actor.can_use_profile(
                 run.request["profile_id"]
             ):
-                raise HTTPException(403, "Profile の利用権限が変更されています。")
+                raise HTTPException(403, "業務プロファイルの利用権限が変更されています。")
             if run.review_expired():
                 raise HTTPException(409, REVIEW_EXPIRED_MESSAGE)
             if not run.preview or run.status not in TERMINAL:
@@ -338,7 +340,7 @@ class SyntheticService:
                     {k: v for k, v in run.request.items() if k != "_object_ids"}
                 )
                 if req.profile_id and not actor.can_use_profile(req.profile_id):
-                    raise HTTPException(403, "Profile の利用権限が変更されました。")
+                    raise HTTPException(403, "業務プロファイルの利用権限が変更されました。")
                 ids = self.preflight([t.table_name for t in run.targets], req.profile_name)
                 if ids != run.request.get("_object_ids"):
                     raise HTTPException(

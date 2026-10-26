@@ -83,6 +83,7 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "parser_adapter_backend": "rag_parser_adapter_backend",
     "parser_docling_enabled": "rag_parser_docling_enabled",
     "parser_unstructured_enabled": "rag_parser_unstructured_enabled",
+    "parser_mineru_enabled": "rag_parser_mineru_enabled",
     "parser_dots_ocr_enabled": "rag_parser_dots_ocr_enabled",
     "parser_structured_records_jsonl_enabled": "rag_parser_structured_records_jsonl_enabled",
     "parser_xml_tree_json_enabled": "rag_parser_xml_tree_json_enabled",
@@ -157,6 +158,7 @@ _EXTERNAL_PARSER_BACKEND_FLAGS: dict[str, str] = {
     "unstructured": "rag_parser_unstructured_enabled",
     "structured_records_jsonl": "rag_parser_structured_records_jsonl_enabled",
     "xml_tree_json": "rag_parser_xml_tree_json_enabled",
+    "mineru": "rag_parser_mineru_enabled",
     "dots_ocr": "rag_parser_dots_ocr_enabled",
 }
 
@@ -226,6 +228,9 @@ def reject_roadmap_parser_backend_input(data: object) -> object:
     """処理レシピの保存の入力で、準備中(ロードマップ)の解析エンジンを検証のエラーにする(#3374)。"""
     if isinstance(data, Mapping):
         reject_roadmap_parser_adapter_backend(data.get("parser_adapter_backend"))
+        # MinerU の flag(parser_mineru_enabled)で選ぶことも止める(#3359)。
+        if data.get("parser_mineru_enabled") is True:
+            reject_roadmap_parser_adapter_backend("mineru")
     return data
 
 
@@ -254,6 +259,7 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     parser_adapter_backend: ParserAdapterBackend | None = None
     parser_docling_enabled: bool | None = None
     parser_unstructured_enabled: bool | None = None
+    parser_mineru_enabled: bool | None = None
     parser_dots_ocr_enabled: bool | None = None
     parser_structured_records_jsonl_enabled: bool | None = None
     parser_xml_tree_json_enabled: bool | None = None

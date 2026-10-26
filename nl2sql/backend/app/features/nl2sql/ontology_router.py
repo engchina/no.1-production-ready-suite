@@ -2583,13 +2583,13 @@ class OntologyApiRuntime:
             if document is None:
                 raise OntologyNotFoundError(
                     "PROFILE_RECOMMENDATION_NOT_FOUND",
-                    "Profile 推薦が見つかりません。",
+                    "業務プロファイル推薦が見つかりません。",
                 )
             recommendation = ProfileRecommendation.model_validate(document["payload"])
             if recommendation.expires_at <= utc_now():
                 raise OntologyStateConflictError(
                     "PROFILE_RECOMMENDATION_EXPIRED",
-                    "Profile 推薦の有効期限が切れました。再判定してください。",
+                    "業務プロファイル推薦の有効期限が切れました。再判定してください。",
                 )
             profile = self._strict_profile(request.selected_profile_id)
             # 推薦候補は profile ごとの基準 revision を持つ(Markdown 公開版がある profile は
@@ -2668,7 +2668,7 @@ class OntologyApiRuntime:
             return recommendation.id
         raise OntologyGateBlockedError(
             "PROFILE_CONFIRMATION_REQUIRED",
-            "推薦された Profile を確認してから問い合わせを開始してください。",
+            "推薦された業務プロファイルを確認してから問い合わせを開始してください。",
         )
 
     def search_ontology_context(
@@ -2973,7 +2973,7 @@ class OntologyApiRuntime:
             if request.allowed_objects.table_names and not allowed.table_names:
                 raise OntologyGateBlockedError(
                     "REQUEST_SCOPE_EMPTY",
-                    "今回指定した object は profile の許可範囲に含まれていません。",
+                    "今回指定した object は業務プロファイルの許可範囲に含まれていません。",
                 )
             view = self._narrow_profile_view(base_view, ontology, allowed)
             self.sessions.register_profile_view(view)
@@ -5536,7 +5536,7 @@ class OntologyApiRuntime:
         except (KeyError, ValueError) as exc:
             raise OntologyNotFoundError(
                 "NL2SQL_PROFILE_NOT_FOUND",
-                "指定された profile が見つからないか、利用できません。",
+                "指定された業務プロファイルが見つからないか、利用できません。",
             ) from exc
 
     def _require_context(self, session_id: str) -> QueryRuntimeContext:

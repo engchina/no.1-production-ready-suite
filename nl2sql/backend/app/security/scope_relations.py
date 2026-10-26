@@ -56,7 +56,7 @@ def relation_catalog(
 
     profiles = [p for p in scope_profiles() if p["id"] == profile_id]
     if not profiles:
-        raise SecurityApiError(404, "有効な Profile が見つかりません。")
+        raise SecurityApiError(404, "有効な業務プロファイルが見つかりません。")
     profile = profiles[0]
     objects = []
     for value in profile["objects"]:
@@ -73,7 +73,7 @@ def relation_catalog(
             )
         )
     if target not in objects:
-        raise SecurityApiError(400, "対象テーブルが Profile の範囲にありません。")
+        raise SecurityApiError(400, "対象テーブルが業務プロファイルの範囲にありません。")
     if cursor is None:
         with service.pools.control_connection() as conn, conn.cursor() as db_cursor:
             return relation_catalog(service, profile_id, target, cursor=db_cursor)

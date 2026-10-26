@@ -86,6 +86,7 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "auto")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_mineru_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_dots_ocr_enabled", False)
 
     def package_info(
@@ -118,21 +119,24 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     # dots_ocr はローカル package/image ではなく外部 API で配信する。
     assert by_backend["dots_ocr"]["install_package"] == "外部 Dots.OCR API"
     connections = {item["backend"]: item for item in body["connections"]}
-    assert set(connections) == {"dots_ocr"}
+    assert set(connections) == {"mineru", "dots_ocr"}
     assert connections["dots_ocr"]["endpoint"] == ""
     assert connections["dots_ocr"]["api_key_configured"] is False
     assert "api_key" not in connections["dots_ocr"]
+    assert by_backend["mineru"]["install_package"] == "外部 MinerU API"
+    assert by_backend["mineru"]["status"] == "disabled"
     assert by_backend["dots_ocr"]["status"] == "disabled"
     # XML ツリー JSON は Docling・Unstructured と同じ使用エンジン(#2042)。
     assert by_backend["xml_tree_json"]["status"] == "disabled"
     assert by_backend["structured_records_jsonl"]["status"] == "disabled"
-    # 削除したエンジン(#270・#2042・#3345)は画面の選択肢・接続・対応形式に出さない。
-    # 構造化レコード JSONL は Unstructured の後、XML ツリー JSON の前(#2457)。
+    # 削除したエンジン(#270・#2042)は画面の選択肢・接続・対応形式に出さない。構造化レコード JSONL は
+    # Unstructured の後、XML ツリー JSON の前(#2457)。
     assert list(by_backend) == [
         "docling",
         "unstructured",
         "structured_records_jsonl",
         "xml_tree_json",
+        "mineru",
         "dots_ocr",
     ]
     assert "source_format_parsers" not in body
@@ -143,7 +147,7 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert score_by_backend["docling"]["warning_codes"] == ["adapter_flag_ignored_by_backend"]
     assert set(score_by_backend) == {"local", "docling", "unstructured"}
     route_by_kind = {route["source_kind"]: route for route in body["source_routes"]}
-    assert route_by_kind["pdf"]["candidate_order"] == ["docling", "unstructured"]
+    assert route_by_kind["pdf"]["candidate_order"] == ["docling", "unstructured", "mineru"]
     assert route_by_kind["pdf"]["attempted_order"] == []
     assert route_by_kind["pdf"]["selected_backend"] == "local"
     assert route_by_kind["email"]["selected_backend"] == "local"
@@ -344,6 +348,7 @@ def test_parser_adapter_settings_no_longer_handle_docling_vision(
     )
 
 
+@pytest.mark.usefixtures("mineru_selectable")
 def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_omitted_flags(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -351,8 +356,9 @@ def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "local")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
-    monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", True)
-    monkeypatch.setattr(settings, "rag_parser_dots_ocr_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_mineru_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_dots_ocr_enabled", True)
     monkeypatch.setattr(
         parser_adapter_readiness,
         "_package_info",
@@ -361,52 +367,50 @@ def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_
     resp = client.patch(
         "/api/settings/parser-adapters",
         json={
-            "adapter_backend": "dots_ocr",
-            "dots_ocr_enabled": True,
-            "unstructured_enabled": False,
+            "adapter_backend": "mineru",
+            "mineru_enabled": True,
+            "mineru_license_acknowledged": True,
+            "dots_ocr_enabled": False,
         },
     )
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["adapter_backend"] == "dots_ocr"
-    assert body["effective_order"] == ["dots_ocr"]
+    assert body["adapter_backend"] == "mineru"
+    assert body["effective_order"] == ["mineru"]
     by_backend = {adapter["backend"]: adapter for adapter in body["adapters"]}
     assert by_backend["docling"]["enabled"] is True
-    assert by_backend["dots_ocr"]["enabled"] is True
-    assert by_backend["unstructured"]["enabled"] is False
-    assert settings.rag_parser_adapter_backend == "dots_ocr"
+    assert by_backend["mineru"]["enabled"] is True
+    assert by_backend["dots_ocr"]["enabled"] is False
+    assert settings.rag_parser_adapter_backend == "mineru"
     assert settings.rag_parser_docling_enabled is True
-    assert settings.rag_parser_dots_ocr_enabled is True
-    assert settings.rag_parser_unstructured_enabled is False
+    assert settings.rag_parser_mineru_enabled is True
+    assert settings.rag_parser_dots_ocr_enabled is False
     parser = _persisted_parser(settings)
-    assert parser["adapter_backend"] == "dots_ocr"
+    assert parser["adapter_backend"] == "mineru"
     assert parser["docling_enabled"] is True
-    assert parser["dots_ocr_enabled"] is True
-    assert parser["unstructured_enabled"] is False
-    # 削除したエンジン(#270・#3345)の項目は保存しない。
-    assert not [
-        key
-        for key in parser
-        if "marker" in key or "unlimited" in key or "glm" in key or "mineru" in key
-    ]
+    assert parser["mineru_enabled"] is True
+    assert parser["dots_ocr_enabled"] is False
+    # 削除したエンジン(#270)の項目は保存しない。
+    assert not [key for key in parser if "marker" in key or "unlimited" in key or "glm" in key]
 
 
+@pytest.mark.usefixtures("mineru_selectable")
 def test_update_external_parser_connection_retains_and_clears_secret(
     monkeypatch: MonkeyPatch,
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_parser_dots_ocr_api_host", "https://old.example.com")
-    monkeypatch.setattr(settings, "rag_parser_dots_ocr_model", "dots-model")
-    monkeypatch.setattr(settings, "rag_parser_dots_ocr_api_key", "top-secret")
+    monkeypatch.setattr(settings, "rag_parser_mineru_api_host", "https://old.example.com")
+    monkeypatch.setattr(settings, "rag_parser_mineru_api_key", "top-secret")
     retained = client.patch(
         "/api/settings/parser-adapters",
         json={
-            "adapter_backend": "dots_ocr",
+            "adapter_backend": "mineru",
+            "mineru_license_acknowledged": True,
             "connections": [
                 {
-                    "backend": "dots_ocr",
-                    "endpoint": "https://dots.example.com/",
+                    "backend": "mineru",
+                    "endpoint": "https://mineru.example.com/",
                     "api_key": "",
                 }
             ],
@@ -415,35 +419,35 @@ def test_update_external_parser_connection_retains_and_clears_secret(
 
     assert retained.status_code == 200
     connection = next(
-        item for item in retained.json()["data"]["connections"] if item["backend"] == "dots_ocr"
+        item for item in retained.json()["data"]["connections"] if item["backend"] == "mineru"
     )
     assert connection == {
-        "backend": "dots_ocr",
-        "protocol": "openai_chat_completions",
-        "endpoint": "https://dots.example.com",
-        "model": "dots-model",
+        "backend": "mineru",
+        "protocol": "mineru_v1",
+        "endpoint": "https://mineru.example.com",
+        "model": None,
         "api_key_configured": True,
         "configured": True,
     }
     assert "top-secret" not in retained.text
-    assert settings.rag_parser_dots_ocr_api_key == "top-secret"
+    assert settings.rag_parser_mineru_api_key == "top-secret"
     parser = _persisted_parser(settings)
-    assert parser["dots_ocr_api_host"] == "https://dots.example.com"
+    assert parser["mineru_api_host"] == "https://mineru.example.com"
     # parser の API key も JSON ではなく .env に保存する（#106）。
-    assert "dots_ocr_api_key" not in parser
+    assert "mineru_api_key" not in parser
     assert "top-secret" not in PARSER_SETTINGS_STORE.path(settings).read_text(encoding="utf-8")
-    assert _saved_env_value(settings, "RAG_PARSER_DOTS_OCR_API_KEY") == "top-secret"
+    assert _saved_env_value(settings, "RAG_PARSER_MINERU_API_KEY") == "top-secret"
 
     cleared = client.patch(
         "/api/settings/parser-adapters",
         json={
-            "adapter_backend": "dots_ocr",
-            "connections": [{"backend": "dots_ocr", "clear_api_key": True}],
+            "adapter_backend": "mineru",
+            "connections": [{"backend": "mineru", "clear_api_key": True}],
         },
     )
 
     assert cleared.status_code == 200
-    assert settings.rag_parser_dots_ocr_api_key == ""
+    assert settings.rag_parser_mineru_api_key == ""
     assert "top-secret" not in cleared.text
 
 

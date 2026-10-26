@@ -66,6 +66,7 @@ import { SchemaRefreshHeaderStatus, SchemaRefreshProcessing } from "./components
 import { useSchemaRefreshCoordinator } from "./SchemaRefreshCoordinator";
 import {
   getSchemaObjectDetail,
+  ProfileUnavailableError,
   useProfileUsageContext,
   useProfileSummaries,
   useSchemaCatalogHead,
@@ -77,7 +78,7 @@ import { submitNl2SqlJob } from "./jobSubmission";
 import { SelectAiCredentialPrecondition } from "./components/SelectAiCredentialPrecondition";
 import { engineUsesSelectAiCredential } from "./selectAiCredentialReadiness";
 import { useSelectAiCredentialReadiness } from "./useSelectAiCredentialReadiness";
-import { prefillFromSearchParams } from "./queryPrefillState";
+import { prefillFromSearchParams, type QueryPrefill } from "./queryPrefillState";
 import { QUESTION_TEMPLATES } from "./questionTemplates";
 import { profileDisplayLabel } from "./profileDisplay";
 import type {
@@ -97,6 +98,7 @@ import type {
 } from "./types";
 import { formatDbObjectName } from "./dbObjectIdentity";
 import { useNl2SqlJobPolling } from "./useNl2SqlJobPolling";
+import { schemaReferenceState } from "./schemaReferenceState";
 import {
   emptySelection,
   insertTextAtRange,
@@ -144,6 +146,14 @@ const WORKBENCH_SCHEMA_REFRESH_PANEL = "workbench-schema-panel";
 
 function messageFromError(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
+}
+
+/** 業務プロファイルが削除済み・権限なしで使えない（利用の情報の 404 / 403）。 */
+function isProfileUnavailableError(error: unknown) {
+  return (
+    error instanceof ProfileUnavailableError ||
+    (error instanceof ApiError && (error.status === 404 || error.status === 403))
+  );
 }
 
 /** ApiError の機械判定用 code(problem.code)。PageError の分類に使う。 */
@@ -281,6 +291,7 @@ function ExecutableNl2SqlWorkbench() {
       ? listLoadMoreErrorMessage(profilesQuery.error, "profiles.error.load")
       : "";
   const noProfiles = profilesQuery.isSuccess && profiles.length === 0;
+  const [pendingPrefill, setPendingPrefill] = useState<QueryPrefill | null>(null);
   const selectedProfileQuery = useProfileUsageContext(profileId);
   const selectedProfile = selectedProfileQuery.data?.profile ?? null;
   // 生成の方式は業務プロファイルごとに残し、選んでいなければ業務プロファイルの既定の生成方式にする（#1524）。
@@ -365,7 +376,16 @@ function ExecutableNl2SqlWorkbench() {
       }),
     };
   }, [schemaDetails, schemaHeadQuery.data, schemaObjects]);
-  const loadingCatalog = schemaObjectsQuery.isPending && !schemaObjectsQuery.data;
+  // 無効の query（業務プロファイルが未選択・使えない）の pending を読み込み中にしない（#3413）。
+  const schemaPanelState = schemaReferenceState({
+    profileId,
+    profilesPending: profilesQuery.isPending,
+    prefillPending: pendingPrefill !== null,
+    profileReady: profileSelectionReady,
+    profileFailed: selectedProfileQuery.isError,
+    schemaPending: schemaObjectsQuery.isPending && !schemaObjectsQuery.data,
+  });
+  const loadingCatalog = schemaPanelState === "loading";
   // 押した「スキーマを更新」だけを送信の間 loading にする。job の間はどちらも無効にするだけで、スピナーは
   // スキーマ参照の進行の表示が出す（durable job の規則。messaging §3.7、#821）。
   const headerSchemaRefreshStarting = schemaRefresh.startingOrigin === WORKBENCH_SCHEMA_REFRESH_HEADER;
@@ -390,9 +410,14 @@ function ExecutableNl2SqlWorkbench() {
           await schemaRefresh.start(refreshOrigin);
           return;
         }
-        const results = await Promise.allSettled([
-          schemaObjectsQuery.refetch(),
+        // スキーマの一覧は使える業務プロファイルがあるときだけ取り直す。無効の query の refetch は enabled を見ずに
+        // 実行するため、未選択の間に業務プロファイルで絞らない一覧を取りに行かない（#3413）。
+        const schemaTasks = [
+          ...(profileSelectionReady ? [schemaObjectsQuery.refetch()] : []),
           schemaHeadQuery.refetch(),
+        ];
+        const results = await Promise.allSettled([
+          ...schemaTasks,
           profilesQuery.refetch(),
           ...(profileId ? [selectedProfileQuery.refetch()] : []),
         ]);
@@ -400,13 +425,12 @@ function ExecutableNl2SqlWorkbench() {
           (result) => result.status === "rejected" || result.value.isError
         );
         if (failedResult) {
-          const failedIndex = results.indexOf(failedResult);
-          const fallback =
-            failedIndex >= 2 ? t("profiles.error.load") : t("nl2sql.error.loadFailed");
+          const profileFailed = results.indexOf(failedResult) >= schemaTasks.length;
+          const fallback = profileFailed ? t("profiles.error.load") : t("nl2sql.error.loadFailed");
           const cause =
             failedResult.status === "rejected" ? failedResult.reason : failedResult.value.error;
           setPageError({
-            source: failedIndex >= 2 ? "profile-load" : "schema-load",
+            source: profileFailed ? "profile-load" : "schema-load",
             message: messageFromError(cause, fallback),
             code: codeFromError(cause),
           });
@@ -429,9 +453,62 @@ function ExecutableNl2SqlWorkbench() {
         });
       }
     },
-    [profileId, profilesQuery, selectedProfileQuery, schemaHeadQuery, schemaObjectsQuery, schemaRefresh]
+    [
+      profileId,
+      profileSelectionReady,
+      profilesQuery,
+      selectedProfileQuery,
+      schemaHeadQuery,
+      schemaObjectsQuery,
+      schemaRefresh,
+    ]
   );
 
+  // 業務プロファイルつきの初期値（実行履歴の「SQL 生成で開く」。#3355）は、業務プロファイルの一覧で今も使えるかを
+  // 確かめてから選ぶ（確かめている途中の pendingPrefill は、スキーマ参照の状態に使うので上で宣言する）。
+  // 削除済み・権限の無い業務プロファイルは利用の情報（usage-context）を取りに行かず、質問だけを
+  // 入れて業務プロファイルを空にし、選び直しを案内する（404 のエラーにしない）。
+  const [prefillProfileUnavailable, setPrefillProfileUnavailable] = useWorkspaceState(
+    "prefillProfileUnavailable",
+    false
+  );
+  // 一覧に無いが後のページにあるかもしれない業務プロファイル。利用の情報の 404 / 403 を「使えない」として扱う。
+  const [prefillProfileToVerify, setPrefillProfileToVerify] = useState("");
+  /** 初期値を入れる（別の業務プロファイルの質問・方式は、その業務プロファイルの草稿へ先に書く）。草稿の失敗で true。 */
+  const applyPrefill = (prefill: QueryPrefill): boolean => {
+    const otherProfile = Boolean(prefill.profileId && prefill.profileId !== profileId);
+    if (prefill.question) {
+      if (otherProfile) {
+        if (!writeDraft(`question:${prefill.profileId}`, prefill.question)) {
+          setActionError(t("workspace.storageFailed"));
+          return true;
+        }
+      } else setQuestion(prefill.question);
+    }
+    // 生成の方式は業務プロファイルごとに残すので、別の業務プロファイルの方式はその草稿へ書く（#1524）。
+    if (prefill.engine) {
+      if (!otherProfile) setEngine(prefill.engine);
+      else if (!writeDraft(`engine:${prefill.profileId}`, prefill.engine)) {
+        setActionError(t("workspace.storageFailed"));
+      }
+    }
+    if (prefill.profileId) setProfileId(prefill.profileId);
+    return false;
+  };
+  /** 受け取った業務プロファイルが使えないとき: 質問を未確定の草稿（`question:`）に置き、業務プロファイルを空にする。 */
+  const applyUnavailablePrefillProfile = (unresolvedQuestion: string) => {
+    // 選び直した業務プロファイルへ、未確定の草稿の質問を引き継ぐ（carryUnresolvedProfileQuestion。#3357）。
+    if (!profileId) {
+      if (unresolvedQuestion) setQuestion(unresolvedQuestion);
+    } else if (unresolvedQuestion && !writeDraft("question:", unresolvedQuestion)) {
+      setActionError(t("workspace.storageFailed"));
+    }
+    setProfileId("");
+    setSelection(emptySelection());
+    setRecommendation(null);
+    setPageError(null);
+    setPrefillProfileUnavailable(true);
+  };
   // 読込エラーは query の状態から render 中に pageError へ反映する。
   if (
     useValuesChanged([
@@ -455,6 +532,15 @@ function ExecutableNl2SqlWorkbench() {
         message: messageFromError(profilesQuery.error, t("profiles.error.load")),
         code: codeFromError(profilesQuery.error),
       });
+    } else if (
+      selectedProfileQuery.isError &&
+      profileId &&
+      profileId === prefillProfileToVerify &&
+      isProfileUnavailableError(selectedProfileQuery.error)
+    ) {
+      // 一覧で確かめられなかった受け取った業務プロファイルが使えない（#3355）。エラーにせず選び直しを案内する。
+      setPrefillProfileToVerify("");
+      applyUnavailablePrefillProfile(question);
     } else if (selectedProfileQuery.isError && profileId) {
       setPageError({
         source: "profile-load",
@@ -657,28 +743,27 @@ function ExecutableNl2SqlWorkbench() {
     let draftFailed = false;
     if (workspaceActive && QUERY_PREFILL_KEYS.some((key) => searchParams.has(key))) {
       const prefill = prefillFromSearchParams(searchParams);
-      const otherProfile = Boolean(prefill.profileId && prefill.profileId !== profileId);
-      if (prefill.question) {
-        if (otherProfile) {
-          if (!writeDraft(`question:${prefill.profileId}`, prefill.question)) {
-            setActionError(t("workspace.storageFailed"));
-            draftFailed = true;
-          }
-        } else setQuestion(prefill.question);
-      }
-      if (!draftFailed) {
-        // 生成の方式は業務プロファイルごとに残すので、別の業務プロファイルの方式はその草稿へ書く（#1524）。
-        if (prefill.engine) {
-          if (!otherProfile) setEngine(prefill.engine);
-          else if (!writeDraft(`engine:${prefill.profileId}`, prefill.engine)) {
-            setActionError(t("workspace.storageFailed"));
-          }
-        }
-        if (prefill.profileId) setProfileId(prefill.profileId);
-      }
+      if (prefill.profileId) setPendingPrefill(prefill);
+      else draftFailed = applyPrefill(prefill);
     }
     if (draftFailed !== prefillDraftFailed) setPrefillDraftFailed(draftFailed);
   }
+  // 業務プロファイルの一覧が揃ったら、受け取った業務プロファイルを選ぶか、使えないと案内する。一覧が後のページへ
+  // 続く・一覧を読めなかったときは選んで、利用の情報の結果で決める。
+  if (pendingPrefill && !profilesQuery.isPending) {
+    const listed = profiles.some((profile) => profile.id === pendingPrefill.profileId);
+    const unknown = !listed && (profilesQuery.hasNextPage || profilesQuery.isError);
+    setPendingPrefill(null);
+    if (listed || unknown) {
+      setPrefillProfileUnavailable(false);
+      setPrefillProfileToVerify(unknown ? pendingPrefill.profileId : "");
+      applyPrefill(pendingPrefill);
+    } else {
+      applyUnavailablePrefillProfile(pendingPrefill.question);
+    }
+  }
+  // 業務プロファイルを選んだら、使えない業務プロファイルの案内を消す。
+  if (prefillProfileUnavailable && profileId) setPrefillProfileUnavailable(false);
   useEffect(() => {
     if (prefillDraftFailed) return;
     if (!workspaceActive || !QUERY_PREFILL_KEYS.some((key) => searchParams.has(key))) return;
@@ -703,7 +788,8 @@ function ExecutableNl2SqlWorkbench() {
     if (noProfiles) {
       setSelection(emptySelection());
       setRecommendation(null);
-    } else if (!profileId) {
+    } else if (!profileId && !prefillProfileUnavailable && !pendingPrefill) {
+      // 受け取った業務プロファイルが使えないときは、先頭へ黙って切り替えず空のままにする（#3355）。
       const nextProfileId = profiles[0]?.id ?? "";
       if (nextProfileId) setProfileId(nextProfileId);
     } else if (
@@ -1295,6 +1381,8 @@ function ExecutableNl2SqlWorkbench() {
                       id="nl2sql-profile-select"
                       label={t("nl2sql.profile.label")}
                       value={profileId}
+                      // 受け取った業務プロファイルが使えず空のとき（#3355）に出す。
+                      placeholder={t("nl2sql.profile.selectPlaceholder")}
                       options={
                         profilesQuery.isPending
                           ? [{ value: profileId, label: t("profiles.summary.loading") }]
@@ -1314,6 +1402,12 @@ function ExecutableNl2SqlWorkbench() {
                       width="lg"
                     />
                   </FieldActionRow>
+                  {prefillProfileUnavailable && !profileId && !noProfiles ? (
+                    // 実行履歴から開いた実行の業務プロファイルが削除済み・権限なしで使えない（#3355）。選択欄の直下に出す。
+                    <div data-testid="nl2sql-prefill-profile-unavailable">
+                      <Banner severity="warning">{t("nl2sql.prefill.profileUnavailable")}</Banner>
+                    </div>
+                  ) : null}
                   {profileLoadMoreError && (
                     <Banner
                       severity="danger"
@@ -1623,6 +1717,7 @@ function ExecutableNl2SqlWorkbench() {
                       <SchemaReferencePanel
                         catalog={catalog}
                         loading={loadingCatalog}
+                        profileUnselected={schemaPanelState === "profile-unselected"}
                         disabled={active}
                         insertMode="logical"
                         allowedTableNames={profileAllowedTableNames}

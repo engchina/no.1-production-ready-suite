@@ -200,7 +200,7 @@ def checked_capability_sql(
 
     for table in tables:
         if table.catalog or table_key(table) not in schema:
-            raise ValueError("SQL の物理参照が Profile の範囲外です。")
+            raise ValueError("SQL の物理参照が業務プロファイルの範囲外です。")
     # 曖昧な列を実行へ渡さない。サブクエリ由来列は初版では明示的 backend 実装へ。
     aliases = {
         identifier_token(t.args["alias"].this if t.args.get("alias") else t.this): schema[
@@ -242,7 +242,7 @@ class ProfileOntologyCapabilityService(ProfileOntologyWorkspaceService):
         definition = next((d for d in bundle.definitions if d.id == definition_id), None)
         if not isinstance(definition, (FunctionDefinition, ActionTypeDefinition)):
             raise OntologyNotFoundError(
-                "CAPABILITY_NOT_FOUND", "この Profile の能力定義が見つかりません。"
+                "CAPABILITY_NOT_FOUND", "この業務プロファイルの能力定義が見つかりません。"
             )
         return bundle, definition
 

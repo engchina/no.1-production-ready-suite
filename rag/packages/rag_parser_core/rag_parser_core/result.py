@@ -30,6 +30,10 @@ LOCAL_PARSER_VERSION = "local_partition_v1"
 EXTERNAL_ADAPTER_PACKAGES = {
     "docling": "docling",
     "unstructured": "unstructured",
+    # MinerU は外部で運用する MinerU の HTTP API(backend の app.clients.external_parser)だけで
+    # 呼ぶ(#3359)。この package の中では MinerU を import・実行せず、in-process の要求は
+    # adapter_unsupported(未導入なら package_missing)で止まる。名前は結果の識別に使う。
+    "mineru": "mineru",
     # PoweRAG 由来。未導入時は package_missing、導入のみで未実装なら adapter_unsupported を
     # 返して安全に fallback する(実 OCR は OCI Enterprise AI VLM へ再マップ)。
     "dots_ocr": "dots_ocr",

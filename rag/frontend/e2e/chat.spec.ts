@@ -2024,6 +2024,8 @@ for (const viewport of [
         outcome: "answered",
         entries: [
           { prompt: "どの規程についてのご質問ですか？", selected: ["出張旅費"], other_text: "海外出張" },
+          // 選択肢の無い確認事項（自由入力だけで答える）の答えは「その他: 」を付けない（#3410）。
+          { prompt: "対象の名前を教えてください。", selected: [], other_text: "名前 A", free_text_only: true },
         ],
       },
     };
@@ -2043,6 +2045,9 @@ for (const viewport of [
     await expect(record.getByRole("group", { name: "回答前に確認した内容" })).toBeVisible();
     await expect(record).toContainText("どの規程についてのご質問ですか？");
     await expect(record).toContainText("出張旅費、その他: 海外出張");
+    await expect(record).toContainText("対象の名前を教えてください。");
+    await expect(record).toContainText("名前 A");
+    await expect(record).not.toContainText("その他: 名前 A");
     await expectNoPageOverflow(page);
     for (const colorScheme of ["light", "dark"] as const) {
       await page.emulateMedia({ colorScheme, reducedMotion: "reduce" });

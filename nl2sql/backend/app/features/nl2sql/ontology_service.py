@@ -886,7 +886,7 @@ class OntologyQuerySessionService:
             if request.profile_id != view.profile_id:
                 raise OntologyIntegrityError(
                     "PROFILE_VIEW_MISMATCH",
-                    "指定した profile とオントロジー範囲が一致しません。",
+                    "指定した業務プロファイルとオントロジー範囲が一致しません。",
                 )
             if request.ontology_revision_id != view.ontology_revision_id:
                 raise OntologyIntegrityError(
@@ -1023,7 +1023,7 @@ class OntologyQuerySessionService:
             if request.profile_id != view.profile_id:
                 raise OntologyIntegrityError(
                     "PROFILE_VIEW_MISMATCH",
-                    "指定した profile とオントロジー範囲が一致しません。",
+                    "指定した業務プロファイルとオントロジー範囲が一致しません。",
                 )
             if request.ontology_revision_id != view.ontology_revision_id:
                 raise OntologyIntegrityError(
@@ -1649,7 +1649,7 @@ class OntologyQuerySessionService:
                 ValidationSeverity.BLOCKER,
                 "プロファイル範囲外の表または view が SQL に含まれています。",
                 sql_ids=[item.id for item in unauthorized],
-                action="Profile の対象範囲と生成 SQL を確認してください。",
+                action="業務プロファイルの対象範囲と生成 SQL を確認してください。",
             )
 
         intended_physical_ids = {

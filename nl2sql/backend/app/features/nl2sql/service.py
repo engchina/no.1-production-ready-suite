@@ -547,7 +547,7 @@ class ProfileOracleCleanupFailed(RuntimeError):
 
     public_message = (
         "Oracle DBMS_CLOUD_AI Profile / Select AI Agent 関連アセットの削除に失敗しました。"
-        "業務 profile は削除していません。"
+        "業務プロファイルは削除していません。"
     )
 
     def __init__(self, cleanup: list[AssetCleanupData]) -> None:
@@ -566,7 +566,7 @@ class ProfileNameConflict(ValueError):
 
     def __init__(self, profile_name: str) -> None:
         normalized = profile_name.strip().upper()
-        super().__init__(f"業務 profile 名「{normalized}」は既に使用されています。")
+        super().__init__(f"業務プロファイル名「{normalized}」は既に使用されています。")
         self.profile_name = normalized
 
 
@@ -578,7 +578,7 @@ class ProfileNotFoundError(KeyError, ValueError):
         super().__init__(self.profile_id)
 
     def __str__(self) -> str:
-        return "指定された profile が見つからないか、利用できません。"
+        return "指定された業務プロファイルが見つからないか、利用できません。"
 
 
 class ProfileScopePermissionError(PermissionError):
@@ -7826,7 +7826,7 @@ class Nl2SqlService:
         # 大文字化すると `SALES."Mixed_Case"` が大文字の同名表 `SALES.MIXED_CASE` に化ける。
         raw = str(value or "").strip()
         if not raw:
-            raise ValueError("空の schema object は profile に追加できません。")
+            raise ValueError("空の schema object は業務プロファイルに追加できません。")
         parts = object_name_tokens(raw)
         if len(parts) == 2:
             # 既存 profile の object が後から削除/権限取消されても profile 自体は
@@ -8241,7 +8241,7 @@ class Nl2SqlService:
             try:
                 stored = self._incremental_repository.save_profile(profile, expected_etag=None)
             except IncrementalVersionConflict as exc:
-                raise ValueError("同じ profile ID が既に存在します。") from exc
+                raise ValueError("同じ業務プロファイル ID が既に存在します。") from exc
             except Exception as exc:
                 self._raise_incremental_repository_failure(
                     operation="profile_create",
@@ -12261,7 +12261,7 @@ class Nl2SqlService:
                         history_id=history.id,
                         status="profile_missing",
                         profile_id=target_profile_id,
-                        message="指定された Profile が存在しないか archived です。",
+                        message="指定された業務プロファイルが存在しないか archived です。",
                     )
                 )
                 continue
@@ -12295,14 +12295,14 @@ class Nl2SqlService:
                         status="already_covered",
                         training_example_id=existing.id,
                         profile_id=existing.profile_id,
-                        message="同じ質問と Profile の training data が既に存在します。",
+                        message="同じ質問と業務プロファイルの training data が既に存在します。",
                     )
                 elif any(item.profile_id and item.profile_id != profile.id for item in matching):
                     result = ClassifierFeedbackImportResult(
                         history_id=history.id,
                         status="conflict",
                         profile_id=profile.id,
-                        message="同じ質問が別の Profile に対応付けられています。",
+                        message="同じ質問が別の業務プロファイルに対応付けられています。",
                     )
                 else:
                     now = _utc_now()
@@ -12353,7 +12353,7 @@ class Nl2SqlService:
         self._load_classifier_state()
         profile = self._exact_profile_for_classifier_label(request.profile_id)
         if profile is None:
-            raise ValueError("指定された Profile が存在しないか archived です。")
+            raise ValueError("指定された業務プロファイルが存在しないか archived です。")
         normalized_question = self._normalize_classifier_question(request.text)
         with self._lock:
             current = next(
@@ -12373,7 +12373,7 @@ class Nl2SqlService:
                 None,
             )
             if conflict is not None:
-                raise ValueError("同じ質問が別の Profile に対応付けられています。")
+                raise ValueError("同じ質問が別の業務プロファイルに対応付けられています。")
             updated = current.model_copy(
                 update={
                     "category": profile.category or profile.name,
@@ -21945,7 +21945,7 @@ class Nl2SqlService:
             ):
                 raise OracleAdapterError(
                     "Oracle Select AI Profile の object scope が未同期です。"
-                    "Profile を再同期してから実行してください。"
+                    "業務プロファイルを再同期してから実行してください。"
                 )
             return
         if scope_meta.profile_name == profile_name and (
@@ -21953,7 +21953,7 @@ class Nl2SqlService:
         ):
             raise OracleAdapterError(
                 "Oracle Select AI Profile の object scope が未同期です。"
-                "Profile を再同期してから実行してください。"
+                "業務プロファイルを再同期してから実行してください。"
             )
 
     def list_select_ai_feedback_entries(
@@ -25346,7 +25346,7 @@ class Nl2SqlService:
         ):
             raise OracleAdapterError(
                 "Oracle Select AI asset の object scope が未同期です。"
-                "Profile を再同期してから実行してください。"
+                "業務プロファイルを再同期してから実行してください。"
             )
         runtime_question = question
         if sql_requirement is not None:

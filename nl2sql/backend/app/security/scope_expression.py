@@ -124,11 +124,13 @@ def validate_expression_metadata(
         catalog = relation_catalog(service, node.profile_id, target, cursor=cursor)
         if node.object_scope_version != catalog["object_scope_version"]:
             raise SecurityApiError(
-                409, "Profile の対象範囲が変更されました。関連条件を再選択してください。"
+                409, "業務プロファイルの対象範囲が変更されました。関連条件を再選択してください。"
             )
         related_target = _qualified(node.target_owner, node.target_object)
         if related_target not in catalog["objects"]:
-            raise SecurityApiError(400, "関連テーブルは同じ Profile 内から選択してください。")
+            raise SecurityApiError(
+                400, "関連テーブルは同じ業務プロファイル内から選択してください。"
+            )
         if node.relation_source != "MANUAL":
             matches = [
                 item

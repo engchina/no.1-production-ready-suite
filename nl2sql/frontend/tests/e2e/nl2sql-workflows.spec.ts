@@ -3877,7 +3877,7 @@ test("標準プロファイル削除後は最初の利用可能なプロファ�
     route.fulfill({
       status: 404,
       contentType: "application/json",
-      body: JSON.stringify({ detail: "指定された profile が見つかりません。" }),
+      body: JSON.stringify({ detail: "指定された業務プロファイルが見つかりません。" }),
     })
   );
   await page.route("**/api/nl2sql/profiles/alternate", (route) =>
@@ -3909,7 +3909,7 @@ test("最後のプロファイル削除後は作成案内を表示して検索�
     route.fulfill({
       status: 404,
       contentType: "application/json",
-      body: JSON.stringify({ detail: "指定された profile が見つかりません。" }),
+      body: JSON.stringify({ detail: "指定された業務プロファイルが見つかりません。" }),
     })
   );
 
@@ -3927,9 +3927,18 @@ test("最後のプロファイル削除後は作成案内を表示して検索�
   await expect(workspace.getByRole("button", { name: "SQL プレビュー" })).toHaveCount(0);
   await expect(workspace.getByRole("button", { name: "質問を解釈" })).toHaveCount(0);
   await expect(workspace.getByRole("button", { name: "SQL を生成して実行" })).toBeDisabled();
+  // 業務プロファイルが無い間、スキーマ参照は読み込み中にせず未選択の案内を出す（#3413）。
+  const schema = page.getByTestId("nl2sql-schema-reference");
+  await expect(schema.getByTestId("nl2sql-schema-profile-unselected")).toContainText(
+    "業務プロファイルを選ぶと、使える表と列を表示します。"
+  );
+  await expect(schema.getByTestId("schema-reference-loading")).toHaveCount(0);
+  await expect(schema.getByRole("searchbox", { name: "表・項目検索" })).toBeDisabled();
+  await expect(schema.getByText("スキーマ未取得です", { exact: false })).toHaveCount(0);
 
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoHorizontalScroll(page);
+  await expect(schema.getByTestId("nl2sql-schema-profile-unselected")).toBeVisible();
   await page.getByRole("button", { name: "業務プロファイルを作成" }).click();
   await expect(page).toHaveURL(/\/profiles\?profile=new$/);
 });
@@ -9645,6 +9654,108 @@ test("本人の SQL 生成の実行は「SQL 生成で開く」で質問と業�
   await page.screenshot({ path: testInfo.outputPath("query-opened-from-history.png") });
 });
 
+for (const listed of ["complete", "paged"] as const) {
+  test(`業務プロファイルが削除済みの実行の「SQL 生成で開く」は質問だけを入れ、選び直しを案内する（一覧 ${listed}）(#3355)`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    const api = await mockNl2SqlApi(page);
+    const question = "合成の質問 B を確認";
+    const own = { ...historyItem, question, kind: "query", executed_by_me: true, profile_id: "deleted-profile" };
+    await page.route("**/api/nl2sql/history/*", (route) => fulfillJson(route, own));
+    if (listed === "paged") {
+      // 一覧が後のページへ続くときは一覧だけでは決められないので、利用の情報の 404 で使えないと分かる。
+      await page.unroute("**/api/nl2sql/profiles/search?*");
+      await page.route("**/api/nl2sql/profiles/search?*", (route) =>
+        fulfillJson(route, {
+          items: [
+            {
+              id: "default",
+              name: "既定",
+              category: "",
+              description: "",
+              archived: false,
+              allowed_table_count: 1,
+              allowed_view_count: 0,
+              glossary_count: 0,
+              few_shot_count: 0,
+              version: 1,
+              etag: "etag-default",
+              updated_at: "2026-06-21T10:00:00.000Z",
+            },
+          ],
+          next_cursor: "next",
+          total: 60,
+          change_token: 1,
+        })
+      );
+    }
+    const usageContextRequests: string[] = [];
+    await page.route("**/api/nl2sql/profiles/deleted-profile/usage-context", (route) => {
+      usageContextRequests.push(route.request().url());
+      return route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "指定された業務プロファイルが見つからないか、利用できません。" }),
+      });
+    });
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error" && !message.text().includes("404")) consoleErrors.push(message.text());
+    });
+
+    await page.goto("/history?id=hist-001");
+    await page.getByTestId("history-detail-open-query").click();
+
+    await expect(page).toHaveURL(/\/query$/);
+    await expect(nl2sqlQuestionInput(page)).toHaveValue(question);
+    const notice = page.getByTestId("nl2sql-prefill-profile-unavailable");
+    await expect(notice).toHaveText("元の業務プロファイルは使えません。選び直してください。");
+    // 先頭の業務プロファイルへ黙って切り替えず、空のまま選び直してもらう。404 のエラーの案内は出さない。
+    await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "");
+    await expect(page.locator("#nl2sql-profile-select")).toContainText("業務プロファイルを選択");
+    await expect(page.getByText(/見つかりません|profile/)).toHaveCount(0);
+    expect(usageContextRequests).toHaveLength(listed === "paged" ? 1 : 0);
+    expect(consoleErrors).toEqual([]);
+    expect(api.jobPayload).toBeNull();
+    await expectNoHorizontalScroll(page);
+    await page.screenshot({ path: testInfo.outputPath(`query-profile-unavailable-${listed}.png`), fullPage: true });
+
+    // 業務プロファイルが未選択の間、スキーマ参照は読み込み中にせず、選ぶと表と列を出すと案内する（#3413）。
+    const schema = page.getByTestId("nl2sql-schema-reference");
+    const schemaIdle = schema.getByTestId("nl2sql-schema-profile-unselected");
+    await expect(schemaIdle).toContainText("業務プロファイルを選んでください");
+    await expect(schemaIdle).toContainText("業務プロファイルを選ぶと、使える表と列を表示します。");
+    await expect(schema.getByTestId("schema-reference-loading")).toHaveCount(0);
+    await expect(schema.getByRole("searchbox", { name: "表・項目検索" })).toBeDisabled();
+    await expect(schema.getByTestId("nl2sql-schema-table-item")).toHaveCount(0);
+    await expect(schema.getByText("全 0 件")).toHaveCount(0);
+    await expect(page.getByTestId("nl2sql-schema-toolbar")).toBeVisible();
+    await schema.screenshot({ path: testInfo.outputPath(`query-schema-profile-unselected-${listed}.png`) });
+    // 「最新情報を取得」は押せ、業務プロファイルで絞らないスキーマの一覧を取りに行かない。
+    const unscopedSchemaRequests: string[] = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/schema/objects" && !url.searchParams.has("profile_id")) {
+        unscopedSchemaRequests.push(request.url());
+      }
+    });
+    const refresh = page.getByRole("button", { name: "最新情報を取得", exact: true });
+    await expect(refresh).toBeEnabled();
+    await refresh.click();
+    await expect(page.getByText("最新の状態に更新しました。")).toBeVisible();
+    await expect(schemaIdle).toBeVisible();
+    expect(unscopedSchemaRequests).toEqual([]);
+
+    // 選び直すと案内を消し、質問は選んだ業務プロファイルへ引き継ぐ。
+    await chooseSelectFieldOption(page.locator("#nl2sql-profile-select"), "default");
+    await expect(notice).toHaveCount(0);
+    await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "default");
+    await expect(nl2sqlQuestionInput(page)).toHaveValue(question);
+    // 選んだ業務プロファイルの表を読み込み、未選択の案内を消す。
+    await expect(schemaIdle).toHaveCount(0);
+    await expect(schema.getByTestId("nl2sql-schema-table-item").first()).toBeVisible();
+    await expect(schema.getByRole("searchbox", { name: "表・項目検索" })).toBeEnabled();
+  });
+}
+
 test("root route opens SQL generation and sidebar exposes feature surfaces", async ({ page }) => {
   await mockNl2SqlApi(page);
 
@@ -11241,7 +11352,7 @@ test("question classifier training data follows the CATEGORY/TEXT contract", asy
   const changedCandidate = page
     .getByTestId("qcm-training-candidate")
     .filter({ hasText: "元 feedback が変更された質問" });
-  await expect(conflictCandidate.getByText("Profile 競合", { exact: true })).toBeVisible();
+  await expect(conflictCandidate.getByText("業務プロファイルの競合", { exact: true })).toBeVisible();
   await expect(changedCandidate.getByText("元 feedback 変更あり", { exact: true })).toBeVisible();
   await expect(page.getByLabel("競合している請求分類を確認したい を選択")).toBeDisabled();
   await expect(page.getByLabel("元 feedback が変更された質問 を選択")).toBeDisabled();
@@ -11517,7 +11628,7 @@ test("learning candidates keep long query text clear of selection controls", asy
   const candidate = page.getByTestId("qcm-training-candidate").first();
   const question = candidate.getByTestId("qcm-candidate-question");
   const checkbox = candidate.getByRole("checkbox");
-  const profile = candidate.getByRole("combobox", { name: "追加する Profile" });
+  const profile = candidate.getByRole("combobox", { name: "追加する業務プロファイル" });
   const candidateBulkBar = page.getByTestId("qcm-candidate-bulk-actions");
   const candidateBulkActions = page.getByTestId("qcm-candidate-page-selection-actions");
   const addSelectedButton = page.getByRole("button", { name: "選択した 0 件を追加" });
@@ -11733,14 +11844,14 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   await candidateBulkActions.getByRole("button", { name: "表示中の選択をすべて解除" }).click();
   await expect(page.getByRole("button", { name: "選択した 0 件を追加" })).toBeDisabled();
 
-  const candidateProfile = firstCandidate.getByRole("combobox", { name: "追加する Profile" });
+  const candidateProfile = firstCandidate.getByRole("combobox", { name: "追加する業務プロファイル" });
   await expect(candidateProfile).toHaveText("既定プロファイル");
   await expect(candidateProfile).not.toContainText("default");
   await candidateProfile.focus();
   await page.keyboard.press("ArrowDown");
   await expect(candidateProfile).toHaveAttribute("aria-expanded", "true");
   // SelectField の一覧は body へ Portal で描くため、ページから引く（#352）。
-  const profileListbox = page.getByRole("listbox", { name: "追加する Profile" });
+  const profileListbox = page.getByRole("listbox", { name: "追加する業務プロファイル" });
   await expect(profileListbox.getByText("default", { exact: true })).toHaveCount(0);
   await expect(profileListbox.getByText("payment", { exact: true })).toHaveCount(0);
   await expect(profileListbox.getByText("請求カテゴリ", { exact: true })).toBeVisible();
@@ -11818,9 +11929,9 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   await page.setViewportSize({ width: 375, height: 900 });
   await expectNoHorizontalScroll(page);
   const mobileCandidate = page.getByTestId("qcm-training-candidate").first();
-  const mobileProfile = mobileCandidate.getByRole("combobox", { name: "追加する Profile" });
+  const mobileProfile = mobileCandidate.getByRole("combobox", { name: "追加する業務プロファイル" });
   await mobileProfile.click();
-  await expectHorizontallyContained(page.getByRole("listbox", { name: "追加する Profile" }), mobileCandidate);
+  await expectHorizontallyContained(page.getByRole("listbox", { name: "追加する業務プロファイル" }), mobileCandidate);
   await page.keyboard.press("Escape");
   await expect(mobileCandidate.getByRole("link", { name: "フィードバック管理で確認" })).toBeVisible();
   await expectNoHorizontalScroll(page);
@@ -13550,7 +13661,7 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   await expect(syntheticPanel.getByRole("button", { name: "ステータスを更新" })).toHaveCount(0);
   const refreshTablesActions = syntheticPanel.getByTestId("data-synthetic-refresh-tables-actions");
   await expect(refreshTablesActions.getByText("対象テーブル一覧の取得")).toBeVisible();
-  await expect(refreshTablesActions.getByText("選択中の Profile から対象テーブル一覧を取得します。")).toBeVisible();
+  await expect(refreshTablesActions.getByText("選択中の業務プロファイルから対象テーブル一覧を取得します。")).toBeVisible();
   await expectTopToBottomOrder(
     syntheticPanel.getByRole("combobox", { name: "Profile", exact: true }),
     refreshTablesActions,
@@ -17593,6 +17704,10 @@ test("workspace: 一覧の検索条件は戻る・進む・再読込でも保持
   await expect(search).toHaveValue("INVOICES");
   await expect(page.getByTestId("list-detail-table-management-list").getByLabel("所有者", { exact: true })).toHaveValue("APP");
   await expectNoHorizontalScroll(page);
+  // 入力してから絞り込みの確定（debounce）の前に再読込しても、入力した検索語を失わない（pagehide で確定する。#3385）。
+  await search.fill("INVOICE");
+  await page.reload();
+  await expect(search).toHaveValue("INVOICE");
 
   // 選んだテーブルは URL（?table=）に持ち、サイドナビで離れて戻っても同じ対象を開く（keep-alive。#2281）。
   await page.getByRole("button", { name: "APP.INVOICES を表示" }).click();

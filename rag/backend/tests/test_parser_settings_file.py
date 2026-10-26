@@ -108,13 +108,18 @@ def test_v4_shared_file_from_other_product_loads_and_backend_serves() -> None:
     assert response.json()["data"]["adapter_backend"] == before
 
 
+@pytest.mark.usefixtures("mineru_selectable")
 def test_rag_parser_save_then_nl2sql_save_then_rag_reads() -> None:
     """RAG が文書解析を保存 → NL2SQL がモデル設定を保存 → RAG は両方を読む。"""
     settings = get_settings()
     model_file = Path(settings.model_settings_file)
     saved = client.patch(
         "/api/settings/parser-adapters",
-        json={"adapter_backend": "dots_ocr", "dots_ocr_enabled": True},
+        json={
+            "adapter_backend": "mineru",
+            "mineru_enabled": True,
+            "mineru_license_acknowledged": True,
+        },
     )
     assert saved.status_code == 200
     assert not model_file.exists()
@@ -127,8 +132,8 @@ def test_rag_parser_save_then_nl2sql_save_then_rag_reads() -> None:
     shared = json.loads(model_file.read_text(encoding="utf-8"))
     assert set(shared) == {"version", "enterprise_ai", "generative_ai"}
     assert reloaded.oci_enterprise_ai_endpoint == "https://nl2sql-saved.example.com"
-    assert reloaded.rag_parser_adapter_backend == "dots_ocr"
-    assert reloaded.rag_parser_dots_ocr_enabled is True
+    assert reloaded.rag_parser_adapter_backend == "mineru"
+    assert reloaded.rag_parser_mineru_enabled is True
 
 
 def test_parser_section_in_shared_file_is_not_read() -> None:
@@ -137,7 +142,7 @@ def test_parser_section_in_shared_file_is_not_read() -> None:
     before = settings.rag_parser_adapter_backend
     _write(
         Path(settings.model_settings_file),
-        {**V4_SHARED_DOCUMENT, "parser_adapters": {"adapter_backend": "dots_ocr"}},
+        {**V4_SHARED_DOCUMENT, "parser_adapters": {"adapter_backend": "mineru"}},
     )
 
     assert get_settings().rag_parser_adapter_backend == before

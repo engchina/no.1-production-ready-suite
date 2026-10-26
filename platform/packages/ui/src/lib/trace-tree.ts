@@ -1,4 +1,4 @@
-import { DEFAULT_TRACE_DETAILS_LABELS, type TraceDetailsLabels, type TraceSpanNames, type TraceSpanStatus } from "./trace-labels";
+import { DEFAULT_TRACE_DETAILS_LABELS, TRACE_FIELD_LABEL_KEYS, type TraceDetailsLabels, type TraceFieldName, type TraceSpanNames, type TraceSpanStatus } from "./trace-labels";
 import type { RunTimelineStep } from "../components/data/run-detail";
 
 function textAttribute(attributes: Readonly<Record<string, unknown>>, key: string): string | undefined {
@@ -60,12 +60,22 @@ export function isMcpProtocolSpan(attributes: Readonly<Record<string, unknown>>)
   return method !== undefined && method !== "tools/call";
 }
 
-/** span の技術の値（詳細の見出しと値）。モデル・ツール・試行・利用量・エラーの種類の allowlist だけ。 */
-const TECHNICAL_FIELDS = ["pr.stage", "gen_ai.request.model", "gen_ai.tool.name", "mcp.method.name", "pr.attempt", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.reasoning.output_tokens", "error.type"];
+/**
+ * span の技術の値（詳細の見出しと値）の allowlist。識別子（段・モデル・ツール・method・試行）→ 利用量 → 入力の文脈の記録
+ * （見積もり・予算・圧縮・指紋。#2583。Agent のモデルの呼び出しだけが持つ）→ エラーの種類の順に出す。
+ */
+const TECHNICAL_FIELDS = ["pr.stage", "gen_ai.request.model", "gen_ai.tool.name", "mcp.method.name", "pr.attempt", ...Object.keys(TRACE_FIELD_LABEL_KEYS), "error.type"];
+const CACHE_READ_FIELD = "gen_ai.usage.cache_read.input_tokens";
+
+function technicalFieldLabel(key: string, labels: TraceDetailsLabels): string {
+  return Object.prototype.hasOwnProperty.call(TRACE_FIELD_LABEL_KEYS, key) ? labels.fieldNames[key as TraceFieldName] : key;
+}
 
 /**
  * span の詳細の技術の値（3 製品共通）。行の名前は日本語にし、実測の記録を引けるように元の span の名前を残す。
- * `gen_ai.chat` の利用量が無いときは 0 にせず「未計測」と出す。
+ * 利用量と入力の文脈の記録は日本語の見出し、識別子は属性名のまま。値は数値も文字列もそのまま（属性の無い値は出さない）。
+ * `gen_ai.chat` の利用量が無いときは 0 にせず「未計測」、利用量はあるのにキャッシュから読んだ入力が無い（プロバイダが
+ * 返さない）ときは 0 と区別して「不明」と出す。
  */
 export function traceSpanFields(
   spanId: string | undefined,
@@ -76,14 +86,14 @@ export function traceSpanFields(
   const fields: { label: string; value: string; mono: boolean }[] = [];
   if (spanId) fields.push({ label: "Span ID", value: spanId, mono: true });
   fields.push({ label: "Span name", value: operationName, mono: true });
+  const chat = operationName === "gen_ai.chat";
   for (const key of TECHNICAL_FIELDS) {
     const v = attributes[key];
-    if (typeof v === "string" || (typeof v === "number" && Number.isFinite(v))) fields.push({ label: key, value: String(v).slice(0, 128), mono: true });
-  }
-  if (operationName === "gen_ai.chat") {
-    for (const key of ["gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens"]) {
-      if (attributes[key] == null) fields.push({ label: key, value: labels.unknown, mono: false });
-    }
+    const label = technicalFieldLabel(key, labels);
+    if (typeof v === "string" || (typeof v === "number" && Number.isFinite(v))) fields.push({ label, value: String(v).slice(0, 128), mono: true });
+    else if (chat && v == null && (key === "gen_ai.usage.input_tokens" || key === "gen_ai.usage.output_tokens")) fields.push({ label, value: labels.unknown, mono: false });
+    // 利用量そのものが無い呼び出しは「未計測」にそろえ、利用量はあるのにキャッシュの値が無いときだけ「不明」。
+    else if (chat && v == null && key === CACHE_READ_FIELD) fields.push({ label, value: attributes["gen_ai.usage.input_tokens"] == null ? labels.unknown : labels.notReported, mono: false });
   }
   return fields;
 }

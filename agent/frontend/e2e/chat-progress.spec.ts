@@ -525,3 +525,81 @@ test("共通の span の表に書けなかった span がある実行は、一�
   await expectNoHorizontalOverflow(page);
   await page.screenshot({path: testInfo.outputPath("history-partial.png"), fullPage: true});
 });
+
+test("実行の詳細のモデルの呼び出しの行を開くと、入力の文脈の記録と利用量を日本語の見出しで出す", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
+  const {run} = seedRunningRun(mockApi);
+  const start = "2026-10-23T00:00:00.000Z";
+  const end = "2026-10-23T00:00:02.000Z";
+  run.created_at = start;
+  run.updated_at = end;
+  run.status = "completed";
+  // backend の allowlist（`pr_backend_core.observability.tracing`）にある、本文を含まない合成の値だけ（#2583）。
+  const usage = {"gen_ai.operation.name": "chat", "gen_ai.request.model": SYNTHETIC_MODEL, "gen_ai.usage.input_tokens": 1200, "gen_ai.usage.output_tokens": 30};
+  const context = {
+    "pr.context.instructions.static_fingerprint": "0123456789abcdef",
+    "pr.context.instructions.fingerprint": "fedcba9876543210",
+    "pr.context.tools.fingerprint": "00112233aabbccdd",
+    "pr.context.tools.count": 4,
+    "pr.context.input.items": 7,
+    "pr.context.estimate.static_instructions_tokens": 300,
+    "pr.context.estimate.dynamic_state_tokens": 40,
+    "pr.context.estimate.tool_definitions_tokens": 500,
+    "pr.context.estimate.history_tokens": 200,
+    "pr.context.estimate.tool_outputs_tokens": 150,
+    "pr.context.estimate.input_tokens": 1190,
+    "pr.context.budget.input_tokens": 100000,
+    "pr.context.budget.remaining_tokens": 98810,
+    "pr.context.compaction.tokens_before": 5000,
+    "pr.context.compaction.tokens_after": 1190,
+    "pr.context.compaction.outputs": 2,
+  };
+  run.progress_events = new ProgressLog(RUN_ID, () => end, start)
+    // 1 回目はプロバイダがキャッシュの値を返さなかった（不明）、2 回目は 0 を返した。
+    .step("chat-1", "done", {startedAt: start, finishedAt: end, kind: "plan", attributes: {...usage, ...context}})
+    .step("chat-2", "done", {startedAt: start, finishedAt: end, kind: "respond", attributes: {...usage, "gen_ai.usage.cache_read.input_tokens": 0, "pr.context.estimate.input_tokens": 1500}})
+    .terminal("done").events;
+  run.events = [{id: "end", run_id: RUN_ID, type: "run.completed", message: "", payload: {}, created_at: end}];
+  await page.goto(`/runs?id=${RUN_ID}`);
+  await expect(page.getByTestId("run-summary")).toBeVisible();
+  await page.getByTestId("run-timeline-section-summary").click();
+  const timeline = page.getByTestId("run-timeline-section");
+  const fieldsOf = async (stepId: string) => {
+    const step = timeline.locator(`[data-run-timeline-step="${stepId}"]`);
+    // 技術の値は行を開いたときだけ出す（既定で閉じる）。
+    await expect(step.getByText("入力トークン", {exact: true})).toHaveCount(0);
+    await step.locator('> div:first-child button[aria-expanded="false"]').click();
+    await expect(step.getByText("入力トークン", {exact: true})).toBeVisible();
+    const terms = await step.locator("dt").allInnerTexts();
+    const values = await step.locator("dd").allInnerTexts();
+    return Object.fromEntries(terms.map((term, index) => [term, values[index]]));
+  };
+  const first = await fieldsOf("chat-1");
+  expect(first).toMatchObject({
+    "入力トークン": "1200",
+    "出力トークン": "30",
+    "キャッシュから読んだ入力": "不明",
+    "入力の見積もり（指示・固定）": "300",
+    "入力の見積もり（動的な状態）": "40",
+    "入力の見積もり（ツールの定義）": "500",
+    "入力の見積もり（履歴）": "200",
+    "入力の見積もり（ツールの結果）": "150",
+    "入力の見積もり（合計）": "1190",
+    "入力の項目数": "7",
+    "文脈の予算": "100000",
+    "文脈の予算の残り": "98810",
+    "圧縮の前": "5000",
+    "圧縮の後": "1190",
+    "圧縮したツールの結果の数": "2",
+    "指示の指紋（固定）": "0123456789abcdef",
+    "指示の指紋（全体）": "fedcba9876543210",
+    "ツール定義の指紋": "00112233aabbccdd",
+    "ツール定義の数": "4",
+  });
+  expect(Object.keys(first).some((term) => term.startsWith("pr.context.") || term.startsWith("gen_ai.usage."))).toBe(false);
+  const second = await fieldsOf("chat-2");
+  expect(second).toMatchObject({"キャッシュから読んだ入力": "0", "入力の見積もり（合計）": "1500"});
+  // 記録の無い値（予算・圧縮・指紋）は行にしない。
+  expect(Object.keys(second).some((term) => term.startsWith("文脈の予算") || term.startsWith("圧縮") || term.includes("指紋"))).toBe(false);
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({path: testInfo.outputPath("history-model-call-context.png"), fullPage: true});
+});

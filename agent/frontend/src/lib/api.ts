@@ -305,7 +305,8 @@ export interface ConfirmationResponseRecord {
   confirmation_id: string;
   source: ConfirmationSource;
   action: "answer" | "skip";
-  entries: { item_id: string; prompt: string; selected: string[]; other_text?: string }[];
+  /** `free_text_only` は選択肢の無い（自由入力だけで答える）確認事項（#3410）。 */
+  entries: { item_id: string; prompt: string; selected: string[]; other_text?: string; free_text_only?: boolean }[];
 }
 
 export interface RunState {

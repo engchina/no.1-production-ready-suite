@@ -9,6 +9,7 @@ import type {
   SectionRulesMode,
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
+import { PARSER_BACKEND_ORDER } from "@/lib/parser-backend-order";
 import { parserBackendLabel } from "@/lib/source-profile-labels";
 
 import type { RecipeConfigItem } from "./DocumentProcessingConfigPanel.logic";
@@ -32,17 +33,14 @@ export const PREPROCESS_OPTIONS: SelectFieldOption<PreprocessProfileName>[] = PR
   })
 );
 
-// 並びは文書解析の画面の使用エンジンのカードと同じ（CPU → OCI → GPU。#2042）。
-export const PARSER_VALUES = [
-  "docling",
-  "unstructured",
-  "structured_records_jsonl",
-  "xml_tree_json",
+// 並びは文書解析の画面の使用エンジンのカードと同じ正本（PARSER_BACKEND_ORDER。#3359）。
+export const PARSER_VALUES = PARSER_BACKEND_ORDER;
+// 準備中（ロードマップ）の解析エンジン（OCI Document Understanding は #3374、MinerU は #3359）。
+// 選択肢には灰色で出し、選ばせない（backend も保存を 422 にする）。
+export const ROADMAP_PARSER_VALUES: readonly ParserAdapterBackend[] = [
+  "mineru",
   "oci_document_understanding",
-  "dots_ocr",
-] as const;
-// 準備中（ロードマップ）の解析エンジン（#3374）。選択肢には灰色で出し、選ばせない（backend も保存を 422 にする）。
-export const ROADMAP_PARSER_VALUES: readonly ParserAdapterBackend[] = ["oci_document_understanding"];
+];
 export const PARSER_OPTIONS: SelectFieldOption<ParserAdapterBackend>[] = PARSER_VALUES.map(
   (value) =>
     ROADMAP_PARSER_VALUES.includes(value)

@@ -1255,12 +1255,12 @@ def update_profile(
     except IncrementalVersionConflict as exc:
         raise HTTPException(
             status_code=409,
-            detail="業務 profile が更新されています。再読込してください。",
+            detail="業務プロファイルが更新されています。再読込してください。",
             headers={"ETag": f'"{exc.current_etag}"'},
         ) from exc
     except KeyError as exc:
         raise HTTPException(
-            status_code=404, detail="指定された profile が見つかりません。"
+            status_code=404, detail="指定された業務プロファイルが見つかりません。"
         ) from exc
     except ProfileNameConflict as exc:
         raise _profile_name_conflict_exception(exc) from exc
@@ -1313,12 +1313,12 @@ def delete_profile(
     except IncrementalVersionConflict as exc:
         raise HTTPException(
             status_code=409,
-            detail="業務 profile が更新されています。再読込してください。",
+            detail="業務プロファイルが更新されています。再読込してください。",
             headers={"ETag": f'"{exc.current_etag}"'},
         ) from exc
     except KeyError as exc:
         raise HTTPException(
-            status_code=404, detail="指定された profile が見つかりません。"
+            status_code=404, detail="指定された業務プロファイルが見つかりません。"
         ) from exc
     except ProfileNameConflict as exc:
         raise _profile_name_conflict_exception(exc) from exc
@@ -1349,7 +1349,7 @@ async def import_profile_learning_material(
         )
     except KeyError as exc:
         raise HTTPException(
-            status_code=404, detail="指定された profile が見つかりません。"
+            status_code=404, detail="指定された業務プロファイルが見つかりません。"
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1363,7 +1363,7 @@ def export_profile_learning_material(profile_id: str, request: Request) -> Respo
         filename, content = nl2sql_service.export_profile_learning_material_xlsx(profile_id)
     except KeyError as exc:
         raise HTTPException(
-            status_code=404, detail="指定された profile が見つかりません。"
+            status_code=404, detail="指定された業務プロファイルが見つかりません。"
         ) from exc
     return Response(
         content=content,
@@ -1453,7 +1453,7 @@ def archive_profile(profile_id: str, request: Request) -> ApiResponse[Nl2SqlProf
         return ApiResponse(data=nl2sql_service.archive_profile(profile_id))
     except KeyError as exc:
         raise HTTPException(
-            status_code=404, detail="指定された profile が見つかりません。"
+            status_code=404, detail="指定された業務プロファイルが見つかりません。"
         ) from exc
     except ProfileNameConflict as exc:
         raise _profile_name_conflict_exception(exc) from exc
@@ -1467,7 +1467,7 @@ def restore_profile(profile_id: str, request: Request) -> ApiResponse[Nl2SqlProf
         return ApiResponse(data=nl2sql_service.restore_profile(profile_id))
     except KeyError as exc:
         raise HTTPException(
-            status_code=404, detail="指定された profile が見つかりません。"
+            status_code=404, detail="指定された業務プロファイルが見つかりません。"
         ) from exc
     except ProfileNameConflict as exc:
         raise _profile_name_conflict_exception(exc) from exc
@@ -1488,7 +1488,7 @@ def upsert_profile_select_ai_profile(
         return ApiResponse(data=nl2sql_service.upsert_profile_select_ai_profile(profile_id, req))
     except KeyError as exc:
         raise HTTPException(
-            status_code=404, detail="指定された profile が見つかりません。"
+            status_code=404, detail="指定された業務プロファイルが見つかりません。"
         ) from exc
 
 
@@ -1549,7 +1549,7 @@ def create_profile_oracle_sync_job(
         raise _select_ai_credential_missing_exception(exc) from exc
     except KeyError as exc:
         raise HTTPException(
-            status_code=404, detail="指定された profile が見つかりません。"
+            status_code=404, detail="指定された業務プロファイルが見つかりません。"
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1616,7 +1616,7 @@ def refresh_select_ai_profile(
         return ApiResponse(data=nl2sql_service.refresh_select_ai_profile(profile_id))
     except KeyError as exc:
         raise HTTPException(
-            status_code=404, detail="指定された profile が見つかりません。"
+            status_code=404, detail="指定された業務プロファイルが見つかりません。"
         ) from exc
 
 
@@ -1632,7 +1632,7 @@ def refresh_select_ai_agent_assets(
         return ApiResponse(data=nl2sql_service.refresh_select_ai_agent_assets(profile_id))
     except KeyError as exc:
         raise HTTPException(
-            status_code=404, detail="指定された profile が見つかりません。"
+            status_code=404, detail="指定された業務プロファイルが見つかりません。"
         ) from exc
 
 

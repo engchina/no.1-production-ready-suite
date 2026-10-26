@@ -14,7 +14,8 @@ sibling repo `../rag_poc` の、解析から回答生成までの実装を本リ
 |---|---|
 | `packages/rag_engine` | rag_poc の解析・分割・検索・回答の実装を、`entrypoints`（Gradio / HTTP）を除いてそのまま移したもの。package と import パスは `rag_engine`（#599）。backend と docling サービスが依存する。回帰テストは CI の `RAG / Engine` ジョブで実行する |
 | `services/parsers/docling` | rag_poc から移した Docling 解析（読み順・段組補正、表セル補修、図内 OCR の集約）。`parser_artifacts.layout_records` に LayoutRecord を保持する。Vision は行わない（#497） |
-| `backend/app/rag/vision.py` | 解析後の図・画像の読み取り（Vision）。Docling を含む全ての解析エンジンで、rag_engine の `describe_layout_pictures`（対象と周辺文脈の 2 枚の画像・装飾画像の skip・表内画像の検出・prompt の metadata）を既定の Vision モデルで実行する。`layout_records` の record がある文書（Docling）は、その record を入力にし、結果を record にも書き戻す（#497） |
+| `backend/app/rag/vision.py` | 解析後の図・画像の読み取り（Vision）。Docling を含む全ての解析エンジンで、rag_engine の `describe_layout_pictures`（対象と周辺文脈の 2 枚の画像・装飾画像の skip・表内画像の検出・prompt の metadata）を既定の Vision モデルで実行する。`layout_records` の record がある文書（Docling・MinerU）は、その record を入力にし、結果を record にも書き戻す（#497・#1334） |
+| `backend/app/clients/mineru_layout.py` | MinerU の Middle JSON から、Docling と同じ形の LayoutRecord（`parser_artifacts.layout_records`）を作る（#1334。下の「MinerU の LayoutRecord」） |
 | `backend/app/rag/chunking_small_to_big.py` | チャンク戦略 `small_to_big`（画面の表示名は「親子階層（small-to-big）」。rag_poc の Small-to-Big 親子分割） |
 | `backend/app/rag/answer_engine.py` | 回答フロー（rag_poc の回答フローを backend の検索・rerank で駆動。#594 から回答はこれだけ） |
 | `backend/app/rag/search_answer_profile_knowledge.py` | 検索・回答プロファイル単位の知識（Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルール） |
@@ -58,7 +59,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 
 1. **解析**：文書解析を Docling にする。図や画面キャプチャが多い文書では、文書のレシピで Vision（図・画像を AI で読み取る）を有効にする（Docling 以外の解析エンジンでも使える）。有効にすると、画像 1 枚ごとに Vision モデルの呼び出しと時間がかかる。
 2. **分割**：文書分割は既定で親子階層（`small_to_big`。#594 で既定にした）。親は回答の文脈に渡す大きい単位、子は検索に当てる小さい単位（LangChain の ParentDocumentRetriever・LlamaIndex の階層の分割と同じ考え方）で、**どの解析の結果でも親子に分割する**（#3377。解析エンジンの名前では選ばず、抽出の形で親子の作り方を選ぶ。取込の trace の `chunk_parent_source`）。
-   - 解析の結果がレイアウトの記録（`parser_artifacts.layout_records`。Docling の PDF・画像）を持つ文書は、その記録から親子を作る（`layout_records`。見出し・表・図の領域と根拠の元の要素を保つ）。
+   - 解析の結果がレイアウトの記録（`parser_artifacts.layout_records`。Docling の PDF・画像。MinerU〔#1334。準備中〕も同じ記録を作る）を持つ文書は、その記録から親子を作る（`layout_records`。見出し・表・図の領域と根拠の元の要素を保つ）。
    - Excel の行の記録は行を子・表の一部を親（`sheet_records`。#1349）、XML ツリー JSON は段落を子・番号つきの単位を親にする（`xml_tree_units`。#2024）。
    - それ以外の抽出（標準の解析の Markdown・テキスト、Unstructured・OCI などの解析の結果、構造化レコード JSONL の CSV・Word など）は、抽出の構造から親子を作る（`extraction_structure`）。子は構造認識と同じ要素の分割（同じ節・同じ種類の要素だけをつなぐ）を子の目標文字数で行い、表は表の子の目標文字数で行のまとまりに分けて列見出しを繰り返す。見出しだけの子は作らず、続く本文の子の先頭に入れる。構造化レコード JSONL は 1 記録 = 1 子（#2457）。親は続く子を、節（文書を 2 つ以上に分ける最初の見出しの段。題が 1 つの文書はその下の段）をまたがず、親の目標文字数・子の数・ページ数の上限の中でまとめる。見出しの無い文書は順と大きさだけでまとめる。子の metadata は Docling の親子と同じ（`chunk_strategy=small_to_big`・`parent_chunk_id` / `chunk_group_id`・`chunk_group_kind=small_to_big_parent`・`parent_text`・`section_path`・頁・`element_ids`）で、回答は同じ経路で親の本文を文脈にする。
    - 以前（#300〜#3377）は、レイアウトの記録が無い文書を「構造認識」（`structure_aware`）へ縮退し、chunk に `chunk_strategy_fallback_reason=layout_missing` を残していた。その chunk は文書詳細の Chunk タブに「親子階層で分割されていない Chunk です」と表示し、Chunk を作り直すと親子階層で分割する（再解析は要らない）。
@@ -73,7 +74,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 5. **検索**：
    - 検索・回答プロファイルを選んで検索すると、先に類似する承認済み FAQ を照会する。候補があれば「この FAQ の回答を使う（LLM を使わない）」か「類似問を使用しない」を選ぶ。
    - 回答には「処理の経過」（#2096。回答の工程ごとの一覧〔入れ子は字下げ・所要時間・LLM の回数〕。実行中は開き、完了したら閉じる〔#2118〕。その下の「詳細」に信頼度・人手確認・使ったモデル・評価、会話を開き直した回答は保存日時と回答の記録の操作）が付く。チャットと RAG 検索は同じ部品 `components/search/AnswerProcess.tsx` 1 つで、位置・開閉・「詳細」の中身をチャットの形にそろえる（#2118。RAG 検索の「詳細」の開始・トレース ID は無くした）。工程は回答の trace の span（共通の span の表。#3226）で、チャット・RAG 検索とも記録ごとの trace の API の snapshot から作る（`lib/trace-progress.ts`。種類 `answer_step` の値に工程名、入れ子は span の親子）。根拠の構成（AI に渡した箇所を同じ節ごとにまとめた単位）は、根拠の一覧の「まとまりごと」に出す（#2097）。
-   - 回答の本文の節（`rag_engine/generation/grounded.py`。#2040）: 「資料により確認できた事項」（質問の条件への該当を監査で確認した説明）・「操作手順（機能名）」「確認手順（機能名）」・「参考情報」（システムが補った原文〔必須根拠・確定操作・但し書き・拒答のときの関連原文・監査が必要とした根拠〕と、該当が未確認〔`applies=unverified`〕の説明の原文。直下に固定の説明「以下は資料の原文です。本質問の条件への該当は確認できていません。」を置き、結論には使わない。規則の検査・監査で確かめられなかった説明の置き場ではない〔#2738〕）・「資料から確認できなかった事項」・「回答に未反映の関連章節」（章節の拡張の上限で読めなかった章節。各行から章節の原文を開ける）・「回答時間の上限により省略した処理」（回答時間の上限で省いた生成・監査・是正）・「回答を確定するために確認すること」・「根拠と矛盾し除いた内容」（監査が根拠と矛盾と判定して本文から外した説明と理由。#2738）・「確認が必要な点」（回答全体の警告と、印の付いた段落の短い引用と理由。#2738）。最後の 2 つは本文だけを読む利用者向けで、正本は回答の構造の段落の印（下の「段落の印」）。見出しと固定の説明は主張ではないので、監査・評価・指標は `is_structural_line` で外す。回答で引用した箇所ごとの使われ方（該当確認済み `confirmed` / 参考 `reference`）は、引用の metadata の `evidence_answer_use` と MCP の `evidence[].answer_use` に載り、画面の件数とバッジ（「回答で引用」「参考」）に使う。
+   - 回答の本文の節（`rag_engine/generation/grounded.py`。#2040）: 「資料により確認できた事項」（質問の条件への該当を監査で確認した説明。印の付いた説明は入れない）・「根拠で確かめきれていない事項」（段落の印〔下の「段落の印」〕の付いた kind=rule の説明。直下に理由の案内を置く。#3394）・「操作手順（機能名）」「確認手順（機能名）」・「参考情報」（システムが補った原文〔必須根拠・確定操作・但し書き・拒答のときの関連原文・監査が必要とした根拠〕と、該当が未確認〔`applies=unverified`〕の説明の原文。直下に固定の説明「以下は資料の原文です。本質問の条件への該当は確認できていません。」を置き、結論には使わない。規則の検査・監査で確かめられなかった説明の置き場ではない〔#2738〕）・「資料から確認できなかった事項」・「回答に未反映の関連章節」（章節の拡張の上限で読めなかった章節。各行から章節の原文を開ける）・「回答時間の上限により省略した処理」（回答時間の上限で省いた生成・監査・是正）・「回答を確定するために確認すること」・「根拠と矛盾し除いた内容」（監査が根拠と矛盾と判定して本文から外した説明と理由。#2738）・「確認が必要な点」（回答全体の警告と、印の付いた段落の短い引用と理由。#2738）。最後の 2 つは本文だけを読む利用者向けで、正本は回答の構造の段落の印（下の「段落の印」）。見出しと固定の説明は主張ではないので、監査・評価・指標は `is_structural_line` で外す。回答で引用した箇所ごとの使われ方（該当確認済み `confirmed` / 参考 `reference`）は、引用の metadata の `evidence_answer_use` と MCP の `evidence[].answer_use` に載り、画面の件数とバッジ（「回答で引用」「参考」）に使う。
    - 保存された回答（回答の記録）は、チャットの各回答の「処理の経過」の中の「処理の詳細」（処理の経過を開いたときのタイムラインの後ろ。#2325）から回答の記録の詳細を開き直せる（会話の回答の trace_id で保存の有無を引き当てる。#304）。引用の一覧は回答の枠の折りたたみ「AI に渡した N 件（K のまとまり）／ 回答で引用 M 件 ／ うち該当確認済み K 件 ／ 参考 L 件」（0 件の項目は出さない。#2040・#2097）の 1 か所だけに出し、「処理の詳細」の中には重ねて出さない。折りたたみの中は「順に表示」（引用のカード）と「まとまりごと」（同じ節ごとにまとめて AI に渡した単位。各箇所の役割・位置・本文の抜粋と、押すと開く引用箇所。chunk の ID は「処理の詳細」の中）で、まとまりの件数の合計は N に一致する（backend は根拠の木 `evidence_tree` の子を引用にした箇所だけ 1 回ずつ持つ。#2097）。「処理の経過」（工程の一覧と、その後ろの「処理の詳細」）は回答の上（作成中の「N ステップ完了」の場所のまま。#2115）に置き、回答の枠の下は「AI に渡した N 件」→ 回答の評価（「この回答は役に立ちましたか？」）の順（#1202 / #1417 / #2096。`platform/docs/ux-contracts/page-archetypes.md` §6.1。RAG 検索の回答のカードもチャットと同じ部品・並び）。根拠の一覧は回答の文脈に入れた根拠の chunk の全件で、回答に使ったもの（`metadata.evidence_model_used`）が先頭に並び、カードに「回答で引用」が付く。回答を作らない検索の結果は「根拠 N 件」（RAG 検索・検索テストでは「検索結果（N）」）とだけ出す（#1208）。回答の記録は 1 件ずつ削除しない（画面の操作も API も持たない。#2325・#2348。保存期間を過ぎた記録は自動で消える）。検索画面の回答履歴の一覧は #444 で削除した（一覧の API `GET /api/search/answers` は、チャットの引き当て（`trace_id` の指定）が使うため残している）。
    - 扱えるのは自分の回答だけ（詳細・評価・削除も同じ）。SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者は、利用できる検索・回答プロファイルのすべての利用者の回答を扱える（#304）。
    - 参照するナレッジベースが 0 件の検索・回答プロファイルでは検索・チャットしない（利用者が使える全 KB を検索しない）。画面は選んだ時点で理由を示し、API は 409 と理由（「この検索・回答プロファイルには参照するナレッジベースがありません。…」）を返す（#304）。
@@ -332,6 +333,7 @@ executor が埋まっても待たない。1 回の検証ごとに `rag_answer_va
 | 監査 `not_applicable` | 本文に残す | `warning`（`target_mismatch`） |
 | 未知の Evidence ID・複数の根拠に一致 / 原文と一致しない引用 | 本文に残す（近い原文・指した根拠があれば出典に結ぶ）。是正の指摘に写し方を渡す | `unverified`（`citation_error` / `quote_unmatched`） |
 | 監査が時間の上限で切れた・応答が空 | 本文に残す | `unverified`（`unassessed`） |
+| 要求の根拠計画が決まらない（作り直しても計画の不整合が残る。#3228。計画だけが無い草稿は、草稿の全体を作り直さず、説明が引いた根拠だけで計画を立て直し〔章節の欠けた根拠の事前の計画と同じ呼び出し〕、それでも照合しなかった根拠の説明。#3394） | 本文に残す（計画が unrelated とした根拠の説明は外す） | `unverified`（`unassessed`） |
 | `ITEM_CHECKS`（見出しの入口化・削除対象・構成明細・処理区分の逐語・値・画面の表示例の値）・生成説明の値・質問の対象 / エラーが根拠に無い・別文書の手順 | 本文に残し、`detail` に検査の名前・理由と原文の引用 | `warning`（`item_check`） |
 | 表の行・列の対応の取り違え（`_table_binding_conflict`。#2998・#3005） | 表の正しい値に直して本文に残す（`table_revision.revise_table_passage`。LLM が誤った値だけを直し、表の照合・正しい値・元の文との近さで確かめる）。直せなければ外し、理由に表の正しい対応を出す | `warning`（`table_corrected`。直した前後） / `removed_passages`（`contradicted`） |
 | 旧版・廃止の文書の根拠（`withhold_superseded`） | 本文に残す | `warning`（`superseded`） |
@@ -377,7 +379,8 @@ level は使わない。そのため「第 3 章 > 3.1」の 3.1 は第 3 章の
 （解析済みの layout record の fixture）と backend の `tests/test_navigation.py` で確かめる。既存の文書の抽出の章節は、
 抽出結果に保存した章節の木から作るため、取り込み直し（解析からの再処理）で新しい規則になる。分割だけをやり直す再処理
 （抽出を使い回す）では chunk の `section_path` だけが変わり、抽出の章節は変わらない。人が修正した章節は上書きしない（深さが
-変わった章節は id が変わるため、「新しく抽出」の印で足される）。
+変わった章節は id が変わるため、「新しく抽出」の印で足される）。MinerU の要素の `section_path` は、共通の抽出の変換が
+MinerU の見出しの level から作るため、この規則にはまだそろえていない（chunk は同じ規則）。
 
 **章節と chunk の対応（#1438）**: 文書の詳細の「章節ナビゲーション」の章節（人の修正 `rag_document_sections` と、修正が
 無いときの抽出の章節）を章節の正本とし、正しいものとして扱う。章節は何度でも直されるが、分割（chunk）・embedding・
@@ -420,11 +423,26 @@ Docling 以外の解析エンジンの bbox は単位が違うため、Vision �
 | Docling | サービスが描いたページ画像の px（`RAG_ENGINE_RENDER_DPI`） | `layout_records.pages` の寸法から同じ解像度で描き直す。実サービス（docling 2.129.0）で確認済み（A4 の PDF は 2480x3509、画像は元画像の px）。#502 |
 | Unstructured | coordinates の座標系（PixelSpace 等）の px | registry が `layout_width` / `layout_height` を要素と asset の `page_width` / `page_height` に写す。無ければ不明。実サービス（unstructured 0.27.8、hi_res）で確認済み（PDF は PixelSpace で 350 dpi 相当のページ画像の px。A4 で 2893x4094。画像は元画像の px）。#502。座標系が左下原点（`PointSpace` / `RelativeCoordinateSystem`）なら y を反転する（#512） |
 | Dots.OCR | 描いたページ画像の px（`RAG_PARSER_DOTS_OCR_DPI`） | `pages` の寸法。画像ファイルは元画像の px（寸法を `pages` に入れる）。モデルが返す bbox は、入力画像を smart_resize（28 の倍数、画素数 3136〜11289600）した寸法の px なので、backend（`app/clients/external_parser.py`）が受け取ったときに送った画像の px へ戻す（公式の parser の `post_process_cells` と同じ換算）。根拠は下の「座標系の根拠」 |
+| MinerU | ページに対して 0-1000 に正規化した座標（左上原点） | V1 API の Middle JSON（schema 2.0）の 0-1 の bbox を、backend（`app/clients/external_parser.py` の `mineru_middle_json_blocks`）が content list と同じ 0-1000 の整数にする（#1329）。1000 を超えれば不明。根拠は下の「座標系の根拠」（この repo の実サービスでは未確認。ai-foundations-lab の検証と一致。#512） |
 | OCI Enterprise AI の VLM 解析 | 0-1 または 0-100 | 構造化抽出の prompt の指定。100 を超えれば不明 |
 | 全ての解析エンジン | 値が全て 1 以下なら 0-1 | 画像ファイル全体の `source_image` の asset も含む |
 
-座標系の根拠（#502。ローカルに接続先がない Dots.OCR は公式のソースで確認した。MinerU の連携は #3345 で削除した）:
+### MinerU の LayoutRecord（#1334）
 
+MinerU の解析（V1 API の Middle JSON 2.0）からは、要素（`mineru_middle_json_blocks`）に加えて、Docling と同じ形の LayoutRecord を `parser_artifacts.layout_records`（`version` / `pages` / `records`）に作る（`backend/app/clients/mineru_layout.py`）。親子階層の分割（rag_engine）は変えず、その入力の形にそろえる。
+
+- 座標: Docling と同じ `image_top_left` のページ画像の px。PDF は Middle JSON の `extensions.docvortex_layout.pages` の寸法（`width_pt` / `height_pt`。bbox と同じ向き）を 300 dpi（Docling サービスの既定の `RAG_ENGINE_RENDER_DPI`）の px にし、`pages` に `width` / `height`（px）と `pdf_width` / `pdf_height`（pt）を入れる。画像ファイルは元の画像の px（EXIF の向きを直した寸法）。Middle JSON の 0-1 の bbox にその寸法を掛ける。要素の bbox（0-1000）を上の表の換算でページ画像の px にした値と一致する（#512 の例でテストしている）。寸法の分からない頁や bbox の無い block（Office の文書など）がある文書は record を作らず、親子階層は構造認識へ縮退する。
+- 種類の対応（1 か所の表 `MINERU_LAYOUT_CATEGORIES`）: `doc_title` → `Title`、`paragraph_title` → `Section-header`、`text` / `ref_text` / `aside_text` → `Text`、`list` / `index` → `List-item`、`table` → `Table`（本文は `table_body` の HTML）、`image` / `chart` → `Picture`（本文を空にして Vision の対象にし、図の中の文字（`image_body` / `chart_body`）は同じ bbox の `picture_ocr_text`）、`*_caption` → `Caption`、`*_footnote` / `page_footnote` → `Footnote`、`equation` → `Formula`、`code` → `Text`（`raw_type=code`・`raw.code`）、`header` → `Page-header`、`footer` / `page_number` → `Page-footer`。表に無い種類は `Text` にし、`raw_type` に元の種類を残す。
+- 頁のヘッダー・フッター・頁番号は、要素（本文）には入れない（#1329 のまま）が、record にはする。分割が Docling と同じく頁の定型（毎頁の柱・著作権表示・頁番号）として本文から外し、頁番号を論理頁に使う。
+- 見出しの深さ: MinerU の `level`（`doc_title`=1、`paragraph_title`=2〜6）は `raw.mineru_level` に残すだけで、分割の見出しの深さには使わない。分割の深さは Docling と同じく本文の番号の形（「1.」「1.2」「第1章」など）から決めていて、尺度が違う（章 0・英字 6・丸数字 8）。
+- 頁・段・図をまたいで続く本文・リスト・表（Middle JSON の `continues_prev`）は、Docling と同じく頁ごとの別の record のままにし、`raw.continues_prev` に印を残す。取込の文書全体の整理（`backend/app/rag/pdf_segment_merge.py` の `consolidate_document_extraction`。#2266）が、MinerU と同じ規則で続きの元を探して `raw.continues_record_id` に写し（本文・リストは図・表・脚注・頁の定型を読み飛ばして前の本文・リスト、表は前の頁の最後の表。表の続きには列見出しの行を付ける）、親子階層の分割が同じ子 chunk に入れる（間の図・表は単独の子 chunk）。段ごとの解析（#2001）の段の境目（`raw.mineru_page_idx` が前の頁から続かない頁）は MinerU が判定できないので、Docling と同じ規則で判定する。表の `cell_merge`（MinerU のサーバー側の LLM の後処理のセルの続き。使っていない）は `raw.cell_merge` に残すだけ。
+- record の `id` は要素の `element_id`（`mineru-p{頁}-b{block の番号}`）と同じで、`raw` に MinerU の元の block の番号（`mineru_block_index`）・頁（`mineru_page_idx`）・種類（`mineru_type`）を残す。caption・footnote・図の中の文字は、親の id に `-caption{n}` / `-footnote{n}` / `-ocr` を付けた別の record にする。chunk の `source_parser` は `mineru_layout`（Docling は `docling_layout`）。
+- Vision は record を入力にし（Docling と同じ読み取り・切り出し）、結果を record に書き戻す。要素・asset は共通の抽出の変換で作ったものなので、ほかの解析エンジンと同じ形（図の本文を説明に置き換え、元の本文を `vision_source_text` に残す）でも書き戻し、構造認識など record を読まない分割方式でも説明を使う。読み取る前に説明の無かった図・表だけを書き戻す（読み取り済みの説明を元の本文として残したり、表の説明を二重に足したりしない）。
+- 実サービスの MinerU での確認は未実施（CI は MinerU 4.0 の公開の契約の形の固定の例で確かめる）。dots.ocr も頁ごとの種類と bbox を返すので同じ方法で record を作れる見込みだが、未確認（今回は MinerU だけ）。
+
+座標系の根拠（#502。ローカルに接続先がない MinerU と Dots.OCR は公式のソースで確認した）:
+
+- MinerU: 2.5.4（tag `mineru-2.5.4-released`）の `mineru/backend/pipeline/pipeline_middle_json_mkcontent.py` の `make_blocks_to_content_list` が `int(x0 * 1000 / page_width)` などで 0-1000 にする。4.0.10（tag `mineru-4.0.10-released`）の `mineru/render/_internal/content_list/common.py` の `normalize_bbox` も「MiddleJson の 0-1 の bbox を Content List の 0-1000 の整数にする」（`int(value * 1000)`）。原点（左上）は、backend の変換と同じ前提のまま（ソースでは未確認）。
 - Dots.OCR: github.com/rednote-hilab/dots.ocr（commit `36d7248`、2026-03-24）の `dots_ocr/utils/layout_utils.py` の `post_process_cells` が、bbox を smart_resize した入力画像の寸法（コメント: 「server input width, also has smart_resize in server」）から元画像の寸法へ戻している。`dots_ocr/utils/image_utils.py` の `smart_resize` と `dots_ocr/utils/consts.py`（`IMAGE_FACTOR=28`・`MIN_PIXELS=3136`・`MAX_PIXELS=11289600`）、Hugging Face の `rednote-hilab/dots.ocr` の `preprocessor_config.json`（`Qwen2VLImageProcessor`、`patch_size` 14・`merge_size` 2・同じ min / max pixels）。backend は OpenAI 互換 API を直接呼ぶので、この換算を backend で行う。換算しないと、A4 を 200 dpi で描いたページで縦に約 0.5%（最大 13px）、400 dpi など 11289600 px を超えるページでは約 15% ずれていた。
 - Dots.OCR の Picture（本文のない図）は asset の kind が `picture` になる。#502 までは Vision の対象の種類に入っておらず、読み取っていなかった。
 
@@ -434,11 +452,14 @@ ai-foundations-lab の検証との照合（#512）:
 
 | 解析エンジン | lab の換算（ファイル） | この repo | 判断 |
 |---|---|---|---|
+| MinerU | content_list / content_list_v2 の bbox は 1000x1000 で割り、ページ画像の寸法を掛ける。y は反転しない（左上原点）。middle.json（`pdf_info[].page_size` の pt）と model.json（`page_info.width/height`）は、その寸法で割る（`adapters/mineru.py` の `_bbox_to_page_image`・`_records_from_flat_content_list`、`adapters/mineru_api.py`、`tests/test_mineru_adapter.py`・`tests/test_mineru_api_adapter.py`） | content list と同じ 0-1000 の bbox を使い、1000x1000 で割る（`vision.py` の `_bbox_scale`。4.x は Middle JSON の 0-1 から換算する。#1329） | 一致。#502 で未確認だった原点（左上）を lab の重ね合わせで確認とする。lab の 2 例（A4 の 2480x3500 のページへの換算）をテストにした（`test_mineru_bbox_matches_ai_foundations_lab`） |
 | Dots.OCR | 後継の dots.mocr の bbox を、300 dpi のページ画像の px としてそのまま使い、ページ内へ収めるだけ（`adapters/dots_mocr.py` の `analyze`）。README は、300 dpi の A4 の画像パッチを約 44,000 とし、`prompt_grounding_ocr` の bbox は「processor 側の resize と一致しない」とする | smart_resize 後の入力画像の px から、送った画像の px へ戻す（`external_parser.py` の `_dots_bboxes_to_page_px`） | #502 が正しい。lab の記録（44,000 ≒ 2492x3500 / 14²、resize と合わない）は、bbox が smart_resize 後の寸法の px であることと合う。300 dpi の A4 は縮小されず 28 の倍数への丸め（x 12px・y 9px、0.5% 未満）しか差がないため、lab ではそのままでも重なって見えた。この repo の既定の 200 dpi や、11289600 px を超えるページでは差が出るので換算を残す。dots.mocr の `preprocessor_config.json`（Hugging Face `rednote-hilab/dots.mocr`、revision `e539fbb`）も dots.ocr と同じ値（14・2・3136・11289600）。lab の値をテストにした（`test_dots_300dpi_a4_matches_ai_foundations_lab_observation`） |
 | Unstructured | `metadata.coordinates.points` の最小・最大を、`system.width / height` で割ってページ画像の寸法を掛ける（`adapters/unstructured_adapter.py`、`tests/test_unstructured_adapter.py`: 350 dpi 相当の 2894x1930 から 300 dpi の 2481x1654 へ） | registry が points を最小・最大の bbox にし、座標系の寸法を `page_width` / `page_height` に写す。`vision.py` がその寸法で割る | 一致。lab の例をテストにした（`test_unstructured_bbox_matches_ai_foundations_lab`） |
 | 共通 | 左下原点の bbox は `coordinates.py` の `pdf_bottom_left_to_image_top_left`（`top = (page_height - max(y)) * scale`）で左上原点へ直す（`tests/test_coordinates.py` で往復を確認） | #512 まで、座標系の原点を見ていなかった | 取り込んだ。Unstructured の `PointSpace` と `RelativeCoordinateSystem` は `Orientation.CARTESIAN`（左下原点。`unstructured/documents/coordinates.py`）なので、`bbox_coordinate_system` がこの 2 つなら `vision.py` の `_page_px_bbox` が同じ式で y を反転する。unstructured 0.27.8 の PDF はどの戦略でも `PixelSpace`（pdfminer の左下原点は `rect_to_bbox` で左上へ直してある）なので、今の parser サービスでは通らない（防御）。`test_bottom_left_coordinate_system_is_flipped` |
 
+- lab と #502 の食い違い: MinerU の middle.json の単位。lab（MinerU 2.x の `mineru[core]>=2.0` と mineru-api の hybrid-engine）は pt（`page_size` で割る）、#502 で読んだ 4.0.10 の `normalize_bbox` は「MiddleJson の 0-1」。版で違う。MinerU 4.0 は `/file_parse` を削除し、V1 API は content list を返さないため、この repo は 4.x の Middle JSON（`schema=docvortex.middle`・`schema_version=2.x` を確かめ、bbox は 0-1）を読み、content list と同じ 0-1000 に換算する（#1329）。3.x の middle.json（`pdf_info`）は読まない。
 - 取り込んでいないもの: lab の Dots.OCR の応答の寛容な読み取り（`{"elements": [...]}` などの包み・切れた JSON）、Picture の切り出しの再 OCR と Mermaid 化は、座標の変換ではないので #512 の対象外。
+- 未確認のまま: /Rotate のあるページで、MinerU の `page_width` / `page_height` が回転後の寸法か（lab も回転したページは確かめていない。ビューアの回転は表示だけ）。Dots.OCR と Vision の段は pymupdf が回転を反映して描くので、送った画像と bbox は合う。
 - この確認では Unstructured の parser サービス（127.0.0.1:18022）が起動していなかったので、実サービスでは確かめ直していない（#502 の実サービスの確認と、parser サービスの venv の unstructured 0.27.8 のソースで確認した）。
 
 ### 頁番号のフッターの論理頁（#2289）

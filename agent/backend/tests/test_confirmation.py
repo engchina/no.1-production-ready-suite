@@ -58,7 +58,9 @@ from app.features.agent.confirmation import (
     nl2sql_answer,
     policy_instructions,
     rag_conditions,
+    record_entries,
     response_instructions,
+    response_record,
     validate_answers,
     validation_premises,
 )
@@ -280,6 +282,37 @@ def test_answers_are_validated_against_the_items() -> None:
         )
     with pytest.raises(ValidationError):
         ConfirmationAnswer(item_id="", option_ids=[])
+
+
+def test_record_entries_keep_whether_the_item_had_options() -> None:
+    """会話に残す記録は、選択肢の無い確認事項を `free_text_only` で残す。
+
+    画面はこの値で、自由入力の答えに「その他: 」を付けない。
+    """
+    request = ConfirmationRequest(
+        source="rag",
+        items=[
+            ConfirmationItem(
+                id="item_1",
+                prompt="どの画面？",
+                options=[ConfirmationOption(id="a", label="画面 A")],
+            ),
+            ConfirmationItem(id="item_2", prompt="対象の名前は？"),
+        ],
+        answers=[
+            ConfirmationAnswer(item_id="item_1", other_text="画面 B"),
+            ConfirmationAnswer(item_id="item_2", other_text="名前 A"),
+        ],
+    )
+    entries = record_entries(request)
+    assert [(entry["other_text"], entry["free_text_only"]) for entry in entries] == [
+        ("画面 B", False),
+        ("名前 A", True),
+    ]
+    response = response_record(
+        request, action="answer", source_run_id="run-a", question_run_id="run-a"
+    )
+    assert [entry["free_text_only"] for entry in response["entries"]] == [False, True]
 
 
 def test_budget_and_policy_instructions() -> None:

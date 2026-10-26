@@ -214,7 +214,8 @@ test.describe("一覧の件数と表示件数（#1891）", () => {
     seedRuns(mockApi, 53);
     await page.goto("/runs");
     const toolbar = page.getByTestId("run-list-toolbar");
-    await expect(toolbar.locator("[data-list-count]")).toHaveText(/^全 \d+ 件$/);
+    // 期間の既定（過去 7 日。#3386）で絞っているので、最初から「N 件（全 M 件）」。
+    await expect(toolbar.locator("[data-list-count]")).toHaveText(/^\d+ 件（全 \d+ 件）$/);
     const pagination = page.getByTestId("run-history-pagination");
     await pagination.getByRole("combobox", { name: "表示件数" }).click();
     await page.getByRole("option", { name: "50 件" }).click();

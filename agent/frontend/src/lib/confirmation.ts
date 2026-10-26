@@ -128,6 +128,8 @@ export function responseRecord(run: Pick<RunState, "metadata">): ConfirmationRec
       prompt: String(entry.prompt ?? ""),
       selected: Array.isArray(entry.selected) ? entry.selected.map(String) : [],
       otherText: entry.other_text || undefined,
+      // 選択肢の無い確認事項の答えに「その他: 」を付けない（記録は答えた時点の写し。値の無い古い記録は付ける。#3410）。
+      freeTextOnly: entry.free_text_only === true,
     })),
   };
 }

@@ -25,6 +25,15 @@ import {
 // - 詳細: RunDetailLayout（概要 → 処理の経過〔タイムラインと処理の詳細〕→ 回答 → 根拠 → フィードバック）をタブ無しの 1 枚で。
 
 const PAGE_SIZE = 25;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+/** 一覧の行の既定の開始の基準（期間の既定の過去 7 日に入る、直近の時刻。#3386）。 */
+const RECENT_BASE_MS = Date.now() - 2 * HOUR_MS;
+
+/** 期間の開始（since）が今から何 ms 前か。 */
+function sinceAgeMs(since: string | null | undefined) {
+  return Date.now() - Date.parse(since as string);
+}
 
 interface RunRow {
   run_id: string;
@@ -83,7 +92,8 @@ function run(index: number, overrides: Partial<RunRow> = {}): RunRow {
     model_id: null,
     conversation_id: chat ? `conv-${index}` : null,
     message_id: chat ? `msg-${index}` : null,
-    created_at: `2026-10-15T0${index % 10}:00:00Z`,
+    // 期間の既定（過去 7 日）に入る直近の時刻（行の番号が大きいほど 1 分ずつ古い）。
+    created_at: new Date(RECENT_BASE_MS - index * 60 * 1000).toISOString(),
     executed_by_me: true,
     executor_display_name: "ローカル利用者",
     ...overrides,
@@ -332,7 +342,11 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     }
     await expectScrollsInsideTable(page, page.getByRole("region", { name: "実行履歴" }));
     expect(listRequests().at(-1)?.get("limit")).toBe(String(PAGE_SIZE));
-    expect(listRequests().at(-1)?.get("since")).toBeNull();
+    // 期間の既定は 3 製品で共通の過去 7 日（#3386）。
+    const since = listRequests().at(-1)?.get("since");
+    expect(since).toBeTruthy();
+    expect(sinceAgeMs(since)).toBeGreaterThan(7 * DAY_MS - HOUR_MS);
+    expect(sinceAgeMs(since)).toBeLessThan(7 * DAY_MS + HOUR_MS);
 
     const pagination = page.getByTestId("run-history-pagination");
     await expect(pagination).toContainText("1–25 / 55 件");
@@ -398,21 +412,26 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(page.locator("#run-history-executor")).toHaveCount(0);
   });
 
-  test("絞り込み: 状態・種類・期間・検索はサーバーで絞り、条件で 0 件なら「絞り込みをクリア」、ツールバーの「条件をクリア」で既定へ戻す", async ({
+  test("絞り込み: 期間の既定は過去 7 日。状態・種類・期間・検索はサーバーで絞り、条件で 0 件なら「絞り込みをクリア」、ツールバーの「条件をクリア」で既定へ戻す", async ({
     page,
   }) => {
     await mockLocalAuth(page);
-    const recent = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const recent = new Date(Date.now() - HOUR_MS).toISOString();
     const { listRequests } = await mockRuns(page, [
       run(1, { created_at: recent }),
       run(2, { status: "error", question: "失敗した質問", created_at: recent }),
-      run(3, { created_at: "2026-09-01T00:00:00Z" }),
+      run(3, { created_at: new Date(Date.now() - 20 * DAY_MS).toISOString() }),
     ]);
 
     await page.goto("/history");
     await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
+    // 既定の過去 7 日より前の実行は出さず、件数で全件があることを伝える。既定のままなら「条件をクリア」を出さない（#3386）。
+    await expect(page.getByTestId("run-history-row-run-3")).toHaveCount(0);
+    expect(sinceAgeMs(listRequests().at(-1)?.get("since"))).toBeGreaterThan(7 * DAY_MS - HOUR_MS);
     const toolbar = page.getByTestId("run-history-toolbar");
+    await expect(toolbar).toContainText("2 件（全 3 件）");
     await expect(toolbar.getByRole("button", { name: "条件をクリア" })).toHaveCount(0);
+    if (!isNarrow(page)) await expect(page.getByRole("combobox", { name: "期間" })).toContainText("過去 7 日");
 
     await chooseFilter(page, "状態", "失敗");
     await expect(page.getByTestId("run-history-row-run-2")).toBeVisible();
@@ -429,17 +448,26 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     // 期間は開始の時刻（ISO 8601）を since で送る。
     await chooseFilter(page, "期間", "過去 24 時間");
     const since = listRequests().at(-1)?.get("since");
-    expect(since).toBeTruthy();
-    const ageMs = Date.now() - Date.parse(since as string);
-    expect(ageMs).toBeGreaterThan(23 * 60 * 60 * 1000);
-    expect(ageMs).toBeLessThan(25 * 60 * 60 * 1000);
+    expect(sinceAgeMs(since)).toBeGreaterThan(23 * HOUR_MS);
+    expect(sinceAgeMs(since)).toBeLessThan(25 * HOUR_MS);
     await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
     await expect(page.getByTestId("run-history-row-run-3")).toHaveCount(0);
 
-    // 条件をすべて既定へ戻す（ツールバーの「条件をクリア」）。
+    // 条件をすべて既定へ戻す（ツールバーの「条件をクリア」）。期間は過去 7 日へ戻る。
     await toolbar.getByRole("button", { name: "条件をクリア" }).click();
-    await expect(page.getByTestId("run-history-row-run-3")).toBeVisible();
+    await expect(page.getByTestId("run-history-row-run-2")).toBeVisible();
+    await expect(page.getByTestId("run-history-row-run-3")).toHaveCount(0);
     expect(listRequests().at(-1)?.get("surface")).toBeNull();
+    expect(sinceAgeMs(listRequests().at(-1)?.get("since"))).toBeGreaterThan(7 * DAY_MS - HOUR_MS);
+
+    // 「すべて」は既定からの変更として「条件をクリア」を出し、再読込の後も残す。
+    await chooseFilter(page, "期間", "すべて");
+    await expect(page.getByTestId("run-history-row-run-3")).toBeVisible();
+    expect(listRequests().at(-1)?.get("since")).toBeNull();
+    await expect(toolbar).toContainText("全 3 件");
+    await expect(toolbar.getByRole("button", { name: "条件をクリア" })).toBeVisible();
+    await page.reload();
+    await expect(page.getByTestId("run-history-row-run-3")).toBeVisible();
     expect(listRequests().at(-1)?.get("since")).toBeNull();
 
     // 実行 ID でも探せる。
@@ -453,7 +481,22 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     expect(listRequests().at(-1)?.get("q")).toBe("存在しない");
     await page.getByRole("button", { name: "絞り込みをクリア" }).click();
     await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
+    await expect(page.getByTestId("run-history-row-run-3")).toHaveCount(0);
     await expectNoPageOverflow(page);
+  });
+
+  test("過去 7 日に実行が無く、それより前にはあるときは、期間を「すべて」にする操作を出す（#3386）", async ({ page }) => {
+    await mockLocalAuth(page);
+    const { listRequests } = await mockRuns(page, [run(1, { created_at: new Date(Date.now() - 20 * DAY_MS).toISOString() })]);
+    await page.goto("/history");
+    const empty = page.getByTestId("run-history-period-empty");
+    await expect(empty).toContainText("過去 7 日の実行はありません");
+    await expect(empty).toContainText("期間を「すべて」にすると表示します");
+    await expect(page.getByText("実行はまだありません")).toHaveCount(0);
+    await expectNoPageOverflow(page);
+    await empty.getByRole("button", { name: "すべての期間を表示" }).click();
+    await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
+    expect(listRequests().at(-1)?.get("since")).toBeNull();
   });
 
   test("実行がまだ無いときの空の状態", async ({ page }) => {
@@ -801,6 +844,66 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await page.reload();
     await expect(page.locator("#search-query")).toHaveValue(question);
     expect(searchRequests).toEqual([]);
+  });
+
+  test("詳細: 検索・回答プロファイルが削除済みの実行の「RAG 検索で開く」は質問だけを入れ、選び直しを案内する（Issue 3355）", async ({
+    page,
+  }, testInfo) => {
+    await mockDatabaseReady(page);
+    await mockAuthUser(page, { permissions: ["menu.chat", "menu.search", "menu.history"] });
+    const question = "合成の質問 B の手順は？";
+    await mockRuns(page, [
+      run(2, { question, search_answer_profile_id: "deleted-profile", search_answer_profile_name: null }),
+    ]);
+    const profileRequests: string[] = [];
+    await page.route("**/api/search-answer-profiles**", async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname.includes("deleted-profile")) profileRequests.push(pathname);
+      if (pathname.endsWith("/query-suggestions") || pathname.endsWith("/approved-faq/suggest")) {
+        await route.fulfill({ json: apiEnvelope({ suggestions: [] }) });
+        return;
+      }
+      await route.fulfill({
+        json: apiEnvelope({
+          items: [
+            {
+              id: "profile-a",
+              name: "プロファイル A",
+              description: null,
+              status: "ACTIVE",
+              knowledge_base_count: 1,
+              created_at: "2026-10-01T00:00:00Z",
+              updated_at: "2026-10-01T00:00:00Z",
+              archived_at: null,
+            },
+          ],
+          total: 1,
+          limit: 50,
+          offset: 0,
+          has_next: false,
+        }),
+      });
+    });
+
+    await page.goto("/history/run-2");
+    await page.getByTestId("run-history-open-search").click();
+
+    await expect(page).toHaveURL(/\/search$/);
+    await expect(page.locator("#search-query")).toHaveValue(question);
+    const notice = page.getByTestId("search-prefill-profile-unavailable");
+    await expect(notice).toHaveText("元の検索・回答プロファイルは使えません。選び直してください。");
+    // 別の検索・回答プロファイルへ黙って切り替えない。
+    await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).not.toContainText("プロファイル A");
+    // 使えない検索・回答プロファイルの API は呼ばない。
+    expect(profileRequests).toEqual([]);
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath("search-profile-unavailable.png"), fullPage: true });
+
+    // 選び直すと案内を消す。
+    await page.getByRole("button", { name: /検索・回答プロファイル/ }).click();
+    await page.getByRole("option", { name: /プロファイル A/ }).click();
+    await expect(notice).toHaveCount(0);
+    await expect(page.locator("#search-query")).toHaveValue(question);
   });
 });
 
