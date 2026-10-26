@@ -48,7 +48,7 @@ XML ツリー JSON(`.json`)は、文書解析の既定か処理レシピの使�
 取込を始める前に止めて、処理レシピで Unstructured(または Office→PDF)を選ぶよう案内する(自動では振り分けない)。
 Unstructured の解析サービスは既定では配備しない。形式ごとの取り込み方は [docs/deployment.md](./docs/deployment.md) の
 「既定の解析エンジン（Docling）で扱える形式と、それ以外の形式の取り込み方」を参照。
-GPU の OCR(mineru / dots_ocr)は外部で運用する API を「取込・検索・回答設定 › 文書解析」で指定する。
+GPU の OCR(dots_ocr)は外部で運用する API を「取込・検索・回答設定 › 文書解析」で指定する。MinerU(mineru)は準備中(ロードマップ。下の「ロードマップ」)。
 
 **MinerU のライセンス(#3359)**: MinerU は「MinerU Open Source License」(Apache-2.0 に追加の条件)で提供される。主な条件は次のとおり。
 **利用の前に、ライセンスの全文([LICENSE.md](https://github.com/opendatalab/MinerU/blob/master/LICENSE.md)。公式のリポジトリは
@@ -58,8 +58,8 @@ GPU の OCR(mineru / dots_ocr)は外部で運用する API を「取込・検索
 2. MinerU を使って第三者にオンラインサービスを提供するときは、サービスの画面か公開の文書の目立つ所に MinerU を使っていることを明示する。
 3. 1・2 を満たさないと、ライセンスは通知なしに自動で終わる。旧モデルの `MinerU2.5-2509-1.2B` は AGPL-3.0 なので、`MinerU2.5-Pro-2605-1.2B`(Apache-2.0)を使う。
 
-システム管理者(system_admin)が「文書解析」の画面で「MinerU のライセンスの条件を確認した」を確かめて保存するまで、MinerU は使用エンジンにも
-処理レシピにも選べない(backend も拒否する)。確認・取り消しは system_admin だけができ、環境変数・`.env` では書けない。公式の remote 解析(mineru.net)は使わず、自前の API サーバーでは `mineru telemetry disable` で利用状況の送信を止める
+MinerU が準備中でなくなったら、システム管理者(system_admin)が「文書解析」の画面で「MinerU のライセンスの条件を確認した」を確かめて保存するまで、
+MinerU は使用エンジンにも処理レシピにも選べない(backend も拒否する。仕組みは実装済み)。確認・取り消しは system_admin だけができ、環境変数・`.env` では書けない。公式の remote 解析(mineru.net)は使わず、自前の API サーバーでは `mineru telemetry disable` で利用状況の送信を止める
 (詳細は [docs/deployment.md](./docs/deployment.md) の「許可（ライセンス）の確認」)。
 Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 詳細は [services/parsers/README.md](./services/parsers/README.md) と
@@ -103,11 +103,12 @@ RAG は専用の Compute 1 台に NL2SQL / Agent と同じネイティブ配備�
 
 ## ロードマップ
 
-準備中の機能は、画面に灰色の「準備中（ロードマップ）」で出し、選択・起動・配備はできません（#3374）。
+準備中の機能は、画面に灰色の「準備中（ロードマップ）」で出し、選択・起動・配備はできません（#3374・#3359）。
 
 | 機能 | 状態 | 今の扱い |
 |---|---|---|
 | OCI Document Understanding の解析（`oci_document_understanding`・サービス `parser-oci-document-understanding`） | 準備中（ロードマップ） | 「取込・検索・回答設定 › 文書解析」の使用エンジンと処理レシピの「文書解析」では選べず、API・`RAG_PARSER_ADAPTER_BACKEND` で選ぶと検証のエラーになります。「運用設定 › サービス管理」では起動できず、Terraform の stack・`rag/init_script.sh`・`scripts/rag-services.sh` も配備しません（既存の Compute の unit は再配備で止めて消します）。実装（`services/parsers/oci_document_understanding`・client）は今後の版のために残しています |
+| MinerU の解析（`mineru`。外部で運用する MinerU 4.x の V1 API） | 準備中（ロードマップ） | 「取込・検索・回答設定 › 文書解析」の使用エンジン（Dots.OCR の次、OCI Document Understanding の前）と処理レシピの「文書解析」では選べず、API・`RAG_PARSER_ADAPTER_BACKEND`・処理レシピの保存で選ぶと検証のエラーになります。保存済みの値は既定（全体は Docling、レシピは全体の継承）に寄せ、取込では呼びません。外部接続の欄も出しません。ライセンスは「MinerU Open Source License」（Apache-2.0 に追加の条件。企業の規模による別途の商用ライセンス・オンラインサービスでの利用の明示・満たさないと自動で終わる。旧モデル `MinerU2.5-2509-1.2B` は AGPL-3.0）で、画面のカードの下にも短い案内と [公式のリポジトリ](https://github.com/opendatalab/MinerU)・[LICENSE.md](https://github.com/opendatalab/MinerU/blob/master/LICENSE.md) へのリンクを出します（主な条件は上の「MinerU のライセンス」）。実装（`app/clients/external_parser.py` の HTTP の client、system_admin だけが確認できるライセンスの確認）は今後の版のために残しています |
 
 ## 外部の MCP クライアントから使う（Claude Code など）
 
