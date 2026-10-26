@@ -670,6 +670,78 @@ class AnswerGenerationTests(unittest.TestCase):
 
         self.assertEqual([image["image_id"] for image in images], ["body-picture"])
 
+    def test_answer_image_evidence_counts_pictures_known_only_by_their_ocr(self):
+        """OCR の entry は持ち主の図の画像として数え、図と OCR が両方あれば 1 回だけ（#3455）。"""
+
+        def ocr(page, bbox, text, **extra):
+            return {"image_id": f"ocr-{page}", "raw_type": "picture_ocr_text", "page": page, "bbox": bbox, "text_preview": text, **extra}
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for page in (1, 2):
+                path = root / "run123" / "pages" / f"page_{page:04d}.png"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"png")
+            ocr_only = replace(
+                _record("chunk-1", "docling", 1, 1, "操作の説明"),
+                source="manual.pdf",
+                source_run_id="run123",
+                chunk_id="chunk-1",
+                metadata={"image_evidence": [ocr(1, [10, 10, 50, 50], "OCR抽出テキスト: 保存 取消", picture_record_id="picture-1")]},
+            )
+            both = replace(
+                _record("chunk-2", "docling", 2, 1, "操作の説明"),
+                source="manual.pdf",
+                source_run_id="run123",
+                chunk_id="chunk-2",
+                metadata={
+                    "image_evidence": [
+                        {"image_id": "picture-2", "raw_type": "picture", "page": 2, "bbox": [10, 10, 50, 50]},
+                        ocr(2, [10.4, 10, 50, 50], "OCR抽出テキスト: 印刷"),
+                        ocr(2, [60, 60, 90, 90], "OCR抽出テキスト: 社章", visual_role="decorative", rag_excluded=True),
+                        {"image_id": "ocr-unplaced", "raw_type": "picture_ocr_text", "page": 2, "text_preview": "位置の無い OCR"},
+                    ]
+                },
+            )
+
+            images = answer_image_evidence([ocr_only, both], root, question="保存の操作は？")
+
+        self.assertEqual([image["image_id"] for image in images], ["picture-1", "picture-2"])
+        self.assertEqual([image["raw_type"] for image in images], ["picture", "picture"])
+        self.assertEqual(images[0]["prompt_path"], str(root / "run123" / "pages" / "page_0001.png"))
+        self.assertEqual(images[0]["bbox"], [10, 10, 50, 50])
+        # OCR の文字が図の関連度に入り、質問の語を含む図が先に並ぶ。
+        self.assertGreater(images[0]["selection_score"], images[1]["selection_score"])
+
+    def test_answer_image_evidence_keeps_the_attachment_budget_for_ocr_only_pictures(self):
+        """OCR だけの図も上限（MAX_ANSWER_IMAGE_ATTACHMENTS=4）と根拠の順を守る（#3455）。"""
+        records = [
+            replace(
+                _record(f"chunk-{index}", "docling", index, 1, "操作の説明"),
+                source="manual.pdf",
+                source_run_id="run123",
+                chunk_id=f"chunk-{index}",
+                metadata={
+                    "image_evidence": [
+                        {
+                            "image_id": f"ocr-{index}",
+                            "raw_type": "picture_ocr_text",
+                            "picture_record_id": f"picture-{index}",
+                            "page": index,
+                            "bbox": [10, 10, 50, 50],
+                            "text_preview": "OCR抽出テキスト: 保存",
+                        }
+                    ]
+                },
+            )
+            for index in range(1, 6)
+        ]
+
+        with TemporaryDirectory() as tmp:
+            images = answer_image_evidence(records, tmp)
+
+        self.assertEqual([image["image_id"] for image in images], ["picture-1", "picture-2", "picture-3", "picture-4"])
+
     def test_answer_generation_uses_multimodal_parser_when_image_asset_exists(self):
         with TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
@@ -798,6 +870,75 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertIn("text answer", result.answer)
         text_parser.assert_called_once()
         multimodal.assert_not_called()
+
+    def test_answer_generation_attaches_ocr_only_picture_only_for_image_answer_model(self):
+        """OCR だけの図の chunk も、画像を読める回答のモデルには図を添付し、テキストのモデルには添付しない（#3455）。"""
+        for name, environ, expected_mode in (
+            (
+                "image_model",
+                {"OCI_ENTERPRISE_AI_DEFAULT_MODEL": "answer-model", "OCI_ENTERPRISE_AI_DEFAULT_MODEL_VISION": "1"},
+                "vision_attachments",
+            ),
+            ("text_model", {"OCI_ENTERPRISE_AI_DEFAULT_MODEL": "text-model"}, "text_only"),
+        ):
+            with self.subTest(name), TemporaryDirectory() as tmp:
+                output_dir = Path(tmp)
+                page_image = output_dir / "abcdef" / "pages" / "page_0001.png"
+                page_image.parent.mkdir(parents=True)
+                page_image.write_bytes(b"png")
+                settings = replace(
+                    get_settings(environ={**environ, "OCI_ENTERPRISE_AI_VLM_MODEL": "vision-model"}, dotenv_path=None),
+                    output_dir=output_dir,
+                )
+                chunk = _stored_child(
+                    "chunk-docling-c000001",
+                    1,
+                    "OCR抽出テキスト:\n倉庫連携 保存",
+                    metadata={
+                        "active": True,
+                        "image_evidence": [
+                            {
+                                "image_id": "picture-1-ocr",
+                                "raw_type": "picture_ocr_text",
+                                "picture_record_id": "picture-1",
+                                "source_run_id": "abcdef",
+                                "page": 1,
+                                "bbox": [10, 10, 50, 50],
+                                "text_preview": "OCR抽出テキスト: 倉庫連携 保存",
+                            }
+                        ],
+                    },
+                )
+
+                with (
+                    patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", return_value=_chunk_run_stub()),
+                    patch("rag_engine.generation.answering.check_adb_hybrid_search_ready"),
+                    patch("rag_engine.generation.answering.search_adb_hybrid_chunks", return_value=_hybrid_result(chunk)),
+                    patch(
+                        "rag_engine.generation.answering.parse_multimodal_response",
+                        return_value=_answer_output(answer="vision answer"),
+                    ) as multimodal,
+                    patch(
+                        "rag_engine.generation.answering.parse_text_response",
+                        return_value=_answer_output(answer="text answer"),
+                    ),
+                ):
+                    result = answer_question_result(
+                        "倉庫連携の説明は？",
+                        "abcdef",
+                        ["docling"],
+                        settings,
+                        query_strategy=SIMPLE_RETRIEVAL_LABEL,
+                        answer_flow=STANDARD_ANSWER_FLOW_LABEL,
+                    )
+
+                self.assertEqual(result.image_prompt_mode, expected_mode)
+                if expected_mode == "vision_attachments":
+                    self.assertEqual([image["image_id"] for image in result.image_evidence], ["picture-1"])
+                    self.assertEqual(multimodal.call_args.args[2], [str(page_image)])
+                else:
+                    self.assertEqual(result.image_evidence, ())
+                    multimodal.assert_not_called()
 
     def test_format_answer_response_extracts_json_answer(self):
         raw = json.dumps(

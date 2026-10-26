@@ -21,6 +21,7 @@ from rag_engine.generation.answer_models import (
     query_strategy_label,
     retrieval_scope_label,
 )
+from rag_engine.parsing.picture_text import fold_picture_ocr_entries
 from rag_engine.retrieval.context_builder import ContextParentEvidence, record_context_key
 
 
@@ -199,7 +200,8 @@ def _metadata_image_evidence(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     images: list[dict[str, Any]] = []
     raw_images = metadata.get("image_evidence")
     if isinstance(raw_images, list):
-        images.extend(dict(raw) for raw in raw_images if isinstance(raw, dict) and str(raw.get("raw_type") or "") != "picture_ocr_text")
+        # 図の中の文字（OCR）の entry は持ち主の図にまとめる（同じ図を 2 回数えず、OCR だけの図も数える。#3455）。
+        images.extend(fold_picture_ocr_entries([raw for raw in raw_images if isinstance(raw, dict)]))
 
     table_context = metadata.get("table_context")
     if not isinstance(table_context, list):
@@ -211,11 +213,7 @@ def _metadata_image_evidence(metadata: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(raw_visuals, list):
             continue
         table_id = str(table.get("table_id") or table.get("record_id") or "")
-        for raw in raw_visuals:
-            if not isinstance(raw, dict):
-                continue
-            if str(raw.get("raw_type") or "") == "picture_ocr_text":
-                continue
+        for raw in fold_picture_ocr_entries([raw for raw in raw_visuals if isinstance(raw, dict)]):
             image = dict(raw)
             image.setdefault("image_id", str(raw.get("record_id") or ""))
             image.setdefault("page", table.get("page"))

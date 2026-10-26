@@ -890,6 +890,8 @@ def _adapter_records(
                         "Picture",
                         format_docling_picture_ocr_text(element.text),
                         raw_type="picture_ocr_text",
+                        # 持ち主の図(分割が図の画像に結び付ける。#3455)。
+                        raw={"source_picture_ref": record_id},
                     )
                 )
     for index, asset in enumerate(extraction.assets):
@@ -941,6 +943,7 @@ def _record(
     text: str,
     *,
     raw_type: str | None = None,
+    raw: dict[str, Any] | None = None,
 ) -> LayoutRecord:
     return LayoutRecord(
         id=record_id,
@@ -954,6 +957,7 @@ def _record(
         category=category,
         text=text,
         raw_type=raw_type or category.casefold(),
+        raw=dict(raw or {}),
     )
 
 

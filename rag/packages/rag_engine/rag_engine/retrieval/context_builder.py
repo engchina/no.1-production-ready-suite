@@ -15,6 +15,7 @@ from rag_engine.parsing.decorative_pictures import (
     INLINE_ICON_VISUAL_ROLE,
     visual_role_from_ref,
 )
+from rag_engine.parsing.picture_text import fold_picture_ocr_entries
 from rag_engine.retrieval.article_catalog import is_added_catalog_article, is_catalog_article
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.entity_expansion import is_reserved_entity_expansion
@@ -908,9 +909,10 @@ def record_has_image_evidence(record: Any) -> bool:
 
 
 def _iter_image_evidence_refs(metadata: dict[str, Any]):
+    # 図の中の文字（OCR）の entry は持ち主の図にまとめて数える（#3455）。
     raw_images = metadata.get("image_evidence")
     if isinstance(raw_images, list):
-        for raw in raw_images:
+        for raw in fold_picture_ocr_entries([raw for raw in raw_images if isinstance(raw, dict)]):
             if _is_usable_image_ref(raw):
                 yield raw
 
@@ -923,7 +925,7 @@ def _iter_image_evidence_refs(metadata: dict[str, Any]):
         raw_visuals = table.get("visual_evidence")
         if not isinstance(raw_visuals, list):
             continue
-        for raw in raw_visuals:
+        for raw in fold_picture_ocr_entries([raw for raw in raw_visuals if isinstance(raw, dict)]):
             if _is_usable_image_ref(raw):
                 yield raw
 
