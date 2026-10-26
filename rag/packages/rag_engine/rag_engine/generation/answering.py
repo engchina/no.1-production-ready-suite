@@ -4563,7 +4563,7 @@ def answer_question_result(
             elif not reads_images:
                 image_step.result("回答モデルが画像を読めないため、画像は添付しません（図の内容は取り込み時に作った文字の説明で読みます）")
             elif not attached:
-                image_step.result("根拠の画像のファイルが無いため、画像は添付しません（図の内容は取り込み時に作った文字の説明で読みます）")
+                image_step.result("添付できる画像のファイルが無いため、画像は添付しません（図の内容は取り込み時に作った文字の説明で読みます）")
             else:
                 image_step.result(f"画像 {len(attached)} 件を添付して回答します")
                 image_step.add(
