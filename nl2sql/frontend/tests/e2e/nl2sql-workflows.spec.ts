@@ -3927,9 +3927,18 @@ test("最後のプロファイル削除後は作成案内を表示して検索�
   await expect(workspace.getByRole("button", { name: "SQL プレビュー" })).toHaveCount(0);
   await expect(workspace.getByRole("button", { name: "質問を解釈" })).toHaveCount(0);
   await expect(workspace.getByRole("button", { name: "SQL を生成して実行" })).toBeDisabled();
+  // 業務プロファイルが無い間、スキーマ参照は読み込み中にせず未選択の案内を出す（#3413）。
+  const schema = page.getByTestId("nl2sql-schema-reference");
+  await expect(schema.getByTestId("nl2sql-schema-profile-unselected")).toContainText(
+    "業務プロファイルを選ぶと、使える表と列を表示します。"
+  );
+  await expect(schema.getByTestId("schema-reference-loading")).toHaveCount(0);
+  await expect(schema.getByRole("searchbox", { name: "表・項目検索" })).toBeDisabled();
+  await expect(schema.getByText("スキーマ未取得です", { exact: false })).toHaveCount(0);
 
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoHorizontalScroll(page);
+  await expect(schema.getByTestId("nl2sql-schema-profile-unselected")).toBeVisible();
   await page.getByRole("button", { name: "業務プロファイルを作成" }).click();
   await expect(page).toHaveURL(/\/profiles\?profile=new$/);
 });
@@ -9709,11 +9718,41 @@ for (const listed of ["complete", "paged"] as const) {
     await expectNoHorizontalScroll(page);
     await page.screenshot({ path: testInfo.outputPath(`query-profile-unavailable-${listed}.png`), fullPage: true });
 
+    // 業務プロファイルが未選択の間、スキーマ参照は読み込み中にせず、選ぶと表と列を出すと案内する（#3413）。
+    const schema = page.getByTestId("nl2sql-schema-reference");
+    const schemaIdle = schema.getByTestId("nl2sql-schema-profile-unselected");
+    await expect(schemaIdle).toContainText("業務プロファイルを選んでください");
+    await expect(schemaIdle).toContainText("業務プロファイルを選ぶと、使える表と列を表示します。");
+    await expect(schema.getByTestId("schema-reference-loading")).toHaveCount(0);
+    await expect(schema.getByRole("searchbox", { name: "表・項目検索" })).toBeDisabled();
+    await expect(schema.getByTestId("nl2sql-schema-table-item")).toHaveCount(0);
+    await expect(schema.getByText("全 0 件")).toHaveCount(0);
+    await expect(page.getByTestId("nl2sql-schema-toolbar")).toBeVisible();
+    await schema.screenshot({ path: testInfo.outputPath(`query-schema-profile-unselected-${listed}.png`) });
+    // 「最新情報を取得」は押せ、業務プロファイルで絞らないスキーマの一覧を取りに行かない。
+    const unscopedSchemaRequests: string[] = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/schema/objects" && !url.searchParams.has("profile_id")) {
+        unscopedSchemaRequests.push(request.url());
+      }
+    });
+    const refresh = page.getByRole("button", { name: "最新情報を取得", exact: true });
+    await expect(refresh).toBeEnabled();
+    await refresh.click();
+    await expect(page.getByText("最新の状態に更新しました。")).toBeVisible();
+    await expect(schemaIdle).toBeVisible();
+    expect(unscopedSchemaRequests).toEqual([]);
+
     // 選び直すと案内を消し、質問は選んだ業務プロファイルへ引き継ぐ。
     await chooseSelectFieldOption(page.locator("#nl2sql-profile-select"), "default");
     await expect(notice).toHaveCount(0);
     await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "default");
     await expect(nl2sqlQuestionInput(page)).toHaveValue(question);
+    // 選んだ業務プロファイルの表を読み込み、未選択の案内を消す。
+    await expect(schemaIdle).toHaveCount(0);
+    await expect(schema.getByTestId("nl2sql-schema-table-item").first()).toBeVisible();
+    await expect(schema.getByRole("searchbox", { name: "表・項目検索" })).toBeEnabled();
   });
 }
 

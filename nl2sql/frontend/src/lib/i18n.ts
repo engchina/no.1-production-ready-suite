@@ -1409,6 +1409,8 @@ const nl2sqlJa = {
   "nl2sql.schema.scoped": "プロファイル「{name}」の対象表（{count} 件）を表示しています。",
   "nl2sql.schema.insertHint": "クリックで項目を挿入",
   "nl2sql.schema.emptyCatalog": "スキーマ未取得です。「スキーマを更新」で最新の表・列を取得してください。",
+  "nl2sql.schema.profileUnselected.title": "業務プロファイルを選んでください",
+  "nl2sql.schema.profileUnselected.hint": "業務プロファイルを選ぶと、使える表と列を表示します。",
   "nl2sql.schema.refresh": "スキーマを更新",
   "nl2sql.schema.toggleTable": "{name} を開閉",
   "nl2sql.schema.toggleColumn": "{name} を選択",
