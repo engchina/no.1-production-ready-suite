@@ -1,4 +1,4 @@
-"""実行のモデルの利用量の集計（`model_usage`。#3419・#3543）のテスト。
+"""実行のモデルの利用量の集計（`model_usage`。#3419・#3543・#3552）のテスト。
 
 本物の `operation_trace` の span の知らせから集める。モデルは呼ばない（usage は合成の値）。
 製品の経路（RAG の回答エンジン・NL2SQL のジョブ）を通した確認は各製品のテストにある。
@@ -13,6 +13,8 @@ from pr_backend_core.observability.model_usage import (
     UNMEASURED_SOURCE_ATTRIBUTE,
     ModelUsageCollector,
     RunModelUsage,
+    add_run_usage,
+    collect_model_usage,
     parse_run_usage,
     run_usage_summary_fields,
     run_usage_totals,
@@ -146,3 +148,101 @@ def test_run_usage_totals(
 def test_parse_run_usage(value: object, expected: int | None) -> None:
     usage = parse_run_usage(value)
     assert (usage.requests if usage is not None else None) == expected
+
+
+def test_collect_model_usage_works_outside_and_inside_an_operation_trace() -> None:
+    """実行の trace の外でも集め、記録の中なら記録の listener にも今どおり知らせる（#3552）。"""
+    with collect_model_usage() as outside:
+        _llm_call("model-a", {"input_tokens": 30, "output_tokens": 4})
+    assert outside.summary() == RunModelUsage(
+        models=["model-a"],
+        requests=1,
+        input_tokens=30,
+        output_tokens=4,
+        total_tokens=34,
+        measurement="complete",
+        measured_requests=1,
+    )
+
+    run = ModelUsageCollector()
+    with operation_trace("run", operation_id="usage-observe", listener=run.observe):
+        _llm_call("model-a", {"input_tokens": 1, "output_tokens": 1})
+        with collect_model_usage() as inside:
+            _llm_call("model-b", {"input_tokens": 10, "output_tokens": 2})
+    inner = inside.summary()
+    outer = run.summary()
+    assert inner is not None and (inner.models, inner.total_tokens) == (["model-b"], 12)
+    assert outer is not None and (outer.requests, outer.total_tokens) == (2, 14)
+
+    with collect_model_usage() as idle, observed_span("stage"):
+        pass
+    # モデルを呼ばなければ足すものが無い（None）。
+    assert idle.summary() is None
+
+
+def test_add_run_usage_sums_two_requests_of_one_run() -> None:
+    """同じ実行の別の要求の利用量を足す（モデル・出どころは先の側の順。#3552）。"""
+    job = RunModelUsage(
+        models=["model-a"],
+        requests=1,
+        input_tokens=100,
+        output_tokens=20,
+        total_tokens=120,
+        cached_input_tokens=40,
+        measured_requests=1,
+    )
+    confirmation = RunModelUsage(
+        models=["model-b", "model-a"],
+        requests=2,
+        input_tokens=50,
+        output_tokens=10,
+        total_tokens=60,
+        reasoning_output_tokens=5,
+        measured_requests=2,
+    )
+
+    assert add_run_usage(job, confirmation) == RunModelUsage(
+        models=["model-a", "model-b"],
+        requests=3,
+        input_tokens=150,
+        output_tokens=30,
+        total_tokens=180,
+        cached_input_tokens=40,
+        reasoning_output_tokens=5,
+        measurement="complete",
+        measured_requests=3,
+    )
+    assert add_run_usage(None, confirmation) == confirmation
+    assert add_run_usage(job, None) == job
+    assert add_run_usage(None, None) is None
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "expected"),
+    [
+        ("complete", "partial", "partial"),
+        ("partial", "complete", "partial"),
+        # 計測できない呼び出しだけの実行に、計測した呼び出しを足すと一部計測。
+        ("unmeasured", "complete", "partial"),
+        ("unmeasured", "unmeasured", "unmeasured"),
+    ],
+    ids=["complete+partial", "partial+complete", "unmeasured+complete", "unmeasured+unmeasured"],
+)
+def test_add_run_usage_measurement(left: str, right: str, expected: str) -> None:
+    def usage(measurement: str) -> RunModelUsage:
+        if measurement == "unmeasured":
+            return RunModelUsage(measurement="unmeasured", unmeasured_sources=["select_ai"])
+        return RunModelUsage.model_validate(
+            {
+                "requests": 1,
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "total_tokens": 2,
+                "measurement": measurement,
+                "measured_requests": 1 if measurement == "complete" else 0,
+            }
+        )
+
+    total = add_run_usage(usage(left), usage(right))
+    assert total is not None and total.measurement == expected
+    assert total.unmeasured_sources == (["select_ai"] if "unmeasured" in (left, right) else [])

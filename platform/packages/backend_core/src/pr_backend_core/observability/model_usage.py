@@ -19,16 +19,21 @@ span の知らせ（`SpanUpdate`）だけで、別の計測は持たない。数
   （画面は「未計測」）。
 
 別の trace（比較の列・MCP の呼び出し元の業務 Agent）の利用量は混ざらない。
+
+実行の trace の外で呼んだモデルの利用量（NL2SQL の回答前の確認の要求。#3552）は
+`collect_model_usage` で同じ規則で集め、`add_run_usage` で実行の利用量に足す。
 """
 
 from __future__ import annotations
 
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from .tracing import SpanUpdate
+from .tracing import SpanUpdate, observe_spans
 
 LLM_CALL_SPAN = "gen_ai.chat"
 # アプリが利用量を受け取れないモデルの呼び出しを含む span の属性（値は出どころの名前。例: Select AI
@@ -188,6 +193,66 @@ class ModelUsageCollector:
         )
 
 
+@contextmanager
+def collect_model_usage() -> Iterator[ModelUsageCollector]:
+    """範囲の中のモデルの呼び出しを集める（実行の trace の外の要求でも使える。#3552）。
+
+    `operation_trace` の記録とは別に span の知らせを受ける（記録の中なら、記録の listener にも
+    今どおり知らせる）。範囲を出た後に `summary()` で読む。モデルを呼ばなければ None。
+    """
+    collector = ModelUsageCollector()
+    with observe_spans(collector.observe):
+        yield collector
+
+
+def _sum_optional(left: int | None, right: int | None) -> int | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return left + right
+
+
+def add_run_usage(total: RunModelUsage | None, usage: RunModelUsage | None) -> RunModelUsage | None:
+    """2 つの利用量の和（同じ実行の別の要求の呼び出しを足す。#3552）。
+
+    None（記録の無い側）は足すものが無いとして、もう一方をそのまま返す。モデル・計測できない
+    呼び出しの出どころは `total` の順を先にする。計測の状態は `ModelUsageCollector` と同じ規則:
+    計測できない呼び出しだけなら未計測、どちらかが一部計測・未計測なら一部計測。
+    """
+    if total is None or usage is None:
+        return total if usage is None else usage
+    models = [*total.models, *(model for model in usage.models if model not in total.models)]
+    unmeasured = [
+        *total.unmeasured_sources,
+        *(source for source in usage.unmeasured_sources if source not in total.unmeasured_sources),
+    ]
+    requests = total.requests + usage.requests
+    measurement: UsageMeasurement
+    if unmeasured and not requests:
+        measurement = "unmeasured"
+    elif total.measurement != "complete" or usage.measurement != "complete":
+        measurement = "partial"
+    else:
+        measurement = "complete"
+    input_tokens = total.input_tokens + usage.input_tokens
+    output_tokens = total.output_tokens + usage.output_tokens
+    return RunModelUsage(
+        models=models,
+        requests=requests,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+        cached_input_tokens=_sum_optional(total.cached_input_tokens, usage.cached_input_tokens),
+        reasoning_output_tokens=_sum_optional(
+            total.reasoning_output_tokens, usage.reasoning_output_tokens
+        ),
+        measurement=measurement,
+        measured_requests=total.measured_requests + usage.measured_requests,
+        unmeasured_sources=unmeasured,
+    )
+
+
 def parse_run_usage(value: object) -> RunModelUsage | None:
     """保存した利用量を読む。無い・形の違う記録（この機能より前の実行）は None（未計測）。"""
     if not isinstance(value, dict):
@@ -235,6 +300,8 @@ __all__ = [
     "ModelUsageCollector",
     "RunModelUsage",
     "UsageMeasurement",
+    "add_run_usage",
+    "collect_model_usage",
     "parse_run_usage",
     "run_usage_summary_fields",
     "run_usage_totals",
