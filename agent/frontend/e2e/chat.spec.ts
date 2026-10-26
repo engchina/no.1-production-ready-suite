@@ -456,6 +456,8 @@ test("実行に失敗した回答は理由を出す", async ({ page, mockApi }) 
   await expect(failure.locator("details")).toHaveAttribute("open", "");
   await expect(failure.locator("details")).toContainText("runtime.model_failed");
   await expect(failure.locator("details")).toContainText("run-chat-seed");
+  // 回答の本文の無い失敗の枠には見出し「回答」を出さない（#3433）。
+  await expect(turn.getByTestId("chat-answer-heading")).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 });
 

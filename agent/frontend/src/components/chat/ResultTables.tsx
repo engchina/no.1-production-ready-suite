@@ -139,7 +139,7 @@ export function AnswerBody({
 }: {
   text: string;
   /** 本文の最上位の見出しの段（置く場所の見出しの下。既定 3）。 */
-  headingLevel?: 2 | 3;
+  headingLevel?: 2 | 3 | 4;
   className?: string;
   testId?: string;
 }) {

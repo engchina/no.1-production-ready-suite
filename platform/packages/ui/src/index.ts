@@ -344,6 +344,15 @@ export {
   type AnswerSectionsLabels,
   type AnswerSectionsProps,
 } from "./components/chat/answer-sections";
+// 回答の見出しと、チャットの回答の本文の見出し「回答」（3 製品共通。#3433）
+export {
+  AnswerHeading,
+  ChatAnswerBody,
+  DEFAULT_CHAT_ANSWER_BODY_LABELS,
+  type AnswerHeadingProps,
+  type ChatAnswerBodyLabels,
+  type ChatAnswerBodyProps,
+} from "./components/chat/answer-heading";
 // 回答の段落の印・外した段落・回答全体の注意（RAG・Agent 共通。#2738）
 export {
   ANSWER_PASSAGE_STATE_ICON,

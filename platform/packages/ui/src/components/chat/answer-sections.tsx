@@ -6,6 +6,7 @@ import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { TEXT_ICON_SIZE } from "../ui/text-icon";
 import { Tooltip } from "../ui/tooltip";
+import { AnswerHeading } from "./answer-heading";
 import {
   ANSWER_PASSAGE_STATE_ICON,
   AnswerPassageMarked,
@@ -561,9 +562,10 @@ function AnswerSection({
   return (
     <section className="space-y-1.5 not-first:pt-2" data-testid={block.testId ?? "answer-section"}>
       {block.title ? (
-        <h4 className="text-sm font-semibold text-fg" lang={titleLang}>
+        // 節の見出しの書式はチャットの回答の見出し「回答」と同じ部品（#3433）。
+        <AnswerHeading level={4} lang={titleLang}>
           {block.title}
-        </h4>
+        </AnswerHeading>
       ) : null}
       {block.ordered ? (
         <ol id={listId} className="list-decimal space-y-1.5 pl-5">
