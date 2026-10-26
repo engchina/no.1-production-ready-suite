@@ -348,8 +348,12 @@ export interface RunHistoryItem {
   startedAt: string;
   /** 所要時間（ミリ秒）。実行中・記録なしは null。 */
   durationMs?: number | null;
-  /** 利用量（token の数・費用の表記）。記録が無い製品は渡さない。 */
-  usage?: { tokens?: number | null; cost?: string | null } | null;
+  /**
+   * 利用量（token の数・費用の表記）。記録が無い製品は渡さない。`note` は計測の状態の注記（「一部計測」「未計測」など。
+   * 翻訳済み）で、詳細の概要（`RunSummary` の `usage.note`）と同じ規則で出す: 数があれば数の下に、無ければ注記だけ
+   * （不明を 0 と出さない。#3419・#3466）。
+   */
+  usage?: { tokens?: number | null; note?: string | null; cost?: string | null } | null;
 }
 
 /** 一覧の文言。製品の i18n で上書きできる（部分で渡す）。 */
@@ -581,10 +585,17 @@ export function RunHistoryTable<T>({
       headerClassName: WIDE_ONLY,
       render: (row) => {
         const usage = toItem(row).usage;
-        if (!usage || (usage.tokens == null && !usage.cost)) return labels.notRecorded;
+        if (!usage || (usage.tokens == null && !usage.cost && !usage.note)) return labels.notRecorded;
+        // 数の無い実行（未計測など）は注記だけを 1 行で出す（「—」と注記を重ねない）。
+        if (usage.tokens == null && !usage.cost) return <span data-run-usage-note="">{usage.note}</span>;
         return (
           <span className="grid justify-items-end">
             <span>{formatRunTokens(usage.tokens, labels.notRecorded)}</span>
+            {usage.note ? (
+              <span className="text-xs" data-run-usage-note="">
+                {usage.note}
+              </span>
+            ) : null}
             {usage.cost ? <span className="text-xs">{usage.cost}</span> : null}
           </span>
         );

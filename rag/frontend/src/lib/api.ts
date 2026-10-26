@@ -4789,6 +4789,12 @@ export interface RunSummary {
   executed_by_me: boolean;
   /** 実行した利用者（実行者）の表示名。見る人を問わず返る（引けない利用者は空文字。#1954）。 */
   executor_display_name: string;
+  /**
+   * モデルの利用量の合計（入力 + 出力の token）と計測の状態（#3466。一覧の「token」の列）。利用量の記録の無い実行は
+   * どちらも null（「未計測」。0 にしない）、LLM を呼ばなかった実行は 0 と complete。古い backend は返さない。
+   */
+  total_tokens?: number | null;
+  usage_measurement?: RunModelUsage["measurement"] | null;
 }
 
 export interface RunFeedback {

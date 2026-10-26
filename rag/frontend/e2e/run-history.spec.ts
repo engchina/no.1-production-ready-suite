@@ -250,7 +250,12 @@ async function mockRuns(page: Page, rows: RunRow[], { gated = false } = {}) {
     const offset = Number(url.searchParams.get("offset") ?? 0);
     await route.fulfill({
       json: apiEnvelope({
-        items: matched.slice(offset, offset + limit),
+        // 一覧の行は利用量の全体ではなく、合計の token と計測の状態だけ（backend の JSON_VALUE と同じ。#3466）。
+        items: matched.slice(offset, offset + limit).map(({ usage, ...item }) => ({
+          ...item,
+          total_tokens: usage ? usage.total_tokens : null,
+          usage_measurement: usage ? usage.measurement : null,
+        })),
         total: matched.length,
         limit,
         offset,
@@ -812,6 +817,67 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(summary).not.toContainText("既定のテキストモデル");
     await expect(fact("tokens")).toHaveText("未計測");
     await expect(fact("modelCalls")).toHaveText("未計測");
+  });
+
+  test("一覧: token の列に合計の token を右寄せ・桁区切りで出し、不明は未計測・一部計測と出す。375px は列を出さない（Issue 3466）", async ({
+    page,
+  }, testInfo) => {
+    await mockLocalAuth(page);
+    const usage = {
+      models: ["model-a"],
+      requests: 4,
+      input_tokens: 1200000,
+      output_tokens: 34567,
+      total_tokens: 1234567,
+      cached_input_tokens: null,
+      reasoning_output_tokens: null,
+      measurement: "complete" as const,
+      measured_requests: 4,
+    };
+    await mockRuns(page, [
+      run(1, { usage }),
+      // 一部の呼び出しの利用量が無い実行。
+      run(2, { usage: { ...usage, total_tokens: 9000, measurement: "partial", measured_requests: 2 } }),
+      // LLM を呼ばなかった RAG 検索は実測の 0。
+      run(4, { usage: { ...usage, models: [], requests: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, measured_requests: 0 } }),
+      // この機能より前の記録は未計測（0 にしない）。
+      run(6),
+    ]);
+
+    await page.goto("/history");
+    const table = page.getByRole("table", { name: "実行履歴" });
+    await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
+    const header = table.getByRole("columnheader", { name: "token", exact: true });
+    const headers = await table.locator("thead th").allTextContents();
+    const usageIndex = headers.indexOf("token");
+    // 列の順は 3 製品で同じ: 所要時間 → token →（製品の列）。見出しは Agent と同じ「token」。
+    expect(usageIndex).toBe(headers.indexOf("所要時間") + 1);
+    expect(headers.indexOf("回答の対応")).toBeGreaterThan(usageIndex);
+    // 行の見出し（題名）は th、ほかは td。
+    const usageCell = (id: string) => page.getByTestId(`run-history-row-${id}`).locator(":scope > th, :scope > td").nth(usageIndex);
+
+    if (isNarrow(page)) {
+      // 375px: 題名と操作の 2 列にまとめ、token の列は出さない（詳細の概要で見る）。横にあふれない。
+      await expect(header).toBeHidden();
+      await expect(usageCell("run-1")).toBeHidden();
+      await expect(page.getByTestId("run-history-row-run-1").locator("[data-run-history-compact-meta]")).not.toContainText(
+        "token"
+      );
+    } else {
+      await expect(header).toBeVisible();
+      await expect(usageCell("run-1")).toHaveText("1,234,567 token");
+      await expect(usageCell("run-2")).toHaveText("9,000 token一部計測");
+      await expect(usageCell("run-2").locator("[data-run-usage-note]")).toHaveText("一部計測");
+      await expect(usageCell("run-4")).toHaveText("0 token");
+      await expect(usageCell("run-6")).toHaveText("未計測");
+      // 数は右寄せ・等幅数字（所要時間の列と同じ）。
+      for (const cell of [header, usageCell("run-1"), usageCell("run-6")]) {
+        await expect(cell).toHaveCSS("text-align", "right");
+      }
+      await expect(usageCell("run-1")).toHaveCSS("font-variant-numeric", "tabular-nums");
+    }
+    await expectNoPageOverflow(page);
+    await page.getByTestId("run-history").screenshot({ path: testInfo.outputPath("list-usage.png") });
   });
 
   test("詳細: 持ち主の会話で system_admin が実行した実行は、持ち主に実行者と会話の持ち主を出し、会話を開ける", async ({

@@ -82,6 +82,7 @@ import {
   runConversationOwner,
   runExecutorLabel,
   runExecutorParam,
+  runListUsage,
   runOutcomeView,
   runProfileLabel,
   runSearchHref,
@@ -159,6 +160,7 @@ function toItem(run: RunSummary): RunHistoryItem {
     executor: { name: runExecutorLabel(run), isSelf: run.executed_by_me },
     startedAt: runStartedAt(run),
     durationMs: run.elapsed_ms,
+    usage: runListUsage(run),
   };
 }
 
@@ -303,11 +305,17 @@ export function RunHistoryClient() {
               toItem={toItem}
               onOpen={open}
               showExecutor={showExecutor}
+              // 実行ごとのモデルの利用量（合計の token。#3466）。見出しは Agent と同じ「token」。
+              showUsage
               extraColumns={runExtraColumns()}
               selectedRunId={view.selected}
               // 件数が減って保存したページが範囲外になったら OffsetPagination が最後のページへ戻す。
               loading={items.length === 0}
-              labels={{ table: t("history.list.aria"), status: statusLabels }}
+              labels={{
+                table: t("history.list.aria"),
+                columns: { usage: t("history.col.usage") },
+                status: statusLabels,
+              }}
               testId="run-history"
             />
             <OffsetPagination
