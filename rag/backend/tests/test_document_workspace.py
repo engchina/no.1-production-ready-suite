@@ -1060,15 +1060,16 @@ def test_document_upload_keeps_ingestion_manual_until_explicit_enqueue() -> None
     assert job_detail.json()["data"]["attempt_count"] == 1
 
 
+@pytest.mark.usefixtures("mineru_selectable")
 def test_document_processing_config_is_used_by_ingestion_pipeline() -> None:
     """レシピの上書きは KB を介さず、取込の Settings へ渡る（#488。レシピの job と同じ合成）。"""
     settings, effective = documents_route._merge_document_processing_config(
-        DocumentProcessingConfig(parser_adapter_backend="dots_ocr", chunking_strategy="page_level")
+        DocumentProcessingConfig(parser_adapter_backend="mineru", chunking_strategy="page_level")
     )
 
-    assert settings.rag_parser_adapter_backend == "dots_ocr"
+    assert settings.rag_parser_adapter_backend == "mineru"
     assert settings.rag_chunking_strategy == "page_level"
-    assert effective.parser_adapter_backend == "dots_ocr"
+    assert effective.parser_adapter_backend == "mineru"
     assert effective.chunking_strategy == "page_level"
 
 
@@ -3000,6 +3001,7 @@ def test_ingestion_segments_progress_unit_for_persisted_office_segments(
     assert xlsx_resp.json()["data"][0]["progress_start"] == 3
 
 
+@pytest.mark.usefixtures("mineru_selectable")
 def test_ingestion_segments_fallback_uses_planned_parser_for_running_extract_job(
     fake_document_dependencies: FakeWorkspaceOracle,
     monkeypatch: pytest.MonkeyPatch,
@@ -3009,13 +3011,13 @@ def test_ingestion_segments_fallback_uses_planned_parser_for_running_extract_job
         documents_route,
         "get_settings",
         lambda: Settings(
-            rag_parser_adapter_backend="dots_ocr",
-            rag_parser_dots_ocr_enabled=True,
+            rag_parser_adapter_backend="mineru",
+            rag_parser_mineru_enabled=True,
         ),
     )
     document_id = _upload("scan.pdf", b"%PDF-1.7\nsample", "application/pdf")
     job = IngestionJob(
-        id="job-dots-ocr",
+        id="job-mineru",
         document_id=document_id,
         status=IngestionJobStatus.RUNNING,
         parser_profile="enterprise_ai_pdf_layout",
@@ -3030,17 +3032,18 @@ def test_ingestion_segments_fallback_uses_planned_parser_for_running_extract_job
     segments = resp.json()["data"]
     assert len(segments) == 1
     assert segments[0]["status"] == "RUNNING"
-    assert segments[0]["parser_backend"] == "dots_ocr"
-    assert segments[0]["parser_profile"] == "dots_ocr"
+    assert segments[0]["parser_backend"] == "mineru"
+    assert segments[0]["parser_profile"] == "mineru"
 
 
+@pytest.mark.usefixtures("mineru_selectable")
 def test_ingestion_segments_fallback_uses_document_parser_before_ingest(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
     """未取込表示は upload 時 profile ではなく文書の現行 parser 設定を使う。"""
     document_id = _upload("scan-before-ingest.pdf", b"%PDF-1.7\nsample", "application/pdf")
     fake_document_dependencies.processing_configs[document_id] = DocumentProcessingConfig(
-        parser_adapter_backend="dots_ocr"
+        parser_adapter_backend="mineru"
     )
 
     resp = client.get(f"/api/documents/{document_id}/ingestion-segments")
@@ -3049,8 +3052,8 @@ def test_ingestion_segments_fallback_uses_document_parser_before_ingest(
     segments = resp.json()["data"]
     assert len(segments) == 1
     assert segments[0]["status"] == "UPLOADED"
-    assert segments[0]["parser_backend"] == "dots_ocr"
-    assert segments[0]["parser_profile"] == "dots_ocr"
+    assert segments[0]["parser_backend"] == "mineru"
+    assert segments[0]["parser_profile"] == "mineru"
 
 
 def test_delete_document_removes_record_and_original_file(

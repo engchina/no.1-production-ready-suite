@@ -72,7 +72,14 @@ from pr_system_settings.model import (
 )
 from pr_system_settings.model import enterprise_ai_seed as enterprise_ai_seed
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    PrivateAttr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from rag_parser_core.sheet_records import ExcelOptions
 from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
@@ -107,6 +114,7 @@ ParserAdapterBackend = Literal[
     # XML ツリー JSON(tag / attr / children の木の JSON)を要素の階層のまま解析する(#2024)。
     # Docling・Unstructured と同じく、使用エンジンで選んだときだけ使う(#2042)。
     "xml_tree_json",
+    "mineru",
     "dots_ocr",
     # service 系 backend。oci_document_understanding は OCI Document Understanding の
     # 非同期 processor job で OCR/表抽出する(parser-oci-document-understanding へ委譲する)。
@@ -130,6 +138,9 @@ DEFAULT_PARSER_ADAPTER_BACKEND: Literal["docling"] = "docling"
 #   global の継承へ寄せる(画面・取込を壊さない)。取込の経路は選ばれていても呼ばずに止める
 #   (ingestion._partition_source)。
 ROADMAP_PARSER_ADAPTER_BACKENDS: dict[str, str] = {
+    # MinerU は外部の HTTP API の client とライセンスの確認(app.rag.mineru_license)を戻したうえで、
+    # 準備中にする(#3359。利用者の判断)。有効にするときはこの行を消す。
+    "mineru": "MinerU",
     "oci_document_understanding": "OCI Document Understanding",
 }
 
@@ -246,7 +257,7 @@ INGESTION_JOB_SUBPROCESS_TIMEOUT_MAX_SECONDS = 604800.0
 # 取込 job の停滞の時間の既定（秒。#2003）。進捗を出さない 1 回の呼び出し（再試行を含む）の最長
 # より長くする: 解析サービスは配備の unit の 1230 秒 × 5 回 + 待ち = 約 6170 秒（timeout も
 # 再試行する）、Vision の LLM は共通の設定（PLATFORM_OCI_ENTERPRISE_AI_*）で選べる最長が
-# 600 秒 × 6 回 = 3600 秒。これらより長い 2 時間にする。
+# 600 秒 × 6 回 = 3600 秒、MinerU の job は既定 1800 秒。これらより長い 2 時間にする。
 INGESTION_JOB_STALL_TIMEOUT_DEFAULT_SECONDS = 7200.0
 CHUNK_CHILD_TARGET_CHARS_DEFAULT = 1000
 CHUNK_CHILD_TARGET_CHARS_MIN = 300
@@ -285,6 +296,7 @@ AnswerFlow = Literal["crag", "standard_rag"]
 # 回答の LLM の用途ごとの推論(思考)の量(#1499)。model はモデルの登録値(共通のモデル設定)のまま、
 # none は送らない、low / medium / high はその値を送る(platform の推論の量の選択肢と同じ)。
 ReasoningEffortOverride = Literal["model", "none", "low", "medium", "high"]
+MineruTier = Literal["flash", "basic", "standard", "advanced"]
 VectorIndexProfile = Literal[
     "balanced",
     "accurate",
@@ -357,9 +369,15 @@ class _PersistedParserAdapterSettings(BaseModel):
     adapter_backend: ParserAdapterBackend = DEFAULT_PARSER_ADAPTER_BACKEND
     docling_enabled: bool = True
     unstructured_enabled: bool = False
+    mineru_enabled: bool = False
     dots_ocr_enabled: bool = False
     structured_records_jsonl_enabled: bool = False
     xml_tree_json_enabled: bool = False
+    mineru_api_host: str = Field(default="", max_length=2048)
+    # MinerU のライセンスの条件を管理者が確認した記録（#3359）。確認するまで MinerU を有効にも
+    # 選択にもできない（app.rag.mineru_license）。確認した人の表示名と日時（UTC の ISO 8601）。
+    mineru_license_acknowledged_by: str = Field(default="", max_length=256)
+    mineru_license_acknowledged_at: str = Field(default="", max_length=64)
     dots_ocr_api_host: str = Field(default="", max_length=2048)
     dots_ocr_model: str = Field(default="rednote-hilab/dots.mocr", max_length=512)
 
@@ -452,6 +470,12 @@ class Settings(
 
     # 環境変数名は属性名から決める（共通の属性は `PLATFORM_*`、それ以外は `RAG_*`。#211）。
     model_config = product_settings_config(prefix="RAG_", backend_dir=BACKEND_ROOT)
+
+    # MinerU のライセンスの条件の確認（確認した人の表示名, UTC の ISO 8601 の日時。#3359）。
+    # 環境変数・`.env` では書けないよう、Settings の項目にせず private にする。書けるのは
+    # 「文書解析」画面（system_admin）の保存だけで、parser-settings.json から読む
+    # （app.rag.mineru_license）。model_copy は private の値も写す。
+    _mineru_license_acknowledgement: tuple[str, str] = PrivateAttr(default=("", ""))
 
     @classmethod
     def settings_customise_sources(
@@ -925,7 +949,7 @@ class Settings(
         description=(
             "process isolation 時、進捗を出す段(解析のページ・図・表の説明)の途中で job の"
             "進捗(rag_ingestion_jobs.progress_json)がこの秒数変わらなければ止める(#2003)。"
-            "進捗を出さない 1 回の呼び出し(解析サービス・Document Understanding・"
+            "進捗を出さない 1 回の呼び出し(解析サービス・MinerU・Document Understanding・"
             "Vision の LLM。再試行を含む)の最長より長くする(起動時に検証する)。"
         ),
     )
@@ -2219,6 +2243,10 @@ class Settings(
             "(画面で Unstructured を選ぶと有効になる)。選択時は parser-unstructured の起動が前提。"
         ),
     )
+    rag_parser_mineru_enabled: bool = Field(
+        default=False,
+        description="外部 MinerU native API adapter を feature flag で有効化する。",
+    )
     rag_parser_dots_ocr_enabled: bool = Field(
         default=False,
         description="外部 Dots.OCR OpenAI 互換 API adapter を feature flag で有効化する。",
@@ -2265,6 +2293,28 @@ class Settings(
     )
     # GPU OCR は外部で運用済みの native API を呼ぶ。旧 *_SERVICE_URL(/parse wrapper)
     # は読まず、誤った protocol への自動移行を避ける。
+    rag_parser_mineru_api_host: str = Field(
+        default="", description="MinerU 4.x の V1 API（/v1/parse/jobs）の base URL。"
+    )
+    rag_parser_mineru_api_key: str = Field(default="", repr=False)
+    # MinerU 4.0 は解析の方式（pipeline / vlm / hybrid）を品質の tier にまとめた（#1329）。
+    # OCR の言語は MinerU の API サーバーの起動時の設定で、V1 の request には無い。
+    rag_parser_mineru_tier: MineruTier = Field(
+        default="basic",
+        description=(
+            "MinerU の解析の品質（flash / basic / standard / advanced）。basic は小さな"
+            "モデルで CPU でも動く（3.x の pipeline 相当）。"
+            "PDF・画像以外は MinerU が flash だけを持つ。"
+        ),
+    )
+    rag_parser_mineru_job_timeout_seconds: float = Field(
+        default=1800.0,
+        gt=0,
+        le=86400,
+        description=(
+            "MinerU の parse job を終了まで待つ上限（秒）。超えたら job を取り消して縮退する。"
+        ),
+    )
     rag_parser_dots_ocr_api_host: str = Field(
         default="", description="Dots.OCR OpenAI 互換 API の base URL。"
     )
@@ -2678,6 +2728,7 @@ class Settings(
                 + self.rag_http_service_retry_max_delay_seconds
                 * max(self.rag_http_service_retry_attempts - 1, 0)
             ),
+            "rag_parser_mineru_job_timeout_seconds": self.rag_parser_mineru_job_timeout_seconds,
             "oci_document_understanding_timeout_seconds": (
                 self.oci_document_understanding_timeout_seconds
             ),
@@ -2880,9 +2931,15 @@ def resolve_model_settings_file(path_value: str) -> Path:
     return (PLATFORM_ENV_FILE.parent / path).resolve()
 
 
-_PARSER_ADAPTER_FIELDS = tuple(_PersistedParserAdapterSettings.model_fields)
+# MinerU のライセンスの確認（#3359）は Settings の項目ではなく private の値に読み書きする。
+_MINERU_LICENSE_FIELDS = ("mineru_license_acknowledged_by", "mineru_license_acknowledged_at")
+_PARSER_ADAPTER_FIELDS = tuple(
+    name
+    for name in _PersistedParserAdapterSettings.model_fields
+    if name not in _MINERU_LICENSE_FIELDS
+)
 # parser の API key（JSON に書かず、RAG の backend/.env に保存する。#106 / #211）。
-PARSER_SECRET_ATTRS = ("rag_parser_dots_ocr_api_key",)
+PARSER_SECRET_ATTRS = ("rag_parser_mineru_api_key", "rag_parser_dots_ocr_api_key")
 
 
 def resolve_language_pack_file(settings: Settings) -> Path:
@@ -2904,10 +2961,20 @@ def _load_parser_adapters(settings: Settings, raw: Mapping[str, Any]) -> None:
     parser = _PersistedParserAdapterSettings.model_validate(raw)
     for name in _PARSER_ADAPTER_FIELDS:
         setattr(settings, f"rag_parser_{name}", getattr(parser, name))
+    settings._mineru_license_acknowledgement = (
+        parser.mineru_license_acknowledged_by,
+        parser.mineru_license_acknowledged_at,
+    )
 
 
 def _dump_parser_adapters(settings: Settings) -> dict[str, Any]:
-    return {name: getattr(settings, f"rag_parser_{name}") for name in _PARSER_ADAPTER_FIELDS}
+    document: dict[str, Any] = {
+        name: getattr(settings, f"rag_parser_{name}") for name in _PARSER_ADAPTER_FIELDS
+    }
+    by, at = settings._mineru_license_acknowledgement
+    document["mineru_license_acknowledged_by"] = by
+    document["mineru_license_acknowledged_at"] = at
+    return document
 
 
 # モデル設定の読み書きは3製品共通（platform の pr_system_settings。#103）。

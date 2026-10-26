@@ -141,6 +141,10 @@ from app.rag.layer_fingerprint import (
     NAVIGATION_SUMMARY_MAX_NODES_ARTIFACT_KEY,
     field_schema_hash,
 )
+from app.rag.mineru_license import (
+    MINERU_LICENSE_REQUIRED_MESSAGE,
+    MINERU_LICENSE_UNACKNOWLEDGED_WARNING,
+)
 from app.rag.navigation import (
     build_navigation_tree,
     navigation_summary_elements,
@@ -2120,7 +2124,7 @@ class IngestionPipeline:
         await _raise_if_cancelled(cancel_checker)
         chunking_params = resolve_chunking_params(self._settings)
         # 親子階層（small-to-big）は、どの解析の結果でも親子に分割する(#3377)。親子を作った入力
-        # (Docling のレイアウト・行の記録・XML ツリー JSON・抽出の構造)は trace に残す。
+        # (Docling・MinerU のレイアウト・行の記録・XML ツリー JSON・抽出の構造)は trace に残す。
         is_small_to_big = chunking_params.strategy == SMALL_TO_BIG_STRATEGY
 
         def _run_chunking() -> list[Chunk]:
@@ -4052,6 +4056,8 @@ def _selected_parser_failure_message(
         )
     if warning == STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_WARNING:
         return structured_records_requires_jsonl_backend_message(label) + warning_suffix
+    if warning == MINERU_LICENSE_UNACKNOWLEDGED_WARNING:
+        return MINERU_LICENSE_REQUIRED_MESSAGE + warning_suffix
     if warning and warning.startswith("structured_records_invalid:"):
         return (
             f"選択した文書解析エンジン（{label}）は、ファイル準備の「CSV→JSONL」「Excel→JSONL」「Word→JSONL」が"
@@ -4137,6 +4143,7 @@ def _parser_backend_label(backend: str) -> str:
         "unstructured": "Unstructured",
         "structured_records_jsonl": "構造化レコード JSONL",
         "xml_tree_json": "XML ツリー JSON",
+        "mineru": "MinerU",
         "dots_ocr": "Dots.OCR",
         "oci_document_understanding": "OCI Document Understanding",
     }
@@ -4208,6 +4215,7 @@ def _is_external_adapter_backend(parser_backend: str) -> bool:
         "unstructured",
         "structured_records_jsonl",
         "xml_tree_json",
+        "mineru",
         "dots_ocr",
     }
 

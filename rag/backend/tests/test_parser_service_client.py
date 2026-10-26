@@ -19,6 +19,7 @@ from app.clients.parser_service import (
     supported_formats_label,
 )
 from app.config import Settings
+from app.rag.mineru_license import set_mineru_license_acknowledgement
 from app.schemas.document import SourceModality, SourceProfile
 
 
@@ -135,21 +136,23 @@ def test_runner_fail_fast_raises_when_service_unreachable(
 
 
 def test_runner_fail_fast_raises_when_external_parser_is_unconfigured() -> None:
-    client = ParserServiceClient(Settings(rag_parser_dots_ocr_api_host=""))
+    settings = Settings(rag_parser_mineru_api_host="")
+    set_mineru_license_acknowledgement(settings, by="", at="2026-10-26T00:00:00+00:00")
+    client = ParserServiceClient(settings)
 
     with pytest.raises(ParserServiceUnavailableError) as exc_info:
         client.runner(
-            "dots_ocr",
+            "mineru",
             b"%PDF",
             _profile(),
             "application/pdf",
             fail_fast=True,
         )
 
-    assert exc_info.value.backend == "dots_ocr"
+    assert exc_info.value.backend == "mineru"
     assert exc_info.value.reason == "unconfigured"
-    assert exc_info.value.warning_code == "dots_ocr_unconfigured"
-    assert "Dots.OCR）の接続先 URL が未設定です" in str(exc_info.value)
+    assert exc_info.value.warning_code == "mineru_unconfigured"
+    assert "MinerU）の接続先 URL が未設定です" in str(exc_info.value)
 
 
 def test_runner_retries_retryable_status_then_returns_success(

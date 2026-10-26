@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 
+import pytest
 from pytest import MonkeyPatch
 
 from app.config import Settings
@@ -243,15 +244,15 @@ def test_source_routes_follow_selected_adapter_support(
     )
     by_kind = {route.source_kind: route for route in routes}
 
-    assert by_kind["pdf"].candidate_order == ("docling", "unstructured")
+    assert by_kind["pdf"].candidate_order == ("docling", "unstructured", "mineru")
     assert by_kind["pdf"].attempted_order == ("unstructured",)
     assert by_kind["pdf"].selected_backend == "unstructured"
-    assert by_kind["image"].candidate_order == ("unstructured", "docling", "dots_ocr")
+    assert by_kind["image"].candidate_order == ("unstructured", "docling", "dots_ocr", "mineru")
     assert by_kind["image"].attempted_order == ("unstructured",)
     assert by_kind["image"].selected_backend == "unstructured"
     # Docling は PDF と画像だけを解析する(capabilities.ADAPTER_CAPABILITIES)ため、office / html の
     # 候補に出さない(#366)。以前は候補に出し、取込では source_unsupported で必ず fallback していた。
-    assert by_kind["office"].candidate_order == ("unstructured",)
+    assert by_kind["office"].candidate_order == ("unstructured", "mineru")
     assert by_kind["office"].attempted_order == ("unstructured",)
     assert by_kind["office"].selected_backend == "unstructured"
     assert by_kind["html"].candidate_order == ("unstructured",)
@@ -266,15 +267,15 @@ def test_source_routes_follow_selected_adapter_support(
     assert "local_parser_preferred_for_source" in by_kind["text"].reason_codes
 
 
+@pytest.mark.usefixtures("mineru_selectable")
 def test_source_routes_explain_explicit_adapter_source_mismatch(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """明示 adapter が source を扱えない場合も routing evidence に警告を出す。"""
     settings = Settings(
-        rag_parser_adapter_backend="dots_ocr",
-        rag_parser_dots_ocr_enabled=True,
-        rag_parser_dots_ocr_api_host="http://dots.example.com",
-        rag_parser_dots_ocr_model="dots-model",
+        rag_parser_adapter_backend="mineru",
+        rag_parser_mineru_enabled=True,
+        rag_parser_mineru_api_host="http://mineru.example.com",
     )
     monkeypatch.setattr(
         parser_adapter_readiness,
@@ -291,7 +292,7 @@ def test_source_routes_explain_explicit_adapter_source_mismatch(
     assert route.attempted_order == ()
     assert route.selected_backend == "local"
     assert "selected_adapter_unsupported_for_source" in route.reason_codes
-    assert "dots_ocr_adapter_source_unsupported" in route.warning_codes
+    assert "mineru_adapter_source_unsupported" in route.warning_codes
 
 
 def _docling_installed(
