@@ -80,7 +80,10 @@ class ParsedTableGrid:
     row_count: int
     cells: tuple[ParsedCell, ...]
     header_rows: int = 0
-    _by_row: Mapping[int, tuple[ParsedCell, ...]] = field(default_factory=dict, repr=False)
+    # 行ごとのセル（``cells`` から作る索引。比較・hash には使わない）。
+    _by_row: Mapping[int, tuple[ParsedCell, ...]] = field(
+        default_factory=dict, repr=False, compare=False, hash=False
+    )
 
     @classmethod
     def build(cls, cells: Iterable[ParsedCell]) -> ParsedTableGrid | None:

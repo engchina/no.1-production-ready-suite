@@ -406,7 +406,7 @@ _EVIDENCE = {
 # （source_line_start・source_line_end）、根拠に表の行・列の
 # 対応の検査が読める表か（table_binding）、rag_search・rag_retrieve_evidence に縮退した任意の
 # 補助の処理（degraded_steps）を足した（#3262）。
-# 36: 行の番号の基準に解析の表の格子（parsed_table）を足し、表のセルに領域（bbox）を足した（#3429）。
+# 36: 行の番号の基準に解析の表の格子（parsed_table）を、表のセルに領域（bbox）を足した（#3429）。
 RAG_OUTPUT_SCHEMA_VERSION = 36
 
 DEFAULT_OUTPUTS: dict[str, Any] = {

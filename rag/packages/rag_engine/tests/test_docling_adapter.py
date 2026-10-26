@@ -15,6 +15,7 @@ from rag_engine.adapters.parsers.docling_adapter import (
     _item_text,
     _table_data_to_html,
     _table_html_by_ref,
+    docling_table_cells,
 )
 from rag_engine.config import get_settings
 from rag_engine.models.layout import PageImage
@@ -615,6 +616,68 @@ class DoclingAdapterTests(unittest.TestCase):
 
         self.assertEqual([record.raw_type for record in records], ["picture", "picture_ocr_text"])
         self.assertIn("図内の箇条書き", records[1].text)
+
+    def test_one_page_table_keeps_cell_regions_and_grid_cells(self):
+        """1 頁の表はセルの領域を record と同じ画像の座標で残し、格子のセル（結合は左上）にできる (#3429)。"""
+
+        def cell(row, col, text, box, **extra):
+            left, top, right, bottom = box
+            return {**_cell(row, col, text, **extra), "bbox": {"l": left, "t": top, "r": right, "b": bottom, "coord_origin": "TOPLEFT"}}
+
+        cells = [
+            cell(0, 0, "Item", [10, 10, 30, 20], column_header=True, row_span=2),
+            cell(0, 1, "H1", [30, 10, 90, 15], column_header=True, col_span=2),
+            cell(1, 1, "Plan", [30, 15, 60, 20], column_header=True),
+            cell(1, 2, "Actual", [60, 15, 90, 20], column_header=True),
+            cell(2, 0, "Alpha", [10, 20, 30, 30], row_header=True),
+            cell(2, 1, "10", [30, 20, 60, 30]),
+            cell(2, 2, "11", [60, 20, 90, 30]),
+        ]
+        table = {**_item("", "table", 1, [10, 10, 90, 30]), "self_ref": "#/tables/0", "data": {"num_rows": 3, "num_cols": 3, "table_cells": cells}}
+        context = AnalysisContext(
+            pdf_path=Path("source.pdf"),
+            run_dir=Path("."),
+            pages=[PageImage(page=1, width=200, height=200, pdf_width=100, pdf_height=100, image_path="page.png")],
+            settings=get_settings(),
+        )
+
+        records = DoclingAdapter(get_settings())._records_from_payload({"tables": [table]}, context)
+
+        boxes = records[0].raw["table_cell_bboxes"]
+        self.assertEqual(boxes[0], {"row": 0, "col": 0, "bbox": [20.0, 20.0, 60.0, 40.0]})
+        self.assertEqual(len(boxes), len(cells))
+        grid = docling_table_cells(records[0].raw)
+        assert grid is not None
+        self.assertEqual(
+            [(c.row, c.col, c.row_span, c.col_span, c.text, c.metadata) for c in grid[:3]],
+            [
+                (0, 0, 2, 1, "Item", {"column_header": True}),
+                (0, 1, 1, 2, "H1", {"column_header": True}),
+                (1, 1, 1, 1, "Plan", {"column_header": True}),
+            ],
+        )
+        self.assertEqual(grid[0].bbox, [20.0, 20.0, 60.0, 40.0])
+        self.assertEqual(grid[4].metadata, {"row_header": True})
+
+    def test_multi_page_table_has_no_cell_regions_and_bad_cells_are_not_a_grid(self):
+        """頁をまたぐ表はセルの領域を作らない。位置の無い・同じ位置のセルは格子にしない (#3429)。"""
+        table = {
+            **_item("", "table", 1, [10, 10, 90, 90]),
+            "self_ref": "#/tables/0",
+            "data": {"table_cells": [{**_cell(0, 0, "A"), "bbox": {"l": 1, "t": 1, "r": 5, "b": 5, "coord_origin": "TOPLEFT"}}]},
+        }
+        table["prov"] = [*table["prov"], {**table["prov"][0], "page_no": 2}]
+        context = replace(
+            _context(),
+            pages=[PageImage(page=page, width=100, height=100, pdf_width=100, pdf_height=100, image_path="page.png") for page in (1, 2)],
+        )
+
+        records = DoclingAdapter(get_settings())._records_from_payload({"tables": [table]}, context)
+
+        self.assertNotIn("table_cell_bboxes", records[0].raw)
+        self.assertEqual(docling_table_cells({"data": {"table_cells": [_cell(0, 0, "A"), _cell(0, 0, "B")]}}), None)
+        self.assertEqual(docling_table_cells({"data": {"table_cells": [{"text": "A"}]}}), None)
+        self.assertEqual(docling_table_cells({"data": {"table_cells": []}}), None)
 
 
 def _item(text: str, label: str, page: int, bbox: list[int]) -> dict:

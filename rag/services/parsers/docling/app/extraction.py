@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from rag_engine.adapters.parsers.base import AnalysisContext
-from rag_engine.adapters.parsers.docling_adapter import TABLE_CELL_BBOXES_KEY, DoclingAdapter
+from rag_engine.adapters.parsers.docling_adapter import DoclingAdapter, docling_table_cells
 from rag_engine.chunking.headings import layout_section_paths
 from rag_engine.config import Settings, get_settings
 from rag_engine.models.layout import LayoutRecord, PageImage
@@ -39,14 +39,9 @@ from rag_parser_core.extraction import (
     ExtractionMetadataValue,
     ExtractionPage,
     ExtractionTable,
-    ExtractionTableCell,
     StructuredExtraction,
 )
-from rag_parser_core.parsed_table import (
-    COLUMN_HEADER_CELL_KEY,
-    PARSED_TABLE_GRID_KEY,
-    PARSED_TABLE_GRID_VERSION,
-)
+from rag_parser_core.parsed_table import PARSED_TABLE_GRID_KEY, PARSED_TABLE_GRID_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -211,13 +206,11 @@ def _element_metadata(record: LayoutRecord) -> dict[str, ExtractionMetadataValue
 
 
 def _table(record: LayoutRecord) -> ExtractionTable:
-    """Docling の表の格子（``table_cells``）を、結合セルは左上の 1 つにしたセルで写す（#3429）。
+    """表の record を、Docling の格子のセル（``docling_table_cells``）を持つ表にする（#3429）。
 
-    セルは Docling の行・列（0 始まり）と span・列の見出しの印（``column_header``）・1 頁の表の
-    セルの領域（record の bbox と同じ座標）を持つ。セルが重なる・位置の無いセルがある表は、格子と
-    して読まない（``PARSED_TABLE_GRID_KEY`` を付けない）。
+    セルを格子として読めない表（位置の無い・重なるセル）は、``PARSED_TABLE_GRID_KEY`` を付けない。
     """
-    cells = _table_cells(record.raw)
+    cells = docling_table_cells(record.raw)
     return ExtractionTable(
         table_id=f"table-{record.id}",
         element_id=record.id,
@@ -228,49 +221,6 @@ def _table(record: LayoutRecord) -> ExtractionTable:
             **({PARSED_TABLE_GRID_KEY: PARSED_TABLE_GRID_VERSION} if cells else {}),
         },
     )
-
-
-def _table_cells(raw: dict[str, Any]) -> list[ExtractionTableCell] | None:
-    data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
-    boxes = {
-        (entry.get("row"), entry.get("col")): entry.get("bbox")
-        for entry in raw.get(TABLE_CELL_BBOXES_KEY) or []
-        if isinstance(entry, dict)
-    }
-    cells: list[ExtractionTableCell] = []
-    starts: set[tuple[int, int]] = set()
-    for cell in data.get("table_cells") or []:
-        if not isinstance(cell, dict):
-            return None
-        row, col = _offset(cell, "start_row_offset_idx"), _offset(cell, "start_col_offset_idx")
-        end_row, end_col = _offset(cell, "end_row_offset_idx"), _offset(cell, "end_col_offset_idx")
-        if row is None or col is None or (row, col) in starts:
-            return None
-        starts.add((row, col))
-        cells.append(
-            ExtractionTableCell(
-                row=row,
-                col=col,
-                text=str(cell.get("text") or ""),
-                row_span=max(1, (end_row or row + 1) - row),
-                col_span=max(1, (end_col or col + 1) - col),
-                bbox=boxes.get((row, col)),
-                metadata={
-                    key: True
-                    for key, flag in (
-                        (COLUMN_HEADER_CELL_KEY, "column_header"),
-                        ("row_header", "row_header"),
-                    )
-                    if cell.get(flag) is True
-                },
-            )
-        )
-    return cells or None
-
-
-def _offset(cell: dict[str, Any], key: str) -> int | None:
-    value = cell.get(key)
-    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
 def _asset(record: LayoutRecord) -> ExtractionAsset:

@@ -6,7 +6,7 @@
 |---|---|
 | `text` | 語の照合の正規化（`normalize_for_match`: NFKC・casefold・空白を除く）と部分一致（`contains_normalized`） |
 | `outcomes` | 回答の対応の語彙（`OUTCOMES`。RAG の `rag_search.outcome` と Agent の `RunOutput.outcome` の公開の契約と同じ 6 つ）、回答・確認・保留の判断（`response_decision`・`expected_decisions`）、検索の指標の対象外（`skips_retrieval`）、往復の判断の 3 値の論理積（`all_correct`） |
-| `evidence` | 必要な根拠と引用の chunk の照合（`evidence_matches`。文書・ページ・シート・行・章節・本文。表は行ごとに照合する）。場所は RAG の `EvidenceLocator` と同じ名前の Mapping で受け取る |
+| `evidence` | 必要な根拠と引用の chunk の照合（`evidence_matches`。文書・ページ・シート・行・章節・本文。表は行ごとに照合する）。場所は RAG の `EvidenceLocator` と同じ名前の Mapping で受け取る。行は同じ行の番号の基準（`row_basis`）の中だけで照合し、評価セットの行（原本の行）を解析の表の格子の行（`parsed_table`）に一致させない |
 | `retrieval` | 正解の文書の順位の逆数（`reciprocal_rank`）・取れた文書（`document_hits`） |
 | `aggregate` | 測れたケースだけの平均と分母（`MetricAggregate`）、閾値の判定（`threshold_failures`）、合否（`overall_passed`） |
 
