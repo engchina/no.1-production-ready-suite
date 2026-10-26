@@ -270,7 +270,7 @@ from rag_engine.retrieval.scope import (
     normalize_retrieval_scope,
 )
 from rag_engine.retrieval.search_stages import ORIGINAL_QUESTION_SEARCH_STAGE
-from rag_engine.retrieval.task_contract import filter_queries, query_rejection_reason, task_contract
+from rag_engine.retrieval.task_contract import GOAL_UNKNOWN, filter_queries, query_rejection_reason, task_contract
 from rag_engine.retrieval.text_search_tokenizer import (
     MAX_TEXT_SEARCH_TOKENS,
     TEXT_SEARCH_TOKENIZER_HYBRID,
@@ -3464,7 +3464,13 @@ def _add_text_search_details(step: _ExecutionStep, info: QuestionTextSearchInfo)
     return True
 
 
-_GOAL_LABELS = {"procedure": "操作方法", "rule": "規則・定義・可否", "count": "件数", "recipient_list": "対象者・明細の一覧"}
+_GOAL_LABELS = {
+    "procedure": "操作方法",
+    "rule": "規則・定義・可否",
+    "count": "件数",
+    "recipient_list": "対象者・明細の一覧",
+    GOAL_UNKNOWN: "未判定",
+}
 
 
 _SEARCH_PURPOSE = "意味の近さ（ベクトル）と語の一致（全文）で探した順位を融合し、上位の根拠とその前後の文脈を集めます。"
@@ -3474,7 +3480,12 @@ def _record_question_understanding(step: _ExecutionStep, question: str, plan: Qu
     """質問から読み取った内容のうち、検索や回答を実際に変えるものだけを示す。"""
     contract = task_contract(question)
     units = [unit for unit in contract["request_units"] if unit.get("text") and unit.get("kind") != "context"]
-    results = [f"質問の目的は「{_GOAL_LABELS.get(contract['goal'], contract['goal'])}」"]
+    # 未判定は目的を決めたように見せない。ラベルの無い値も内部の値を表示に出さず未判定にする（#3498）。
+    goal = contract["goal"] if contract["goal"] in _GOAL_LABELS else GOAL_UNKNOWN
+    results = [
+        f"質問の目的は「{_GOAL_LABELS[goal]}」"
+        + ("（目的の分類に当てはまらないため、目的を決めずに検索・回答します）" if goal == GOAL_UNKNOWN else "")
+    ]
     if len(units) > 1:
         results.append(f"答える要求は {len(units)} 件")
         results.extend(f"{number}) {unit['text']}" for number, unit in enumerate(units, 1))

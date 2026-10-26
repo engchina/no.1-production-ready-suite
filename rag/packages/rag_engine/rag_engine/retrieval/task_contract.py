@@ -20,6 +20,10 @@ from rag_engine.retrieval.enumeration import ENUMERATION_ASPECT, enumeration_req
 # 業務固有の語（自治体・業種の名前など）はコードにも言語資源にも置かず、profile（requester_terms など）で足す (#849)。
 
 
+# 質問の目的（`task_contract()["goal"]`）の値のうち、どの判定の条件にも一致しなかったもの（#3498）。
+GOAL_UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True)
 class _Cues:
     """言語資源から組み立てた、質問の理解の正規表現と語。"""
@@ -279,6 +283,8 @@ def _task_contract(question: str, _pack_hash: str = "") -> dict[str, Any]:
     # 追加・削除等の本来の目的が契約から脱落する。原質問の他の要求も保持する。
     action_text = "\n".join([*intent_parts["desired_outcomes"], current])
     enumeration = enumeration_request(question)
+    # どの判定の条件にも一致しない質問は「unknown」（未判定）にする。規則・定義を尋ねると判定した質問と区別し、
+    # 未判定を既定の目的として後段で扱わない（#3498）。
     goal = (
         "rule"
         if definitions and not change_request and not cues.has("method_cues", text)
@@ -288,7 +294,7 @@ def _task_contract(question: str, _pack_hash: str = "") -> dict[str, Any]:
         if wants_count
         else "procedure"
         if change_request or cues.has("method_cues", text) or cues.has("procedure_cues", text)
-        else "rule"
+        else GOAL_UNKNOWN
     )
     return {
         "original_question": question,

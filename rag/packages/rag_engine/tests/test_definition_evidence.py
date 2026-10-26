@@ -50,6 +50,9 @@ def test_explicit_definition_targets(question, expected):
     if expected:
         assert contract["goal"] == "rule"
         assert all(t["id"].startswith("Q1.D") for t in contract["definition_targets"])
+    else:
+        # 定義項目が無い質問は規則・定義にしない。他の判定に一致しなければ未判定（#3498）。
+        assert contract["goal"] != "rule"
 
 
 @pytest.mark.parametrize("sudachi", [False, True], ids=["script-only", "sudachi"])

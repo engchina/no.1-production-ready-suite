@@ -15,12 +15,13 @@ from rag_engine.retrieval.task_contract import task_contract
         ("文言で「，」を「、」に変更したい。", "procedure"),
         ("タイトルを修正したい", "procedure"),
         ("文言を変えたい", "procedure"),
-        ("変更履歴を知りたい", "rule"),
-        ("変更内容を知りたい", "rule"),
+        ("変更履歴を知りたい", "unknown"),
+        ("変更内容を知りたい", "unknown"),
         ("摘要欄に注記を表示させたい", "procedure"),
     ],
 )
 def test_change_intent(question, expected):
+    # 説明の要求（「変更履歴」）は操作の要求ではない。どの判定の条件にも一致しなければ未判定（#3498）。
     assert task_contract(question)["goal"] == expected
     assert ("procedure" in task_contract(question)["required_aspects"]) is (expected == "procedure")
 

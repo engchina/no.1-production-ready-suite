@@ -77,7 +77,7 @@ from rag_engine.retrieval.evidence_scope import evidence_scope_error, unsupporte
 from rag_engine.retrieval.evidence_selection import evidence_relevance
 from rag_engine.retrieval.operation_context import operation_labels, operation_target_score
 from rag_engine.retrieval.result_granularity import aggregate_only_evidence
-from rag_engine.retrieval.task_contract import task_contract
+from rag_engine.retrieval.task_contract import GOAL_UNKNOWN, task_contract
 
 logger = logging.getLogger(__name__)
 
@@ -464,7 +464,7 @@ AUDIT_SYSTEM_PROMPT = (
         "ば false。\n"
         "- goal_alignment: items 全体が task_c"
         "ontract の goal と current_request に"
-        "答えていれば aligned。目的の一部にしか答えていない、または背"
+        "答えていれば aligned（goal が unknown なら current_request だけで判断する）。目的の一部にしか答えていない、または背"
         "景・仮説の説明が中心なら partial。別の対象・業務・目的に答え"
         "ていれば off_target。個案の最終判断に必要な実データが未閲"
         "覧という理由だけで partial や off_target にしな"
@@ -609,7 +609,8 @@ def function_key(span: dict) -> tuple[str, ...]:
 def tag_spans(question: str, spans: Sequence[dict]) -> list[dict]:
     """入力を変更せず、タグ・機能キー・必須根拠を付けた写しを返す。"""
     goal = task_contract(question)["goal"]
-    wanted = "definition" if goal == "rule" else "operation_entry"
+    # 目的を判定できた質問だけ、目的に合う根拠を必須根拠にする。未判定は定義・操作の入口のどちらも優先しない（#3498）。
+    wanted = None if goal == GOAL_UNKNOWN else "definition" if goal == "rule" else "operation_entry"
     tagged, pinned = [], 0
     for span in spans:
         tags = set().union(*(tagger(question, span) for tagger in SPAN_TAGGERS))
