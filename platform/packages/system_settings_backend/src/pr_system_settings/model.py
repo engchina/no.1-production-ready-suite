@@ -86,6 +86,10 @@ ENTERPRISE_AI_CONNECTION_IDS = (
     ENTERPRISE_AI_TERTIARY_CONNECTION_ID,
 )
 MAX_ENTERPRISE_AI_CONNECTIONS = len(ENTERPRISE_AI_CONNECTION_IDS)
+# 既定の判定モデル（`default_judge_model_id`。#3574）の「回答と同じモデル」を表す明示の値。
+# 空（既定）は既定のテキストモデル、それ以外は登録モデルの ID。
+# 解決は `enterprise_ai_judge_model_id` だけで行う。
+ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER: Final = "same_as_answer"
 # 設定してもしなくてもよい接続（プライマリ接続の後ろ）。Endpoint URL があるときだけ有効になる。
 _OPTIONAL_CONNECTION_IDS = ENTERPRISE_AI_CONNECTION_IDS[1:]
 # Project OCID を任意にする接続（#786）。ターシャリ接続は OpenAI / OpenAI 互換 API 向けで、
@@ -308,6 +312,9 @@ class EnterpriseAiModelSettings(BaseModel):
     default_text_model_id: str = Field(default="", max_length=256)
     # 画像を読む処理の既定。モデルを 1 つ以上登録したら必須で、Vision 対応のモデルに限る。
     default_vision_model_id: str = Field(default="", max_length=256)
+    # 品質評価で回答を判定するモデル（#3574）。空 = 既定のテキストモデル、
+    # `ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER` = 回答を作ったモデル、それ以外は登録モデルの ID。
+    default_judge_model_id: str = Field(default="", max_length=256)
     api_path: str = Field(default="/responses", max_length=512)
     vlm_input_mode: EnterpriseAiVlmInputMode = "auto"
     text_payload_template: str = Field(default="", max_length=20000)
@@ -354,6 +361,7 @@ class EnterpriseAiModelSettings(BaseModel):
     @field_validator(
         "default_text_model_id",
         "default_vision_model_id",
+        "default_judge_model_id",
         "api_path",
         "text_payload_template",
         "vision_payload_template",
@@ -981,6 +989,20 @@ def enterprise_ai_vision_model_id(settings: Any) -> str:
     )
 
 
+def enterprise_ai_judge_model_id(settings: Any, answer_model_id: str | None = None) -> str:
+    """品質評価で回答を判定するモデル ID（#3574。既定の判定モデルの解決はここだけ）。
+
+    - 既定の判定モデルが空（既定）: 既定のテキストモデル（`enterprise_ai_default_model_id`）
+    - 「回答と同じモデル」（`ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER`）: ``answer_model_id``
+      （回答を作ったモデル）。分からなければ既定のテキストモデル
+    - 登録モデルの ID: そのモデル（すべての回答を同じモデルで判定する）
+    """
+    judge = _setting_text(settings, "oci_enterprise_ai_default_judge_model")
+    if judge == ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER:
+        return (answer_model_id or "").strip() or enterprise_ai_default_model_id(settings)
+    return judge or enterprise_ai_default_model_id(settings)
+
+
 def enterprise_ai_default_model_id(settings: Any) -> str:
     """画像を扱わない呼び出しで使うモデル ID を返す。
 
@@ -1110,12 +1132,13 @@ def validate_model_ids(enterprise: EnterpriseAiModelSettings) -> list[ModelField
 
 
 def validate_default_models(enterprise: EnterpriseAiModelSettings) -> list[ModelFieldError]:
-    """既定のモデル 2 つが登録モデルと矛盾しないかを確かめる（#499）。
+    """既定のモデルが登録モデルと矛盾しないかを確かめる（#499）。
 
     - モデルを 1 つ以上登録したら、既定の Vision モデルは必須で、Vision 対応のモデルに限る
     - 既定のテキストモデルも、モデルを 1 つ以上登録したら必須（#566）。登録したモデルのどれか
       （Vision 対応でもよい）
-    エラーは画面の並び順（テキスト → Vision）で返す。
+    - 既定の判定モデル（#3574）は任意。空・「回答と同じモデル」以外は登録したモデルのどれか
+    エラーは画面の並び順（テキスト → Vision → 判定）で返す。
     """
     models = [model for model in enterprise.models if model.model_id]
     registered = {model.model_id for model in models}
@@ -1163,6 +1186,15 @@ def validate_default_models(enterprise: EnterpriseAiModelSettings) -> list[Model
                 "対応をオンにするか、別のモデルを選んでください。",
             )
         )
+    judge = enterprise.default_judge_model_id
+    if judge and judge != ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER and judge not in registered:
+        errors.append(
+            ModelFieldError(
+                "default_judge_model_id",
+                f"既定の判定モデル「{judge}」は登録モデルにありません。"
+                "登録モデルから選び直してください。",
+            )
+        )
     return errors
 
 
@@ -1190,6 +1222,7 @@ def model_payload(settings: Any) -> ModelSettingsPayload:
             models=models,
             default_text_model_id=_setting_text(settings, "oci_enterprise_ai_default_text_model"),
             default_vision_model_id=enterprise_ai_vision_model_id(settings),
+            default_judge_model_id=_setting_text(settings, "oci_enterprise_ai_default_judge_model"),
             api_path=api_path or "/responses",
             vlm_input_mode=settings.oci_enterprise_ai_vlm_input_mode,
             text_payload_template=settings.oci_enterprise_ai_llm_payload_template,
@@ -1220,6 +1253,7 @@ def apply_model_settings(settings: Any, payload: ModelSettingsPayload) -> None:
     settings.oci_enterprise_ai_models = models
     settings.oci_enterprise_ai_default_text_model = enterprise.default_text_model_id
     settings.oci_enterprise_ai_default_vision_model = enterprise.default_vision_model_id
+    settings.oci_enterprise_ai_default_judge_model = enterprise.default_judge_model_id
     settings.oci_enterprise_ai_llm_path = enterprise.api_path
     settings.oci_enterprise_ai_vlm_path = enterprise.api_path
     settings.oci_enterprise_ai_vlm_input_mode = enterprise.vlm_input_mode
@@ -1329,6 +1363,8 @@ class _PersistedEnterpriseAiSettings(BaseModel):
     models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
     default_text_model_id: str | None = None
     default_vision_model_id: str | None = None
+    # 既定の判定モデル（#3574。空 = 既定のテキストモデル）。前の JSON に無ければ空。
+    default_judge_model_id: str = ""
     # #499 より前の JSON の key（既定モデルが 1 つ）。読み込むときに上の 2 つへ移す。
     default_model_id: str | None = None
     api_path: str = "/responses"
@@ -1349,7 +1385,11 @@ class _PersistedEnterpriseAiSettings(BaseModel):
         return str(value).strip().casefold() or "auto"
 
     @field_validator(
-        "default_text_model_id", "default_vision_model_id", "default_model_id", mode="before"
+        "default_text_model_id",
+        "default_vision_model_id",
+        "default_judge_model_id",
+        "default_model_id",
+        mode="before",
     )
     @classmethod
     def strip_model_id(cls, value: object) -> object:
@@ -1664,6 +1704,7 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, Any]:
             ],
             "default_text_model_id": enterprise.default_text_model_id,
             "default_vision_model_id": enterprise.default_vision_model_id,
+            "default_judge_model_id": enterprise.default_judge_model_id,
             "api_path": enterprise.api_path,
             "vlm_input_mode": enterprise.vlm_input_mode,
             "text_payload_template": enterprise.text_payload_template,
@@ -1976,6 +2017,7 @@ def _default_models_changed(settings: Any, enterprise: EnterpriseAiModelSettings
             [(model.model_id, model.vision_enabled) for model in value.models if model.model_id],
             value.default_text_model_id,
             value.default_vision_model_id,
+            value.default_judge_model_id,
         )
 
     return key(model_payload(settings).enterprise_ai) != key(enterprise)

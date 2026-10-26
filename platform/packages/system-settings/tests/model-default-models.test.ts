@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  JUDGE_SAME_AS_ANSWER,
   followModelChange,
+  judgeModelOptions,
   textModelOptions,
   validateDefaultModels,
   validateModelIds,
@@ -109,12 +111,16 @@ describe("既定のモデルの選択肢", () => {
 });
 
 describe("followModelChange", () => {
-  const defaults = { default_text_model_id: "llm-a", default_vision_model_id: "vlm-b" };
+  const defaults = {
+    default_text_model_id: "llm-a",
+    default_vision_model_id: "vlm-b",
+    default_judge_model_id: "",
+  };
 
   it("既定に選んだモデルの ID を書き換えたら追従する（消し切ったときは追従しない）", () => {
     expect(
       followModelChange(defaults, models[1], { ...models[1]!, model_id: "vlm-c" }),
-    ).toEqual({ default_text_model_id: "llm-a", default_vision_model_id: "vlm-c" });
+    ).toEqual({ ...defaults, default_vision_model_id: "vlm-c" });
     expect(followModelChange(defaults, models[0], { ...models[0]!, model_id: "" })).toEqual(
       defaults,
     );
@@ -136,14 +142,18 @@ describe("followModelChange", () => {
         { ...models[0]!, model_id: "llm-x" },
         models[1]!,
       ]),
-    ).toEqual({ default_text_model_id: "llm-x", default_vision_model_id: "vlm-b" });
+    ).toEqual({ ...defaults, default_text_model_id: "llm-x" });
   });
 
   it("Vision 対応をオンにしたとき、既定の画像対応モデルが未選択ならそのモデルを選ぶ", () => {
-    const empty = { default_text_model_id: "", default_vision_model_id: "" };
+    const empty = {
+      default_text_model_id: "",
+      default_vision_model_id: "",
+      default_judge_model_id: "",
+    };
     expect(
       followModelChange(empty, models[0], { ...models[0]!, vision_enabled: true }),
-    ).toEqual({ default_text_model_id: "", default_vision_model_id: "llm-a" });
+    ).toEqual({ ...empty, default_vision_model_id: "llm-a" });
     // 既に選んでいれば変えない。Vision 対応のオフでも変えない（エラーで案内する）。
     expect(
       followModelChange(defaults, models[0], { ...models[0]!, vision_enabled: true }),
@@ -151,6 +161,58 @@ describe("followModelChange", () => {
     expect(
       followModelChange(defaults, models[1], { ...models[1]!, vision_enabled: false }),
     ).toEqual(defaults);
+  });
+});
+
+describe("既定の判定モデル（#3574）", () => {
+  const valid = {
+    models,
+    default_text_model_id: "llm-a",
+    default_vision_model_id: "vlm-b",
+  };
+
+  it("既定のテキストモデル（空）・回答と同じモデル・登録モデルを受け付け、登録に無い ID はエラーにする", () => {
+    for (const judge of [undefined, "", JUDGE_SAME_AS_ANSWER, "llm-a", "vlm-b"]) {
+      expect(validateDefaultModels({ ...valid, default_judge_model_id: judge })).toEqual({});
+    }
+    expect(validateDefaultModels({ ...valid, default_judge_model_id: "gone" })).toEqual({
+      default_judge_model_id:
+        "「gone」は登録モデルにありません。登録モデルから選び直してください。",
+    });
+  });
+
+  it("選択肢は「既定のテキストモデル」（空）→「回答と同じモデル」→ 登録モデルの順", () => {
+    expect(judgeModelOptions(models)).toEqual([
+      { value: "", label: "既定のテキストモデル" },
+      { value: JUDGE_SAME_AS_ANSWER, label: "回答と同じモデル" },
+      ...textModelOptions(models),
+    ]);
+    // 「既定のテキストモデル」には、今の既定のテキストモデルを説明に出す。
+    expect(judgeModelOptions(models, "llm-a")[0]).toEqual({
+      value: "",
+      label: "既定のテキストモデル",
+      description: "標準",
+    });
+  });
+
+  it("判定に選んだモデルの ID を書き換えたら追従し、回答と同じモデルは変えない", () => {
+    const judged = {
+      default_text_model_id: "llm-a",
+      default_vision_model_id: "vlm-b",
+      default_judge_model_id: "llm-a",
+    };
+    expect(
+      followModelChange(judged, models[0], { ...models[0]!, model_id: "llm-c" }),
+    ).toEqual({
+      default_text_model_id: "llm-c",
+      default_vision_model_id: "vlm-b",
+      default_judge_model_id: "llm-c",
+    });
+    const same = { ...judged, default_judge_model_id: JUDGE_SAME_AS_ANSWER };
+    expect(
+      followModelChange(same, models[0], { ...models[0]!, model_id: "llm-c" })
+        .default_judge_model_id,
+    ).toBe(JUDGE_SAME_AS_ANSWER);
   });
 });
 

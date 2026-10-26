@@ -479,8 +479,12 @@ class EvaluationJudgeDiagnostics(BaseModel):
     ``standard_scope_reused`` は比較範囲（標準回答の比較項目）を同じ評価の job の記録から
     使い回したか、``standard_scope_retries`` / ``judge_retries`` は比較範囲の固定 / 照合・
     監査で出力の誤りを指摘して出し直させた回数、``retry_reasons`` はその段と原因の例外の型
-    （「standard_scope:InvalidStructuredOutput」）。``standard_scope_dropped`` は、引用が
-    標準回答に結び付かず（質問の文・言い換えの引用）比較範囲から外した項目の数。
+    （「standard_scope:InvalidStructuredOutput」）。``standard_scope_dropped`` は、指した
+    標準回答の単位の ID がどれも標準回答に無いので比較範囲から外した項目の数。
+    ``judge_calls`` は網羅・正確性・主張の判定の LLM の呼び出しの数（再試行を含む。比較範囲の
+    固定を除く）、``claim_calls`` はそのうち段落ごとの主張の判定の数、``claim_failures`` は判定を
+    完了できず unassessed にした段落の数、``uncited_claims`` は出典が無くモデルを呼ばずに
+    unsupported にした段落の数（#3576）。
     """
 
     standard_scope_reused: bool = False
@@ -488,6 +492,12 @@ class EvaluationJudgeDiagnostics(BaseModel):
     standard_scope_dropped: int = Field(default=0, ge=0)
     judge_retries: int = Field(default=0, ge=0)
     retry_reasons: list[str] = Field(default_factory=list)
+    # 判定に使ったモデルの ID（#3574。共通のモデル設定の既定の判定モデルで解決した ID）。
+    judge_model_id: str | None = None
+    judge_calls: int = Field(default=0, ge=0)
+    claim_calls: int = Field(default=0, ge=0)
+    claim_failures: int = Field(default=0, ge=0)
+    uncited_claims: int = Field(default=0, ge=0)
 
 
 class EvaluationAnswerJudgement(BaseModel):
@@ -509,6 +519,8 @@ class EvaluationAnswerJudgement(BaseModel):
     # 判定の診断（比較範囲を job の記録から使い回したか・出力の誤りで再試行した回数）。
     # 評価を完了できなかったケースでも残す。判定が記録を返さなかった（時間切れなど）ときは None。
     judge_diagnostics: EvaluationJudgeDiagnostics | None = None
+    # 判定のモデルの ID（#3574）。判定を完了できなかった（時間切れ・失敗）ケースにも残す。
+    judge_model_id: str | None = None
 
 
 class EvaluationTurnResult(BaseModel):

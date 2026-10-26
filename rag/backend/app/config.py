@@ -61,6 +61,9 @@ from pr_system_settings.model import (
     enterprise_ai_default_model_id as enterprise_ai_default_model_id,
 )
 from pr_system_settings.model import (
+    enterprise_ai_judge_model_id as enterprise_ai_judge_model_id,
+)
+from pr_system_settings.model import (
     enterprise_ai_max_input_tokens as enterprise_ai_max_input_tokens,
 )
 from pr_system_settings.model import enterprise_ai_model_catalog as enterprise_ai_model_catalog
@@ -594,6 +597,10 @@ class Settings(
     # で解決する。
     oci_enterprise_ai_default_text_model: str = Field(default="")
     oci_enterprise_ai_default_vision_model: str = Field(default="")
+    # 品質評価の判定のモデル（#3574。空 = 既定のテキストモデル、
+    # same_as_answer = 回答と同じモデル）。
+    # 判定に使う ID は enterprise_ai_judge_model_id で解決する。
+    oci_enterprise_ai_default_judge_model: str = Field(default="")
     oci_enterprise_ai_llm_path: str = Field(default="/responses")
     oci_enterprise_ai_vlm_path: str = Field(default="/responses")
     oci_enterprise_ai_vlm_input_mode: EnterpriseAiVlmInputMode = Field(

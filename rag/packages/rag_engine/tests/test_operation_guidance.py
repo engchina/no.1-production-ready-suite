@@ -60,7 +60,7 @@ def test_crag_sufficiency_needs_business_object_and_reports_other_gaps(
 
 
 def test_default_and_optional_evaluation_use_guidance_goal():
-    from rag_engine.evaluation.answer_eval import SYSTEM_PROMPT
+    from rag_engine.evaluation.answer_eval import CLAIM_PROMPT, COVERAGE_PROMPT
     from rag_engine.generation.grounded import GENERATE_SYSTEM_PROMPT
 
     # 生成 prompt は共有方針の全文を結合せず、items 向けに書いた方針を持つ (#960)。編集可能テンプレートには重複させない。
@@ -73,6 +73,7 @@ def test_default_and_optional_evaluation_use_guidance_goal():
     assert "資料の値を今の値として断定しない" in GENERATE_SYSTEM_PROMPT
     assert "今の設定値として断定した説明は誤り" in OPERATION_GUIDANCE_POLICY
     assert OPERATION_GUIDANCE_POLICY not in DEFAULT_VLM_ANSWER_PROMPT
-    assert OPERATION_GUIDANCE_POLICY in SYSTEM_PROMPT
+    # 品質評価の判定の指示は判定の基準だけを持ち、回答の生成の方針は入れない（#3576）。
+    assert OPERATION_GUIDANCE_POLICY not in CLAIM_PROMPT + COVERAGE_PROMPT
     assert "未提供なら `confidence=low`" not in GENERATE_SYSTEM_PROMPT + DEFAULT_VLM_ANSWER_PROMPT
     assert "「関連資料を追加する」" not in GENERATE_SYSTEM_PROMPT + DEFAULT_VLM_ANSWER_PROMPT

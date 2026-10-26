@@ -3934,6 +3934,8 @@ export const ja = {
   "settings.answerPrompts.part.template": "入力テンプレート",
   "settings.answerPrompts.part.correctness": "回答の正確性の判定",
   "settings.answerPrompts.part.scope": "評価範囲の固定",
+  "settings.answerPrompts.part.coverage": "標準回答の比較項目の網羅の判定",
+  "settings.answerPrompts.part.claim": "回答の段落ごとの、出典の根拠による裏付けの判定",
   "settings.answerPrompts.part.instruction": "指示",
   "settings.answerPrompts.part.picture": "図・画像を読むときの対象の指示",
   "settings.answerPrompts.part.table": "表を読むときの対象の指示",

@@ -23,6 +23,9 @@ suite の package を import せずにこの module の型で読む。一致の�
     # 評価器を動かして校正する（OCI Enterprise AI を呼ぶ。接続とモデルは RAG の設定）
     uv run python -m app.rag.answer_judge_calibration ../../tmp/eval/labels.json \\
         --output ../../tmp/eval/rag-answer-calibration.json
+    # 判定のモデルを明示する（省略時は共通のモデル設定の既定の判定モデル。#3574）
+    uv run python -m app.rag.answer_judge_calibration ../../tmp/eval/labels.json \\
+        --judge-model <登録モデルの ID> --output ../../tmp/eval/rag-answer-calibration.json
     # 人手の判定を直したら、保存した評価を使って集計だけやり直す（モデルを呼ばない）
     uv run python -m app.rag.answer_judge_calibration ../../tmp/eval/labels.json \\
         --evaluations ../../tmp/eval/rag-answer-calibration.json \\
@@ -203,11 +206,19 @@ def evaluate_labels(labels: HumanLabels, evaluate: Evaluate) -> dict[str, dict[s
     return {item.id: dict(evaluate(item)) for item in labels.items}
 
 
-def judge_provenance(settings: Any) -> dict[str, Any]:
-    """評価器の判定のモデル（校正の結果に記録し、画面の「校正済み」の照合に使う。#3578）。"""
-    from app.config import enterprise_ai_default_model_id
+def resolve_judge_model_id(settings: Any, judge_model_id: str | None = None) -> str:
+    """判定のモデル（指定、無ければ共通のモデル設定の既定の判定モデル。#3574）。"""
+    from app.config import enterprise_ai_judge_model_id
 
-    return {"provider": "oci_enterprise_ai", "model": enterprise_ai_default_model_id(settings)}
+    return (judge_model_id or "").strip() or enterprise_ai_judge_model_id(settings)
+
+
+def judge_provenance(settings: Any, judge_model_id: str | None = None) -> dict[str, Any]:
+    """評価器の判定のモデル（校正の結果に記録し、画面の「校正済み」の照合に使う。#3578）。"""
+    return {
+        "provider": "oci_enterprise_ai",
+        "model": resolve_judge_model_id(settings, judge_model_id),
+    }
 
 
 def judge_prompt_sha256() -> str:
@@ -225,13 +236,20 @@ def judge_prompt_sha256() -> str:
     return _sha256(prompts)
 
 
-def backend_evaluator(settings: Any | None = None) -> tuple[Evaluate, dict[str, Any]]:
-    """RAG の設定で、画面・評価の job と同じ評価器（`evaluate_answer_record`）を使う。"""
+def backend_evaluator(
+    settings: Any | None = None, judge_model_id: str | None = None
+) -> tuple[Evaluate, dict[str, Any]]:
+    """RAG の設定で、画面・評価の job と同じ評価器（`evaluate_answer_record`）を使う。
+
+    判定のモデルは ``judge_model_id``（`--judge-model`）、無ければ共通のモデル設定の既定の判定モデル
+    （人手の判定の回答は作ったモデルが分からないので、「回答と同じモデル」は既定のテキストモデル。#3574）。
+    """
     from app.config import get_settings
     from app.rag.answer_engine import evaluate_answer_record
     from app.schemas.search import RetrievedChunk
 
     resolved = settings or get_settings()
+    judge_model = resolve_judge_model_id(resolved, judge_model_id)
 
     def evaluate(item: LabeledAnswer) -> Mapping[str, Any]:
         citations = [
@@ -241,10 +259,19 @@ def backend_evaluator(settings: Any | None = None) -> tuple[Evaluate, dict[str, 
             for evidence in item.evidence
         ]
         return evaluate_answer_record(
-            evaluation_input(item), item.standard_answer or "", resolved, citations=citations
+            evaluation_input(item),
+            item.standard_answer or "",
+            resolved,
+            citations=citations,
+            judge_model_id=judge_model,
         )
 
-    return evaluate, judge_provenance(resolved)
+    return evaluate, {"provider": "oci_enterprise_ai", "model": judge_model}
+
+
+def _backend_evaluator(judge_model_id: str | None = None) -> tuple[Evaluate, dict[str, Any]]:
+    """CLI の評価器（`--judge-model`）。"""
+    return backend_evaluator(None, judge_model_id)
 
 
 def _pass_at(values: Sequence[str]) -> dict[str, float]:
@@ -279,6 +306,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-kappa", type=float, default=defaults.min_kappa)
     parser.add_argument("--max-false-pass-rate", type=float, default=defaults.max_false_pass_rate)
     parser.add_argument("--min-coverage", type=float, default=defaults.min_coverage)
+    parser.add_argument(
+        "--judge-model",
+        help="判定のモデル（登録モデルの ID。省略時は共通のモデル設定の既定の判定モデル）",
+    )
     parser.add_argument("--output", type=Path, required=True, help="校正の結果の出力先")
     return parser
 
@@ -304,7 +335,7 @@ def main(
             if missing:
                 raise ValueError(f"評価の無い項目があります: {', '.join(missing[:10])}")
         else:
-            evaluate, provenance = evaluator or backend_evaluator()
+            evaluate, provenance = evaluator or _backend_evaluator(args.judge_model)
             evaluations = evaluate_labels(labels, evaluate)
         report = calibrate_evaluations(
             labels, evaluations, thresholds=thresholds, pass_at=cutoffs, evaluator=provenance

@@ -98,6 +98,11 @@ export interface EnterpriseAiModelSettings {
   default_text_model_id: string;
   /** 画像を読む処理の既定。モデルを登録したら必須で、Vision 対応のモデルに限る（#499）。 */
   default_vision_model_id: string;
+  /**
+   * 品質評価で回答を判定するモデル（#3574）。空（既定）は既定のテキストモデル、
+   * JUDGE_SAME_AS_ANSWER（"same_as_answer"）は回答を作ったモデル、それ以外は登録モデルの ID。
+   */
+  default_judge_model_id?: string;
   api_path: string;
   vlm_input_mode: EnterpriseAiVlmInputMode;
   text_payload_template: string;

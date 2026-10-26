@@ -3,11 +3,13 @@
 from unittest.mock import patch
 
 import pytest
+from judge_stub import calls_of, judge
 
 from rag_engine.evaluation.answer_eval import (
     AnswerEvaluationOutput,
     ClaimCheck,
     CoverageCheck,
+    CoverageOutput,
     StandardAnswerScope,
     StandardRequirement,
     _evidence_fragments,
@@ -17,6 +19,8 @@ from rag_engine.generation.answering import AnswerContext, AnswerRecord, _crag_g
 from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
 from rag_engine.retrieval.evidence_selection import evidence_packet
 from rag_engine.retrieval.task_contract import task_contract
+
+PARSE = "rag_engine.evaluation.answer_eval.parse_text_response"
 
 
 def record(key, text, **kwargs):
@@ -223,26 +227,20 @@ def test_evaluation_does_not_repeat_child_text_already_in_parent():
 
 
 def evaluation_case(status):
-    """主張の監査の判定と引用の検証を確かめる評価ケース。"""
+    """主張の監査の判定と根拠への結び付けを確かめる評価ケース（段落の出典の行が根拠を指す）。"""
     data = {
         "question": "原因欄を編集する操作は？",
         "standard_answer": "※で開き鉛筆で編集する。",
-        "answer_text": "鉛筆で画面を開く。",
-        "evidence_items": [{"id": "p1", "text": "※で画面を開く。鉛筆で編集する。"}],
+        "answer_text": "鉛筆で画面を開く。\n根拠：manual.pdf",
+        "evidence_items": [{"id": "p1", "source": "manual.pdf", "text": "※で画面を開く。鉛筆で編集する。"}],
     }
     scope = StandardAnswerScope(
-        requirements=[StandardRequirement(standard_answer_quote="※で開き鉛筆で編集する。", requirement="入口と編集ボタンの説明")],
+        requirements=[StandardRequirement(standard_answer_unit_ids=["S1"], requirement="入口と編集ボタンの説明")],
         excluded_case_data=[],
     )
-    proof = "※で画面を開く。" if status in {"supported", "contradicted"} else ""
     output = AnswerEvaluationOutput(
         coverage_checks=[CoverageCheck(requirement_index=1, status="addressed", answer_quote="鉛筆で画面を開く。")],
-        evidence_summary="入口と編集の役割",
-        claim_checks=[
-            ClaimCheck(
-                answer_quote="鉛筆で画面を開く。", status=status, source_id="p1" if proof else "", evidence_quote=proof, reason="役割を確認"
-            )
-        ],
+        claim_checks=[ClaimCheck(answer_quote="鉛筆で画面を開く。", status=status, source_id="", evidence_quote="", reason="役割を確認")],
     )
     return data, scope, output
 
@@ -251,61 +249,39 @@ def evaluation_case(status):
 def test_unsupported_or_reversed_operations_keep_their_claim_status(status):
     # 合否は backend が主張の裏付け(claim_support_rate)で決める。rag_engine は判定をそのまま残す(#680)。
     data, scope, output = evaluation_case(status)
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=output):
+    with patch(PARSE, side_effect=judge(output)):
         result = evaluate_answer_payload(data, object(), standard_scope=scope)
     assert result["status"] == "completed"
-    assert [claim["status"] for claim in result["claim_checks"]] == [status]
+    assert [claim["status"] for claim in result["claim_checks"] if claim["status"] != "not_a_claim"] == [status]
 
 
 def test_invented_evaluation_source_cannot_confirm_contradiction():
     data, scope, output = evaluation_case("contradicted")
-    output.claim_checks[0].evidence_quote = "存在しない根拠"
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=output):
+    output.claim_checks[0].evidence_id = "E0000000000"
+    with patch(PARSE, side_effect=judge(output)):
         result = evaluate_answer_payload(data, object(), standard_scope=scope)
     assert result["status"] == "completed"
     assert result["claim_checks"][0]["status"] == "citation_error"
-    assert "一致を検証できない" in result["claim_checks"][0]["reason"]
+    assert result["claim_checks"][0]["audit_status"] == "contradicted"
 
 
-def test_missing_claim_audit_is_recorded_as_unassessed():
+def test_audit_records_the_original_passage_including_parentheses():
     data, scope, output = evaluation_case("data_confirmation")
-    output.claim_checks = []
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=output):
-        result = evaluate_answer_payload(data, object(), standard_scope=scope)
-    assert result["requirement_coverage"] == 1.0
-    assert result["missing_audit_passage_ids"] == ["A1"]
-    assert [claim["status"] for claim in result["claim_checks"]] == ["unassessed"]
-
-
-def test_audit_binds_original_passage_including_parentheses():
-    data, scope, output = evaluation_case("data_confirmation")
-    data["answer_text"] = "鉛筆（編集用）で画面を開く。"
-    output.coverage_checks[0].answer_quote = data["answer_text"]
+    data["answer_text"] = "鉛筆（編集用）で画面を開く。\n根拠：manual.pdf"
     output.claim_checks[0].answer_passage_id = "A1"
-    output.claim_checks[0].answer_quote = "鉛筆で画面を開く。"
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=output):
+    with patch(PARSE, side_effect=judge(output)):
         result = evaluate_answer_payload(data, object(), standard_scope=scope)
     assert result["status"] == "completed"
-    assert result["claim_checks"][0]["answer_quote"] == data["answer_text"]
+    assert result["claim_checks"][0]["answer_quote"] == "鉛筆（編集用）で画面を開く。"
     assert result["claim_checks"][0]["answer_passage_id"] == "A1"
-
-
-def test_audit_rejects_nonexistent_answer_passage():
-    data, scope, output = evaluation_case("data_confirmation")
-    output.claim_checks[0].answer_passage_id = "A999"
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=output) as parse:
-        result = evaluate_answer_payload(data, object(), standard_scope=scope)
-    assert result["status"] == "error"
-    assert parse.call_count == 2
 
 
 def test_coverage_binds_original_passage_instead_of_joined_steps():
     data, scope, output = evaluation_case("data_confirmation")
     data["answer_text"] = "最初に画面を開く。次に条件を入力する。最後に保存する。"
-    output.claim_checks[0].answer_passage_id = "A1"
     output.coverage_checks[0].answer_passage_id = "A3"
     output.coverage_checks[0].answer_quote = "画面を開く。保存する。"
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=output):
+    with patch(PARSE, side_effect=judge(output)):
         result = evaluate_answer_payload(data, object(), standard_scope=scope)
     assert result["status"] == "completed"
     assert result["coverage_checks"][0]["answer_quote"] == "最後に保存する。"
@@ -314,10 +290,11 @@ def test_coverage_binds_original_passage_instead_of_joined_steps():
 def test_coverage_rejects_nonexistent_answer_passage():
     data, scope, output = evaluation_case("data_confirmation")
     output.coverage_checks[0].answer_passage_id = "A999"
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=output) as parse:
+    calls = []
+    with patch(PARSE, side_effect=judge(output, calls=calls)):
         result = evaluate_answer_payload(data, object(), standard_scope=scope)
     assert result["status"] == "error"
-    assert parse.call_count == 2
+    assert len(calls_of(calls, CoverageOutput)) == 2
 
 
 def test_fragmented_native_ranges_are_rejoined_so_a_sentence_can_be_quoted():
