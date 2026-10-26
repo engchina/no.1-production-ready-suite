@@ -111,7 +111,12 @@ from app.mcp.profile_scope import (
     check_search,
     within_profile_scope,
 )
-from app.rag.answer_engine import CATALOG_ARTICLE_ROLE, AnswerScope
+from app.rag.answer_engine import (
+    ANSWER_VALIDATION_STEP,
+    CATALOG_ARTICLE_ROLE,
+    AnswerScope,
+    _answer_step_span,
+)
 from app.rag.answer_failure import ANSWER_API_FAILED_ERROR_CODE, describe_answer_api_failure
 from app.rag.answer_validation import (
     MAX_ANSWER_TRACE_IDS,
@@ -4793,31 +4798,34 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         enforce_rate_limit("search", http_request)
         guide = arguments.guide
         try:
-            result = await validate_answer(
-                arguments.query,
-                arguments.answer,
-                [EvidenceRef(item.document_id, item.chunk_id) for item in arguments.evidence],
-                get_settings(),
-                requests=(
-                    [item.model_dump() for item in arguments.requests]
-                    if arguments.requests is not None
-                    else None
-                ),
-                gaps=arguments.gaps,
-                answer_trace_ids=arguments.answer_trace_ids,
-                premises=[item.model_dump() for item in arguments.premises],
-                data_results=[item.model_dump() for item in arguments.data_results],
-                guide=(
-                    GuideCheckRef(
-                        guide.search_answer_profile_id,
-                        guide.guide_id,
-                        guide.revision,
-                        dict(guide.conditions),
-                    )
-                    if guide is not None
-                    else None
-                ),
-            )
+            # 回答フローの「資料との照合」と同じ工程の span で包む（呼び出し元の Agent の
+            # 処理の経過で、MCP の呼び出しの下に RAG の工程として出る。#3470）。
+            with _answer_step_span(ANSWER_VALIDATION_STEP):
+                result = await validate_answer(
+                    arguments.query,
+                    arguments.answer,
+                    [EvidenceRef(item.document_id, item.chunk_id) for item in arguments.evidence],
+                    get_settings(),
+                    requests=(
+                        [item.model_dump() for item in arguments.requests]
+                        if arguments.requests is not None
+                        else None
+                    ),
+                    gaps=arguments.gaps,
+                    answer_trace_ids=arguments.answer_trace_ids,
+                    premises=[item.model_dump() for item in arguments.premises],
+                    data_results=[item.model_dump() for item in arguments.data_results],
+                    guide=(
+                        GuideCheckRef(
+                            guide.search_answer_profile_id,
+                            guide.guide_id,
+                            guide.revision,
+                            dict(guide.conditions),
+                        )
+                        if guide is not None
+                        else None
+                    ),
+                )
         except GuideProfileNotFoundError as exc:
             assert guide is not None  # 業務ガイドを渡したときだけ起きる
             raise await profile_not_found_error(guide.search_answer_profile_id) from exc
