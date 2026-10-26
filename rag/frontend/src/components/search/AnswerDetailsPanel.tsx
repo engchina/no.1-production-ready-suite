@@ -44,12 +44,11 @@ export function AnswerDetailsPanel({
           title: data.models.llm.modelId,
         }
       : null,
-    data.models.vision
+    data.models.attachedImages
       ? {
-          key: "vision",
-          label: t("search.answerDetails.model.vision"),
-          value: data.models.vision.label,
-          title: data.models.vision.modelId,
+          key: "attachedImages",
+          label: t("search.answerDetails.model.attachedImages"),
+          value: t("search.answerDetails.model.attachedImagesValue", { count: data.models.attachedImages }),
         }
       : null,
     data.models.embedding

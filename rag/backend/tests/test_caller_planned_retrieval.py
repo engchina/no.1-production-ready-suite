@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from app.config import Settings
+from app.config import EnterpriseAiConfiguredModel, Settings
 from app.rag.answer_engine import AnswerEngine
 from app.rag.pipeline import RagPipeline
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
@@ -85,8 +85,16 @@ def _reasoning_settings() -> Settings:
         rag_article_catalog_enabled=True,
         rag_screen_linking_enabled=True,
         rag_auto_field_filter_enabled=True,
-        rag_answer_vision_enabled=True,
+        # 回答のモデルが画像を読めても、回答を作らない検索では根拠の画像を切り出さない（#3444）。
+        oci_enterprise_ai_models=[
+            EnterpriseAiConfiguredModel(model_id="vlm", display_name="VLM", vision_enabled=True)
+        ],
+        oci_enterprise_ai_default_text_model="vlm",
     )
+
+
+async def _fail_source(oracle: object, document_id: str) -> bytes:
+    raise AssertionError("回答を作らない検索では根拠の画像を切り出さない")
 
 
 @pytest.fixture
@@ -96,6 +104,8 @@ def no_generation(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
     GENERATION_CALLS.clear()
     monkeypatch.setattr(engine_oci, "parse_text_response", _fail_generation)
     monkeypatch.setattr(engine_oci, "parse_multimodal_response", _fail_generation)
+    # 根拠の画像を切り出す原本の読み込み（回答を作らない検索では行わない。#3444）。
+    monkeypatch.setattr("app.rag.answer_engine.load_parsed_source", _fail_source)
     yield GENERATION_CALLS
     GENERATION_CALLS.clear()
 

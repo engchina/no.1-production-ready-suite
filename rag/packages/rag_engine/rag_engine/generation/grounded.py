@@ -4984,7 +4984,6 @@ def run_round(
     parse_images: Callable[..., Any],
     previous: Sequence[CheckedItem] = (),
     known_gaps: Sequence[str] = (),
-    image_provider_id: str | None = None,
     audit_settings: Any = None,
     compact_audit_reasons: bool = False,
     guide_steps: Sequence[tuple[str, str, Sequence[str]]] = (),
@@ -5006,7 +5005,7 @@ def run_round(
     item がない round の summary は、監査が支持しても公開しない（items の裏付けがない）。
     LLM 呼出は呼出元から受け取る。注入境界と既存テストの差し替え位置を1か所に保つ。
     known_gaps は監査入力にも渡し、既知の欠落だけを理由に off_target と判定させない (#986)。
-    画像を添付する生成は ``image_provider_id``（既定の Vision モデル）、それ以外は ``provider_id`` で呼ぶ (#649)。
+    生成・作り直し・監査はすべて回答のモデル ``provider_id`` で呼ぶ。``image_paths`` はそのモデルへ添付する画像（#3444）。
     監査は ``audit_settings``（監査の推論の量を反映した設定。#1528）で呼ぶ。None は生成と同じ ``settings``。
     ``compact_audit_reasons`` は監査に通った判定の reason を空にさせる（#1912。`audit_system_prompt`）。
     ``guide_steps`` は業務ガイドの手順ごとの根拠（#2395）。監査に手順と根拠の対応を渡し、手順ごとの充足
@@ -5084,9 +5083,7 @@ def run_round(
     generation_system = GENERATE_SYSTEM_PROMPT + (ASSUMPTION_SYSTEM_PROMPT if assume_unconfirmed else "")
     if image_paths:
         try:
-            draft = parse_images(
-                generation_system, prompt, list(image_paths), settings, GroundedDraft, provider_id=image_provider_id or provider_id
-            )
+            draft = parse_images(generation_system, prompt, list(image_paths), settings, GroundedDraft, provider_id=provider_id)
         except Exception as exc:
             if invalid_output is None or not invalid_output(exc):
                 raise
@@ -5131,9 +5128,7 @@ def run_round(
             )
         )
         if image_paths and not image_fallback:
-            draft = parse_images(
-                generation_system, repair_prompt, list(image_paths), settings, GroundedDraft, provider_id=image_provider_id or provider_id
-            )
+            draft = parse_images(generation_system, repair_prompt, list(image_paths), settings, GroundedDraft, provider_id=provider_id)
         else:
             draft = parse_text(generation_system, repair_prompt, settings, GroundedDraft, provider_id=provider_id)
         generation_calls += 1
