@@ -11,7 +11,6 @@ const agent = {
   description: "業務調査を行う",
   instructions: "根拠を示して回答する。",
   skill_ids: ["business-rag-research"],
-  migration_required: false,
   enabled: true,
   source: "builtin",
   // 公開中の v1（#770）。

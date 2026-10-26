@@ -339,6 +339,7 @@ from app.observability import (
     CONTEXT_COMPACTIONS_TOTAL,
     MODEL_INCOMPLETE_RETRIES_TOTAL,
     TOOL_LOOP_STOPS_TOTAL,
+    UNDECLARED_TOOL_CALLS_TOTAL,
 )
 from app.settings import get_settings
 
@@ -1478,6 +1479,9 @@ class _ToolRecorder:
         )
         # 同じ応答で確認を出したため、実行しない呼び出しの ID（確認の答えを待つ間は実行しない）。
         self.held_calls: set[str] = set()
+        # スキルが宣言したが、この Run ではモデルに渡さなかったツール（名前 → 理由。#3240）。
+        # 渡していない名前の呼び出しの理由（`classify_undeclared_call`）に使う。
+        self.excluded: dict[str, str] = {}
 
     async def hold_for_confirmation(self, context: Any, output: Sequence[Any]) -> None:
         """モデルの応答に回答前の確認があれば、ツールを実行する前に中断するかを決める（#3352）。
@@ -2537,13 +2541,18 @@ def build_function_tools(
     conflicts = _conflicting_tool_names(entries)
     _note_tool_name_conflicts(run_id, conflicts)
     for definition, handler in entries:
-        if definition.name in seen or definition.name in conflicts:
+        if definition.name in conflicts:
+            recorder.excluded[definition.name] = UNDECLARED_CALL_NAME_CONFLICT
+            continue
+        if definition.name in seen:
             continue
         seen.add(definition.name)
         if is_declined_tool(definition.name, declined):
+            recorder.excluded[definition.name] = UNDECLARED_CALL_DECLINED
             continue
         decision = policy.decide(definition)
         if decision == ToolPolicyDecision.DENY:
+            recorder.excluded[definition.name] = UNDECLARED_CALL_POLICY_DENIED
             continue
 
         async def on_invoke(
@@ -2785,6 +2794,120 @@ def build_sdk_agent(
 
 # 無いツールの呼び出しの返答で、候補として並べるツールの数の上限（#1303）。
 _TOOL_NOT_FOUND_LIST_MAX = 20
+
+# モデルに渡していない名前のツールの呼び出し（宣言の閉包の外の呼び出し）の理由（#3240）。
+# どの理由でも実行せず（`tool_not_found_message` をモデルへ返す）、検知を理由に渡すツールを
+# 広げない。理由は Run のイベント（`undeclared_tool_call`）・ログ・metric に残す。
+# 渡したツールと同じツールを別の名前（素の名前・別の接頭辞）で呼んだ（モデルの名前違い）。
+UNDECLARED_CALL_NAME_MISMATCH = "name_mismatch"
+# スキルが宣言したが、ツール権限が「拒否」なので渡していない。
+UNDECLARED_CALL_POLICY_DENIED = "policy_denied"
+# スキルが宣言したが、この Run で利用者が確認を取り消した種類なので渡していない（#1441）。
+UNDECLARED_CALL_DECLINED = "declined"
+# スキルが宣言したが、別の出自のツールと名前が重なったので渡していない（#2596）。
+UNDECLARED_CALL_NAME_CONFLICT = "name_conflict"
+# 同じ会話の前の Run で呼んだツールだが、この Run では渡していない（前の文脈の名前）。
+UNDECLARED_CALL_PREVIOUS_CONTEXT = "previous_context"
+# 登録済みの MCP 接続・Control Plane のツールの名前だが、業務 Agent のスキルが宣言していない
+# （スキルの設定の不足か、宣言の外への呼び出しの試み）。
+UNDECLARED_CALL_NOT_DECLARED = "not_declared"
+# どの接続・ツールの名前にも当たらない。
+UNDECLARED_CALL_UNKNOWN = "unknown"
+UNDECLARED_CALL_REASONS: tuple[str, ...] = (
+    UNDECLARED_CALL_NAME_MISMATCH,
+    UNDECLARED_CALL_POLICY_DENIED,
+    UNDECLARED_CALL_DECLINED,
+    UNDECLARED_CALL_NAME_CONFLICT,
+    UNDECLARED_CALL_PREVIOUS_CONTEXT,
+    UNDECLARED_CALL_NOT_DECLARED,
+    UNDECLARED_CALL_UNKNOWN,
+)
+# 記録するツールの名前の長さの上限（モデルが作った名前なので、長い文を残さない）。
+_UNDECLARED_NAME_MAX_CHARS = 128
+
+
+def classify_undeclared_call(
+    called: str,
+    exposed: Collection[str],
+    *,
+    excluded: Mapping[str, str],
+    previous_names: Collection[str],
+    registered_connections: Collection[str],
+    registered_tools: Collection[str],
+) -> str:
+    """モデルに渡していない名前のツールを呼んだ理由（`UNDECLARED_CALL_REASONS` の 1 つ。#3240）。
+
+    先に、この Run で外したツール（スキルが宣言したもの）か、渡したツールの別名かを見る。次に
+    同じ会話の前の Run で呼んだ名前か、登録済みの接続・Control Plane のツールの名前かを見る。
+    """
+    if called in excluded:
+        return excluded[called]
+    base = mcp_base_tool_name(called)
+    if any(name != called and mcp_base_tool_name(name) == base for name in exposed):
+        return UNDECLARED_CALL_NAME_MISMATCH
+    if called in previous_names:
+        return UNDECLARED_CALL_PREVIOUS_CONTEXT
+    prefix = _connection_prefix(called)
+    if called in registered_tools or (prefix is not None and prefix in registered_connections):
+        return UNDECLARED_CALL_NOT_DECLARED
+    return UNDECLARED_CALL_UNKNOWN
+
+
+def _previous_tool_names(run_id: str) -> set[str]:
+    """同じ会話の前の Run で呼んだツールの名前（`previous_context` の判定）。"""
+    from app.features.agent.runtime import runtime_repository
+
+    names: set[str] = set()
+    for run in runtime_repository.thread_previous_runs(run_id):
+        names.update(step.tool_call.name for step in run.steps if step.tool_call is not None)
+    return names
+
+
+def record_undeclared_call(
+    run_id: str,
+    *,
+    called: str,
+    call_id: str,
+    exposed: Collection[str],
+    excluded: Mapping[str, str],
+) -> str:
+    """渡していない名前の呼び出しを理由つきで Run のイベント・ログ・metric に残す（#3240）。
+
+    記録は補助（失敗しても Run は続ける）。呼び出しは実行しない（実行しないことは呼び出し側の
+    SDK の `tool_not_found` の扱い）。理由を返す。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    try:
+        previous = _previous_tool_names(run_id)
+    except Exception:  # noqa: BLE001 - 前の Run が読めなくても理由は決める
+        previous = set()
+    reason = classify_undeclared_call(
+        called,
+        exposed,
+        excluded=excluded,
+        previous_names=previous,
+        registered_connections={
+            config.server_id for config in runtime_config_store.list_mcp_servers()
+        },
+        registered_tools=set(tool_registry.names()),
+    )
+    name = called[:_UNDECLARED_NAME_MAX_CHARS]
+    UNDECLARED_TOOL_CALLS_TOTAL.labels(reason=reason).inc()
+    logger.warning(
+        "builtin_runtime_undeclared_tool_call",
+        extra={"run_id": run_id, "tool_name": name, "call_id": call_id, "reason": reason},
+    )
+    try:
+        runtime_repository.record_undeclared_tool_call(
+            run_id, {"tool_name": name, "call_id": call_id, "reason": reason}
+        )
+    except Exception as exc:  # noqa: BLE001 - 記録は補助。残せなくてもモデルへ案内は返す
+        logger.warning(
+            "builtin_runtime_undeclared_tool_call_record_failed",
+            extra={"run_id": run_id, "exception_type": type(exc).__name__},
+        )
+    return reason
 
 
 def tool_not_found_message(called: str, exposed: Collection[str]) -> str:
@@ -3071,16 +3194,29 @@ def _run_config(run_id: str, sdk_agent: Agent[Any]) -> RunConfig:
     モデルが呼んだ名前のまま。同じ名前が複数の接続にあるときに誤った接続を呼ばない）。
     """
     exposed = [str(getattr(tool, "name", "")) for tool in sdk_agent.tools]
+    recorder = next(
+        (
+            found
+            for tool in sdk_agent.tools
+            if isinstance(found := getattr(tool, _RECORDER_ATTR, None), _ToolRecorder)
+        ),
+        None,
+    )
+    excluded = dict(recorder.excluded) if recorder is not None else {}
 
-    def format_error(args: ToolErrorFormatterArgs[Any]) -> str | None:
+    async def format_error(args: ToolErrorFormatterArgs[Any]) -> str | None:
         if args.kind != "tool_not_found":
             return None
-        message = tool_not_found_message(args.tool_name, exposed)
-        logger.warning(
-            "builtin_runtime_tool_not_found",
-            extra={"run_id": run_id, "tool_name": args.tool_name, "call_id": args.call_id},
+        # 渡していない名前の呼び出しは実行せず、理由つきで Run に残す（#3240）。
+        await asyncio.to_thread(
+            record_undeclared_call,
+            run_id,
+            called=args.tool_name,
+            call_id=str(args.call_id or ""),
+            exposed=exposed,
+            excluded=excluded,
         )
-        return message
+        return tool_not_found_message(args.tool_name, exposed)
 
     limits = getattr(sdk_agent, _CONTEXT_LIMITS_ATTR, None)
     static_instructions = getattr(sdk_agent, _STATIC_INSTRUCTIONS_ATTR, None)

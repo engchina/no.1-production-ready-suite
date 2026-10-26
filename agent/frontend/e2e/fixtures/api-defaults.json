@@ -17,11 +17,6 @@
         "structured-data-query"
       ],
       "model_id": "",
-      "migration_required": false,
-      "tool_names": [
-        "agent_skill_list",
-        "echo"
-      ],
       "enabled": true,
       "source": "builtin",
       "versioned": true,
@@ -56,11 +51,6 @@
         "business-rag-research"
       ],
       "model_id": "",
-      "migration_required": false,
-      "tool_names": [
-        "agent_skill_list",
-        "echo"
-      ],
       "enabled": true,
       "source": "builtin",
       "versioned": true,
@@ -93,11 +83,6 @@
         "structured-data-query"
       ],
       "model_id": "",
-      "migration_required": false,
-      "tool_names": [
-        "agent_skill_list",
-        "echo"
-      ],
       "enabled": true,
       "source": "builtin",
       "versioned": true,
@@ -208,160 +193,6 @@
     }
   ],
   "tools": [
-    {
-      "name": "agent_skill_list",
-      "description": "Agent Runtime に登録された Skill 一覧を返す。",
-      "input_schema": {
-        "type": "object",
-        "additionalProperties": false
-      },
-      "output_schema": {
-        "$defs": {
-          "AgentSkillDefinition": {
-            "properties": {
-              "id": {
-                "title": "Id",
-                "type": "string"
-              },
-              "name": {
-                "title": "Name",
-                "type": "string"
-              },
-              "description": {
-                "default": "",
-                "title": "Description",
-                "type": "string"
-              },
-              "instructions": {
-                "default": "",
-                "title": "Instructions",
-                "type": "string"
-              },
-              "mcp_requirements": {
-                "items": {
-                  "$ref": "#/$defs/SkillMcpRequirement"
-                },
-                "title": "Mcp Requirements",
-                "type": "array"
-              },
-              "references": {
-                "items": {
-                  "$ref": "#/$defs/SkillReference"
-                },
-                "title": "References",
-                "type": "array"
-              },
-              "enabled": {
-                "default": true,
-                "title": "Enabled",
-                "type": "boolean"
-              },
-              "tags": {
-                "items": {
-                  "type": "string"
-                },
-                "title": "Tags",
-                "type": "array"
-              },
-              "source": {
-                "default": "runtime",
-                "title": "Source",
-                "type": "string"
-              },
-              "created_at": {
-                "format": "date-time",
-                "title": "Created At",
-                "type": "string"
-              },
-              "updated_at": {
-                "format": "date-time",
-                "title": "Updated At",
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "name"
-            ],
-            "title": "AgentSkillDefinition",
-            "type": "object"
-          },
-          "SkillMcpRequirement": {
-            "description": "Skill が使う MCP 接続とツールの許可リスト（#757）。\n\n`server_id` は MCP 接続の ID（`rag` / `nl2sql` / 登録した接続）。`control-plane` は\nControl Plane のツール（`tool_registry`）。`tool_names` が空なら接続のすべてのツールを使う。\n`tool_names` は MCP のツールの素の名前（`rag_search`）。Skill の指示も素の名前で書いてよく、\n組み込み Runtime が Run のときにモデルへ渡す名前（`rag__rag_search`）へ書き直す（#1303）。",
-            "properties": {
-              "server_id": {
-                "title": "Server Id",
-                "type": "string"
-              },
-              "tool_names": {
-                "items": {
-                  "type": "string"
-                },
-                "title": "Tool Names",
-                "type": "array"
-              }
-            },
-            "required": [
-              "server_id"
-            ],
-            "title": "SkillMcpRequirement",
-            "type": "object"
-          },
-          "SkillReference": {
-            "description": "スキルの参照文書（SKILL.md と同じディレクトリの `references/` の 1 ファイル）。\n\n`path` はスキルのディレクトリからの相対パス（`references/guide.md`）。本文（`content`）は\nAPI の応答・保存に出さず（`exclude`）、`skill_reference_read` だけが読む。",
-            "properties": {
-              "path": {
-                "title": "Path",
-                "type": "string"
-              },
-              "characters": {
-                "default": 0,
-                "title": "Characters",
-                "type": "integer"
-              },
-              "content": {
-                "default": "",
-                "title": "Content",
-                "type": "string"
-              }
-            },
-            "required": [
-              "path"
-            ],
-            "title": "SkillReference",
-            "type": "object"
-          }
-        },
-        "properties": {
-          "skills": {
-            "items": {
-              "$ref": "#/$defs/AgentSkillDefinition"
-            },
-            "title": "Skills",
-            "type": "array"
-          },
-          "metadata": {
-            "additionalProperties": true,
-            "title": "Metadata",
-            "type": "object"
-          }
-        },
-        "required": [
-          "skills"
-        ],
-        "title": "AgentSkillListOutput",
-        "type": "object"
-      },
-      "permission_level": "read",
-      "side_effects": false,
-      "timeout_seconds": 1.0,
-      "max_retries": 0,
-      "audit_tags": [
-        "agent",
-        "skill",
-        "discovery"
-      ]
-    },
     {
       "name": "echo",
       "description": "入力をそのまま返す疎通確認用ツール。",

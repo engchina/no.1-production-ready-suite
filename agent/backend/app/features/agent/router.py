@@ -237,6 +237,7 @@ from app.features.agent.runtime import (
     MCP_API_KEY_NAME_KEY,
     AgentNotPublishedError,
     AgentProfile,
+    AgentProfileCreate,
     AgentProfilePatch,
     AgentPublishRequest,
     AgentsData,
@@ -1950,14 +1951,6 @@ async def create_run(
             )
         # 旧エンジンの v1 の Run（`X-Agent-API-Version: 1`）は #756 で削除した。
         agent = _control_plane_agent(run_request.agent_id)
-        if agent.migration_required:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "agent_migration_required",
-                    "message": "Skill を選択して Agent の移行を完了してください。",
-                },
-            )
         if not agent.enabled:
             raise HTTPException(
                 status_code=409,
@@ -2874,7 +2867,7 @@ async def create_evaluation(
     item = _evaluation_set_for_actor(request, evaluation.set_id)
     # 評価セットの業務 Agent 以外でも評価できる（同じ評価ケースで Agent をまたいで比べる。#1845）。
     agent = _require_evaluable_agent(request, evaluation.agent_id or item.agent_id)
-    if not agent.enabled or agent.migration_required:
+    if not agent.enabled:
         raise HTTPException(status_code=409, detail="この業務 Agent は実行できない状態です。")
     # 評価する版（#810）。下書きの評価は下書きの実行と同じく、Agent 管理か個人の Agent の持ち主
     # だけ（#2522・#2523）。省略時は、下書きを評価できて公開していない変更があれば下書き、
@@ -3850,7 +3843,7 @@ async def suggest_agent_draft_from_description(
 
 @router.post("/agents", response_model=ApiResponse[AgentProfile])
 async def create_agent(
-    agent: AgentProfile,
+    agent: AgentProfileCreate,
     request: Request,
     _: None = Depends(require_agent_builder),
 ) -> ApiResponse[AgentProfile]:
@@ -3868,7 +3861,8 @@ async def create_agent(
     # 画面・API で作る Agent は下書きから始める（公開するまで利用者の Run には使えない。#770）。
     # 版の項目は送られても使わない。
     policy = _actor_policy(request)
-    draft = agent.model_copy(
+    # 保存・応答は `AgentProfile`（作成の要求の型はツールの直接の指定を拒むだけ。#3240）。
+    draft = AgentProfile.model_validate(agent.model_dump()).model_copy(
         update={
             "id": agent_id,
             "versioned": True,

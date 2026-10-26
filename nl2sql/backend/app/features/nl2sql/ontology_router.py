@@ -22,6 +22,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from pr_backend_core import ApiResponse
+from pr_backend_core.observability.model_usage import RunModelUsage, collect_model_usage
 from pr_backend_core.timezones import local_today
 from pr_system_settings.auth.visibility import (
     OTHERS_CONTENT_FORBIDDEN_MESSAGE,
@@ -3229,7 +3230,9 @@ class OntologyApiRuntime:
                 "REQUEST_SCOPE_EMPTY",
                 "業務プロファイルの範囲に、使える表がありません。",
             )
-        with observe_stage("requirement_draft"):
+        # 確認の LLM の呼び出しはジョブの trace の外なので、ここで利用量を集めて session に残す
+        # （実行履歴の行でジョブの利用量と合算する。#3552）。
+        with observe_stage("requirement_draft"), collect_model_usage() as usage:
             output, model = call_requirement_llm(
                 self._requirement_client(),
                 question=request.question,
@@ -3265,6 +3268,7 @@ class OntologyApiRuntime:
                     conversation_history=conversation,
                 ),
                 draft=draft,
+                usage=usage.summary(),
             )
             runtime_context = QueryRuntimeContext(
                 allowed_objects=allowed,
@@ -4202,9 +4206,11 @@ class OntologyApiRuntime:
         except RequirementAnswerInvalidError as exc:
             raise OntologyIntegrityError("CLARIFICATION_ANSWER_INVALID", str(exc)) from exc
         review_round = current.requirement_review_round
+        review_usage: RunModelUsage | None = None
         if not unresolved_items(draft) and review_round < max_rounds:
-            # 原則 2: 全部の質問に答えたら、要件のまとめを LLM でもう一度検査する。
-            with observe_stage("requirement_review"):
+            # 原則 2: 全部の質問に答えたら、要件のまとめを LLM でもう一度検査する。利用量は session
+            # に足す（#3552）。
+            with observe_stage("requirement_review"), collect_model_usage() as usage:
                 output, model = call_requirement_llm(
                     self._requirement_client(),
                     question=current.original_question,
@@ -4221,6 +4227,7 @@ class OntologyApiRuntime:
                 previous=draft,
             )
             review_round += 1
+            review_usage = usage.summary()
         item = next(
             (value for value in current.requirement.items if value.id == request.item_id), None
         )
@@ -4250,6 +4257,7 @@ class OntologyApiRuntime:
                     draft_version=draft.version,
                 ),
                 review_round=review_round,
+                usage=review_usage,
             )
             self._persist_session(session)
             record_transition(

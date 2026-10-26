@@ -40,11 +40,13 @@ logger = logging.getLogger(__name__)
 RAG_CONNECTION_ID = "rag"
 RAG_EVIDENCE_KIND = "rag_evidence"
 READ_SOURCE_TOOL = "rag_read_source"
-# RAG が URL を作ってよい呼び出し（画面の操作）の印（RAG の `FIGURE_URL_PURPOSE` /
-# `SOURCE_PREVIEW_PURPOSE` と同じ値）。
+# RAG が URL を作ってよい呼び出し（画面の操作）の印（サービストークンの claim `purpose`。値は
+# platform/docs/backend-standard.md の共通の規則）。
 FIGURE_URL_PURPOSE = "figure_url"
 SOURCE_PREVIEW_PURPOSE = "source_preview"
-# RAG の図・原文のプレビューの読み取りの path。公開の起点に付け替えるときに確かめる。
+# RAG の図・原文のプレビューの読み取りの path の始まり（契約 rag-tools.json の `rag_read_source` の
+# `image_url.path`・`preview.content_path` の pattern。#3240）。公開の起点に付け替えるときに
+# 確かめる。
 FIGURE_PATH_PREFIX = "/api/figures/"
 SOURCE_PREVIEW_PATH_PREFIX = "/api/source-previews/"
 
@@ -71,7 +73,8 @@ PREVIEW_FAILED_MESSAGE = (
     "RAG から原文のプレビューを取得できませんでした。時間をおいて再度お試しください。"
 )
 
-# RAG の MCP のエラー（`rag_read_source`）→ 画面へ返す status と文言。
+# RAG の MCP のエラー（`rag_read_source`。code は契約 rag-tools.json の `errors`）→ 画面へ返す
+# status と文言。
 _TOOL_ERRORS: dict[str, tuple[int, str]] = {
     "source_stale": (409, STALE_MESSAGE),
     "source_not_found": (404, NOT_FOUND_MESSAGE),

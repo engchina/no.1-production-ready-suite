@@ -690,7 +690,7 @@ def test_grounding_tools_and_attempts() -> None:
     assert tool_grounding.is_grounding_tool(QUERY)
     assert tool_grounding.is_grounding_tool("erp__lookup_order")
     assert not tool_grounding.is_grounding_tool("skill_reference_read")
-    assert not tool_grounding.is_grounding_tool("agent_skill_list")
+    assert not tool_grounding.is_grounding_tool("echo")
     assert not tool_grounding.is_grounding_tool("rag__rag_list_search_answer_profiles")
     assert not tool_grounding.is_grounding_tool("nl2sql__nl2sql_list_profiles")
     assert not tool_grounding.is_grounding_tool("nl2sql__nl2sql_recommend_profile")
