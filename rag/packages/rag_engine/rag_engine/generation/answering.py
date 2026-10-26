@@ -183,6 +183,7 @@ from rag_engine.generation.query_prompts import (
     _dedupe_generated_queries,
     _generated_queries_from_payload,
     _limited_text_search_query_variants,
+    _merge_retrieval_queries,
     _query_expansion_details,
     _retrieval_metadata_filter,
     _retrieval_queries,
@@ -244,11 +245,7 @@ from rag_engine.retrieval.guide_steps import (
     select_step_parents,
     unsearched_steps,
 )
-from rag_engine.retrieval.inquiry_conditions import (
-    InquiryConditionParse,
-    inquiry_retrieval_queries,
-    parse_inquiry_conditions,
-)
+from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse, parse_inquiry_conditions
 from rag_engine.retrieval.operation_context import alternative_operation_queries
 from rag_engine.retrieval.question_planning import QuestionPlan, plan_question
 from rag_engine.retrieval.reference_follow import follow_reference_sources, is_followed_reference
@@ -271,7 +268,7 @@ from rag_engine.retrieval.scope import (
     normalize_retrieval_scope,
 )
 from rag_engine.retrieval.search_stages import ORIGINAL_QUESTION_SEARCH_STAGE
-from rag_engine.retrieval.task_contract import filter_queries, query_rejection_reason, task_contract
+from rag_engine.retrieval.task_contract import filter_queries, goal_retrieval_queries, query_rejection_reason, task_contract
 from rag_engine.retrieval.text_search_tokenizer import (
     MAX_TEXT_SEARCH_TOKENS,
     TEXT_SEARCH_TOKENIZER_HYBRID,
@@ -3099,11 +3096,14 @@ def matched_term_query(runtime_knowledge: RuntimeKnowledgeContext | None) -> str
 def _lexical_retrieval_queries(
     original_question: str,
     runtime_expanded_question: str,
-    inquiry_conditions: InquiryConditionParse | None,
     *,
     keyword_trace: dict[str, Any] | None = None,
 ) -> tuple[str, ...]:
-    """業務 profile の言い換えと質問理解の検索語から、補助の検索文を作ります。"""
+    """業務 profile の言い換え（別名）から、語彙の補助の検索文を作ります。
+
+    質問の理解（`inquiry_conditions`）が読み取った語からは検索文を作らない（#3496）。読み取った語は検索の候補の
+    加点（`profile_channel_rankings`）と回答への条件の受け渡しにだけ使う。
+    """
     source_texts = _dedupe_queries((original_question, runtime_expanded_question))
     source_key = _dedupe_query_key(" ".join(source_texts))
     terms: list[str] = []
@@ -3113,12 +3113,6 @@ def _lexical_retrieval_queries(
         if not trigger_key or all(trigger_key not in _dedupe_query_key(source) for source in source_texts):
             continue
         terms.extend(expansions)
-
-    if inquiry_conditions is not None:
-        for term in inquiry_conditions.search_terms:
-            term_key = _dedupe_query_key(term)
-            if term_key and term_key not in source_key:
-                terms.append(term)
 
     candidates = _dedupe_term_list(terms, source_key=source_key)
     accepted, rejected = filter_queries(original_question, candidates, grounded_text=runtime_expanded_question)
@@ -3172,7 +3166,6 @@ def _retrieval_query_plan_payload(
         llm_expansion_queries=tuple(expansion.generated_queries),
         lexical_queries=_dedupe_queries(lexical_queries),
         target_text_queries=tuple(target_text_queries),
-        inquiry_queries=tuple(inquiry_conditions.retrieval_queries) if inquiry_conditions is not None else (),
         crag_rewrites=_dedupe_queries(crag_rewrites),
         retrieval_scope=normalize_retrieval_scope(retrieval_scope),
         top_k=max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K)),
@@ -3496,15 +3489,11 @@ def _record_question_understanding(step: _ExecutionStep, question: str, plan: Qu
         step.field(f"読み取った{label}", join_values(values))
     if not any(values for _, values in read):
         step.field("読み取った条件", "なし（質問の文のまま検索します）")
-    if conditions.retrieval_queries:
-        step.field("補助の検索文", f"{len(conditions.retrieval_queries)} 本")
     impacts = []
     if len(units) > 1:
         impacts.append("回答後、要求ごとに答えたかを確認します")
     if conditions.metadata_filter.active and narrowing:
         impacts.append("絞り込みに合う文書だけを検索します")
-    if conditions.retrieval_queries:
-        impacts.append(f"補助の検索文を {len(conditions.retrieval_queries)} 本追加します")
     step.impact("。".join(impacts) + "。" if impacts else "")
 
 
@@ -4242,17 +4231,15 @@ def answer_question_result(
         lexical_queries = _lexical_retrieval_queries(
             normalized_question,
             runtime_knowledge.expanded_question,
-            inquiry_conditions,
             keyword_trace=keyword_trace,
         )
         # 用語・同義語に一致したら、一致した用語と別名だけの検索文を足す（#2163）。原質問の後ろに足しただけの
         # 検索文（用語・ルールの拡張）は長い質問に別名が埋もれ、規定の用語で書かれた根拠に当たりにくい。
         term_query = matched_term_query(runtime_knowledge)
-        candidate_queries = inquiry_retrieval_queries(
+        candidate_queries = _merge_retrieval_queries(
             normalized_question,
             runtime_knowledge.expanded_question,
-            _dedupe_queries((*expansion.retrieval_queries, *lexical_queries, *((term_query,) if term_query else ()))),
-            inquiry_conditions,
+            *_dedupe_queries((*expansion.retrieval_queries, *lexical_queries, *((term_query,) if term_query else ()))),
         )
         grounded = " ".join(label for term in runtime_knowledge.matched_terms for label in term.labels())
         retrieval_queries, rejected = filter_queries(normalized_question, candidate_queries, grounded_text=grounded)
@@ -4266,7 +4253,7 @@ def answer_question_result(
         text_search_info = build_question_text_search_info(
             normalized_question,
             settings,
-            query_source=_text_search_query_source(runtime_knowledge, expansion, inquiry_conditions),
+            query_source=_text_search_query_source(runtime_knowledge, expansion),
             query_variants=_text_search_variants(retrieval_queries, expansion),
         )
         text_search_info = replace(text_search_info, domain_keyword_expansion=keyword_trace)
@@ -4282,10 +4269,15 @@ def answer_question_result(
             sources.setdefault(_dedupe_query_key(query), "語彙の補助")
         if term_query:
             sources.setdefault(_dedupe_query_key(term_query), "用語・同義語")
+        # 規定の書き方の検索文は質問拡張の LLM が作り、質問の目的の検索文は経緯と目的が混ざった質問から目的を取り出す。
+        for query in expansion.provision_queries:
+            sources.setdefault(_dedupe_query_key(query), "質問拡張")
+        for query in goal_retrieval_queries(expansion.original_question):
+            sources.setdefault(_dedupe_query_key(query), "質問の目的")
         step.result(
             f"検索文 {len(retrieval_queries)} 本",
             *(
-                f"{number}. [{sources.get(_dedupe_query_key(query), '質問理解')}] {_display_query(query)}"
+                f"{number}. " + (f"[{source}] " if (source := sources.get(_dedupe_query_key(query))) else "") + _display_query(query)
                 for number, query in enumerate(retrieval_queries, 1)
             ),
         )
@@ -4353,7 +4345,6 @@ def answer_question_result(
                             query_source=_text_search_query_source(
                                 runtime_knowledge,
                                 expansion,
-                                inquiry_conditions,
                                 crag_rewrites=crag_rewrites,
                             ),
                             query_variants=_text_search_variants(crag_attempts[-1].retrieval_queries, expansion),
@@ -4688,9 +4679,9 @@ def _start_original_query_prefetch(
     prefetch = injected_prefetch_search()
     if prefetch is None or query_strategy_id(query_strategy) == SIMPLE_RETRIEVAL_STRATEGY:
         return None
-    # 文書検索の先頭の検索文と同じ形（NFKC・空白の正規化。`inquiry_retrieval_queries`）にする。違う形だと cache に
+    # 文書検索の先頭の検索文と同じ形（NFKC・空白の正規化。`_merge_retrieval_queries`）にする。違う形だと cache に
     # 当たらない（結果は変わらないが先読みが無駄になる）。
-    first = inquiry_retrieval_queries(question, question, (), None)
+    first = _merge_retrieval_queries(question)
     if not first:
         return None
     query = first[0]

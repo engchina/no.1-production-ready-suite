@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from collections.abc import Sequence
 from typing import Any
 
@@ -38,7 +40,6 @@ MAX_GENERATED_QUERY_COUNT = 5
 def _text_search_query_source(
     runtime_knowledge: RuntimeKnowledgeContext,
     expansion: QueryExpansionResult,
-    inquiry_conditions: InquiryConditionParse | None,
     *,
     crag_rewrites: Sequence[str] = (),
 ) -> str:
@@ -47,8 +48,6 @@ def _text_search_query_source(
         parts.append("実行時用語・ルール")
     if expansion.generated_queries:
         parts.append("拡張検索文")
-    if inquiry_conditions is not None and inquiry_conditions.retrieval_queries:
-        parts.append("クエリ理解検索文")
     if crag_rewrites:
         parts.append("CRAG 再検索文")
     return " + ".join(parts)
@@ -355,6 +354,30 @@ def _dedupe_generated_queries(
         if limit is not None and len(selected) >= limit:
             break
     return tuple(selected)
+
+
+def _merge_retrieval_queries(*queries: str) -> tuple[str, ...]:
+    """検索文を渡した順に並べ、空と重複を除く。
+
+    各検索文は NFKC・制御文字の除去・空白の正規化をした形にする（元の質問の先読みの検索と文書検索の先頭の検索文を
+    同じ形にし、検索の結果の cache に当てる）。
+    """
+    merged: list[str] = []
+    seen: set[str] = set()
+    for query in queries:
+        text = _normalized_query_text(query)
+        key = text.casefold()
+        if not text or key in seen:
+            continue
+        merged.append(text)
+        seen.add(key)
+    return tuple(merged)
+
+
+def _normalized_query_text(value: Any) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value or ""))
+    normalized = "".join(character for character in normalized if unicodedata.category(character) not in {"Cc", "Cf"})
+    return re.sub(r"\s+", " ", normalized).strip()
 
 
 def _retrieval_queries(question: str, retrieval_queries: Sequence[str] | None) -> tuple[str, ...]:

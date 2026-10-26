@@ -77,7 +77,7 @@ from rag_engine.retrieval.text_search_tokenizer import (
     oracle_text_query_for_question,
 )
 
-# 原質問以外の検索文（用語補助・LLM拡張・語彙・質問理解・CRAGの書き換え）全体の票の合計。
+# 原質問以外の検索文（用語補助・LLM拡張・語彙・CRAGの書き換え）全体の票の合計。
 # 各検索文を 1.0 で足すと、検索文が10本前後のとき原質問の票が1割になり、無関係な
 # 拡張語が1本入るだけで多数決が別機能へ寄る。原質問を主軸に保ち、派生は補助に留める。
 DERIVED_QUERY_TOTAL_WEIGHT = 1.0
