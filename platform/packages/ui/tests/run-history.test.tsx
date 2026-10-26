@@ -173,6 +173,29 @@ describe("RunHistoryTable", () => {
     expect(container.querySelector("[data-run-history-table]")?.className).toContain("@container");
   });
 
+  it("「操作」の見出しは広い置き場所で 1 行、セルは操作が無くてもメニューのボタンの幅を保つ（#3427）", () => {
+    render(
+      <RunHistoryTable
+        rows={ROWS}
+        toItem={toItem}
+        onOpen={() => undefined}
+        // 1 行目だけに操作（終わった実行の行は操作が無い）。
+        actionsFor={(row) => [{ id: "cancel", label: "停止", visible: row.run_id === "r1", onSelect: () => undefined }]}
+        testId="runs"
+      />
+    );
+    const label = container.querySelector("thead th:last-child span")!;
+    expect(label.textContent).toBe("操作");
+    // not-sr-only は white-space: normal に戻すので、nowrap を重ねる。
+    expect(label.className).toContain("@4xl:not-sr-only");
+    expect(label.className).toContain("@4xl:whitespace-nowrap");
+    const cells = container.querySelectorAll("[data-run-history-actions]");
+    expect(cells).toHaveLength(2);
+    for (const cell of cells) expect(cell.className).toContain("min-w-[var(--button-height-sm)]");
+    expect(cells[0].querySelector('[data-testid="runs-row-actions-r1"]')).not.toBeNull();
+    expect(cells[1].childElementCount).toBe(0);
+  });
+
   it("題名は詳細へのリンク（href・aria-current）で、狭い画面の 1 行に状態・日時・所要時間・実行者を持つ", () => {
     render(
       <RunHistoryTable rows={ROWS} toItem={toItem} onOpen={() => undefined} showExecutor selectedRunId="r2" />
