@@ -417,3 +417,34 @@ async def test_compare_progress_counts_both_passes(monkeypatch: MonkeyPatch) -> 
     await evaluation_route._execute_run(request, time_budget_seconds=60.0, progress=progress)
 
     assert seen == [(0, "case-1"), (1, "case-1"), (2, None)]
+
+
+async def test_compare_passes_share_the_standard_scope_record(monkeypatch: MonkeyPatch) -> None:
+    """2 回流す評価（#2402）の 2 つの pass は、標準回答の比較範囲の記録を共有する（#3570）。"""
+    from rag_engine.evaluation.answer_eval import StandardScopeCache, standard_scope_cache
+
+    from app.api.routes import evaluation as evaluation_route
+
+    seen: list[StandardScopeCache] = []
+
+    class FakeRunner:
+        async def run(self, **kwargs: Any) -> EvaluationMetrics:
+            del kwargs
+            with standard_scope_cache() as cache:
+                seen.append(cache)
+            return EvaluationMetrics(case_count=1)
+
+    class FakeOracleClient:
+        async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
+            del artifact
+            return "eval-1"
+
+    monkeypatch.setattr(evaluation_route, "EvaluationRunner", FakeRunner)
+    monkeypatch.setattr(evaluation_route, "OracleClient", FakeOracleClient)
+    request = EvaluationRunRequest(
+        cases=[_case()], knowledge_base_ids=["kb-1"], compare_search_answer_profile_id="p-1"
+    )
+
+    await evaluation_route._execute_run(request, time_budget_seconds=60.0)
+
+    assert len(seen) == 2 and seen[0] is seen[1]

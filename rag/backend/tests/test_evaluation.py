@@ -1917,3 +1917,64 @@ async def test_evaluation_runner_does_not_use_the_shared_article_catalog_record(
     assert seen == [True, True]
     # 評価の外（検索・チャット）では使う。
     assert shared_cache_bypassed() is False
+
+
+async def test_evaluation_runner_shares_one_standard_scope_record_across_cases() -> None:
+    """1 回の評価のケースは、標準回答の比較範囲の記録を共有する（#3570）。"""
+    from rag_engine.evaluation.answer_eval import StandardScopeCache, standard_scope_cache
+
+    seen: list[StandardScopeCache] = []
+
+    class RecordingPipeline(StubPipeline):
+        async def run(
+            self,
+            request: SearchRequest,
+            trace_id: str | None = None,
+            progress_callback: SearchStageProgressCallback | None = None,
+        ) -> SearchResponse:
+            # 共有の中なら、その記録が返る。
+            with standard_scope_cache() as cache:
+                seen.append(cache)
+            return await super().run(request, trace_id, progress_callback)
+
+    runner = EvaluationRunner(pipeline=RecordingPipeline())
+    cases = [
+        EvaluationCase(id="case-1", query="承認条件"),
+        EvaluationCase(id="case-2", query="申請の期限"),
+    ]
+    await runner.run(cases=cases, top_k=5)
+    await runner.run(cases=cases[:1], top_k=5)
+
+    assert len(seen) == 3
+    assert seen[0] is seen[1]
+    # 別の評価（job）は記録を共有しない。
+    assert seen[2] is not seen[0]
+
+
+def test_summarize_answer_judgement_keeps_judge_diagnostics() -> None:
+    """判定の診断（比較範囲の使い回し・再試行の回数）は、採点できなかったケースにも残す（#3570）。"""
+    diagnostics: dict[str, object] = {
+        "standard_scope_reused": True,
+        "standard_scope_retries": 0,
+        "judge_retries": 1,
+        "retry_reasons": ["judge:InvalidStructuredOutput"],
+    }
+    completed = summarize_answer_judgement(
+        {**_completed_judgement(), "judge_diagnostics": diagnostics}
+    )
+    assert completed.judge_diagnostics is not None
+    assert completed.judge_diagnostics.model_dump() == diagnostics
+
+    failed = summarize_answer_judgement(
+        {
+            "status": "error",
+            "message": "",
+            "judge_diagnostics": {**diagnostics, "standard_scope_retries": 1},
+        }
+    )
+    assert failed.status == "error" and failed.judge_diagnostics is not None
+    assert failed.judge_diagnostics.standard_scope_retries == 1
+
+    assert summarize_answer_judgement({"status": "timeout"}).judge_diagnostics is None
+    broken = summarize_answer_judgement({"status": "error", "judge_diagnostics": "壊れた値"})
+    assert broken.judge_diagnostics is None
