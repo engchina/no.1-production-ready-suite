@@ -709,6 +709,14 @@ def test_search_maps_evidence_and_uses_token_user_context(
                         },
                         "prompt_version": "prompt-0123456789abcdef",
                     },
+                    # 失敗して縮退した補助の処理（#3259）。例外の型ごとの記録を種類でまとめる。
+                    "degraded_steps": [
+                        {"kind": "rerank", "count": 1, "exc_type": "TimeoutError"},
+                        {"kind": "section_outline", "count": 2, "exc_type": "OSError"},
+                        {"kind": "rerank", "count": 2, "exc_type": "ValueError"},
+                        {"kind": "", "count": 1},
+                        {"kind": "screen_link", "count": True},
+                    ],
                 }
             ),
         )
@@ -750,6 +758,11 @@ def test_search_maps_evidence_and_uses_token_user_context(
         }
     ]
     assert [warning["code"] for warning in body["answer_warnings"]] == ["off_goal"]
+    # 縮退した任意の補助の処理は種類と回数だけ（例外の型の名前・壊れた記録は出さない。#3262）。
+    assert body["degraded_steps"] == [
+        {"kind": "rerank", "count": 3},
+        {"kind": "section_outline", "count": 2},
+    ]
     assert [request["status"] for request in body["requests"]] == ["addressed", "missing"]
     assert (body["conditions"], body["gaps"], body["confirmations"]) == (
         ["承認済みの場合"],
@@ -770,6 +783,9 @@ def test_search_maps_evidence_and_uses_token_user_context(
         "page_start": 3,
         "page_end": 4,
         "sheet_name": None,
+        # 原本の行の位置が無い根拠は、行の番号の基準も表の番号も null（#3262）。
+        "row_basis": None,
+        "table_index": None,
         "row_start": None,
         "row_end": None,
         "cell_range": None,
@@ -791,6 +807,8 @@ def test_search_maps_evidence_and_uses_token_user_context(
     assert (evidence["header_range"], evidence["next_offset"]) == (None, None)
     assert body["evidence_text_omitted"] == 0
     assert evidence["used_in_answer"] is True
+    # 表の無い本文の根拠は、表の行・列の対応の検査の対象ではない（#3262）。
+    assert evidence["table_binding"] is None
     assert evidence["role"] == "retrieved_anchor"
     assert (evidence["score"], evidence["rerank_score"]) == (0.5, 0.9)
     unused = body["evidence"][1]
@@ -841,6 +859,8 @@ def test_search_evidence_locates_spreadsheet_rows(
         "page_start": None,
         "page_end": None,
         "sheet_name": "コード表",
+        "row_basis": "sheet",
+        "table_index": None,
         "row_start": 3,
         "row_end": 6,
         "cell_range": "A3:C6",
@@ -855,14 +875,16 @@ def test_search_evidence_locates_spreadsheet_rows(
     }
 
 
-def _locator_of(auth: ProductionAuth, monkeypatch: MonkeyPatch, **metadata: Any) -> Any:
-    """1 件の根拠の chunk（metadata は引数）を rag_search で返した locator。"""
+def _evidence_of(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch, *, text: str = "本文", **metadata: Any
+) -> Any:
+    """1 件の根拠の chunk（本文と metadata は引数）を rag_search で返した根拠。"""
 
     async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         del request
         return SearchResponse(
             answer="回答",
-            citations=[_chunk("c-1", used=True, **metadata)],
+            citations=[_chunk("c-1", text=text, used=True, **metadata)],
             trace_id="trace-1",
             elapsed_ms=1.0,
         )
@@ -870,7 +892,12 @@ def _locator_of(auth: ProductionAuth, monkeypatch: MonkeyPatch, **metadata: Any)
     monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
     user = auth.user_with_permissions("searcher", ["menu.search"])
     body = _call("rag_search", {"query": "値"}, _token(user.user_uuid))["structuredContent"]
-    return body["evidence"][0]["locator"]
+    return body["evidence"][0]
+
+
+def _locator_of(auth: ProductionAuth, monkeypatch: MonkeyPatch, **metadata: Any) -> Any:
+    """1 件の根拠の chunk（metadata は引数）を rag_search で返した locator。"""
+    return _evidence_of(auth, monkeypatch, **metadata)["locator"]
 
 
 def test_search_evidence_of_a_spreadsheet_row_cites_cells_and_headers(
@@ -894,12 +921,189 @@ def test_search_evidence_of_a_spreadsheet_row_cites_cells_and_headers(
         7,
         "A7:D7",
     )
+    assert (locator["row_basis"], locator["table_index"]) == ("sheet", None)
     assert locator["table_row"] == 7
     assert locator["table_cells"] == [
         {"table_col": "A", "header_path": ["区分"]},
         {"table_col": "C", "header_path": ["上の段", "下の段"]},
         {"table_col": "D", "header_path": []},
     ]
+
+
+def test_search_evidence_of_a_split_sheet_table_returns_the_table_index(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """1 シートを複数の表に分けた記録は、シートの中の表の番号を返す（#2516・#3262）。"""
+    locator = _locator_of(
+        auth, monkeypatch, sheet_name="シート A", sheet_table_index=2, row_start=12, row_end=12
+    )
+    assert (locator["row_basis"], locator["table_index"], locator["row_start"]) == ("sheet", 2, 12)
+
+
+def test_search_evidence_of_a_csv_row_cites_the_line_and_cells(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """CSV の 1 物理行の記録は、原本の物理行と値のあるセルの列・表頭を返す（#3262）。"""
+    cells = [["A", ["列 1"]], ["C", []]]
+    locator = _locator_of(
+        auth,
+        monkeypatch,
+        content_kind="record",
+        record_kind="row",
+        csv_header_row=1,
+        row_basis="csv",
+        row_start=5,
+        row_end=5,
+        table_row=5,
+        table_cells_json=json.dumps(cells, ensure_ascii=False),
+    )
+    assert (locator["row_basis"], locator["row_start"], locator["row_end"]) == ("csv", 5, 5)
+    # CSV はシートでもセル範囲でもない。
+    assert (locator["sheet_name"], locator["cell_range"], locator["table_index"]) == (
+        None,
+        None,
+        None,
+    )
+    assert locator["table_row"] == 5
+    assert locator["table_cells"] == [
+        {"table_col": "A", "header_path": ["列 1"]},
+        {"table_col": "C", "header_path": []},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        # 基準を記録する前の CSV の chunk: 表頭の行から基準が決まり、物理行を返す（セルは無い）。
+        ({"csv_header_row": 1, "row_start": 4, "row_end": 4}, ("csv", 4, 4, None)),
+        # 引用符の中の改行を含む記録（複数の物理行）は 1 つの行の座標を持たない。
+        (
+            {"row_basis": "csv", "csv_header_row": 1, "row_start": 4, "row_end": 6},
+            ("csv", 4, 6, None),
+        ),
+    ],
+    ids=["before-basis", "multiline-record"],
+)
+def test_search_evidence_of_a_csv_record_without_cells(
+    auth: ProductionAuth,
+    monkeypatch: MonkeyPatch,
+    metadata: dict[str, Any],
+    expected: tuple[Any, ...],
+) -> None:
+    locator = _locator_of(auth, monkeypatch, content_kind="record", **metadata)
+    assert (
+        locator["row_basis"],
+        locator["row_start"],
+        locator["row_end"],
+        locator["table_row"],
+    ) == expected
+    assert locator["table_cells"] == []
+
+
+def test_search_evidence_of_a_word_table_returns_the_table_rows(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """Word の 1 つの表を含むまとまりは、本文の表の番号とその表の行の範囲を返す（#3262）。"""
+    locator = _locator_of(
+        auth,
+        monkeypatch,
+        content_kind="table",
+        record_kind="passage",
+        row_basis="word_table",
+        table_index=2,
+        table_row_start=4,
+        table_row_end=9,
+        # 複数行のまとまりはセルの座標を持たない（同じ名前の値があっても使わない）。
+        table_row=4,
+        table_cells_json='[["A", ["列 1"]]]',
+    )
+    assert (
+        locator["row_basis"],
+        locator["table_index"],
+        locator["row_start"],
+        locator["row_end"],
+    ) == ("word_table", 2, 4, 9)
+    assert (locator["table_row"], locator["table_cells"], locator["cell_range"]) == (
+        None,
+        [],
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"row_basis": "word_table", "table_row_start": 4, "table_row_end": 9},
+        {"row_basis": "word_table", "table_index": 1, "table_row_start": 9, "table_row_end": 4},
+        {"row_basis": "unknown", "table_index": 1, "table_row_start": 1, "table_row_end": 2},
+    ],
+    ids=["no-table-index", "reversed-rows", "unknown-basis"],
+)
+def test_search_evidence_with_an_incomplete_table_position_has_no_rows(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch, metadata: dict[str, Any]
+) -> None:
+    """表の位置の記録が欠けた・壊れた根拠は、行の位置を返さない（精密に見せない。#3262）。"""
+    locator = _locator_of(auth, monkeypatch, content_kind="table", **metadata)
+    assert (
+        locator["row_basis"],
+        locator["table_index"],
+        locator["row_start"],
+        locator["row_end"],
+    ) == (None, None, None, None)
+
+
+_MARKDOWN_TABLE = "| 区分 | 値 |\n| --- | --- |\n| 区分 A | X-01 |\n| 区分 B | X-02 |"
+
+
+@pytest.mark.parametrize(
+    ("text", "metadata", "expected"),
+    [
+        # 2 行以上の表（Markdown・HTML）は検査が読める。
+        (_MARKDOWN_TABLE, {"content_kind": "table"}, "checkable"),
+        (
+            "<table><tr><th>区分</th><th>値</th></tr><tr><td>区分 A</td><td>X-01</td></tr>"
+            "<tr><td>区分 B</td><td>X-02</td></tr></table>",
+            {"content_kind": "table"},
+            "checkable",
+        ),
+        # 本文の中の表も検査が読む。
+        (f"前書き。\n{_MARKDOWN_TABLE}", {"content_kind": "text"}, "checkable"),
+        # 表の根拠でも、列の並びが崩れた本文・1 行の記録は読めない。
+        ("区分 A X-01 区分 B X-02", {"content_kind": "table"}, "not_checkable"),
+        (
+            "区分: 区分 A / 値: X-01",
+            {"content_kind": "record", "sheet_block_kind": "row"},
+            "not_checkable",
+        ),
+        (
+            "列 1: 値 1 / 列 2: 値 2",
+            {"content_kind": "record", "record_kind": "row"},
+            "not_checkable",
+        ),
+        # 表の無い本文の根拠・表でない記録（手順）は対象ではない。
+        ("本文。", {"content_kind": "text"}, None),
+        ("1. 手順の本文", {"content_kind": "record", "sheet_block_kind": "procedure_step"}, None),
+    ],
+    ids=[
+        "markdown",
+        "html",
+        "table-in-text",
+        "broken-columns",
+        "sheet-row",
+        "csv-row",
+        "text",
+        "procedure",
+    ],
+)
+def test_search_evidence_tells_whether_the_table_binding_check_can_read_it(
+    auth: ProductionAuth,
+    monkeypatch: MonkeyPatch,
+    text: str,
+    metadata: dict[str, Any],
+    expected: str | None,
+) -> None:
+    """表の行・列の対応の検査が根拠を表として読めるかを返す（読めない表の根拠を示す。#3262）。"""
+    assert _evidence_of(auth, monkeypatch, text=text, **metadata)["table_binding"] == expected
 
 
 @pytest.mark.parametrize(
@@ -955,6 +1159,7 @@ def test_search_evidence_of_a_parsed_table_has_no_cell_coordinates(
         None,
         None,
     )
+    assert (locator["row_basis"], locator["table_index"]) == (None, None)
 
 
 def test_retrieve_evidence_skips_answer_generation(
@@ -996,11 +1201,52 @@ def test_retrieve_evidence_skips_answer_generation(
     assert [item["chunk_id"] for item in body["evidence"]] == ["c0", "c1", "c2"]
     assert body["evidence_omitted"] == 1
     assert (body["trace_id"], body["guardrail_warnings"]) == ("trace-r", ["注意"])
+    # 縮退した補助の処理の記録が無ければ空（#3262）。
+    assert body["degraded_steps"] == []
     assert "answer" not in body
     # 検索の権限が無ければ使えない。
     chatter = auth.user_with_permissions("chatter", ["menu.chat"])
     denied = _call("rag_retrieve_evidence", {"query": "規程"}, _token(chatter.user_uuid))
     assert denied["isError"] is True
+
+
+def test_retrieve_evidence_returns_the_degraded_optional_steps(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """根拠の取得も、失敗して縮退した任意の補助の処理を種類と回数で返す（#3259・#3262）。
+
+    縮退は根拠を返せたことと分けて示す（検索の結果があることを、補助の処理が働いたことに
+    しない）。
+    """
+
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
+        del request
+        return SearchResponse(
+            answer="",
+            citations=[_chunk("c0", used=False, evidence_role="retrieved_anchor")],
+            trace_id="trace-d",
+            guardrail_warnings=[],
+            elapsed_ms=1.0,
+            diagnostics=SearchDiagnostics(
+                answer={
+                    "degraded_steps": [
+                        {"kind": "rerank", "count": 1, "exc_type": "TimeoutError"},
+                        {"kind": "reference_load", "count": 2, "exc_type": "OSError"},
+                    ]
+                }
+            ),
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call("rag_retrieve_evidence", {"query": "規程"}, _token(user.user_uuid))[
+        "structuredContent"
+    ]
+    assert [item["chunk_id"] for item in body["evidence"]] == ["c0"]
+    assert body["degraded_steps"] == [
+        {"kind": "rerank", "count": 1},
+        {"kind": "reference_load", "count": 2},
+    ]
 
 
 def test_retrieve_evidence_fits_full_texts_to_the_response_budget_in_rank_order(

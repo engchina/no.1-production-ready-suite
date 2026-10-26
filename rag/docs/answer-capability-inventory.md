@@ -26,7 +26,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | `RT` | rag_engine の結果の trace だけ（backend の診断に写していない） | `rag/packages/rag_engine/rag_engine/generation/answering.py` |
 | `LOG` | ログだけ（診断では「無効・該当なし」と同じ値） | — |
 
-- MCP の応答には、`DS`・`ZE`・`GD` を今は出していない（`rag/backend/app/mcp/tools.py` に該当の項目が無い。#3259 の残課題。#3257）。MCP は回答の診断の `needs_human_review` から `outcome=conditional` を決める（`rag/backend/app/mcp/tools.py::_answer_fields`）。
+- MCP の応答（`rag_search`・`rag_retrieve_evidence`）は `DS` の処理の種類と回数を `degraded_steps` に出す（例外の型の名前は出さない。#3262。`rag/backend/app/mcp/tools.py::_degraded_steps`）。`ZE`・`GD` は今は出していない。MCP は回答の診断の `needs_human_review` から `outcome=conditional` を決める（`rag/backend/app/mcp/tools.py::_answer_fields`）。
 - `SearchDiagnostics.answer` は自由な dict で、REST の schema には `DS` などの形を持たない。
 
 ## 能力の一覧
@@ -120,7 +120,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 生成の監査（LLM） | 必須（監査をする型のとき） | 期限で切れたとき → 監査なしの round にし、全要求を未回答として是正へ進む。他の失敗 → **エラー** | `RT`（round の `audit_cut`） | 見せない（未回答として扱う） | `rag/packages/rag_engine/rag_engine/generation/grounded.py` |
 | 規則の当てはめの段（#2155） | 任意 | 失敗 → 当てはめを足さず、結論は確かめていないまま | `RT`（`application_step.error`。型の名前だけ。backend の診断に写していない） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py`（`application_step`） |
 | 根拠の画像の添付（Vision） | 任意（`RAG_ANSWER_VISION_ENABLED`） | 画像ファイルが無い・Vision のモデルが無い → 文字の説明として使う。添付した生成の出力が壊れた → 画像なしで作り直す | `ST`（工程「回答に使う画像の確認」）・`DX`（`models.vision` が空）・`RT`（`image_fallback`） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answer_images.py::_image_prompt_mode`・`rag/backend/app/rag/answer_engine.py::AnswerEngine._materialize_image_evidence` |
-| 表の行・列の対応の検査（#2659・#2998） | 必須（決定的な照合。外部の能力を使わない） | 例外の扱いは無い（送出すれば生成の失敗）。表として読めない根拠（列の並びが崩れた本文など）には検査が働かない | なし（検査が働いたかを示す診断は見当たらない） | 見せない（「表で確かめた」とは出さない）。ただし検査が働かなかったことも出さない（未確認: 呼び出し元が判断できる項目は無い） | `rag/packages/rag_engine/rag_engine/generation/table_binding.py::unbound_table_values`・`rag/packages/rag_engine/rag_engine/generation/grounded.py::_table_binding_conflict` |
+| 表の行・列の対応の検査（#2659・#2998） | 必須（決定的な照合。外部の能力を使わない） | 例外の扱いは無い（送出すれば生成の失敗）。表として読めない根拠（列の並びが崩れた本文・1 行の記録など）には検査が働かない | MCP の根拠の `table_binding`（`checkable` / 表の根拠だが読めない `not_checkable` / 表の無い根拠 `null`。#3262）。回答の診断には無い | 見せない（「表で確かめた」とは出さない）。検査が読めない表の根拠は `not_checkable` で呼び出し元が見分ける | `rag/packages/rag_engine/rag_engine/generation/table_binding.py::unbound_table_values`・`rag/packages/rag_engine/rag_engine/generation/grounded.py::_table_binding_conflict` |
 | 表の値の直し（#3005） | 任意 | LLM の失敗・確かめに通らない → 外したまま（安全側） | `LOG`（直せなかった理由を診断で区別しない） | 見せない | `rag/packages/rag_engine/rag_engine/generation/table_revision.py::revise_table_passage` |
 | 最終の検証（資料との照合。`RAG_ANSWER_AUDIT_MODE`） | 任意（`none` で省く） | 失敗 → `status: error`・`valid: false` にし、`needs_human_review`・`confidence: low`・`outcome: conditional` にする | `DX`（`answer_validation`）・`ST`（`execution_steps` の `error`）・span の失敗 | 見せない（確認が要る回答にする） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._validate_outcome` |
 | 承認済み FAQ からの回答（#702） | 必須（FAQ を選んだとき） | LLM の失敗 → **エラー** | span の失敗・工程の `error` | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._answer_from_approved_faq` |
@@ -132,9 +132,9 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 | 項目 | 現状 | コード |
 |---|---|---|
-| 行・列の位置 | `EvidenceLocator` の `sheet_name`・`row_start`・`row_end`・`cell_range` は表計算の根拠にだけある。表計算の 1 つのデータの行の根拠は、セルの座標の `table_row`（シートの行）と `table_cells`（値のあるセルの列 `table_col` と表頭の段 `header_path`）も持つ（#3262。取込で記録した chunk だけ）。PDF・HTML の表の根拠には行・列の位置が無く、頁・bbox・要素の定位子だけ（`table_row` は `null`、`table_cells` は空） | `rag/backend/app/mcp/tools.py::EvidenceLocator`・`rag/packages/rag_parser_core/rag_parser_core/sheet_records.py::_table_locator_metadata` |
+| 行・列の位置 | `EvidenceLocator` の `row_start`・`row_end` の番号の基準は `row_basis`（`sheet`=表計算のシート / `csv`=CSV の物理行 / `word_table`=Word の `table_index` の表の行。#3262）。`cell_range` は表計算だけ。表計算と CSV の 1 つのデータの行（1 物理行）の根拠は、セルの座標の `table_row` と `table_cells`（値のあるセルの列 `table_col` と表頭の段 `header_path`）も持つ（取込で記録した chunk だけ）。Word は 1 つの表だけを含むまとまりが表の番号と行の範囲だけを持つ（セルの座標は無い）。PDF・HTML・画像の表の根拠には原本の行・列の位置が無く、頁・bbox・要素の定位子だけ（`row_basis` は `null`、`table_cells` は空） | `rag/backend/app/mcp/tools.py::EvidenceLocator`・`rag/backend/app/mcp/tools.py::_table_rows`・`rag/packages/rag_parser_core/rag_parser_core/sheet_records.py::_table_locator_metadata`・`rag/packages/rag_parser_core/rag_parser_core/structured_records.py::_csv_table_metadata` |
 | 版 | 根拠の版は処理の単位の `chunk_set_id`（取込み直すと変わる。文書の改訂の版ではない）。改訂した文書は別の `document_id` で、置き換えた旧版は `superseded`。文書の改訂の番号は持たない | `rag/backend/app/mcp/tools.py::RagEvidence` |
-| 位置が無いときの見え方 | 位置の項目は空（`null`・空の配列）のまま。精密な位置を持つように見せる値は入れない（`table_cells` は表頭の段を記録していない古い記録から推測せず、壊れた値は空にする。`rag/backend/tests/test_mcp_api.py` が確かめる）。PDF・HTML・画像の表の行列の位置、CSV・Word の表のセルの座標は未対応 | `rag/backend/app/mcp/tools.py::_locator` |
+| 位置が無いときの見え方 | 位置の項目は空（`null`・空の配列）のまま。精密な位置を持つように見せる値は入れない（`table_cells` は表頭の段を記録していない古い記録から推測せず、壊れた値は空にする。`rag/backend/tests/test_mcp_api.py` が確かめる）。PDF・HTML・画像の表の行列の位置、Word の表のセルの座標は未対応 | `rag/backend/app/mcp/tools.py::_locator` |
 
 ## `degraded_steps` の処理の種類
 
@@ -180,11 +180,11 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 - **任意の能力**は、上の表のとおり縮退して回答を続ける。縮退した結果を「確かめた」「精密な位置」として見せる経路は、静的確認の範囲では見当たらない。`models.rerank` は rerank が失敗したとき空にした（#3286）。
 - **記録が足りない縮退**: #3286 の表の処理（rerank・追加の検索文の rerank・CRAG の判定・会話の書き換え・抽出項目の条件の読み取り・会話の添付・Sudachi・章節の子の並べ替え・条の目録の元の質問の検索）は `DS` に入れた。条の目録の範囲の文書の選択と 2 段目の失敗は `DS` に数え、cache しない（#3285。#3278 と同じ種類）。例外ではない縮退（書き換えの安全チェックの拒否・抽出項目の条件の読めない出力・呼び出し元の検索文の拒否）は `DS` に入れない。
 - **診断に例外の文が残る経路**: 要求ごとの根拠の探し直しと、用語・ルールの読み込みは、例外の型の名前だけにした（#3284）。
-- **呼び出し元が判断できない点**: MCP の応答には `DS`・`ZE`・`GD` が無い（#3257）。表の行・列の対応の検査が働いたかどうかは、どこにも出ない。
+- **呼び出し元が判断できない点**: MCP の応答には `ZE`・`GD` が無い（`DS` は種類と回数を `degraded_steps` に出す。#3262）。表の行・列の対応の検査が根拠を読めるかは根拠の `table_binding` に出すが、回答の中で検査が段落を外した・直したかは `rag_validate_answer` の claims（`support_check`）だけにある。
 
 ## 未確認の事項
 
 - 実 Oracle・実 LLM での失敗の振る舞い（すべて静的確認）。
 - chat の入口（`rag/backend/app/api/routes/chat.py`）の質問の安全チェックの工程の span。
-- 表の行・列の対応の検査が働かなかった（表として読めなかった）根拠を、呼び出し元が見分ける方法。
-- PDF・HTML・画像の表の根拠を、原本の表の行・列へ結び付けること（解析が読んだ表の行の番号は原本の座標ではないので出していない。#3262 の後の段）。CSV・Word の表のセルの座標（原本の行・列は前処理が持つが、根拠の locator には出していない）。
+- 1 行の記録の根拠を複数並べたとき（表計算・CSV の 1 行 = 1 chunk）に、別の行の値の取り違えを根拠をまたいで照合すること（今の検査は 1 つの根拠の本文の中の表だけを見る。`not_checkable` で示す。同じ行・セルの照合の効果は #2594 で測る）。
+- PDF・HTML・画像の表の根拠を、原本の表の行・列へ結び付けること（解析が読んだ表の行の番号は原本の座標ではないので出していない。#3262 の後の段）。Word の表のセルの座標（まとまりが複数の行を含むので、行の範囲だけを出す）。

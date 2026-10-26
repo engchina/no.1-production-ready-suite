@@ -5,6 +5,9 @@
 
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+from types import ModuleType
 from typing import Any, cast
 
 import pytest
@@ -454,3 +457,175 @@ def test_extraction_recipe_includes_structured_records_flag_only_for_its_engine(
     assert flag not in extraction_recipe_subset(_settings())
     subset = extraction_recipe_subset(_settings(rag_parser_adapter_backend=BACKEND, **{flag: True}))
     assert subset[flag] is True
+
+
+# ---- 表の根拠の行・セルの座標（取込から根拠の locator まで。#3262）------------------------------
+
+_RAG_DIR = Path(__file__).resolve().parents[2]
+
+
+def _csv_to_jsonl_converter() -> ModuleType:
+    """前処理のサービスの CSV の変換（別の venv で動く純 Python）を、ファイルの場所から読み込む。"""
+    path = _RAG_DIR / "services" / "preprocess" / "csv_to_jsonl" / "app" / "converters.py"
+    spec = importlib.util.spec_from_file_location("csv_to_jsonl_converters_3262", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _chunks_of(extraction: StructuredExtraction, strategy: str) -> list[Chunk]:
+    if strategy == "small_to_big":
+        from app.rag.chunking_small_to_big import build_parent_child_chunks
+
+        return build_parent_child_chunks(extraction)
+    return chunk_extraction_with_strategy(
+        extraction, strategy=strategy, chunk_size=800, overlap=120, min_chars=120
+    )
+
+
+def _locators(chunks: list[Chunk]) -> dict[int, dict[str, Any]]:
+    """記録の chunk の locator（開始の行 → locator）。"""
+    from app.mcp.tools import _locator
+
+    found = [_locator(dict(chunk.metadata)).model_dump() for chunk in chunks]
+    return {locator["row_start"]: locator for locator in found if locator["row_basis"]}
+
+
+@pytest.mark.parametrize("strategy", ["structure_aware", "small_to_big", "fixed_delimiter"])
+def test_csv_rows_cite_lines_and_cells_from_ingest_to_locator(strategy: str) -> None:
+    """CSV の前処理の変換から根拠の locator まで、物理行・セルの列・原本の表頭が保たれる。
+
+    重複した表頭（列名は補う）・空の値・引用符の中の改行（複数の物理行）を含む合成の CSV。
+    """
+    source = '区分,値,値\n区分 A,10,\n"区分 B\n続き",20,30\n区分 C,30,40\n'.encode()
+    outcome = _csv_to_jsonl_converter().convert(source, "text/csv", "csv_to_jsonl", None)
+    assert outcome.converted is True
+    extraction = run_external_adapter(BACKEND, outcome.derived_bytes, None, "").extraction
+    assert extraction is not None
+    chunks = _chunks_of(StructuredExtraction.model_validate(extraction.model_dump()), strategy)
+    locators = _locators(chunks)
+    assert sorted(locators) == [2, 3, 5]
+    first, multiline, last = locators[2], locators[3], locators[5]
+    assert (first["row_basis"], first["row_start"], first["row_end"], first["table_row"]) == (
+        "csv",
+        2,
+        2,
+        2,
+    )
+    # 空の値のセルは入らない。
+    assert first["table_cells"] == [
+        {"table_col": "A", "header_path": ["区分"]},
+        {"table_col": "B", "header_path": ["値"]},
+    ]
+    # 引用符の中の改行を含む記録は物理行の範囲だけ（1 つの行の座標にしない）。
+    assert (multiline["row_start"], multiline["row_end"], multiline["table_row"]) == (3, 4, None)
+    assert multiline["table_cells"] == []
+    # 重複した表頭の列（列名は「値_1」）の表頭は、原本の文字のまま。
+    assert last["table_row"] == 5
+    assert last["table_cells"][2] == {"table_col": "C", "header_path": ["値"]}
+    for locator in locators.values():
+        assert (locator["sheet_name"], locator["cell_range"], locator["table_index"]) == (
+            None,
+            None,
+            None,
+        )
+
+
+def _word_table_extraction() -> StructuredExtraction:
+    """Word の表（合成）: 表頭 2 段・単位の段・表の後の注記と、大きい表を分けた続きの部分。"""
+    from rag_parser_core.structured_records import (
+        PassageLine,
+        SectionLine,
+        WordLocation,
+        WordParagraph,
+        WordTable,
+    )
+
+    header = [["区分", "期間", "期間"], ["", "開始", "終了"], ["", "（日）", "（日）"]]
+    lines: list[Any] = [
+        DocumentLine(
+            record_id="document",
+            source_type="docx",
+            converter="word_to_jsonl",
+            converter_version="v1",
+            location_basis="original",
+        ),
+        SectionLine(
+            record_id="s0001",
+            source_type="docx",
+            heading="1 表",
+            level=1,
+            heading_path=["1 表"],
+            location=WordLocation(body_start=1, body_end=1),
+        ),
+        PassageLine(
+            record_id="p0001",
+            source_type="docx",
+            parent_id="s0001",
+            section_path=["1 表"],
+            location=WordLocation(body_start=2, body_end=3, table_indices=[2]),
+            blocks=[
+                WordTable(
+                    body_index=2,
+                    table_index=2,
+                    header_rows=3,
+                    rows=[*header, ["区分 A", "1", "10"], ["区分 B", "2", "20"]],
+                    row_start=4,
+                    row_end=5,
+                ),
+                WordParagraph(text="注: 合成の注記。", body_index=3, paragraph_index=2),
+            ],
+        ),
+        # 続きの部分（表頭を繰り返す）。
+        PassageLine(
+            record_id="p0002",
+            source_type="docx",
+            parent_id="s0001",
+            section_path=["1 表"],
+            location=WordLocation(body_start=2, body_end=2, table_indices=[2]),
+            blocks=[
+                WordTable(
+                    body_index=2,
+                    table_index=2,
+                    header_rows=3,
+                    rows=[*header, ["区分 C", "3", "30"], ["区分 D", "4", "40"]],
+                    row_start=6,
+                    row_end=7,
+                )
+            ],
+        ),
+    ]
+    result = run_external_adapter(BACKEND, dump_structured_records(lines), None, "")
+    assert result.extraction is not None
+    return StructuredExtraction.model_validate(result.extraction.model_dump())
+
+
+@pytest.mark.parametrize("strategy", ["structure_aware", "small_to_big", "fixed_delimiter"])
+def test_word_table_parts_cite_the_original_table_rows(strategy: str) -> None:
+    """Word の表の根拠は、本文の表の番号と元の表の行の範囲を持ち、表として検査できる。
+
+    多段の表頭・単位の段・注記を含む表と、表頭を繰り返した続きの部分（合成）。続きの部分も元の
+    表の行の番号を持ち（行の番号を振り直さない）、本文は検査（表の行・列の対応）が読める表。
+    """
+    from app.mcp.tools import _locator, _table_binding
+
+    chunks = _chunks_of(_word_table_extraction(), strategy)
+    tables = [chunk for chunk in chunks if chunk.metadata.get("row_basis") == "word_table"]
+    assert len(tables) == 2
+    first, second = (_locator(dict(chunk.metadata)).model_dump() for chunk in tables)
+    assert (first["row_basis"], first["table_index"], first["row_start"], first["row_end"]) == (
+        "word_table",
+        2,
+        4,
+        5,
+    )
+    assert (second["table_index"], second["row_start"], second["row_end"]) == (2, 6, 7)
+    for chunk, locator in zip(tables, (first, second), strict=True):
+        # 複数行のまとまりはセルの座標を持たない（行の範囲だけ）。
+        assert (locator["table_row"], locator["table_cells"]) == (None, [])
+        # 表頭の段（単位の段を含む）は列ごとに 1 つの見出しの行になり、本文は検査が読める表。
+        assert "| 区分 | 期間 / 開始 / （日） | 期間 / 終了 / （日） |" in chunk.text
+        assert _table_binding(chunk.text, dict(chunk.metadata)) == "checkable"
+    # 注記は表の後ろに同じまとまりで残る。
+    assert tables[0].text.endswith("注: 合成の注記。")
