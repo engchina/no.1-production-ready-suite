@@ -35,6 +35,7 @@ from rag_parser_core.language import current_pack
 from rag_parser_core.language.markers import marker_patterns
 from rag_parser_core.language.text import numbered, text_patterns
 
+from app.rag.pdf_backend import PdfSource, SourceOpenError
 from app.rag.pdf_text_correction import correct_docling_pdf_text
 from app.schemas.extraction import (
     DocumentElement,
@@ -852,7 +853,7 @@ class _PdfTextLines:
 
     def __init__(self, source_bytes: bytes) -> None:
         self._source = source_bytes
-        self._document: Any = None
+        self._document: PdfSource | None = None
         self._opened = False
         self._pages: dict[int, list[_LineBox] | None] = {}
 
@@ -900,44 +901,37 @@ class _PdfTextLines:
         lines = self._pages[page_number]
         if lines is None or self._document is None:
             return None
-        rect = self._document[page_number - 1].rect
-        return lines, float(rect.width), float(rect.height)
+        width, height = self._document.page_size(page_number - 1)
+        return lines, width, height
 
     def _read_page(self, page_number: int) -> list[_LineBox] | None:
         document = self._open()
-        if document is None or page_number > len(document):
+        if document is None or page_number > document.page_count:
             return None
         try:
-            page = document[page_number - 1]
-            if page.rotation:
+            if document.rotation(page_number - 1):
                 return None
-            payload = page.get_text("dict")
+            text_lines = document.text_lines(page_number - 1)
         except Exception:  # noqa: BLE001 - 行の位置は補助。読めないページは文の終わりの規則だけ。
             return None
         lines: list[_LineBox] = []
-        for block in payload.get("blocks", []):
-            for line in block.get("lines", []) if isinstance(block, Mapping) else []:
-                direction = line.get("dir") or (1.0, 0.0)
-                text = "".join(str(span.get("text") or "") for span in line.get("spans", []))
-                box = line.get("bbox")
-                if not text.strip() or not isinstance(box, list | tuple) or len(box) < 4:
-                    continue
-                if abs(float(direction[1])) > 0.1 or float(direction[0]) <= 0:
-                    continue  # 縦書き・回転した行。
-                x0, y0, x1, y1 = (float(value) for value in box[:4])
-                if x1 > x0 and y1 > y0:
-                    lines.append((x0, y0, x1, y1))
+        for line in text_lines:
+            if not line.text.strip():
+                continue
+            if abs(line.dir[1]) > 0.1 or line.dir[0] <= 0:
+                continue  # 縦書き・回転した行。
+            x0, y0, x1, y1 = line.bbox
+            if x1 > x0 and y1 > y0:
+                lines.append((x0, y0, x1, y1))
         return lines
 
-    def _open(self) -> Any:
+    def _open(self) -> PdfSource | None:
         if not self._opened:
             self._opened = True
             if self._source.startswith(b"%PDF"):
                 try:
-                    import fitz  # type: ignore[import-untyped]
-
-                    self._document = fitz.open(stream=self._source, filetype="pdf")
-                except Exception:  # noqa: BLE001 - 開けない PDF は文の終わりの規則だけ。
+                    self._document = PdfSource(self._source)
+                except SourceOpenError:  # 開けない PDF は文の終わりの規則だけ。
                     self._document = None
         return self._document
 

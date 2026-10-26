@@ -2479,7 +2479,7 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
         "CREATE TABLE DEPARTMENT" in statement and "CREATE TABLE EMPLOYEE" in statement
         for statement in adapter.admin_statements
     )
-    with pytest.raises(ValueError, match="profile"):
+    with pytest.raises(ValueError, match="業務プロファイル"):
         service.get_profile("sql_assist_sample")
     info = service.sample_data_info()
     assert info.profile_id == ""
@@ -2607,7 +2607,7 @@ def test_sample_data_import_does_not_create_profile_in_deterministic_runtime() -
         "V_EMP_DEPT",
         "V_DEPT_PROJECT",
     }
-    with pytest.raises(ValueError, match="profile"):
+    with pytest.raises(ValueError, match="業務プロファイル"):
         service.get_profile("sql_assist_sample")
     assert service.sample_data_info().profile_id == ""
 
@@ -2660,7 +2660,7 @@ def test_schema_objects_invalid_profile_returns_400() -> None:
             Response(), CursorParams(cursor=None, limit=50), profile_id="missing-profile"
         )
     assert exc.value.status_code == 400
-    assert "profile" in str(exc.value.detail)
+    assert "業務プロファイル" in str(exc.value.detail)
 
 
 def test_explicit_select_ai_agent_without_oracle_runtime_returns_error() -> None:

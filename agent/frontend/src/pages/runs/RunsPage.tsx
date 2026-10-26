@@ -8,6 +8,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  DEFAULT_RUN_PERIOD,
   EmptyState,
   FormActionBar,
   FormStatus,
@@ -18,6 +19,7 @@ import {
   RUN_PERIODS,
   RUN_STATUSES,
   RunDetailSkeleton,
+  RunHistoryPeriodEmptyState,
   RunHistoryTable,
   RunHistoryToolbar,
   TableSkeleton,
@@ -137,7 +139,13 @@ export function RunsPage() {
     DEFAULT_AGENT_RUN_KIND as AgentRunKindFilter,
     isRunKindFilter
   );
-  const [periodFilter, setPeriodFilter] = useWorkspaceState("listFilter", "runsPeriod", "all" as RunPeriod, isRunPeriod);
+  // 期間の既定は 3 製品で共通の過去 7 日（#3386）。明示に選んだ「すべて」は作業状態に残す。
+  const [periodFilter, setPeriodFilter] = useWorkspaceState(
+    "listFilter",
+    "runsPeriod",
+    DEFAULT_RUN_PERIOD as RunPeriod,
+    isRunPeriod
+  );
   const [executorFilter, setExecutorFilter] = useWorkspaceState(
     "listFilter",
     "runsExecutor",
@@ -274,16 +282,25 @@ export function RunsPage() {
       setRunPage(1);
     };
   }
+  // 期間のほかの検索語・絞り込みがあるか。
+  const otherFiltersActive =
+    Boolean(runQuery.trim()) ||
+    statusFilter !== "all" ||
+    kindFilter !== DEFAULT_AGENT_RUN_KIND ||
+    executorFilter !== "all";
+  // 既定（期間は過去 7 日）と違う絞り込みがあるか（「条件をクリア」の文言）。
   const filtersActive =
     statusFilter !== "all" ||
     kindFilter !== DEFAULT_AGENT_RUN_KIND ||
-    periodFilter !== "all" ||
+    periodFilter !== DEFAULT_RUN_PERIOD ||
     executorFilter !== "all";
+  // 一覧が全件より狭いか（件数の「N 件（全 M 件）」）。既定の過去 7 日も期間で絞っているので数える（#3386）。
+  const listNarrowed = otherFiltersActive || periodFilter !== "all";
   const clearRunFilters = () => {
     setRunQuery("");
     setStatusFilter("all");
     setKindFilter(DEFAULT_AGENT_RUN_KIND);
-    setPeriodFilter("all");
+    setPeriodFilter(DEFAULT_RUN_PERIOD);
     setExecutorFilter("all");
     setRunPage(1);
   };
@@ -662,11 +679,7 @@ export function RunsPage() {
                         : undefined
                     }
                     onClearFilters={clearRunFilters}
-                    count={listCount(
-                      runs.data.unfiltered_total,
-                      runs.data.total,
-                      Boolean(runQuery.trim()) || filtersActive
-                    )}
+                    count={listCount(runs.data.unfiltered_total, runs.data.total, listNarrowed)}
                     labels={{
                       all: t("run.filter.all"),
                       names: {
@@ -692,7 +705,14 @@ export function RunsPage() {
                   />
                 }
                 empty={
-                  runs.data.unfiltered_total ? (
+                  runs.data.unfiltered_total && !otherFiltersActive && periodFilter !== "all" ? (
+                    // 期間（既定は過去 7 日）だけで絞り、その中に実行が無くそれより前にはある: 期間を広げる操作を出す（#3386）。
+                    <RunHistoryPeriodEmptyState
+                      period={periodFilter}
+                      onShowAll={() => changeFilter(setPeriodFilter)("all")}
+                      testId="runs-period-empty"
+                    />
+                  ) : runs.data.unfiltered_total ? (
                     <NoMatchState
                       title={t("run.noMatch")}
                       clearLabel={filtersActive ? t("common.clearFilters") : t("common.clearSearch")}

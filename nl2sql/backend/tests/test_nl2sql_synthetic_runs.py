@@ -223,7 +223,11 @@ def test_create_rejects_empty_profile_with_field_error(service: Any) -> None:
     detail = error.value.detail
     assert isinstance(detail, dict)
     assert detail["field_errors"] == [
-        {"pointer": "/profile_name", "code": "required", "message": "Profile を選択してください。"}
+        {
+            "pointer": "/profile_name",
+            "code": "required",
+            "message": "業務プロファイルを選択してください。",
+        }
     ]
     service.adapter.generate_synthetic_data.assert_not_called()
 

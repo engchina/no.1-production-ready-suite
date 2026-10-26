@@ -4,15 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
-import fitz as pymupdf  # type: ignore[import-untyped]
 import pytest
 
+from app.rag import pdf_text_correction
 from app.rag.chunking import chunk_extraction
 from app.rag.chunking_small_to_big import build_parent_child_chunks
 from app.rag.navigation import build_navigation_tree
 from app.rag.pdf_segment_merge import ContinuationGeometry, consolidate_document_extraction
 from app.rag.pdf_text_correction import _restore_source_characters, correct_docling_pdf_text
 from app.schemas.extraction import DocumentElement, StructuredExtraction
+from tests.fixtures.synthetic_pdf import SyntheticPdf, blank_pdf
 
 
 @pytest.mark.parametrize(
@@ -41,21 +42,20 @@ def test_wave_character_restoration_preserves_evidence_matching() -> None:
     from app.schemas.search import RetrievedChunk
 
     original = "09:00\uff5e17:00"
-    with pymupdf.open() as document:
-        page = document.new_page()
-        page.insert_text((50, 70), original, fontname="japan")
-        record = {
-            "id": "body-1",
-            "engine": "docling",
-            "category": "Text",
-            "page": 1,
-            "text": "09:00\u301c17:00",
-            "bbox": list(page.search_for(original)[0]),
-            "page_width": page.rect.width,
-            "page_height": page.rect.height,
-            "coord_system": "image_top_left",
-        }
-        source = bytes(document.tobytes())
+    document = SyntheticPdf()
+    page = document.page()
+    record = {
+        "id": "body-1",
+        "engine": "docling",
+        "category": "Text",
+        "page": 1,
+        "text": "09:00\u301c17:00",
+        "bbox": list(page.text(50, 70, original, font="japan")),
+        "page_width": page.width,
+        "page_height": page.height,
+        "coord_system": "image_top_left",
+    }
+    source = document.to_bytes()
     chunk = RetrievedChunk(
         document_id="doc-1",
         chunk_id="chunk-1",
@@ -70,26 +70,25 @@ def test_wave_character_restoration_preserves_evidence_matching() -> None:
     assert evidence_matches_chunk(expected, chunk.model_copy(update={"text": record["text"]}))
 
 
-def _fixture() -> tuple[bytes, dict[str, Any]]:
-    with pymupdf.open() as document:
-        page = document.new_page()
-        page.insert_text((50, 70), "Synthetic_01_Title")
-        page.insert_text((50, 150), "Other_02_Title")
-        rect = page.search_for("Synthetic_01_Title")[0]
-        record = {
-            "id": "title-1",
-            "engine": "docling",
-            "category": "Section-header",
-            "page": 1,
-            "seq_no": 1,
-            "text": "Synthetic\u033201\u0332Title",
-            "bbox": list(rect),
-            "page_width": page.rect.width,
-            "page_height": page.rect.height,
-            "coord_system": "image_top_left",
-            "raw": {"text": "Synthetic\u033201\u0332Title"},
-        }
-        return bytes(document.tobytes()), record
+def _fixture(rotation: int = 0) -> tuple[bytes, dict[str, Any]]:
+    document = SyntheticPdf()
+    page = document.page(rotation=rotation)
+    rect = page.text(50, 70, "Synthetic_01_Title")
+    page.text(50, 150, "Other_02_Title")
+    record = {
+        "id": "title-1",
+        "engine": "docling",
+        "category": "Section-header",
+        "page": 1,
+        "seq_no": 1,
+        "text": "Synthetic\u033201\u0332Title",
+        "bbox": list(rect),
+        "page_width": page.width,
+        "page_height": page.height,
+        "coord_system": "image_top_left",
+        "raw": {"text": "Synthetic\u033201\u0332Title"},
+    }
+    return document.to_bytes(), record
 
 
 def test_corrects_only_same_position_and_is_idempotent() -> None:
@@ -125,9 +124,7 @@ def test_unreadable_sources_are_preserved(changed: str) -> None:
     elif changed == "scale":
         record["page_width"] = 0
     elif changed == "rotation":
-        with pymupdf.open(stream=pdf, filetype="pdf") as document:
-            document[0].set_rotation(90)
-            pdf = bytes(document.tobytes())
+        pdf, _rotated = _fixture(rotation=90)
     else:
         pdf = b"not a pdf"
     assert correct_docling_pdf_text([record], pdf) == set()
@@ -197,9 +194,7 @@ def test_no_text_layer_and_other_parser_are_not_corrected() -> None:
     record["engine"] = "other"
     assert correct_docling_pdf_text([record], pdf) == set()
     record["engine"] = "docling"
-    with pymupdf.open() as document:
-        document.new_page()
-        empty = bytes(document.tobytes())
+    empty = blank_pdf()
     assert correct_docling_pdf_text([record], empty) == set()
 
 
@@ -210,5 +205,5 @@ def test_normal_text_does_not_open_pdf(monkeypatch: pytest.MonkeyPatch) -> None:
     def unexpected_open(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("正常な文字では PDF を開かない")
 
-    monkeypatch.setattr(pymupdf, "open", unexpected_open)
+    monkeypatch.setattr(pdf_text_correction, "PdfSource", unexpected_open)
     assert correct_docling_pdf_text([record], pdf) == set()

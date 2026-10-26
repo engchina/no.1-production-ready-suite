@@ -1,7 +1,7 @@
 """解析後の図・画像の読み取り(Vision。#497)の共通の段のテスト。
 
 VLM は決定論スタブ(``FakeDescriber``)に置き換え、切り出した画像の寸法で bbox の単位の
-正規化(解析エンジンごと)を確かめる。PDF / 画像は pymupdf / Pillow でテストの中で作る。
+正規化(解析エンジンごと)を確かめる。PDF / 画像は reportlab / Pillow でテストの中で作る。
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import fitz  # type: ignore[import-untyped]
 import pytest
 from PIL import Image
 from rag_engine.models.layout import PageImage
@@ -37,6 +36,7 @@ from app.schemas.extraction import (
     ExtractionPage,
     StructuredExtraction,
 )
+from tests.fixtures.synthetic_pdf import SyntheticPdf
 
 PAGE_PT = (595.0, 842.0)
 # 図の位置(PDF の pt)。テストの PDF はここに画像を置く。
@@ -52,15 +52,13 @@ def _png(size: tuple[int, int], color: str = "navy") -> bytes:
 
 
 def _pdf(*, table_image: bool = False) -> bytes:
-    document = fitz.open()
-    page = document.new_page(width=PAGE_PT[0], height=PAGE_PT[1])
-    page.insert_text((100, 80), "受注入力の手順", fontsize=14)
-    page.insert_image(fitz.Rect(*FIGURE_PT), stream=_png((400, 300)))
+    document = SyntheticPdf()
+    page = document.page(*PAGE_PT)
+    page.text(100, 80, "受注入力の手順", font="japan", size=14)
+    page.image(FIGURE_PT, _png((400, 300)))
     if table_image:
-        page.insert_image(fitz.Rect(120, 520, 220, 600), stream=_png((200, 160), "green"))
-    data = document.tobytes()
-    document.close()
-    return bytes(data)
+        page.image((120, 520, 220, 600), _png((200, 160), "green"))
+    return document.to_bytes()
 
 
 def _artifact(extraction: StructuredExtraction, key: str) -> Any:

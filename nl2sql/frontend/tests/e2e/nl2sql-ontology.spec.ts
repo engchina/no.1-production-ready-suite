@@ -1887,7 +1887,7 @@ test(`ALLの要件確認はProfileと質問を引き継ぐ（保存不可=${stor
   const panel = await startRequirementCheck(page);
   await expect(panel.getByRole("group", { name: "どの業務プロファイルで確認しますか？" })).toBeVisible();
   await panel.getByRole("radio", { name: /標準プロファイル/ }).check();
-  await panel.getByRole("button", { name: "このProfileで開始" }).click();
+  await panel.getByRole("button", { name: "この業務プロファイルで開始" }).click();
   await expect(panel.getByRole("heading", { name: "「今年度」は、どの期間ですか？" })).toBeVisible();
   expect(payloads.profileConfirmation).toMatchObject({ selected_profile_id: "default" });
   expect(payloads.create).toMatchObject({ profile_id: "default", clarification_mode: "guided" });

@@ -2561,11 +2561,11 @@ test("profile scope の schema 解決失敗から DB 構造を再取得できる
   failed.job.events = [
     {
       at: "2026-07-12T00:00:01Z",
-      message_ja: "DB から profile 範囲のスキーマ情報を取得しています。",
+      message_ja: "DB から業務プロファイル範囲のスキーマ情報を取得しています。",
     },
   ];
   failed.job.error_message_ja =
-    "profile の対象オブジェクトを DB schema catalog に解決できません。DB 構造を再取得するか、Profile の対象 object を確認してから再実行してください。";
+    "業務プロファイルの対象オブジェクトを DB schema catalog に解決できません。DB 構造を再取得するか、業務プロファイルの対象 object を確認してから再実行してください。";
   failed.job.warnings_ja = [
     "「APP.INVOICES」を DB schema catalog の table として解決できません。DB 構造を再取得するか、Profile の対象 object 名(owner 付き)を確認してください。",
   ];
@@ -2602,7 +2602,7 @@ function schemaScopeFailedJob() {
     { name: "proposal_registration", status: "skipped", detail_ja: "" },
   ];
   failed.job.error_message_ja =
-    "profile の対象オブジェクトを DB schema catalog に解決できません。DB 構造を再取得するか、Profile の対象 object を確認してから再実行してください。";
+    "業務プロファイルの対象オブジェクトを DB schema catalog に解決できません。DB 構造を再取得するか、業務プロファイルの対象 object を確認してから再実行してください。";
   failed.job.warnings_ja = [
     "「APP.TABLE_01」を DB schema catalog の table として解決できません。DB 構造を再取得するか、Profile の対象 object 名(owner 付き)を確認してください。",
   ];
@@ -2893,7 +2893,7 @@ test("失効したProfile URLでは別Profileの情報を取得せず明示選�
   await page.goto("/ontology-build?profile=missing");
   const fetch = page.getByRole("button", { name: "情報を取得", exact: true });
   await expect(fetch).toBeDisabled();
-  await expect(page.getByText("指定された profile が見つかりません。")).toBeVisible();
+  await expect(page.getByText("指定された業務プロファイルが見つかりません。")).toBeVisible();
   expect(state.profileDetailCalls).toEqual([]);
   expect(state.ontologyViewCalls).toBe(0);
   await page.screenshot({ path: testInfo.outputPath("ontology-missing-profile.png") });

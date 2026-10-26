@@ -1,9 +1,12 @@
+import { CalendarRange } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { displayDateTimeParts } from "../../lib/date-time";
 import { INFORMATION_TABLE_VISIBLE_ROWS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
 import { formatChatProgressDuration } from "../feedback/chat-progress-format";
+import { EmptyState } from "../feedback/state-views";
+import { Button } from "../ui/button";
 import { DataTable, type DataTableColumn } from "./data-table";
 import { FilterSelect, isFilterActive } from "./list-filters";
 import type { ListCountProps } from "./list-count";
@@ -56,10 +59,17 @@ export function formatRunTokens(tokens: number | null | undefined, notRecorded =
 // ---------------------------------------------------------------------------
 // 絞り込みの値（部品は #1933 の `FilterSelect` を使う。ここは 3 製品で同じ選択肢と既定の文言）
 
-/** 期間の絞り込み。既定は `all`（古い実行を黙って隠さない）。 */
+/** 期間の絞り込み。既定は `DEFAULT_RUN_PERIOD`（過去 7 日）。 */
 export type RunPeriod = "all" | "24h" | "7d" | "30d";
 
 export const RUN_PERIODS: readonly RunPeriod[] = ["all", "24h", "7d", "30d"] as const;
+
+/**
+ * 期間の既定（#3386）。3 製品の実行履歴の初期値・「条件をクリア」の戻り先・「既定と違う条件か」の基準。
+ * 直近の実行を見る一覧なので過去 7 日にし、それより前は「すべて」を選ぶと出す（件数の「N 件（全 M 件）」と
+ * `RunHistoryPeriodEmptyState` で、隠れている実行があることを伝える）。
+ */
+export const DEFAULT_RUN_PERIOD: RunPeriod = "7d";
 
 export const DEFAULT_RUN_PERIOD_LABELS: Record<RunPeriod, string> = {
   all: "すべて",
@@ -78,6 +88,56 @@ const PERIOD_MS: Record<Exclude<RunPeriod, "all">, number> = {
 export function runPeriodSince(period: RunPeriod, now: Date = new Date()): string | null {
   if (period === "all") return null;
   return new Date(now.getTime() - PERIOD_MS[period]).toISOString();
+}
+
+/** 期間の空の状態の既定の文言（`RunHistoryPeriodEmptyState`。#3386）。 */
+export const DEFAULT_RUN_PERIOD_EMPTY_LABELS = {
+  /** 「〈期間〉の実行はありません」。 */
+  title: (period: string) => `${period}の実行はありません`,
+  hint: "それより前の実行は、期間を「すべて」にすると表示します。",
+  showAll: "すべての期間を表示",
+} as const;
+
+export interface RunHistoryPeriodEmptyStateProps {
+  /** 今の期間（`all` 以外）。 */
+  period: Exclude<RunPeriod, "all">;
+  /** 期間を「すべて」にする（ページも 1 ページ目へ）。 */
+  onShowAll: () => void;
+  labels?: {
+    period?: Partial<Record<RunPeriod, string>>;
+    title?: string;
+    hint?: string;
+    showAll?: string;
+  };
+  testId?: string;
+}
+
+/**
+ * 期間の中に実行が無く、それより前の実行はあるときの空の状態（#3386）。「まだ実行がありません」と分け、
+ * 期間で隠れていることと、期間を「すべて」にする操作を出す。3 製品の実行履歴で同じ文言・同じ形にする。
+ */
+export function RunHistoryPeriodEmptyState({ period, onShowAll, labels, testId }: RunHistoryPeriodEmptyStateProps) {
+  const periodLabel = { ...DEFAULT_RUN_PERIOD_LABELS, ...labels?.period }[period];
+  return (
+    <div data-testid={testId} data-run-history-period-empty={period}>
+      <EmptyState
+        title={labels?.title ?? DEFAULT_RUN_PERIOD_EMPTY_LABELS.title(periodLabel)}
+        hint={labels?.hint ?? DEFAULT_RUN_PERIOD_EMPTY_LABELS.hint}
+        action={
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            icon={CalendarRange}
+            onClick={onShowAll}
+            data-testid={testId ? `${testId}-show-all` : undefined}
+          >
+            {labels?.showAll ?? DEFAULT_RUN_PERIOD_EMPTY_LABELS.showAll}
+          </Button>
+        }
+      />
+    </div>
+  );
 }
 
 /** 実行者の絞り込み（#1954）。既定は `all`。他の人の実行が見える利用者（system_admin・会話の持ち主）だけに出す。 */
@@ -202,7 +262,7 @@ export function RunHistoryToolbar({
     );
   }
   if (period) {
-    active += Number(isFilterActive(period.value, "all"));
+    active += Number(isFilterActive(period.value, DEFAULT_RUN_PERIOD));
     filters.push(
       <FilterSelect<RunPeriod>
         key="period"
@@ -211,7 +271,7 @@ export function RunHistoryToolbar({
         value={period.value}
         options={RUN_PERIODS.map((value) => ({ value, label: periodLabels[value] }))}
         onValueChange={period.onChange}
-        defaultValue="all"
+        defaultValue={DEFAULT_RUN_PERIOD}
         data-testid={testId ? `${testId}-period` : undefined}
       />
     );

@@ -1,32 +1,29 @@
 """解析結果プレビュー用の crop API(PDF / 画像の bbox 切り出し)。"""
 
+import io
 from types import SimpleNamespace
 from typing import Any, cast
 
-import fitz  # type: ignore[import-untyped]
 import pytest
+from PIL import Image
 
 from app.api.routes import documents as documents_route
 from app.main import app
 from app.rag import document_crop
+from tests.fixtures.synthetic_pdf import SyntheticPdf, blank_pdf, encrypted_pdf, png
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
 
 
 def _pdf_bytes() -> bytes:
-    document = fitz.open()
-    page = document.new_page(width=600, height=800)
-    page.draw_rect(fitz.Rect(100, 100, 300, 200), color=(1, 0, 0), fill=(1, 0, 0))
-    data: bytes = document.tobytes()
-    document.close()
-    return data
+    document = SyntheticPdf()
+    document.page(600, 800).rect((100, 100, 300, 200), fill=(1, 0, 0))
+    return document.to_bytes()
 
 
 def _png_bytes() -> bytes:
-    pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 200, 100), 0)
-    pixmap.clear_with(255)
-    return bytes(pixmap.tobytes("png"))
+    return png((200, 100), (255, 255, 255))
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, data: bytes) -> None:
@@ -45,9 +42,9 @@ def _install(monkeypatch: pytest.MonkeyPatch, data: bytes) -> None:
     monkeypatch.setattr(document_crop, "ObjectStorageClient", FakeStorage)
 
 
-def _size(png: bytes) -> tuple[int, int]:
-    pixmap = fitz.Pixmap(png)
-    return pixmap.width, pixmap.height
+def _size(data: bytes) -> tuple[int, int]:
+    with Image.open(io.BytesIO(data)) as image:
+        return image.width, image.height
 
 
 def test_crop_pdf_region_from_page_image_coordinates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -153,13 +150,8 @@ def _install_preview(monkeypatch: pytest.MonkeyPatch, data: bytes) -> None:
 
 
 def _rotated_two_page_pdf() -> bytes:
-    document = fitz.open()
-    document.new_page(width=600, height=800)
-    rotated = document.new_page(width=600, height=800)
-    rotated.set_rotation(90)
-    data: bytes = document.tobytes()
-    document.close()
-    return data
+    # 2 頁目は 600x800 pt の頁を 90 度回転（表示は 800x600）。
+    return blank_pdf((600, 800), (800, 600), rotations=(0, 90))
 
 
 def test_preview_pages_lists_page_sizes_with_rotation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -214,11 +206,24 @@ def test_preview_pages_rejects_files_that_are_not_pages(monkeypatch: pytest.Monk
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize(
+    "data",
+    [encrypted_pdf(), b"%PDF-1.7\nbroken"],
+    ids=["encrypted", "broken"],
+)
+def test_preview_and_crop_reject_encrypted_and_broken_pdfs(
+    monkeypatch: pytest.MonkeyPatch, data: bytes
+) -> None:
+    """暗号化・破損した PDF は PDFium で開けず、422（ValueError）になる（#3343）。"""
+    _install_preview(monkeypatch, data)
+    assert client.get("/api/documents/doc-1/preview-pages").status_code == 422
+    assert client.get("/api/documents/doc-1/preview-pages/1").status_code == 422
+    with pytest.raises(ValueError, match="切り出し"):
+        document_crop.crop_png(data, 1, (0, 0, 10, 10), (100, 100))
+
+
 def test_render_page_png_caps_large_pages() -> None:
-    document = fitz.open()
-    document.new_page(width=14400, height=14400)
-    data: bytes = document.tobytes()
-    document.close()
+    data = blank_pdf((14400, 14400))
 
     width, height = _size(document_crop.render_page_png(data, 1, dpi=288))
 

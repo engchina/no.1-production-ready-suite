@@ -5,11 +5,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  DEFAULT_RUN_PERIOD,
   DEFAULT_RUN_STATUS_LABELS,
   RUN_STATUSES,
   RunDetailLayout,
   RunDetailSection,
   RunProcessDetails,
+  RunHistoryPeriodEmptyState,
   RunHistoryTable,
   RunHistoryToolbar,
   RunStatusBadge,
@@ -241,7 +243,7 @@ describe("RunHistoryToolbar", () => {
       <RunHistoryToolbar
         status={{ value: "failed", options: ["succeeded", "failed"], onChange: () => {} }}
         kind={{ value: "", options: [{ value: "", label: "すべて" }, { value: "chat", label: "チャット" }], onChange: () => {} }}
-        period={{ value: "all", onChange: () => {} }}
+        period={{ value: DEFAULT_RUN_PERIOD, onChange: () => {} }}
         executor={{ value: "all", onChange: () => {} }}
         onClearFilters={onClear}
         testId="runs"
@@ -262,12 +264,20 @@ describe("RunHistoryToolbar", () => {
     render(
       <RunHistoryToolbar
         status={{ value: "all", options: ["succeeded"], onChange: () => {} }}
-        period={{ value: "all", onChange: () => {} }}
+        period={{ value: DEFAULT_RUN_PERIOD, onChange: () => {} }}
         onClearFilters={() => {}}
       />
     );
     expect(container.querySelector("[data-list-toolbar-clear]")).toBeNull();
     expect(container.querySelectorAll("[data-filter-active]")).toHaveLength(2);
+    expect(container.textContent).toContain("過去 7 日");
+  });
+
+  it("期間の既定は 3 製品で共通の過去 7 日で、「すべて」を選ぶと既定からの変更として数える（#3386）", () => {
+    expect(DEFAULT_RUN_PERIOD).toBe("7d");
+    render(<RunHistoryToolbar period={{ value: "all", onChange: () => {} }} onClearFilters={() => {}} />);
+    expect(container.querySelector("[data-list-toolbar-clear]")).not.toBeNull();
+    expect(container.querySelector<HTMLElement>("[data-filter-active]")?.dataset.filterActive).toBe("true");
   });
 
   it("種類の既定は defaultValue（品質評価以外）を基準にし、「すべて」を選ぶと絞り込みとして数える（#1983）", () => {
@@ -294,6 +304,29 @@ describe("RunHistoryToolbar", () => {
     );
     expect(container.querySelector("[data-list-toolbar-clear]")).not.toBeNull();
     expect(container.querySelector<HTMLElement>("[data-filter-active]")?.dataset.filterActive).toBe("true");
+  });
+});
+
+describe("RunHistoryPeriodEmptyState（#3386）", () => {
+  it("期間の中に実行が無いことと、期間を「すべて」にする操作を出す", () => {
+    const onShowAll = vi.fn();
+    render(<RunHistoryPeriodEmptyState period="7d" onShowAll={onShowAll} testId="runs-period-empty" />);
+    const root = container.querySelector<HTMLElement>("[data-testid='runs-period-empty']");
+    expect(root?.dataset.runHistoryPeriodEmpty).toBe("7d");
+    expect(container.textContent).toContain("過去 7 日の実行はありません");
+    expect(container.textContent).toContain("期間を「すべて」にすると表示します");
+    const button = container.querySelector<HTMLButtonElement>("[data-testid='runs-period-empty-show-all']");
+    expect(button?.textContent).toContain("すべての期間を表示");
+    act(() => button!.click());
+    expect(onShowAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("期間の名前と文言は製品の文言で上書きできる", () => {
+    render(
+      <RunHistoryPeriodEmptyState period="30d" onShowAll={() => {}} labels={{ period: { "30d": "直近 30 日" }, showAll: "全期間" }} />
+    );
+    expect(container.textContent).toContain("直近 30 日の実行はありません");
+    expect(container.textContent).toContain("全期間");
   });
 });
 

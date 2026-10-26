@@ -794,14 +794,11 @@ async def test_rerank_skip_is_recorded_with_reason(
 
 
 def _pdf_with_figure() -> bytes:
-    import fitz  # type: ignore[import-untyped]
+    from tests.fixtures.synthetic_pdf import SyntheticPdf
 
-    document = fitz.open()
-    page = document.new_page(width=500, height=700)
-    page.draw_rect(fitz.Rect(0, 0, 50, 35), color=(0, 0, 1), fill=(0, 0, 1))
-    data: bytes = document.tobytes()
-    document.close()
-    return data
+    document = SyntheticPdf()
+    document.page(500, 700).rect((0, 0, 50, 35), fill=(0, 0, 1))
+    return document.to_bytes()
 
 
 def _figure_oracle() -> FakeOracle:

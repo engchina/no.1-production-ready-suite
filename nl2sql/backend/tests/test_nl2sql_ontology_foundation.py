@@ -169,7 +169,7 @@ def test_request_scope_is_intersection_of_profile_view() -> None:
 def test_unknown_profile_never_falls_back_to_default() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
 
-    with pytest.raises(ValueError, match="profile"):
+    with pytest.raises(ValueError, match="業務プロファイル"):
         service.get_profile("does-not-exist")
 
 

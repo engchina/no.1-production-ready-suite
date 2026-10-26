@@ -2348,6 +2348,7 @@ export const ja = {
     "「{name}」をアーカイブします。参照先のナレッジベース・文書は削除されません。",
   "searchAnswerProfiles.scope.label": "検索・回答プロファイル",
   "searchAnswerProfiles.scope.required": "対象の検索・回答プロファイルを選択してください。",
+  "search.prefill.profileUnavailable": "元の検索・回答プロファイルは使えません。選び直してください。",
   "searchAnswerProfiles.scope.noKnowledgeBases":
     "この検索・回答プロファイルには参照するナレッジベースがありません。検索・回答プロファイルの設定でナレッジベースを追加してください。",
   "searchAnswerProfileSelect.placeholder": "検索・回答プロファイルを検索して選択…",

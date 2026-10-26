@@ -1240,7 +1240,7 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await expect(saveButton).toBeEnabled();
   await saveButton.click();
-  // 業務 Profile 保存後はすぐに解除され、Oracle 反映は polling で完了を受け取る。
+  // 業務プロファイルの保存後はすぐに解除され、Oracle 反映は polling で完了を受け取る。
   const saveProgress = page.getByTestId("profile-save-progress");
   await expect(saveProgress).toHaveAttribute("data-job-status", "succeeded");
   await expect(page.getByTestId("profile-save-step-save_profile")).toHaveAttribute(
@@ -1363,7 +1363,7 @@ test("Oracle 反映失敗を明示し Ontology に触れず再試行できる", 
 
   const status = page.getByTestId("profile-save-progress");
   await expect(status).toContainText(
-    "業務 Profile は保存されましたが、Oracle 反映に失敗しました。"
+    "業務プロファイルは保存されましたが、Oracle 反映に失敗しました。"
   );
   await expect(status).toContainText("Oracle 呼出しが 120 秒でタイムアウトしました。");
   await expect(page.getByTestId("profile-save-step-save_profile")).toHaveAttribute(
@@ -1451,7 +1451,7 @@ test("Oracle 反映の再起動・期限切れを表示して明示的に再試�
 
   const status = page.getByTestId("profile-save-progress");
   await expect(status).toContainText(
-    "業務 Profile は保存されましたが、Oracle 反映に失敗しました。"
+    "業務プロファイルは保存されましたが、Oracle 反映に失敗しました。"
   );
   await expect(status).toContainText("Oracle 反映の実行期限を超えました。反映済みの可能性があるため、Oracle Profile と Agent の状態を確認してから再試行してください。");
   await expect(page.getByTestId("profile-save-step-save_profile")).toHaveAttribute(
@@ -1587,7 +1587,7 @@ test("新規保存直後の Oracle 反映再試行は保存時の確認語を再
   const status = page.getByTestId("profile-save-progress");
   await expect(status).toHaveAttribute("data-job-status", "submission_failed");
   await expect(status).toContainText(
-    "業務 Profile は保存されましたが、Oracle 反映を開始できませんでした。"
+    "業務プロファイルは保存されましたが、Oracle 反映を開始できませんでした。"
   );
   await expect(page.getByLabel("実行確認語")).toHaveValue("");
 
@@ -2549,14 +2549,14 @@ test("業務プロファイル重複名称は名称欄のエラーとして表�
       contentType: "application/json",
       body: JSON.stringify({
         data: null,
-        error_messages: ["業務 profile 名「SALES_PROFILE」は既に使用されています。"],
+        error_messages: ["業務プロファイル名「SALES_PROFILE」は既に使用されています。"],
         warning_messages: [],
         error_code: "NL2SQL_PROFILE_NAME_CONFLICT",
         problem: {
           type: "urn:nl2sql:problem:nl2sql-profile-name-conflict",
           title: "入力内容を確認してください",
           status: 422,
-          detail: "業務 profile 名「SALES_PROFILE」は既に使用されています。",
+          detail: "業務プロファイル名「SALES_PROFILE」は既に使用されています。",
           code: "NL2SQL_PROFILE_NAME_CONFLICT",
           request_id: "req-duplicate-profile-name",
           retryable: false,
@@ -2564,7 +2564,7 @@ test("業務プロファイル重複名称は名称欄のエラーとして表�
             {
               pointer: "/name",
               code: "profile_name_conflict",
-              message: "業務 profile 名「SALES_PROFILE」は既に使用されています。",
+              message: "業務プロファイル名「SALES_PROFILE」は既に使用されています。",
             },
           ],
         },
@@ -3453,7 +3453,7 @@ test("保存の 409（ほかの更新）は文に合わせて「最新の内容�
       return route.fulfill({
         status: 409,
         contentType: "application/json",
-        body: JSON.stringify({ detail: "業務 profile が更新されています。再読込してください。" }),
+        body: JSON.stringify({ detail: "業務プロファイルが更新されています。再読込してください。" }),
       });
     }
     const payload = route.request().postDataJSON() as Record<string, unknown>;
@@ -3533,7 +3533,7 @@ test("プロファイル詳細取得失敗は選択 URL を保持し再試行で
   await expect(page).toHaveURL(/profile=default/);
   await page.route("**/api/nl2sql/profiles/missing", (route) => route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "not found" }) }));
   await page.goto("/profiles?profile=missing");
-  await expect(page.getByText("指定された profile が見つかりません。", { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText("指定された業務プロファイルが見つかりません。", { exact: true })).toBeVisible({ timeout: 15000 });
   await expect(page).toHaveURL(/profile=missing/);
 });
 
@@ -3559,7 +3559,7 @@ test("名称を変えた保存の Oracle 反映が終わったら最新の ETag 
       await route.fulfill({
         status: 409,
         contentType: "application/json",
-        body: JSON.stringify({ detail: "業務 profile が更新されています。再読込してください。" }),
+        body: JSON.stringify({ detail: "業務プロファイルが更新されています。再読込してください。" }),
       });
       return;
     }
