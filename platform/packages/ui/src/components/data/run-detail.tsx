@@ -499,12 +499,21 @@ export function RunProcessDetails({
 /** 段の状態（チャットの処理の経過 `ChatProgressStepStatus` と同じ値 + 応答待ち）。 */
 export type RunTimelineStepStatus = ChatProgressStepStatus | "waiting";
 
-/** 段の名前の前の製品名（別の製品の処理の行。#3272）。読み上げでも名前の前に読む。 */
+/**
+ * 段の名前の後ろの製品名のタグ（別の製品の処理の行。#3272）。名前の前に置くと、その行の名前だけが兄弟の段の名前より
+ * 右にずれるので、名前の後ろの控えめな枠つきの文字にする（#3447）。色だけに頼らず文字で出し、読み上げは名前の後ろ。
+ */
 export function RunTimelineProduct({ product }: { product: string }) {
   return (
-    <span className="text-fg-muted" data-run-timeline-product="">
-      {`${product} · `}
-    </span>
+    <>
+      {" "}
+      <span
+        className="inline-block rounded-sm border border-border px-1 align-baseline leading-4 text-fg-muted"
+        data-run-timeline-product=""
+      >
+        {product}
+      </span>
+    </>
   );
 }
 
@@ -535,7 +544,8 @@ export interface RunTimelineStep {
   /** 開いて見る自由な中身（結果の表など。`details` の下に出す）。渡すと行に開閉のボタンが付く。 */
   children?: ReactNode;
   /**
-   * 入れ子の深さ（0 = 段、1 以上 = 段の中のツールの呼び出し・工程）。字下げは 3 段で止める（375px で名前の幅を残す）。
+   * 入れ子の深さ（0 = 段、1 以上 = 段の中のツールの呼び出し・工程）。字下げは 1 段 1rem で 6 段まで（375px でも名前の
+   * 幅を残す）。6 段より深い段は 6 段の位置に置き、左に点線の印を付けて深さが潰れていることを示す（#3447）。
    * 時刻の無い入れ子の段の線は、親（1 つ浅い直前の段）の始まりから積む。
    */
   level?: number;
@@ -558,18 +568,29 @@ const STEP_BAR: Record<RunTimelineStepStatus, string> = {
   pending: "bg-fg-subtle",
 };
 
-/** 入れ子の字下げ（1 段 = 1.5rem。3 段で止める）。 */
-const STEP_INDENT = ["", "pl-6", "pl-12", "pl-16"] as const;
+/**
+ * 入れ子の字下げ（1 段 = 1rem。6 段で止める。#3447）。製品を跨ぐ trace（Agent のツール → MCP の呼び出し → RAG の検索
+ * → RAG の工程 → 工程の中の段）は 5 段になる。3 段で止めると工程と子の段が同じ位置に並び、親子が見えなかった。
+ * 6 段（6rem）でも 375px で名前の幅を残す。
+ */
+const STEP_INDENT = ["", "pl-4", "pl-8", "pl-12", "pl-16", "pl-20", "pl-24"] as const;
+/** 見える深さの上限（これより深い段は上限の位置に置き、深さの印を付ける）。 */
+export const RUN_TIMELINE_MAX_VISIBLE_DEPTH = STEP_INDENT.length - 1;
+/** 上限より深い段の印（上限の字下げの中の点線。字下げで表せない深さがあることを示す）。 */
+const DEEPER_GUIDE =
+  "relative before:absolute before:inset-y-0 before:left-[5.25rem] before:border-l before:border-dashed before:border-border-strong before:content-['']";
 
 function stepLevel(level: number | undefined): number {
   return typeof level === "number" && Number.isFinite(level) ? Math.max(0, Math.floor(level)) : 0;
 }
 
 function stepIndent(level: number | undefined): string {
-  return STEP_INDENT[Math.min(STEP_INDENT.length - 1, stepLevel(level))];
+  const depth = stepLevel(level);
+  if (depth > RUN_TIMELINE_MAX_VISIBLE_DEPTH) return `${STEP_INDENT[RUN_TIMELINE_MAX_VISIBLE_DEPTH]} ${DEEPER_GUIDE}`;
+  return STEP_INDENT[depth];
 }
 
-/** 段の行の字下げ（`level`。3 段で止める）。`RunTimeline` の外で同じ形の行を描く部品（チャットの実行中の段）が使う。 */
+/** 段の行の字下げ（`level`。6 段で止め、それより深い段は深さの印を付ける）。`RunTimeline` の外で同じ形の行を描く部品（チャットの実行中の段）が使う。 */
 export const runTimelineStepIndent = stepIndent;
 
 /**
@@ -802,7 +823,6 @@ export function RunTimeline({
           const level = stepLevel(step.level);
           const name = (
             <span className={cn("min-w-0 break-words [overflow-wrap:anywhere]", !hasDetails && "flex-1")}>
-              {step.product ? <RunTimelineProduct product={step.product} /> : null}
               <span
                 className={
                   step.status === "failed" ? "text-danger-fg" : step.status === "pending" ? "text-fg-muted" : "text-fg"
@@ -811,6 +831,7 @@ export function RunTimeline({
               >
                 {step.label}
               </span>
+              {step.product ? <RunTimelineProduct product={step.product} /> : null}
               {step.detail ? <span className="text-fg-muted">{`（${step.detail}）`}</span> : null}
               {visibleStatus ? null : <span className="sr-only">{` ${labels.stepStatus[step.status]}`}</span>}
             </span>
