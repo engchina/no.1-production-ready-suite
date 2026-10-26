@@ -35,12 +35,14 @@ import { APP_ROUTES } from "@/lib/routes";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { feedbackRatingLabel, userFeedbackRatingBadgeLabel } from "../feedbackLabels";
 import {
+  historyCancellation,
   historyConversationHref,
   historyExecutor,
   historyKindDisplay,
   historyOwner,
   historyRunStatus,
   historySqlGenerationHref,
+  isCancelledHistory,
 } from "../historyManagementState";
 import { engineLabel } from "../labels";
 import { profileRecordDisplayLabel } from "../profileDisplay";
@@ -86,7 +88,9 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
   // span の表にあり、行の処理の経過の API で 1 回読む（行は終わった実行）。span の無い古い形式の記録は案内の文を出す。
   const progress = useNl2SqlTraceProgress({ targetId: item.id, path: historyTracePath(item.id), active: false });
   const timelineSteps = useMemo(() => progress.steps.map(chatProgressTimelineStep), [progress.steps]);
-  const executed = !item.generation_only && item.safety_is_safe;
+  // 停止の行（#3348）は SQL・実行結果・評価を持たない（「SQL と結果」の節を出さない）。
+  const cancelled = isCancelledHistory(item);
+  const executed = !item.generation_only && item.safety_is_safe && !cancelled;
 
   const extraFacts: RunFact[] = [
     { id: "engine", label: t("history.detail.engine"), value: engineLabel(item.engine) },
@@ -167,6 +171,7 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
             kind={historyKindDisplay(item)}
             executor={historyExecutor(item)}
             owner={historyOwner(item)}
+            cancellation={historyCancellation(item)}
             target={{ label: t("history.detail.target"), value: profileRecordDisplayLabel(item) || "—" }}
             runId={item.id}
             extraFacts={extraFacts}
@@ -220,6 +225,7 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
           ) : null
         }
         evidence={
+          cancelled ? null : (
           <RunDetailSection
             title={t("history.detail.sqlSection")}
             testId="history-detail-sql"
@@ -242,6 +248,7 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
             )}
             <RunFactList facts={resultFacts} testId="history-detail-result" />
           </RunDetailSection>
+          )
         }
         feedback={
           hasFeedback ? (

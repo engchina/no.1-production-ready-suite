@@ -13,14 +13,16 @@
 #   scripts/rag-services.sh run <service>     # systemd を使わず前面で起動する（systemd の無い環境向け。Ctrl+C で停止）
 #
 # 対象（省略時は --cpu）:
-#   --cpu   前処理 5 つと既定の CPU parser（parser-docling。PDF と画像）と parser-structured-records-jsonl
+#   --cpu   前処理 4 つと既定の CPU parser（parser-docling。PDF と画像）と parser-structured-records-jsonl
 #           （前処理の構造化レコードの JSONL。文書解析の使用エンジンに構造化レコード JSONL を選んだときに使う）と
 #           parser-xml-tree-json（XML ツリー JSON の .json。文書解析の使用エンジンに XML ツリー JSON を選んだときに
 #           使う。install は登録だけして起動しない）
 #   --unstructured  parser-unstructured（Docling が扱えないテキスト・Office・メール などを取り込む場合）
-#   --oci   OCI parser（parser-oci-document-understanding）
-#   --all   すべて
+#   --all   すべて（準備中〔ロードマップ〕のサービスは入れない）
 #   <service_id>  個別に指定（例: parser-docling）
+#
+# 準備中（ロードマップ）のサービス（rag-systemd.sh の RAG_ROADMAP_SERVICES。OCI Document Understanding の
+# parser-oci-document-understanding。#3374）は選べない（実装は repo に残すが、登録・起動しない）。
 #
 # torch を使うサービス（parser-docling・parser-unstructured）の lock は、PyTorch の CPU 版の index の torch を
 # 持ち、CUDA の wheel（triton・nvidia-* / cuda-*）を入れない（各 pyproject.toml の [[tool.uv.index]]。#1650）。
@@ -58,13 +60,11 @@ CPU_SERVICES=(
   preprocess-csv-to-jsonl
   preprocess-excel-to-jsonl
   preprocess-word-to-jsonl
-  preprocess-pii-redact
   parser-docling
   parser-structured-records-jsonl
   parser-xml-tree-json
 )
 UNSTRUCTURED_SERVICES=(parser-unstructured)
-OCI_SERVICES=(parser-oci-document-understanding)
 SELECTED=()
 
 log() {
@@ -80,6 +80,10 @@ add_selected() {
   for service in "$@"; do
     if ! rag_service_definition "${service}" >/dev/null; then
       log "未知のサービスです: ${service}"
+      return 1
+    fi
+    if rag_service_roadmap "${service}"; then
+      log "${service} は準備中（ロードマップ）のため、まだ登録・起動できません。"
       return 1
     fi
     if [[ " ${SELECTED[*]} " != *" ${service} "* ]]; then
@@ -99,8 +103,11 @@ parse_targets() {
     case "${arg}" in
       --cpu) add_selected "${CPU_SERVICES[@]}" ;;
       --unstructured) add_selected "${UNSTRUCTURED_SERVICES[@]}" ;;
-      --oci) add_selected "${OCI_SERVICES[@]}" ;;
-      --all) add_selected "${CPU_SERVICES[@]}" "${UNSTRUCTURED_SERVICES[@]}" "${OCI_SERVICES[@]}" ;;
+      --all) add_selected "${CPU_SERVICES[@]}" "${UNSTRUCTURED_SERVICES[@]}" ;;
+      --oci)
+        log "OCI の parser（parser-oci-document-understanding）は準備中（ロードマップ）のため、まだ登録・起動できません。"
+        return 1
+        ;;
       *) add_selected "${arg}" ;;
     esac
   done
@@ -130,7 +137,7 @@ warn_missing_os_tools() {
 }
 
 sync_services() {
-  local service dir extra model_command
+  local service dir model_command
   local sync_args=()
   require_uv
   case "${MODELS_VARIANT}" in
@@ -146,10 +153,6 @@ sync_services() {
     mapfile -t sync_args < <(rag_uv_sync_args "${service}")
     log "${service}: uv ${sync_args[*]}"
     (cd "${dir}" && uv "${sync_args[@]}")
-    extra="$(rag_service_venv_extra_command "${service}")"
-    if [ -n "${extra}" ]; then
-      (cd "${dir}" && bash -c "${extra}")
-    fi
     model_command="$(rag_service_model_command "${service}")"
     if [ -n "${model_command}" ] && [ "${MODELS_VARIANT}" = "skip" ]; then
       log "${service}: RAG_SERVICES_MODELS=skip のため、モデルを取得しません。"

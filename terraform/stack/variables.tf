@@ -675,7 +675,9 @@ variable "rag_enable_parser_unstructured" {
 }
 
 variable "rag_enable_oci_cloud_parsers" {
-  description = "Install and start the OCI Document Understanding parser proxy (parser-oci-document-understanding) as a systemd service. It calls OCI Document Understanding and needs no GPU."
+  # OCI Document Understanding の parser は準備中（ロードマップ。#3374）。入力は残すが、今は配備しない
+  # （locals の rag_services に入れず、rag/init_script.sh も読み飛ばす）。Resource Manager の画面にも出さない。
+  description = "Reserved for the OCI Document Understanding parser (parser-oci-document-understanding), which is on the roadmap and not available yet. The parser is not installed regardless of this value."
   type        = bool
   default     = false
 }

@@ -60,6 +60,7 @@ from app.config import (
     SMALL_TO_BIG_SETTING_FIELDS,
     Settings,
     get_settings,
+    is_roadmap_parser_adapter_backend,
 )
 from app.rag.answer_prompts import (
     EDITABLE_PROMPT_KEYS,
@@ -1040,13 +1041,27 @@ def _persist_huggingface_settings(settings: Settings) -> None:
 
 
 def _parser_service_backends_data(settings: Settings) -> list[ParserServiceBackendData]:
-    """service 系 parser backend の選択状態と設定可用性を作る。"""
+    """service 系 parser backend の選択状態と設定可用性を作る。
+
+    準備中(ロードマップ)のエンジン(#3374)は選べないため、``availability="roadmap"`` で返し、
+    選択中にも未設定の警告にもしない(エラーではなく「まだ使えない」状態)。
+    """
     selected = str(getattr(settings, "rag_parser_adapter_backend", "local"))
+    backend = "oci_document_understanding"
     du_configured = OciDocumentUnderstandingClient(settings=settings).is_configured()
+    if is_roadmap_parser_adapter_backend(backend):
+        return [
+            ParserServiceBackendData(
+                backend=backend,
+                availability="roadmap",
+                selected=False,
+                configured=du_configured,
+            ),
+        ]
     return [
         ParserServiceBackendData(
-            backend="oci_document_understanding",
-            selected=selected == "oci_document_understanding",
+            backend=backend,
+            selected=selected == backend,
             configured=du_configured,
             warning_code=(None if du_configured else "oci_document_understanding_unconfigured"),
         ),

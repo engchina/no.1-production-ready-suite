@@ -119,7 +119,7 @@ run_venv_case() (
   prepare_case "${case_dir}"
   # shellcheck source=/dev/null
   source "${REPO_DIR}/init_script.sh"
-  RAG_SERVICES=(preprocess-pii-redact parser-docling parser-unstructured)
+  RAG_SERVICES=(preprocess-office-to-pdf parser-docling parser-unstructured)
 
   retry_command() {
     local attempts="$1"
@@ -197,7 +197,7 @@ run_systemd_case() (
 
 # 既存の Compute の再配備（suite-update.sh → suite-restart.sh → suite-init.sh → init_script.sh の main。#2042）。
 # 以前の stack が書いた rag_services.txt（parser-xml-tree-json が無く、提供しなくなった preprocess-url-to-markdown・preprocess-image-enhance・parser-oci-genai-vision・
-# parser-asr・preprocess-pdf-to-page-images（#3347）がある）と、以前の配備の unit がある状態から、main と同じ順に load_rag_services → configure_systemd を実行する。
+# parser-asr・preprocess-pdf-to-page-images（#3347）・preprocess-pii-redact（#3358）がある）と、以前の配備の unit がある状態から、main と同じ順に load_rag_services → configure_systemd を実行する。
 run_redeploy_case() (
   local case_dir="${TEST_TMP_DIR}/redeploy"
   local service
@@ -209,10 +209,10 @@ run_redeploy_case() (
     visudo() { :; }
   fi
 
-  printf '%s\n' 'preprocess-office-to-pdf preprocess-pdf-to-page-images preprocess-url-to-markdown preprocess-image-enhance parser-docling parser-oci-genai-vision parser-asr parser-oci-document-understanding' \
+  printf '%s\n' 'preprocess-office-to-pdf preprocess-pdf-to-page-images preprocess-pii-redact preprocess-url-to-markdown preprocess-image-enhance parser-docling parser-oci-genai-vision parser-asr parser-oci-document-understanding' \
     > "${APP_ROOT}/props/rag_services.txt"
   chmod 0640 "${APP_ROOT}/props/rag_services.txt"
-  for service in preprocess-office-to-pdf preprocess-pdf-to-page-images preprocess-url-to-markdown preprocess-image-enhance parser-docling parser-oci-genai-vision parser-asr parser-oci-document-understanding; do
+  for service in preprocess-office-to-pdf preprocess-pdf-to-page-images preprocess-pii-redact preprocess-url-to-markdown preprocess-image-enhance parser-docling parser-oci-genai-vision parser-asr parser-oci-document-understanding; do
     printf '[Unit]\nDescription=previous %s\n' "${service}" > "${SYSTEMD_UNIT_DIR}/production-ready-rag-${service}.service"
     touch "${case_dir}/enabled/production-ready-rag-${service}.service"
   done
@@ -294,11 +294,12 @@ EOF
 )
 
 # --- 配備する前処理 / parser（CPU / OCI だけ。提供しないサービスは読み飛ばし、必ず配備する parser は足す） ---
-# stack が配備してよい一覧は、提供するサービス（rag-systemd.sh の RAG_MICROSERVICES）と同じ並び。
+# stack が配備してよい一覧は、提供するサービス（rag-systemd.sh の RAG_MICROSERVICES）から準備中（ロードマップ）の
+# サービス（RAG_ROADMAP_SERVICES。#3374）を除いたものと同じ並び。
 allowed_order="$(RAG_INIT_TEST_MODE=true bash -c 'source "$1/init_script.sh"; printf "%s\n" "${ALLOWED_RAG_SERVICES[*]}"' _ "${REPO_DIR}")"
-provided_order="$(bash -c 'source "$1/scripts/rag-systemd.sh"; for e in "${RAG_MICROSERVICES[@]}"; do printf "%s " "${e%%|*}"; done' _ "${REPO_DIR}")"
+provided_order="$(bash -c 'source "$1/scripts/rag-systemd.sh"; for e in "${RAG_MICROSERVICES[@]}"; do id="${e%%|*}"; rag_service_roadmap "${id}" || printf "%s " "${id}"; done' _ "${REPO_DIR}")"
 test "${allowed_order} " = "${provided_order}" \
-  || fail "init_script.sh の ALLOWED_RAG_SERVICES が rag-systemd.sh の RAG_MICROSERVICES と一致しない: ${allowed_order}"
+  || fail "init_script.sh の ALLOWED_RAG_SERVICES が rag-systemd.sh の RAG_MICROSERVICES（準備中を除く）と一致しない: ${allowed_order}"
 run_services_case services-default "preprocess-office-to-pdf parser-unstructured parser-docling parser-structured-records-jsonl parser-xml-tree-json"
 test "$(cat "${TEST_TMP_DIR}/services-default/result")" = "ok" || fail "既定の service が拒否された"
 test "$(cat "${TEST_TMP_DIR}/services-default/services")" = \
@@ -311,8 +312,8 @@ test "$(cat "${TEST_TMP_DIR}/services-legacy-file/services")" = \
   "parser-unstructured parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl" \
   || fail "以前の stack の backend / ingestion-worker を前処理 / parser として扱った"
 # 以前の stack が書いた一覧に、提供しなくなったサービス（#270 の parser-marker・#2042 の parser-asr /
-# parser-oci-genai-vision・preprocess-url-to-markdown・preprocess-image-enhance・#3347 の preprocess-pdf-to-page-images）や未知の名前があっても、再配備を止めずに読み飛ばす。
-run_services_case services-removed "parser-docling parser-asr parser-oci-genai-vision preprocess-url-to-markdown preprocess-image-enhance preprocess-pdf-to-page-images parser-marker frontend"
+# parser-oci-genai-vision・preprocess-url-to-markdown・preprocess-image-enhance・#3347 の preprocess-pdf-to-page-images・#3358 の preprocess-pii-redact）や未知の名前があっても、再配備を止めずに読み飛ばす。
+run_services_case services-removed "parser-docling parser-asr parser-oci-genai-vision preprocess-url-to-markdown preprocess-image-enhance preprocess-pdf-to-page-images preprocess-pii-redact parser-marker frontend"
 test "$(cat "${TEST_TMP_DIR}/services-removed/result")" = "ok" \
   || fail "提供しなくなったサービスが rag_services.txt にあると再配備が失敗する"
 test "$(cat "${TEST_TMP_DIR}/services-removed/services")" = "parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl" \
@@ -360,9 +361,10 @@ grep -Fq "run_as_app_user_in_dir ${rag_dir}/services/parsers/docling uv sync --l
   || fail "parser-docling の venv をサービスのディレクトリで作っていない"
 grep -Fq "run_as_app_user_in_dir ${rag_dir}/services/parsers/unstructured uv sync --locked --no-dev --python 3.12 | attempts=3" "${venv_commands}" \
   || fail "parser-unstructured の venv をサービスのディレクトリで作っていない"
-grep -Fq "run_as_app_user_in_dir ${rag_dir}/services/preprocess/pii_redact uv sync --locked --no-dev --python 3.12 --inexact | attempts=3" "${venv_commands}" \
-  || fail "pii_redact の venv が spaCy のモデルを残す --inexact で作られていない"
-grep -Fq "spacy download ja_core_news_lg" "${venv_commands}" || fail "pii_redact の日本語 NER モデルを入れていない"
+grep -Fq "run_as_app_user_in_dir ${rag_dir}/services/preprocess/office_to_pdf uv sync --locked --no-dev --python 3.12 | attempts=3" "${venv_commands}" \
+  || fail "preprocess-office-to-pdf の venv をサービスのディレクトリで作っていない"
+# 取込時の PIIマスクと spaCy の日本語モデルは削除した（#3358）。venv は lock どおりで、追加の取得をしない。
+grep -Eq -- "--inexact|spacy download" "${venv_commands}" && fail "削除した PIIマスクの venv の例外（--inexact・spaCy のモデル）が残っている"
 grep -Fq "run_as_service_user_in_dir ${rag_dir}/services/parsers/docling .venv/bin/docling-tools models download" "${venv_commands}" \
   || fail "docling のモデルを SERVICE_USER の ~/.cache に取得していない"
 grep -Fq "WARNING: parser-docling could not download its models now" "${TEST_TMP_DIR}/venvs/venvs.log" \
@@ -525,8 +527,9 @@ test "${main_order}" = "load_rag_services configure_systemd " \
 run_redeploy_case
 redeploy_dir="${TEST_TMP_DIR}/redeploy"
 redeploy_log="${redeploy_dir}/systemctl.log"
+# 準備中（ロードマップ）の parser-oci-document-understanding（#3374）は以前の一覧にあっても書き戻さない。
 test "$(cat "${redeploy_dir}/app/props/rag_services.txt")" = \
-  "preprocess-office-to-pdf parser-docling parser-oci-document-understanding parser-structured-records-jsonl parser-xml-tree-json preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl" \
+  "preprocess-office-to-pdf parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl" \
   || fail "再配備で rag_services.txt を今の一覧に書き戻していない: $(cat "${redeploy_dir}/app/props/rag_services.txt")"
 test "$(stat -c '%a' "${redeploy_dir}/app/props/rag_services.txt")" = "640" \
   || fail "rag_services.txt の書き戻しで mode が変わった"
@@ -551,7 +554,7 @@ for service in preprocess-csv-to-jsonl preprocess-excel-to-jsonl; do
     "${redeploy_dir}/sudoers.d/production-ready-rag-services" \
     || fail "再配備の sudoers が ${service} の操作を許可していない"
 done
-for removed in preprocess-pdf-to-page-images preprocess-url-to-markdown preprocess-image-enhance parser-oci-genai-vision parser-asr; do
+for removed in preprocess-pdf-to-page-images preprocess-pii-redact preprocess-url-to-markdown preprocess-image-enhance parser-oci-genai-vision parser-asr; do
   grep -Fqx "[rag-init] Skipping RAG service that is no longer provided: ${removed}" "${redeploy_dir}/load.log" \
     || fail "提供しなくなった ${removed} を読み飛ばしたことを log に出していない"
   grep -qx "disable --now production-ready-rag-${removed}.service" "${redeploy_log}" \
@@ -567,6 +570,22 @@ done
 grep -Fq '/usr/bin/systemctl enable --now production-ready-rag-parser-xml-tree-json.service' \
   "${redeploy_dir}/sudoers.d/production-ready-rag-services" \
   || fail "再配備の sudoers が parser-xml-tree-json の操作を許可していない"
+# 準備中（ロードマップ）の parser-oci-document-understanding（#3374）: 以前の配備で起動していた unit を、再配備で
+# 止めて（disable --now）消し、sudoers からも外す。起動・再起動はしない。
+roadmap_unit="production-ready-rag-parser-oci-document-understanding.service"
+grep -Fqx "[rag-init] Skipping RAG service that is on the roadmap (not available yet): parser-oci-document-understanding" \
+  "${redeploy_dir}/load.log" \
+  || fail "準備中の parser-oci-document-understanding を読み飛ばしたことを log に出していない"
+grep -qx "disable --now ${roadmap_unit}" "${redeploy_log}" \
+  || fail "再配備で準備中の parser-oci-document-understanding を止めていない"
+if grep -Eq "^(enable|start|restart)( --now)? ${roadmap_unit}$" "${redeploy_log}"; then
+  fail "再配備で準備中の parser-oci-document-understanding を起動した"
+fi
+test ! -e "${redeploy_dir}/units/${roadmap_unit}" \
+  || fail "再配備で準備中の parser-oci-document-understanding の unit が残っている"
+if grep -Fq "${roadmap_unit}" "${redeploy_dir}/sudoers.d/production-ready-rag-services"; then
+  fail "再配備の sudoers が準備中の parser-oci-document-understanding を許可している"
+fi
 # rag_services.txt を書けなくても配備は続ける（読み込みで毎回直す）。
 (
   case_dir="${TEST_TMP_DIR}/redeploy-readonly"

@@ -16,7 +16,6 @@ RAG_MICROSERVICES=(
   "preprocess-csv-to-jsonl|services/preprocess/csv_to_jsonl|18012|300"
   "preprocess-excel-to-jsonl|services/preprocess/excel_to_jsonl|18013|300"
   "preprocess-word-to-jsonl|services/preprocess/word_to_jsonl|18017|300"
-  "preprocess-pii-redact|services/preprocess/pii_redact|18016|300"
   "parser-docling|services/parsers/docling|18020|300"
   "parser-unstructured|services/parsers/unstructured|18022|300"
   "parser-structured-records-jsonl|services/parsers/structured_records_jsonl|18023|300"
@@ -27,6 +26,10 @@ RAG_MICROSERVICES=(
 # 「起動」（enable --now）で起動でき、以後は最後に操作した状態（enable / disable）を保つ。
 # XML ツリー JSON は使用エンジンに選んだときだけ使う（RAG_PARSER_XML_TREE_JSON_ENABLED の既定 false と同じ。#2453）。
 RAG_DEFAULT_STOPPED_SERVICES=(parser-xml-tree-json)
+# 準備中（ロードマップ）のサービス（#3374）。実装は repo に残すが、配備・登録しない（init_script.sh は
+# rag_services.txt にあっても読み飛ばし、以前の配備の unit は「配備しなくなった unit」として止めて消す。
+# rag-services.sh も選べない）。backend の catalog の availability="roadmap" と同じ（テストで照合する）。
+RAG_ROADMAP_SERVICES=(parser-oci-document-understanding)
 RAG_UNIT_PREFIX="production-ready-rag-"
 # 画面から操作する unit に、systemctl / journalctl だけを許可する sudoers（backend の app.services.systemd と同じ argv）。
 RAG_SUDOERS_FILE_NAME="production-ready-rag-services"
@@ -73,29 +76,25 @@ rag_service_default_stopped() {
   return 1
 }
 
+# 準備中（ロードマップ）で配備しないサービスなら 0。
+rag_service_roadmap() {
+  local id="$1"
+  local roadmap
+  for roadmap in "${RAG_ROADMAP_SERVICES[@]}"; do
+    if [ "${roadmap}" = "${id}" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 rag_service_dir() { rag_service_field "$1" 2; }
 rag_service_port() { rag_service_field "$1" 3; }
 rag_service_timeout() { rag_service_field "$1" 4; }
 
 # サービスごとの venv を作る（uv の lock どおり。開発用の依存は入れない）。
-# pii_redact は spaCy の日本語モデルを venv へ追加で入れるため、lock に無い package を消さない（--inexact）。
 rag_uv_sync_args() {
-  local id="$1"
-  local args=(sync --locked --no-dev --python "${RAG_PYTHON_VERSION}")
-  if [ "${id}" = "preprocess-pii-redact" ]; then
-    args+=(--inexact)
-  fi
-  printf '%s\n' "${args[@]}"
-}
-
-# venv を作った後に venv へ追加で入れるもの（venv の所有者が、サービスのディレクトリで実行する）。
-# pii_redact: Presidio の spaCy NLP エンジンが使う日本語 NER モデル（spacy download は pip を使う）。
-rag_service_venv_extra_command() {
-  case "$1" in
-    preprocess-pii-redact)
-      printf '%s\n' '.venv/bin/python -c "import ja_core_news_lg" 2>/dev/null || { uv pip install --python .venv/bin/python pip && .venv/bin/python -m spacy download ja_core_news_lg; }'
-      ;;
-  esac
+  printf '%s\n' sync --locked --no-dev --python "${RAG_PYTHON_VERSION}"
 }
 
 # サービスが実行時に使うモデルを、サービスの実行ユーザーの ~/.cache に取得するコマンド

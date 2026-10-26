@@ -7,7 +7,11 @@ import {
   preprocessSelectionPatch,
   recipeConfigGroups,
 } from "./DocumentProcessingConfigPanel.logic";
-import { PARSER_VALUES, PREPROCESS_OPTIONS } from "./DocumentProcessingConfigPanel.values";
+import {
+  PARSER_OPTIONS,
+  PARSER_VALUES,
+  PREPROCESS_OPTIONS,
+} from "./DocumentProcessingConfigPanel.values";
 import type { DocumentProcessingConfig } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
@@ -99,6 +103,18 @@ describe("CSV→JSONL・Excel→JSONL の選択", () => {
     expect(labels.indexOf("CSV→JSONL")).toBeGreaterThan(-1);
     expect(labels.indexOf("Excel→JSONL")).toBe(labels.indexOf("CSV→JSONL") + 1);
     expect(labels.indexOf("Word→JSONL")).toBe(labels.indexOf("Excel→JSONL") + 1);
+  });
+
+  it("準備中（ロードマップ）の OCI Document Understanding は、灰色のバッジと理由つきで選べない", () => {
+    const roadmap = PARSER_OPTIONS.find((option) => option.value === "oci_document_understanding");
+    expect(roadmap).toMatchObject({
+      disabled: true,
+      badge: "準備中（ロードマップ）",
+      disabledReason: "準備中（ロードマップ）のため、まだ選べません。",
+    });
+    expect(
+      PARSER_OPTIONS.filter((option) => option.disabled).map((option) => option.value)
+    ).toEqual(["oci_document_understanding"]);
   });
 
   it("構造化レコード JSONL は XML ツリー JSON の直前に並ぶ", () => {

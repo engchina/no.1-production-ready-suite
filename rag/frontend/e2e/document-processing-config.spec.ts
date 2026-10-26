@@ -360,12 +360,13 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
   await panel.getByRole("combobox", { name: "文書解析" }).click();
   // 解析エンジンの選択肢は文書解析の画面のカードと同じ並び（XML ツリー JSON を含む。#2042）。
   // 構造化レコード JSONL は Unstructured の後、XML ツリー JSON の前（#2457）。
+  // OCI Document Understanding は準備中（ロードマップ。#3374）の印と理由つきで、選べない選択肢として並ぶ。
   await expect(page.getByRole("option")).toHaveText([
     "Docling",
     "Unstructured",
     "構造化レコード JSONL",
     "XML ツリー JSON",
-    "OCI Document Understanding",
+    /^OCI Document Understanding準備中（ロードマップ）準備中（ロードマップ）のため、まだ選べません。$/,
     "Dots.OCR",
   ]);
   await page.getByRole("option", { name: "Dots.OCR" }).click();
@@ -797,6 +798,51 @@ test("保存失敗時は編集値を保持する", async ({ page }) => {
   await expect(panel).toContainText("取込ジョブの実行中は設定を変更できません");
   await expect(panel.getByRole("combobox", { name: "文書解析" })).toContainText("Dots.OCR");
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(
+    `準備中（ロードマップ）の解析エンジンは、処理レシピの選択肢に灰色で出て選べない (${viewport.name})`,
+    { tag: "@responsive" },
+    async ({ page }, testInfo) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await mockWorkspace(page);
+      await page.goto("/documents/doc-1");
+
+      const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
+      await panel.getByRole("button", { name: "処理設定を編集" }).click();
+      await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
+      const combobox = panel.getByRole("combobox", { name: "文書解析" });
+      await combobox.click();
+      const roadmap = page.getByRole("option", { name: /OCI Document Understanding/ });
+      await expect(roadmap).toHaveAttribute("aria-disabled", "true");
+      await expect(roadmap).toContainText("準備中（ロードマップ）のため、まだ選べません。");
+      await expect(page.getByRole("option", { name: "Docling", exact: true })).not.toHaveAttribute(
+        "aria-disabled",
+        "true"
+      );
+      await expectNoPageOverflow(page);
+      await page.screenshot({
+        path: testInfo.outputPath(`recipe-parser-roadmap-${viewport.name}.png`),
+        fullPage: false,
+      });
+      // 押しても選ばれず、一覧は開いたまま（値は変わらない）。
+      const before = await combobox.getAttribute("data-value");
+      // aria-disabled の選択肢は Playwright が押せないものとして待つため、押す操作を強制して確かめる。
+      await roadmap.click({ force: true });
+      await expect(page.getByRole("listbox")).toBeVisible();
+      await expect(combobox).toHaveAttribute("data-value", before ?? "");
+      // キーボードでも選べない: 強調して Enter を押しても値は変わらない。
+      await roadmap.hover({ force: true });
+      await page.keyboard.press("Enter");
+      await expect(combobox).toHaveAttribute("data-value", before ?? "");
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("listbox")).toHaveCount(0);
+    }
+  );
+}
 
 for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },

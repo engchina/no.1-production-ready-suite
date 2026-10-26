@@ -18,7 +18,6 @@ ParserAdapterSourceKind = Literal[
     "office",
     "html",
     "email",
-    "audio",
     "text",
     "unknown",
 ]
@@ -33,7 +32,6 @@ SOURCE_ROUTE_KINDS: tuple[ParserAdapterSourceKind, ...] = (
     "office",
     "html",
     "email",
-    "audio",
     "text",
     "unknown",
 )
@@ -51,7 +49,6 @@ _ADAPTER_PREFERENCE_BY_SOURCE_KIND: AdapterOrderBySourceKind = {
     "office": ("docling", "unstructured"),
     "html": ("docling", "unstructured"),
     "email": ("unstructured",),
-    "audio": (),
     "text": (),
     "unknown": ("unstructured", "docling"),
 }
@@ -86,8 +83,6 @@ def normalize_source_kind(value: object) -> ParserAdapterSourceKind:
         return "html"
     if normalized in {"email", "eml", "message"}:
         return "email"
-    if normalized in {"audio", "wav", "mp3", "m4a", "flac", "ogg", "aac"}:
-        return "audio"
     if normalized in {"text", "markdown", "md", "csv", "tsv", "json", "jsonl", "ndjson"}:
         return "text"
     return "unknown"

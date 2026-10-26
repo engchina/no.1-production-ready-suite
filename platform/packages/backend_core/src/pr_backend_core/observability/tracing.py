@@ -71,6 +71,23 @@ _SAFE_ATTRIBUTES = frozenset(
         "pr.cache.hit",
         "pr.result.count",
         "pr.stage",
+        # モデルの呼び出しの入力の指紋・構成の見積もり・予算（本文は含めない。#2583）。
+        "pr.context.instructions.static_fingerprint",
+        "pr.context.instructions.fingerprint",
+        "pr.context.tools.fingerprint",
+        "pr.context.tools.count",
+        "pr.context.input.items",
+        "pr.context.estimate.static_instructions_tokens",
+        "pr.context.estimate.dynamic_state_tokens",
+        "pr.context.estimate.tool_definitions_tokens",
+        "pr.context.estimate.history_tokens",
+        "pr.context.estimate.tool_outputs_tokens",
+        "pr.context.estimate.input_tokens",
+        "pr.context.budget.input_tokens",
+        "pr.context.budget.remaining_tokens",
+        "pr.context.compaction.tokens_before",
+        "pr.context.compaction.tokens_after",
+        "pr.context.compaction.outputs",
         "error.type",
     }
 )

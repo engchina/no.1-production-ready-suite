@@ -860,6 +860,56 @@ class ThreadsData(ChatHistoryPage[ThreadSummary]):
     """
 
 
+CancelVia = Literal["screen", "mcp", "system"]
+
+
+class RunCancellationView(BaseModel):
+    """実行の詳細の「取消」（取り消した人と入口。応答だけに付ける。保存しない。#3348）。
+
+    `via` は画面の操作（`screen`）・外部の MCP の `agent_cancel_run`（`mcp`）・操作した人の記録の
+    無い自動の取消（`system`。品質評価の後始末など）。API キーの名前は、見ている利用者が見られる
+    キーだけ（`AuthService.api_key_names`。見られなければ空で、画面は「MCP」だけを出す）。
+    """
+
+    via: CancelVia
+    # 取り消した人の表示名（引けない利用者は ""。`system` は ""）。
+    actor_display_name: str = ""
+    # 取り消した人が見ている利用者か。
+    by_me: bool = False
+    api_key_name: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class RunCancelRecord:
+    """取消のイベント（`run.cancelled`）に残した、取り消した人と入口（#3240・#3348）。"""
+
+    # 取り消した人のログイン ID（記録の無い自動の取消は None）。
+    cancelled_by: str | None
+    via: CancelVia
+    api_key_id: str | None
+
+
+def run_cancel_record(run: RunState) -> RunCancelRecord | None:
+    """取り消した Run の最後の取消のイベントの記録（取り消していない Run は None）。"""
+    if run.status != RunStatus.CANCELLED:
+        return None
+    event = next(
+        (item for item in reversed(run.events) if item.type == RunEventType.RUN_CANCELLED), None
+    )
+    payload = event.payload if event is not None else {}
+    cancelled_by = payload.get("cancelled_by")
+    actor = cancelled_by if isinstance(cancelled_by, str) and cancelled_by else None
+    key_id = payload.get(MCP_API_KEY_ID_KEY)
+    via: CancelVia = (
+        "mcp" if payload.get(CANCEL_VIA_KEY) == MCP_RUN_SOURCE else "screen" if actor else "system"
+    )
+    return RunCancelRecord(
+        cancelled_by=actor,
+        via=via,
+        api_key_id=key_id if via == "mcp" and isinstance(key_id, str) and key_id else None,
+    )
+
+
 class RunViewer(BaseModel):
     """見ている利用者から見た Run の事実（応答だけに付ける。保存しない。#1954）。
 
@@ -881,6 +931,8 @@ class RunViewer(BaseModel):
     # 保存した根拠のうち、見ている利用者が今の権限で見られない根拠の数（抜粋・文書は返さない。
     # `evidence_access`。#3252）。
     withheld_evidence_count: int = 0
+    # 取り消した人と入口（取り消した Run だけ。`run.cancelled` のイベントから作る。#3348）。
+    cancellation: RunCancellationView | None = None
 
 
 class RunView(RunViewer, RunState):

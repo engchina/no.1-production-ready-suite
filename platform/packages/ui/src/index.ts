@@ -608,6 +608,8 @@ export {
 
 // --- data ---
 export {
+  DEFAULT_ROADMAP_LABEL,
+  RoadmapBadge,
   StatusBadge,
   type StatusVariant,
 } from "./components/data/status-badge";
@@ -759,7 +761,12 @@ export {
   RunFactList,
   runTimelineBars,
   resolveRunDetailLabels,
+  formatRunCancellation,
   DEFAULT_RUN_DETAIL_LABELS,
+  DEFAULT_RUN_CANCELLATION_LABELS,
+  type RunCancellation,
+  type RunCancellationLabels,
+  type RunCancellationVia,
   type RunDetailLabels,
   type RunDetailLabelsInput,
   type RunFact,

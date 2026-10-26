@@ -227,6 +227,7 @@ from app.features.agent.job_cancel import (
     RUN_CANCEL_TRACE_PREFIX,
     in_flight_nl2sql_jobs,
 )
+from app.features.agent.model_call_observation import model_call_attributes
 from app.features.agent.output_fields import (
     OUTPUT_RETRY_MESSAGE,
     AgentOutputField,
@@ -349,9 +350,12 @@ set_tracing_disabled(True)
 CONTEXT_OVERFLOW_CODE = "runtime.context_overflow"
 # 業務 Agent（SDK の Agent）に付ける、入力を収める上限（`ContextLimits`）の属性の名前。
 _CONTEXT_LIMITS_ATTR = "_agent_context_limits"
+# 業務 Agent（SDK の Agent）に付ける、指示の変わらない部分（Run の状態を足す前の指示）の属性の
+# 名前（#2583。モデルの呼び出しの span の指紋と構成の見積もりに使う）。
+_STATIC_INSTRUCTIONS_ATTR = "_agent_static_instructions"
 # いまモデルを呼んでいる Run の入力の管理（`_ContextWindow`）。呼び出しの直前に SDK の
 # `call_model_input_filter` が入れ、プロバイダの入力の超過の送り直し
-# （`_OciResponses.create`）が読む。
+# （`_OciResponses.create`）とモデルの呼び出しの span の属性（#2583）が読む。
 _ACTIVE_CONTEXT_WINDOW: ContextVar[_ContextWindow | None] = ContextVar(
     "agent_context_window", default=None
 )
@@ -689,8 +693,33 @@ def _set_turn_kind(span: ObservedSpan, response: object) -> None:
         span.set_display(kind=kind)
 
 
+def _model_input_attributes(request: Mapping[str, Any]) -> dict[str, int | str]:
+    """モデルに送る要求の指紋・構成の見積もり・予算（#2583。本文は含めない）。
+
+    Run の中の呼び出しは Run の入力の管理（`_ContextWindow`）の予算・縮め方・指示の変わらない部分を
+    使う。観測は補助なので、作れなくてもモデルは呼ぶ。
+    """
+    window = _ACTIVE_CONTEXT_WINDOW.get()
+    try:
+        if window is None:
+            return model_call_attributes(request)
+        return model_call_attributes(
+            request,
+            budget=window.budget,
+            static_instructions=window.static_instructions,
+            provider_limit=window.provider_limit,
+            compaction=window.last_input,
+        )
+    except Exception as exc:  # noqa: BLE001 - 観測は補助。作れなくてもモデルは呼ぶ
+        logger.warning(
+            "builtin_runtime_model_input_observation_failed",
+            extra={"exception_type": type(exc).__name__},
+        )
+        return {}
+
+
 class _ObservedResponseManager:
-    def __init__(self, inner: Any, model: str) -> None:
+    def __init__(self, inner: Any, request: Mapping[str, Any]) -> None:
         self._inner = inner
         self._scope = observed_span(
             "gen_ai.chat",
@@ -698,7 +727,8 @@ class _ObservedResponseManager:
             attributes={
                 "gen_ai.operation.name": "chat",
                 "gen_ai.provider.name": "oracle",
-                "gen_ai.request.model": model,
+                "gen_ai.request.model": str(request.get("model") or ""),
+                **_model_input_attributes(request),
             },
         )
 
@@ -722,9 +752,8 @@ class _OciStreamingResponses:
         self._inner = inner
 
     def create(self, **kwargs: Any) -> Any:
-        return _ObservedResponseManager(
-            self._inner.create(**_oci_request(kwargs)), str(kwargs.get("model") or "")
-        )
+        request = _oci_request(kwargs)
+        return _ObservedResponseManager(self._inner.create(**request), request)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -841,6 +870,7 @@ class _OciResponses:
                 "gen_ai.provider.name": "oracle",
                 "gen_ai.request.model": str(request.get("model") or ""),
                 "pr.attempt": attempt,
+                **_model_input_attributes(request),
             },
         ) as span:
             response = await self._inner.create(**request)
@@ -2667,6 +2697,8 @@ def build_sdk_agent(
     if scope_text:
         scope_names = instruction_tool_names(skill_ids, exposed, origins)
         composed = f"{composed}\n\n{render_tool_names(scope_text, scope_names)}"
+    # ここまでが業務 Agent の版で決まる部分。後ろに Run の状態を足す（#2583 の指紋と見積もり）。
+    static_instructions = composed
     if support_task:
         support_names = instruction_tool_names(skill_ids, exposed, origins)
         composed = f"{composed}\n\n{render_tool_names(support_task, support_names)}"
@@ -2710,6 +2742,7 @@ def build_sdk_agent(
             max_output_tokens=target.max_output_tokens,
         ),
     )
+    setattr(sdk_agent, _STATIC_INSTRUCTIONS_ATTR, static_instructions)
     return sdk_agent
 
 
@@ -2768,9 +2801,14 @@ class _ContextWindow:
         limits: ContextLimits,
         exposed: Collection[str],
         rerunnable: Collection[str] = (),
+        *,
+        static_instructions: str | None = None,
     ) -> None:
         settings = get_settings()
         self.run_id = run_id
+        # 指示の変わらない部分（`build_sdk_agent`。モデルの呼び出しの span の指紋・見積もり。
+        # #2583）。
+        self.static_instructions = static_instructions
         self.enabled = bool(settings.agent_context_compaction_enabled)
         self.budget = ContextBudget(
             limits,
@@ -2786,6 +2824,11 @@ class _ContextWindow:
         self._recorded: tuple[object, ...] | None = None
         # 直前のモデルの呼び出しの入力（見積もりと画像。実測と並べる。#2650）。
         self.last_input: CompactionResult | None = None
+
+    @property
+    def provider_limit(self) -> int | None:
+        """プロバイダが返した入力の上限（設定より小さいときだけ。無ければ None）。"""
+        return self._provider_limit
 
     def read_tool_for(self, tool_name: str) -> str | None:
         """縮めた結果の本文を読み直すツール（モデルに渡した名前。無ければ None）。"""
@@ -2888,6 +2931,8 @@ class _ContextWindow:
             # 縮める結果が無い（同じ要求を送り直しても同じ超過になる）。
             self.fail_after_retry(overflow)
         self._record(result, trigger="provider_limit")
+        # 送り直す要求の入力（モデルの呼び出しの span の縮める前後。#2583）。
+        self.last_input = result
         return {**request, "input": result.items}
 
     def fail_after_retry(self, overflow: ProviderOverflow) -> Never:
@@ -3001,8 +3046,17 @@ def _run_config(run_id: str, sdk_agent: Agent[Any]) -> RunConfig:
         return message
 
     limits = getattr(sdk_agent, _CONTEXT_LIMITS_ATTR, None)
+    static_instructions = getattr(sdk_agent, _STATIC_INSTRUCTIONS_ATTR, None)
     window = (
-        _ContextWindow(run_id, limits, exposed, _rerunnable_tool_names(sdk_agent.tools))
+        _ContextWindow(
+            run_id,
+            limits,
+            exposed,
+            _rerunnable_tool_names(sdk_agent.tools),
+            static_instructions=static_instructions
+            if isinstance(static_instructions, str)
+            else None,
+        )
         if isinstance(limits, ContextLimits)
         else None
     )

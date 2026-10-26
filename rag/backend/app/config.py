@@ -110,6 +110,7 @@ ParserAdapterBackend = Literal[
     "dots_ocr",
     # service 系 backend。oci_document_understanding は OCI Document Understanding の
     # 非同期 processor job で OCR/表抽出する(parser-oci-document-understanding へ委譲する)。
+    # 準備中(ロードマップ)で、まだ選べない(ROADMAP_PARSER_ADAPTER_BACKENDS。#3374)。
     "oci_document_understanding",
 ]
 # 削除した文書解析エンジン(#270: Marker / Unlimited-OCR / GLM-OCR、#2042: OCI Generative AI
@@ -121,6 +122,37 @@ REMOVED_PARSER_ADAPTER_BACKENDS = frozenset(
 )
 # 既定の文書解析エンジン(#286: Unstructured から Docling へ変更)。Unstructured は明示選択で使える。
 DEFAULT_PARSER_ADAPTER_BACKEND: Literal["docling"] = "docling"
+# 準備中(ロードマップ)の文書解析エンジン(#3374)。client・parser のサービスの実装は残すが、
+# まだ選べない。
+# - 選ぶ操作(文書解析の全体設定の API・RAG_PARSER_ADAPTER_BACKEND・処理レシピの保存)は
+#   検証のエラーにする。
+# - 保存済みの値(parser-settings.json・文書レシピ・取込ジョブ)は読み込み時に既定エンジン /
+#   global の継承へ寄せる(画面・取込を壊さない)。取込の経路は選ばれていても呼ばずに止める
+#   (ingestion._partition_source)。
+ROADMAP_PARSER_ADAPTER_BACKENDS: dict[str, str] = {
+    "oci_document_understanding": "OCI Document Understanding",
+}
+
+
+def is_roadmap_parser_adapter_backend(value: object) -> bool:
+    """準備中(ロードマップ)で、まだ選べない文書解析エンジンか。"""
+    return isinstance(value, str) and value.strip().casefold() in ROADMAP_PARSER_ADAPTER_BACKENDS
+
+
+def roadmap_parser_adapter_backend_message(value: object) -> str:
+    """準備中の文書解析エンジンを選んだときの検証のエラーの文言。"""
+    label = ROADMAP_PARSER_ADAPTER_BACKENDS.get(str(value).strip().casefold(), str(value))
+    return (
+        f"{label} の解析は準備中（ロードマップ）のため、まだ選べません。"
+        "Docling などの使える解析エンジンを選んでください。"
+    )
+
+
+def reject_roadmap_parser_adapter_backend(value: object) -> object:
+    """準備中の文書解析エンジンなら ValueError(理由の分かる文言)にする。それ以外はそのまま返す。"""
+    if is_roadmap_parser_adapter_backend(value):
+        raise ValueError(roadmap_parser_adapter_backend_message(value))
+    return value
 
 
 def normalize_parser_adapter_backend_value(value: object) -> object:
@@ -150,7 +182,6 @@ PreprocessProfile = Literal[
     "csv_to_jsonl",
     "excel_to_jsonl",
     "word_to_jsonl",
-    "pii_redact",
 ]
 # 削除したファイル準備の変換方式(text_normalize、#2042: スキャン画像の補正・URL→Markdown)。
 # 保存済みの設定(backend/.env・文書レシピ・KB 構築設定・取込ジョブ)に残っていても起動・取込を
@@ -336,9 +367,19 @@ class _PersistedParserAdapterSettings(BaseModel):
     # Vision の既定は backend/.env の RAG_VISION_ENABLED で決める。#528)は
     # 既定の extra=ignore で読み捨てる。
     # adapter_backend に削除済みエンジンが残っていれば既定エンジンへ寄せる(#270)。
+    # 準備中(ロードマップ)のエンジンが残っていても既定エンジンへ寄せる(#3374。以前の版が画面から
+    # 保存した値。起動を止めず、ログに出す。次に保存すると消える)。
     @field_validator("adapter_backend", mode="before")
     @classmethod
     def normalize_adapter_backend(cls, value: object) -> object:
+        if is_roadmap_parser_adapter_backend(value):
+            logging.getLogger(__name__).warning(
+                "parser-settings.json の解析エンジン %s は準備中（ロードマップ）のため使わず、"
+                "既定の %s にします。",
+                value,
+                DEFAULT_PARSER_ADAPTER_BACKEND,
+            )
+            return DEFAULT_PARSER_ADAPTER_BACKEND
         return normalize_parser_adapter_backend_value(value)
 
 
@@ -757,18 +798,6 @@ class Settings(
             "application/rtf",
             "application/x-rtf",
             "text/rtf",
-            "audio/aac",
-            "audio/flac",
-            "audio/mp3",
-            "audio/mpeg",
-            "audio/mp4",
-            "audio/ogg",
-            "audio/wave",
-            "audio/wav",
-            "audio/x-flac",
-            "audio/x-m4a",
-            "audio/x-wav",
-            "application/ogg",
             "application/octet-stream",
         ]
     )
@@ -897,7 +926,7 @@ class Settings(
             "process isolation 時、進捗を出す段(解析のページ・図・表の説明)の途中で job の"
             "進捗(rag_ingestion_jobs.progress_json)がこの秒数変わらなければ止める(#2003)。"
             "進捗を出さない 1 回の呼び出し(解析サービス・Document Understanding・"
-            "AI Speech・Vision の LLM。再試行を含む)の最長より長くする(起動時に検証する)。"
+            "Vision の LLM。再試行を含む)の最長より長くする(起動時に検証する)。"
         ),
     )
 
@@ -2104,8 +2133,7 @@ class Settings(
             "(.doc/.docm/.ppt/.pptm を含む。Excel は対象外)、"
             "csv_to_jsonl は CSV→構造化 JSON、"
             "excel_to_jsonl は Excel(.xls/.xlsx/.xlsm)→構造化 JSON、"
-            "pii_redact は取込時の PII マスク"
-            "(Presidio + 日本語 NER、外部 SaaS 非使用)"
+            "word_to_jsonl は Word→構造化 JSON"
             "(いずれも各々独立した前処理マイクロサービス)。"
         ),
     )
@@ -2144,10 +2172,6 @@ class Settings(
             "Word(.doc/.docx/.docm)→構造化レコード JSONL 前処理マイクロサービスの base URL(#2457)。"
         ),
     )
-    rag_preprocess_pii_redact_service_url: str = Field(
-        default="http://127.0.0.1:18016",
-        description="PII マスク(取込時)前処理マイクロサービスの base URL。",
-    )
     rag_preprocess_service_timeout_seconds: float = Field(
         default=300.0,
         gt=0,
@@ -2165,9 +2189,10 @@ class Settings(
         default=DEFAULT_PARSER_ADAPTER_BACKEND,
         description=(
             "文書解析 backend の明示選択。既定は Docling(#286)。Unstructured は明示選択で使う。"
-            "Docling/Unstructured/構造化レコード JSONL/XML ツリー JSON/各 OCR/"
-            "Document Understanding は対応 parser マイクロサービスまたは API へ HTTP 委譲する。"
+            "Docling/Unstructured/構造化レコード JSONL/XML ツリー JSON/各 OCR は"
+            "対応 parser マイクロサービスまたは API へ HTTP 委譲する。"
             "in-process 解析・local fallback は持たない。"
+            "OCI Document Understanding は準備中（ロードマップ）で、まだ選べない(#3374)。"
         ),
     )
     rag_parser_docling_enabled: bool = Field(
@@ -2249,12 +2274,6 @@ class Settings(
     rag_parser_dots_ocr_api_key: str = Field(default="", repr=False)
     rag_parser_dots_ocr_dpi: int = Field(default=200, ge=72, le=600)
     rag_parser_dots_ocr_pdf_workers: int = Field(default=4, ge=1, le=16)
-    rag_parser_asr_enabled: bool = Field(
-        default=True,
-        description=(
-            "音声/動画の文字起こし(OCI AI Speech)を有効化する。OFF にすると音声は未対応として扱う。"
-        ),
-    )
     rag_parser_oci_document_understanding_service_url: str = Field(
         default="http://127.0.0.1:18028",
         description=(
@@ -2428,46 +2447,6 @@ class Settings(
         le=3600.0,
         description="DU processor job 完了待ちの上限(秒)。超過時は安全に縮退する。",
     )
-    # --- OCI AI Speech(音声文字起こし。空欄はローカル faster-whisper へ縮退)---
-    oci_speech_compartment_id: str = Field(
-        default="",
-        description="OCI AI Speech の compartment OCID。空欄時は oci_compartment_id を使う。",
-    )
-    oci_speech_namespace: str = Field(
-        default="",
-        description="Speech 入出力 Object Storage の namespace。空欄は object_storage_namespace。",
-    )
-    oci_speech_input_bucket: str = Field(
-        default="",
-        description="Speech 入力 bucket。空欄は object_storage_bucket。",
-    )
-    oci_speech_output_bucket: str = Field(
-        default="",
-        description="Speech 出力 bucket。空欄は入力 bucket と同じ。",
-    )
-    oci_speech_input_prefix: str = Field(
-        default="speech/input",
-        description="Speech 入力 object の key prefix。",
-    )
-    oci_speech_output_prefix: str = Field(
-        default="speech/output",
-        description="Speech 出力 JSON の key prefix。",
-    )
-    oci_speech_language: str = Field(
-        default="ja",
-        description="文字起こしの言語コード(既定 日本語)。",
-    )
-    oci_speech_poll_interval_seconds: float = Field(
-        default=5.0,
-        gt=0,
-        description="Speech transcription job の状態 poll 間隔(秒)。",
-    )
-    oci_speech_timeout_seconds: float = Field(
-        default=900.0,
-        gt=0,
-        le=7200.0,
-        description="Speech job 完了待ちの上限(秒)。超過時はローカル faster-whisper へ縮退。",
-    )
     rag_segment_checkpoint_enabled: bool = Field(
         default=True,
         description="取込 segment checkpoint を Oracle に永続化し、失敗 segment の再試行に使う。",
@@ -2577,8 +2556,9 @@ class Settings(
         ``local`` は **正規化しない**。advanced diagnostics(scorecard/staging golden gate)が
         「常時利用可能な baseline」概念として扱う。runtime では ingestion._partition_source が
         ``local`` を既定エンジン(``docling``)のサービスへマップし、in-process 解析は実行しない。
+        準備中(ロードマップ)のエンジン(#3374)は理由の分かる検証のエラーにする(``.env`` で選べない)。
         """
-        return normalize_parser_adapter_backend_value(value)
+        return reject_roadmap_parser_adapter_backend(normalize_parser_adapter_backend_value(value))
 
     @field_validator("rag_preprocess_profile", mode="before")
     @classmethod
@@ -2701,7 +2681,6 @@ class Settings(
             "oci_document_understanding_timeout_seconds": (
                 self.oci_document_understanding_timeout_seconds
             ),
-            "oci_speech_timeout_seconds": self.oci_speech_timeout_seconds,
             "oci_enterprise_ai_timeout_seconds": (
                 self.oci_enterprise_ai_timeout_seconds * (self.oci_enterprise_ai_max_retries + 1)
             ),

@@ -24,7 +24,6 @@ PREPROCESS_PROFILE_ORDER: tuple[PreprocessProfileName, ...] = (
     "csv_to_jsonl",
     "excel_to_jsonl",
     "word_to_jsonl",
-    "pii_redact",
 )
 
 
@@ -74,13 +73,6 @@ PREPROCESS_PROFILE_SPECS: dict[PreprocessProfileName, PreprocessProfileSpec] = {
         recommended_for=("word", "doc", "docx"),
         requires_service=True,
     ),
-    "pii_redact": PreprocessProfileSpec(
-        name="pii_redact",
-        origin="presidio_ja_ner",
-        # テキスト形式だけ(メールの MIME は本文が符号化されていてマスクできない。#2068)。
-        recommended_for=("text", "html"),
-        requires_service=True,
-    ),
 }
 
 
@@ -114,7 +106,6 @@ PREPROCESS_SERVICE_URL_ATTRS: dict[PreprocessProfileName, str] = {
     "csv_to_jsonl": "rag_preprocess_csv_to_jsonl_service_url",
     "excel_to_jsonl": "rag_preprocess_excel_to_jsonl_service_url",
     "word_to_jsonl": "rag_preprocess_word_to_jsonl_service_url",
-    "pii_redact": "rag_preprocess_pii_redact_service_url",
 }
 
 

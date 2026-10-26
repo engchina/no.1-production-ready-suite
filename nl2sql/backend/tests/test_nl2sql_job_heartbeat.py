@@ -131,7 +131,11 @@ def test_long_generation_renews_lease_and_stops_heartbeat_after_completion(
     if outcome == "cancel":
         assert completed["error_code"] == service_module.JOB_CANCELLED_ERROR_CODE
     assert completed["attempt"] == 1
-    assert len(repo.list_documents("history", limit=100)) == (1 if outcome == "done" else 0)
+    # 完了と停止（#3348。停止の行）は実行履歴に残し、失敗は残さない。
+    history = repo.list_documents("history", limit=100)
+    assert len(history) == (0 if outcome == "error" else 1)
+    if outcome == "cancel":
+        assert history[0]["run_status"] == "cancelled"
 
 
 @pytest.mark.parametrize("state", ["expired", "reclaimed", "done", "error"])
