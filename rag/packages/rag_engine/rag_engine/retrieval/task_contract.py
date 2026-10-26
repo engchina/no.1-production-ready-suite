@@ -42,6 +42,7 @@ class _Cues:
     error_phrase: re.Pattern[str]
     error_clause_split: re.Pattern[str]
     request_marker: re.Pattern[str]
+    cause_target: re.Pattern[str]
     parallel_objects: re.Pattern[str]
     chained_operations: re.Pattern[str]
     circled: str
@@ -119,6 +120,13 @@ def _build_cues(pack: LanguagePack) -> _Cues:
             rf"{alt['error_clause_particles']}(?!{char_class(words['error_clause_particle_exceptions'])})|{comma}"
         ),
         request_marker=re.compile(rf"{alt['question_final_particles']}[{unit_chars}\s]*$|{alt['request_cues']}"),
+        # 原因・理由の名詞が質問の的になっている形（#3491）: 名詞の直後（並べた語を挟んでもよい）に問う語尾が続くか、
+        # 疑問の語が名詞の前に付く（目的語の「を」が続く「どんな理由を入力」は項目の名前として除く）。
+        # 「理由は何文字以上」「理由の欄」「理由を入力する手順」のように数量・入力・形式の対象の名前のときは当たらない。
+        cause_target=re.compile(
+            rf"{alt['cause_nouns']}(?:{alt['parallel_connectors']}[^{sentence_chars}\n]{{0,20}}?)?{alt['cause_noun_question_endings']}"
+            rf"|{alt['cause_noun_question_leads']}{alt['cause_nouns']}(?!{alt['object_particles']})"
+        ),
         parallel_objects=re.compile(
             rf"({name}{{1,20}}){alt['parallel_connectors']}({name}{{1,20}}){alt['target_particles']}"
             rf"({alt['split_operation_words']})"
@@ -345,8 +353,20 @@ def _task_contract(question: str, _pack_hash: str = "") -> dict[str, Any]:
 
 
 def asks_cause(question: str) -> bool:
-    """今回の要求文が原因・理由を尋ねているか (#713)。原因の推測を summary で列挙させないための材料。"""
-    return _cues().has("cause_cues", current_request_text(question))
+    """今回の要求文が原因・理由を尋ねているか (#713)。原因の推測を summary で列挙させないための材料。
+
+    「なぜ」のような原因を問う語があるか、原因・理由の名詞が質問の的になっているとき（`cause_noun_targeted`）だけ真。
+    """
+    current = current_request_text(question)
+    return _cues().has("cause_cues", current) or cause_noun_targeted(current)
+
+
+def cause_noun_targeted(text: str) -> bool:
+    """原因・理由の名詞が、問う形（「理由は何ですか」「原因を教えて」「何が原因か」）の的になっているか (#3491)。
+
+    「理由」は入力・記載する項目の名前（「理由は何文字以上」「理由の欄」）にも使うため、語の有無では判定しない。
+    """
+    return bool(_cues().cause_target.search(text))
 
 
 def action_targets(question: str) -> list[str]:
