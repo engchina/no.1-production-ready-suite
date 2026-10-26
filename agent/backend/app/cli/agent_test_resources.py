@@ -1,8 +1,9 @@
-"""合成資料の業務 Agent を作成・更新して公開する管理の命令（#3545）。
+"""合成資料の業務 Agent を Agent の管理 API で作成・更新して公開する命令（#3545）。
 
-    uv run python -m app.cli.agent_test_resources --rag-state <RAG の命令の state>
-    uv run python -m app.cli.agent_test_resources --profile A=<ID> --profile B=<ID> \
-        [--namespace <区分>]
+    uv run python -m app.cli.agent_test_resources --agent-api <Agent の /api までの URL> \
+        --rag-state <RAG の命令の state> [--state <結果の保存先>]
+    uv run python -m app.cli.agent_test_resources --agent-api <URL> \
+        --profile A=<ID> --profile B=<ID> [--namespace <区分>]
 
 合成資料の検索・回答を確かめる業務 Agent（定義は `agent/examples/test-pdfs-ja/agents.json`）を、
 RAG の命令（`app.rag.test_resources_cli`）が作った検索・回答プロファイルの ID で作る。RAG は
@@ -10,44 +11,40 @@ Agent を呼ばないので、業務 Agent の段は Agent の側のこの命令
 rag/examples/test-pdfs-ja/README.md）。
 
 - プロファイルの ID は、RAG の命令の `--state`（`complete: true` のもの。名前の区分も読む）か、
-  `--profile <グループ>=<ID>` で渡す。RAG の API は呼ばない。
-- 業務 Agent は Agent の保存先（共通 `.env` の `PLATFORM_ORACLE_*`）に repository で書く（画面の
-  API・Cookie を使わない）。Oracle の保存先だけを受け付ける（memory・file は動いている backend と
-  共有できない）。
-- 名前で既存の業務 Agent を探し、無ければ作る。あれば定義（版の項目と有効 / 無効）を下書きに合わせ、
-  公開していない変更があるときだけ公開する。同じ命令を何度実行してもよい（変更が無ければ書かない）。
-  同名が複数ある・組み込み・個人の業務 Agent・移行が要るときは変更せずに止める。
-- 公開は画面と同じ公開前の評価の門（`publish_gate`）を通す。断られたら下書きを残して止める。
-- 書いたときは、動いている Agent の backend のメモリが古いまま（次に自分で保存するまで、この命令の
-  変更を読まない。#1916）なので、出力の `restart_required` のプロセスを再起動する。
+  `--profile <グループ>=<ID>` で渡す。この命令は RAG を呼ばない。
+- Agent 自身の管理 API（画面と同じ `POST /auth/login` の Cookie / CSRF）で書く。保存先に直接は
+  書かないので、動いている backend の再起動は要らない。データの範囲の確認（RAG の MCP で、利用者が
+  使えるプロファイルか）と公開前の評価の門も、画面と同じ経路で backend が行う。
+- 組織の業務 Agent を作るので、Agent 管理（`agent.admin`）か system_admin の利用者で実行する。
+- 名前で既存の業務 Agent を探し、無ければ作る。あれば定義（版の項目と有効 / 無効）と違う項目だけ
+  下書きを直し、公開していない変更があるときだけ公開する。同じ命令を何度実行してもよい（変更が
+  無ければ GET だけ）。同名が複数ある・組み込み・個人の業務 Agent・移行が要るときは、変更せずに
+  止める。
 
-結果（業務 Agent の ID と公開中の版）は 1 行の JSON で標準出力に出し、`--state` を渡せばそこにも
-保存する。認証情報・接続先は出さない。
+ログイン ID とパスワードは対話で入力する（自動実行では `SUITE_TEST_LOGIN_USER` /
+`SUITE_TEST_PASSWORD`）。結果（業務 Agent の ID と公開中の版）は 1 行の JSON で標準出力に出し、
+`--state` を渡せばそこにも保存する。認証情報・接続先は出さない。
 """
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
+import os
 import re
+import ssl
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-from pr_backend_core.logging import configure_cli_logging
-from pr_backend_core.oracle_dsn import enable_cli_connect_mode
+import httpx
 from pydantic import ValidationError
 
 from app.features.agent.data_scope import RAG_CONNECTION_ID, AgentDataScope
-from app.features.agent.publish_gate import publish_evaluation_refusal
-from app.features.agent.runtime import (
-    AGENT_VERSIONED_FIELDS,
-    AgentProfile,
-    AgentProfilePatch,
-    AgentRuntimeRepositoryContract,
-    AgentRuntimeStorageUnavailableError,
-)
+from app.features.agent.runtime import AGENT_VERSIONED_FIELDS, AgentProfile
 
 # 定義の項目（版の項目と有効 / 無効）。データの範囲は定義に書かず、プロファイルの ID から作る。
 DEFINITION_FIELDS: tuple[str, ...] = (*AGENT_VERSIONED_FIELDS, "enabled")
@@ -57,14 +54,65 @@ PUBLISH_NOTE = "合成資料の検索・回答の確認用"
 # グループ・名前の区分（RAG の命令と同じ形）。
 KEY_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,32}")
 NAME_PREFIX = "テスト_"
+ADMIN_PERMISSION = "agent.admin"
+# 利用者向けの文（画面と同じ検証の理由）を返す status。5xx の本文は出さない。
+_CLIENT_ERRORS = frozenset({400, 403, 404, 409, 422})
 
 
 class ProvisionError(RuntimeError):
-    """値や保存先の中身を漏らさず、止めた理由を説明する。"""
+    """値や応答の本文を漏らさず、止めた理由を説明する。"""
+
+
+class AgentApi:
+    """Cookie / CSRF で Agent の管理 API を呼ぶ。変更の自動再送はしない。"""
+
+    def __init__(self, client: httpx.Client, base: str) -> None:
+        parsed = urlsplit(base)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ProvisionError("API URL は http / https の絶対 URL にしてください。")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ProvisionError("API URL に認証情報・質問文字列・fragment は指定できません。")
+        self.client = client
+        self.base = base.rstrip("/")
+
+    def call(self, method: str, path: str, **kwargs: Any) -> Any:
+        headers: dict[str, str] = {}
+        for cookie in self.client.cookies.jar:
+            if "csrf" in cookie.name.lower() and cookie.value:
+                headers["X-CSRF-Token"] = cookie.value
+        try:
+            response = self.client.request(method, self.base + path, headers=headers, **kwargs)
+        except httpx.HTTPError as exc:
+            raise ProvisionError(
+                "Agent の管理 API の通信が失敗しました。状態を確認して再実行してください。"
+            ) from exc
+        if response.is_error or response.is_redirect:
+            raise ProvisionError(_error_message(response))
+        try:
+            result = response.json()
+            if result.get("error_messages") or result.get("warning_messages"):
+                raise ProvisionError("Agent の管理 API がエラーまたは警告を返しました。")
+            return result["data"]
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise ProvisionError("Agent の管理 API の応答形式を確認してください。") from exc
+
+
+def _error_message(response: httpx.Response) -> str:
+    """失敗の status と、検証の理由（画面に出す文。4xx だけ）。"""
+    message = f"Agent の管理 API が HTTP {response.status_code} を返しました。"
+    if response.status_code not in _CLIENT_ERRORS:
+        return message
+    try:
+        reasons = response.json().get("error_messages") or []
+    except (ValueError, AttributeError):
+        return message
+    if reasons and isinstance(reasons[0], str):
+        return f"{message}{reasons[0][:300]}"
+    return message
 
 
 def read_definitions(path: Path) -> dict[str, dict[str, Any]]:
-    """業務 Agent の定義（グループ → 項目）。形が違えば保存先に触る前に止める。"""
+    """業務 Agent の定義（グループ → 項目）。形が違えば API を呼ぶ前に止める。"""
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ProvisionError("業務 Agent の定義の版・形式を確認してください。")
@@ -142,30 +190,34 @@ def parse_profiles(values: Sequence[str]) -> dict[str, AgentDataScope]:
 
 def desired_agent(
     definition: Mapping[str, Any], scope: AgentDataScope, namespace: str
-) -> AgentProfile:
-    """定義とデータの範囲から、目標の業務 Agent（検証済みの型）を作る。"""
+) -> dict[str, Any]:
+    """定義とデータの範囲から、目標の項目（API の JSON と同じ形）を作る。"""
     name = str(definition["name"])
     if namespace:
         name = f"{NAME_PREFIX}{namespace}_{name.removeprefix(NAME_PREFIX)}"
-    return AgentProfile.model_validate(
+    profile = AgentProfile.model_validate(
         {**definition, "name": name, "data_scopes": {RAG_CONNECTION_ID: scope.model_dump()}}
+    )
+    return profile.model_dump(mode="json", include=set(DEFINITION_FIELDS))
+
+
+def _differences(actual: Mapping[str, Any], target: Mapping[str, Any]) -> list[str]:
+    return [field for field in DEFINITION_FIELDS if actual.get(field) != target[field]]
+
+
+def _published(agent: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    version = agent.get("published_version")
+    return next(
+        (item for item in agent.get("versions") or [] if item.get("version") == version), None
     )
 
 
-def _differences(agent: AgentProfile, target: AgentProfile) -> list[str]:
-    return [field for field in DEFINITION_FIELDS if getattr(agent, field) != getattr(target, field)]
-
-
-def provision(
-    repository: AgentRuntimeRepositoryContract,
+def build_targets(
     definitions: Mapping[str, Mapping[str, Any]],
     scopes: Mapping[str, AgentDataScope],
-    *,
-    namespace: str = "",
-    publish_refusal: Callable[[AgentProfile], str | None],
-    log: Callable[[str], None] = print,
-) -> dict[str, Any]:
-    """業務 Agent を作成・更新して公開する（冪等）。戻り値の `changed` は保存先に書いたか。"""
+    namespace: str,
+) -> dict[str, dict[str, Any]]:
+    """グループごとの目標の項目。足りない・形の違う入力は、API を呼ぶ前に止める。"""
     if namespace and not KEY_PATTERN.fullmatch(namespace):
         raise ProvisionError("名前の区分は英数字・_・- の 32 字以内にしてください。")
     missing = sorted(set(definitions) - set(scopes))
@@ -173,95 +225,94 @@ def provision(
         raise ProvisionError(
             f"検索・回答プロファイルの ID が無いグループがあります: {', '.join(missing)}"
         )
-    result: dict[str, Any] = {"namespace": namespace, "groups": {}, "changed": False}
-    for key in sorted(definitions):
-        target = desired_agent(definitions[key], scopes[key], namespace)
-        found = [agent for agent in repository.list_agents() if agent.name == target.name]
+    return {
+        key: desired_agent(definitions[key], scopes[key], namespace) for key in sorted(definitions)
+    }
+
+
+class Provisioner:
+    """名前で照合し、作成・下書きの修正・公開を、要るときだけ管理 API で行う（冪等）。"""
+
+    def __init__(self, api: AgentApi, *, log: Callable[[str], None] = print) -> None:
+        self.api, self.log = api, log
+
+    def require_admin(self) -> None:
+        """組織の業務 Agent を作るので、Agent 管理か system_admin を求める（個人の業務 Agent に
+        しない）。"""
+        me = self.api.call("GET", "/auth/me")
+        if not me.get("is_system_admin") and ADMIN_PERMISSION not in (me.get("permissions") or []):
+            raise ProvisionError(
+                "Agent 管理（agent.admin）か system_admin の利用者で実行してください"
+                "（組織の業務 Agent を作るため）。"
+            )
+
+    def run(self, targets: Mapping[str, Mapping[str, Any]], *, namespace: str) -> dict[str, Any]:
+        """`targets` は `build_targets` の結果（グループ → 目標の項目）。"""
+        self.require_admin()
+        result: dict[str, Any] = {"namespace": namespace, "groups": {}}
+        for key, target in targets.items():
+            agent = self._ensure(key, target)
+            if agent.get("unpublished_changes", True):
+                agent = self.api.call(
+                    "POST", f"/agents/{agent['id']}/publish", json={"note": PUBLISH_NOTE}
+                )
+                self.log(
+                    f"業務 Agent を公開しました（グループ {key}・v{agent['published_version']}）。"
+                )
+            published = _published(agent)
+            if (
+                published is None
+                or _differences(agent, target)
+                or any(published.get(field) != target[field] for field in AGENT_VERSIONED_FIELDS)
+            ):
+                raise ProvisionError(
+                    f"業務 Agent（グループ {key}）の公開中の版が定義と異なります。公開の状態を"
+                    "確認してください。"
+                )
+            result["groups"][key] = {
+                "agent_id": agent["id"],
+                "published_version": agent["published_version"],
+            }
+        return result
+
+    def _ensure(self, key: str, target: Mapping[str, Any]) -> dict[str, Any]:
+        """無ければ作り、あれば下書きの違う項目だけを直す（同じなら書かない）。"""
+        agents = self.api.call("GET", "/agents")["agents"]
+        found = [agent for agent in agents if agent.get("name") == target["name"]]
         if len(found) > 1:
             raise ProvisionError(
                 f"同じ名前の業務 Agent が複数あります（グループ {key}）。自動では選びません。"
             )
-        try:
-            agent = _ensure_agent(repository, key, target, found, result, log)
-            if agent.has_unpublished_changes():
-                refusal = publish_refusal(agent)
-                if refusal is not None:
-                    raise ProvisionError(
-                        f"公開前の評価の門が公開を断りました（グループ {key}）。下書きは保存済み"
-                        f"です。{refusal}"
-                    )
-                agent = repository.publish_agent(agent.id, note=PUBLISH_NOTE)
-                result["changed"] = True
-                log(f"業務 Agent を公開しました（グループ {key}・v{agent.published_version}）。")
-        except (KeyError, ValueError) as exc:
-            # repository の検証（スキルが無いなど）の文は画面の 400 と同じで、値を含まない。
-            detail = str(exc) if isinstance(exc, ValueError) else "業務 Agent が見つかりません。"
-            raise ProvisionError(f"業務 Agent（グループ {key}）を保存できません。{detail}") from exc
-        _verify_published(key, agent, target)
-        result["groups"][key] = {
-            "agent_id": agent.id,
-            "published_version": agent.published_version,
-        }
-    return result
-
-
-def _ensure_agent(
-    repository: AgentRuntimeRepositoryContract,
-    key: str,
-    target: AgentProfile,
-    found: list[AgentProfile],
-    result: dict[str, Any],
-    log: Callable[[str], None],
-) -> AgentProfile:
-    """無ければ作り、あれば下書きを定義に合わせる（同じなら書かない）。"""
-    if not found:
-        # 画面の作成と同じく下書きから始める組織の業務 Agent（ID は `agent_<uuid>`）。
-        agent = repository.create_agent(
-            target.model_copy(
-                update={
-                    "versioned": True,
-                    "versions": [],
-                    "published_version": None,
-                    "source": "runtime",
-                    "owner_user_uuid": None,
-                    "share_request": None,
-                }
+        if not found:
+            # ID は送らない（backend が `agent_<uuid>` を作る。画面の作成と同じ下書きから）。
+            created = self.api.call("POST", "/agents", json=dict(target))
+            if created.get("owner_user_uuid"):
+                raise ProvisionError(
+                    f"業務 Agent（グループ {key}）が個人の業務 Agent として作られました。"
+                    "画面で削除し、Agent 管理の利用者で実行し直してください。"
+                )
+            self.log(f"業務 Agent を作成しました（グループ {key}）。")
+            return dict(created)
+        agent = found[0]
+        if (
+            agent.get("source") != "runtime"
+            or agent.get("owner_user_uuid")
+            or agent.get("migration_required")
+        ):
+            raise ProvisionError(
+                f"同名の業務 Agent（グループ {key}）が組み込み・個人の業務 Agent か、移行が要る"
+                "状態です。変更せずに停止します。"
             )
+        changes = _differences(agent, target)
+        if not changes:
+            return dict(agent)
+        patched = self.api.call(
+            "PATCH", f"/agents/{agent['id']}", json={field: target[field] for field in changes}
         )
-        result["changed"] = True
-        log(f"業務 Agent を作成しました（グループ {key}）。")
-        return agent
-    agent = found[0]
-    if agent.source != "runtime" or agent.owner_user_uuid or agent.migration_required:
-        raise ProvisionError(
-            f"同名の業務 Agent（グループ {key}）が組み込み・個人の業務 Agent か、移行が要る"
-            "状態です。変更せずに停止します。"
+        self.log(
+            f"業務 Agent の下書きを定義に合わせました（グループ {key}: {', '.join(changes)}）。"
         )
-    changes = _differences(agent, target)
-    if not changes:
-        return agent
-    agent = repository.patch_agent(
-        agent.id, AgentProfilePatch(**{field: getattr(target, field) for field in changes})
-    )
-    result["changed"] = True
-    log(f"業務 Agent の下書きを定義に合わせました（グループ {key}: {', '.join(changes)}）。")
-    return agent
-
-
-def _verify_published(key: str, agent: AgentProfile, target: AgentProfile) -> None:
-    """公開中の版と有効 / 無効が定義のとおりか（書いた後にも確かめる）。"""
-    published = agent.published()
-    if (
-        published is None
-        or _differences(agent, target)
-        or any(
-            getattr(published, field) != getattr(target, field) for field in AGENT_VERSIONED_FIELDS
-        )
-    ):
-        raise ProvisionError(
-            f"業務 Agent（グループ {key}）の公開中の版が定義と異なります。公開の状態を確認して"
-            "ください。"
-        )
+        return dict(patched)
 
 
 def _stable_json(value: Mapping[str, Any]) -> str:
@@ -276,47 +327,11 @@ def _save_state(path: Path, data: Mapping[str, Any]) -> None:
     temporary.replace(path)
 
 
-def _restart_required() -> dict[str, object]:
-    """動いている backend（と dispatcher）は、この命令の変更をメモリに持たない（#1916）。"""
-    from app.features.agent.storage_bootstrap import BACKEND_PROCESS, DISPATCHER_PROCESS
-    from app.settings import get_settings
-
-    processes = [BACKEND_PROCESS]
-    if get_settings().agent_runtime_dispatch_mode.strip().lower() != "in_process":
-        processes.append(DISPATCHER_PROCESS)
-    return {
-        "message": (
-            "業務 Agent を保存しました。動いているプロセスは、自分で次に保存するまでこの変更を"
-            "メモリに読み込みません（一覧・チャットに出ません）。実行中の Run が無いときに"
-            "再起動してください。"
-        ),
-        "processes": processes,
-    }
-
-
-def _open_repository() -> AgentRuntimeRepositoryContract:
-    """動いている backend と同じ Oracle の保存先（定義の復元を含む。中断した Run は触らない）。"""
-    from app.features.agent import control_plane_store, runtime, storage_backend
-
-    backend = storage_backend.resolved_backend()
-    if backend not in storage_backend.ORACLE_BACKENDS:
-        raise ProvisionError(
-            f"Agent の保存先が Oracle ではありません（{backend}）。動いている backend と共有"
-            "できないため、この命令では作りません。画面で作成・公開してください。"
-        )
-    # 画面で入れたスキル（業務 Agent の検証・公開の版の固定）と評価の履歴（公開前の評価の門）を
-    # 読み込む。backend の起動と違い、中断した Run の失敗（#1894）はしない。
-    control_plane_store.restore_control_plane()
-    return runtime.get_runtime_repository()
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    configure_cli_logging("agent")
-    # DB の停止中・届かないときに、接続記述子の TNS の再試行で長く待たずに失敗を返す（#1779）。
-    enable_cli_connect_mode()
+def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    parser.add_argument("--agent-api", required=True, help="Agent の /api までの URL")
     parser.add_argument(
         "--definitions",
         type=Path,
@@ -335,6 +350,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--namespace", default="", help="名前の区分（--profile のときだけ。state は state の区分）"
     )
     parser.add_argument("--state", type=Path, help="結果（業務 Agent の ID と公開中の版）の保存先")
+    parser.add_argument("--ca-file", help="私設 CA の PEM ファイル")
     args = parser.parse_args(argv)
     try:
         definitions = read_definitions(args.definitions)
@@ -344,39 +360,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             scopes, namespace = read_rag_state(args.rag_state)
         else:
             scopes, namespace = parse_profiles(args.profile), args.namespace
-        repository = _open_repository()
-        result = provision(
-            repository,
-            definitions,
-            scopes,
-            namespace=namespace,
-            publish_refusal=publish_evaluation_refusal,
-            log=lambda message: print(message, file=sys.stderr),  # noqa: T201
+        targets = build_targets(definitions, scopes, namespace)
+        user = os.environ.get("SUITE_TEST_LOGIN_USER") or input("ログイン ID: ")
+        password = os.environ.get("SUITE_TEST_PASSWORD") or getpass.getpass("パスワード: ")
+        options: dict[str, Any] = (
+            {"transport": transport}
+            if transport is not None
+            else {"verify": ssl.create_default_context(cafile=args.ca_file)}
         )
-        repository.flush_writes()
-        data: dict[str, Any] = {
-            "groups": result["groups"],
-            "namespace": result["namespace"],
-            "restart_required": _restart_required() if result["changed"] else None,
-        }
+        with httpx.Client(timeout=120, follow_redirects=False, **options) as client:
+            api = AgentApi(client, args.agent_api)
+            api.call("POST", "/auth/login", json={"login_user_id": user, "password": password})
+            result = Provisioner(
+                api,
+                log=lambda message: print(message, file=sys.stderr),  # noqa: T201
+            ).run(targets, namespace=namespace)
         if args.state is not None:
-            _save_state(args.state, data)
+            _save_state(args.state, result)
     except ProvisionError as exc:
         print(_stable_json({"error": {"message": str(exc)}, "ok": False}))  # noqa: T201
         return 1
-    except AgentRuntimeStorageUnavailableError as exc:
-        # 利用者に返せる文（接続先・資格情報を含まない）。
-        print(_stable_json({"error": {"message": str(exc)}, "ok": False}))  # noqa: T201
-        return 1
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        message = f"定義・state のファイルか保存先を確認してください（{type(exc).__name__}）。"
+        message = f"定義・state のファイルを確認してください（{type(exc).__name__}）。"
         print(_stable_json({"error": {"message": message}, "ok": False}))  # noqa: T201
         return 1
-    except Exception as exc:  # 接続・SQL の失敗は SQL や資格情報を出さずに非 0 で終わる
-        message = f"業務 Agent の作成・公開に失敗しました（{type(exc).__name__}）。"
-        print(_stable_json({"error": {"message": message}, "ok": False}))  # noqa: T201
-        return 1
-    print(_stable_json({"data": data, "ok": True}))  # noqa: T201
+    print(_stable_json({"data": result, "ok": True}))  # noqa: T201
     return 0
 
 

@@ -15,7 +15,7 @@ backend/app/features/agent/
 backend/app/security/       共通認証の上の Agent の権限・対象範囲・権限管理 API
 backend/app/system_schema.py               システムテーブル（AGENT_* の DDL・migration・状態）
 backend/app/cli/agent_system_schema.py     システムテーブルの status / initialize / recreate の CLI
-backend/app/cli/agent_test_resources.py    合成資料の業務 Agent の作成・公開の CLI（定義は examples/test-pdfs-ja/agents.json。#3545）
+backend/app/cli/agent_test_resources.py    合成資料の業務 Agent を管理 API で作成・公開する CLI（定義は examples/test-pdfs-ja/agents.json。#3545）
 frontend/src/
   App.tsx                   route（画面は React.lazy で route ごとに読む）
   pages/<領域>/<画面>.tsx    agents / runs / approvals / audit / skills / settings など

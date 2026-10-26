@@ -27,7 +27,7 @@ RAG と業務 Agent の検索・回答を確かめるための合成資料です
 
 ## 管理 API と Agent の命令による再構築
 
-2 段で作ります。先に RAG の命令で KB・検索・回答プロファイル・文書を作って取り込み、次に Agent の命令で、RAG の命令が残した検索・回答プロファイルの ID を使って業務 Agent を作成・公開します。RAG の命令は Agent を呼ばず、Agent の命令は RAG を呼びません（2 つは `--state` のファイルだけでつながります）。
+2 段で作ります。先に RAG の命令で KB・検索・回答プロファイル・文書を作って取り込み、次に Agent の命令で、RAG の命令が残した検索・回答プロファイルの ID を使って業務 Agent を作成・公開します。RAG の命令は RAG の管理 API だけ、Agent の命令は Agent の管理 API だけを呼びます（2 つは `--state` のファイルだけでつながります）。
 
 前提は RAG と Agent の配備、管理 API を操作できる利用者、利用可能な Oracle / Object Storage、Docling の解析サービス、embedding・rerank と OCI Enterprise AI の接続です。Agent には組み込みの `business-rag-research` スキルと RAG の MCP 接続が必要です。モデルや接続先は対象環境のシステム設定を使います。取込の自動処理は各文書のレシピで選び、全体の設定・ツール権限は変更しません。
 
@@ -57,23 +57,23 @@ uv run --project rag/backend python -m app.rag.test_resources_cli \
 
 ### 2. Agent: 業務 Agent の作成・公開
 
-Agent の配備先（Agent の backend と同じ共通 `.env` の `PLATFORM_ORACLE_*` を読める場所）の `agent/backend` で実行します。業務 Agent は Agent の保存先（Oracle）に直接書き、画面の API・RAG の API は呼びません。1 の state を渡します。
+repo の直下から、Agent の管理 API（`/api` までの URL）を呼びます。ログインは 1 と同じく対話（自動実行では `SUITE_TEST_LOGIN_USER` / `SUITE_TEST_PASSWORD`）で、組織の業務 Agent を作るため Agent 管理（`agent.admin`）か system_admin の利用者を使います。1 の state を渡します。
 
 ```bash
-cd agent/backend
-uv run python -m app.cli.agent_test_resources \
-  --rag-state ../../tmp/test-resources/state.json \
-  --state ../../tmp/test-resources/agent-state.json
+uv run --project agent/backend python -m app.cli.agent_test_resources \
+  --agent-api https://suite.example.invalid/agent/api \
+  --rag-state tmp/test-resources/state.json \
+  --state tmp/test-resources/agent-state.json
 ```
 
-state の代わりに `--profile A=<プロファイルの ID> --profile B=<プロファイルの ID>`（必要なら `--namespace <区分>`）でも渡せます。定義は既定で [agents.json](../../../agent/examples/test-pdfs-ja/agents.json) を読みます（`--definitions` で変えられます）。
+state の代わりに `--profile A=<プロファイルの ID> --profile B=<プロファイルの ID>`（必要なら `--namespace <区分>`）でも渡せます。定義は既定で [agents.json](../../../agent/examples/test-pdfs-ja/agents.json) を読みます（`--definitions` で変えられます）。私設 CA を使う環境では `--ca-file` を追加します。
 
 1. state の `complete: true` を確かめ、グループごとの業務 Agent のデータの範囲（`data_scopes.rag`）に、対応するプロファイル 1 件だけと既定を設定します。
-2. 業務 Agent は名前で照合します。無ければ組織の業務 Agent として作ります。あれば下書きを定義に合わせます（プロファイルの ID が変わったときなど）。同名が複数ある、組み込み・個人の業務 Agent、移行が要る状態のときは変更せずに終了コード 1 で停止します。
-3. 公開していない変更があるときだけ公開し、公開中の版の指示・スキル・データの範囲を確かめます。公開は画面と同じ公開前の評価の門を通し、断られた場合は下書きを残して成功にしません。
+2. 業務 Agent は名前で照合します。無ければ組織の業務 Agent として作ります。あれば定義と違う項目だけ下書きを直します（プロファイルの ID が変わったときなど）。同名が複数ある、組み込み・個人の業務 Agent、移行が要る状態のときは変更せずに終了コード 1 で停止します。
+3. 公開していない変更があるときだけ公開し、公開中の版の指示・スキル・データの範囲を確かめます。
 4. 業務 Agent の ID と公開中の版を 1 行の JSON で出し、`--state` に保存します（このファイルも commit しません）。
 
-同じ命令を再実行しても、変更が無ければ何も書きません。保存先が Oracle でない（memory・file）ときは、動いている backend と共有できないため作りません。書いたときは、動いている Agent の backend が次に自分で保存するまでこの変更をメモリに読み込まない（一覧・チャットに出ない）ため、出力の `restart_required` のプロセスを、実行中の Run が無いときに再起動します。
+作成・変更・公開は画面と同じ API を通るので、画面と同じ検証を受けます。データの範囲のプロファイルを、実行した利用者が使えるか（Agent の backend が RAG の MCP で確かめます）と、公開前の評価の門です。断られた場合は理由を示して終了コード 1 で停止します（公開を断られたときは下書きが残ります）。同じ命令を再実行しても、変更が無ければ読むだけです。
 
 2 つの命令が終了コード 0 で終われば構築完了です。これは検索回答の正答率を表しません。構築後は次の質問集を使い、事実・引用・検索範囲の分離を別に確認します。Agent のツール呼び出しが承認待ちになったら、画面で各呼び出しを確認して承認します。検索が実行されていない保留を正答として数えたり、全体のツール権限を自動変更したりしません。
 

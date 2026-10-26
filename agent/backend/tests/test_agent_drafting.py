@@ -14,7 +14,7 @@ from agents.testing import ScriptedModel, assistant_message
 from pytest import MonkeyPatch
 from security_support import ProductionAuth, client, enable_production_auth, login
 
-from app.features.agent import builtin_runtime, publish_gate
+from app.features.agent import builtin_runtime
 from app.features.agent import router as agent_router
 from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.data_scope import (
@@ -325,8 +325,7 @@ def agent() -> Iterator[None]:
 
 def _jobs(monkeypatch: MonkeyPatch, *jobs: SimpleNamespace) -> None:
     store = SimpleNamespace(list=lambda: list(jobs))
-    # 公開前の評価の門は publish_gate が持つ（画面の公開と管理の命令が共有する。#3545）。
-    monkeypatch.setattr(publish_gate, "evaluation_store", store)
+    monkeypatch.setattr(agent_router, "evaluation_store", store)
 
 
 def _job(*, pass_rate: float | None, offset_seconds: float, **overrides: Any) -> SimpleNamespace:
