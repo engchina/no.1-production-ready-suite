@@ -512,6 +512,28 @@ def _attached_image_count(result: object) -> int:
     )
 
 
+# 条の選択の記録(#3507)の既定の置き場所(PLATFORM_LOCAL_STORAGE_DIR の下)。
+# 3 製品で同じ保存先を設定しても、RAG の名前の下に分ける。
+_ARTICLE_CATALOG_CACHE_SUBDIR = Path("cache") / "rag-article-catalog"
+
+
+def resolve_article_catalog_cache_dir(settings: Settings) -> Path | None:
+    """条の選択の記録の置き場所(#3507)。明示の設定、無ければローカルの保存先の下。
+
+    どちらも無ければ None(process をまたぐ記録を使わない)。
+    """
+    explicit = str(getattr(settings, "rag_article_catalog_cache_dir", "") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    root = str(getattr(settings, "local_storage_dir", "") or "").strip()
+    return Path(root).expanduser() / _ARTICLE_CATALOG_CACHE_SUBDIR if root else None
+
+
+def article_catalog_cache_dir(settings: Settings) -> Path | None:
+    """rag_engine に渡す条の選択の記録の置き場所(テストは保存先を分けるため差し替える)。"""
+    return resolve_article_catalog_cache_dir(settings)
+
+
 def _reasoning_effort_override(value: str) -> str:
     """用途ごとの推論の量の設定を rag_engine へ渡す値にする(#1499。model は空 = 登録値のまま)。"""
     return "" if value == "model" else value
@@ -619,6 +641,14 @@ def build_engine_settings(
         ),
         "RAG_ENGINE_ARTICLE_CATALOG_REVIEW": (
             "1" if settings.rag_article_catalog_review_enabled else "0"
+        ),
+        # 条の選択の結果を process をまたいで使う記録(#3507)。置き場所が無ければ process の中だけ。
+        "RAG_ENGINE_ARTICLE_CATALOG_CACHE_DIR": str(article_catalog_cache_dir(settings) or ""),
+        "RAG_ENGINE_ARTICLE_CATALOG_CACHE_TTL_SECONDS": str(
+            settings.rag_article_catalog_cache_ttl_seconds
+        ),
+        "RAG_ENGINE_ARTICLE_CATALOG_CACHE_MAX_ENTRIES": str(
+            settings.rag_article_catalog_cache_max_entries
         ),
         # 回答の最終の検証の入力の上限。
         "RAG_ENGINE_ANSWER_VALIDATION_MAX_INPUT_BYTES": str(

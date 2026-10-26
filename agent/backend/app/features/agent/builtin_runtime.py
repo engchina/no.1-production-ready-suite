@@ -92,6 +92,7 @@ from pr_system_settings.enterprise_ai_errors import (
 from pr_system_settings.model import (
     DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
     DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
+    EnterpriseAiModelNotRegisteredError,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
     enterprise_ai_max_input_tokens,
@@ -241,6 +242,7 @@ from app.features.agent.output_fields import (
     record_output_tool,
     without_output_record_sections,
 )
+from app.features.agent.rag_retrieval_state import retrieval_notice
 from app.features.agent.run_claim import RunClaim
 from app.features.agent.section_coverage import (
     COVERAGE_INCOMPLETE,
@@ -420,7 +422,12 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
             "使うモデルが決まっていません。"
             "システム設定 > モデル で既定のテキストモデルを設定してください。",
         )
-    connection = enterprise_ai_connection_for_model(settings, resolved)
+    try:
+        connection = enterprise_ai_connection_for_model(settings, resolved)
+    except EnterpriseAiModelNotRegisteredError as exc:
+        # 業務 Agent が選んだモデルが登録に無い（登録を消したなど）。別のモデル・接続へ暗黙に
+        # 切り替えずに失敗させる（#3240 の不変条件 2）。
+        raise BuiltinRuntimeError("runtime.model_not_registered", str(exc)) from exc
     if not connection.is_configured():
         raise BuiltinRuntimeError(
             "runtime.model_connection_not_configured",
@@ -1906,6 +1913,12 @@ class _ToolRecorder:
                 )
                 if note is not None:
                     output = {**output, "next_step": self._without_asking(note["next_step"])}
+            if base in RAG_BUDGET_TOOLS and isinstance(output, dict):
+                # 根拠 0 件が資料の不在を意味しない（安全チェックの未完了・補助の処理の縮退）とき
+                # の案内（#3546）。
+                notice = retrieval_notice(output)
+                if notice is not None:
+                    output = {**output, "retrieval_notice": notice}
             if isinstance(output, dict):
                 output = self.hop_hints(
                     call, output, step_id=step_id, adjusted_limits=adjusted_limits

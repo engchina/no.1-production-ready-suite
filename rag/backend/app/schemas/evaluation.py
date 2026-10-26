@@ -218,6 +218,10 @@ EVIDENCE_SECTION_MAX_CHARS = 300
 EVIDENCE_LABEL_MAX_CHARS = 1000
 
 
+# 必要な根拠の行の番号の基準（RAG の根拠の `locator.row_basis` と同じ語彙。#3547）。
+EvidenceRowBasis = Literal["sheet", "csv", "word_table", "parsed_table"]
+
+
 class EvaluationEvidence(BaseModel):
     """回答に必要な根拠（#1284。handoff §14.2 の「各必需证据召回」）。
 
@@ -229,8 +233,12 @@ class EvaluationEvidence(BaseModel):
       範囲と重なる（ページの分からない chunk は一致しない）。`page_end` を省くと 1 ページ。
       PDF にしたスライドはスライドの番号がページの番号になる。
     - `sheet`: chunk のシート名（`sheet_name`）が一致する（表計算の文書。#2086）。
-    - `row_start`〜`row_end`: chunk の行（`row_start`〜`row_end`。シートの元の行番号）が範囲と重なる
-      （行の分からない chunk は一致しない）。`row_end` を省くと 1 行。
+    - `row_start`〜`row_end`: chunk の行（`row_start`〜`row_end`）が範囲と重なる（行の分からない
+      chunk は一致しない）。`row_end` を省くと 1 行。行は `row_basis`（行の番号の基準。RAG の根拠の
+      `locator.row_basis` と同じ語彙: `sheet` / `csv` / `word_table` / `parsed_table`）が同じ chunk
+      だけと照合する。`row_basis` を省くと原本の行（表計算のシート・CSV の記録・Word の表）として
+      照合し、解析が組み立てた表の格子の行（`parsed_table`。原本の座標ではない）には一致させない
+      （#3547）。
     - `section`: chunk の章節の見出しの道筋（`section_path`）が `section` を含む。
     - `text`: chunk の本文が `text` を含む。
 
@@ -251,6 +259,7 @@ class EvaluationEvidence(BaseModel):
     sheet: str | None = Field(default=None, max_length=EVIDENCE_SECTION_MAX_CHARS)
     row_start: int | None = Field(default=None, ge=1)
     row_end: int | None = Field(default=None, ge=1)
+    row_basis: EvidenceRowBasis | None = None
     label: str | None = Field(default=None, max_length=EVIDENCE_LABEL_MAX_CHARS)
 
     @field_validator("id")
@@ -281,6 +290,8 @@ class EvaluationEvidence(BaseModel):
                 raise ValueError(f"根拠の {name}_end は {name}_start と一緒に指定してください。")
             if start is not None and end is not None and end < start:
                 raise ValueError(f"根拠の {name}_end は {name}_start 以上にしてください。")
+        if self.row_basis is not None and self.row_start is None:
+            raise ValueError("根拠の row_basis は row_start と一緒に指定してください。")
         if (
             self.text is None
             and self.page_start is None

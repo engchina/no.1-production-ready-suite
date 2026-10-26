@@ -33,6 +33,7 @@ from pr_evaluation_scoring import (
     threshold_failures,
     unique_in_order,
 )
+from rag_engine.resources.shared_cache import bypass_shared_cache
 
 from app.clients.ai_calls import make_ai_caller
 from app.clients.oracle import OracleClient
@@ -304,7 +305,36 @@ class EvaluationRunner:
 
         `search_answer_profile_id` を渡すと、ケースごとに検索・回答と同じ解決（参照 KB・回答の
         設定・用語・同義語・回答ルール・業務ガイド）をしてから回答する（#1249）。渡さなければ全体の既定（#301）。
+
+        条の選択の process をまたぐ記録（#3507）は読みも書きもしない（同じ質問の再実行でも
+        実際の費用を測る。process の中の記録は回答と同じに使う）。
         """
+        with bypass_shared_cache():
+            return await self._run(
+                cases,
+                top_k,
+                filters,
+                knowledge_base_ids,
+                thresholds,
+                rag_overrides,
+                search_answer_profile_id=search_answer_profile_id,
+                time_budget_seconds=time_budget_seconds,
+                progress=progress,
+            )
+
+    async def _run(
+        self,
+        cases: list[EvaluationCase],
+        top_k: int,
+        filters: dict[str, str] | None,
+        knowledge_base_ids: Sequence[str] | None,
+        thresholds: EvaluationThresholds | None,
+        rag_overrides: EvaluationRagOverrides | None,
+        *,
+        search_answer_profile_id: str | None,
+        time_budget_seconds: float | None,
+        progress: EvaluationProgressCallback | None,
+    ) -> EvaluationMetrics:
         deadline = _deadline(time_budget_seconds)
         effective_settings = evaluation_settings(self._settings, rag_overrides)
         pipeline = self._pipeline or RagPipeline(settings=effective_settings)
@@ -962,13 +992,18 @@ def evidence_matches_chunk(
     """引用の 1 つの chunk が根拠の条件（文書・ページ・シート・行・章節・本文）をすべて満たすか。
 
     #2065・#2086。`document_id` は chunk の文書の ID の代わりに比べる ID（同じ文書とみなす文書を
-    正解の文書の ID にそろえたもの）。照合は platform の採点の部品（#3240）。
+    正解の文書の ID にそろえたもの）。照合は platform の採点の部品（#3240）。行の条件は MCP の根拠の
+    場所と同じ行の番号の基準と行（`row_basis`・`row_start`・`row_end`）で照合する（#3547。suite の
+    評価と同じ）。
     """
+    # MCP の層は検索・回答の多くを読むので、使うときに読む（循環の import を避ける）。
+    from app.mcp.tools import evidence_row_location
+
     return evidence_matches(
         evidence,
         document_id=document_id if document_id is not None else chunk.document_id,
         text=chunk.text,
-        locator=chunk.metadata,
+        locator={**chunk.metadata, **evidence_row_location(dict(chunk.metadata))},
     )
 
 

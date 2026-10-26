@@ -38,6 +38,14 @@
 - 正確性・網羅性・忠実性の評価は「品質評価」で実行します。検索・チャットの回答詳細には標準回答による評価操作を置きません。
 - CLI (`app.rag.evaluation_cli`) の出力と、業務 Agent との比較（製品横断の評価 `suite/evaluation` の `suite-evaluation`。#3240）も同じ六指標です。照合・順位・判断の部品は platform の `pr_evaluation_scoring` を共有します。
 
+### 回答の評価器の校正（#3418・#2577）
+
+正確性・網羅性・忠実性を採点する回答の評価器（`evaluate_answer_payload` と `score_answer_evaluation`）は、人手の判定との一致で校正してから合否に使います。検索の評価器の校正（`rag_engine.evaluation.crag_grader_eval`）とは対象が違うので分けます。
+
+- 人手の判定は、製品横断の評価の校正と同じ形の JSON（LabelSet。`suite-evaluation label-import` が記入用のブックから書く。手順は `suite/evaluation/README.md`「人手の判定による校正の手順」）を使います。RAG は suite を import せず、同じ JSON を自分の型で読みます。
+- `uv run python -m app.rag.answer_judge_calibration <LabelSet の JSON> --output <結果>`（`rag/backend` で）が、項目ごとに評価器を動かし（OCI Enterprise AI を呼ぶ。接続とモデルは RAG の設定）、観点ごとの一致（一致率・Cohen の κ・混同行列・誤合格 / 誤不合格）と holdout の合否を出します。`--evaluations <前の結果>` はモデルを呼ばずに集計だけやり直します。
+- 指標の値が `--pass-at`（既定 1.0。観点ごとに `<観点>=<値>`）以上を pass とし、評価が完了しない・測れない項目は判定できなかった件に数えます。一致の集計と合否の閾値（holdout の件数 50 以上・判定率 0.95 以上・κ 0.6 以上・誤合格の率 0.1 以下）は platform の `pr_evaluation_scoring` を suite と共有します。故意に壊した回答（合成の対照）は合否に入れず、synthetic の区分に別に集計します。
+
 実行時の安全機構、回答生成の監査、引用リンクは評価指標の整理によって削除しません。
 
 ## 観測性

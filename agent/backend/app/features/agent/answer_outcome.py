@@ -42,7 +42,9 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
    判断が人への引き継ぎ（handoff）→ needs_human
 6. `absence_conclusion`: 現場のデータの道具を使っておらず、Run のどれかの `rag_search` が
    insufficient_evidence を返し、回答の最初の段落（結論。見出し・出典を除く）が資料から確かめられ
-   ないと述べた → insufficient_evidence（調べた資料の一覧・近い規定の紹介が続いても。#1454）
+   ないと述べた → insufficient_evidence（調べた資料の一覧・近い規定の紹介が続いても。#1454）。
+   根拠 0 件が安全チェックの未完了・補助の処理の縮退による `rag_search`（`guardrail_degraded`・
+   `degraded_steps`。資料に記載が無いことを示さない）は数えない（#3546）。
 7. `answer_passages`（または現場のデータの道具を使ったなら `environment_tools`）: Agent が自分で
    組み立てた回答。主張の段落（最終の検証で外した段落と、実データの確認を促すだけの段落を除く）が
    無ければ、実データの確認を促していれば needs_environment_data、それ以外は insufficient_evidence。
@@ -71,6 +73,13 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 手順ごとの充足〔RAG の回答と同じ規則〕。共有の根拠の共通の文だけを述べた手順・根拠を集めていない
 手順。#2708）。最終の検証が警告の印（規則の検査・続く手順）だけを付けたときは不足の印にせず、
 記録の `rule_warnings` だけを付ける（answered のまま。#2738）。
+
+記録だけのシグナル（対応の値を変えない。#3546）: RAG の根拠のツールが縮退した検索の結果を返した
+（`rag_degraded`。任意の補助の処理の縮退 `degraded_steps` か安全チェックの未完了
+`guardrail_degraded`。任意の能力の縮退は回答を続ける契約なので不足の印にしない）・最終の検証が
+裏付けた（`supported`）段落の根拠が、表の行・列の対応の検査が本文を読めない表の根拠
+（`table_binding_unchecked`。RAG の根拠の `table_binding=not_checkable`。表の対応は検査して
+いない）。
 
 ここは決め方だけを持つ（呼び出しと保存は `builtin_runtime`）。
 """
@@ -101,6 +110,12 @@ from app.features.agent.answer_validation import (
 )
 from app.features.agent.clarification_cancel import CANCEL_TRACE_PREFIX
 from app.features.agent.job_cancel import RUN_CANCEL_TRACE_PREFIX
+from app.features.agent.rag_retrieval_state import (
+    TABLE_BINDING_NOT_CHECKABLE,
+    degraded_absence,
+    degraded_retrieval,
+    table_binding,
+)
 from app.features.agent.support_task import (
     RAG_RETRIEVE_EVIDENCE,
     RAG_SEARCH,
@@ -169,6 +184,10 @@ SIGNAL_UNREAD_SECTIONS = "unread_sections"
 SIGNAL_GUIDE_STEPS = "guide_steps"
 # 結論の段落で答えた後の、補足の段落だけの不足の文（不足の印にしない記録。#1475）。
 SIGNAL_SUPPLEMENT_ABSENCE = "supplement_absence"
+# RAG の根拠のツールが縮退した検索の結果を返した（不足の印にしない記録。#3546）。
+SIGNAL_RAG_DEGRADED = "rag_degraded"
+# 最終の検証が裏付けた段落の根拠に、表の対応の検査が読めない表の根拠がある（記録だけ。#3546）。
+SIGNAL_TABLE_BINDING_UNCHECKED = "table_binding_unchecked"
 # 結論の段落で答えた後の、補足の段落だけを最終の検証が外した・未確認とした（不足の印にしない
 # 記録。#1491）。
 SIGNAL_SUPPLEMENT_WITHHELD = "supplement_withheld"
@@ -402,7 +421,11 @@ def _guide_steps_unexplained(validation: JsonObject | None) -> bool:
 
 
 def _rag_insufficient(steps: list[RunStep]) -> bool:
-    """Run のどれかの `rag_search` が insufficient_evidence を返したか（#1454）。"""
+    """Run のどれかの `rag_search` が insufficient_evidence を返したか（#1454）。
+
+    根拠 0 件が安全チェックの未完了・補助の処理の縮退によるもの（資料に記載が無いことを示さない）は
+    数えない（#3546）。
+    """
     for step in steps:
         call, result = step.tool_call, step.tool_result
         if not _succeeded(step) or call is None or result is None:
@@ -412,9 +435,62 @@ def _rag_insufficient(steps: list[RunStep]) -> bool:
             mcp_base_tool_name(call.name) == RAG_SEARCH
             and isinstance(output, dict)
             and output.get("outcome") == INSUFFICIENT_EVIDENCE
+            and not degraded_absence(output)
         ):
             return True
     return False
+
+
+def _rag_evidence_outputs(steps: list[RunStep]) -> list[dict[str, Any]]:
+    """成功した RAG の根拠のツール（`rag_search` / `rag_retrieve_evidence`）の結果。"""
+    outputs: list[dict[str, Any]] = []
+    for step in steps:
+        call, result = step.tool_call, step.tool_result
+        if not _succeeded(step) or call is None or result is None:
+            continue
+        if mcp_base_tool_name(call.name) not in {RAG_SEARCH, RAG_RETRIEVE_EVIDENCE}:
+            continue
+        if isinstance(result.output, dict):
+            outputs.append(result.output)
+    return outputs
+
+
+def _record_signals(steps: list[RunStep], validation: JsonObject | None) -> set[str]:
+    """記録だけのシグナル（縮退した検索・表の対応の検査が読めない根拠での裏付け。#3546）。"""
+    outputs = _rag_evidence_outputs(steps)
+    signals: set[str] = set()
+    if any(degraded_retrieval(output) for output in outputs):
+        signals.add(SIGNAL_RAG_DEGRADED)
+    unchecked = {
+        str(item.get("chunk_id"))
+        for output in outputs
+        for item in _records(output.get("evidence"))
+        if table_binding(item) == TABLE_BINDING_NOT_CHECKABLE
+    }
+    if unchecked and _supported_chunk_ids(validation) & unchecked:
+        signals.add(SIGNAL_TABLE_BINDING_UNCHECKED)
+    return signals
+
+
+def _records(value: object) -> list[dict[str, Any]]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _supported_chunk_ids(validation: JsonObject | None) -> set[str]:
+    """最終の検証が段落を裏付けた（`supported`）根拠の chunk（判定が出たときだけ）。"""
+    if not isinstance(validation, dict) or validation.get("status") != STATUS_COMPLETED:
+        return set()
+    result = validation.get("result")
+    claims = result.get("claims") if isinstance(result, dict) else None
+    return {
+        str(claim.get("chunk_id"))
+        for claim in (claims if isinstance(claims, list) else [])
+        if isinstance(claim, dict)
+        and not claim.get("non_claim")
+        and claim.get("status") == "supported"
+        and isinstance(claim.get("chunk_id"), str)
+        and claim.get("chunk_id")
+    }
 
 
 def _concludes_absence(answer: str) -> bool:
@@ -475,6 +551,7 @@ def answer_outcome(
         )
     removed, unverified, warned, confirmations = _validation_parts(validation)
     claims, signals, absences = _passages(answer)
+    signals |= _record_signals(steps, validation)
     if _guide_errors(validation):
         # 業務ガイドの手順・影響範囲の検査の error: どの段落の手順が誤りかを決められない。本文は
         # 出し、人が業務ガイドと照らして確かめる（#1491・#2738）。

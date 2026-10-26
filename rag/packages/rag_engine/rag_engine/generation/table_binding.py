@@ -216,6 +216,26 @@ def _value_cell(key: str, cell: str) -> bool:
     return any(char.isdigit() for char in key) or len(key) >= _MIN_WORD_VALUE_CHARS
 
 
+_INDEX_CELL = re.compile(r"[0-9]{1,6}")
+
+
+def index_column(body: Sequence[Sequence[str]]) -> bool:
+    """先頭の列が行の番号（整数が上の行から増える）で、ほかに 2 列以上ある表か。
+
+    行の番号の列を区分・名前の列とみなすと、次の列の区分・名前（「部品 1」）を値として扱い、正しい文を別の列の値の
+    取り違えと疑ってしまう。行の番号は飛んでもよい（根拠に一部の行だけがあるとき）。
+    """
+    if len(body) < 2 or any(len(cells) < 3 for cells in body):
+        return False
+    numbers: list[int] = []
+    for cells in body:
+        key = _fold(cells[0])
+        if not _INDEX_CELL.fullmatch(key):
+            return False
+        numbers.append(int(key))
+    return all(later > earlier for earlier, later in zip(numbers, numbers[1:], strict=False))
+
+
 def _table(rows: Sequence[tuple[bool, list[str]]]) -> Table | None:
     body = [cells for header, cells in rows if not header]
     headers = [cells for header, cells in rows if header]
@@ -223,6 +243,10 @@ def _table(rows: Sequence[tuple[bool, list[str]]]) -> Table | None:
     if body and len(body) == len(rows) and len(body) >= 3 and not any(_is_value(_cell_key(cell)) for cell in body[0]):
         headers = [body[0]]
         body = body[1:]
+    if index_column(body):
+        # 先頭の行の番号の列は、行の区分・名前の列でも値でもない（次の列を区分・名前の列にする。#3564）。
+        body = [cells[1:] for cells in body]
+        headers = [cells[1:] for cells in headers]
     grid = tuple(tuple(_cell_key(cell) for cell in cells) for cells in body)
     values: set[str] = set()
     labels: set[str] = set()
@@ -338,6 +362,12 @@ def _mentions(key: str, window: str, *, shortened_label: bool = False, roman_lab
     セルを短くした区分・名前は、漢字・カタカナが続く複合語の内部だけでは行の手がかりにしない。
     ローマ数字だけの区分の名前（``roman_label``。「区分Ⅰ」の「Ⅰ」）は、漢字に続いても数える。
     """
+    return bool(_mention_starts(key, window, shortened_label=shortened_label, roman_label=roman_label))
+
+
+def _mention_starts(key: str, window: str, *, shortened_label: bool = False, roman_label: bool = False) -> list[int]:
+    """セルの照合の形が区間に現れる位置（`_mentions` が数える所だけ）。"""
+    found: list[int] = []
     start = window.find(key)
     while start >= 0:
         end = start + len(key)
@@ -360,9 +390,9 @@ def _mentions(key: str, window: str, *, shortened_label: bool = False, roman_lab
             joined = joined or bool(_LABEL_LETTER.fullmatch(before) or _LABEL_LETTER.fullmatch(after))
         counted = not roman_label and (len(key) == 1 and (_IDEOGRAPH.fullmatch(before or " ") or _IDEOGRAPH.fullmatch(after or " ")))
         if not joined and not counted:
-            return True
+            found.append(start)
         start = window.find(key, start + 1)
-    return False
+    return found
 
 
 def _windows(claim: str, values: set[str]) -> Iterable[str]:
@@ -391,15 +421,27 @@ def _unbound_in_table(window: str, table: Table) -> tuple[list[tuple[str, str]],
         for key in row:
             counts[key] = counts.get(key, 0) + 1
 
-    def said(key: str) -> bool:
-        return _mentions(
+    def starts(key: str) -> list[int]:
+        return _mention_starts(
             key,
             window,
             shortened_label=table.is_label(key) and not table.is_value(key) and _fold(table.cells.get(key, key)) != key,
             roman_label=key in table.labels,
         )
 
-    mentioned = {key for key in counts if (table.is_value(key) or table.is_label(key)) and said(key)}
+    def said(key: str) -> bool:
+        return bool(starts(key))
+
+    found = {key: places for key in counts if (table.is_value(key) or table.is_label(key)) and (places := starts(key))}
+    # 述べた長いセルの中にだけ現れる短いセル（「部品 1」の「1」）は、別に述べたことにしない（#3564）。
+    spans = [(place, place + len(key)) for key, places in found.items() for place in places]
+    mentioned = {
+        key
+        for key, places in found.items()
+        if any(
+            not any(left <= place and place + len(key) <= right and right - left > len(key) for left, right in spans) for place in places
+        )
+    }
     # 行を見分ける手がかり: その表の 1 行にだけあり、区間に現れるセル。
     distinct = {key for key in mentioned if counts[key] == 1}
     unbound: list[tuple[str, str]] = []
@@ -565,4 +607,4 @@ def states_value(value: str, text: str) -> bool:
     return bool(key) and (key in folded or any(code in folded for code in _CODE_IN_CELL.findall(_fold(value))))
 
 
-__all__ = ["Table", "evidence_tables", "states_value", "table_corrections", "table_mismatch_notes", "unbound_table_values"]
+__all__ = ["Table", "evidence_tables", "index_column", "states_value", "table_corrections", "table_mismatch_notes", "unbound_table_values"]

@@ -22,6 +22,8 @@ CSV・Excel・Word の前処理は、原本を 1 行 1 オブジェクトの JSO
   - ``form_field``: 帳票（方眼紙）の 1 項目（``label``・``value``・ラベルと値のセル。#2516）。
     選択の記号を読んで値を選ばれた選択肢にしたときは、原文を ``value_original`` に持つ（#2526）。
   - ``preamble``: 表頭より上の行（``text``）。
+  - ``note``: 表の下の注記の行（``text``・先頭の注記の印 ``marker``。#3566）。表の行のうち注記の印を
+    セルに含む行は、その注記の文を ``row`` の ``notes`` にも持つ。
   - ``section``: Word の見出し（見出しの階層 ``heading_path``・段落の位置）。``parent_id`` は上位の
     見出し。
   - ``passage``: Word の見出しの下の意味のまとまり（段落・リスト・表と、表の前後の説明）。表示の行
@@ -78,6 +80,7 @@ from rag_parser_core.sheet_records import (
     SheetColumn,
     SheetDiagnostic,
     SheetLayout,
+    SheetNoteRow,
     SheetPreambleRow,
     SheetRecords,
     SheetRecordsDocument,
@@ -254,6 +257,13 @@ class _RecordLine(_Line):
 class RowLine(_RecordLine):
     record_type: Literal["row"] = "row"
     fields: list[RecordField] = Field(default_factory=list)
+    notes: list[str] | None = Field(
+        default=None,
+        description=(
+            "Excel の表の行のセルが注記の印（例: ※1）で指す、表の下の注記の文"
+            "（無ければ省く。#3566）。"
+        ),
+    )
 
 
 class ProcedureStepLine(_RecordLine):
@@ -275,6 +285,14 @@ class FormFieldLine(_RecordLine):
 class PreambleLine(_RecordLine):
     record_type: Literal["preamble"] = "preamble"
     text: str
+
+
+class NoteLine(_RecordLine):
+    """Excel の表の下の注記の行（#3566）。``marker`` は先頭の注記の印（印の無い長い文は None）。"""
+
+    record_type: Literal["note"] = "note"
+    text: str
+    marker: str | None = None
 
 
 # ---- Word（形式別の拡張。source_type が doc / docx の行だけが使う）----------------------------
@@ -380,6 +398,7 @@ StructuredRecordLine = Annotated[
     | ProcedureStepLine
     | FormFieldLine
     | PreambleLine
+    | NoteLine
     | SectionLine
     | PassageLine,
     Field(discriminator="record_type"),
@@ -391,10 +410,11 @@ _LINE_ADAPTER: TypeAdapter[
     | ProcedureStepLine
     | FormFieldLine
     | PreambleLine
+    | NoteLine
     | SectionLine
     | PassageLine
 ] = TypeAdapter(StructuredRecordLine)
-ContentLine = RowLine | ProcedureStepLine | FormFieldLine | PreambleLine | PassageLine
+ContentLine = RowLine | ProcedureStepLine | FormFieldLine | PreambleLine | NoteLine | PassageLine
 ContextLine = SheetLine | SectionLine
 
 
@@ -501,7 +521,7 @@ def parse_structured_records(
                 return StructuredRecordsError("unsupported_record_type", number)
             sheet_ids.add(line.record_id)
         else:
-            if isinstance(line, ProcedureStepLine | FormFieldLine) and (
+            if isinstance(line, ProcedureStepLine | FormFieldLine | NoteLine) and (
                 document.source_type not in _SPREADSHEET_SOURCE_TYPES
             ):
                 return StructuredRecordsError("unsupported_record_type", number)
@@ -597,7 +617,7 @@ def sheet_records_to_lines(
     converter: str,
     converter_version: str,
 ) -> list[DocumentLine | SheetLine | ContentLine]:
-    """Excel の行の記録を JSONL の行にする（シートの文脈の行・前書き・記録の順）。
+    """Excel の行の記録を JSONL の行にする（シートの文脈の行・前書き・記録・表の下の注記の順）。
 
     記録の ID は要素の ID（`sheet_records_extraction`）と同じにし、JSONL の行と要素を対応させる。
     """
@@ -706,6 +726,23 @@ def sheet_records_to_lines(
                     section_path=block.section_path,
                     shape_cells=block.shape_cells or None,
                     fields=fields,
+                    notes=block.notes or None,
+                )
+            )
+        for note in sheet.notes:
+            lines.append(
+                NoteLine(
+                    record_id=f"{sheet_id}-r{note.row_number}",
+                    source_type=source_type,
+                    parent_id=sheet_id,
+                    location=RecordLocation(
+                        row_start=note.row_number,
+                        row_end=note.row_number,
+                        cell_range=note.cell_range,
+                    ),
+                    shape_cells=note.shape_cells or None,
+                    text=note.text,
+                    marker=note.marker,
                 )
             )
     return lines
@@ -766,6 +803,16 @@ def structured_records_to_sheet_records(
                     shape_cells=line.shape_cells or [],
                 )
             )
+        elif isinstance(line, NoteLine):
+            sheet.notes.append(
+                SheetNoteRow(
+                    row_number=line.location.row_start,
+                    cell_range=line.location.cell_range or "",
+                    text=line.text,
+                    marker=line.marker,
+                    shape_cells=line.shape_cells or [],
+                )
+            )
         elif isinstance(line, FormFieldLine):
             sheet.blocks.append(_form_field_block(line))
         elif isinstance(line, ProcedureStepLine):
@@ -790,6 +837,7 @@ def structured_records_to_sheet_records(
                     section_path=line.section_path,
                     values={item.name: item.value for item in line.fields},
                     shape_cells=line.shape_cells or [],
+                    notes=line.notes or [],
                 )
             )
     source_format: Literal["xlsx", "xls"] = "xls" if document.source_type == "xls" else "xlsx"
@@ -1215,7 +1263,7 @@ def oversized_record_line(document: StructuredRecordsDocument) -> int | None:
             continue
         if isinstance(line, PassageLine):
             text = word_passage_text(line)
-        elif isinstance(line, PreambleLine):
+        elif isinstance(line, PreambleLine | NoteLine):
             text = line.text
         elif document.source_type not in _SPREADSHEET_SOURCE_TYPES:
             text = _csv_row_text(line, max_chars=None) if isinstance(line, RowLine) else ""
@@ -1234,6 +1282,7 @@ def oversized_record_line(document: StructuredRecordsDocument) -> int | None:
                     if isinstance(line, RowLine)
                     else {}
                 ),
+                notes=(line.notes or []) if isinstance(line, RowLine) else [],
             )
             text = _block_text(block, roles_by_sheet.get(str(line.parent_id)), max_chars=None)
         if len(text) > _RECORD_TEXT_MAX_CHARS:
@@ -1276,6 +1325,7 @@ __all__ = [
     "ContentLine",
     "ContextLine",
     "DocumentLine",
+    "NoteLine",
     "PassageLine",
     "PreambleLine",
     "ProcedureStepLine",

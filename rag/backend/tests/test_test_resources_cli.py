@@ -1,4 +1,4 @@
-"""管理 API の録画相当の応答で再構築・断点再開・衝突を検証する。"""
+"""管理 API の録画相当の応答で再構築・断点再開・衝突を検証する（RAG の API だけを呼ぶ。#3545）。"""
 
 from __future__ import annotations
 
@@ -34,13 +34,6 @@ def corpus(tmp_path: Path) -> Path:
         groups[key] = {
             "knowledge_base": {"name": f"KB {key}", "description": "合成資料"},
             "profile": {"name": f"Profile {key}", "description": "合成資料", "config": {}},
-            "agent": {
-                "name": f"Agent {key}",
-                "description": "合成資料",
-                "instructions": "資料を調べて回答する。",
-                "skill_ids": ["business-rag-research"],
-                "enabled": True,
-            },
         }
     (tmp_path / "manifest.json").write_text(json.dumps({"synthetic": True, "documents": documents}))
     (tmp_path / "resources.json").write_text(
@@ -62,7 +55,7 @@ class Service:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.tables: dict[str, dict[str, dict[str, Any]]] = {
-            key: {} for key in ("knowledge-bases", "search-answer-profiles", "documents", "agents")
+            key: {} for key in ("knowledge-bases", "search-answer-profiles", "documents")
         }
         self.recipes: dict[str, dict[str, Any]] = {}
         self.jobs: dict[str, list[dict[str, Any]]] = {}
@@ -72,12 +65,11 @@ class Service:
         self.prefix = "new-"
 
     def handle(self, request: httpx.Request) -> httpx.Response:
-        path = request.url.path.split("/api/", 1)[1]
+        prefix, path = request.url.path.split("/api/", 1)
+        assert prefix == "/rag", request.url.path
         self.requests.append((request.method, path))
         parts = path.split("/")
         resource = parts[0]
-        if resource == "skills":
-            return httpx.Response(200, json={"data": {"id": parts[1]}})
         table = self.tables[resource]
         payload = (
             json.loads(request.content)
@@ -87,22 +79,17 @@ class Service:
         result: Any
         if len(parts) == 1 and request.method == "GET":
             rows = list(table.values())
-            if resource == "agents":
-                result = {"agents": rows}
-            else:
-                if request.url.params.get("q"):
-                    rows = [
-                        row for row in rows if request.url.params["q"] in row.get("file_name", "")
-                    ]
-                if request.url.params.get("knowledge_base_id"):
-                    rows = [
-                        row
-                        for row in rows
-                        if {k["id"] for k in row["knowledge_bases"]}
-                        == {request.url.params["knowledge_base_id"]}
-                    ]
-                offset = int(request.url.params.get("offset", 0))
-                result = {"items": rows[offset : offset + 1], "total": len(rows)}
+            if request.url.params.get("q"):
+                rows = [row for row in rows if request.url.params["q"] in row.get("file_name", "")]
+            if request.url.params.get("knowledge_base_id"):
+                rows = [
+                    row
+                    for row in rows
+                    if {k["id"] for k in row["knowledge_bases"]}
+                    == {request.url.params["knowledge_base_id"]}
+                ]
+            offset = int(request.url.params.get("offset", 0))
+            result = {"items": rows[offset : offset + 1], "total": len(rows)}
         elif len(parts) == 1 and request.method == "POST":
             item_id = self.prefix + resource + str(len(table) + 1)
             result = {**payload, "id": item_id, "status": "ACTIVE"}
@@ -158,10 +145,6 @@ class Service:
                 result = [recipe]
         elif resource == "documents" and parts[2:] == ["ingestion-jobs"]:
             result = self.jobs[parts[1]]
-        elif resource == "agents" and parts[2:] == ["publish"]:
-            result = table[parts[1]]
-            version = {k: v for k, v in result.items() if k != "enabled"}
-            result.update(published_version=1, versions=[{**version, "version": 1}])
         else:
             result = table[parts[1]]
         return httpx.Response(
@@ -173,7 +156,6 @@ def rebuilder(service: Service, root: Path, **kwargs: Any) -> Rebuilder:
     client = httpx.Client(transport=httpx.MockTransport(service.handle))
     return Rebuilder(
         ManagementApi(client, "https://suite.invalid/rag/api"),
-        ManagementApi(client, "https://suite.invalid/agent/api"),
         root,
         root / "state.json",
         log=lambda _: None,
@@ -187,15 +169,13 @@ def test_rebuild_resolves_ids_and_rerun_has_no_mutation(corpus: Path) -> None:
     assert result["complete"]
     assert len(result["documents"]) == 2
     assert all(row["vector_count"] == 2 for row in result["documents"].values())
+    assert result["namespace"] == ""
     for key, group in result["groups"].items():
-        profile = service.tables["search-answer-profiles"][group["profile_id"]]
-        agent = service.tables["agents"][group["agent_id"]]
+        # 業務 Agent の命令に渡す検索・回答プロファイルの ID（グループごとに 1 件で既定も同じ）。
+        assert set(group) == {"kb_id", "profile_ids", "default_profile_id"}
+        assert group["profile_ids"] == [group["default_profile_id"]]
+        profile = service.tables["search-answer-profiles"][group["default_profile_id"]]
         assert profile["config"]["knowledge_base_ids"] == [group["kb_id"]]
-        assert agent["data_scopes"]["rag"] == {
-            "profile_ids": [group["profile_id"]],
-            "default_profile_id": group["profile_id"],
-        }
-        assert agent["published_version"] == 1
         assert next(
             row
             for row in service.tables["documents"].values()
@@ -204,9 +184,10 @@ def test_rebuild_resolves_ids_and_rerun_has_no_mutation(corpus: Path) -> None:
     service.requests.clear()
     assert rebuilder(service, corpus).run()["complete"]
     assert all(method == "GET" for method, _ in service.requests)
+    assert json.loads((corpus / "state.json").read_text()) == result
 
 
-@pytest.mark.parametrize("resource", ["knowledge-bases", "search-answer-profiles", "agents"])
+@pytest.mark.parametrize("resource", ["knowledge-bases", "search-answer-profiles"])
 def test_disconnect_after_create_is_discovered_without_duplicate(
     corpus: Path, resource: str
 ) -> None:
@@ -225,7 +206,6 @@ def test_disconnect_after_create_is_discovered_without_duplicate(
     [
         ("knowledge-bases", "description", "different"),
         ("search-answer-profiles", "config", {"knowledge_base_ids": ["foreign"]}),
-        ("agents", "data_scopes", {}),
     ],
 )
 def test_existing_difference_is_not_overwritten(
@@ -324,6 +304,18 @@ def test_repository_fixtures_are_valid() -> None:
     assert len(manifest["documents"]) == 10
     assert sum(row["pages"] for row in manifest["documents"]) == 110
     assert set(config["groups"]) == {"A", "B"}
+    assert all(set(group) == {"knowledge_base", "profile"} for group in config["groups"].values())
+
+
+def test_group_with_unknown_definition_is_rejected(corpus: Path) -> None:
+    """業務 Agent などの RAG が持たない定義は、黙って無視せずに書き込みの前に止める（#3545）。"""
+    resources = json.loads((corpus / "resources.json").read_text())
+    resources["groups"]["A"]["extra"] = {"name": "合成"}
+    (corpus / "resources.json").write_text(json.dumps(resources))
+    service = Service(corpus)
+    with pytest.raises(RebuildError, match="knowledge_base と profile"):
+        rebuilder(service, corpus).run()
+    assert not service.requests
 
 
 def test_namespace_creates_separate_resources_and_does_not_change_existing(corpus: Path) -> None:
@@ -332,6 +324,7 @@ def test_namespace_creates_separate_resources_and_does_not_change_existing(corpu
     before = deepcopy(service.tables)
     separate = rebuilder(service, corpus, namespace="isolated").run()
     assert separate["complete"]
+    assert separate["namespace"] == "isolated"
     assert separate["groups"]["A"]["kb_id"] != original["groups"]["A"]["kb_id"]
     for kind, table in before.items():
         assert all(service.tables[kind][key] == row for key, row in table.items())

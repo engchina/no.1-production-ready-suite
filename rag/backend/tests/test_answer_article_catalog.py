@@ -255,6 +255,42 @@ def test_engine_settings_pass_the_article_catalog_options(tmp_path: Any) -> None
     assert engine_settings.article_catalog_refine_candidates == 60
     assert engine_settings.article_catalog_context_records == 4
     assert json.loads(json.dumps(engine_settings.article_catalog_max_documents)) == 16
+    # テストでは process をまたぐ記録の置き場所を渡さない（conftest。#3507）。
+    assert engine_settings.article_catalog_cache_dir is None
+
+
+def test_engine_settings_pass_the_shared_article_catalog_record(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """条の選択の記録(#3507)の置き場所・有効期間・件数を rag_engine へ渡す。"""
+    from app.rag import answer_engine
+
+    settings = Settings(
+        rag_article_catalog_cache_ttl_seconds=600,
+        rag_article_catalog_cache_max_entries=32,
+    )
+    monkeypatch.setattr(
+        answer_engine, "article_catalog_cache_dir", answer_engine.resolve_article_catalog_cache_dir
+    )
+    settings.local_storage_dir = str(tmp_path / "storage")
+    engine_settings = answer_engine.build_engine_settings(settings, output_dir=tmp_path)
+
+    assert engine_settings.article_catalog_cache_dir == (
+        tmp_path / "storage" / "cache" / "rag-article-catalog"
+    )
+    assert engine_settings.article_catalog_cache_ttl_seconds == 600.0
+    assert engine_settings.article_catalog_cache_max_entries == 32
+
+    settings.rag_article_catalog_cache_dir = str(tmp_path / "explicit")
+    assert answer_engine.resolve_article_catalog_cache_dir(settings) == tmp_path / "explicit"
+    settings.rag_article_catalog_cache_dir = ""
+    settings.local_storage_dir = ""
+    assert answer_engine.resolve_article_catalog_cache_dir(settings) is None
+    defaults = Settings()
+    assert (
+        defaults.rag_article_catalog_cache_ttl_seconds,
+        defaults.rag_article_catalog_cache_max_entries,
+    ) == (86400, 4096)
 
 
 async def test_article_documents_are_read_once_per_scope_and_index_state(

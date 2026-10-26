@@ -1048,3 +1048,63 @@ def test_absence_in_the_conclusion_is_still_a_gap_even_with_a_supplement() -> No
     validation = _validated(ended, *_verdicts(ended, {}))
     content = answer_outcome(ended, steps=[_retrieve()], validation=validation)
     assert (content["value"], content["signals"]) == ("conditional", ["absence"])
+
+
+ABSENCE_ANSWER = "ご質問の手続きの期限は、検索した資料には記載がありませんでした。"
+
+
+@pytest.mark.parametrize(
+    ("search_output", "basis"),
+    [
+        ({}, "absence_conclusion"),
+        # 補助の処理の縮退で 0 件（読めなかった可能性がある）。資料に無いとは結論しない。
+        ({"degraded_steps": [{"kind": "reference_load", "count": 1}]}, "answer_passages"),
+        # 安全チェックを完了できず止めた（資料を調べていない）。
+        ({"guardrail_degraded": True}, "answer_passages"),
+    ],
+    ids=["no-hit", "degraded", "guardrail"],
+)
+def test_absence_conclusion_does_not_count_a_degraded_zero_evidence_search(
+    search_output: dict[str, Any], basis: str
+) -> None:
+    """縮退・安全チェックの未完了で 0 件の rag_search は、答えなしの根拠に数えない（#3546）。"""
+    steps = [
+        _step(
+            "rag__rag_search",
+            {"outcome": "insufficient_evidence", "evidence": [], **search_output},
+        ),
+        _step("rag__rag_retrieve_evidence", {"evidence": []}),
+    ]
+    content = answer_outcome(ABSENCE_ANSWER, steps=steps)
+    assert (content["value"], content["basis"]) == ("insufficient_evidence", basis)
+    assert ("rag_degraded" in content["signals"]) is (basis != "absence_conclusion")
+
+
+def test_record_signals_do_not_change_the_outcome_value() -> None:
+    """縮退した検索・表の対応の検査が読めない根拠での裏付けは、記録だけのシグナル（#3546）。"""
+    answer = "申請の期限は 30 日です。"
+    table_evidence = [
+        {"document_id": "doc-1", "chunk_id": "chunk-1", "table_binding": "not_checkable"}
+    ]
+    steps = [
+        _step(
+            "rag__rag_search",
+            {
+                "outcome": "answered",
+                "evidence": table_evidence,
+                "degraded_steps": [{"kind": "rerank", "count": 1}],
+            },
+        )
+    ]
+    validation = _validated(answer, {**_claim(answer, "supported"), "chunk_id": "chunk-1"})
+    content = answer_outcome(answer, steps=steps, validation=validation)
+    assert (content["value"], content["basis"]) == ("answered", "rag_search")
+    assert content["signals"] == ["rag_degraded", "table_binding_unchecked"]
+    # 検査が読める根拠・裏付けに使っていない根拠では付けない。
+    checkable = [{**table_evidence[0], "table_binding": "checkable"}]
+    content = answer_outcome(
+        answer,
+        steps=[_step("rag__rag_search", {"outcome": "answered", "evidence": checkable})],
+        validation=validation,
+    )
+    assert content["signals"] == []
