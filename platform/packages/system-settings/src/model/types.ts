@@ -57,14 +57,6 @@ export const DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS = 32_768;
 export const ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MIN = 1;
 export const ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX = 2_000_000;
 
-/**
- * LLM / VLM の呼び出しの seed（#1434）。全モデルで共通の 1 つで、既定は 42。範囲は backend の
- * ENTERPRISE_AI_SEED_MIN / ENTERPRISE_AI_SEED_MAX と同じ（範囲外は保存で 422）。
- */
-export const DEFAULT_ENTERPRISE_AI_SEED = 42;
-export const ENTERPRISE_AI_SEED_MIN = 0;
-export const ENTERPRISE_AI_SEED_MAX = 2_147_483_647;
-
 export interface EnterpriseAiConfiguredModel {
   model_id: string;
   display_name: string;
@@ -114,11 +106,6 @@ export interface EnterpriseAiModelSettings {
   vision_response_path: string;
   timeout_seconds: number;
   max_retries: number;
-  /**
-   * LLM / VLM の呼び出しの seed（#1434。既定 42）。古い応答に無ければ読み込みで既定にする
-   * （`normalizeModelSettings`）。入力中の空欄は NaN で持ち、保存の前に止める。
-   */
-  seed?: number;
 }
 
 export interface GenerativeAiModelSettings {

@@ -49,7 +49,6 @@ class FakeSettings(ModelSecretStateMixin):
     oci_enterprise_ai_vlm_response_path: str = ""
     oci_enterprise_ai_timeout_seconds: float = 600.0
     oci_enterprise_ai_max_retries: int = 3
-    oci_enterprise_ai_seed: int = 42
     oci_genai_embedding_model: str = "cohere.embed-v4.0"
     oci_genai_embedding_dim: int = 1536
     oci_genai_rerank_model: str = "cohere.rerank-v4.0-fast"
@@ -290,6 +289,38 @@ def test_saved_key_overrides_process_environment_key(
     assert cleared["settings"]["enterprise_ai"]["connections"][0]["has_api_key"] is True
     client.get("/api/settings/model")
     assert settings.oci_enterprise_ai_api_key == "sk-process"
+
+
+def test_seed_is_not_kept(tmp_path: Path) -> None:
+    """seed は持たない（#3529）。保存済みの JSON・送られた payload の `seed` は読み捨てる。"""
+    (tmp_path / "model-settings.json").write_text(
+        json.dumps(
+            {
+                "version": 6,
+                "enterprise_ai": {
+                    "models": [{"model_id": "llm-a", "display_name": "A"}],
+                    "default_text_model_id": "llm-a",
+                    "seed": 42,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    client = make_client(settings, store)
+
+    assert (
+        "seed" not in client.get("/api/settings/model").json()["data"]["settings"]["enterprise_ai"]
+    )
+    payload = {**PAYLOAD, "enterprise_ai": {**PAYLOAD["enterprise_ai"], "seed": 7}}
+    saved = client.patch("/api/settings/model", json=payload)
+
+    assert saved.status_code == 200
+    assert "seed" not in saved.json()["data"]["settings"]["enterprise_ai"]
+    document = json.loads((tmp_path / "model-settings.json").read_text(encoding="utf-8"))
+    assert "seed" not in document["enterprise_ai"]
 
 
 def test_broken_json_is_reported(tmp_path: Path) -> None:

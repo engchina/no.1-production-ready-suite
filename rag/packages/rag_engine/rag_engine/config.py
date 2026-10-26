@@ -189,10 +189,6 @@ class LlmProviderSettings:
         return self.endpoint.strip().rstrip("/")
 
 
-# LLM / VLM の呼び出しの seed の既定(#1434。platform の DEFAULT_ENTERPRISE_AI_SEED と同じ)。
-DEFAULT_LLM_SEED = 42
-
-
 @dataclass(frozen=True)
 class Settings:
     """アプリ全体の環境変数由来設定を保持します。"""
@@ -226,9 +222,6 @@ class Settings:
     # 構造化出力の呼び出し 1 回の出力の上限(tokens。既定 32768。#1719)。送る値はこれと呼ぶモデルの出力の上限
     # (`LlmProviderSettings.max_output_tokens`)の小さい方(`llm_output_token_limit`)。
     answer_max_tokens: int
-    # LLM / VLM の呼び出しの seed(#1434。backend が platform の `enterprise_ai_seed` で決めて
-    # `OCI_ENTERPRISE_AI_SEED` で渡す。既定 42)。Responses API の top-level の `seed` で送る。
-    llm_seed: int
     default_rerank_enabled: bool
     rerank_model: str
     oci_rerank_endpoint: str
@@ -545,7 +538,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         ),
         llm_retry_max_wait_seconds=_env_float(env, "LLM_RETRY_MAX_WAIT_SECONDS", _env_float(env, "VISION_RETRY_MAX_WAIT_SECONDS", 30.0)),
         answer_max_tokens=_positive_int(env, "ANSWER_MAX_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS),
-        llm_seed=_env_int(env, "OCI_ENTERPRISE_AI_SEED", DEFAULT_LLM_SEED),
         default_rerank_enabled=_env_bool(env, "RAG_ENGINE_DEFAULT_RERANK_ENABLED", True),
         approved_faq_semantic_matching_enabled=_env_bool(env, "APPROVED_FAQ_SEMANTIC_MATCHING_ENABLED", True),
         approved_faq_semantic_suggestions_enabled=_env_bool(env, "APPROVED_FAQ_SEMANTIC_SUGGESTIONS_ENABLED", False),

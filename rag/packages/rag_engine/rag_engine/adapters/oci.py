@@ -127,8 +127,6 @@ def _runtime(
 
 
 # 生成・監査・質問ルーティング・Vision 説明の全呼出で同じ入力から同じ出力を得やすくするための設定。
-# seed は共通のモデル設定の値(#1434。`settings.llm_seed`、既定 42)。Responses API に seed の引数は
-# ないため extra_body(top-level の `seed`)で渡す。
 LLM_TEMPERATURE = 0.0
 
 
@@ -745,7 +743,6 @@ def _openai_parsed[StructuredOutputT: BaseModel](
             "text_format": text_format,
             "max_output_tokens": send_budget,
             "temperature": LLM_TEMPERATURE,
-            "extra_body": {"seed": int(settings.llm_seed)},
             **reasoning,
         }
         timing: _StreamTiming | None = None
