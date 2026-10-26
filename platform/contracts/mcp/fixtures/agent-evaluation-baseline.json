@@ -157,7 +157,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": "run-answered-agent-outcome-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_2bcc392a542c1d40310e2ad992adad96",
@@ -227,6 +227,8 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
               "cell_range": null,
@@ -260,6 +262,8 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
               "cell_range": null,
@@ -293,6 +297,8 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
               "cell_range": null,
@@ -429,7 +435,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": "run-approval-skipped-run-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_83bf7f626d94207e4a1cf75e366a4c7d",
@@ -499,6 +505,8 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
               "cell_range": null,
@@ -565,7 +573,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": "run-cancelled-run-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_d5b2344f70113ba52cc9d56fedc06955",
@@ -662,7 +670,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": "run-clarification-skips-retrieval-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_3c6fcc7db02aaf5ebb3665728385506d",
@@ -750,7 +758,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": "run-failed-run-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_f6203978c7d52d0c1209354e9e59905b",
@@ -830,7 +838,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": "run-failed-second-turn-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_69538a51893803f39c04b43521089184",
@@ -903,7 +911,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": "run-failed-second-turn-1",
         "agent_id": "agent-baseline",
         "thread_id": "thread_69538a51893803f39c04b43521089184",
@@ -976,7 +984,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": "run-legacy-inferred-abstained-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_4230d9441156be20c8b4e1d2b79b79cb",
@@ -1097,7 +1105,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": "run-legacy-inferred-question-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_dc16e6d5d33bb78719d0dbdfe06bfe2b",
@@ -1153,6 +1161,8 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
               "cell_range": null,
@@ -1270,7 +1280,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": "run-legacy-rag-search-outcome-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_c614321f6e08aa846369039c13777b4e",
@@ -1326,6 +1336,8 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
               "cell_range": null,
@@ -1418,7 +1430,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": "run-multi-turn-clarify-then-answer-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_94207fc60be625afbb5e518975e8e332",
@@ -1610,7 +1622,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": "run-multi-turn-clarify-then-answer-1",
         "agent_id": "agent-baseline",
         "thread_id": "thread_94207fc60be625afbb5e518975e8e332",
@@ -1682,6 +1694,8 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
               "cell_range": null,
@@ -1717,6 +1731,8 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
               "cell_range": null,
@@ -1838,7 +1854,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": "run-no-expectations-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_8c59a57531b93554924d360de5704f64",
@@ -1894,6 +1910,8 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
               "cell_range": null,
@@ -1960,7 +1978,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": "run-timeout-run-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_f0fe8e2b136544171316a3787537bebc",
@@ -2144,7 +2162,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": "run-unknown-outcome-vocabulary-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_3a3e477b6eddca6fb65c5244c490b255",
@@ -2214,6 +2232,8 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
               "cell_range": null,
@@ -2247,6 +2267,8 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
               "cell_range": null,
@@ -2313,7 +2335,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": "run-waiting-approval-run-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_a8ae0fc16c603e12f9e9be7df489b972",

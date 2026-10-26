@@ -402,7 +402,10 @@ _EVIDENCE = {
 # 33: 根拠の locator に表の 1 行のセルの座標（table_row・table_cells）を足した（#3262）。
 # 34: 読み取りのツールの本文を文・段落（表は行）の境界で切り、表の続きに付けた見出しの行の位置
 # （header_range）を足した（#3344）。
-RAG_OUTPUT_SCHEMA_VERSION = 34
+# 35: 根拠の locator に行の番号の基準（row_basis）と表の番号（table_index）、根拠に表の行・列の
+# 対応の検査が読める表か（table_binding）、rag_search・rag_retrieve_evidence に縮退した任意の
+# 補助の処理（degraded_steps）を足した（#3262）。
+RAG_OUTPUT_SCHEMA_VERSION = 35
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {

@@ -1988,6 +1988,35 @@
                 "default": null,
                 "title": "Sheet Name"
               },
+              "row_basis": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "sheet",
+                      "csv",
+                      "word_table"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Row Basis"
+              },
+              "table_index": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Table Index"
+              },
               "row_start": {
                 "anyOf": [
                   {
@@ -2270,7 +2299,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 3,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

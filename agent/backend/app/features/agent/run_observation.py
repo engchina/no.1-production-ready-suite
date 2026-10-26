@@ -65,6 +65,8 @@ LOCATOR_FIELDS = (
     "page_label_start",
     "page_label_end",
     "sheet_name",
+    "row_basis",
+    "table_index",
     "row_start",
     "row_end",
     "cell_range",
@@ -72,6 +74,8 @@ LOCATOR_FIELDS = (
     "table_row",
     "table_cells",
 )
+# 行の番号の基準（RAG の `EvidenceLocator.row_basis`）。知らない値は写さない。
+ROW_BASES = frozenset({"sheet", "csv", "word_table"})
 # 失敗の分類として出してよい形（外部の MCP の結果の任意の文を分類として写さない）。
 _ERROR_CODE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _OTHER_ERROR_CODE = "tool_error"
@@ -162,10 +166,12 @@ def _locator(value: Mapping[str, Any]) -> dict[str, Any]:
     sections = value.get("section_path")
     if isinstance(sections, list):
         locator["section_path"] = [item for item in sections if isinstance(item, str)]
-    for key in ("page_start", "page_end", "row_start", "row_end", "table_row"):
+    for key in ("page_start", "page_end", "row_start", "row_end", "table_row", "table_index"):
         number = _int(value.get(key))
         if number is not None:
             locator[key] = number
+    if (basis := _str(value.get("row_basis"))) in ROW_BASES:
+        locator["row_basis"] = basis
     for key in (
         "page_label_start",
         "page_label_end",
