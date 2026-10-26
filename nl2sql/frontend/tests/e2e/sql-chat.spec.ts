@@ -1631,6 +1631,29 @@ test("確認の質問は複数選択・自由入力で答えられ、答える�
   expect(state.requests).toHaveLength(0);
 });
 
+test("候補の無い確認事項は、自由入力だけの言い方で聞く (#3366)", async ({ page }, testInfo) => {
+  const state = await setup(page, { create: "free_text_question", answers: ["ready"] });
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
+  await composer.fill("今年度の地域ごとの受注金額");
+  await composer.press("Enter");
+  const turn = page.getByTestId("sql-chat-requirement-turn");
+  const question = turn.getByTestId("nl2sql-clarification-question");
+  await expect(question.getByRole("heading", { name: "「今年度」は、どの期間ですか？" })).toBeVisible();
+  await expect(question.getByRole("radio")).toHaveCount(0);
+  // 候補が無いので「その他」「選択肢に無い」と言わない。
+  const answer = question.getByRole("textbox", { name: "答え", exact: true });
+  await expect(answer).toHaveAttribute("placeholder", /^答えを入力してください。/);
+  await expect(question.getByText("答えを書くと押せます。")).toBeVisible();
+  await expect(question.getByRole("textbox", { name: "その他（自由入力）" })).toHaveCount(0);
+  await expect(question).not.toContainText("選択肢");
+  await question.screenshot({ path: testInfo.outputPath("nl2sql-clarification-free-text.png") });
+  await answer.fill("2026 年度（4 月始まり）");
+  await question.getByRole("button", { name: "この内容で回答" }).click();
+  await expect(turn.getByTestId("nl2sql-clarification-summary")).toBeVisible();
+  expect(state.requirement.answers).toMatchObject([{ selected_candidate_ids: [], free_text: "2026 年度（4 月始まり）" }]);
+});
+
 test("確認を終えると、質問を取り消さずに確認せずに SQL を生成する (#2303)", async ({ page }) => {
   const state = await setup(page, { create: "needs_answer" });
   await page.goto("/chat");

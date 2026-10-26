@@ -11,6 +11,9 @@ export interface ClarificationNouns {
   action: string;
 }
 
+/** 確認事項の答え方（選択肢から選ぶ・自由入力だけで答える）と、複数の確認事項でそれが混ざること。 */
+export type ClarificationAnswerKind = "choice" | "freeText" | "mixed";
+
 export interface ClarificationLabels {
   /** カードの題（例:「回答の前に確認させてください」）。 */
   title: string;
@@ -26,15 +29,23 @@ export interface ClarificationLabels {
   reason: string;
   /** 複数選択の確認事項の補足。 */
   multipleHint: string;
-  /** 自由入力の欄のラベル。 */
+  /** 選択肢のある確認事項の自由入力の欄のラベル（選択肢に無い答えの逃げ道）。 */
   other: string;
   otherPlaceholder: string;
+  /** 選択肢の無い（自由入力だけで答える）確認事項の欄のラベル。「その他」と言わない（#3366）。 */
+  freeText: string;
+  freeTextPlaceholder: string;
   /** 確定のボタン（例:「この内容で回答」）。 */
   confirm: string;
-  /** 確定を押せない理由（1 件）。 */
+  /** 確定を押せない理由（1 件。選択肢のある確認事項）。 */
   confirmBlocked: string;
-  /** 確定を押せない理由（複数の確認事項。`remaining` は答えていない件数）。 */
-  confirmBlockedMultiple: (remaining: number) => string;
+  /** 確定を押せない理由（1 件。選択肢の無い確認事項）。 */
+  confirmBlockedFreeText: string;
+  /**
+   * 確定を押せない理由（複数の確認事項。`remaining` は答えていない件数、`kind` は答えていない確認事項の答え方:
+   * すべて選択肢あり `choice` / すべて自由入力だけ `freeText` / 混在 `mixed`）。
+   */
+  confirmBlockedMultiple: (remaining: number, kind?: ClarificationAnswerKind) => string;
   /** スキップのボタン（例:「確認せずに回答」）。 */
   skip: string;
   /** スキップの補足（例:「前提を示して回答します。」）。空なら出さない。 */
@@ -71,10 +82,17 @@ export function clarificationLabels(nouns: ClarificationNouns): ClarificationLab
     multipleHint: "当てはまるものをすべて選べます。",
     other: "その他（自由入力）",
     otherPlaceholder: "選択肢に無いときは、ここに書いてください",
+    freeText: "答え",
+    freeTextPlaceholder: "答えを書いてください",
     confirm: spaced("この内容で", action),
     confirmBlocked: "選択肢を選ぶか、「その他（自由入力）」に書くと押せます。",
-    confirmBlockedMultiple: (remaining) =>
-      `すべての確認事項で、選択肢を選ぶか「その他（自由入力）」に書くと押せます（残り ${remaining} 件）。`,
+    confirmBlockedFreeText: "答えを書くと押せます。",
+    confirmBlockedMultiple: (remaining, kind = "choice") =>
+      kind === "freeText"
+        ? `すべての確認事項で答えを書くと押せます（残り ${remaining} 件）。`
+        : kind === "mixed"
+          ? `すべての確認事項に答えると押せます（残り ${remaining} 件）。`
+          : `すべての確認事項で、選択肢を選ぶか「その他（自由入力）」に書くと押せます（残り ${remaining} 件）。`,
     skip: spaced("確認せずに", action),
     skipHint: `${spaced("前提を示して", action)}します。`,
     confirming: "答えを反映しています",

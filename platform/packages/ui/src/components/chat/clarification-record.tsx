@@ -14,6 +14,8 @@ export interface ClarificationRecordEntry {
   selected: string[];
   /** 自由入力の答え。 */
   otherText?: string;
+  /** 選択肢の無い（自由入力だけで答える）確認事項。答えを「その他: 」を付けずに出す（#3366）。 */
+  freeTextOnly?: boolean;
 }
 
 export interface ClarificationRecordProps {
@@ -39,7 +41,7 @@ export function clarificationRecordAnswerText(
 ): string {
   const parts = [...entry.selected];
   const other = entry.otherText?.trim();
-  if (other) parts.push(labels.recordOther(other));
+  if (other) parts.push(entry.freeTextOnly ? other : labels.recordOther(other));
   return parts.length > 0 ? parts.join(labels.recordSeparator) : labels.recordNoAnswer;
 }
 

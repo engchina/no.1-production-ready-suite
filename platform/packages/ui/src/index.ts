@@ -319,6 +319,7 @@ export {
 export {
   DEFAULT_CLARIFICATION_LABELS,
   clarificationLabels,
+  type ClarificationAnswerKind,
   type ClarificationLabels,
   type ClarificationNouns,
 } from "./components/chat/clarification-labels";
