@@ -220,6 +220,8 @@ def _full_run(setup: Setup) -> RunState:
                 # 表の 1 行の根拠のセルの座標（RAG の EvidenceLocator の table_row・table_cells）。
                 locator={
                     "sheet_name": "シート 1",
+                    "row_basis": "sheet",
+                    "table_index": 2,
                     "row_start": 5,
                     "row_end": 5,
                     "cell_range": "A5:C5",
@@ -490,13 +492,19 @@ def test_observation_returns_the_run_metadata_tool_calls_and_all_evidence(setup:
         "page_label_start": None,
         "page_label_end": None,
         "sheet_name": None,
+        "row_basis": None,
+        "table_index": None,
         "row_start": None,
         "row_end": None,
+        "source_line_start": None,
+        "source_line_end": None,
         "cell_range": None,
         "element_locator": "doc:doc-a/el:1",
         "table_row": None,
         "table_cells": [],
     }
+    # 行の番号の基準と表の番号（#3262）。
+    assert (second["locator"]["row_basis"], second["locator"]["table_index"]) == ("sheet", 2)
     assert (second["locator"]["table_row"], second["locator"]["table_cells"]) == (
         5,
         [
@@ -522,8 +530,12 @@ def test_observation_returns_the_run_metadata_tool_calls_and_all_evidence(setup:
         "page_label_start": None,
         "page_label_end": None,
         "sheet_name": "シート 1",
+        "row_basis": None,
+        "table_index": None,
         "row_start": 1,
         "row_end": 1,
+        "source_line_start": None,
+        "source_line_end": None,
         "cell_range": "A1:C1",
         "element_locator": None,
         "table_row": None,
@@ -709,3 +721,26 @@ def test_observation_drops_table_cells_of_another_shape(cells: object) -> None:
     """RAG の table_cells の形に合わないセルがあれば、セルを 1 つも写さない（行の番号は写す）。"""
     locator = run_observation._locator({"table_row": 5, "table_cells": cells})
     assert locator == {"table_row": 5}
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (
+            {"row_basis": "word_table", "table_index": 3},
+            {"row_basis": "word_table", "table_index": 3},
+        ),
+        (
+            {"row_basis": "csv", "row_start": 4, "source_line_start": 5, "source_line_end": 6},
+            {"row_basis": "csv", "row_start": 4, "source_line_start": 5, "source_line_end": 6},
+        ),
+        # 知らない基準・形の合わない番号は写さない。
+        ({"row_basis": "page", "table_index": "3"}, {}),
+    ],
+    ids=["word-table", "csv", "unknown"],
+)
+def test_observation_copies_the_row_basis_of_rag(
+    value: dict[str, object], expected: object
+) -> None:
+    """行の番号の基準と表の番号（RAG の EvidenceLocator と同じ名前。#3262）を写す。"""
+    assert run_observation._locator(value) == expected

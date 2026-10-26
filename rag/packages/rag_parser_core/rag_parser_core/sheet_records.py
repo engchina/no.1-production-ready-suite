@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from typing import Final
 
 from pr_backend_core.spreadsheet.models import (
     COLUMN_ROLE_NONE,
@@ -83,7 +84,46 @@ EXCEL_HEADER_LOW_CONFIDENCE_WARNING = "excel_header_low_confidence"
 # いない古い行の記録（``SheetColumn.header_path`` が None）からは作らない（推測しない）。
 TABLE_ROW_KEY = "table_row"
 TABLE_CELLS_KEY = "table_cells_json"
-TABLE_LOCATOR_METADATA_KEYS: tuple[str, ...] = (TABLE_ROW_KEY, TABLE_CELLS_KEY)
+# 行の番号の基準（根拠の locator の row_basis。#3262）と、その基準の行の範囲
+# （``table_row_start`` / ``table_row_end``）。表計算は ``sheet_name`` から決まり、行の範囲は
+# ``row_start`` / ``row_end`` なので記録しない。CSV は記録の番号（RFC 7111 の行）で、原本の物理行の
+# 範囲を ``source_line_start`` / ``source_line_end`` に持つ。Word は 1 つの表だけを含むまとまりの
+# ``table_index`` の表の行。
+ROW_BASIS_KEY = "row_basis"
+ROW_BASIS_SHEET: Final = "sheet"
+ROW_BASIS_CSV: Final = "csv"
+ROW_BASIS_WORD_TABLE: Final = "word_table"
+TABLE_INDEX_KEY = "table_index"
+TABLE_ROW_START_KEY = "table_row_start"
+TABLE_ROW_END_KEY = "table_row_end"
+SOURCE_LINE_START_KEY = "source_line_start"
+SOURCE_LINE_END_KEY = "source_line_end"
+TABLE_LOCATOR_METADATA_KEYS: tuple[str, ...] = (
+    TABLE_ROW_KEY,
+    TABLE_CELLS_KEY,
+    ROW_BASIS_KEY,
+    TABLE_INDEX_KEY,
+    TABLE_ROW_START_KEY,
+    TABLE_ROW_END_KEY,
+    SOURCE_LINE_START_KEY,
+    SOURCE_LINE_END_KEY,
+)
+
+
+def table_cells_metadata(cells: list[tuple[str, list[str]]]) -> str:
+    """値のあるセルの列の記号と表頭の段（``TABLE_CELLS_KEY`` の値。本文の順）。"""
+    return json.dumps(
+        [[column, path] for column, path in cells], ensure_ascii=False, separators=(",", ":")
+    )
+
+
+def column_letters(position: int) -> str:
+    """列の位置（1 始まり）を表計算の列の記号にする（1 → A、27 → AA）。"""
+    letters = ""
+    while position > 0:
+        position, remainder = divmod(position - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
 
 
 def _block_text(
@@ -135,16 +175,16 @@ def _table_locator_metadata(
     if block.kind != "row" or block.row_start != block.row_end:
         return {}
     metadata: dict[str, str | int] = {TABLE_ROW_KEY: block.row_start}
-    cells: list[list[object]] = []
+    cells: list[tuple[str, list[str]]] = []
     for name, value in block.values.items():
         column = columns.get(name)
         if not value.strip():
             continue
         if column is None or column.header_path is None:
             return metadata
-        cells.append([column.column, column.header_path])
+        cells.append((column.column, column.header_path))
     if cells:
-        metadata[TABLE_CELLS_KEY] = json.dumps(cells, ensure_ascii=False, separators=(",", ":"))
+        metadata[TABLE_CELLS_KEY] = table_cells_metadata(cells)
     return metadata
 
 
@@ -311,9 +351,18 @@ __all__ = [
     "SHEET_RECORDS_FORMAT",
     "SHEET_RECORDS_FORMAT_VERSION",
     "SHEET_RECORD_CONTENT_KIND",
+    "SOURCE_LINE_END_KEY",
+    "SOURCE_LINE_START_KEY",
+    "ROW_BASIS_CSV",
+    "ROW_BASIS_KEY",
+    "ROW_BASIS_SHEET",
+    "ROW_BASIS_WORD_TABLE",
     "TABLE_CELLS_KEY",
+    "TABLE_INDEX_KEY",
     "TABLE_LOCATOR_METADATA_KEYS",
+    "TABLE_ROW_END_KEY",
     "TABLE_ROW_KEY",
+    "TABLE_ROW_START_KEY",
     "ColumnRole",
     "ColumnRoleSetting",
     "ExcelOptions",
@@ -329,8 +378,10 @@ __all__ = [
     "SheetLayout",
     "SkippedSheet",
     "column_display_name",
+    "column_letters",
     "parse_excel_range",
     "sheet_block_record_id",
     "sheet_records_extraction",
     "sheet_section_path",
+    "table_cells_metadata",
 ]

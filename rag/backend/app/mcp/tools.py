@@ -72,6 +72,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from rag_engine.generation.table_binding import evidence_tables
 from rag_engine.knowledge.runtime_knowledge import (
     MAX_MATCHED_RULES,
     MAX_MATCHED_TERMS,
@@ -80,7 +81,19 @@ from rag_engine.knowledge.runtime_knowledge import (
 )
 from rag_engine.retrieval.entity_expansion import entity_expansion_relevant
 from rag_parser_core.extraction import is_derived_content
-from rag_parser_core.sheet_records import TABLE_CELLS_KEY, TABLE_ROW_KEY
+from rag_parser_core.sheet_records import (
+    ROW_BASIS_CSV,
+    ROW_BASIS_KEY,
+    ROW_BASIS_SHEET,
+    ROW_BASIS_WORD_TABLE,
+    SOURCE_LINE_END_KEY,
+    SOURCE_LINE_START_KEY,
+    TABLE_CELLS_KEY,
+    TABLE_INDEX_KEY,
+    TABLE_ROW_END_KEY,
+    TABLE_ROW_KEY,
+    TABLE_ROW_START_KEY,
+)
 from rag_parser_core.xml_tree_json import xml_tree_citation_key
 
 from app.api.errors import DocumentFileMissingError
@@ -276,7 +289,13 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 34: 読み取りのツール（rag_read_source・rag_read_section・rag_read_document）の本文を、上限の
 #     文字数に入る最後の文・段落（表は行）の境界で切るようにした。表の続きは先頭に見出しの行を
 #     付け、その位置（rag_read_source と読み取りの chunks の header_range）を足した（#3344）。
-MCP_OUTPUT_SCHEMA_VERSION = 34
+# 35: 根拠の場所（locator・読み取りの chunks）に行の番号の基準（row_basis。表計算のシート・CSV の
+#     記録の番号・Word の表の行）と表の番号（table_index）、CSV の原本の物理行の範囲
+#     （source_line_start・source_line_end）を足し、CSV の 1 行の根拠にセルの座標
+#     （table_row・table_cells）、Word の 1 つの表の根拠に表の行の範囲を入れた。根拠に、表の行・
+#     列の対応の検査が読める表か（table_binding）を、rag_search・rag_retrieve_evidence に、失敗して
+#     縮退した任意の補助の処理（degraded_steps）を足した（#3262）。
+MCP_OUTPUT_SCHEMA_VERSION = 35
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
 # 値と決め方は pr_backend_core.source_text。#3321）。
 EVIDENCE_TEXT_ITEM_MAX_TOKENS = SOURCE_TEXT_ITEM_MAX_TOKENS
@@ -1114,6 +1133,25 @@ class ExcerptRange(BaseModel):
     end: int
 
 
+RowBasis = Literal["sheet", "csv", "word_table"]
+ROW_BASIS_DESCRIPTION = (
+    "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の"
+    "記録の番号〔RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から数える。表計算の"
+    "ソフトで開いたときの行〕/ word_table=Word の table_index の表の行。表頭の行も数え、大きい表を"
+    "分けた部分は先頭に繰り返した表頭を数えない）。原本の行の位置が分からない根拠（PDF・HTML・"
+    "画像の表など）は null。"
+)
+SOURCE_LINE_START_DESCRIPTION = (
+    "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録は"
+    "source_line_end と違う）。"
+)
+SOURCE_LINE_END_DESCRIPTION = "原本のテキストの終了の物理行（row_basis=csv だけ）。"
+TABLE_INDEX_DESCRIPTION = (
+    "表の番号（1 始まり。row_basis=word_table は本文の表の順、sheet は 1 シートを複数の表に"
+    "分けたときの表の順）。無ければ null。"
+)
+
+
 class ReadDocumentChunk(BaseModel):
     """返した本文に含まれる chunk（根拠として引用するときの場所）。"""
 
@@ -1122,10 +1160,16 @@ class ReadDocumentChunk(BaseModel):
     section_path: list[str] = Field(default_factory=list)
     page_start: int | None = None
     page_end: int | None = None
-    # 表計算の場所（検索の根拠の locator と同じ。#1471）。表計算でない chunk は null。
+    # 表計算・表の場所（検索の根拠の locator と同じ。#1471・#3262）。行の位置の無い chunk は null。
     sheet_name: str | None = Field(default=None, description="表計算のシート名（#1221）。")
-    row_start: int | None = Field(default=None, description="シートの開始の行（1 始まり）。")
-    row_end: int | None = Field(default=None, description="シートの終了の行。")
+    row_basis: RowBasis | None = Field(default=None, description=ROW_BASIS_DESCRIPTION)
+    table_index: int | None = Field(default=None, description=TABLE_INDEX_DESCRIPTION)
+    row_start: int | None = Field(
+        default=None, description="開始の行（1 始まり。番号の基準は row_basis）。"
+    )
+    row_end: int | None = Field(default=None, description="終了の行。")
+    source_line_start: int | None = Field(default=None, description=SOURCE_LINE_START_DESCRIPTION)
+    source_line_end: int | None = Field(default=None, description=SOURCE_LINE_END_DESCRIPTION)
     cell_range: str | None = Field(default=None, description="セル範囲（例: A3:F7）。")
     start: int = Field(description="返した本文の中の開始の位置（文字数）。")
     end: int = Field(description="返した本文の中の終了の位置（文字数）。")
@@ -1207,7 +1251,9 @@ class RecommendSearchAnswerProfileOutput(VersionedOutput):
 class EvidenceTableCell(BaseModel):
     """表の 1 行の根拠の、値のあるセル（セルの座標は table_row と table_col）。"""
 
-    table_col: str = Field(description="原本の列（表計算の列の記号。例: B）。")
+    table_col: str = Field(
+        description="原本の列（表計算の列の記号。例: B。CSV は列の位置を同じ記号で示す）。"
+    )
     header_path: list[str] = Field(
         description="列の表頭（複数段の表頭は上の段から。表頭の文字の無い列は空）。"
     )
@@ -1220,9 +1266,17 @@ class EvidenceLocator(BaseModel):
     page_start: int | None = Field(default=None, description="開始の頁（PDF の物理頁）。")
     page_end: int | None = Field(default=None, description="終了の頁（PDF の物理頁）。")
     sheet_name: str | None = Field(default=None, description="表計算のシート名（#1221）。")
-    row_start: int | None = Field(default=None, description="シートの開始の行（1 始まり）。")
-    row_end: int | None = Field(default=None, description="シートの終了の行。")
-    cell_range: str | None = Field(default=None, description="セル範囲（例: A3:F7）。")
+    row_basis: RowBasis | None = Field(default=None, description=ROW_BASIS_DESCRIPTION)
+    table_index: int | None = Field(default=None, description=TABLE_INDEX_DESCRIPTION)
+    row_start: int | None = Field(
+        default=None, description="開始の行（1 始まり。番号の基準は row_basis）。"
+    )
+    row_end: int | None = Field(default=None, description="終了の行。")
+    source_line_start: int | None = Field(default=None, description=SOURCE_LINE_START_DESCRIPTION)
+    source_line_end: int | None = Field(default=None, description=SOURCE_LINE_END_DESCRIPTION)
+    cell_range: str | None = Field(
+        default=None, description="表計算のセル範囲（例: A3:F7。row_basis=sheet だけ）。"
+    )
     page_label_start: str | None = Field(
         default=None,
         description="開始の頁の印刷の頁番号（PDF のページラベル。物理頁と違うときだけ。#1244）。",
@@ -1245,8 +1299,9 @@ class EvidenceLocator(BaseModel):
     table_row: int | None = Field(
         default=None,
         description=(
-            "根拠が表計算の表の 1 つのデータの行のとき、そのシートの行番号。複数行の根拠・"
-            "ほかの形式の表（PDF・HTML・画像・CSV・Word）は null。"
+            "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 記録）のとき、その行の"
+            "番号（row_basis の番号）。複数行の根拠・行の番号を原本で決められない表（PDF・HTML・"
+            "画像・Word）は null。"
         ),
     )
     table_cells: list[EvidenceTableCell] = Field(
@@ -1392,6 +1447,10 @@ class EvidenceSection(BaseModel):
     parent_chars: int | None = Field(default=None, description="親の章節の本文の文字数。")
 
 
+# 根拠の本文を表の行・列の対応の検査（``rag_engine.generation.table_binding``）が読めるか（#3262）。
+TableBinding = Literal["checkable", "not_checkable"]
+
+
 class RagEvidence(BaseModel):
     """検索・回答の根拠 1 件。"""
 
@@ -1489,6 +1548,16 @@ class RagEvidence(BaseModel):
         description=(
             "本文の由来。source=文書の原文（表・図の中の文字を含む）/ derived=取込が原文から作った"
             "要約・抽出した値（引用する前に原文を読んで確かめる）。"
+        ),
+    )
+    table_binding: TableBinding | None = Field(
+        default=None,
+        description=(
+            "回答の検査（回答の生成と rag_validate_answer）が、文の値を表の別の行・列の値と"
+            "取り違えていないかをこの根拠の本文で確かめられるか。checkable=2 行以上の表（HTML・"
+            "Markdown の表・「名前: 値」の行の並び）を読める / not_checkable=表の根拠だが読めない"
+            "（1 行の記録・列の並びが崩れた本文）ので、値の行・列は locator のセルの座標か原文で"
+            "確かめる / null=表の無い根拠。"
         ),
     )
     superseded: bool = Field(
@@ -1677,6 +1746,21 @@ AUTO_SELECTED_PROFILE_DESCRIPTION = (
 )
 
 
+# 回答の診断の degraded_steps（#3259）の公開の形（#3262）。
+class DegradedStep(BaseModel):
+    """失敗して縮退した任意の補助の処理。"""
+
+    kind: str = Field(description="処理の種類（例: rerank・section_outline・reference_load）。")
+    count: int = Field(description="失敗した回数。")
+
+
+DEGRADED_STEPS_DESCRIPTION = (
+    "失敗して縮退した任意の補助の処理（rerank・章節の目録・参照先の読み込みなど）。その処理を"
+    "使わずに続けた結果（例: rerank の失敗は検索の順のまま）で、空なら縮退していない。必須の能力"
+    "（主の検索・回答の生成・有効な安全チェック）の失敗は縮退せずエラーで返る。"
+)
+
+
 class SearchOutput(VersionedOutput):
     answer: str
     trace_id: str
@@ -1728,6 +1812,9 @@ class SearchOutput(VersionedOutput):
     answer_warnings: list[PassageReason] = Field(
         default_factory=list,
         description="回答全体の警告（質問からずれている可能性など）。",
+    )
+    degraded_steps: list[DegradedStep] = Field(
+        default_factory=list, description=DEGRADED_STEPS_DESCRIPTION
     )
     evidence: list[RagEvidence] = Field(
         description=(
@@ -1922,6 +2009,9 @@ class ProfileKnowledge(BaseModel):
 class RetrieveEvidenceOutput(VersionedOutput):
     trace_id: str
     guardrail_warnings: list[str]
+    degraded_steps: list[DegradedStep] = Field(
+        default_factory=list, description=DEGRADED_STEPS_DESCRIPTION
+    )
     evidence: list[RagEvidence] = Field(
         description=(
             "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）と、実体からたどった"
@@ -2248,6 +2338,53 @@ def _table_cells(metadata: dict[str, Any]) -> list[EvidenceTableCell]:
     return cells
 
 
+def _table_rows(
+    metadata: dict[str, Any], sheet_name: str | None
+) -> tuple[RowBasis, int | None, int | None, int | None] | None:
+    """行の番号の基準・表の番号・行の範囲（#3262）。原本の行の位置が無い根拠は None。
+
+    表計算はシート名があれば、CSV は表頭の行（``csv_header_row``）があれば、基準を記録する前の
+    chunk でも基準が決まる。CSV の行は記録の番号（RFC 7111 の行）で、記録の番号を記録する前の
+    chunk は行を返さない（物理行は ``_source_lines``）。Word は 1 つの表だけを含むまとまりで取込が
+    記録したときだけ。
+    """
+    basis = _metadata_str(metadata, ROW_BASIS_KEY)
+    if sheet_name:
+        return (
+            ROW_BASIS_SHEET,
+            _metadata_int(metadata, "sheet_table_index"),
+            _metadata_int(metadata, "row_start"),
+            _metadata_int(metadata, "row_end"),
+        )
+    if basis == ROW_BASIS_CSV or (
+        basis is None and _metadata_int(metadata, "csv_header_row") is not None
+    ):
+        start = _metadata_int(metadata, TABLE_ROW_START_KEY)
+        end = _metadata_int(metadata, TABLE_ROW_END_KEY)
+        if start is None or end is None or end < start:
+            return ROW_BASIS_CSV, None, None, None
+        return ROW_BASIS_CSV, None, start, end
+    if basis == ROW_BASIS_WORD_TABLE:
+        table_index = _metadata_int(metadata, TABLE_INDEX_KEY)
+        start = _metadata_int(metadata, TABLE_ROW_START_KEY)
+        end = _metadata_int(metadata, TABLE_ROW_END_KEY)
+        if table_index is None or start is None or end is None or end < start:
+            return None
+        return ROW_BASIS_WORD_TABLE, table_index, start, end
+    return None
+
+
+def _source_lines(metadata: dict[str, Any]) -> tuple[int | None, int | None]:
+    """CSV の根拠の原本の物理行の範囲（記録する前の chunk は ``row_start`` / ``row_end``）。"""
+    start = _metadata_int(metadata, SOURCE_LINE_START_KEY)
+    end = _metadata_int(metadata, SOURCE_LINE_END_KEY)
+    if start is None:
+        start, end = _metadata_int(metadata, "row_start"), _metadata_int(metadata, "row_end")
+    if start is None or end is None or end < start:
+        return None, None
+    return start, end
+
+
 def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
     section = metadata.get("section_path")
     if isinstance(section, list):
@@ -2259,16 +2396,27 @@ def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
     page_start = _metadata_int(metadata, "page_start") or _metadata_int(metadata, "page_number")
     page_end = _metadata_int(metadata, "page_end") or page_start
     sheet_name = _metadata_str(metadata, "sheet_name")
-    # セルの座標は表計算の 1 行の記録だけが持つ（取込で記録したときだけ。推測しない）。
-    table_row = _metadata_int(metadata, TABLE_ROW_KEY) if sheet_name else None
+    rows = _table_rows(metadata, sheet_name)
+    basis, table_index, row_start, row_end = rows if rows is not None else (None, None, None, None)
+    source_lines = _source_lines(metadata) if basis == ROW_BASIS_CSV else (None, None)
+    # セルの座標は表計算・CSV の 1 行の記録だけが持つ（取込で記録したときだけ。推測しない）。
+    table_row = (
+        _metadata_int(metadata, TABLE_ROW_KEY)
+        if basis in {ROW_BASIS_SHEET, ROW_BASIS_CSV}
+        else None
+    )
     return EvidenceLocator(
         section_path=path,
         page_start=page_start,
         page_end=page_end,
         sheet_name=sheet_name,
-        row_start=_metadata_int(metadata, "row_start") if sheet_name else None,
-        row_end=_metadata_int(metadata, "row_end") if sheet_name else None,
-        cell_range=_metadata_str(metadata, "cell_range") if sheet_name else None,
+        row_basis=basis,
+        table_index=table_index,
+        row_start=row_start,
+        row_end=row_end,
+        source_line_start=source_lines[0],
+        source_line_end=source_lines[1],
+        cell_range=_metadata_str(metadata, "cell_range") if basis == ROW_BASIS_SHEET else None,
         page_label_start=_metadata_str(metadata, "page_label_start") if page_start else None,
         page_label_end=_metadata_str(metadata, "page_label_end") if page_start else None,
         bbox=bbox_numbers(metadata.get("bbox")),
@@ -2426,12 +2574,34 @@ def _evidence(
         origin="derived"
         if is_derived_content(metadata.get("content_kind"), metadata)
         else "source",
+        table_binding=_table_binding(chunk.text, metadata),
         superseded=metadata.get("document_superseded") is True,
         references=_references(metadata),
         reference_from=_metadata_str(metadata, REFERENCE_FROM_KEY),
         reference_label=_metadata_str(metadata, REFERENCE_LABEL_KEY),
         section=_evidence_section((sections or {}).get(chunk.chunk_id)),
     )
+
+
+def _is_table_evidence(metadata: dict[str, Any]) -> bool:
+    """表の根拠か（表の chunk・表計算と CSV の表の 1 行の記録）。"""
+    return (
+        _metadata_str(metadata, "content_kind") == "table"
+        or _metadata_str(metadata, "sheet_block_kind") == "row"
+        or _metadata_str(metadata, "record_kind") == "row"
+        or _metadata_int(metadata, TABLE_ROW_KEY) is not None
+    )
+
+
+def _table_binding(text: str, metadata: dict[str, Any]) -> TableBinding | None:
+    """表の行・列の対応の検査がこの根拠の本文を表として読めるか（#3262）。
+
+    検査（``rag_engine.generation.table_binding``）と同じ読み方で、本文から 2 行以上の表を読めれば
+    checkable。表の根拠なのに読めなければ not_checkable（検査が働かないことを呼び出し元に示す）。
+    """
+    if evidence_tables(text):
+        return "checkable"
+    return "not_checkable" if _is_table_evidence(metadata) else None
 
 
 def _excerpt_range(value: object) -> ExcerptRange | None:
@@ -2863,10 +3033,29 @@ def _answer_fields(result: SearchResponse, evidence_limit: int) -> dict[str, Any
         **passage_mark_record(
             answer if any(key in answer for key in PASSAGE_MARK_RECORD_KEYS) else envelope
         ),
+        "degraded_steps": _degraded_steps(answer),
         "evidence": [],
         "evidence_omitted": max(0, len(ordered) - evidence_limit),
         "provenance": _provenance(answer.get("provenance")),
     }
+
+
+def _degraded_steps(answer: Mapping[str, Any]) -> list[DegradedStep]:
+    """回答の診断の degraded_steps（#3259）の処理の種類と回数だけ（例外の型の名前は出さない）。"""
+    counts: dict[str, int] = {}
+    raw = answer.get("degraded_steps")
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        kind, count = item.get("kind"), item.get("count")
+        if (
+            isinstance(kind, str)
+            and kind
+            and isinstance(count, int)
+            and not isinstance(count, bool)
+        ):
+            counts[kind] = counts.get(kind, 0) + max(0, count)
+    return [DegradedStep(kind=kind, count=count) for kind, count in counts.items() if count]
 
 
 def _provenance(value: object) -> dict[str, Any] | None:
@@ -3313,8 +3502,12 @@ async def read_section_tool(arguments: ReadSectionInput) -> ReadSectionOutput:
                     page_start=locator.page_start,
                     page_end=locator.page_end,
                     sheet_name=locator.sheet_name,
+                    row_basis=locator.row_basis,
+                    table_index=locator.table_index,
                     row_start=locator.row_start,
                     row_end=locator.row_end,
+                    source_line_start=locator.source_line_start,
+                    source_line_end=locator.source_line_end,
                     cell_range=locator.cell_range,
                     start=start,
                     end=length,
@@ -3490,8 +3683,12 @@ async def read_document(arguments: ReadDocumentInput) -> ReadDocumentOutput:
                     page_start=locator.page_start,
                     page_end=locator.page_end,
                     sheet_name=locator.sheet_name,
+                    row_basis=locator.row_basis,
+                    table_index=locator.table_index,
                     row_start=locator.row_start,
                     row_end=locator.row_end,
+                    source_line_start=locator.source_line_start,
+                    source_line_end=locator.source_line_end,
                     cell_range=locator.cell_range,
                     start=start,
                     end=length,
@@ -4544,6 +4741,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         output = RetrieveEvidenceOutput(
             trace_id=result.trace_id,
             guardrail_warnings=list(result.guardrail_warnings),
+            degraded_steps=_degraded_steps(_answer_diagnostics(result)),
             evidence=[],
             evidence_omitted=max(0, len(hits) - limit),
             older_versions=await _older_versions(arguments, request, result.citations),

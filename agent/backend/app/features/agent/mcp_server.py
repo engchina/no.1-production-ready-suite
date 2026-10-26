@@ -136,8 +136,9 @@ LIST_OUTPUT_SCHEMA_VERSION = 1
 SKILL_EXPORT_SCHEMA_VERSION = 1
 CANCEL_OUTPUT_SCHEMA_VERSION = 1
 # agent_get_run_observation の出力の形の版（#3240。#3262 で根拠の場所に RAG の表のセルの座標の
-# table_row・table_cells を足して 2）。
-OBSERVATION_SCHEMA_VERSION = 2
+# table_row・table_cells を足して 2、行の番号の基準 row_basis・表の番号 table_index・CSV の物理行の
+# 範囲 source_line_start / source_line_end を足して 3）。
+OBSERVATION_SCHEMA_VERSION = 3
 # 根拠の件数の上限。本文は件ごとの全文を応答の予算に入れる（3 製品で共通の規則。値と決め方は
 # pr_backend_core.source_text。#3321）。
 _MAX_SOURCES = 10
@@ -532,8 +533,15 @@ class ObservedLocator(BaseModel):
     page_label_start: str | None = None
     page_label_end: str | None = None
     sheet_name: str | None = None
+    # 行の番号の基準（sheet=表計算のシート / csv=CSV の物理行 / word_table=Word の表の行）と
+    # 表の番号。
+    row_basis: Literal["sheet", "csv", "word_table"] | None = None
+    table_index: int | None = None
     row_start: int | None = None
     row_end: int | None = None
+    # CSV の原本の物理行の範囲（row_start・row_end は記録の番号）。
+    source_line_start: int | None = None
+    source_line_end: int | None = None
     cell_range: str | None = None
     element_locator: str | None = None
     table_row: int | None = None

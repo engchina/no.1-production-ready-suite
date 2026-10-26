@@ -11,9 +11,9 @@ CSV・Excel・Word の前処理は、原本を 1 行 1 オブジェクトの JSO
 - すべての行が ``schema``・``schema_version``・``record_id``（ファイルの中で一意）・
   ``source_type``・``record_type`` を持つ。
 - ``record_type``:
-  - ``document``: 先頭の 1 行だけ。変換器・版・読まなかったシート・表頭の行（CSV）・診断。Word は
-    位置の基準（``location_basis``）と、.doc を .docx にして読んだときの原本と派生物の対応
-    （``conversion``）も持つ。
+  - ``document``: 先頭の 1 行だけ。変換器・版・読まなかったシート・表頭の行と表頭のセルの文字
+    （CSV）・診断。Word は位置の基準（``location_basis``）と、.doc を .docx にして読んだときの
+    原本と派生物の対応（``conversion``）も持つ。
   - ``sheet``: Excel のシートの文脈（表頭の行・推定の信頼度・読み方・版式の判定・列と役割・診断。
     1 シートを複数の表に分けたときは表ごとに 1 行で、``table_index``・``region``・``title``
     を持つ）。
@@ -29,8 +29,8 @@ CSV・Excel・Word の前処理は、原本を 1 行 1 オブジェクトの JSO
     を持つ。位置（``WordLocation``）は本文の順の番号で、原本に無いページ番号は持たない。
   CSV・Excel の記録は ``parent_id`` で文脈の行（Excel は ``sheet``）を指し、``location``
   （元の行番号・セル範囲）と ``section_path`` を持つ。Excel の記録のうち図形・テキストボックスの
-  文字を置いたセル範囲は ``shape_cells`` に持つ（#2526）。CSV の行番号は原本の物理行（引用符の中の
-  改行を含む記録は複数行）。
+  文字を置いたセル範囲は ``shape_cells`` に持つ（#2526）。CSV の ``row_start`` / ``row_end`` は
+  原本の物理行（引用符の中の改行を含む記録は複数行）で、``record`` は記録の番号（RFC 7111 の行）。
 - 読み取り（`parse_structured_records`）は厳格にし、不正な JSON・オブジェクトでない行・空行・BOM・
   未知の schema・未対応の版・record_id の重複・document の行の欠落・存在しない parent_id を、行番号
   つきの診断で拒否する（任意の JSONL を構造化レコードとみなさない）。
@@ -61,7 +61,17 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 from rag_parser_core.sheet_records import (
     _BLOCK_TEXT_MAX_CHARS,
+    ROW_BASIS_CSV,
+    ROW_BASIS_KEY,
+    ROW_BASIS_WORD_TABLE,
     SHEET_RECORD_CONTENT_KIND,
+    SOURCE_LINE_END_KEY,
+    SOURCE_LINE_START_KEY,
+    TABLE_CELLS_KEY,
+    TABLE_INDEX_KEY,
+    TABLE_ROW_END_KEY,
+    TABLE_ROW_KEY,
+    TABLE_ROW_START_KEY,
     HeaderDetection,
     LayoutDetection,
     SheetBlock,
@@ -73,8 +83,10 @@ from rag_parser_core.sheet_records import (
     SheetRecordsDocument,
     SkippedSheet,
     _block_text,
+    column_letters,
     sheet_block_record_id,
     sheet_records_extraction,
+    table_cells_metadata,
 )
 
 STRUCTURED_RECORDS_CONTENT_TYPE = "application/vnd.production-ready.structured-records+jsonl"
@@ -160,6 +172,14 @@ class DocumentLine(_Line):
     header_row: int | None = Field(
         default=None, ge=1, description="CSV の表頭の物理行（1 始まり）。"
     )
+    header: list[str] | None = Field(
+        default=None,
+        description=(
+            "CSV の表頭の行のセルの文字（原本の列の順。空のセルは空文字）。記録の ``fields`` の"
+            "``name`` は空・重複を補った名前で、表頭の文字はこちら。None は記録していない"
+            "（この項目より前の変換器の記録）。"
+        ),
+    )
     location_basis: Literal["original", "derived"] | None = Field(
         default=None,
         description=(
@@ -198,6 +218,15 @@ class RecordLocation(BaseModel):
     row_start: int = Field(ge=1)
     row_end: int = Field(ge=1)
     cell_range: str | None = Field(default=None, description="Excel のセル範囲（例: A5:F5）。")
+    record: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "CSV の記録の番号（RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から"
+            "数える。表計算のソフトで開いたときの行）。None は記録していない（この項目より前の"
+            "変換器の記録）。"
+        ),
+    )
 
 
 class RecordField(BaseModel):
@@ -781,6 +810,41 @@ def _csv_row_text(line: RowLine, *, max_chars: int | None = _RECORD_TEXT_MAX_CHA
     return text if max_chars is None else text[:max_chars]
 
 
+def _csv_table_metadata(line: RowLine, header: list[str] | None) -> dict[str, str | int]:
+    """CSV の 1 データ行の場所の基準とセルの座標（#3262）。
+
+    行の番号は記録の番号（RFC 7111 の行。表頭の記録を含めて先頭から数え、表計算のソフトで開いた
+    ときの行）で、``table_row`` と ``table_row_start`` / ``table_row_end`` にする（引用符の中の
+    改行を含む記録も 1 行）。原本の物理行の範囲は ``source_line_start`` / ``source_line_end``。
+    記録の番号を記録していない古い記録は行の番号もセルの座標も持たず、表頭のセルの文字を記録して
+    いない古い記録（``header`` が None）からは、補った列名で表頭を作らない。
+    """
+    metadata: dict[str, str | int] = {
+        ROW_BASIS_KEY: ROW_BASIS_CSV,
+        SOURCE_LINE_START_KEY: line.location.row_start,
+        SOURCE_LINE_END_KEY: line.location.row_end,
+    }
+    record = line.location.record
+    if record is None:
+        return metadata
+    metadata[TABLE_ROW_KEY] = record
+    metadata[TABLE_ROW_START_KEY] = record
+    metadata[TABLE_ROW_END_KEY] = record
+    if header is None:
+        return metadata
+    cells = [
+        (
+            column_letters(item.position),
+            [text] if item.position <= len(header) and (text := header[item.position - 1]) else [],
+        )
+        for item in line.fields
+        if item.value.strip()
+    ]
+    if cells:
+        metadata[TABLE_CELLS_KEY] = table_cells_metadata(cells)
+    return metadata
+
+
 def _csv_extraction(
     document: StructuredRecordsDocument,
     *,
@@ -816,6 +880,7 @@ def _csv_extraction(
                         if document.document.header_row is not None
                         else {}
                     ),
+                    **_csv_table_metadata(line, document.document.header),
                 },
             )
         )
@@ -905,6 +970,14 @@ def _word_metadata(
         metadata["word_paragraph_end"] = location.paragraph_end
     if location.table_indices:
         metadata["word_table_indices"] = ",".join(str(item) for item in location.table_indices)
+    tables = [block for block in line.blocks if isinstance(block, WordTable)]
+    if len(tables) == 1:
+        # 1 つの表（か、大きい表を分けた部分）だけを含むまとまりは、その表の行の範囲を持つ
+        # （#3262）。複数の表を含むまとまりは、1 つの範囲で示せないので持たない。
+        metadata[ROW_BASIS_KEY] = ROW_BASIS_WORD_TABLE
+        metadata[TABLE_INDEX_KEY] = tables[0].table_index
+        metadata[TABLE_ROW_START_KEY] = tables[0].row_start
+        metadata[TABLE_ROW_END_KEY] = tables[0].row_end
     if line.part is not None:
         metadata["word_part_group"] = line.part.group_id
         metadata["word_part_index"] = line.part.index
