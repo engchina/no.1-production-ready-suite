@@ -69,20 +69,21 @@ def test_parent_with_one_high_reranked_anchor_is_not_pushed_out_by_a_parent_with
     assert [r.id for r in bundle.records] == [f"p{i}" for i in range(12)]
 
 
-def test_unscored_parents_follow_reranked_parents_and_keep_the_retrieval_order():
-    """rerank の点数の無い起点だけの親は、点数のある親の後ろに取得の順で置く（点数のある親を枠から押し出さない）。"""
+def test_parents_follow_the_best_anchor_in_the_rerank_order():
+    """親の並びは起点の最上位の順位（rerank の後の並び）。起点の数・前後の chunk の数は同点の順だけ。
+
+    rerank の工程の明示の配置（位置を保つ候補など）は rerank の後の並びのまま。rerank が動かなかったときは
+    取得の順位。
+    """
     children = [
         child("u1", 1, "位置を保つ候補", "u.pdf", "pu"),
-        child("s1", 2, "本文", "s.pdf", "ps", 0.3),
-        child("s2", 3, "本文", "t.pdf", "pt", 0.6),
-        child("u2", 4, "位置を保つ候補", "v.pdf", "pv"),
+        child("s1", 2, "本文", "s.pdf", "ps", 0.6),
+        child("s2", 3, "本文", "t.pdf", "pt", 0.5),
+        child("s3", 4, "本文", "t.pdf", "pt", 0.4),
+        child("u2", 5, "位置を保つ候補", "v.pdf", "pv"),
     ]
     parents = [parent(name, i, "本文", f"{name}.pdf") for i, name in enumerate(["pu", "ps", "pt", "pv"], start=1)]
-    assert [r.id for r in _bundle(children, parents, max_records=3).records] == ["pt", "ps", "pu"]
-
-    # rerank が動かなかった（全候補に点数が無い）ときは取得の順位。
-    plain = [replace(c, metadata={"section_path": ["管理-(1)登録"]}) for c in children]
-    assert [r.id for r in _bundle(plain, parents, max_records=3).records] == ["pu", "ps", "pt"]
+    assert [r.id for r in _bundle(children, parents, max_records=3).records] == ["pu", "ps", "pt"]
 
 
 def _context(records, children):
