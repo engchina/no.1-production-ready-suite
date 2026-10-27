@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 import { expect, type Locator, type Page, test, type TestInfo } from "./fixtures/test";
 
+import { jumpToPage } from "../../../platform/packages/ui/e2e/layout-checks";
+
 import { mockEvaluationJobs, prepareEvaluationRun } from "./_evaluation-jobs";
 import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 import { JUDGE_CALIBRATION_ROWS, mockJudgeCalibration } from "./_judge-calibration";
@@ -142,7 +144,7 @@ function answerMetrics() {
 }
 
 for (const viewport of VIEWPORTS) {
-  test("判定の校正は集合を作り、blind で記入し、裁定し、校正して結果に校正済みを出す (" + viewport.name + ")", async ({
+  test("判定の校正は集合を作り、blind で記入し、裁定し、校正して結果に校正済みを出す (" + viewport.name + ")", { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {
     test.setTimeout(90_000);
@@ -180,6 +182,16 @@ for (const viewport of VIEWPORTS) {
     await expect(annotator.getByTestId("calibration-criterion")).toBeVisible();
     await expectOneLine(page.getByTestId("calibration-my-progress").getByRole("rowheader", { name: "正確性" }));
     await expect(annotator).not.toContainText("a2");
+    const judgement = annotator.getByTestId("calibration-annotate-label-pass").locator("xpath=ancestor::fieldset");
+    const spacing = await judgement.evaluate(element => {
+      const legend = element.querySelector("legend")!;
+      const button = element.querySelector("button")!;
+      return {
+        gap: button.getBoundingClientRect().top - legend.getBoundingClientRect().bottom,
+        standard: Number.parseFloat(getComputedStyle(document.documentElement).fontSize) * 0.5,
+      };
+    });
+    expect(spacing.gap).toBeGreaterThanOrEqual(spacing.standard - 0.5);
     await annotator.getByTestId("calibration-annotate-save").click();
     await expect(annotator.getByRole("alert")).toHaveText("判定を選んでください。");
     await annotator.getByTestId("calibration-annotate-label-fail").click();
@@ -337,4 +349,36 @@ test("根拠は共通の高さで止まり、最後まで内部スクロール�
   await expect.poll(() => region.evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(1);
   await expectNoPageOverflow(page);
   await region.screenshot({path:testInfo.outputPath("evidence-scroll.png")});
+});
+
+
+test("集合一覧は標準のページングと内部スクロールを持ち、作業状態を保つ", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockEvaluationBasics(page);
+  await mockJudgeCalibration(page, { withSet: true, setCount: 60 });
+  await page.goto("/evaluation?tab=calibration");
+  const table = page.getByTestId("calibration-label-sets");
+  const pager = page.getByTestId("calibration-label-sets-pagination");
+  await expect(table.getByRole("row")).toHaveCount(26);
+  await expect(page.getByTestId("calibration-label-sets-toolbar")).toContainText("全 60 件");
+  await expect(pager).toContainText("1–25 / 60 件");
+  const scroller = table.locator("xpath=ancestor::div[1]");
+  await expect.poll(() => scroller.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+  await expect(table.locator("thead")).toHaveCSS("position", "sticky");
+  await table.getByRole("button", { name: "校正の集合 A", exact: true }).click();
+  const detail = page.getByTestId("calibration-detail");
+  await expect(detail.getByRole("heading", { name: "校正の集合 A" })).toBeVisible();
+  await jumpToPage(pager, 2);
+  await expect(table).toContainText("校正の集合 26");
+  await expect(detail.getByRole("heading", { name: "校正の集合 A" })).toBeVisible();
+  await pager.getByRole("combobox", { name: "表示件数" }).click();
+  await page.getByRole("option", { name: "10 件", exact: true }).click();
+  await expect(table.getByRole("row")).toHaveCount(11);
+  await expect(pager).toContainText("1–10 / 60 件");
+  await jumpToPage(pager, 3);
+  await expect(table).toContainText("校正の集合 21");
+  await page.reload();
+  await expect(pager).toContainText("21–30 / 60 件");
+  await expect(detail.getByRole("heading", { name: "校正の集合 A" })).toBeVisible();
+  await expectNoPageOverflow(page);
+  await table.screenshot({ path: testInfo.outputPath("label-sets-paging.png") });
 });

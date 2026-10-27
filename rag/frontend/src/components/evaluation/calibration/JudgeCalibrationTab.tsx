@@ -8,6 +8,9 @@ import {
   CardTitle,
   DataTable,
   FormActionBar,
+  ListToolbar,
+  PagedDataTable,
+  PAGE_SIZE_OPTIONS,
   RowTitleButton,
   Section,
   Skeleton,
@@ -28,6 +31,8 @@ import {
   useImportLabelSet,
   useLabelSets,
 } from "@/lib/calibration-queries";
+import { listCountProps, useClientListPaging } from "@/lib/list-paging";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { formatDateTime } from "@/lib/format";
 import { type I18nKey, t } from "@/lib/i18n";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
@@ -236,6 +241,7 @@ function LabelSetTable({
   canManage: boolean;
   onSelect: (id: string) => void;
 }) {
+  const paging = useClientListPaging("evaluation.calibration.setsPaging", "label-sets");
   if (query.isPending) {
     return (
       <TimedLoadingState
@@ -262,79 +268,90 @@ function LabelSetTable({
     );
   }
   return (
-    <DataTable<LabelSetSummary>
-      testId="calibration-label-sets"
-      ariaLabel={t("evaluation.calibration.sets.title")}
-      rows={query.data.items}
-      getRowKey={(row) => row.label_set_id}
-      selectedRowKey={selectedId}
-      onRowClick={(row) => onSelect(row.label_set_id)}
-      empty={
-        <EmptyState
-          title={t("evaluation.calibration.sets.empty")}
-          hint={
-            canManage
-              ? t("evaluation.calibration.sets.emptyHintManage")
-              : t("evaluation.calibration.sets.emptyHint")
-          }
-        />
-      }
-      columns={[
-        {
-          key: "name",
-          header: t("evaluation.calibration.sets.column.name"),
-          rowHeader: true,
-          // 375px でもほかの列（折り返さない）に押されて 1 文字ずつ折り返さないよう、最小幅を持たせる（#3583）。
-          className: "min-w-[10rem] break-words",
-          render: (row) => (
-            <RowTitleButton
-              title={row.name}
-              onClick={() => onSelect(row.label_set_id)}
-            />
-          ),
-        },
-        {
-          key: "items",
-          header: t("evaluation.calibration.sets.column.items"),
-          className: "tnum whitespace-nowrap",
-          render: (row) =>
-            t("evaluation.calibration.sets.items", {
-              human: row.human_item_count,
-              synthetic: row.synthetic_item_count,
-            }),
-        },
-        {
-          key: "mine",
-          header: t("evaluation.calibration.sets.column.mine"),
-          className: "tnum whitespace-nowrap",
-          render: (row) => `${row.my_labeled} / ${row.row_count}`,
-        },
-        {
-          key: "resolved",
-          header: t("evaluation.calibration.sets.column.resolved"),
-          className: "tnum whitespace-nowrap",
-          render: (row) => `${row.resolved_rows} / ${row.row_count}`,
-        },
-        {
-          key: "annotators",
-          header: t("evaluation.calibration.sets.column.annotators"),
-          className: "tnum whitespace-nowrap",
-          render: (row) => row.annotator_count,
-        },
-        {
-          key: "calibration",
-          header: t("evaluation.calibration.sets.column.calibration"),
-          className: "whitespace-nowrap",
-          render: latestCalibrationBadge,
-        },
-        {
-          key: "created",
-          header: t("evaluation.calibration.sets.column.created"),
-          className: "tnum whitespace-nowrap text-fg-muted",
-          render: (row) => formatDateTime(row.created_at),
-        },
-      ]}
-    />
+    <div className="grid min-w-0 gap-2">
+      <ListToolbar
+        count={listCountProps({ matchedTotal: query.data.items.length, filtered: false, live: true })}
+        testId="calibration-label-sets-toolbar"
+      />
+      <PagedDataTable<LabelSetSummary>
+        {...paging}
+        pageSizeOptions={PAGE_SIZE_OPTIONS}
+        paginationLabels={paginationLabels()}
+        paginationAriaLabel={t("evaluation.calibration.sets.title")}
+        paginationTestId="calibration-label-sets-pagination"
+        testId="calibration-label-sets"
+        ariaLabel={t("evaluation.calibration.sets.title")}
+        rows={query.data.items}
+        getRowKey={(row) => row.label_set_id}
+        selectedRowKey={selectedId}
+        onRowClick={(row) => onSelect(row.label_set_id)}
+        empty={
+          <EmptyState
+            title={t("evaluation.calibration.sets.empty")}
+            hint={
+              canManage
+                ? t("evaluation.calibration.sets.emptyHintManage")
+                : t("evaluation.calibration.sets.emptyHint")
+            }
+          />
+        }
+        columns={[
+          {
+            key: "name",
+            header: t("evaluation.calibration.sets.column.name"),
+            rowHeader: true,
+            // 375px でもほかの列（折り返さない）に押されて 1 文字ずつ折り返さないよう、最小幅を持たせる（#3583）。
+            className: "min-w-[10rem] break-words",
+            render: (row) => (
+              <RowTitleButton
+                title={row.name}
+                onClick={() => onSelect(row.label_set_id)}
+              />
+            ),
+          },
+          {
+            key: "items",
+            header: t("evaluation.calibration.sets.column.items"),
+            className: "tnum whitespace-nowrap",
+            render: (row) =>
+              t("evaluation.calibration.sets.items", {
+                human: row.human_item_count,
+                synthetic: row.synthetic_item_count,
+              }),
+          },
+          {
+            key: "mine",
+            header: t("evaluation.calibration.sets.column.mine"),
+            className: "tnum whitespace-nowrap",
+            render: (row) => `${row.my_labeled} / ${row.row_count}`,
+          },
+          {
+            key: "resolved",
+            header: t("evaluation.calibration.sets.column.resolved"),
+            className: "tnum whitespace-nowrap",
+            render: (row) => `${row.resolved_rows} / ${row.row_count}`,
+          },
+          {
+            key: "annotators",
+            header: t("evaluation.calibration.sets.column.annotators"),
+            className: "tnum whitespace-nowrap",
+            render: (row) => row.annotator_count,
+          },
+          {
+            key: "calibration",
+            header: t("evaluation.calibration.sets.column.calibration"),
+            className: "whitespace-nowrap",
+            render: latestCalibrationBadge,
+          },
+          {
+            key: "created",
+            header: t("evaluation.calibration.sets.column.created"),
+            className: "tnum whitespace-nowrap text-fg-muted",
+            render: (row) => formatDateTime(row.created_at),
+          },
+        ]}
+      />
+    </div>
   );
 }
 

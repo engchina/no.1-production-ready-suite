@@ -50,6 +50,7 @@ export type WorkspaceField =
   | "evaluation.processDrafts"
   | "evaluation.useProcessDrafts"
   // 判定の校正（#3578）: 選んだ記入の集合・手順のタブ・記入の観点と状態の絞り込み・校正の job id。
+  | "evaluation.calibration.setsPaging"
   | "evaluation.calibration.labelSetId"
   | "evaluation.calibration.step"
   | "evaluation.calibration.aspect"

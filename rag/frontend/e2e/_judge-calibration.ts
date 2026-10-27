@@ -258,7 +258,7 @@ function finalLabel(state: JudgeCalibrationMock, k: string): StoredLabel | undef
 /** 判定の校正の API を mock する（`withSet` なら合成の集合が 1 つある状態から始める）。 */
 export async function mockJudgeCalibration(
   page: Page,
-  options: { withSet?: boolean; calibrated?: boolean; canManage?: boolean; evidence?: MockItem["evidence"] } = {}
+  options: { setCount?: number; withSet?: boolean; calibrated?: boolean; canManage?: boolean; evidence?: MockItem["evidence"] } = {}
 ): Promise<JudgeCalibrationMock> {
   const source = items();
   const evidence = options.evidence;
@@ -281,6 +281,9 @@ export async function mockJudgeCalibration(
   };
   const canManage = options.canManage ?? true;
   const sets: { id: string; name: string }[] = options.withSet ? [{ id: SET_ID, name: "校正の集合 A" }] : [];
+  for (let i = 1; i < (options.setCount ?? 1); i++) {
+    sets.push({ id: `set-extra-${i}`, name: `校正の集合 ${String(i + 1).padStart(2, "0")}` });
+  }
   const excluded = new Set<string>();
   let polls = 0;
   let started = false;
