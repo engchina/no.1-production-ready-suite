@@ -9,7 +9,6 @@ from pathlib import Path
 from rag_engine.config import Settings
 from rag_engine.dependencies import AnswerDependencies
 from rag_engine.ports import ArtifactStore, Embedder
-from rag_engine.profiles import DomainProfile
 from rag_engine.resources.runtime import Runtime
 
 
@@ -43,7 +42,7 @@ class OracleApplication:
 
         self.settings, self.runtime = settings, runtime
         self.parser = DocumentParser(settings, runtime, engines=tuple(settings.enabled_engines))
-        self.chunker = ChunkingService(runtime.profile)
+        self.chunker = ChunkingService()
         # 索引と検索の vector 空間を揃えるため、同じ embedder を両方へ渡す。
         self.indexer = OracleIndexer(settings, runtime, embedder=embedder)
         self.retriever = OracleRetriever(settings, runtime, embedder=embedder)
@@ -77,26 +76,21 @@ def create_oracle_application(
     workspace: str | Path,
     *,
     settings: Settings | None = None,
-    profile: str | DomainProfile = "generic",
     dependencies: AnswerDependencies | None = None,
     artifact_store: ArtifactStore | None = None,
     embedder: Embedder | None = None,
 ) -> OracleApplication:
     """明示した workspace に既存 backend を構成する。構築時に外部接続は行わない。
 
-    settings 未指定では環境変数や .env を読まず、軽量な generic 既定値を使う。
+    settings 未指定では環境変数や .env を読まず、汎用の既定値を使う。
     相対設定パスは workspace 基準。FAQ は明示された場合だけ読み込む。
     embedder は索引と検索 query の両方に使う。dependencies を明示した場合、その search は変更しない。
     """
     from rag_engine.config import get_settings
-    from rag_engine.profiles import DomainProfile, load_profile
     from rag_engine.resources.pool import ModelPool
     from rag_engine.resources.runtime import ResourcePaths, Runtime
 
     workspace = Path(workspace).resolve()
-    chosen = load_profile(profile) if isinstance(profile, str) else profile
-    if not isinstance(chosen, DomainProfile):
-        raise TypeError("profile must be a DomainProfile or a built-in profile name")
     settings = settings or get_settings(environ={}, dotenv_path=None, domain_keywords_override=())
 
     def path(value):
@@ -113,11 +107,8 @@ def create_oracle_application(
         query_history_blocklist_path=path(settings.query_history_blocklist_path),
         prompt_dir=path(settings.prompt_dir),
         faq_path=path(settings.faq_path),
-        profile=chosen.name,
     )
     prompts = settings.prompt_dir
-    if chosen.name == "legacy" and prompts is None:
-        prompts = workspace / "prompts"
     faq = settings.faq_path
-    runtime = Runtime(ResourcePaths(workspace, settings.output_dir, prompts, faq), chosen, ModelPool())
+    runtime = Runtime(ResourcePaths(workspace, settings.output_dir, prompts, faq), model_pool=ModelPool())
     return OracleApplication(settings, runtime, dependencies=dependencies, artifact_store=artifact_store, embedder=embedder)

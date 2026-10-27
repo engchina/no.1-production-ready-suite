@@ -14,32 +14,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from rag_parser_core.language.markers import marker_patterns
 
-from rag_engine.profiles import load_profile
-from rag_engine.resources.runtime import current_profile
-
-
-def _category_label_without_code(value: str) -> str:
-    return re.sub(r"^\d+_", "", value)
-
-
 CLASSIFICATION_SCHEMA_VERSION = 1
 DEFAULT_CATEGORY_VALUE = ""
 LEGACY_UNCATEGORIZED_VALUE = "未分類"
-LARGE_CATEGORIES = load_profile("legacy").large_categories
-MIDDLE_CATEGORIES_BY_LARGE = dict(load_profile("legacy").categories)
-MIDDLE_CATEGORIES = load_profile("legacy").middle_categories
-
-
-def _aliases(values):
-    return {alias: category for category in values for alias in (category, _category_label_without_code(category))}
-
-
-def _large_aliases():
-    return _aliases(current_profile().large_categories)
-
-
-def _middle_aliases():
-    return _aliases(current_profile().middle_categories)
 
 
 @dataclass(frozen=True)
@@ -129,9 +106,7 @@ def infer_classification_from_path(
     """share 配下のパス構造から文書分類を推定します。"""
     source_path = Path(path)
     path_parts = _classification_path_parts(source_path, source_root=source_root)
-    large = _first_matching_category(path_parts, current_profile().large_categories)
-    middle = _first_matching_category(path_parts, current_profile().middle_categories)
-    middle = _valid_middle_category(large, middle)
+    large = middle = ""
     small = _small_category_from_path(source_path, path_parts)
     source = "path_default" if large or middle or small else "default"
     return DocumentClassification(
@@ -164,11 +139,11 @@ def classification_from_selection(
         small = manual_small
     elif has_small_manual:
         large = inferred.large_category
-        middle = _valid_middle_category(large, inferred.middle_category)
+        middle = inferred.middle_category
         small = manual_small
     else:
         large = inferred.large_category
-        middle = _valid_middle_category(large, inferred.middle_category)
+        middle = inferred.middle_category
         small = inferred.small_category
     return DocumentClassification(
         large_category=large or DEFAULT_CATEGORY_VALUE,
@@ -264,12 +239,6 @@ def classification_from_metadata(value: Any) -> DocumentClassification:
     )
 
 
-def middle_categories_for_large(large_category: Any) -> tuple[str, ...]:
-    """大分類に対応する中分類候補を返します。"""
-    large = _large_category_value(large_category)
-    return dict(current_profile().categories).get(large, ())
-
-
 def classification_options_from_share(
     source_root: str | Path,
     *,
@@ -278,11 +247,9 @@ def classification_options_from_share(
     """share 配下のファイル構成から UI 分類候補を収集します。"""
     root = Path(source_root)
     suffixes = {str(suffix).lower() for suffix in supported_suffixes}
-    large = set(current_profile().large_categories)
-    middle = set(current_profile().middle_categories)
-    middle_by_large = {
-        large_category: set(middle_categories) for large_category, middle_categories in dict(current_profile().categories).items()
-    }
+    large: set[str] = set()
+    middle: set[str] = set()
+    middle_by_large: dict[str, set[str]] = {}
     small: set[str] = set()
     if root.exists():
         try:
@@ -302,14 +269,10 @@ def classification_options_from_share(
             if classification.small_category:
                 small.add(classification.small_category)
     return ClassificationOptions(
-        large_categories=_sorted_categories(large, preferred_order=current_profile().large_categories),
-        middle_categories=_sorted_categories(middle, preferred_order=current_profile().middle_categories),
+        large_categories=_sorted_categories(large),
+        middle_categories=_sorted_categories(middle),
         small_categories=_sorted_categories(small),
-        middle_categories_by_large={
-            category: _sorted_categories(values, preferred_order=current_profile().middle_categories)
-            for category, values in middle_by_large.items()
-            if category
-        },
+        middle_categories_by_large={category: _sorted_categories(values) for category, values in middle_by_large.items() if category},
     )
 
 
@@ -363,31 +326,11 @@ def _classification_path_parts(path: Path, *, source_root: str | Path | None) ->
     return [unicodedata.normalize("NFC", part) for part in cleaned]
 
 
-def _first_matching_category(parts: Sequence[str], categories: Sequence[str]) -> str:
-    aliases = _aliases_for_categories(categories)
-    for part in parts:
-        normalized = unicodedata.normalize("NFKC", part)
-        candidate = _canonical_category_value(normalized, aliases)
-        if candidate:
-            return candidate
-        for alias, category in aliases.items():
-            if alias and alias in normalized:
-                return category
-    return ""
-
-
 def _small_category_from_path(path: Path, path_parts: Sequence[str]) -> str:
     candidates = [_clean_topic(path.stem)]
     candidates.extend(_clean_topic(part) for part in reversed(path_parts[:-1]))
     for candidate in candidates:
-        if (
-            candidate
-            and candidate not in current_profile().large_categories
-            and candidate not in current_profile().middle_categories
-            and candidate not in _large_aliases()
-            and candidate not in _middle_aliases()
-            and not _is_version_or_date(candidate)
-        ):
+        if candidate and not _is_version_or_date(candidate):
             return candidate
     return ""
 
@@ -408,22 +351,15 @@ def _is_version_or_date(value: str) -> bool:
 
 
 def _large_category_value(value: Any) -> str:
-    return _category_value(value, aliases=_large_aliases())
+    return _blankable_category_value(value)
 
 
 def _middle_category_value(value: Any) -> str:
-    return _category_value(value, aliases=_middle_aliases())
+    return _blankable_category_value(value)
 
 
 def _small_category_value(value: Any) -> str:
     return _blankable_category_value(value)
-
-
-def _category_value(value: Any, *, aliases: dict[str, str]) -> str:
-    text = _blankable_category_value(value)
-    if not text:
-        return ""
-    return _canonical_category_value(text, aliases) or text
 
 
 def _blankable_category_value(value: Any) -> str:
@@ -431,31 +367,6 @@ def _blankable_category_value(value: Any) -> str:
     if text in {"", "-", "任意", "未選択", "(未選択)", "指定なし", LEGACY_UNCATEGORIZED_VALUE}:
         return ""
     return text
-
-
-def _canonical_category_value(value: str, aliases: dict[str, str]) -> str:
-    text = unicodedata.normalize("NFKC", str(value or "")).strip()
-    if text in aliases:
-        return aliases[text]
-    cleaned = _clean_topic(text)
-    if cleaned in aliases:
-        return aliases[cleaned]
-    return ""
-
-
-def _valid_middle_category(large_category: str, middle_category: str) -> str:
-    if not large_category or not middle_category:
-        return ""
-    return middle_category if middle_category in middle_categories_for_large(large_category) else ""
-
-
-def _aliases_for_categories(categories: Sequence[str]) -> dict[str, str]:
-    selected = set(categories)
-    aliases = {}
-    for alias, category in {**_large_aliases(), **_middle_aliases()}.items():
-        if category in selected:
-            aliases[alias] = category
-    return aliases
 
 
 def _saved_classification_metadata_paths(root: Path) -> list[Path]:

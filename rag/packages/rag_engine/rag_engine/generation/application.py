@@ -93,7 +93,7 @@ def answer_question_result(question, run_id, preferred_engines, settings, **opti
 
     from rag_engine.composition import create_oracle_application
 
-    application = create_oracle_application(settings.workspace_dir or Path.cwd(), settings=settings, profile=settings.profile)
+    application = create_oracle_application(settings.workspace_dir or Path.cwd(), settings=settings)
     classification = options.pop("classification_filter", None)
     request = AnswerRequest(
         question=question,

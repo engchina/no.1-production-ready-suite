@@ -6,7 +6,6 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
-from rag_engine.profiles import DomainProfile, load_profile
 from rag_engine.resources.pool import ModelPool
 
 
@@ -23,10 +22,10 @@ class ResourcePaths:
 
 @dataclass
 class Runtime:
-    """業務設定とモデルの寿命をアプリごとに分離する。"""
+    """保存先・指示の上書きとモデルの寿命をアプリごとに分離する。"""
 
     paths: ResourcePaths
-    profile: DomainProfile
+    prompt_overrides: tuple[tuple[str, str], ...] = ()
     model_pool: ModelPool | None = None
 
     @contextmanager
@@ -50,9 +49,3 @@ _current: ContextVar[Runtime | None] = ContextVar("rag_engine_runtime", default=
 def current_runtime() -> Runtime | None:
     """有効なアプリ資源を返す。互換関数の直接呼び出し時は None。"""
     return _current.get()
-
-
-def current_profile() -> DomainProfile:
-    """互換関数には従来の profile、新 API には明示された profile を適用する。"""
-    runtime = current_runtime()
-    return runtime.profile if runtime is not None else load_profile("legacy")
