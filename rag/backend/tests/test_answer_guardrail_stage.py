@@ -1,6 +1,7 @@
 """出力の検査の実施・省略・検査不能を progress / chat / trace で区別する。"""
 
 import asyncio
+from typing import Any, cast
 
 import pytest
 from pr_backend_core.chat_progress import fold_chat_progress_events
@@ -104,3 +105,70 @@ async def test_cancelled_inspection_does_not_report_clean_or_skipped() -> None:
             "synthetic", "answer_guardrail", cancelled(), progress_callback=capture
         )
     assert [event.outcome for event in events] == ["started", "cancelled"]
+
+
+@pytest.mark.parametrize(
+    "final_text,allowed,changed",
+    [
+        ("合成の回答", True, False),
+        ("[機微情報]", True, True),
+        ("安全チェックで回答を停止しました。", False, True),
+    ],
+)
+async def test_saved_validation_and_evaluation_follow_the_final_body(
+    monkeypatch: pytest.MonkeyPatch,
+    final_text: str,
+    allowed: bool,
+    changed: bool,
+) -> None:
+    from app.rag.answer_engine import AnswerEngine, AnswerOutcome
+    from app.rag.guardrails import GuardrailResult
+    from app.rag.pipeline import RagPipeline
+    from app.schemas.search import SearchRequest
+    from tests.test_answer_engine import FakeGenAi, SavingOracle
+
+    async def engine_run(
+        self: AnswerEngine, request: SearchRequest, **kwargs: Any
+    ) -> AnswerOutcome:
+        return AnswerOutcome(
+            answer="合成の回答",
+            citations=[],
+            context_text="合成の資料",
+            diagnostics={
+                "outcome": "answered",
+                "answer_validation": {
+                    "status": "completed",
+                    "valid": True,
+                    "reuse_context": "version-a",
+                },
+            },
+            evaluation_input={"answer_text": "合成の回答", "evidence_items": []},
+        )
+
+    monkeypatch.setattr(AnswerEngine, "run", engine_run)
+    monkeypatch.setattr(
+        GuardrailPolicy,
+        "validate_answer",
+        lambda *args, **kwargs: GuardrailResult(
+            allowed=allowed,
+            sanitized_text=final_text,
+            findings=[],
+        ),
+    )
+    oracle = SavingOracle()
+    response = await RagPipeline(
+        settings=Settings(rag_guardrails_input_enabled=False),
+        oracle=cast(Any, oracle),
+        genai=cast(Any, FakeGenAi()),
+    ).run(SearchRequest(query="合成の質問", knowledge_base_ids=["kb-1"]))
+    assert response.answer == final_text == oracle.saved[-1]["answer"]
+    assert response.diagnostics.answer is not None
+    validation = response.diagnostics.answer["answer_validation"]
+    assert isinstance(validation, dict)
+    assert validation["valid"] is (not changed)
+    assert validation["status"] == ("body_changed" if changed else "completed")
+    assert validation["reuse_context"] == ("" if changed else "version-a")
+    if changed:
+        assert "claim_checks" not in validation and "counts" not in validation
+        assert isinstance(validation["previous_body_validation"], dict)
+    assert oracle.saved[-1]["evaluation_input"]["answer_text"] == final_text

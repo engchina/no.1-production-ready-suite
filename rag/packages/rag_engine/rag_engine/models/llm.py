@@ -556,9 +556,12 @@ class GroundedItemReview(_StrictModel):
         max_length=600,
         description="段落を支持する連続した原文（根拠からの抜粋）。",
     )
-    # 監査のモデルが答えた適用性（記録用。応答の schema には出さない）。not_applicable / unknown は回答に反映せず
-    # ここに残す（#2837。`grounded.applicability_policy`）。
+    # 原判定を保持し、採否への利用だけを別の方針にする。モデルの応答 schema には内部方針を出さない。
     observed_applicability: SkipJsonSchema[str] = Field(default="", description="監査が答えた適用性の記録（応答の schema には出さない）。")
+    applicability_action: SkipJsonSchema[Literal["apply", "record_only"]] = Field(
+        default="apply", description="適用性の原判定を本文へ反映するか。"
+    )
+    applicability_policy_reason: SkipJsonSchema[str] = Field(default="", description="原判定と本文への反映を分けた理由。")
 
     output_fields: OutputFieldEvidence | None = Field(
         default=None, description="上の判定理由に対応する出力ファイルの項目の照合。列の主張がない操作の説明はnull。"

@@ -30,6 +30,7 @@ from app.rag.answer_validation import (
     GuideProfileNotFoundError,
     is_valid,
     validate_answer,
+    validation_reuse_context,
 )
 from app.schemas.search import RetrievedChunk
 from app.schemas.support_guide import SupportGuideContent
@@ -1212,7 +1213,39 @@ class _RecordOracle(_Oracle):
     def __init__(self, stored_text: str = "有効期限は最長 30 日です。") -> None:
         super().__init__()
         self.read_trace_ids: list[str] = []
-        self.record = {
+        from app.rag.answer_provenance import answer_prompt_version
+
+        context = validation_reuse_context(
+            "有効期限は？",
+            _RAG_ANSWER,
+            get_settings(),
+            prompt_version=answer_prompt_version({}),
+            evidence=[
+                {
+                    "id": "c1",
+                    "source": "manual.pdf",
+                    "page_start": 1,
+                    "page_end": 1,
+                    "text": stored_text,
+                    "artifact_version": {
+                        key: None
+                        for key in (
+                            "recipe_id",
+                            "chunk_set_id",
+                            "artifact_id",
+                            "source_run_id",
+                            "chunk_strategy",
+                        )
+                    },
+                }
+            ],
+            premises=[],
+            data_results=[],
+            guide=None,
+            requests=None,
+            gaps=[],
+        )
+        self.record: dict[str, Any] = {
             "answer": _RAG_ANSWER,
             "citations_json": [
                 {
@@ -1223,13 +1256,28 @@ class _RecordOracle(_Oracle):
                 }
             ],
             "diagnostics_json": {
+                "answer_validation": {
+                    "status": "completed",
+                    "valid": True,
+                    "reuse_context": context,
+                    "claim_checks": [
+                        {
+                            "status": "supported",
+                            "answer_quote": "有効期限は最長 30 日です。",
+                            "source_id": "c1",
+                        }
+                    ],
+                },
                 "envelope": {
                     "items": [
                         {"kind": "rule", "text": "有効期限は最長 30 日です。", "applies": "matched"}
                     ]
-                }
+                },
             },
         }
+
+    async def answer_prompt_overrides(self) -> dict[str, str]:
+        return {}
 
     async def get_answer_record(self, trace_id: str) -> Any:
         # 記録は今の利用者の範囲で読む（範囲の外は None）。
@@ -1248,7 +1296,7 @@ async def test_validate_answer_reuses_the_audited_items_of_the_answer_record(
 
     monkeypatch.setattr(answer_eval, "parse_text_response", _never_called)
     oracle = _RecordOracle()
-    answer = "有効期限は最長 30 日です。\n\n- 有効期限は最長 30 日です。"
+    answer = _RAG_ANSWER
     result = await validate_answer(
         "有効期限は？",
         answer,
@@ -1449,3 +1497,105 @@ def test_engine_settings_pass_the_validation_input_budget(tmp_path: Path) -> Non
 
     assert engine_settings.answer_validation_max_input_bytes == 120_000
     assert Settings().rag_answer_validation_max_input_bytes == 96_000
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "question",
+        "answer",
+        "prompt_version",
+        "evidence",
+        "premises",
+        "data_results",
+        "requests",
+        "gaps",
+        "guide",
+        "model",
+        "profile",
+        "runtime",
+    ],
+)
+def test_review_reuse_invalidates_changed_dependencies(changed: str) -> None:
+    """前提・参照・指示などの変化を、本文の字句類似では省略しない。"""
+    settings = get_settings()
+    arguments: dict[str, Any] = dict(
+        question="質問A",
+        answer="回答A",
+        settings=settings,
+        prompt_version="prompt-a",
+        evidence=[{"id": "c1", "text": "本文A", "artifact_version": "v1"}],
+        premises=[],
+        data_results=[],
+        requests=None,
+        gaps=[],
+        guide=None,
+    )
+    original = validation_reuse_context(**arguments)
+    replacements: dict[str, Any] = {
+        "question": "質問B",
+        "answer": "回答B",
+        "prompt_version": "prompt-b",
+        "evidence": [{"id": "c1", "text": "本文A", "artifact_version": "v2"}],
+        "premises": [{"id": "p1", "text": "前提A"}],
+        "data_results": [{"id": "r1", "text": "結果A"}],
+        "requests": [{"id": "r1", "text": "要求A"}],
+        "gaps": ["不足A"],
+        "guide": GuideCheckRef("profile-a", "guide-a", 2),
+    }
+    if changed in {"profile", "runtime"}:
+        name = (
+            "rag_search_answer_profile_revision"
+            if changed == "profile"
+            else "rag_runtime_knowledge"
+        )
+        arguments["settings"] = settings.model_copy(update={name: {"revision": "b"}})
+    elif changed == "model":
+        arguments["settings"] = settings.model_copy(
+            update={"oci_enterprise_ai_default_text_model": "test-model-b"}
+        )
+    else:
+        arguments[changed] = replacements[changed]
+    assert validation_reuse_context(**arguments) != original
+
+
+@pytest.mark.parametrize("status", ["partial", "timed_out", "error", "not_run", "missing_version"])
+async def test_review_reuse_never_trusts_incomplete_or_legacy_records(status: str) -> None:
+    from app.rag.answer_validation import audited_answer_lines
+
+    oracle = _RecordOracle()
+    validation = oracle.record["diagnostics_json"]["answer_validation"]
+    context = validation["reuse_context"]
+    if status == "missing_version":
+        validation.pop("reuse_context")
+    else:
+        validation["status"] = status
+    assert (
+        await audited_answer_lines(
+            cast(Any, oracle),
+            ["trace-1"],
+            {"c1": {"text": "有効期限は最長 30 日です。"}},
+            reuse_context=context,
+        )
+        == {}
+    )
+
+
+@pytest.mark.parametrize("source_id,evidence_id", [("c2", "E2"), ("c1", "E1,E2")])
+async def test_reuse_requires_the_final_audits_actual_claim_source_pair(
+    source_id: str, evidence_id: str
+) -> None:
+    from app.rag.answer_validation import audited_answer_lines
+
+    oracle = _RecordOracle()
+    validation = oracle.record["diagnostics_json"]["answer_validation"]
+    validation["claim_checks"][0].update(source_id=source_id, evidence_id=evidence_id)
+    assert (
+        await audited_answer_lines(
+            cast(Any, oracle),
+            ["trace-1"],
+            {"c1": {"text": "有効期限は最長 30 日です。"}},
+            reuse_context=validation["reuse_context"],
+        )
+        == {}
+    )

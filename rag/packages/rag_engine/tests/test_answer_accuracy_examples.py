@@ -117,7 +117,7 @@ def test_context_is_required_before_coverage_can_skip_additional_retrieval():
 
 @pytest.mark.parametrize("mode", ["none", "detailed"])
 @pytest.mark.parametrize("summary_key", ["wrong_summary", "missing_qualifier", "reversed_target", "correct_summary"])
-def test_summary_preserves_the_deletion_target_from_the_same_file(summary_key, mode):
+def test_summary_uses_the_audit_instead_of_deletion_word_heuristics(summary_key, mode):
     case = CASES["summary"]
     assert case["evidence"] in (EXAMPLES / "operations.txt").read_text()
     with (EXAMPLES / "rows.csv").open() as stream:
@@ -127,7 +127,7 @@ def test_summary_preserves_the_deletion_target_from_the_same_file(summary_key, m
     evidence_id = ids(ctx, case["question"])[case["evidence"]]
     model = FakeModel(
         [draft(item(evidence_id, case["evidence"], case["evidence"]), summary=case[summary_key])],
-        [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])],
+        [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")], summary_supported=summary_key == "correct_summary")],
     )
 
     def unused(*args, **kwargs):
@@ -140,8 +140,9 @@ def test_summary_preserves_the_deletion_target_from_the_same_file(summary_key, m
             replace(get_settings(), answer_audit_mode=mode),
             image_prompt_mode="text_only",
         ).response
-    if summary_key != "correct_summary":
-        assert not response.answer_text.startswith(case[summary_key])
-    else:
-        assert response.answer_text.startswith(case["correct_summary"])
+    assert response.answer_text.startswith(case[summary_key])
+    warning = response.generation_trace["rounds"][0].get("summary_warning")
+    assert bool(warning) is (mode == "detailed" and summary_key != "correct_summary")
+    if mode == "none":
+        assert response.generation_trace["rounds"][0]["review_execution"] == "not_run"
     assert case["evidence"] in response.answer_text
