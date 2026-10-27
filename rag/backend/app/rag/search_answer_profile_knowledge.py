@@ -49,6 +49,7 @@ from rag_engine.knowledge.domain_keyword_candidates import (
 from rag_engine.knowledge.domain_keywords import (
     DOMAIN_KEYWORDS_SCHEMA_VERSION,
     MAX_DOMAIN_KEYWORDS,
+    normalize_domain_keyword,
     normalize_domain_keywords,
 )
 from rag_engine.knowledge.runtime_knowledge import (
@@ -110,15 +111,28 @@ async def load_domain_keywords(
     return normalize_domain_keywords(payload.get("keywords"))
 
 
+def validate_domain_keywords(values: list[str]) -> list[str]:
+    """既存の正規化で重複を除き、上限超過は切り捨てず拒否する。"""
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        keyword = normalize_domain_keyword(value)
+        key = keyword.casefold()
+        if keyword and key not in seen:
+            seen.add(key)
+            result.append(keyword)
+            if len(result) > MAX_DOMAIN_KEYWORDS:
+                raise ValueError(f"ドメインキーワードは {MAX_DOMAIN_KEYWORDS} 件までです。")
+    return result
+
+
 async def save_domain_keywords(
     store: SearchAnswerProfileKnowledgeStore,
     search_answer_profile_id: str,
     keywords: list[str],
 ) -> list[str]:
     """正規化(重複・空白・長さ・件数上限)して保存し、保存後の一覧を返す。"""
-    normalized = normalize_domain_keywords(keywords)
-    if len(normalized) > MAX_DOMAIN_KEYWORDS:
-        raise ValueError(f"ドメインキーワードは {MAX_DOMAIN_KEYWORDS} 件までです。")
+    normalized = validate_domain_keywords(keywords)
     await store.save_search_answer_profile_knowledge(
         search_answer_profile_id,
         DOMAIN_KEYWORDS_KIND,

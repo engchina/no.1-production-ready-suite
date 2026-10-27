@@ -20,6 +20,20 @@ class DomainKeywordsUpdate(BaseModel):
     keywords: list[str] = Field(default_factory=list, max_length=2000)
 
 
+class DomainKeywordImportRowData(BaseModel):
+    row: int
+    keyword: str
+
+
+class DomainKeywordImportPreviewData(BaseModel):
+    total: int
+    rows: list[DomainKeywordImportRowData]
+
+
+class DomainKeywordImportData(DomainKeywordsData):
+    inserted_count: int
+
+
 class DomainKeywordCandidateData(BaseModel):
     keyword: str
     score: float

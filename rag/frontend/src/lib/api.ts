@@ -3840,6 +3840,23 @@ export const api = {
         body: JSON.stringify({ keywords }),
       },
     ),
+  previewDomainKeywordImport: (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<DomainKeywordImportPreviewData>(
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/domain-keywords/import/preview`,
+      { method: "POST", body: form },
+    );
+  },
+  importDomainKeywords: (id: string, file: File, mode: DomainKeywordImportMode) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("mode", mode);
+    return request<DomainKeywordImportData>(
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/domain-keywords/import`,
+      { method: "POST", body: form },
+    );
+  },
   getApprovedFaq: (id: string) =>
     request<ApprovedFaqListData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq`,
@@ -4044,11 +4061,6 @@ export const api = {
       `${supportGuidesPath(id)}/${encodeURIComponent(guideId)}/try`,
       jsonBody(body),
       { timeoutMs: ANSWER_GENERATION_TIMEOUT_MS },
-    ),
-  suggestDomainKeywords: (id: string) =>
-    request<DomainKeywordSuggestionData>(
-      `/api/search-answer-profiles/${encodeURIComponent(id)}/domain-keywords/suggest`,
-      { method: "POST" },
     ),
 
   // チャット（会話 / マルチモデル比較）
@@ -4582,17 +4594,15 @@ export interface DomainKeywordsData {
   keywords: string[];
 }
 
-export interface DomainKeywordCandidateData {
-  keyword: string;
-  score: number;
-  frequency: number;
-  chunk_count: number;
-  document_count: number;
+export type DomainKeywordImportMode = "INSERT" | "REPLACE";
+
+export interface DomainKeywordImportPreviewData {
+  total: number;
+  rows: { row: number; keyword: string }[];
 }
 
-export interface DomainKeywordSuggestionData {
-  candidates: DomainKeywordCandidateData[];
-  processed_chunk_count: number;
+export interface DomainKeywordImportData extends DomainKeywordsData {
+  inserted_count: number;
 }
 
 // --- 検索・回答プロファイルの知識: Approved FAQ(類似問) ---

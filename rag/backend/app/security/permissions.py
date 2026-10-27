@@ -436,6 +436,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_BV}/approved-faq"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/approved-faq"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/approved-faq/delete"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/domain-keywords/import/preview"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/domain-keywords/import"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/approved-faq/import/preview"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/approved-faq/import"): _any(MENU_SEARCH_ANSWER_PROFILES),
     # 回答前に類似の承認済み FAQ を提示する（読み取り）。
