@@ -1290,19 +1290,6 @@ export interface SectionRulesSettingsData {
   presets: Partial<Record<SectionRulesMode, SectionRule[]>>;
 }
 
-export interface SectionRulesPreviewData {
-  document_id: string;
-  recipe_id: string;
-  extraction_recipe_id: string | null;
-  mode: SectionRulesMode;
-  effective_mode: SectionRulesMode;
-  recipe_overrides_mode: boolean;
-  extraction_available: boolean;
-  manual_edits_present: boolean;
-  page_count: number | null;
-  sections: DocumentSection[];
-}
-
 export type DocumentRecipeStepStatus =
   | "PENDING"
   | "QUEUED"
@@ -2486,6 +2473,8 @@ export interface ParserAdapterSettingsData {
   heading_level_inference_enabled?: boolean;
   field_extraction_enabled: boolean;
   navigation_summary_enabled: boolean;
+  /** 1 文書の取込で要約する章節数の実効上限。読み取り専用。 */
+  navigation_summary_max_nodes?: number;
   /** 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。1〜16。#2002）。 */
   vision_concurrency?: number;
   /** MinerU のライセンスの条件の確認（#3359）。確認するまで MinerU を選べない。 */
@@ -3512,10 +3501,6 @@ export const api = {
       { method: "DELETE" },
     ),
 
-  previewSectionRules: (documentId: string, body: { recipe_id: string; mode: SectionRulesMode; rules: SectionRule[] }) =>
-    request<SectionRulesPreviewData>(`/api/documents/${encodeURIComponent(documentId)}/sections/preview`, {
-      method: "POST", body: JSON.stringify(body),
-    }),
   getSectionRulesSettings: () => request<SectionRulesSettingsData>("/api/settings/section-rules"),
   saveSectionRulesSettings: (body: { mode: SectionRulesMode; rules: SectionRule[] }) =>
     request<SectionRulesSettingsData>("/api/settings/section-rules", {

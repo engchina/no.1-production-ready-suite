@@ -626,7 +626,7 @@ const CATEGORY_TREE = [
 
 async function mockDocumentDetail(
   page: Page,
-  overrides?: { extraction?: Record<string, unknown>; chunks?: unknown[] }
+  overrides?: { extraction?: Record<string, unknown>; chunks?: unknown[]; pdf?: boolean }
 ) {
   const catalog = [
     knowledgeBase("kb-1", "社内規程", 1),
@@ -805,7 +805,7 @@ async function mockDocumentDetail(
           };
   const documentData = () => ({
       id: "doc-1",
-      file_name: "policy.txt",
+      file_name: overrides?.pdf ? "sample.pdf" : "policy.txt",
       status: "INDEXED",
       category_name: null,
       content_type: "text/plain",
@@ -830,7 +830,7 @@ async function mockDocumentDetail(
         parser_profile: "local_text_structure",
         parser_backend: "local_partition",
         parser_version: "local_partition_v1",
-        preview_kind: "text",
+        preview_kind: overrides?.pdf ? "pdf" : "text",
         text_charset: "utf-8",
         duplicate_of_document_id: null,
         unsupported_reason: null,
@@ -1246,3 +1246,70 @@ for (const { summarized, ruleSummary, staleRules } of [{ summarized: false, rule
     }
   });
 }
+
+
+test("長い章節ナビゲーションは共通の高さで止まり、編集も内部スクロールできる", { tag: "@responsive" }, async ({ page }) => {
+  await mockDocumentDetail(page);
+  const state = await mockDocumentSections(page);
+  state.sections = Array.from({ length: 80 }, (_, i) => ({
+    id: `nav-long-${i}`, title: `合成の章節 ${i + 1}`, level: 1, page_start: 1, page_end: 1,
+    origin: "extraction", source_section_id: `nav-long-${i}`, edited: false,
+  }));
+  const panel = await openSections(page);
+  const list = panel.getByTestId("sections-navigation-scroll");
+  await expect(list).toBeVisible();
+  const dimensions = await list.evaluate(node => ({ height: node.clientHeight, content: node.scrollHeight,
+    expected: parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(min-width: 48rem)").matches ? 28 : 17.5) }));
+  expect(Math.abs(dimensions.height - dimensions.expected)).toBeLessThanOrEqual(1);
+  expect(dimensions.content).toBeGreaterThan(dimensions.height);
+  await list.focus(); await list.press("End");
+  await expect.poll(() => list.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  await list.getByRole("button").last().scrollIntoViewIfNeeded();
+  await expect(list.getByRole("button").last()).toBeInViewport();
+  await list.screenshot({path: test.info().outputPath("sections-navigation-scroll.png")});
+  await panel.getByRole("button", { name: "編集", exact: true }).click();
+  const editor = panel.getByTestId("sections-editor-scroll");
+  await expect.poll(() => editor.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+  await editor.getByRole("textbox").last().scrollIntoViewIfNeeded();
+  await expect(editor.getByRole("textbox").last()).toBeInViewport();
+  await expect(panel.getByRole("button", {name: "保存", exact: true})).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+
+test("本文・構造化要素・Chunk はプレビューの現在ページだけに追従する", { tag: "@responsive" }, async ({ page }) => {
+  const elements = [1, 2].map(n => ({element_id: `page-${n}`, kind: "text", text: `合成ページ ${n} の本文`, order: n, page_number: n}));
+  const chunks = [1, 2].map(n => ({document_id: "doc-1", chunk_id: `chunk-page-${n}`, chunk_index: n, text: `合成ページ ${n} の引用`, page_start: n, page_end: n,
+    bbox: null, section_path: null, content_kind: "text", chunk_group_id: null, source_parser: null, element_ids: [`page-${n}`], metadata: {}}));
+  await mockDocumentDetail(page, { pdf: true, extraction: { raw_text: "全体の本文", elements,
+    pages: [1, 2, 3].map(n => ({page_number: n, element_ids: [`page-${n}`]})), tables: [], fields: [], assets: []}, chunks });
+  await mockDocumentSections(page);
+  await page.route("**/preview-pages**", route => {
+    const url = new URL(route.request().url());
+    if (/preview-pages\/\d+$/.test(url.pathname)) return route.fulfill({contentType: "image/png", body: Buffer.from(PNG_PIXEL.split(",")[1], "base64")});
+    return route.fulfill({json: {data: {pages: [1,2,3].map(n => ({page_number: n, width: 600, height: 800})), page_count: 3}, error_messages: [], warning_messages: []}});
+  });
+  await page.goto("/documents/doc-1");
+  await expect(page.getByTestId("inspector-current-page")).toHaveText("表示中のページ: p.1");
+  const inspector = page.getByTestId("document-inspector-pane");
+  for (const [tab, one, two] of [["本文テキスト", "合成ページ 1 の本文", "合成ページ 2 の本文"], ["構造化要素", "合成ページ 1 の本文", "合成ページ 2 の本文"], ["Chunk / Citation", "合成ページ 1 の引用", "合成ページ 2 の引用"]]) {
+    await page.getByRole("tab", {name: tab, exact: tab !== "Chunk / Citation"}).click();
+    await expect(inspector).toContainText(one); await expect(inspector).not.toContainText(two);
+  }
+  await page.getByRole("button", {name: "次のページ", exact: true}).click();
+  await expect(page.getByTestId("inspector-current-page")).toHaveText("表示中のページ: p.2");
+  await expect(inspector).toContainText("合成ページ 2 の引用"); await expect(inspector).not.toContainText("合成ページ 1 の引用");
+  await page.getByRole("tab", {name: "本文テキスト", exact: true}).click();
+  await expect(inspector).toContainText("合成ページ 2 の本文"); await expect(inspector).not.toContainText("合成ページ 1 の本文");
+  await page.getByRole("tab", {name: "構造化要素", exact: true}).click();
+  await expect(inspector).toContainText("合成ページ 2 の本文"); await expect(inspector).not.toContainText("合成ページ 1 の本文");
+  await page.getByTestId("sections-navigation-scroll").getByRole("button", {name: "第1章 総則（p.1–2）をプレビューで開く"}).click();
+  await expect(page.getByTestId("inspector-current-page")).toHaveText("表示中のページ: p.1");
+  await expect(inspector).toContainText("合成ページ 1 の本文");
+  await page.getByRole("button", {name: "次のページ", exact: true}).click();
+  await page.getByRole("button", {name: "次のページ", exact: true}).click();
+  await expect(page.getByTestId("inspector-current-page")).toHaveText("表示中のページ: p.3");
+  await expect(inspector).not.toContainText("合成ページ 2 の本文");
+  await expectNoHorizontalOverflow(page);
+  await inspector.screenshot({path: test.info().outputPath("inspector-current-page.png")});
+});
