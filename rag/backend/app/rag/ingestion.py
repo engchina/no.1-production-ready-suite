@@ -4380,6 +4380,7 @@ def _chunks_with_context_headers(
     contextualized: list[Chunk] = []
     for chunk in chunks:
         metadata = dict(chunk.metadata)
+        metadata["context_header_enabled"] = enabled
         section_path = str(metadata.get("section_path") or "").strip()
         header = " > ".join(part for part in (document_title.strip(), section_path) if part)
         if enabled and header:

@@ -3087,7 +3087,14 @@ def _engine_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
         except ValueError:
             decoded = None
         if isinstance(decoded, dict):
-            return decoded
+            return {
+                **decoded,
+                **{
+                    key: chunk.metadata[key]
+                    for key in ("context_header", "context_header_enabled")
+                    if key in chunk.metadata
+                },
+            }
     # 親子階層以外の分割方式の chunk も最小の v4 metadata で扱う。
     section = str(chunk.metadata.get("section_path") or "")
     return {
@@ -3099,6 +3106,11 @@ def _engine_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
         "source_categories": ["Text"],
         "section_path": [part for part in section.split(" > ") if part],
         "section_path_sources": [],
+        **{
+            key: chunk.metadata[key]
+            for key in ("context_header", "context_header_enabled")
+            if key in chunk.metadata
+        },
     }
 
 

@@ -367,6 +367,8 @@ def evidence_spans(
         str(getattr(child, "chunk_uid", "") or getattr(child, "id", "")) for child in scope_records if is_catalog_article(child)
     }
 
+    from rag_engine.retrieval.source_context import source_context, source_context_text
+
     remaining = max(0, budget)
     context_remaining = max(0, budget // 10)
     seen_documents = set()
@@ -380,7 +382,12 @@ def evidence_spans(
     # 取り置きは最終的な処理順（定義質問の並べ替え後）で数える。並べ替え前に数えると index と後続候補が
     # 対応せず、定義質問で取り置きが過不足になる (#744)。
     def native_need(record: Any) -> int:
-        return min(NATIVE_RESERVE_CAP, sum(b - a for a, b in _native_ranges(record) if b - a <= 600))
+        ranges = [(a, b) for a, b in _native_ranges(record) if b - a <= 600]
+        return (
+            len(source_context_text(source_context(record))) * (1 + len(ranges))
+            + len(answer_metadata_context(record, max_chars=1200))
+            + min(NATIVE_RESERVE_CAP, sum(b - a for a, b in ranges) + 8 * max(0, len(ranges) - 1))
+        )
 
     whole = (
         whole_records
@@ -392,6 +399,11 @@ def evidence_spans(
         reserve_after[position] = reserve_after[position + 1] + native_need(ordered[position][1])
     for index, (key, record) in enumerate(ordered):
         text = str(getattr(record, "text", "") or "")
+        source_info = source_context(record)
+        source_cost = len(source_context_text(source_info))
+        if source_cost >= remaining:
+            continue
+        remaining -= source_cost
         document_key = document_context_key(record)
         prefix = answer_metadata_context(
             record, max_chars=min(1200, context_remaining, max(0, remaining // 10)), include_first_page=document_key not in seen_documents
@@ -472,6 +484,7 @@ def evidence_spans(
                         or ""
                     ),
                     "source": getattr(record, "source", ""),
+                    "source_context": source_info,
                     # 関連度順で選んだ根拠も、生成時は見出しと本文を原文順に読めるようにする。
                     "source_order": (getattr(record, "chunk_seq", 0), getattr(record, "seq_no", 0), start),
                     "page": getattr(record, "page", 0),
@@ -525,6 +538,23 @@ def evidence_spans(
                         page_end=page,
                         scope_source_ids=sorted({c.chunk_uid or c.id for _, c in matching}),
                     )
+            # 親の出典と、その抜粋に実際に重なる子の出典を別々に保持する。
+            children = []
+            for a, b, _, child in provenance:
+                if a < end and start < b:
+                    child_info = {"source_id": child.chunk_uid or child.id, **source_context(child)}
+                    if child_info not in children:
+                        children.append(child_info)
+            info = {**source_info, **({"children": children} if children else {})}
+            extra_cost = len(source_context_text(info)) - source_cost
+            # 複数の抜粋では、出典を繰り返す分も予算に含める。階層を省略しない。
+            if cursor:
+                extra_cost += source_cost
+            if extra_cost > remaining:
+                result.pop()
+                continue
+            remaining -= extra_cost
+            result[-1]["source_context"] = info
             cursor = end
     return _merge_adjacent_spans(result)
 
@@ -539,7 +569,17 @@ def _merge_adjacent_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     # page_end も一致条件に入れる。頁を確定できた span（page_end == page）と、親の範囲のままの span を
     # つなぐと、確定していない側まで 1 頁に決まったように見えてしまう。
-    same = ("source_id", "origin", "page", "page_end", "section_path", "excerpt_only", "value_context", "scope_source_ids")
+    same = (
+        "source_context",
+        "source_id",
+        "origin",
+        "page",
+        "page_end",
+        "section_path",
+        "excerpt_only",
+        "value_context",
+        "scope_source_ids",
+    )
 
     def joinable(left: dict[str, Any], right: dict[str, Any]) -> bool:
         return left["end"] == right["start"] and "answer_context" not in right and all(left.get(key) == right.get(key) for key in same)

@@ -4168,6 +4168,17 @@ def _retrieved_heading_context(spans: Sequence[dict]) -> list[dict]:
     return [{**span, "function": functions.get(span.get("evidence_id"), span["function"])} for span in spans]
 
 
+def _source_note(span: dict) -> str:
+    from rag_engine.retrieval.source_context import source_context_text
+
+    parts = []
+    if span.get("source_context"):
+        parts.append(source_context_text(span["source_context"]))
+    if span.get("answer_context"):
+        parts.append(span["answer_context"])
+    return f"\n{CONTEXT_NOTE_BEGIN}\n" + "\n".join(parts) + f"\n{CONTEXT_NOTE_END}" if parts else ""
+
+
 def format_functions(spans: Sequence[dict]) -> str:
     """根拠を機能ごとの見出しで分けて提示し、別機能の混合を入力の時点で防ぐ。"""
     spans = _retrieved_heading_context(spans)
@@ -4192,7 +4203,7 @@ def format_functions(spans: Sequence[dict]) -> str:
             + (f" tags={','.join(span['tags'])}" if span["tags"] else "")
             + (" pinned" if span["pinned"] else "")
             + (" catalog" if span.get(ARTICLE_CATALOG_KEY) else "")
-            + (f"\n{CONTEXT_NOTE_BEGIN}\n{span['answer_context']}\n{CONTEXT_NOTE_END}" if span.get("answer_context") else "")
+            + _source_note(span)
             + "\n"
             + numbered_text(span["text"])
             for span in members

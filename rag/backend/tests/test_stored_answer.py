@@ -96,7 +96,7 @@ def test_stored_citation_metadata_drops_null_and_unknown_keys() -> None:
             "text_sha256": "x",
             "context_header": "a > b",
         }
-    ) == {"page_start": 3, "rrf_score": 0.01, "chunk_set_id": "cs-1"}
+    ) == {"page_start": 3, "rrf_score": 0.01, "chunk_set_id": "cs-1", "context_header": "a > b"}
 
 
 def _evaluation_input() -> dict[str, Any]:
@@ -275,3 +275,13 @@ def test_restored_chat_message_returns_stored_shape() -> None:
     restored = chat_route._to_chat_message(message)
 
     assert [citation.model_dump(mode="json") for citation in restored.citations] == [case["stored"]]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_stored_header_survives_json_round_trip_without_original_chunk(enabled: bool) -> None:
+    metadata = {"context_header_enabled": enabled, "section_path": "分類 A > 機能 A > 説明"}
+    if enabled:
+        metadata["context_header"] = "文書 A > 分類 A > 機能 A > 説明"
+    stored = stored_citation_metadata(metadata)
+    assert json.loads(json.dumps(stored, ensure_ascii=False)) == metadata
+    assert stored_citation_metadata({}) == {}

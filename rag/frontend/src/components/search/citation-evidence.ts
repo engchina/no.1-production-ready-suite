@@ -72,6 +72,10 @@ function citationRetrievalBadges(chunk: RetrievedChunk): string[] {
 }
 function chipValue(chip: CitationMetadataChip): string {
   switch (chip.id) {
+    case "context_header":
+      return chip.value;
+    case "context_header_enabled":
+      return t(chip.value === "true" ? "search.citation.contextHeaderOn" : chip.value === "false" ? "search.citation.contextHeaderOff" : "search.citation.contextHeaderUnknown");
     case "citation_label":
       return chip.value;
     case "page":
@@ -94,6 +98,10 @@ function chipValue(chip: CitationMetadataChip): string {
 
 function chipLabel(chip: CitationMetadataChip): string {
   switch (chip.id) {
+    case "context_header":
+      return t("search.citation.contextHeaderLabel");
+    case "context_header_enabled":
+      return t("search.citation.contextHeaderStatusLabel");
     case "citation_label":
       return t("search.citation.citationLabelLabel");
     case "page":

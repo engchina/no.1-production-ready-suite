@@ -8,10 +8,12 @@ import {
   citationSourceUrl,
 } from "./chunk-metadata";
 
+const sourceChips = (metadata: Parameters<typeof citationMetadataChips>[0]) => citationMetadataChips(metadata).filter(chip => chip.id !== "context_header_enabled");
+
 describe("citationMetadataChips", () => {
   it("XML ツリー JSON の段落の引用ラベルを先頭の chip にする（issue 2024）", () => {
     expect(
-      citationMetadataChips({
+      sourceChips({
         xml_tree_citation_label_arabic: "サンプル規程 第7条第1項",
         section_path: "サンプル規程 > 第七条（対象の範囲）",
       })
@@ -23,7 +25,7 @@ describe("citationMetadataChips", () => {
 
   it("ページ範囲と構造 metadata を chip 化する", () => {
     expect(
-      citationMetadataChips({
+      sourceChips({
         page_start: 2,
         page_end: 4,
         content_kind: "table",
@@ -41,11 +43,11 @@ describe("citationMetadataChips", () => {
   });
 
   it("資料に印刷されたページ番号があれば物理頁と並べる（issue 1287）", () => {
-    expect(citationMetadataChips({ page_start: 12, page_label_start: "3-4" })).toEqual([
+    expect(sourceChips({ page_start: 12, page_label_start: "3-4" })).toEqual([
       { id: "page", value: "12", printed: "3-4" },
     ]);
     expect(
-      citationMetadataChips({
+      sourceChips({
         page_start: 12,
         page_end: 13,
         page_label_start: "3-4",
@@ -53,20 +55,20 @@ describe("citationMetadataChips", () => {
       })
     ).toEqual([{ id: "page", value: "12-13", printed: "3-4〜3-5" }]);
     // 印刷の番号が無い・空・物理頁と同じ表記なら物理頁だけ。
-    expect(citationMetadataChips({ page_start: 12 })).toEqual([{ id: "page", value: "12" }]);
-    expect(citationMetadataChips({ page_start: 12, page_label_start: " " })).toEqual([
+    expect(sourceChips({ page_start: 12 })).toEqual([{ id: "page", value: "12" }]);
+    expect(sourceChips({ page_start: 12, page_label_start: " " })).toEqual([
       { id: "page", value: "12" },
     ]);
-    expect(citationMetadataChips({ page_start: 12, page_label_start: "12" })).toEqual([
+    expect(sourceChips({ page_start: 12, page_label_start: "12" })).toEqual([
       { id: "page", value: "12" },
     ]);
     // 物理頁が無ければ印刷の番号だけでは出さない（MCP の locator と同じ）。
-    expect(citationMetadataChips({ page_label_start: "ii" })).toEqual([]);
+    expect(sourceChips({ page_label_start: "ii" })).toEqual([]);
   });
 
   it("欠損値や非文字列 metadata は表示対象にしない", () => {
     expect(
-      citationMetadataChips({
+      sourceChips({
         page_start: null,
         page_end: 3,
         content_kind: "",
@@ -135,3 +137,11 @@ describe("citationSourceUrl", () => {
     expect(citationSourceUrl({})).toBeNull();
   });
 });
+
+ it("文脈ヘッダの実値と有効・無効・未記録を区別する", () => {
+    expect(citationMetadataChips({context_header: "文書 A > 上位 > 下位", context_header_enabled: true})).toEqual([
+      {id: "context_header", value: "文書 A > 上位 > 下位"}, {id: "context_header_enabled", value: "true"}
+    ]);
+    expect(citationMetadataChips({context_header_enabled: false})).toEqual([{id: "context_header_enabled", value: "false"}]);
+    expect(citationMetadataChips({})).toEqual([{id: "context_header_enabled", value: "unknown"}]);
+ });

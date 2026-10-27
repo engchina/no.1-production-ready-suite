@@ -23,6 +23,8 @@ function searchStreamBody(chunkId: string, extraMetadata: Record<string, unknown
     file_name: "policy.txt",
     category_name: null,
     metadata: {
+      context_header: "文書 A > 分類 A > 機能 A > 説明",
+      context_header_enabled: true,
       page_start: 2,
       content_kind: "table",
       context_role: "evidence",
@@ -164,6 +166,8 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
   await expect(page.getByText("Rerank #1")).toBeVisible();
   // レシピバッジ(recipe_slot_no)が引用カードに表示される。
   await expect(page.getByText("レシピ1")).toBeVisible();
+  await expect(page.getByText("文書 A > 分類 A > 機能 A > 説明", {exact:true})).toBeVisible();
+  await expect(page.getByText("有効", {exact:true})).toBeVisible();
 
   const citationText = page.getByTestId("citation-text");
   const citation = citationText.locator("xpath=ancestor::li[1]");

@@ -49,7 +49,7 @@ describe("citationEvidenceItem", () => {
       sourceUrl: "https://example.com/a",
     });
     expect(item.routeBadges).toEqual(["Both", "Vector #1", "Keyword #2", "Evidence"]);
-    expect(item.chips).toEqual([{ id: "page", label: "ページ", value: "p.3" }]);
+    expect(item.chips).toEqual([{ id: "page", label: "ページ", value: "p.3" }, { id: "context_header_enabled", label: "文脈ヘッダの索引への追加", value: "未記録" }]);
     expect(item.tags?.map((tag) => [tag.id, tag.tone ?? "neutral"])).toEqual([
       ["recipe", "neutral"],
       ["category", "info"],
