@@ -99,6 +99,7 @@ from rag_pipeline_core.evaluation import LEGACY_EVALUATION_SUITES
 
 from app.parser_settings_store import ParserSettingsStore
 from app.rag.language_pack_store import LANGUAGE_PACK_STORE
+from app.search_defaults import SEARCH_TOP_K_DEFAULT, SEARCH_TOP_K_MAX
 
 UploadStorageBackend = Literal["local", "oci"]
 AuditPersistence = Literal["log", "oracle", "both"]
@@ -1305,6 +1306,12 @@ class Settings(
             "チャットで回答するとき、会話履歴から最新の質問を"
             "単独の質問へ書き換える(履歴がある場合だけ LLM 呼び出しが 1 回増える)。"
         ),
+    )
+    rag_search_top_k_default: int = Field(
+        default=SEARCH_TOP_K_DEFAULT,
+        ge=1,
+        le=SEARCH_TOP_K_MAX,
+        description="検索・チャット・MCP で top_k を省略したときの基準件数。",
     )
     rag_query_strategy: QueryStrategy = Field(
         default="simple_retrieval",

@@ -154,7 +154,7 @@ export function runConversationOwner(
  */
 /**
  * 実行の詳細の「RAG 検索で開く」の URL（#3309。run-history.md「詳細」）。RAG 検索の実行を、質問・検索・回答
- * プロファイル・回答の生成の有無・記録の条件（件数・絞り込み）を入れて RAG 検索の画面に開く（検索はしない）。
+ * プロファイル・回答の生成の有無・記録の絞り込み条件を入れて RAG 検索の画面に開く（検索はしない）。
  * 出すのは実行した本人で、RAG 検索の画面の権限があるときだけ（system_admin でも他の人の実行には出さない。#3244）。
  * 質問を保存していない実行（安全チェックで止めた実行）は入れる質問が無いので null。
  */
@@ -170,7 +170,6 @@ export function runSearchHref(
     question: run.question,
     searchAnswerProfileId: run.search_answer_profile_id,
     generateAnswer: run.answer_generated,
-    topK: run.search_conditions?.top_k ?? null,
     filters: run.search_conditions?.filters ?? {},
   });
 }

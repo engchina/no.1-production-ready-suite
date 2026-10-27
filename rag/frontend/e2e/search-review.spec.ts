@@ -381,13 +381,10 @@ test("詳細条件は条件を設定したままでも閉じられ、閉じる�
 
   await advanced.click();
   await expect(advanced).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByRole("combobox", { name: "候補取得数" })).toHaveAccessibleDescription(/文書内の箇所（テキスト断片）の基準件数/);
-  await expect(page.getByText(/文書数や回答の引用数ではなく/)).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("retrieval-candidate-help.png") });
-  // 既定は 50（#3512）。既定と違う値を選ぶと条件が効いている。
-  await expect(page.getByRole("combobox", { name: "候補取得数" })).toContainText("50");
-  await page.getByRole("combobox", { name: "候補取得数" }).click();
-  await page.getByRole("option", { name: "100", exact: true }).click();
+  await expect(page.locator("#search-top-k")).toHaveCount(0);
+  await page.locator('button[aria-controls="search-classification-filters"]').click();
+  await page.locator("#search-as_of").fill("2026-04-01");
+  await page.screenshot({ path: testInfo.outputPath("search-default-conditions.png") });
 
   // 条件があっても閉じられる。閉じている間は「設定中」で条件が効いていることを示す。
   await advanced.click();
@@ -399,7 +396,7 @@ test("詳細条件は条件を設定したままでも閉じられ、閉じる�
   await advanced.focus();
   await page.keyboard.press("Space");
   await expect(advanced).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByRole("combobox", { name: "候補取得数" })).toContainText("100");
+  await expect(page.locator("#search-as_of")).toHaveValue("2026-04-01");
   await expect(advanced).not.toContainText("設定中");
   await page.keyboard.press("Enter");
   await expect(advanced).toHaveAttribute("aria-expanded", "false");
@@ -876,4 +873,32 @@ test("RAG 検索と履歴の工程の内容・階層・状態・時間が一致�
   expect(await timelineTypography(page.getByTestId("run-history-timeline"))).toEqual(liveTypography);
   await expectNoPageOverflow(page);
   await page.getByTestId("run-history-timeline").screenshot({path: testInfo.outputPath("history-process.png")});
+});
+
+
+test("旧取得件数の URL・保存値を無視し、検索・再試行に top_k を送らない", { tag: "@responsive" }, async ({ page }) => {
+  await page.addInitScript(() => {
+    sessionStorage.setItem("production-ready-rag.workspace.v1:search.topK", JSON.stringify({ value: "100", savedAt: Date.now() }));
+  });
+  const requests: Record<string, unknown>[] = [];
+  await page.route("**/api/search/stream", async (route) => {
+    requests.push(route.request().postDataJSON());
+    await fulfillStream(route, sse([["error", { trace_id: "t1", message: "検索処理がタイムアウトしました。", error_type: "TimeoutError" }]]));
+  });
+  await page.goto("/search?question=sample&search_answer_profile_id=bv-1&top_k=100");
+  await expect(page).toHaveURL(/\/search$/);
+  await expect(page.locator("#search-query")).toHaveValue("sample");
+  await page.getByRole("button", { name: /詳細条件/ }).click();
+  await expect(page.locator("#search-top-k")).toHaveCount(0);
+  await page.getByRole("button", { name: "検索", exact: true }).click();
+  const alert = page.getByRole("alert").filter({ hasText: "タイムアウトしました" });
+  await expect(alert).toBeVisible();
+  await alert.getByRole("button", { name: "再試行" }).click();
+  await expect.poll(() => requests.length).toBe(2);
+  for (const request of requests) {
+    expect(request).not.toHaveProperty("top_k");
+    expect(request).toMatchObject({ query: "sample", search_answer_profile_id: "bv-1" });
+  }
+  expect(await page.evaluate(() => sessionStorage.getItem("production-ready-rag.workspace.v1:search.topK"))).toBeNull();
+  await expectNoPageOverflow(page);
 });

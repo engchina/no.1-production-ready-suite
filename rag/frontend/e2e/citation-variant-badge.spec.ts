@@ -104,25 +104,23 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
   await page.keyboard.press("Escape");
 
   await page.getByText("詳細条件", { exact: true }).click();
-  const topKSelect = page.getByRole("combobox", { name: "候補取得数" });
-  await expect(topKSelect).toBeVisible();
+  await expect(page.locator("#search-top-k")).toHaveCount(0);
   // 内容種別と見出しの条件は #649 で外した。
   await expect(page.getByRole("combobox", { name: "内容種別" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "見出しで絞り込む" })).toHaveCount(0);
   // 検索の方式と Rerank の件数は回答エンジンが使わないため選ばせない（#595）。
   await expect(page.getByRole("combobox", { name: "Rerank 採用数" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "ハイブリッド" })).toHaveCount(0);
-  // 候補取得数の既定は 50（#3512）。選ばなければ既定で検索する。
-  await expect(topKSelect).toContainText("50");
+
 
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("交通費の上限");
   await page.getByRole("button", { name: "検索", exact: true }).click();
   await expect.poll(() => searchRequests.length).toBe(1);
-  for (const removed of ["mode", "strategy", "rerank_top_n", "generation_profile"]) {
+  for (const removed of ["mode", "strategy", "rerank_top_n", "generation_profile", "top_k"]) {
     expect(removed in searchRequests[0], removed).toBe(false);
   }
   // 既定は回答を生成しない（検索結果まで。#649）。
-  expect(searchRequests[0]).toMatchObject({ top_k: 50, generate_answer: false });
+  expect(searchRequests[0]).toMatchObject({ generate_answer: false });
   expect("filters" in searchRequests[0]).toBe(false);
 
   // 処理の経過（#2096。チャットと同じ ChatProgress）: 実行中は今の工程と経過時間。

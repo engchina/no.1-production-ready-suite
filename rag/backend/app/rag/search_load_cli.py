@@ -27,7 +27,8 @@ from pr_backend_core.logging import configure_cli_logging
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.clients.http_retry import HttpRetryConfig, async_request_with_retry
-from app.schemas.search import SEARCH_TOP_K_DEFAULT, SEARCH_TOP_K_MAX, SearchRequest
+from app.schemas.search import SEARCH_TOP_K_MAX, SearchRequest
+from app.search_defaults import search_top_k_default, search_top_k_schema
 
 DEFAULT_SEARCH_LOAD_API_URL = "http://localhost:8000/api/search"
 DEFAULT_SEARCH_LOAD_API_BASE_URL = "http://localhost:8000"
@@ -78,7 +79,12 @@ class SearchLoadCase(BaseModel):
 
     id: str = Field(..., min_length=1, max_length=128)
     query: str = Field(..., min_length=1)
-    top_k: int = Field(default=SEARCH_TOP_K_DEFAULT, ge=1, le=SEARCH_TOP_K_MAX)
+    top_k: int = Field(
+        default_factory=search_top_k_default,
+        ge=1,
+        le=SEARCH_TOP_K_MAX,
+        json_schema_extra=search_top_k_schema,
+    )
     # 旧 standard の指定(rerank_top_n / mode / strategy)は #595 で削除した。scenario に
     # 残っていても読み捨てる(pydantic の既定 extra="ignore")。
     filters: dict[str, str] = Field(default_factory=dict)

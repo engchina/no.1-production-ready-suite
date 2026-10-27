@@ -22,13 +22,9 @@ from pydantic import (
 from app.rag.figure_region import figure_region
 from app.schemas.classification import normalize_category_value
 from app.schemas.common import JsonValue
-
-# 検索する件数(top_k。検索で上位から選ぶ chunk の基準の件数)の既定と上限(#3512)。
-# チャット・RAG 検索・MCP の根拠の取得の既定はこの値。回答の prompt の大きさは top_k ではなく
-# 文脈の上限(親の件数・字数)で、検索・rerank の候補の数は rag_engine の取得幅
-# (top_k の 8 倍を 50〜150 に収める)で決まる。
-SEARCH_TOP_K_DEFAULT = 50
-SEARCH_TOP_K_MAX = 100
+from app.search_defaults import SEARCH_TOP_K_DEFAULT as SEARCH_TOP_K_DEFAULT
+from app.search_defaults import SEARCH_TOP_K_MAX as SEARCH_TOP_K_MAX
+from app.search_defaults import search_top_k_default, search_top_k_schema
 
 # PoweRAG 由来の scalar / 日付 / カテゴリ pre-filter。Oracle AI Database の JSON_VALUE 数値述語・
 # TIMESTAMP 範囲・IN 述語へ再マップし、ベクトル/hybrid 検索の候補集合を事前に絞り込む。
@@ -233,7 +229,12 @@ class SearchRequest(BaseModel):
     # 利用者の元の質問(#2261)。呼び出し元(業務 Agent)が検索文 query を短く言い換えたときに渡す。
     # 条の目録から文書・条を選ぶ段だけが query と合わせて使う(検索そのものは query で行う)。
     original_question: str | None = Field(default=None, max_length=8000)
-    top_k: int = Field(default=SEARCH_TOP_K_DEFAULT, ge=1, le=SEARCH_TOP_K_MAX)
+    top_k: int = Field(
+        default_factory=search_top_k_default,
+        ge=1,
+        le=SEARCH_TOP_K_MAX,
+        json_schema_extra=search_top_k_schema,
+    )
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
     search_answer_profile_id: str | None = Field(

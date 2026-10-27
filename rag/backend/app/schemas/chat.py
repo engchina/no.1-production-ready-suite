@@ -11,8 +11,9 @@ from typing import Any, Literal
 from pr_system_settings.chat_attachments import ChatAttachmentReference
 from pydantic import BaseModel, Field, field_validator
 
-from app.schemas.search import SEARCH_TOP_K_DEFAULT, SEARCH_TOP_K_MAX, RetrievedChunk
+from app.schemas.search import SEARCH_TOP_K_MAX, RetrievedChunk
 from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
+from app.search_defaults import search_top_k_default, search_top_k_schema
 
 
 class ConversationStatus(StrEnum):
@@ -185,7 +186,12 @@ class ChatMessageRequest(BaseModel):
     model_ids: list[str] = Field(default_factory=list, max_length=5)
     # 旧 standard の検索モード(``mode``)は #595 で削除した。送られても読み捨てる。
     # 検索する件数。チャットの画面は送らず、RAG 検索の既定と同じ値を使う(#3512)。
-    top_k: int = Field(default=SEARCH_TOP_K_DEFAULT, ge=1, le=SEARCH_TOP_K_MAX)
+    top_k: int = Field(
+        default_factory=search_top_k_default,
+        ge=1,
+        le=SEARCH_TOP_K_MAX,
+        json_schema_extra=search_top_k_schema,
+    )
     # 利用者が選んだ類似の承認済み FAQ の id(#684)。b
     # ackend が検索・回答プロファイルの FAQ から引き直し、
     #

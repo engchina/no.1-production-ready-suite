@@ -72,12 +72,19 @@ describe("workspace-state", () => {
   });
 
   it("型が合わない値・壊れた JSON は初期値に戻す", () => {
-    writeWorkspace("search.topK", 20);
-    expect(readWorkspace("search.topK", "20", isOneOf(["5", "10", "20"] as const))).toBe("20");
+    writeWorkspace("chat.faqChoice", 20);
+    expect(readWorkspace("chat.faqChoice", "20", isOneOf(["5", "10", "20"] as const))).toBe("20");
     storage.setItem(`${WORKSPACE_NAMESPACE}search.query`, "{broken");
     expect(readWorkspace("search.query", "fallback")).toBe("fallback");
     writeWorkspace("search.searchAnswerProfileId", ["bv-1", "bv-2"]);
     expect(readWorkspace("search.searchAnswerProfileId", null, isNullableString)).toBeNull();
+  });
+
+  it("廃止した検索件数だけを削除し、質問とその他の条件を保つ", () => {
+    storage.setItem(`${WORKSPACE_NAMESPACE}search.topK`, JSON.stringify({ value: "100", savedAt: Date.now() }));
+    writeWorkspace("search.query", "合成の質問");
+    expect(storage.getItem(`${WORKSPACE_NAMESPACE}search.topK`)).toBeNull();
+    expect(readWorkspace("search.query", "")).toBe("合成の質問");
   });
 
   it("上限を超える値は保存せず false を返す", () => {
