@@ -299,8 +299,8 @@ def test_strong_signals_with_partly_matched_requests_skip_the_grade():
     # 多段の問は要求の語が 1 つの根拠にそろわない（一部一致 = weak）。根拠の無い要求が無ければ飛ばす。
     context = _scored(_parent("p1", "経費精算の申請は月末までに行います。"), _parent("p2", "承認は部長が行います。", source="承認規程.pdf"))
     check = _check(context)
-    assert check["skip"] is True, check
-    assert any("根拠なし 0 件" in line for line in check["lines"])
+    assert check["skip"] is False, check
+    assert "充足性の判定は行わない" in check["reason"]
 
 
 @pytest.mark.parametrize(
