@@ -503,9 +503,16 @@ test.describe("画面の a11y（axe）", { tag: "@a11y" }, () => {
   // ページの操作・FormActionBar・ObjectActionBar・チャットの入力欄と送信・ページの末尾の操作）と重ならない。
   // 通知は本文より上に重なるので、重なると操作が隠れる（WCAG 2.2 の 2.4.11 Focus Not Obscured の考え方）。
   for (const screen of [...SCREENS, ...NON_NAV_SCREENS]) {
-    test(`${screen.path} の主操作は通知の置き場所と重ならない`, { tag: "@responsive" }, async ({ page }) => {
+    test(`${screen.path} の主操作は通知の置き場所と重ならない`, { tag: "@responsive" }, async ({ page }, testInfo) => {
       await openScreen(page, screen, "light");
+      if (screen.path === "/feedback") {
+        // 少数の一覧では共通標準に従い、単一ページのページ送りを表示しない。
+        await expect(page.getByTestId("feedback-pagination")).toHaveCount(0);
+      }
       await expectMainActionsClearOfToast(page);
+      if (screen.path === "/feedback") {
+        await page.screenshot({ path: testInfo.outputPath("feedback-single-page-toast.png"), fullPage: true });
+      }
     });
   }
 });
