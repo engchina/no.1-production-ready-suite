@@ -795,13 +795,15 @@ class OracleClient:
         anchors: list[RetrievedChunk],
         *,
         max_chunks_per_group: int,
+        neighbor_child_count: int | None = None,
     ) -> list[RetrievedChunk]:
-        """rerank 済み anchor と同じ親 chunk group の sibling を取得する。"""
+        """命中した成果物から、親の出典復元用または前後補完用の原文を読む。"""
         if max_chunks_per_group <= 0 or not anchors:
             return []
         return await self._context_group_siblings_with_oracle(
             anchors,
             max_chunks_per_group=max_chunks_per_group,
+            neighbor_child_count=neighbor_child_count,
         )
 
     async def has_retrieval_chunks(self, filters: dict[str, str]) -> bool:
@@ -6634,8 +6636,11 @@ class OracleClient:
         anchors: list[RetrievedChunk],
         *,
         max_chunks_per_group: int,
+        neighbor_child_count: int | None = None,
     ) -> list[RetrievedChunk]:
-        """Oracle から同一 parent chunk group の sibling を取得する。
+        """親子の出典復元と非親子の前後補完に使う原文を、保存された成果物から読む。
+
+        親子は同じ親 group、非親子は同じ chunk_set の前後を独立した上限で読む。
 
         chunk_set を持つ起点は ``_CONTEXT_ANCHOR_BATCH_SIZE`` 件ずつ 1 回の SQL にまとめ(#1490)、
         sibling の本文は chunk ごとに 1 回だけ読む(#1498)。
@@ -6643,9 +6648,16 @@ class OracleClient:
         同じで、返す順も起点の順・起点ごとの並びのまま。chunk_set の無い起点(レシピ導入前の文書)
         だけは 1 件ずつ読む。
         """
+        if max_chunks_per_group <= 0:
+            return []
         targets: list[tuple[RetrievedChunk, str, int]] = []
         for anchor in anchors:
-            group_id = _chunk_group_id_from_retrieved(anchor)
+            parent_group = _chunk_group_id_from_retrieved(anchor)
+            if anchor.metadata.get("chunk_strategy") == "small_to_big" and parent_group is None:
+                continue
+            group_id = (
+                parent_group if anchor.metadata.get("chunk_strategy") == "small_to_big" else ""
+            )
             anchor_index = _chunk_index_from_retrieved(anchor)
             if group_id is None or anchor_index is None:
                 continue
@@ -6668,6 +6680,7 @@ class OracleClient:
                         *_context_group_siblings_batch_sql(
                             [target for _position, target in batch],
                             max_chunks_per_group=max_chunks_per_group,
+                            neighbor_child_count=neighbor_child_count,
                         )
                     )
                     for batch in batches
@@ -6681,7 +6694,15 @@ class OracleClient:
                     ranked.setdefault(position, []).append((context_rank, row))
             for position, pairs in ranked.items():
                 rows_by_target[position] = [
-                    row for _rank, row in sorted(pairs, key=lambda pair: pair[0])
+                    row
+                    for _rank, row in sorted(
+                        pairs,
+                        key=lambda pair: (
+                            pair[0],
+                            _int_value(pair[1].get("chunk_index")),
+                            str(pair[1].get("chunk_id") or ""),
+                        ),
+                    )
                 ]
         for position, (anchor, group_id, anchor_index) in enumerate(targets):
             if _metadata_str(anchor.metadata.get("chunk_set_id")) is None:
@@ -6690,6 +6711,7 @@ class OracleClient:
                     group_id=group_id,
                     anchor_index=anchor_index,
                     max_chunks_per_group=max_chunks_per_group,
+                    neighbor_child_count=neighbor_child_count,
                 )
         siblings: list[RetrievedChunk] = []
         for position, (anchor, group_id, anchor_index) in enumerate(targets):
@@ -6715,6 +6737,7 @@ class OracleClient:
         group_id: str,
         anchor_index: int,
         max_chunks_per_group: int,
+        neighbor_child_count: int | None = None,
     ) -> list[dict[str, object]]:
         """1 つの起点と同じ chunk group の sibling の行を、起点に近い順に読む。"""
         where_sql, binds = _context_anchor_retrieval_where(anchor)
@@ -6724,6 +6747,11 @@ class OracleClient:
                 "anchor_index": anchor_index,
                 "anchor_chunk_id": anchor.chunk_id,
                 "max_chunks_per_group": max_chunks_per_group,
+                "neighbor_child_count": (
+                    (max_chunks_per_group + 1) // 2
+                    if neighbor_child_count is None
+                    else max(0, neighbor_child_count)
+                ),
             }
         )
         return await self._fetch_all(
@@ -6741,18 +6769,26 @@ class OracleClient:
                     d.file_name,
                     d.category_name,
                     d.superseded_by_document_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY CASE WHEN :chunk_group_id IS NOT NULL
+                                     OR c.chunk_index < :anchor_index THEN 0 ELSE 1 END
+                        ORDER BY ABS(c.chunk_index - :anchor_index), c.chunk_index, c.chunk_id
+                    ) AS context_rank,
                     0 AS score
                 FROM rag_chunks c
                 JOIN rag_documents d ON d.document_id = c.document_id
                 WHERE {where_sql}
-                  AND JSON_VALUE(c.metadata_json, '$.chunk_group_id') = :chunk_group_id
+                  AND (:chunk_group_id IS NULL
+                       OR JSON_VALUE(c.metadata_json, '$.chunk_group_id') = :chunk_group_id)
                   AND c.chunk_id <> :anchor_chunk_id
                 ORDER BY
                     ABS(c.chunk_index - :anchor_index) ASC,
                     c.chunk_index ASC,
                     c.chunk_id ASC
             )
-            WHERE ROWNUM <= :max_chunks_per_group
+            WHERE context_rank <= CASE WHEN :chunk_group_id IS NULL
+                                      THEN :neighbor_child_count
+                                      ELSE :max_chunks_per_group END
             """,
                 where_sql=where_sql,
             ),
@@ -13217,6 +13253,7 @@ def _context_group_siblings_batch_sql(
     targets: Sequence[tuple[RetrievedChunk, str, int]],
     *,
     max_chunks_per_group: int,
+    neighbor_child_count: int | None = None,
 ) -> tuple[str, dict[str, object]]:
     """chunk_set を持つ起点の sibling を 1 回で読む SQL と bind(#1490)。
 
@@ -13276,6 +13313,11 @@ def _context_group_siblings_batch_sql(
         ):
             binds[f"ca_{name}_{ordinal}"] = value
     binds["max_chunks_per_group"] = max_chunks_per_group
+    binds["neighbor_child_count"] = (
+        (max_chunks_per_group + 1) // 2
+        if neighbor_child_count is None
+        else max(0, neighbor_child_count)
+    )
     # chunk group の id(metadata_json の JSON_VALUE)は、起点の文書・chunk_set の chunk ごとに
     # 1 回だけ読む(``grp``。NO_MERGE で結合の外に置く)。結合の条件に書くと(起点 × 同じ文書の
     # chunk)の組ごとに CLOB の JSON を解き、起点 150 件で数秒かかっていた(#3461)。起点の表は
@@ -13304,8 +13346,12 @@ def _context_group_siblings_batch_sql(
                 SELECT
                     a.anchor_ord,
                     c.chunk_id,
+                    CASE WHEN a.chunk_group_id IS NULL THEN :neighbor_child_count
+                         ELSE :max_chunks_per_group END AS context_limit,
                     ROW_NUMBER() OVER (
-                        PARTITION BY a.anchor_ord
+                        PARTITION BY a.anchor_ord,
+                            CASE WHEN a.chunk_group_id IS NOT NULL
+                                 OR c.chunk_index < a.anchor_index THEN 0 ELSE 1 END
                         ORDER BY
                             ABS(c.chunk_index - a.anchor_index) ASC,
                             c.chunk_index ASC,
@@ -13325,13 +13371,13 @@ def _context_group_siblings_batch_sql(
                 ) grp
                   ON grp.document_id = a.document_id
                  AND grp.chunk_set_id = a.chunk_set_id
-                 AND grp.chunk_group_id = a.chunk_group_id
+                 AND (a.chunk_group_id IS NULL OR grp.chunk_group_id = a.chunk_group_id)
                 JOIN rag_chunks c ON c.chunk_id = grp.chunk_id
                 JOIN rag_documents d ON d.document_id = c.document_id
                 WHERE {where_sql}
                   AND c.chunk_id <> a.anchor_chunk_id
             )
-            WHERE context_rank <= :max_chunks_per_group
+            WHERE context_rank <= context_limit
             GROUP BY chunk_id
         ) p
         JOIN rag_chunks c ON c.chunk_id = p.chunk_id
@@ -16292,7 +16338,12 @@ def _with_context_group_metadata(
         update={
             "metadata": {
                 **chunk.metadata,
-                "context_group_expanded": True,
+                "context_group_expanded": anchor.metadata.get("chunk_strategy") != "small_to_big",
+                "context_group_purpose": (
+                    "parent_source_mapping"
+                    if anchor.metadata.get("chunk_strategy") == "small_to_big"
+                    else "neighbor_context"
+                ),
                 "context_anchor_chunk_id": anchor.chunk_id,
                 "context_group_id": group_id,
                 "context_group_distance": distance,

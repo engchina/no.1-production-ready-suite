@@ -70,7 +70,7 @@ async def _indexed_document(
     return document_id, chunk_set_id
 
 
-def _anchor(document_id: str, chunk_set_id: str, index: int) -> RetrievedChunk:
+def _anchor(document_id: str, chunk_set_id: str, index: int, strategy: str) -> RetrievedChunk:
     return RetrievedChunk(
         document_id=document_id,
         chunk_id=f"{document_id}:{chunk_set_id}:{index}",
@@ -78,6 +78,7 @@ def _anchor(document_id: str, chunk_set_id: str, index: int) -> RetrievedChunk:
         score=0.5,
         metadata={
             "chunk_group_id": _GROUPS[index],
+            "chunk_strategy": strategy,
             "chunk_index": index,
             "chunk_set_id": chunk_set_id,
         },
@@ -85,7 +86,8 @@ def _anchor(document_id: str, chunk_set_id: str, index: int) -> RetrievedChunk:
 
 
 @pytest.mark.usefixtures("oracle_db")
-async def test_context_group_siblings_on_real_oracle() -> None:
+@pytest.mark.parametrize("strategy", ["small_to_big", "fixed_length"])
+async def test_context_group_siblings_on_real_oracle(strategy: str) -> None:
     client = OracleClient()
     token = uuid4().hex[:8]
     kb = await client.create_knowledge_base(name=f"context-{token}")
@@ -97,9 +99,10 @@ async def test_context_group_siblings_on_real_oracle() -> None:
         client, file_name=f"context-b-{token}.pdf", knowledge_base_id=kb.id
     )
     anchors = [
-        _anchor(first, first_set, 2),
-        _anchor(first, first_set, 6),
-        _anchor(other, other_set, 0),
+        _anchor(first, first_set, 2, strategy),
+        _anchor(first, first_set, 6, strategy),
+        _anchor(other, other_set, 0, strategy),
+        _anchor(first, first_set, 4, strategy),
     ]
 
     siblings = await client.context_group_siblings(anchors, max_chunks_per_group=2)
@@ -107,25 +110,26 @@ async def test_context_group_siblings_on_real_oracle() -> None:
     def ids(document_id: str, chunk_set_id: str, *indexes: int) -> list[str]:
         return [f"{document_id}:{chunk_set_id}:{index}" for index in indexes]
 
-    # 起点の順に、起点に近い順(距離が同じなら chunk の順)で上限まで。自分と別の group は入らない。
+    expected = [
+        ids(first, first_set, 1, 3),
+        ids(first, first_set, 5, 7),
+        ids(other, other_set, 1, 2) if strategy == "small_to_big" else ids(other, other_set, 1),
+        ids(first, first_set, 3, 2) if strategy == "small_to_big" else ids(first, first_set, 3, 5),
+    ]
     assert [chunk.chunk_id for chunk in siblings] == [
-        *ids(first, first_set, 1, 3),
-        *ids(first, first_set, 5, 7),
-        *ids(other, other_set, 1, 2),
+        chunk_id for group in expected for chunk_id in group
     ]
     assert [chunk.metadata["context_anchor_chunk_id"] for chunk in siblings] == [
-        anchors[0].chunk_id,
-        anchors[0].chunk_id,
-        anchors[1].chunk_id,
-        anchors[1].chunk_id,
-        anchors[2].chunk_id,
-        anchors[2].chunk_id,
+        anchor.chunk_id for anchor, group in zip(anchors, expected, strict=True) for _ in group
     ]
-    assert [chunk.metadata["context_group_distance"] for chunk in siblings] == [
-        -1,
-        1,
-        -1,
-        1,
-        1,
-        2,
-    ]
+    assert all(
+        chunk.metadata["context_group_purpose"]
+        == ("parent_source_mapping" if strategy == "small_to_big" else "neighbor_context")
+        for chunk in siblings
+    )
+
+    if strategy == "fixed_length":
+        expanded = await client.context_group_siblings(
+            [anchors[-1]], max_chunks_per_group=2, neighbor_child_count=3
+        )
+        assert [chunk.chunk_id for chunk in expanded] == ids(first, first_set, 3, 5, 2, 6, 1, 7)

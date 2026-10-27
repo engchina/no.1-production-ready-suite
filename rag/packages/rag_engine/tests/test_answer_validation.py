@@ -9,6 +9,7 @@ import pytest
 from rag_engine.evaluation.answer_validation import (
     QUESTION_ID,
     VALIDATION_RUBRIC_VERSION,
+    VALIDATION_SYSTEM_PROMPT,
     ClaimAuditOutput,
     validate_answer_claims,
 )
@@ -33,6 +34,7 @@ def test_claims_are_bound_to_passages_and_evidence() -> None:
     def parse(system, inputs, settings, schema, provider_id=None):
         ids, evidence_id = _passages(inputs)
         assert schema is ClaimAuditOutput
+        assert system == VALIDATION_SYSTEM_PROMPT and system.startswith("## Step 1:")
         assert "standard_answer" not in inputs  # 標準回答は使わない
         return ClaimAuditOutput.model_validate(
             {
@@ -1516,6 +1518,9 @@ def test_premises_support_the_user_answer_and_the_conclusion_drawn_from_it() -> 
 
     def parse(system, inputs, settings, schema, provider_id=None):
         if schema is PremiseConsistencyOutput:
+            from rag_engine.evaluation.answer_validation import PREMISE_CONSISTENCY_SYSTEM_PROMPT
+
+            assert system == PREMISE_CONSISTENCY_SYSTEM_PROMPT and system.startswith("## Step 1:")
             # 答えと両立しない内容を勧める段落は無いので、判定を変えない（#2726）。
             return PremiseConsistencyOutput(checks=[])
         payload = json.loads(inputs)

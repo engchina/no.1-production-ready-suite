@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from rag_engine.generation.grounded import ASSUMPTION_SYSTEM_PROMPT
 from rag_engine.knowledge.runtime_knowledge import build_runtime_knowledge_context
 from rag_engine.models.llm import GroundedDraft
 
@@ -167,7 +168,7 @@ async def test_final_answer_generation_receives_assumptions(
         output = _fake_llm(system, prompt, settings, schema, **options)
         if schema is GroundedDraft:
             prompts.append(system)
-            assert ("## 回答の前提" in system) is (policy == "assume")
+            assert system.endswith(ASSUMPTION_SYSTEM_PROMPT) is (policy == "assume")
             if policy == "assume":
                 assert str(PENDING["question"]).replace("？", "?") in prompt
                 assert "対象 A" in prompt and "対象 B" in prompt
@@ -183,7 +184,9 @@ async def test_final_answer_generation_receives_assumptions(
     ).run(SearchRequest(query=QUESTION))
     assert prompts
     assert ("前提: 設定の対象は未確定です。" in outcome.answer) is (policy == "assume")
-    assert all(("## 回答の前提" in prompt) is (policy == "assume") for prompt in prompts)
+    assert all(
+        prompt.endswith(ASSUMPTION_SYSTEM_PROMPT) is (policy == "assume") for prompt in prompts
+    )
 
 
 @pytest.mark.parametrize("answered", [False, True])

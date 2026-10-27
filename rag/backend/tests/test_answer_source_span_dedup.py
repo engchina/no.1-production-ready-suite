@@ -34,6 +34,7 @@ def test_element_ids_reach_parents_and_two_recipes_of_the_same_passage_collapse(
         {
             "chunk_group_id": "cs-a:parent-1",
             "parent_text": parent_text,
+            "chunk_strategy": "small_to_big",
             "element_ids": "docling-p3-1,docling-p3-2",
         },
         "\n".join(_PARAGRAPHS[1:]),
@@ -46,15 +47,14 @@ def test_element_ids_reach_parents_and_two_recipes_of_the_same_passage_collapse(
     assert children[0].metadata["element_ids"] == ["docling-p3-1", "docling-p3-2"]
     parents = _stored_parents(children, state)
     assert [parent.metadata["element_ids"] for parent in parents] == [
-        ["docling-p3-1", "docling-p3-2"],
-        ["docling-p3-1"],
+        ["docling-p3-1", "docling-p3-2"]
     ]
 
-    records = [_stored_chunk_answer_record(parent) for parent in parents]
+    records = [_stored_chunk_answer_record(record) for record in [*parents, children[1]]]
     spans = evidence_spans("経費精算の申請方法", records)
 
     assert {span["source_id"] for span in spans} == {"doc-1:cs-a:parent-1"}
-    assert spans[0]["source_aliases"] == ["doc-1:cs-a:parent-1", "doc-1:cs-b:chunk-7"]
+    assert spans[0]["source_aliases"] == ["doc-1:cs-a:parent-1", "cs-b:chunk-7"]
 
 
 def test_chunks_without_element_ids_do_not_get_the_key() -> None:
@@ -73,7 +73,13 @@ def _named_chunk(
         text=text,
         score=1.0,
         file_name="sample.pdf",
-        metadata={"page_start": 1, "section_path": section_path, "chunk_group_id": group},
+        metadata={
+            "page_start": 1,
+            "section_path": section_path,
+            "chunk_group_id": group,
+            "chunk_strategy": "small_to_big",
+            "parent_text": text,
+        },
     )
 
 

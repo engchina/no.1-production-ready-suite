@@ -38,7 +38,7 @@ def test_numbered_functions_do_not_match_shared_subheadings():
 
 
 @pytest.mark.parametrize("reverse", [False, True])
-def test_supplement_budget_keeps_relevant_other_function(reverse):
+def test_parent_context_does_not_expand_by_matching_operation_labels(reverse):
     rows = []
     anchors = []
     for prefix, start, label in [("print", 60, "B管理 － （2）伝票印刷設定"), ("form", 54, "B管理 － （1）帳票設定")]:
@@ -69,8 +69,7 @@ def test_supplement_budget_keeps_relevant_other_function(reverse):
             max_chars=12000,
         )
     )
-    assert "form2" in {r.id for r in bundle.records}
-    assert len(bundle.records) <= 5
+    assert {r.id for r in bundle.records} == {"form0", "print0"}
 
 
 def draft(answer):
@@ -96,7 +95,7 @@ def test_mixed_function_boundary_is_not_a_neighbor():
     assert _operation_parent_neighbors(b, [a]) == []
 
 
-def test_field_heading_recovers_an_independent_function_not_in_primary():
+def test_field_heading_does_not_implicitly_add_another_parent():
     primary = rec("p", "parent", 1, "固定文言を入力する。", page=60, headings=["B管理－（2）伝票印刷設定"])
     child = rec("c", "child", 1, "固定文言を入力する。", parent="p", page=60)
     entry = rec("entry", "parent", 2, "B 【操作説明】\n帳票を選ぶ。", page=54, headings=["B管理－（1）帳票設定"])
@@ -117,9 +116,7 @@ def test_field_heading_recovers_an_independent_function_not_in_primary():
             max_chars=12000,
         )
     )
-    assert {"p", "entry", "editing"} <= {r.id for r in result.records}
-    assert "other" not in {r.id for r in result.records}
-    assert next(p.reason for p in result.evidence_tree if p.record.id == "editing") == "alternative_operation_context"
+    assert [r.id for r in result.records] == ["p"]
 
 
 def test_manual_heading_and_steps_survive_repeated_search_labels():
