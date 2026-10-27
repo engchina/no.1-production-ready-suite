@@ -11,6 +11,7 @@ from app.clients.oracle import StoredConversation, StoredMessage
 from app.config import Settings
 from app.rag.chat_question_token import context_digest, issue_question_token, read_question_token
 from app.rag.guardrails import GuardrailPolicy
+from app.rag.pipeline import RagPipeline
 from app.schemas.search_answer_profile import SearchAnswerProfileDetail
 
 
@@ -68,7 +69,7 @@ def context_setup(monkeypatch: pytest.MonkeyPatch) -> tuple[ContextOracle, Setti
     monkeypatch.setattr(chat, "load_runtime_knowledge_payload", empty)
     monkeypatch.setattr(chat, "_published_guides", empty)
     monkeypatch.setattr(chat, "_ensure_caller_owns", lambda _conversation: None)
-    monkeypatch.setattr(chat.RagPipeline, "_safe_rewritten_query", rewrite)
+    monkeypatch.setattr(RagPipeline, "_safe_rewritten_query", rewrite)
     return oracle, settings, calls
 
 
@@ -95,6 +96,7 @@ async def test_context_rejects_stale_or_tampered_preparation(
     _, token = await chat.prepare_chat_question(
         oracle, "conversation-a", "profile-a", query, settings
     )
+    assert token is not None
     if change == "history":
         oracle.messages[0].content = "対象 B について。"
     elif change == "query":

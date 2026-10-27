@@ -45,7 +45,8 @@ from app.rag.diagnostics import build_search_diagnostics
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
 from app.rag.field_filter_reader import read_field_conditions
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
-from app.rag.history_question import HISTORY_REWRITE_SYSTEM_PROMPT, HistoryRewrite
+from app.rag.history_question import HISTORY_REWRITE_SYSTEM_PROMPT as HISTORY_REWRITE_SYSTEM_PROMPT
+from app.rag.history_question import HistoryRewrite
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
     elapsed_ms,
