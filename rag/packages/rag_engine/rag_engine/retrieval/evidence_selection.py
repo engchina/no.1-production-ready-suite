@@ -382,7 +382,12 @@ def evidence_spans(
     # 取り置きは最終的な処理順（定義質問の並べ替え後）で数える。並べ替え前に数えると index と後続候補が
     # 対応せず、定義質問で取り置きが過不足になる (#744)。
     def native_need(record: Any) -> int:
-        return min(NATIVE_RESERVE_CAP, sum(b - a for a, b in _native_ranges(record) if b - a <= 600))
+        ranges = [(a, b) for a, b in _native_ranges(record) if b - a <= 600]
+        return (
+            len(source_context_text(source_context(record))) * (1 + len(ranges))
+            + len(answer_metadata_context(record, max_chars=1200))
+            + min(NATIVE_RESERVE_CAP, sum(b - a for a, b in ranges) + 8 * max(0, len(ranges) - 1))
+        )
 
     whole = (
         whole_records
