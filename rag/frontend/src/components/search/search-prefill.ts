@@ -92,4 +92,3 @@ export function searchPrefillFromParams(params: URLSearchParams): SearchPrefill 
 export function hasSearchPrefillParams(params: URLSearchParams): boolean {
   return SEARCH_PREFILL_KEYS.some((key) => params.has(key));
 }
-

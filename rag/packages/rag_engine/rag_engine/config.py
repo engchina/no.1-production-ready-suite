@@ -272,8 +272,6 @@ class Settings:
     workspace_dir: Path | None = None
     prompt_dir: Path | None = None
     faq_path: Path | None = None
-    # 業務固有の問い合わせ規則(legacy profile)は既定 OFF。RAG_ENGINE_PROFILE=legacy で opt-in する。
-    profile: str = "generic"
     adb_settings: AdbSettings | None = None
     approved_faq_semantic_matching_enabled: bool = True
     approved_faq_semantic_suggestions_enabled: bool = False
@@ -658,7 +656,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         ).strip()
         or DEFAULT_TEXT_SEARCH_TOKENIZER_LATIN_STEMMER,
         llm_api_mode=llm_api_mode,
-        profile=env.get("RAG_ENGINE_PROFILE", "generic").strip() or "generic",
         llm_providers=llm_providers,
         default_vision_llm=default_vision_llm,
         default_answer_llm=default_answer_llm,

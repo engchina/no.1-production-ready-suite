@@ -337,15 +337,15 @@ class AnswerGenerationTests(unittest.TestCase):
 
         self.assertEqual(ranked[0].id, "parameter")
 
-    def test_rank_records_uses_domain_query_expansions(self):
+    def test_rank_records_uses_explicit_question_terms(self):
         records = [
-            _record("general", "docling", 1, 1, "見積書 見積書 見積書 有効期限"),
-            _record("expiry", "docling", 4, 2, "見積条件画面の無期限チェックを外すと有効期限を日付で指定した見積書を発行できます。"),
+            _record("other", "docling", 1, 1, "別の設定の説明です。"),
+            _record("direct", "docling", 4, 2, "SAMPLE_SETTING の設定値を確認します。"),
         ]
 
-        ranked = rank_records("見積書の有効期限が9999-12-31と表示される。どうすればよいか。", records)
+        ranked = rank_records("SAMPLE_SETTING の設定値", records)
 
-        self.assertEqual(ranked[0].id, "expiry")
+        self.assertEqual(ranked[0].id, "direct")
 
     def test_rank_records_with_rrf_prefers_cross_query_matches(self):
         records = [
@@ -1625,9 +1625,9 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertEqual(search.call_args.kwargs["classification_filter"], classification_filter)
         # 既定の検索範囲は示さず、指定した分類フィルタだけを文書検索の工程に示す（#3495）。
         self.assertNotIn("検索範囲:", result.question_display)
-        self.assertIn("分類フィルタ: 大分類=20_在庫管理 / 中分類=20_操作説明書", result.question_display)
+        self.assertIn("分類フィルタ: 大分類=在庫管理 / 中分類=操作説明書", result.question_display)
         self.assertEqual(payload["retrieval_scope"], RETRIEVAL_SCOPE_KNOWLEDGE_BASE)
-        self.assertEqual(payload["classification_filter"]["large_category"], "20_在庫管理")
+        self.assertEqual(payload["classification_filter"]["large_category"], "在庫管理")
         self.assertEqual(payload["primary_source_run_id"], "abcdef")
 
     def test_expansion_strategies_generated_text_participates_in_retrieval(self):
@@ -1758,7 +1758,7 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertIn(QUESTION_DISPLAY_METADATA_SEPARATOR, result.question_display)
         self.assertIn("1. [原質問] ", result.question_display)
         self.assertIn("[質問拡張] ", result.question_display)
-        self.assertIn("[語彙の補助] ", result.question_display)
+        self.assertNotIn("[語彙の補助] ", result.question_display)
         self.assertNotIn("[質問理解]", result.question_display)
         self.assertIn("全文検索のキーワード: 拠点名 / 拠点 / 変更", result.question_display)
         self.assertNotIn(QUESTION_TEXT_SEARCH_SEPARATOR, result.question_display)
@@ -1772,12 +1772,12 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertIn("{拠点倉庫名} OR {倉庫マスタ登録} OR {F5実行}", result.text_search_queries)
         retrieval_queries = search.call_args.kwargs["retrieval_queries"]
         self.assertEqual(retrieval_queries[:2], (original_question, generated_query))
-        self.assertTrue(any("拠点倉庫名" in query for query in retrieval_queries))
+        self.assertEqual(retrieval_queries, (original_question, generated_query))
         payload = answer_result_payload(result, answer_id="answer123", run_id="abcdef")
         plan = payload["retrieval_query_plan"]
         self.assertEqual(plan["vector_queries"], list(retrieval_queries))
         self.assertEqual(plan["llm_expansion_queries"], [generated_query])
-        self.assertTrue(any("拠点倉庫名" in query for query in plan["lexical_queries"]))
+        self.assertEqual(plan["lexical_queries"], [])
         self.assertNotIn("inquiry_queries", plan)
         self.assertIn("{拠点倉庫名} OR {倉庫マスタ登録} OR {F5実行}", plan["oracle_text_queries"])
         self.assertEqual(plan["text_search_tokens"], ["拠点名", "拠点", "変更"])
@@ -1833,7 +1833,7 @@ class AnswerGenerationTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(inquiry_conditions)
-        self.assertIn("拠点倉庫名", " ".join(retrieval_queries))
+        self.assertNotIn("拠点倉庫名", " ".join(retrieval_queries))
         self.assertIn("operation_steps", inquiry_conditions.active_profiles)
         self.assertIn("[Fine-grained Query Understanding]", final_prompt)
         self.assertIn("nlu_tasks: Intent Classification, Slot Filling", final_prompt)

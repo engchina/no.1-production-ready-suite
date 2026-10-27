@@ -2162,7 +2162,7 @@ class ChunkingTests(unittest.TestCase):
         self.assertEqual(parent.retrieval_text, parent.text)
         self.assertNotIn("Source file:", child.text)
         self.assertIn("Source file: manual.pdf", child.retrieval_text)
-        self.assertIn("Classification: 20_在庫管理 / 20_操作説明書 / 倉庫連携", child.retrieval_text)
+        self.assertIn("Classification: 在庫管理 / 操作説明書 / 倉庫連携", child.retrieval_text)
         self.assertIn("Section path: Ⅰ. 倉庫マスタ登録", child.retrieval_text)
         self.assertNotIn(parent.chunk_id, child.retrieval_text)
         self.assertIn("Parent summary:", child.retrieval_text)
@@ -2404,8 +2404,8 @@ class ChunkingTests(unittest.TestCase):
         payload = chunk_payload(loadless_result(chunks=chunks, source_run_id="abcdef", source_file_name="manual.pdf"))
         loaded = chunk_result_from_payload(payload)
 
-        self.assertEqual(child.metadata["document"]["classification"]["large_category"], "20_在庫管理")
-        self.assertEqual(child.metadata["document"]["classification"]["middle_category"], "20_操作説明書")
+        self.assertEqual(child.metadata["document"]["classification"]["large_category"], "在庫管理")
+        self.assertEqual(child.metadata["document"]["classification"]["middle_category"], "操作説明書")
         self.assertEqual(loaded.chunks[0].metadata["document"]["classification"]["small_category"], "倉庫連携")
 
     def test_chunks_use_analysis_payload_classification_by_default(self):
@@ -2425,8 +2425,8 @@ class ChunkingTests(unittest.TestCase):
         )
         child = next(chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL)
 
-        self.assertEqual(child.metadata["document"]["classification"]["large_category"], "20_在庫管理")
-        self.assertEqual(child.metadata["document"]["classification"]["middle_category"], "20_操作説明書")
+        self.assertEqual(child.metadata["document"]["classification"]["large_category"], "在庫管理")
+        self.assertEqual(child.metadata["document"]["classification"]["middle_category"], "操作説明書")
         self.assertEqual(child.metadata["document"]["classification"]["small_category"], "倉庫連携")
 
     def test_parent_child_relationships_live_only_in_authoritative_chunk_fields(self):

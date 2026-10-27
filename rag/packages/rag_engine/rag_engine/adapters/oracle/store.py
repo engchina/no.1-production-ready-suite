@@ -35,8 +35,6 @@ from rag_engine.chunking import (
 from rag_engine.config import DEFAULT_TIMEZONE, RRF_K, Settings
 from rag_engine.knowledge.classification import (
     DEFAULT_CATEGORY_VALUE,
-    LARGE_CATEGORIES,
-    MIDDLE_CATEGORIES,
     ClassificationFilter,
     business_today,
     classification_filter_from_values,
@@ -2416,9 +2414,7 @@ _BUSINESS_METADATA_FIELDS = (
 def _business_term_variants(term: str) -> tuple[str, ...]:
     """番号付き分類と旧ラベルを同じ業務値として比較する。その他は完全一致する。"""
     label = re.sub(r"^\d+_", "", term)
-    categories = (*LARGE_CATEGORIES, *MIDDLE_CATEGORIES)
-    matches = [value for value in categories if re.sub(r"^\d+_", "", value) == label]
-    return tuple(dict.fromkeys([term, label, *matches])) if matches else (term,)
+    return tuple(dict.fromkeys((term, label)))
 
 
 def _business_metadata_values(metadata: dict[str, Any]) -> set[str]:
@@ -2430,7 +2426,7 @@ def _business_metadata_values(metadata: dict[str, Any]) -> set[str]:
             bucket = bucket.get(namespace) if isinstance(bucket, dict) else None
         value = bucket.get(key) if isinstance(bucket, dict) else None
         items = value if isinstance(value, list) else [value]
-        values.update(item for item in items if isinstance(item, str))
+        values.update(variant for item in items if isinstance(item, str) for variant in _business_term_variants(item))
     return values
 
 

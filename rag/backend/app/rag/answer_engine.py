@@ -555,9 +555,6 @@ def build_engine_settings(
     (#3444)。既定の Vision モデル(``OCI_ENTERPRISE_AI_VLM_*``)は取り込みの処理(図の説明など)
     だけが使う。
 
-    業務 profile の JSON はここでは決まらない。`rag_engine.profiles` が process の環境変数
-    `RAG_ENGINE_DOMAIN_PROFILE_FILE`(未指定なら作業ディレクトリの `domain_profile.json`)を
-    直接読む(#569)。
     """
     from rag_engine.config import get_settings as engine_get_settings
 
@@ -607,7 +604,6 @@ def build_engine_settings(
         # 常に「未実行」になる(#275)。
         "OCI_COMPARTMENT_ID": settings.oci_compartment_id,
         "RERANK_MODEL": settings.oci_genai_rerank_model,
-        "RAG_ENGINE_PROFILE": settings.rag_answer_profile,
         "RAG_ENGINE_OUTPUT_DIR": str(output_dir),
         # 「今日」(基準日の既定)の時間帯(共通の設定 PLATFORM_TIMEZONE。#3249)。
         "PLATFORM_TIMEZONE": configured_timezone_name(settings),

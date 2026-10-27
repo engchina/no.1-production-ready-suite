@@ -16,8 +16,8 @@ from rag_engine.retrieval.inquiry_conditions import (
 
 
 class InquiryConditionsTests(unittest.TestCase):
-    def test_injected_business_domains_replace_domain_profile_patterns(self):
-        """業務名の照合を注入したら、その結果だけを使い、profile の business_patterns は使わない。"""
+    def test_only_injected_business_domains_are_used(self):
+        """業務名は検索範囲の分類を照合した結果だけを使う。"""
         from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 
         def unused(*args, **kwargs):
@@ -36,7 +36,7 @@ class InquiryConditionsTests(unittest.TestCase):
             )
 
         question = "販管の業務Xで拠点名を変更する方法は？"
-        self.assertEqual(parse_inquiry_conditions(question).business_domains, ("販売管理",))
+        self.assertEqual(parse_inquiry_conditions(question).business_domains, ())
         with bound(lambda text: ["10_業務X", "10_業務X"] if "業務X" in text else []):
             parsed = parse_inquiry_conditions(question)
         self.assertEqual(parsed.business_domains, ("10_業務X",))
@@ -44,16 +44,16 @@ class InquiryConditionsTests(unittest.TestCase):
         with bound(lambda text: []):
             self.assertEqual(parse_inquiry_conditions(question).business_domains, ())
 
-    def test_parse_rename_question_expands_business_terms_and_operation_profile(self):
+    def test_parse_rename_question_keeps_operation_without_external_aliases(self):
         parsed = parse_inquiry_conditions("倉庫を移転したので、拠点名を変更する方法を教えてほしい。")
 
         self.assertIn("procedure", parsed.decision_types)
         self.assertIn(OPERATION_PROFILE, parsed.active_profiles)
-        self.assertIn("拠点倉庫名", parsed.search_terms)
-        self.assertIn("倉庫マスタ登録", parsed.search_terms)
+        self.assertNotIn("拠点倉庫名", parsed.search_terms)
+        self.assertNotIn("倉庫マスタ登録", parsed.search_terms)
 
     def test_parse_file_data_question_extracts_file_code_column_and_external_context(self):
-        parsed = parse_inquiry_conditions("倉庫連携ゲートウェイから取込した result.csv で W1114 が出た。EC列を確認する必要がありますか。")
+        parsed = parse_inquiry_conditions("外部システムから取込した result.csv で W1114 が出た。EC列を確認する必要がありますか。")
 
         self.assertTrue(parsed.requires_file_data_confirmation)
         self.assertTrue(parsed.requires_external_context)
@@ -83,7 +83,7 @@ class InquiryConditionsTests(unittest.TestCase):
         self.assertEqual(parsed.metadata_filter.page_numbers, ())
 
     def test_display_lines_use_formal_query_understanding_labels(self):
-        parsed = parse_inquiry_conditions("倉庫連携ゲートウェイから取込した result.csv で W1114 が出た。EC列を確認する必要がありますか。")
+        parsed = parse_inquiry_conditions("外部システムから取込した result.csv で W1114 が出た。EC列を確認する必要がありますか。")
 
         display = "\n".join(parsed.display_lines())
 
@@ -106,23 +106,14 @@ class InquiryConditionsTests(unittest.TestCase):
         )
 
         self.assertIn({"name": "DiscQtyRule", "value": "03"}, parsed.parameter_refs)
-        self.assertIn("ボリュームディスカウント", parsed.search_terms)
+        self.assertNotIn("ボリュームディスカウント", parsed.search_terms)
         self.assertIn("DiscQtyRule 03", parsed.search_terms)
         self.assertTrue(parsed.requires_condition_answer)
 
-    def test_parse_known_aliases_from_profile(self):
-        cases = [
-            ("納品書の一括発行で出荷予定日を翌月にしても問題ないか。", "先日付"),
-            ("得意先の営業担当をまとめて付け替えるとき新しいコードを指定したい。", "担当者付替"),
-            ("前受金を翌月の請求から差し引けるか。", "入金消込"),
-            ("商品コードが未入力の新商品はどのように番号を付けるか？", "自動採番"),
-        ]
-
-        for question, expected_term in cases:
-            with self.subTest(question=question):
-                parsed = parse_inquiry_conditions(question)
-
-                self.assertIn(expected_term, parsed.search_terms)
+    def test_generic_processing_does_not_invent_external_aliases(self):
+        parsed = parse_inquiry_conditions("項目Aの設定を変更する方法を教えてください。")
+        self.assertIn("procedure", parsed.decision_types)
+        self.assertNotIn("外部ファイルだけの別名", parsed.search_terms)
 
     def test_chunk_metadata_records_only_compact_filter_and_profile_signals(self):
         metadata = build_inquiry_chunk_metadata(
@@ -134,12 +125,12 @@ class InquiryConditionsTests(unittest.TestCase):
             page_end=4,
         )
 
-        self.assertIn("販売管理", metadata["business_domains"])
+        self.assertNotIn("business_domains", metadata)
         self.assertIn("操作説明書", metadata["document_kinds"])
         self.assertIn(CONDITION_PROFILE, metadata["active_profiles"])
         self.assertEqual(
             set(metadata),
-            {"business_domains", "document_kinds", "active_profiles"},
+            {"document_kinds", "active_profiles"},
         )
         self.assertRegex(inquiry_profile_contract_hash(), r"^[0-9a-f]{64}$")
 

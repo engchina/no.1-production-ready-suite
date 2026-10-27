@@ -69,7 +69,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 
 文書の版（#1248）: 文書詳細の「版」で、その文書を置き換えた新しい版の文書を選ぶと、その文書は旧版（`rag_documents.superseded_by_document_id` / `superseded_at`）になる。置き換えの記録は文書の属性で、KB の membership・レシピは変えない。旧版の chunk は、既定では回答の検索（`rag_search`・チャット・RAG 検索）の対象から外す（`_oracle_retrieval_where` の `d.superseded_by_document_id IS NULL`）。旧版・変更点を尋ねるときは `filters` の `include_superseded=true`（MCP は引数 `include_superseded: true`。#1392）で含め、その根拠の出典の文書名に「（旧版）」を付ける（MCP の根拠は `superseded: true`）。MCP の `rag_search` / `rag_retrieve_evidence` は、旧版を含めずに検索したとき、当たった今の版の文書の旧版を `older_versions`（文書名と先頭の見出しのタイトル。`OracleClient.retrieval_older_versions` が旧版を含めた検索と同じ範囲の中から引く）で返す（#1405）。`document_id` で文書を名指しする経路（文書の chunk 数・根拠の前後の補完）と MCP の `rag_read_source` は旧版も読む。自分自身・循環（A→B→A）・見えない文書は新しい版にできない（422）。新しい版の文書を削除すると、旧版は今有効な版に戻る。
 
-回答の業務の絞り込み（#545 / #546 / #553）: 業務の範囲の正本は検索・回答プロファイル・ナレッジベース（検索範囲）で、その中で質問が大分類の名前を含むときだけ、さらにその業務の候補に絞る。大分類の語の一覧は、検索範囲（`filters` と同じ条件）の文書に保存済みの大分類の DISTINCT（`OracleClient.retrieval_large_categories`）で、1 回の回答で 1 回だけ読む。質問との比較は #547 の正規化（NFKC・空白・番号の接頭辞を外す `category_label`）と大文字・小文字の違いを無視して行い、長い名前から照合する（「業務A」の中の「業務」は拾わない）。一致した大分類は rag_engine の `AnswerDependencies.business_domains` で質問の理解（`inquiry_conditions.business_domains`）へ渡し、rag_engine の `_same_business_records`（一致する候補が無ければ絞らない）と business_match のチャネルが使う。名指しが無い、範囲外の大分類、一致する候補が無いときは絞らない。質問の業務名に domain profile の `business_patterns` は使わない（下の `RAG_ENGINE_DOMAIN_PROFILE_FILE`）。
+回答の業務の絞り込み（#545 / #546 / #553）: 業務の範囲の正本は検索・回答プロファイル・ナレッジベース（検索範囲）で、その中で質問が大分類の名前を含むときだけ、さらにその業務の候補に絞る。大分類の語の一覧は、検索範囲（`filters` と同じ条件）の文書に保存済みの大分類の DISTINCT（`OracleClient.retrieval_large_categories`）で、1 回の回答で 1 回だけ読む。質問との比較は #547 の正規化（NFKC・空白・番号の接頭辞を外す `category_label`）と大文字・小文字の違いを無視して行い、長い名前から照合する（「業務A」の中の「業務」は拾わない）。一致した大分類は rag_engine の `AnswerDependencies.business_domains` で質問の理解（`inquiry_conditions.business_domains`）へ渡し、rag_engine の `_same_business_records`（一致する候補が無ければ絞らない）と business_match のチャネルが使う。名指しが無い、範囲外の大分類、一致する候補が無いときは絞らない。業務名はこの保存済み分類の一覧だけから照合する。
 
 ## 使い方（推奨の流れ）
 
@@ -171,8 +171,6 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_HISTORY_REWRITE_ENABLED` | `true` | チャットで、会話履歴から質問を書き換える |
 | `RAG_ANSWER_RECORD_RETENTION_DAYS` | `0` | 回答の記録とチャット・RAG 検索の実行履歴の保存日数。既定の `0` は無期限で、自動では削除しない（#3235。以前の既定は 90 日）。正の値にすると、回答の保存時と設定の保存時に期限を過ぎた記録を削除する。取込・検索・回答設定 > 検索方法の「回答の記録の保存期間」で変更できる（#593 で回答スタイルの画面から移した） |
 | `RAG_QUERY_HISTORY_RETENTION_DAYS` | `0` | 質問履歴（よく聞かれる質問の候補。`RAG_QUERY_HISTORY_ENABLED` が有効なときだけ記録する）の保存日数。既定の `0` は無期限で、自動では削除しない（#3235。以前の既定は 90 日）。正の値にすると、記録時と設定の保存時に期限を過ぎた履歴を削除する。取込・検索・回答設定 > 検索方法の「質問履歴」で変更できる |
-| `RAG_ANSWER_PROFILE` | `legacy` | 回答フローの業務 profile。回答フローは rag_engine の `current_profile()`（runtime を渡さないときの既定 = `legacy`）で動くため、rag_poc と同じく日本語問い合わせ規則が有効で、業務分類・別名は `RAG_ENGINE_DOMAIN_PROFILE_FILE` の JSON（未指定なら作業ディレクトリの `domain_profile.json`、なければ分類・別名なし）から読む（書式は rag_poc の `domain_profile.example.json`。業務固有の profile は同梱していない）。既定はこの実際の挙動に合わせて `legacy`（#300。以前の既定 `generic` は回答フローに届いていなかった）。`generic` は既存の `.env` との互換のため受け付けるが、回答フローには反映されない |
-| `RAG_ENGINE_DOMAIN_PROFILE_FILE`（backend の process の環境変数） | 未指定 | legacy profile の JSON（業務固有の語。書式は rag_poc の `domain_profile.example.json`。業務固有の profile は同梱していない）。rag_engine の `rag_engine.profiles` が process の環境変数（`os.environ`）を直接読み、未指定なら作業ディレクトリ（backend は `rag/backend/`）の `domain_profile.json` を読む。どちらのファイルもなければ分類・別名・判定語なしで動く。`backend/.env` / 共通 `.env` に書いても process の環境変数にはならないため効かない。指定するときは systemd の unit の `Environment=` か、起動する shell の `export` で渡す。読んだ内容は process 内で cache するため、変えたら backend を再起動する。rag_engine の設定（`build_engine_settings`）には読み先を渡していない（#569）。質問の業務名（`business_patterns`）には使わない（検索範囲の大分類の語の一覧から照合する。#553）。今も使う項目は、質問の検索語の別名（`aliases`）、ファイル・データの確認と外部連携の判定語（`file_data_terms` / `external_context_terms`）、操作手順の節ラベル（`operation_section_pattern`）、問い合わせ元の語（`requester_terms`）、大分類・中分類の候補（`categories`。business_match の番号付きの分類名の照合）と、取込時の chunk の `retrieval_profile.business_domains`（`business_patterns`。business_match の照合先の 1 つ）。画面からは管理できない |
 | `RAG_ENGINE_RENDER_DPI`（docling サービス） | `300` | 解析時のページ画像の解像度。bbox はこの画像の px 座標になる |
 
 **回答の時間の配分（#1516）**: 回答の上限（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒）の中で、章節の拡張・抽出と、
@@ -590,3 +588,11 @@ LlamaIndex AutoMerging 風の分割方式「親子階層」は削除し、一覧
 既存の近傍・親子 chunk の役割と `section_context` は別に記録する。
 
 方式の比較と追加候補の採否は [章節補完の比較](section-completion-evaluation.md) を参照。
+
+## 外部 DomainProfile の廃止（#3668）
+
+外部 JSON の業務分類・別名・判定語を自動読込する機能は廃止した。文書に保存済みの分類と、その検索範囲から照合する業務名は引き続き使う。分類名を外部の一覧から補正したり、パスの語から大分類・中分類を決めたりしない。任意の手入力分類は保存した名前のまま復元する。
+
+別名は検索・回答プロファイルの「用語・同義語」、検索で保護する語は「ドメインキーワード」、回答前の確認と回答の指示はページ管理のルール・ガイドを使用する。一般的な日本語の質問理解・条件の読取り・言語資源は維持する。旧ファイルの内容をこれらの設定へ自動コピーしない。
+
+SDK の `DomainProfile`、`Runtime.profile`、`create_oracle_application(profile=...)` は削除した。Runtime の Prompt 上書きは `prompt_overrides`、Prompt ファイルの保存先は `ResourcePaths.prompts` / `Settings.prompt_dir` で明示する。
