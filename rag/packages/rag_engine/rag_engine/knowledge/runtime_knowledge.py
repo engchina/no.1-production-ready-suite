@@ -11,6 +11,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from rag_engine.matching.analysis import normalize_text
+
+from .rule_matching import rank_rules
+
 logger = logging.getLogger(__name__)
 
 RUNTIME_KNOWLEDGE_SCHEMA_VERSION = 1
@@ -354,10 +358,11 @@ def build_runtime_knowledge_context(
         )
 
     matched_terms = _matched_terms(original_question, knowledge.terms, term_limit)
-    matched_rules = _matched_rules(original_question, knowledge.rules, rule_limit)
+    rule_matches = rank_rules(question, knowledge.rules, rule_limit, tokens=_tokens)
+    matched_rules = rule_matches.selected
     expanded_question = _expanded_question(original_question, matched_terms, matched_rules)
     decisions = []
-    for kind, items, selected in (("term", knowledge.terms, matched_terms), ("rule", knowledge.rules, matched_rules)):
+    for kind, items, selected in (("term", knowledge.terms, matched_terms),):
         for item in items:
             if not item.active:
                 continue
@@ -386,7 +391,7 @@ def build_runtime_knowledge_context(
         active_rule_count=sum(rule.active for rule in knowledge.rules),
         assume_unconfirmed=knowledge.assume_unconfirmed,
         unconfirmed_conditions=knowledge.unconfirmed_conditions,
-        expansion_decisions=tuple(decisions),
+        expansion_decisions=(*decisions, *rule_matches.decisions),
     )
 
 
@@ -571,22 +576,7 @@ SUPPORT_GUIDE_RULE_TAG = "support_guide"
 
 
 def _matched_rules(question: str, rules: Sequence[RuntimeRule], limit: int) -> list[RuntimeRule]:
-    scored: list[tuple[int, int, RuntimeRule]] = []
-    for index, rule in enumerate(rules):
-        if not rule.active:
-            continue
-        if PINNED_RULE_TAG in rule.tags:
-            scored.append((1_000, index, rule))
-            continue
-        score = 0
-        for label in rule.labels():
-            if _matches(question, label):
-                score += 3
-        if score and _shared_token_count(question, rule.content):
-            score += 1
-        if score:
-            scored.append((score, index, rule))
-    return [rule for _, _, rule in sorted(scored, key=lambda item: (-item[0], item[1]))[: max(1, limit)]]
+    return list(rank_rules(question, rules, limit, tokens=_tokens).selected)
 
 
 def _expansion_additions(
@@ -724,6 +714,4 @@ def _normalize(value: str) -> str:
 
 
 def _key(value: Any) -> str:
-    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
-    text = re.sub(r"[\x00-\x1f\x7f]+", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+    return normalize_text(str(value or ""))
