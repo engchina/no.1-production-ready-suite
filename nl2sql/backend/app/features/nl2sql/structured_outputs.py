@@ -48,7 +48,9 @@ class DbAdminChatAnalysisOutput(BaseModel):
     cause: str
     fix: str
     conclusion: str
-    corrected_sql: str = ""
+    corrected_sql: str = Field(
+        default="", description="失敗した対象の 1 文を直した SQL。直せないときは空文字列。"
+    )
 
 
 class StructureOutput(BaseModel):
