@@ -9,10 +9,12 @@ from collections.abc import Mapping, Sequence
 from time import monotonic
 from typing import Literal
 
+from fastapi import HTTPException
 from pr_backend_core.observability.tracing import observed_span
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import Settings
+from app.rag.guardrails import GuardrailPolicy
 from app.rag.search_answer_profile_knowledge import (
     SectionPages,
     _already_answered,
@@ -122,6 +124,14 @@ async def recognize_rule_selections(
             async with asyncio.timeout(
                 min(settings.oci_enterprise_ai_timeout_seconds, settings.rag_answer_timeout_seconds)
             ):
+                checked = await asyncio.to_thread(GuardrailPolicy(settings).validate_query, text)
+                if not checked.allowed:
+                    span.set_attributes({"rule_clarification.status": "blocked"})
+                    return tuple(found)
+                text = checked.sanitized_text
+                data = json.loads(context)
+                data["user_statements"] = text
+                context = json.dumps(data, ensure_ascii=False)
                 raw = await condition_client(settings).generate(
                     RULE_SELECTION_INPUT_PROMPT,
                     context,
@@ -184,8 +194,10 @@ def apply_rule_selection_scope(
     if ranges:
         merged = _with_page_ranges(filters, ranges)
         if not merged:
-            # 明示した既存の範囲と両立しない推定から、範囲を広げない。
-            return request
+            raise HTTPException(
+                status_code=422,
+                detail="選んだ確認の対象範囲が現在の検索範囲と一致しません。対象範囲を見直してください。",
+            )
         filters = merged
     updated = request.model_copy(update={"filters": filters})
     updated._rule_selection_scope = {

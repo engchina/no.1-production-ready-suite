@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 
 from app.config import Settings
 from app.rag import rule_selection
@@ -201,9 +202,10 @@ async def test_scope_uses_current_section_pages_and_never_widens_explicit_filter
             }
         }
     )
-    unchanged = apply_rule_selection_scope(restricted, PAYLOAD, [answer])
-    assert unchanged.filters == restricted.filters
-    assert not unchanged._rule_selection_scope
+    with pytest.raises(HTTPException) as conflict:
+        apply_rule_selection_scope(restricted, PAYLOAD, [answer])
+    assert conflict.value.status_code == 422
+    assert not restricted._rule_selection_scope
 
 
 async def test_shared_resolution_reuses_recognition_and_deducts_elapsed_once(
@@ -305,3 +307,35 @@ async def test_single_complete_label_does_not_call_semantic_model(
     monkeypatch.setattr(rule_selection, "condition_client", unavailable)
     result = await recognize_rule_selections(payload, "モードA", Settings())
     assert len(result) == 1 and result[0].option_ids == ["a"]
+
+
+async def test_guardrail_blocks_recognition_before_model_and_masks_allowed_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.rag.guardrails import GuardrailResult
+
+    calls = []
+
+    class Policy:
+        allowed = False
+
+        def __init__(self, settings: Settings) -> None:
+            pass
+
+        def validate_query(self, query: str) -> GuardrailResult:
+            return GuardrailResult(
+                allowed=self.allowed, sanitized_text="設定は [MASK]", findings=[]
+            )
+
+    class Client:
+        async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
+            calls.append(json.loads(context)["user_statements"])
+            return '{"conditions": []}'
+
+    monkeypatch.setattr(rule_selection, "GuardrailPolicy", Policy)
+    monkeypatch.setattr(rule_selection, "condition_client", lambda settings: Client())
+    assert not await recognize_rule_selections(PAYLOAD, "設定は非公開の値", Settings())
+    assert not calls
+    Policy.allowed = True
+    assert not await recognize_rule_selections(PAYLOAD, "設定は非公開の値", Settings())
+    assert calls == ["設定は [MASK]"]
