@@ -4750,6 +4750,7 @@ def answer_question_result(
             coverage_budget=_request_coverage_budget(settings),
             usage=coverage_usage,
             searched_queries=retrieval_queries,
+            initial_query_overflowed=any(item.get("truncated") for item in text_search_info.tokenization_traces),
             allow_split=not caller_planned and not getattr(settings, "retrieval_original_query_only", False),
             skip_reason="caller_planned" if caller_planned else "original_query_only",
         )

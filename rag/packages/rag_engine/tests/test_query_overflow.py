@@ -200,3 +200,21 @@ def test_exhausted_evidence_budget_does_not_spend_queries():
     assert not results
     assert trace["requests"][0]["status"] == "unsearched_evidence_budget"
     assert budget.remaining == 8
+
+
+def test_alias_expansion_overflow_can_search_the_unexpanded_original_request():
+    queries = []
+    with patch("rag_engine.retrieval.query_overflow.coverage_targets", return_value=[_target("Q1", "元の要求")]):
+        results, trace = search_overflow_requests(
+            "元の要求",
+            tokenize=lambda text: replace(_tokens(text), truncated_count=0),
+            retrieve=lambda text: queries.append(text) or SimpleNamespace(records=["根拠"]),
+            extra_budget=ExtraRetrievalBudget(8),
+            coverage_budget=CoverageBudget(),
+            usage=CoverageUsage(),
+            searched_queries=["元の要求 大量の登録別名"],
+            initial_query_overflowed=True,
+        )
+    assert queries == ["元の要求"]
+    assert results[0].request_id == "Q1"
+    assert trace["initial_query_overflowed"] is True

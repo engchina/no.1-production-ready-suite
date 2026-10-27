@@ -36,6 +36,7 @@ def search_overflow_requests(
     usage: CoverageUsage,
     searched_queries: Sequence[str] = (),
     allow_split: bool = True,
+    initial_query_overflowed: bool = False,
     skip_reason: str = "caller_planned",
     clock: Callable[[], float] = monotonic,
 ) -> tuple[list[OverflowSearch], dict[str, Any]]:
@@ -49,13 +50,14 @@ def search_overflow_requests(
         return [], {"schema_version": 1, "triggered": False, "skipped": "tokenization_failed", "requests": [], "llm_calls": 0}
     trace: dict[str, Any] = {
         "schema_version": 1,
-        "triggered": original.truncated,
+        "triggered": original.truncated or initial_query_overflowed,
+        "initial_query_overflowed": initial_query_overflowed,
         "assessment": "not_performed",
         "llm_calls": 0,
         "original_query_chars": len(original.oracle_text_query),
         "requests": [],
     }
-    if not original.truncated:
+    if not trace["triggered"]:
         return [], trace
     targets = [target for target in coverage_targets(question, lambda text: tokenize(text).tokens) if "." not in target.id]
     started = clock()
