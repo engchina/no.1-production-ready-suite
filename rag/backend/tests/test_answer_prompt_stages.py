@@ -236,7 +236,7 @@ def test_crag_readonly_prompts_are_the_executed_step_instructions() -> None:
     from rag_engine.generation.answering import CRAG_GRADER_SYSTEM_PROMPT
     from rag_engine.generation.crag_support import CRAG_GRADE_PROMPT_TEMPLATE
 
-    displayed = []
+    displayed: list[str] = []
     for stage in readonly_prompt_stages():
         parts = stage["prompts"]
         assert isinstance(parts, list)
