@@ -846,7 +846,7 @@ export function UserManagementPage({
               loading ? (
                 <ProcessingIndicator
                   active
-                  label={t("security.common.loading")}
+                  label={t("security.users.loading")}
                   operationKey="security-users-load"
                   placement="panel"
                   testId="security-users-loading"

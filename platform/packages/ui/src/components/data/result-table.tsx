@@ -516,6 +516,8 @@ export function ResultTable({
                 scrollAriaLabel={labels.scrollLabel}
                 scrollTestId={testIdOf("all-scroll")}
                 testId={testIdOf("all-table")}
+                paginationPosition="top"
+                showSinglePagePagination
                 paginationTestId={testIdOf("all-pagination")}
               />
               {truncated ? <p className="text-xs text-fg-muted">{notice}</p> : null}

@@ -1645,13 +1645,13 @@ export const ja = {
     "検証・本番環境です。起動は systemctl enable --now、停止は systemctl disable --now で行い、最後に操作した状態をサーバーの再起動・再配備後も保ちます。",
   "settings.services.commands.title": "実行コマンド",
   "settings.services.commands.description":
-    "サーバー上で状態やログを確かめるコマンドです。rag/ ディレクトリで実行します。",
+    "サーバー上で実行します。状態とログの確認は、どの作業ディレクトリでも使えます。",
   "settings.services.commands.status.label":
-    "すべてのサービスの状態を確認",
+    "ロード済みの RAG サービスの状態を確認",
   "settings.services.commands.logs.label":
     "Docling のログを追いかける",
   "settings.services.commands.install.label":
-    "開発環境で unit と sudoers を登録(CPU サービス)",
+    "開発環境で unit と sudoers を登録（CPU サービス、rag/ で実行）",
   "settings.services.commands.copy": "コピー",
   "settings.services.commands.copied": "コマンドをコピーしました",
   "settings.services.commands.copyFailed": "コマンドをコピーできませんでした。欄の文字を選択してコピーしてください。",

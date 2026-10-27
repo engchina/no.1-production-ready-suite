@@ -369,11 +369,11 @@ test("unit が未登録・起動失敗のサービスは状態と案内を出す
   await expect(docling.getByText("/var/lib/production-ready-rag/.cache")).toBeVisible();
 });
 
-test("実行コマンドは既定で折りたたまれ、展開すると systemd のコマンドを表示する", { tag: "@responsive" }, async ({
+for (const mode of ["local", "staging", "production"] as const) {
+test(`実行コマンドはディレクトリと対象範囲を正確に案内する（${mode}）`, { tag: "@responsive" }, async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1280, height: 760 });
-  await mockServices(page, { controlEnabled: true, deploymentMode: "local" });
+  await mockServices(page, { controlEnabled: true, deploymentMode: mode });
 
   await page.goto("/settings/services");
 
@@ -394,11 +394,23 @@ test("実行コマンドは既定で折りたたまれ、展開すると systemd
     page.getByText("sudo journalctl -u production-ready-rag-parser-docling.service -f").first()
   ).toBeVisible();
   // dev は unit と sudoers を登録するコマンドも出す。
-  await expect(page.getByText("scripts/rag-services.sh install", { exact: true })).toBeVisible();
+  const panel = page.locator("#service-commands");
+  await expect(panel).toContainText("状態とログの確認は、どの作業ディレクトリでも使えます。");
+  await expect(panel).toContainText("ロード済みの RAG サービスの状態を確認");
+  if (mode === "local") {
+    await expect(panel.getByText("scripts/rag-services.sh install", { exact: true })).toBeVisible();
+    await expect(panel).toContainText("CPU サービス、rag/ で実行");
+  } else {
+    await expect(panel.getByText("scripts/rag-services.sh install", { exact: true })).toHaveCount(0);
+    await expect(panel).not.toContainText("rag/ で実行");
+  }
+  await expectNoPageOverflow(page);
   // GPU のサービスは無い（ASR は削除した。#2042）。
   await expect(page.getByText("scripts/rag-services.sh install --gpu", { exact: true })).toHaveCount(0);
   await expect(page.getByText("docker", { exact: false })).toHaveCount(0);
 });
+
+}
 
 test("制御有効時は確認ダイアログを経て停止できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
