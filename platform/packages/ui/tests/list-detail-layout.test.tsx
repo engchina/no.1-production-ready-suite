@@ -42,7 +42,7 @@ function setWide(next: boolean) {
 
 const ITEMS = ["alpha", "beta", "gamma"];
 
-function Harness({ initial = null as string | null }) {
+function Harness({ initial = null as string | null, single = false }) {
   const [selected, setSelected] = useState<string | null>(initial);
   return (
     <>
@@ -51,6 +51,7 @@ function Harness({ initial = null as string | null }) {
       </button>
       <ListDetailLayout
         id="things"
+        layout={single ? "single" : "responsive"}
         listLabel="項目の一覧"
         detailLabel="項目の詳細"
         listHeader={<input aria-label="検索" data-testid="search" />}
@@ -103,6 +104,19 @@ afterEach(() => {
 });
 
 describe("ListDetailLayout（#2281）", () => {
+  it("明示した single は desktop でも一覧と全幅の詳細を切り替える", () => {
+    act(() => root.render(<Harness single />));
+    expect(layout().dataset.listDetailLayout).toBe("single");
+    expect(layout().dataset.listDetailView).toBe("list");
+    expect(listColumn().classList.contains("hidden")).toBe(false);
+    click(itemButton("beta"));
+    expect(layout().dataset.listDetailView).toBe("detail");
+    expect(listColumn().classList.contains("hidden")).toBe(true);
+    expect($('[data-testid="detail"]').textContent).toBe("beta");
+    click($('[data-testid="back"]'));
+    expect(layout().dataset.listDetailView).toBe("list");
+  });
+
   it("xl 以上は一覧（既定 20rem）と詳細を並べ、未選択は空の状態を出す（先頭を自動で選ばない）", () => {
     act(() => root.render(<Harness />));
     expect(layout().dataset.listDetailLayout).toBe("split");

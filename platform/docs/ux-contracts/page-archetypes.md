@@ -395,6 +395,8 @@ Carbon・Material は「表への操作が主で、検索は操作の 1 つ」�
 
 ### `ListDetailLayout`（B 型の一覧 + 詳細。#2281）
 
+RAG のフィードバックは、長い質問・回答・根拠を読むため、すべての幅で一覧から全幅の詳細へ切り替える B 型の例外とする（#3635）。共通 `ListDetailLayout` の `layout="single"` と `useUrlSelection(singlePane: true)` を組み合わせ、一覧の検索・条件・ページと、戻る時の行へのフォーカスを保つ。
+
 規則は §1 B。部品の props は design-system README §4「`ListDetailLayout`」と components-reference.md。
 
 - `id` は `<feature>-<view>`（例: `table-management`）。一覧の幅と開閉の localStorage の key（製品の `storagePrefix` + `id`）と `data-testid`（`list-detail-<id>` / `-list` / `-detail` / `-resizer` / `-toggle`）に使う。

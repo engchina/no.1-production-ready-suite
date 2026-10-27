@@ -179,6 +179,8 @@ export interface ListDetailLayoutProps {
    * `data-testid`（`list-detail-<id>`・`-list`・`-detail`・`-resizer`・`-toggle`）に使う。
    */
   id: string;
+  /** single は幅に関わらず一覧から全幅の詳細へ切り替える。既定は xl 以上で分割する。 */
+  layout?: "responsive" | "single";
   /** 一覧の列の名前（翻訳済み。例:「テーブル一覧」）。列の読み上げ名と、開閉ボタンの名前・Tooltip に使う。 */
   listLabel: string;
   /** 一覧の列の上（スクロールしない）。検索・絞り込み・件数（`ListToolbar`）。 */
@@ -221,6 +223,7 @@ export interface ListDetailLayoutProps {
  */
 export function ListDetailLayout({
   id,
+  layout = "responsive",
   listLabel,
   listHeader,
   list,
@@ -236,7 +239,8 @@ export function ListDetailLayout({
   className,
 }: ListDetailLayoutProps) {
   const labels = { ...DEFAULT_LIST_DETAIL_LAYOUT_LABELS, ...labelOverrides };
-  const split = useListDetailSplit();
+  const responsiveSplit = useListDetailSplit();
+  const split = layout !== "single" && responsiveSplit;
   const storageKey = listDetailStorageKey(id, storagePrefix);
   const [stored, setStored] = useState<ListDetailStoredState>(() => readStoredState(storageKey));
   const [previousKey, setPreviousKey] = useState(storageKey);

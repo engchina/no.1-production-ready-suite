@@ -26,7 +26,8 @@ import {
   TimedLoadingState,
   adjacentListItems,
   useConfirm,
-  useListDetailSplit,
+  INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_TABLE_FOCUS_CLASS,
   useUrlSelection,
   INFORMATION_TABLE_ROW_CLASS,
 } from "@production-ready/ui";
@@ -98,8 +99,7 @@ export function FeedbackClient() {
   const urlState = useMemo(() => parseFeedbackUrl(searchParams), [searchParams]);
   // B 型の選択は URL の `feedback` が唯一の情報源（共有の useUrlSelection。#2283）。先頭の行を自動で選ばない。
   // 1 ペイン（xl 未満）で一覧から詳細へ入るときは履歴に積み、「一覧へ戻る」とブラウザの「戻る」で一覧へ戻る。
-  const split = useListDetailSplit();
-  const selection = useUrlSelection({ param: "feedback", searchParams, setSearchParams, singlePane: !split });
+  const selection = useUrlSelection({ param: "feedback", searchParams, setSearchParams, singlePane: true });
   const selectedId = selection.selectedId;
   const params = useMemo(() => feedbackListParams(urlState), [urlState]);
   const query = useFeedbackDashboard(params);
@@ -210,9 +210,9 @@ export function FeedbackClient() {
         wide
         title={t("feedback.page.title")}
         subtitle={t("feedback.page.subtitle")}
-        // 1 ペイン（xl 未満）で詳細を開いているときだけ、左上に「一覧へ戻る」（page-archetypes.md §1 B。#2283）。
+        // 詳細を開いているときだけ、左上に「一覧へ戻る」（page-archetypes.md §1 B。#2283）。
         back={
-          !split && selectedId
+          selectedId
             ? {
                 label: t("common.backToList"),
                 ariaLabel: t("editor.backToListOf", { list: t("feedback.list.title") }),
@@ -223,6 +223,7 @@ export function FeedbackClient() {
         }
       />
       <PageBody wide>
+        {!selectedId ? <>
         <Banner
           severity="info"
           title={t(seesAllUsers ? "feedback.scope.allTitle" : "feedback.scope.ownTitle")}
@@ -310,6 +311,7 @@ export function FeedbackClient() {
           count={listCountProps({ matchedTotal: page?.total, filtered, allTotal: allTotal.data })}
           testId="feedback-filters-toolbar"
         />
+        </> : null}
 
         {query.isLoading ? (
           <TimedLoadingState
@@ -329,10 +331,11 @@ export function FeedbackClient() {
           <ErrorState message={t("feedback.page.loadError")} onRetry={() => void query.refetch()} />
         ) : data ? (
           <>
-            <SummaryPanel summary={data.summary} previous={data.previous_summary} />
+            {!selectedId ? <SummaryPanel summary={data.summary} previous={data.previous_summary} /> : null}
             {items.length || selectedId ? (
-              // B 型の一覧 + 詳細（共有 ListDetailLayout。#2283）。xl 以上は「狭い一覧 | 広い詳細」、xl 未満は 1 ペイン。
+              // 長い質問と根拠を読むため、すべての幅で一覧から全幅の詳細へ切り替える。
               <ListDetailLayout
+                layout="single"
                 id={LIST_DETAIL_ID}
                 listLabel={t("feedback.list.title")}
                 detailLabel={t("feedback.detail.title")}
@@ -708,7 +711,7 @@ function EvidenceTab({ detail }: { detail: FeedbackDetail }) {
   // 文書の詳細を開けない利用者には、引用元（文書の詳細）へのリンクを出さない（#303）。
   const canOpenDetail = canOpenDocumentDetail(useAuth().hasPermission);
   return (
-    <div id="feedback-panel-evidence" role="tabpanel" aria-labelledby="feedback-tab-evidence" className="space-y-3">
+    <div id="feedback-panel-evidence" role="tabpanel" aria-labelledby="feedback-tab-evidence" tabIndex={0} data-testid="feedback-evidence-scroll" className={cn("space-y-3", INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS)}>
       {detail.citations.length ? detail.citations.map((citation, index) => {
         const targeted = detail.target_type === "citation" && citation.chunk_id === detail.chunk_id;
         const link = `${APP_ROUTES.documents}/${encodeURIComponent(citation.document_id)}?chunk_id=${encodeURIComponent(citation.chunk_id)}`;
