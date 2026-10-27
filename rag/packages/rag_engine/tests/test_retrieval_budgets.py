@@ -151,3 +151,35 @@ def test_explicit_total_override_does_not_change_per_stage_admission():
 def test_same_local_identifier_in_another_artifact_is_not_a_duplicate():
     selected, _ = select_candidates([child("local", artifact="v1"), child("local", artifact="v2")], 10)
     assert len(selected) == 2
+
+
+def test_deferred_parent_is_read_only_when_recovery_is_requested(monkeypatch):
+    import rag_engine.generation.answering as answering
+    from rag_engine.generation.answer_models import AnswerContext
+
+    deferred = replace(child("c1"), parent_chunk_uid="p1", metadata={**child("c1").metadata, "chunk_strategy": "small_to_big"})
+    parent = replace(deferred, id="p1", chunk_id="p1", chunk_uid="p1", chunk_level="parent", parent_chunk_uid="", text="保存済みの親原文")
+    calls = []
+    monkeypatch.setattr(answering, "_stored_chunk_answer_record", lambda record: record)
+    deps = AnswerDependencies(
+        search=lambda **kw: None,
+        check_ready=lambda **kw: None,
+        parse_text=lambda *args, **kw: None,
+        parse_images=lambda *args, **kw: None,
+        rerank=lambda *args, **kw: [],
+        context_chunks=lambda **kw: calls.append([record.id for record in kw["anchors"]]) or [parent],
+    )
+    context = AnswerContext(records=[], text="", expansion_records=(deferred,), deferred_records=(deferred,))
+    with bind_dependencies(deps):
+        result = answering._deferred_document_records(context, 1)
+    assert calls == [["c1"]]
+    assert result.records == (parent,)
+
+
+def test_deferred_nonparent_retains_the_original_hit_without_synthetic_parent():
+    from rag_engine.generation.answer_models import AnswerContext
+    from rag_engine.generation.answering import _deferred_document_records
+
+    hit = replace(child("c1"), parent_chunk_uid="synthetic-unused")
+    context = AnswerContext(records=[], text="", expansion_records=(hit,), deferred_records=(hit,))
+    assert _deferred_document_records(context, 1).records == (hit,)

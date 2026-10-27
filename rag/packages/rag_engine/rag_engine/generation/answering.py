@@ -221,6 +221,7 @@ from rag_engine.models.storage import AdbHybridSearchUnavailable
 from rag_engine.resources.tracing import observe_call
 from rag_engine.retrieval.article_catalog import is_added_catalog_article
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
+from rag_engine.retrieval.candidate_budget import artifact_key as retrieval_artifact_key
 from rag_engine.retrieval.candidate_budget import record_id as retrieval_record_id
 from rag_engine.retrieval.candidate_budget import select_candidates, stage_limits
 from rag_engine.retrieval.character_forms import fold_model_view, fold_width
@@ -1516,6 +1517,11 @@ def _recover_crag_context(
         "added_chunk_ids": [],
         "reason": "no_new_compatible_evidence",
     }
+    context = _hydrate_recovery_context(
+        context,
+        [record for record in context.expansion_records if record.chunk_uid in anchors or record.parent_chunk_uid in anchors],
+        min(6, max_records),
+    )
     for action in actions:
         recovery = recover_context_records(
             visible, context.expansion_records, anchors, action, max_records=min(6, max_records), max_chars=max_chars
@@ -1854,7 +1860,9 @@ def _expand_context_from_pool(
         # 親を pool から足す。可視の起点と同じ文書しか探さない近傍・同単元の回復では届かないため先に試す。
         # 足す件数は可視の根拠の数まで。下の併合は可視の 2 倍を上限にするので、超えると既存の根拠を押し出して
         # `would_drop_existing_evidence` で却下され、回退が空振りした（実データで確認）。
-        recovered, mode = _deferred_document_records(context, min(max_records, max(1, len(visible)))), "deferred_documents"
+        limit = min(max_records, max(1, len(visible)))
+        context = _hydrate_recovery_context(context, context.deferred_records, limit)
+        recovered, mode = _deferred_document_records(context, limit), "deferred_documents"
     if not recovered.records:
         for mode in modes:
             recovered = recover_context_records(
@@ -1903,13 +1911,48 @@ def _adds_new_records(current: AnswerContext, restored: AnswerContext) -> bool:
     return any((record.chunk_uid or record.id) not in known for record in restored.records)
 
 
+def _hydrate_recovery_context(context: AnswerContext, candidates: Sequence[AnswerRecord], limit: int) -> AnswerContext:
+    """明示した回復先だけを既存の件数枠で読む。未読の親が無いことを根拠不足と取り違えない。"""
+    known = {retrieval_record_id(record): record for record in context.expansion_records}
+    selected: dict[tuple[str, ...], AnswerRecord] = {}
+    for child in candidates:
+        if child.chunk_level != CHILD_CHUNK_LEVEL:
+            continue
+        strategy = child.metadata.get("chunk_strategy")
+        parent = child.parent_chunk_uid if strategy in (None, "small_to_big", "small_to_big_parent_child") else ""
+        if parent and parent in known:
+            continue
+        key = (*retrieval_artifact_key(child), parent or retrieval_record_id(child))
+        selected.setdefault(key, child)
+        if len(selected) >= max(0, limit):
+            break
+    if not selected or limit <= 0:
+        return context
+    loaded = injected_context_chunks(anchors=list(selected.values()), settings=None)
+    if loaded is None:
+        return context
+    known.update((retrieval_record_id(record), record) for record in map(_stored_chunk_answer_record, loaded))
+    record_retrieval_stage(
+        {
+            "stage": "context_recovery",
+            "anchor_limit": limit,
+            "anchor_ids": [retrieval_record_id(record) for record in selected.values()],
+            "loaded_ids": [str(chunk.chunk_uid) for chunk in loaded],
+        }
+    )
+    return replace(context, expansion_records=tuple(known.values()))
+
+
 def _deferred_document_records(context: AnswerContext, max_records: int) -> ContextRecovery:
     """後回しにした文書の child の親を、順位順に最大 max_records 件、既取得 pool から返す (#1028)。"""
+    context = _hydrate_recovery_context(context, context.deferred_records, max_records)
     pool = {r.chunk_uid or r.id: r for r in context.expansion_records}
     visible = {r.chunk_uid or r.id for r in context.records}
     selected: dict[str, AnswerRecord] = {}
     for child in context.deferred_records:
-        parent = pool.get(child.parent_chunk_uid) if child.chunk_level == "child" and child.parent_chunk_uid else child
+        strategy = child.metadata.get("chunk_strategy")
+        parent_mode = strategy in (None, "small_to_big", "small_to_big_parent_child")
+        parent = (pool.get(child.parent_chunk_uid) or child) if parent_mode and child.parent_chunk_uid else child
         uid = (parent.chunk_uid or parent.id) if parent is not None else ""
         if not uid or uid in visible or uid in selected:
             continue
