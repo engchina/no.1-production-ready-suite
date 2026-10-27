@@ -35,6 +35,7 @@ def _chunk(chunk_id: str, text: str, seq: int) -> RetrievedChunk:
         metadata={
             "chunk_group_id": "chunk-docling-p000001",
             "parent_text": PARENT_TEXT,
+            "chunk_strategy": "small_to_big",
             "engine_search_text": f"Source file: manual.pdf\nChild text: {text}",
             "engine_chunk_seq": seq,
             "page_start": 1,
@@ -133,7 +134,11 @@ class FakeOracle:
         return self.chunks[:1]
 
     async def context_group_siblings(
-        self, anchors: list[RetrievedChunk], *, max_chunks_per_group: int
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_group: int,
+        neighbor_child_count: int | None = None,
     ) -> list[RetrievedChunk]:
         return self.chunks[1:]
 
@@ -1439,6 +1444,7 @@ def _doc_chunk(
                 **chunk.metadata,
                 "chunk_group_id": f"{document_id}-p1",
                 "parent_text": text,
+                "chunk_strategy": "small_to_big",
                 "engine_search_text": f"Source file: {file_name}\nChild text: {text}",
                 "engine_metadata_json": json.dumps(metadata, ensure_ascii=False),
             },
@@ -1468,7 +1474,11 @@ class TwoDocumentOracle(FakeOracle):
         return list(self.chunks)
 
     async def context_group_siblings(
-        self, anchors: list[RetrievedChunk], *, max_chunks_per_group: int
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_group: int,
+        neighbor_child_count: int | None = None,
     ) -> list[RetrievedChunk]:
         return []
 
@@ -1771,7 +1781,7 @@ async def test_answer_engine_search_puts_first_page_context_on_child_and_parent(
 
     documents = {chunk.chunk_uid: chunk.metadata.get("document") for chunk in result.all_chunks}
     assert documents["doc-1:c1"] == {"first_page_context": _first_page_context()}
-    assert documents["doc-1:chunk-docling-p000001"] == documents["doc-1:c1"]
+    assert documents["doc-1:cs-1:chunk-docling-p000001"] == documents["doc-1:c1"]
     assert documents["doc-1:c2"] == {"first_page_context": _first_page_context("旧い表紙")}
     child = next(chunk for chunk in result.child_chunks if chunk.chunk_uid == "doc-1:c1")
     assert FIRST_PAGE_TEXT not in child.retrieval_text
@@ -2071,6 +2081,7 @@ def _screen_chunk(chunk_id: str, text: str, section_path: list[str]) -> Retrieve
                 **chunk.metadata,
                 "chunk_group_id": "setting-p1",
                 "parent_text": text,
+                "chunk_strategy": "small_to_big",
                 "engine_search_text": f"Source file: {_SCREEN_FILE}\nChild text: {text}",
                 "section_path": " > ".join(section_path),
                 "chunk_set_id": "cs-setting",
@@ -2257,7 +2268,7 @@ async def test_screen_chunks_carry_classification_and_first_page_context() -> No
         "first_page_context": _first_page_context(),
     }
     assert documents["setting:c1"] == expected
-    assert documents["doc-setting:setting-p1"] == expected
+    assert documents["doc-setting:cs-setting:setting-p1"] == expected
     assert "setting:c2" not in documents
     assert oracle.classification_calls == [["doc-setting"]]
     assert oracle.first_page_calls == [["cs-setting"]]
@@ -3323,7 +3334,11 @@ class CoverageOracle(FakeOracle):
         return [self.order] if "受注" in query else [self.invoice]
 
     async def context_group_siblings(
-        self, anchors: list[RetrievedChunk], *, max_chunks_per_group: int
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_group: int,
+        neighbor_child_count: int | None = None,
     ) -> list[RetrievedChunk]:
         return []
 
@@ -3787,3 +3802,33 @@ def test_engine_bridge_keeps_original_search_context(engine: bool, enabled: bool
     assert result.metadata["context_header_enabled"] is enabled
     assert result.metadata.get("context_header") == metadata.get("context_header")
     assert "context_header" not in result.text
+
+
+def test_context_parent_uses_only_stored_parent_text_and_artifact_scope() -> None:
+    from app.rag.answer_engine import _SearchState, _stored_child, _stored_parents
+
+    chunk = _chunk("child-a", "子の原文", 1)
+    state = _SearchState()
+    state.chunks[chunk.chunk_id] = chunk
+    stored = _stored_child(chunk, rrf_score=0.9)
+    assert _stored_parents([stored], state)[0].text == PARENT_TEXT
+    for metadata in (
+        {**chunk.metadata, "chunk_strategy": "fixed_length"},
+        {**chunk.metadata, "parent_text": ""},
+    ):
+        modified = chunk.model_copy(update={"metadata": metadata})
+        state.chunks[chunk.chunk_id] = modified
+        assert _stored_parents([_stored_child(modified, rrf_score=0.9)], state) == []
+    versions = [
+        chunk.model_copy(
+            update={
+                "chunk_id": f"child-{i}",
+                "metadata": {**chunk.metadata, "chunk_set_id": f"set-{i}"},
+            }
+        )
+        for i in range(2)
+    ]
+    state.chunks.update({c.chunk_id: c for c in versions})
+    parents = _stored_parents([_stored_child(c, rrf_score=0.9) for c in versions], state)
+    assert len(parents) == 2
+    assert parents[0].chunk_uid != parents[1].chunk_uid

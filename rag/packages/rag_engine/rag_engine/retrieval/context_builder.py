@@ -20,11 +20,9 @@ from rag_engine.retrieval.article_catalog import is_added_catalog_article, is_ca
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.entity_expansion import is_reserved_entity_expansion
 from rag_engine.retrieval.evidence_cues import evidence_cues
-from rag_engine.retrieval.evidence_selection import evidence_relevance
 from rag_engine.retrieval.metadata_context import answer_metadata_context, document_context_key, with_child_contexts
-from rag_engine.retrieval.operation_context import mentions_operation_section, operation_labels, operation_target_score
+from rag_engine.retrieval.operation_context import operation_labels
 from rag_engine.retrieval.reference_follow import is_followed_reference, reference_source_uid
-from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests
 
 DEFAULT_MAX_RECORD_TEXT_CHARS = 1200
 DEFAULT_MIN_SNIPPET_CHARS = 80
@@ -167,6 +165,7 @@ class ContextBundle:
     evidence_tree: tuple[ContextParentEvidence, ...] = ()
     status: Literal["ready", "insufficient"] = "ready"
     insufficient_reason: str = ""
+    excluded_evidence: tuple[dict[str, str], ...] = ()
 
     @property
     def ready(self) -> bool:
@@ -188,6 +187,7 @@ class ContextBundle:
         return {
             "status": self.status,
             "insufficient_reason": self.insufficient_reason,
+            "excluded_evidence": list(self.excluded_evidence),
             "evidence": [item.to_payload() for item in self.evidence],
             "evidence_tree": [item.to_payload() for item in self.evidence_tree],
         }
@@ -271,7 +271,11 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
 
     def group_for_child(child: Any) -> _ParentEvidenceBuilder | None:
         parent_key = _record_parent_context_key(child)
-        parent = parents.get(parent_key) if parent_key else None
+        parent = parents.get(parent_key) if parent_key and _uses_parent_context(child) else None
+        if parent is not None and (
+            _artifact_context_key(parent) != _artifact_context_key(child) or not str(getattr(parent, "text", "") or "").strip()
+        ):
+            parent = None
         record = parent or child
         group_id = record_context_key(record)
         if not group_id:
@@ -282,7 +286,13 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
         group = _ParentEvidenceBuilder(
             record=record,
             role="synthesis_parent" if parent is not None else "child_fallback",
-            reason="parent_of_retrieved_child" if parent is not None else "retrieved_child_without_parent",
+            reason=(
+                "parent_of_retrieved_child"
+                if parent is not None
+                else "parent_unavailable_child_fallback"
+                if _uses_parent_context(child)
+                else "retrieved_chunk"
+            ),
         )
         groups_by_id[group_id] = group
         groups.append(group)
@@ -319,7 +329,7 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
 
     top_k = max(1, int(request.top_k or 1))
     max_anchors_per_parent = max(1, int(request.max_anchors_per_parent or 1))
-    anchors_by_parent: dict[tuple[Any, ...], int] = {}
+    anchors_by_parent: dict[str, int] = {}
     anchor_count = 0
     catalog_limit = max(0, int(request.catalog_records or 0))
     # 目録で選んだ条（#2254）は、検索の根拠の起点と親を決めた後に足す（検索の根拠の選び方を変えない）。
@@ -346,12 +356,11 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
         # 同じ親の child は起点を最大 MAX_ANCHORS_PER_PARENT 件に抑える。親が 6,000 字だと 1 親に child が
         # 6 件以上あり、上位 top_k が 2〜3 の機能で埋まって別の要求の節（複数要求の問い合わせの片方）が
         # 入らない。親の本文は起点 1 件で全 child が入るため、同じ親の起点を増やしても根拠は増えない (#669)。
-        parent_key = _child_sibling_context_key(child)
+        parent_key = _child_sibling_context_key(child) if _uses_parent_context(child) else record_context_key(child)
         if anchors_by_parent.get(parent_key, 0) >= max_anchors_per_parent:
             continue
         anchors_by_parent[parent_key] = anchors_by_parent.get(parent_key, 0) + 1
         anchor_count += 1
-        siblings = children_by_parent.get(parent_key, [])
         add_child(
             group,
             child,
@@ -359,106 +368,10 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
             "top_retrieved_child",
             retrieval_rank=retrieval_rank,
         )
-        for neighbor in _chunk_neighbors(
-            child,
-            siblings,
-            request.neighbor_child_count,
-        ):
-            add_child(group, neighbor, "neighbor_context", "adjacent_child")
-        for neighbor in _same_page_chunk_neighbors(child, siblings, request.neighbor_child_count):
-            add_child(group, neighbor, "same_page_context", "same_page_child")
-        if group.role == "synthesis_parent":
-            for sibling in siblings:
-                add_child(group, sibling, "parent_context", "same_parent_child")
 
-    ranked_groups = sorted(groups, key=_parent_group_sort_key)
-    # 同一parentだけでは、スクリーンショットと別parentの操作説明が切り離される。
-    # 検索済み主根拠は落とさず、明示された補助枠または空き枠を前後の操作説明に使う。
-    # 上限まで候補がある場合も、既存の同一操作を並べてbatch境界の分断を減らす。
-    primary = _reserve_entity_expansion_groups(ranked_groups, request.max_records)
-    support_limit = min(3, max(0, request.max_records - len(primary), request.support_record_limit), max(0, request.neighbor_child_count))
-    selected_ids = {record_context_key(group.record) for group in primary}
-    # 全候補を集めてから機能別に選ぶ。上位画面が補助枠を独占しない。
-    candidates = {}
-    for group in primary:
-        for parent in _operation_parent_neighbors(group.record, list(parents.values())):
-            key = record_context_key(parent)
-            if key not in selected_ids:
-                candidates[key] = parent
-    visual_ids = set()
-    for group in primary:
-        for parent in _visual_context_parents(group.record, list(parents.values())):
-            key = record_context_key(parent)
-            if key not in selected_ids:
-                candidates[key] = parent
-                visual_ids.add(key)
-    # 上位に別機能だけがある場合も、同じ文書・章の編集対象見出しを持つ
-    # 候補を独立した機能として提示する。同一操作とみなして連結はしない。
-    scopes = {
-        (_record_scope_context_key(group.record), str(getattr(group.record, "chunk_uid", "") or "").partition(":")[0]) for group in primary
-    }
-    chapters = {label.split("-(", 1)[0] for group in primary for label in _operation_labels(group.record) if "-(" in label}
-    alternative_ids = set()
-    for parent in parents.values() if STEPS_REQUEST in explicit_requests(request.question) else ():
-        labels = _operation_labels(parent)
-        if (
-            (_record_scope_context_key(parent), str(getattr(parent, "chunk_uid", "") or "").partition(":")[0]) not in scopes
-            or len(labels) != 1
-            or not any("-(" in label and label.split("-(", 1)[0] in chapters for label in labels)
-            or operation_target_score(request.question, parent) <= 0
-        ):
-            continue
-        for candidate in [parent, *_operation_parent_neighbors(parent, list(parents.values()))]:
-            key = record_context_key(candidate)
-            if key not in selected_ids:
-                candidates[key] = candidate
-                alternative_ids.add(key)
-    support = []
-    covered: set[tuple[str, str]] = set()
-    target_functions = {
-        (_record_scope_context_key(p), label)
-        for p in candidates.values()
-        if operation_target_score(request.question, p) >= 80
-        for label in _operation_labels(p)
-    }
-    while candidates and len(support) < support_limit:
-
-        def candidate_priority(parent):
-            labels = {(_record_scope_context_key(parent), s) for s in _operation_labels(parent)}
-            text = str(getattr(parent, "text", "") or "")
-            entry_bonus = 100 if labels & target_functions and mentions_operation_section(text) else 0
-            return (
-                record_context_key(parent) in visual_ids,
-                operation_target_score(request.question, parent) > 0 or bool(entry_bonus),
-                bool(labels - covered),
-                operation_target_score(request.question, parent) + entry_bonus + evidence_relevance(request.question, text),
-                -_record_page(parent),
-                record_context_key(parent),
-            )
-
-        parent = max(candidates.values(), key=candidate_priority)
-        key = record_context_key(parent)
-        del candidates[key]
-        covered.update((_record_scope_context_key(parent), s) for s in _operation_labels(parent))
-        reason = (
-            "visual_context_source"
-            if key in visual_ids
-            else "alternative_operation_context"
-            if key in alternative_ids
-            else "same_operation_context"
-        )
-        neighbor = _ParentEvidenceBuilder(record=parent, role="synthesis_parent", reason=reason)
-        for child in children_by_parent.get(key, []):
-            add_child(
-                neighbor,
-                child,
-                "visual_context" if key in visual_ids else "operation_context",
-                "explicit_visual_context_source" if key in visual_ids else "same_operation_across_parent",
-            )
-        support.append(neighbor)
-        selected_ids.add(key)
-    selected = primary + support
-    # 目録で選んだ条（#2254）と会話の添付（#3212）: 親が選んだ親にあれば起点として添え、無ければ親を親の数の外に足す。
+    # 起点は Rerank 順を保つ。親子分割では親本文だけを使い、隣接親・同一ページ・子全体を補完しない。
+    primary = _reserve_entity_expansion_groups(sorted(groups, key=_parent_group_sort_key), request.max_records)
+    selected = list(primary)
     selected_groups = {id(group) for group in selected}
     added_children = [
         *((rank, child, "catalog_article") for rank, child in catalog_children),
@@ -470,26 +383,45 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
             continue
         add_child(group, child, "retrieved_anchor", reason, retrieval_rank=retrieval_rank)
         if id(group) not in selected_groups:
-            # 選んだ条・添付のために足した親（条は呼び出し元が検索の根拠と分けて扱う。MCP の根拠の上限に数えない）。
             group.reason = reason
-            parent_key = _child_sibling_context_key(child)
-            for neighbor in _chunk_neighbors(child, children_by_parent.get(parent_key, []), request.neighbor_child_count):
-                add_child(group, neighbor, "neighbor_context", "adjacent_child")
             selected.append(group)
             selected_groups.add(id(group))
-    if request.neighbor_child_count > 0:
-        remaining = {record_context_key(group.record): group for group in selected}
-        ordered = []
-        for group in selected:
-            key = record_context_key(group.record)
-            if key not in remaining:
+    # 非親子の前後は同じ成果物の保存順から選び、原文の個別 record として回答へ渡す。
+    neighbors: dict[str, Any] = {}
+    for group in selected:
+        for anchor in tuple(group.children.values()):
+            if anchor.role != "retrieved_anchor" or _uses_parent_context(anchor.record):
                 continue
-            ordered.append(remaining.pop(key))
-            for neighbor in _operation_parent_neighbors(group.record, [entry.record for entry in selected]):
-                adjacent = remaining.pop(record_context_key(neighbor), None)
-                if adjacent is not None:
-                    ordered.append(adjacent)
-        selected = ordered
+            siblings = children_by_parent.get(_child_sibling_context_key(anchor.record), [])
+            for neighbor in _chunk_neighbors(anchor.record, siblings, request.neighbor_child_count):
+                key = record_context_key(neighbor)
+                if key not in {record_context_key(entry.record) for entry in selected}:
+                    neighbors.setdefault(key, neighbor)
+    for neighbor in neighbors.values():
+        if len(selected) >= request.max_records + len(added_children):
+            break
+        group = group_for_child(neighbor)
+        if group is None or id(group) in selected_groups:
+            continue
+        group.reason = "adjacent_child"
+        add_child(group, neighbor, "neighbor_context", "adjacent_child")
+        selected.append(group)
+        selected_groups.add(id(group))
+    # 図に保存された明示的な原文 ID の対応は、距離による近傍補完とは分けて保つ。
+    visual_limit = max(0, request.support_record_limit)
+    visual_added = 0
+    selected_keys = {record_context_key(group.record) for group in selected}
+    for anchor_group in tuple(selected):
+        for parent in _visual_context_parents(anchor_group.record, list(parents.values())):
+            key = record_context_key(parent)
+            if key in selected_keys or visual_added >= visual_limit:
+                continue
+            group = _ParentEvidenceBuilder(record=parent, role="synthesis_parent", reason="visual_context_source")
+            for child in children_by_parent.get(f"{_artifact_context_key(parent)}::{key}", []):
+                add_child(group, child, "visual_context", "explicit_visual_context_source")
+            selected.append(group)
+            selected_keys.add(key)
+            visual_added += 1
     evidence_tree = _finalize_parent_evidence(selected)
     return _context_bundle_from_parent_evidence(evidence_tree, max_chars=request.max_chars)
 
@@ -772,6 +704,11 @@ def _context_bundle_from_parent_evidence(
             status="insufficient",
             insufficient_reason="context character budget is zero",
         )
+    excluded = tuple(
+        {"id": _record_id(item.record), "reason": "context_character_budget", "context_reason": item.reason}
+        for item in evidence_tree
+        if len(str(getattr(item.record, "text", "") or "")) > max_chars
+    )
     kept = tuple(item for item in evidence_tree if len(str(getattr(item.record, "text", "") or "")) <= max_chars)
     if evidence_tree and not kept:
         return ContextBundle(
@@ -783,6 +720,7 @@ def _context_bundle_from_parent_evidence(
             insufficient_reason=(
                 f"parent chunk exceeds synthesis budget; re-run chunking with a smaller parent size: {_record_id(evidence_tree[0].record)}"
             ),
+            excluded_evidence=excluded,
         )
     evidence_tree = kept
     sections = []
@@ -808,7 +746,7 @@ def _context_bundle_from_parent_evidence(
     evidence = tuple(
         ContextEvidence(
             record=item.record,
-            role="supporting" if item.reason in {"same_operation_context", "visual_context_source"} else "primary",
+            role="supporting" if item.reason in {"same_operation_context", "visual_context_source", "adjacent_child"} else "primary",
             reason=item.reason,
             anchor_child_ids=item.anchor_child_ids,
         )
@@ -819,6 +757,7 @@ def _context_bundle_from_parent_evidence(
         text=text,
         evidence=evidence,
         evidence_tree=evidence_tree,
+        excluded_evidence=excluded,
     )
 
 
@@ -1067,7 +1006,25 @@ def _record_parent_context_key(record: Any) -> str:
 
 
 def _child_sibling_context_key(record: Any) -> str:
-    return _record_parent_context_key(record) or _record_scope_context_key(record)
+    if _uses_parent_context(record):
+        return f"{_artifact_context_key(record)}::{_record_parent_context_key(record)}"
+    return _artifact_context_key(record)
+
+
+def _uses_parent_context(record: Any) -> bool:
+    """保存された方式を優先する。SDK の親子型は明示的な親子参照を契約にする。"""
+    metadata = getattr(record, "metadata", {}) or {}
+    if "chunk_strategy" in metadata:
+        return metadata["chunk_strategy"] in {"small_to_big", "small_to_big_parent_child"}
+    return bool(_record_parent_context_key(record))
+
+
+def _artifact_context_key(record: Any) -> str:
+    """文書・レシピ・chunk_set・解析版の境界を近傍選択に保つ。"""
+    metadata = getattr(record, "metadata", {}) or {}
+    return repr(
+        (_record_scope_context_key(record), *(str(metadata.get(key) or "") for key in ("document_id", "recipe_id", "chunk_set_id")))
+    )
 
 
 def _record_scope_context_key(record: Any) -> str:

@@ -325,7 +325,11 @@ class DerivedHitOracle(FakeOracle):
         return [self.hit]
 
     async def context_group_siblings(
-        self, anchors: list[RetrievedChunk], *, max_chunks_per_group: int
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_group: int,
+        neighbor_child_count: int | None = None,
     ) -> list[RetrievedChunk]:
         # 同じ親の前後の文脈に派生の chunk が混じっても、根拠に渡さない。
         return [_derived("section_summary", chunk_id="doc-1:nav-sibling")]

@@ -47,7 +47,11 @@ class GuideStepOracle(FakeOracle):
         return [self.step_b] if "画面 B" in query else [self.step_a]
 
     async def context_group_siblings(
-        self, anchors: list[RetrievedChunk], *, max_chunks_per_group: int
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_group: int,
+        neighbor_child_count: int | None = None,
     ) -> list[RetrievedChunk]:
         return []
 

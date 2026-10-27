@@ -82,7 +82,10 @@ def test_parents_follow_the_best_anchor_in_the_rerank_order():
         child("s3", 4, "本文", "t.pdf", "pt", 0.4),
         child("u2", 5, "位置を保つ候補", "v.pdf", "pv"),
     ]
-    parents = [parent(name, i, "本文", f"{name}.pdf") for i, name in enumerate(["pu", "ps", "pt", "pv"], start=1)]
+    parents = [
+        parent(name, i, "本文", source)
+        for i, (name, source) in enumerate(zip(["pu", "ps", "pt", "pv"], ["u.pdf", "s.pdf", "t.pdf", "v.pdf"], strict=True), start=1)
+    ]
     assert [r.id for r in _bundle(children, parents, max_records=3).records] == ["pu", "ps", "pt"]
 
 
