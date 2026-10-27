@@ -290,6 +290,9 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
                       </h3>
                       <p id={hintId} className="mt-1 text-xs leading-relaxed text-fg-muted">
                         {t(step.hint)}
+                        {step.field === "navigation_summary_enabled" && settings.navigation_summary_max_nodes != null ? (
+                          <> {t("settings.parserAdapters.postParse.navigationSummary.limit", {count: settings.navigation_summary_max_nodes})}</>
+                        ) : null}
                       </p>
                     </div>
                     <Switch

@@ -84,6 +84,8 @@ export function DocumentPreview({
   preparedArtifact = null,
   showFallbackDownload = true,
   focusPage = null,
+  onPageChange,
+  focusRequestKey = null,
   focusBbox = null,
   focusBboxMode = null,
   focusBboxUnit = null,
@@ -101,6 +103,8 @@ export function DocumentPreview({
   preparedArtifact?: DocumentPreprocessArtifact | null;
   showFallbackDownload?: boolean;
   focusPage?: number | null;
+  onPageChange?: (page: number) => void;
+  focusRequestKey?: string | null;
   focusBbox?: number[] | null;
   focusBboxMode?: BboxCoordinateMode | null;
   focusBboxUnit?: BboxOverlayUnit | null;
@@ -155,6 +159,8 @@ export function DocumentPreview({
       // 表示できない形式（Office の原本・処理後の JSONL など）は、形式によらず共通の案内の 1 文にする（#2679）。
       downloadUrl={showFallbackDownload ? downloadUrl : null}
       focusPage={focusPage}
+      onPageChange={onPageChange}
+      focusRequestKey={focusRequestKey}
       focusBbox={focusBbox}
       focusBboxMode={focusBboxMode}
       focusBboxUnit={focusBboxUnit}

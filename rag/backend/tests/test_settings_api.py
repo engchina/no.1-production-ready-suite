@@ -82,6 +82,7 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
 ) -> None:
     """adapter readiness は flag と Python package 有無を非機密に返す。"""
     settings = get_settings()
+    monkeypatch.setattr(settings, "rag_navigation_summary_max_nodes", 37)
     # 旧 runtime 値 auto は利用者向けには返さず、明示値 local へ寄せる。
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "auto")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
@@ -105,6 +106,7 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
 
     assert resp.status_code == 200
     body = resp.json()["data"]
+    assert body["navigation_summary_max_nodes"] == 37
     assert body["adapter_backend"] == "local"
     assert body["effective_order"] == []
     by_backend = {adapter["backend"]: adapter for adapter in body["adapters"]}

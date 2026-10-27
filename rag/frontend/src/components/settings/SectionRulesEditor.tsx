@@ -17,7 +17,6 @@ import {
 import { ArrowDown, ArrowUp, Plus, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
 import { useState } from "react";
 
-import { SectionRulesPreview } from "@/components/settings/SectionRulesPreview";
 
 import { SECTION_RULES_OPTIONS } from "@/components/documents/DocumentProcessingConfigPanel.values";
 import { ApiErrorState } from "@/components/StateViews";
@@ -75,7 +74,6 @@ export function SectionRulesEditor() {
   const reset = useResetSectionRulesSettings();
   const confirm = useConfirm();
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState("");
 
@@ -187,7 +185,8 @@ export function SectionRulesEditor() {
           label={t("sectionRules.mode.label")}
           value={current.mode}
           options={SECTION_RULES_OPTIONS}
-          width="md"
+          width="lg"
+          wrapOptions
           onValueChange={(mode) => update({ mode })}
         />
 
@@ -301,9 +300,6 @@ export function SectionRulesEditor() {
           </Disclosure>
         )}
       </FormGrid>
-      <Disclosure summary={t("sectionRules.preview.title")} open={previewOpen} onOpenChange={setPreviewOpen}>
-        {previewOpen ? <SectionRulesPreview mode={current.mode} rules={current.rules} disabled={Boolean(hasErrors)} /> : null}
-      </Disclosure>
 
       <FormActionBar
         ariaLabel={t("sectionRules.actions.form")}

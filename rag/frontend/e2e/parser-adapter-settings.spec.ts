@@ -226,7 +226,7 @@ async function mockParserAdaptersWithPostParse(
   initial: { vision_enabled: boolean; field_extraction_enabled: boolean; navigation_summary_enabled: boolean }
 ) {
   const patches: Record<string, unknown>[] = [];
-  let current = { heading_level_inference_enabled: false, ...initial };
+  let current = { heading_level_inference_enabled: false, navigation_summary_max_nodes: 37, ...initial };
   const envelope = () =>
     parserAdapterEnvelope({
       ...current,
@@ -417,7 +417,7 @@ test("図・表の説明を同時に呼ぶ数を検証して保存する（#2002
   await expect(card.getByText("未保存の変更があります。")).toHaveCount(0);
 });
 
-test("項目抽出の項目の定義を追加・検証・保存できる", async ({ page }) => {
+test("項目抽出の項目の定義を追加・検証・保存できる", { tag: "@responsive" }, async ({ page }) => {
   await mockParserAdaptersWithPostParse(page, {
     vision_enabled: false,
     field_extraction_enabled: true,
@@ -434,6 +434,17 @@ test("項目抽出の項目の定義を追加・検証・保存できる", async
   await definitions.click();
   const editor = page.getByTestId("extraction-fields-editor");
   await expect(editor.getByLabel("項目名")).toHaveValue("請求書番号");
+  const layout = await editor.evaluate(node => {
+    const row = node.querySelector("ol > li")!;
+    const description = node.querySelector<HTMLInputElement>('input[id$="-description"]')!;
+    return { container: node.clientWidth, row: row.getBoundingClientRect().width, description: description.getBoundingClientRect().width,
+      name: node.querySelector('input[id$="-name"]')!.getBoundingClientRect().width };
+  });
+  expect(Math.abs(layout.row - layout.container)).toBeLessThanOrEqual(1);
+  if (page.viewportSize()!.width >= 1440) expect(layout.description).toBeGreaterThan(layout.name);
+  await expectNoPageOverflow(page);
+  await editor.screenshot({ path: test.info().outputPath("extraction-fields-full-width.png") });
+
 
   await editor.getByRole("button", { name: "項目を追加" }).click();
   await expect(editor.getByLabel("項目名").nth(1)).toBeFocused();
@@ -1588,6 +1599,15 @@ test("文書解析の各プロンプトは機能の位置で共通の編集操�
   await mockExtractionFields(page);
   const requests = await mockFeaturePrompts(page);
   await page.goto("/settings/parser-adapters");
+  const dotsCard = page.getByTestId("external-parser-connection-dots_ocr");
+  const prompt = dotsCard.locator("summary").filter({ hasText: "Dots.OCR の読み取りプロンプト" });
+  await expect(prompt).toHaveCount(1);
+  await expect(page.locator("summary").filter({hasText: "Dots.OCR の読み取りプロンプト"})).toHaveCount(1);
+  const position = await prompt.boundingBox();
+  const connection = await dotsCard.getByRole("button", { name: "接続を確認", exact: true }).boundingBox();
+  expect(position!.y).toBeGreaterThanOrEqual(connection!.y + connection!.height);
+  await expect(page.getByText("GPU 解析エンジンは外部 API を直接呼びます。", {exact: false})).toHaveCount(0);
+
   for (const [key, title] of [
     ["external_ocr", "Dots.OCR の読み取りプロンプト"],
     ["heading_levels", "見出しの階層の推定プロンプト"],
@@ -1601,60 +1621,39 @@ test("文書解析の各プロンプトは機能の位置で共通の編集操�
   await page.screenshot({ path: test.info().outputPath("feature-prompts.png"), fullPage: true });
 });
 
-// 保存しない章節の比較は、文書と既存レシピを明示して実行する。
-test("章節の候補を保存前に確認し、方式を変えると古い候補を隠す", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("文書の章節候補の専用確認機能は表示しない", { tag: "@responsive" }, async ({ page }) => {
   await mockParserAdaptersWithPostParse(page, { vision_enabled: false, field_extraction_enabled: false, navigation_summary_enabled: false });
-  await mockExtractionFields(page);
-  const state = await mockSectionRules(page);
-  const bodies: Record<string, unknown>[] = [];
-  await page.route(/\/api\/documents\?/, (route) => route.fulfill({ json: {
-    data: { items: [{ id: "doc-a", file_name: "文書 A.txt" }], total: 1, offset: 0, limit: 25 }, error_messages: [], warning_messages: [],
-  } }));
-  await page.route("**/api/documents/doc-a/recipes", (route) => route.fulfill({ json: {
-    data: [{ recipe_id: "recipe-a", document_id: "doc-a", slot_no: 1, steps: [] }], error_messages: [], warning_messages: [],
-  } }));
-  await page.route("**/api/documents/doc-a/sections/preview", (route) => {
-    const body = route.request().postDataJSON() as Record<string, unknown>;
-    bodies.push(body);
-    if (bodies.length === 4) return route.fulfill({ status: 503, json: { data: null, error_messages: ["候補を読み込めませんでした。"], warning_messages: [] } });
-    return route.fulfill({ json: { data: {
-      document_id: "doc-a", recipe_id: "recipe-a", extraction_recipe_id: "extract-a", mode: body.mode,
-      effective_mode: "parser", recipe_overrides_mode: true, extraction_available: bodies.length !== 3, manual_edits_present: true, page_count: 3,
-      sections: body.mode === "numbered" ? [] : [
-        { id: "section-a", title: "概要", level: 1, page_start: 1, page_end: 3 },
-        { id: "section-b", title: "設定", level: 2, page_start: 2, page_end: 3 },
-      ],
-    }, error_messages: [], warning_messages: [] } });
-  });
+  await mockExtractionFields(page); await mockSectionRules(page);
   await page.goto("/settings/parser-adapters#post-parse-section-rules");
-  const editor = page.getByTestId("section-rules-editor");
-  await editor.getByText("文書で章節の候補を確認する", { exact: true }).click();
-  const preview = page.getByTestId("section-rules-preview");
-  const run = preview.getByRole("button", { name: "章節の候補を確認", exact: true });
-  await expect(run).toBeDisabled();
-  await preview.getByRole("button", { name: /^対象文書 / }).click();
-  await page.getByRole("option", { name: "文書 A.txt", exact: true }).click();
-  await run.click();
-  await expect(preview.getByRole("list", { name: "選択中の方式の候補：2 件" })).toBeVisible();
-  await expect(preview).toContainText("人が編集した章節があります");
-  await expect(preview).toContainText("レシピの指定方式");
-  await expect(preview).toContainText("ページ 2〜3");
-  expect(bodies[0]).toMatchObject({ mode: "parser", recipe_id: "recipe-a" });
-  await preview.screenshot({ path: testInfo.outputPath("section-rules-preview.png") });
-  await editor.getByRole("combobox", { name: "方式", exact: true }).click();
-  await page.getByRole("option", { name: "番号の規則：1.・1.1・1.1.1", exact: true }).click();
-  await expect(preview.getByRole("list")).toHaveCount(0);
-  await expect(preview).toContainText("候補をもう一度確認してください");
-  await run.click();
-  await expect(preview).toContainText("この方式では章節の候補はありません");
-  expect(bodies[1]).toMatchObject({ mode: "numbered", recipe_id: "recipe-a" });
-  await run.click();
-  await expect(preview).toContainText("保存済みの抽出結果がありません");
-  await run.click();
-  await expect(preview).toContainText("候補を読み込めませんでした。");
-  await preview.getByRole("button", { name: /再試行|再読み込み/ }).click();
-  await expect(preview).toContainText("この方式では章節の候補はありません");
-  expect(bodies).toHaveLength(5);
-  expect(state.patches).toEqual([]);
+  await expect(page.getByTestId("section-rules-editor")).toBeVisible();
+  await expect(page.getByText("文書で章節の候補を確認する", {exact: true})).toHaveCount(0);
+  await expect(page.getByTestId("section-rules-preview")).toHaveCount(0);
+});
+
+
+test("章節の方式は広い欄と折り返す選択肢で全文を読める", { tag: "@responsive" }, async ({ page }) => {
+  await mockParserAdaptersWithPostParse(page, { vision_enabled: false, field_extraction_enabled: false, navigation_summary_enabled: false });
+  await mockExtractionFields(page); await mockSectionRules(page);
+  await page.goto("/settings/parser-adapters#post-parse-section-rules");
+  const select = page.getByRole("combobox", {name: "方式", exact: true});
+  const size = await select.evaluate(node => ({width: node.getBoundingClientRect().width, root: parseFloat(getComputedStyle(document.documentElement).fontSize)}));
+  if (page.viewportSize()!.width >= 640) expect(size.width).toBeCloseTo(size.root * 28, 0);
+  await select.click();
+  const option = page.getByRole("option", {name: "番号の規則：編・章・節・款・目・条", exact: true});
+  await expect(option).toBeVisible();
+  const clipped = await option.getByText("番号の規則：編・章・節・款・目・条", {exact: true}).evaluate(node => node.scrollWidth > node.clientWidth + 1);
+  expect(clipped).toBe(false);
+  await option.click(); await expect(select).toHaveText("番号の規則：編・章・節・款・目・条");
   await expectNoPageOverflow(page);
+  await select.screenshot({path: test.info().outputPath("section-rules-mode.png")});
+});
+
+
+test("章節の要約は実効の対象数上限を示し不要な比較文を出さない", { tag: "@responsive" }, async ({ page }) => {
+  await mockParserAdaptersWithPostParse(page, {vision_enabled: false, field_extraction_enabled: false, navigation_summary_enabled: false});
+  await mockExtractionFields(page); await mockFeaturePrompts(page);
+  await page.goto("/settings/parser-adapters");
+  await expect(page.getByText(/正常に処理した章節が最大 37 件/)).toBeVisible();
+  await expect(page.getByText(/モデルの呼び出し回数の上限ではありません/)).toBeVisible();
+  await expect(page.getByText("RAPTOR は使いません。", {exact: false})).toHaveCount(0);
 });

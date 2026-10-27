@@ -44,6 +44,7 @@ export type DocumentPreviewPagesState =
   | { status: "error"; error: unknown; onRetry?: () => void };
 
 export interface DocumentPreviewFocus {
+  focusRequestKey?: string | null;
   focusPage?: number | null;
   focusBbox?: number[] | null;
   focusBboxMode?: BboxCoordinateMode | null;
@@ -53,6 +54,8 @@ export interface DocumentPreviewFocus {
 
 export interface DocumentPreviewProps extends DocumentPreviewFocus {
   kind: DocumentPreviewKind;
+  /** ページ画像のビューアで表示中の実ページを通知する。 */
+  onPageChange?: (page: number) => void;
   fileName: string;
   /** `image`: 画像の URL。 */
   imageUrl?: string | null;
@@ -109,6 +112,8 @@ export function DocumentPreview({
   unsupportedMessage,
   downloadUrl = null,
   focusPage = null,
+  onPageChange,
+  focusRequestKey = null,
   focusBbox = null,
   focusBboxMode = null,
   focusBboxUnit = null,
@@ -127,6 +132,8 @@ export function DocumentPreview({
     return (
       <PreviewViewer
         key={imageUrl}
+        onPageChange={onPageChange}
+        focusRequestKey={focusRequestKey}
         kind="image"
         sizing={sizing}
         className={viewerClassName}
@@ -163,6 +170,8 @@ export function DocumentPreview({
     if (pages.status === "ready" && pages.pages.length > 0) {
       return (
         <PreviewViewer
+          onPageChange={onPageChange}
+        focusRequestKey={focusRequestKey}
           kind="pdf"
           sizing={sizing}
           className={viewerClassName}

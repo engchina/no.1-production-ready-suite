@@ -1155,6 +1155,7 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
         heading_level_inference_enabled=settings.rag_heading_level_inference_enabled,
         field_extraction_enabled=settings.rag_field_extraction_enabled,
         navigation_summary_enabled=settings.rag_navigation_summary_enabled,
+        navigation_summary_max_nodes=settings.rag_navigation_summary_max_nodes,
         vision_concurrency=settings.rag_vision_concurrency,
         mineru_license=_mineru_license_data(settings),
         config_source="runtime",

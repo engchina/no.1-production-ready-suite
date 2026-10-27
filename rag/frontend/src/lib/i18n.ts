@@ -252,8 +252,6 @@ export const ja = {
   "settings.parserAdapters.serviceBackend.unconfigured": "未設定",
   "settings.parserAdapters.roadmap.badge": "準備中（ロードマップ）",
   "settings.parserAdapters.roadmap.reason": "準備中（ロードマップ）のため、まだ選べません。",
-  "settings.parserAdapters.serviceBackend.note":
-    "GPU 解析エンジンは外部 API を直接呼びます。この画面から解析エンジンのサーバーの構築や起動は行いません。",
   "settings.parserAdapters.backend.structured_records_jsonl": "構造化レコード JSONL",
   "settings.parserAdapters.backend.structured_records_jsonl.description":
     "ファイル準備の CSV→JSONL・Excel→JSONL・Word→JSONL が作る構造化レコードの JSONL を、記録の単位で解析。固定分割で 1 記録 1 チャンクにする。選んだ場合だけ使用",
@@ -319,7 +317,8 @@ export const ja = {
   "settings.parserAdapters.postParse.fieldExtraction.empty":
     "項目の定義が 0 件で保存されているため、ナレッジベースで項目を定義していない文書からは何も抽出しません。下の項目の定義で項目を追加するか、「標準の項目に戻す」を使ってください。",
   "settings.parserAdapters.postParse.navigationSummary.hint":
-    "「章節の抽出規則」で作る章節ごとに、要約を OCI Enterprise AI で作り、検索にも使います。RAPTOR は使いません。章節ごとにモデルを呼び出します（上限あり）。無効でも章節ナビゲーションは作られ、「章節の抽出規則」は独立して適用されます。",
+    "「章節の抽出規則」で作る章節ごとに、要約を OCI Enterprise AI で作り、検索にも使います。章節ごとにモデルを呼び出します。無効でも章節ナビゲーションは作られ、「章節の抽出規則」は独立して適用されます。",
+  "settings.parserAdapters.postParse.navigationSummary.limit": "1 文書の 1 回の取込で、先頭から要約対象の章節を処理し、正常に処理した章節が最大 {count} 件になると止めます。上限を超えた章節もナビゲーションには残ります。失敗や再試行があるため、モデルの呼び出し回数の上限ではありません。",
   "settings.parserAdapters.postParse.actionsLabel": "解析後の処理の操作",
   "settings.parserAdapters.postParse.save": "解析後の処理を保存",
   "settings.parserAdapters.postParse.saved": "解析後の処理を保存しました。",
@@ -2909,6 +2908,7 @@ export const ja = {
     "全体の既定の項目の定義が 0 件で保存されているため、ナレッジベースで項目を定義していない文書では項目抽出は実行されません。文書解析の設定の「解析後の処理」で項目を追加するか、標準の項目に戻してください。",
   "documents.processingConfig.fieldSchemaStandard":
     "標準の項目（文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を抽出します。文書が属するナレッジベースで項目を定義していれば、その項目を使います。",
+  "flow.inspector.currentPage": "表示中のページ: p.{page}",
   "flow.extraction.navigation.title": "章節ナビゲーション",
   "documents.processingConfig.sectionRules": "章節の抽出規則",
   "sectionRules.mode.parser": "解析済みの見出しを使う",
@@ -2932,23 +2932,6 @@ export const ja = {
   "sectionRules.example.output": "章節の候補：概要の下に設定が入ります。見出しの構造がない解析結果では候補は0件です。",
   "sectionRules.example.tree": "概要（1ページ）\n  設定（2ページ）",
   "sectionRules.customDetails": "独自規則の詳細を編集する",
-  "sectionRules.preview.title": "文書で章節の候補を確認する",
-  "sectionRules.preview.hint": "選択中の方式と未保存の規則を、文書の保存済みの抽出結果に当てます。設定の保存、再取込、AIの呼び出し、要約生成は行いません。",
-  "sectionRules.preview.document": "対象文書",
-  "sectionRules.preview.recipe": "処理レシピ",
-  "sectionRules.preview.recipeName": "レシピ {number}",
-  "sectionRules.preview.choose": "選択してください",
-  "sectionRules.preview.run": "章節の候補を確認",
-  "sectionRules.preview.loading": "保存済みの抽出結果から章節を確認しています",
-  "sectionRules.preview.count": "選択中の方式の候補：{count} 件",
-  "sectionRules.preview.page": "ページ {start}〜{end}",
-  "sectionRules.preview.noPage": "ページ情報なし",
-  "sectionRules.preview.empty": "この方式では章節の候補はありません。番号の規則を試すか、解析結果に見出しや番号が保存されているか確認してください。",
-  "sectionRules.preview.noExtraction": "このレシピには保存済みの抽出結果がありません。文書の解析を完了してから確認してください。",
-  "sectionRules.preview.manual": "この文書には人が編集した章節があります。ここでは編集済みの最終表示を使わず、抽出結果から作る候補だけを表示します。",
-  "sectionRules.preview.override": "このレシピの指定方式は「{mode}」です。全体の既定を変更してもこの指定が優先されます。下の候補は比較用に選択中の方式で作っています。",
-  "sectionRules.preview.stale": "方式、規則、対象が変わりました。候補をもう一度確認してください。",
-  "sectionRules.preview.error": "章節の候補を確認できませんでした。対象と権限を確認して、もう一度試してください。",
   "sectionRules.level": "階層 {level}",
   "sectionRules.list.label": "独自の規則",
   "sectionRules.empty": "規則がありません。「規則を追加」かプリセットから読み込んでください。",
@@ -3861,7 +3844,7 @@ export const ja = {
   "settings.answerPrompts.field_extraction.description": "「メタデータ/項目抽出」が有効なときに、本文の単位ごとに渡す指示です。項目の定義は実行時に追加します。 保存した内容は次の処理から使い、処理済みの文書には再処理するまで反映しません。",
   "settings.answerPrompts.field_extraction.field": "プロンプト",
   "settings.answerPrompts.navigation_summary.title": "章節の要約プロンプト",
-  "settings.answerPrompts.navigation_summary.description": "文書解析の「章節の要約」が有効なときに、章節ごとに使います。RAPTOR は使いません。保存した内容は次の処理から使い、処理済みの文書には再処理するまで反映しません。",
+  "settings.answerPrompts.navigation_summary.description": "文書解析の「章節の要約」が有効なときに、章節ごとに使います。保存した内容は次の処理から使い、処理済みの文書には再処理するまで反映しません。",
   "settings.answerPrompts.navigation_summary.field": "プロンプト",
   "settings.answerPrompts.raptor_summary_system.title": "RAPTOR の階層の要約のシステムプロンプト",
   "settings.answerPrompts.raptor_summary_system.description": "文書分割後、RAPTOR の階層の要約が有効なときに使う共通の指示です。保存した内容は次の処理から使い、処理済みの文書には再処理するまで反映しません。",
@@ -3886,7 +3869,7 @@ export const ja = {
     "業務ガイドの取り込みで「回答の過程（Excel・テキスト）」から下書きを作るときと、品質評価で「回答の過程」から期待の下書きを作るとき（行ごと）",
   "settings.answerPrompts.stage.navigation_summary": "章節の要約",
   "settings.answerPrompts.stage.navigation_summary.condition":
-    "解析後の処理の「章節の要約」を有効にしたとき（章節ごと。上限あり）",
+    "解析後の処理の「章節の要約」を有効にしたとき（対象数の上限は文書解析の設定に表示）",
   "settings.answerPrompts.stage.raptor_summary": "RAPTOR の階層の要約",
   "settings.answerPrompts.stage.raptor_summary.condition":
     "RAPTOR の階層の要約を backend の設定で有効にしたとき（既定は無効）",

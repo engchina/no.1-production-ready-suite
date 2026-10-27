@@ -238,5 +238,19 @@ describe("evidencePreviewFocus", () => {
       await act(async () => root.unmount());
       host.remove();
     });
+    it("初期表示・ページ送り・出典への移動を親へ通知する", async () => {
+      const host = document.createElement("div"); document.body.append(host);
+      const root = createRoot(host); const seen: number[] = [];
+      const onPageChange = (page: number) => seen.push(page);
+      const render = (focusPage: number, focusRequestKey?: string) => <DocumentPreview kind="pdf" fileName="a.pdf" pages={{ status: "ready", pages: PAGES }} focusPage={focusPage} focusRequestKey={focusRequestKey} onPageChange={onPageChange} />;
+      await act(async () => root.render(render(1)));
+      expect(seen.at(-1)).toBe(1);
+      await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="次のページ"]')!.click());
+      expect(seen.at(-1)).toBe(2);
+      await act(async () => root.render(render(1, "repeat-first-page")));
+      expect(seen.at(-1)).toBe(1);
+      await act(async () => root.unmount()); host.remove();
+    });
+
   });
 });

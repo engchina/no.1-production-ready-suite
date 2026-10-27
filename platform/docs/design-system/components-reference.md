@@ -4013,3 +4013,13 @@ NL2SQL のチャット・DB 管理チャットと、Agent のチャット・実�
 - 取込などで言語が分かっていれば値を渡す（`zh-CN` → `zh-Hans`、`zh-TW` → `zh-Hant`、`zh-HK` / `zh-Hant-HK` → `zh-HK`、`ja-JP` → `ja`）。今は 3 製品とも取込で言語を持たないので、本文からの判定で付く。
 - `detectContentLang` は決められなければ `undefined`（`lang` を付けない）。`zh-HK` は判定しない。
 - 単体テストは `packages/ui/tests/content-lang.test.tsx`。e2e は `font-checks.ts` の `renderedLangFonts`（3 製品の書体の spec）と、RAG の `chat.spec.ts` の中国語の内容の会話（Chromium が実際に使った書体を CDP で確かめる）。
+
+
+### 文書プレビューの現在ページの通知（#3610）
+
+`DocumentPreview` / `PreviewViewer` は任意の `onPageChange(page: number)` を受けます。同じページへの再移動には `focusRequestKey` を変えて通知します。ページ画像の初期表示・ページ送り・出典への移動で、表示中の実ページ番号を通知します。本文だけの表示や iframe の内部ページは通知しません。呼び出し側は表示の絞り込みに使い、出典の強調の focusPage とは別に保持します。
+
+抽出項目の定義のように複数の欄を横に並べる表形式の編集行は、通常の単一入力フォームの FormGrid の最大幅で止めず全幅を使用します（#3608）。名前・型の幅の段は維持し、説明に残りの幅を割り当てます。
+
+
+`SelectField` の `wrapOptions`（既定 false）は、展開した選択肢のラベルを省略せず折り返します。番号例などが判断に必要な長い選択肢で使います。欄の幅は従来の width の段で指定します（#3613）。
