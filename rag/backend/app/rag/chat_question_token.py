@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -54,3 +55,40 @@ def read_question_context(
 
 def read_question_token(secret: str, token: str, binding: Mapping[str, Any]) -> str:
     return read_question_context(secret, token, binding)[0]
+
+
+def with_rule_selection_answers(
+    secret: str, token: str, answers: list[dict[str, Any]], *, elapsed_seconds: float = 0.0
+) -> str:
+    """現在の質問の署名に、原文照合済みの選択だけを束縛する。"""
+    payload = verify_signed_token(_key(secret), token, version=_VERSION)
+    return issue_signed_token(
+        _key(secret),
+        version=_VERSION,
+        claims={
+            "confirmed_fact_ids": payload.get("confirmed_fact_ids", []),
+            "binding": payload["binding"],
+            "question": payload["question"],
+            "rule_selection_answers": answers,
+            "rule_selection_elapsed_seconds": elapsed_seconds,
+        },
+    )[0]
+
+
+def read_rule_selection_answers(secret: str, token: str) -> list[dict[str, Any]]:
+    """read_question_token で現在のbindingを検証した後に、同じ署名の選択を読む。"""
+    payload = verify_signed_token(_key(secret), token, version=_VERSION)
+    values = payload.get("rule_selection_answers", [])
+    if not isinstance(values, list) or any(not isinstance(value, dict) for value in values):
+        raise ValueError("確認した選択の形式が正しくありません。")
+    return values
+
+
+def read_rule_selection_elapsed(secret: str, token: str) -> float:
+    payload = verify_signed_token(_key(secret), token, version=_VERSION)
+    value = payload.get("rule_selection_elapsed_seconds", 0.0)
+    return (
+        float(value)
+        if isinstance(value, int | float) and math.isfinite(value) and value >= 0
+        else 0.0
+    )

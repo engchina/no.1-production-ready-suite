@@ -8,7 +8,14 @@ import pytest
 from app.api.routes import chat
 from app.config import Settings
 from app.rag.answer_engine import AnswerScope
-from app.rag.chat_question_token import _key, issue_question_token, read_question_context
+from app.rag.chat_question_token import (
+    _key,
+    issue_question_token,
+    read_question_context,
+    read_rule_selection_answers,
+    read_rule_selection_elapsed,
+    with_rule_selection_answers,
+)
 from app.rag.guardrails import GuardrailPolicy
 from app.rag.history_question import HistoryConfirmation
 from app.rag.pipeline import (
@@ -322,3 +329,48 @@ async def test_signed_token_cannot_reference_unsupplied_history_fact(
         )
     assert error.value.status_code == 409
     assert len(model.calls) == 1
+
+
+def test_rule_selection_token_preserves_signed_history_references() -> None:
+    """確認の選択を追記しても、履歴から沿用する事実と設定への束縛を落とさない。"""
+    secret = "synthetic-secret-" * 3
+    binding = {"owner": "owner-a", "profile": "profile-a", "policy": "language-a"}
+    token = issue_question_token(secret, binding, "その手順は？", confirmed_fact_ids=("user-a:0",))
+    answers = [{"rule_id": "r1", "option_ids": ["a"], "other_text": ""}]
+    updated = with_rule_selection_answers(secret, token, answers, elapsed_seconds=3)
+    assert read_question_context(secret, updated, binding) == ("その手順は？", ("user-a:0",))
+    assert read_rule_selection_answers(secret, updated) == answers
+    assert read_rule_selection_elapsed(secret, updated) == 3
+    with pytest.raises(ValueError):
+        read_question_context(secret, updated, {**binding, "policy": "language-b"})
+
+
+async def test_recognized_rule_scope_preserves_history_facts_and_language_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rag_parser_core.language import current_pack
+
+    from app.schemas.search import SearchRequest, SearchResponse
+
+    settings = Settings().model_copy(
+        update={"rag_language_pack_overrides": {"question_cues": {"cause_cues": ["理屈"]}}}
+    )
+    pipeline = RagPipeline(
+        settings=settings,
+        scope=AnswerScope(context="履歴の条件", confirmed_premises=(("対象は？", "合成 A"),)),
+    )
+    request = SearchRequest(query="対象 A の理屈は？")
+    request._rule_selection_scope = {"context": "確認ルールの条件", "search_terms": ("合成",)}
+
+    async def run(_self: Any, *_args: Any, **_kwargs: Any) -> SearchResponse:
+        assert _self._scope.confirmed_premises == (("対象は？", "合成 A"),)
+        assert _self._scope.context == "履歴の条件\n確認ルールの条件"
+        assert _self._scope.search_terms == ("合成",)
+        assert current_pack().words("question_cues", "cause_cues") == ("理屈",)
+        return SearchResponse(
+            query=request.query, answer="合成回答", citations=[], trace_id="trace-a", elapsed_ms=0
+        )
+
+    monkeypatch.setattr(RagPipeline, "_run", run)
+    await pipeline.run(request)
+    assert current_pack().words("question_cues", "cause_cues") != ("理屈",)

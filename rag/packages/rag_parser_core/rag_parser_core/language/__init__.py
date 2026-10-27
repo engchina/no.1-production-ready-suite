@@ -6,7 +6,7 @@
 - 組み込みのパック（``packs/<locale>.json``）が既定値。今までのコードの値をそのまま持つ。
 - 上書きは「節 → 項目 → 値」の形で、項目ごとに組み込みの値を置き換える（``resolve``）。
 - 実行のときは ``current_pack()`` で読む。backend が全体の上書きを ``set_default_pack`` で置き、
-  取込の job・回答の要求の間だけ ``bind_pack`` で KB・プロファイルの上書きを束ねる。
+  取込の job・検索と回答の要求の間だけ ``bind_pack`` で、その要求の上書きを束ねる。
 - 項目の種類（``FieldKind``）は語の一覧か決まった型だけ。正規表現は受け付けない。
 
 このモジュールは仕組み（スキーマ・検証・重ね合わせ）だけを持ち、言語の書き方の値は持たない。
@@ -1027,9 +1027,14 @@ def set_default_pack(pack: LanguagePack | None) -> None:
     _default = pack
 
 
+def default_pack() -> LanguagePack:
+    """要求に束ねた値を含まない全体の既定。プロファイル間で上書きを継承しない。"""
+    return _default or builtin_pack()
+
+
 def current_pack() -> LanguagePack:
     """今の言語資源（束ねたもの → 全体の既定 → 組み込みの順）。"""
-    return _bound.get() or _default or builtin_pack()
+    return _bound.get() or default_pack()
 
 
 def per_pack[T](build: Callable[[LanguagePack], T]) -> Callable[[], T]:
@@ -1087,6 +1092,7 @@ __all__ = [
     "build_pack",
     "builtin_pack",
     "current_pack",
+    "default_pack",
     "overrides_from",
     "overrides_payload",
     "pack_from_payload",

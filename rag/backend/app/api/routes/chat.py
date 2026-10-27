@@ -66,7 +66,13 @@ from app.rag.chat_answer_runs import (
     get_chat_answer_run_service,
 )
 from app.rag.chat_attachments import attach_to_conversation, delete_conversation_attachments
-from app.rag.chat_question_token import context_digest, issue_question_token, read_question_context
+from app.rag.chat_question_token import (
+    context_digest,
+    issue_question_token,
+    read_question_context,
+    read_rule_selection_answers,
+    read_rule_selection_elapsed,
+)
 from app.rag.document_sections_service import current_section_pages
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.history_question import HistoryConfirmation
@@ -78,6 +84,7 @@ from app.rag.pipeline import (
     scope_with_history_confirmations,
     storage_failure,
 )
+from app.rag.question_understanding import profile_language_scope
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import (
     caller_owns,
@@ -116,6 +123,7 @@ from app.schemas.chat import (
 )
 from app.schemas.common import ApiResponse, Page
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
+from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 from app.security.dependencies import current_principal
 from app.security.user_names import display_names_by_user_hash
 
@@ -691,6 +699,7 @@ async def prepare_chat_question(
     *,
     token: str | None = None,
     confirmed_facts: list[HistoryConfirmation] | None = None,
+    force_token: bool = False,
 ) -> tuple[str, str | None]:
     """現在の権限で文脈を読み、確認と検索が使う質問を一度だけ補完する。"""
     query = query.strip()
@@ -706,67 +715,70 @@ async def prepare_chat_question(
         _ensure_caller_owns(conversation)
         owner = conversation.user_id_hash
         messages = await oracle.list_messages(conversation_id)
-    if not messages and not token:
+    if not messages and not token and not force_token:
         return query, None
     view = await oracle.get_search_answer_profile(search_answer_profile_id)
     if view is not None:
         settings, _ = resolve_search_answer_profile_settings(settings, view.config)
-    binding = {
-        "conversation": conversation_id,
-        "owner": owner,
-        "profile": search_answer_profile_id,
-        "query": context_digest(query),
-        "revision": context_digest([asdict(message) for message in messages]),
-        "policy": context_digest(
-            [
-                settings.model_dump(mode="json"),
-                view.model_dump(mode="json") if view else None,
-                await load_runtime_knowledge_payload(oracle, search_answer_profile_id),
-                await _published_guides(oracle, search_answer_profile_id),
-            ]
-        ),
-    }
-    guardrails = GuardrailPolicy(settings)
-    checked = await asyncio.to_thread(guardrails.validate_query, query)
-    if not checked.allowed:
-        return query, None
-    history = await _build_safe_history(messages, guardrails)
-    facts = history_confirmation_facts(history)
-    if token:
-        try:
-            question, selected = read_question_context(
-                settings.app_service_token_secret, token, binding
-            )
-            if any(identity not in facts for identity in selected):
-                raise ValueError("確認回答の参照が現在の履歴にありません。")
-        except (ValueError, SignedUrlUnavailableError) as exc:
-            raise HTTPException(
-                status_code=409, detail="会話または設定が変わりました。質問を送信し直してください。"
-            ) from exc
+    with profile_language_scope(settings) as language_pack:
+        binding = {
+            "conversation": conversation_id,
+            "owner": owner,
+            "profile": search_answer_profile_id,
+            "query": context_digest(query),
+            "revision": context_digest([asdict(message) for message in messages]),
+            "policy": context_digest(
+                [
+                    settings.model_dump(mode="json"),
+                    language_pack.hash,
+                    view.model_dump(mode="json") if view else None,
+                    await load_runtime_knowledge_payload(oracle, search_answer_profile_id),
+                    await _published_guides(oracle, search_answer_profile_id),
+                ]
+            ),
+        }
+        guardrails = GuardrailPolicy(settings)
+        checked = await asyncio.to_thread(guardrails.validate_query, query)
+        if not checked.allowed:
+            return query, None
+        history = await _build_safe_history(messages, guardrails)
+        facts = history_confirmation_facts(history)
+        if token:
+            try:
+                question, selected = read_question_context(
+                    settings.app_service_token_secret, token, binding
+                )
+                if any(identity not in facts for identity in selected):
+                    raise ValueError("確認回答の参照が現在の履歴にありません。")
+            except (ValueError, SignedUrlUnavailableError) as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="会話または設定が変わりました。質問を送信し直してください。",
+                ) from exc
+            if confirmed_facts is not None:
+                confirmed_facts.extend(facts[identity] for identity in selected)
+            return question, token
+        question = checked.sanitized_text
+        selected_facts: tuple[HistoryConfirmation, ...] = ()
+        if history and settings.rag_history_rewrite_enabled:
+            pipeline = RagPipeline(settings=settings, guardrails=guardrails)
+            question = await pipeline._safe_rewritten_query(question, history) or question
+            selected_facts = pipeline._selected_history_facts
         if confirmed_facts is not None:
-            confirmed_facts.extend(facts[identity] for identity in selected)
+            confirmed_facts.extend(selected_facts)
+        # 署名鍵が未設定なら補完を共有せず、正式送信側で現在の履歴を読む。
+        if not settings.app_service_token_secret:
+            return question, None
+        try:
+            token = issue_question_token(
+                settings.app_service_token_secret,
+                binding,
+                question,
+                confirmed_fact_ids=tuple(fact.id for fact in selected_facts),
+            )
+        except SignedUrlUnavailableError:
+            return question, None
         return question, token
-    question = checked.sanitized_text
-    selected_facts: tuple[HistoryConfirmation, ...] = ()
-    if history and settings.rag_history_rewrite_enabled:
-        pipeline = RagPipeline(settings=settings, guardrails=guardrails)
-        question = await pipeline._safe_rewritten_query(question, history) or question
-        selected_facts = pipeline._selected_history_facts
-    if confirmed_facts is not None:
-        confirmed_facts.extend(selected_facts)
-    # 署名鍵が未設定なら補完を共有せず、正式送信側で現在の履歴を読む。
-    if not settings.app_service_token_secret:
-        return question, None
-    try:
-        token = issue_question_token(
-            settings.app_service_token_secret,
-            binding,
-            question,
-            confirmed_fact_ids=tuple(fact.id for fact in selected_facts),
-        )
-    except SignedUrlUnavailableError:
-        return question, None
-    return question, token
 
 
 @dataclass(frozen=True, slots=True)
@@ -943,6 +955,11 @@ async def _prepare_chat_turn(
         filters=filters,
         conditions=conditions,
     )
+    if request.question_context_token:
+        base_request._rule_selection_state["prepared"] = True
+        base_request._rule_selection_state["elapsed_seconds"] = read_rule_selection_elapsed(
+            settings.app_service_token_secret, request.question_context_token
+        )
     # 履歴は今回のユーザー発話を保存する前に読む(自分自身を含めない)。
     prior_messages = await oracle.list_messages(conversation_id)
     (
@@ -958,6 +975,14 @@ async def _prepare_chat_turn(
         if request.question_context_token and settings.rag_history_rewrite_enabled
         else _guide_user_context(prior_messages),
         interactive=True,
+        confirmed_rule_answers=tuple(
+            ClarificationAnswer.model_validate(value)
+            for value in read_rule_selection_answers(
+                settings.app_service_token_secret, request.question_context_token
+            )
+        )
+        if request.question_context_token
+        else (),
         answered_rule_ids=(request.clarification.rule_id,)
         if request.clarification is not None
         and not request.clarification.rule_id.startswith(GUIDE_CLARIFICATION_PREFIX)

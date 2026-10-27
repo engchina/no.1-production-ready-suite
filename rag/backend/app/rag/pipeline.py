@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from time import perf_counter, time
 from typing import Any, Literal, cast
@@ -31,7 +31,6 @@ from pydantic import ValidationError
 from rag_engine.evaluation.answer_validation import MAX_PREMISES
 from rag_engine.resources.deadline import current_deadline
 from rag_engine.resources.tracing import CallObservation, bind_trace_observer
-from rag_parser_core.language import bind_pack, current_pack, resolve
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
@@ -61,6 +60,7 @@ from app.rag.observability import (
     record_trace_span,
 )
 from app.rag.query_history import record_query_history
+from app.rag.question_understanding import profile_language_scope
 from app.rag.run_history import RunRecorder
 from app.rag.span_display import (
     ANSWER_STEP_FAILED_STATUS,
@@ -371,7 +371,37 @@ class RagPipeline:
         い trace に置く(画面・外部の traceparent を親にしない。サービストークンの MCP の要求の中だ
         け Agent の trace を続ける。`operation_trace_parent`)。
         """
-        overrides = self._settings.rag_language_pack_overrides
+        if request._rule_selection_scope:
+            recognized = AnswerScope(**request._rule_selection_scope)
+            self._scope = AnswerScope(
+                context="\n".join(
+                    value
+                    for value in (self._scope.context if self._scope else "", recognized.context)
+                    if value
+                ),
+                search_terms=tuple(
+                    dict.fromkeys(
+                        [
+                            *(self._scope.search_terms if self._scope else ()),
+                            *recognized.search_terms,
+                        ]
+                    )
+                ),
+                label="、".join(
+                    value
+                    for value in (self._scope.label if self._scope else "", recognized.label)
+                    if value
+                ),
+                confirmed_premises=tuple(
+                    dict.fromkeys(
+                        [
+                            *(self._scope.confirmed_premises if self._scope else ()),
+                            *recognized.confirmed_premises,
+                        ]
+                    )
+                ),
+            )
+
         trace_id = trace_id or new_trace_id()
         if trace is not None:
             trace.run_id = trace_id
@@ -385,7 +415,7 @@ class RagPipeline:
                 links=links,
             ),
             bind_trace_observer(_observe_engine_call),
-            bind_pack(resolve(current_pack(), overrides)) if overrides else nullcontext(),
+            profile_language_scope(self._settings),
         ):
             response = await self._run(
                 request,
