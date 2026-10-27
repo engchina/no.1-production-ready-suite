@@ -1163,3 +1163,35 @@ for (const targetIndex of [1, 2, 3]) {
     await page.screenshot({ path: testInfo.outputPath(`single-correction-${targetIndex}.png`), fullPage: true });
   });
 }
+
+for (const count of [14, 26]) {
+  test(`DB 管理の結果 ${count} 行のシートを開くとページ送りと範囲が見える`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await setup(page, {
+      responses: [generated(plan("SELECT 1 FROM DUAL"))],
+      execute: () => {
+        const result = selectResultFor(1, "VALUE", "1");
+        const values = Array.from({ length: count }, (_, index) => ({ VALUE: String(index + 1) }));
+        return { ...result, select_result: { ...result.select_result, rows: values, total: count, returned_count: count } };
+      },
+    });
+    await page.goto("/db-admin-chat");
+    await ask(page, "合成の結果を確認する");
+    const turn = page.getByTestId("db-admin-chat-turn").first();
+    await turn.getByTestId("db-admin-chat-execute").click();
+    await turn.getByRole("button", { name: "すべての行を見る" }).click();
+    const sheet = page.getByRole("dialog", { name: `実行結果（${count} 行）` });
+    const pagination = sheet.locator("nav[data-pagination]");
+    await expect(pagination).toContainText(`1–${Math.min(count, 25)} / ${count} 件`);
+    await expect(pagination.getByRole("button", { name: "次へ" })).toBeInViewport();
+    await expect(sheet.locator("tbody tr")).toHaveCount(Math.min(count, 25));
+    if (count > 25) {
+      await pagination.getByRole("button", { name: "次へ" }).click();
+      await expect(pagination).toContainText("26–26 / 26 件");
+      await expect(sheet.locator("tbody tr")).toHaveCount(1);
+    } else {
+      await expect(pagination.getByRole("button", { name: "次へ" })).toBeDisabled();
+      await expect(pagination.getByRole("textbox", { name: "ページ番号" })).toHaveValue("1");
+    }
+    await sheet.screenshot({ path: testInfo.outputPath(`result-pages-${count}.png`) });
+  });
+}

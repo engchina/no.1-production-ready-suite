@@ -346,6 +346,8 @@ test("「すべての行を見る」は広いシートでページを送り、CS
   else expect(sheetBox.width).toBeGreaterThan(viewport.width * 0.6);
   const pagination = sheet.getByTestId("sql-chat-result-all-pagination");
   await expect(pagination).toContainText("1–25 / 60 件");
+  expect((await pagination.boundingBox())!.y).toBeLessThan((await sheet.getByTestId("sql-chat-result-all-table").boundingBox())!.y);
+  await expect(pagination.getByRole("button", { name: "次へ" })).toBeInViewport();
   await expect(sheet.getByTestId("sql-chat-result-all-table").locator("tbody tr")).toHaveCount(25);
   await pagination.getByRole("button", { name: "次へ" }).click();
   await expect(pagination).toContainText("26–50 / 60 件");
@@ -362,11 +364,11 @@ test("「すべての行を見る」は広いシートでページを送り、CS
   expect(await body.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0);
   expect((await allScroll.boundingBox())!.height).toBeGreaterThan(viewport.height * 0.7);
   // 表頭は本文のスクロールに追従する。
-  await body.evaluate((element) => { element.scrollTop = 160; });
+  await body.evaluate((element) => { element.scrollTop = 320; });
   const header = allScroll.locator("thead");
   await expect.poll(async () => (await header.boundingBox())!.y).toBeGreaterThanOrEqual((await body.boundingBox())!.y - 1);
   const headerTop = (await header.boundingBox())!.y;
-  await body.evaluate((element) => { element.scrollTop = 320; });
+  await body.evaluate((element) => { element.scrollTop = 480; });
   await expect.poll(async () => (await header.boundingBox())!.y).toBeCloseTo(headerTop, 0);
   await body.evaluate((element) => { element.scrollTop = 0; });
   await sheet.screenshot({ path: testInfo.outputPath("chat-execution-sheet.png") });

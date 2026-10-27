@@ -192,6 +192,23 @@ describe("ResultTable", () => {
     expect(onCsvDownloaded).toHaveBeenCalledTimes(1);
   });
 
+  it.each([14, 25, 26, 60])("%i 行でもページ送りを表の前に出す", (count) => {
+    act(() => root.render(<ResultTable columns={columns} rows={rows(count)} testId="result" />));
+    act(() => $('[data-testid="result-view-all"]')!.click());
+    const table = $('[data-testid="result-all-table"]')!;
+    const pagination = $('[data-testid="result-all-pagination"]')!;
+    expect(pagination).not.toBeNull();
+    expect(pagination.textContent).toContain(`1–${Math.min(count, 25)} / ${count} 件`);
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(Math.min(count, 25));
+    expect(pagination.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const next = Array.from(pagination.querySelectorAll("button")).find((button) => button.textContent?.includes("次へ"))!;
+    expect(next.disabled).toBe(count <= 25);
+    if (count > 25) {
+      act(() => next.click());
+      expect(pagination.textContent).toContain(`26–${Math.min(count, 50)} / ${count} 件`);
+    }
+  });
+
   it("文言は製品から上書きできる", () => {
     act(() =>
       root.render(
