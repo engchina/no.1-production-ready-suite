@@ -136,10 +136,17 @@ def calibration_failures(result: Agreement | None, thresholds: CalibrationThresh
     failures: list[str] = []
     if result.total < thresholds.min_items:
         failures.append(f"holdout の件数 {result.total} < {thresholds.min_items}")
-    if result.coverage is None or result.coverage < thresholds.min_coverage:
+    # 測れない値（None）は不合格にし、比較の形ではなく測れない理由を書く（出力に None を出さない）。
+    if result.coverage is None:
+        failures.append("判定率 —（項目がありません）")
+    elif result.coverage < thresholds.min_coverage:
         failures.append(f"判定率 {result.coverage} < {thresholds.min_coverage}")
-    if result.kappa is None or result.kappa < thresholds.min_kappa:
+    if result.kappa is None:
+        failures.append("κ —（判定した行が無いか、人と評価器の判定がすべて同じで、測れません）")
+    elif result.kappa < thresholds.min_kappa:
         failures.append(f"κ {result.kappa} < {thresholds.min_kappa}")
-    if result.false_pass_rate is None or result.false_pass_rate > thresholds.max_false_pass_rate:
+    if result.false_pass_rate is None:
+        failures.append("誤合格の率 —（人が fail にした行がありません）")
+    elif result.false_pass_rate > thresholds.max_false_pass_rate:
         failures.append(f"誤合格の率 {result.false_pass_rate} > {thresholds.max_false_pass_rate}")
     return failures

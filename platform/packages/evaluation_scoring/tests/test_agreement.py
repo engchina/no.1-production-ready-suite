@@ -74,6 +74,25 @@ def test_calibration_failures_check_every_holdout_threshold() -> None:
     failures = calibration_failures(noisy, thresholds)
     assert [item.split(" ")[0] for item in failures] == ["holdout", "判定率", "κ", "誤合格の率"]
     assert calibration_failures(None, thresholds) == ["holdout の項目がありません"]
+    # 測れない値（None）は不合格にし、None を文に出さない（#3585）。
+    unmeasured = agreement(
+        _pairs([("pass", "pass"), ("pass", "pass"), ("pass", "pass"), ("pass", None)]),
+        LABELS,
+        positive="pass",
+        negative="fail",
+    )
+    assert (unmeasured.kappa, unmeasured.false_pass_rate) == (None, None)
+    failures = calibration_failures(unmeasured, thresholds)
+    assert failures == [
+        "判定率 0.75 < 0.95",
+        "κ —（判定した行が無いか、人と評価器の判定がすべて同じで、測れません）",
+        "誤合格の率 —（人が fail にした行がありません）",
+    ]
+    assert not any("None" in item for item in failures)
+    empty = agreement([], LABELS, positive="pass", negative="fail")
+    assert calibration_failures(empty, CalibrationThresholds(min_items=0))[0] == (
+        "判定率 —（項目がありません）"
+    )
     assert CalibrationThresholds().provenance() == {
         "split": "holdout",
         "min_items": 50,
