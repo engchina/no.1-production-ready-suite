@@ -2217,12 +2217,16 @@ def synthesize_grounded_answer(
             grounded.correction_feedback(best[0].feedback(), audit_mode, assume_unconfirmed=assume_unconfirmed),
         )
         retrieval_remedy = None
-        gap_ids = {item.request_id for item in best[0].draft.items if item.kind == "gap" and item.request_id}
-        retrieval_requests = [
-            {key: value for key, value in entry.items() if key in {"request_id", "status"}}
+        # 生成の gap は監査の要求判定と独立して補查する。監査が要求を返さない場合も失わない。
+        retrieval_by_id = {
+            str(entry["request_id"]): {key: value for key, value in entry.items() if key in {"request_id", "status"}}
             for entry in best[0].unanswered
-            if entry.get("reviewed") or entry["request_id"] in gap_ids
-        ]
+            if entry.get("reviewed")
+        }
+        for item in best[0].draft.items:
+            if item.kind == "gap" and item.request_id:
+                retrieval_by_id[item.request_id] = {"request_id": item.request_id, "status": "missing"}
+        retrieval_requests = list(retrieval_by_id.values())
         if recover_requests is not None and retrieval_requests and not retrieval_attempted and number < max_rounds - 1:
             retrieval_attempted = True
             if budget.allows_round(number + 1):
