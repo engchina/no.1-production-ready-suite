@@ -8,7 +8,6 @@ import { expect, test, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { confirmChatRequirement, mockChatRequirement } from "./_helpers/chat-requirement";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
-import { expectFieldLabelOnOneLine } from "./_helpers/field-label";
 import { withJobProgress } from "./_helpers/job-progress";
 
 const profile = {
