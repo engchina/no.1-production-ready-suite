@@ -10,7 +10,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from rag_parser_core.language import LanguagePack, per_pack
+from rag_parser_core.language import LanguagePack, current_pack, per_pack
 from rag_parser_core.language.markers import marker_patterns
 from rag_parser_core.language.text import alternation, char_class, range_class, text_patterns
 
@@ -265,6 +265,7 @@ class InquiryConditionParse:
     """質問文から推定した問い合わせ種別、channel、制約を保持します。"""
 
     original_question: str
+    language_pack_hash: str = ""
     business_domains: tuple[str, ...] = ()
     document_kinds: tuple[str, ...] = ()
     screen_terms: tuple[str, ...] = ()
@@ -305,6 +306,7 @@ class InquiryConditionParse:
         """UI と trace 保存に使う JSON 互換 payload へ変換します。"""
         return {
             "schema_version": INQUIRY_CONDITION_SCHEMA_VERSION,
+            "language_pack_hash": self.language_pack_hash,
             "process_name": QUERY_UNDERSTANDING_PROCESS_NAME,
             "nlu_tasks": list(QUERY_UNDERSTANDING_TASKS),
             "original_question": self.original_question,
@@ -448,6 +450,7 @@ def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
     )
     return InquiryConditionParse(
         original_question=original,
+        language_pack_hash=current_pack().hash,
         business_domains=tuple(business_domains),
         document_kinds=tuple(document_kinds),
         screen_terms=tuple(screen_terms),

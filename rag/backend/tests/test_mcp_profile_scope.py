@@ -520,3 +520,44 @@ def test_scope_with_only_archived_profiles_denies_knowledge_bases(
     for context in _read_with_every_reading_tool(archived):
         assert context.allowed_search_answer_profile_ids == frozenset({"bv-1"})
         assert context.allowed_knowledge_base_ids == frozenset()
+
+
+def test_public_mcp_resolves_profile_question_language_before_rule_preparation(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    from rag_parser_core.language import current_pack
+
+    from app.api.routes import search as search_route
+
+    config = VIEWS["bv-1"].model_copy(
+        update={"language_pack": {"question_cues": {"cause_cues": ["理屈"]}}}
+    )
+    monkeypatch.setitem(VIEWS, "bv-1", config)
+    _install_search(monkeypatch)
+    monkeypatch.setattr(search_route, "OracleClient", lambda *_a, **_k: ScopedViewOracle(VIEWS))
+    seen: list[tuple[str, ...]] = []
+    from app.rag.answer_assumptions import with_answer_assumptions
+
+    original = with_answer_assumptions
+
+    def prepare(*args: Any, **kwargs: Any) -> Any:
+        seen.append(current_pack().words("question_cues", "cause_cues"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(search_route, "with_answer_assumptions", prepare)
+    user = auth.user_with_permissions(
+        "synthetic-searcher",
+        ["menu.search"],
+        search_answer_profile_ids=["bv-1"],
+        knowledge_base_ids=["kb-1", "kb-2"],
+    )
+    result = _call(
+        "rag_search",
+        {"query": "対象 A の理屈は？", "search_answer_profile_id": "bv-1"},
+        _headers(user.user_uuid, ["bv-1"]),
+    )
+    assert result["isError"] is False, result
+    assert seen == [("理屈",)]
+    assert current_pack().words("question_cues", "cause_cues") != ("理屈",)
+    assert RecordingPipeline.captured_settings is not None
+    assert RecordingPipeline.captured_settings.rag_language_pack_overrides == config.language_pack

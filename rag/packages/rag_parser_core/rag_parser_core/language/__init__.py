@@ -1027,9 +1027,14 @@ def set_default_pack(pack: LanguagePack | None) -> None:
     _default = pack
 
 
+def default_pack() -> LanguagePack:
+    """要求に束ねた値を含まない全体の既定。プロファイル間で上書きを継承しない。"""
+    return _default or builtin_pack()
+
+
 def current_pack() -> LanguagePack:
     """今の言語資源（束ねたもの → 全体の既定 → 組み込みの順）。"""
-    return _bound.get() or _default or builtin_pack()
+    return _bound.get() or default_pack()
 
 
 def per_pack[T](build: Callable[[LanguagePack], T]) -> Callable[[], T]:
@@ -1087,6 +1092,7 @@ __all__ = [
     "build_pack",
     "builtin_pack",
     "current_pack",
+    "default_pack",
     "overrides_from",
     "overrides_payload",
     "pack_from_payload",

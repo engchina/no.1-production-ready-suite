@@ -290,3 +290,32 @@ async def test_blocked_confirmation_also_excludes_assistant_reply(
         created_at=datetime.now(UTC),
     )
     assert await chat._build_safe_history([user, assistant], policy) == []
+
+
+async def test_chat_history_understanding_uses_profile_language_scope(
+    context_setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rag_engine.retrieval.task_contract import task_contract
+    from rag_parser_core.language import current_pack
+
+    oracle, settings, _ = context_setup
+    oracle.view = oracle.view.model_copy(
+        update={
+            "config": oracle.view.config.model_copy(
+                update={"language_pack": {"question_cues": {"cause_cues": ["理屈"]}}}
+            )
+        }
+    )
+    global_hash = current_pack().hash
+    observed: list[bool] = []
+
+    async def rewrite(self: Any, query: str, history: Any) -> str:
+        observed.append(task_contract(query)["asks_cause"])
+        return query
+
+    monkeypatch.setattr(RagPipeline, "_safe_rewritten_query", rewrite)
+    await chat.prepare_chat_question(
+        oracle, "conversation-a", "profile-a", "対象 A の理屈を教えてください。", settings
+    )
+    assert observed == [True]
+    assert current_pack().hash == global_hash

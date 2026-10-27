@@ -71,6 +71,7 @@ from app.rag.document_sections_service import current_section_pages
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import elapsed_ms, new_trace_id
 from app.rag.pipeline import ChatTurn, RagPipeline, storage_failure
+from app.rag.question_understanding import profile_language_scope
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import (
     caller_owns,
@@ -639,6 +640,7 @@ async def prepare_chat_question(
     settings: Settings,
     *,
     token: str | None = None,
+    force_token: bool = False,
 ) -> tuple[str, str | None]:
     """現在の権限で文脈を読み、確認と検索が使う質問を一度だけ補完する。"""
     query = query.strip()
@@ -654,51 +656,53 @@ async def prepare_chat_question(
         _ensure_caller_owns(conversation)
         owner = conversation.user_id_hash
         messages = await oracle.list_messages(conversation_id)
-    if not messages and not token:
+    if not messages and not token and not force_token:
         return query, None
     view = await oracle.get_search_answer_profile(search_answer_profile_id)
     if view is not None:
         settings, _ = resolve_search_answer_profile_settings(settings, view.config)
-    binding = {
-        "conversation": conversation_id,
-        "owner": owner,
-        "profile": search_answer_profile_id,
-        "query": context_digest(query),
-        "revision": context_digest([asdict(message) for message in messages]),
-        "policy": context_digest(
-            [
-                settings.model_dump(mode="json"),
-                view.model_dump(mode="json") if view else None,
-                await load_runtime_knowledge_payload(oracle, search_answer_profile_id),
-                await _published_guides(oracle, search_answer_profile_id),
-            ]
-        ),
-    }
-    guardrails = GuardrailPolicy(settings)
-    checked = await asyncio.to_thread(guardrails.validate_query, query)
-    if not checked.allowed:
-        return query, None
-    if token:
+    with profile_language_scope(settings):
+        binding = {
+            "conversation": conversation_id,
+            "owner": owner,
+            "profile": search_answer_profile_id,
+            "query": context_digest(query),
+            "revision": context_digest([asdict(message) for message in messages]),
+            "policy": context_digest(
+                [
+                    settings.model_dump(mode="json"),
+                    view.model_dump(mode="json") if view else None,
+                    await load_runtime_knowledge_payload(oracle, search_answer_profile_id),
+                    await _published_guides(oracle, search_answer_profile_id),
+                ]
+            ),
+        }
+        guardrails = GuardrailPolicy(settings)
+        checked = await asyncio.to_thread(guardrails.validate_query, query)
+        if not checked.allowed:
+            return query, None
+        if token:
+            try:
+                question = read_question_token(settings.app_service_token_secret, token, binding)
+            except (ValueError, SignedUrlUnavailableError) as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="会話または設定が変わりました。質問を送信し直してください。",
+                ) from exc
+            return question, token
+        history = await _build_safe_history(messages, guardrails)
+        question = checked.sanitized_text
+        if history and settings.rag_history_rewrite_enabled:
+            pipeline = RagPipeline(settings=settings, guardrails=guardrails)
+            question = await pipeline._safe_rewritten_query(question, history) or question
+        # 署名鍵が未設定なら補完を共有せず、正式送信側で現在の履歴を読む。
+        if not settings.app_service_token_secret:
+            return question, None
         try:
-            question = read_question_token(settings.app_service_token_secret, token, binding)
-        except (ValueError, SignedUrlUnavailableError) as exc:
-            raise HTTPException(
-                status_code=409, detail="会話または設定が変わりました。質問を送信し直してください。"
-            ) from exc
+            token = issue_question_token(settings.app_service_token_secret, binding, question)
+        except SignedUrlUnavailableError:
+            return question, None
         return question, token
-    history = await _build_safe_history(messages, guardrails)
-    question = checked.sanitized_text
-    if history and settings.rag_history_rewrite_enabled:
-        pipeline = RagPipeline(settings=settings, guardrails=guardrails)
-        question = await pipeline._safe_rewritten_query(question, history) or question
-    # 署名鍵が未設定なら補完を共有せず、正式送信側で現在の履歴を読む。
-    if not settings.app_service_token_secret:
-        return question, None
-    try:
-        token = issue_question_token(settings.app_service_token_secret, binding, question)
-    except SignedUrlUnavailableError:
-        return question, None
-    return question, token
 
 
 @dataclass(frozen=True, slots=True)
