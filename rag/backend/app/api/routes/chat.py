@@ -661,7 +661,7 @@ async def prepare_chat_question(
     view = await oracle.get_search_answer_profile(search_answer_profile_id)
     if view is not None:
         settings, _ = resolve_search_answer_profile_settings(settings, view.config)
-    with profile_language_scope(settings):
+    with profile_language_scope(settings) as language_pack:
         binding = {
             "conversation": conversation_id,
             "owner": owner,
@@ -671,6 +671,7 @@ async def prepare_chat_question(
             "policy": context_digest(
                 [
                     settings.model_dump(mode="json"),
+                    language_pack.hash,
                     view.model_dump(mode="json") if view else None,
                     await load_runtime_knowledge_payload(oracle, search_answer_profile_id),
                     await _published_guides(oracle, search_answer_profile_id),

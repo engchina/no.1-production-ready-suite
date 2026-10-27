@@ -319,3 +319,23 @@ async def test_chat_history_understanding_uses_profile_language_scope(
     )
     assert observed == [True]
     assert current_pack().hash == global_hash
+
+
+async def test_prepared_question_rejects_changed_global_language_pack(context_setup: Any) -> None:
+    from rag_parser_core.language import default_pack, resolve, set_default_pack
+
+    oracle, settings, _ = context_setup
+    _, token = await chat.prepare_chat_question(
+        oracle, "conversation-a", "profile-a", "その手順は？", settings
+    )
+    assert token
+    old = default_pack()
+    try:
+        set_default_pack(resolve(old, {"question_cues": {"cause_cues": ["合成"]}}))
+        with pytest.raises(HTTPException) as rejected:
+            await chat.prepare_chat_question(
+                oracle, "conversation-a", "profile-a", "その手順は？", settings, token=token
+            )
+        assert rejected.value.status_code == 409
+    finally:
+        set_default_pack(old)
