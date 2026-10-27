@@ -5,7 +5,7 @@ from app.rag.system_schema import SystemSchemaManager
 from tests.test_system_schema_manager import _FakeDatabase
 
 
-def test_raptor_prompt_migration_keeps_custom_content_and_runs_once():
+def test_raptor_prompt_migration_keeps_custom_content_and_runs_once() -> None:
     section = next(
         s
         for s in oracle_schema_migration_sections()
