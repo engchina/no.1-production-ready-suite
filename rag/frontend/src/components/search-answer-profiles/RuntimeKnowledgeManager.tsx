@@ -95,25 +95,29 @@ function rowName(kind: RuntimeKnowledgeKind, row: Row): string {
   return kind === "terms" ? text(row.term) : text(row.title) || text(row.id);
 }
 
-type RequiredField = "name" | "title" | "content";
+type RequiredField = "name" | "title" | "labels" | "content";
 type RequiredErrors = Partial<Record<RequiredField, string | null>>;
 
 const FIELD_IDS: Record<RequiredField, string> = {
   name: "runtime-knowledge-name",
   title: "runtime-knowledge-title",
+  labels: "runtime-knowledge-labels",
   content: "runtime-knowledge-content",
 };
 
 /**
  * 保存前の必須の検証（#540）。規則と文言は backend（rag_engine の edit_knowledge）と同じ:
- * 用語は「用語」、ルールは「ルール ID」「ルール名」「ルール内容」が必須。
+ * 用語は「用語」、ルールは「ルール名」「照合キーワード」「ルール内容」が必須。
  */
 export function runtimeKnowledgeRequiredErrors(form: FormState): RequiredErrors {
   if (form.kind === "terms") {
     return { name: requiredTextError(form.name, t("searchAnswerProfiles.runtime.error.termRequired")) };
   }
   return {
-    name: requiredTextError(form.name, t("searchAnswerProfiles.runtime.error.ruleIdRequired")),
+    labels: requiredTextError(
+      form.labels.split(/[\n,、，]/).map((value) => value.trim()).filter(Boolean).join(""),
+      t("searchAnswerProfiles.runtime.error.triggersRequired"),
+    ),
     title: requiredTextError(form.title, t("searchAnswerProfiles.runtime.error.ruleTitleRequired")),
     content: requiredTextError(form.content, t("searchAnswerProfiles.runtime.error.ruleContentRequired")),
   };
@@ -141,6 +145,7 @@ export function RuntimeKnowledgeManager({
   // 読み込んだ行（または空の新規）を基準に、未保存の入力だけを離脱ガードの対象にする。
   const [baseline, setBaseline] = useState<FormState>(() => emptyForm(kind));
   const kindLabel = runtimeKindLabel(kind);
+  const enabledLabel = t(kind === "rules" ? "searchAnswerProfiles.runtime.ruleEnabledLabel" : "searchAnswerProfiles.runtime.enabledLabel");
   const load = (next: FormState) => {
     setForm(next);
     setBaseline(next);
@@ -165,7 +170,7 @@ export function RuntimeKnowledgeManager({
   const saveForm = () => {
     const nextErrors = runtimeKnowledgeRequiredErrors(form);
     setErrors(nextErrors);
-    const order: RequiredField[] = ["name", "title", "content"];
+    const order: RequiredField[] = ["name", "title", "labels", "content"];
     if (focusFirstInvalidField(order.map((field) => [FIELD_IDS[field], nextErrors[field]] as const))) return;
     submit();
   };
@@ -206,7 +211,7 @@ export function RuntimeKnowledgeManager({
     const ok = await confirm({
       title: t("searchAnswerProfiles.runtime.deleteConfirm.title", { kind: kindLabel }),
       description: t("searchAnswerProfiles.runtime.deleteConfirm.description", {
-        name: form.selected ?? "",
+        name: kind === "rules" ? form.title : form.selected ?? "",
       }),
       confirmLabel: t("searchAnswerProfiles.faq.delete"),
       tone: "danger",
@@ -338,30 +343,29 @@ export function RuntimeKnowledgeManager({
         <section className="min-w-0 space-y-3 rounded-md border border-border p-3">
           <h4 className="text-sm font-semibold text-fg">
             {form.selected
-              ? t("searchAnswerProfiles.runtime.editTitle", { name: form.selected })
+              ? t("searchAnswerProfiles.runtime.editTitle", { name: kind === "rules" ? form.title : form.selected })
               : t("searchAnswerProfiles.runtime.addTitle", { kind: kindLabel })}
           </h4>
-          {/* 編集の欄（#1891）: 用語、ルール ID、ルール名は名前の幅（md）、別名・内容は文章（全幅）。 */}
+          {/* 編集の欄（#1891）: 用語、ルール名は名前の幅（md）、別名・内容は文章（全幅）。 */}
           <FormGrid columns={1}>
-          <TextField
+          {kind === "terms" ? (
+            <TextField
             id="runtime-knowledge-name"
             width="md"
-            label={t(
-              kind === "terms"
-                ? "searchAnswerProfiles.runtime.term"
-                : "searchAnswerProfiles.runtime.ruleId",
-            )}
+            label={t("searchAnswerProfiles.runtime.term")}
             value={form.name}
             maxLength={160}
             onChange={(event) => update({ name: event.target.value })}
             error={errors.name ?? undefined}
             required
-          />
+            />
+          ) : null}
           {kind === "rules" ? (
             <TextField
               id="runtime-knowledge-title"
               width="md"
               label={t("searchAnswerProfiles.runtime.ruleTitle")}
+              helper={t("searchAnswerProfiles.runtime.ruleTitleHelp")}
               value={form.title}
               maxLength={160}
               onChange={(event) => update({ title: event.target.value })}
@@ -370,9 +374,8 @@ export function RuntimeKnowledgeManager({
             />
           ) : null}
           {(["labels", "content"] as const).map((field) => {
-            // ルール内容だけが必須（用語の説明・別名・照合キーワードは任意。backend と同じ）。
-            const required = field === "content" && kind === "rules";
-            const error = field === "content" ? errors.content : null;
+            const required = kind === "rules";
+            const error = errors[field];
             return (
               <TextareaField
                 key={field}
@@ -387,6 +390,11 @@ export function RuntimeKnowledgeManager({
                       ? "searchAnswerProfiles.runtime.description"
                       : "searchAnswerProfiles.runtime.content",
                 )}
+                helper={kind === "rules"
+                  ? t(field === "labels"
+                    ? "searchAnswerProfiles.runtime.triggersHelp"
+                    : "searchAnswerProfiles.runtime.contentHelp")
+                  : undefined}
                 error={error ?? undefined}
                 value={form[field]}
                 onChange={(event) => update({ [field]: event.target.value })}
@@ -397,12 +405,18 @@ export function RuntimeKnowledgeManager({
           })}
           </FormGrid>
           <div className="flex items-center justify-between gap-3">
-            <span className="text-sm text-fg">
-              {t("searchAnswerProfiles.runtime.enabledLabel")}
-            </span>
+            <div>
+              <span className="text-sm text-fg">{enabledLabel}</span>
+              {kind === "rules" ? (
+                <p id="runtime-knowledge-enabled-help" className="text-xs leading-relaxed text-fg-muted">
+                  {t("searchAnswerProfiles.runtime.enabledHelp")}
+                </p>
+              ) : null}
+            </div>
             <Switch
               checked={form.enabled}
-              aria-label={t("searchAnswerProfiles.runtime.enabledLabel")}
+              aria-label={enabledLabel}
+              aria-describedby={kind === "rules" ? "runtime-knowledge-enabled-help" : undefined}
               onCheckedChange={(checked) => update({ enabled: checked })}
             />
           </div>
@@ -516,6 +530,7 @@ export function RuntimeKnowledgeManager({
           key={form.selected}
           searchAnswerProfileId={searchAnswerProfileId}
           ruleId={form.selected}
+          ruleTitle={form.title}
           stored={storedClarification(
             rows.find((row) => rowKey(kind, row) === form.selected)?.clarification
           )}

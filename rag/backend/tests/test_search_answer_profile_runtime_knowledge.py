@@ -72,18 +72,18 @@ def test_edit_terms_rules_and_preview(fake_oracle: FakeKnowledgeOracle) -> None:
         ({"kind": "terms", "name": "  "}, "用語を入力してください。"),
         (
             {"kind": "rules", "name": "", "title": "t", "content": "c"},
-            "ルール ID を入力してください。",
+            "照合キーワードを入力してください。",
         ),
         (
             {"kind": "rules", "name": "R1", "title": "", "content": "c"},
             "ルール名を入力してください。",
         ),
         (
-            {"kind": "rules", "name": "R1", "title": "t", "content": " "},
+            {"kind": "rules", "name": "R1", "title": "t", "labels": "合成語", "content": " "},
             "ルール内容を入力してください。",
         ),
     ],
-    ids=["term", "rule-id", "rule-title", "rule-content"],
+    ids=["term", "rule-keywords", "rule-title", "rule-content"],
 )
 def test_edit_rejects_empty_required_fields_like_the_screen(
     fake_oracle: FakeKnowledgeOracle, payload: dict[str, str], message: str
@@ -127,3 +127,44 @@ def test_search_context_carries_search_answer_profile_runtime_knowledge(
     revision = settings.rag_search_answer_profile_revision
     assert revision["id"] == "bv-1"
     assert isinstance(revision["updated_at"], str) and revision["config_sha256"]
+
+
+def test_rule_identity_is_generated_and_retained_on_edit(fake_oracle: FakeKnowledgeOracle) -> None:
+    values = {
+        "kind": "rules",
+        "title": "合成ルール A",
+        "labels": "合成語 A",
+        "content": "合成の注意点。",
+    }
+    first = client.post(f"{BASE}/edit", json=values)
+    assert first.status_code == 200
+    identity = first.json()["data"]["rules"][0]["id"]
+    assert identity.startswith("rule_")
+    second = client.post(f"{BASE}/edit", json={**values, "title": "合成ルール B"})
+    assert second.status_code == 200
+    rules = second.json()["data"]["rules"]
+    assert len({rule["id"] for rule in rules}) == 2
+    edited = client.post(
+        f"{BASE}/edit", json={**values, "selected": identity, "title": "合成ルール C"}
+    )
+    assert edited.status_code == 200
+    assert edited.json()["data"]["rules"][0]["id"] == identity
+    assert edited.json()["data"]["rules"][0]["title"] == "合成ルール C"
+
+
+@pytest.mark.parametrize("labels", ["", " \n ", "、,，\n"])
+def test_rule_keywords_require_a_nonempty_value(
+    fake_oracle: FakeKnowledgeOracle, labels: str
+) -> None:
+    response = client.post(
+        f"{BASE}/edit",
+        json={
+            "kind": "rules",
+            "title": "合成ルール A",
+            "labels": labels,
+            "content": "合成の注意点。",
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["error_messages"] == ["照合キーワードを入力してください。"]
+    assert client.get(BASE).json()["data"]["rules"] == []

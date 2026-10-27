@@ -368,7 +368,7 @@ async function mockAnswerStream(page: Page, graphExpansion?: Record<string, unkn
 }
 
 // #540 / #541: FAQ の追加と回答ルールの保存は、押せる状態のまま未入力を欄の直下に出す。
-// ルールは backend と同じく「ルール ID」「ルール名」「ルール内容」が必須。
+// ルールは backend と同じく「ルール名」「照合キーワード」「ルール内容」が必須。
 test("FAQ の追加と回答ルールの保存は、未入力を欄の下に出す", async ({ page }) => {
   await mockCommon(page);
   await mockSearchAnswerProfileApi(page);
@@ -397,10 +397,11 @@ test("FAQ の追加と回答ルールの保存は、未入力を欄の下に出�
     .getByRole("tabpanel", { name: "回答ルール" })
     .getByRole("button", { name: "保存", exact: true })
     .click();
-  await expect(page.locator("#runtime-knowledge-name")).toHaveAccessibleDescription(/ルール ID を入力してください。/);
+  await expect(page.locator("#runtime-knowledge-name")).toHaveCount(0);
+  await expect(page.locator("#runtime-knowledge-labels")).toHaveAccessibleDescription(/照合キーワードを入力してください。/);
   await expect(page.locator("#runtime-knowledge-title")).toHaveAccessibleDescription(/ルール名を入力してください。/);
   await expect(page.locator("#runtime-knowledge-content")).toHaveAccessibleDescription(/ルール内容を入力してください。/);
-  await expect(page.locator("#runtime-knowledge-name")).toBeFocused();
+  await expect(page.locator("#runtime-knowledge-title")).toBeFocused();
   expect(writes).toHaveLength(0);
   await expectNoPageOverflow(page);
 });
@@ -428,7 +429,7 @@ test("検索・回答プロファイルごとに類似問の提示をオン / �
 
 
 // #717: 回答ルールに確認の質問と、選択肢が指す章節を設定する。
-test("回答ルールに回答前の確認と章節を設定して保存できる", async ({ page }) => {
+test("回答ルールに回答前の確認と章節を設定して保存できる", { tag: "@responsive" }, async ({ page }) => {
   await mockCommon(page);
   await mockSearchAnswerProfileApi(page);
   await page.route("**/api/search-answer-profiles/bv-1/runtime-knowledge", (route) =>
@@ -447,17 +448,16 @@ test("回答ルールに回答前の確認と章節を設定して保存でき�
     puts.push(route.request().postDataJSON());
     await route.fulfill({ json: envelope({ search_answer_profile_id: "bv-1", terms: [], rules: [] }) });
   });
-  await page.route("**/api/documents?**", (route) =>
-    route.fulfill({
-      json: envelope({
-        items: [{ id: "doc-travel", file_name: "出張旅費規程.pdf" }],
-        total: 1,
-        limit: 50,
-        offset: 0,
-        has_next: false,
-      }),
-    })
-  );
+  const documentQueries: URL[] = [];
+  await page.route("**/api/documents?**", (route) => {
+    const url = new URL(route.request().url());
+    documentQueries.push(url);
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const items = offset === 0
+      ? Array.from({ length: 100 }, (_, index) => ({ id: `synthetic-${index + 1}`, file_name: `文書 ${index + 1}.pdf` }))
+      : [{ id: "doc-travel", file_name: "文書 101.pdf" }];
+    return route.fulfill({ json: envelope({ items, total: 101, limit: 100, offset, has_next: offset === 0 }) });
+  });
   await page.route("**/api/documents/doc-travel/sections**", (route) =>
     route.fulfill({
       json: envelope({
@@ -479,6 +479,9 @@ test("回答ルールに回答前の確認と章節を設定して保存でき�
   await page.goto("/search-answer-profiles?id=bv-1");
   await page.getByRole("tab", { name: "回答ルール" }).click();
   await page.getByRole("button", { name: /期限の確認/ }).first().click();
+  await expect(page.locator("#runtime-knowledge-name")).toHaveCount(0);
+  await expect(page.getByRole("switch", { name: "ルールを有効にする", exact: true })).toBeVisible();
+  await expect(page.locator("#runtime-knowledge-enabled-help")).toContainText("無効にして保存すると両方を使いません");
   const editor = page.getByTestId("rule-clarification-editor");
   await editor.getByRole("button", { name: "回答前の確認を設定する" }).click();
 
@@ -492,7 +495,25 @@ test("回答ルールに回答前の確認と章節を設定して保存でき�
   await editor.getByRole("textbox", { name: /表示名/ }).nth(1).fill("経費精算");
   await editor.getByRole("textbox", { name: "検索に足す語" }).nth(0).fill("出張、日当");
   await editor.getByRole("button", { name: /^章節を選ぶ文書/ }).first().click();
-  await page.getByRole("option", { name: "出張旅費規程.pdf" }).click();
+  const listbox = page.getByRole("listbox", { name: "章節を選ぶ文書" });
+  await expect(listbox.getByRole("option")).toHaveCount(100);
+  expect(documentQueries).toHaveLength(1);
+  expect(documentQueries[0].searchParams.get("limit")).toBe("100");
+  await expect(listbox.getByRole("option").nth(1)).toHaveText("文書 2.pdf");
+  await expect(listbox.getByRole("option").nth(9)).toHaveText("文書 10.pdf");
+  await listbox.evaluate((node) => { node.scrollTop = node.scrollHeight; node.dispatchEvent(new Event("scroll")); });
+  await expect(page.getByRole("option", { name: "文書 101.pdf", exact: true })).toBeVisible();
+  expect(documentQueries.some((url) => url.searchParams.get("offset") === "100")).toBe(true);
+  await page.screenshot({ path: test.info().outputPath("document-candidates-loaded.png") });
+  await page.getByRole("option", { name: "文書 101.pdf", exact: true }).click();
+  const documentPicker = editor.getByRole("button", { name: /^章節を選ぶ文書/ }).first();
+  await documentPicker.click();
+  const search = page.getByRole("combobox", { name: /章節を選ぶ文書/ });
+  await search.fill("文書");
+  await expect.poll(() => documentQueries.some((url) => url.searchParams.get("q") === "文書" && url.searchParams.get("offset") === "0")).toBe(true);
+  await expect(listbox.getByRole("option")).toHaveCount(100);
+  await search.press("Escape");
+  await expect(documentPicker).toContainText("文書 101.pdf");
   await editor.getByRole("checkbox", { name: /第6条 申請と精算/ }).check();
   await expect(editor.getByRole("list", { name: "選んだ章節" })).toContainText("第6条 申請と精算 p.2–3");
 
@@ -511,7 +532,7 @@ test("回答ルールに回答前の確認と章節を設定して保存でき�
           sections: [
             {
               document_id: "doc-travel",
-              document_name: "出張旅費規程.pdf",
+              document_name: "文書 101.pdf",
               section_id: "sec-6",
               title: "第6条 申請と精算",
               page_start: 2,
@@ -524,6 +545,7 @@ test("回答ルールに回答前の確認と章節を設定して保存でき�
     },
   });
   await expectNoPageOverflow(page);
+  await page.screenshot({ path: test.info().outputPath("rule-clarification-form.png") });
 });
 
 

@@ -3,6 +3,7 @@ import {
   FormStatus,
   SearchableSelectField,
   StatusBadge,
+  type SearchableSelectOption,
 } from "@production-ready/ui";
 import { History, Save, Undo2 } from "lucide-react";
 import { useState } from "react";
@@ -13,13 +14,11 @@ import { ApiError, type DocumentDetail } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
-import { useDocuments, useSaveDocumentSupersededBy } from "@/lib/queries";
+import { useDocumentCandidates, useSaveDocumentSupersededBy } from "@/lib/queries";
 import { useValuesChanged } from "@/lib/render-sync";
 import { APP_ROUTES } from "@/lib/routes";
 
 const DOCUMENT_VERSION_PICKER_ID = "document-version-picker";
-// 候補は文書名の検索で絞る（サーバー側の検索。1 回に読む件数）。
-const DOCUMENT_VERSION_CANDIDATE_LIMIT = 50;
 
 /**
  * 文書の版（#1248）。この文書を置き換えた新しい版の文書を選んで保存すると、この文書は旧版になり、
@@ -29,6 +28,7 @@ export function DocumentVersionEditor({ document: doc }: { document: DocumentDet
   const save = useSaveDocumentSupersededBy();
   const savedId = doc.superseded_by_document_id ?? "";
   const [selectedId, setSelectedId] = useState(savedId);
+  const [selectedCandidate, setSelectedCandidate] = useState<SearchableSelectOption | null>(null);
   // 文書詳細は処理中に定期的に再取得される。保存値が実際に変わったときだけ選択を入れ替える。
   if (useValuesChanged([savedId])) setSelectedId(savedId);
   const [lastAction, setLastAction] = useState<"set" | "clear" | null>(null);
@@ -36,11 +36,18 @@ export function DocumentVersionEditor({ document: doc }: { document: DocumentDet
   // 候補は欄に触れたときに初めて読む（文書詳細を開くたびに文書の一覧を読まない）。
   const [pickerActive, setPickerActive] = useState(false);
   const [query, setQuery] = useState("");
-  const documents = useDocuments(
-    { q: query || undefined, limit: DOCUMENT_VERSION_CANDIDATE_LIMIT },
+  const documents = useDocumentCandidates(
+    { q: query || undefined },
     { enabled: pickerActive },
   );
-  const options = documentVersionOptions(documents.data?.items ?? [], doc.id, {
+  const candidates = [
+    ...new Map(
+      (documents.data?.pages ?? [])
+        .flatMap((page) => page.items)
+        .map((item) => [item.id, item]),
+    ).values(),
+  ];
+  const options = documentVersionOptions(candidates, doc.id, {
     superseded: t("documents.version.superseded"),
   });
   const saved = savedVersionOption(savedId, doc.superseded_by_file_name, (id) =>
@@ -48,6 +55,7 @@ export function DocumentVersionEditor({ document: doc }: { document: DocumentDet
   );
   const selected =
     options.find((option) => option.value === selectedId) ??
+    (selectedCandidate?.value === selectedId ? selectedCandidate : null) ??
     (saved && saved.value === selectedId ? saved : null);
 
   const isDirty = selectedId !== savedId;
@@ -121,16 +129,17 @@ export function DocumentVersionEditor({ document: doc }: { document: DocumentDet
           selectedOption={selected}
           onValueChange={(value) => {
             setSelectedId(value);
+            setSelectedCandidate(options.find((option) => option.value === value) ?? null);
             setLastAction(null);
             save.reset();
           }}
           onQueryChange={setQuery}
           remote={{
-            total: documents.data?.total ?? options.length,
-            hasMore: false,
-            loadingMore: false,
-            searching: documents.isFetching,
-            onLoadMore: () => undefined,
+            total: documents.data?.pages.at(-1)?.total ?? options.length,
+            hasMore: documents.hasNextPage,
+            loadingMore: documents.isFetchingNextPage,
+            searching: documents.isFetching && !documents.isFetchingNextPage,
+            onLoadMore: () => void documents.fetchNextPage(),
           }}
           disabled={save.isPending}
           width="lg"

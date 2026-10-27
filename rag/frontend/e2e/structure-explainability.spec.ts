@@ -522,7 +522,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900, theme: "light" },
   { name: "mobile", width: 375, height: 900, theme: "dark" },
 ] as const) {
-  test(`文書詳細で新しい版を選んで保存し、解除できる (${viewport.name} / ${viewport.theme})`, async ({
+  test(`文書詳細で新しい版を選んで保存し、解除できる (${viewport.name} / ${viewport.theme})`, { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {
     await page.addInitScript((theme) => {
@@ -549,6 +549,7 @@ for (const viewport of [
     // 文書自身と、この文書に置き換えられた文書（循環する）は候補に出さない。
     const listbox = page.getByRole("listbox", { name: "この文書を置き換えた新しい版" });
     await expect(listbox.getByRole("option")).toHaveCount(1);
+    expect(state.listQueries[0]).toContain("limit=100");
     await listbox.getByRole("option", { name: /経費精算規程/ }).click();
     await expect(save).toBeEnabled();
     await save.click();

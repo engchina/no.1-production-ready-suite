@@ -166,6 +166,8 @@ def edit_knowledge(
         rows.pop(index)
     else:
         row = copy.deepcopy(rows[index]) if index is not None else {}
+        if kind == "rules" and not name.strip():
+            name = selected or f"rule_{uuid4().hex}"
         name = _text(name, "用語" if kind == "terms" else "ルール ID", required=True, limit=160)
         if any(_key(other[identity]) == _key(name) for i, other in enumerate(rows) if i != index):
             raise ValueError("同じ用語またはルール ID が登録済みです。編集対象を選択してください。")
@@ -177,6 +179,8 @@ def edit_knowledge(
         else:
             row["title"] = _text(title, "ルール名", required=True, limit=160)
             row["triggers"] = _labels(labels, "照合キーワード", MAX_TRIGGERS_PER_RULE)
+            if not row["triggers"]:
+                raise ValueError("照合キーワードを入力してください。")
             row["content"] = _text(content, "ルール内容", required=True)
         # 既存の承認・再確認・下書き状態は、利用可否を変更した場合だけ置き換える。
         if index is None or bool(enabled) != (row.get("status", "") in RUNTIME_KNOWLEDGE_ACTIVE_STATUSES):
