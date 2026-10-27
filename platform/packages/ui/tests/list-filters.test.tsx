@@ -261,6 +261,19 @@ describe("ListToolbar の絞り込み（#1933）", () => {
     }
   });
 
+  it("二段目の絞り込みも狭い画面では同じシートへ移す", () => {
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 320, height: 40 } as DOMRect);
+    try {
+      render(<ListToolbar filters={<span data-testid="primary-filter" />} secondaryFilters={<span data-testid="secondary-filter" />} filtersLayout="sheet" testId="two-row-toolbar" />);
+      const trigger = host.querySelector<HTMLButtonElement>("[data-list-toolbar-filters-trigger] button")!;
+      act(() => trigger.click());
+      const sheet = document.querySelector('[data-testid="two-row-toolbar-filters-sheet"]')!;
+      expect(sheet.querySelector('[data-testid="primary-filter"]')).not.toBeNull();
+      expect(sheet.querySelector('[data-testid="secondary-filter"]')).not.toBeNull();
+      expect(document.querySelectorAll('[data-testid="secondary-filter"]')).toHaveLength(1);
+    } finally { rect.mockRestore(); }
+  });
+
   it("文言は labels で上書きできる", () => {
     render(
       <ListToolbar

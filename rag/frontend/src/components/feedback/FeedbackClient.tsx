@@ -37,6 +37,7 @@ import {
   ExternalLink,
   FileText,
   MessageSquareText,
+  RefreshCw,
   ThumbsDown,
   ThumbsUp,
 } from "lucide-react";
@@ -214,6 +215,7 @@ export function FeedbackClient() {
         wide
         title={t("feedback.page.title")}
         subtitle={t("feedback.page.subtitle")}
+        actions={selectedId ? [] : [{ id: "refresh", kind: "utility", label: t("feedback.page.refresh"), icon: RefreshCw, loading: query.isFetching, onClick: () => void query.refetch() }]}
         // 詳細を開いているときだけ、左上に「一覧へ戻る」（page-archetypes.md §1 B。#2283）。
         back={
           selectedId
@@ -269,9 +271,13 @@ export function FeedbackClient() {
                 value={urlState.searchAnswerProfileId}
                 options={searchAnswerProfileOptions}
                 onValueChange={(value) => setParam("search_answer_profile", value)}
-                // 対象の選択（長い名前）。
-                width="lg"
+                // 一段目の検索・期間と同じ行に収める。全文は共通の選択欄で確認できる。
+                width="md"
               />
+            </>
+          }
+          secondaryFilters={
+            <>
               <FilterSelect
                 id="feedback-target"
                 label={t("feedback.filters.target")}
@@ -329,7 +335,7 @@ export function FeedbackClient() {
                 <Skeleton key={index} className="h-24" />
               ))}
             </div>
-            <TableSkeleton columns={1} />
+            <TableSkeleton columns={6} />
           </TimedLoadingState>
         ) : query.isError ? (
           <ErrorState message={t("feedback.page.loadError")} onRetry={() => void query.refetch()} />
@@ -442,8 +448,7 @@ function QuestionMeta({ item }: { item: FeedbackItem }) {
 }
 
 /**
- * 一覧の列（ListDetailLayout の狭い列）の行。問題の概要（2 行まで）と補足 1 行だけにし、列の多い表にしない
- * （page-archetypes.md §1 B「一覧の行」）。行の高さは列の残りの高さで、列の中を縦にスクロールする。
+ * 全幅の比較一覧。desktop は評価の項目を列で比較し、狭い画面は質問の下へ摘要をまとめる。
  */
 function FeedbackList({
   items,
@@ -462,11 +467,18 @@ function FeedbackList({
           header: t("feedback.table.question"),
           rowHeader: true,
           className: "py-2.5 align-top",
+          headerClassName: "lg:w-[28%]",
           render: (item) => (
             <RowTitleButton
               title={questionSummary(item)}
               maxLines={2}
-              subtitle={<QuestionMeta item={item} />}
+              subtitle={<>
+                <span className="hidden lg:block truncate text-xs text-fg-muted">{item.search_answer_profile_name ?? t("feedback.list.unknownSearchAnswerProfile")}</span>
+                <span className="lg:hidden"><QuestionMeta item={item} />
+                  <span className="mt-1 block text-xs text-fg-muted">{t(`feedback.target.${item.target_type}`)}{item.reason ? ` · ${t(FEEDBACK_REASON_LABEL_KEYS[item.reason])}` : ""}</span>
+                  {item.comment_preview ? <span className="mt-1 line-clamp-2 text-xs text-fg-muted">{item.comment_preview}</span> : null}
+                </span>
+              </>}
               current={item.feedback_id === selectedId}
               aria-label={t("feedback.list.selectNamed", { name: questionSummary(item) })}
               onClick={() => onSelect(item.feedback_id)}
@@ -474,6 +486,11 @@ function FeedbackList({
             />
           ),
         },
+        { key: "target", header: t("feedback.filters.target"), headerClassName: "hidden lg:table-cell lg:w-[8%]", className: "hidden lg:table-cell align-top", render: (item) => t(`feedback.target.${item.target_type}`) },
+        { key: "rating", header: t("feedback.filters.rating"), headerClassName: "hidden lg:table-cell lg:w-[18%]", className: "hidden lg:table-cell align-top", render: (item) => <RatingBadge rating={item.rating} /> },
+        { key: "reason", header: t("feedback.detail.reason"), headerClassName: "hidden lg:table-cell lg:w-[16%]", className: "hidden lg:table-cell align-top", render: (item) => item.reason ? <span className="line-clamp-2" title={t(FEEDBACK_REASON_LABEL_KEYS[item.reason])}>{t(FEEDBACK_REASON_LABEL_KEYS[item.reason])}</span> : "—" },
+        { key: "comment", header: t("feedback.detail.comment"), headerClassName: "hidden lg:table-cell lg:w-[16%]", className: "hidden lg:table-cell align-top", render: (item) => <span className="line-clamp-2" title={item.comment_preview ?? undefined}>{item.comment_preview ?? (item.has_comment ? t("feedback.list.hasComment") : "—")}</span> },
+        { key: "date", header: t("feedback.table.date"), headerClassName: "hidden lg:table-cell lg:w-[14%]", className: "hidden lg:table-cell align-top tabular-nums", render: (item) => formatDateTime(item.created_at) },
       ]}
       rows={items}
       getRowKey={(item) => item.feedback_id}
@@ -545,12 +562,12 @@ function FeedbackDetailPanel({ feedbackId }: { feedbackId: string }) {
 function SummaryPanel({ summary, previous }: { summary: FeedbackSummary; previous: FeedbackSummary | null }) {
   return (
     <Card>
-      <CardContent className="grid gap-4 pt-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+      <CardContent className="grid gap-3 py-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
         <section aria-labelledby="feedback-summary-heading">
-          <h2 id="feedback-summary-heading" className="mb-3 text-sm font-semibold text-fg">
+          <h2 id="feedback-summary-heading" className="mb-2 text-sm font-semibold text-fg">
             {t("feedback.summary.title")}
           </h2>
-          <div className="grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4">
             <Metric label={t("feedback.summary.total")} value={formatNumber(summary.total)} delta={countDelta(summary.total, previous?.total)} />
             <Metric label={t("feedback.summary.helpfulRate")} value={formatRate(summary.helpful_rate)} delta={rateDelta(summary.helpful_rate, previous?.helpful_rate)} />
             <Metric label={t("feedback.summary.answerRate")} value={formatRate(summary.answer_helpful_rate)} detail={t("feedback.summary.count", { count: summary.answer_total })} delta={rateDelta(summary.answer_helpful_rate, previous?.answer_helpful_rate)} />
@@ -558,7 +575,7 @@ function SummaryPanel({ summary, previous }: { summary: FeedbackSummary; previou
           </div>
         </section>
         <section aria-labelledby="feedback-reasons-heading">
-          <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="mb-2 flex items-center justify-between gap-2">
             <h2 id="feedback-reasons-heading" className="text-sm font-semibold text-fg">
               {t("feedback.reasons.title")}
             </h2>

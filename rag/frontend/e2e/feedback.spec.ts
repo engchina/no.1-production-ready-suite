@@ -62,7 +62,14 @@ test("全幅の一覧を検索・数値ページングし、全幅の詳細の�
   await expect(paging.getByRole("button", { name: "前へ", exact: true })).toBeDisabled();
 
   await expect(page.getByRole("heading", { name: "利用者フィードバック" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "問題の概要" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "質問" })).toBeVisible();
+  for (const name of ["評価対象", "評価", "低評価の理由", "利用者コメント", "日時"]) {
+    await expect(page.getByRole("columnheader", { name, exact: true })).toBeVisible();
+  }
+  const toolbar = page.getByTestId("feedback-filters-toolbar");
+  const period = await toolbar.getByRole("combobox", {name: "期間", exact: true}).boundingBox();
+  const target = await toolbar.getByRole("combobox", {name: "評価対象", exact: true}).boundingBox();
+  expect(target!.y).toBeGreaterThanOrEqual(period!.y + period!.height);
   await expect(page.getByRole("table").getByText("最新の経費申請期限を教えて", { exact: true })).toBeVisible();
   await expect(page.getByText("前期間比 +17pt", { exact: true }).first()).toBeVisible();
   // B 型：狭い一覧と広い詳細を ListDetailLayout で並べ、先頭を自動で選ばず、未選択の詳細は選び方を案内する（#2283）。
@@ -201,9 +208,12 @@ test("全幅の 1 ペイン: 選ぶと詳細だけ、「一覧へ戻る」とブ
   await expect(citationButton).toBeFocused();
 
   // ブラウザの「戻る」でも一覧へ戻る（一覧から入るときは履歴に積む）。
+  await answerButton.scrollIntoViewIfNeeded();
+  const scrollBefore = await page.locator("main").evaluate(node => node.scrollTop);
   await answerButton.click();
   await expect(detail).toBeVisible();
   await page.goBack();
+  await expect.poll(() => page.locator("main").evaluate(node => node.scrollTop)).toBeCloseTo(scrollBefore, 0);
   await expect(list).toBeVisible();
   await expect(page).not.toHaveURL(/feedback=/);
   await expect(answerButton).toBeFocused();
@@ -392,7 +402,7 @@ test("見える範囲を案内する: SYSTEM_ADMIN はすべての利用者の�
 });
 
 for (const width of [1280, 1920]) {
-  test(`一覧は全幅で、行の値が列の境界を超えず、タイトルと左端がそろう (${width}px)`, async ({ page }, testInfo) => {
+  test(`一覧は全幅で、行の値が列の境界を超えず、タイトルと左端がそろう (${width}px)`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop", "desktop table contract");
     await page.setViewportSize({ width, height: 900 });
     await clearListDetailStorage(page);
@@ -401,7 +411,7 @@ for (const width of [1280, 1920]) {
 
     const list = page.getByTestId("list-detail-feedback-list");
     const table = list.getByRole("table");
-    await expect(table.getByText("役に立たなかった").first()).toBeVisible();
+    await expect(table.locator('[data-status-variant="danger"]:visible').first()).toBeVisible();
     await expect(table.getByText("旧データの評価（送信元が記録されていない）")).toBeVisible();
     expect(await measureTableCellOverflow(page, "main table")).toEqual([]);
     // 1920px でも一覧は全幅で、PageHeader と左端がそろう。
@@ -419,7 +429,7 @@ for (const width of [1280, 1920]) {
     expect(overflow).toBeLessThanOrEqual(1);
 
     // 評価は状態なのでサムズアップ / ダウンのアイコンを持つ（色だけで表さない）。
-    const notHelpful = table.locator("[data-status-variant='danger']").first();
+    const notHelpful = table.locator("[data-status-variant='danger']:visible").first();
     await expect(notHelpful).toHaveText("役に立たなかった");
     await expect(notHelpful.locator("svg")).toHaveCount(1);
     await expectNoPageOverflow(page);
@@ -446,6 +456,10 @@ test("375pxの一覧の行は評価バッジや値が行の外にはみ出さな
     })
   );
   expect(overflow).toEqual([]);
+  await expect(page.getByRole("columnheader")).toHaveCount(1);
+  const firstCell = await page.getByRole("rowheader").first().boundingBox();
+  const tableBox = await page.getByRole("table").boundingBox();
+  expect(firstCell!.width).toBeGreaterThan(tableBox!.width * 0.9);
   await expectNoPageOverflow(page);
 });
 
@@ -836,4 +850,43 @@ test("長い根拠は共通の高さでスクロールし、戻るとページ�
   await expect(page).toHaveURL(/sort=oldest/);
   await expect(page).toHaveURL(/page=2/);
   await expect(page.getByTestId("feedback-pagination")).toContainText("2 / 5 ページ");
+});
+
+test("比較一覧から詳細へ移り、戻ると表内とページの読んでいた位置を復元する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockFeedback(page, []);
+  await page.route("**/api/feedback**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== "/api/feedback") {
+      const detail = feedbackDetailEnvelope();
+      detail.data.feedback_id = url.pathname.split("/").at(-1)!;
+      await route.fulfill({json: detail});
+      return;
+    }
+    const limit = Number(url.searchParams.get("limit") ?? 25);
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const envelope = feedbackEnvelope(limit, offset);
+    const base = envelope.data.items.items[0]!;
+    const items = Array.from({length: 60}, (_, i) => ({...base, feedback_id: `synthetic-${i}`, question_preview: `合成の質問 ${i}`, comment_preview: `合成のコメント ${i}`, search_answer_profile_name: "プロファイル A"})).slice(offset, offset + limit);
+    await route.fulfill({json: {...envelope, data: {...envelope.data, items: {...envelope.data.items, total: 60, has_next: offset + limit < 60, items}}}});
+  });
+  await page.goto("/feedback?period=7&sort=oldest&size=25&page=2");
+  const scroll = page.getByTestId("feedback-scroll-region");
+  const main = page.locator("main");
+  for (const back of ["button", "browser"]) {
+    const target = page.getByTestId("feedback-row-synthetic-48").getByRole("button");
+    await target.scrollIntoViewIfNeeded();
+    const before = await scroll.evaluate(node => node.scrollTop);
+    const pageBefore = await main.evaluate(node => node.scrollTop);
+    expect(before + pageBefore).toBeGreaterThan(0);
+    await target.click();
+    await expect(page.getByTestId("feedback-detail")).toBeVisible();
+    if (back === "button") await page.getByTestId("feedback-detail-back").click();
+    else await page.goBack();
+    await expect(target).toBeFocused();
+    await expect.poll(() => scroll.evaluate(node => node.scrollTop)).toBeCloseTo(before, 0);
+    await expect.poll(() => main.evaluate(node => node.scrollTop)).toBeCloseTo(pageBefore, 0);
+    await expect(page).toHaveURL(/period=7&sort=oldest&size=25&page=2$/);
+  }
+  await expectNoPageOverflow(page);
+  await page.screenshot({path: testInfo.outputPath(`feedback-comparison-${testInfo.project.name}.png`), fullPage: true});
 });
