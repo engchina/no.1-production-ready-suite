@@ -146,3 +146,8 @@ def test_explicit_total_override_does_not_change_per_stage_admission():
     assert len(selected) == trace["limit"] == 2
     assert len(trace["excluded"]) == 2
     assert trace["limit_policy"] == "total_cap"
+
+
+def test_same_local_identifier_in_another_artifact_is_not_a_duplicate():
+    selected, _ = select_candidates([child("local", artifact="v1"), child("local", artifact="v2")], 10)
+    assert len(selected) == 2

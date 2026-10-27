@@ -26,7 +26,7 @@ def select_candidates(
 
     別文書・版・レシピの同文は統合しない。範囲の異なる部分一致も、同じ事実との推測では消さない。
     """
-    seen_ids: set[str] = set()
+    seen_ids: set[tuple[Any, ...]] = set()
     originals: dict[tuple[Any, ...], str] = {}
     unique: list[Any] = []
     excluded: list[dict[str, str]] = []
@@ -38,10 +38,11 @@ def select_candidates(
         # 同文でも別ページの繰り返しは同じ根拠ではない。成果物と抽出元が分からない場合は ID だけで比較する。
         source = refs if refs and (record.source_run_id or record.metadata.get("chunk_set_id")) else (uid,)
         key = (*artifact, source, text)
-        if uid in seen_ids or (text and key in originals):
+        identity = (*artifact, uid)
+        if identity in seen_ids or (text and key in originals):
             excluded.append({"id": uid, "reason": "duplicate_original", "retained_id": originals.get(key, uid)})
             continue
-        seen_ids.add(uid)
+        seen_ids.add(identity)
         if text:
             originals[key] = uid
         unique.append(record)
