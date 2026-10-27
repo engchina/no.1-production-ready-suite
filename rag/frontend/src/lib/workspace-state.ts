@@ -41,6 +41,7 @@ export type WorkspaceField =
   | "evaluation.import"
   | "evaluation.profileId"
   | "evaluation.runProfileName"
+  | "evaluation.runInput"
   | "evaluation.runJobId"
   | "evaluation.runCaseLabels"
   | "evaluation.compareEnabled"

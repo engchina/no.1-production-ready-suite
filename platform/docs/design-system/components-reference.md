@@ -1487,6 +1487,8 @@ export function ChatSkeleton({ turns = 2, className, testId }: ChatSkeletonProps
 )}
 ```
 
+`PagedDataTable` の `viewport="bounded"` は、長いセルで 1 行が高くなる表を共通のカード一覧の上限（md 未満 17.5rem、md 以上 28rem）で止めます。表頭固定・ページ送り・縦横スクロールは維持します。既定の `list` は実測の 5 / 8 行、`page` は親でスクロールする全高の表です。
+
 クライアント側で全件を持つ一覧は、上の組み合わせを 1 つにした `PagedDataTable` を使います（#265。RAG・Agent が使う）。
 
 ```tsx

@@ -2,6 +2,8 @@ import {
   AnswerPlainText,
   Disclosure,
   ExcerptContent,
+  INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_TABLE_FOCUS_CLASS,
   StatusBadge,
 } from "@production-ready/ui";
 import { BookOpenCheck, FileText } from "lucide-react";
@@ -88,22 +90,30 @@ export function RowContent({
         defaultOpen={evidence.length <= 2}
       >
         {evidence.length ? (
-          <ol className="grid min-w-0 gap-3">
-            {evidence.map((item) => (
-              <li
-                key={item.id}
-                className="min-w-0 rounded-md border border-border p-3"
-              >
-                <p
-                  className="mb-1 truncate font-mono text-xs text-fg-muted"
-                  title={item.id}
+          <div
+            role="region"
+            aria-label={t("evaluation.calibration.row.evidence", { count: evidence.length })}
+            tabIndex={0}
+            className={`min-w-0 ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
+            data-testid="calibration-evidence-scroll"
+          >
+            <ol className="grid min-w-0 gap-3">
+              {evidence.map((item) => (
+                <li
+                  key={item.id}
+                  className="min-w-0 rounded-md border border-border p-3"
                 >
-                  {item.id}
-                </p>
-                <ExcerptContent text={item.text} className="text-sm text-fg" />
-              </li>
-            ))}
-          </ol>
+                  <p
+                    className="mb-1 truncate font-mono text-xs text-fg-muted"
+                    title={item.id}
+                  >
+                    {item.id}
+                  </p>
+                  <ExcerptContent text={item.text} className="text-sm text-fg" />
+                </li>
+              ))}
+            </ol>
+          </div>
         ) : (
           <p className="text-sm text-fg-muted">
             {t("evaluation.calibration.row.noEvidence")}

@@ -892,6 +892,7 @@ def summarize_case_results(
             thresholds=_threshold_values(thresholds),
             values=aggregate_values,
         ),
+        applied_thresholds=_threshold_values(thresholds),
         threshold_failures=[
             EvaluationThresholdFailure(
                 metric=item.metric, actual=item.actual, threshold=item.threshold

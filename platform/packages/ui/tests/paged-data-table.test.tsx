@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { PagedDataTable, type PaginationLabels } from "../src/components/data/paged-data-table";
-import { INFORMATION_TABLE_ROW_CLASS } from "../src/lib/list-density";
+import { INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_ROW_CLASS } from "../src/lib/list-density";
 
 type Row = { id: string; name: string };
 
@@ -60,4 +60,14 @@ describe("PagedDataTable", () => {
     expect(html).not.toContain('data-testid="pager"');
     expect(html).toContain(`${INFORMATION_TABLE_ROW_CLASS} align-top`);
   });
+  it("長いセルの表は共通の高さ上限でも表頭とページ送りを保つ", () => {
+    const html = render({ viewport: "bounded", scrollAriaLabel: "内容の一覧" });
+    for (const cls of INFORMATION_LIST_SCROLL_CLASS.split(" ")) expect(html).toContain(cls);
+    expect(html).toContain("sticky");
+    expect(html).toContain('role="region"');
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain("1–25 / 53 件");
+    expect(html).not.toContain("overflow-visible");
+  });
+
 });

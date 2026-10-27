@@ -2004,6 +2004,7 @@ export interface EvaluationThresholdFailure {
 export type EvaluationMetrics = Partial<Record<EvaluationMetricName, number | null>> & {
  metrics_version?:string; case_count:number; error_count:number; evaluation_suite:string;
  metric_case_counts?:Partial<Record<EvaluationMetricName,number>>; passed:boolean|null;
+ applied_thresholds?:Partial<Record<EvaluationMetricName,number>>;
  threshold_failures:EvaluationThresholdFailure[]; failure_reason_counts:Partial<Record<string,number>>;
  category_breakdown?:Partial<Record<string,EvaluationCategorySummary>>;
  split_breakdown?:Partial<Record<string,EvaluationSplitSummary>>;
@@ -3277,10 +3278,10 @@ function requestUpload<T>(
 async function requestFile(
   path: string,
   fallbackName: string,
-  options: { signal?: AbortSignal } = {},
+  options: RequestInit = {},
 ): Promise<DownloadedFile> {
-  const headers = withCsrfHeaders("GET");
-  const res = await fetch(appPath(path), { credentials: "same-origin", headers, signal: options.signal });
+  const headers = withCsrfHeaders(options.method ?? "GET", options.headers);
+  const res = await fetch(appPath(path), { ...options, credentials: "same-origin", headers });
   if (!res.ok) {
     const envelope = await parseEnvelope<null>(res);
     const error = apiErrorFromEnvelope(res.status, envelope, res.headers.get("X-Request-ID"));
@@ -4211,6 +4212,10 @@ export const api = {
       "/api/evaluation/cases/process-drafts",
       jsonBody(body)
     ),
+  downloadEvaluationResults: (jobId: string, body: {
+    rows: EvaluationImportRow[]; cases: EvaluationCase[];
+    profile_name: string | null; compare_profile_name: string | null;
+  }) => requestFile(`/api/evaluation/jobs/${encodeURIComponent(jobId)}/results.xlsx`, "evaluation_results.xlsx", jsonBody(body)),
   getEvaluationJob: (jobId: string) =>
     request<EvaluationJob>(`/api/evaluation/jobs/${encodeURIComponent(jobId)}`),
   cancelEvaluationJob: (jobId: string) =>

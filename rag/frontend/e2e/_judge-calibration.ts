@@ -258,9 +258,11 @@ function finalLabel(state: JudgeCalibrationMock, k: string): StoredLabel | undef
 /** 判定の校正の API を mock する（`withSet` なら合成の集合が 1 つある状態から始める）。 */
 export async function mockJudgeCalibration(
   page: Page,
-  options: { withSet?: boolean; calibrated?: boolean; canManage?: boolean } = {}
+  options: { withSet?: boolean; calibrated?: boolean; canManage?: boolean; evidence?: MockItem["evidence"] } = {}
 ): Promise<JudgeCalibrationMock> {
   const source = items();
+  const evidence = options.evidence;
+  if (evidence) source.forEach(item => { item.evidence = evidence; });
   const state: JudgeCalibrationMock = {
     labels: new Map(),
     other: seededOther(source),

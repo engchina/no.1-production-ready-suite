@@ -308,3 +308,33 @@ test("記入の集合を削除しても、消した集合の詳細と行を取�
   expect(deleted).toBe(true);
   expect(afterDelete).toEqual([]);
 });
+
+
+test("根拠は共通の高さで止まり、最後まで内部スクロールできる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockEvaluationBasics(page);
+  await mockJudgeCalibration(page, { withSet: true, evidence: Array.from({ length: 15 }, (_, i) => ({
+    id: `evidence-${i + 1}`, text: (`合成の根拠 ${i + 1} の説明です。\n`).repeat(10),
+  })) });
+  await page.goto("/evaluation?tab=calibration");
+  await page.getByTestId("calibration-label-sets").getByRole("button", { name: "校正の集合 A" }).click();
+  const annotator = page.getByTestId("calibration-annotator");
+  await annotator.locator("summary").filter({ hasText: "根拠（評価器に渡した 15 件）" }).click();
+  const region = annotator.getByTestId("calibration-evidence-scroll");
+  await expect(region).toBeVisible();
+  const dimensions = await region.evaluate(node => {
+    const rootSize = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    return {height: node.clientHeight, content: node.scrollHeight,
+      expected: rootSize * (matchMedia("(min-width: 48rem)").matches ? 28 : 17.5)};
+  });
+  expect(Math.abs(dimensions.height - dimensions.expected)).toBeLessThanOrEqual(1);
+  expect(dimensions.content).toBeGreaterThan(dimensions.height);
+  await region.focus();
+  await expect(region).toBeFocused();
+  await region.press("End");
+  await expect.poll(() => region.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  await region.evaluate(node => node.scrollTo({top: node.scrollHeight}));
+  await expect(region.locator("li")).toHaveCount(15);
+  await expect.poll(() => region.evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(1);
+  await expectNoPageOverflow(page);
+  await region.screenshot({path:testInfo.outputPath("evidence-scroll.png")});
+});
