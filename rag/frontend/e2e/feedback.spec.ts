@@ -120,10 +120,8 @@ test("全幅の一覧を検索・数値ページングし、全幅の詳細の�
 
   await detail.getByRole("tab", { name: "根拠" }).click();
   await expect(page.getByRole("tabpanel", { name: "根拠" }).getByText("評価対象", { exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "引用元を開く" })).toHaveAttribute(
-    "href",
-    "/documents/doc-1?chunk_id=doc-1%3A0"
-  );
+  await expect(page.getByRole("button", { name: /の根拠を表示$/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: "引用元を開く" })).toHaveCount(0);
 
   await detail.getByRole("tab", { name: "実行情報" }).click();
   await expect(
@@ -373,7 +371,7 @@ test("承認 FAQ への反映の権限が無い利用者には 登録済みQ&A �
   await detail.getByRole("tab", { name: "根拠" }).click();
   const evidence = page.getByRole("tabpanel", { name: "根拠" });
   await expect(evidence.locator("article").first()).toBeVisible();
-  await expect(evidence.getByRole("link", { name: "引用元を開く" })).toHaveCount(0);
+  await expect(evidence.getByRole("button", { name: /の根拠を表示$/ })).toHaveCount(0);
 });
 
 test("見える範囲を案内する: SYSTEM_ADMIN はすべての利用者の分、ほかのロールは自分が送った分だけ", { tag: "@responsive" }, async ({ page }) => {
@@ -838,9 +836,12 @@ test("長い根拠は共通の高さでスクロールし、戻るとページ�
   await page.getByTestId("feedback-row-feedback-answer").click();
   await page.getByRole("tab", {name: "根拠", exact: true}).click();
   const list = page.getByTestId("feedback-evidence-scroll");
-  const size = await list.evaluate(node => ({height: node.clientHeight, content: node.scrollHeight, expected: parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(min-width: 48rem)").matches ? 28 : 17.5)}));
-  expect(Math.abs(size.height - size.expected)).toBeLessThanOrEqual(1);
-  expect(size.content).toBeGreaterThan(size.height);
+  const before = await list.evaluate(node => node.clientHeight);
+  const width = page.viewportSize()!.width;
+  await page.setViewportSize({ width, height: 1500 });
+  if (width >= 768) await expect.poll(() => list.evaluate(node => node.clientHeight)).toBeGreaterThan(before + 200);
+  else await expect.poll(() => list.evaluate(node => node.clientHeight)).toBe(before);
+  await expect.poll(() => list.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
   await list.focus(); await list.press("End");
   await expect.poll(() => list.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
   await list.getByText("合成節 40", {exact: false}).scrollIntoViewIfNeeded();
@@ -889,4 +890,58 @@ test("比較一覧から詳細へ移り、戻ると表内とページの読ん�
   }
   await expectNoPageOverflow(page);
   await page.screenshot({path: testInfo.outputPath(`feedback-comparison-${testInfo.project.name}.png`), fullPage: true});
+});
+
+test("フィードバックの根拠を同じ右側パネルの該当ページで強調し、元の詳細へ戻る", { tag: "@responsive" }, async ({ page }) => {
+  await mockFeedback(page, []);
+  let chunkReads = 0;
+  const imagePages: string[] = [];
+  await page.route("**/api/documents/doc-1/chunks/**", route => {
+    chunkReads++;
+    return route.fulfill({ json: { data: {
+      document_id: "doc-1", chunk_id: "doc-1:0", file_name: "合成文書.pdf", text: "合成の原文", score: 0, rerank_score: null,
+      category_name: null, metadata: { page_start: 2, page_width: 612, page_height: 792, bbox: [61, 79, 306, 158], bbox_unit: "absolute" },
+    }, error_messages: [], warning_messages: [] } });
+  });
+  await page.route("**/api/documents/doc-1", route => route.fulfill({ json: { data: { document_id: "doc-1", file_name: "合成文書.pdf", preprocess_artifact: null }, error_messages: [], warning_messages: [] } }));
+  await page.route("**/api/documents/doc-1/recipes", route => route.fulfill({ json: { data: [], error_messages: [], warning_messages: [] } }));
+  await page.route(/\/api\/documents\/doc-1\/preview-pages(?:\?|$)/, route => route.fulfill({ json: { data: { page_count: 3, pages: [1, 2, 3].map(page_number => ({ page_number, width: 612, height: 792 })) }, error_messages: [], warning_messages: [] } }));
+  await page.route(/\/api\/documents\/doc-1\/preview-pages\/\d+(?:\?|$)/, route => {
+    imagePages.push(route.request().url());
+    return route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="612" height="792"><rect width="612" height="792" fill="white"/></svg>' });
+  });
+  await page.goto("/feedback?feedback=feedback-answer&tab=evidence");
+  await page.getByRole("tab", { name: "根拠", exact: true }).click();
+  expect(chunkReads).toBe(0);
+  const originalUrl = page.url();
+  const open = page.getByRole("button", { name: /の根拠を表示$/ }).first();
+  await expect(open).toContainText("根拠を表示");
+  await open.click();
+  const sheet = page.getByRole("dialog", { name: "回答の根拠", exact: true });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByTestId("bbox-content-overlay")).toHaveCount(1);
+  await expect.poll(() => imagePages.some(url => /preview-pages\/2(?:\?|$)/.test(url))).toBe(true);
+  expect(chunkReads).toBe(1);
+  expect(page.url()).toBe(originalUrl);
+  await expect(page.getByRole("link", { name: "引用元を開く" })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: test.info().outputPath("feedback-source-drawer.png"), fullPage: true });
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  expect(page.url()).toBe(originalUrl);
+  await expect(open).toBeFocused();
+});
+
+test("現在は閲覧できない根拠を別の文書や引用へ置き換えない", { tag: "@responsive" }, async ({ page }) => {
+  await mockFeedback(page, []);
+  await page.route("**/api/documents/doc-1/chunks/**", route => route.fulfill({ status: 404, json: { error_messages: ["この根拠は現在の閲覧範囲では表示できません。"], warning_messages: [] } }));
+  let previews = 0;
+  await page.route("**/preview-pages**", route => { previews++; return route.abort(); });
+  await page.goto("/feedback?feedback=feedback-answer&tab=evidence");
+  await page.getByRole("tab", { name: "根拠", exact: true }).click();
+  await page.getByRole("button", { name: /の根拠を表示$/ }).first().click();
+  const sheet = page.getByRole("dialog", { name: "回答の根拠", exact: true });
+  await expect(sheet.getByText("この根拠は現在の閲覧範囲では表示できません。", { exact: true })).toBeVisible();
+  expect(previews).toBe(0);
+  await expect(sheet.getByTestId("bbox-content-overlay")).toHaveCount(0);
 });
