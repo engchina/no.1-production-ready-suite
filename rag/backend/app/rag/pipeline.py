@@ -325,6 +325,28 @@ class RagPipeline:
         い trace に置く(画面・外部の traceparent を親にしない。サービストークンの MCP の要求の中だ
         け Agent の trace を続ける。`operation_trace_parent`)。
         """
+        if request._rule_selection_scope:
+            recognized = AnswerScope(**request._rule_selection_scope)
+            self._scope = AnswerScope(
+                context="\n".join(
+                    value
+                    for value in (self._scope.context if self._scope else "", recognized.context)
+                    if value
+                ),
+                search_terms=tuple(
+                    dict.fromkeys(
+                        [
+                            *(self._scope.search_terms if self._scope else ()),
+                            *recognized.search_terms,
+                        ]
+                    )
+                ),
+                label="、".join(
+                    value
+                    for value in (self._scope.label if self._scope else "", recognized.label)
+                    if value
+                ),
+            )
         overrides = self._settings.rag_language_pack_overrides
         trace_id = trace_id or new_trace_id()
         if trace is not None:

@@ -3891,6 +3891,8 @@ export const ja = {
   "settings.answerPrompts.stage.support_guide_conditions": "質問から業務ガイドの自由入力条件を読み取る",
   "settings.answerPrompts.stage.support_guide_conditions.condition":
     "回答・確認の対象に選んだ業務ガイドに、利用者が答える未確認の自由入力条件があるとき",
+  "settings.answerPrompts.stage.rule_selection": "質問から回答ルールの選択を確かめる",
+  "settings.answerPrompts.stage.rule_selection.condition": "質問に一致した回答ルールに未回答の選択式の確認があるとき。利用者が選んだ値だけをまとめて確かめ、曖昧な条件は確認に残します",
   "settings.answerPrompts.stage.history_rewrite": "会話を踏まえた質問の書き換え",
   "settings.answerPrompts.stage.history_rewrite.condition": "会話履歴があり、会話を踏まえた質問の書き換えを有効にしたとき。検索用の質問を作ります",
   "settings.answerPrompts.stage.field_filter": "質問から項目の条件を読み取る",
