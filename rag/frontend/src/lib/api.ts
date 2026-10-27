@@ -4699,6 +4699,10 @@ export interface RuntimeKnowledgeEditRequest {
   labels?: string;
   content?: string;
   source?: string;
+  purpose?: "confirmation" | "generation" | "both";
+  instruction_kind?: "presentation" | "requirement" | "verification";
+  exclusive_group?: string;
+  priority?: number;
   enabled?: boolean;
   delete?: boolean;
 }
@@ -4707,6 +4711,7 @@ export interface RuntimeKnowledgePreviewData {
   expanded_question: string;
   matched_terms: string[];
   matched_rules: string[];
+  conflicting_rules?: string[];
 }
 
 // --- 業務ガイド（SupportGuide。#1237）。型は backend の app/schemas/support_guide.py と同じ ---

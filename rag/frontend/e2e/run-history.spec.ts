@@ -1139,7 +1139,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     // 包む段 → 質問の理解（Query Understanding） → 用語・同義語の確認 → 回答ルールの確認（同じ段の子でこの順）。
     await expect(steps).toHaveCount(4);
     await expect(steps.nth(2)).toContainText("用語・同義語の確認");
-    await expect(steps.nth(3)).toContainText("回答ルールの確認");
+    await expect(steps.nth(3)).toContainText("確認・回答ルールの確認");
     await expect(steps.nth(2)).toHaveAttribute("data-level", "1");
     await expect(steps.nth(3)).toHaveAttribute("data-level", "1");
     await expect(page.getByText("用語・ルールの確認")).toHaveCount(0);
