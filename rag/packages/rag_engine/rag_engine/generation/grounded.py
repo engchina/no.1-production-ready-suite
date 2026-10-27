@@ -712,17 +712,18 @@ def _near_page(span: dict, other: dict) -> bool:
 _TRUSTED_HEADING_SOURCES = frozenset({"section_header", "title"})
 
 
-def _trusted_section_path(span: dict) -> list[str]:
+def _trusted_section_path(span: Mapping[str, Any], *, trust_legacy: bool = True) -> list[str]:
     """機能判定に使う section_path。出所が Docling の分類（section_header / title）の見出しだけを残す (#820)。
 
     柱の初出（running_head）・本文の再出現（promoted_text）・画面経路 caption（route_caption）は chunking の
     昇格・推定で、同じページで手順を別機能に割ることがある。出所が無い旧データ（v3 以前の ADB 行）は
     全要素を Docling 由来として扱う。原文照合や表示（_heading_matches など）は元の section_path を使う。
+    出典を除外する判断では trust_legacy=False とし、出所の無い道筋を確定した見出しとして扱わない。
     """
     path = [str(h) for h in span.get("section_path") or ()]
     sources = [str(s) for s in span.get("section_path_sources") or ()]
     if len(sources) != len(path):
-        return path
+        return path if trust_legacy else []
     return [heading for heading, source in zip(path, sources, strict=False) if source in _TRUSTED_HEADING_SOURCES]
 
 
@@ -1762,15 +1763,16 @@ HEADING_ONLY_REASON = "引用が節の見出しだけの出典。見出しでは
 def heading_only_quote(quote: str, span: Mapping[str, Any]) -> bool:
     """引用が根拠の節の見出し（``section_path`` の要素）だけか（見出しは説明を支えない。#3541・#3544）。
 
-    文書の構造だけで決める: 1 行の引用が見出し（`>` でつないだ末尾を含む）の一部か、見出しに番号・記号（文字を
-    含まない部分）を足しただけのもの。
+    出所を確認できる見出しだけで決める。出所の無い section_path や推定した道筋には本文の文も含まれるため、
+    その一致だけでは原文照合済みの出典を外さない。1 行の引用が確かな見出し（`>` でつないだ末尾を含む）の一部か、
+    見出しに番号・記号（文字を含まない部分）を足しただけのものを対象にする。
     """
     if len([line for line in quote.splitlines() if line.strip()]) > 1:
         return False
     text = _canonical(quote)[0]
     if not text:
         return False
-    path = [str(heading) for heading in span.get("section_path") or () if str(heading).strip()]
+    path = [heading for heading in _trusted_section_path(span, trust_legacy=False) if heading.strip()]
     for heading in [*path, *(" > ".join(path[-count:]) for count in range(2, len(path) + 1))]:
         core = _canonical(heading)[0]
         if not core:
