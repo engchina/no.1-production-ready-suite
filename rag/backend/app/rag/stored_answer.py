@@ -46,6 +46,8 @@ _PAGE_AND_SECTION_KEYS = (
     "page_label_end",
     "section_title",
     "section_path",
+    "context_header",
+    "context_header_enabled",
     "content_kind",
     "chunk_profile",
     "file_name",

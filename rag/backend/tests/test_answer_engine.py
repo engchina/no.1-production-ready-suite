@@ -3772,3 +3772,31 @@ async def test_approved_faq_generation_reports_usage_and_failure(
     assert [item[1] for item in events] == ["started", "error" if fails else "success"]
     assert events[-1][2] > 0
     assert events[-1][3]["llm_usage"]["calls"] == 1
+
+
+@pytest.mark.parametrize("engine", [True, False])
+@pytest.mark.parametrize("enabled", [True, False])
+def test_engine_bridge_keeps_original_search_context(engine: bool, enabled: bool) -> None:
+    metadata: dict[str, Any] = {
+        "section_path": "分類 A > 機能 A > 説明",
+        "context_header_enabled": enabled,
+    }
+    if enabled:
+        metadata["context_header"] = "document-a.txt > 分類 A > 機能 A > 説明"
+    if engine:
+        metadata["engine_metadata_json"] = json.dumps(
+            {"section_path": ["分類 A", "機能 A", "説明"]}, ensure_ascii=False
+        )
+    chunk = RetrievedChunk(
+        document_id="doc-a",
+        chunk_id="chunk-a",
+        text="説明本文",
+        score=1,
+        file_name="document-a.txt",
+        metadata=metadata,
+    )
+    result = answer_engine_module._stored_child(chunk, rrf_score=1)
+    assert result.metadata["section_path"] == ["分類 A", "機能 A", "説明"]
+    assert result.metadata["context_header_enabled"] is enabled
+    assert result.metadata.get("context_header") == metadata.get("context_header")
+    assert "context_header" not in result.text

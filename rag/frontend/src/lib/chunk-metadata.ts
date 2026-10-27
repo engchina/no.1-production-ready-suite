@@ -8,7 +8,9 @@ export type CitationMetadataChipId =
   | "content_kind"
   | "section_title"
   | "section_path"
-  | "chunk_profile";
+  | "chunk_profile"
+  | "context_header"
+  | "context_header_enabled";
 
 export interface CitationMetadataChip {
   id: CitationMetadataChipId;
@@ -37,6 +39,10 @@ export function citationMetadataChips(
     const value = stringMetadata(metadata, id);
     if (value) chips.push({ id, value });
   }
+  const header = stringMetadata(metadata, "context_header");
+  if (header) chips.push({ id: "context_header", value: header });
+  const enabled = metadata.context_header_enabled;
+  chips.push({ id: "context_header_enabled", value: typeof enabled === "boolean" ? String(enabled) : header ? "true" : "unknown" });
   return chips;
 }
 

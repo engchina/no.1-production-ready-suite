@@ -118,7 +118,8 @@
                 }
               ]
             }
-          ]
+          ],
+          "context_header": "incident-contact-rules.pdf > 障害連絡規程"
         },
         "figure_image_available": false
       }
@@ -198,7 +199,8 @@
           "content_kind": "record",
           "row_start": 40,
           "section_path": "システム台帳",
-          "sheet_name": "システム台帳"
+          "sheet_name": "システム台帳",
+          "context_header": "system-ledger.xlsx > システム台帳"
         },
         "figure_image_available": false
       }
@@ -330,7 +332,8 @@
                 }
               ]
             }
-          ]
+          ],
+          "context_header": "incident-contact-rules.pdf > 障害連絡規程 > 第 3 章 連絡の手段"
         },
         "figure_image_available": false
       }
@@ -462,7 +465,8 @@
                 }
               ]
             }
-          ]
+          ],
+          "context_header": "incident-contact-rules.pdf > 障害連絡規程 > 第 3 章 連絡の手段"
         },
         "figure_image_available": false
       }
@@ -542,7 +546,8 @@
           "content_kind": "record",
           "row_start": 40,
           "section_path": "システム台帳",
-          "sheet_name": "システム台帳"
+          "sheet_name": "システム台帳",
+          "context_header": "system-ledger.xlsx > システム台帳"
         },
         "figure_image_available": false
       }
