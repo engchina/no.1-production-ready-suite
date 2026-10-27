@@ -4291,7 +4291,7 @@ export const ja = {
   "evaluation.thresholdFailures": "閾値未達",
   "evaluation.cases": "ケース別結果",
   "evaluation.knowledgeBaseScope.helper":
-    "評価の質問を、選んだナレッジベースの文書で検索・回答します。期待する根拠のファイル名も、この中の文書と照合します。",
+    "選んだ検索・回答プロファイルの設定で評価します。期待する根拠のファイル名は、参照するナレッジベースの文書と照合します。",
   "evaluation.error.run": "評価実行に失敗しました。",
   "evaluation.error.cancel": "評価を取り消せませんでした。時間をおいて、もう一度取り消してください。",
   "evaluation.actions.starting": "評価を開始しています",
@@ -4339,18 +4339,18 @@ export const ja = {
   "evaluation.suite.applied": "評価の基準",
   "evaluation.input.description":
     "1 行に 1 つの質問を書いた Excel（質問・期待する根拠・標準回答）をアップロードします。書き方はテンプレートの「記入の説明」、形式ごとの例は「記入例」のシートにあります。",
-  "evaluation.knowledgeBaseScope.required": "ナレッジベースを 1 つ以上選んでください。",
+  "evaluation.knowledgeBaseScope.required": "評価する検索・回答プロファイルを 1 つ選んでください。",
   "evaluation.knowledgeBaseScope.emptySelection": "未選択です。評価するナレッジベースを選んでください。",
   "evaluation.conditions.title": "評価の条件",
   "evaluation.conditions.description":
-    "評価するナレッジベースを選び、評価リクエストの Excel をアップロードして評価を実行します。",
+    "評価する検索・回答プロファイルを 1 つ選び、評価リクエストの Excel をアップロードして評価を実行します。",
   "evaluation.import.label": "評価リクエストの Excel",
   "evaluation.import.dropzone": "Excel ファイルをドラッグ＆ドロップするか、クリックして選択",
   "evaluation.import.dropzoneReplace": "{name} を選択中。別のファイルをドロップかクリックで置き換えます",
   "evaluation.import.dropzoneHint": ".xlsx・{rows} 行・{size}MB まで",
   "evaluation.import.template": "テンプレートをダウンロード",
   "evaluation.import.templateHint":
-    "列は「質問」「期待する根拠」「標準回答」「必須の回答要点」「期待する応答の判断」「回答の過程」の 6 つで、質問だけが必須です。期待する判断には回答・確認・保留を指定します。評価に必要な入力や根拠が不足する指標は「未評価」となり、合格を意味しません。ナレッジベースを選んでからダウンロードすると、その文書の一覧（ファイル名・文書 ID）が入ります。",
+    "列は「質問」「期待する根拠」「標準回答」「必須の回答要点」「期待する応答の判断」「回答の過程」の 6 つで、質問だけが必須です。期待する判断には回答・確認・保留を指定します。評価に必要な入力や根拠が不足する指標は「未評価」となり、合格を意味しません。検索・回答プロファイルを選んでからダウンロードすると、参照する文書の一覧（ファイル名・文書 ID）が入ります。",
   "evaluation.import.templateDone": "テンプレートをダウンロードしました。",
   "evaluation.import.templateError":
     "テンプレートをダウンロードできませんでした。時間をおいて、もう一度試してください。",
@@ -4359,9 +4359,9 @@ export const ja = {
   "evaluation.import.required": "評価リクエストの Excel をアップロードしてください。",
   "evaluation.import.fixErrors": "Excel の誤りを直して、もう一度アップロードしてください。",
   "evaluation.import.needsKnowledgeBase":
-    "ナレッジベースを選ぶと、Excel を確かめます（期待する根拠のファイル名を、選んだナレッジベースで照合します）。",
+    "検索・回答プロファイルを選ぶと、参照する文書で Excel の期待する根拠を照合します。",
   "evaluation.import.staleKnowledgeBase":
-    "ナレッジベースを変えたため、Excel をもう一度アップロードしてください（期待する根拠のファイル名を、選んだナレッジベースで照合し直します）。",
+    "検索・回答プロファイルを変えたため、Excel をもう一度アップロードしてください（参照する文書で期待する根拠を照合し直します）。",
   "evaluation.import.invalidType": "Excel（.xlsx）のファイルを選んでください。",
   "evaluation.import.multiple": "ファイルは 1 つだけ選んでください。",
   "evaluation.import.ready": "{file}: {total} 件のケースを評価できます。",
@@ -4501,7 +4501,7 @@ export const ja = {
   "evaluation.failureReason.screen_missing": "案内すべき画面を案内していない",
   "evaluation.failureReason.wrong_screen": "別の画面を案内した",
   "evaluation.failureReason.off_target": "目的外の回答",
-  // 案内した画面と目的外の割合・ナレッジベースと検索・回答プロファイルの比較（#2402）。
+  // 案内した画面と目的外の割合・検索・回答プロファイルの比較（#2402）。
   "evaluation.perspective.guidance": "案内",
   "evaluation.perspective.guidance.description":
     "目的に合う画面へ案内したか・別の画面へ案内していないか・質問の目的に答えたか（参考の集計で、評価の基準の閾値には使いません）",
@@ -4521,25 +4521,25 @@ export const ja = {
   "evaluation.case.wrongScreens": "別の画面: {screens}",
   "evaluation.case.screenJudged": "回答に画面の名前が無いため、判定器で判定しました。",
   "evaluation.case.screenUnresolved": "回答に画面の名前が無く、判定できませんでした。",
-  "evaluation.compare.toggle": "検索・回答プロファイルでも評価して比較する",
+  "evaluation.compare.toggle": "別の検索・回答プロファイルでも評価して比較する",
   "evaluation.compare.helper":
-    "同じケースを、選んだナレッジベースの範囲と、検索・回答プロファイルの範囲（参照ナレッジベースと、設定されている業務ガイド・ルール）でそれぞれ評価し、同じ六指標・閾値で比較します。評価は 2 回実行します。所要時間は設定や処理状況によって変わります。",
+    "同じケースを、選んだ 2 つの検索・回答プロファイルの設定でそれぞれ評価し、同じ六指標・閾値で比較します。比べる対象は主条件と別のプロファイルを選びます。評価は 2 回実行します。所要時間は設定や処理状況によって変わります。",
   "evaluation.compare.profileLabel": "比べる検索・回答プロファイル",
   "evaluation.compare.profileRequired": "比べる検索・回答プロファイルを選んでください。",
   "evaluation.compare.profilesLoadError": "検索・回答プロファイルを読み込めませんでした。",
-  "evaluation.compare.title": "ナレッジベースと検索・回答プロファイルの比較",
+  "evaluation.compare.title": "検索・回答プロファイルの比較",
   "evaluation.compare.description":
-    "同じ評価セットを、ナレッジベースの範囲と検索・回答プロファイル「{name}」の範囲で流した結果です。差は検索・回答プロファイル − ナレッジベースの範囲（ポイント）です。",
+    "同じ評価セットを、検索・回答プロファイル「{baseName}」と「{name}」で評価した結果です。差は比較対象 − 主条件（ポイント）です。",
   "evaluation.compare.column.metric": "指標",
-  "evaluation.compare.column.base": "ナレッジベースの範囲",
-  "evaluation.compare.column.compared": "検索・回答プロファイル",
+  "evaluation.compare.column.base": "主条件: {name}",
+  "evaluation.compare.column.compared": "比較対象: {name}",
   "evaluation.compare.column.delta": "差",
   "evaluation.compare.better": "改善",
   "evaluation.compare.worse": "悪化",
   "evaluation.compare.same": "変化なし",
   "evaluation.compare.lowerIsBetter": "低いほどよい",
   "evaluation.compare.tabsLabel": "結果の詳細",
-  "evaluation.compare.tab.base": "ナレッジベースの範囲",
+  "evaluation.compare.tab.base": "主条件: {name}",
   "evaluation.compare.tab.compared": "検索・回答プロファイル: {name}",
   "evaluation.import.column.screens": "必須の回答要点",
   "evaluation.import.column.decision": "期待する応答の判断",

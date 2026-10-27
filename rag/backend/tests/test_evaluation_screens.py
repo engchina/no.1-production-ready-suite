@@ -334,27 +334,34 @@ def test_screen_schema_cleans_aliases_and_rejects_blank_name() -> None:
         EvaluationScreen(name="  ")
 
 
-def test_run_request_rejects_compare_with_profile() -> None:
-    with pytest.raises(ValueError):
+def test_run_request_compares_distinct_profiles_and_rejects_same_profile() -> None:
+    request = EvaluationRunRequest(
+        cases=[_case()],
+        search_answer_profile_id=" profile-1 ",
+        compare_search_answer_profile_id=" profile-2 ",
+    )
+    assert request.search_answer_profile_id == "profile-1"
+    assert request.compare_search_answer_profile_id == "profile-2"
+    with pytest.raises(ValueError, match="別にしてください"):
         EvaluationRunRequest(
             cases=[_case()],
             search_answer_profile_id="profile-1",
-            compare_search_answer_profile_id="profile-2",
+            compare_search_answer_profile_id=" profile-1 ",
         )
 
 
-# ---- ナレッジベースとプロファイルの比較 --------------------------------------------------------
+# ---- プロファイル同士の比較 --------------------------------------------------------
 
 
-def test_compare_api_runs_knowledge_base_then_profile(monkeypatch: MonkeyPatch) -> None:
-    """比べるプロファイルを指定すると、KB の範囲とプロファイルの範囲の 2 回流して並べる。"""
+def test_compare_api_runs_both_profiles(monkeypatch: MonkeyPatch) -> None:
+    """比べるプロファイルを指定すると、それぞれのプロファイルで 2 回流して並べる。"""
     runs: list[dict[str, Any]] = []
     artifacts: list[dict[str, Any]] = []
 
     class FakeRunner:
         async def run(self, **kwargs: Any) -> EvaluationMetrics:
             runs.append(kwargs)
-            rate = 0.5 if kwargs["search_answer_profile_id"] else 0.25
+            rate = 0.5 if kwargs["search_answer_profile_id"] == "profile-1" else 0.25
             return EvaluationMetrics(case_count=1, response_decision_accuracy=rate)
 
     class FakeOracleClient:
@@ -369,7 +376,7 @@ def test_compare_api_runs_knowledge_base_then_profile(monkeypatch: MonkeyPatch) 
         "/api/evaluation/run",
         json={
             "cases": [{"id": "case-1", "query": "設定を変えるには？"}],
-            "knowledge_base_ids": ["kb-1"],
+            "search_answer_profile_id": "profile-base",
             "compare_search_answer_profile_id": "profile-1",
         },
     )
@@ -379,8 +386,8 @@ def test_compare_api_runs_knowledge_base_then_profile(monkeypatch: MonkeyPatch) 
     assert data["response_decision_accuracy"] == 0.25
     assert data["comparison"]["search_answer_profile_id"] == "profile-1"
     assert data["comparison"]["metrics"]["response_decision_accuracy"] == 0.5
-    assert [run["search_answer_profile_id"] for run in runs] == [None, "profile-1"]
-    assert runs[0]["knowledge_base_ids"] == ["kb-1"]
+    assert [run["search_answer_profile_id"] for run in runs] == ["profile-base", "profile-1"]
+    assert runs[0]["knowledge_base_ids"] == []
     # プロファイルの範囲は、プロファイルの参照 KB で決める（KB の指定は渡さない）。
     assert runs[1]["knowledge_base_ids"] == []
     assert "knowledge_base_id" not in runs[1]["filters"]

@@ -1938,8 +1938,8 @@ export function useSubmitRunEvaluationJob() {
 /** 評価リクエストの Excel を検証してケースにする（#2065。サーバーには保存しない）。 */
 export function useImportEvaluationCases() {
   return useMutation({
-    mutationFn: ({ file, knowledgeBaseIds }: { file: File; knowledgeBaseIds: string[] }) =>
-      api.importEvaluationCases(file, knowledgeBaseIds),
+    mutationFn: ({ file, searchAnswerProfileId }: { file: File; searchAnswerProfileId: string }) =>
+      api.importEvaluationCases(file, searchAnswerProfileId),
   });
 }
 

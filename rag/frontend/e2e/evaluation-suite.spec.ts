@@ -2,7 +2,8 @@ import { expect, type Page, test } from "./fixtures/test";
 
 import { measureShellHiddenOverflow } from "../../../platform/packages/ui/e2e/layout-checks";
 import {
-  chooseEvaluationKnowledgeBase,
+  chooseEvaluationProfile,
+  mockEvaluationProfiles,
   evaluationImportResult,
   mockEvaluationImport,
   mockEvaluationJobs,
@@ -15,6 +16,7 @@ test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await mockKnowledgeBases(page);
+  await mockEvaluationProfiles(page);
   await mockEvaluationSuiteSettings(page, "standard");
 });
 
@@ -23,7 +25,8 @@ for (const viewport of [
   { name: "mobile", width: 375, height: 812 },
 ]) {
   test(
-    `評価ページは評価の基準を表示だけし、ナレッジベースと評価リクエストの Excel を必須にする (${viewport.name})`,
+    `評価ページは評価の基準を表示だけし、プロファイルと評価リクエストの Excel を必須にする (${viewport.name})`,
+    { tag: "@responsive" },
     async ({ page }, testInfo) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
 
@@ -53,7 +56,7 @@ for (const viewport of [
       await expect(conditions).toContainText("同じ六指標・閾値で比較します。");
       await expect(conditions).toContainText("所要時間は設定や処理状況によって変わります。");
       await expect(conditions).not.toContainText("約 2 倍");
-      await expect(conditions.getByRole("switch", { name: "検索・回答プロファイルでも評価して比較する" })).toBeVisible();
+      await expect(conditions.getByRole("switch", { name: "別の検索・回答プロファイルでも評価して比較する" })).toBeVisible();
       await conditions.screenshot({ path: testInfo.outputPath("evaluation-guidance.png") });
       // JSON の入力・設定比較・サンプルは無い。
       await expect(page.getByLabel("Golden set JSON")).toHaveCount(0);
@@ -65,12 +68,12 @@ for (const viewport of [
       const run = page.getByRole("button", { name: "評価実行" });
       await expect(run).toBeEnabled();
       await run.click();
-      const knowledgeBase = page.getByTestId("evaluation-knowledge-base");
-      await expect(knowledgeBase.getByRole("alert")).toHaveText("ナレッジベースを 1 つ以上選んでください。");
-      await expect(page.getByRole("combobox", { name: "ナレッジベース" })).toBeFocused();
+      const knowledgeBase = page.getByTestId("evaluation-profile");
+      await expect(knowledgeBase.getByRole("alert")).toHaveText("評価する検索・回答プロファイルを 1 つ選んでください。");
+      await expect(page.locator("#evaluation-profile")).toBeFocused();
 
       // ナレッジベースを選ぶとエラーは消え、次は Excel の欄に出す。
-      await chooseEvaluationKnowledgeBase(page);
+      await chooseEvaluationProfile(page);
       await expect(knowledgeBase.getByRole("alert")).toHaveCount(0);
       await run.click();
       const dropzone = page.getByTestId("evaluation-request-dropzone");
@@ -83,6 +86,7 @@ for (const viewport of [
 
   test(
     `Excel の警告は表で出し、評価は実行できる (${viewport.name})`,
+    { tag: "@responsive" },
     async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       const jobs = await mockEvaluationJobs(page, { autoComplete: true });
@@ -105,7 +109,7 @@ for (const viewport of [
       );
 
       await page.goto("/evaluation");
-      await chooseEvaluationKnowledgeBase(page);
+      await chooseEvaluationProfile(page);
       await uploadEvaluationExcel(page);
 
       const ready = page.getByTestId("evaluation-import-ready");
@@ -125,6 +129,7 @@ for (const viewport of [
 
   test(
     `Excel の誤りは行・列・内容の表で出し、評価を実行しない (${viewport.name})`,
+    { tag: "@responsive" },
     async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       const jobs = await mockEvaluationJobs(page, { autoComplete: true });
@@ -142,7 +147,7 @@ for (const viewport of [
       );
 
       await page.goto("/evaluation");
-      await chooseEvaluationKnowledgeBase(page);
+      await chooseEvaluationProfile(page);
       await uploadEvaluationExcel(page);
 
       const errors = page.getByTestId("evaluation-import-errors");
@@ -223,7 +228,7 @@ test("テンプレートをダウンロードでき、選んだナレッジベ�
   });
 
   await page.goto("/evaluation");
-  await expect(page.getByText(/ナレッジベースを選んでからダウンロードすると、その文書の一覧/)).toBeVisible();
+  await expect(page.getByText(/検索・回答プロファイルを選んでからダウンロードすると、参照する文書の一覧/)).toBeVisible();
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "テンプレートをダウンロード" }).click();
 
@@ -232,17 +237,17 @@ test("テンプレートをダウンロードでき、選んだナレッジベ�
   expect(new URL(urls[0] ?? "").searchParams.getAll("knowledge_base_ids")).toEqual([]);
 
   // ナレッジベースを選ぶと、その文書（ファイル名・文書 ID）を「文書一覧」のシートに入れるよう求める（#2086）。
-  await chooseEvaluationKnowledgeBase(page);
+  await chooseEvaluationProfile(page);
   const second = page.waitForEvent("download");
   await page.getByRole("button", { name: "テンプレートをダウンロード" }).click();
   await second;
-  expect(new URL(urls[1] ?? "").searchParams.getAll("knowledge_base_ids")).toEqual(["kb-1"]);
+  expect(new URL(urls[1] ?? "").searchParams.getAll("search_answer_profile_id")).toEqual(["profile-base"]);
 });
 
 test("Excel の形式でないファイルは検証に送らず欄の直下に出す", async ({ page }) => {
   const imports = await mockEvaluationImport(page);
   await page.goto("/evaluation");
-  await chooseEvaluationKnowledgeBase(page);
+  await chooseEvaluationProfile(page);
 
   await uploadEvaluationExcel(page, "cases.csv");
 
@@ -252,7 +257,7 @@ test("Excel の形式でないファイルは検証に送らず欄の直下に�
   expect(imports.requests).toHaveLength(0);
 });
 
-test("ナレッジベースより先に Excel を選ぶと、選んだ時点で検証し、変えたら検証し直す", async ({ page }) => {
+test("プロファイルより先に Excel を選ぶと、選んだ時点で検証し、変えたら検証し直す", async ({ page }) => {
   const imports = await mockEvaluationImport(page);
   await page.route("**/api/knowledge-bases**", async (route) => {
     await route.fulfill({ json: knowledgeBasesEnvelope(["社内規程", "人事規程"]) });
@@ -260,17 +265,17 @@ test("ナレッジベースより先に Excel を選ぶと、選んだ時点で�
   await page.goto("/evaluation");
 
   await uploadEvaluationExcel(page);
-  await expect(page.getByText("ナレッジベースを選ぶと、Excel を確かめます", { exact: false })).toBeVisible();
+  await expect(page.getByText("検索・回答プロファイルを選ぶと、参照する文書で Excel", { exact: false })).toBeVisible();
   expect(imports.requests).toHaveLength(0);
 
-  await chooseEvaluationKnowledgeBase(page);
+  await chooseEvaluationProfile(page);
   await expect(page.getByTestId("evaluation-import-ready")).toContainText("cases.xlsx: 2 件のケースを評価できます。");
-  expect(imports.requests).toEqual([["kb-1"]]);
+  expect(imports.requests).toEqual([["profile-base"]]);
 
   // 期待する根拠のファイル名は KB で照合するので、KB を変えたら同じファイルで検証し直す。
-  await chooseEvaluationKnowledgeBase(page, /人事規程/);
+  await chooseEvaluationProfile(page, /プロファイル B/);
   await expect.poll(() => imports.requests.length).toBe(2);
-  expect(imports.requests[1]).toEqual(["kb-1", "kb-2"]);
+  expect(imports.requests[1]).toEqual(["profile-1"]);
 });
 
 for (const viewport of [
@@ -279,6 +284,7 @@ for (const viewport of [
 ]) {
   test(
     `検証した Excel は件数とプレビューを出し、評価の job は進捗・今の行・経過時間を出す (${viewport.name})`,
+    { tag: "@responsive" },
     async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       const jobs = await mockEvaluationJobs(page, {
@@ -301,7 +307,7 @@ for (const viewport of [
       await expect.poll(() => jobs.runPayloads.length).toBe(1);
       expect(jobs.runPayloads[0]).toEqual({
         cases: evaluationImportResult().cases,
-        knowledge_base_ids: ["kb-1"],
+        search_answer_profile_id: "profile-base",
       });
 
       // 実行状況（#390）: 状態・件数・今の行・経過時間（placement="job"）と取り消し。

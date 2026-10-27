@@ -39,7 +39,8 @@ export type WorkspaceField =
   // 品質評価（#2065）: 検証した評価リクエストの Excel（ケースとプレビュー。200,000 文字を超えると
   // 保存しない）、KB スコープ、評価の job id と、その評価のケースの見出し（結果の表の質問・根拠）。
   | "evaluation.import"
-  | "evaluation.knowledgeBaseIds"
+  | "evaluation.profileId"
+  | "evaluation.runProfileName"
   | "evaluation.runJobId"
   | "evaluation.runCaseLabels"
   | "evaluation.compareEnabled"

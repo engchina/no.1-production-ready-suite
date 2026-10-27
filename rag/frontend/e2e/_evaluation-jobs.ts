@@ -156,6 +156,7 @@ export function evaluationImportResult(overrides: Record<string, unknown> = {}) 
     error_count: 0,
     warnings: [],
     warning_count: 0,
+    search_answer_profile_id: "profile-base",
     knowledge_base_ids: ["kb-1"],
     document_names: { "doc-1": "経費精算規程.pdf", "doc-2": "出張旅費規程.docx" },
     max_rows: 200,
@@ -165,8 +166,8 @@ export function evaluationImportResult(overrides: Record<string, unknown> = {}) 
 }
 
 /**
- * 評価リクエストの Excel の検証の API（`POST /api/evaluation/cases/import`）の mock。送った KB の ID を記録し、
- * 結果の `knowledge_base_ids` は送った値にする（画面は KB を変えたら検証し直す）。
+ * 評価リクエストの Excel の検証の API（`POST /api/evaluation/cases/import`）の mock。送ったプロファイルの ID を記録し、
+ * 結果の `search_answer_profile_id` は送った値にする（変更時は再検証する）。
  */
 export async function mockEvaluationImport(
   page: Page,
@@ -175,23 +176,30 @@ export async function mockEvaluationImport(
   const requests: string[][] = [];
   await page.route("**/api/evaluation/cases/import", async (route) => {
     const body = route.request().postDataBuffer()?.toString("utf8") ?? "";
-    const ids = [...body.matchAll(/name="knowledge_base_ids"\r\n\r\n([^\r\n]+)/g)].map((match) => match[1] ?? "");
+    const ids = [...body.matchAll(/name="search_answer_profile_id"\r\n\r\n([^\r\n]+)/g)].map((match) => match[1] ?? "");
     requests.push(ids);
     await route.fulfill({
-      json: { data: { ...result(ids), knowledge_base_ids: ids }, error_messages: [], warning_messages: [] },
+      json: { data: { ...result(ids), search_answer_profile_id: ids[0], knowledge_base_ids: ["kb-1"] }, error_messages: [], warning_messages: [] },
     });
   });
   return { requests };
 }
 
-/** 品質評価の画面でナレッジベース（社内規程）を選ぶ。 */
-export async function chooseEvaluationKnowledgeBase(page: Page, name: RegExp = /社内規程/) {
-  const combo = page.getByRole("combobox", { name: "ナレッジベース" });
-  const listbox = page.getByRole("listbox", { name: "ナレッジベース" });
-  // 2 回目以降は入力欄にフォーカスが残り、押しても開かないことがあるので、開閉のボタンで開く。
-  if (!(await listbox.isVisible())) await page.getByRole("button", { name: "ナレッジベースの一覧を開閉" }).click();
-  await listbox.getByRole("option", { name }).click();
-  await combo.press("Escape");
+/** 品質評価で主条件の検索・回答プロファイルを一つ選ぶ。 */
+export async function chooseEvaluationProfile(page: Page, name: RegExp = /プロファイル A/) {
+  await page.locator("#evaluation-profile").click();
+  await page.getByRole("listbox").getByRole("option", { name }).click();
+}
+
+/** 評価ページの主条件・比較対象の合成プロファイル。 */
+export async function mockEvaluationProfiles(page: Page) {
+  await page.route("**/api/search-answer-profiles**", route => route.fulfill({json: {
+    data: {items: ["A", "B"].map((name, i) => ({
+      id: i === 0 ? "profile-base" : "profile-1", name: `プロファイル ${name}`,
+      description: "", status: "ACTIVE", knowledge_base_count: 1,
+      created_at: "2026-06-15T00:00:00Z", updated_at: "2026-06-15T00:00:00Z", archived_at: null,
+    })), total: 2, limit: 50, offset: 0, has_next: false}, error_messages: [], warning_messages: [],
+  }}));
 }
 
 /** 評価リクエストの Excel を選ぶ（中身は検証の API の mock が返すので、何でもよい）。 */
@@ -203,10 +211,12 @@ export async function uploadEvaluationExcel(page: Page, name = "cases.xlsx") {
   });
 }
 
-/** 評価を実行できる状態にする（KB を選び、Excel を検証する）。 */
+/** 評価を実行できる状態にする（プロファイルを選び、Excel を検証する）。 */
 export async function prepareEvaluationRun(page: Page) {
+  await mockEvaluationProfiles(page);
+  await page.reload();
   const imports = await mockEvaluationImport(page);
-  await chooseEvaluationKnowledgeBase(page);
+  await chooseEvaluationProfile(page);
   await uploadEvaluationExcel(page);
   await expect(page.getByTestId("evaluation-import-ready")).toBeVisible();
   return imports;

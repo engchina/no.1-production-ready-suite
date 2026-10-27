@@ -179,21 +179,21 @@ describe("api.request envelope", () => {
   );
 
   // Issue 2065: 評価リクエストの Excel の検証は multipart（ファイルと KB の ID）で送る。
-  it("importEvaluationCases はファイルとナレッジベースを multipart で送る", async () => {
+  it("importEvaluationCases はファイルと検索・回答プロファイルを multipart で送る", async () => {
     const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({ data: { file_name: "cases.xlsx", cases: [] }, error_messages: [], warning_messages: [] })
     );
     vi.stubGlobal("fetch", fetchMock);
     const file = new File(["x"], "cases.xlsx");
 
-    await api.importEvaluationCases(file, ["kb-1", "kb-2"]);
+    await api.importEvaluationCases(file, "profile-1");
 
     const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(path).toBe("/api/evaluation/cases/import");
     expect(init.method).toBe("POST");
     const body = init.body as FormData;
     expect(body.get("file")).toBeInstanceOf(File);
-    expect(body.getAll("knowledge_base_ids")).toEqual(["kb-1", "kb-2"]);
+    expect(body.getAll("search_answer_profile_id")).toEqual(["profile-1"]);
   });
 
   it("downloadEvaluationTemplate はファイルとファイル名を返し、失敗は ApiError にする", async () => {
@@ -219,7 +219,7 @@ describe("api.request envelope", () => {
     await expect(api.downloadEvaluationTemplate()).rejects.toMatchObject({ status: 403 });
   });
 
-  it("downloadEvaluationTemplate は選んだナレッジベースを query に入れる（Issue 2086）", async () => {
+  it("downloadEvaluationTemplate は選んだ検索・回答プロファイルを query に入れる（Issue 2086）", async () => {
     const fetchMock = vi.fn().mockImplementation(
       async () =>
         new Response("xlsx", {
@@ -229,10 +229,10 @@ describe("api.request envelope", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.downloadEvaluationTemplate(["kb-1", "kb 2"]);
+    await api.downloadEvaluationTemplate("profile 1");
 
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "/api/evaluation/cases/template?knowledge_base_ids=kb-1&knowledge_base_ids=kb+2"
+      "/api/evaluation/cases/template?search_answer_profile_id=profile+1"
     );
   });
 
