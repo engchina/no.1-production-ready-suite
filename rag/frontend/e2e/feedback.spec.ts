@@ -866,9 +866,8 @@ test("比較一覧から詳細へ移り、戻ると表内とページの読ん�
     const offset = Number(url.searchParams.get("offset") ?? 0);
     const envelope = feedbackEnvelope(limit, offset);
     const base = envelope.data.items.items[0]!;
-    envelope.data.items = {...envelope.data.items, total: 60, has_next: offset + limit < 60,
-      items: Array.from({length: 60}, (_, i) => ({...base, feedback_id: `synthetic-${i}`, question_preview: `合成の質問 ${i}`, comment_preview: `合成のコメント ${i}`, search_answer_profile_name: "プロファイル A"})).slice(offset, offset + limit)};
-    await route.fulfill({json: envelope});
+    const items = Array.from({length: 60}, (_, i) => ({...base, feedback_id: `synthetic-${i}`, question_preview: `合成の質問 ${i}`, comment_preview: `合成のコメント ${i}`, search_answer_profile_name: "プロファイル A"})).slice(offset, offset + limit);
+    await route.fulfill({json: {...envelope, data: {...envelope.data, items: {...envelope.data.items, total: 60, has_next: offset + limit < 60, items}}}});
   });
   await page.goto("/feedback?period=7&sort=oldest&size=25&page=2");
   const scroll = page.getByTestId("feedback-scroll-region");
