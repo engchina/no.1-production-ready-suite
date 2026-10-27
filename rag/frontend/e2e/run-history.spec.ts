@@ -982,7 +982,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("プロファイル A");
     await expect(page.getByRole("switch", { name: "LLM で回答を生成する" })).toHaveAttribute("aria-checked", "true");
     // 記録の条件が入り、詳細条件が開いて見える。
-    await expect(page.locator("#search-top-k")).toContainText("100");
+    await expect(page.locator("#search-top-k")).toHaveCount(0);
     await expect(page.locator("#search-as_of")).toHaveValue("2026-04-01");
     await expect(page.locator("#search-classification-filters")).toContainText("分類 A");
     await expectNoPageOverflow(page);

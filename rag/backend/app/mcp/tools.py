@@ -230,6 +230,7 @@ from app.schemas.search_answer_profile import (
     SearchAnswerProfileSummary,
 )
 from app.schemas.support_guide import SupportGuideReference
+from app.search_defaults import search_top_k_default, search_top_k_schema
 from app.security.permissions import MENU_SEARCH, ROUTE_PERMISSIONS
 
 logger = logging.getLogger(__name__)
@@ -328,6 +329,16 @@ EVIDENCE_LIMIT_MAX = 50
 # rag_search は回答に使った根拠が先に並ぶので 12 のまま。返す本文の合計は
 # EVIDENCE_TEXT_BUDGET_TOKENS で抑える。
 RETRIEVE_EVIDENCE_LIMIT_DEFAULT = min(SEARCH_TOP_K_DEFAULT, EVIDENCE_LIMIT_MAX)
+
+
+def _retrieve_evidence_default() -> int:
+    return min(search_top_k_default(), EVIDENCE_LIMIT_MAX)
+
+
+def _retrieve_evidence_default_schema(schema: dict[str, Any]) -> None:
+    schema["default"] = _retrieve_evidence_default()
+
+
 # rag_retrieve_evidence の planning=caller（呼び出し元が検索文を作る。#2651）で query に足せる
 # 検索文の本数と 1 本の長さの上限（全文検索に使う検索文の本数の上限 6 に、query を合わせて収める）。
 CALLER_QUERIES_MAX = 5
@@ -557,7 +568,11 @@ class SearchInput(BaseModel):
     )
     # 既定を契約に出す（#3240。呼び出し側が説明の文から既定を写さない）。null は省略と同じ。
     top_k: int | None = Field(
-        default=SEARCH_TOP_K_DEFAULT, ge=1, le=SEARCH_TOP_K_MAX, description="検索する件数。"
+        default_factory=search_top_k_default,
+        ge=1,
+        le=SEARCH_TOP_K_MAX,
+        json_schema_extra=search_top_k_schema,
+        description="検索する件数。",
     )
     filters: dict[str, str] = Field(
         default_factory=dict,
@@ -678,12 +693,13 @@ class RetrieveEvidenceInput(SearchInput):
         ),
     )
     evidence_limit: int = Field(
-        default=RETRIEVE_EVIDENCE_LIMIT_DEFAULT,
+        default_factory=_retrieve_evidence_default,
+        json_schema_extra=_retrieve_evidence_default_schema,
         ge=1,
         le=EVIDENCE_LIMIT_MAX,
         description=(
             "返す根拠の最大件数。検索で当たった根拠（関連度の順）、前後の文脈の順に並べてから切る。"
-            f"省略時は検索する件数（top_k。省略時 {SEARCH_TOP_K_DEFAULT}）と同じで、"
+            "省略時は設定の検索する件数（top_k）を基準に、この件数の上限まで返し、"
             "検索で当たった根拠を全部返す。"
         ),
     )

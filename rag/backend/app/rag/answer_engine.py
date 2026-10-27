@@ -1506,8 +1506,14 @@ class AnswerEngine:
         with _search_stage(CONTEXT_SIBLINGS_STAGE, active=bool(anchors)):
             siblings = original_chunks(
                 await self._oracle.context_group_siblings(
-                    anchors,
+                    [
+                        anchor
+                        for anchor in anchors
+                        if anchor.metadata.get("chunk_strategy") == "small_to_big"
+                        or self._settings.rag_neighbor_child_count > 0
+                    ],
                     max_chunks_per_group=max(1, self._settings.rag_context_group_max_chunks),
+                    neighbor_child_count=self._settings.rag_neighbor_child_count,
                 )
             )
         for sibling in siblings:
@@ -3384,6 +3390,9 @@ def _stored_child(
     if retrieval_channels:
         metadata["adb_hybrid"] = {"retrieval_channels": sorted(retrieval_channels)}
     metadata["document_id"] = chunk.document_id
+    # 現在の設定でなく、命中した成果物の方式・版を文脈組み立てへ渡す。
+    for key in ("chunk_strategy", "recipe_id", "chunk_set_id"):
+        metadata[key] = chunk.metadata.get(key, "")
     if classification:
         document = metadata.get("document")
         metadata["document"] = {
@@ -3434,14 +3443,19 @@ def _stored_child(
         # 起点の上限で数えない(#3100)。backend の印(`chat_attachment_id`)は engine の metadata に
         # 入らないので、engine の印に写す(#3126)。
         metadata[ATTACHMENT_EVIDENCE_KEY] = True
+    chunk_set_id = str(chunk.metadata.get("chunk_set_id") or "")
+    artifact_id = chunk_set_id or str(chunk.metadata.get("recipe_id") or "")
+    parent_uid = ":".join(
+        part for part in (chunk.document_id, artifact_id, _group_id(chunk)) if part
+    )
     page_start = _int(chunk.metadata.get("page_start") or chunk.metadata.get("page_number"), 1)
     return StoredChunk(
         chunk_uid=chunk.chunk_id,
         chunk_id=chunk.chunk_id,
         chunk_level="child",
         chunk_seq=_int(chunk.metadata.get("engine_chunk_seq") or chunk.metadata.get("chunk_index")),
-        parent_chunk_uid=f"{chunk.document_id}:{_group_id(chunk)}",
-        parent_chunk_id=f"{chunk.document_id}:{_group_id(chunk)}",
+        parent_chunk_uid=parent_uid,
+        parent_chunk_id=parent_uid,
         child_chunk_ids=(),
         text=chunk.text,
         retrieval_text=engine_search_text(chunk.metadata) or chunk.text,
@@ -3568,13 +3582,16 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
 
     by_parent: dict[str, list[Any]] = {}
     for child in children:
-        by_parent.setdefault(child.parent_chunk_uid, []).append(child)
+        if child.metadata.get("chunk_strategy") == "small_to_big":
+            by_parent.setdefault(child.parent_chunk_uid, []).append(child)
     parents = []
     for parent_uid, members in by_parent.items():
         members.sort(key=lambda child: child.chunk_seq)
         source = state.chunks.get(members[0].chunk_uid)
         parent_text = str((source.metadata if source else {}).get("parent_text") or "")
-        text = parent_text or "\n\n".join(child.text for child in members)
+        if not parent_text.strip():
+            continue
+        text = parent_text
         metadata = dict(members[0].metadata)
         _merge_member_metadata(metadata, members)
         metadata.pop("rrf_score", None)

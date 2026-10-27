@@ -3611,8 +3611,6 @@ export const ja = {
   "search.filters.fields.applied.lte": "{name} ≤ {value}",
   "search.filters.knowledgeBaseHelper": "回答生成に使う検索対象をナレッジベース単位で絞り込みます。",
   "search.filters.clear": "クリア",
-  "search.tuning.topK": "候補取得数",
-  "search.tuning.topKHelp": "検索で上位から選ぶ文書内の箇所（テキスト断片）の基準件数です。文書数や回答の引用数ではなく、検索設定や文脈の追加で実際の件数は変わります。増やすと候補が広がる一方、処理時間が増える場合があり、精度の向上は保証されません。",
   "search.answer": "回答",
   "search.faq.title": "質問に近い登録済みQ&Aがあります",
   "search.faq.description":

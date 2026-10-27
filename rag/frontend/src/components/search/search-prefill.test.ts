@@ -8,7 +8,6 @@ import {
   extractionFieldFilterValue,
 } from "./extraction-field-filters";
 import {
-  DEFAULT_TOP_K,
   EMPTY_CLASSIFICATION_FILTERS,
   hasSearchPrefillParams,
   searchPrefillFromParams,
@@ -32,13 +31,12 @@ function paramsOf(href: string) {
 }
 
 describe("RAG 検索の画面に入れる初期値（Issue 3309）", () => {
-  it("記録の質問・プロファイル・回答の生成・件数・絞り込みを URL で往復する（質問は書き換えない）", () => {
+  it("記録の質問・プロファイル・回答の生成・絞り込みを URL で往復する（質問は書き換えない）", () => {
     const question = "  合成の質問 A？\n2 行目  ";
     const href = searchPrefillHref({
       question,
       searchAnswerProfileId: "profile-a",
       generateAnswer: true,
-      topK: 100,
       filters: {
         large_category: "分類 A",
         as_of: "2026-04-01",
@@ -57,7 +55,6 @@ describe("RAG 検索の画面に入れる初期値（Issue 3309）", () => {
       question,
       searchAnswerProfileId: "profile-a",
       generateAnswer: true,
-      topK: "100",
       classification: { ...EMPTY_CLASSIFICATION_FILTERS, large_category: "分類 A", as_of: "2026-04-01" },
     });
     // 抽出項目の条件は編集の行に戻り、画面が作り直す条件は記録と同じになる。
@@ -69,7 +66,7 @@ describe("RAG 検索の画面に入れる初期値（Issue 3309）", () => {
   });
 
   it("記録に無い条件は既定に戻し、前の作業の条件を混ぜない", () => {
-    const href = searchPrefillHref({ question: "q", searchAnswerProfileId: null, generateAnswer: false, topK: 50 });
+    const href = searchPrefillHref({ question: "q", searchAnswerProfileId: null, generateAnswer: false });
     const { params } = paramsOf(href);
     // 既定の件数・空の絞り込み・プロファイルの無い実行は URL に入れない。
     expect([...params.keys()]).toEqual(["question", "generate_answer"]);
@@ -77,7 +74,6 @@ describe("RAG 検索の画面に入れる初期値（Issue 3309）", () => {
       question: "q",
       searchAnswerProfileId: null,
       generateAnswer: false,
-      topK: DEFAULT_TOP_K,
       classification: EMPTY_CLASSIFICATION_FILTERS,
       extractionRows: [],
     });
@@ -90,9 +86,9 @@ describe("RAG 検索の画面に入れる初期値（Issue 3309）", () => {
     const prefill = searchPrefillFromParams(
       new URLSearchParams({ question: "q", top_k: "7", extraction_fields: "{broken" })
     );
-    expect(prefill?.topK).toBe(DEFAULT_TOP_K);
+    expect(prefill).not.toHaveProperty("topK");
     expect(prefill?.extractionRows).toEqual([]);
-    expect(searchPrefillHref({ question: "q", searchAnswerProfileId: null, generateAnswer: false, topK: 7 })).not.toContain(
+    expect(searchPrefillHref({ question: "q", searchAnswerProfileId: null, generateAnswer: false })).not.toContain(
       "top_k"
     );
   });

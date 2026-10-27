@@ -188,14 +188,17 @@ test.describe("作業状態の保持", () => {
     await selectSearchAnswerProfile(page, /経理ビュー/);
     await page.locator("#search-query").fill("交通費の上限");
     await page.getByText("詳細条件", { exact: true }).click();
-    await page.getByRole("combobox", { name: "候補取得数" }).click();
-    await page.getByRole("option", { name: "100", exact: true }).click();
+    await page.locator('button[aria-controls="search-classification-filters"]').click();
+    await page.locator("#search-as_of").fill("2026-04-01");
     await page.getByRole("switch", { name: "LLM で回答を生成する" }).click();
 
     const expectRestored = async () => {
       await expect(page.locator("#search-query")).toHaveValue("交通費の上限");
       await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("経理ビュー");
-      await expect(page.getByRole("combobox", { name: "候補取得数" })).toContainText("100");
+      await expect(page.getByRole("button", { name: /詳細条件/ })).toHaveAttribute("aria-expanded", "true");
+      const classification = page.locator('button[aria-controls="search-classification-filters"]');
+      if (await classification.getAttribute("aria-expanded") === "false") await classification.click();
+      await expect(page.locator("#search-as_of")).toHaveValue("2026-04-01");
       await expect(page.getByRole("switch", { name: "LLM で回答を生成する" })).toHaveAttribute(
         "aria-checked",
         "true"

@@ -218,7 +218,7 @@ def test_search_api_accepts_and_ignores_removed_standard_options(
 
 
 def test_search_request_top_k_defaults_to_50_and_caps_at_100() -> None:
-    """検索する件数の既定は 50、上限は 100（RAG 検索の画面の選択肢 25 / 50 / 100。#3512）。"""
+    """検索する件数の既定は 50、上限は 100（省略時は現在の設定で解決。#3679）。"""
     assert SearchRequest(query="q").top_k == 50
     assert SearchRequest(query="q", top_k=100).top_k == 100
     for invalid in (0, 101):

@@ -20,7 +20,6 @@ export type WorkspaceField =
   | "search.searchAnswerProfileId"
   | "search.classification"
   | "search.extractionFields"
-  | "search.topK"
   | "search.advancedOpen"
   | "search.generateAnswer"
   | "chat.searchAnswerProfileId"
@@ -85,6 +84,7 @@ function storage(): Storage | null {
 
 /** 更新境界にだけ旧名を置き、owner / TTL / scoped ID / 自由入力は変えない。 */
 function migrateWorkspaceNames(store: Storage): void {
+  store.removeItem(`${WORKSPACE_NAMESPACE}search.topK`);
   const migrations: Record<string, string> = {
     "search.businessViewId": "search.searchAnswerProfileId",
     "chat.businessViewId": "chat.searchAnswerProfileId",

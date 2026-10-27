@@ -676,7 +676,11 @@ class ReferenceOracle:
         ][:top_k]
 
     async def context_group_siblings(
-        self, anchors: list[RetrievedChunk], *, max_chunks_per_group: int
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_group: int,
+        neighbor_child_count: int | None = None,
     ) -> list[RetrievedChunk]:
         return []
 
@@ -839,8 +843,8 @@ async def test_search_adds_referenced_section_after_citing_anchor() -> None:
     assert added.metadata[REFERENCE_FROM_KEY] == "doc-1:a"
     assert added.metadata[REFERENCE_LABEL_KEY] == "第3章"
     assert set(state.reference_expansions) == {"doc-1:cs-1:s0", "doc-1:cs-1:s1"}
-    # 親(small-to-big の文脈)も作る。
-    assert any(chunk.chunk_level == "parent" for chunk in result.all_chunks)
+    # 非親子の参照先は子の原文を保持し、連結した親を合成しない。
+    assert all(chunk.chunk_level == "child" for chunk in result.all_chunks)
 
 
 async def test_search_reference_expansion_respects_budget_and_caches_targets() -> None:

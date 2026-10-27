@@ -143,7 +143,7 @@ async def test_caller_planned_retrieval_calls_no_reasoning_model(
     assert genai.rerank_calls >= 1
     roles = {citation.metadata.get("evidence_role") for citation in response.citations}
     assert "retrieved_anchor" in roles
-    assert {citation.chunk_id for citation in response.citations} == {"doc-1:c1", "doc-1:c2"}
+    assert {citation.chunk_id for citation in response.citations} == {"doc-1:c1"}
     anchor = next(c for c in response.citations if c.chunk_id == "doc-1:c1")
     assert anchor.rerank_score is not None
     assert anchor.metadata.get("evidence_retrieval_rank") == 1
