@@ -19,7 +19,7 @@ from rag_engine.evaluation.answer_validation import (
 )
 from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.retrieval.context_builder import ContextParentEvidence
-from rag_engine.retrieval.request_coverage import CoverageBudget, assess_targets, coverage_targets, run_targeted_retrievals
+from rag_engine.retrieval.request_coverage import CoverageBudget, coverage_targets, request_rows, run_targeted_retrievals
 
 EXAMPLES = Path(__file__).with_name("fixtures") / "answer_accuracy"
 CASES = json.loads((EXAMPLES / "cases.json").read_text())
@@ -88,8 +88,9 @@ def test_context_is_required_before_coverage_can_skip_additional_retrieval():
         return re.findall("対象選択|設定|入力|方法|開いて", text)
 
     targets = coverage_targets(case["question"], tokenize)
-    rows = assess_targets(targets, [("initial", case["initial_evidence"])])
-    assert rows[0]["status"] != "supported"
+    rows = request_rows(targets)
+    assert rows[0]["status"] == "unassessed"
+    rows[0]["answer_status"] = "missing"
     calls = []
 
     def retrieve(text, queries):
@@ -106,12 +107,12 @@ def test_context_is_required_before_coverage_can_skip_additional_retrieval():
         budget=CoverageBudget(),
         retrieve=retrieve,
         tokenize=tokenize,
-        searched_queries=(case["question"],),
+        searched_queries=("初回の検索文",),
     )
     assert calls and results[0].parents
     assert stop == ""
-    after = assess_targets(targets, [("additional", case["additional_evidence"])])
-    assert after[0]["status"] == "supported"
+    after = request_rows(targets)
+    assert after[0]["status"] == "unassessed"
 
 
 @pytest.mark.parametrize("mode", ["none", "detailed"])

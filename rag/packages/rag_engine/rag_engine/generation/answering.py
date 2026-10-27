@@ -251,11 +251,10 @@ from rag_engine.retrieval.request_coverage import (
     COVERAGE_SCHEMA_VERSION,
     CoverageBudget,
     CoverageUsage,
-    assess_targets,
     coverage_counts,
     coverage_targets,
-    evidence_texts,
     re_retrieval_skip_reason,
+    request_rows,
     run_targeted_retrievals,
     select_new_parents,
     within_extra_budget,
@@ -1374,19 +1373,7 @@ def _crag_grade_skip(question: str, context: AnswerContext, settings: Settings) 
 
 
 def _crag_grade_skip_check(question: str, context: AnswerContext, settings: Settings) -> dict[str, Any]:
-    """CRAG の評価を飛ばすかの決定的な判定 (#1499。#1528 で曖昧な帯だけ評価器を呼ぶ形に見直した)。
-
-    CRAG 論文の評価器の閾値の方式に合わせ、規則の信号が「強い」ときだけ評価器を呼ばず、それ以外（曖昧な帯・
-    弱い信号）は呼ぶ。返り値の ``skip`` が True なら飛ばす。``reason`` は飛ばさない理由（実行記録に出す）。
-
-    強い: 設定で有効、根拠がある、rerank の最上位の score が閾値以上、質問の要求を 1 件以上判定でき、語の一致で
-    根拠の無い要求（missing）が無い（weak は可。多段の問は要求の語が 1 つの根拠にそろわないことが普通で、
-    #1499 の条件（すべて supported）では 5 問中 1 問しか効かなかった）、定義を問う語の定義本文がある。
-    必ず呼ぶ: エラー文を問う質問（評価器の判定をエラー文の一致で候補ごとに外す。#999）、列挙・網羅・件数の質問
-    （取得した根拠で網羅できたかを語の一致では確かめられない。列挙の項目は評価器が挙げる。#1503）、候補の除外が
-    要る根拠（新しい版に置き換えた旧版の文書、別の文書に同じ本文がある重複）がある（評価器の relevant=false の
-    除外を保つ）。
-    """
+    """旧省略設定でも文字の一致から根拠の充足性を確定しない。"""
     if not getattr(settings, "crag_skip_on_strong_signals", False):
         return {"skip": False, "reason": "disabled"}
     if not context.records or not context.text.strip():
@@ -1410,39 +1397,8 @@ def _crag_grade_skip_check(question: str, context: AnswerContext, settings: Sett
         covered = {d["label"] for r in context.records for d in definition_ranges(r.text, labels)}
         if any(label not in covered for label in labels):
             return {"skip": False, "reason": "定義を問う語の定義本文が無い"}
-    rows = assess_targets(coverage_targets(question, _coverage_tokenizer(settings)), evidence_texts(context))
-    assessed = [row for row in rows if row["status"] != "unassessed"]
-    if not assessed:
-        return {"skip": False, "reason": "質問の要求を語の一致で判定できない"}
-    # 一部一致（weak）の要求は、要求の語が根拠の全体（複数の根拠の和）にそろうときだけ強いとみなす。多段の問は語が
-    # 根拠ごとに分かれるが、別の要求（「…と、出張旅費の上限額」）の語が根拠のどこにも無ければ曖昧な帯にする。
-    joined = "\n".join(text for _key, text in evidence_texts(context))
-    weak_union = {row["id"]: _union_ratio(row, joined) for row in assessed if row["status"] == "weak"}
-    missing = [
-        row
-        for row in assessed
-        if row["status"] == "missing" or row["status"] == "weak" and weak_union[row["id"]] < _CRAG_SKIP_WEAK_UNION_RATIO
-    ]
-    if missing:
-        return {"skip": False, "reason": f"語の一致で根拠の無い要求が {len(missing)} 件"}
-    counts = {status: sum(row["status"] == status for row in assessed) for status in ("supported", "weak")}
-    return {
-        "skip": True,
-        "lines": [
-            f"rerank の最上位の score {score:.3f}（閾値 {threshold:.3f} 以上）",
-            f"質問の要求 {len(assessed)} 件に語の一致で根拠あり（一致 {counts['supported']} 件・"
-            f"一部一致 {counts['weak']} 件、根拠なし 0 件）",
-        ],
-        "trace": {
-            "top_rerank_score": score,
-            "min_rerank_score": threshold,
-            "requests": [{"id": row["id"], "status": row["status"], "best_ratio": row.get("best_ratio")} for row in rows],
-        },
-    }
-
-
-# 一部一致の要求を強いとみなす、根拠の全体に現れる要求の語の割合（#1528）。
-_CRAG_SKIP_WEAK_UNION_RATIO = 0.8
+    # 文字上の一致や精排スコアは、回答に足りる根拠があることを保証しない。
+    return {"skip": False, "reason": "語の一致による充足性の判定は行わない"}
 
 
 # エラー文・エラーコードを問う質問（質問契約の error_messages が拾わない「E0123」「ERR-12」などのコードも含む）。
@@ -1450,12 +1406,6 @@ def _error_question() -> re.Pattern[str]:
     """エラー文・エラーコードを問う質問（エラーの語は言語資源の question_cues。#2181）。"""
     words = alternation(current_pack().words("question_cues", "error_words"))
     return re.compile(rf"{words}|[A-Za-z]{{1,5}}-?\d{{3,}}")
-
-
-def _union_ratio(row: dict[str, Any], joined: str) -> float:
-    """要求の語のうち、根拠の全体（親子の本文をつないだもの）のどこかに現れる語の割合。"""
-    terms = row.get("terms") or []
-    return sum(term in joined for term in terms) / len(terms) if terms else 0.0
 
 
 # 重複とみなす本文の長さの下限（字）。短い定型文（「以上」「目的」など）は文書をまたいで一致しても重複にしない。
@@ -2267,12 +2217,16 @@ def synthesize_grounded_answer(
             grounded.correction_feedback(best[0].feedback(), audit_mode, assume_unconfirmed=assume_unconfirmed),
         )
         retrieval_remedy = None
-        gap_ids = {item.request_id for item in best[0].draft.items if item.kind == "gap" and item.request_id}
-        retrieval_requests = [
-            {key: value for key, value in entry.items() if key in {"request_id", "status"}}
+        # 生成の gap は監査の要求判定と独立して補查する。監査が要求を返さない場合も失わない。
+        retrieval_by_id = {
+            str(entry["request_id"]): {key: value for key, value in entry.items() if key in {"request_id", "status"}}
             for entry in best[0].unanswered
-            if entry.get("reviewed") or entry["request_id"] in gap_ids
-        ]
+            if entry.get("reviewed")
+        }
+        for item in best[0].draft.items:
+            if item.kind == "gap" and item.request_id:
+                retrieval_by_id[item.request_id] = {"request_id": item.request_id, "status": "missing"}
+        retrieval_requests = list(retrieval_by_id.values())
         if recover_requests is not None and retrieval_requests and not retrieval_attempted and number < max_rounds - 1:
             retrieval_attempted = True
             if budget.allows_round(number + 1):
@@ -2818,30 +2772,30 @@ def _cover_missing_requests(
     unanswered_requests: Sequence[Mapping[str, Any]] | None = None,
     usage: CoverageUsage | None = None,
 ) -> tuple[AnswerContext, dict[str, Any]]:
-    """要求ごとの根拠の覆域を判定し、根拠が無いか一部だけの要求と小問（#2399）を予算の範囲で 1 回ずつ再検索する (#1279)。
+    """生成・実行済み監査が示した不足を、元の要求 ID と原文に解決して予算内で探し直す。
 
-    ``searched_queries`` は最初の検索の文。同じ文では再検索しない（1 要求の質問も、違う検索文を作れれば再検索する。#2810）。
-
-    小問ごとの検索と再検索の回数の合計は、追加の検索の枠（``extra_budget``。#2395）の残りも超えない。
-
-    覆域の判定は決定的（LLM を呼ばない）。再検索は embedding・hybrid 検索・rerank だけで、文書の選択と
-    画面目録（LLM を呼ぶ）は使わない。足した根拠は既存の根拠の後ろに置き、既存の根拠は追い出さない。
-    戻り値は (回答に渡す context, 覆域の記録)。
+    原資料の文字上の一致は判定しない。補助検索は既存の権限・範囲・予算を維持し、既存根拠を追い出さない。
     """
     tokenize = _coverage_tokenizer(settings)
     targets = coverage_targets(question, tokenize)
-    rows = assess_targets(targets, evidence_texts(context))
+    rows = request_rows(targets)
+    known_ids = {str(unit.get("id") or "") for unit in task_contract(question)["request_units"]}
+    unmapped = [
+        str(entry.get("request_id") or "") for entry in unanswered_requests or () if str(entry.get("request_id") or "") not in known_ids
+    ]
     if unanswered_requests is not None:
         # 生成後の不足を語の一致で上書きしない。監査の理由や草稿の文は検索入力にしない。
         for row in rows:
             statuses = [
                 str(entry.get("status"))
                 for entry in unanswered_requests
-                if str(entry.get("request_id") or "") == row["id"] or str(entry.get("request_id") or "").startswith(row["id"] + ".")
+                if str(entry.get("request_id") or "") in known_ids
+                and (str(entry.get("request_id") or "") == row["id"] or str(entry.get("request_id") or "").startswith(row["id"] + "."))
+                and entry.get("status") in {"missing", "partial"}
             ]
             if statuses:
                 row["answer_status"] = "missing" if "missing" in statuses else "partial"
-        rows = [row for row in rows if row.get("answer_status")]
+
     budget = _request_coverage_budget(settings)
     if usage is not None:
         budget = usage.remaining(budget)
@@ -2850,16 +2804,17 @@ def _cover_missing_requests(
         budget = within_extra_budget(rows, budget, extra_budget.remaining)
     trace: dict[str, Any] = {
         "schema_version": COVERAGE_SCHEMA_VERSION,
+        "unmapped_request_ids": unmapped,
         "requests": rows,
         "counts": coverage_counts(rows),
         "budget": asdict(budget),
         "llm_calls": 0,
-        "assessment": "lexical",
+        "assessment": "not_performed",
         "answerability": "unassessed",
         "phase": "after_generation" if unanswered_requests is not None else "before_generation",
     }
     skip = re_retrieval_skip_reason(rows, budget)
-    if skip == "all_covered" and unanswered_requests and not rows:
+    if skip == "no_explicit_gap" and unanswered_requests and not any(row.get("answer_status") for row in rows):
         skip = "unmapped_requests"
     if skip:
         trace["re_retrieval"] = {"applied": False, "skipped": skip}
@@ -2900,15 +2855,15 @@ def _cover_missing_requests(
     elapsed = max(0.0, clock() - started)
     if usage is not None:
         subquestion_ids = {target.id for target in targets if target.subquestion}
-        usage.subquestions += sum(result.request_id in subquestion_ids for result in results)
-        usage.queries += sum(result.request_id not in subquestion_ids for result in results)
+        usage.subquestions += sum(result.request_id in subquestion_ids and not result.reused for result in results)
+        usage.queries += sum(result.request_id not in subquestion_ids and not result.reused for result in results)
         usage.elapsed_seconds += elapsed
         usage.searched_queries.extend(query for result in results for query in result.queries)
     if not results and stop == "same_query":
         trace["re_retrieval"] = {"applied": False, "skipped": stop}
         return context, trace
     if extra_budget is not None:
-        extra_budget.take(REQUEST_COVERAGE_KIND, len(results))
+        extra_budget.take(REQUEST_COVERAGE_KIND, sum(not result.reused for result in results))
     existing = {r.chunk_uid or r.id for r in context.records} | {p.record.chunk_uid or p.record.id for p in context.evidence_tree}
     selected = select_new_parents(results, existing, budget.max_chunks)
     added_ids: list[str] = []
@@ -2953,6 +2908,7 @@ def _cover_missing_requests(
                 "request_id": result.request_id,
                 "queries": list(result.queries),
                 "candidates": len(result.parents),
+                "reused": result.reused,
                 "added_chunk_ids": [
                     (p.record.chunk_uid or p.record.id)
                     for rid, p in selected
@@ -2965,13 +2921,14 @@ def _cover_missing_requests(
         ],
         "added_chunk_ids": sorted(added_set),
     }
-    if added_ids:
-        after = {row["id"]: row for row in assess_targets(targets, evidence_texts(context))}
-        for row in rows:
-            if row["id"] in after:
-                row["status_after"] = after[row["id"]]["status"]
-                row["evidence_ids_after"] = after[row["id"]]["evidence_ids"]
-        trace["counts_after"] = coverage_counts([after[row["id"]] for row in rows if row["id"] in after])
+    by_request = {result.request_id: result for result in results}
+    for row in rows:
+        if result := by_request.get(row["id"]):
+            row["retrieval_status"] = "failed" if result.error else "candidates_found" if result.parents else "no_candidates"
+            row["evidence_ids"] = [p.record.chunk_uid or p.record.id for p in result.parents]
+        elif row.get("answer_status"):
+            row["retrieval_status"] = "not_executed"
+            row["skip_reason"] = stop or "budget"
     return context, trace
 
 
@@ -3170,7 +3127,7 @@ _COVERAGE_SKIP_LABELS = {
     "disabled": "しない（設定で無効）",
     "no_budget": "しない（探し直しの上限が 0）",
     "same_query": "しない（最初の検索と違う検索文を作れない）",
-    "all_covered": "しない（すべての要求で語が一致、回答可能性は未判定）",
+    "no_explicit_gap": "しない（生成・監査による明示的な不足なし）",
     "deadline": "しない（探し直しの時間上限）",
     "unmapped_requests": "しない（未回答の要求を元の質問の要求単位に対応できない）",
 }
@@ -3178,12 +3135,8 @@ _COVERAGE_SKIP_LABELS = {
 
 def _coverage_step_lines(trace: dict[str, Any]) -> list[str]:
     """覆域の工程の記録の行。"""
-    labels = {"supported": "語の一致が多い", "weak": "語が一部一致", "missing": "語の一致が少ない", "unassessed": "語の一致を判定できない"}
     lines = [
-        f"{row['id']}: {labels.get(row['status'], row['status'])}"
-        + (f" → {labels.get(row['status_after'], row['status_after'])}" if row.get("status_after") else "")
-        + f"（{_display_query(row['text'])}）"
-        for row in trace.get("requests", ())
+        f"{row['id']}: {row.get('retrieval_status', 'not_planned')}（{_display_query(row['text'])}）" for row in trace.get("requests", ())
     ]
     re_retrieval = trace.get("re_retrieval") or {}
     for query in re_retrieval.get("queries", ()):
@@ -4856,45 +4809,15 @@ def answer_question_result(
                 request_question=request_text,
             )
 
-        with _execution_step(
-            "要求ごとの根拠の確認", "要求の語と資料の語の一致を測り、一致が少ない要求を探し直します。回答可能性は生成時に別に確認します。"
-        ) as coverage_step:
-            context, request_coverage = _cover_missing_requests(
-                request_text,
-                context,
-                settings,
-                run_id=run_id,
-                preferred_engines=preferred_engine_ids,
-                top_k=chunk_top_k,
-                neighbor_child_count=chunk_neighbor_count,
-                rerank_enabled=effective_rerank_enabled,
-                inquiry_conditions=inquiry_conditions,
-                retrieval_scope=selected_retrieval_scope,
-                classification_filter=selected_classification_filter,
-                runtime_knowledge=runtime_knowledge,
-                extra_budget=extra_budget,
-                usage=coverage_usage,
-                searched_queries=crag_attempts[-1].retrieval_queries if crag_attempts else retrieval_queries,
-            )
-            counts = request_coverage["counts"]
-            re_retrieval = request_coverage.get("re_retrieval") or {}
-            if re_retrieval.get("skipped") in {"disabled", "same_query"}:
-                coverage_step.hide()
-            coverage_step.result(
-                f"語の一致が多い {counts['supported']} 件、一部一致 {counts['weak']} 件、"
-                f"一致が少ない {counts['missing']} 件（回答可能性は未判定）",
-                *_coverage_step_lines(request_coverage),
-            )
-            # 探し直しをしたか・しなかった理由（記録の文から省いた工程も段は出る。#2341）。
-            skipped = str(re_retrieval.get("skipped") or "")
-            coverage_step.field(
-                "根拠が足りない要求の探し直し",
-                f"{len(re_retrieval.get('queries') or ())} 件の要求で実行"
-                if re_retrieval.get("queries")
-                else _COVERAGE_SKIP_LABELS.get(skipped, f"しない（{skipped}）" if skipped else "しない（根拠が足りない要求なし）"),
-            )
-            if re_retrieval.get("applied"):
-                coverage_step.impact(f"根拠が足りない要求の根拠 {len(re_retrieval['added_chunk_ids'])} 件を回答の材料に加えます。")
+        # 生成前は要求 ID だけを登録し、本文の文字上の一致から追加検索を決めない。
+        request_coverage: dict[str, Any] = {
+            "schema_version": COVERAGE_SCHEMA_VERSION,
+            "requests": request_rows(coverage_targets(request_text, _coverage_tokenizer(settings))),
+            "phase": "before_generation",
+            "assessment": "not_performed",
+            "answerability": "unassessed",
+            "re_retrieval": {"applied": False, "skipped": "no_explicit_gap" if settings.request_coverage_retrieval_enabled else "disabled"},
+        }
 
         # 不足要求の追加検索も同じ読取記録・時間・入力・抽出呼び出しの予算を使う。
         context, section_expansion = complete_sections(context, "request_coverage")

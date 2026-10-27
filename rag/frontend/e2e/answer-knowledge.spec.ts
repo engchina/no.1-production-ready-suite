@@ -8,7 +8,7 @@ import {
   selectSearchAnswerProfile,
 } from "./_helpers";
 
-// rag_poc からの移植: プロファイルの知識(登録済みQ&A / 用語・同義語 / ドメインキーワード / 回答ルール)、
+// rag_poc からの移植: プロファイルの知識(登録済みQ&A / 用語・同義語 / ドメインキーワード / 確認・回答ルール)、
 // 検索前の類似問提示、回答の根拠パネル。
 
 const envelope = (data: unknown) => ({ data, error_messages: [], warning_messages: [] });
@@ -126,7 +126,7 @@ for (const viewport of [
       "登録済みQ&A",
       "用語・同義語",
       "ドメインキーワード",
-      "回答ルール",
+      "確認・回答ルール",
       "業務ガイド",
     ]);
     await expect(page.getByRole("tab", { name: "登録済みQ&A" })).toHaveAttribute(
@@ -361,9 +361,9 @@ async function mockAnswerStream(page: Page, graphExpansion?: Record<string, unkn
   );
 }
 
-// #540 / #541: FAQ の追加と回答ルールの保存は、押せる状態のまま未入力を欄の直下に出す。
+// #540 / #541: FAQ の追加と確認・回答ルールの保存は、押せる状態のまま未入力を欄の直下に出す。
 // ルールは backend と同じく「ルール名」「照合キーワード」「ルール内容」が必須。
-test("FAQ の追加と回答ルールの保存は、未入力を欄の下に出す", async ({ page }) => {
+test("FAQ の追加と確認・回答ルールの保存は、未入力を欄の下に出す", async ({ page }) => {
   await mockCommon(page);
   await mockSearchAnswerProfileApi(page);
   const writes: string[] = [];
@@ -382,13 +382,13 @@ test("FAQ の追加と回答ルールの保存は、未入力を欄の下に出�
   await expect(page.locator("#approved-faq-answer")).toHaveAccessibleDescription(/回答を入力してください。/);
   await expect(page.locator("#approved-faq-question")).toBeFocused();
 
-  await page.getByRole("tab", { name: "回答ルール" }).click();
-  await expect(page.getByRole("heading", { name: "回答ルールを追加" })).toBeVisible();
+  await page.getByRole("tab", { name: "確認・回答ルール" }).click();
+  await expect(page.getByRole("heading", { name: "確認・回答ルールを追加" })).toBeVisible();
   await expect(page.locator('label[for="runtime-knowledge-title"]')).toContainText("必須");
   await expect(page.locator('label[for="runtime-knowledge-content"]')).toContainText("必須");
-  // ヘッダーの「保存」（検索・回答プロファイルの設定。#618）と区別し、回答ルールのタブの中の保存を押す。
+  // ヘッダーの「保存」（検索・回答プロファイルの設定。#618）と区別し、確認・回答ルールのタブの中の保存を押す。
   await page
-    .getByRole("tabpanel", { name: "回答ルール" })
+    .getByRole("tabpanel", { name: "確認・回答ルール" })
     .getByRole("button", { name: "保存", exact: true })
     .click();
   await expect(page.locator("#runtime-knowledge-name")).toHaveCount(0);
@@ -422,8 +422,8 @@ test("検索・回答プロファイルごとに類似問の提示をオン / �
 });
 
 
-// #717: 回答ルールに確認の質問と、選択肢が指す章節を設定する。
-test("回答ルールに回答前の確認と章節を設定して保存できる", { tag: "@responsive" }, async ({ page }) => {
+// #717: 確認・回答ルールに確認の質問と、選択肢が指す章節を設定する。
+test("確認・回答ルールに回答前の確認と章節を設定して保存できる", { tag: "@responsive" }, async ({ page }) => {
   await mockCommon(page);
   await mockSearchAnswerProfileApi(page);
   await page.route("**/api/search-answer-profiles/bv-1/runtime-knowledge", (route) =>
@@ -471,7 +471,7 @@ test("回答ルールに回答前の確認と章節を設定して保存でき�
   );
 
   await page.goto("/search-answer-profiles?id=bv-1");
-  await page.getByRole("tab", { name: "回答ルール" }).click();
+  await page.getByRole("tab", { name: "確認・回答ルール" }).click();
   await page.getByRole("button", { name: /期限の確認/ }).first().click();
   await expect(page.locator("#runtime-knowledge-name")).toHaveCount(0);
   await expect(page.getByRole("switch", { name: "ルールを有効にする", exact: true })).toBeVisible();
@@ -633,4 +633,42 @@ test("キーワード Excel の遅い旧プレビューとファイル検証エ�
   releaseFirst();
   await expect(page.getByRole("button", { name: "取込", exact: true })).toBeDisabled();
   await expect(page.getByText("旧語", { exact: true })).toHaveCount(0);
+});
+
+// #3664: 用途と段階別の適用は管理設定として明示し、確認だけにダミー指示を求めない。
+test("確認だけのルールを空の内容で保存し、適用設定を保持する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockCommon(page);
+  await mockSearchAnswerProfileApi(page);
+  const saved: Record<string, unknown>[] = [];
+  await page.route("**/api/search-answer-profiles/bv-1/runtime-knowledge/edit", async (route) => {
+    saved.push(route.request().postDataJSON());
+    await route.fulfill({ json: envelope({ search_answer_profile_id: "bv-1", terms: [], rules: [] }) });
+  });
+  await page.goto("/search-answer-profiles?id=bv-1");
+  await page.getByRole("tab", { name: "確認・回答ルール" }).click();
+  await page.locator("#runtime-knowledge-title").fill("合成の確認");
+  await page.locator("#runtime-knowledge-labels").fill("設定");
+  await page.locator("#runtime-knowledge-purpose").click();
+  await page.getByRole("option", { name: "回答前の確認だけ", exact: true }).click();
+  await expect(page.locator('label[for="runtime-knowledge-content"]')).not.toContainText("必須");
+  await expect(page.locator("#runtime-knowledge-instruction-kind")).toBeDisabled();
+  await page.locator("#runtime-knowledge-exclusive-group").fill("group-a");
+  await page.locator("#runtime-knowledge-priority").fill("3");
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("rule-application-purpose.png"), fullPage: true });
+  await page.getByRole("tabpanel", { name: "確認・回答ルール" }).getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => saved.length).toBe(1);
+  expect(saved[0]).toMatchObject({ purpose: "confirmation", content: "", exclusive_group: "group-a", priority: 3 });
+});
+
+test("照合テストで保留した排他設定を管理者へ示す", { tag: "@responsive" }, async ({ page }) => {
+  await mockCommon(page);
+  await mockSearchAnswerProfileApi(page);
+  await page.route("**/api/search-answer-profiles/bv-1/runtime-knowledge/preview", (route) => route.fulfill({ json: envelope({ expanded_question: "設定", matched_terms: [], matched_rules: [], conflicting_rules: ["合成ルール A", "合成ルール B"] }) }));
+  await page.goto("/search-answer-profiles?id=bv-1");
+  await page.getByRole("tab", { name: "確認・回答ルール" }).click();
+  await page.locator("#runtime-knowledge-question").fill("設定");
+  await page.getByRole("button", { name: "照合する", exact: true }).click();
+  await expect(page.getByText(/排他設定の競合により保留しました: 合成ルール A、合成ルール B/)).toBeVisible();
+  await expectNoPageOverflow(page);
 });

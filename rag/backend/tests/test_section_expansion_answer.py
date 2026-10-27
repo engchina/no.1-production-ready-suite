@@ -640,6 +640,7 @@ async def test_supplemental_searches_complete_new_sections_before_generation(
 
     import app.rag.answer_engine as backend
 
+    generated_prompts: list[str] = []
     # 検索済みの根拠と追加検索の根拠を異なる章節にする。
     original_outline = section_map_service.section_outline
     original_read = section_map_service.read_section
@@ -741,11 +742,42 @@ async def test_supplemental_searches_complete_new_sections_before_generation(
 
         def cover(question: str, context: Any, *args: Any, **kwargs: Any) -> Any:
             _, trace = original(question, context, *args, **kwargs)
+            trace["re_retrieval"] = {"applied": True, "added_chunk_ids": ["doc-1:c5"]}
             return add_anchor(context), trace
 
         monkeypatch.setattr(answering, "_cover_missing_requests", cover)
+        import rag_engine.adapters.oci as engine_oci
+        from rag_engine.models.llm import GroundedDraft
 
-    outcome = await _engine(rag_answer_flow="standard_rag").run(SearchRequest(query="登録方法は？"))
+        def explicit_gap(
+            system: str, prompt: str, config: Any, schema: type, **options: Any
+        ) -> Any:
+            if schema is GroundedDraft:
+                generated_prompts.append(prompt)
+            result = _fake_llm(system, prompt, config, schema, **options)
+            if schema is GroundedDraft and "変更後に確認を実行します。" not in prompt:
+                data = result.model_dump(exclude_unset=True)
+                data["items"].append(
+                    {
+                        "kind": "gap",
+                        "text": "確認の根拠がありません。",
+                        "request_id": "Q1",
+                        "citations": [],
+                    }
+                )
+                return GroundedDraft.model_validate(data)
+            return result
+
+        monkeypatch.setattr(engine_oci, "parse_text_response", explicit_gap)
+
+    outcome = await _engine(
+        rag_answer_flow="standard_rag", rag_request_coverage_retrieval_enabled=True
+    ).run(SearchRequest(query="登録方法は？"))
     assert [key for key, _ in section_map.reads] == ["s1", "s2"]
     assert outcome.diagnostics["section_expansion"]["minimum_scope_complete"]
-    assert "doc-1:c6" in {citation.chunk_id for citation in outcome.citations}
+    if stage == "guide":
+        assert "doc-1:c6" in {citation.chunk_id for citation in outcome.citations}
+    else:
+        # 追加原文は再生成へ渡る。新資料を使わない代役の回答は採用を強制しない。
+        assert len(generated_prompts) >= 2
+        assert "設定を変更します。" in generated_prompts[1]
