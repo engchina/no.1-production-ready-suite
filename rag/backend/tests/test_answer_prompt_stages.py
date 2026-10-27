@@ -291,7 +291,11 @@ def test_query_strategy_display_uses_actual_step_prompts() -> None:
         QUERY_ROUTING_PROMPT_TEMPLATE,
     )
 
-    displayed = [part["content"] for stage in readonly_prompt_stages() for part in stage["prompts"]]
+    displayed: list[object] = []
+    for stage in readonly_prompt_stages():
+        parts = stage["prompts"]
+        assert isinstance(parts, list)
+        displayed.extend(part["content"] for part in parts)
     for prompt in (
         QUERY_ROUTING_SYSTEM_PROMPT,
         QUERY_EXPANSION_SYSTEM_PROMPT,
