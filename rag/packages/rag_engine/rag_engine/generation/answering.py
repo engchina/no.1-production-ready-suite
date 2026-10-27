@@ -245,6 +245,7 @@ from rag_engine.retrieval.guide_steps import (
 )
 from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse, parse_inquiry_conditions
 from rag_engine.retrieval.operation_context import alternative_operation_queries
+from rag_engine.retrieval.query_overflow import search_overflow_requests
 from rag_engine.retrieval.question_planning import QuestionPlan, plan_question
 from rag_engine.retrieval.reference_follow import follow_reference_sources, is_followed_reference
 from rag_engine.retrieval.request_coverage import (
@@ -4709,13 +4710,87 @@ def answer_question_result(
                 priority=guide_ranges,
             )
 
-        # 業務ガイドの手順ごとの検索が後に来るなら、その根拠から広げる分の入力を残す（#2816）。
+        # 超限した検索文は原要求ごとに補い、以後の補查と同じ枠・期限・既検索文を使う。
+        extra_budget = ExtraRetrievalBudget.from_settings(settings)
+        coverage_usage = CoverageUsage()
+        overflow_settings = replace(settings, document_selection_enabled=False, screen_linking_enabled=False, article_catalog_enabled=False)
+        overflow_config = normalize_text_search_tokenizer_config(_question_text_search_tokenizer_config(settings))
+        overflow_keywords = (
+            settings.domain_keywords_override
+            if settings.domain_keywords_override is not None
+            else load_domain_keywords(settings.output_dir)
+        )
+
+        def overflow_retrieve(query: str) -> AnswerContext:
+            return build_adb_hybrid_answer_context(
+                query,
+                run_id,
+                preferred_engine_ids,
+                overflow_settings,
+                top_k=chunk_top_k,
+                neighbor_child_count=chunk_neighbor_count,
+                retrieval_queries=(query,),
+                rerank_enabled=effective_rerank_enabled,
+                inquiry_conditions=inquiry_conditions,
+                retrieval_scope=selected_retrieval_scope,
+                classification_filter=selected_classification_filter,
+                runtime_knowledge=runtime_knowledge,
+            )
+
+        overflow_results, overflow_trace = search_overflow_requests(
+            request_text,
+            tokenize=lambda text: tokenize_text_search_query_with_trace(text, domain_keywords=overflow_keywords, config=overflow_config),
+            retrieve=overflow_retrieve,
+            extra_budget=extra_budget,
+            coverage_budget=_request_coverage_budget(settings),
+            usage=coverage_usage,
+            searched_queries=retrieval_queries,
+            allow_split=not caller_planned,
+        )
+        overflow_added: set[str] = set()
+        for result in overflow_results:
+            remaining_chunks = max(0, _request_coverage_budget(settings).max_chunks - len(overflow_added))
+            if not remaining_chunks:
+                break
+            before = {record.chunk_uid or record.id for record in context.records}
+            candidate = _merge_crag_evidence(
+                context,
+                result.context,
+                normalized_question,
+                max_records=len(context.records) + remaining_chunks,
+                max_chars=MAX_CONTEXT_CHARS * 2,
+            )
+            after = {record.chunk_uid or record.id for record in candidate.records}
+            if before <= after:
+                context = replace(
+                    candidate,
+                    expansion_records=tuple(
+                        dict(
+                            (record.chunk_uid or record.id, record)
+                            for record in (*context.expansion_records, *result.context.expansion_records)
+                        ).values()
+                    ),
+                    preferred_child_ids=context.preferred_child_ids,
+                    ranked_candidates=context.ranked_candidates,
+                    deferred_records=context.deferred_records,
+                    document_selection=context.document_selection,
+                )
+                overflow_added.update(after - before)
+        coverage_usage.chunks += len(overflow_added)
+        overflow_trace["added_chunk_ids"] = sorted(overflow_added)
+        if overflow_trace.get("triggered"):
+            with _execution_step(
+                "検索上限の要求別補完", "全文検索の上限で省略した要求を、元の要求と共通条件のまま検索します。"
+            ) as overflow_step:
+                statuses = [str(row["status"]) for row in overflow_trace["requests"]]
+                overflow_step.result(f"要求 {len(statuses)} 件、新しい根拠 {len(overflow_added)} 件")
+                overflow_step.field("追加検索の残り", str(extra_budget.remaining))
+                overflow_step.field("未検索", str(sum(status.startswith("unsearched_") for status in statuses)))
+                overflow_step.field("失敗", str(statuses.count("failed")))
+        # 業務ガイドの手順が後に来るなら、その根拠から広げる分の入力を残す。
         context, section_expansion = complete_sections(
             context, "main", reserve=guide_plan is not None and bool(getattr(settings, "guide_step_retrieval_enabled", False))
         )
-        # 主の検索の後に足す検索の枠（手順ごとの検索と根拠の無い要求の再検索で共有する。#2395）。
-        extra_budget = ExtraRetrievalBudget.from_settings(settings)
-        coverage_usage = CoverageUsage()
         guide_step_trace: dict[str, Any] | None = None
         if guide_plan is not None:
             # 業務ガイドの案内（窓口・引き継ぐ条件・承認。#2792）。本文の「業務ガイドの案内」の節に資料とは分けて出す。
@@ -4782,7 +4857,7 @@ def answer_question_result(
             if zero_evidence["rejected_count"]:
                 flow_step.field("根拠確認で外した候補", f"{zero_evidence['rejected_count']} 件")
             if not generate_answer:
-                return evidence_result(context, trace={"zero_evidence": zero_evidence})
+                return evidence_result(context, trace={"zero_evidence": zero_evidence, "query_overflow": overflow_trace})
             # 空検索では LLM に推測させず、表示本文と保存 payload の不足情報を揃える。
             response = AnswerResponse(
                 answer_text=(
@@ -4792,7 +4867,7 @@ def answer_question_result(
                 confidence="low",
                 insufficient_reason="現在の検索範囲では、回答に使える文書の根拠が取得できませんでした。",
                 needs_human_review=True,
-                generation_trace={"zero_evidence": zero_evidence},
+                generation_trace={"zero_evidence": zero_evidence, "query_overflow": overflow_trace},
             )
             if legacy_notice:
                 response = replace(response, answer_text=f"{response.answer_text}\n\n{legacy_notice}")
@@ -4829,6 +4904,7 @@ def answer_question_result(
         # 根拠の補いの記録（回答の generation_trace と同じ key）。
         evidence_trace: dict[str, Any] = {
             "request_coverage": request_coverage,
+            "query_overflow": overflow_trace,
             **({"guide_steps": guide_step_trace} if guide_step_trace is not None else {}),
             **({"section_expansion": section_expansion.trace} if section_expansion is not None else {}),
         }
