@@ -84,6 +84,7 @@ from app.rag.answer_provenance import answer_prompt_version
 from app.rag.answer_threads import run_answer_in_thread
 from app.rag.chat_attachments import is_attachment_chunk
 from app.rag.chunking_small_to_big import engine_search_text
+from app.rag.context_page_scope import CONTEXT_PAGE_SCOPE, contained, positive
 from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
     REFERENCE_LABEL_KEY,
@@ -1610,6 +1611,11 @@ class AnswerEngine:
         selected_fused_ids = set(ranked)
         # 当たった派生の chunk(要約・項目抽出の値)は検索の手がかり。回答の根拠には、その chunk が
         # 指す原文の chunk を同じ位置に置く(原文が読めなければ根拠に渡さない。#2641)。
+        context_scope = (
+            (_with_page_ranges(state.filters, page_ranges) or {}) if page_ranges else state.filters
+        ).get(PAGE_RANGES_FILTER_KEY, "")
+        if context_scope:
+            expand_references = False
         anchors = await self._original_anchors(
             state,
             [state.chunks[chunk_id] for chunk_id in ranked],
@@ -1618,6 +1624,11 @@ class AnswerEngine:
             if page_ranges
             else dict(state.filters),
         )
+        anchors = [
+            chunk
+            for chunk in anchors
+            if contained(chunk.document_id, chunk.metadata, context_scope)
+        ]
         ranked = [chunk.chunk_id for chunk in anchors]
         fusion_ids = set(ranked[:candidate_limit])
         for rank, chunk_id in enumerate(ranked, start=1):
@@ -1639,6 +1650,11 @@ class AnswerEngine:
                         neighbor_child_count=self._settings.rag_neighbor_child_count,
                     )
                 )
+        siblings = [
+            chunk
+            for chunk in siblings
+            if contained(chunk.document_id, chunk.metadata, context_scope)
+        ]
         for sibling in siblings:
             state.chunks.setdefault(sibling.chunk_id, sibling)
         # 上位の候補が本文で参照する節の chunk(#1280)。起点の候補の直後に置き、rerank に任せる。
@@ -1804,6 +1820,10 @@ class AnswerEngine:
                 all_children[stored.chunk_uid] = stored
                 attached.append(stored)
             children = [*attached, *children]
+        children = [_with_context_scope(child, context_scope) for child in children]
+        all_children = {
+            uid: _with_context_scope(child, context_scope) for uid, child in all_children.items()
+        }
         parents = [] if defer_context else _stored_parents(list(all_children.values()), state)
         state.retrieval_stages.append(
             {
@@ -1839,56 +1859,85 @@ class AnswerEngine:
         settings: Any = None,
     ) -> list[Any]:
         """精排後の起点だけから、同じ有効成果物の親/近傍を読む。再構築は回答内の既読を使う。"""
-        selected = [
-            state.chunks[item.chunk_uid] for item in anchors if item.chunk_uid in state.chunks
-        ]
-        pending = [item for item in selected if item.chunk_id not in state.context_reads]
-        if pending:
-            with _search_stage(CONTEXT_SIBLINGS_STAGE):
-                siblings = original_chunks(
-                    await self._oracle.context_group_siblings(
-                        [
-                            item
-                            for item in pending
-                            if item.metadata.get("chunk_strategy") == "small_to_big"
-                            or self._settings.rag_neighbor_child_count > 0
-                        ],
-                        max_chunks_per_group=max(1, self._settings.rag_context_group_max_chunks),
-                        neighbor_child_count=self._settings.rag_neighbor_child_count,
+        result: list[Any] = []
+        # 検索ごとの範囲を起点から引き継ぐ。同じ chunk でも異なる範囲の既読を混ぜない。
+        scopes: dict[str, list[Any]] = {}
+        default_scope = (getattr(state, "filters", None) or {}).get(PAGE_RANGES_FILTER_KEY, "")
+        for anchor in anchors:
+            scope = str(anchor.metadata.get(CONTEXT_PAGE_SCOPE, default_scope))
+            scopes.setdefault(scope, []).append(anchor)
+        for scope, scoped_anchors in scopes.items():
+            selected = [
+                state.chunks[item.chunk_uid]
+                for item in scoped_anchors
+                if item.chunk_uid in state.chunks
+            ]
+            selected = [
+                item for item in selected if contained(item.document_id, item.metadata, scope)
+            ]
+
+            def cache_key(item: RetrievedChunk, page_scope: str = scope) -> str:
+                return json.dumps([item.chunk_id, page_scope], ensure_ascii=False)
+
+            pending = [item for item in selected if cache_key(item) not in state.context_reads]
+            if pending:
+                with _search_stage(CONTEXT_SIBLINGS_STAGE):
+                    siblings = original_chunks(
+                        await self._oracle.context_group_siblings(
+                            [
+                                item
+                                for item in pending
+                                if item.metadata.get("chunk_strategy") == "small_to_big"
+                                or self._settings.rag_neighbor_child_count > 0
+                            ],
+                            max_chunks_per_group=max(
+                                1, self._settings.rag_context_group_max_chunks
+                            ),
+                            neighbor_child_count=self._settings.rag_neighbor_child_count,
+                        )
                     )
-                )
-            for item in pending:
-                state.context_reads[item.chunk_id] = [
-                    sibling
-                    for sibling in siblings
-                    if sibling.document_id == item.document_id
-                    and sibling.metadata.get("chunk_set_id") == item.metadata.get("chunk_set_id")
-                    and sibling.metadata.get("recipe_id") == item.metadata.get("recipe_id")
+                siblings = [
+                    item for item in siblings if contained(item.document_id, item.metadata, scope)
                 ]
-            for item in siblings:
-                state.chunks.setdefault(item.chunk_id, item)
-        chunks = {item.chunk_id: item for item in selected}
-        for anchor in selected:
-            chunks.update(
-                (item.chunk_id, item) for item in state.context_reads.get(anchor.chunk_id, ())
-            )
-        originals = list(chunks.values())
-        await self._load_classifications(originals, state)
-        await self._load_first_page_contexts(originals, state)
-        if self._attach_images:
-            for item in originals:
-                await self._materialize_image_evidence(item, state)
-        children = [
-            _stored_child(
-                state.chunks.get(item.chunk_id, item),
-                rrf_score=0.0,
-                classification=state.classifications.get(item.document_id),
-                first_page_context=_first_page_context(item, state),
-                retrieval_channels=state.retrieval_channels.get(item.chunk_id),
-            )
-            for item in originals
-        ]
-        return [*children, *_stored_parents(children, state)]
+                for item in pending:
+                    state.context_reads[cache_key(item)] = [
+                        sibling
+                        for sibling in siblings
+                        if sibling.document_id == item.document_id
+                        and sibling.metadata.get("chunk_set_id")
+                        == item.metadata.get("chunk_set_id")
+                        and sibling.metadata.get("recipe_id") == item.metadata.get("recipe_id")
+                    ]
+                for item in siblings:
+                    state.chunks.setdefault(item.chunk_id, item)
+            chunks = {item.chunk_id: item for item in selected}
+            for anchor in selected:
+                chunks.update(
+                    (item.chunk_id, item) for item in state.context_reads.get(cache_key(anchor), ())
+                )
+            originals = list(chunks.values())
+            await self._load_classifications(originals, state)
+            # 範囲外の1ページ目を文書背景としても渡さない。
+            if not scope:
+                await self._load_first_page_contexts(originals, state)
+            if self._attach_images:
+                for item in originals:
+                    await self._materialize_image_evidence(item, state)
+            children = [
+                _with_context_scope(
+                    _stored_child(
+                        state.chunks.get(item.chunk_id, item),
+                        rrf_score=0.0,
+                        classification=state.classifications.get(item.document_id),
+                        first_page_context=_first_page_context(item, state) if not scope else None,
+                        retrieval_channels=state.retrieval_channels.get(item.chunk_id),
+                    ),
+                    scope,
+                )
+                for item in originals
+            ]
+            result.extend([*children, *_stored_parents(children, state)])
+        return result
 
     async def _original_anchors(
         self,
@@ -3794,6 +3843,25 @@ def _parent_sheet_location(metadata: Mapping[str, object]) -> dict[str, object] 
     }
 
 
+def _with_context_scope(child: Any, scope: str) -> Any:
+    if not scope or child.metadata.get(CONTEXT_PAGE_SCOPE) == scope:
+        return child
+    metadata = dict(child.metadata)
+    metadata[CONTEXT_PAGE_SCOPE] = scope
+    document = metadata.get("document")
+    if isinstance(document, dict):
+        metadata["document"] = {
+            key: value for key, value in document.items() if key != "first_page_context"
+        }
+    suffix = hashlib.sha256(scope.encode()).hexdigest()[:16]
+    return replace(
+        child,
+        metadata=metadata,
+        parent_chunk_uid=f"{child.parent_chunk_uid}:scope:{suffix}",
+        parent_chunk_id=f"{child.parent_chunk_id}:scope:{suffix}",
+    )
+
+
 def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
     """子の metadata に保持した親本文から親 chunk を復元する。"""
     from rag_engine.models.storage import StoredChunk
@@ -3808,6 +3876,24 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
         source = state.chunks.get(members[0].chunk_uid)
         parent_text = str((source.metadata if source else {}).get("parent_text") or "")
         if not parent_text.strip():
+            continue
+        source_metadata = source.metadata if source else {}
+        scope = str(
+            members[0].metadata.get(
+                CONTEXT_PAGE_SCOPE,
+                (getattr(state, "filters", None) or {}).get(PAGE_RANGES_FILTER_KEY, ""),
+            )
+        )
+        if scope and not contained(
+            str(members[0].metadata.get("document_id", "")), source_metadata, scope, parent=True
+        ):
+            state.retrieval_stages.append(
+                {
+                    "stage": "context_page_scope",
+                    "id": parent_uid,
+                    "reason": "parent_range_unproven_or_outside_scope",
+                }
+            )
             continue
         text = parent_text
         metadata = dict(members[0].metadata)
@@ -3843,8 +3929,10 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
                 source_file_name=members[0].source_file_name,
                 source_engine_id="docling",
                 source_engine_label="Docling",
-                page_start=min(child.page_start for child in members),
-                page_end=max(child.page_end for child in members),
+                page_start=positive(source_metadata.get("parent_page_start"))
+                or min(child.page_start for child in members),
+                page_end=positive(source_metadata.get("parent_page_end"))
+                or max(child.page_end for child in members),
                 source_seq_ranges=tuple(
                     item for child in members for item in child.source_seq_ranges
                 ),

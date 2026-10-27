@@ -31,6 +31,8 @@ class GuideStepOracle(FakeOracle):
         self.step_a = _doc_chunk("doc-a", "設定 A は画面 A で変更します。")
         self.step_b = _doc_chunk("doc-b", "設定 A を変えたあとは、画面 B で反映ボタンを押します。")
         self.page = _doc_chunk("doc-c", "画面 B の項目の説明です。反映の前に確認します。")
+        # 参照の2〜3ページに保存された原文。検索スタブも実際のページ位置を返す。
+        self.page.metadata.update(page_start=2, page_end=2, parent_page_start=2, parent_page_end=3)
 
     async def hybrid_search(
         self,
