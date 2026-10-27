@@ -166,8 +166,8 @@ class PreviewPdfTests(unittest.TestCase):
             ):
                 run = preview_pdf(pdf_path, settings)
 
-        self.assertEqual(run.classification["large_category"], "20_在庫管理")
-        self.assertEqual(run.classification["middle_category"], "20_操作説明書")
+        self.assertEqual(run.classification["large_category"], "在庫管理")
+        self.assertEqual(run.classification["middle_category"], "操作説明書")
         self.assertEqual(run.classification["small_category"], "倉庫連携")
 
     def test_preview_recreates_native_table_crop_for_current_run(self):
