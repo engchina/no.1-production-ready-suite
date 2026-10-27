@@ -18415,7 +18415,7 @@ class Nl2SqlService:
                 raw = self._enterprise_ai_client.generate(
                     prompt=(
                         "次の SQL の実行が失敗しました。原因と直し方を示し、"
-                        "直した SQL を作ってください。"
+                        "対象の SQL だけを直してください。"
                     ),
                     context=context,
                     system_prompt=_DB_ADMIN_CHAT_ANALYSIS_SYSTEM_PROMPT,
@@ -18423,19 +18423,31 @@ class Nl2SqlService:
                 )
                 output = DbAdminChatAnalysisOutput.model_validate_json(raw)
                 corrected_sql = _strip_sql_code_fence(output.corrected_sql)
-                if not corrected_sql or sql_identity(corrected_sql) not in failed_sql:
+                if not corrected_sql:
+                    break
+                candidates = _split_sql_statements(corrected_sql)
+                if len(candidates) != 1:
+                    rejection = "修正 SQL は対象の 1 文だけを返してください。"
+                    warning = (
+                        "対象の 1 文だけの修正 SQL を得られませんでした。"
+                        "他の文を含む候補は適用できません。"
+                    )
+                elif sql_identity(candidates[0]) in failed_sql:
+                    rejection = "失敗済みの SQL と同一です。"
+                    warning = (
+                        "前に試して失敗した SQL と同じ修正しか得られませんでした。"
+                        "質問や作業の進め方を見直してください。"
+                    )
+                else:
                     break
                 if attempt == 0:
                     context += (
-                        "\n\ncorrection_rejected: 失敗済みの SQL と同一です。\nrejected_sql:\n"
+                        f"\n\ncorrection_rejected: {rejection}\nrejected_sql:\n"
                         + corrected_sql[:SQL_CONTEXT_CHARS]
                     )
             else:
                 corrected_sql = ""
-                warnings.append(
-                    "前に試して失敗した SQL と同じ修正しか得られませんでした。"
-                    "質問や作業の進め方を見直してください。"
-                )
+                warnings.append(warning)
         except (EnterpriseAiDirectError, ValueError) as exc:
             return DbAdminChatAnalyzeData(
                 **deterministic.model_dump(exclude={"corrected_sql"}),
@@ -19186,8 +19198,11 @@ class Nl2SqlService:
                 raise ValueError(
                     f"文 {statement_index} はありません（このターンの文は {len(current)} 個です）。"
                 )
+            replacements = _split_sql_statements(corrected)
+            if len(replacements) != 1:
+                raise ValueError("置き換える SQL は対象の 1 文だけを指定してください。")
             corrected = _db_admin_chat_join_statements(
-                [*current[: statement_index - 1], corrected, *current[statement_index:]]
+                [*current[: statement_index - 1], replacements[0], *current[statement_index:]]
             )
         plan = self._db_admin_chat_plan(corrected)
         attempts = record_failures(turn, turn.statement_executions)

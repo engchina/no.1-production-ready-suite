@@ -23,6 +23,7 @@ from app.features.nl2sql.db_admin_chat_corrections import (
 )
 from app.features.nl2sql.models import (
     DbAdminChatAnalyzeRequest,
+    DbAdminChatPlanUpdateRequest,
     DbAdminChatStatementLastExecution,
     DbAdminChatTurnExecuteRequest,
 )
@@ -304,3 +305,129 @@ def test_sql_identity_preserves_division_and_slashes_in_literals() -> None:
     assert sql_identity("SELECT 6 / 2 FROM DUAL") != sql_identity("SELECT 6 FROM DUAL")
     assert sql_identity("SELECT '/' FROM DUAL") != sql_identity("SELECT '' FROM DUAL")
     assert sql_identity('SELECT "/" FROM T') != sql_identity('SELECT "" FROM T')
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "DELETE FROM T1; SELECT 2 FROM DUAL",
+        "DELETE FROM T3; SELECT 2 FROM DUAL",
+        "BEGIN NULL; END;\n/\nSELECT 2 FROM DUAL;",
+        "-- 修正 SQL を確認してください。",
+    ],
+)
+@pytest.mark.parametrize("recover", [True, False])
+def test_analysis_rejects_non_single_statement_candidates(candidate: str, recover: bool) -> None:
+    def answer(sql: str) -> dict[str, str]:
+        return {
+            "cause": "原因",
+            "fix": "直し方",
+            "conclusion": "確認します。",
+            "corrected_sql": sql,
+        }
+
+    ai = _FakeEnterpriseAi([answer(candidate), answer("DELETE FROM T3" if recover else candidate)])
+    service = _catalog_service(_FakeAdapter(), ai)
+    ids = _saved_analysis_turn(service, "DELETE FROM T1; SELECT 2 FROM DUAL")
+    original = service._db_admin_chat_store.get_turn(*ids)
+    result = service.analyze_db_admin_chat_failure(
+        *ids, DbAdminChatAnalyzeRequest(statement_index=1), **OWNER
+    )
+    assert len(ai.calls) == 2
+    assert "correction_rejected" in ai.calls[1]["context"]
+    if recover:
+        assert result.corrected_plan is not None
+        assert [s.sql for s in result.corrected_plan.statements] == ["DELETE FROM T3"]
+        assert not result.warnings
+    else:
+        assert result.corrected_plan is None
+        assert result.warnings
+    assert service._db_admin_chat_store.get_turn(*ids) == original
+
+
+@pytest.mark.parametrize("index", [1, 2, 3])
+@pytest.mark.parametrize(
+    "replacement",
+    ["SELECT 'a;b' FROM DUAL; -- 区切り", "BEGIN NULL; NULL; END;\n/"],
+)
+def test_single_statement_fix_preserves_other_sql_and_execution_summaries(
+    index: int, replacement: str
+) -> None:
+    ai = _FakeEnterpriseAi(
+        [
+            {
+                "cause": "原因",
+                "fix": "直し方",
+                "conclusion": "確認します。",
+                "corrected_sql": replacement,
+            }
+        ]
+    )
+    service = _catalog_service(_FakeAdapter(), ai)
+    ids = _saved_analysis_turn(
+        service, "SELECT 1 FROM DUAL; SELECT 2 FROM DUAL; SELECT 3 FROM DUAL"
+    )
+    turn = service._db_admin_chat_store.get_turn(*ids)
+    assert turn is not None
+    turn.question = "3 つの SQL を作成してください。"
+    turn.statement_executions = [
+        DbAdminChatStatementLastExecution(
+            index=i,
+            status="failed" if i == index else "succeeded",
+            outcome="ORA-00942" if i == index else "成功",
+            executed_at="2026-10-27",
+        )
+        for i in range(1, 4)
+    ]
+    service._db_admin_chat_store.update_turn(ids[0], turn)
+    result = service.analyze_db_admin_chat_failure(
+        *ids, DbAdminChatAnalyzeRequest(statement_index=index), **OWNER
+    )
+    assert result.corrected_plan is not None
+    assert len(result.corrected_plan.statements) == 1
+    updated = service.replace_db_admin_chat_turn_sql(
+        *ids, result.corrected_plan.sql, statement_index=index, **OWNER
+    )
+    assert len(updated.plan.statements) == 3
+    for before, after in zip(turn.plan.statements, updated.plan.statements, strict=True):
+        assert after.index == before.index
+        if before.index != index:
+            assert after.sql == before.sql
+        else:
+            assert sql_identity(after.sql) == sql_identity(replacement)
+    assert updated.statement_executions == [
+        e for e in turn.statement_executions if e.index != index
+    ]
+    assert updated.revision == turn.revision + 1
+
+
+@pytest.mark.parametrize("index", [1, 2, 3])
+@pytest.mark.parametrize("candidate", ["", "-- 注釈", "SELECT 9 FROM DUAL; SELECT 2 FROM DUAL"])
+def test_targeted_replace_rejects_non_single_sql_without_saving(index: int, candidate: str) -> None:
+    service = _catalog_service(_FakeAdapter(), _FakeEnterpriseAi([]))
+    ids = _saved_analysis_turn(
+        service, "SELECT 1 FROM DUAL; SELECT 2 FROM DUAL; SELECT 3 FROM DUAL"
+    )
+    original = service._db_admin_chat_store.get_turn(*ids)
+    with pytest.raises(ValueError, match="対象の 1 文だけ"):
+        service.replace_db_admin_chat_turn_sql(*ids, candidate, statement_index=index, **OWNER)
+    assert service._db_admin_chat_store.get_turn(*ids) == original
+
+
+def test_targeted_replace_route_rejects_additional_statements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _catalog_service(_FakeAdapter(), _FakeEnterpriseAi([]))
+    ids = _saved_analysis_turn(service, "SELECT 1 FROM DUAL; SELECT 2 FROM DUAL")
+    original = service._db_admin_chat_store.get_turn(*ids)
+    monkeypatch.setattr(router, "nl2sql_service", service)
+    with pytest.raises(HTTPException) as caught:
+        router.replace_db_admin_chat_turn_sql(
+            *ids,
+            DbAdminChatPlanUpdateRequest(
+                sql="SELECT 9 FROM DUAL; SELECT 2 FROM DUAL", statement_index=1
+            ),
+            _http(_principal("chat-user")),
+        )
+    assert caught.value.status_code == 400
+    assert service._db_admin_chat_store.get_turn(*ids) == original

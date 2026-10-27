@@ -1128,3 +1128,38 @@ for (const code of ["ORA-01489", "ORA-01722"]) {
     await page.screenshot({ path: testInfo.outputPath(`analysis-${code}.png`), fullPage: true });
   });
 }
+
+
+for (const targetIndex of [1, 2, 3]) {
+  test(`複数 SQL の文 ${targetIndex} だけを修正し文数と他の SQL を保つ`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    const original = ["SELECT 1 FROM DUAL", "SELECT 2 FROM DUAL", "SELECT 3 FROM DUAL"];
+    const corrected = "SELECT 9 FROM DUAL";
+    const mock = await setup(page, {
+      responses: [generated(plan(original))],
+      execute: (_request, _turn, statement) => mutationResult(statement.sql, false, statement.index),
+      analyze: {
+        cause: "合成のエラーです。", fix: "対象の式を直します。", conclusion: "修正後に確認します。",
+        corrected_plan: plan(corrected), source: "oci_enterprise_ai", model: "test-model", warnings: [], previous_attempts: [],
+      },
+    });
+    await page.goto("/db-admin-chat");
+    await ask(page, "3 つの SQL を作成してください。");
+    let blocks = statements(page);
+    await expect(blocks).toHaveCount(3);
+    const target = blocks.nth(targetIndex - 1);
+    await target.getByTestId("db-admin-chat-execute").click();
+    await target.getByTestId("db-admin-chat-analyze").click();
+    await expect(target.getByTestId("db-admin-chat-corrected-sql")).toHaveText(corrected);
+    expect(mock.analyzeBodies).toEqual([{ statement_index: targetIndex }]);
+    await target.getByTestId("db-admin-chat-use-corrected").click();
+    await expect.poll(() => mock.planBodies).toEqual([{ sql: corrected, statement_index: targetIndex }]);
+    blocks = statements(page);
+    await expect(blocks).toHaveCount(3);
+    for (let index = 0; index < original.length; index++) {
+      await expect(blocks.nth(index).getByTestId("db-admin-chat-sql")).toHaveText(index === targetIndex - 1 ? corrected : original[index]!);
+    }
+    expect(mock.generateBodies).toHaveLength(1);
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`single-correction-${targetIndex}.png`), fullPage: true });
+  });
+}
