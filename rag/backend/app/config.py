@@ -1895,16 +1895,6 @@ class Settings(
         default_factory=list,
         description="質問履歴に記録・提示しない語(部分一致)。env は JSON 配列で指定する。",
     )
-    rag_answer_profile: Literal["generic", "legacy"] = Field(
-        default="legacy",
-        description=(
-            "回答フローの業務 profile。回答フローは rag_engine の current_profile()"
-            "(runtime なしの既定 = legacy: 日本語問い合わせ規則を有効、業務分類・別名は"
-            " RAG_ENGINE_DOMAIN_PROFILE_FILE の JSON)で動き、rag_poc と同じ挙動になる。"
-            "既定はこの実際の挙動に合わせて legacy(#300)。generic は既存の .env との互換のため"
-            "受け付けるが、回答フローには反映されない。"
-        ),
-    )
     rag_runtime_knowledge: dict[str, object] = Field(
         default_factory=dict,
         description=(

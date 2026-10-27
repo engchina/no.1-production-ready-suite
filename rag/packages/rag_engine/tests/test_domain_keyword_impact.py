@@ -13,7 +13,6 @@ from rag_engine.evaluation.domain_keyword_eval import run_keyword_comparison, sc
 from rag_engine.evaluation.rag_eval import RagEvalCase
 from rag_engine.generation.answering import (
     AnswerContext,
-    _lexical_retrieval_queries,
     build_adb_hybrid_answer_context,
     build_question_text_search_info,
 )
@@ -27,11 +26,8 @@ class DomainKeywordImpactTests(unittest.TestCase):
 
     def test_registered_keywords_are_never_added_by_partial_match(self):
         # 質問の語と部分的に重なるだけの登録キーワードは検索文に加えない。この機能と設定は廃止した (#557)。
-        with patch("rag_engine.generation.answering.load_domain_keywords", return_value=("出庫伝票番号",)):
-            trace = {}
-            queries = _lexical_retrieval_queries("出庫伝票", "出庫伝票", keyword_trace=trace)
-        self.assertNotIn("出庫伝票番号", " ".join(queries))
-        self.assertEqual(set(trace), {"decisions"})
+        info = build_question_text_search_info("登録語の前半", self.settings(domain_keywords_override=("登録語の前半と後半",)))
+        self.assertNotIn("登録語の前半と後半", str(info.tokenization_traces))
         settings = get_settings(environ={"DOMAIN_KEYWORD_EXPANSION_ENABLED": "true"}, dotenv_path=None)
         self.assertFalse(hasattr(settings, "domain_keyword_expansion_enabled"))
 

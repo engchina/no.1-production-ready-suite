@@ -793,14 +793,13 @@ parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`
 | `RAG_DOCRAG_SCREEN_LINKING_ENABLED` | `RAG_SCREEN_LINKING_ENABLED` |
 | `RAG_DOCRAG_ANSWER_VISION_ENABLED` | `RAG_ANSWER_VISION_ENABLED` |
 | `RAG_DOCRAG_HISTORY_REWRITE_ENABLED` | `RAG_HISTORY_REWRITE_ENABLED` |
-| `RAG_DOCRAG_PROFILE` | `RAG_ANSWER_PROFILE` |
 | `RAG_DOCRAG_CHILD_TARGET_CHARS` | `RAG_CHUNK_CHILD_TARGET_CHARS` |
 | `RAG_DOCRAG_TABLE_CHILD_TARGET_CHARS` | `RAG_CHUNK_TABLE_CHILD_TARGET_CHARS` |
 | `RAG_DOCRAG_PARENT_TARGET_CHARS` | `RAG_CHUNK_PARENT_TARGET_CHARS` |
 | `RAG_DOCRAG_PARENT_MAX_PAGES` | `RAG_CHUNK_PARENT_MAX_PAGES` |
 | `RAG_DOCRAG_PARENT_MAX_CHILDREN` | `RAG_CHUNK_PARENT_MAX_CHILDREN` |
 
-**process の環境変数**（`rag_engine` の package が読む。`backend/.env` ではなく、systemd の unit の `Environment=` か shell の `export` で渡すもの）: `DOCRAG_*` は `RAG_ENGINE_*` にした（例: `DOCRAG_DOMAIN_PROFILE_FILE` → `RAG_ENGINE_DOMAIN_PROFILE_FILE`、docling サービスの `DOCRAG_RENDER_DPI` → `RAG_ENGINE_RENDER_DPI`・`DOCRAG_OUTPUT_DIR` → `RAG_ENGINE_OUTPUT_DIR`）。
+**process の環境変数**（`rag_engine` の package が読む。`backend/.env` ではなく、systemd の unit の `Environment=` か shell の `export` で渡すもの）: `DOCRAG_*` は `RAG_ENGINE_*` にした（docling サービスの `DOCRAG_RENDER_DPI` → `RAG_ENGINE_RENDER_DPI`・`DOCRAG_OUTPUT_DIR` → `RAG_ENGINE_OUTPUT_DIR`）。
 
 **コード・package**: `rag/packages/docrag_core`（distribution `docrag-core`、import `docrag`）は `rag/packages/rag_engine`（distribution `rag-engine`、import `rag_engine`）。backend の `app/rag/docrag_answer.py` → `answer_engine.py`、`docrag_chunking.py` → `chunking_small_to_big.py`、`docrag_prompts.py` → `answer_prompts.py`、`docrag_verify_cli.py` → `answer_verify_cli.py`（`python -m app.rag.answer_verify_cli`）。CI の job `RAG / DocRAG core` は `RAG / Engine`。
 
@@ -845,7 +844,7 @@ parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`
      sudo cp -p "${env_file}" "${env_file}.bak-599"
      sudo sed -i -E \
        -e 's/^RAG_DOCRAG_(CHILD_TARGET_CHARS|TABLE_CHILD_TARGET_CHARS|PARENT_TARGET_CHARS|PARENT_MAX_PAGES|PARENT_MAX_CHILDREN)=/RAG_CHUNK_\1=/' \
-       -e 's/^RAG_DOCRAG_PROFILE=/RAG_ANSWER_PROFILE=/' \
+       -e '/^RAG_DOCRAG_PROFILE=/d' \
        -e 's/^RAG_DOCRAG_(QUERY_STRATEGY|ANSWER_FLOW|NEIGHBOR_CHILD_COUNT|RERANK_ENABLED|SCREEN_LINKING_ENABLED|ANSWER_VISION_ENABLED|HISTORY_REWRITE_ENABLED)=/RAG_\1=/' \
        -e 's/^RAG_CHUNKING_STRATEGY=docrag_small_to_big$/RAG_CHUNKING_STRATEGY=small_to_big/' \
        "${env_file}"
@@ -854,7 +853,7 @@ parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`
    ```
 
    ローカルは `rag/backend/.env` だけを同じ `sed` で直す。
-3. process の環境変数 `DOCRAG_*` を `RAG_ENGINE_*` に直す。systemd の unit の drop-in（`systemctl edit production-ready-rag-backend.service` などで足した `Environment=DOCRAG_DOMAIN_PROFILE_FILE=...`）や、起動する shell の `export` を探して改名する。docling サービスの unit の `Environment=RAG_ENGINE_OUTPUT_DIR=...` は `scripts/rag-systemd.sh` が書くので、手順 4 の `init_script.sh` の再実行（ローカルは `scripts/rag-services.sh install`）で作り直す。
+3. process の環境変数 `DOCRAG_*` を `RAG_ENGINE_*` に直す。systemd の unit の drop-in や、起動する shell の `export` を探して改名する。ただし外部 DomainProfile の設定は廃止しているので、後述の #3668 の手順で除く。docling サービスの unit の `Environment=RAG_ENGINE_OUTPUT_DIR=...` は `scripts/rag-systemd.sh` が書くので、手順 4 の `init_script.sh` の再実行（ローカルは `scripts/rag-services.sh install`）で作り直す。
 
    ```bash
    sudo grep -rn 'DOCRAG_' /etc/systemd/system/production-ready-rag-* 2>/dev/null
@@ -2042,3 +2041,11 @@ placeholder を置き換えます。旧名を実行時に展開する互換処�
 更新時に `python -m app.rag.guardrail_settings_migration --env-file .env` を実行し、
 回答 backend を再読み込みします。旧 OCI 選択は on、Local 選択は off へ移ります。
 設定・障害時の扱いは [安全チェック](evaluation-observability-guardrails.md) を参照してください。
+
+## 外部 DomainProfile の読込の廃止（#3668）
+
+`RAG_ENGINE_DOMAIN_PROFILE_FILE` と作業ディレクトリの `domain_profile.json` を読む機能、および `RAG_ANSWER_PROFILE` / `RAG_ENGINE_PROFILE` の選択を廃止した。これらの変数は別名で受け付けず、残っていても実行には使わない。backend の `.env`、起動 shell、systemd の drop-in に残る定義は運用者が削除する。`DOCRAG_DOMAIN_PROFILE_FILE` の旧定義も新しい名前へ改名しない。
+
+ファイル自体や保存済みデータは自動削除しない。別名や判定に必要な設定は、内容を確認したうえで検索・回答プロファイルのページ管理の「用語・同義語」「ドメインキーワード」「回答ルール」「業務ガイド」へ必要な分だけ登録する。文書分類は保存済み metadata と手入力が正本となり、外部 taxonomy による名前の補正やパスからの大分類・中分類の推定は行わない。既存の chunk の分類と検索範囲は保持する。文書の再取込・DB migration は不要。
+
+一般的な日本語の質問理解は設定に依存せず維持する。SDK から `profile=` を渡していた場合は引数を除き、Prompt 上書きだけが必要なら Runtime の `prompt_overrides` を使う。Prompt の本文や保存済みの Prompt 設定は変更しない。

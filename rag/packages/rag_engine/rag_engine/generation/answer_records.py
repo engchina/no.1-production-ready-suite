@@ -16,7 +16,6 @@ from rag_engine.generation.answer_payload import _bbox_values, _int_value, _trim
 from rag_engine.models.llm import RerankTextRank
 from rag_engine.models.storage import StoredChunk
 from rag_engine.parsing.content_labels import content_labels
-from rag_engine.resources.runtime import current_profile
 from rag_engine.retrieval.context_builder import context_bundle_from_records
 from rag_engine.retrieval.entity_expansion import (  # noqa: F401  is_entity_expansion_record はここからも参照できる
     is_entity_expansion_record,
@@ -364,11 +363,6 @@ def _search_terms(question: str) -> list[str]:
     compact = re.sub(r"\s+", "", normalized)
     if 2 <= len(compact) <= 80:
         terms.add(compact)
-    # 文書群に固有の言い換えは業務 profile が持つ。コードには置かない。
-    for trigger, expansions in current_profile().aliases:
-        if _normalize_text(trigger) not in normalized:
-            continue
-        terms.update(_normalize_text(expansion) for expansion in expansions)
     return sorted(terms, key=lambda term: (-len(term), term))
 
 

@@ -14,7 +14,6 @@ from rag_parser_core.language import LanguagePack, per_pack
 from rag_parser_core.language.markers import marker_patterns
 from rag_parser_core.language.text import alternation, char_class, range_class, text_patterns
 
-from rag_engine.resources.runtime import current_profile
 from rag_engine.retrieval.task_contract import cause_noun_targeted
 
 # 2: 補助の検索文（retrieval_queries）を持たない（#3496）。検索文の追加は質問の言い換えの工程が受け持つ。
@@ -73,8 +72,7 @@ _DECISION_TYPE_DISPLAY_LABELS = {
 class _Cues:
     """言語資源（inquiry_cues。#2181 段 4）から組み立てた問い合わせの条件の語と正規表現。
 
-    業務固有の連携先・資料名・製品名はコードにも言語資源にも置かず、業務 profile の file_data_terms /
-    external_context_terms で足す (#849)。
+    業務固有の連携先・資料名・製品名は含めず、言語資源の汎用の判定語だけを使う。
     """
 
     term: re.Pattern[str]
@@ -197,17 +195,17 @@ _PROFILE_BY_ID = {profile.profile_id: profile for profile in INQUIRY_PROFILES}
 
 
 def _file_data_terms() -> tuple[str, ...]:
-    """ファイル/データ確認とみなす語。汎用語に業務 profile の語を足す。"""
-    return (*_cues().file_data_terms, *current_profile().file_data_terms)
+    """ファイル/データ確認とみなす語。言語資源の汎用語を使う。"""
+    return _cues().file_data_terms
 
 
 def _external_context_terms() -> tuple[str, ...]:
-    """外部連携の確認とみなす語。汎用語に業務 profile の語を足す。"""
-    return (*_cues().external_context_terms, *current_profile().external_context_terms)
+    """外部連携の確認とみなす語。言語資源の汎用語を使う。"""
+    return _cues().external_context_terms
 
 
 def _trigger_terms(profile: InquiryProfileDefinition) -> tuple[str, ...]:
-    """問い合わせ種別の trigger 語（言語資源）。ファイル/データ確認だけは業務 profile の語も含める。"""
+    """問い合わせ種別の trigger 語（言語資源）。"""
     if profile.profile_id == FILE_DATA_PROFILE:
         return _file_data_terms()
     cues = _cues()
@@ -215,15 +213,9 @@ def _trigger_terms(profile: InquiryProfileDefinition) -> tuple[str, ...]:
 
 
 def _document_kind_patterns() -> tuple[tuple[str, str], ...]:
-    """文書種別の判定規則（言語資源）。ファイル/データの種別には業務 profile のファイル/データ確認の語も含める。"""
+    """文書種別の判定規則（言語資源）。"""
     cues = _cues()
-    extra = current_profile().file_data_terms
-    if not extra:
-        return cues.document_kinds
-    alternatives = "|".join(re.escape(term) for term in extra)
-    return tuple(
-        (label, f"{pattern}|{alternatives}" if label == cues.file_data_kind else pattern) for label, pattern in cues.document_kinds
-    )
+    return cues.document_kinds
 
 
 def inquiry_profile_contract_hash() -> str:
@@ -406,8 +398,6 @@ def _display_profiles(values: Sequence[str]) -> list[str]:
 def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
     """質問文から問い合わせ profile、channel、制約語を抽出します。"""
     original = _clean_text(question)
-    if not current_profile().japanese_inquiry_rules:
-        return InquiryConditionParse(original_question=original, business_domains=tuple(_question_business_domains(original)))
     comparable = _comparable(original)
     business_domains = _question_business_domains(original)
     document_kinds = _match_patterns(original, _document_kind_patterns())
@@ -479,19 +469,14 @@ def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
 
 
 def _question_business_domains(question: str) -> list[str]:
-    """質問が名指しした業務名。
-
-    呼び出し元が業務名の照合（`AnswerDependencies.business_domains`）を注入していればそれだけを使い、
-    domain profile の `business_patterns` は使わない（本製品は検索範囲の文書の大分類の一覧から照合する）。
-    注入が無いとき（SDK・単体の呼び出し）は従来どおり `business_patterns` で推定する。
-    """
+    """呼び出し元が検索範囲の保存済み大分類から照合した業務名だけを使う。"""
     from rag_engine.dependencies import question_business_domains
 
     injected = question_business_domains(question)
     if injected is not None:
         # 値は候補の大分類と完全一致で比べる（`_same_business_records`）ため、表記を変えずに重複だけ除く。
         return list(dict.fromkeys(str(value) for value in injected if str(value).strip()))
-    return _match_patterns(question, current_profile().business_patterns)
+    return []
 
 
 def build_inquiry_chunk_metadata(
@@ -504,16 +489,11 @@ def build_inquiry_chunk_metadata(
     page_end: int,
 ) -> dict[str, Any]:
     """検索 filter と profile channel に必要な chunk metadata だけを構築します。"""
-    if not current_profile().japanese_inquiry_rules:
-        return {}
     combined = _clean_text("\n".join([source_file_name, retrieval_text, text]))
-    business_domains = _match_patterns(combined, current_profile().business_patterns)
     document_kinds = _match_patterns(combined, _document_kind_patterns())
     active_profiles = _active_chunk_profiles(combined, source_categories)
     # 版は chunk metadata の top（schema_version）と chunks.json の contracts が持つ。ここには入れない (#814)。
     metadata: dict[str, Any] = {}
-    if business_domains:
-        metadata["business_domains"] = business_domains
     if document_kinds:
         metadata["document_kinds"] = document_kinds
     if active_profiles:
@@ -635,7 +615,6 @@ def _search_terms(
     date_terms: Sequence[str],
 ) -> list[str]:
     terms: list[str] = []
-    normalized = _comparable(text)
     for source in (
         _cues().term.findall(text),
         business_domains,
@@ -654,11 +633,6 @@ def _search_terms(
         _append_unique(terms, ref.get("value", ""))
         joined = f"{ref.get('name', '')} {ref.get('value', '')}".strip()
         _append_unique(terms, joined)
-    for trigger, expansions in current_profile().aliases:
-        if _comparable(trigger) in normalized:
-            _append_unique(terms, trigger)
-            for expansion in expansions:
-                _append_unique(terms, expansion)
     return sorted([term for term in terms if len(_comparable(term)) >= 2], key=lambda item: (-len(_comparable(item)), item))
 
 

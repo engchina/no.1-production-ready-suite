@@ -253,7 +253,7 @@ def get_prompt_file(key: str) -> PromptFile:
         runtime = current_runtime()
         if runtime is None:
             return definition
-        content = dict(runtime.profile.prompt_overrides).get(key, definition.default_content)
+        content = dict(runtime.prompt_overrides).get(key, definition.default_content)
         directory = runtime.paths.prompts
         return replace(
             definition,
