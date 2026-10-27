@@ -50,7 +50,7 @@ async function clearListDetailStorage(page: Page) {
   });
 }
 
-test("高密度一覧を検索・数値ページングし、行を選ぶと「狭い一覧 | 広い詳細」の詳細の三つのタブから原因を追える", async ({ page }, testInfo) => {
+test("全幅の一覧を検索・数値ページングし、全幅の詳細の三つのタブから原因を追える", { tag: "@responsive" }, async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "2 ペインは xl 以上の幅で確かめる");
   await clearListDetailStorage(page);
   const requestedUrls: string[] = [];
@@ -64,14 +64,13 @@ test("高密度一覧を検索・数値ページングし、行を選ぶと「�
   await expect(page.getByText("前期間比 +17pt", { exact: true }).first()).toBeVisible();
   // B 型：狭い一覧と広い詳細を ListDetailLayout で並べ、先頭を自動で選ばず、未選択の詳細は選び方を案内する（#2283）。
   const layout = page.getByTestId("list-detail-feedback");
-  await expect(layout).toHaveAttribute("data-list-detail-layout", "split");
-  await expect(page.getByText("フィードバックを選んでください")).toBeVisible();
+  await expect(layout).toHaveAttribute("data-list-detail-layout", "single");
+  await expect(page.getByRole("region", { name: "フィードバック詳細" })).toBeHidden();
   await expect(page).not.toHaveURL(/feedback=/);
   const list = page.getByTestId("list-detail-feedback-list");
   const [listBox, layoutBox] = await Promise.all([list.boundingBox(), layout.boundingBox()]);
-  // 一覧は既定 20rem（14px ルートで 280px）、詳細は残りの幅。
-  expect(listBox!.width).toBeCloseTo(280, 0);
-  expect(layoutBox!.width - listBox!.width).toBeGreaterThan(listBox!.width * 2);
+  // 一覧は画面の全幅を使う。
+  expect(listBox!.width).toBeCloseTo(layoutBox!.width, 0);
   // 「詳細を開く」ボタンは行に置かない（行のクリックと名前のボタンで選ぶ）。
   await expect(page.getByRole("button", { name: "詳細を開く" })).toHaveCount(0);
 
@@ -104,10 +103,10 @@ test("高密度一覧を検索・数値ページングし、行を選ぶと「�
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(detail.getByText("2024年版の経費規程では翌月10日です。", { exact: true })).toBeVisible();
   await expect(detail.getByText("規程が更新されています。", { exact: true })).toBeVisible();
-  // 横並びでは詳細が一覧の右にすぐ出る。
+  // 選択後は一覧を隠し、詳細が全幅になる。
   const box = await detail.boundingBox();
-  const rowBox = await row.boundingBox();
-  expect(box && rowBox && box.x > rowBox.x).toBe(true);
+  expect(box!.width).toBeCloseTo(layoutBox!.width, 0);
+  await expect(list).toBeHidden();
 
   await detail.getByRole("tab", { name: "根拠" }).click();
   await expect(page.getByRole("tabpanel", { name: "根拠" }).getByText("評価対象", { exact: true })).toBeVisible();
@@ -132,7 +131,7 @@ test("高密度一覧を検索・数値ページングし、行を選ぶと「�
   await expect(page.getByTestId("feedback-row-feedback-answer")).toHaveAttribute("aria-current", "true");
   await expect(page.getByRole("region", { name: "フィードバック詳細" })).toBeVisible();
 
-  // 前へ / 次へ（詳細の上端の行）は一覧の今の並びの前後へ移る（2 ペインの選び直しは履歴に積まない）。
+  // 前へ / 次へ（詳細の上端の行）は一覧の今の並びの前後へ移る（単一ペインの選択は履歴に積む）。
   await page.getByTestId("feedback-detail-pager-next").click();
   await expect(page).toHaveURL(/feedback=feedback-citation/);
   await expect(page.getByTestId("feedback-row-feedback-citation")).toHaveAttribute("aria-current", "true");
@@ -141,39 +140,15 @@ test("高密度一覧を検索・数値ページングし、行を選ぶと「�
   await expect(page).toHaveURL(/feedback=feedback-answer/);
   await expect(page.getByTestId("feedback-detail-pager-previous")).toBeDisabled();
 
-  // キーボード：先頭セルの名前のボタンで別の行を選び、↑ / ↓ で行の間を移る。
-  const answerButton = page.getByRole("button", { name: "最新の経費申請期限を教えて の詳細を表示" });
-  const citationButton = page.getByRole("button", { name: "申請期限を確認したい の詳細を表示" });
-  await answerButton.focus();
-  await page.keyboard.press("ArrowDown");
-  await expect(citationButton).toBeFocused();
-  await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/feedback=feedback-citation/);
-  await expect(page.getByTestId("feedback-row-feedback-citation")).toHaveAttribute("aria-current", "true");
-  await expect(page.getByTestId("feedback-row-feedback-answer")).not.toHaveAttribute("aria-current", "true");
-  await expect(citationButton).toBeFocused();
-  await page.keyboard.press("ArrowUp");
-  await expect(answerButton).toBeFocused();
-
-  // 分割線は role="separator" で、矢印キーで一覧の幅を変えると製品の key で保存する。開閉ボタンで畳むと詳細が全幅。
-  const resizer = page.getByRole("separator", { name: "一覧の幅" });
-  await expect(resizer).toHaveAttribute("aria-valuenow", "20");
-  await resizer.focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(resizer).toHaveAttribute("aria-valuenow", "21");
-  const stored = await page.evaluate(() => window.localStorage.getItem("production-ready-rag.listDetail.feedback"));
-  expect(stored).toContain("21");
-  const toggle = page.getByTestId("list-detail-feedback-toggle");
-  await expect(toggle).toHaveAccessibleName("フィードバック明細");
-  await toggle.click();
-  await expect(list).toBeHidden();
-  await toggle.click();
+  await page.getByTestId("feedback-detail-back").click();
   await expect(list).toBeVisible();
+  await expect(page).toHaveURL(/size=25/);
+  await expect(page).toHaveURL(/page=1/);
+  await expect(page.getByTestId("list-detail-feedback-resizer")).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
-test("xl 未満は 1 ペイン: 選ぶと詳細だけ、「一覧へ戻る」とブラウザの「戻る」で一覧に戻り、選んだ行へフォーカスを戻す", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  if (testInfo.project.name === "desktop") await page.setViewportSize({ width: 1024, height: 900 });
+test("全幅の 1 ペイン: 選ぶと詳細だけ、「一覧へ戻る」とブラウザの「戻る」で一覧に戻り、選んだ行へフォーカスを戻す", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await clearListDetailStorage(page);
   await mockFeedback(page, []);
 
@@ -277,7 +252,7 @@ test("行の題名のボタン（共有 RowTitleButton）は Tab で届き、Ent
   await expect(answerRow).toHaveAttribute("aria-current", "true");
   await expect(answerRow.locator("[data-row-title-button]")).toHaveAttribute("aria-current", "true");
   // 「一覧へ戻る」で一覧へ戻ってから次の行を選ぶ。
-  if (mobile) await page.getByTestId("feedback-detail-back").click();
+  await page.getByTestId("feedback-detail-back").click();
 
   await citationButton.focus();
   await page.keyboard.press("Space");
@@ -287,12 +262,12 @@ test("行の題名のボタン（共有 RowTitleButton）は Tab で届き、Ent
   await expect(citationRow.locator("[data-row-title-button]")).toHaveAttribute("aria-current", "true");
   await expect(answerRow.locator("[data-row-title-button]")).not.toHaveAttribute("aria-current", /.*/);
 
+  await page.getByTestId("feedback-detail-back").click();
   if (!mobile) {
     // ホバーで題名に下線を引く。
     await answerButton.hover();
     await expect(answerButton.locator("span").first()).toHaveCSS("text-decoration-line", "underline");
   } else {
-    await page.getByTestId("feedback-detail-back").click();
     await expect(citationButton).toBeFocused();
     await expectNoPageOverflow(page);
   }
@@ -411,24 +386,25 @@ test("見える範囲を案内する: SYSTEM_ADMIN はすべての利用者の�
 });
 
 for (const width of [1280, 1920]) {
-  test(`一覧の列は狭い列のままで、行の値が列の境界を超えず、タイトルと左端がそろう (${width}px)`, async ({ page }, testInfo) => {
+  test(`一覧は全幅で、行の値が列の境界を超えず、タイトルと左端がそろう (${width}px)`, async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop", "desktop table contract");
     await page.setViewportSize({ width, height: 900 });
     await clearListDetailStorage(page);
     await mockFeedback(page, []);
-    await page.goto("/feedback?period=30&sort=newest&size=50&page=1&feedback=feedback-answer");
+    await page.goto("/feedback?period=30&sort=newest&size=50&page=1");
 
     const list = page.getByTestId("list-detail-feedback-list");
     const table = list.getByRole("table");
     await expect(table.getByText("役に立たなかった").first()).toBeVisible();
     await expect(table.getByText("旧データの評価（送信元が記録されていない）")).toBeVisible();
     expect(await measureTableCellOverflow(page, "main table")).toEqual([]);
-    // 一覧は 1920px でも既定 20rem（280px）の狭い列。PageHeader のタイトルと左端がそろう（PageHeader と PageBody の wide）。
+    // 1920px でも一覧は全幅で、PageHeader と左端がそろう。
     const [listBox, titleBox] = await Promise.all([
       list.boundingBox(),
       page.getByRole("heading", { level: 1, name: "利用者フィードバック" }).boundingBox(),
     ]);
-    expect(listBox!.width).toBeCloseTo(280, 0);
+    const layoutBox = await page.getByTestId("list-detail-feedback").boundingBox();
+    expect(listBox!.width).toBeCloseTo(layoutBox!.width, 0);
     expect(Math.abs(listBox!.x - titleBox!.x)).toBeLessThanOrEqual(1);
     // ページ送りは列の幅に収まる（横にあふれない）。
     const overflow = await page
@@ -828,4 +804,30 @@ test("強制カラーモードでは、選んだタブだけに Highlight の下
   // 色の transition の途中の値は system color ではないため CanvasText に置き換わる。終わるのを待つ。
   await expect.poll(() => underline(unselected)).toBe(highlight);
   await expect.poll(() => underline(selected)).toBe(canvas);
+});
+
+
+test("長い根拠は共通の高さでスクロールし、戻るとページと条件を保つ", { tag: "@responsive" }, async ({ page }) => {
+  await mockFeedback(page, []);
+  await page.route("**/api/feedback/feedback-answer", route => {
+    const envelope = feedbackDetailEnvelope();
+    envelope.data.citations = Array.from({length: 40}, (_, i) => ({document_id: `source-${i}`, chunk_id: `source-${i}:0`, file_name: "合成文書.pdf", section_title: `合成節 ${i + 1}`, page_number: i + 1, content_preview: "合成の根拠です。".repeat(10), rerank_score: 0.9}));
+    return route.fulfill({json: envelope});
+  });
+  await page.goto("/feedback?period=30&sort=oldest&size=25&page=2");
+  await page.getByTestId("feedback-row-feedback-answer").click();
+  await page.getByRole("tab", {name: "根拠", exact: true}).click();
+  const list = page.getByTestId("feedback-evidence-scroll");
+  const size = await list.evaluate(node => ({height: node.clientHeight, content: node.scrollHeight, expected: parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(min-width: 48rem)").matches ? 28 : 17.5)}));
+  expect(Math.abs(size.height - size.expected)).toBeLessThanOrEqual(1);
+  expect(size.content).toBeGreaterThan(size.height);
+  await list.focus(); await list.press("End");
+  await expect.poll(() => list.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  await list.getByText("合成節 40", {exact: false}).scrollIntoViewIfNeeded();
+  await expect(list.getByText("合成節 40", {exact: false})).toBeInViewport();
+  await page.getByTestId("feedback-detail-back").click();
+  await expect(page).not.toHaveURL(/feedback=/);
+  await expect(page).toHaveURL(/sort=oldest/);
+  await expect(page).toHaveURL(/page=2/);
+  await expect(page.getByTestId("feedback-pagination")).toContainText("2 / 5 ページ");
 });
