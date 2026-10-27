@@ -14,6 +14,14 @@ from typing import Any
 
 import pytest
 from openpyxl import load_workbook
+from pr_evaluation_scoring.perturbation import (
+    PERTURBATIONS,
+    add_unsupported_claim,
+    drop_condition,
+    parse_kinds,
+    reverse_steps,
+    swap_values,
+)
 from test_rag_mcp_target import FakeRagMcp, _evidence, _mcp, _output
 
 from pr_suite_evaluation.cli import main
@@ -35,14 +43,6 @@ from pr_suite_evaluation.judge.labeling import (
     assign_splits,
     build_labeling_items,
     load_items,
-)
-from pr_suite_evaluation.judge.perturbation import (
-    PERTURBATIONS,
-    add_unsupported_claim,
-    drop_condition,
-    parse_kinds,
-    reverse_steps,
-    swap_values,
 )
 from pr_suite_evaluation.judge.rubric import load_rubric
 from pr_suite_evaluation.judge.workbook import (
@@ -480,3 +480,13 @@ def test_label_import_rejects_mismatched_or_malformed_workbooks(
     assert main([*agreed, "--output", str(labels_path)]) == 0
     labels = load_labels(labels_path)
     assert {item.labeler for item in labels.items if item.origin == "human"} == {"a1+a2"}
+
+
+def test_label_set_fields_match_shared_contract() -> None:
+    """LabelSet の形は platform の共有の名前と同じ（RAG の判定の校正の画面と往復する。#3578）。"""
+    from pr_evaluation_scoring.labeling import LABEL_SET_FIELDS, LABEL_SET_ITEM_FIELDS
+
+    from pr_suite_evaluation.judge.calibration import LabeledItem
+
+    assert tuple(LabelSet.model_fields) == LABEL_SET_FIELDS
+    assert tuple(LabeledItem.model_fields) == LABEL_SET_ITEM_FIELDS

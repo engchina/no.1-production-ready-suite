@@ -206,18 +206,50 @@ def evaluate_labels(labels: HumanLabels, evaluate: Evaluate) -> dict[str, dict[s
     return {item.id: dict(evaluate(item)) for item in labels.items}
 
 
-def _backend_evaluator(judge_model_id: str | None = None) -> tuple[Evaluate, dict[str, Any]]:
+def resolve_judge_model_id(settings: Any, judge_model_id: str | None = None) -> str:
+    """判定のモデル（指定、無ければ共通のモデル設定の既定の判定モデル。#3574）。"""
+    from app.config import enterprise_ai_judge_model_id
+
+    return (judge_model_id or "").strip() or enterprise_ai_judge_model_id(settings)
+
+
+def judge_provenance(settings: Any, judge_model_id: str | None = None) -> dict[str, Any]:
+    """評価器の判定のモデル（校正の結果に記録し、画面の「校正済み」の照合に使う。#3578）。"""
+    return {
+        "provider": "oci_enterprise_ai",
+        "model": resolve_judge_model_id(settings, judge_model_id),
+    }
+
+
+def judge_prompt_sha256() -> str:
+    """評価器の指示（``answer_eval`` の ``*_PROMPT``）の sha256（校正の結果と照合する。#3578）。
+
+    指示の名前・数が変わっても、module の大文字の ``*_PROMPT`` の文字列を名前の順に hash する。
+    """
+    from rag_engine.evaluation import answer_eval
+
+    prompts = sorted(
+        (name, value)
+        for name, value in vars(answer_eval).items()
+        if name.isupper() and name.endswith("PROMPT") and isinstance(value, str)
+    )
+    return _sha256(prompts)
+
+
+def backend_evaluator(
+    settings: Any | None = None, judge_model_id: str | None = None
+) -> tuple[Evaluate, dict[str, Any]]:
     """RAG の設定で、画面・評価の job と同じ評価器（`evaluate_answer_record`）を使う。
 
     判定のモデルは ``judge_model_id``（`--judge-model`）、無ければ共通のモデル設定の既定の判定モデル
     （人手の判定の回答は作ったモデルが分からないので、「回答と同じモデル」は既定のテキストモデル。#3574）。
     """
-    from app.config import enterprise_ai_judge_model_id, get_settings
+    from app.config import get_settings
     from app.rag.answer_engine import evaluate_answer_record
     from app.schemas.search import RetrievedChunk
 
-    settings = get_settings()
-    judge_model = (judge_model_id or "").strip() or enterprise_ai_judge_model_id(settings)
+    resolved = settings or get_settings()
+    judge_model = resolve_judge_model_id(resolved, judge_model_id)
 
     def evaluate(item: LabeledAnswer) -> Mapping[str, Any]:
         citations = [
@@ -229,12 +261,17 @@ def _backend_evaluator(judge_model_id: str | None = None) -> tuple[Evaluate, dic
         return evaluate_answer_record(
             evaluation_input(item),
             item.standard_answer or "",
-            settings,
+            resolved,
             citations=citations,
             judge_model_id=judge_model,
         )
 
     return evaluate, {"provider": "oci_enterprise_ai", "model": judge_model}
+
+
+def _backend_evaluator(judge_model_id: str | None = None) -> tuple[Evaluate, dict[str, Any]]:
+    """CLI の評価器（`--judge-model`）。"""
+    return backend_evaluator(None, judge_model_id)
 
 
 def _pass_at(values: Sequence[str]) -> dict[str, float]:

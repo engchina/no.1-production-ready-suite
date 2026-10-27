@@ -74,6 +74,7 @@
 正確性・網羅性・忠実性を採点する回答の評価器（`evaluate_answer_payload` と `score_answer_evaluation`）は、人手の判定との一致で校正してから合否に使います。検索の評価器の校正（`rag_engine.evaluation.crag_grader_eval`）とは対象が違うので分けます。
 
 - 人手の判定は、製品横断の評価の校正と同じ形の JSON（LabelSet。`suite-evaluation label-import` が記入用のブックから書く。手順は `suite/evaluation/README.md`「人手の判定による校正の手順」）を使います。RAG は suite を import せず、同じ JSON を自分の型で読みます。
+- 画面では「品質評価」のタブ「判定の校正」（#3578）で、記入の集合の作成・記入（記入者は自分の判定だけを見る）・記入者の間の κ と裁定・校正（品質評価の job。判定のモデル（既定の判定モデル）の ID・評価器の rubric の版・指示の sha256 を記録）・LabelSet の JSON の書き出し / 取り込みを行えます。記入は `menu.evaluation`、全員の判定・裁定・校正・入出力は `rag.evaluation_calibration.manage`。表は `rag_evaluation_label_sets`・`rag_evaluation_label_items`・`rag_evaluation_labels`・`rag_evaluation_calibrations`。品質評価の結果の正確性・網羅・根拠の指標には、今の判定のモデルと指示で合格した校正があれば「校正済み κ=…」、無ければ「未校正」を出します（指標の値は変えません）。
 - `uv run python -m app.rag.answer_judge_calibration <LabelSet の JSON> --output <結果>`（`rag/backend` で）が、項目ごとに評価器を動かし（OCI Enterprise AI を呼ぶ。判定のモデルは `--judge-model <登録モデルの ID>`、省略時は既定の判定モデル。人手の判定の回答は作ったモデルが分からないので、「回答と同じモデル」は既定のテキストモデル）、観点ごとの一致（一致率・Cohen の κ・混同行列・誤合格 / 誤不合格）と holdout の合否を出します。`--evaluations <前の結果>` はモデルを呼ばずに集計だけやり直します。
 - 指標の値が `--pass-at`（既定 1.0。観点ごとに `<観点>=<値>`）以上を pass とし、評価が完了しない・測れない項目は判定できなかった件に数えます。一致の集計と合否の閾値（holdout の件数 50 以上・判定率 0.95 以上・κ 0.6 以上・誤合格の率 0.1 以下）は platform の `pr_evaluation_scoring` を suite と共有します。故意に壊した回答（合成の対照）は合否に入れず、synthetic の区分に別に集計します。
 

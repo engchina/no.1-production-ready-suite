@@ -810,7 +810,9 @@ def _sync_knowledge_base_filter(
     )
 
 
-EvaluationJobKind = Literal["run"]
+# run: 品質評価（#390）。calibration: 判定の校正（人手の判定と評価器の一致。#3578。
+# 結果は `rag_evaluation_calibrations` に書き、`run_result` は持たない）。
+EvaluationJobKind = Literal["run", "calibration"]
 EvaluationJobStatus = Literal["RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"]
 
 

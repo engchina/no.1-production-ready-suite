@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from pr_evaluation_scoring.perturbation import parse_kinds
 from pydantic import ValidationError
 
 from pr_suite_evaluation.dataset import (
@@ -85,7 +86,6 @@ from pr_suite_evaluation.judge.labeling import (
     write_json,
     write_template,
 )
-from pr_suite_evaluation.judge.perturbation import parse_kinds
 from pr_suite_evaluation.judge.rubric import load_rubric
 from pr_suite_evaluation.judge.run import judge_record
 from pr_suite_evaluation.judge.workbook import WorkbookError

@@ -17,6 +17,7 @@ from typing import Any
 from app.clients.document_category_store import oracle_document_category_schema_sql
 from app.clients.document_cleanup_store import oracle_document_cleanup_schema_sql
 from app.clients.entity_store import oracle_entity_schema_sql
+from app.clients.evaluation_calibration_store import oracle_evaluation_calibration_schema_sql
 from app.clients.oracle import (
     oracle_answer_prompt_schema_sql,
     oracle_answer_record_schema_sql,
@@ -328,6 +329,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             table_name="rag_evaluation_jobs",
             sql=oracle_evaluation_job_schema_sql(),
         ),
+        # 品質評価の判定の校正（記入の集合・項目・判定・校正の結果。#3578）。
+        OracleSchemaSection(
+            name="evaluation_calibration",
+            table_name="rag_evaluation_label_sets",
+            sql=oracle_evaluation_calibration_schema_sql(),
+        ),
         # ロールの RAG 権限と対象範囲（#214）。
         # PLATFORM_ROLES と検索・回答プロファイル・KB を参照する。
         OracleSchemaSection(
@@ -540,7 +547,56 @@ END;
             sql=cited_evidence_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261026_001_evaluation_calibration",
+            table_name="rag_evaluation_label_sets",
+            sql=evaluation_calibration_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261026_002_evaluation_job_calibration_kind",
+            table_name="rag_evaluation_jobs",
+            sql=evaluation_job_calibration_kind_migration_sql(),
+        )
+    )
     return sections
+
+
+def evaluation_calibration_migration_sql() -> str:
+    """判定の校正の表（記入の集合・項目・判定・校正の結果）と索引を無ければ作る（#3578）。
+
+    表と索引を足すだけでデータは変えない。DDL は正本
+    （``oracle_evaluation_calibration_schema_sql``）から作る。
+    """
+    return _create_missing_objects_sql(oracle_evaluation_calibration_schema_sql(), "判定の校正")
+
+
+def evaluation_job_calibration_kind_migration_sql() -> str:
+    """品質評価の job の kind に判定の校正（``calibration``）を足す（#3578）。
+
+    CHECK 制約を作り直すだけで行は変えない。表が無ければ何もしない（冪等）。
+    """
+    return """DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOBS';
+    IF v_count > 0 THEN
+        SELECT COUNT(*) INTO v_count
+        FROM user_constraints
+        WHERE table_name = 'RAG_EVALUATION_JOBS'
+          AND constraint_name = 'RAG_EVALUATION_JOBS_KIND_CK';
+        IF v_count > 0 THEN
+            EXECUTE IMMEDIATE
+                'ALTER TABLE rag_evaluation_jobs DROP CONSTRAINT rag_evaluation_jobs_kind_ck';
+        END IF;
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_evaluation_jobs ADD CONSTRAINT rag_evaluation_jobs_kind_ck '
+            || 'CHECK (kind IN (''run'', ''calibration''))';
+    END IF;
+END;
+/"""
 
 
 # #2457 で改名したファイル準備の値(旧, 新)。JSON を文字列にして置き換える(値と、抽出の ID の入力の

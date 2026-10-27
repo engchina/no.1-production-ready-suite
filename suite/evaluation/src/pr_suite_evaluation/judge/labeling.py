@@ -18,16 +18,35 @@
 
 from __future__ import annotations
 
-import hashlib
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from itertools import combinations
 from pathlib import Path
 from typing import Any, Literal
 
-from pr_evaluation_scoring import LabelPair, agreement
+# 区分の決め方・誤りの型と目標・記入者の間の一致は platform の共有の部品（RAG の判定の校正の画面と
+# 同じ。#3578）。CLI・テストが使う名前はここからも読めるようにする。
+from pr_evaluation_scoring.labeling import (
+    ANNOTATOR_ID,
+    CANNOT_JUDGE,
+    FAIL,
+    NO_CATEGORY,
+    PASS,
+    item_order_key,
+    pairwise_agreement,
+)
+from pr_evaluation_scoring.labeling import ASPECT_HOLDOUT_TARGET as ASPECT_HOLDOUT_TARGET
+from pr_evaluation_scoring.labeling import ASPECT_LABEL_TARGET as ASPECT_LABEL_TARGET
+from pr_evaluation_scoring.labeling import DEFAULT_HOLDOUT_RATIO as DEFAULT_HOLDOUT_RATIO
+from pr_evaluation_scoring.labeling import DEFAULT_PERTURB_MAX as DEFAULT_PERTURB_MAX
+from pr_evaluation_scoring.labeling import DEFAULT_SPLIT_SALT as DEFAULT_SPLIT_SALT
+from pr_evaluation_scoring.labeling import ERROR_TYPE_IDS as ERROR_TYPE_IDS
+from pr_evaluation_scoring.labeling import ERROR_TYPES as ERROR_TYPES
+from pr_evaluation_scoring.labeling import ErrorType as ErrorType
+from pr_evaluation_scoring.labeling import agreed_label as shared_agreed_label
+from pr_evaluation_scoring.labeling import assign_splits as assign_splits
+from pr_evaluation_scoring.perturbation import PerturbationSource, perturb_items
+from pr_evaluation_scoring.rubric import applicable_aspects, aspect_criteria
 from pydantic import BaseModel, ConfigDict, Field
 
 from pr_suite_evaluation.dataset import LoadedDataset, canonical_sha256
@@ -39,8 +58,7 @@ from pr_suite_evaluation.judge.calibration import (
     PerturbationInfo,
 )
 from pr_suite_evaluation.judge.judging import case_input
-from pr_suite_evaluation.judge.perturbation import PERTURBATIONS, perturbed_labels
-from pr_suite_evaluation.judge.rubric import CANNOT_JUDGE, FAIL, PASS, Rubric
+from pr_suite_evaluation.judge.rubric import Rubric
 from pr_suite_evaluation.judge.workbook import (
     LABEL_CHOICES,
     TARGET_SHEET,
@@ -53,88 +71,8 @@ from pr_suite_evaluation.judge.workbook import (
 from pr_suite_evaluation.targets import agent_mcp
 
 ITEMS_SCHEMA_VERSION = 1
-DEFAULT_HOLDOUT_RATIO = 0.7
-DEFAULT_SPLIT_SALT = "answer-judge-calibration-v1"
-DEFAULT_PERTURB_MAX = 25
 # ブックの根拠の抜粋の合計の上限（セルの上限の内）。
 MAX_EVIDENCE_EXCERPT_CHARS = 30_000
-NO_CATEGORY = "-"
-
-
-@dataclass(frozen=True)
-class ErrorType:
-    id: str
-    group: Literal["誤りの型", "対照"]
-    title: str
-    aspects: str
-    holdout_target: int
-
-
-# #2577・#3418 で挙がった判定器の誤りの型と、誤合格・誤不合格を分ける対照（件数は holdout の目標）。
-ERROR_TYPES: tuple[ErrorType, ...] = (
-    ErrorType(
-        "attribute_swap",
-        "誤りの型",
-        "対象・属性・比較の相手の取り違え（別々の属性を同じものとして扱う）",
-        "answer_correctness・claim_support",
-        5,
-    ),
-    ErrorType(
-        "general_rule_overreach",
-        "誤りの型",
-        "一般の規則を、質問の個別の対象・範囲を超えて当てはめる（一般論の注記で免責しない）",
-        "answer_correctness",
-        5,
-    ),
-    ErrorType(
-        "step_order",
-        "誤りの型",
-        "手順の前後関係の誤り（個々の文は正しくても順序が前提を満たさない）",
-        "answer_correctness",
-        5,
-    ),
-    ErrorType(
-        "scope_expansion",
-        "誤りの型",
-        "処理の段階・時間の単位を根拠なく広げる（ある段階の扱いを別の段階へ、日を月へ など）",
-        "answer_correctness・claim_support",
-        5,
-    ),
-    ErrorType(
-        "unsupported_claim",
-        "誤りの型",
-        "根拠に無い主張・根拠と矛盾する主張",
-        "claim_support",
-        5,
-    ),
-    ErrorType(
-        "partial_omission",
-        "誤りの型",
-        "必要な論点（結論・条件・例外・数量・期間）の一部の不足",
-        "requirement_coverage",
-        5,
-    ),
-    ErrorType(
-        "correct_paraphrase",
-        "対照",
-        "正しい言い換え（意味が同じなら pass。誤不合格を見る）",
-        "（すべて pass）",
-        10,
-    ),
-    ErrorType(
-        "correct_refusal",
-        "対照",
-        "正しい拒答・利用者への確認（資料に無い・条件が足りない）",
-        "（すべて pass）",
-        5,
-    ),
-)
-ERROR_TYPE_IDS = tuple(item.id for item in ERROR_TYPES)
-# 観点ごとの holdout の目標（calibrate の既定の閾値の件数 50 と、pass・fail の両方）。
-ASPECT_HOLDOUT_TARGET = 50
-ASPECT_LABEL_TARGET = 20
-
-ANNOTATOR_ID = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
 
 
 class LabelingItem(BaseModel):
@@ -200,34 +138,10 @@ def load_items(path: Path) -> LabelingItems:
     return LabelingItems.model_validate_json(path.read_text(encoding="utf-8"))
 
 
-def _hash(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def assign_splits(
-    strata: Mapping[str, str], *, holdout_ratio: float, salt: str
-) -> dict[str, Literal["dev", "holdout"]]:
-    """単位（ケース）ごとの区分。層（category）の中を sha256 の順に並べ、先頭を dev にする。"""
-    if not 0 < holdout_ratio <= 1:
-        raise ValueError("holdout の割合は 0 より大きく 1 以下にしてください。")
-    groups: dict[str, list[str]] = {}
-    for unit, stratum in strata.items():
-        groups.setdefault(stratum, []).append(unit)
-    splits: dict[str, Literal["dev", "holdout"]] = {}
-    for units in groups.values():
-        ordered = sorted(units, key=lambda unit: _hash(f"{salt}:{unit}"))
-        dev_count = int(len(ordered) * (1 - holdout_ratio) + 0.5)
-        for index, unit in enumerate(ordered):
-            splits[unit] = "dev" if index < dev_count else "holdout"
-    return splits
-
-
 def _applicable(rubric: Rubric, standard_answer: str | None) -> list[str]:
-    return [
-        aspect.id
-        for aspect in rubric.aspects
-        if not ("standard_answer" in aspect.requires and not standard_answer)
-    ]
+    return applicable_aspects(
+        rubric.model_dump(mode="json"), has_standard_answer=bool(standard_answer)
+    )
 
 
 def build_labeling_items(
@@ -323,38 +237,33 @@ def build_labeling_items(
 def _perturbed(
     items: Sequence[LabelingItem], kinds: Sequence[str], *, perturb_max: int, salt: str
 ) -> list[LabelingItem]:
-    synthetic: list[LabelingItem] = []
-    ordered = sorted(items, key=lambda item: _hash(f"{salt}:perturb:{item.id}"))
-    for kind in kinds:
-        perturbation = PERTURBATIONS[kind]
-        count = 0
-        for item in ordered:
-            if count >= perturb_max:
-                break
-            if perturbation.needs_standard_answer and not item.standard_answer:
-                continue
-            labels = perturbed_labels(perturbation, item.aspects)
-            if not labels:
-                continue
-            result = perturbation.apply(item.answer, item.standard_answer, item.id)
-            if result is None or result.answer == item.answer:
-                continue
-            synthetic.append(
-                item.model_copy(
-                    update={
-                        "id": f"{item.id}~{kind}",
-                        "origin": "synthetic",
-                        "answer": result.answer,
-                        "aspects": list(labels),
-                        "perturbation": PerturbationInfo(
-                            kind=kind, base_item_id=item.id, description=result.description
-                        ),
-                        "synthetic_labels": labels,
-                    }
-                )
-            )
-            count += 1
-    return synthetic
+    by_id = {item.id: item for item in items}
+    sources = [
+        PerturbationSource(
+            id=item.id,
+            answer=item.answer,
+            standard_answer=item.standard_answer,
+            aspects=tuple(item.aspects),
+        )
+        for item in items
+    ]
+    return [
+        by_id[result.base_item_id].model_copy(
+            update={
+                "id": result.id,
+                "origin": "synthetic",
+                "answer": result.answer,
+                "aspects": list(result.labels),
+                "perturbation": PerturbationInfo(
+                    kind=result.kind,
+                    base_item_id=result.base_item_id,
+                    description=result.description,
+                ),
+                "synthetic_labels": result.labels,
+            }
+        )
+        for result in perturb_items(sources, kinds, perturb_max=perturb_max, salt=salt)
+    ]
 
 
 # ---- ブックの書き出し ---------------------------------------------------------------------
@@ -362,9 +271,7 @@ def _perturbed(
 
 def aspect_text(rubric: Rubric, aspect_id: str) -> str:
     """rubric の指示の中の、観点の基準の行（`- <観点>: …`）。無ければ指示の全体。"""
-    pattern = re.compile(rf"^- {re.escape(aspect_id)}:\s*(?P<text>.+)$", re.MULTILINE)
-    match = pattern.search(rubric.instructions)
-    return match.group("text").strip() if match else rubric.instructions
+    return aspect_criteria(rubric.instructions, aspect_id)
 
 
 def evidence_excerpt(evidence: Sequence[LabeledEvidence]) -> str:
@@ -428,7 +335,7 @@ def _target_rows() -> list[list[object]]:
 
 def _item_order(items: Sequence[LabelingItem], salt: str) -> list[LabelingItem]:
     # 同じケースの A・C・D の回答が続かないよう、sha256 の順に並べる（決定的）。
-    return sorted(items, key=lambda item: _hash(f"{salt}:order:{item.id}"))
+    return sorted(items, key=lambda item: item_order_key(salt, item.id))
 
 
 def _label_rows(
@@ -624,10 +531,7 @@ class InterAnnotatorReport(BaseModel):
 
 def agreed_label(annotations: Sequence[Annotation], key: tuple[str, str]) -> str | None:
     """全員が同じラベルを付けた行のラベル（未記入・食い違いは None）。"""
-    labels = [item.labels.get(key) for item in annotations]
-    if labels and labels[0] is not None and all(label == labels[0] for label in labels):
-        return labels[0]
-    return None
+    return shared_agreed_label([item.labels.get(key) for item in annotations])
 
 
 def _check_annotators(annotations: Sequence[Annotation]) -> None:
@@ -652,23 +556,17 @@ def inter_annotator(
         keys = [(item.id, aspect_id) for item in items.human_items if aspect_id in item.aspects]
         if not keys:
             continue
-        pairs: list[PairAgreement] = []
-        for first, second in combinations(annotations, 2):
-            compared = [
-                LabelPair(item_id=key[0], human=a, judge=b)
-                for key in keys
-                if (a := first.labels.get(key)) in (PASS, FAIL)
-                and (b := second.labels.get(key)) in (PASS, FAIL)
-            ]
-            result = agreement(compared, (PASS, FAIL))
-            pairs.append(
-                PairAgreement(
-                    annotators=[first.annotator, second.annotator],
-                    compared=result.total,
-                    agreement=result.accuracy,
-                    kappa=result.kappa,
-                )
+        pairs = [
+            PairAgreement(
+                annotators=list(result.annotators),
+                compared=result.compared,
+                agreement=result.agreement,
+                kappa=result.kappa,
             )
+            for result in pairwise_agreement(
+                keys, {item.annotator: item.labels for item in annotations}
+            )
+        ]
         disagreed = [key for key in keys if agreed_label(annotations, key) is None]
         report.aspects[aspect_id] = AspectInterAnnotator(
             rows=len(keys),

@@ -48,6 +48,7 @@ export const CAPABILITY_PERMISSION_CODES = [
   "rag.knowledge_bases.manage",
   "rag.feedback.manage",
   "rag.system_tables.manage",
+  "rag.evaluation_calibration.manage",
 ] as const;
 
 export const ALL_PERMISSION_CODES: string[] = [

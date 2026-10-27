@@ -1,7 +1,8 @@
 """判定の基準（rubric）: LLM による判定の観点・ラベル・指示（版と hash を記録する。#3418）。
 
 rubric は JSON のファイルで、判定の指示（`instructions`）・観点（`aspects`）・ラベル（`labels`）を
-持つ。既定は `rubrics/answer_quality_v1.json`。内容の sha256 を判定の結果と校正の結果に記録し、
+持つ。既定は platform の `pr_evaluation_scoring` に同梱の `rubrics/answer_quality_v1.json`（RAG の
+判定の校正の画面と同じ基準。#3578）。内容の sha256 を判定の結果と校正の結果に記録し、
 rubric を変えたら校正をやり直す（hash が違う校正の結果では、判定を合否に使わない）。
 """
 
@@ -9,18 +10,18 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from importlib import resources
 from pathlib import Path
 from typing import Any, Literal, Self
 
+# ラベルは platform の共有の定義（記入用のブック・RAG の画面と同じ。#3578）。
+from pr_evaluation_scoring.labeling import CANNOT_JUDGE as CANNOT_JUDGE
+from pr_evaluation_scoring.labeling import FAIL as FAIL
+from pr_evaluation_scoring.labeling import PASS as PASS
+from pr_evaluation_scoring.rubric import DEFAULT_RUBRIC, load_rubric_data
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from pr_suite_evaluation.dataset import METRIC_NAMES, canonical_sha256
 
-DEFAULT_RUBRIC = "answer_quality_v1.json"
-PASS = "pass"  # nosec B105 - 判定のラベル（資格情報ではない）
-FAIL = "fail"
-CANNOT_JUDGE = "cannot_judge"
 REQUIRED_LABELS = (PASS, FAIL, CANNOT_JUDGE)
 
 Requirement = Literal["standard_answer"]
@@ -95,8 +96,7 @@ class Rubric(BaseModel):
 def load_rubric(path: Path | None = None) -> Rubric:
     """rubric を読む（省略時は既定の rubric）。"""
     if path is None:
-        text = resources.files("pr_suite_evaluation.judge.rubrics").joinpath(DEFAULT_RUBRIC)
-        raw: Mapping[str, Any] = json.loads(text.read_text(encoding="utf-8"))
+        raw: Mapping[str, Any] = load_rubric_data(DEFAULT_RUBRIC)
     else:
         raw = json.loads(path.read_text(encoding="utf-8"))
     return Rubric.model_validate(raw)

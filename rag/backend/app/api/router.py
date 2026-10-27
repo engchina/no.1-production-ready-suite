@@ -14,6 +14,7 @@ from app.api.routes import (
     document_categories,
     documents,
     evaluation,
+    evaluation_calibration,
     feedback,
     figures,
     health,
@@ -72,6 +73,10 @@ api_router.include_router(search.router, prefix="/search", tags=["search"])
 api_router.include_router(history.router, prefix="/history", tags=["history"])
 api_router.include_router(
     document_categories.router, prefix="/document-categories", tags=["document-categories"]
+)
+# 判定の校正（#3578）。品質評価の画面のタブ。
+api_router.include_router(
+    evaluation_calibration.router, prefix="/evaluation/calibration", tags=["evaluation"]
 )
 api_router.include_router(evaluation.router, prefix="/evaluation", tags=["evaluation"])
 api_router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])

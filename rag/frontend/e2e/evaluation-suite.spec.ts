@@ -30,6 +30,9 @@ for (const viewport of [
       await page.goto("/evaluation");
 
       await expect(page.getByRole("heading", { name: "品質評価", level: 1 })).toBeVisible();
+      // 評価の実行と判定の校正（#3578）のタブ。既定は評価の実行。
+      await expect(page.getByRole("tab", { name: "評価の実行" })).toHaveAttribute("aria-selected", "true");
+      await expect(page.getByRole("tab", { name: "判定の校正" })).toHaveAttribute("aria-selected", "false");
       // 評価の基準は表示だけ（#2065）。選択欄・ラベルは無く、設定の既定と閾値と設定へのリンクを出す。
       const suite = page.getByTestId("evaluation-suite");
       await expect(suite.getByRole("combobox")).toHaveCount(0);
@@ -391,7 +394,9 @@ for (const viewport of [
         // 支援技術・ページ内検索と同じく、読み上げ専用の文を見える位置へ移す。外枠は動かない。
         for (const live of Array.from(element.querySelectorAll(".sr-only"))) live.scrollIntoView({ block: "nearest" });
         element.scrollTo({ top: element.scrollHeight });
-        const body = element.querySelector<HTMLElement>("[data-testid=evaluation-result-loading]")!.parentElement!;
+        // 評価の実行のタブ（#3578）の中にあるので、タブの外の PageBody の余白を測る。
+        const panel = element.querySelector<HTMLElement>("[data-testid=evaluation-result-loading]")!.parentElement!;
+        const body = panel.closest<HTMLElement>("[role=tabpanel]")?.parentElement ?? panel;
         const last = body.lastElementChild!.getBoundingClientRect();
         const mainRect = element.getBoundingClientRect();
         return {
