@@ -23,6 +23,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import text_patterns
 
@@ -407,14 +408,18 @@ def run_application_step(
 ) -> tuple[list[CheckedApplication], str]:
     """当てはめだけを作り、検査と監査を通す。公開できる当てはめと、監査が支持した結論の文（無ければ空）を返す。"""
     inputs, supported = application_step_inputs(question, checked, request_units)
-    draft = parse_text(APPLICATION_SYSTEM_PROMPT, render_prompt(inputs), settings, ApplicationDraft, provider_id=provider_id)
+    draft = call_with_model_purpose(
+        "answer.generate", parse_text, APPLICATION_SYSTEM_PROMPT, render_prompt(inputs), settings, ApplicationDraft, provider_id=provider_id
+    )
     applications = check_applications(question, draft.applications, supported)
     for application in applications:
         application.source = "step"
     candidates = audit_view(applications, lambda item: next((i for i, e in supported.items() if e is item), None))
     if not candidates:
         return applications, ""
-    audit = parse_text(
+    audit = call_with_model_purpose(
+        "answer.audit",
+        parse_text,
         APPLICATION_AUDIT_SYSTEM_PROMPT,
         render_prompt({**inputs, "applications": candidates, "summary": draft.summary}),
         audit_settings,

@@ -17,6 +17,7 @@ import unicodedata
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, Field
 
 from rag_engine.dependencies import report_degraded
@@ -143,7 +144,9 @@ def link_screens(
     text = "\n".join(f"[{source}]\n" + " / ".join(headings) for source, headings in catalog.items())
     prompt = json.dumps({"question": question, "catalog": text}, ensure_ascii=False)
     try:
-        return validated_links(parse_text(LINK_SYSTEM_PROMPT, prompt, settings, ScreenLinks), catalog)
+        return validated_links(
+            call_with_model_purpose("evidence.select_screen", parse_text, LINK_SYSTEM_PROMPT, prompt, settings, ScreenLinks), catalog
+        )
     except Exception as exc:  # noqa: BLE001 - 画面の選択は補助。選ばずに検索を続ける。
         report_degraded("screen_link", exc)
         return None

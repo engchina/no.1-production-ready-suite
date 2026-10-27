@@ -55,6 +55,7 @@ from pr_backend_core.chat_progress import (
     ChatProgressStepDetails,
     chat_progress_details,
 )
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pr_backend_core.observability.model_usage import (
     ModelUsageCollector,
     RunModelUsage,
@@ -14147,7 +14148,9 @@ class Nl2SqlService:
         """生成と安全検証を共通化する。DB 実行・履歴保存は行わない。"""
         if not self._enterprise_ai_client.is_configured():
             raise ValueError("OCI Enterprise AI を設定してから SQL を再生成してください。")
-        raw = self._enterprise_ai_client.generate(
+        raw = call_with_model_purpose(
+            "sql.generate",
+            self._enterprise_ai_client.generate,
             response_format=response_format(SqlOutput),
             prompt=text,
             context=self._enterprise_ai_schema_context(
@@ -14610,7 +14613,9 @@ class Nl2SqlService:
             )
         try:
             profile = self.get_profile(None)
-            raw = self._enterprise_ai_client.generate(
+            raw = call_with_model_purpose(
+                "sql.describe",
+                self._enterprise_ai_client.generate,
                 response_format=response_format(_SqlAnalysisLlmPayload),
                 prompt=sql,
                 context=self._enterprise_ai_schema_context(
@@ -14711,7 +14716,9 @@ class Nl2SqlService:
                 }
             )
         try:
-            raw = self._enterprise_ai_client.generate(
+            raw = call_with_model_purpose(
+                "schema.comments",
+                self._enterprise_ai_client.generate,
                 response_format=response_format(CommentsOutput),
                 prompt=(
                     "表・列・ビュー・マテリアライズドビューの COMMENT ON 候補を"
@@ -14885,7 +14892,9 @@ class Nl2SqlService:
             batch: MetadataSqlGenerateRequest, previous_sql: str, client: EnterpriseAiDirectClient
         ) -> str:
             del previous_sql
-            return client.generate(
+            return call_with_model_purpose(
+                "sql.generate",
+                client.generate,
                 response_format=response_format(SqlOutput),
                 max_output_tokens=self._metadata_sql_output_tokens(batch),
                 prompt=(
@@ -15055,7 +15064,9 @@ class Nl2SqlService:
         ) -> str:
             del previous_sql
             has_samples = bool(batch.sample_text.strip())
-            return client.generate(
+            return call_with_model_purpose(
+                "sql.generate",
+                client.generate,
                 response_format=response_format(SqlOutput),
                 max_output_tokens=self._metadata_sql_output_tokens(batch),
                 prompt=(
@@ -15217,7 +15228,9 @@ class Nl2SqlService:
             batch: MetadataSqlGenerateRequest, previous_sql: str, client: EnterpriseAiDirectClient
         ) -> str:
             has_samples = bool(batch.sample_text.strip())
-            return client.generate(
+            return call_with_model_purpose(
+                "sql.generate",
+                client.generate,
                 response_format=response_format(SqlOutput),
                 max_output_tokens=self._metadata_sql_output_tokens(batch),
                 prompt=(
@@ -18131,7 +18144,9 @@ class Nl2SqlService:
                 ]
             )
         try:
-            raw = self._enterprise_ai_client.generate(
+            raw = call_with_model_purpose(
+                "sql.repair",
+                self._enterprise_ai_client.generate,
                 prompt="存在しない列・オブジェクトを参照する文を、実際の列を使って直してください。",
                 context="\n".join(lines),
                 system_prompt=_DB_ADMIN_CHAT_REPAIR_SYSTEM_PROMPT,
@@ -18322,7 +18337,9 @@ class Nl2SqlService:
         output: DbAdminChatSqlOutput | None = None
         for _attempt in range(_DB_ADMIN_CHAT_GENERATION_ATTEMPTS):
             try:
-                raw = self._enterprise_ai_client.generate(
+                raw = call_with_model_purpose(
+                    "sql.generate",
+                    self._enterprise_ai_client.generate,
                     prompt=prompt,
                     context=context,
                     system_prompt=_DB_ADMIN_CHAT_SYSTEM_PROMPT,
@@ -18412,7 +18429,9 @@ class Nl2SqlService:
         warnings: list[str] = []
         try:
             for attempt in range(2):
-                raw = self._enterprise_ai_client.generate(
+                raw = call_with_model_purpose(
+                    "sql.analyze",
+                    self._enterprise_ai_client.generate,
                     prompt=(
                         "次の SQL の実行が失敗しました。原因と直し方を示し、"
                         "対象の SQL だけを直してください。"
@@ -20336,7 +20355,9 @@ class Nl2SqlService:
             "annotation": "ALTER ... ANNOTATIONS",
         }[request.target]
         try:
-            raw = self._enterprise_ai_client.generate(
+            raw = call_with_model_purpose(
+                "sql.analyze",
+                self._enterprise_ai_client.generate,
                 response_format=response_format(AnalysisOutput),
                 prompt=(
                     f"以下は Oracle Database での {target_label} SQL とその実行結果です。"
@@ -20444,7 +20465,9 @@ class Nl2SqlService:
                 }
             )
         try:
-            raw = self._enterprise_ai_client.generate(
+            raw = call_with_model_purpose(
+                "schema.relations",
+                self._enterprise_ai_client.generate,
                 response_format=response_format(StructureOutput),
                 prompt=_SQL_STRUCTURE_ANALYSIS_PROMPT.format(sql=view_sql),
                 context="",
@@ -25281,7 +25304,9 @@ class Nl2SqlService:
             generate_kwargs["max_retries"] = runtime_max_retries
         call_started = time.monotonic()
         try:
-            raw_text = self._enterprise_ai_client.generate(**generate_kwargs)
+            raw_text = call_with_model_purpose(
+                "sql.generate", self._enterprise_ai_client.generate, **generate_kwargs
+            )
         except EnterpriseAiDirectError as exc:
             _record_engine_timing(
                 engine_timings,

@@ -25,6 +25,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
+from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from rag_parser_core.language import LanguagePack, current_pack
 
@@ -316,7 +317,9 @@ def llm_screen_judge(llm: ScreenJudgeLlm) -> ScreenJudge:
         expected: Sequence[EvaluationScreen],
         candidates: Sequence[str],
     ) -> ScreenJudgement:
-        raw = await llm.generate(
+        raw = await async_call_with_model_purpose(
+            "evaluation.judge",
+            llm.generate,
             SCREEN_JUDGE_PROMPT,
             screen_judge_context(answer, expected, candidates),
             system_prompt=SCREEN_JUDGE_SYSTEM_PROMPT,

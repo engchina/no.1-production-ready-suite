@@ -21,6 +21,7 @@ from typing import Any
 from uuid import uuid4
 
 from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause
+from pr_backend_core.observability.model_purpose import model_purpose_attributes
 from pr_backend_core.observability.model_usage import UNMEASURED_SOURCE_ATTRIBUTE
 from pr_backend_core.observability.tracing import observed_span
 from pr_backend_core.oracle_dsn import dsn_without_tns_retry
@@ -3907,6 +3908,7 @@ class OracleNl2SqlAdapter:
             attributes={
                 "db.system.name": "oracle.db",
                 "db.operation.name": "SELECT_AI",
+                **model_purpose_attributes(default="sql.generate"),
                 # DB の中でモデルを呼ぶので、アプリは利用量を受け取れない（実行履歴は数を作らず
                 # 未計測にする。#3543）。
                 UNMEASURED_SOURCE_ATTRIBUTE: "select_ai",
@@ -4239,6 +4241,7 @@ class OracleNl2SqlAdapter:
             attributes={
                 "db.system.name": "oracle.db",
                 "db.operation.name": "SELECT_AI",
+                **model_purpose_attributes(default="sql.generate"),
                 # DB の中でモデルを呼ぶので、アプリは利用量を受け取れない（実行履歴は数を作らず
                 # 未計測にする。#3543）。
                 UNMEASURED_SOURCE_ATTRIBUTE: "select_ai_agent",
@@ -4311,6 +4314,7 @@ class OracleNl2SqlAdapter:
             attributes={
                 "db.system.name": "oracle.db",
                 "db.operation.name": "SELECT_AI",
+                **model_purpose_attributes(default="sql.generate"),
                 # DB の中でモデルを呼ぶので、アプリは利用量を受け取れない（実行履歴は数を作らず
                 # 未計測にする。#3543）。
                 UNMEASURED_SOURCE_ATTRIBUTE: "select_ai_agent",

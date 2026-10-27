@@ -28,6 +28,7 @@ from contextvars import ContextVar
 from functools import partial
 from typing import Any, Literal
 
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic.json_schema import SkipJsonSchema
 
@@ -505,6 +506,7 @@ def _parse_checked(
     max_input_bytes: int = MAX_EVALUATION_INPUT_BYTES,
     attempts: int = 2,
     on_retry: RetryRecorder | None = None,
+    purpose: str = "evaluation.judge",
 ):
     """同じ根拠と採点範囲を保ち、違反内容を指摘して1回だけ再試行する。根拠の本文は ``model_request`` の形で渡す。
 
@@ -518,7 +520,7 @@ def _parse_checked(
         if size > max_input_bytes:
             raise EvaluationInputTooLarge
         try:
-            raw = parse_text_response(system, _json(request), settings, schema, provider_id=provider_id)
+            raw = call_with_model_purpose(purpose, parse_text_response, system, _json(request), settings, schema, provider_id=provider_id)
             output = schema.model_validate(raw.model_dump())
             check(output)
             return output

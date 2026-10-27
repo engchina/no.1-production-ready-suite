@@ -10,6 +10,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pr_backend_core.observability.model_purpose import model_call_purpose
+
 if TYPE_CHECKING:
     from rag_engine.ports import Embedder
 
@@ -202,13 +204,15 @@ def check_adb_hybrid_search_ready(**kwargs):
 def parse_text_response(*args, **kwargs):
     """指定 schema のテキスト回答を取得する。呼出回数を llm_call_count に数える。"""
     _count_llm_call()
-    return _get().parse_text(*args, **kwargs)
+    with model_call_purpose(kwargs.pop("purpose", None)):
+        return _get().parse_text(*args, **kwargs)
 
 
 def parse_multimodal_response(*args, **kwargs):
     """指定 schema の画像付き回答を取得する。呼出回数を llm_call_count に数える。"""
     _count_llm_call()
-    return _get().parse_images(*args, **kwargs)
+    with model_call_purpose(kwargs.pop("purpose", None)):
+        return _get().parse_images(*args, **kwargs)
 
 
 def rerank_text_with_scores(*args, **kwargs):

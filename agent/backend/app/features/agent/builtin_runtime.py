@@ -73,6 +73,7 @@ from pr_backend_core.chat_history import (
 from pr_backend_core.llm_request_params_httpx import asend_dropping_parameters
 from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.mcp_trace import traceparent_links
+from pr_backend_core.observability.model_purpose import model_purpose_attributes
 from pr_backend_core.observability.request_context import bind_log_context
 from pr_backend_core.observability.tracing import (
     ObservedSpan,
@@ -733,6 +734,7 @@ class _ObservedResponseManager:
             kind="client",
             attributes={
                 "gen_ai.operation.name": "chat",
+                **model_purpose_attributes(default="agent.choose_action"),
                 "gen_ai.provider.name": "oracle",
                 "gen_ai.request.model": str(request.get("model") or ""),
                 **_model_input_attributes(request),
@@ -874,6 +876,7 @@ class _OciResponses:
             finish_on_exit=False,
             attributes={
                 "gen_ai.operation.name": "chat",
+                **model_purpose_attributes(default="agent.choose_action"),
                 "gen_ai.provider.name": "oracle",
                 "gen_ai.request.model": str(request.get("model") or ""),
                 "pr.attempt": attempt,

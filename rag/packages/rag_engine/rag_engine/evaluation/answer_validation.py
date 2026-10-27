@@ -14,6 +14,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
 from rag_parser_core.language import current_pack
@@ -588,7 +589,14 @@ def premise_conflicts(
     inputs = {"question": question, "user_answers": answers, "answer_passages": [dict(passage) for passage in passages]}
     try:
         output = _parse_checked(
-            PREMISE_CONSISTENCY_SYSTEM_PROMPT, inputs, settings, PremiseConsistencyOutput, provider_id, lambda _output: None, attempts=1
+            PREMISE_CONSISTENCY_SYSTEM_PROMPT,
+            inputs,
+            settings,
+            PremiseConsistencyOutput,
+            provider_id,
+            lambda _output: None,
+            attempts=1,
+            purpose="answer.premise_consistency",
         )
     except Exception:
         # 答えとの比較は主張の監査を補うだけ。失敗しても監査の判定を返す（答え・回答の本文は記録しない）。
@@ -609,7 +617,9 @@ def _revise_table_claims(
     from rag_engine.evaluation import answer_eval
 
     def parse(system: str, user: str, schema: type[BaseModel]) -> BaseModel:
-        output: BaseModel = answer_eval.parse_text_response(system, user, settings, schema, provider_id=provider_id)
+        output: BaseModel = call_with_model_purpose(
+            "answer.resolve_conflicts", answer_eval.parse_text_response, system, user, settings, schema, provider_id=provider_id
+        )
         return output
 
     result: list[ValidationClaimCheck] = []
@@ -767,6 +777,7 @@ def _recheck_unreferenced_passages(
             provider_id,
             _passage_check(targets, str(fixed.get("answer_text") or "")),
             max_input_bytes=_max_input_bytes(settings),
+            purpose="answer.recheck",
         )
     except Exception:
         # 確かめ直しは最初の判定を補うだけなので、失敗しても最初の判定を返す。
@@ -833,6 +844,7 @@ def _reaudit_misclassified_passages(
             _passage_check(targets, str(fixed.get("answer_text") or "")),
             max_input_bytes=_max_input_bytes(settings),
             attempts=1,
+            purpose="answer.recheck",
         )
     except Exception:
         # 監査し直しは最初の判定を補うだけなので、失敗しても最初の判定（unassessed）を返す。
@@ -916,6 +928,7 @@ def _audit_batch(
                 provider_id,
                 _passage_check(batch, str(fixed.get("answer_text") or "")),
                 max_input_bytes=max_input_bytes,
+                purpose="answer.validate",
             )
         except EvaluationInputTooLarge:
             raise
@@ -1021,6 +1034,7 @@ def _recheck_figure_supported(
             _passage_check(targets, str(fixed.get("answer_text") or "")),
             max_input_bytes=_max_input_bytes(settings),
             attempts=1,
+            purpose="answer.recheck",
         )
     except Exception:
         # 確かめ直しは最初の判定を厳しくするだけなので、失敗しても最初の判定を返す。

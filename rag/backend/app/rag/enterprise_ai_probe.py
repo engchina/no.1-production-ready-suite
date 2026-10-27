@@ -8,6 +8,8 @@ import json
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
+from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
+
 from app.clients.oci_enterprise_ai import DEFAULT_MIME_TYPE, OciEnterpriseAiClient
 from app.config import Settings, get_settings
 
@@ -232,9 +234,13 @@ async def _invoke_surface(
 ) -> dict[str, object]:
     """実 endpoint を呼び、raw content なしの parse 結果 summary を返す。"""
     if surface == "llm":
-        answer = await client.generate(prompt, context)
+        answer = await async_call_with_model_purpose(
+            "connection.check", client.generate, prompt, context
+        )
         return {"text_chars": len(answer)}
-    extraction = await client.extract_with_vlm_endpoint(
+    extraction = await async_call_with_model_purpose(
+        "connection.check",
+        client.extract_with_vlm_endpoint,
         vlm_text.encode("utf-8"),
         vlm_prompt,
         mime_type=mime_type,

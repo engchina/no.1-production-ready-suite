@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, Field
 
 SYSTEM_PROMPT = (
@@ -49,5 +50,12 @@ def answer_from_approved_faq(question: str, faq_question: str, faq_answer: str, 
     """質問・類似問・承認済みの回答から回答の本文を作る（既定の回答のモデル）。"""
     from rag_engine.adapters.oci import parse_text_response
 
-    draft = parse_text_response(SYSTEM_PROMPT, faq_answer_prompt(question, faq_question, faq_answer), settings, FaqAnswerDraft)
+    draft = call_with_model_purpose(
+        "answer.generate",
+        parse_text_response,
+        SYSTEM_PROMPT,
+        faq_answer_prompt(question, faq_question, faq_answer),
+        settings,
+        FaqAnswerDraft,
+    )
     return draft.answer.strip()

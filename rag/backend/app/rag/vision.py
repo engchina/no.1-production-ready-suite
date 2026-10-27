@@ -39,6 +39,7 @@ from types import SimpleNamespace
 from typing import Any, Protocol
 
 from pr_backend_core.bounded_calls import Attempt, BoundedCaller, BoundedCallFailed
+from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pydantic import ValidationError
 from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.models.llm import PictureDescriptionOutput
@@ -318,7 +319,9 @@ async def _generate(
     *,
     system_prompt: str,
 ) -> str:
-    return await reader.generate_from_images(
+    return await async_call_with_model_purpose(
+        "document.read",
+        reader.generate_from_images,
         images,
         prompt,
         system_prompt=system_prompt,

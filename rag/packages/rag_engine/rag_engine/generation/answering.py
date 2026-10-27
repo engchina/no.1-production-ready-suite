@@ -15,6 +15,7 @@ from pathlib import Path
 from time import monotonic
 from typing import Any, cast
 
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import alternation
 
@@ -1589,7 +1590,9 @@ def _grade_crag_retrieval(
     compact = bool(getattr(settings, "crag_compact_input", False))
     # 詰めた入力では、候補の chunk_uid を短い ID にして評価器の出力を短くする (#1864)。返った ID は canonical で戻す。
     aliases: dict[str, str] | None = {} if compact and getattr(settings, "crag_short_candidate_ids", False) else None
-    output = parse_text_response(
+    output = call_with_model_purpose(
+        "evidence.grade",
+        parse_text_response,
         CRAG_GRADER_SYSTEM_PROMPT,
         # 詰めた入力 (#1528) は候補を JSON の空白なし・chunk_uid だけで書き、候補の数を max_candidates にする。
         _build_crag_grade_prompt(
@@ -3408,7 +3411,9 @@ def build_query_expansion(
         # ルーティングが検索文を返さない、または全て不採用のときは、戦略ごとの拡張呼出で補う (#923)。
         prompt = _build_query_expansion_prompt(original_question, effective_strategy)
         try:
-            output = parse_text_response(
+            output = call_with_model_purpose(
+                "query.expand",
+                parse_text_response,
                 QUERY_EXPANSION_SYSTEM_PROMPT,
                 prompt,
                 settings_for_llm_purpose(settings, LLM_PURPOSE_STRATEGY),
@@ -5334,7 +5339,9 @@ def _route_query_strategy(
     strategy は schema の enum で戦略 ID に制約される (#919)。ID の正規化と routable 判定は、schema を
     強制しない差し替え実装やテストの出力に対する防御として残す。
     """
-    output = parse_text_response(
+    output = call_with_model_purpose(
+        "query.route",
+        parse_text_response,
         QUERY_ROUTING_SYSTEM_PROMPT,
         _build_query_routing_prompt(question),
         # 戦略の判定と検索文の生成は、根拠の評価と別の推論の量で呼ぶ (#1499。low では戦略の選択がぶれた)。

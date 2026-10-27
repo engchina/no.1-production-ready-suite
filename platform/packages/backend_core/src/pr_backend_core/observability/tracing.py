@@ -35,6 +35,7 @@ from pydantic import AwareDatetime, BaseModel, Field, field_validator
 
 from ..chat_progress import ChatProgressParamValue, ChatProgressStepDetails
 from ..config.tracing import TracingSettings
+from .model_purpose import model_purpose_attributes
 from .request_context import validated_traceparent
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ _SAFE_ATTRIBUTES = frozenset(
         # アプリが利用量を受け取れないモデルの呼び出しの出どころ（Select AI など。`model_usage`。
         # #3543）。
         "pr.gen_ai.unmeasured_source",
+        "pr.gen_ai.purpose",
         "mcp.method.name",
         # MCP の呼び出しで呼ぶツールの表示名（MCP の `title`。画面の行の名前。#3468）。
         "pr.tool.title",
@@ -532,7 +534,12 @@ def observed_span(
     span_kind = trace.SpanKind[kind.upper()]
     sdk_span = tracer.start_span(name, kind=span_kind, start_time=start, links=list(links))
     observed = ObservedSpan(sdk_span)
-    observed.set_attributes(attributes or {})
+    observed.set_attributes(
+        {
+            **(model_purpose_attributes() if name in {"gen_ai.chat", "oracle.select_ai"} else {}),
+            **(attributes or {}),
+        }
+    )
     if display is not None:
         observed.display = display
     parent = trace.get_current_span().get_span_context()

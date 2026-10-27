@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Final
 
+from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pr_system_settings.chat_attachments import (
     IMAGE_READING_PROMPT,
     ChatAttachmentService,
@@ -74,8 +75,12 @@ def _image_reader() -> Callable[[bytes, str], Awaitable[str]] | None:
     async def read(data: bytes, media_type: str) -> str:
         from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 
-        return await OciEnterpriseAiClient(get_settings()).generate_from_image(
-            data, IMAGE_READING_PROMPT, mime_type=media_type
+        return await async_call_with_model_purpose(
+            "document.read",
+            OciEnterpriseAiClient(get_settings()).generate_from_image,
+            data,
+            IMAGE_READING_PROMPT,
+            mime_type=media_type,
         )
 
     return read

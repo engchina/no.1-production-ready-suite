@@ -28,6 +28,7 @@ from time import monotonic
 from types import SimpleNamespace
 from typing import Any
 
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import alternation, arabic_numbers
 
@@ -5465,7 +5466,9 @@ def run_round(
 
     def plan_scope(evidence: Sequence[dict]) -> RequestScopePlan:
         """本文の生成と分けて、要求ごとに根拠の対象を照合する計画を立てる。"""
-        return parse_text(
+        return call_with_model_purpose(
+            "answer.scope",
+            parse_text,
             SCOPE_PLAN_SYSTEM_PROMPT,
             json.dumps(
                 {
@@ -5518,15 +5521,28 @@ def run_round(
     generation_system = GENERATE_SYSTEM_PROMPT + (ASSUMPTION_SYSTEM_PROMPT if assume_unconfirmed else "")
     if image_paths:
         try:
-            draft = parse_images(generation_system, prompt, list(image_paths), settings, GroundedDraft, provider_id=provider_id)
+            draft = call_with_model_purpose(
+                "answer.generate",
+                parse_images,
+                generation_system,
+                prompt,
+                list(image_paths),
+                settings,
+                GroundedDraft,
+                provider_id=provider_id,
+            )
         except Exception as exc:
             if invalid_output is None or not invalid_output(exc):
                 raise
             # 画像の説明の文字は根拠のレコードに残るので、文字の根拠の範囲で作り直す（#2772）。
             image_fallback = type(exc).__name__
-            draft = parse_text(generation_system, prompt, settings, GroundedDraft, provider_id=provider_id)
+            draft = call_with_model_purpose(
+                "answer.generate", parse_text, generation_system, prompt, settings, GroundedDraft, provider_id=provider_id
+            )
     else:
-        draft = parse_text(generation_system, prompt, settings, GroundedDraft, provider_id=provider_id)
+        draft = call_with_model_purpose(
+            "answer.generate", parse_text, generation_system, prompt, settings, GroundedDraft, provider_id=provider_id
+        )
     if scope_plan is not None:
         draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
     generation_calls = 1 + int(scope_plan is not None)
@@ -5563,9 +5579,20 @@ def run_round(
             )
         )
         if image_paths and not image_fallback:
-            draft = parse_images(generation_system, repair_prompt, list(image_paths), settings, GroundedDraft, provider_id=provider_id)
+            draft = call_with_model_purpose(
+                "answer.repair",
+                parse_images,
+                generation_system,
+                repair_prompt,
+                list(image_paths),
+                settings,
+                GroundedDraft,
+                provider_id=provider_id,
+            )
         else:
-            draft = parse_text(generation_system, repair_prompt, settings, GroundedDraft, provider_id=provider_id)
+            draft = call_with_model_purpose(
+                "answer.repair", parse_text, generation_system, repair_prompt, settings, GroundedDraft, provider_id=provider_id
+            )
         generation_calls += 1
         if scope_plan is not None:
             draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
@@ -5582,7 +5609,9 @@ def run_round(
         # 検討しなかった。
         review_started = monotonic()
         try:
-            reviews = parse_text(
+            reviews = call_with_model_purpose(
+                "evidence.grade",
+                parse_text,
                 CATALOG_REVIEW_SYSTEM_PROMPT,
                 catalog_review_input(question, draft, unreviewed),
                 settings,
@@ -5632,7 +5661,12 @@ def run_round(
         if ref:
             entry["evidence_ref"] = ref
     # 根拠の表の対応と取り違えた説明は、表の正しい値に直せれば直して残す（#3005。直せなければ外したまま）。
-    revise_table_conflicts(checked, lambda system, user, schema: parse_text(system, user, settings, schema, provider_id=provider_id))
+    revise_table_conflicts(
+        checked,
+        lambda system, user, schema: call_with_model_purpose(
+            "answer.resolve_conflicts", parse_text, system, user, settings, schema, provider_id=provider_id
+        ),
+    )
     # 引き継ぎは監査の前に行い、引き継いだ item も当該 round の根拠・指摘のもとで監査する (#1011)。監査の後に
     # 引き継ぐと、前の round で誤って支持された主張が監査に掛からないまま復活し、撤回できなかった。
     previous_in_scope = [entry for entry in previous if entry.span and not _outside_request_plan(entry.item, entry.span, draft, spans)]
@@ -6003,9 +6037,13 @@ def _parse_audit(
 ) -> GroundedAudit:
     """監査を 1 回呼ぶ。通常の回答（#2795）は事実の監査の schema で受け、判定しない項目を空にして写す。"""
     if detailed:
-        audit = parse_text(system, prompt, settings, GroundedAudit, provider_id=provider_id)
+        audit = call_with_model_purpose("answer.audit", parse_text, system, prompt, settings, GroundedAudit, provider_id=provider_id)
     else:
-        audit = GroundedAudit.model_validate(parse_text(system, prompt, settings, GroundedFactAudit, provider_id=provider_id).model_dump())
+        audit = GroundedAudit.model_validate(
+            call_with_model_purpose(
+                "answer.audit", parse_text, system, prompt, settings, GroundedFactAudit, provider_id=provider_id
+            ).model_dump()
+        )
     return applicability_policy(audit)
 
 
