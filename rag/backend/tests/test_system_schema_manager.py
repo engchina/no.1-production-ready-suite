@@ -656,7 +656,7 @@ def test_update_retires_graph_claims_community_tables_with_approval() -> None:
     assert result["status"] == "ready"
     assert _RETIRE_GRAPH_CLAIMS_MIGRATION in database.migrations
     assert not any((name, "TABLE") in database.objects for name in _RETIRED_GRAPH_TABLES)
-    # 関係情報グラフが読む表は残す。
+    # 文書構造グラフが読む表は残す。
     for name in ("RAG_GRAPH_ENTITIES", "RAG_GRAPH_RELATIONSHIPS", "RAG_GRAPH_ENTITY_CHUNKS"):
         assert (name, "TABLE") in database.objects
 

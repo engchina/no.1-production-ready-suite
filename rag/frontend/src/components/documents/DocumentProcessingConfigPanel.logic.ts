@@ -24,7 +24,7 @@ import { SETTINGS_ANCHORS } from "@/lib/settings-anchors";
  * - CHUNK: 文書分割 → 文脈ヘッダ（`_chunks_with_context_headers` は分割の直後に chunk metadata へ付ける）
  *   → 「Chunk 後に Embedding / 索引へ進む」のゲート（CHUNKED で止まり、
  *   `rag_auto_index_after_chunk_enabled` なら INDEX の job を積む）
- * - INDEX: embedding と索引の保存の後に名称・別名の索引（`_save_entity_index_if_enabled`。#1362）と
+ * - INDEX: embedding と索引の保存の後に実体・別名索引（`_save_entity_index_if_enabled`。#1362）と
  *   関係情報（`_save_index` / `_save_embeddings_for_chunk_set` の `graph_indexing`）を作る
  */
 
@@ -170,8 +170,8 @@ export const RECIPE_CONFIG_ITEMS = [
     phase: "CHUNK",
     globalSettings: { route: APP_ROUTES.settingsPipeline, anchor: SETTINGS_ANCHORS.autoIndexGate },
   },
-  // 名称・別名の索引（#1362 / #1388）。索引の保存の後に作る。検索・回答プロファイルの「実体でつながる
-  // 根拠を 1 段広げる」が使う。名前・属性の列は、この項目が有効なときに下の行で選ぶ。
+  // 実体・別名索引（#1362 / #1388）。索引の保存の後に作る。検索方法の全体設定の「実体・別名による検索拡張」が使う。
+  // 名前・属性の列は、この項目が有効なときに下の行で選ぶ。
   {
     field: "entity_index_enabled",
     kind: "boolean",

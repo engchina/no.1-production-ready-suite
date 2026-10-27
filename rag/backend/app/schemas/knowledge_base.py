@@ -179,7 +179,7 @@ def _unique_clean_ids(values: list[str]) -> list[str]:
 
 
 class KnowledgeBaseGraphNode(BaseModel):
-    """関係情報グラフのノード(KG entity)。"""
+    """文書構造グラフのノード(KG entity)。"""
 
     id: str
     name: str
@@ -188,7 +188,7 @@ class KnowledgeBaseGraphNode(BaseModel):
 
 
 class KnowledgeBaseGraphEdge(BaseModel):
-    """関係情報グラフのエッジ(KG relationship)。"""
+    """文書構造グラフのエッジ(KG relationship)。"""
 
     id: str
     source: str
@@ -198,7 +198,7 @@ class KnowledgeBaseGraphEdge(BaseModel):
 
 
 class KnowledgeBaseGraphData(BaseModel):
-    """KB の関係情報(GraphRAG)可視化用 subgraph。"""
+    """KB の文書構造グラフ可視化用 subgraph。"""
 
     status: Literal["ok", "empty"] = "empty"
     nodes: list[KnowledgeBaseGraphNode] = Field(default_factory=list)

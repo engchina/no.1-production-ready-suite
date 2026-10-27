@@ -16,7 +16,7 @@
    `--keep-superseded-active` を渡すと登録せず、旧版も今有効な文書のまま検索させる
    （旧版の紛らわしさの測定）。
 5. `file:` の参照を文書 ID に置き換え、`knowledge_base_ids` を入れた評価セットを `--output` に書く。
-6. 名称・別名の索引は文書レシピの ``entity_index_enabled`` で選ぶ（全体の既定は OFF）。
+6. 実体・別名索引は文書レシピの ``entity_index_enabled`` で選ぶ（全体の既定は OFF）。
    `--entity-index` は索引の構築を明示し、比較用の評価セットの `rag_overrides` に
    `entity_expansion_enabled: true` を入れる（既存の明示値は変えない）。
    `--no-entity-index` は構築を無効にし、未指定は全体の既定に従う。
@@ -444,9 +444,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
-            "すべての文書のレシピで実体の抽出（実体の層。#1362）を明示して取り込み、評価セットと"
+            "すべての文書のレシピで実体・別名索引の構築を明示して取り込み、評価セットと"
             "作る検索・回答プロファイルで実体の 1 段の拡張を選ぶ（#1388）。--no-entity-index は"
-            "実体の抽出を無効にする（無しの比較）。省略時はレシピは全体の既定（ON）に従う"
+            "実体・別名索引の構築を無効にする。省略時は全体の既定（OFF）に従う"
         ),
     )
     parser.add_argument(

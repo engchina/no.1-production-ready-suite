@@ -513,8 +513,8 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
   });
 });
 
-// #1388: 名称・別名の索引（文書レシピ。全体の既定は有効）と、その列を画面で選んで保存する。
-test("名称・別名の索引は全体が有効なら継承し、列の上書きと無効化を保存できる", async ({ page }) => {
+// #1388: 実体・別名索引（文書レシピ。全体の既定は有効）と、その列を画面で選んで保存する。
+test("実体・別名索引は全体が有効なら継承し、列の上書きと無効化を保存できる", async ({ page }) => {
   const state = await mockWorkspace(page);
   await page.goto("/documents/doc-1");
   const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
@@ -561,7 +561,7 @@ test("名称・別名の索引は全体が有効なら継承し、列の上書�
     entity_attribute_columns: ["担当部署", "重要度"],
   });
 
-  // 列を継承に戻し、名称・別名の索引を無効にして保存する。
+  // 列を継承に戻し、実体・別名索引を無効にして保存する。
   await columns.getByText("グローバルを継承", { exact: true }).click();
   await entityRow.getByText("無効", { exact: true }).click();
   await panel.getByRole("button", { name: "構築設定を保存" }).click();
@@ -590,9 +590,9 @@ const PROCESSING_ORDER = [
   "entity_index_enabled",
   "graph_profile",
 ];
-// 名称・別名の索引も専用画面への導線を持つ。
+// 実体・別名索引も専用画面への導線を持つ。
 const GLOBAL_LINK_COUNT = PROCESSING_ORDER.length;
-// 上書きの一覧は、名称・別名の索引が有効（全体の既定）のとき、その右に「名称・別名の索引の列」の行を出す。
+// 上書きの一覧は、実体・別名索引が有効（全体の既定）のとき、その右に「実体・別名索引の列」の行を出す。
 const EDITOR_ORDER = PROCESSING_ORDER.flatMap((field) =>
   field === "entity_index_enabled" ? [field, "entity_columns"] : [field]
 );
@@ -683,7 +683,7 @@ test("グローバル設定に従う行に、全体の既定を変える画面�
     editor.getByRole("link", { name: "図・画像を AI で読み取る のグローバル設定を開く" })
   ).toHaveAttribute("href", "/settings/parser-adapters#post-parse-vision");
   await expect(
-    editor.getByRole("link", { name: "関係情報の構築 のグローバル設定を開く" })
+    editor.getByRole("link", { name: "文書構造索引の構築 のグローバル設定を開く" })
   ).toHaveAttribute("href", "/settings/graph");
   const visionRow = editor.locator('[data-config-field="vision_enabled"]');
   await expect(visionRow).toContainText("グローバル設定に従う: 無効");
@@ -928,7 +928,7 @@ test("派生レイヤー状態チップ・項目の定義が 0 件の警告・�
               layer_id: "gl-1",
               requested: true,
               status: "planned_only",
-              reason: "関係情報は構築計画に含まれていますが、まだ実体化していません。",
+              reason: "文書構造索引は構築計画に含まれていますが、まだ実体化していません。",
             },
             navigation: {
               layer_id: "nv-1",

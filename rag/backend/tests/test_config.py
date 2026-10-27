@@ -149,7 +149,7 @@ def test_unknown_evaluation_suite_is_rejected() -> None:
 
 
 def test_graph_profile_defaults_to_off() -> None:
-    """関係情報の構築の既定は off(構築しない)。"""
+    """文書構造索引の構築の既定は off(構築しない)。"""
     assert Settings().rag_graph_profile == "off"
 
 

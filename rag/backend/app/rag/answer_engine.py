@@ -1835,8 +1835,7 @@ class AnswerEngine:
         schema など)は足さずに回答を続ける。LLM は呼ばない。
         """
         if not self._settings.rag_entity_expansion_enabled:
-            # 既定は on(#1402)。検索・回答プロファイル(と評価の rag_overrides)で off にできる
-            # (#1388)。
+            # 検索方法の全体設定で選ぶ(既定 OFF)。評価では rag_overrides で比較できる。
             return []
         scope = _expansion_scope(request.filters)
         seeds = list(anchors[:ENTITY_SEED_ANCHORS])
@@ -1891,7 +1890,7 @@ class AnswerEngine:
     ) -> list[RetrievedChunk]:
         """関係情報(#2055)で、上位の候補の章節・表と質問の見出しの語から chunk を足す。
 
-        関係情報は文書レシピで「関係情報の構築」を「構築する」にした文書にだけあり、無ければ何も
+        関係情報は文書レシピで「文書構造索引の構築」を「構築する」にした文書にだけあり、無ければ何も
         足さない。足す chunk は主の検索と同じ範囲(利用者が指定した条件と権限。
         ``_expansion_scope``)の中だけで、合計 ``rag_graph_expansion_max_chunks`` 件まで。読めない
         ときは足さずに回答を続ける。LLM は呼ばない。

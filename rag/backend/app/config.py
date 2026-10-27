@@ -309,12 +309,12 @@ EvaluationSuite = Literal[
     "standard",
     "strict",
 ]
-# 関係情報の構築(#621)。off = 構築しない、entities = 文書と章・節の見出しのつながりを構築する。
+# 文書構造索引の構築(#621)。off = 構築しない、entities = 文書と章・節の見出しのつながりを構築する。
 GraphProfile = Literal[
     "off",
     "entities",
 ]
-# #621 で削除した関係情報の構築の値。backend/.env に残っていると起動を止めて書き換えを促す。
+# #621 で削除した文書構造索引の構築の値。backend/.env に残っていると起動を止めて書き換えを促す。
 REMOVED_GRAPH_PROFILES = frozenset({"full"})
 EnterpriseAiVlmInputMode = Literal["files_api", "inline_image"]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -1060,7 +1060,7 @@ class Settings(
             "取込の索引の保存の後に、chunk から実体（表の行の名前・属性の値、本文の定義の形・"
             "言及）と「実体と chunk の関連」を決定的に抜き出し、Oracle の rag_entities / "
             "rag_entity_aliases / rag_entity_chunks に保存する。既定 OFF。全体の設定と文書"
-            "レシピの「名称・別名の索引」で構築を選ぶ。LLM は使わない。回答の検索は、"
+            "レシピの「実体・別名索引」で構築を選ぶ。LLM は使わない。回答の検索は、"
             "この表との SQL の join で関連する chunk を 1 段だけ足す（検索方法の全体設定の"
             " entity_expansion_enabled。#1388）。"
         ),
@@ -1085,7 +1085,7 @@ class Settings(
         description=(
             "回答の検索で、質問と上位の候補の chunk の実体から、実体の表との SQL の join で"
             "関連する chunk を 1 段だけ足す（#1362）。検索方法の全体設定で選ぶ（既定 OFF）。"
-            "実体は文書レシピで実体の抽出"
+            "実体は文書レシピで実体・別名索引の構築"
             "（rag_entity_index_enabled）を選んだ文書にだけある。LLM の呼び出しは増えない。"
         ),
     )
@@ -1101,11 +1101,11 @@ class Settings(
     rag_graph_expansion_enabled: bool = Field(
         default=False,
         description=(
-            "回答の検索で、関係情報の構築（rag_graph_profile=entities）で作った章節・表 / 図の"
+            "回答の検索で、文書構造索引の構築（rag_graph_profile=entities）で作った章節・表 / 図の"
             "見出しの entity と chunk の対応から候補を足す（#2055。既定 OFF。LLM の呼び出しは"
             "増えない）。検索の上位の chunk と同じ狭い章節・表の chunk と、質問に見出しの語が"
             "含まれる章節の chunk を足す。検索方法の画面で選ぶ（全体設定だけで決め、"
-            "検索・回答プロファイルでは上書きしない）。関係情報の無い文書では何もしない。"
+            "検索・回答プロファイルでは上書きしない）。文書構造索引の無い文書では何もしない。"
         ),
     )
     rag_graph_expansion_max_chunks: int = Field(
@@ -1113,8 +1113,8 @@ class Settings(
         ge=1,
         le=20,
         description=(
-            "関係情報で 1 回の検索に足す chunk 数の上限（#2055）。全体設定だけで決め、"
-            "検索・回答プロファイルでは上書きしない。"
+            "文書構造による検索拡張で 1 回の検索に足す chunk 数の上限（#2055）。"
+            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_section_expansion_enabled: bool = Field(
@@ -2180,8 +2180,8 @@ class Settings(
     rag_graph_profile: GraphProfile = Field(
         default="off",
         description=(
-            "関係情報の構築。off(既定)は構築しない、entities は文書と章・節の見出しのつながりを"
-            "構築する(LLM は使わない)。ナレッジベースの関係情報グラフで見られ、"
+            "文書構造索引の構築。off(既定)は構築しない、entities は文書と章・節の見出しのつながりを"
+            "構築する(LLM は使わない)。ナレッジベースの文書構造グラフで見られ、"
             "rag_graph_expansion_enabled を ON にすると回答の検索の候補を広げるのにも使う(#2055)。"
         ),
     )

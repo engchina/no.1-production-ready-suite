@@ -3768,8 +3768,8 @@ class IngestionPipeline:
                 extra={"document_id": document_id, "error_type": type(exc).__name__},
             )
             raise IngestionUserError(
-                "関係情報の構築に失敗しました。別経路には切り替えずに取込を停止しました。"
-                "関係情報の構築の設定、抽出結果、データベース保存先を確認してから再実行してください。"
+                "文書構造索引の構築に失敗しました。別経路には切り替えずに取込を停止しました。"
+                "文書構造索引の構築の設定、抽出結果、データベース保存先を確認してから再実行してください。"
             ) from exc
 
     async def _save_embeddings_for_chunk_set(
@@ -3818,8 +3818,8 @@ class IngestionPipeline:
                 extra={"document_id": document_id, "error_type": type(exc).__name__},
             )
             raise IngestionUserError(
-                "関係情報の構築に失敗しました。別経路には切り替えずに取込を停止しました。"
-                "関係情報の構築の設定、抽出結果、データベース保存先を確認してから再実行してください。"
+                "文書構造索引の構築に失敗しました。別経路には切り替えずに取込を停止しました。"
+                "文書構造索引の構築の設定、抽出結果、データベース保存先を確認してから再実行してください。"
             ) from exc
 
     async def _save_entity_index_if_enabled(
@@ -3831,7 +3831,7 @@ class IngestionPipeline:
         *,
         chunk_set_id: str | None,
     ) -> None:
-        """実体の抽出が有効なとき(既定。#1388)、実体と「実体と chunk の関連」を保存する(#1362)。
+        """実体・別名索引の構築が有効なとき、実体と chunk の関連を保存する。
 
         文書レシピで無効にした文書は何もしない(SQL も実行しない)。実体は chunk_set ごとに
         置き換える。
@@ -3853,7 +3853,7 @@ class IngestionPipeline:
                 extra={"document_id": document_id, "error_type": type(exc).__name__},
             )
             raise IngestionUserError(
-                "実体の抽出の保存に失敗しました。別経路には切り替えずに取込を停止しました。"
+                "実体・別名索引の保存に失敗しました。別経路には切り替えずに取込を停止しました。"
                 "システムテーブル(実体の層の表)が作成済みか、データベース保存先を確認してから"
                 "再実行してください。"
             ) from exc
@@ -4999,7 +4999,7 @@ def _entity_index_result_attributes(index: EntityIndex) -> Mapping[str, object]:
 
 
 def _graph_index_result_attributes(graph_index: GraphIndex) -> Mapping[str, object]:
-    """関係情報の構築結果から件数だけを trace attribute にする。"""
+    """文書構造索引の構築結果から件数だけを trace attribute にする。"""
     return {
         "graph_entity_count": len(graph_index.entities),
         "graph_relationship_count": len(graph_index.relationships),
