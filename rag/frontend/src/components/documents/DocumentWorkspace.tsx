@@ -2750,20 +2750,6 @@ function ChunkPreviewControls({
             });
           }}
         />
-        {/* 隣の選択欄（md）と同じ高さの最小（#613）。 */}
-        <div className="flex min-h-[var(--control-height-md)] items-center justify-between gap-3 rounded-md border border-border bg-surface-sunken px-3 py-2">
-          <span className="text-sm font-medium text-fg">
-            {t("flow.chunkPreview.contextHeader")}
-          </span>
-          <Switch
-            checked={form.chunk_context_header_enabled}
-            disabled={pending}
-            aria-label={t("flow.chunkPreview.contextHeader")}
-            onCheckedChange={(checked) =>
-              onChange({ chunk_context_header_enabled: checked })
-            }
-          />
-        </div>
         {fixedDelimiter ? (
           <TextField
             id="chunk-preview-delimiter"

@@ -258,7 +258,6 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
         "chunk_size",
         "chunk_overlap",
         "chunk_min_chars",
-        "chunk_context_header_enabled",
         "chunk_delimiter",
         *SMALL_TO_BIG_PROCESSING_CONFIG_FIELDS,
     ),
@@ -2550,10 +2549,6 @@ def _merge_document_processing_config(
     base = global_settings or get_settings()
     adapter = KnowledgeBaseAdapterConfig(ingestion=config)
     effective_settings = resolve_effective_settings(base, adapter, scope="ingestion")
-    if config.chunk_context_header_enabled is not None:
-        effective_settings = effective_settings.model_copy(
-            update={"rag_chunk_context_header_enabled": config.chunk_context_header_enabled}
-        )
     # 外部 parser 選択時に自動注入される feature flag も含め、実際の Settings を
     # スナップショットへ投影する。これにより runtime と drift 判定が同じ値を見る。
     effective = resolve_effective_adapter_config(
@@ -2562,7 +2557,6 @@ def _merge_document_processing_config(
     return effective_settings, DocumentProcessingConfig.model_validate(
         {
             **effective.model_dump(),
-            "chunk_context_header_enabled": (effective_settings.rag_chunk_context_header_enabled),
             # 章節の抽出規則の方式は Settings ではなく全体の既定のファイルが持つ(#715)。
             "section_rules_mode": config.section_rules_mode or load_section_rules().mode,
         }

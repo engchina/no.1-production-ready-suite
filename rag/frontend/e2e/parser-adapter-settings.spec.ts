@@ -324,6 +324,7 @@ for (const scheme of ["light", "dark"] as const) {
       "3. メタデータ/項目抽出",
       "4. 章節の抽出規則",
       "5. 章節の要約",
+    "6. RAPTOR の階層の要約",
     ]);
     await expect(card).toContainText("Docling の解析結果のうち、PDF のしおりの階層を使えず");
     await expect(card).toContainText("番号から階層を決められない見出しの割合と見出し数が設定の条件を満たす文書が対象です。");
@@ -369,6 +370,7 @@ for (const scheme of ["light", "dark"] as const) {
         heading_level_inference_enabled: false,
         field_extraction_enabled: true,
         navigation_summary_enabled: false,
+        raptor_enabled: false,
         vision_concurrency: 4,
       },
     ]);
@@ -410,6 +412,7 @@ test("図・表の説明を同時に呼ぶ数を検証して保存する（#2002
       heading_level_inference_enabled: false,
       field_extraction_enabled: false,
       navigation_summary_enabled: false,
+      raptor_enabled: false,
       vision_concurrency: 6,
     },
   ]);
@@ -622,6 +625,7 @@ test("章節の抽出規則を独自の規則にして保存できる", { tag: "
     "3. メタデータ/項目抽出",
     "4. 章節の抽出規則",
     "5. 章節の要約",
+    "6. RAPTOR の階層の要約",
   ]);
   const editor = page.getByTestId("section-rules-editor");
   await expect(editor).toContainText("保存済みの解析結果にある見出しと階層を使います");
@@ -1613,10 +1617,11 @@ test("文書解析の各プロンプトは機能の位置で共通の編集操�
     ["heading_levels", "見出しの階層の推定プロンプト"],
     ["field_extraction", "メタデータ/項目抽出プロンプト"],
     ["navigation_summary", "章節の要約プロンプト"],
+    ["raptor_summary_system", "RAPTOR の階層の要約のシステムプロンプト"],
   ]) {
     await verifyFeaturePrompt(page, key, title);
   }
-  expect(requests.map((item) => item.method)).toEqual(["PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE"]);
+  expect(requests.map((item) => item.method)).toEqual(["PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE"]);
   await page.getByRole("region", { name: "通知", exact: true }).getByRole("button", { name: "閉じる", exact: true }).evaluateAll((buttons) => buttons.forEach((button) => (button as HTMLButtonElement).click()));
   await page.screenshot({ path: test.info().outputPath("feature-prompts.png"), fullPage: true });
 });
@@ -1657,3 +1662,25 @@ test("章節の要約は実効の対象数上限を示し不要な比較文を�
   await expect(page.getByText(/モデルの呼び出し回数の上限ではありません/)).toBeVisible();
   await expect(page.getByText("RAPTOR は使いません。", {exact: false})).toHaveCount(0);
 });
+
+ test("RAPTOR は文書解析の第6項で既定 OFF、保存と破棄を共通操作で扱う", {tag: "@responsive"}, async ({page}) => {
+  const state = await mockParserAdaptersWithPostParse(page, {vision_enabled:false, field_extraction_enabled:false, navigation_summary_enabled:false});
+  await mockExtractionFields(page);
+  await mockFeaturePrompts(page);
+  await page.goto("/settings/parser-adapters");
+  const panel = page.locator("#post-parse-raptor-summary");
+  await expect(panel.getByRole("heading", {name: "6. RAPTOR の階層の要約", exact:true})).toBeVisible();
+  const toggle = panel.getByRole("switch", {name: "RAPTOR の階層の要約", exact:true});
+  await expect(toggle).not.toBeChecked();
+  await toggle.click();
+  const container = panel.locator("xpath=ancestor::*[.//ol][1]");
+  await container.getByRole("button", {name: "変更を破棄", exact:true}).click();
+  await expect(toggle).not.toBeChecked();
+  await toggle.click();
+  await container.getByRole("button", {name: "解析後の処理を保存", exact:true}).click();
+  await expect.poll(() => state.length).toBe(1);
+  expect(state[0]).toMatchObject({raptor_enabled:true});
+  await expect(page.locator("summary").filter({hasText: "RAPTOR の階層の要約プロンプト"})).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await panel.screenshot({path: test.info().outputPath("raptor-setting.png")});
+ });

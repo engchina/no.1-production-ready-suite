@@ -756,13 +756,13 @@ def test_update_chunking_settings_persists_env_and_mutates_runtime(
     assert settings.rag_chunk_size == 1000
     assert settings.rag_chunk_min_chars == 40
     assert settings.rag_chunk_delimiter == "---"
-    assert settings.rag_chunk_context_header_enabled is False
+    assert settings.rag_chunk_context_header_enabled is True
     persisted = env_file.read_text(encoding="utf-8")
     assert "RAG_CHUNKING_STRATEGY=recursive_character" in persisted
     assert "RAG_CHUNK_SIZE=1000" in persisted
     assert "RAG_CHUNK_MIN_CHARS=40" in persisted
     assert "RAG_CHUNK_DELIMITER=---" in persisted
-    assert "RAG_CHUNK_CONTEXT_HEADER_ENABLED=false" in persisted
+    assert "RAG_CHUNK_CONTEXT_HEADER_ENABLED" not in persisted
 
 
 def test_update_chunking_settings_saves_small_to_big_params(

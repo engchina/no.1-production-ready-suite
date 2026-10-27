@@ -599,3 +599,11 @@ for (const width of [1280, 375]) {
     await expectNoPageOverflow(page);
   });
 }
+
+ test("根拠の前後から加える数に不要なゼロの説明を表示しない", {tag: "@responsive"}, async ({page}) => {
+  await mockLocalAuth(page);
+  await mockRetrievalCards(page);
+  await page.goto("/settings/retrieval");
+  await expect(page.getByText("根拠のチャンクの前後から文脈に加えるチャンクの数です。", {exact:true})).toBeVisible();
+  await expect(page.getByText("0 は加えません。", {exact:false})).toHaveCount(0);
+ });

@@ -2,7 +2,6 @@
 
 import {
   PageBody,
-  Section,
   Card,
   CardContent,
   CardDescription,
@@ -12,7 +11,6 @@ import {
   FormActionBar,
   FormGrid,
   FormStatus,
-  Switch,
   TextField,
   TimedLoadingState,
   FormSkeleton,
@@ -26,7 +24,6 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 
-import { FeaturePromptDisclosure } from "./AnswerPromptEditor";
 
 import { ApiErrorState } from "@/components/StateViews";
 import {
@@ -216,10 +213,6 @@ export function ChunkingSettingsClient() {
         errors={fieldErrors}
         onChange={updateForm}
       />
-      <Section title={t("settings.answerPrompts.stage.raptor_summary")} description={t("settings.raptor.description")}>
-        <FeaturePromptDisclosure promptKey="raptor_summary_system" />
-        <FeaturePromptDisclosure promptKey="raptor_summary" />
-      </Section>
     </PageBody>
   );
 }
@@ -438,22 +431,6 @@ function ParamsCard({
       </CardHeader>
       <CardContent>
         <FormGrid>
-          <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-surface p-3 col-span-full">
-            <div className="min-w-0">
-              <div className="text-sm font-medium text-fg">
-                {t("settings.chunking.params.contextHeader")}
-              </div>
-              <p className="mt-1 text-xs leading-relaxed text-fg-muted">
-                {t("settings.chunking.params.contextHeaderHint")}
-              </p>
-            </div>
-            <Switch
-              checked={form.context_header_enabled}
-              disabled={saving}
-              aria-label={t("settings.chunking.params.contextHeader")}
-              onCheckedChange={(checked) => onChange({ context_header_enabled: checked })}
-            />
-          </div>
           {smallToBig
             ? SMALL_TO_BIG_PARAMS.map((spec) => (
                 <NumberField
@@ -857,7 +834,6 @@ function formFromSettings(settings: ChunkingSettingsData): ChunkingForm {
     overlap: settings.overlap,
     min_chars: settings.min_chars,
     delimiter: settings.delimiter || JSONL_RECORD_BOUNDARY,
-    context_header_enabled: settings.context_header_enabled,
     chunk_child_target_chars: settings.chunk_child_target_chars,
     chunk_table_child_target_chars: settings.chunk_table_child_target_chars,
     chunk_parent_target_chars: settings.chunk_parent_target_chars,
@@ -873,7 +849,6 @@ function serializeForm(form: ChunkingForm) {
     overlap: form.overlap,
     min_chars: form.min_chars,
     delimiter: form.delimiter,
-    context_header_enabled: form.context_header_enabled,
     chunk_child_target_chars: form.chunk_child_target_chars,
     chunk_table_child_target_chars: form.chunk_table_child_target_chars,
     chunk_parent_target_chars: form.chunk_parent_target_chars,

@@ -573,7 +573,6 @@ class DocumentChunkPreviewRequest(BaseModel):
     chunk_parent_max_children: int | None = Field(
         default=None, ge=CHUNK_PARENT_MAX_CHILDREN_MIN, le=CHUNK_PARENT_MAX_CHILDREN_MAX
     )
-    chunk_context_header_enabled: bool | None = None
 
     _FIELD_TO_SETTING = {
         "chunking_strategy": "rag_chunking_strategy",
@@ -586,7 +585,6 @@ class DocumentChunkPreviewRequest(BaseModel):
         "chunk_parent_target_chars": "rag_chunk_parent_target_chars",
         "chunk_parent_max_pages": "rag_chunk_parent_max_pages",
         "chunk_parent_max_children": "rag_chunk_parent_max_children",
-        "chunk_context_header_enabled": "rag_chunk_context_header_enabled",
     }
 
     def settings_overrides(self) -> dict[str, object]:
@@ -624,7 +622,16 @@ class DocumentProcessingConfig(KnowledgeBaseIngestionConfig):
     """文書単位の処理レシピ上書き。None は global 既定を継承する。"""
 
     model_config = ConfigDict(extra="forbid")
-    chunk_context_header_enabled: bool | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def discard_global_only_settings(cls, value: object) -> object:
+        if isinstance(value, dict):
+            return {
+                key: item for key, item in value.items() if key != "chunk_context_header_enabled"
+            }
+        return value
+
     # 章節の抽出規則の方式。章節の表示と、取込時に要約する章節に適用する。
     section_rules_mode: SectionRulesMode | None = None
 

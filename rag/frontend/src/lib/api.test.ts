@@ -507,7 +507,6 @@ describe("api.request envelope", () => {
     await api.previewDocumentRecipeChunks("doc-1", "recipe-1", {
       chunking_strategy: "recursive_character",
       chunk_size: 640,
-      chunk_context_header_enabled: true,
     });
 
     expect(fetchMock.mock.calls[0][0]).toBe(
@@ -517,7 +516,6 @@ describe("api.request envelope", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       chunking_strategy: "recursive_character",
       chunk_size: 640,
-      chunk_context_header_enabled: true,
     });
   });
 

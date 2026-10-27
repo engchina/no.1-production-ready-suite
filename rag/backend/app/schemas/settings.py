@@ -431,6 +431,7 @@ class ParserAdapterSettingsData(BaseModel):
     heading_level_inference_enabled: bool = False
     field_extraction_enabled: bool = False
     navigation_summary_enabled: bool = False
+    raptor_enabled: bool = False
     navigation_summary_max_nodes: int
     # 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。#2002）。
     vision_concurrency: int = 4
@@ -446,6 +447,7 @@ POST_PARSE_SETTING_FIELDS = (
     "heading_level_inference_enabled",
     "field_extraction_enabled",
     "navigation_summary_enabled",
+    "raptor_enabled",
     "vision_concurrency",
 )
 
@@ -473,6 +475,7 @@ class ParserAdapterSettingsUpdate(BaseModel):
     heading_level_inference_enabled: bool | None = None
     field_extraction_enabled: bool | None = None
     navigation_summary_enabled: bool | None = None
+    raptor_enabled: bool | None = None
     vision_concurrency: int | None = Field(default=None, ge=1, le=16)
 
     @field_validator("adapter_backend", mode="before")
@@ -643,7 +646,6 @@ class ChunkingSettingsUpdate(BaseModel):
     overlap: int = Field(default=120, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     min_chars: int = Field(default=120, ge=0, le=2000)
     delimiter: str = Field(default=JSONL_RECORD_BOUNDARY, min_length=1, max_length=256)
-    context_header_enabled: bool = False
     chunk_child_target_chars: int = Field(
         default=CHUNK_CHILD_TARGET_CHARS_DEFAULT,
         ge=CHUNK_CHILD_TARGET_CHARS_MIN,
@@ -729,7 +731,6 @@ class AnswerPromptView(BaseModel):
         "field_extraction",
         "navigation_summary",
         "raptor_summary_system",
-        "raptor_summary",
     ]
     content: str
     default_content: str

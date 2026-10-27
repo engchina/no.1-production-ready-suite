@@ -28,7 +28,6 @@ INGESTION_PROMPT_REFS = {
     "field_extraction": "app.rag.ingestion_prompts:FIELD_EXTRACTION_PROMPT",
     "navigation_summary": "app.rag.ingestion_prompts:NAVIGATION_SUMMARY_PROMPT",
     "raptor_summary_system": "app.rag.ingestion_prompts:RAPTOR_SUMMARY_SYSTEM_PROMPT",
-    "raptor_summary": "app.rag.ingestion_prompts:RAPTOR_SUMMARY_PROMPT",
 }
 EDITABLE_PROMPT_KEYS = (VLM_ANSWER_PROMPT_KEY, IMAGE_RETRIEVAL_PROMPT_KEY, *INGESTION_PROMPT_REFS)
 ANSWER_PROMPT_MAX_CHARS = 50_000
@@ -121,10 +120,7 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
     PromptStage(
         "raptor_summary",
         "indexing",
-        (
-            ("system", "app.rag.ingestion_prompts:RAPTOR_SUMMARY_SYSTEM_PROMPT"),
-            ("instruction", "app.rag.ingestion_prompts:RAPTOR_SUMMARY_PROMPT"),
-        ),
+        (("system", "app.rag.ingestion_prompts:RAPTOR_SUMMARY_SYSTEM_PROMPT"),),
     ),
     # 回答の過程の表から業務ガイドの下書きを作る(#2397。検索・回答プロファイルの知識の作成)。
     PromptStage(

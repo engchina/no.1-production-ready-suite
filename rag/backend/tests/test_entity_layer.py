@@ -477,7 +477,7 @@ def test_settings_default_off_for_recipe_and_expansion(monkeypatch: pytest.Monke
     settings = Settings(_env_file=None)
     # 索引の構築は既定 OFF。検索時の拡張とは別に設定する。
     assert settings.rag_entity_index_enabled is False
-    assert settings.rag_chunk_context_header_enabled is False
+    assert settings.rag_chunk_context_header_enabled is True
     assert settings.rag_entity_name_columns == []
     assert settings.rag_entity_attribute_columns == []
     # 任意の検索拡張は明示的に有効化した場合だけ使う。
