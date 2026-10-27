@@ -1313,3 +1313,23 @@ test("本文・構造化要素・Chunk はプレビューの現在ページだ�
   await expectNoHorizontalOverflow(page);
   await inspector.screenshot({path: test.info().outputPath("inspector-current-page.png")});
 });
+
+
+test("構造化要素は共通の最大高さで内部スクロールする", { tag: "@responsive" }, async ({ page }) => {
+  const elements = Array.from({ length: 40 }, (_, i) => ({element_id: `long-${i}`, kind: "text", text: `合成要素 ${i + 1}`, order: i, page_number: 1}));
+  await mockDocumentDetail(page, { extraction: { raw_text: "合成の本文", elements, pages: [], tables: [], fields: [], assets: []} });
+  await page.goto("/documents/doc-1");
+  await page.getByRole("tab", { name: "構造化要素", exact: true }).click();
+  const list = page.getByTestId("structured-elements-scroll");
+  await expect(list).toBeVisible();
+  const dimensions = await list.evaluate(node => ({height: node.clientHeight, content: node.scrollHeight,
+    expected: parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(min-width: 48rem)").matches ? 28 : 17.5)}));
+  expect(Math.abs(dimensions.height - dimensions.expected)).toBeLessThanOrEqual(1);
+  expect(dimensions.content).toBeGreaterThan(dimensions.height);
+  await list.focus(); await list.press("End");
+  await expect.poll(() => list.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  await list.getByText("合成要素 40", {exact: true}).scrollIntoViewIfNeeded();
+  await expect(list.getByText("合成要素 40", {exact: true})).toBeInViewport();
+  await list.screenshot({path: test.info().outputPath("structured-elements-scroll.png")});
+  await expectNoPageOverflow(page);
+});

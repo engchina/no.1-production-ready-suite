@@ -382,3 +382,31 @@ test("集合一覧は標準のページングと内部スクロールを持ち�
   await expectNoPageOverflow(page);
   await table.screenshot({ path: testInfo.outputPath("label-sets-paging.png") });
 });
+
+
+test("合成の対照は共通の最大表示行数を超えると表内スクロールし、除外を保持する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  await mockEvaluationBasics(page);
+  await mockJudgeCalibration(page, {withSet: true, syntheticCount: 40});
+  await page.goto("/evaluation?tab=calibration");
+  await page.getByTestId("calibration-label-sets").getByRole("button", {name: "校正の集合 A", exact:true}).click();
+  const detail = page.getByTestId("calibration-detail");
+  await detail.getByRole("tab", {name: "2. 一致と裁定"}).click();
+  const table = page.getByTestId("calibration-synthetic-table");
+  const scroll = page.getByTestId("calibration-synthetic-scroll");
+  await scroll.scrollIntoViewIfNeeded();
+  await expect(table.getByRole("row")).toHaveCount(41);
+  await expect.poll(() => scroll.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+  const header = table.getByRole("columnheader").first();
+  const firstTop = (await header.boundingBox())!.y;
+  await scroll.evaluate(node => {node.scrollTop = node.scrollHeight;});
+  await expect.poll(() => scroll.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  await expect.poll(async () => Math.abs((await header.boundingBox())!.y-firstTop)).toBeLessThanOrEqual(1);
+  const toggle = table.getByRole("switch").last();
+  await toggle.click();
+  await expect(toggle).toBeChecked();
+  await page.reload();
+  await detail.getByRole("tab", {name: "2. 一致と裁定"}).click();
+  await expect(table.getByRole("switch").last()).toBeChecked();
+  await expectNoPageOverflow(page);
+  await page.getByTestId("calibration-synthetic").screenshot({path:testInfo.outputPath("synthetic-scroll.png")});
+});

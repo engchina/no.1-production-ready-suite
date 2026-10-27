@@ -258,7 +258,7 @@ function finalLabel(state: JudgeCalibrationMock, k: string): StoredLabel | undef
 /** 判定の校正の API を mock する（`withSet` なら合成の集合が 1 つある状態から始める）。 */
 export async function mockJudgeCalibration(
   page: Page,
-  options: { setCount?: number; withSet?: boolean; calibrated?: boolean; canManage?: boolean; evidence?: MockItem["evidence"] } = {}
+  options: { syntheticCount?: number; setCount?: number; withSet?: boolean; calibrated?: boolean; canManage?: boolean; evidence?: MockItem["evidence"] } = {}
 ): Promise<JudgeCalibrationMock> {
   const source = items();
   const evidence = options.evidence;
@@ -380,7 +380,8 @@ export async function mockJudgeCalibration(
     };
   };
 
-  const synthetic = () => [
+  const synthetic = () => {
+    const base = [
     {
       item_id: source[1].item_id + "~swap_values",
       base_item_id: source[1].item_id,
@@ -399,7 +400,13 @@ export async function mockJudgeCalibration(
       answer: source[2].answer,
       excluded: excluded.has(source[2].item_id + "~add_unsupported_claim"),
     },
-  ];
+    ];
+    return Array.from({length: options.syntheticCount ?? base.length}, (_, index) => {
+      const item = base[index % base.length];
+      const itemId = index < base.length ? item.item_id : `${item.item_id}-${index}`;
+      return {...item, item_id: itemId, excluded: excluded.has(itemId)};
+    });
+  };
 
   const job = () => {
     polls += 1;

@@ -1609,7 +1609,8 @@ test("文書解析の各プロンプトは機能の位置で共通の編集操�
   await expect(page.locator("summary").filter({hasText: "Dots.OCR の読み取りプロンプト"})).toHaveCount(1);
   const position = await prompt.boundingBox();
   const connection = await dotsCard.getByRole("button", { name: "接続を確認", exact: true }).boundingBox();
-  expect(position!.y).toBeGreaterThanOrEqual(connection!.y + connection!.height);
+  const minimumGap = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize));
+  expect(position!.y - connection!.y - connection!.height).toBeGreaterThanOrEqual(minimumGap - 1);
   await expect(page.getByText("GPU 解析エンジンは外部 API を直接呼びます。", {exact: false})).toHaveCount(0);
 
   for (const [key, title] of [

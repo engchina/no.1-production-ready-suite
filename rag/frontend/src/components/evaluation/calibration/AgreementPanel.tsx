@@ -5,6 +5,8 @@ import {
   CardHeader,
   CardTitle,
   DataTable,
+  INFORMATION_TABLE_VISIBLE_ROWS,
+  INFORMATION_TABLE_ROW_CLASS,
   FilterChipGroup,
   FilterSelect,
   Pagination,
@@ -491,6 +493,12 @@ function SyntheticItemsCard({ labelSetId }: { labelSetId: string }) {
       <CardContent>
         <DataTable
           ariaLabel={t("evaluation.calibration.synthetic.title")}
+          testId="calibration-synthetic-table"
+          scrollTestId="calibration-synthetic-scroll"
+          scrollAriaLabel={t("evaluation.calibration.synthetic.title")}
+          stickyHeader
+          visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+          rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
           rows={items}
           loading={query.isPending}
           getRowKey={(row) => row.item_id}

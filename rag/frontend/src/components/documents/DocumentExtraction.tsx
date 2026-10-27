@@ -10,7 +10,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useRef, type ReactNode, type Ref } from "react";
 
-import { Banner, CopyButton, Disclosure, excerptHasTable, excerptPlainText } from "@production-ready/ui";
+import { Banner, CopyButton, Disclosure, excerptHasTable, excerptPlainText, INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS, cn } from "@production-ready/ui";
 import type {
   DocumentElement,
   DocumentNavigationNode,
@@ -236,7 +236,7 @@ export function DocumentExtraction({
               {formatNumber(stats.elementCount)}
             </span>
           </h4>
-          <ol className="space-y-3 pr-1">
+          <ol className={cn("space-y-3 pr-1", INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS)} tabIndex={0} aria-label={t("flow.extraction.elements")} data-testid="structured-elements-scroll">
             {parsed.elements.map((element) => (
               <ElementItem
                 key={elementKey(element)}

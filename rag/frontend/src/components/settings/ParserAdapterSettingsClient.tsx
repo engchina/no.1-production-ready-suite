@@ -763,7 +763,7 @@ function ExternalConnectionCard({
           />
         ) : null}
       </div>
-      {backend === "dots_ocr" ? <FeaturePromptDisclosure promptKey="external_ocr" /> : null}
+      {backend === "dots_ocr" ? <div className="mt-4"><FeaturePromptDisclosure promptKey="external_ocr" /></div> : null}
     </div>
   );
 }
