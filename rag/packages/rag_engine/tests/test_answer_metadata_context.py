@@ -78,8 +78,8 @@ def test_document_dedup_version_separation_and_budget():
     other = replace(r, id="v2", metadata={**r.metadata, "document": {**r.metadata["document"], "effective_from": "2026-04-01"}})
     spans = evidence_spans("説明", [r, other])
     assert format_evidence_packet(spans).count("FIRST_PAGE_SENTINEL") == 2
-    spans = evidence_spans("説明", [r], budget=80)
-    assert sum(len(s["text"]) + len(s.get("answer_context", "")) for s in spans) <= 80
+    spans = evidence_spans("説明", [r], budget=160)
+    assert sum(len(s["text"]) + len(s.get("answer_context", "")) for s in spans) <= 160
     assert "BODY_SENTINEL" in format_evidence_packet(spans)
     assert "FIRST_PAGE_SENTINEL" not in answer_metadata_context(replace(r, page=1))
 

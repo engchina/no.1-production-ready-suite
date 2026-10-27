@@ -84,7 +84,8 @@ def stub_generation(testcase, target: str = "rag_engine.generation.answering.syn
 def echo_model(system, prompt, settings, schema, **options):
     """最初の根拠の先頭行をそのまま引用する。実際の生成経路で prompt の内容を確認する用途。"""
     if schema is GroundedDraft:
-        match = re.search(r"\[(E[0-9]+)\][^\n]*\n([^\n]+)", prompt)
+        source_prompt = re.sub(r"<補助情報[（(]quote 不可[）)]>.*?</補助情報>\n?", "", prompt, flags=re.S)
+        match = re.search(r"\[(E[0-9]+)\][^\n]*\n([^\n]+)", source_prompt)
         # 長い根拠の行には行番号（`1| `）が付く（#2830）。番号を外した原文を引く。
         line = re.sub(r"^[0-9]+\| ", "", match.group(2)) if match else ""
         items = [{"kind": "rule", "text": line, "citations": [{"evidence_id": match.group(1), "quote": line}]}] if match else []
