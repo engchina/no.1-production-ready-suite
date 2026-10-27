@@ -10,6 +10,7 @@ import {
   ListToolbar,
   PAGE_SIZE_OPTIONS,
   RowTitleButton,
+  SelectField,
   StatusBadge,
   Switch,
   TableSkeleton,
@@ -46,10 +47,14 @@ type FormState = {
   labels: string;
   content: string;
   enabled: boolean;
+  purpose?: "confirmation" | "generation" | "both";
+  instructionKind?: "presentation" | "requirement" | "verification";
+  exclusiveGroup?: string;
+  priority?: number;
 };
 
 function emptyForm(kind: RuntimeKnowledgeKind): FormState {
-  return { kind, selected: null, name: "", title: "", labels: "", content: "", enabled: true };
+  return { kind, selected: null, name: "", title: "", labels: "", content: "", enabled: true, purpose: "both", instructionKind: "requirement", exclusiveGroup: "", priority: 0 };
 }
 
 /** 種類の表示名（タブ・通知の文言に使う。#682）。 */
@@ -70,8 +75,8 @@ function list(value: JsonValue | undefined): string[] {
 }
 
 /** 入力値と編集対象を比べて dirty を判定する。 */
-function editableSnapshot({ selected, name, title, labels, content, enabled }: FormState) {
-  return JSON.stringify([selected, name, title, labels, content, enabled]);
+function editableSnapshot({ selected, name, title, labels, content, enabled, purpose, instructionKind, exclusiveGroup, priority }: FormState) {
+  return JSON.stringify([selected, name, title, labels, content, enabled, purpose, instructionKind, exclusiveGroup, priority]);
 }
 
 function formFromRow(kind: RuntimeKnowledgeKind, row: Row): FormState {
@@ -84,6 +89,10 @@ function formFromRow(kind: RuntimeKnowledgeKind, row: Row): FormState {
     labels: list(kind === "terms" ? row.aliases : row.triggers).join("\n"),
     content: text(kind === "terms" ? row.description : row.content),
     enabled: ACTIVE_STATUSES.has(text(row.status)),
+    purpose: text(row.purpose) === "confirmation" ? "confirmation" : text(row.purpose) === "generation" ? "generation" : "both",
+    instructionKind: text(row.instruction_kind) === "presentation" ? "presentation" : text(row.instruction_kind) === "verification" ? "verification" : "requirement",
+    exclusiveGroup: text(row.exclusive_group),
+    priority: typeof row.priority === "number" ? row.priority : 0,
   };
 }
 
@@ -119,7 +128,7 @@ export function runtimeKnowledgeRequiredErrors(form: FormState): RequiredErrors 
       t("searchAnswerProfiles.runtime.error.triggersRequired"),
     ),
     title: requiredTextError(form.title, t("searchAnswerProfiles.runtime.error.ruleTitleRequired")),
-    content: requiredTextError(form.content, t("searchAnswerProfiles.runtime.error.ruleContentRequired")),
+    content: form.purpose === "confirmation" ? null : requiredTextError(form.content, t("searchAnswerProfiles.runtime.error.ruleContentRequired")),
   };
 }
 
@@ -184,6 +193,7 @@ export function RuntimeKnowledgeManager({
         title: form.title.trim(),
         labels: form.labels,
         content: form.content,
+        ...(kind === "rules" ? { purpose: form.purpose ?? "both", instruction_kind: form.instructionKind ?? "requirement", exclusive_group: form.exclusiveGroup ?? "", priority: form.priority ?? 0 } : {}),
         enabled: form.enabled,
         delete: remove,
       },
@@ -373,8 +383,52 @@ export function RuntimeKnowledgeManager({
               required
             />
           ) : null}
+          {kind === "rules" ? (
+            <>
+              <SelectField
+                id="runtime-knowledge-purpose"
+                width="md"
+                label={t("searchAnswerProfiles.runtime.purpose")}
+                helper={t("searchAnswerProfiles.runtime.purposeHelp")}
+                value={form.purpose ?? "both"}
+                options={(["confirmation", "generation", "both"] as const).map((value) => ({ value, label: t(`searchAnswerProfiles.runtime.purpose.${value}`) }))}
+                onValueChange={(purpose) => update({ purpose })}
+              />
+              <SelectField
+                id="runtime-knowledge-instruction-kind"
+                width="md"
+                label={t("searchAnswerProfiles.runtime.instructionKind")}
+                helper={t("searchAnswerProfiles.runtime.instructionKindHelp")}
+                value={form.instructionKind ?? "requirement"}
+                options={(["presentation", "requirement", "verification"] as const).map((value) => ({ value, label: t(`searchAnswerProfiles.runtime.instructionKind.${value}`) }))}
+                onValueChange={(instructionKind) => update({ instructionKind })}
+                disabled={form.purpose === "confirmation"}
+              />
+              <TextField
+                id="runtime-knowledge-exclusive-group"
+                width="md"
+                label={t("searchAnswerProfiles.runtime.exclusiveGroup")}
+                helper={t("searchAnswerProfiles.runtime.exclusiveGroupHelp")}
+                value={form.exclusiveGroup ?? ""}
+                maxLength={160}
+                onChange={(event) => update({ exclusiveGroup: event.target.value })}
+              />
+              <TextField
+                id="runtime-knowledge-priority"
+                width="xs"
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                label={t("searchAnswerProfiles.runtime.priority")}
+                helper={t("searchAnswerProfiles.runtime.priorityHelp")}
+                value={form.priority ?? 0}
+                onChange={(event) => update({ priority: Number(event.target.value) })}
+              />
+            </>
+          ) : null}
           {(["labels", "content"] as const).map((field) => {
-            const required = kind === "rules";
+            const required = kind === "rules" && (field === "labels" || form.purpose !== "confirmation");
             const error = errors[field];
             return (
               <TextareaField
@@ -488,6 +542,9 @@ export function RuntimeKnowledgeManager({
           >
             {t("searchAnswerProfiles.runtime.previewRun")}
           </Button>
+          {preview?.conflicting_rules?.length ? (
+            <FormStatus tone="warning" message={t("searchAnswerProfiles.runtime.conflictHelp", { names: preview.conflicting_rules.join("、") })} />
+          ) : null}
           {preview ? (
             <dl className="space-y-1 text-xs">
               <div>
@@ -525,7 +582,7 @@ export function RuntimeKnowledgeManager({
         </section>
       </div>
       {/* 既存のルールには確認の質問を設定できる（チャットの確認。#717）。ルールの保存とは別に保存する。 */}
-      {kind === "rules" && form.selected ? (
+      {kind === "rules" && form.selected && form.purpose !== "generation" ? (
         <RuleClarificationEditor
           key={form.selected}
           searchAnswerProfileId={searchAnswerProfileId}

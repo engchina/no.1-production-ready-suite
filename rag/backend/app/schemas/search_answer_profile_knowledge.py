@@ -153,6 +153,10 @@ class RuntimeKnowledgeEditRequest(BaseModel):
     )
     content: str = Field(default="", max_length=8000, description="説明 / ルール内容")
     source: str = Field(default="", max_length=800)
+    purpose: Literal["confirmation", "generation", "both"] | None = None
+    instruction_kind: Literal["presentation", "requirement", "verification"] | None = None
+    exclusive_group: str | None = Field(default=None, max_length=160)
+    priority: int | None = Field(default=None, ge=0, le=100, strict=True)
     enabled: bool = True
     delete: bool = False
 
@@ -167,6 +171,7 @@ class RuntimeKnowledgePreviewData(BaseModel):
     expanded_question: str
     matched_terms: list[str] = Field(default_factory=list)
     matched_rules: list[str] = Field(default_factory=list)
+    conflicting_rules: list[str] = Field(default_factory=list)
 
 
 class QuerySuggestion(BaseModel):
