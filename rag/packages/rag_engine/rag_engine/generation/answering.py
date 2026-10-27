@@ -13,7 +13,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from time import monotonic
-from typing import Any
+from typing import Any, cast
 
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import alternation
@@ -362,7 +362,7 @@ def rerank_records(
         )
         record_retrieval_stage({"stage": "rerank_output", "selected_ids": [retrieval_record_id(record) for record in ranked]})
         conditions = parse_inquiry_conditions(question) if business_domains is None or screen_terms is None else None
-        domains = conditions.business_domains if business_domains is None else business_domains
+        domains = cast(InquiryConditionParse, conditions).business_domains if business_domains is None else business_domains
         screens = getattr(conditions, "screen_terms", ()) if screen_terms is None else screen_terms
         ranked = _named_screen_first(_same_business_records(ranked, domains, step), screens, step)
         # 交差参照で足した参照先は、参照元の直後へ置く（質問で並べると橋渡しの参照先が下がる。#1549）。
@@ -536,7 +536,7 @@ def _rerank_records(
     reranked_candidates = _records_by_rerank_ranks(
         rerankable_candidates,
         reranked,
-        settings,
+        cast(Settings, settings),
         candidate_indices=rerankable_indices,
     )
     # 関連度が下限以上の実体の拡張の根拠は、backend が置いた候補の位置へ戻す（#1362・#1390）。
@@ -1505,7 +1505,7 @@ def _recover_crag_context(
     """不足評価の起点を検証して文脈を追加する。空振り時は最小の近傍から試す。"""
     visible = list(_records_for_prompt_injection_scan(context.records, context.evidence_tree))
     anchors = attempt.recovery_anchor_ids
-    actions = (attempt.recovery_action,)
+    actions: tuple[str, ...] = (attempt.recovery_action,)
     if fallback:
         anchors = tuple(dict.fromkeys((*attempt.relevant_chunk_ids, *(r.chunk_uid for r in visible[:8] if r.chunk_uid))))[:8]
         actions = ("neighbor_children", "parent", "neighbor_parents")
@@ -1913,7 +1913,7 @@ def _deferred_document_records(context: AnswerContext, max_records: int) -> Cont
         uid = (parent.chunk_uid or parent.id) if parent is not None else ""
         if not uid or uid in visible or uid in selected:
             continue
-        selected[uid] = parent
+        selected[uid] = cast(AnswerRecord, parent)
         if len(selected) >= max_records:
             break
     return ContextRecovery(tuple(selected.values()), (), "expanded" if selected else "no_new_compatible_evidence")
@@ -2548,7 +2548,7 @@ def synthesize_grounded_answer(
         # 実行できる説明があっても、監査が未回答とした要求があれば、監査が挙げた根拠のうちまだ示していないものを
         # 手順の後に原文として加える。正しい画面の記載が手元にあるのに示さないことを避ける (#1106)。
         cited = {entry.span["evidence_id"] for entry in grounded.cited_entries(published) if entry.span}
-        extra = [entry for entry in needed if entry.span["evidence_id"] not in cited] if reviewed_unanswered else []
+        extra = [entry for entry in needed if cast(dict[str, Any], entry.span)["evidence_id"] not in cited] if reviewed_unanswered else []
         shown = [*published, *extra]
         envelope_entries = [*[entry for entry in current.checked if entry.published or (entry.span and not entry.removed)], *extra]
         rendered = grounded.render_answer(
@@ -2718,8 +2718,8 @@ def synthesize_grounded_answer(
                     [
                         {
                             "evidence_id": used_id,
-                            "source": e.span.get("source", ""),
-                            "page": e.span.get("page", ""),
+                            "source": cast(dict[str, Any], e.span).get("source", ""),
+                            "page": cast(dict[str, Any], e.span).get("page", ""),
                             "look_at": "引用",
                             "visible_evidence": e.item.quote[:200],
                             # 同じ箇所を使った item のうち 1 つでも確かめた説明なら confirmed（#2040）。
