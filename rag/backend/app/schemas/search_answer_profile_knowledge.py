@@ -128,7 +128,11 @@ class RuntimeKnowledgeEditRequest(BaseModel):
 
     kind: Literal["terms", "rules"]
     selected: str | None = Field(default=None, max_length=160)
-    name: str = Field(default="", max_length=160, description="用語、またはルール ID")
+    name: str = Field(
+        default="",
+        max_length=160,
+        description="用語、またはルール ID（ルール追加時に省略すると自動採番）",
+    )
     title: str = Field(default="", max_length=160, description="ルール名(rules のみ)")
     labels: str = Field(
         default="", max_length=8000, description="別名 / 照合キーワード(改行・読点区切り)"
