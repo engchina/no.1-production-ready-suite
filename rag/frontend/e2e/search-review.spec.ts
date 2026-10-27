@@ -292,14 +292,14 @@ test("類似 FAQ を使わずに生成した検索の再試行は FAQ を出し�
   await page.goto("/search");
   await selectSearchAnswerProfile(page, /経理ビュー/);
   await search(page, "交通費の上限");
-  await page.getByRole("button", { name: "類似問を使用しない" }).click();
+  await page.getByRole("button", { name: "どれでもない（資料を検索する）" }).click();
 
   const alert = page.getByRole("alert").filter({ hasText: "リクエスト数が上限を超えました" });
   await expect(alert).toBeVisible();
   await alert.getByRole("button", { name: "再試行" }).click();
 
   await expect.poll(() => calls).toBe(2);
-  await expect(page.getByText("類似する承認済み FAQ があります")).toHaveCount(0);
+  await expect(page.getByText("質問に近い登録済みQ&Aがあります")).toHaveCount(0);
 });
 
 test("質問から読み取った条件を「自動」のチップで出し、外して検索し直せる（#652）", async ({ page }) => {
@@ -575,7 +575,7 @@ test.describe("送り直す操作は、表示中の結果を出した検索の�
     });
   });
 
-  test("「類似問を使用しない」は、類似 FAQ を確かめた質問を送る", async ({ page }) => {
+  test("「どれでもない（資料を検索する）」は、類似 FAQ を確かめた質問を送る", async ({ page }) => {
     await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", (route) =>
       route.fulfill(
         envelope({
@@ -601,10 +601,10 @@ test.describe("送り直す操作は、表示中の結果を出した検索の�
     await page.goto("/search");
     await selectSearchAnswerProfile(page, /経理ビュー/);
     await search(page, "交通費の上限");
-    await expect(page.getByText("類似する承認済み FAQ があります")).toBeVisible();
+    await expect(page.getByText("質問に近い登録済みQ&Aがあります")).toBeVisible();
 
     await page.getByRole("textbox", { name: "RAG 検索" }).fill("書きかけ");
-    await page.getByRole("button", { name: "類似問を使用しない" }).click();
+    await page.getByRole("button", { name: "どれでもない（資料を検索する）" }).click();
 
     await expect.poll(() => requests.length).toBe(1);
     expect(requests[0]).toMatchObject({ query: "交通費の上限", search_answer_profile_id: "bv-1" });
@@ -645,7 +645,7 @@ test.describe("類似 FAQ の照会中も、検索を始めたことを示す（
     await expectNoPageOverflow(page);
 
     releaseFaq();
-    await expect(page.getByText("類似する承認済み FAQ があります")).toBeVisible();
+    await expect(page.getByText("質問に近い登録済みQ&Aがあります")).toBeVisible();
     await expect(button).toHaveAccessibleName("検索");
     await expect(page.getByTestId("search-run-progress")).toHaveCount(0);
     expect(streamCalls).toBe(0);
@@ -731,7 +731,7 @@ test("FAQ の提示対象が無いときは質問を止めず検索する", { ta
   await selectSearchAnswerProfile(page, /経理ビュー/);
   await search(page, "合成の設定 A");
   await expect.poll(() => searched).toBe(true);
-  await expect(page.getByText("類似する承認済み FAQ があります")).toHaveCount(0);
+  await expect(page.getByText("質問に近い登録済みQ&Aがあります")).toHaveCount(0);
 });
 
 /**
