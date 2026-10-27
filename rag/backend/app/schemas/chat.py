@@ -180,6 +180,7 @@ class ChatMessageRequest(BaseModel):
     """会話へのメッセージ送信リクエスト。"""
 
     content: str = Field(..., min_length=1, max_length=8000)
+    question_context_token: str | None = Field(default=None, min_length=1, max_length=300000)
     # 複数指定でマルチモデル比較(設定済み OCI モデル間)。空なら既定モデル 1 系統。
     model_ids: list[str] = Field(default_factory=list, max_length=5)
     # 旧 standard の検索モード(``mode``)は #595 で削除した。送られても読み捨てる。

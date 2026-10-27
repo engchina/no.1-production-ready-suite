@@ -1961,7 +1961,7 @@ for (const viewport of [
         clarification: { ...clarificationSuggestion.clarification, allow_other: false },
       };
       await route.fulfill({
-        json: { data: { suggestion }, error_messages: [], warning_messages: [] },
+        json: { data: { suggestion, question_context_token: "synthetic-context-token" }, error_messages: [], warning_messages: [] },
       });
     });
     const streamBodies: Record<string, unknown>[] = [];
@@ -2019,6 +2019,7 @@ for (const viewport of [
     await expect.poll(() => streamBodies.length).toBe(1);
     expect(streamBodies[0]).toMatchObject({
       content: "申請の期限は？",
+      question_context_token: "synthetic-context-token",
       clarification: { rule_id: "R01", option_ids: ["travel"], other_text: "海外出張" },
     });
     await expect(choice).toHaveCount(0);
@@ -2032,7 +2033,8 @@ for (const viewport of [
     await choice.getByRole("button", { name: "確認せずに回答" }).click();
     await expect.poll(() => streamBodies.length).toBe(2);
     // 質問はそのまま送り（入力欄には戻さない）、取り消さない。
-    expect(streamBodies[1]).toMatchObject({ content: "交通費の期限は？", clarification_skipped_rule_id: "R01" });
+    expect(streamBodies[1]).toMatchObject({ content: "交通費の期限は？", clarification_skipped_rule_id: "R01", question_context_token: "synthetic-context-token" });
+    expect(clarifyQueries[1]).toMatchObject({ conversation_id: "conv-1" });
     expect(streamBodies[1]).not.toHaveProperty("clarification");
     await expect(choice).toHaveCount(0);
     await expect(composer).toHaveValue("");

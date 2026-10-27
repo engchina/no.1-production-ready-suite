@@ -516,54 +516,68 @@ async def post_clarification_suggest(
     """質問に出す確認(一致したルールのうち確認を持つ最初の 1 件。#717)。"""
     oracle = OracleClient()
     view = await _require_search_answer_profile(oracle, search_answer_profile_id)
+    from app.api.routes.chat import _guide_user_context, prepare_chat_question
+
+    settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
+    query, context_token = await prepare_chat_question(
+        oracle, request.conversation_id, search_answer_profile_id, request.query, settings
+    )
+
+    def response(data: ClarificationSuggestionsData) -> ApiResponse[ClarificationSuggestionsData]:
+        data.question_context_token = context_token
+        return ApiResponse(data=data)
+
     # 方針が「前提を示して回答する」なら確認を出さない（#1839）。
     if view.config.clarification_policy == "assume":
-        return ApiResponse(data=ClarificationSuggestionsData())
+        return response(ClarificationSuggestionsData())
     payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
-    found = await asyncio.to_thread(suggest_clarification, payload, request.query)
+    found = await asyncio.to_thread(suggest_clarification, payload, query)
     if found is None:
         # 業務ガイドの不明・矛盾の条件（選択肢付き）を、ルールの確認と同じ形で聞く（#1238）。
         # 適用範囲は検索と同じ手がかりで確かめる（#1278）。
         settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
         if not settings.rag_support_guide_enabled:
-            return ApiResponse(data=ClarificationSuggestionsData())
+            return response(ClarificationSuggestionsData())
         guides = await _published_guides(oracle, search_answer_profile_id)
+        # 文面の補完を OFF にしても、ガイドの既存の利用者履歴の照合は維持する。
+        if request.conversation_id and not settings.rag_history_rewrite_enabled:
+            query = "\n".join(
+                [*_guide_user_context(await oracle.list_messages(request.conversation_id)), query]
+            )
         # 検索と同じく、用語の別名で展開し、ON なら意味の照合を使う（#2398）。
-        query = await build_guide_query(
-            oracle, settings, search_answer_profile_id, guides, request.query, payload
+        guide_query = await build_guide_query(
+            oracle, settings, search_answer_profile_id, guides, query, payload
         )
         selected = select_guide(
             guides,
-            query,
+            guide_query,
             {},
-            context=await support_guide_context(
-                oracle, guides, request.query, profile_scope_filters(view)
-            ),
+            context=await support_guide_context(oracle, guides, query, profile_scope_filters(view)),
             close_margin=(
                 settings.rag_support_guide_close_match_margin
                 if settings.rag_support_guide_close_match_clarification_enabled
                 else None
             ),
         )
-        selected = await resolve_text_conditions(selected, request.query, settings)
+        selected = await resolve_text_conditions(selected, query, settings)
         guide: tuple[str, str, Any] | None = None
         if isinstance(selected, GuideChoice):
             guide = guide_choice_clarification(selected)
         elif selected is not None:
             guide = guide_clarification(selected)
         if guide is None:
-            return ApiResponse(data=ClarificationSuggestionsData())
+            return response(ClarificationSuggestionsData())
         rule_id, title, guide_question = guide
-        return ApiResponse(
-            data=ClarificationSuggestionsData(
+        return response(
+            ClarificationSuggestionsData(
                 suggestion=ClarificationSuggestionData(
                     rule_id=rule_id, rule_title=title, clarification=guide_question
                 )
             )
         )
     rule, clarification = found
-    return ApiResponse(
-        data=ClarificationSuggestionsData(
+    return response(
+        ClarificationSuggestionsData(
             suggestion=ClarificationSuggestionData(
                 rule_id=str(rule.get("id", "")),
                 rule_title=str(rule.get("title", "") or rule.get("id", "")),

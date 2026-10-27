@@ -1473,6 +1473,7 @@ export interface ConversationUpdateBody {
 
 export interface ChatMessageRequestBody {
   content: string;
+  question_context_token?: string;
   model_ids?: string[];
   top_k?: number;
   /** 利用者が選んだ類似の承認済み FAQ の id。質問と一緒に LLM へ渡す（#684）。 */
@@ -3884,10 +3885,10 @@ export const api = {
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/suggest`,
       { ...jsonBody({ query, purpose }), signal },
     ),
-  suggestClarification: (id: string, query: string) =>
-    request<{ suggestion: ClarificationSuggestionData | null }>(
+  suggestClarification: (id: string, query: string, conversationId?: string | null) =>
+    request<{ suggestion: ClarificationSuggestionData | null; question_context_token?: string | null }>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/clarifications/suggest`,
-      jsonBody({ query }),
+      jsonBody({ query, ...(conversationId ? { conversation_id: conversationId } : {}) }),
     ),
   saveRuleClarification: (id: string, ruleId: string, clarification: RuleClarification | null) =>
     request<RuntimeKnowledgeData>(

@@ -244,7 +244,8 @@ class RuleClarificationRequest(BaseModel):
 
 
 class ClarificationSuggestRequest(BaseModel):
-    query: str = Field(min_length=1, max_length=2000)
+    query: str = Field(min_length=1, max_length=8000)
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class ClarificationSuggestionData(BaseModel):
@@ -257,6 +258,7 @@ class ClarificationSuggestionsData(BaseModel):
     """質問に出す確認(無ければ None)。1 つの質問で聞き返すのは 1 回だけ。"""
 
     suggestion: ClarificationSuggestionData | None = None
+    question_context_token: str | None = None
 
 
 class ClarificationAnswer(BaseModel):
