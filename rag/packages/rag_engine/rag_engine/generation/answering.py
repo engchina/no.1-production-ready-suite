@@ -13,7 +13,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from time import monotonic
-from typing import Any
+from typing import Any, cast
 
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import alternation
@@ -37,10 +37,12 @@ from rag_engine.config import (
 )
 from rag_engine.dependencies import (
     check_adb_hybrid_search_ready,
+    injected_context_chunks,
     injected_embedder,
     injected_prefetch_search,
     parse_multimodal_response,
     parse_text_response,
+    record_retrieval_stage,
     report_degraded,
     rerank_text_with_scores,
     search_adb_hybrid_chunks,
@@ -219,6 +221,9 @@ from rag_engine.models.storage import AdbHybridSearchUnavailable
 from rag_engine.resources.tracing import observe_call
 from rag_engine.retrieval.article_catalog import is_added_catalog_article
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
+from rag_engine.retrieval.candidate_budget import artifact_key as retrieval_artifact_key
+from rag_engine.retrieval.candidate_budget import record_id as retrieval_record_id
+from rag_engine.retrieval.candidate_budget import select_candidates, stage_limits
 from rag_engine.retrieval.character_forms import fold_model_view, fold_width
 from rag_engine.retrieval.context_builder import (
     MAX_ANCHORS_PER_PARENT,
@@ -356,8 +361,9 @@ def rerank_records(
         ranked = _rerank_records(
             question, records, settings, step, enabled=enabled, candidate_limit=candidate_limit, extra_queries=extra_queries
         )
+        record_retrieval_stage({"stage": "rerank_output", "selected_ids": [retrieval_record_id(record) for record in ranked]})
         conditions = parse_inquiry_conditions(question) if business_domains is None or screen_terms is None else None
-        domains = conditions.business_domains if business_domains is None else business_domains
+        domains = cast(InquiryConditionParse, conditions).business_domains if business_domains is None else business_domains
         screens = getattr(conditions, "screen_terms", ()) if screen_terms is None else screen_terms
         ranked = _named_screen_first(_same_business_records(ranked, domains, step), screens, step)
         # 交差参照で足した参照先は、参照元の直後へ置く（質問で並べると橋渡しの参照先が下がる。#1549）。
@@ -531,7 +537,7 @@ def _rerank_records(
     reranked_candidates = _records_by_rerank_ranks(
         rerankable_candidates,
         reranked,
-        settings,
+        cast(Settings, settings),
         candidate_indices=rerankable_indices,
     )
     # 関連度が下限以上の実体の拡張の根拠は、backend が置いた候補の位置へ戻す（#1362・#1390）。
@@ -814,20 +820,58 @@ def _bundle_context(
     max_chars: int,
 ):
     """rerank 済みの child を起点に parent・隣接 child を展開して context bundle を作る（検索と復元で共用）。"""
-    return build_chunk_context_bundle(
-        ContextBuildRequest(
-            question=question,
-            ranked_children=list(ranked_children),
-            active_records=list(active_records),
-            top_k=max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K)),
-            neighbor_child_count=neighbor_child_count,
-            support_record_limit=3,
-            max_anchors_per_parent=_max_anchors_per_parent(settings),
-            max_records=max_records,
-            max_chars=max_chars,
-            catalog_records=int(getattr(settings, "article_catalog_context_records", 0) or 0),
-        )
+    request = ContextBuildRequest(
+        question=question,
+        ranked_children=list(ranked_children),
+        active_records=list(active_records),
+        top_k=max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K)),
+        neighbor_child_count=neighbor_child_count,
+        support_record_limit=3,
+        max_anchors_per_parent=_max_anchors_per_parent(settings),
+        max_records=max_records,
+        max_chars=max_chars,
+        catalog_records=int(getattr(settings, "article_catalog_context_records", 0) or 0),
     )
+    # 同じ起点選択を先に行い、未採用の候補の親本文・近傍を読まない。文字予算は原文の取得後に適用する。
+    provisional = build_chunk_context_bundle(replace(request, max_chars=2**31 - 1, select_anchors_only=True))
+    anchor_ids = {
+        retrieval_record_id(child.record)
+        for parent in provisional.evidence_tree
+        for child in parent.children
+        if child.role == "retrieved_anchor"
+    }
+    selected = [record for record in ranked_children if retrieval_record_id(record) in anchor_ids]
+    loaded = injected_context_chunks(anchors=selected, settings=settings)
+    if loaded is not None:
+        known = {retrieval_record_id(record): record for record in active_records}
+        fresh = {retrieval_record_id(record): record for record in map(_stored_chunk_answer_record, loaded)}
+        for record in ranked_children:
+            uid = retrieval_record_id(record)
+            if uid in fresh:
+                metadata = {**(record.metadata or {}), **(fresh[uid].metadata or {})}
+                # 遅延取得で並べ替えの点数・順序を消さない。画像等の新しい原文情報だけを補う。
+                metadata.update({key: record.metadata[key] for key in ("rerank", "rrf_score") if key in record.metadata})
+                fresh[uid] = replace(record, metadata=metadata)
+        known.update(fresh)
+        request = replace(request, ranked_children=[fresh.get(retrieval_record_id(record), record) for record in ranked_children])
+        # 呼出元が保持する回復候補にも、実際に読み取った原文を残す。
+        if isinstance(active_records, list):
+            active_records[:] = known.values()
+        request = replace(request, active_records=list(known.values()))
+    bundle = build_chunk_context_bundle(request)
+    record_retrieval_stage(
+        {
+            "stage": "answer_context",
+            "anchor_limit": top_k,
+            "record_limit": max_records,
+            "character_limit": max_chars,
+            "anchor_ids": [retrieval_record_id(record) for record in selected],
+            "loaded_ids": [str(chunk.chunk_uid) for chunk in loaded] if loaded is not None else [],
+            "selected_ids": [retrieval_record_id(record) for record in bundle.records],
+            "excluded": list(bundle.excluded_evidence),
+        }
+    )
+    return bundle
 
 
 def _restore_deferred_context(
@@ -926,7 +970,7 @@ def build_adb_hybrid_answer_context(
         "retrieval_queries": queries,
         "settings": settings,
         "preferred_engine_ids": preferred_engines,
-        "candidate_limit": _retrieval_candidate_limit(top_k),
+        "candidate_limit": _retrieval_candidate_limit(top_k, settings),
         "retrieval_scope": scope,
         "classification_filter": classification_filter,
         # 注入された検索実装の既存シグネチャを壊さないよう、指定時だけ渡す。
@@ -950,10 +994,14 @@ def build_adb_hybrid_answer_context(
     linked_screens: list[tuple[str, str]] = []
     if getattr(settings, "screen_linking_enabled", False):
         added, linked_screens, expansion = _linked_screen_children(question, search_result.all_chunks, ranked_children, settings)
-        ranked_children = [*ranked_children, *added]
+        ranked_children = [
+            *ranked_children,
+            *(replace(record, metadata={**record.metadata, "retrieval_admission_stage": "screen"}) for record in added),
+        ]
         known = {record.chunk_uid for record in active_records}
         active_records.extend(record for record in expansion if record.chunk_uid not in known)
     if getattr(settings, "article_catalog_enabled", False):
+        before_catalog = {retrieval_record_id(record) for record in ranked_children}
         ranked_children, expansion = _catalog_article_children(
             question,
             ranked_children,
@@ -962,6 +1010,19 @@ def build_adb_hybrid_answer_context(
         )
         known = {record.chunk_uid for record in active_records}
         active_records.extend(record for record in expansion if record.chunk_uid not in known)
+    if getattr(settings, "article_catalog_enabled", False):
+        ranked_children = [
+            record
+            if retrieval_record_id(record) in before_catalog
+            else replace(record, metadata={**record.metadata, "retrieval_admission_stage": "article"})
+            for record in ranked_children
+        ]
+    ranked_children, candidate_trace = select_candidates(
+        ranked_children,
+        max(0, int(getattr(settings, "rerank_candidate_limit", 0))),
+        stage_limits=stage_limits(settings, ranked_children),
+    )
+    record_retrieval_stage({"stage": "rerank_input", **candidate_trace})
     ranked_children = rerank_records(
         question,
         ranked_children,
@@ -972,6 +1033,7 @@ def build_adb_hybrid_answer_context(
         business_domains=inquiry_conditions.business_domains if inquiry_conditions is not None else None,
         screen_terms=inquiry_conditions.screen_terms if inquiry_conditions is not None else None,
     )
+    record_retrieval_stage({"stage": "post_rerank_policies", "selected_ids": [retrieval_record_id(record) for record in ranked_children]})
     reserve_rank = int(getattr(settings, "screen_linking_reserve_rank", 0) or 0)
     if linked_screens and reserve_rank > 0:
         from rag_engine.retrieval.screen_catalog import reserve_linked_screens
@@ -1444,7 +1506,7 @@ def _recover_crag_context(
     """不足評価の起点を検証して文脈を追加する。空振り時は最小の近傍から試す。"""
     visible = list(_records_for_prompt_injection_scan(context.records, context.evidence_tree))
     anchors = attempt.recovery_anchor_ids
-    actions = (attempt.recovery_action,)
+    actions: tuple[str, ...] = (attempt.recovery_action,)
     if fallback:
         anchors = tuple(dict.fromkeys((*attempt.relevant_chunk_ids, *(r.chunk_uid for r in visible[:8] if r.chunk_uid))))[:8]
         actions = ("neighbor_children", "parent", "neighbor_parents")
@@ -1455,6 +1517,11 @@ def _recover_crag_context(
         "added_chunk_ids": [],
         "reason": "no_new_compatible_evidence",
     }
+    context = _hydrate_recovery_context(
+        context,
+        [record for record in context.expansion_records if record.chunk_uid in anchors or record.parent_chunk_uid in anchors],
+        min(6, max_records),
+    )
     for action in actions:
         recovery = recover_context_records(
             visible, context.expansion_records, anchors, action, max_records=min(6, max_records), max_chars=max_chars
@@ -1793,7 +1860,9 @@ def _expand_context_from_pool(
         # 親を pool から足す。可視の起点と同じ文書しか探さない近傍・同単元の回復では届かないため先に試す。
         # 足す件数は可視の根拠の数まで。下の併合は可視の 2 倍を上限にするので、超えると既存の根拠を押し出して
         # `would_drop_existing_evidence` で却下され、回退が空振りした（実データで確認）。
-        recovered, mode = _deferred_document_records(context, min(max_records, max(1, len(visible)))), "deferred_documents"
+        limit = min(max_records, max(1, len(visible)))
+        context = _hydrate_recovery_context(context, context.deferred_records, limit)
+        recovered, mode = _deferred_document_records(context, limit), "deferred_documents"
     if not recovered.records:
         for mode in modes:
             recovered = recover_context_records(
@@ -1842,17 +1911,52 @@ def _adds_new_records(current: AnswerContext, restored: AnswerContext) -> bool:
     return any((record.chunk_uid or record.id) not in known for record in restored.records)
 
 
+def _hydrate_recovery_context(context: AnswerContext, candidates: Sequence[AnswerRecord], limit: int) -> AnswerContext:
+    """明示した回復先だけを既存の件数枠で読む。未読の親が無いことを根拠不足と取り違えない。"""
+    known = {retrieval_record_id(record): record for record in context.expansion_records}
+    selected: dict[tuple[str, ...], AnswerRecord] = {}
+    for child in candidates:
+        if child.chunk_level != CHILD_CHUNK_LEVEL:
+            continue
+        strategy = child.metadata.get("chunk_strategy")
+        parent = child.parent_chunk_uid if strategy in (None, "small_to_big", "small_to_big_parent_child") else ""
+        if parent and parent in known:
+            continue
+        key = (*retrieval_artifact_key(child), parent or retrieval_record_id(child))
+        selected.setdefault(key, child)
+        if len(selected) >= max(0, limit):
+            break
+    if not selected or limit <= 0:
+        return context
+    loaded = injected_context_chunks(anchors=list(selected.values()), settings=None)
+    if loaded is None:
+        return context
+    known.update((retrieval_record_id(record), record) for record in map(_stored_chunk_answer_record, loaded))
+    record_retrieval_stage(
+        {
+            "stage": "context_recovery",
+            "anchor_limit": limit,
+            "anchor_ids": [retrieval_record_id(record) for record in selected.values()],
+            "loaded_ids": [str(chunk.chunk_uid) for chunk in loaded],
+        }
+    )
+    return replace(context, expansion_records=tuple(known.values()))
+
+
 def _deferred_document_records(context: AnswerContext, max_records: int) -> ContextRecovery:
     """後回しにした文書の child の親を、順位順に最大 max_records 件、既取得 pool から返す (#1028)。"""
+    context = _hydrate_recovery_context(context, context.deferred_records, max_records)
     pool = {r.chunk_uid or r.id: r for r in context.expansion_records}
     visible = {r.chunk_uid or r.id for r in context.records}
     selected: dict[str, AnswerRecord] = {}
     for child in context.deferred_records:
-        parent = pool.get(child.parent_chunk_uid) if child.chunk_level == "child" and child.parent_chunk_uid else child
+        strategy = child.metadata.get("chunk_strategy")
+        parent_mode = strategy in (None, "small_to_big", "small_to_big_parent_child")
+        parent = (pool.get(child.parent_chunk_uid) or child) if parent_mode and child.parent_chunk_uid else child
         uid = (parent.chunk_uid or parent.id) if parent is not None else ""
         if not uid or uid in visible or uid in selected:
             continue
-        selected[uid] = parent
+        selected[uid] = cast(AnswerRecord, parent)
         if len(selected) >= max_records:
             break
     return ContextRecovery(tuple(selected.values()), (), "expanded" if selected else "no_new_compatible_evidence")
@@ -2487,7 +2591,7 @@ def synthesize_grounded_answer(
         # 実行できる説明があっても、監査が未回答とした要求があれば、監査が挙げた根拠のうちまだ示していないものを
         # 手順の後に原文として加える。正しい画面の記載が手元にあるのに示さないことを避ける (#1106)。
         cited = {entry.span["evidence_id"] for entry in grounded.cited_entries(published) if entry.span}
-        extra = [entry for entry in needed if entry.span["evidence_id"] not in cited] if reviewed_unanswered else []
+        extra = [entry for entry in needed if cast(dict[str, Any], entry.span)["evidence_id"] not in cited] if reviewed_unanswered else []
         shown = [*published, *extra]
         envelope_entries = [*[entry for entry in current.checked if entry.published or (entry.span and not entry.removed)], *extra]
         rendered = grounded.render_answer(
@@ -2657,8 +2761,8 @@ def synthesize_grounded_answer(
                     [
                         {
                             "evidence_id": used_id,
-                            "source": e.span.get("source", ""),
-                            "page": e.span.get("page", ""),
+                            "source": cast(dict[str, Any], e.span).get("source", ""),
+                            "page": cast(dict[str, Any], e.span).get("page", ""),
                             "look_at": "引用",
                             "visible_evidence": e.item.quote[:200],
                             # 同じ箇所を使った item のうち 1 つでも確かめた説明なら confirmed（#2040）。
@@ -3202,6 +3306,7 @@ def matched_term_query(runtime_knowledge: RuntimeKnowledgeContext | None) -> str
 
 def _retrieval_query_plan_payload(
     *,
+    settings: Settings | None = None,
     expansion: QueryExpansionResult,
     text_search_info: QuestionTextSearchInfo,
     runtime_knowledge: RuntimeKnowledgeContext | None,
@@ -3230,7 +3335,7 @@ def _retrieval_query_plan_payload(
         crag_rewrites=_dedupe_queries(crag_rewrites),
         retrieval_scope=normalize_retrieval_scope(retrieval_scope),
         top_k=max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K)),
-        candidate_limit=_retrieval_candidate_limit(top_k),
+        candidate_limit=_retrieval_candidate_limit(top_k, settings),
         metadata_filter=_retrieval_metadata_filter(
             inquiry_conditions,
             classification_filter,
@@ -4416,6 +4521,7 @@ def answer_question_result(
         if chunk_run is None:
             _record_search_not_ready(selected_classification_filter, "検索対象のチャンクがありません。")
             return _answer_question_result(
+                settings=settings,
                 expansion=base_expansion,
                 answer=(
                     "ADB hybrid search に必要な chunk run がありません。"
@@ -4443,6 +4549,7 @@ def answer_question_result(
     except AdbHybridSearchUnavailable as exc:
         _record_search_not_ready(selected_classification_filter, "ADB hybrid search を利用できません。")
         return _answer_question_result(
+            settings=settings,
             expansion=base_expansion,
             answer=f"ADB hybrid search を使用できません: {exc}",
             text_search_info=text_search_info,
@@ -4577,6 +4684,7 @@ def answer_question_result(
     def evidence_result(context: AnswerContext, *, trace: Mapping[str, Any] | None = None) -> AnswerQuestionResult:
         """回答を作らずに、集めた根拠を返す（本文は空）。根拠の補いの記録は回答と同じ generation_trace に残す。"""
         return _answer_question_result(
+            settings=settings,
             expansion=expansion,
             answer="",
             response=AnswerResponse(answer_text="", generation_trace=dict(trace or {})),
@@ -4670,6 +4778,7 @@ def answer_question_result(
             flow_step.status = "中止"
             flow_step.add("文書検索を続行できません。" + ("回答文の生成は未実行です。" if generate_answer else ""))
             return _answer_question_result(
+                settings=settings,
                 expansion=expansion,
                 answer=f"ADB hybrid search を使用できません: {exc}",
                 text_search_info=text_search_info,
@@ -4797,6 +4906,7 @@ def answer_question_result(
             if legacy_notice:
                 response = replace(response, answer_text=f"{response.answer_text}\n\n{legacy_notice}")
             return _answer_question_result(
+                settings=settings,
                 expansion=expansion,
                 answer=_format_answer_response(response),
                 response=response,
@@ -4939,6 +5049,7 @@ def answer_question_result(
         if references:
             answer = f"{answer}\n\n参照:\n{references}"
         return _answer_question_result(
+            settings=settings,
             expansion=expansion,
             answer=answer,
             response=response,
@@ -4983,7 +5094,7 @@ def _start_original_query_prefetch(
     if not first:
         return None
     query = first[0]
-    candidate_limit = _retrieval_candidate_limit(top_k)
+    candidate_limit = _retrieval_candidate_limit(top_k, settings)
 
     def run() -> float:
         started = monotonic()
@@ -5246,6 +5357,7 @@ def _answer_question_result(
     expansion: QueryExpansionResult,
     answer: str,
     *,
+    settings: Settings | None = None,
     response: AnswerResponse | None = None,
     records: Sequence[AnswerRecord] = (),
     text_search_info: QuestionTextSearchInfo | None = None,
@@ -5277,6 +5389,7 @@ def _answer_question_result(
     prompt_warnings = prompt_injection_warnings_for_records(records, evidence_tree=evidence_tree)
     rerank_scores = _rerank_scores_from_evidence(records, evidence_tree)
     retrieval_query_plan = _retrieval_query_plan_payload(
+        settings=settings,
         target_text_queries=text_search.target_text_queries if text_search is not None else (),
         expansion=expansion,
         text_search_info=text_search,

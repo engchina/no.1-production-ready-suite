@@ -1241,12 +1241,32 @@ class Settings(
         le=1000,
         description="Hybrid retrieval の Reciprocal Rank Fusion 定数。",
     )
+    rag_retrieval_query_limit: int = Field(
+        default=600,
+        ge=1,
+        le=2000,
+        description="検索文ごとに各検索経路から取得する上限。起点数・多様化の有無とは独立。",
+    )
+    rag_retrieval_candidate_limit: int = Field(
+        default=150,
+        ge=1,
+        le=2000,
+        description="融合順位から選ぶ基本候補の上限。回答起点数 top_k とは独立。",
+    )
+    rag_rerank_candidate_limit: int = Field(
+        default=0,
+        ge=0,
+        le=2000,
+        description="明示参照・多様化・各種拡張を含む精排入力の合計上限。0は有効な各段の既存上限の合計から互換上限を導出。",
+    )
     rag_candidate_diversity_depth: int = Field(
         default=600,
         ge=0,
         le=2000,
         description=(
-            "回答の検索で検索文ごとに読む件数(0 は候補の多様化をしない)。融合の上位(候補の上限)"
+            "多様化を探す融合順位の深さ(0 は無効)。"
+            "DB の取得上限は rag_retrieval_query_limit で独立。"
+            "融合の上位(候補の上限)"
             "は変えず、その外から文書ごとの上位を rerank の候補に足す。1 つの文書が融合の上位を"
             "占めても、別の文書の根拠が rerank の判断を受ける(#2228)。"
         ),
