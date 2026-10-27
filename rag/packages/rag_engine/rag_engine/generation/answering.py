@@ -251,6 +251,7 @@ from rag_engine.retrieval.reference_follow import follow_reference_sources, is_f
 from rag_engine.retrieval.request_coverage import (
     COVERAGE_SCHEMA_VERSION,
     CoverageBudget,
+    CoverageUsage,
     assess_targets,
     coverage_counts,
     coverage_targets,
@@ -2048,6 +2049,7 @@ def synthesize_grounded_answer(
     unread_sections: Sequence[Any] = (),
     unread_documents: Collection[str] = (),
     evidence_budget_chars: int | None = None,
+    recover_requests: Callable[[AnswerContext, Sequence[Mapping[str, Any]]], tuple[AnswerContext, dict[str, Any]]] | None = None,
 ) -> GroundedAnswer:
     """主張と引用の対で回答を生成し、検査・局所監査・最大2回の是正を行う。
 
@@ -2061,7 +2063,8 @@ def synthesize_grounded_answer(
 
     是正は1回につき1手段（既取得poolからの同機能根拠の追加、原画像の添付、指摘の反映）。
     支持済みの要求を失うか問題が増える候補は採用せず、最良の回を公開する。
-    外部検索は行わない。通常は各回で生成と監査を1回ずつ行う。生成した根拠計画の構造が不正な場合だけ、1回修正する。
+    recover_requests があれば、未回答の要求を共有予算内で1回だけ探し直す。通常は各回で生成と監査を1回ずつ行う。
+    生成した根拠計画の構造が不正な場合だけ、1回修正する。
     """
     from rag_engine.generation import grounded
     from rag_engine.models.llm import GroundedItem
@@ -2076,9 +2079,11 @@ def synthesize_grounded_answer(
     best: tuple[Any, AnswerContext, list[dict[str, Any]], tuple, str] | None = None
     feedback: dict[str, Any] | None = None
     expanded = corrected = False
+    retrieval_attempted = False
     # 監査が summary を不支持とした round の (番号, その round に公開しなかった草稿の主張があったか, 草稿の summary)。
     summary_flags: list[tuple[int, bool, str]] = []
     best_number = 0
+    best_unread_sections = tuple(unread_sections)
     image_decision = {
         "reason": "already_multimodal" if mode == "vision_attachments" else "not_needed",
         "regeneration_calls": 0,
@@ -2253,6 +2258,8 @@ def synthesize_grounded_answer(
         if accepted:
             best = (current, context, spans, images, mode)
             best_number = number
+            best_unread_sections = tuple(unread_sections)
+        assert best is not None
         if current.audit is not None and not current.audit.summary_supported:
             summary_flags.append((number, current.unpublished_claims, str(current.draft.summary)))
         rounds.append({**current.trace(), "accepted": accepted})
@@ -2261,6 +2268,33 @@ def synthesize_grounded_answer(
             feedback,
             grounded.correction_feedback(best[0].feedback(), audit_mode, assume_unconfirmed=assume_unconfirmed),
         )
+        retrieval_remedy = None
+        gap_ids = {item.request_id for item in best[0].draft.items if item.kind == "gap" and item.request_id}
+        retrieval_requests = [
+            {key: value for key, value in entry.items() if key in {"request_id", "status"}}
+            for entry in best[0].unanswered
+            if entry.get("reviewed") or entry["request_id"] in gap_ids
+        ]
+        if recover_requests is not None and retrieval_requests and not retrieval_attempted and number < max_rounds - 1:
+            retrieval_attempted = True
+            if budget.allows_round(number + 1):
+                with _execution_step("未回答の要求の探し直し") as retrieval_step:
+                    try:
+                        retrieved_context, retrieval_trace = recover_requests(context, retrieval_requests)
+                    except Exception as exc:  # noqa: BLE001 - 補助の検索の失敗で採用済みの回答を捨てない。
+                        report_degraded("unanswered_request_retrieval", exc)
+                        retrieved_context, retrieval_trace = context, {"error": type(exc).__name__, "applied": False}
+                    rounds[-1]["request_retrieval"] = retrieval_trace
+                    added_ids = {r.chunk_uid or r.id for r in retrieved_context.records} - {r.chunk_uid or r.id for r in context.records}
+                    if added_ids:
+                        context = retrieved_context
+                        feedback = {**feedback, "unanswered_requests": retrieval_requests}
+                        retrieval_remedy = {"remedy": "retrieval", "added_chunk_ids": sorted(added_ids)}
+                        retrieval_step.result(f"未回答の要求を探し直し、新しい根拠 {len(added_ids)} 件で回答を作り直します")
+                    else:
+                        retrieval_step.result("新しい根拠を追加できなかったため、取得済みの資料で回答を確定します")
+            else:
+                rounds[-1]["request_retrieval"] = {"applied": False, "skipped": "deadline"}
         budget.note(current, feedback, accepted=accepted)
         if not feedback or number == max_rounds - 1:
             if feedback and max_rounds < grounded.MAX_ROUNDS:
@@ -2272,8 +2306,8 @@ def synthesize_grounded_answer(
                 }
             break
         needs_content = any(feedback.get(key) for key in ("unanswered_requests", "unused_evidence_ids", "goal_alignment"))
-        remedy: dict[str, Any] | None = None
-        if needs_content and not expanded:
+        remedy: dict[str, Any] | None = retrieval_remedy
+        if remedy is None and needs_content and not expanded:
             expanded = True
             candidate, remedy = _expand_context_from_pool(question, context)
             if candidate is None:
@@ -2328,18 +2362,21 @@ def synthesize_grounded_answer(
                     "context": "答えていない要求があるため、取得済みの資料から同じ機能の根拠を追加して作り直します",
                     "images": "答えていない要求があるため、根拠の原画像を添付して作り直します",
                     "correction": "検査の指摘を渡して作り直します",
+                    "retrieval": "未回答の要求ごとに探し直し、新しい根拠を使って作り直します",
                 }[remedy["remedy"]]
             )
             # 直す指摘と、作り直しに使う材料（#2341）。
             remedy_step.field("直す指摘", join_values(grounded.pending_feedback_labels(feedback)))
             remedy_step.field("次の回答の作成", f"{number + 2} 回目（上限 {max_rounds} 回）")
-            if remedy["remedy"] == "context":
+            if remedy["remedy"] in {"context", "retrieval"}:
                 remedy_step.field("加えた根拠", f"{len(remedy.get('added_chunk_ids') or ())} 件")
                 remedy_step.field("回答の材料の根拠", evidence_summary(context.records))
             elif remedy["remedy"] == "images":
                 remedy_step.field("添付する画像", f"{len(images)} 件")
 
+    assert best is not None
     current, context, spans, images, mode = best
+    unread_sections = best_unread_sections
     # 採用した回の根拠で決まる項目の種類と業務ガイドの条件（#2404）と、その条件の手順の計画（#2689）。
     field_kinds = form_field_kinds.question_field_kinds(question, context)
     resolved_conditions = form_field_kinds.resolve_conditions(field_kinds, settings.evidence_conditions)
@@ -2780,6 +2817,8 @@ def _cover_missing_requests(
     extra_budget: ExtraRetrievalBudget | None = None,
     searched_queries: Sequence[str] = (),
     clock: Callable[[], float] = monotonic,
+    unanswered_requests: Sequence[Mapping[str, Any]] | None = None,
+    usage: CoverageUsage | None = None,
 ) -> tuple[AnswerContext, dict[str, Any]]:
     """要求ごとの根拠の覆域を判定し、根拠が無いか一部だけの要求と小問（#2399）を予算の範囲で 1 回ずつ再検索する (#1279)。
 
@@ -2794,7 +2833,20 @@ def _cover_missing_requests(
     tokenize = _coverage_tokenizer(settings)
     targets = coverage_targets(question, tokenize)
     rows = assess_targets(targets, evidence_texts(context))
+    if unanswered_requests is not None:
+        # 生成後の不足を語の一致で上書きしない。監査の理由や草稿の文は検索入力にしない。
+        for row in rows:
+            statuses = [
+                str(entry.get("status"))
+                for entry in unanswered_requests
+                if str(entry.get("request_id") or "") == row["id"] or str(entry.get("request_id") or "").startswith(row["id"] + ".")
+            ]
+            if statuses:
+                row["answer_status"] = "missing" if "missing" in statuses else "partial"
+        rows = [row for row in rows if row.get("answer_status")]
     budget = _request_coverage_budget(settings)
+    if usage is not None:
+        budget = usage.remaining(budget)
     if extra_budget is not None:
         # 小問ごとの検索（#2399）と根拠の無い要求の再検索を、追加の検索の枠の残りの中に収める（小問が先）。
         budget = within_extra_budget(rows, budget, extra_budget.remaining)
@@ -2804,8 +2856,13 @@ def _cover_missing_requests(
         "counts": coverage_counts(rows),
         "budget": asdict(budget),
         "llm_calls": 0,
+        "assessment": "lexical",
+        "answerability": "unassessed",
+        "phase": "after_generation" if unanswered_requests is not None else "before_generation",
     }
     skip = re_retrieval_skip_reason(rows, budget)
+    if skip == "all_covered" and unanswered_requests and not rows:
+        skip = "unmapped_requests"
     if skip:
         trace["re_retrieval"] = {"applied": False, "skipped": skip}
         return context, trace
@@ -2839,9 +2896,16 @@ def _cover_missing_requests(
         retrieve=retrieve,
         runtime_knowledge=runtime_knowledge,
         tokenize=tokenize,
-        searched_queries=searched_queries,
+        searched_queries=(*searched_queries, *(usage.searched_queries if usage else ())),
         clock=clock,
     )
+    elapsed = max(0.0, clock() - started)
+    if usage is not None:
+        subquestion_ids = {target.id for target in targets if target.subquestion}
+        usage.subquestions += sum(result.request_id in subquestion_ids for result in results)
+        usage.queries += sum(result.request_id not in subquestion_ids for result in results)
+        usage.elapsed_seconds += elapsed
+        usage.searched_queries.extend(query for result in results for query in result.queries)
     if not results and stop == "same_query":
         trace["re_retrieval"] = {"applied": False, "skipped": stop}
         return context, trace
@@ -2877,6 +2941,11 @@ def _cover_missing_requests(
                 document_selection=context.document_selection,
             )
     added_set = set(added_ids)
+    if usage is not None:
+        usage.chunks += sum(
+            request_id not in subquestion_ids and (parent.record.chunk_uid or parent.record.id) in added_set
+            for request_id, parent in selected
+        )
     trace["re_retrieval"] = {
         "applied": bool(added_ids),
         "stop_reason": stop or ("rejected:" + rejected if rejected else ""),
@@ -3103,13 +3172,15 @@ _COVERAGE_SKIP_LABELS = {
     "disabled": "しない（設定で無効）",
     "no_budget": "しない（探し直しの上限が 0）",
     "same_query": "しない（最初の検索と違う検索文を作れない）",
-    "all_covered": "しない（すべての要求に根拠あり）",
+    "all_covered": "しない（すべての要求で語が一致、回答可能性は未判定）",
+    "deadline": "しない（探し直しの時間上限）",
+    "unmapped_requests": "しない（未回答の要求を元の質問の要求単位に対応できない）",
 }
 
 
 def _coverage_step_lines(trace: dict[str, Any]) -> list[str]:
     """覆域の工程の記録の行。"""
-    labels = {"supported": "根拠あり", "weak": "根拠が一部", "missing": "根拠なし", "unassessed": "判定なし"}
+    labels = {"supported": "語の一致が多い", "weak": "語が一部一致", "missing": "語の一致が少ない", "unassessed": "語の一致を判定できない"}
     lines = [
         f"{row['id']}: {labels.get(row['status'], row['status'])}"
         + (f" → {labels.get(row['status_after'], row['status_after'])}" if row.get("status_after") else "")
@@ -4743,6 +4814,7 @@ def answer_question_result(
         )
         # 主の検索の後に足す検索の枠（手順ごとの検索と根拠の無い要求の再検索で共有する。#2395）。
         extra_budget = ExtraRetrievalBudget.from_settings(settings)
+        coverage_usage = CoverageUsage()
         guide_step_trace: dict[str, Any] | None = None
         if guide_plan is not None:
             # 業務ガイドの案内（窓口・引き継ぐ条件・承認。#2792）。本文の「業務ガイドの案内」の節に資料とは分けて出す。
@@ -4843,7 +4915,7 @@ def answer_question_result(
             )
 
         with _execution_step(
-            "要求ごとの根拠の確認", "質問の要求ごとに根拠があるかを確かめ、根拠が無いか一部だけの要求を探し直します。"
+            "要求ごとの根拠の確認", "要求の語と資料の語の一致を測り、一致が少ない要求を探し直します。回答可能性は生成時に別に確認します。"
         ) as coverage_step:
             context, request_coverage = _cover_missing_requests(
                 request_text,
@@ -4859,6 +4931,7 @@ def answer_question_result(
                 classification_filter=selected_classification_filter,
                 runtime_knowledge=runtime_knowledge,
                 extra_budget=extra_budget,
+                usage=coverage_usage,
                 searched_queries=crag_attempts[-1].retrieval_queries if crag_attempts else retrieval_queries,
             )
             counts = request_coverage["counts"]
@@ -4866,7 +4939,8 @@ def answer_question_result(
             if re_retrieval.get("skipped") in {"disabled", "same_query"}:
                 coverage_step.hide()
             coverage_step.result(
-                f"根拠あり {counts['supported']} 件、一部 {counts['weak']} 件、なし {counts['missing']} 件",
+                f"語の一致が多い {counts['supported']} 件、一部一致 {counts['weak']} 件、"
+                f"一致が少ない {counts['missing']} 件（回答可能性は未判定）",
                 *_coverage_step_lines(request_coverage),
             )
             # 探し直しをしたか・しなかった理由（記録の文から省いた工程も段は出る。#2341）。
@@ -4931,6 +5005,35 @@ def answer_question_result(
                     ),
                 )
 
+        unread_for_answer = list(section_expansion.unread) if section_expansion is not None else []
+
+        def recover_requests(candidate: AnswerContext, unanswered: Sequence[Mapping[str, Any]]) -> tuple[AnswerContext, dict[str, Any]]:
+            recovered, trace = _cover_missing_requests(
+                request_text,
+                candidate,
+                settings,
+                run_id=run_id,
+                preferred_engines=preferred_engine_ids,
+                top_k=chunk_top_k,
+                neighbor_child_count=chunk_neighbor_count,
+                rerank_enabled=effective_rerank_enabled,
+                inquiry_conditions=inquiry_conditions,
+                retrieval_scope=selected_retrieval_scope,
+                classification_filter=selected_classification_filter,
+                runtime_knowledge=runtime_knowledge,
+                extra_budget=extra_budget,
+                usage=coverage_usage,
+                unanswered_requests=unanswered,
+                searched_queries=crag_attempts[-1].retrieval_queries if crag_attempts else retrieval_queries,
+            )
+            request_coverage.setdefault("after_generation", []).append(trace)
+            if trace.get("re_retrieval", {}).get("applied"):
+                recovered, completed = complete_sections(recovered, "after_generation")
+                if completed is not None:
+                    unread_for_answer[:] = completed.unread
+                    evidence_trace["section_expansion"] = completed.trace
+            return recovered, trace
+
         grounded_answer = synthesize_grounded_answer(
             request_text,
             context,
@@ -4943,9 +5046,10 @@ def answer_question_result(
             answer_llm_provider=answer_llm_provider,
             query_expansion=expansion,
             known_gaps=_known_gaps(crag_attempts, section_expansion),
-            unread_sections=section_expansion.unread if section_expansion is not None else (),
+            unread_sections=unread_for_answer,
             unread_documents={document_id for document_id, _start, _end in guide_ranges},
             evidence_budget_chars=_section_evidence_budget(context, settings, section_expansion),
+            recover_requests=recover_requests if settings.request_coverage_retrieval_enabled else None,
         )
         # 是正で根拠や画像が増えた場合は、回答を生成した入力を参照欄と payload に使う。
         response, context = grounded_answer.response, grounded_answer.context
@@ -5135,6 +5239,9 @@ def _expand_context_by_sections(
             priority=tuple(sections.PriorityRange(document_id, start, end) for document_id, start, end in priority),
         )
         result.trace["phase"] = phase
+        result.trace["extraction_enabled"] = bool(getattr(settings, "section_extraction_enabled", True))
+        if result.trace.get("large_section_handoff") == "extract_then_integrate_unavailable":
+            result.trace["large_section_handoff_reason"] = "disabled_by_setting"
         previous = state.get("result")
         if previous is not None:
             result.applied = result.applied or previous.applied
