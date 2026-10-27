@@ -42,6 +42,8 @@ def test_wrong_value_is_replaced_by_the_value_of_the_table() -> None:
     assert "『区分Ⅱ』の値は『02』" in revised.note
     [(system, inputs, schema)] = seen
     assert system == REVISION_SYSTEM_PROMPT and schema is TableRevision
+    assert system.startswith("## Step 1:")
+    assert "## Step 4:" in system
     # LLM には段落と表の正しい対応だけを渡す。
     assert inputs == {
         "passage": WRONG,
