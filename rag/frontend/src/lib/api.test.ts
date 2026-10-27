@@ -1163,7 +1163,7 @@ describe("api.services", () => {
       jsonResponse({
         data: {
           control_enabled: true,
-          deployment_mode: "dev",
+          deployment_mode: "local",
           services: [
             {
               service_id: "parser-docling",
@@ -1183,7 +1183,7 @@ describe("api.services", () => {
 
     const result = await api.getServiceCatalog();
 
-    expect(result.deployment_mode).toBe("dev");
+    expect(result.deployment_mode).toBe("local");
     expect(result.services[0].service_id).toBe("parser-docling");
     expect(fetchMock).toHaveBeenCalledWith("/api/services/catalog", expect.anything());
   });

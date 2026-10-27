@@ -165,7 +165,7 @@ make_case() {
     "${platform_dir}/packages/ui" \
     "${case_dir}/wallet/nested" \
     "${case_dir}/fake-bin"
-  printf 'NL2SQL_APP_AUTH_ENABLED=true\n' > "${app_dir}/backend/.env"
+  printf 'PLATFORM_AUTH_MODE=authenticated\n' > "${app_dir}/backend/.env"
   # 共通の設定（Wallet の場所を含む）は platform/.env（#211）。
   printf 'PLATFORM_ORACLE_WALLET_DIR=%s\n' "${case_dir}/wallet" > "${platform_dir}/.env"
   printf 'PLATFORM_ORACLE_PASSWORD=$(touch %s/must-not-run)\n' "${case_dir}" >> "${platform_dir}/.env"

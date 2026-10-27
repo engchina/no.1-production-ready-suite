@@ -69,8 +69,8 @@ run_install_env_case() (
   # shellcheck source=/dev/null
   source "${REPO_DIR}/init_script.sh"
 
-  printf 'PLATFORM_ORACLE_DSN=agentdb_high\n' > "${PROPS_DIR}/platform.env"
-  printf 'AGENT_AUTH_MODE=production\n' > "${PROPS_DIR}/backend.env"
+  printf 'PLATFORM_ORACLE_DSN=agentdb_high\nPLATFORM_ENVIRONMENT=staging\nPLATFORM_AUTH_MODE=authenticated\n' > "${PROPS_DIR}/platform.env"
+  printf 'AGENT_LOG_LEVEL=INFO\n' > "${PROPS_DIR}/backend.env"
   python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1], "w").writestr("tnsnames.ora", "agentdb_high=\n")' \
     "${PROPS_DIR}/wallet.zip"
 
@@ -109,7 +109,7 @@ install_suite="${TEST_TMP_DIR}/install-env/app/no.1-production-ready-suite"
 grep -qx 'PLATFORM_ORACLE_DSN=agentdb_high' "${install_suite}/platform/.env" \
   || fail "共通 .env が platform/.env に置かれていない"
 test "$(stat -c '%a' "${install_suite}/platform/.env")" = "600" || fail "platform/.env の permission が 0600 ではない"
-grep -qx 'AGENT_AUTH_MODE=production' "${install_suite}/agent/backend/.env" \
+grep -qx 'AGENT_LOG_LEVEL=INFO' "${install_suite}/agent/backend/.env" \
   || fail "backend/.env が置かれていない"
 test "$(stat -c '%a' "${install_suite}/agent/backend/.env")" = "600" || fail "backend/.env の permission が 0600 ではない"
 if grep -q 'PLATFORM_' "${install_suite}/agent/backend/.env"; then

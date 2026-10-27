@@ -1902,7 +1902,7 @@ async def test_quality_evaluation_http_statuses_for_missing_workbook_and_bad_pag
         engine_runner=lambda *_args: "SELECT 1 FROM dual",
         judge_runner=_judge,
     )
-    monkeypatch.setattr(get_settings(), "app_auth_enabled", False)
+    monkeypatch.setattr(get_settings(), "auth_mode", "local")
     monkeypatch.setattr(nl2sql_router_module, "quality_evaluation_service", service)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

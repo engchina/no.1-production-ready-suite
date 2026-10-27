@@ -109,6 +109,8 @@ PLATFORM_ADMIN_LOGIN_USER_PASSWORD=${admin_password}
 PLATFORM_SERVICE_TOKEN_SECRET=${secret}
 
 PLATFORM_AUTH_COOKIE_SECURE=true
+PLATFORM_ENVIRONMENT=staging
+PLATFORM_AUTH_MODE=authenticated
 PLATFORM_AUTH_SESSION_COOKIE_NAME=pr_session
 PLATFORM_AUTH_CSRF_COOKIE_NAME=pr_csrf
 EOF
@@ -116,7 +118,6 @@ EOF
 RAG_APP_VERSION=0.1.0
 RAG_LOG_LEVEL=INFO
 
-RAG_AUTH_MODE=production
 RAG_AUDIT_CONTEXT_HASH_SALT=
 
 RAG_PARSER_ADAPTER_BACKEND=docling
@@ -127,13 +128,10 @@ EOF
   "${docker_cmd}" exec -i "${container}" bash -c "umask 077; cat > ${props}/nl2sql.backend.env" <<'EOF'
 NL2SQL_APP_VERSION=0.1.0
 NL2SQL_LOG_LEVEL=INFO
-NL2SQL_ENVIRONMENT=production
 NL2SQL_SERVICE_NAME=production-ready-nl2sql
 NL2SQL_CORS_ORIGINS=["http://localhost","http://127.0.0.1"]
 NL2SQL_ENABLE_METRICS=true
-NL2SQL_DEBUG=false
 
-NL2SQL_APP_AUTH_ENABLED=true
 
 NL2SQL_ORACLE_DEEPSEC_ENABLED=false
 NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER
@@ -151,11 +149,9 @@ EOF
   "${docker_cmd}" exec -i "${container}" bash -c "umask 077; cat > ${props}/agent.backend.env" <<'EOF'
 AGENT_APP_VERSION=0.1.0
 AGENT_LOG_LEVEL=INFO
-AGENT_ENVIRONMENT=production
 AGENT_SERVICE_NAME=production-ready-agent
 AGENT_CORS_ORIGINS=["http://localhost","http://127.0.0.1"]
 
-AGENT_AUTH_MODE=production
 
 AGENT_RUNTIME_REPOSITORY_BACKEND=oracle_checkpoint
 AGENT_RUNTIME_DISPATCH_MODE=in_process

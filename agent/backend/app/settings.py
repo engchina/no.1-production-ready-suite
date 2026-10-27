@@ -3,7 +3,7 @@
 import logging
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pr_backend_core.chat_history import (
     CHAT_HISTORY_DEFAULT_MAX_CHARS,
@@ -64,17 +64,11 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     model_config = product_settings_config(prefix="AGENT_", backend_dir=BACKEND_DIR)
 
     service_name: str = "production-ready-agent"
-    # --- 認証（#215）---
-    # RAG / NL2SQL と同じ共通認証（#750）。ユーザー・ロールはどちらも Oracle の PLATFORM_*。
-    # local: ログインを省略し、全権限のローカル利用者として使う（開発用）。
-    # production: 共通認証（PLATFORM_* のユーザー・ロール）のログインを必須にする。Cookie の
-    #   ないリクエストは 401（Runtime からの呼出しは Binding token の /api/mcp/{binding_id}）。
-    auth_mode: Literal["local", "production"] = "local"
+    # 実行環境と認証方式は platform の RuntimeSettings を継承する。
     # 構成管理者・認証ポリシー・ログインの Cookie 名は共通 `.env` の PLATFORM_ADMIN_* /
     # PLATFORM_AUTH_*（#211）。Cookie は 3 製品で共有し、1 回のログインで全製品を使える（#1565）。
     app_admin_login_user_id: str = ""
     app_admin_login_user_password: str = ""
-    app_auth_cookie_secure: bool = False
     app_auth_session_cookie_name: str = DEFAULT_SESSION_COOKIE_NAME
     app_auth_csrf_cookie_name: str = DEFAULT_CSRF_COOKIE_NAME
     app_auth_idle_timeout_minutes: int = 60
@@ -337,16 +331,6 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_opentelemetry_endpoint: str | None = None
     agent_artifact_storage_backend: str = "inline"
     agent_artifact_storage_path: str = ".agent-artifacts"
-
-    @property
-    def local_debug_enabled(self) -> bool:
-        """local mode: 画面は全権限のローカル利用者（DB セッションを作らない）。"""
-        return self.auth_mode == "local"
-
-    @property
-    def app_auth_enabled(self) -> bool:
-        """production mode: 画面は共通認証のログインを必須にする。"""
-        return self.auth_mode == "production"
 
     @property
     def oracle_driver_mode(self) -> str:

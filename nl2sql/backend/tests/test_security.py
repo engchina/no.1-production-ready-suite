@@ -104,7 +104,7 @@ def _settings() -> Settings:
         app_admin_login_user_password="AppAdminPass123",
         oracle_dsn="test",
         nl2sql_persistence_mode="memory",
-        app_auth_enabled=True,
+        auth_mode="authenticated",
         app_auth_failed_login_limit=5,
         app_auth_lockout_minutes=15,
         app_auth_idle_timeout_minutes=60,
@@ -176,7 +176,7 @@ def _patch_security_threadpools(monkeypatch: pytest.MonkeyPatch) -> None:
 def _configure_memory_api_auth(monkeypatch: pytest.MonkeyPatch) -> SecurityService:
     _patch_security_threadpools(monkeypatch)
     settings = get_settings()
-    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_mode", "authenticated")
     monkeypatch.setattr(settings, "app_auth_cookie_secure", False)
     monkeypatch.setattr(settings, "oracle_user", "DBADMIN")
     monkeypatch.setattr(settings, "oracle_password", "DbAdminPass!123")
@@ -345,9 +345,9 @@ def test_oracle_store_maps_bare_ora_00942_to_operation_security_object(
 
 
 def test_debug_auth_bypass_is_local_only_and_has_system_admin_permissions() -> None:
-    local = Settings.model_construct(debug=True, environment="local")
-    production = Settings.model_construct(debug=True, environment="production")
-    disabled = Settings.model_construct(debug=False, environment="local")
+    local = Settings.model_construct(auth_mode="local", environment="local")
+    production = Settings.model_construct(auth_mode="local", environment="production")
+    disabled = Settings.model_construct(auth_mode="authenticated", environment="local")
 
     assert local.local_debug_enabled is True
     assert production.local_debug_enabled is False
@@ -364,9 +364,9 @@ def test_local_debug_me_and_logout_need_no_session_or_csrf(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "debug", True)
+    monkeypatch.setattr(settings, "auth_mode", "local")
     monkeypatch.setattr(settings, "environment", "local")
-    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_mode", "local")
 
     async def exercise() -> None:
         request = Request(
@@ -422,9 +422,8 @@ def test_debug_flag_cannot_bypass_auth_outside_local(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "debug", True)
     monkeypatch.setattr(settings, "environment", "production")
-    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_mode", "authenticated")
 
     class RejectingSecurityService:
         @staticmethod
@@ -3383,7 +3382,7 @@ def test_auth_api_sets_http_only_session_and_requires_csrf(
     _patch_security_threadpools(monkeypatch)
     _patch_app_admin_env(monkeypatch, tmp_path, password="BootstrapPass123")
     settings = get_settings()
-    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_mode", "authenticated")
     monkeypatch.setattr(settings, "app_auth_cookie_secure", False)
     monkeypatch.setattr(settings, "oracle_user", "ADMIN")
     monkeypatch.setattr(settings, "oracle_password", "BootstrapPass!123")
@@ -3447,8 +3446,8 @@ def test_deepsec_config_patch_updates_runtime_without_restart(
     monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: closed.append(True))
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "local")
-    monkeypatch.setattr(settings, "debug", True)
-    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_mode", "local")
+    monkeypatch.setattr(settings, "auth_mode", "local")
     monkeypatch.setattr(settings, "oracle_user", "ADMIN")
     monkeypatch.setattr(settings, "oracle_dsn", "")
     monkeypatch.setattr(settings, "oracle_deepsec_enabled", False)
@@ -3539,8 +3538,8 @@ def test_deepsec_config_sync_password_endpoint_uses_saved_secret_without_payload
     )
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "local")
-    monkeypatch.setattr(settings, "debug", True)
-    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_mode", "local")
+    monkeypatch.setattr(settings, "auth_mode", "local")
     monkeypatch.setattr(settings, "oracle_user", "ADMIN")
     monkeypatch.setattr(settings, "oracle_dsn", "test")
     monkeypatch.setattr(settings, "oracle_driver_mode", "thin")
@@ -3628,8 +3627,8 @@ def test_deepsec_config_sync_password_endpoint_treats_ora28007_as_success_when_l
     )
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "local")
-    monkeypatch.setattr(settings, "debug", True)
-    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_mode", "local")
+    monkeypatch.setattr(settings, "auth_mode", "local")
     monkeypatch.setattr(settings, "oracle_user", "ADMIN")
     monkeypatch.setattr(settings, "oracle_dsn", "test")
     monkeypatch.setattr(settings, "oracle_driver_mode", "thin")
@@ -3701,8 +3700,8 @@ def test_deepsec_config_sync_password_endpoint_keeps_409_when_ora28007_probe_fai
     )
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "local")
-    monkeypatch.setattr(settings, "debug", True)
-    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_mode", "local")
+    monkeypatch.setattr(settings, "auth_mode", "local")
     monkeypatch.setattr(settings, "oracle_user", "ADMIN")
     monkeypatch.setattr(settings, "oracle_dsn", "test")
     monkeypatch.setattr(settings, "oracle_driver_mode", "thin")
@@ -3759,8 +3758,8 @@ def test_deepsec_config_patch_sync_failure_returns_409_without_secret(
     )
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "local")
-    monkeypatch.setattr(settings, "debug", True)
-    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_mode", "local")
+    monkeypatch.setattr(settings, "auth_mode", "local")
     monkeypatch.setattr(settings, "oracle_user", "ADMIN")
     monkeypatch.setattr(settings, "oracle_dsn", "test")
     monkeypatch.setattr(settings, "oracle_driver_mode", "thin")
@@ -3802,7 +3801,7 @@ def test_api_enforces_menu_permissions(
 ) -> None:
     _patch_security_threadpools(monkeypatch)
     settings = get_settings()
-    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_mode", "authenticated")
     monkeypatch.setattr(settings, "app_auth_cookie_secure", False)
     monkeypatch.setattr(settings, "oracle_user", "DBADMIN")
     monkeypatch.setattr(settings, "oracle_password", "DbAdminPass!123")
@@ -5448,7 +5447,7 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_mode", "authenticated")
     monkeypatch.setattr(settings, "app_auth_cookie_secure", False)
     monkeypatch.setattr(settings, "oracle_user", "DBADMIN")
     monkeypatch.setattr(settings, "oracle_password", "DbAdminPass!123")

@@ -687,14 +687,14 @@ variable "rag_enable_oci_cloud_parsers" {
 
 # ---------------------------------------------------------------- NL2SQL
 
-variable "nl2sql_app_environment" {
-  description = "NL2SQL application environment (NL2SQL_ENVIRONMENT). HTTP deployments use local with NL2SQL_DEBUG=false; staging and production require https_enabled=true (PLATFORM_AUTH_COOKIE_SECURE=true)."
+variable "platform_environment" {
+  description = "3製品共通の実行環境（PLATFORM_ENVIRONMENT）。staging / production は HTTPS とログイン認証を必須にする。"
   type        = string
-  default     = "local"
+  default     = "staging"
 
   validation {
-    condition     = contains(["local", "staging", "production"], var.nl2sql_app_environment)
-    error_message = "nl2sql_app_environment must be local, staging, or production."
+    condition     = contains(["local", "staging", "production"], var.platform_environment)
+    error_message = "platform_environment must be local, staging, or production."
   }
 }
 

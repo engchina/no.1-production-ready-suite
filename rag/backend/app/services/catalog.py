@@ -198,13 +198,8 @@ def is_allowed_systemd_unit(unit: str) -> bool:
 
 
 def is_dev_mode(settings: Settings) -> bool:
-    """local 環境が dev か判定する。
-
-    ``RAG_ENVIRONMENT`` を流用し、``prod``/``production`` 以外は dev とみなす
-    (readiness の production 判定と整合)。dev/prod とも systemd の unit で起動/停止する(#286)。
-    dev は起動/停止を自動で有効にする。
-    """
-    return settings.environment.strip().lower() not in {"prod", "production"}
+    """ローカル環境だけでサービス制御を自動的に有効にする。"""
+    return settings.environment == "local"
 
 
 def resolve_service_base_url(settings: Settings, url_field: str) -> str:

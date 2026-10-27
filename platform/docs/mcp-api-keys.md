@@ -106,7 +106,7 @@ NL2SQL の読み取りのツールの例は `nl2sql_list_profiles`、Agent は `
 
 ## local の認証モード
 
-`RAG_AUTH_MODE=local` などログインを省略する開発の構成でも、`Authorization: Bearer prak_…` を付けた要求はキーを検証する（素通りにしない）。local の画面（ローカル利用者）で発行したキーはローカル利用者として動き、local でだけ使える（production では 401）。キーを付けない要求は、従来どおり全権限のローカル利用者になる。そのため local では、MCP クライアントの接続の確認（`claude mcp list` の Connected）だけではキーを確かめられない。キーが使われたかは「API キー」の最終利用日時で確かめる。
+`PLATFORM_AUTH_MODE=local` などログインを省略する開発の構成でも、`Authorization: Bearer prak_…` を付けた要求はキーを検証する（素通りにしない）。local の画面（ローカル利用者）で発行したキーはローカル利用者として動き、local でだけ使える（production では 401）。キーを付けない要求は、従来どおり全権限のローカル利用者になる。そのため local では、MCP クライアントの接続の確認（`claude mcp list` の Connected）だけではキーを確かめられない。キーが使われたかは「API キー」の最終利用日時で確かめる。
 
 ## 実装（開発者向け）
 

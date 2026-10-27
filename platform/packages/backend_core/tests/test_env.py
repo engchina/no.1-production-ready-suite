@@ -24,7 +24,6 @@ def _settings_class(tmp_path: Path) -> type[BaseServiceSettings]:
 
         oracle_dsn: str = ""
         app_auth_idle_timeout_minutes: int = 60
-        auth_mode: str = "local"
         rag_chunk_size: int = 1
 
     return Settings
@@ -34,7 +33,7 @@ def test_env_names_split_platform_and_product(tmp_path: Path) -> None:
     names = settings_env_names(_settings_class(tmp_path))
     assert names["oracle_dsn"] == "PLATFORM_ORACLE_DSN"
     assert names["app_auth_idle_timeout_minutes"] == "PLATFORM_AUTH_IDLE_TIMEOUT_MINUTES"
-    assert names["auth_mode"] == "RAG_AUTH_MODE"
+    assert names["auth_mode"] == "PLATFORM_AUTH_MODE"
     assert names["rag_chunk_size"] == "RAG_CHUNK_SIZE"
     assert names["log_level"] == "RAG_LOG_LEVEL"
 
@@ -46,17 +45,18 @@ def test_reads_platform_then_product_env_and_ignores_old_names(
     settings_cls = _settings_class(tmp_path)
     (tmp_path / "platform").mkdir()
     (tmp_path / "platform" / ".env").write_text(
-        "PLATFORM_ORACLE_DSN=shared\nPLATFORM_AUTH_IDLE_TIMEOUT_MINUTES=30\n", encoding="utf-8"
+        "PLATFORM_ORACLE_DSN=shared\nPLATFORM_AUTH_IDLE_TIMEOUT_MINUTES=30\nPLATFORM_AUTH_MODE=authenticated\n",
+        encoding="utf-8",
     )
     (tmp_path / "rag" / "backend" / ".env").write_text(
-        "RAG_AUTH_MODE=database\nORACLE_DSN=old\nAUTH_MODE=old\n", encoding="utf-8"
+        "RAG_AUTH_MODE=local\nORACLE_DSN=old\nAUTH_MODE=old\n", encoding="utf-8"
     )
     monkeypatch.setenv("ORACLE_DSN", "old")
     monkeypatch.setenv("RAG_CHUNK_SIZE", "5")
     settings = settings_cls()
     assert settings.oracle_dsn == "shared"  # type: ignore[attr-defined]
     assert settings.app_auth_idle_timeout_minutes == 30  # type: ignore[attr-defined]
-    assert settings.auth_mode == "database"  # type: ignore[attr-defined]
+    assert settings.auth_mode == "authenticated"  # type: ignore[attr-defined]
     assert settings.rag_chunk_size == 5  # type: ignore[attr-defined]
     # 属性名での生成（テスト用）も使える。
     assert settings_cls(oracle_dsn="kw").oracle_dsn == "kw"  # type: ignore[attr-defined]
@@ -76,7 +76,7 @@ def test_old_names_are_not_read_even_without_new_names(
     settings = settings_cls()
     assert settings.oracle_dsn == ""  # type: ignore[attr-defined]
     assert settings.log_level == "INFO"
-    assert settings.auth_mode == "local"  # type: ignore[attr-defined]
+    assert settings.auth_mode == "authenticated"  # type: ignore[attr-defined]
     assert settings.rag_chunk_size == 7  # type: ignore[attr-defined]
 
 

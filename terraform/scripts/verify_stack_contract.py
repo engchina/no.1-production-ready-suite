@@ -52,7 +52,7 @@ HIDDEN_VARIABLES = [
     "application_git_ref",
     "existing_oracle_wallet_password",
     "adb_is_mtls_connection_required",
-    "nl2sql_app_environment",
+    "platform_environment",
     "app_admin_login_user_id",
     "agent_runtime_repository_backend",
     # elastic pool は選ばせず既定値（無効）で配備する（#2801）。
@@ -165,9 +165,8 @@ RAG_OPTIONAL_SERVICES = [
 # 準備中（ロードマップ）で配備しない parser（#3374）。入力は残すが画面に出さず、rag_services に入れない。
 RAG_ROADMAP_SERVICES = {"parser-oci-document-understanding": "rag_enable_oci_cloud_parsers"}
 # systemd の unit の Environment（init_script.sh）と Settings の既定値が正本の key。RAG の .env に書くと、
-# unit の値に隠れる（RAG_ENVIRONMENT）か、配備が前提にする場所とずれる。
+# 配備が前提にする場所とずれるため、共通 .env にも書かない。
 RAG_UNIT_OWNED_ENV_KEYS = {
-    "RAG_ENVIRONMENT",
     "PLATFORM_LOCAL_STORAGE_DIR",
     "PLATFORM_MODEL_SETTINGS_FILE",
     "PLATFORM_OCI_CONFIG_FILE",
@@ -180,7 +179,6 @@ REQUIRED_BACKEND_ENV_LINES = {
     # RAG の backend/.env は OCI parser の unit も EnvironmentFile で読む。入力由来の値は single quote で囲む。
     # 既定の解析エンジンは Docling。サービス管理画面は sudoers で許可した unit の systemctl だけを実行する（#286）。
     "rag": [
-        "RAG_AUTH_MODE=production\n",
         "RAG_AUDIT_CONTEXT_HASH_SALT=\n",
         "RAG_PARSER_ADAPTER_BACKEND=docling\n",
         "RAG_PARSER_DOCLING_ENABLED=true\n",
@@ -196,7 +194,6 @@ REQUIRED_BACKEND_ENV_LINES = {
         "NL2SQL_SELECT_AI_CREDENTIAL_NAME=NL2SQL_OCI_CRED\n",
     ],
     "agent": [
-        "AGENT_AUTH_MODE=production\n",
         "AGENT_RUNTIME_REPOSITORY_BACKEND=${var.agent_runtime_repository_backend}\n",
         "AGENT_RUNTIME_DISPATCH_MODE=in_process\n",
         # RAG / NL2SQL の MCP は、同じ Compute の backend（127.0.0.1）を直接呼ぶ（#233 / #1316）。
@@ -227,6 +224,8 @@ REQUIRED_PLATFORM_ENV_LINES = [
     "PLATFORM_SERVICE_TOKEN_SECRET=${random_password.service_token_secret.result}\n",
     # 1 台の Compute では platform/.env は 1 つ。ログインの Cookie は HTTPS が on なら Secure（#1316）。
     "PLATFORM_AUTH_COOKIE_SECURE=${var.https_enabled}\n",
+    "PLATFORM_ENVIRONMENT=${var.platform_environment}\n",
+    "PLATFORM_AUTH_MODE=authenticated\n",
     # ログインの Cookie は 3 製品で共有する（1 回のログインで全製品を使える。#1565）。
     "PLATFORM_AUTH_SESSION_COOKIE_NAME=pr_session\n",
     "PLATFORM_AUTH_CSRF_COOKIE_NAME=pr_csrf\n",
@@ -244,7 +243,7 @@ SETTINGS_FILES = {
 # pr_backend_core.BaseServiceSettings の共通 field（各製品の Settings には書かれていない）。
 BASE_SETTINGS_FIELDS = {"app_version", "log_level", "environment", "cors_origins"}
 # 3 製品の Settings が pr_backend_core.config の mixin から受け継ぐ共通の属性（時間帯の TimezoneSettings。#3255）。
-MIXIN_SETTINGS_FIELDS = {"timezone"}
+MIXIN_SETTINGS_FIELDS = {"timezone", "auth_mode", "app_auth_cookie_secure"}
 
 # 1 台の Compute の配備（platform/deploy/suite-init.sh が呼ぶ。#1316。製品は単独では配備しない）の契約。
 # 製品の init_script.sh は Nginx の site を書かず、/<製品>/ を base に frontend を build し、backend/.env は製品ごとの元から作る。
@@ -766,7 +765,7 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             'trimspace(var.app_admin_login_user_password) != ""',
             # 公開の port に SSH・よく使われる service・Compute の中で使う port を使わせない（#1316）。
             "condition     = length(local.public_ports_reserved) == 0",
-            '!var.deploy_nl2sql || var.nl2sql_app_environment == "local" || var.https_enabled',
+            'var.platform_environment == "local" || var.https_enabled',
             "!var.deploy_nl2sql || !var.nl2sql_oracle_deepsec_enabled",
             # 3製品で同じサービス間 token の署名鍵。
             'resource "random_password" "service_token_secret" {',

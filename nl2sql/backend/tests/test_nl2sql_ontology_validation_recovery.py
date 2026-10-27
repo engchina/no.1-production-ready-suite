@@ -21,7 +21,7 @@ from app.settings import get_settings
 @pytest.fixture(autouse=True)
 def external(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
-    monkeypatch.setattr(get_settings(), "app_auth_enabled", False)
+    monkeypatch.setattr(get_settings(), "auth_mode", "local")
 
 
 def setup_job() -> tuple[Any, Any, Any, dict[str, Any], list[str]]:

@@ -55,7 +55,7 @@ stable JSON を返す。設定値は出力しない。終了コードが 0 以�
 製品 `.env` に残った `PLATFORM_*` や旧名は `ENV_ACTUAL_UNKNOWN_KEYS`、共通 `.env` に置いた製品の変数は
 `PLATFORM_ENV_ACTUAL_UNKNOWN_KEYS` として検出する。
 
-非 local 環境は起動時に `NL2SQL_DEBUG=false` を必須とする。認証を有効にする場合は
+非 local 環境は起動時に `PLATFORM_AUTH_MODE=authenticated` を必須とする。認証を有効にする場合は
 `PLATFORM_AUTH_COOKIE_SECURE=true` も必須とする。
 
 ## 既存環境の更新手順（#566 既定のテキストモデルの必須化）

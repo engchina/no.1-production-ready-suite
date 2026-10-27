@@ -1634,14 +1634,15 @@ export const ja = {
   "settings.services.controlEnabled.off": "無効(可視化のみ)",
   "settings.services.controlDisabled.hint":
     "起動/停止は無効です。有効化するには RAG_SERVICE_CONTROL_ENABLED=true を設定してください。",
-  "settings.services.mode.dev":
+  "settings.services.mode.local":
     "開発 (systemd)",
-  "settings.services.mode.prod":
+  "settings.services.mode.staging": "検証 (systemd)",
+  "settings.services.mode.production":
     "本番 (systemd)",
-  "settings.services.mode.dev.hint":
-    "開発モード(RAG_ENVIRONMENT=development)です。unit と sudoers は rag/scripts/rag-services.sh install で登録します。起動/停止した状態は、PC の再起動後も保たれます。",
-  "settings.services.mode.prod.hint":
-    "本番モードです。起動は systemctl enable --now、停止は systemctl disable --now で行い、最後に操作した状態をサーバーの再起動・再配備後も保ちます。",
+  "settings.services.mode.local.hint":
+    "開発モード(PLATFORM_ENVIRONMENT=local)です。unit と sudoers は rag/scripts/rag-services.sh install で登録します。起動/停止した状態は、PC の再起動後も保たれます。",
+  "settings.services.mode.deployed.hint":
+    "検証・本番環境です。起動は systemctl enable --now、停止は systemctl disable --now で行い、最後に操作した状態をサーバーの再起動・再配備後も保ちます。",
   "settings.services.commands.title": "実行コマンド",
   "settings.services.commands.description":
     "サーバー上で状態やログを確かめるコマンドです。rag/ ディレクトリで実行します。",

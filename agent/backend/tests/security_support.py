@@ -126,9 +126,9 @@ class ProductionAuth:
 
 
 def enable_production_auth(monkeypatch: MonkeyPatch) -> ProductionAuth:
-    """AGENT_AUTH_MODE=production と InMemory の共通認証 service にする。"""
+    """PLATFORM_AUTH_MODE=authenticated と InMemory の共通認証 service にする。"""
     settings = get_settings()
-    monkeypatch.setattr(settings, "auth_mode", "production")
+    monkeypatch.setattr(settings, "auth_mode", "authenticated")
     monkeypatch.setattr(settings, "app_admin_login_user_id", "system_admin")
     monkeypatch.setattr(settings, "app_admin_login_user_password", CONFIGURED_ADMIN_PASSWORD)
     monkeypatch.setattr(settings, "app_auth_cookie_secure", False)

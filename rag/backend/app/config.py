@@ -31,6 +31,7 @@ from pr_backend_core.chat_history_window import (
 )
 from pr_backend_core.config import (
     PlatformEnvSourcesMixin,
+    RuntimeSettings,
     TimezoneSettings,
     TracingSettings,
     platform_env_file,
@@ -99,7 +100,6 @@ from rag_pipeline_core.evaluation import LEGACY_EVALUATION_SUITES
 from app.parser_settings_store import ParserSettingsStore
 from app.rag.language_pack_store import LANGUAGE_PACK_STORE
 
-AuthMode = Literal["local", "production"]
 UploadStorageBackend = Literal["local", "oci"]
 AuditPersistence = Literal["log", "oracle", "both"]
 ParserAdapterBackend = Literal[
@@ -466,7 +466,12 @@ def resolve_ingestion_queue_concurrency(
 
 
 class Settings(
-    PlatformEnvSourcesMixin, ModelSecretStateMixin, TracingSettings, TimezoneSettings, BaseSettings
+    PlatformEnvSourcesMixin,
+    RuntimeSettings,
+    ModelSecretStateMixin,
+    TracingSettings,
+    TimezoneSettings,
+    BaseSettings,
 ):
     """環境変数ベースの設定。旧名（属性名と同じ環境変数名）は読まない（#211）。"""
 
@@ -501,23 +506,14 @@ class Settings(
 
     # --- アプリ ---
     app_name: str = "production-ready-rag"
-    environment: str = Field(default="dev")
     log_level: str = Field(default="INFO")
     app_version: str = Field(default="0.1.0")
-    auth_mode: AuthMode = Field(
-        default="local",
-        description=(
-            "local は全権限・対象範囲の制限なしのローカル利用者として動かす（ログイン不要）。"
-            "production は共通認証（PLATFORM_* のユーザー・ロール）のログインを必須にする。"
-        ),
-    )
     # --- 共通認証（platform の pr_system_settings.auth。#214）---
     # 構成管理者・認証ポリシー・ログインの Cookie 名は共通 `.env` の PLATFORM_ADMIN_* /
     # PLATFORM_AUTH_*（#211）。Cookie は 3 製品で共有し、1 回のログインで全製品を使える（#1565）。
     service_name: str = Field(default="production-ready-rag")
     app_admin_login_user_id: str = Field(default="")
     app_admin_login_user_password: str = Field(default="")
-    app_auth_cookie_secure: bool = Field(default=False)
     app_auth_session_cookie_name: str = Field(default=DEFAULT_SESSION_COOKIE_NAME)
     app_auth_csrf_cookie_name: str = Field(default=DEFAULT_CSRF_COOKIE_NAME)
     app_auth_idle_timeout_minutes: int = Field(default=60)
@@ -2456,7 +2452,7 @@ class Settings(
         description=(
             "サービス管理画面からの起動/停止(systemd の unit の操作)を有効化する。"
             "OFF(既定)は稼働状態の可視化のみで、制御 API は 409(control_disabled)で拒否する。"
-            "dev(RAG_ENVIRONMENT が prod 以外)は自動で有効。操作は sudoers で許可した "
+            "local(PLATFORM_ENVIRONMENT=local)は自動で有効。操作は sudoers で許可した "
             "allowlist の unit の `systemctl enable --now / disable --now / restart` と "
             "`journalctl -u <unit>` だけを `sudo -n` で実行する(rag/docs/deployment.md)。"
         ),
@@ -2818,16 +2814,6 @@ class Settings(
         ):
             raise ValueError("RAG_CHUNK_MIN_CHARS は RAG_CHUNK_SIZE より小さくしてください。")
         return self
-
-    @property
-    def local_debug_enabled(self) -> bool:
-        """local mode: 全権限・対象範囲の制限なしのローカル利用者（DB セッションを作らない）。"""
-        return self.auth_mode == "local"
-
-    @property
-    def app_auth_enabled(self) -> bool:
-        """production mode: 共通認証のログインを必須にする。"""
-        return self.auth_mode == "production"
 
     @property
     def oracle_driver_mode(self) -> str:

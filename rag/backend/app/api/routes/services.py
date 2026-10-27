@@ -85,7 +85,7 @@ def _catalog_item(settings: Settings, entry: ServiceCatalogEntry) -> ServiceCata
 
 
 def _deployment_mode(settings: Settings) -> DeploymentMode:
-    return "dev" if is_dev_mode(settings) else "prod"
+    return settings.environment
 
 
 @router.get("/catalog", response_model=ApiResponse[ServiceCatalogData])

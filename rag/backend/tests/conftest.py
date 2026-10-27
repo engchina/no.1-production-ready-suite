@@ -24,6 +24,10 @@ from pr_backend_core.config import isolate_env_files_for_tests
 # 手元の `.env`（共通・製品）を読ませない。`app` の import の前に呼ぶ（3 製品で同じ。#1972）。
 isolate_env_files_for_tests("RAG_")
 
+os.environ["PLATFORM_ENVIRONMENT"] = "local"
+os.environ["PLATFORM_AUTH_MODE"] = "local"
+
+
 if TYPE_CHECKING:
     from app.config import Settings
     from app.rag.request_context import AuditRequestContext

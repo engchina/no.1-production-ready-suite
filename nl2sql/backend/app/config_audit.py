@@ -16,6 +16,7 @@ from typing import Literal
 
 from pr_backend_core.config import (
     PLATFORM_SETTING_FIELDS,
+    RuntimeSettings,
     platform_env_file,
     platform_env_name,
     settings_env_names,
@@ -239,22 +240,28 @@ def _audit_security_combinations(
     result: ConfigAuditResult,
     effective: dict[str, str],
 ) -> None:
-    environment = _unquote(effective.get("NL2SQL_ENVIRONMENT", "local")).lower()
-    debug = _as_bool(effective.get("NL2SQL_DEBUG", "false"))
-    auth_enabled = _as_bool(effective.get("NL2SQL_APP_AUTH_ENABLED", "true"))
-    cookie_secure = _as_bool(effective.get("PLATFORM_AUTH_COOKIE_SECURE", "false"))
-    deepsec_enabled = _as_bool(effective.get("NL2SQL_ORACLE_DEEPSEC_ENABLED", "false"))
-    oracle_driver_mode = _unquote(effective.get("PLATFORM_ORACLE_DRIVER_MODE", "thin")).lower()
-    if environment != "local" and debug:
-        result.findings.append(AuditFinding("error", "NONLOCAL_DEBUG_ENABLED", ("NL2SQL_DEBUG",)))
-    if environment != "local" and auth_enabled and not cookie_secure:
+    from pydantic import ValidationError
+
+    try:
+        RuntimeSettings.model_validate(
+            {
+                "environment": _unquote(effective.get("PLATFORM_ENVIRONMENT", "staging")),
+                "auth_mode": _unquote(effective.get("PLATFORM_AUTH_MODE", "authenticated")),
+                "app_auth_cookie_secure": _as_bool(
+                    effective.get("PLATFORM_AUTH_COOKIE_SECURE", "true")
+                ),
+            }
+        )
+    except ValidationError:
         result.findings.append(
             AuditFinding(
                 "error",
-                "NONLOCAL_AUTH_COOKIE_NOT_SECURE",
-                ("PLATFORM_AUTH_COOKIE_SECURE",),
+                "INVALID_RUNTIME_SETTINGS",
+                ("PLATFORM_ENVIRONMENT", "PLATFORM_AUTH_MODE", "PLATFORM_AUTH_COOKIE_SECURE"),
             )
         )
+    deepsec_enabled = _as_bool(effective.get("NL2SQL_ORACLE_DEEPSEC_ENABLED", "false"))
+    oracle_driver_mode = _unquote(effective.get("PLATFORM_ORACLE_DRIVER_MODE", "thin")).lower()
     if deepsec_enabled and oracle_driver_mode != "thin":
         result.findings.append(
             AuditFinding(

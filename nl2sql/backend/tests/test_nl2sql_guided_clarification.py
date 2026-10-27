@@ -2215,7 +2215,7 @@ def mcp_requirement(monkeypatch: pytest.MonkeyPatch) -> Callable[[_ScriptedLlm],
 
     from app.features.mcp import tools as mcp_tools
 
-    monkeypatch.setattr(get_settings(), "app_auth_enabled", False)
+    monkeypatch.setattr(get_settings(), "auth_mode", "local")
     monkeypatch.setattr(mcp_tools, "JOB_POLL_INTERVAL_SECONDS", 0.01)
 
     def install(llm: _ScriptedLlm) -> _McpJobs:

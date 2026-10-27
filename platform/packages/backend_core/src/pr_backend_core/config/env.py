@@ -33,6 +33,8 @@ PLATFORM_ENV_PREFIX = "PLATFORM_"
 # 共通 `.env` に置く Settings の属性。製品が持たない属性は無視される。
 PLATFORM_SETTING_FIELDS = frozenset(
     {
+        "environment",
+        "auth_mode",
         # trace（3 製品共通）
         "trace_enabled",
         "trace_sample_rate",
@@ -109,7 +111,7 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "oracle_adb_region",
         "oracle_tcp_connect_timeout_seconds",
         "oracle_db_test_timeout_seconds",
-        # 共通認証（構成管理者・認証ポリシー・ログインの Cookie 名。認証の有効 / 無効は製品ごと）。
+        # 共通認証（構成管理者・認証ポリシー・ログインの Cookie 名。環境と認証方式も共通）。
         # Cookie 名を 3 製品で共通にし、1 回のログインで全製品を使えるようにする（#1565）。
         "app_admin_login_user_id",
         "app_admin_login_user_password",

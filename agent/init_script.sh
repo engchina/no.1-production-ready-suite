@@ -3,7 +3,7 @@
 # Agent Control Plane を Docker なしで Nginx + systemd に直接配備する。
 # ADB の DDL は持たない。Runtime 状態の table は backend 起動時に Oracle repository が作成し、
 # 共通認証（PLATFORM_*）と Agent のシステムテーブル（AGENT_*）はアプリの CLI（agent_system_schema）が作成する（#751）。
-# ログインは共通認証（AGENT_AUTH_MODE=production。構成管理者 system_admin と DB ユーザー。#215）。
+# ログインは共通認証（PLATFORM_AUTH_MODE=authenticated。構成管理者 system_admin と DB ユーザー。#215）。
 # 3 製品は 1 台の Compute にセットで配備する（#1316。単独では配備しない）。platform/deploy/suite-init.sh が呼び、
 # Nginx の site は suite が 1 つだけ書く（ここでは書かない）。frontend は FRONTEND_BASE_PATH（/agent/）を base に build する。
 set -euo pipefail

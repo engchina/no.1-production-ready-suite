@@ -720,7 +720,7 @@ build_frontend() {
   test -f "${FRONTEND_DIR}/dist/index.html"
 }
 
-# backend と ingestion-worker の unit。RAG_ENVIRONMENT などは以前の Docker Compose の配備（#286 より前）の environment と同じ値。
+# backend と ingestion-worker の unit。環境と認証は platform/.env の共通設定を読む。
 write_backend_unit() {
   local unit_path="$1"
   local description="$2"
@@ -741,7 +741,6 @@ Group=${SERVICE_GROUP}
 WorkingDirectory=${BACKEND_DIR}
 Environment=HOME=${SERVICE_HOME}
 Environment=PYTHONUNBUFFERED=1
-Environment=RAG_ENVIRONMENT=prod
 Environment=RAG_INGESTION_QUEUE_DEDICATED_WORKER_ENABLED=true
 Environment=RAG_PARSER_SERVICE_TIMEOUT_SECONDS=1230
 Environment=RAG_PREPROCESS_ENABLED=true

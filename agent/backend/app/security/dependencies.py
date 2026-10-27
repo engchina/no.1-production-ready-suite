@@ -5,7 +5,7 @@
 
 判定順（`/api` の HTTP）:
 
-1. local（`AGENT_AUTH_MODE=local`）: 全権限のローカル利用者（`request.state.principal`）。
+1. local（`PLATFORM_AUTH_MODE=local`）: 全権限のローカル利用者（`request.state.principal`）。
 2. production で公開 path（`/health`・`/ready`・`/ready/database`・`/auth/login`）: そのまま通す。
 3. production: 共通認証（DB ユーザー・構成管理者）の session Cookie を検証し、更新系は CSRF を
    照合し、manifest の権限を確認する。Cookie が無ければ 401。router は利用者から `ActorPolicy`

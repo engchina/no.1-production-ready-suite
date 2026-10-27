@@ -24,7 +24,7 @@ Skill（SKILL.md・references/・宣言・画面）→ Skill Registry
 - Common Run: 状態、Event、cancel、Artifact（回答・ツールの結果）、Approval、Audit。
 - Dispatcher: 開発は in-process、本番は Oracle row lock + claim/lease worker。
 - Snapshot v2: 業務 Agent・Run の Control Plane backup。
-- ログインと権限: RAG / NL2SQL と同じ共通認証（`AGENT_AUTH_MODE=production`）。ロールごとの権限と、
+- ログインと権限: RAG / NL2SQL と同じ共通認証（`PLATFORM_AUTH_MODE=authenticated`）。ロールごとの権限と、
   エージェント単位の対象範囲（「セキュリティ設定 > 権限管理」）。local でもユーザー・ロールは共通 DB。詳細は
   [docs/security-rbac.md](docs/security-rbac.md)。
 
@@ -70,8 +70,8 @@ frontend の Vite は `BACKEND_URL` を明示したときだけ `/api` を backe
 `BACKEND_URL` を渡さずに `npm run dev` すると hermetic モードになり、`/api` は proxy されず 404 を返します（起動時に警告を 1 行表示）。
 `scripts/start-all.sh` / `scripts/start-frontend.sh` は `BACKEND_URL` を明示して起動します。
 
-ローカル開発の既定は `AGENT_AUTH_MODE=local`（全権限のローカル利用者。ログイン不要）です。ログインを確認するときは
-`AGENT_AUTH_MODE=production` にし、共通 `.env` の `PLATFORM_ORACLE_*` と `PLATFORM_ADMIN_LOGIN_USER_PASSWORD` を設定して
+ローカル開発の既定は `PLATFORM_AUTH_MODE=local`（全権限のローカル利用者。ログイン不要）です。ログインを確認するときは
+`PLATFORM_AUTH_MODE=authenticated` にし、共通 `.env` の `PLATFORM_ORACLE_*` と `PLATFORM_ADMIN_LOGIN_USER_PASSWORD` を設定して
 運用設定 > システムテーブル か `cd backend && uv run python -m app.cli.agent_system_schema --initialize` でテーブルを作ります（[docs/security-rbac.md](docs/security-rbac.md)）。
 
 業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・品質評価などの保存先は `backend/.env` の
@@ -152,7 +152,7 @@ FULL=1 scripts/check-all.sh                                 # CI と同じく全
 ## 既存環境の更新手順（#215）
 
 #215 で Agent も共通認証のログインと権限管理になり、Resource Manager の stack の Nginx Basic 認証を廃止しました。
-共通 `.env` の `PLATFORM_ADMIN_*` の確認、`AGENT_AUTH_MODE=production`、システムテーブルの作成・更新、
+共通 `.env` の `PLATFORM_ADMIN_*` の確認、`PLATFORM_AUTH_MODE=authenticated`、システムテーブルの作成・更新、
 Nginx の Basic 認証の削除の手順は [docs/security-rbac.md §8](docs/security-rbac.md#8-既存環境の更新手順215) を参照してください。
 
 ## OCI への配備（Resource Manager）
@@ -186,7 +186,7 @@ Agent Control Plane は専用の Compute 1 台に配備します。ログイン�
 
 ## セキュリティ境界
 
-- production（`AGENT_AUTH_MODE=production`）は全 API を既定拒否の権限 manifest で守ります。Cookie のないリクエストは 401 です
+- production（`PLATFORM_AUTH_MODE=authenticated`）は全 API を既定拒否の権限 manifest で守ります。Cookie のないリクエストは 401 です
   （RAG / NL2SQL と同じ。`X-Agent-Roles` などの header は使いません）（[docs/security-rbac.md](docs/security-rbac.md)）。
 - 承認の決定者はログイン中の利用者です。
 - モデルの API key・外部の token は API/snapshot/log/Artifact に出しません。SDK の tracing は無効です。
