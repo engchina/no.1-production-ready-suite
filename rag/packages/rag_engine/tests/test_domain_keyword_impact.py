@@ -48,6 +48,16 @@ class DomainKeywordImpactTests(unittest.TestCase):
         self.assertFalse(info.error)
         self.assertEqual(info.tokenization_traces[0]["matched_domain_keywords"], [])
 
+    def test_query_trace_records_actual_expression_and_protected_omissions(self):
+        question = " ".join(f"ID-{index:03}" for index in range(30))
+        info = build_question_text_search_info(question, self.settings(domain_keywords_override=()))
+        trace = info.tokenization_traces[0]
+        self.assertEqual(trace["oracle_text_query"], info.oracle_text_query)
+        self.assertEqual(trace["oracle_text_query_chars"], len(info.oracle_text_query))
+        self.assertTrue(trace["omitted_protected_tokens"])
+        self.assertEqual(trace["tokens"], list(info.tokens))
+        self.assertLessEqual(len(info.tokens), 24)
+
     def test_metrics_use_actual_anchor_rank_and_ignore_neighbors(self):
         children = [
             SimpleNamespace(role="retrieved_anchor", retrieval_rank=3, record=SimpleNamespace(chunk_id="hit")),

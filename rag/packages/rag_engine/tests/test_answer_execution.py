@@ -404,7 +404,7 @@ class AnswerExecutionTests(unittest.TestCase):
         steps, calls = self.assert_same_evidence_flow(generation.STANDARD_ANSWER_FLOW_LABEL)
         names = [name for _depth, name in steps]
         self.assertIn((1, "文書検索"), steps)
-        self.assertLess(names.index(generation.EVIDENCE_FLOW_STEP), names.index("要求ごとの根拠の確認"))
+        self.assertNotIn("要求ごとの根拠の確認", names)
         self.assertNotIn("回答文の生成と根拠確認（1回目）", names)
         self.assertEqual(calls, [])
 

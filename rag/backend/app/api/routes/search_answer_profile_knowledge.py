@@ -482,6 +482,10 @@ async def post_runtime_knowledge_edit(
             labels=request.labels,
             content=request.content,
             source=request.source,
+            purpose=request.purpose,
+            instruction_kind=request.instruction_kind,
+            exclusive_group=request.exclusive_group,
+            priority=request.priority,
             enabled=request.enabled,
             delete=request.delete,
         )
@@ -507,6 +511,13 @@ async def post_runtime_knowledge_preview(
             expanded_question=context.expanded_question,
             matched_terms=[term.term for term in context.matched_terms],
             matched_rules=[rule.title or rule.rule_id for rule in context.matched_rules],
+            conflicting_rules=sorted(
+                {
+                    str(item["title"])
+                    for item in context.rule_applications
+                    if item["reason"] == "unresolved_exclusive_conflict"
+                }
+            ),
         )
     )
 

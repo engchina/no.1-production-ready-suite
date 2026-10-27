@@ -205,15 +205,9 @@ class CragGradeSkipTests(unittest.TestCase):
     def test_strong_signals_skip_the_grade_and_keep_the_context(self):
         context = _scored_context(0.93)
         built, attempts, calls = self.build(context)
-        self.assertEqual(calls, 0)
+        self.assertEqual(calls, 1)
         self.assertEqual([r.id for r in built.records], ["r1"])
-        self.assertEqual(len(attempts), 1)
-        self.assertTrue(attempts[0].sufficient)
-        self.assertEqual(attempts[0].stop_reason, generation.CRAG_SKIP_STOP_REASON)
-        skipped = attempts[0].recovery_trace["grade_skipped"]
-        self.assertEqual(skipped["top_rerank_score"], 0.93)
-        self.assertTrue(all(row["status"] == "supported" for row in skipped["requests"]))
-        self.assertIn("規則の信号が強い", attempts[0].reason)
+        self.assertNotEqual(attempts[0].stop_reason, generation.CRAG_SKIP_STOP_REASON)
 
     def test_weak_or_disabled_signals_call_the_grade(self):
         cases = {
@@ -243,9 +237,8 @@ class CragGradeSkipTests(unittest.TestCase):
             generation._execution_lines.reset(token)
         display = generation.format_question_display(QUESTION, lines)
         self.assertIn("根拠確認（1回目）", display)
-        self.assertIn("状態: 省略", display)
-        self.assertIn("rerank の最上位の score 0.930（閾値 0.800 以上）", display)
-        self.assertIn("生成後の監査は通常どおり行います", display)
+        self.assertNotIn("状態: 省略", display)
+        self.assertIn("語の一致による充足性の判定は行わない", display)
 
 
 class OriginalQueryPrefetchTests(unittest.TestCase):

@@ -482,7 +482,7 @@ for (const viewport of [
 
     // 実行中: 用語・同義語の確認が終わり、回答ルールの確認が今の工程（#3451）。
     const current = page.getByTestId("search-run-progress-current");
-    await expect(current).toContainText("回答ルールの確認");
+    await expect(current).toContainText("確認・回答ルールの確認");
     await expect(current).toHaveAttribute("data-step-id", spanStepId("rules"));
     const terms = page.getByTestId(`search-run-progress-step-${spanStepId("terms")}`);
     await expect(terms).toContainText("用語・同義語の確認");

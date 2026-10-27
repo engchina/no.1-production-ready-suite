@@ -1,27 +1,4 @@
-"""要求ごとの根拠の覆域と、欠けた要求だけの再検索（#1279、handoff §8.3 / §9）。
-
-質問契約の要求単位（`task_contract.request_units`）ごとに、回答に渡す根拠（context の親と子の本文）が
-要求の語をどれだけ含むかを決定的に判定する（覆域の行列）。モデル（LLM）は呼ばない。
-
-- supported: 1 つの根拠が要求の語の `SUPPORTED_RATIO` 以上を含む。
-- weak: 最良の根拠が `WEAK_RATIO` 以上・`SUPPORTED_RATIO` 未満を含む。
-- missing: どの根拠も `WEAK_RATIO` 未満しか含まない。
-- unassessed: 要求から語を取り出せない（判定しない。再検索もしない）。
-
-再検索は corrective / adaptive RAG の「欠けた所だけを狙って取り直す」に当たる。missing と weak の要求ごとに
-1 回だけ（missing を先に）、要求の文（＋用語の別名・業務ガイドの検索の手がかり）と、weak の要求では根拠に
-現れなかった語だけの文で検索する。最初の検索と同じ検索文は使わない（同じ文の検索は新しい根拠をほぼ返さない）。
-1 要求の質問は要求の文が最初の検索の文と同じになるので、手がかりの文か、根拠に現れなかった語の文があるときだけ
-検索する（#2810）。作れる検索文が無ければ ``same_query`` として検索しない。
-丸数字・(1) などで並べた小問（要求単位の `subquestion`。#2399）は、根拠が無いか一部だけの小問ごとに、前置き＋
-小問の文で 1 回ずつ検索し、小問ごとに上位の根拠を `chunks_per_subquestion` 件まで確保する。
-どの要求をどの順で何件まで検索するか（追加の検索の枠）は `plan_targeted_retrievals` の 1 か所で数え、
-回数・足す根拠の数・時間は `CoverageBudget` で抑える。検索と並べ替え（rerank）は既存の hybrid 検索を使い、
-足す根拠は既存の根拠を追い出さない（呼び出し側が併合する）。
-
-lexical の判定は言い換え（資料が別の語で書く）を missing と見誤ることがある。その場合も再検索が 1 回
-増えるだけで、回答の材料から既存の根拠は減らない。判定の閾値は評価セットで見直す。
-"""
+"""原質問の要求 ID と、明示された未回答の追加検索を追跡する。候補取得は回答可能性と区別する。"""
 
 from __future__ import annotations
 
@@ -30,26 +7,18 @@ import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from time import monotonic
-from typing import Any, Literal
+from typing import Any
 
 from rag_engine.dependencies import report_degraded
 from rag_engine.retrieval.task_contract import task_contract
 
-COVERAGE_SCHEMA_VERSION = 1
-# 根拠が要求の語のこの割合以上を含めば supported、WEAK_RATIO 以上なら weak。
-SUPPORTED_RATIO = 0.6
-WEAK_RATIO = 0.33
+COVERAGE_SCHEMA_VERSION = 2
 # 1 要求の再検索に足す手がかり（用語の別名・業務ガイドの検索の手がかり）の上限。
 MAX_HINTS = 3
-# 1 要求の記録に残す根拠の数。
-MAX_EVIDENCE_PER_REQUEST = 3
-
-CoverageStatus = Literal["supported", "weak", "missing", "unassessed"]
-
 # 要求単位の文の中の「原文: …」以降は判定に使わない（親の要求の原文の写し）。
 _FACET_TARGET = re.compile(r"対象「(.+?)」の(.+?)を個別に回答する")
 _DEFINITION_TARGET = re.compile(r"項目「(.+?)」")
-# 問い方の語。資料の本文に現れないことが普通で、覆域の判定に使うと根拠があっても割合が下がる。
+# 別名・手がかりの照合では、一般的な問い方の語を除く。
 _QUESTION_FORM_TERMS = frozenset(
     {
         "方法",
@@ -93,7 +62,7 @@ class CoverageBudget:
 
 @dataclass(frozen=True)
 class RequestTarget:
-    """覆域を判定する要求 1 件。"""
+    """元の質問から追跡する要求 1 件。"""
 
     id: str
     kind: str
@@ -140,7 +109,7 @@ def _focus_text(unit: Mapping[str, Any]) -> str:
     if kind in {"request", "desired_outcome"}:
         return text
     if kind == "explicit_facet" and ".R" in unit_id:
-        # 「AとBを追加」の対象ごとの子要求。親の文の判定では一方だけで足りてしまうので、対象ごとに判定する。
+        # 「AとBを追加」の対象ごとの子要求。親の文の判定では一方だけで足りてしまうので、対象ごとに追跡する。
         match = _FACET_TARGET.search(text)
         return f"{match.group(1)}の{match.group(2)}" if match else ""
     if not kind and ".D" in unit_id:
@@ -151,7 +120,7 @@ def _focus_text(unit: Mapping[str, Any]) -> str:
 
 
 def _content_terms(raw_terms: Iterable[str]) -> tuple[str, ...]:
-    """判定に使う語。2 文字以上で、問い方の語を除き、部分の語が揃う複合語（「登録方法」）は部分に任せる。
+    """検索の手がかりに使う語。2 文字以上で、問い方の語を除き、部分の語が揃う複合語（「登録方法」）は部分に任せる。
 
     分かち書きは複合語とその部分の両方を返す。複合語のまま数えると、資料が「登録」「方法」を別々に書く
     ときに一致しないので、部分の語がある複合語は数えない。
@@ -162,9 +131,9 @@ def _content_terms(raw_terms: Iterable[str]) -> tuple[str, ...]:
 
 
 def coverage_targets(question: str, tokenize: Callable[[str], Sequence[str]]) -> list[RequestTarget]:
-    """質問契約の要求単位から、覆域を判定する要求を返す。語の集合が同じ要求は 1 つにまとめる。"""
+    """質問契約の要求を ID ごとに保持する。語の集合では要求を統合しない。"""
     targets: list[RequestTarget] = []
-    seen: set[tuple[str, ...]] = set()
+    seen: set[str] = set()
     contract = task_contract(question)
     contexts = [str(unit["text"]) for unit in task_contract(contract["current_request"])["request_units"] if unit.get("kind") == "context"]
     context_text = " ".join(contexts)
@@ -184,8 +153,8 @@ def coverage_targets(question: str, tokenize: Callable[[str], Sequence[str]]) ->
         except Exception:  # noqa: BLE001 - 分かち書きの失敗は判定しない（unassessed）にする。
             raw_terms = ()
         terms = _content_terms(raw_terms)
-        key = tuple(sorted(terms))
-        if terms and key in seen:
+        key = str(unit.get("id") or "")
+        if key in seen:
             continue
         seen.add(key)
         targets.append(
@@ -206,101 +175,31 @@ def _record_key(record: Any) -> str:
     return str(getattr(record, "chunk_uid", "") or getattr(record, "id", "") or "")
 
 
-def evidence_texts(context: Any) -> list[tuple[str, str]]:
-    """回答に渡す根拠ごとの (key, 正規化した本文)。親の本文に子の本文を足す。"""
-    tree = list(getattr(context, "evidence_tree", ()) or ())
-    if tree:
-        return [
-            (
-                _record_key(parent.record),
-                _normalize(
-                    "\n".join(
-                        [
-                            str(getattr(parent.record, "text", "") or ""),
-                            *(str(getattr(child.record, "text", "") or "") for child in parent.children),
-                        ]
-                    )
-                ),
-            )
-            for parent in tree
-        ]
-    return [(_record_key(record), _normalize(getattr(record, "text", ""))) for record in getattr(context, "records", ()) or ()]
-
-
-def assess_targets(targets: Sequence[RequestTarget], evidence: Sequence[tuple[str, str]]) -> list[dict[str, Any]]:
-    """要求 × 根拠の語の一致を測る。回答可能性・操作の裏付けは判定しない。"""
-    rows: list[dict[str, Any]] = []
-    for target in targets:
-        if not target.terms:
-            rows.append(
-                {
-                    "id": target.id,
-                    "kind": target.kind,
-                    "text": target.text,
-                    "terms": [],
-                    "status": "unassessed",
-                    "best_ratio": 0.0,
-                    "matched_terms": [],
-                    "evidence_ids": [],
-                }
-            )
-            continue
-        scored: list[tuple[float, int, str, list[str]]] = []
-        for position, (key, text) in enumerate(evidence):
-            matched = [term for term in target.terms if term in text]
-            if matched:
-                ratio = len(matched) / len(target.terms)
-                if target.context_terms:
-                    # 同じ根拠で対象・状況と要求の両方が一致する必要がある。
-                    context_ratio = sum(term in text for term in target.context_terms) / len(target.context_terms)
-                    ratio = min(ratio, context_ratio)
-                scored.append((ratio, position, key, matched))
-        scored.sort(key=lambda item: (-item[0], item[1]))
-        best = scored[0][0] if scored else 0.0
-        status: CoverageStatus = "supported" if best >= SUPPORTED_RATIO else "weak" if best >= WEAK_RATIO else "missing"
-        rows.append(
-            {
-                "id": target.id,
-                "kind": target.kind,
-                "text": target.text,
-                "terms": list(target.terms),
-                "status": status,
-                "best_ratio": round(best, 3),
-                "matched_terms": scored[0][3] if scored else [],
-                "evidence_ids": [key for ratio, _, key, _ in scored if ratio >= WEAK_RATIO and key][:MAX_EVIDENCE_PER_REQUEST],
-                **({"context_terms": list(target.context_terms)} if target.context_terms else {}),
-            }
-        )
-    for row, target in zip(rows, targets, strict=True):
-        row.update(assessment="lexical", answerability="unassessed")
-        if target.subquestion:
-            row["subquestion"] = target.subquestion
-    return rows
+def request_rows(targets: Sequence[RequestTarget]) -> list[dict[str, Any]]:
+    """要求の追跡行を作る。取得済み本文から充足性を推測しない。"""
+    return [
+        {
+            "id": target.id,
+            "kind": target.kind,
+            "text": target.text,
+            "status": "unassessed",
+            "assessment": "not_performed",
+            "answerability": "unassessed",
+            "retrieval_status": "not_planned",
+            "evidence_ids": [],
+            **({"subquestion": target.subquestion} if target.subquestion else {}),
+        }
+        for target in targets
+    ]
 
 
 def coverage_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
-    counts = {"supported": 0, "weak": 0, "missing": 0, "unassessed": 0}
-    for row in rows:
-        counts[str(row["status"])] = counts.get(str(row["status"]), 0) + 1
-    return counts
+    return {"unassessed": len(rows)}
 
 
 def _needs_search(row: Mapping[str, Any]) -> bool:
-    """再検索の対象か。根拠が無い（missing）か一部だけ（weak）の要求（小問は #2399、通常の要求は #2810）。"""
-    return row["status"] in {"missing", "weak"} or row.get("answer_status") in {"missing", "partial"}
-
-
-def _unmatched_terms(row: Mapping[str, Any]) -> tuple[str, ...]:
-    """一部だけの要求と、対象・状況が一致しなかった要求の追加検索語。"""
-    if row.get("status") not in {"weak", "missing"}:
-        return ()
-    matched = set(row.get("matched_terms") or ())
-    terms = [*(row.get("terms") or ()), *(row.get("context_terms") or ())]
-    return (
-        tuple(dict.fromkeys(term for term in terms if term not in matched))
-        if row.get("context_terms") or row.get("status") == "weak"
-        else ()
-    )
+    """生成の明示した gap または実行済み監査の不足だけを検索対象にする。"""
+    return row.get("answer_status") in {"missing", "partial"}
 
 
 def _query_key(text: str) -> str:
@@ -322,7 +221,7 @@ def re_retrieval_skip_reason(rows: Sequence[Mapping[str, Any]], budget: Coverage
         return "deadline"
     wanted = [row for row in rows if _needs_search(row)]
     if not wanted:
-        return "all_covered"
+        return "no_explicit_gap"
     subquestion_budget = budget.max_subquestions > 0 and budget.chunks_per_subquestion > 0
     request_budget = budget.max_queries > 0 and budget.max_chunks > 0
     if not any(subquestion_budget if row.get("subquestion") else request_budget for row in wanted):
@@ -420,6 +319,7 @@ class TargetedRetrieval:
     error: str = ""
     # この要求に確保する根拠の数（小問）。None は欠けた要求の共有の枠（max_chunks）から取る。
     chunk_cap: int | None = None
+    reused: bool = False
 
 
 def run_targeted_retrievals(
@@ -442,10 +342,10 @@ def run_targeted_retrievals(
     検索の失敗は要求ごとに記録し、回答は既存の根拠で続ける（失敗と「根拠が無い」を区別する。handoff §9 の 5）。
     """
     plan, stop = plan_targeted_retrievals(rows, targets, budget)
-    by_id = {row["id"]: row for row in rows}
     results: list[TargetedRetrieval] = []
     start = clock()
     same_query = 0
+    searched = list(searched_queries)
     for planned in plan:
         target = planned.target
         if clock() - start >= budget.deadline_seconds:
@@ -454,17 +354,23 @@ def run_targeted_retrievals(
         queries = targeted_queries(
             target,
             request_hints(target, runtime_knowledge, tokenize),
-            # 回答後の不足は語の一致と独立。原質問の繰り返しを避け、原質問由来の対象語で絞り直す。
-            unmatched=(
-                tuple(dict.fromkeys((*target.context_terms, *target.terms)))
-                if by_id.get(target.id, {}).get("answer_status")
-                else _unmatched_terms(by_id.get(target.id, {}))
-            ),
-            searched=searched_queries,
+            searched=searched,
         )
         if not queries:
+            previous = next(
+                (
+                    result
+                    for result in results
+                    if any(_query_key(query) == _query_key(target.query or target.text) for query in result.queries)
+                ),
+                None,
+            )
+            if previous is not None:
+                results.append(replace(previous, request_id=target.id, reused=True, chunk_cap=planned.chunk_cap))
+                continue
             same_query += 1
             continue
+        searched.extend(queries)
         began = clock()
         try:
             context = retrieve(target.query or target.text, queries)
@@ -544,10 +450,9 @@ __all__ = [
     "PlannedRetrieval",
     "RequestTarget",
     "TargetedRetrieval",
-    "assess_targets",
+    "request_rows",
     "coverage_counts",
     "coverage_targets",
-    "evidence_texts",
     "plan_targeted_retrievals",
     "re_retrieval_skip_reason",
     "request_hints",

@@ -53,6 +53,7 @@ PRIMARY_TERM_WEIGHT = 1.0
 SUPPLEMENT_TERM_WEIGHT = 0.5
 
 # 語の出どころ。値は上限で切り詰めるときの優先度（大きいほど残す）。
+_TIER_EXPLICIT = 4
 _TIER_KEYWORD = 3
 _TIER_KEYWORD_PART = 2
 _TIER_PRIMARY = 1
@@ -198,6 +199,10 @@ class TextSearchTokenizationResult:
     selected_domain_keywords: tuple[str, ...] = ()
     truncated_domain_keywords: tuple[str, ...] = ()
     tokenizer: str = TEXT_SEARCH_TOKENIZER_HYBRID
+    protected_tokens: tuple[str, ...] = ()
+    omitted_protected_tokens: tuple[str, ...] = ()
+    character_limit_tokens: tuple[str, ...] = ()
+    oracle_text_query: str = ""
 
     @property
     def truncated(self) -> bool:
@@ -312,6 +317,7 @@ def tokenize_text_search_query_with_trace(
     domain_keywords: Sequence[str] | None = None,
     config: TextSearchTokenizerConfig | None = None,
     max_tokens: int = MAX_TEXT_SEARCH_TOKENS,
+    max_query_chars: int = MAX_ORACLE_TEXT_QUERY_CHARS,
 ) -> TextSearchTokenizationResult:
     """token 化結果に加えて、語の重みと採用・除外理由の trace を返します。"""
     cfg = normalize_text_search_tokenizer_config(config)
@@ -359,15 +365,30 @@ def tokenize_text_search_query_with_trace(
             add(token, _TIER_KEYWORD_PART if tier == _TIER_PRIMARY else tier)
 
     # 品詞判定が接頭辞とする一文字でも、質問で明示された列名は失わない。
-    for label in definition_labels(query):
+    labels = definition_labels(query)
+    for label in labels:
         add(label, _TIER_KEYWORD)
     for token, tier in _content_terms(query, cfg, use_sudachi):
         add(token, tier)
+    # 優先配分だけを変え、既存の重みと語順は維持する。意味の充足は判定しない。
+    protected = tuple(dict.fromkeys((*_protected_query_terms(query), *(_normalize_term(label) for label in labels))))
+    for token in protected:
+        if token not in candidates:
+            add(token, _TIER_PRIMARY)
+        if candidate := candidates.get(token):
+            candidates[token] = _TokenCandidate(token, candidate.first_order, _TIER_EXPLICIT, candidate.weight)
     ordered_candidates = list(candidates.values())
     if len(ordered_candidates) <= limit:
         selected = sorted(ordered_candidates, key=lambda candidate: candidate.first_order)
     else:
         selected = sorted(ordered_candidates, key=_ranked_token_sort_key)[:limit]
+    character_plan = build_oracle_text_query_with_trace(
+        tuple(candidate.term for candidate in selected),
+        weights=tuple(candidate.weight for candidate in selected),
+        max_chars=max_query_chars,
+    )
+    used = set(character_plan.tokens)
+    selected = [candidate for candidate in selected if candidate.term in used]
     selected_keys = {candidate.term for candidate in selected}
     ranked_candidates = sorted(ordered_candidates, key=_ranked_token_sort_key)
     truncated_tokens = tuple(candidate.term for candidate in ranked_candidates if candidate.term not in selected_keys)
@@ -383,6 +404,27 @@ def tokenize_text_search_query_with_trace(
         truncated_count=max(0, len(ordered_candidates) - len(selected)),
         max_tokens=limit,
         tokenizer=TEXT_SEARCH_TOKENIZER_HYBRID if use_sudachi else TEXT_SEARCH_TOKENIZER_SCRIPT_ONLY,
+        protected_tokens=tuple(protected),
+        omitted_protected_tokens=tuple(token for token in protected if token not in selected_keys),
+        character_limit_tokens=character_plan.omitted_tokens,
+        oracle_text_query=character_plan.query,
+    )
+
+
+def _protected_query_terms(query: str) -> tuple[str, ...]:
+    """識別子の内部の数字を別の条件として重複配分しない。"""
+    normalized = normalize_text_search_text(query)
+    matches = [
+        match
+        for pattern in (*_EXTRA_PATTERNS, re.compile(r"\d+(?:[-/.]\d+)+"), re.compile(r"\d+(?:[.,]\d+)*"))
+        for match in pattern.finditer(normalized)
+    ]
+    return tuple(
+        dict.fromkeys(
+            match.group(0)
+            for match in sorted(matches, key=lambda item: (item.start(), -item.end()))
+            if not any(other.start() <= match.start() and match.end() <= other.end() and other.span() != match.span() for other in matches)
+        )
     )
 
 
@@ -442,22 +484,27 @@ def oracle_text_query_for_question(
         domain_keywords=domain_keywords,
         config=config,
         max_tokens=max_tokens,
+        max_query_chars=max_chars,
     )
-    return build_oracle_text_query(result.tokens, weights=result.weights, max_chars=max_chars)
+    return result.oracle_text_query
 
 
-def build_oracle_text_query(
-    terms: Sequence[str],
-    *,
-    weights: Sequence[float] | None = None,
-    max_chars: int = MAX_ORACLE_TEXT_QUERY_CHARS,
-) -> str:
-    """token 列から長さ上限内の Oracle Text query（語を ``ACCUM`` で結ぶ）を構築します。
+@dataclass(frozen=True)
+class OracleTextQueryPlan:
+    """実際の SQL bind に使う式と、文字数で採用できなかった語。"""
 
-    ``weights`` は ``terms`` と同じ並び。1 以外の重みは ``{語}*重み`` で付ける。
-    ``ACCUM`` は多くの語に当たる文書ほど上にする（``OR`` は最も強い 1 語の点だけになる）。
-    """
+    query: str
+    tokens: tuple[str, ...]
+    omitted_tokens: tuple[str, ...]
+
+
+def build_oracle_text_query_with_trace(
+    terms: Sequence[str], *, weights: Sequence[float] | None = None, max_chars: int = MAX_ORACLE_TEXT_QUERY_CHARS
+) -> OracleTextQueryPlan:
+    """長さの枠を守って式を作り、長過ぎる語で後続の短い語まで捨てない。"""
     pieces: list[str] = []
+    included: list[str] = []
+    omitted: list[str] = []
     used_chars = 0
     limit = max(1, int(max_chars or 1))
     for index, term in enumerate(terms):
@@ -468,10 +515,19 @@ def build_oracle_text_query(
         piece = escaped if weight == PRIMARY_TERM_WEIGHT else f"{escaped}*{_format_weight(weight)}"
         addition = len(piece) + (len(_ACCUM_JOINER) if pieces else 0)
         if used_chars + addition > limit:
-            break
+            omitted.append(term)
+            continue
         pieces.append(piece)
+        included.append(term)
         used_chars += addition
-    return _ACCUM_JOINER.join(pieces)
+    return OracleTextQueryPlan(_ACCUM_JOINER.join(pieces), tuple(included), tuple(omitted))
+
+
+def build_oracle_text_query(
+    terms: Sequence[str], *, weights: Sequence[float] | None = None, max_chars: int = MAX_ORACLE_TEXT_QUERY_CHARS
+) -> str:
+    """重み付き ACCUM の式を実行用と診断用で共通の計画から作る。"""
+    return build_oracle_text_query_with_trace(terms, weights=weights, max_chars=max_chars).query
 
 
 _ACCUM_JOINER = " ACCUM "

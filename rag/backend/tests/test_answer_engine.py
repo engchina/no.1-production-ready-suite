@@ -13,6 +13,7 @@ from rag_engine.models.llm import (
     GroundedDraft,
     GroundedFactAudit,
     QueryRoutingOutput,
+    RequestScopePlan,
 )
 
 import app.rag.answer_engine as answer_engine_module
@@ -154,6 +155,18 @@ class FakeGenAi:
 
 
 def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+    if schema is RequestScopePlan:
+        data = json.loads(prompt)
+        ids = [item["evidence_id"] for item in data["evidence"]]
+        return RequestScopePlan.model_validate(
+            {
+                "request_coverage": [
+                    {"request_id": unit["id"], "evidence_ids": ids}
+                    for unit in data["question_contract"]["request_units"]
+                    if unit.get("kind") != "context"
+                ]
+            }
+        )
     if schema is QueryRoutingOutput:
         return QueryRoutingOutput(
             strategy="simple_retrieval", reason="単純な手順の質問", queries=[]
@@ -3348,7 +3361,22 @@ async def _answer_with_coverage(
 ) -> Any:
     import rag_engine.adapters.oci as engine_oci
 
-    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    def explicit_gap(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
+        result = _fake_llm(system, prompt, config, schema, **options)
+        if schema is GroundedDraft and _INVOICE_TEXT not in prompt:
+            data = result.model_dump(exclude_unset=True)
+            data["items"].append(
+                {
+                    "kind": "gap",
+                    "text": "追加操作の根拠がありません。",
+                    "request_id": "Q2",
+                    "citations": [],
+                }
+            )
+            return GroundedDraft.model_validate(data)
+        return result
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", explicit_gap)
     settings.setdefault("rag_request_coverage_retrieval_enabled", True)
     engine = AnswerEngine(
         Settings(
@@ -3375,18 +3403,20 @@ async def test_request_coverage_re_retrieves_only_missing_request(
 
     coverage = outcome.diagnostics["request_coverage"]
     statuses = {row["id"]: row["status"] for row in coverage["requests"]}
-    assert statuses == {"Q1": "supported", "Q2": "missing"}
-    re_retrieval = coverage["re_retrieval"]
+    assert statuses == {"Q1": "unassessed", "Q2": "unassessed"}
+    after_trace = coverage["after_generation"][0]
+    re_retrieval = after_trace["re_retrieval"]
     assert re_retrieval["applied"] is True
     assert [query["request_id"] for query in re_retrieval["queries"]] == ["Q2"]
     assert re_retrieval["queries"][0]["queries"][0] == "請求書の再発行方法は？"
-    assert coverage["llm_calls"] == 0
-    after = {row["id"]: row.get("status_after") for row in coverage["requests"]}
-    assert after["Q2"] == "supported"
+    assert after_trace["llm_calls"] == 0
+    assert all(row["status"] == "unassessed" for row in after_trace["requests"])
     # 足した根拠が回答の材料(根拠の木)に入る。
-    assert "doc-invoice:c1" in _evidence_ids(outcome)
+    assert any(key.startswith("doc-invoice:") for key in re_retrieval["added_chunk_ids"])
+    # 合成モデルは新資料を引用しないため、公開候補には以前の回答を維持できる。
+    assert "doc-order:c1" in _evidence_ids(outcome)
     assert any(
-        step["name"] == "要求ごとの根拠の確認" for step in outcome.diagnostics["execution_steps"]
+        step["name"] == "未回答の要求の探し直し" for step in outcome.diagnostics["execution_steps"]
     )
 
 
@@ -3466,13 +3496,18 @@ async def test_original_question_keeps_numbered_requests_through_coverage(
 
     coverage = outcome.diagnostics["request_coverage"]
     assert {row["id"]: (row["kind"], row["status"]) for row in coverage["requests"]} == {
-        "Q1": ("request", "missing"),
-        "Q2": ("request", "missing"),
-        "Q3": ("request", "supported"),
+        "Q1": ("request", "unassessed"),
+        "Q2": ("request", "unassessed"),
+        "Q3": ("request", "unassessed"),
     }
     # 1 要求として探し直しを省かず、根拠の無い要求ごとに要求の文で探し直す。
-    assert [item["request_id"] for item in coverage["re_retrieval"]["queries"]] == ["Q1", "Q2"]
-    assert "1. 受注の登録方法は？" in oracle.queries
+    assert coverage["re_retrieval"]["skipped"] == "no_explicit_gap"
+    for trace in coverage.get("after_generation", ()):
+        assert {item["request_id"] for item in trace["re_retrieval"].get("queries", ())} <= {
+            "Q1",
+            "Q2",
+            "Q3",
+        }
     # 主の検索は言い換えた検索文で行う(元の質問の全文の検索は、条の目録の候補の補いだけ)。
     assert oracle.queries[0] == query
     # 回答の要求(rag_search の requests。回答の検査の入力)も元の質問の 3 要求(充足は監査が決める)。
@@ -3511,7 +3546,7 @@ async def test_without_original_question_requests_come_from_the_query(
     coverage = outcome.diagnostics["request_coverage"]
     assert [row["id"] for row in coverage["requests"]] == ["Q1"]
     # 1 要求で、最初の検索と違う検索文を作れないので探し直さない(#2810)。
-    assert coverage["re_retrieval"]["skipped"] == "same_query"
+    assert coverage["re_retrieval"]["skipped"] == "no_explicit_gap"
 
 
 def test_build_engine_settings_passes_request_coverage(tmp_path: Any) -> None:
