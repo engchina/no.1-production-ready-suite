@@ -1,3 +1,4 @@
+import { expectGrowingList } from "./_list-viewport";
 import { expect, type Page, test } from "./fixtures/test";
 import { findClippedPlaceholders, findFloatingFormActionBars } from "../../../platform/packages/ui/e2e/layout-checks";
 import {
@@ -863,8 +864,11 @@ async function mockSearchAnswerProfiles(
       await route.fulfill(envelope(detail));
       return;
     }
+    const url = new URL(route.request().url());
+    const limit = Number(url.searchParams.get("limit") ?? 25);
+    const offset = Number(url.searchParams.get("offset") ?? 0);
     await route.fulfill(
-      envelope({ items, total: items.length, limit: 50, offset: 0, has_next: false })
+      envelope({ items: items.slice(offset, offset + limit), total: items.length, limit, offset, has_next: offset + limit < items.length })
     );
   });
 }
@@ -1309,4 +1313,10 @@ test("言語資源の全体再取得は継承欄だけを更新し、編集中�
     .toEqual({ question_cues: { past_markers: ["過去"], future_markers: ["将来"] } });
   await expectNoPageOverflow(page);
   await page.screenshot({ path: test.info().outputPath("inherited-language-refresh.png"), fullPage: true });
+});
+
+test("主一覧は高い画面の余白へ拡張し、ページ送りを維持する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockSearchAnswerProfiles(page, Array.from({ length: 60 }, (_, i) => ({ ...accountingView, id: `viewport-${i}`, name: `プロファイル ${i}` })));
+  await page.goto("/search-answer-profiles");
+  await expectGrowingList(page, testInfo, "search-answer-profiles");
 });

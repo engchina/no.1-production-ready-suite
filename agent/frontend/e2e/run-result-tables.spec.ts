@@ -158,13 +158,13 @@ async function expectLargeResultTable(page: Page, table: Locator, testId: string
   await expect(pagination).toContainText("26–50 / 60 件");
   await pagination.getByRole("button", { name: "前へ" }).click();
   await expect(pagination).toContainText("1–25 / 60 件");
-  expect((await pagination.boundingBox())!.y).toBeLessThan((await sheet.getByTestId(`${testId}-all-table`).boundingBox())!.y);
+  expect((await pagination.boundingBox())!.y).toBeGreaterThan((await sheet.getByTestId(`${testId}-all-scroll`).boundingBox())!.y);
   await expect(sheet.getByRole("button", { name: "CSV をダウンロード" })).toBeVisible();
   const allScroll = sheet.getByTestId(`${testId}-all-scroll`);
-  expect(await allScroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
-  expect((await allScroll.boundingBox())!.height).toBeGreaterThan(page.viewportSize()!.height * 0.7);
+  expect(await allScroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0);
+  expect((await allScroll.boundingBox())!.height).toBeLessThan(page.viewportSize()!.height * 0.7);
   const body = sheet.locator(":scope > div").last();
-  expect(await body.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0);
+  expect(await body.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
   await sheet.focus();
   await page.keyboard.press("Escape");
   // SideSheet は閉じた後も DOM に残る（data-state="closed"・非表示）ので、数ではなく非表示を確かめる。

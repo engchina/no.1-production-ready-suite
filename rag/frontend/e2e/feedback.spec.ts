@@ -57,6 +57,9 @@ test("全幅の一覧を検索・数値ページングし、全幅の詳細の�
   await mockFeedback(page, requestedUrls);
 
   await page.goto("/feedback?period=30&sort=newest&size=50&page=1");
+  const paging = page.getByTestId("feedback-pagination");
+  await expect(paging.getByRole("textbox", { name: "ページ番号" })).toHaveValue("1");
+  await expect(paging.getByRole("button", { name: "前へ", exact: true })).toBeDisabled();
 
   await expect(page.getByRole("heading", { name: "利用者フィードバック" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "問題の概要" })).toBeVisible();
@@ -126,11 +129,13 @@ test("全幅の一覧を検索・数値ページングし、全幅の詳細の�
 
   await page.screenshot({ path: testInfo.outputPath("feedback-root-cause-desktop.png"), fullPage: true });
 
+  await expect(page).toHaveURL(/size=25/);
   // 再読込しても URL から同じ行を選んだ状態に戻る。
   await page.reload();
   await expect(page.getByTestId("feedback-row-feedback-answer")).toHaveAttribute("aria-current", "true");
   await expect(page.getByRole("region", { name: "フィードバック詳細" })).toBeVisible();
 
+  await expect(page).toHaveURL(/size=25/);
   // 前へ / 次へ（詳細の上端の行）は一覧の今の並びの前後へ移る（単一ペインの選択は履歴に積む）。
   await page.getByTestId("feedback-detail-pager-next").click();
   await expect(page).toHaveURL(/feedback=feedback-citation/);
@@ -140,6 +145,7 @@ test("全幅の一覧を検索・数値ページングし、全幅の詳細の�
   await expect(page).toHaveURL(/feedback=feedback-answer/);
   await expect(page.getByTestId("feedback-detail-pager-previous")).toBeDisabled();
 
+  await expect(page).toHaveURL(/size=25/);
   await page.getByTestId("feedback-detail-back").click();
   await expect(list).toBeVisible();
   await expect(page).toHaveURL(/size=25/);

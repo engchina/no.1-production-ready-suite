@@ -252,6 +252,7 @@ function KnowledgeBaseList({
               })}
               stickyHeader
               visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+              growToViewport
               scrollAriaLabel={t("knowledgeBases.scrollLabel")}
               scrollTestId="knowledge-bases-scroll-region"
               tableClassName="w-full min-w-[54.29rem] text-sm"

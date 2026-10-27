@@ -226,7 +226,7 @@ for (const viewport of [
     }
     // 工程の説明は、対応する設定画面の説明と同じ文（複数のグループに分かれる工程は最初のグループにだけ出す）。
     await expect(
-      page.getByText("文書解析の前に原本を一度だけ整えるファイル準備方式を選択します。", { exact: true })
+      page.getByText("文書解析の前にファイルを変換する方式を選択します。", { exact: true })
     ).toBeVisible();
     await expect(
       page.getByText("文書解析に使う方式を選び、必要な解析エンジンの現在状態を確認します。", { exact: true })

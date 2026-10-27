@@ -1,3 +1,4 @@
+import { expectGrowingList } from "./_list-viewport";
 import type { SourceProfile } from "../src/lib/api";
 import { expect, type Page, test } from "./fixtures/test";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
@@ -705,3 +706,9 @@ for (const width of [1280, 375]) {
     await page.screenshot({ path: testInfo.outputPath("bulk-mixed-reasons.png"), fullPage: true });
   });
 }
+
+test("主一覧は高い画面の余白へ拡張し、ページ送りを維持する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockFileListApi(page, Array.from({ length: 60 }, (_, i) => documentSummary(`viewport-${i}`, `sample-${i}.pdf`, "INDEXED")));
+  await page.goto("/file-list");
+  await expectGrowingList(page, testInfo, "file-list");
+});

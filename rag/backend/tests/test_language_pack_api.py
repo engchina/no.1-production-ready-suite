@@ -211,3 +211,25 @@ def test_numeric_mapping_metadata_exposes_minimum() -> None:
     minimums = {f["key"]: f["min_value"] for f in fields if f["section"] == "numbers"}
     assert minimums["kanji_digits"] == 0
     assert minimums["roman_digits"] == minimums["kanji_multipliers"] == 1
+
+
+def test_history_retains_only_five_latest_versions_and_restore_is_capped() -> None:
+    """6 件目で古い版を外し、復元でも最新 5 件に収める。"""
+    ids = []
+    for _ in range(6):
+        assert client.put("/api/settings/language-pack", json={"overrides": {}}).status_code == 200
+        ids.append(
+            client.get("/api/settings/language-pack/history").json()["data"]["versions"][0]["id"]
+        )
+    versions = client.get("/api/settings/language-pack/history").json()["data"]["versions"]
+    assert [v["id"] for v in versions] == list(reversed(ids[-5:]))
+    settings = get_settings()
+    from app.rag.language_pack_store import history_path
+
+    stored = json.loads(history_path(resolve_language_pack_file(settings)).read_text())
+    assert len(stored["versions"]) == 5
+    assert client.post(f"/api/settings/language-pack/history/{ids[0]}/restore").status_code == 404
+    assert client.post(f"/api/settings/language-pack/history/{ids[-2]}/restore").status_code == 200
+    versions = client.get("/api/settings/language-pack/history").json()["data"]["versions"]
+    assert len(versions) == 5
+    assert versions[0]["restored_from"] == ids[-2]

@@ -16,6 +16,7 @@ for (const viewport of [
     await mockEvaluation(page, "standard");
 
     await page.goto("/settings/evaluation");
+    await expect(page.getByText(/ほかの五指標は 100%/)).toBeVisible();
 
     await expect(page.getByRole("heading", { name: "評価の基準", exact: true, level: 1 })).toBeVisible();
     // 基準は標準・厳格の 2 つだけ(#591)。

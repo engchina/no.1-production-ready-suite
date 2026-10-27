@@ -203,7 +203,7 @@ export const ja = {
     "文書解析に使う方式を選び、必要な解析エンジンの現在状態を確認します。",
   "settings.parserAdapters.overview.title": "文書解析の現在の設定",
   "settings.parserAdapters.overview.description":
-    "文書解析に使うエンジンを選び、現在の可用性を確認します。保存したエンジンは、文書のレシピで上書きしていない文書に、次の取込と再処理から使います。取込済みの文書は、文書の詳細で再処理するまで今の解析結果のまま検索されます。",
+    "文書解析に使うエンジンを選び、現在の可用性を確認します。対象形式に合うエンジンを選びます。稼働中の表示は、個々のファイルの解析成功を保証するものではありません。保存したエンジンは、文書のレシピで上書きしていない文書に、次の取込と再処理から使います。取込済みの文書は、文書の詳細で再処理するまで今の解析結果のまま検索されます。",
   "settings.parserAdapters.backend": "使用エンジン",
   "settings.parserAdapters.backend.local": "Local(廃止)",
   "settings.parserAdapters.backend.local.description": "旧 in-process 解析。既定の Docling へ正規化",
@@ -246,7 +246,7 @@ export const ja = {
   "settings.parserAdapters.backend.dots_ocr.description": "外部 Dots.OCR API を使用",
   "settings.parserAdapters.backend.oci_document_understanding": "OCI Document Understanding",
   "settings.parserAdapters.backend.oci_document_understanding.description":
-    "OCI Document Understanding の非同期 job で日本語 OCR/表抽出",
+    "OCI Document Understanding による OCR・表抽出を予定（未実装）",
   "settings.parserAdapters.capabilities": "対応形式",
   "settings.parserAdapters.legacyBackendNotice":
     "旧『local』設定です。未選択時は既定の Docling で解析します(内蔵フォールバックは廃止)。下から解析方式を選ぶと上書きされます。",
@@ -255,7 +255,7 @@ export const ja = {
   "settings.parserAdapters.roadmap.reason": "準備中（ロードマップ）のため、まだ選べません。",
   "settings.parserAdapters.backend.structured_records_jsonl": "構造化レコード JSONL",
   "settings.parserAdapters.backend.structured_records_jsonl.description":
-    "ファイル準備の CSV→JSONL・Excel→JSONL・Word→JSONL が作る構造化レコードの JSONL を、記録の単位で解析。固定分割で 1 記録 1 チャンクにする。選んだ場合だけ使用",
+    "ファイル準備の CSV→JSONL・Excel→JSONL・Word→JSONL が作る構造化レコードの JSONL を、記録の単位で解析。一般の JSONL ではなく、この構造化レコード形式が対象。解析後の分割は「文書分割」の設定で決まります",
   "settings.parserAdapters.backend.xml_tree_json": "XML ツリー JSON",
   "settings.parserAdapters.backend.xml_tree_json.description":
     "XML の要素の木（tag / attr / children）を JSON にした文書を、要素の階層のまま解析。選んだ場合だけ使用",
@@ -383,7 +383,7 @@ export const ja = {
   "settings.language.search.count": "{count} 項目",
   "settings.language.search.empty": "検索語に当たる項目はありません。",
   "settings.language.history.title": "保存の履歴",
-  "settings.language.history.description": "保存ごとの版です。前の版に戻すと、その版の内容を保存し直します（戻したことも履歴に残ります）。新しい順に 50 件まで残します。",
+  "settings.language.history.description": "保存ごとの版です。前の版に戻すと、その版の内容を保存し直します（戻したことも履歴に残ります）。新しい順に 5 件まで残します。",
   "settings.language.history.loading": "保存の履歴を読み込んでいます",
   "settings.language.history.empty": "まだ保存していません。",
   "settings.language.history.loadError": "保存の履歴を読み込めませんでした。",
@@ -1589,7 +1589,7 @@ export const ja = {
   "settings.pipeline.flow.saveError": "工程の自動進行を保存できませんでした。",
   "settings.pipeline.flow.unsaved": "未保存の変更があります。",
   "settings.preprocess.subtitle":
-    "文書解析の前に原本を一度だけ整えるファイル準備方式を選択します。",
+    "文書解析の前にファイルを変換する方式を選択します。",
   "settings.preprocess.overview.title": "ファイル準備方式",
   "settings.preprocess.overview.description":
     "ファイルの種類や状態に合わせて、解析の前に原本を読み取りやすい形へ変換します。原本はそのまま残し、処理後ファイルとの対応を記録します。保存した方式は、文書のレシピで上書きしていない文書に、次の取込と再処理から使います。取込済みの文書は、文書の詳細で再処理するまで今の結果のまま検索されます。",
@@ -1610,13 +1610,13 @@ export const ja = {
     "Word・PowerPoint の文書(旧形式の .doc・.ppt、マクロ付きの .docm・.pptm を含む)を PDF にしてから解析します。マクロは実行しません。PDF にした文書はブラウザーでプレビューできます。Excel は「Excel→JSONL」を使います。",
   "settings.preprocess.profile.csv_to_jsonl": "CSV→JSONL",
   "settings.preprocess.profile.csv_to_jsonl.description":
-    "CSV の 1 行を、見出しの列名と値の組の 1 件の記録(JSONL)にしてから解析します。元の行の位置を保ちます。文書解析は「構造化レコード JSONL」を使います。",
+    "CSV の表頭を除くデータの 1 記録を、列名と値の組の JSONL に変換します。空行は除き、元の行の位置を保ちます。文書解析は「構造化レコード JSONL」を使います。",
   "settings.preprocess.profile.excel_to_jsonl": "Excel→JSONL",
   "settings.preprocess.profile.excel_to_jsonl.description":
-    "Excel ファイル(.xls・.xlsx・マクロ付きの .xlsm)の表の 1 行(手順は 1 手順)を、見出しの列名と値の組の 1 件の記録(JSONL)にしてから解析します。マクロは実行しません。シート・行・セル範囲を保ちます。文書解析は「構造化レコード JSONL」を使います。",
+    "Excel ファイル(.xls・.xlsx・マクロ付きの .xlsm)の表の 1 行(手順は 1 手順)を、見出しの列名と値の組の 1 件の記録(JSONL)にしてから解析します。マクロは実行しません。シート・行・セル範囲を保ちます。既定では表示シート・表示セルを読み、数式は保存済みの計算結果を使います。計算結果がないセルは数式の文字列と警告を残します。文書解析は「構造化レコード JSONL」を使います。",
   "settings.preprocess.profile.word_to_jsonl": "Word→JSONL",
   "settings.preprocess.profile.word_to_jsonl.description":
-    "Word ファイル(.doc・.docx・マクロ付きの .docm)を、見出しの下の段落・リスト・表のまとまりを 1 件の記録(JSONL)にしてから解析します。見出しの階層と本文の位置を保ちます。.doc は .docx にしてから読み、マクロは実行しません。文書解析は「構造化レコード JSONL」を使います。",
+    "Word ファイル(.doc・.docx・マクロ付きの .docm)を、見出しの下の段落・リスト・表のまとまりを 1 件の記録(JSONL)にしてから解析します。見出しの階層と本文の順序を保ち、長い節は分割します。画像・ヘッダー・フッターは読み取らず、ページ番号は付けません。.doc は .docx にしてから読み、マクロは実行しません。文書解析は「構造化レコード JSONL」を使います。",
   "settings.preprocess.actions.save": "保存",
   "settings.preprocess.actions.label": "ファイル準備の設定の操作",
   "settings.preprocess.actions.saved": "ファイル準備の設定を保存しました。",
@@ -1763,9 +1763,9 @@ export const ja = {
   "settings.guardrail.selection": "検査するテキスト（既定は両方とも未選択）",
   "settings.guardrail.input": "入力を検査する",
   "settings.guardrail.output": "出力を検査する",
-  "settings.guardrail.input.description": "質問を OCI Guardrails に送信し、個人情報・プロンプト攻撃・不適切な内容を検査します。未選択のときは質問を送信しません。",
-  "settings.guardrail.output.description": "回答を OCI Guardrails に送信し、個人情報・プロンプト攻撃・不適切な内容を検査します。未選択のときは回答を送信しません。",
-  "settings.guardrail.resultHandling": "検出された個人情報はアプリでマスクします。プロンプト攻撃・不適切な内容を検出したとき、または検査を完了できないときは、処理・回答の表示を停止します。",
+  "settings.guardrail.input.description": "質問を OCI Guardrails に送信し、個人情報・プロンプト攻撃・不適切な内容を検査します。未選択のときは、この検査のために質問を OCI Guardrails へ送信しません。",
+  "settings.guardrail.output.description": "回答を OCI Guardrails に送信し、個人情報・プロンプト攻撃・不適切な内容を検査します。未選択のときは、この検査のために回答を OCI Guardrails へ送信しません。",
+  "settings.guardrail.resultHandling": "OCI の検出結果に基づき、個人情報として返された位置の文字をアプリでマスクします。プロンプト攻撃・不適切な内容を検出したとき、または検査を完了できないときは、処理・回答の表示を停止します。",
   "settings.guardrail.officialDocs": "OCI Guardrails の公式ドキュメント（新しいタブで開きます）",
   "settings.guardrail.ociSettingsLink": "OCI 認証設定を開く",
   "settings.guardrail.actions.label": "安全チェックの設定の操作",
@@ -1826,7 +1826,7 @@ export const ja = {
   "settings.evaluation.suite.standard": "標準",
   "settings.evaluation.suite.standard.description": "日常の確認と毎晩の回帰の判定に使う既定の閾値です。",
   "settings.evaluation.suite.strict": "厳格",
-  "settings.evaluation.suite.strict.description": "リリース前の判定に使う高い閾値です。根拠のない主張と、回答を控える判断の誤りを 1 件も許しません。",
+  "settings.evaluation.suite.strict.description": "リリース前の確認に使う高い閾値です。MRR は 80%、ほかの五指標は 100% を求めます。測定できた範囲の合否であり、評価器がすべての誤りを検出できる保証ではありません。",
   "settings.evaluation.applyHint":
     "変更は次に実行する品質評価から使います。実行済みの評価の合否は変わりません。品質評価の画面で評価の基準を選んで実行した場合は、そちらを使います。",
   "settings.evaluation.actions.label": "評価の基準の操作",
@@ -2664,7 +2664,6 @@ export const ja = {
   "upload.job.status.SKIPPED": "スキップ",
   "upload.job.status.CANCELLED": "キャンセル済み",
   "upload.storageNotice.title": "現在の保存先",
-  "upload.storageNotice.settings": "保存先設定",
   "upload.storageNotice.unset": "未設定",
   "upload.knowledgeBases.title": "所属させるナレッジベース",
   "upload.knowledgeBases.loading": "ナレッジベースを読み込んでいます。",
@@ -3779,7 +3778,7 @@ export const ja = {
   "search.history.savedAt": "保存日時: {value}",
   "settings.answerPrompts.vlm_answer.title": "回答生成のプロンプト",
   "settings.answerPrompts.vlm_answer.description":
-    "根拠と質問を回答モデルへ渡す指示のテンプレートです。全体で 1 つの設定で、保存した内容は次の回答から使います。",
+    "根拠と質問を回答モデルへ渡す指示のテンプレートです。全体で 1 つの設定で、保存した内容は次に検索した根拠から回答を生成するときに使います。承認済み FAQ や回答前の確認の経路では使いません。",
   "settings.answerPrompts.vlm_answer.field": "テンプレート",
   "settings.answerPrompts.image_retrieval.title": "図・画像の読み取りプロンプト",
   "settings.answerPrompts.image_retrieval.description":
@@ -3802,10 +3801,10 @@ export const ja = {
   "settings.answerPrompts.loading": "プロンプトを読み込んでいます",
   "settings.answerPrompts.loadError": "プロンプトを読み込めませんでした。",
   "settings.retrieval.prompts.title": "検索に使うプロンプト",
-  "settings.retrieval.prompts.description": "質問の解釈、検索、根拠の判定の順に並べています。各段の中はモデルへ渡す順です。使われる条件と指示の原文を確認できます。すべて読み取り専用です。",
+  "settings.retrieval.prompts.description": "質問の解釈、検索、根拠の判定ごとに、使う条件とモデルに渡す指示を確認できます。表示順は処理の目安です。設定や検索結果によって省略・再実行され、CRAG では検索と判定を繰り返す場合があります。すべて読み取り専用です。",
   "settings.answerPrompts.stages.title": "処理の各段のプロンプト",
   "settings.answerPrompts.stages.description":
-    "回答生成・監査・資料との照合の順に並べています。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。各段の中はモデルへ渡す順です。業務ガイドの準備は独立した処理で、FAQ は検索による回答とは別の経路です。回答テンプレートだけ編集でき、ほかの指示は読み取り専用です。",
+    "回答生成・監査・資料との照合ごとに、使う条件と指示を示します。設定や判定によって省略・再生成される場合があります。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。各段の中はモデルへ渡す順です。業務ガイドの準備は独立した処理で、FAQ は検索による回答とは別の経路です。回答テンプレートだけ編集でき、ほかの指示は読み取り専用です。",
   "settings.answerPrompts.phase.ingestion": "文書解析",
   "settings.answerPrompts.phase.question": "質問の解釈",
   "settings.answerPrompts.phase.retrieval": "検索",
@@ -3821,11 +3820,11 @@ export const ja = {
   "settings.answerPrompts.phase.question.description": "業務ガイドの条件確認、会話を踏まえた書き換え、項目の条件、検索戦略と検索文の順です。対象外の段は省略します。",
   "settings.answerPrompts.phase.retrieval.description": "検索候補を集めた後、必要に応じて画面や条の目録から根拠を足します。",
   "settings.answerPrompts.phase.grounding.description": "取得した根拠を判定・補完します。CRAG は再検索や章節の拡張の途中で判定を繰り返すため、一方向に一度だけ進む処理ではありません。",
-  "settings.answerPrompts.phase.generation.description": "承認済み FAQ を選んだ場合は FAQ の経路、それ以外は検索した根拠による生成です。後者の system 指示と入力テンプレートをこの順に示します。",
+  "settings.answerPrompts.phase.generation.description": "承認済み FAQ を選んだ場合は FAQ の経路、それ以外は検索した根拠による生成です。後者の システムプロンプトと入力テンプレートをこの順に示します。",
   "settings.answerPrompts.phase.audit.description": "回答の生成後に使う監査・資料との照合の指示です。RAG では LLM 監査が有効なときに使います（既定は無効）。MCP の資料との照合は独立して呼び出します。",
   "settings.evaluation.prompts.title": "品質評価のプロンプト",
   "settings.evaluation.prompts.description": "品質評価と保存した回答の評価で使う指示です。読み取り専用です。",
-  "settings.answerPrompts.phase.evaluation.description": "品質評価の内部では、評価範囲の固定、網羅性・忠実性の検査、正確性の判定の順です。検索と応答判断の指標はコードで計算します。資料との照合は回答プロンプトで確認できます。",
+  "settings.answerPrompts.phase.evaluation.description": "品質評価では、利用できる標準回答・必須要点・取得した根拠に応じて、モデルが回答の網羅性・忠実性・正確性を判定します。必要な情報がない指標や判定を完了できない指標は未評価です。検索と応答判断の指標はコードで計算します。資料との照合は回答プロンプトで確認できます。",
   "settings.answerPrompts.condition": "使われる条件: {condition}",
   "settings.answerPrompts.fixedRules": "共通の読み取り指示（読み取り専用）",
   "settings.answerPrompts.noPlaceholders": "必須の placeholder はありません。",
@@ -3905,7 +3904,7 @@ export const ja = {
   "settings.answerPrompts.stage.answer_validation": "資料との照合",
   "settings.answerPrompts.stage.answer_validation.condition":
     "生成後の LLM 監査を有効にしたとき、検索した根拠から生成した最終回答の検証、または MCP の資料との照合（rag_validate_answer）を呼んだとき",
-  "settings.answerPrompts.part.assumptionSystem": "「前提を示して回答する」のときに追加する system 指示",
+  "settings.answerPrompts.part.assumptionSystem": "「前提を示して回答する」のときに追加する システムプロンプト",
   "settings.answerPrompts.part.system": "システムプロンプト",
   "settings.answerPrompts.part.template": "入力テンプレート",
   "settings.answerPrompts.part.correctness": "回答の正確性の判定",
@@ -3930,10 +3929,10 @@ export const ja = {
   "settings.answerPrompts.part.catalogReview": "条の目録で選んだ条が支える説明を検討する指示（設定で有効にしたとき、生成が条を引かなかったときだけ）",
   "settings.queryHistory.title": "質問履歴",
   "settings.queryHistory.description":
-    "回答に成功した質問を検索・回答プロファイルごとに保存し、よく聞かれている質問を RAG 検索の入力欄の下に候補として出します。質問の本文を保存するため、既定では無効です。",
+    "回答の処理に成功した質問を検索・回答プロファイルごとに保存し、同じ質問の回数が最小回数に達したものを RAG 検索の候補として出します。回答の正確性を評価した結果ではありません。質問の本文を保存するため、既定では無効です。",
   "settings.queryHistory.enabled": "質問を保存して候補に使う",
   "settings.queryHistory.enabledHint":
-    "安全チェックでマスクした後の質問を保存します。無効にしても保存済みの履歴は残ります（保存期間を決めたときは、その期間まで）。",
+    "安全チェック後の質問を保存します。無効にすると新しい履歴の保存と候補の表示を止めますが、保存済みの履歴は削除しません。期限を過ぎた履歴は候補から除き、次の履歴保存時や設定保存時に削除します。",
   "settings.queryHistory.retention": "履歴の保存期間",
   "settings.queryHistory.minCount": "候補にする最小回数",
   "settings.queryHistory.minCountHint": "同じ質問がこの回数以上聞かれたときだけ候補にします。",
@@ -3959,16 +3958,16 @@ export const ja = {
     "回答した質問・回答・根拠・実行記録と、チャット・RAG 検索の実行履歴を保存する期間です。既定は無期限で、自動では削除しません。期間を決めたときは、期限を過ぎた記録を次の回答の保存時とこの設定の保存時に削除します。",
   "settings.answering.title": "回答の検索と生成",
   "settings.answering.description":
-    "すべての検索・回答プロファイルと、プロファイルを指定しない呼び出しで使う全体設定です。各機能は実行時に最初に呼ばれる順で並べています。",
+    "すべての検索・回答プロファイルと、プロファイルを指定しない呼び出しで使う全体設定です。各処理は有効な設定・対象資料・呼び出し方に応じて実行され、省略や繰り返しがあります。",
   "settings.answering.queryStrategy": "質問の拡張",
   "settings.answering.queryStrategyHint":
     "質問の言い回しでは届きにくい資料の表現を補う検索文の作り方です。自動ルーティングは質問ごとに AI が選びます。",
   "settings.answering.answerFlow": "回答の生成方式",
   "settings.answering.answerFlowHint":
-    "標準 RAG は検索した根拠からそのまま回答を作ります。CRAG は必要なときだけ選ぶ方式で、検索結果を AI が評価し、根拠が足りなければ検索文を書き換えて探し直します（最大 3 回）。評価の AI の呼び出しが増え、回答までの時間が長くなります。",
+    "標準 RAG は検索した根拠を使って回答を作ります。CRAG は必要なときだけ選ぶ方式で、AI が根拠の十分性を判定し、不足時は検索文の書き換えや根拠の追加を試みます。初回を含め最大 3 段で、検索文の書き換えは最大 2 回です。判定を省略する場合もあります。AI の呼び出しが増え、回答までの時間が長くなることがあります。",
   "settings.answering.neighborChildCount": "根拠の前後から加える数",
   "settings.answering.neighborChildCountHint":
-    "根拠のチャンクの前後から文脈に加えるチャンクの数です。",
+    "当たった根拠の前と後から、それぞれ最大でこの数のチャンクを文脈に加えます。同じ親やページの範囲、取得できる根拠、入力上限によって実際の数は減ります。",
   "settings.answering.entityExpansion": "実体・別名による検索拡張",
   "settings.answering.entityExpansionHint": "質問と上位の検索候補に含まれる実体の名称・ID・別名を手がかりに、同じ対象の定義と、その属性で結び付く対象の根拠を 1 段だけ検索候補に加えます。実体・別名索引を作った文書だけに効きます。AI の呼び出しは増えません。文書構造による検索拡張と併用できます。全体の検索に適用します。",
   "settings.answering.sectionExpansion": "章節で広げる根拠",
@@ -3982,15 +3981,15 @@ export const ja = {
     "OCI Generative AI の Rerank で、検索候補を質問との関連の強さの順に並べ替えます。",
   "settings.answering.autoFieldFilter": "質問から項目の条件を読み取る",
   "settings.answering.autoFieldFilterHint":
-    "質問に書かれた条件（「2025年以降」「10万円以上」など）を、ナレッジベースで定義した抽出項目の条件として AI が読み取り、検索を絞り込みます。読み取った条件で見つからないときは、条件を外して検索し直します。質問ごとに AI の呼び出しが 1 回増えます。",
+    "質問の条件を、検索・回答プロファイルの対象ナレッジベースで定義した抽出項目の条件として AI が読み取り、検索を絞り込みます。項目定義がない場合や、呼び出し元が検索文を指定した場合は読み取りません。自動で読んだ条件で候補が見つからない場合は、その条件を外して探し直します。読み取りを行う場合にモデル呼び出しが増えます。",
   "settings.answering.graphExpansion": "文書構造による検索拡張",
   "settings.answering.graphExpansionHint": "文書構造索引を使い、上位の検索候補と同じ狭い章・節・表・図の根拠や、質問に見出しの語が含まれる章・節・表・図の根拠を検索候補に加えます。文書構造索引を作った文書だけに効きます。AI の呼び出しは増えません。実体・別名による検索拡張と併用でき、追加済みの根拠は重複して加えません。全体の検索に適用します。",
   "settings.answering.screenLinking": "画面目録で操作画面を探す",
   "settings.answering.screenLinkingHint":
-    "検索範囲の文書の画面見出しから、質問を解決する設定画面などを AI が選び、その説明を根拠の候補に加えます。「印字されない」のような症状の質問に向きます。回答ごとに AI の呼び出しが 1 回増えます。",
+    "検索範囲に画面目録がある場合、質問に関係する操作画面を AI が選び、その説明を根拠の候補に加えます。目録がない場合などは選択を省略します。選択を行う場合にモデル呼び出しが増えます。選ばれた画面だけで回答できるとは限りません。",
   "settings.answering.requestCoverage": "根拠の無い要求を探し直す",
   "settings.answering.requestCoverageHint":
-    "質問に複数の要求があるとき、要求ごとに根拠があるかを確かめ、根拠の無い要求だけをその要求の文で 1 回ずつ探し直して回答の材料に加えます。AI の呼び出しは増えませんが、探し直すたびに数秒かかります。",
+    "要求の語と取得済みの根拠の一致を手がかりに、不足する要求を対象・状況を保った検索文で探し直します。語の一致だけで、十分に回答できるとは判定しません。生成や監査で判明した不足も対象にし、生成前後で検索回数・追加根拠数・時間の上限を共有します。同じ検索文は繰り返しません。新しい根拠を得て回答を作り直す場合は、モデル呼び出しと待ち時間が増えます。",
   "settings.answering.save": "回答の設定を保存",
   "settings.answering.saved": "回答の検索と生成の設定を保存しました。",
   "settings.answering.saveError": "回答の検索と生成の設定を保存できませんでした。",
@@ -4320,7 +4319,7 @@ export const ja = {
   "evaluation.suite.settingsLink": "設定で既定の基準を変更",
   "evaluation.suite.applied": "評価の基準",
   "evaluation.input.description":
-    "1 行に 1 つの質問を書いた Excel（質問・期待する根拠・標準回答）をアップロードします。書き方はテンプレートの「記入の説明」、形式ごとの例は「記入例」のシートにあります。",
+    "1 行に 1 つの質問を書いた Excel をアップロードします。列は「質問」「期待する根拠」「標準回答」「必須の回答要点」「期待する応答の判断」「回答の過程」で、質問だけが必須です。書き方はテンプレートの「記入の説明」、形式ごとの例は「記入例」のシートにあります。",
   "evaluation.knowledgeBaseScope.required": "評価する検索・回答プロファイルを 1 つ選んでください。",
   "evaluation.knowledgeBaseScope.emptySelection": "未選択です。評価するナレッジベースを選んでください。",
   "evaluation.conditions.title": "評価の条件",
@@ -5078,7 +5077,7 @@ export const ja = {
   "evaluation.tabs.calibration": "判定の校正",
   "evaluation.calibration.title": "判定の校正",
   "evaluation.calibration.description":
-    "品質評価の LLM の判定（回答の評価器）を人手の判定と照らし、観点ごとに判定を合否に使えるかを確かめます。校正に通った観点だけ「校正済み」になり、通らない観点の値は参考値です。",
+    "品質評価の LLM の判定（回答の評価器）を人手の判定と照らし、観点ごとに判定を合否に使えるかを確かめます。モデル・指示が同じ構成で校正に通った観点だけ「校正済み」になります。未校正の観点は参考値です。校正は判定の一致を測る処理で、モデルの学習や回答の正解保証ではありません。",
   "evaluation.calibration.step.sets.title": "記入の集合を作る",
   "evaluation.calibration.step.sets.description": "終わった品質評価の回答から、項目 × 観点の行を作ります。",
   "evaluation.calibration.step.annotate.title": "記入する",

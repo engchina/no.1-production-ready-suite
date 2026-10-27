@@ -685,7 +685,7 @@ test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる�
   await expect(toastStatus).toHaveCount(0);
 });
 
-test("全再作成は実行確認語の完全一致まで実行できない", async ({ page }) => {
+test("全再作成は実行確認語の完全一致まで実行できない", { tag: "@responsive" }, async ({ page }) => {
   let recreateRequests = 0;
   let requestBody: unknown = null;
   await page.route("**/api/settings/database/system-tables", (route) =>
@@ -707,6 +707,13 @@ test("全再作成は実行確認語の完全一致まで実行できない", as
   const card = page.locator("#system-tables");
   const trigger = card.getByRole("button", { name: "すべて再作成" });
   const confirmationField = card.getByTestId("execution-confirmation-field");
+  const description = card.getByText("NL2SQL の中核データを削除して migration を最初から適用します。削除したデータは復元できません。", { exact: true });
+  const [descriptionBox, confirmationBox] = await Promise.all([description.boundingBox(), confirmationField.boundingBox()]);
+  expect(confirmationBox!.y).toBeGreaterThanOrEqual(descriptionBox!.y + descriptionBox!.height);
+  if (page.viewportSize()!.width >= 1280) {
+    const lines = await description.evaluate(node => node.getBoundingClientRect().height / parseFloat(getComputedStyle(node).lineHeight));
+    expect(lines).toBeLessThan(1.1);
+  }
   const field = card.getByRole("textbox", { name: "実行確認語" });
 
   // 未入力・不一致(ADMIN_EXECUTE を含む)では実行できない。

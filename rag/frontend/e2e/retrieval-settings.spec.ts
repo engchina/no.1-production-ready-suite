@@ -275,6 +275,10 @@ for (const viewport of [
       // 根拠の無い要求を探し直す（#1279）は既定で無効。
       const requestCoverage = page.getByRole("switch", { name: "根拠の無い要求を探し直す" });
       await expect(requestCoverage).not.toBeChecked();
+      await expect(requestCoverage).toHaveAccessibleDescription(/語の一致だけで.*十分に回答できるとは判定しません/);
+      await expect(requestCoverage).toHaveAccessibleDescription(/生成前後.*上限を共有.*モデル呼び出しと待ち時間が増え/);
+      await expect(answerFlow).toHaveAccessibleDescription(/初回を含め最大 3 段.*書き換えは最大 2 回/);
+      await expect(screenLinking).toHaveAccessibleDescription(/目録がない場合.*省略/);
       const autoFieldFilter = page.getByRole("switch", { name: "質問から項目の条件を読み取る" });
       await expect(autoFieldFilter).not.toBeChecked();
       // 文書構造による検索拡張（#2055）は既定で無効。AI の呼び出しが増えないことを説明に出す。
@@ -615,6 +619,6 @@ for (const width of [1280, 375]) {
   await mockLocalAuth(page);
   await mockRetrievalCards(page);
   await page.goto("/settings/retrieval");
-  await expect(page.getByText("根拠のチャンクの前後から文脈に加えるチャンクの数です。", {exact:true})).toBeVisible();
+  await expect(page.getByText("当たった根拠の前と後から、それぞれ最大でこの数のチャンクを文脈に加えます。同じ親やページの範囲、取得できる根拠、入力上限によって実際の数は減ります。", {exact:true})).toBeVisible();
   await expect(page.getByText("0 は加えません。", {exact:false})).toHaveCount(0);
  });

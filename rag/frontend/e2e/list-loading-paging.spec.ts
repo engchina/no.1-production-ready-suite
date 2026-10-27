@@ -4,7 +4,7 @@ import { jumpToPage, measureHorizontalOverflow } from "../../../platform/package
 
 // Issue 265: 読み込み中・一覧の縦スクロール・ページングを NL2SQL の基準にそろえる。
 // - 読み込み中は TimedLoadingState（文言と経過時間）+ 表の形の Skeleton で領域を予約する
-// - 一覧は表頭を固定し、md 未満 5 行・md 以上 8 行を超えた行は表の中で縦スクロールする
+// - 一覧は表頭を固定し、md 未満 5 行・md 以上は 8 行を基準に画面高まで伸ばし、超えた行は表の中で縦スクロールする
 // - ページングは共通の Pagination（25 件/ページ。#1952）。ページ番号は再読込でも残る
 // desktop / mobile（375px）の両 project で動く。
 
@@ -140,7 +140,7 @@ test("チャットの会話一覧: 読み込み中は経過時間と行の Skele
   await expect(page.getByTestId("chat-conversations-pagination")).toContainText("26–50 / 55 件");
 });
 
-/** 表頭は固定され、表示行数（md 未満 5 行・md 以上 8 行）を超えた行は表の中で縦スクロールする。 */
+/** 表頭は固定され、表示領域（md 未満 5 行・md 以上は画面高まで）を超えた行は表の中で縦スクロールする。 */
 async function expectScrollsInsideTable(page: Page, region: Locator) {
   await expect(region).toBeVisible();
   const expectedRows = (page.viewportSize()?.width ?? 1440) < 768 ? 5 : 8;
@@ -158,7 +158,8 @@ async function expectScrollsInsideTable(page: Page, region: Locator) {
   });
   expect(metrics.sticky).toBe("sticky");
   expect(metrics.scrollable).toBe(true);
-  expect(metrics.visibleRows).toBe(expectedRows);
+  if (expectedRows === 5) expect(metrics.visibleRows).toBe(5);
+  else expect(metrics.visibleRows).toBeGreaterThanOrEqual(8);
   // 表の中をスクロールしても表頭は上端に残る。
   await region.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
   const headerOffset = await region.evaluate(

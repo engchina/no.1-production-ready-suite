@@ -125,6 +125,8 @@ for (const viewport of [
       'label[for="settings-parser-backend-structured_records_jsonl"]'
     );
     await expect(structuredRecordsCard).toContainText("記録の単位で解析");
+    await expect(structuredRecordsCard).toContainText("一般の JSONL ではなく");
+    await expect(structuredRecordsCard).toContainText("分割は「文書分割」の設定");
     // 構造化レコードの JSONL を作るファイル準備は 3 つとも挙げる（#2480）。
     await expect(structuredRecordsCard).toContainText("CSV→JSONL・Excel→JSONL・Word→JSONL");
     await expect(structuredRecordsCard).toContainText("対応形式: JSONL");
