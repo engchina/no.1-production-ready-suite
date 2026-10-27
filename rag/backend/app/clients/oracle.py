@@ -4087,6 +4087,19 @@ class OracleClient:
             update_fields=update_fields,
         )
 
+    async def update_question_understanding(
+        self, search_answer_profile_id: str, overrides: dict[str, dict[str, object]]
+    ) -> SearchAnswerProfileDetail:
+        """行をロックして質問理解の項目だけを置換し、他の設定を保持する。"""
+        return await self._update_search_answer_profile_with_oracle(
+            search_answer_profile_id=search_answer_profile_id,
+            name=None,
+            description=None,
+            config=None,
+            update_fields={"config"},
+            language_pack_patch=overrides,
+        )
+
     async def archive_search_answer_profile(
         self, search_answer_profile_id: str
     ) -> SearchAnswerProfileDetail:
@@ -7335,6 +7348,7 @@ class OracleClient:
         description: str | None,
         config: SearchAnswerProfileConfig | None,
         update_fields: set[str] | None,
+        language_pack_patch: dict[str, dict[str, object]] | None = None,
     ) -> SearchAnswerProfileDetail:
         """Oracle search answer profile table を更新する。"""
         fields = update_fields or {
@@ -7348,10 +7362,46 @@ class OracleClient:
         }
 
         def operation(connection: OracleConnectionProtocol) -> SearchAnswerProfileDetail:
+            requested_config = config
+            # 部分更新と主フォームを直列にして、他の設定の同時保存を失わない。
+            _execute(
+                connection,
+                _render_sql(
+                    "SELECT search_answer_profile_id FROM rag_search_answer_profiles "
+                    "WHERE search_answer_profile_id = :search_answer_profile_id "
+                    "AND {access_sql} FOR UPDATE",
+                    access_sql=" AND ".join(_oracle_search_answer_profile_access_predicates()),
+                ),
+                _with_search_answer_profile_scope_bind(
+                    _with_tenant_bind({"search_answer_profile_id": search_answer_profile_id})
+                ),
+            )
             existing = _select_search_answer_profile(connection, search_answer_profile_id)
             if existing is None:
                 raise KeyError(
                     f"search_answer_profile_id={search_answer_profile_id} は存在しません。"
+                )
+            if language_pack_patch is None and config is not None:
+                from app.rag.question_understanding import question_understanding_overrides
+
+                current_config = _to_search_answer_profile_detail(existing).config
+                if question_understanding_overrides(
+                    config.language_pack
+                ) != question_understanding_overrides(current_config.language_pack):
+                    raise ValueError(
+                        "質問の理解の設定が変わりました。最新情報を取得して、専用のタブから保存してください。"
+                    )
+            if language_pack_patch is not None:
+                from app.rag.question_understanding import replace_question_understanding
+
+                current_config = _to_search_answer_profile_detail(existing).config
+                requested_config = SearchAnswerProfileConfig.model_validate(
+                    {
+                        **current_config.model_dump(),
+                        "language_pack": replace_question_understanding(
+                            current_config.language_pack, language_pack_patch
+                        ),
+                    }
                 )
             if existing.status != SearchAnswerProfileStatus.ACTIVE:
                 # アーカイブ済みは編集・保存しない（画面の読み取り専用と同じ。#961）。
@@ -7359,12 +7409,12 @@ class OracleClient:
             is_default = existing.name.casefold() == DEFAULT_SEARCH_ANSWER_PROFILE_NAME.casefold()
             if is_default and "name" in fields:
                 raise ValueError("DEFAULT 検索・回答プロファイルの名前は変更できません。")
-            if is_default and "config" in fields and config is not None:
+            if is_default and "config" in fields and requested_config is not None:
                 default_knowledge_base = _select_knowledge_base_by_name(
                     connection,
                     DEFAULT_KNOWLEDGE_BASE_NAME,
                 )
-                if default_knowledge_base is None or config.knowledge_base_ids != [
+                if default_knowledge_base is None or requested_config.knowledge_base_ids != [
                     default_knowledge_base.id
                 ]:
                     raise ValueError("DEFAULT 検索・回答プロファイルの参照 KB は変更できません。")
@@ -7375,10 +7425,10 @@ class OracleClient:
                     updated = updated_copy_search_answer_profile(updated, name=name)
                 if "description" in fields:
                     updated = updated_copy_search_answer_profile(updated, description=description)
-                if "config" in fields and config is not None:
+                if "config" in fields and requested_config is not None:
                     updated = updated_copy_search_answer_profile(
                         updated,
-                        profile_config=dump_search_answer_profile_config(config),
+                        profile_config=dump_search_answer_profile_config(requested_config),
                     )
                 updated = updated_copy_search_answer_profile(updated, updated_at=now)
                 _execute(

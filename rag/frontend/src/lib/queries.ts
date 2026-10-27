@@ -1256,6 +1256,32 @@ export function useInheritedAnswerContact() {
   });
 }
 
+export function useQuestionUnderstanding(id: string) {
+  return useQuery({
+    queryKey: [...queryKeys.searchAnswerProfile(id), "question-understanding"],
+    queryFn: () => api.getQuestionUnderstanding(id),
+    retry: false,
+  });
+}
+
+export function useSaveQuestionUnderstanding(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (overrides: LanguagePackSections) => api.saveQuestionUnderstanding(id, overrides),
+    onSuccess: (data) => {
+      qc.setQueryData([...queryKeys.searchAnswerProfile(id), "question-understanding"], data);
+      void qc.invalidateQueries({ queryKey: queryKeys.searchAnswerProfile(id), exact: true });
+    },
+  });
+}
+
+export function usePreviewQuestionUnderstanding(id: string) {
+  return useMutation({
+    mutationFn: ({ text, overrides }: { text: string; overrides: LanguagePackSections }) =>
+      api.previewQuestionUnderstanding(id, text, overrides),
+  });
+}
+
 /** 検索・回答プロファイルのドメインキーワード。 */
 export function useDomainKeywords(searchAnswerProfileId: string) {
   return useQuery({

@@ -7,7 +7,7 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from time import perf_counter, time
 from typing import Any, Literal, cast
@@ -29,7 +29,6 @@ from pr_backend_core.observability.tracing import (
 from pydantic import ValidationError
 from rag_engine.resources.deadline import current_deadline
 from rag_engine.resources.tracing import CallObservation, bind_trace_observer
-from rag_parser_core.language import bind_pack, current_pack, resolve
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
@@ -58,6 +57,7 @@ from app.rag.observability import (
     record_trace_span,
 )
 from app.rag.query_history import record_query_history
+from app.rag.question_understanding import profile_language_scope
 from app.rag.run_history import RunRecorder
 from app.rag.span_display import (
     ANSWER_STEP_FAILED_STATUS,
@@ -347,7 +347,7 @@ class RagPipeline:
                     if value
                 ),
             )
-        overrides = self._settings.rag_language_pack_overrides
+
         trace_id = trace_id or new_trace_id()
         if trace is not None:
             trace.run_id = trace_id
@@ -361,7 +361,7 @@ class RagPipeline:
                 links=links,
             ),
             bind_trace_observer(_observe_engine_call),
-            bind_pack(resolve(current_pack(), overrides)) if overrides else nullcontext(),
+            profile_language_scope(self._settings),
         ):
             response = await self._run(
                 request,

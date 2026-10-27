@@ -22,6 +22,7 @@ from app.api.routes import (
     knowledge_bases,
     language_pack,
     mcp,
+    question_understanding,
     search,
     search_answer_profile_knowledge,
     search_answer_profiles,
@@ -63,6 +64,11 @@ api_router.include_router(
 )
 api_router.include_router(
     support_guide_process_import.router,
+    prefix="/search-answer-profiles",
+    tags=["search-answer-profiles"],
+)
+api_router.include_router(
+    question_understanding.router,
     prefix="/search-answer-profiles",
     tags=["search-answer-profiles"],
 )

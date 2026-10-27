@@ -30,9 +30,9 @@ test("言語資源の上書き（検索・回答の項目だけ）を検索・�
   });
   const fields = [
     { section: "numbers", key: "article_units", kind: "words", choices: [], ingest: true, max_chars: 40 },
-    { section: "question_cues", key: "cause_cues", kind: "words", choices: [], ingest: false, max_chars: 40 },
+    { section: "answer_check_cues", key: "guarantee_verbs", kind: "words", choices: [], ingest: false, max_chars: 40 },
   ];
-  const effective = { numbers: { article_units: ["条"] }, question_cues: { cause_cues: ["なぜ", "原因"] } };
+  const effective = { numbers: { article_units: ["条"] }, answer_check_cues: { guarantee_verbs: ["なぜ", "原因"] } };
   await page.route("**/api/settings/language-pack", (route) =>
     route.fulfill({
       json: { data: { fields, builtin: effective, overrides: {}, effective, hash: "a" }, error_messages: [], warning_messages: [] },
@@ -45,7 +45,7 @@ test("言語資源の上書き（検索・回答の項目だけ）を検索・�
   await expect(section).toHaveAttribute("open", "");
   // 取込の項目（条の単位）は出さない。
   await expect(section.getByLabel("条の単位", { exact: true })).toHaveCount(0);
-  const cause = section.getByLabel("原因を尋ねる語", { exact: true });
+  const cause = section.getByLabel("保証の動詞", { exact: true });
   await expect(cause).toHaveValue("なぜ\n原因");
   await cause.fill("なぜ\n原因\n理屈");
   await expect(section.getByText("上書き 1 項目")).toBeVisible();
@@ -54,7 +54,7 @@ test("言語資源の上書き（検索・回答の項目だけ）を検索・�
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
   await expect
     .poll(() => (updateBody?.config as { language_pack?: unknown } | undefined)?.language_pack)
-    .toEqual({ question_cues: { cause_cues: ["なぜ", "原因", "理屈"] } });
+    .toEqual({ answer_check_cues: { guarantee_verbs: ["なぜ", "原因", "理屈"] } });
   await section.locator("summary").click();
   await expect(cause).not.toBeVisible();
   await page.screenshot({ path: test.info().outputPath("language-overrides-collapsed.png"), fullPage: true });
@@ -1022,7 +1022,7 @@ function searchStreamBody(answer = "上限額を確認しました。"): string 
 }
 
 // アーカイブ済みは読み取り専用。上書き中の項目の選択欄も操作できず、未保存の変更を作らない。
-test("アーカイブ済みの検索・回答プロファイルは上書き中の項目の選択欄も変更できない", async ({ page }) => {
+test("アーカイブ済みの検索・回答プロファイルは上書き中の項目の選択欄も変更できない", { tag: "@responsive" }, async ({ page }) => {
   const archived = {
     ...accountingView,
     id: "bv-old",
@@ -1054,10 +1054,23 @@ test("アーカイブ済みの検索・回答プロファイルは上書き中�
     await route.fulfill(envelope(archived));
   });
 
+  await page.route("**/api/search-answer-profiles/bv-old/question-understanding", (route) => route.fulfill({ json: {
+    data: {
+      fields: [{ section: "question_cues", key: "cause_cues", kind: "words", choices: [], ingest: false, max_chars: 40 }],
+      builtin: { question_cues: { cause_cues: ["なぜ"] } }, overrides: {},
+      effective: { question_cues: { cause_cues: ["なぜ"] } }, hash: "synthetic",
+    }, error_messages: [], warning_messages: [],
+  } }));
   await page.goto("/search-answer-profiles?id=bv-old");
   await expect(page.getByText("アーカイブ済みの検索・回答プロファイルは編集・保存できません。")).toBeVisible();
   await expect(page.getByRole("combobox", { name: "安全チェック" })).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "質問の拡張" })).toHaveCount(0);
+  await page.getByRole("tab", { name: "質問の理解", exact: true }).click();
+  const understanding = page.getByTestId("question-understanding-panel");
+  await expect(understanding.getByRole("textbox", { name: "原因を尋ねる語", exact: true })).toBeDisabled();
+  await expect(understanding.getByRole("button", { name: "質問の理解を保存", exact: true })).toBeDisabled();
+  await expect(understanding.getByRole("textbox", { name: "テストする質問", exact: true })).toBeEnabled();
+  await expectNoPageOverflow(page);
 });
 
 // 知識（登録済みQ&A・用語・ドメインキーワード・ルール）の読み込みに失敗したら、空（0 件）と見せずに
@@ -1253,15 +1266,15 @@ for (const viewport of [
 test("言語資源の全体再取得は継承欄だけを更新し、編集中と保存済みの上書きを保持する", { tag: "@responsive" }, async ({ page }) => {
   let body = null as Record<string, unknown> | null;
   await mockDefaultSearchAnswerProfile(page, (value) => { body = value; });
-  const fields = ["cause_cues", "past_markers", "future_markers"].map((key) => ({
-    section: "question_cues", key, kind: "words", choices: [], ingest: false, max_chars: 40,
+  const fields = ["guarantee_verbs", "guarantee_endings", "guarantee_exceptions"].map((key) => ({
+    section: "answer_check_cues", key, kind: "words", choices: [], ingest: false, max_chars: 40,
   }));
   let causeValue = "なぜ";
   let pastValue = "以前";
   let calls = 0;
   await page.route("**/api/settings/language-pack", (route) => {
     calls++;
-    const effective = { question_cues: { cause_cues: [causeValue], past_markers: [pastValue], future_markers: ["以後"] } };
+    const effective = { answer_check_cues: { guarantee_verbs: [causeValue], guarantee_endings: [pastValue], guarantee_exceptions: ["以後"] } };
     return route.fulfill({ json: { data: { fields, effective, builtin: effective, overrides: {}, hash: causeValue }, error_messages: [], warning_messages: [] } });
   });
   await page.goto("/search-answer-profiles?id=bv-default");
@@ -1289,7 +1302,7 @@ test("言語資源の全体再取得は継承欄だけを更新し、編集中�
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の説明");
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack)
-    .toEqual({ question_cues: { past_markers: ["過去"], future_markers: ["今後"] } });
+    .toEqual({ answer_check_cues: { guarantee_endings: ["過去"], guarantee_exceptions: ["今後"] } });
   causeValue = "理由";
   pastValue = "過去";
   const savedCalls = calls;
@@ -1310,7 +1323,7 @@ test("言語資源の全体再取得は継承欄だけを更新し、編集中�
   await future.fill("将来");
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack)
-    .toEqual({ question_cues: { past_markers: ["過去"], future_markers: ["将来"] } });
+    .toEqual({ answer_check_cues: { guarantee_endings: ["過去"], guarantee_exceptions: ["将来"] } });
   await expectNoPageOverflow(page);
   await page.screenshot({ path: test.info().outputPath("inherited-language-refresh.png"), fullPage: true });
 });
@@ -1319,4 +1332,77 @@ test("主一覧は高い画面の余白へ拡張し、ページ送りを維持�
   await mockSearchAnswerProfiles(page, Array.from({ length: 60 }, (_, i) => ({ ...accountingView, id: `viewport-${i}`, name: `プロファイル ${i}` })));
   await page.goto("/search-answer-profiles");
   await expectGrowingList(page, testInfo, "search-answer-profiles");
+});
+
+test("質問の理解は段階順の独立 Tab で差分を保存し、認識結果と継承を確認できる", { tag: "@responsive" }, async ({ page }) => {
+  await mockDefaultSearchAnswerProfile(page, () => {});
+  const fields = [
+    { section: "question_cues", key: "cause_cues", kind: "words", choices: [], ingest: false, max_chars: 40 },
+  ];
+  const builtin = { question_cues: { cause_cues: ["なぜ", "原因"] } };
+  let overrides: Record<string, Record<string, string[]>> = {};
+  let savedBody: unknown;
+  let previewBody: unknown;
+  let saves = 0;
+  const metadata = () => ({ fields, builtin, overrides, effective: { question_cues: { ...builtin.question_cues, ...overrides.question_cues } }, hash: `synthetic-${saves}` });
+  await page.route("**/api/search-answer-profiles/bv-default/question-understanding", async (route) => {
+    if (route.request().method() === "PUT") {
+      savedBody = route.request().postDataJSON();
+      overrides = (savedBody as { overrides: typeof overrides }).overrides;
+      saves++;
+    }
+    await route.fulfill({ json: { data: metadata(), error_messages: [], warning_messages: [] } });
+  });
+  await page.route("**/api/search-answer-profiles/bv-default/question-understanding/preview", async (route) => {
+    previewBody = route.request().postDataJSON();
+    const result = { inquiry: { request_kind: "cause" }, task_contract: { requests: ["合成の要求"] }, hash: "synthetic-preview" };
+    await route.fulfill({ json: { data: { original_text: (previewBody as { text: string }).text, saved: result, draft: result }, error_messages: [], warning_messages: [] } });
+  });
+  await page.goto("/search-answer-profiles?id=bv-default");
+  const tabs = page.getByRole("tablist", { name: "プロファイルの知識", exact: true });
+  await expect(tabs.getByRole("tab")).toHaveText(["登録済みQ&A", "質問の理解", "用語・同義語", "確認・回答ルール", "業務ガイド", "ドメインキーワード"]);
+  await tabs.getByRole("tab", { name: "質問の理解", exact: true }).click();
+  const panel = page.getByTestId("question-understanding-panel");
+  const cause = panel.getByRole("textbox", { name: "原因を尋ねる語", exact: true });
+  await expect(cause).toHaveValue("なぜ\n原因");
+  await cause.fill("あ".repeat(41));
+  await expect(panel.getByRole("button", { name: "質問の理解を保存", exact: true })).toBeDisabled();
+  await cause.fill("なぜ\n原因\nどうして");
+  await tabs.getByRole("tab", { name: "用語・同義語", exact: true }).click();
+  const leave = page.getByRole("alertdialog", { name: "変更を破棄しますか" });
+  await expect(leave).toBeVisible();
+  await leave.getByRole("button", { name: "キャンセル", exact: true }).click();
+  await expect(cause).toHaveValue("なぜ\n原因\nどうして");
+  await panel.getByRole("textbox", { name: "テストする質問" }).fill("対象 A が失敗した原因は何ですか。対処方法も教えてください。");
+  await panel.getByRole("button", { name: "試す", exact: true }).click();
+  await expect(panel.getByTestId("question-understanding-result")).toBeVisible();
+  expect(previewBody).toEqual({ text: "対象 A が失敗した原因は何ですか。対処方法も教えてください。", overrides: { question_cues: { cause_cues: ["なぜ", "原因", "どうして"] } } });
+  expect(saves).toBe(0);
+  await page.screenshot({ path: test.info().outputPath("question-understanding-preview.png"), fullPage: true });
+  await panel.getByRole("button", { name: "質問の理解を保存", exact: true }).click();
+  await expect.poll(() => saves).toBe(1);
+  expect(savedBody).toEqual({ overrides: { question_cues: { cause_cues: ["なぜ", "原因", "どうして"] } } });
+  await expect(cause).toHaveValue("なぜ\n原因\nどうして");
+  await panel.getByRole("button", { name: "全体の値に戻す", exact: true }).click();
+  await expect(cause).toHaveValue("なぜ\n原因");
+  await panel.getByRole("button", { name: "質問の理解を保存", exact: true }).click();
+  await expect.poll(() => saves).toBe(2);
+  expect(savedBody).toEqual({ overrides: {} });
+  // 空欄は継承へのリセットとは異なり、明示的な空の一覧として保存する。
+  await cause.fill("");
+  await panel.getByRole("button", { name: "質問の理解を保存", exact: true }).click();
+  await expect.poll(() => saves).toBe(3);
+  expect(savedBody).toEqual({ overrides: { question_cues: { cause_cues: [] } } });
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: test.info().outputPath("question-understanding.png"), fullPage: true });
+});
+
+test("質問の理解の読込失敗は空の保存欄を出さず、再実行できる", { tag: "@responsive" }, async ({ page }) => {
+  await mockDefaultSearchAnswerProfile(page, () => {});
+  await page.route("**/api/search-answer-profiles/bv-default/question-understanding", (route) => route.fulfill({ status: 503, json: { detail: "合成の一時障害" } }));
+  await page.goto("/search-answer-profiles?id=bv-default");
+  await page.getByRole("tab", { name: "質問の理解", exact: true }).click();
+  await expect(page.getByRole("button", { name: "再試行", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "質問の理解を保存" })).toHaveCount(0);
+  await expectNoPageOverflow(page);
 });
