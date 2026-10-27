@@ -190,7 +190,8 @@ def test_all_runtime_instructions_use_markdown_sections() -> None:
         parts = stage["prompts"]
         assert isinstance(parts, list)
         for part in parts:
-            assert re.search(("^## \\S"), str(part["content"]), re.M), (stage["id"], part["id"])
+            # 監査の理由の規則など、Step に連結する部分は小節のまま表示する。
+            assert re.search(r"^#{2,3} \S", str(part["content"]), re.M), (stage["id"], part["id"])
 
 
 def test_evaluation_catalog_exposes_only_current_evaluation_stages() -> None:
@@ -244,3 +245,37 @@ def test_crag_readonly_prompts_are_the_executed_step_instructions() -> None:
     # 画面用の別文ではなく、実行で参照する定数の本文をそのまま登録する。
     assert CRAG_GRADER_SYSTEM_PROMPT in displayed
     assert CRAG_GRADE_PROMPT_TEMPLATE in displayed
+
+
+def test_readonly_generation_validation_and_evaluation_are_executed_step_prompts() -> None:
+    from rag_engine.evaluation.answer_eval import (
+        CLAIM_PROMPT,
+        CORRECTNESS_PROMPT,
+        COVERAGE_PROMPT,
+        SCOPE_PROMPT,
+    )
+    from rag_engine.evaluation.answer_validation import (
+        PREMISE_CONSISTENCY_SYSTEM_PROMPT,
+        VALIDATION_SYSTEM_PROMPT,
+    )
+    from rag_engine.generation.grounded import AUDIT_SYSTEM_PROMPT, GENERATE_SYSTEM_PROMPT
+    from rag_engine.generation.table_revision import REVISION_SYSTEM_PROMPT
+
+    displayed: list[str] = []
+    for stage in readonly_prompt_stages():
+        parts = stage["prompts"]
+        assert isinstance(parts, list)
+        displayed.extend(part["content"] for part in parts)
+    for executed in (
+        GENERATE_SYSTEM_PROMPT,
+        AUDIT_SYSTEM_PROMPT,
+        VALIDATION_SYSTEM_PROMPT,
+        PREMISE_CONSISTENCY_SYSTEM_PROMPT,
+        REVISION_SYSTEM_PROMPT,
+        SCOPE_PROMPT,
+        COVERAGE_PROMPT,
+        CLAIM_PROMPT,
+        CORRECTNESS_PROMPT,
+    ):
+        assert executed in displayed
+        assert executed.startswith("## Step 1:")

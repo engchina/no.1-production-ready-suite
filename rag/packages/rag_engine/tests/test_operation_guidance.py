@@ -65,7 +65,7 @@ def test_default_and_optional_evaluation_use_guidance_goal():
 
     # 生成 prompt は共有方針の全文を結合せず、items 向けに書いた方針を持つ (#960)。編集可能テンプレートには重複させない。
     assert OPERATION_GUIDANCE_POLICY not in GENERATE_SYSTEM_PROMPT
-    assert "4.1 例示値と実データ" in GENERATE_SYSTEM_PROMPT
+    assert "### 例示値と実データ" in GENERATE_SYSTEM_PROMPT
     # 表の列の役割の表示（#1281）は、前処理が本文に付ける表示（rag_parser_core の
     # COLUMN_ROLE_TEXT_LABELS。backend の test_sheet_records が両方の一致を確かめる）と同じ文字で指示する。
     for label in ("資料の既定値", "例示の値", "記載時点の設定値", "資料の推奨値", "設定できる範囲"):

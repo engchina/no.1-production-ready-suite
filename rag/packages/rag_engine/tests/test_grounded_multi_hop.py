@@ -226,7 +226,7 @@ def test_miscopied_sentence_needs_a_verbatim_first_sentence_in_the_named_evidenc
 
 def test_prompts_tell_generation_and_audit_how_to_treat_intermediate_hops():
     generate, audit_prompt = grounded.GENERATE_SYSTEM_PROMPT, grounded.AUDIT_SYSTEM_PROMPT
-    assert "4.8 複数の根拠をつなぐ答え（多段）" in generate
+    assert "### 複数の根拠をつなぐ答え（多段）" in generate
     assert "1 段 1 item" in generate
     assert "足りない段を推測で埋めない" in generate
     assert "その item だけで最終の答えにならないこと" in audit_prompt
@@ -234,7 +234,7 @@ def test_prompts_tell_generation_and_audit_how_to_treat_intermediate_hops():
     assert "尋ねている項目を quote が述べていないことは not_applicable の理由にならない" in audit_prompt
     assert "つなぐ段のどれかが supported な item に無ければ false" in audit_prompt
     # 監査の prompt は 1 行 1 規則（節見出しと空行を除く）。
-    assert all(line.startswith(("- ", "## ")) or line[:1].isdigit() or not line for line in audit_prompt.splitlines())
+    assert all(line.startswith(("- ", "## ", "### ")) or line[:1].isdigit() or not line for line in audit_prompt.splitlines())
 
 
 def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
@@ -242,7 +242,7 @@ def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
     from rag_engine.models.llm import GroundedItem, RequestCoverage, RequestEvidenceScope
 
     generate = grounded.GENERATE_SYSTEM_PROMPT
-    section = generate.split("4.10 出典の網羅", 1)[1].split("## 5.", 1)[0]
+    section = generate.split("### 出典の網羅", 1)[1].split("## Step 3:", 1)[0]
     assert "挙げた文書ごとに" in section
     assert "言い換えていても省かず" in section
     assert "説明の内容を支えない原文は、質問に関係していても出典にしない" in section
