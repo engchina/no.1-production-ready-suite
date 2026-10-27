@@ -279,3 +279,24 @@ def test_readonly_generation_validation_and_evaluation_are_executed_step_prompts
     ):
         assert executed in displayed
         assert executed.startswith("## Step 1:")
+
+
+def test_query_strategy_display_uses_actual_step_prompts() -> None:
+    from rag_engine.generation.answering import (
+        QUERY_EXPANSION_SYSTEM_PROMPT,
+        QUERY_ROUTING_SYSTEM_PROMPT,
+    )
+    from rag_engine.generation.query_prompts import (
+        QUERY_EXPANSION_PROMPT_TEMPLATE,
+        QUERY_ROUTING_PROMPT_TEMPLATE,
+    )
+
+    displayed = [part["content"] for stage in readonly_prompt_stages() for part in stage["prompts"]]
+    for prompt in (
+        QUERY_ROUTING_SYSTEM_PROMPT,
+        QUERY_EXPANSION_SYSTEM_PROMPT,
+        QUERY_ROUTING_PROMPT_TEMPLATE,
+        QUERY_EXPANSION_PROMPT_TEMPLATE,
+    ):
+        assert prompt in displayed
+        assert prompt.startswith("## Step 1:")
