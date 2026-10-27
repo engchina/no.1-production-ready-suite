@@ -3638,19 +3638,14 @@ def test_diverse_candidates_adds_each_document_tail_without_changing_the_head() 
     assert _diverse_candidates(ordered, 2, lambda c: c[0], new_document=0, present_document=0) == []
 
 
-@pytest.mark.parametrize(
-    ("depth", "expected"), [(0, 150), (100, 150), (600, 600)], ids=["off", "shallow", "deep"]
-)
-def test_read_depth_reads_deeper_than_candidate_limit_only_when_diversity_is_on(
-    depth: int, expected: int
-) -> None:
-    """検索文ごとに読む件数は候補の上限を下回らない。0 は今の件数(#2228)。"""
+@pytest.mark.parametrize("diversity", [0, 100, 600])
+def test_read_depth_is_independent_of_diversity_and_anchor_count(diversity: int) -> None:
     engine = AnswerEngine(
-        Settings(rag_candidate_diversity_depth=depth),
+        Settings(rag_retrieval_query_limit=321, rag_candidate_diversity_depth=diversity),
         oracle=cast(Any, TwoDocumentOracle()),
         genai=cast(Any, FakeGenAi()),
     )
-    assert engine._read_depth(150) == expected
+    assert engine._read_depth(50) == engine._read_depth(150) == 321
 
 
 async def test_search_without_diversity_keeps_only_the_fused_head() -> None:

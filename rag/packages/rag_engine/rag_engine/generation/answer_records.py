@@ -9,7 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from rag_engine.chunking import CHILD_CHUNK_LEVEL, DEFAULT_RETRIEVAL_TOP_K, PARENT_CHUNK_LEVEL, ChunkingResult, DocumentChunk
+from rag_engine.chunking import CHILD_CHUNK_LEVEL, PARENT_CHUNK_LEVEL, ChunkingResult, DocumentChunk
 from rag_engine.config import RRF_K, Settings  # noqa: F401  RRF_K は互換のためここからも参照できる
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord, _dedupe_queries, _normalize_text
 from rag_engine.generation.answer_payload import _bbox_values, _int_value, _trim_for_context
@@ -35,11 +35,7 @@ MAX_CONTEXT_RECORDS = 12
 
 MAX_RECORD_TEXT_CHARS = 1200
 
-BROAD_RETRIEVAL_MIN_CANDIDATES = 50
-
-BROAD_RETRIEVAL_TOP_K_MULTIPLIER = 8
-
-BROAD_RETRIEVAL_MAX_CANDIDATES = 150
+DEFAULT_RETRIEVAL_CANDIDATE_LIMIT = 150
 
 MAX_RERANK_METADATA_CHARS = 700
 
@@ -164,15 +160,9 @@ def _rerank_configured(settings: Settings) -> bool:
     return bool(str(getattr(settings, "rerank_model", "") or "").strip() and str(getattr(settings, "oci_compartment_id", "") or "").strip())
 
 
-def _retrieval_candidate_limit(top_k: int) -> int:
-    anchor_count = max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K))
-    return min(
-        BROAD_RETRIEVAL_MAX_CANDIDATES,
-        max(
-            BROAD_RETRIEVAL_MIN_CANDIDATES,
-            anchor_count * BROAD_RETRIEVAL_TOP_K_MULTIPLIER,
-        ),
-    )
+def _retrieval_candidate_limit(top_k: int, settings: Settings | None = None) -> int:
+    """融合後の基本候補数。回答起点数 top_k から召回・精排の幅を推測しない。"""
+    return max(1, int(getattr(settings, "retrieval_candidate_limit", DEFAULT_RETRIEVAL_CANDIDATE_LIMIT)))
 
 
 def _engine_labels(raw_engines: Any) -> dict[str, str]:

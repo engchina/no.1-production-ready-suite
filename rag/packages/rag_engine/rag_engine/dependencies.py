@@ -74,6 +74,9 @@ class AnswerDependencies:
     article_leads: Callable[..., Mapping[str, str]] | None = None
     embedder: "Embedder | None" = None
     report_degraded: Callable[[str, BaseException], None] | None = None
+    # 精排・起点選択の後に親/近傍を読む。未指定の SDK は取得済みの原文だけで構築する。
+    context_chunks: Callable[..., Sequence[Any]] | None = None
+    record_retrieval: Callable[[Mapping[str, Any]], None] | None = None
 
 
 _active: ContextVar[AnswerDependencies | None] = ContextVar("rag_engine_answer_dependencies", default=None)
@@ -211,3 +214,18 @@ def parse_multimodal_response(*args, **kwargs):
 def rerank_text_with_scores(*args, **kwargs):
     """指定した候補の順位と score を取得する。"""
     return _get().rerank(*args, **kwargs)
+
+
+def injected_context_chunks(**kwargs) -> list[Any] | None:
+    """選択済み起点の原文を現在の検索範囲で遅延取得する。"""
+    current = _active.get()
+    if current is None or current.context_chunks is None:
+        return None
+    return list(current.context_chunks(**kwargs))
+
+
+def record_retrieval_stage(stage: Mapping[str, Any]) -> None:
+    """内容を推定せず、実際の入力・採用・打切りを呼出元へ記録する。"""
+    current = _active.get()
+    if current is not None and current.record_retrieval is not None:
+        current.record_retrieval(stage)
