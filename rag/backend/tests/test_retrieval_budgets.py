@@ -1,25 +1,38 @@
 """予算の設定と精排後の原文読取を外部 I/O なしで確認する。"""
 
+from pathlib import Path
 from typing import Any, cast
 
-from rag_engine.generation.answering import _stored_chunk_answer_record
+import pytest
+from rag_engine.generation.answer_records import _stored_chunk_answer_record
 
 from app.config import Settings
 from app.rag.answer_engine import AnswerEngine, _SearchState, build_engine_settings
-from app.schemas.search import SearchRequest
+from app.schemas.search import RetrievedChunk, SearchRequest
 from tests.test_answer_engine import FakeGenAi, FakeOracle
 
 
-async def test_search_defers_original_context_until_ranked_anchors_are_known():
+async def test_search_defers_original_context_until_ranked_anchors_are_known(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     oracle = FakeOracle()
     calls: list[list[str]] = []
     original = oracle.context_group_siblings
 
-    async def siblings(anchors, **options):
+    async def siblings(
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_group: int,
+        neighbor_child_count: int | None = None,
+    ) -> list[RetrievedChunk]:
         calls.append([anchor.chunk_id for anchor in anchors])
-        return await original(anchors, **options)
+        return await original(
+            anchors,
+            max_chunks_per_group=max_chunks_per_group,
+            neighbor_child_count=neighbor_child_count,
+        )
 
-    oracle.context_group_siblings = siblings
+    monkeypatch.setattr(oracle, "context_group_siblings", siblings)
     engine = AnswerEngine(Settings(), oracle=cast(Any, oracle), genai=cast(Any, FakeGenAi()))
     state = _SearchState()
     result = await engine._search(
@@ -41,14 +54,14 @@ async def test_search_defers_original_context_until_ranked_anchors_are_known():
     assert len(calls) == 1
 
 
-def test_backend_budget_settings_reach_the_engine(tmp_path):
+def test_backend_budget_settings_reach_the_engine(tmp_path: Path) -> None:
     settings = Settings(rag_retrieval_candidate_limit=77, rag_rerank_candidate_limit=91)
     engine = build_engine_settings(settings, output_dir=tmp_path)
     assert engine.retrieval_candidate_limit == 77
     assert engine.rerank_candidate_limit == 91
 
 
-def test_default_total_budget_includes_enabled_reference_expansion(tmp_path):
+def test_default_total_budget_includes_enabled_reference_expansion(tmp_path: Path) -> None:
     from rag_engine.retrieval.candidate_budget import stage_limits
 
     engine = build_engine_settings(Settings(), output_dir=tmp_path)
