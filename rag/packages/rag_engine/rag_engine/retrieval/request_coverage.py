@@ -240,7 +240,9 @@ def request_hints(target: RequestTarget, runtime_knowledge: Any, tokenize: Calla
         labels = [str(label) for label in term.labels() if str(label).strip()]
         if any(_normalize(label) in focus for label in labels):
             hints.extend(label for label in labels if _normalize(label) not in focus)
-    for rule in getattr(runtime_knowledge, "matched_rules", ()) or ():
+    stage_rules = getattr(runtime_knowledge, "rules_for_stage", None)
+    rules = stage_rules("generation") if callable(stage_rules) else getattr(runtime_knowledge, "matched_rules", ()) or ()
+    for rule in rules:
         for trigger in getattr(rule, "triggers", ()) or ():
             trigger = str(trigger).strip()
             if not trigger or _normalize(trigger) in focus:

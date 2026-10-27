@@ -331,6 +331,8 @@ class _SearchState:
     """
 
     chunks: dict[str, RetrievedChunk] = field(default_factory=dict)
+    context_reads: dict[str, list[RetrievedChunk]] = field(default_factory=dict)
+    retrieval_stages: list[dict[str, Any]] = field(default_factory=list)
     # 検索の経路(chunk_id → 当たった経路。rag_engine の検索の実装と同じ形の ``vector:qN`` /
     # ``keyword:oracle_text:qN`` / ``citation`` / 質問理解の profile の経路。#3443)。根拠の記録
     # (``adb_hybrid.retrieval_channels``)と、文書の検索の工程の詳細(候補の経路)に出す。
@@ -628,6 +630,25 @@ def build_engine_settings(
         "OCI_COMPARTMENT_ID": settings.oci_compartment_id,
         "RERANK_MODEL": settings.oci_genai_rerank_model,
         "RAG_ENGINE_OUTPUT_DIR": str(output_dir),
+        "RAG_ENGINE_RETRIEVAL_CANDIDATE_LIMIT": str(settings.rag_retrieval_candidate_limit),
+        "RAG_ENGINE_RERANK_CANDIDATE_LIMIT": str(settings.rag_rerank_candidate_limit),
+        "RAG_ENGINE_RETRIEVAL_STAGE_LIMITS": json.dumps(
+            {
+                "fusion": settings.rag_retrieval_candidate_limit,
+                "diversity": settings.rag_candidate_diversity_max_extra
+                if settings.rag_candidate_diversity_depth > 0
+                else 0,
+                "reference": settings.rag_reference_expansion_max_chunks
+                if settings.rag_reference_expansion_enabled
+                else 0,
+                "entity": settings.rag_entity_expansion_max_chunks
+                if settings.rag_entity_expansion_enabled
+                else 0,
+                "structure": settings.rag_graph_expansion_max_chunks
+                if settings.rag_graph_expansion_enabled
+                else 0,
+            }
+        ),
         # 「今日」(基準日の既定)の時間帯(共通の設定 PLATFORM_TIMEZONE。#3249)。
         "PLATFORM_TIMEZONE": configured_timezone_name(settings),
         "LLM_REQUEST_TIMEOUT_SECONDS": str(int(settings.oci_enterprise_ai_timeout_seconds)),
@@ -1310,7 +1331,13 @@ class AnswerEngine:
             return _run_on_loop(factory, loop)
 
         dependencies = AnswerDependencies(
-            search=lambda **kwargs: run_async(lambda: self._search(request, state, **kwargs)),
+            search=lambda **kwargs: run_async(
+                lambda: self._search(request, state, defer_context=True, **kwargs)
+            ),
+            context_chunks=lambda **kwargs: run_async(
+                lambda: self._context_chunks(state, **kwargs)
+            ),
+            record_retrieval=lambda stage: state.retrieval_stages.append(dict(stage)),
             check_ready=lambda **kwargs: None,
             parse_text=parse_text_response,
             parse_images=parse_multimodal_response,
@@ -1434,6 +1461,7 @@ class AnswerEngine:
         inquiry_conditions: Any = None,
         settings: Any = None,
         expand_references: bool = True,
+        defer_context: bool = False,
         page_ranges: Sequence[Mapping[str, Any]] = (),
         **_: object,
     ) -> Any:
@@ -1535,15 +1563,51 @@ class AnswerEngine:
                     fused[chunk_id] = fused.get(chunk_id, 0.0) + channel_weight / (k + rank)
                     state.retrieval_channels.setdefault(chunk_id, set()).add(channel)
         ordered = sorted(fused, key=lambda chunk_id: -fused[chunk_id])
+        unique: list[str] = []
+        source_keys: dict[tuple[Any, ...], str] = {}
+        duplicates: list[dict[str, str]] = []
+        for chunk_id in ordered:
+            chunk = state.chunks[chunk_id]
+            refs = tuple(
+                sorted(
+                    {
+                        str(ref.get("record_id") or "")
+                        for ref in _json_list(chunk.metadata.get("source_record_refs_json"))
+                        if ref.get("record_id")
+                    }
+                )
+            )
+            artifact = str(chunk.metadata.get("chunk_set_id") or "")
+            key = (
+                chunk.document_id,
+                artifact,
+                str(chunk.metadata.get("recipe_id") or ""),
+                refs,
+                chunk.text,
+            )
+            if refs and artifact and key in source_keys:
+                duplicates.append(
+                    {
+                        "id": chunk_id,
+                        "retained_id": source_keys[key],
+                        "reason": "duplicate_original",
+                    }
+                )
+                continue
+            if refs and artifact:
+                source_keys[key] = chunk_id
+            unique.append(chunk_id)
+        ordered = unique
         ranked = ordered[:candidate_limit]
         if self._settings.rag_candidate_diversity_depth > 0:
             ranked += _diverse_candidates(
-                ordered,
+                ordered[: self._settings.rag_candidate_diversity_depth],
                 candidate_limit,
                 lambda chunk_id: state.chunks[chunk_id].document_id,
                 new_document=self._settings.rag_candidate_diversity_new_document,
                 present_document=self._settings.rag_candidate_diversity_present_document,
             )[: self._settings.rag_candidate_diversity_max_extra]
+        selected_fused_ids = set(ranked)
         # 当たった派生の chunk(要約・項目抽出の値)は検索の手がかり。回答の根拠には、その chunk が
         # 指す原文の chunk を同じ位置に置く(原文が読めなければ根拠に渡さない。#2641)。
         anchors = await self._original_anchors(
@@ -1555,23 +1619,26 @@ class AnswerEngine:
             else dict(state.filters),
         )
         ranked = [chunk.chunk_id for chunk in anchors]
+        fusion_ids = set(ranked[:candidate_limit])
         for rank, chunk_id in enumerate(ranked, start=1):
             known = state.fused_ranks.get(chunk_id)
             if known is None or rank < known[0]:
                 state.fused_ranks[chunk_id] = (rank, fused[chunk_id])
-        with _search_stage(CONTEXT_SIBLINGS_STAGE, active=bool(anchors)):
-            siblings = original_chunks(
-                await self._oracle.context_group_siblings(
-                    [
-                        anchor
-                        for anchor in anchors
-                        if anchor.metadata.get("chunk_strategy") == "small_to_big"
-                        or self._settings.rag_neighbor_child_count > 0
-                    ],
-                    max_chunks_per_group=max(1, self._settings.rag_context_group_max_chunks),
-                    neighbor_child_count=self._settings.rag_neighbor_child_count,
+        siblings: list[RetrievedChunk] = []
+        if not defer_context:
+            with _search_stage(CONTEXT_SIBLINGS_STAGE, active=bool(anchors)):
+                siblings = original_chunks(
+                    await self._oracle.context_group_siblings(
+                        [
+                            anchor
+                            for anchor in anchors
+                            if anchor.metadata.get("chunk_strategy") == "small_to_big"
+                            or self._settings.rag_neighbor_child_count > 0
+                        ],
+                        max_chunks_per_group=max(1, self._settings.rag_context_group_max_chunks),
+                        neighbor_child_count=self._settings.rag_neighbor_child_count,
+                    )
                 )
-            )
         for sibling in siblings:
             state.chunks.setdefault(sibling.chunk_id, sibling)
         # 上位の候補が本文で参照する節の chunk(#1280)。起点の候補の直後に置き、rerank に任せる。
@@ -1614,7 +1681,7 @@ class AnswerEngine:
                         *entity_ids,
                     },
                 )
-        if self._attach_images:
+        if self._attach_images and not defer_context:
             evidence = [*anchors, *siblings, *referenced, *entity_chunks, *graph_chunks]
             with _search_stage(
                 IMAGE_EVIDENCE_STAGE,
@@ -1699,6 +1766,19 @@ class AnswerEngine:
                 )
                 for chunk in graph_chunks
             ]
+        for child in children:
+            stage = (
+                "reference"
+                if child.chunk_uid in promoted
+                else "entity"
+                if child.chunk_uid in entity_ids
+                else "structure"
+                if child.chunk_uid in {chunk.chunk_id for chunk in graph_chunks}
+                else "fusion"
+                if child.chunk_uid in fusion_ids
+                else "diversity"
+            )
+            child.metadata["retrieval_admission_stage"] = stage
         all_children = {chunk.chunk_uid: chunk for chunk in children}
         for sibling in siblings:
             all_children.setdefault(
@@ -1720,13 +1800,95 @@ class AnswerEngine:
                 if chunk.chunk_id in all_children:
                     continue
                 stored = _stored_child(chunk, rrf_score=base_score * max(chunk.score, 0.1))
+                stored.metadata["retrieval_admission_stage"] = "attachment"
                 all_children[stored.chunk_uid] = stored
                 attached.append(stored)
             children = [*attached, *children]
-        parents = _stored_parents(list(all_children.values()), state)
+        parents = [] if defer_context else _stored_parents(list(all_children.values()), state)
+        state.retrieval_stages.append(
+            {
+                "stage": "candidate_fusion",
+                "query_count": len(queries),
+                "query_limit": depth,
+                "fused_count": len(fused),
+                "fused_ids": ordered,
+                "duplicates": duplicates,
+                "excluded": [
+                    {"id": chunk_id, "reason": "fusion_candidate_budget"}
+                    for chunk_id in ordered
+                    if chunk_id not in selected_fused_ids
+                ],
+                "query_results": [
+                    {"query_index": index, "count": len(hits)}
+                    for index, hits in enumerate(all_hits)
+                ],
+                "base_limit": candidate_limit,
+                "selected_ids": [child.chunk_uid for child in children],
+                "context_deferred": defer_context,
+            }
+        )
         return HybridSearchResult(
             child_chunks=children, all_chunks=[*all_children.values(), *parents]
         )
+
+    async def _context_chunks(
+        self,
+        state: _SearchState,
+        *,
+        anchors: Sequence[Any],
+        settings: Any = None,
+    ) -> list[Any]:
+        """精排後の起点だけから、同じ有効成果物の親/近傍を読む。再構築は回答内の既読を使う。"""
+        selected = [
+            state.chunks[item.chunk_uid] for item in anchors if item.chunk_uid in state.chunks
+        ]
+        pending = [item for item in selected if item.chunk_id not in state.context_reads]
+        if pending:
+            with _search_stage(CONTEXT_SIBLINGS_STAGE):
+                siblings = original_chunks(
+                    await self._oracle.context_group_siblings(
+                        [
+                            item
+                            for item in pending
+                            if item.metadata.get("chunk_strategy") == "small_to_big"
+                            or self._settings.rag_neighbor_child_count > 0
+                        ],
+                        max_chunks_per_group=max(1, self._settings.rag_context_group_max_chunks),
+                        neighbor_child_count=self._settings.rag_neighbor_child_count,
+                    )
+                )
+            for item in pending:
+                state.context_reads[item.chunk_id] = [
+                    sibling
+                    for sibling in siblings
+                    if sibling.document_id == item.document_id
+                    and sibling.metadata.get("chunk_set_id") == item.metadata.get("chunk_set_id")
+                    and sibling.metadata.get("recipe_id") == item.metadata.get("recipe_id")
+                ]
+            for item in siblings:
+                state.chunks.setdefault(item.chunk_id, item)
+        chunks = {item.chunk_id: item for item in selected}
+        for anchor in selected:
+            chunks.update(
+                (item.chunk_id, item) for item in state.context_reads.get(anchor.chunk_id, ())
+            )
+        originals = list(chunks.values())
+        await self._load_classifications(originals, state)
+        await self._load_first_page_contexts(originals, state)
+        if self._attach_images:
+            for item in originals:
+                await self._materialize_image_evidence(item, state)
+        children = [
+            _stored_child(
+                state.chunks.get(item.chunk_id, item),
+                rrf_score=0.0,
+                classification=state.classifications.get(item.document_id),
+                first_page_context=_first_page_context(item, state),
+                retrieval_channels=state.retrieval_channels.get(item.chunk_id),
+            )
+            for item in originals
+        ]
+        return [*children, *_stored_parents(children, state)]
 
     async def _original_anchors(
         self,
@@ -1849,8 +2011,8 @@ class AnswerEngine:
         )
 
     def _read_depth(self, candidate_limit: int) -> int:
-        """検索文ごとに読む件数。候補の多様化(#2228)が有効なら、候補の上限より深く読む。"""
-        return max(candidate_limit, self._settings.rag_candidate_diversity_depth)
+        """検索文ごとの取得上限。融合後の候補数・多様化の有無・起点数とは独立。"""
+        return max(1, self._settings.rag_retrieval_query_limit)
 
     async def _query_hits(
         self,
@@ -3908,6 +4070,7 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         if isinstance(step, Mapping)
     ]
     diagnostics = {
+        "retrieval_stages": list(state.retrieval_stages),
         "answer_flow": result.answer_flow,
         "strategy": result.effective_strategy,
         "confidence": result.confidence,

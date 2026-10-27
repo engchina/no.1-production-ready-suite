@@ -510,3 +510,17 @@ def test_without_request_question_requests_come_from_the_query(monkeypatch: pyte
     result, _searched, generated = _answer_with_request_question(monkeypatch, tmp_path, short, None)
     assert generated == [short]
     assert result.task_contract == a.task_contract(short)
+
+
+def test_confirmation_only_rules_do_not_supply_generation_retrieval_hints() -> None:
+    target = RequestTarget("Q1", "request", "設定方法", ("設定",))
+    knowledge = RuntimeKnowledgeContext(
+        original_question="設定方法",
+        expanded_question="設定方法",
+        path=None,
+        matched_rules=(
+            RuntimeRule(rule_id="confirm", title="確認", triggers=("設定 確認専用",), purpose="confirmation"),
+            RuntimeRule(rule_id="generate", title="生成", triggers=("設定 生成専用",), purpose="generation"),
+        ),
+    )
+    assert request_hints(target, knowledge, lambda text: text.split()) == ["設定 生成専用"]

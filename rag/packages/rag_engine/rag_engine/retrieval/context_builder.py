@@ -218,6 +218,8 @@ class ContextBuildRequest:
     # 選んだ条は起点に数えず、検索の根拠の親を減らさない。0 は足さない（選んだ条も他の候補と同じに扱う）。
     # 会話の添付の箇所（#3212）も同じく起点・親の数の外にすべて足す（数の上限は backend が選ぶ箇所の数）。
     catalog_records: int = 0
+    # 原文の遅延取得のための起点選択専用。返した本文は回答に使わず、親参照で起点をまとめる。
+    select_anchors_only: bool = False
 
 
 def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
@@ -277,7 +279,11 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
         ):
             parent = None
         record = parent or child
-        group_id = record_context_key(record)
+        group_id = (
+            f"{_artifact_context_key(child)}::{parent_key}"
+            if request.select_anchors_only and parent_key and _uses_parent_context(child)
+            else record_context_key(record)
+        )
         if not group_id:
             return None
         group = groups_by_id.get(group_id)
@@ -360,7 +366,9 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
         if anchors_by_parent.get(parent_key, 0) >= max_anchors_per_parent:
             continue
         anchors_by_parent[parent_key] = anchors_by_parent.get(parent_key, 0) + 1
-        anchor_count += 1
+        # 同じ親へ集約する child は引用の位置だけを追加し、次の異なる原文の枠を消費しない。
+        if not any(item.role == "retrieved_anchor" for item in group.children.values()):
+            anchor_count += 1
         add_child(
             group,
             child,
