@@ -153,7 +153,7 @@ _EXPANSION_INSTRUCTIONS = {
     ),
     HYDE_STRATEGY: (
         "仮説文生成（HyDE）として、文書内に存在しそうな仮想回答文または説明文を1〜3個作ってください。"
-        "ADB hybrid search の検索入力として使える、短い自然文にします。"
+        "ADB hybrid search の検索入力として使える、短い自然文にします。仮想文は検索の補助であり、回答の事実根拠にはしません。"
     ),
 }
 
@@ -197,17 +197,24 @@ _ROUTING_STRATEGIES = [
     },
 ]
 
-# 静的な指示は番号付きの節のテンプレートに置き、実行時の値は {{...}} で差し込む。UI はこの定数を読み取り専用で示す (#934)。
+# 静的な指示は Step 形式のテンプレートに置き、実行時の値は {{...}} で差し込む。UI はこの定数を読み取り専用で示す (#934)。
 QUERY_ROUTING_PROMPT_TEMPLATE = (
-    """## 1. 指示
+    """## Step 1: 原質問と保持する条件を読む
+原質問:
+{{question}}
+
+変更してはいけない目的・条件:
+{{task_contract}}
+
+## Step 2: 戦略を選び検索文を作る
 次の問い合わせに対して、検索前処理として最適な戦略を1つだけ選んでください。strategy には選んだ選択肢の strategy の値（ID）をそのまま返し、label は返さない。
 
-## 2. 選択肢
+選択肢:
 """
     f"{json.dumps(_ROUTING_STRATEGIES, ensure_ascii=False, indent=2)}"
     """
 
-## 3. 判定規則
+## Step 3: 戦略と実データの要否を別々に点検する
 - 戦略は選択肢の use_when で判断し、実データ確認とは独立に決める。エラーコードや完全なメッセージが1つだけなら単純検索、エラー文・対象・論点が2つ以上あれば質問分解。質問が明確・具体的というだけでは単純検索を選ばず、主要な語が文書の正式な用語と一致しているかで判断し、迷ったら RAG フュージョンを選ぶ。
 - routing_data_required は、個案の原因・値・処理分岐の確定に実際の日付・設定・CSV・ログ・履歴などの照合が必要かの暫定判定。必要なら routing_data_items に確認するフィールドと目的を列挙し、値や原因は推測しない。操作方法・出力方法・エラーの意味・規則の説明、関連文書の不足、質問内に全必要値がある場合は false と空配列（検索後に回答生成で再判定する）。
 - 単純検索以外では、その選択肢の generate の指示に従って検索文を queries に返す（単純検索では空配列）。
@@ -217,15 +224,8 @@ QUERY_ROUTING_PROMPT_TEMPLATE = (
     + (
         "- 利用者の仮説は事実に変えず、問い合わせ元を検索条件にしない。\n"
         "\n"
-        "## 4. 入力\n"
-        "問い合わせ:\n"
-        "{{question}}\n"
-        "\n"
-        "変更してはいけない目的・条件:\n"
-        "{{task_contract}}\n"
-        "\n"
-        "## 5. 出力\n"
-        "以下のJSONだけを返してください。\n"
+        "## Step 4: 指定した JSON だけを返す\n"
+        "以下のJSONだけを返してください。JSON の外に Step 番号・説明・分析を書かないでください。\n"
         '{"strategy": "選んだ戦略の ID", "reason"'
         ': "検索戦略を選んだ短い理由", "routing_data_re'
         'quired": true|false, "routing_data'
@@ -238,28 +238,24 @@ QUERY_ROUTING_PROMPT_TEMPLATE = (
 
 QUERY_EXPANSION_PROMPT_TEMPLATE = (
     (
-        "## 1. 指示\n"
+        "## Step 1: 原質問と保持する条件を読む\n"
+        "原質問:\n{{question}}\n\n"
+        "変更してはいけない目的・条件:\n{{task_contract}}\n\n"
+        "## Step 2: 指定した戦略で検索文を作る\n"
         "戦略「{{strategy_label}}」の指示に従い、検索に使う"
         "追加質問または検索文を作ってください。一覧にない戦略の場合は、検索に"
         "有効な追加質問を作ってください。\n"
         "\n"
-        "## 2. 戦略ごとの指示\n"
+        "戦略ごとの指示:\n"
     )
     + "".join(f"- {query_strategy_label(strategy)}: {instruction}\n" for strategy, instruction in _EXPANSION_INSTRUCTIONS.items())
-    + ("\n## 3. 制約\n")
+    + ("\n## Step 3: 意図・条件・仮説の扱いを点検する\n")
     + _EXPANSION_CONSTRAINTS
     + (
         "- 利用者の仮説は事実に変えず、問い合わせ元を検索条件にしない。\n"
         "\n"
-        "## 4. 入力\n"
-        "原質問:\n"
-        "{{question}}\n"
-        "\n"
-        "変更してはいけない目的・条件:\n"
-        "{{task_contract}}\n"
-        "\n"
-        "## 5. 出力\n"
-        "以下のJSONだけを返してください。\n"
+        "## Step 4: 指定した JSON だけを返す\n"
+        "以下のJSONだけを返してください。JSON の外に Step 番号・説明・分析を書かないでください。\n"
         '{"queries": ["追加の検索質問または検索文"]}'
     )
 )
