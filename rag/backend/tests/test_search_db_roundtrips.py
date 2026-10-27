@@ -420,7 +420,11 @@ class _SearchOracle:
         return {}
 
     async def context_group_siblings(
-        self, anchors: list[RetrievedChunk], *, max_chunks_per_group: int
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_group: int,
+        neighbor_child_count: int | None = None,
     ) -> list[RetrievedChunk]:
         return []
 
@@ -909,7 +913,10 @@ async def test_injected_search_reports_db_search_stages_and_channels(
         return {}
 
     async def no_siblings(
-        anchors: list[RetrievedChunk], *, max_chunks_per_group: int
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_group: int,
+        neighbor_child_count: int | None = None,
     ) -> list[RetrievedChunk]:
         return []
 

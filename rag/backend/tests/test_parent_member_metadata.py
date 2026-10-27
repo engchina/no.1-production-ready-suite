@@ -73,6 +73,7 @@ def _child(
             "engine_chunk_seq": index,
             "chunk_group_id": _GROUP,
             "parent_text": _PARENT_TEXT,
+            "chunk_strategy": "small_to_big",
             "engine_metadata_json": json.dumps(engine, ensure_ascii=False),
         },
     )

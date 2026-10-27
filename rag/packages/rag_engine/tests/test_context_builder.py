@@ -103,13 +103,56 @@ class ContextBuilderTests(unittest.TestCase):
         self.assertEqual(
             {child.record.id: child.role for child in bundle.evidence_tree[0].children},
             {
-                "before": "neighbor_context",
                 "target": "retrieved_anchor",
-                "after": "neighbor_context",
             },
         )
         self.assertIn("parent-1 / p.1", bundle.text)
         self.assertIn("tail marker", bundle.text)
+
+    def test_saved_strategy_selects_parent_or_neighbor_exclusively(self):
+        scope = dict(document_id="doc-a", recipe_id="recipe-a", chunk_set_id="set-a", chunk_strategy="fixed_length")
+        before = _chunk_record("before", "child", 1, "synthetic", "前の原文", metadata=dict(scope))
+        hit = _chunk_record("hit", "child", 2, "synthetic", "命中原文", metadata=dict(scope))
+        after = _chunk_record("after", "child", 3, "synthetic", "後の原文", metadata=dict(scope))
+        synthetic = _chunk_record("synthetic", "parent", 1, "", "合成した親を使わない", metadata=dict(scope))
+        foreign = [
+            replace(after, id=f"foreign-{key}", chunk_id=f"foreign-{key}", metadata={**scope, key: "other"})
+            for key in ("document_id", "recipe_id", "chunk_set_id")
+        ]
+
+        def build(records, ranked, count=1, max_records=8):
+            return build_chunk_context_bundle(
+                ContextBuildRequest(
+                    question="命中",
+                    ranked_children=ranked,
+                    active_records=records,
+                    top_k=4,
+                    neighbor_child_count=count,
+                    max_records=max_records,
+                    max_chars=1000,
+                )
+            )
+
+        records = [before, hit, after, synthetic, *foreign]
+        bundle = build(records, [hit])
+        self.assertEqual([r.id for r in bundle.records], ["hit", "before", "after"])
+        self.assertEqual([e.reason for e in bundle.evidence], ["retrieved_chunk", "adjacent_child", "adjacent_child"])
+        self.assertEqual([r.id for r in build(records, [hit], count=0).records], ["hit"])
+        self.assertEqual([r.id for r in build(records, [before]).records], ["before", "hit"])
+        self.assertEqual([r.id for r in build(records, [hit], max_records=1).records], ["hit"])
+        self.assertEqual([r.id for r in build(records, [after, before], count=0).records], ["after", "before"])
+        self.assertEqual([r.id for r in build(records, [after, before, hit], count=0).records], ["after", "before", "hit"])
+        parent_scope = {**scope, "chunk_strategy": "small_to_big"}
+        parent_hit = replace(hit, metadata=parent_scope)
+        parent = replace(synthetic, text="保存された親原文", metadata=parent_scope)
+        mixed = build([*records, parent_hit, parent], [parent_hit], count=5)
+        self.assertEqual([r.id for r in mixed.records], ["synthetic"])
+        self.assertEqual([c.role for c in mixed.evidence_tree[0].children], ["retrieved_anchor"])
+        missing = build([before, parent_hit, after], [parent_hit], count=5)
+        self.assertEqual([r.id for r in missing.records], ["hit"])
+        self.assertEqual(missing.evidence[0].reason, "parent_unavailable_child_fallback")
+        other_parent = replace(parent, metadata={**parent_scope, "chunk_set_id": "other"})
+        self.assertEqual([r.id for r in build([parent_hit, other_parent], [parent_hit]).records], ["hit"])
 
     def test_multiple_child_hits_in_same_parent_emit_one_parent_context(self):
         records = [
@@ -310,6 +353,10 @@ class ContextBuilderTests(unittest.TestCase):
         self.assertEqual([record.id for record in bundle.records], ["parent-small"])
         self.assertIn("small parent synthesis", bundle.text)
         self.assertNotIn("parent-big", bundle.text)
+        self.assertEqual(
+            bundle.trace_payload()["excluded_evidence"],
+            [{"id": "parent-big", "reason": "context_character_budget", "context_reason": "parent_of_retrieved_child"}],
+        )
 
     def test_context_budget_keeps_citation_for_first_record(self):
         record = _chunk_record("target", "child", 1, "", "needle " * 100)
