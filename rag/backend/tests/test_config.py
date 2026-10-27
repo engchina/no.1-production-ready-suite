@@ -1088,6 +1088,20 @@ def test_platform_and_product_env_examples_load(monkeypatch: pytest.MonkeyPatch)
     assert settings.oracle_password in ("", None)
 
 
+def test_history_rewrite_env_example_matches_default_and_precedes_query_strategy() -> None:
+    """履歴の書き換えを雛形でも有効にし、独立した質問拡張より前に案内する。"""
+    from dotenv import dotenv_values
+
+    example = config_module.BACKEND_ROOT / ".env.example"
+    values = dotenv_values(example, interpolate=False)
+    assert values["RAG_HISTORY_REWRITE_ENABLED"] == "true"
+    assert Settings.model_fields["rag_history_rewrite_enabled"].default is True
+    lines = example.read_text(encoding="utf-8").splitlines()
+    assert lines.index("RAG_HISTORY_REWRITE_ENABLED=true") < lines.index(
+        "RAG_QUERY_STRATEGY=simple_retrieval"
+    )
+
+
 def test_settings_today_uses_common_timezone_not_os_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     """基準日の既定は共通の設定の時間帯（PLATFORM_TIMEZONE。既定 UTC）の今日（#3255）。"""
     from datetime import UTC, date, datetime
