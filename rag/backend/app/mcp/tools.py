@@ -4368,11 +4368,12 @@ async def _profile_knowledge(arguments: RetrieveEvidenceInput) -> ProfileKnowled
             terms_omitted=0,
             load_failed=True,
         )
-    if not (context.matched_rules or context.matched_terms):
+    generation_rules = context.rules_for_stage("generation")
+    if not (generation_rules or context.matched_terms):
         return None
     remaining = PROFILE_KNOWLEDGE_MAX_CHARS
     rules: list[ProfileKnowledgeRule] = []
-    for rule in context.matched_rules:
+    for rule in generation_rules:
         size = len(rule.title) + len(rule.content) + len(rule.source)
         if len(rules) < PROFILE_KNOWLEDGE_RULES_MAX and size <= remaining:
             rules.append(_knowledge_rule(rule))
@@ -4390,7 +4391,7 @@ async def _profile_knowledge(arguments: RetrieveEvidenceInput) -> ProfileKnowled
         matched_on=matched_on,
         rules=rules,
         terms=terms,
-        rules_omitted=len(context.matched_rules) - len(rules),
+        rules_omitted=len(generation_rules) - len(rules),
         terms_omitted=len(context.matched_terms) - len(terms),
     )
 

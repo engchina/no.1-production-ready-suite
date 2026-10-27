@@ -464,6 +464,10 @@ async def edit_runtime_knowledge(
     labels: str = "",
     content: str = "",
     source: str = "",
+    purpose: str | None = None,
+    instruction_kind: str | None = None,
+    exclusive_group: str | None = None,
+    priority: int | None = None,
     enabled: bool = True,
     delete: bool = False,
 ) -> dict[str, object]:
@@ -480,6 +484,10 @@ async def edit_runtime_knowledge(
             labels=labels,
             content=content,
             source=source,
+            purpose=purpose,
+            instruction_kind=instruction_kind,
+            exclusive_group=exclusive_group,
+            priority=priority,
             enabled=enabled,
             delete=delete,
             confirmed=delete,
@@ -501,10 +509,10 @@ def preview_runtime_knowledge(
 def match_runtime_knowledge(
     payload: Mapping[str, object], question: str
 ) -> RuntimeKnowledgeContext:
-    """質問に当たる有効な用語・同義語と回答ルールを、一致の強い順にすべて返す(件数で切らない。保存しない)。
+    """質問に当たる用語と、用途・排他・明示優先度で採用した確認・回答ルールを返す（保存しない）。
 
-    照合と有効の判定(承認済み・見直し待ちだけ)は回答生成と同じ。件数・字数で切って省いた数を
-    示すのは呼び出し元(MCP の根拠の取得。#2701)。
+    照合・有効状態・用途と排他の判定は回答生成と同じ。生成側は rules_for_stage で取り出す。
+    件数・字数で切って省いた数を示すのは呼び出し元(MCP の根拠の取得。#2701)。
     """
     with _runtime_knowledge_dir(payload) as (work_dir, path):
         return build_runtime_knowledge_context(
@@ -531,6 +539,8 @@ def _rules(payload: Mapping[str, object]) -> list[dict[str, object]]:
 
 def rule_clarification(rule: Mapping[str, object]) -> RuleClarification | None:
     """ルールの確認(無い・壊れているときは None)。"""
+    if rule.get("purpose", "both") not in ("confirmation", "both"):
+        return None
     raw = rule.get("clarification")
     if not isinstance(raw, Mapping):
         return None
@@ -588,7 +598,7 @@ def unanswered_rule_clarifications(
     """一致したルールの未回答の確認事項。確認の提示と前提の明示で同じ判定を使う。"""
     found: list[tuple[Mapping[str, object], RuleClarification]] = []
     by_id = {str(rule.get("id", "")): rule for rule in _rules(payload)}
-    for matched in preview_runtime_knowledge(payload, question).matched_rules:
+    for matched in preview_runtime_knowledge(payload, question).rules_for_stage("confirmation"):
         rule = by_id.get(matched.rule_id)
         if rule is None:
             continue

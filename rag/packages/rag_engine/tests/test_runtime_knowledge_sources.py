@@ -34,15 +34,15 @@ def _context(tmp_path: Path, question: str, *, terms: list[Any], rules: list[Any
     ("question", "terms", "rules", "expected"),
     [
         ("略称A の期限は？", [_TERM], [], ("用語・同義語",)),
-        ("条件B の期限は？", [], [_RULE], ("回答ルール",)),
-        ("略称A で条件B の期限は？", [_TERM], [_RULE], ("用語・同義語", "回答ルール")),
+        ("条件B の期限は？", [], [_RULE], ("確認・回答ルール",)),
+        ("略称A で条件B の期限は？", [_TERM], [_RULE], ("用語・同義語", "確認・回答ルール")),
         (
             "期限は？",
             [],
             [{**_RULE, "id": "guide-1", "triggers": ["手がかりC"], "tags": [PINNED_RULE_TAG, SUPPORT_GUIDE_RULE_TAG]}],
             ("業務ガイド",),
         ),
-        ("期限は？", [], [{**_RULE, "triggers": ["手がかりC"], "tags": [PINNED_RULE_TAG]}], ("回答ルール",)),
+        ("期限は？", [], [{**_RULE, "triggers": ["手がかりC"], "tags": [PINNED_RULE_TAG]}], ("確認・回答ルール",)),
     ],
     ids=["terms", "rules", "terms-and-rules", "support-guide", "pinned-rule"],
 )

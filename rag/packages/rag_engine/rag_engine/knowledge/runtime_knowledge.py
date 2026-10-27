@@ -13,6 +13,7 @@ from typing import Any
 
 from rag_engine.matching.analysis import normalize_text
 
+from .rule_application import rule_version, select_rule_applications
 from .rule_matching import rank_rules
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ MAX_TEXT_CHARS = 800
 # 原質問に語を足した出どころの表示名（検索文の出どころ・検索語の元に出す）。設定の「プロファイルの知識」のタブと
 # 処理の経過の段の名前にそろえる（#3451・#3490）。
 TERMS_SOURCE_LABEL = "用語・同義語"
-RULES_SOURCE_LABEL = "回答ルール"
+RULES_SOURCE_LABEL = "確認・回答ルール"
 GUIDE_SOURCE_LABEL = "業務ガイド"
 SCOPE_SOURCE_LABEL = "確認で選んだ条件"
 ORIGINAL_QUESTION_SOURCE_LABEL = "原質問"
@@ -83,12 +84,38 @@ class RuntimeRule:
     title: str
     triggers: tuple[str, ...] = ()
     content: str = ""
+    purpose: str = "both"
+    instruction_kind: str = "requirement"
+    exclusive_group: str = ""
+    priority: int = 0
+    confirmation_signature: str = ""
     source: str = ""
     tags: tuple[str, ...] = ()
     status: str = ""
     updated_at: str = ""
     reviewed_at: str = ""
     next_review_at: str = ""
+
+    @property
+    def version(self) -> str:
+        """実際に使う内容と条件の版。手順の条件解決で本文を置換した場合も更新する。"""
+        return rule_version(
+            {
+                "id": self.rule_id,
+                "title": self.title,
+                "triggers": self.triggers,
+                "content": self.content,
+                "source": self.source,
+                "tags": self.tags,
+                "status": self.status,
+                "updated_at": self.updated_at,
+                "purpose": self.purpose,
+                "instruction_kind": self.instruction_kind,
+                "exclusive_group": self.exclusive_group,
+                "priority": self.priority,
+                "confirmation": self.confirmation_signature,
+            }
+        )
 
     @property
     def active(self) -> bool:
@@ -106,6 +133,11 @@ class RuntimeRule:
             "title": self.title,
             "triggers": list(self.triggers),
             "content": self.content,
+            "purpose": self.purpose,
+            "instruction_kind": self.instruction_kind,
+            "exclusive_group": self.exclusive_group,
+            "priority": self.priority,
+            "version": self.version,
             "source": self.source,
             "tags": list(self.tags),
             "status": self.status,
@@ -151,6 +183,7 @@ class RuntimeKnowledgeContext:
     registered_rule_count: int = 0
     active_rule_count: int = 0
     expansion_decisions: tuple[dict[str, Any], ...] = ()
+    rule_applications: tuple[dict[str, Any], ...] = ()
     # 利用者が確認の質問で選んだ条件と対象範囲(チャットの確認。#717)。
     scope_context: str = ""
     # 業務ガイドの手順ごとの根拠(#2395)。(手順 id, 題名, 根拠の chunk_uid の列) の列。手順ごとの検索の後に入る。
@@ -202,7 +235,7 @@ class RuntimeKnowledgeContext:
     @property
     def is_active(self) -> bool:
         """UI に表示すべき runtime knowledge 状態かを返します。"""
-        return self.has_matches or bool(self.error)
+        return self.has_matches or bool(self.error) or bool(self.rule_applications)
 
     @property
     def expansion_sources(self) -> tuple[str, ...]:
@@ -211,7 +244,7 @@ class RuntimeKnowledgeContext:
         実際に語を足したものだけを、足した順に返す。足していなければ空。
         """
         sources = _ordered_unique(
-            source for _, source in _expansion_additions(self.original_question, self.matched_terms, self.matched_rules)
+            source for _, source in _expansion_additions(self.original_question, self.matched_terms, self.rules_for_stage("generation"))
         )
         if self.scope_search_terms:
             sources.append(SCOPE_SOURCE_LABEL)
@@ -224,11 +257,19 @@ class RuntimeKnowledgeContext:
             return "原質問のみ"
         return " + ".join((ORIGINAL_QUESTION_SOURCE_LABEL, *self.expansion_sources))
 
+    def rules_for_stage(self, stage: str) -> tuple[RuntimeRule, ...]:
+        """段階ごとの採用結果。古い呼出元が組み立てた文脈では用途だけで区分する。"""
+        if not self.rule_applications:
+            return tuple(rule for rule in self.matched_rules if rule.purpose in (stage, "both"))
+        accepted = {item["id"] for item in self.rule_applications if item["stage"] == stage and item["accepted"]}
+        return tuple(rule for rule in self.matched_rules if rule.rule_id in accepted)
+
     def prompt_context(self) -> str:
         """LLM prompt に追加する補助 context 文字列を返します。"""
         if not self.has_matches:
             return ""
-        lines = [] if not (self.matched_terms or self.matched_rules) else ["[Runtime Glossary / Rules]"]
+        generation_rules = [rule for rule in self.rules_for_stage("generation") if rule.content]
+        lines = [] if not (self.matched_terms or generation_rules) else ["[Runtime Glossary / Rules]"]
         if self.matched_terms:
             lines.append("Glossary:")
             for term in self.matched_terms:
@@ -238,13 +279,13 @@ class RuntimeKnowledgeContext:
                 detail = f": {term.description}" if term.description else ""
                 source = f" [{term.source}]" if term.source else ""
                 lines.append(f"- {label}{detail}{source}")
-        if self.matched_rules:
+        if generation_rules:
             lines.append("Rules:")
-            for rule in self.matched_rules:
+            for rule in generation_rules:
                 label = rule.title or rule.rule_id
                 triggers = f" (triggers: {', '.join(rule.triggers)})" if rule.triggers else ""
                 source = f" [{rule.source}]" if rule.source else ""
-                lines.append(f"- {label}{triggers}: {rule.content}{source}")
+                lines.append(f"- {label}{triggers} [{rule.instruction_kind}; id={rule.rule_id}]: {rule.content}{source}")
         if self.scope_context:
             lines.extend(
                 [
@@ -276,6 +317,10 @@ class RuntimeKnowledgeContext:
             "registered_count": self.registered_count,
             "active_count": self.active_count,
             "expansion_decisions": list(self.expansion_decisions),
+            "rule_applications": [
+                {**item, "version": next((rule.version for rule in self.matched_rules if rule.rule_id == item["id"]), item["version"])}
+                for item in self.rule_applications
+            ],
             "scope_context": self.scope_context,
             "assume_unconfirmed": self.assume_unconfirmed,
             "unconfirmed_conditions": list(self.unconfirmed_conditions),
@@ -358,9 +403,13 @@ def build_runtime_knowledge_context(
         )
 
     matched_terms = _matched_terms(original_question, knowledge.terms, term_limit)
-    rule_matches = rank_rules(question, knowledge.rules, rule_limit, tokens=_tokens)
-    matched_rules = rule_matches.selected
-    expanded_question = _expanded_question(original_question, matched_terms, matched_rules)
+    rule_matches = rank_rules(question, knowledge.rules, MAX_RULES, tokens=_tokens)
+    applications = select_rule_applications(rule_matches.selected, rule_limit)
+    matched_rules = applications.selected
+    generation_ids = {item["id"] for item in applications.decisions if item["stage"] == "generation" and item["accepted"]}
+    expanded_question = _expanded_question(
+        original_question, matched_terms, [rule for rule in matched_rules if rule.rule_id in generation_ids]
+    )
     decisions = []
     for kind, items, selected in (("term", knowledge.terms, matched_terms),):
         for item in items:
@@ -378,6 +427,23 @@ def build_runtime_knowledge_context(
                         "reason": "explicit_label" if item in selected else "limit" if matches else "shared_words_only",
                     }
                 )
+    generation_decisions = {item["id"]: item for item in applications.decisions if item["stage"] == "generation"}
+    rule_decisions = []
+    for item in rule_matches.decisions:
+        application = generation_decisions.get(item["key"])
+        if application is None:
+            rule_decisions.append(item)
+        else:
+            rule_decisions.append(
+                {
+                    **item,
+                    "matching_eligible": item["accepted"],
+                    "match_reason": item["reason"],
+                    "accepted": application["accepted"],
+                    "selected": application["accepted"],
+                    "reason": item["reason"] if application["accepted"] else application["reason"],
+                }
+            )
     return RuntimeKnowledgeContext(
         original_question=original_question,
         expanded_question=expanded_question,
@@ -391,7 +457,8 @@ def build_runtime_knowledge_context(
         active_rule_count=sum(rule.active for rule in knowledge.rules),
         assume_unconfirmed=knowledge.assume_unconfirmed,
         unconfirmed_conditions=knowledge.unconfirmed_conditions,
-        expansion_decisions=(*decisions, *rule_matches.decisions),
+        expansion_decisions=(*decisions, *rule_decisions),
+        rule_applications=applications.decisions,
     )
 
 
@@ -408,6 +475,8 @@ def runtime_rules_status(context: RuntimeKnowledgeContext) -> str:
     """工程「回答ルールの確認」の結果。未登録・無効・一致なし・読込失敗を区別する。"""
     if context.error:
         return f"読込エラー: {context.error}（補助情報なしで続行）"
+    if any(item["reason"] == "unresolved_exclusive_conflict" for item in context.rule_applications):
+        return "設定の競合があるルールを保留し、両立するルールだけを適用します"
     if context.matched_rules:
         return "一致: " + " / ".join(rule.title or rule.rule_id for rule in context.matched_rules)
     return _unmatched_status(context.loaded, context.registered_rule_count, context.active_rule_count, "回答ルール")
@@ -530,6 +599,13 @@ def _parse_rules(payload: Any) -> list[RuntimeRule]:
                     title=title,
                     triggers=tuple(triggers),
                     content=content,
+                    purpose=str(item.get("purpose", "both")),
+                    instruction_kind=str(item.get("instruction_kind", "requirement")),
+                    exclusive_group=_clean_text(item.get("exclusive_group"), 160),
+                    priority=item.get("priority", 0) if type(item.get("priority", 0)) is int else 0,
+                    confirmation_signature=json.dumps(item["clarification"], ensure_ascii=False, sort_keys=True)
+                    if isinstance(item.get("clarification"), dict)
+                    else "",
                     source=source,
                     tags=tuple(tags),
                     status=status,
