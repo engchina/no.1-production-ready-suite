@@ -193,6 +193,7 @@ type ColumnFailureDetail = Pick<ChatAnswerFailureInfo, "errorType" | "errorCode"
 /** 送信の条件（再送信で同じ条件のまま送り直す）。 */
 interface DeliverRequest {
   content: string;
+  questionContextToken?: string;
   approvedFaqId?: string;
   clarification?: ClarificationAnswer;
   /** 回答前の確認を「確認せずに回答」で飛ばした確認の id（会話に残すだけ。#1839）。 */
@@ -1147,31 +1148,34 @@ export function ChatClient() {
   async function clarifyOrDeliver(content: string, controller: AbortController, retryContent?: string) {
     if (!searchAnswerProfileId) return;
     let suggestion: ClarificationSuggestionData | null = null;
+    let questionContextToken: string | undefined;
     try {
-      suggestion = (await api.suggestClarification(searchAnswerProfileId, content)).suggestion ?? null;
+      const prepared = await api.suggestClarification(searchAnswerProfileId, content, activeId);
+      suggestion = prepared.suggestion ?? null;
+      questionContextToken = prepared.question_context_token ?? undefined;
     } catch {
       // 確認は補助。照会できなくても回答は作る。
     }
     if (controller.signal.aborted) return;
     if (suggestion) {
       setLiveTurn(null);
-      setClarifyChoice({ content, retryContent, suggestion });
+      setClarifyChoice({ content, retryContent, suggestion, questionContextToken });
       releaseController(controller);
       return;
     }
-    await deliver({ content }, controller);
+    await deliver({ content, questionContextToken }, controller);
   }
 
   /** 確認の答えを確定して送る（`answer` が無ければ「確認せずに回答」。前提を示して回答する。#1839）。 */
   function chooseClarification(answer?: ClarificationAnswer) {
     if (!clarifyChoice) return;
-    const { content, suggestion } = clarifyChoice;
+    const { content, suggestion, questionContextToken } = clarifyChoice;
     setClarifyChoice(null);
     setSending(true);
     void deliver(
       answer
-        ? { content, clarification: answer }
-        : { content, clarificationSkippedRuleId: suggestion.rule_id }
+        ? { content, clarification: answer, questionContextToken }
+        : { content, clarificationSkippedRuleId: suggestion.rule_id, questionContextToken }
     );
   }
 
@@ -1201,7 +1205,7 @@ export function ChatClient() {
 
   async function deliver(request: DeliverRequest, existingController?: AbortController) {
     if (!searchAnswerProfileId) return;
-    const { content, approvedFaqId, clarification, clarificationSkippedRuleId } = request;
+    const { content, approvedFaqId, clarification, clarificationSkippedRuleId, questionContextToken } = request;
     const controller = existingController ?? new AbortController();
     abortRef.current = controller;
     // 質問の id は画面が決める（#1175）。送り直すたびに新しくする（同じ id の二重の保存は 409）。
@@ -1330,6 +1334,7 @@ export function ChatClient() {
       outgoingAttachmentsRef.current = { ids: [], items: [] };
       const body = {
         content,
+        ...(questionContextToken ? { question_context_token: questionContextToken } : {}),
         model_ids: [],
         client_message_id: clientMessageId,
         ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
@@ -1893,6 +1898,7 @@ function isFaqChoice(value: unknown): value is FaqChoice | null {
 
 interface ClarifyChoice {
   content: string;
+  questionContextToken?: string;
   retryContent?: string;
   suggestion: ClarificationSuggestionData;
 }

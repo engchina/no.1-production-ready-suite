@@ -143,7 +143,7 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
     PromptStage(
         "history_rewrite",
         "question",
-        (("system", "app.rag.pipeline:HISTORY_REWRITE_SYSTEM_PROMPT"),),
+        (("system", "app.rag.history_question:HISTORY_REWRITE_SYSTEM_PROMPT"),),
     ),
     PromptStage(
         "field_filter",

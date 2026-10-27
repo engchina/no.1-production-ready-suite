@@ -590,7 +590,7 @@ async def test_history_rewrite_failure_reaches_answer_diagnostics(
     """
     from tests.test_answer_engine import RewriteLlm, _run_chat
 
-    llm = RewriteLlm(Boom(SECRET) if fail else "それの登録方法は？")
+    llm = RewriteLlm(Boom(SECRET) if fail else json.dumps({"question": "それの登録方法は？"}))
 
     response, oracle = await _run_chat(monkeypatch, llm, history=True)
 
