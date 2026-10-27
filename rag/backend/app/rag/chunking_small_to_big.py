@@ -285,11 +285,35 @@ def build_structure_parent_child_chunks(
                         "chunk_part_index": part_index,
                         "chunk_part_count": len(group),
                         "parent_text": parent_text,
+                        **_parent_page_metadata(group),
                         "engine_chunk_seq": len(result),
                     },
                 )
             )
     return result
+
+
+def _parent_page_metadata(group: list[Chunk]) -> dict[str, int]:
+    from app.rag.context_page_scope import positive
+
+    starts = [
+        positive(chunk.metadata.get("page_start") or chunk.metadata.get("page_number"))
+        for chunk in group
+    ]
+    ends = [
+        positive(
+            chunk.metadata.get("page_end")
+            or chunk.metadata.get("page_start")
+            or chunk.metadata.get("page_number")
+        )
+        for chunk in group
+    ]
+    if not starts or any(value is None for value in [*starts, *ends]):
+        return {}
+    return {
+        "parent_page_start": min(value for value in starts if value is not None),
+        "parent_page_end": max(value for value in ends if value is not None),
+    }
 
 
 def _section_parts(chunk: Chunk) -> tuple[str, ...]:
@@ -469,6 +493,7 @@ def build_sheet_parent_child_chunks(
                         "chunk_part_index": part_index,
                         "chunk_part_count": len(group),
                         "parent_text": parent_text,
+                        **_parent_page_metadata(group),
                         "engine_chunk_seq": len(result),
                         **location,
                     },
@@ -523,6 +548,7 @@ def build_xml_tree_parent_child_chunks(
                         "chunk_part_index": part_index,
                         "chunk_part_count": len(group),
                         "parent_text": parent_text,
+                        **_parent_page_metadata(group),
                         "engine_chunk_seq": len(result),
                     },
                 )
@@ -717,6 +743,8 @@ def _backend_chunk(
             "chunk_group_id": group_id,
             "chunk_group_kind": "small_to_big_parent",
             "parent_text": parent.text if parent is not None else "",
+            "parent_page_start": parent.page_start if parent is not None else None,
+            "parent_page_end": parent.page_end if parent is not None else None,
             ENGINE_SEARCH_TEXT_KEY: child.retrieval_text,
             "content_kind": content_kind,
             "section_path": " > ".join(section_path) or None,
