@@ -28,7 +28,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from time import monotonic
 from typing import Any, Literal
 
@@ -104,6 +104,26 @@ class RequestTarget:
     query: str = ""
     # 要求に先行する、質問中で明示された対象・状況。要求の語だけの一致で覆域を確定しない。
     context_terms: tuple[str, ...] = ()
+
+
+@dataclass
+class CoverageUsage:
+    """生成前と生成後の再検索で共有する使用量。設定の上限を段ごとにリセットしない。"""
+
+    queries: int = 0
+    subquestions: int = 0
+    chunks: int = 0
+    elapsed_seconds: float = 0.0
+    searched_queries: list[str] = field(default_factory=list)
+
+    def remaining(self, budget: CoverageBudget) -> CoverageBudget:
+        return replace(
+            budget,
+            max_queries=max(0, budget.max_queries - self.queries),
+            max_subquestions=max(0, budget.max_subquestions - self.subquestions),
+            max_chunks=max(0, budget.max_chunks - self.chunks),
+            deadline_seconds=max(0.0, budget.deadline_seconds - self.elapsed_seconds),
+        )
 
 
 def _normalize(text: Any) -> str:
@@ -208,7 +228,7 @@ def evidence_texts(context: Any) -> list[tuple[str, str]]:
 
 
 def assess_targets(targets: Sequence[RequestTarget], evidence: Sequence[tuple[str, str]]) -> list[dict[str, Any]]:
-    """要求 × 根拠の覆域を判定する。根拠ごとの割合のうち最良のもので要求の状態を決める。"""
+    """要求 × 根拠の語の一致を測る。回答可能性・操作の裏付けは判定しない。"""
     rows: list[dict[str, Any]] = []
     for target in targets:
         if not target.terms:
@@ -252,6 +272,7 @@ def assess_targets(targets: Sequence[RequestTarget], evidence: Sequence[tuple[st
             }
         )
     for row, target in zip(rows, targets, strict=True):
+        row.update(assessment="lexical", answerability="unassessed")
         if target.subquestion:
             row["subquestion"] = target.subquestion
     return rows
@@ -266,7 +287,7 @@ def coverage_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
 
 def _needs_search(row: Mapping[str, Any]) -> bool:
     """再検索の対象か。根拠が無い（missing）か一部だけ（weak）の要求（小問は #2399、通常の要求は #2810）。"""
-    return row["status"] in {"missing", "weak"}
+    return row["status"] in {"missing", "weak"} or row.get("answer_status") in {"missing", "partial"}
 
 
 def _unmatched_terms(row: Mapping[str, Any]) -> tuple[str, ...]:
@@ -297,6 +318,8 @@ def re_retrieval_skip_reason(rows: Sequence[Mapping[str, Any]], budget: Coverage
     """再検索しない理由。空なら再検索する（根拠の無い要求と、根拠が無いか一部だけの小問）。"""
     if not budget.enabled:
         return "disabled"
+    if budget.deadline_seconds <= 0:
+        return "deadline"
     wanted = [row for row in rows if _needs_search(row)]
     if not wanted:
         return "all_covered"
@@ -367,7 +390,7 @@ def plan_targeted_retrievals(
     """
     by_id = {target.id: target for target in targets}
     wanted = [by_id[row["id"]] for row in rows if row["id"] in by_id and _needs_search(row)]
-    status = {row["id"]: row["status"] for row in rows}
+    status = {row["id"]: row.get("answer_status") or row["status"] for row in rows}
     subquestions = [target for target in wanted if target.subquestion]
     # 根拠の無い要求を、一部だけの要求より先に検索する（枠が足りないときは missing を優先）。
     requests = sorted((target for target in wanted if not target.subquestion), key=lambda target: status[target.id] != "missing")
@@ -431,7 +454,12 @@ def run_targeted_retrievals(
         queries = targeted_queries(
             target,
             request_hints(target, runtime_knowledge, tokenize),
-            unmatched=_unmatched_terms(by_id.get(target.id, {})),
+            # 回答後の不足は語の一致と独立。原質問の繰り返しを避け、原質問由来の対象語で絞り直す。
+            unmatched=(
+                tuple(dict.fromkeys((*target.context_terms, *target.terms)))
+                if by_id.get(target.id, {}).get("answer_status")
+                else _unmatched_terms(by_id.get(target.id, {}))
+            ),
             searched=searched_queries,
         )
         if not queries:
@@ -512,6 +540,7 @@ __all__ = [
     "COVERAGE_SCHEMA_VERSION",
     "within_extra_budget",
     "CoverageBudget",
+    "CoverageUsage",
     "PlannedRetrieval",
     "RequestTarget",
     "TargetedRetrieval",

@@ -1036,3 +1036,36 @@ def test_answer_section_phase_passes_the_guide_priority():
 
     assert [seed["document_id"] for seed in result.trace["deferred_seeds"]] == [OTHER_DOC]
     assert stub.read_calls[0] == "s3-1"
+
+
+def test_unavailable_extraction_is_explicitly_identified_as_disabled_setting():
+    from time import monotonic
+
+    from rag_engine.generation.answering import _expand_context_by_sections
+
+    stub = SectionStub()
+    unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
+    settings = replace(
+        get_settings(environ={}, dotenv_path=None),
+        section_extraction_enabled=False,
+        section_expansion_max_levels=4,
+        section_expansion_input_token_percent=50,
+        answer_max_input_tokens=800,
+    )
+    with bind_dependencies(
+        AnswerDependencies(unused, unused, unused, unused, unused, section_outline=stub.outline, section_chunks=stub.chunks)
+    ):
+        _, result = _expand_context_by_sections(
+            QUESTION,
+            _seed_context("c31a"),
+            settings,
+            (),
+            answer_llm_provider=None,
+            rerank_enabled=False,
+            started_at=monotonic(),
+            use_grader=False,
+        )
+    assert result.trace["extraction_enabled"] is False
+    assert result.trace["large_section_handoff"] == "extract_then_integrate_unavailable"
+    assert result.trace["large_section_handoff_reason"] == "disabled_by_setting"
+    assert result.unread or result.omitted

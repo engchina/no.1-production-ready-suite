@@ -1,0 +1,277 @@
+"""語の一致と回答可能性を分離し、生成後の不足だけを共有予算で再検索する。"""
+
+from dataclasses import replace
+from typing import Any
+
+import pytest
+from test_grounded_answer import FakeModel, draft, ids, item
+from test_request_coverage import _patch_search, context, parent
+
+from rag_engine.config import get_settings
+from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+from rag_engine.generation import answering as a
+from rag_engine.retrieval.extra_retrieval import ExtraRetrievalBudget
+from rag_engine.retrieval.request_coverage import CoverageUsage, RequestTarget, assess_targets
+
+QUESTION = "対象Aの設定を変更する方法は？"
+OLD_TEXT = "対象Aの設定を変更する機能の概要。手順の記載はありません。"
+NEW_TEXT = "対象Aの設定画面を開き、項目を選択して保存ボタンを押します。"
+
+
+def settings(**kwargs: Any) -> Any:
+    kwargs.setdefault("request_coverage_retrieval_enabled", True)
+    return replace(get_settings(environ={}, dotenv_path=None), **kwargs)
+
+
+def cover(ctx, config, *, usage=None, unanswered=None, extra=None, question=QUESTION):
+    return a._cover_missing_requests(
+        question,
+        ctx,
+        config,
+        run_id="run",
+        preferred_engines=["docling"],
+        top_k=8,
+        neighbor_child_count=0,
+        rerank_enabled=False,
+        inquiry_conditions=None,
+        retrieval_scope="knowledge_base",
+        classification_filter=None,
+        runtime_knowledge=None,
+        searched_queries=(question,),
+        usage=usage,
+        unanswered_requests=unanswered,
+        extra_budget=extra,
+    )
+
+
+def test_high_word_overlap_does_not_assert_answerability():
+    target = RequestTarget("Q1", "request", "要求", tuple(f"語{i}" for i in range(8)))
+    row = assess_targets([target], [("r", " ".join(f"語{i}" for i in range(7)))])[0]
+    assert row["status"] == "supported" and row["best_ratio"] == 0.875
+    assert row["assessment"] == "lexical" and row["answerability"] == "unassessed"
+    assert "回答可能性は未判定" in a._COVERAGE_SKIP_LABELS["all_covered"]
+    assert "語の一致が多い" in a._coverage_step_lines({"requests": [row]})[0]
+
+
+def test_post_generation_missing_overrides_high_word_overlap_without_using_reason(monkeypatch):
+    calls = _patch_search(monkeypatch, {QUESTION: context(parent("new", NEW_TEXT))})
+    monkeypatch.setattr(a, "_coverage_tokenizer", lambda _: lambda text: [term for term in ("対象A", "設定", "変更") if term in text])
+    old = context(parent("old", OLD_TEXT))
+    merged, trace = cover(old, settings(), unanswered=[{"request_id": "Q1", "status": "missing", "reason": "検索に入れない文"}])
+    assert trace["requests"][0]["status"] == "supported"
+    assert trace["requests"][0]["answer_status"] == "missing"
+    assert trace["phase"] == "after_generation"
+    assert calls == [(QUESTION, ("対象a 設定 変更",))]
+    assert {r.chunk_uid for r in merged.records} == {"run:old", "run:new"}
+
+
+def test_pre_and_post_generation_share_all_limits(monkeypatch):
+    from test_request_coverage import QUESTION as two_requests
+    from test_request_coverage import _settings
+    from test_request_coverage import parent as p
+
+    calls = _patch_search(monkeypatch, {"請求書の再発行方法は？": context(p("new", "請求書 再発行"))})
+    usage, extra = CoverageUsage(), ExtraRetrievalBudget(5)
+    old = context(p("old", "受注 登録"))
+    first, _ = cover(old, _settings(request_coverage_max_queries=1), usage=usage, extra=extra, question=two_requests)
+    assert usage.queries == 1
+    second, trace = cover(
+        first,
+        _settings(request_coverage_max_queries=1),
+        usage=usage,
+        extra=extra,
+        question=two_requests,
+        unanswered=[{"request_id": "Q2", "status": "missing"}],
+    )
+    assert trace["re_retrieval"]["skipped"] == "no_budget"
+    assert second is first and len(calls) == 1
+    assert extra.used == {"request_coverage": 1}
+    assert usage.chunks == 1 and usage.searched_queries
+
+
+@pytest.mark.parametrize("limit", ["chunks", "deadline", "global"])
+def test_exhausted_limits_prevent_search(monkeypatch, limit):
+    calls = _patch_search(monkeypatch, {})
+    usage = CoverageUsage(chunks=4 if limit == "chunks" else 0, elapsed_seconds=10 if limit == "deadline" else 0)
+    _, trace = cover(
+        context(parent("old", OLD_TEXT)),
+        settings(),
+        usage=usage,
+        extra=ExtraRetrievalBudget(0 if limit == "global" else 5),
+        unanswered=[{"request_id": "Q1", "status": "missing"}],
+    )
+    assert trace["re_retrieval"]["skipped"] in {"no_budget", "deadline"}
+    assert not calls
+
+
+def _synthesize(monkeypatch, first, recover, **changes):
+    old = context(parent("old", OLD_TEXT))
+    merged = context(parent("old", OLD_TEXT), parent("new", NEW_TEXT))
+    eid = ids(merged, QUESTION)[NEW_TEXT]
+    model = FakeModel([first, draft(item(eid, NEW_TEXT, NEW_TEXT, request_id="Q1"), summary="資料に記載の操作です。")], [])
+    unused = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = a.synthesize_grounded_answer(
+            QUESTION,
+            old,
+            settings(**{"answer_audit_mode": "none", **changes}),
+            image_prompt_mode="text_only",
+            recover_requests=recover,
+        )
+    return result, model
+
+
+def gap():
+    return draft({"kind": "gap", "text": "操作の根拠がありません。", "request_id": "Q1", "citations": []}, summary="根拠が不足しています。")
+
+
+def test_generated_gap_can_retrieve_and_regenerate_without_enabling_audit(monkeypatch):
+    calls = []
+
+    def recover(ctx, unanswered):
+        calls.append(unanswered)
+        return context(parent("old", OLD_TEXT), parent("new", NEW_TEXT)), {"applied": True}
+
+    result, model = _synthesize(monkeypatch, gap(), recover)
+    assert calls == [[{"request_id": "Q1", "status": "missing"}]]
+    assert NEW_TEXT in result.response.answer_text
+    assert NEW_TEXT in model.prompts[1][1]
+    assert len(model.prompts) == 2
+    assert result.response.generation_trace["rounds"][0]["remedy"]["remedy"] == "retrieval"
+
+
+@pytest.mark.parametrize("kind", ["no_new_evidence", "failure", "zero_rounds"])
+def test_recovery_does_not_repeat_generation_without_new_evidence(monkeypatch, kind):
+    calls = []
+
+    def recover(ctx, unanswered):
+        calls.append(unanswered)
+        if kind == "failure":
+            raise RuntimeError("検索の例外の本文は記録しない")
+        return ctx, {"applied": False}
+
+    result, model = _synthesize(monkeypatch, gap(), recover, answer_max_correction_rounds=0 if kind == "zero_rounds" else 2)
+    assert len(model.prompts) == 1
+    assert len(calls) == (0 if kind == "zero_rounds" else 1)
+    assert "操作の根拠がありません" in result.response.answer_text
+    if kind == "failure":
+        trace = result.response.generation_trace["rounds"][0]["request_retrieval"]
+        assert trace == {"error": "RuntimeError", "applied": False}
+
+
+def test_missing_audit_does_not_trigger_search_when_draft_has_no_gap(monkeypatch):
+    old = context(parent("old", OLD_TEXT))
+    eid = ids(old, QUESTION)[OLD_TEXT]
+    calls = []
+    result, model = _synthesize(monkeypatch, draft(item(eid, OLD_TEXT, OLD_TEXT, request_id="Q1")), lambda *args: calls.append(args))
+    assert len(model.prompts) == 1 and not calls
+    assert result.response.answer_text
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_main_answer_flow_wires_recovery_and_respects_disabled_setting(monkeypatch, tmp_path, enabled):
+    old = context(parent("old", OLD_TEXT))
+    merged = context(parent("old", OLD_TEXT), parent("new", NEW_TEXT))
+    eid = ids(merged, QUESTION)[NEW_TEXT]
+    model = FakeModel([gap(), draft(item(eid, NEW_TEXT, NEW_TEXT, request_id="Q1"), summary="資料に記載の操作です。")], [])
+    calls = []
+
+    def search(question, *args, **kwargs):
+        calls.append((question, kwargs.get("retrieval_queries")))
+        return old if len(calls) == 1 else context(parent("new", NEW_TEXT))
+
+    monkeypatch.setattr(a, "check_adb_hybrid_search_ready", lambda **kwargs: None)
+    monkeypatch.setattr(a, "build_adb_hybrid_answer_context", search)
+    monkeypatch.setattr(a, "_coverage_tokenizer", lambda _: lambda text: [term for term in ("対象A", "設定", "変更") if term in text])
+    unused = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
+    config = settings(
+        request_coverage_retrieval_enabled=enabled,
+        output_dir=tmp_path,
+        answer_audit_mode="none",
+        section_expansion_enabled=False,
+        domain_keywords_override=(),
+    )
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = a.answer_question_result(
+            QUESTION,
+            "run",
+            ["docling"],
+            config,
+            query_strategy=a.SIMPLE_RETRIEVAL_LABEL,
+            answer_flow=a.STANDARD_ANSWER_FLOW,
+            retrieval_scope=a.RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
+        )
+    assert len(calls) == (2 if enabled else 1)
+    assert len(model.prompts) == (2 if enabled else 1)
+    if enabled:
+        assert calls[1][1] == ("対象a 設定 変更",)
+        trace = result.generation_trace["request_coverage"]["after_generation"][0]
+        assert trace["re_retrieval"]["applied"] is True
+        assert NEW_TEXT in result.answer
+    else:
+        assert result.generation_trace["request_coverage"]["re_retrieval"]["skipped"] == "disabled"
+
+
+def test_same_focused_query_is_not_repeated_across_phases(monkeypatch):
+    calls = _patch_search(monkeypatch, {})
+    monkeypatch.setattr(a, "_coverage_tokenizer", lambda _: lambda text: [term for term in ("対象A", "設定", "変更") if term in text])
+    usage = CoverageUsage()
+    old = context(parent("old", OLD_TEXT))
+    for _ in range(2):
+        _, trace = cover(old, settings(), usage=usage, unanswered=[{"request_id": "Q1", "status": "missing"}])
+    assert len(calls) == 1 and usage.queries == 1
+    assert trace["re_retrieval"]["skipped"] == "same_query"
+
+
+def test_audit_partial_request_triggers_retrieval_even_without_gap(monkeypatch):
+    from test_grounded_answer import audit
+
+    old = context(parent("old", OLD_TEXT))
+    merged = context(parent("old", OLD_TEXT), parent("new", NEW_TEXT))
+    old_id, new_id = ids(old, QUESTION)[OLD_TEXT], ids(merged, QUESTION)[NEW_TEXT]
+    model = FakeModel(
+        [draft(item(old_id, OLD_TEXT, OLD_TEXT, request_id="Q1")), draft(item(new_id, NEW_TEXT, NEW_TEXT, request_id="Q1"))],
+        [
+            audit((0, "supported", "matched", ""), requests=[("Q1", "partial")]),
+            audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")]),
+        ],
+    )
+    calls = []
+
+    def recover(ctx, unanswered):
+        calls.append(unanswered)
+        return merged, {"applied": True}
+
+    unused = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = a.synthesize_grounded_answer(
+            QUESTION, old, settings(answer_audit_mode="detailed"), image_prompt_mode="text_only", recover_requests=recover
+        )
+    assert calls == [[{"request_id": "Q1", "status": "partial"}]]
+    assert NEW_TEXT in result.response.answer_text
+    assert len(model.prompts) == 4
+
+
+def test_unknown_request_does_not_search_unrelated_targets(monkeypatch):
+    calls = _patch_search(monkeypatch, {})
+    _, trace = cover(context(parent("old", OLD_TEXT)), settings(), unanswered=[{"request_id": "unknown", "status": "missing"}])
+    assert not calls
+    assert trace["re_retrieval"]["skipped"] == "unmapped_requests"
+
+
+def test_focused_query_preserves_explicit_target_context():
+    from rag_engine.retrieval.request_coverage import CoverageBudget, run_targeted_retrievals
+
+    question = "対象Bについて、設定を変更する方法は？"
+    target = RequestTarget("Q1", "request", "設定を変更する方法は？", ("設定", "変更"), query=question, context_terms=("対象b",))
+    rows = [{"id": "Q1", "status": "supported", "answer_status": "missing"}]
+    calls = []
+    run_targeted_retrievals(
+        rows,
+        [target],
+        budget=CoverageBudget(),
+        retrieve=lambda text, queries: calls.append((text, queries)),
+        tokenize=lambda text: [],
+        searched_queries=(question,),
+    )
+    assert calls == [(question, ("対象b 設定 変更",))]
