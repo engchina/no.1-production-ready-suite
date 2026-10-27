@@ -14,8 +14,6 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
-  SelectField,
-  type SelectFieldOption,
   Switch,
   TextField,
   TimedLoadingState,
@@ -57,7 +55,7 @@ import {
   useSearchAnswerProfiles,
   useSearchExtractionFields,
 } from "@/lib/queries";
-import { isNullableString, isOneOf, useWorkspaceState } from "@/lib/workspace-state";
+import { isNullableString, useWorkspaceState } from "@/lib/workspace-state";
 import { AnswerNotices } from "./AnswerDetailsPanel";
 import { AnswerProcess } from "./AnswerProcess";
 import { answerAttachedImages, answerModelHeading, parseAnswerDiagnostics, unreadSectionLinks } from "@/lib/answer-diagnostics";
@@ -80,13 +78,10 @@ import {
 import {
   CLASSIFICATION_FILTER_KEYS,
   type ClassificationFilterValues,
-  DEFAULT_TOP_K,
   EMPTY_CLASSIFICATION_FILTERS,
   hasSearchPrefillParams,
   SEARCH_PREFILL_KEYS,
   searchPrefillFromParams,
-  TOP_K_OPTIONS,
-  type TopKOption,
 } from "./search-prefill";
 
 type Phase = "idle" | "streaming" | "done" | "cancelled" | "error";
@@ -119,17 +114,10 @@ interface SearchRequestSnapshot {
   query: string;
   searchAnswerProfileId: string;
   generateAnswer: boolean;
-  /** 回答のモデル（空は既定のテキストモデル）。 */
-  topK: TopKOption;
   filters: Record<string, string>;
   /** 質問から読み取った条件のうち、利用者が外した項目（#652）。 */
   excludedAutoFields: string[];
 }
-
-const TOP_K_SELECT_OPTIONS = TOP_K_OPTIONS.map((option) => ({
-  value: option,
-  label: option,
-})) satisfies SelectFieldOption<TopKOption>[];
 
 /**
  * RAG 検索画面。チャットと同じ工程（質問の理解・拡張・検索・rerank）で検索し、既定は検索結果までを表示する。
@@ -170,20 +158,13 @@ export function SearchClient() {
     prefill?.extractionRows
   );
   const [extractionOpen, setExtractionOpen] = useState(() => Boolean(prefill?.extractionRows.length));
-  const [topK, setTopK] = useWorkspaceState<TopKOption>(
-    "search.topK",
-    DEFAULT_TOP_K,
-    isOneOf(TOP_K_OPTIONS),
-    prefill?.topK
-  );
   // URL で条件を入れたときは詳細条件を開き、入った条件を見せる。
   const [advancedOpen, setAdvancedOpen] = useWorkspaceState(
     "search.advancedOpen",
     false,
     undefined,
     prefill
-      ? prefill.topK !== DEFAULT_TOP_K ||
-          prefill.extractionRows.length > 0 ||
+      ? prefill.extractionRows.length > 0 ||
           Object.values(prefill.classification).some((value) => value)
       : undefined
   );
@@ -268,8 +249,7 @@ export function SearchClient() {
   const hasFilters = hasClassificationFilters || hasExtractionFieldFilters;
   // 開閉は利用者の操作だけで決める。閉じていても条件は効くので、見出しに「設定中」を出す（#461）。
   const classificationVisible = classificationOpen;
-  const hasSearchTuning = topK !== DEFAULT_TOP_K;
-  const hasAdvancedSettings = hasFilters || hasSearchTuning;
+  const hasAdvancedSettings = hasFilters;
 
   /** 入力欄・選択から検索の条件を作って送る（「検索」ボタンと Enter）。 */
   const runSubmit = async () => {
@@ -294,7 +274,6 @@ export function SearchClient() {
         query: trimmed,
         searchAnswerProfileId,
         generateAnswer,
-        topK,
         filters: buildSearchFilters({
           classification,
           extractionFields: extractionFieldFilterValue(fieldFilter.conditions),
@@ -366,7 +345,6 @@ export function SearchClient() {
       await streamSearch(
         {
           query: request.query,
-          top_k: Number(request.topK),
           search_answer_profile_id: request.searchAnswerProfileId,
           generate_answer: request.generateAnswer,
           ...(request.excludedAutoFields.length
@@ -460,7 +438,6 @@ export function SearchClient() {
     setClassificationOpen(false);
     setExtractionRows([]);
     setExtractionOpen(false);
-    setTopK(DEFAULT_TOP_K);
     setAdvancedOpen(false);
   };
 
@@ -612,20 +589,6 @@ export function SearchClient() {
                 {advancedOpen ? (
                 <fieldset id="search-advanced-conditions" className="space-y-4 border-t border-border p-3">
                   <legend className="sr-only">{t("search.filters.title")}</legend>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <SelectField
-                      id="search-top-k"
-                      width="xs"
-                      label={t("search.tuning.topK")}
-                      value={topK}
-                      options={TOP_K_SELECT_OPTIONS}
-                      helper={t("search.tuning.topKHelp")}
-                      onValueChange={setTopK}
-                      className="[&_label]:text-xs"
-                      buttonClassName="bg-surface"
-                    />
-                  </div>
-
                   <div className="rounded-md border border-border bg-surface">
                     <button
                       type="button"
