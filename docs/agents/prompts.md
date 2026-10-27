@@ -4,6 +4,7 @@
 
 LLM に渡す文（製品の LLM への指示、組み込みのスキル `skills/`、MCP の server instructions・ツールと引数の説明、Agent の組み込み Runtime の指示とツールの結果の案内）は、pi（[badlogic/pi-mono](https://github.com/badlogic/pi-mono) の coding agent。[作者の解説](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/)）と DeepSeek Harness（[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) の `.agents/skills/` の `agent-experience`・`dsh-prose-standard`・`dsh-trim-cot-leakage`）の書き方に従う。
 
+- **Agent・RAG・NL2SQL と共通基盤のすべての Prompt は、実際にモデルへ渡す指示を `## Step 1: …`、`## Step 2: …` の形式で処理順に書く。** System Prompt・入力テンプレート・ツールやスキルのモデル向けの手順にも適用する。役割と目的、入力の読み方、判断と制約、出力を必要な Step に整理し、内容に応じた連番にする。画面の表示だけを整形して済ませず、表示と実行の指示を一致させる。既存の意味・安全上の境界・否定・例外・出力契約を保ち、形式を変えた場合も関連テストと初回に渡す字数の前後を確認する。
 - **1 つの規則は 1 つの層にだけ書く**（MCP の instructions / ツールの説明 / 引数の説明 / validator / スキル / Runtime の指示）。引数の既定・範囲・組み合わせ・いつ渡すかは引数の説明、ツールをいつ使うかはツールの説明、複数のツールをつなぐ手順はスキルに置き、ほかの層で繰り返さない。
 - **コードで保証できることはコードに置く**（validator・正規化・既定値・上限）。プロンプトに重ねない。誤りのメッセージは、何が違反でどう直せばよいかを書く（モデルが読んで呼び直せる形）。
 - **状態で変わる案内はツールの結果に置く**（`next_step` などの次にすること）。静的な指示に「〜のときは〜」を並べない。呼べば結果で分かること（無いファイルは読めない等）は書かない。
