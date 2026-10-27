@@ -230,3 +230,17 @@ def test_catalog_separates_independent_preparation_and_orders_evaluation_calls()
         "field_extraction",
         "navigation_summary",
     ]
+
+
+def test_crag_readonly_prompts_are_the_executed_step_instructions() -> None:
+    from rag_engine.generation.answering import CRAG_GRADER_SYSTEM_PROMPT
+    from rag_engine.generation.crag_support import CRAG_GRADE_PROMPT_TEMPLATE
+
+    displayed: list[str] = []
+    for stage in readonly_prompt_stages():
+        parts = stage["prompts"]
+        assert isinstance(parts, list)
+        displayed.extend(part["content"] for part in parts)
+    # 画面用の別文ではなく、実行で参照する定数の本文をそのまま登録する。
+    assert CRAG_GRADER_SYSTEM_PROMPT in displayed
+    assert CRAG_GRADE_PROMPT_TEMPLATE in displayed

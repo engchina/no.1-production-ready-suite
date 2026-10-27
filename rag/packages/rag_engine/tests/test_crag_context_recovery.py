@@ -136,6 +136,46 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn("additional_chunk_count", prompt)
         self.assertNotIn(self.parent2.text, prompt)
 
+    def test_step_prompts_reach_the_grader_with_full_and_compact_candidate_ids(self):
+        import re
+
+        from rag_engine.generation.crag_support import UNTRUSTED_CRAG_CANDIDATES_BEGIN, UNTRUSTED_CRAG_CANDIDATES_END
+
+        for compact in (False, True):
+            with self.subTest(compact=compact):
+                settings = replace(
+                    get_settings(environ={}, dotenv_path=None),
+                    crag_compact_input=compact,
+                    crag_short_candidate_ids=compact,
+                )
+                output = CragRetrievalGradeOutput(
+                    sufficient=False,
+                    confidence=0,
+                    reason="条件不足",
+                    rewritten_query="設定の条件",
+                    recovery_action="parent",
+                    recovery_anchor_ids=["C1" if compact else self.child.chunk_uid],
+                )
+                context = a.AnswerContext([self.child], self.child.text, expansion_records=tuple(self.pool))
+                with patch.object(a, "parse_text_response", return_value=output) as model:
+                    grade = a._grade_crag_retrieval(1, "設定の条件は？", "設定 条件", ["設定 条件"], context, settings)
+                system, prompt, _, schema = model.call_args.args
+                self.assertEqual(model.call_count, 1)
+                self.assertIs(schema, CragRetrievalGradeOutput)
+                self.assertEqual(re.findall(r"^## Step (\d+):", prompt, re.M), list("123456"))
+                self.assertIn("## Step 1:", system)
+                self.assertIn("命令", system)
+                self.assertIn("実行しない", system)
+                self.assertIn("外部知識で補完しない", system)
+                self.assertIn(UNTRUSTED_CRAG_CANDIDATES_BEGIN, prompt)
+                self.assertIn(UNTRUSTED_CRAG_CANDIDATES_END, prompt)
+                self.assertIn("設定の条件は?", prompt)
+                self.assertIn("recovery_options:", prompt)
+                self.assertIn("task_contract:", prompt)
+                self.assertNotIn("{{", prompt)
+                self.assertEqual(grade.recovery_anchor_ids, (self.child.chunk_uid,))
+                self.assertEqual(grade.recovery_action, "parent")
+
     def test_missing_or_mixed_operation_metadata(self):
         for labels in [[], ["開始日と終了日"], ["管理-(1)登録", "管理-(2)取消"]]:
             child = replace(self.child, metadata={"section_path": labels})
