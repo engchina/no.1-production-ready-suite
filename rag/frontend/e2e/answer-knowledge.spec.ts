@@ -8,7 +8,7 @@ import {
   selectSearchAnswerProfile,
 } from "./_helpers";
 
-// rag_poc からの移植: プロファイルの知識(Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルール)、
+// rag_poc からの移植: プロファイルの知識(登録済みQ&A / 用語・同義語 / ドメインキーワード / 回答ルール)、
 // 検索前の類似問提示、回答の根拠パネル。
 
 const envelope = (data: unknown) => ({ data, error_messages: [], warning_messages: [] });
@@ -107,9 +107,9 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`プロファイルの知識パネルでキーワード・FAQ・用語ルールを管理できる (${viewport.name})`, async ({
+  test(`プロファイルの知識パネルでキーワード・FAQ・用語ルールを管理できる (${viewport.name})`, { tag: "@responsive" }, async ({
     page,
-  }) => {
+  }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockCommon(page);
     await mockSearchAnswerProfileApi(page);
@@ -120,21 +120,24 @@ for (const viewport of [
 
     const panel = page.getByRole("heading", { name: "プロファイルの知識" });
     await expect(panel).toBeVisible();
-    // 先頭・既定のタブは Approved FAQ（#636）。以降は回答フローで使う順（#682）。
+    // 先頭・既定のタブは 登録済みQ&A（#636）。以降は回答フローで使う順（#682）。
     const tabs = page.getByRole("tablist", { name: "プロファイルの知識" }).getByRole("tab");
     await expect(tabs).toHaveText([
-      "Approved FAQ（類似問）",
+      "登録済みQ&A",
       "用語・同義語",
       "ドメインキーワード",
       "回答ルール",
       "業務ガイド",
     ]);
-    await expect(page.getByRole("tab", { name: "Approved FAQ（類似問）" })).toHaveAttribute(
+    await expect(page.getByRole("tab", { name: "登録済みQ&A" })).toHaveAttribute(
       "aria-selected",
       "true"
     );
     await expect(page.getByRole("rowheader", { name: faqSuggestion.question })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Excel 取込" })).toBeVisible();
+    await expect(page.getByRole("switch", { name: "回答の前に関連するQ&Aを提示する" })).toBeVisible();
+    await page.getByRole("switch", { name: "回答の前に関連するQ&Aを提示する" }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("registered-qa.png") });
 
     await page.getByRole("tab", { name: "ドメインキーワード" }).click();
     await expect(page.getByLabel("登録キーワード（1 行に 1 語）")).toHaveValue("受注番号");
@@ -207,7 +210,7 @@ test("よく聞かれている質問を入力欄の下に出し、選ぶと質�
   await expectNoPageOverflow(page);
 });
 
-test("類似する承認済み FAQ を提示し、FAQ の回答を LLM なしで表示する", async ({ page }) => {
+test("類似する登録済みQ&Aを提示し、FAQ の回答を LLM なしで表示する", async ({ page }) => {
   await mockCommon(page);
   await mockSearchAnswerProfileApi(page, { suggestions: [faqSuggestion] });
   let streamed = false;
@@ -218,9 +221,9 @@ test("類似する承認済み FAQ を提示し、FAQ の回答を LLM なしで
 
   await selectSearchAnswerProfileAndAsk(page, "受注を取り消すには？");
 
-  await expect(page.getByRole("heading", { name: "類似する承認済み FAQ があります" })).toBeVisible();
-  await page.getByRole("button", { name: "この FAQ の回答を使う" }).click();
-  await expect(page.getByRole("heading", { name: "承認済み FAQ の回答" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "質問に近い登録済みQ&Aがあります" })).toBeVisible();
+  await page.getByRole("button", { name: "このQ&Aで回答する" }).click();
+  await expect(page.getByRole("heading", { name: "登録済みQ&Aの回答" })).toBeVisible();
   await expect(page.getByText(faqSuggestion.answer)).toBeVisible();
   expect(streamed).toBe(false);
 });
@@ -231,7 +234,7 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   await mockAnswerStream(page);
 
   await selectSearchAnswerProfileAndAsk(page, "受注を取り消すには？");
-  await page.getByRole("button", { name: "類似問を使用しない" }).click();
+  await page.getByRole("button", { name: "どれでもない（資料を検索する）" }).click();
 
   // 回答の記録の詳細は、処理の経過の中の「処理の詳細」に畳む（#2096 / #2325。旧「回答の根拠と実行記録」）。
   const process = page.getByRole("region", { name: "処理の経過" });
@@ -371,7 +374,7 @@ test("FAQ の追加と回答ルールの保存は、未入力を欄の下に出�
   });
 
   await page.goto("/search-answer-profiles?id=bv-1");
-  await page.getByRole("tab", { name: "Approved FAQ（類似問）" }).click();
+  await page.getByRole("tab", { name: "登録済みQ&A" }).click();
   const add = page.getByRole("button", { name: "追加", exact: true });
   await expect(add).toBeEnabled();
   await add.click();
@@ -410,7 +413,7 @@ test("検索・回答プロファイルごとに類似問の提示をオン / �
   });
 
   await page.goto("/search-answer-profiles?id=bv-1");
-  const toggle = page.getByRole("switch", { name: "回答の前に類似問を提示する" });
+  const toggle = page.getByRole("switch", { name: "回答の前に関連するQ&Aを提示する" });
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "false");
@@ -549,7 +552,7 @@ for (const graph of [
     await mockSearchAnswerProfileApi(page, { suggestions: [faqSuggestion] });
     await mockAnswerStream(page, graph);
     await selectSearchAnswerProfileAndAsk(page, "合成の操作方法を確認する");
-    await page.getByRole("button", { name: "類似問を使用しない" }).click();
+    await page.getByRole("button", { name: "どれでもない（資料を検索する）" }).click();
     const panel = await openAnswerProcessDetails(page, "search-run-progress");
     const diagnostic = panel.getByTestId("answer-graph-expansion");
     await expect(diagnostic).toContainText("0 件");

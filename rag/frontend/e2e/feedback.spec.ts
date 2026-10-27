@@ -290,7 +290,7 @@ test("行の題名のボタン（共有 RowTitleButton）は Tab で届き、Ent
   await page.screenshot({ path: testInfo.outputPath(`feedback-row-title-${testInfo.project.name}.png`), fullPage: true });
 });
 
-test("回答のフィードバックを詳細から Approved FAQ に登録し、品質評価のケースを Excel に書き出せる", async ({ page }) => {
+test("回答のフィードバックを詳細から 登録済みQ&Aに登録し、品質評価のケースを Excel に書き出せる", async ({ page }) => {
   await mockFeedback(page, []);
   await page.route("**/api/feedback/feedback-answer", (route) => {
     const envelope = feedbackDetailEnvelope();
@@ -335,10 +335,10 @@ test("回答のフィードバックを詳細から Approved FAQ に登録し、
   await expect(detail.getByRole("heading", { name: "修正した回答" })).toBeVisible();
   const actions = detail.getByTestId("feedback-detail-actions");
 
-  await actions.getByRole("button", { name: "Approved FAQ に登録" }).click();
-  const confirmDialog = page.getByRole("alertdialog", { name: "検索・回答プロファイルの Approved FAQ に登録しますか？" });
-  await confirmDialog.getByRole("button", { name: "Approved FAQ に登録" }).click();
-  await expect(page.getByText("Approved FAQ に登録しました: 最新の経費申請期限を教えて")).toBeVisible();
+  await actions.getByRole("button", { name: "登録済みQ&Aに登録" }).click();
+  const confirmDialog = page.getByRole("alertdialog", { name: "検索・回答プロファイルの登録済みQ&Aに登録しますか？" });
+  await confirmDialog.getByRole("button", { name: "登録済みQ&Aに登録" }).click();
+  await expect(page.getByText("登録済みQ&Aに登録しました: 最新の経費申請期限を教えて")).toBeVisible();
   expect(promoted).toBe(true);
 
   const download = page.waitForEvent("download");
@@ -349,7 +349,7 @@ test("回答のフィードバックを詳細から Approved FAQ に登録し、
   await expect(page).toHaveURL(/\/feedback/);
 });
 
-test("承認 FAQ への反映の権限が無い利用者には Approved FAQ への登録を出さない", async ({ page }) => {
+test("承認 FAQ への反映の権限が無い利用者には 登録済みQ&A への登録を出さない", async ({ page }) => {
   await mockFeedback(page, []);
   // フィードバックの閲覧だけを持つ DB ユーザー（rag.feedback.manage なし。#214）。
   await mockAuthUser(page, {
@@ -367,7 +367,7 @@ test("承認 FAQ への反映の権限が無い利用者には Approved FAQ へ�
   const detail = page.getByRole("region", { name: "フィードバック詳細" });
   const actions = detail.getByTestId("feedback-detail-actions");
   await expect(actions.getByRole("button", { name: "品質評価のケースを書き出す" })).toBeVisible();
-  await expect(actions.getByRole("button", { name: "Approved FAQ に登録" })).toHaveCount(0);
+  await expect(actions.getByRole("button", { name: "登録済みQ&Aに登録" })).toHaveCount(0);
 
   // 文書の詳細を開けない利用者には、根拠から引用元（文書の詳細）へのリンクを出さない（#303）。
   await detail.getByRole("tab", { name: "根拠" }).click();
