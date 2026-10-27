@@ -130,7 +130,6 @@ from app.rag.ingestion_prompts import (
     FIELD_EXTRACTION_PROMPT,
     HEADING_LEVEL_PROMPT,
     NAVIGATION_SUMMARY_PROMPT,
-    RAPTOR_SUMMARY_PROMPT,
     RAPTOR_SUMMARY_SYSTEM_PROMPT,
 )
 from app.rag.ingestion_quality import build_ingestion_quality_report, requires_review
@@ -3674,7 +3673,6 @@ class IngestionPipeline:
             return chunks
         await _raise_if_cancelled(cancel_checker)
 
-        prompt = await self._stage_prompt("raptor_summary", RAPTOR_SUMMARY_PROMPT)
         system_prompt = await self._stage_prompt(
             "raptor_summary_system", RAPTOR_SUMMARY_SYSTEM_PROMPT
         )
@@ -3687,7 +3685,7 @@ class IngestionPipeline:
                 else text[: max(200, len(text) >> attempt.adaptation)]
             )
             with sdk_retries_disabled():
-                return await self._vlm.generate(prompt, source, system_prompt=system_prompt)
+                return await self._vlm.generate("", source, system_prompt=system_prompt)
 
         try:
             with ingestion_ai_calls(self._settings, "raptor_summary") as caller:

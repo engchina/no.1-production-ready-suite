@@ -207,6 +207,9 @@ test("回答の品質評価だけを評価の基準で読み取れる", { tag: "
   await page.goto("/settings/evaluation");
   const stage = page.getByTestId("answer-prompt-stage-evaluation");
   await expect(stage).toContainText("回答の品質評価");
+  await expect(page.getByTestId("answer-prompt-stages-card")).toBeVisible();
+  expect(await page.getByTestId("answer-prompt-stages-card").evaluate(node => parseFloat(getComputedStyle(node).borderTopWidth))).toBeGreaterThan(0);
+
   await expect(page.getByTestId("answer-prompt-stage-answer_validation")).toHaveCount(0);
   await stage.locator("summary").click();
   const fields = stage.getByRole("textbox");

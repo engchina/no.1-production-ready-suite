@@ -1156,6 +1156,7 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
         field_extraction_enabled=settings.rag_field_extraction_enabled,
         navigation_summary_enabled=settings.rag_navigation_summary_enabled,
         navigation_summary_max_nodes=settings.rag_navigation_summary_max_nodes,
+        raptor_enabled=settings.rag_raptor_enabled,
         vision_concurrency=settings.rag_vision_concurrency,
         mineru_license=_mineru_license_data(settings),
         config_source="runtime",
@@ -1187,6 +1188,7 @@ def _persist_post_parse_settings(settings: Settings) -> None:
             "RAG_NAVIGATION_SUMMARY_ENABLED": _format_env_bool(
                 settings.rag_navigation_summary_enabled
             ),
+            "RAG_RAPTOR_ENABLED": _format_env_bool(settings.rag_raptor_enabled),
             "RAG_VISION_CONCURRENCY": str(settings.rag_vision_concurrency),
         },
         section_comment="# 文書解析: 解析後の処理",
@@ -1672,7 +1674,6 @@ def _chunking_settings_candidate(
             "rag_chunk_overlap": payload.overlap,
             "rag_chunk_min_chars": payload.min_chars,
             "rag_chunk_delimiter": payload.delimiter,
-            "rag_chunk_context_header_enabled": payload.context_header_enabled,
             "rag_chunk_child_target_chars": payload.chunk_child_target_chars,
             "rag_chunk_table_child_target_chars": payload.chunk_table_child_target_chars,
             "rag_chunk_parent_target_chars": payload.chunk_parent_target_chars,
@@ -1689,7 +1690,6 @@ def _apply_chunking_settings(target: Settings, source: Settings) -> None:
     target.rag_chunk_overlap = source.rag_chunk_overlap
     target.rag_chunk_min_chars = source.rag_chunk_min_chars
     target.rag_chunk_delimiter = source.rag_chunk_delimiter
-    target.rag_chunk_context_header_enabled = source.rag_chunk_context_header_enabled
     for name in SMALL_TO_BIG_SETTING_FIELDS:
         setattr(target, name, getattr(source, name))
 
@@ -1704,9 +1704,6 @@ def _persist_chunking_settings(settings: Settings) -> None:
             "RAG_CHUNK_OVERLAP": str(settings.rag_chunk_overlap),
             "RAG_CHUNK_MIN_CHARS": str(settings.rag_chunk_min_chars),
             "RAG_CHUNK_DELIMITER": settings.rag_chunk_delimiter,
-            "RAG_CHUNK_CONTEXT_HEADER_ENABLED": _format_env_bool(
-                settings.rag_chunk_context_header_enabled
-            ),
             **{name.upper(): str(getattr(settings, name)) for name in SMALL_TO_BIG_SETTING_FIELDS},
             # 交差参照の解析の語は言語資源へ移した(#2181)。以前に保存した値は消す。
             **{f"RAG_REFERENCE_{spec.key.upper()}": None for spec in FIELD_SPECS},

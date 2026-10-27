@@ -1,4 +1,3 @@
-import { mockFeaturePrompts, verifyFeaturePrompt } from "./_feature-prompt-helpers";
 import { expect, test, type Page } from "./fixtures/test";
 import { expectNoPageOverflow, mockLocalAuth, openSidebarNav } from "./_helpers";
 
@@ -55,7 +54,7 @@ for (const viewport of [
     await expect(page.getByLabel("overlap(文字)")).toHaveValue("120");
     await expect(
       page.getByRole("switch", { name: "文脈ヘッダを検索対象へ追加" })
-    ).toBeChecked();
+    ).toHaveCount(0);
 
     await expectStrategyParams(page, /^構造認識/, [
       "chunk サイズ(文字)",
@@ -68,7 +67,7 @@ for (const viewport of [
       "最小 chunk 文字数",
     ]);
     await expectStrategyParams(page, /親子階層（small-to-big）/, SMALL_TO_BIG_LABELS);
-    await expect(page.getByRole("switch", { name: "文脈ヘッダを検索対象へ追加" })).toBeVisible();
+    await expect(page.getByRole("switch", { name: "文脈ヘッダを検索対象へ追加" })).toHaveCount(0);
     await expect(page.getByRole("spinbutton", { name: "子チャンク目標文字数", exact: true })).toHaveValue("1000");
     await expect(page.getByRole("spinbutton", { name: "表の子チャンク目標文字数", exact: true })).toHaveValue("3000");
     await expect(page.getByRole("spinbutton", { name: "親チャンク目標文字数", exact: true })).toHaveValue("6000");
@@ -193,7 +192,6 @@ test("文書分割設定は親子階層（small-to-big）のパラメータを�
     overlap: 120,
     min_chars: 120,
     delimiter: "\\n\\n",
-    context_header_enabled: true,
     chunk_child_target_chars: 600,
     chunk_table_child_target_chars: 3000,
     chunk_parent_target_chars: 6000,
@@ -217,8 +215,7 @@ test("文書分割設定は方式とパラメータを保存できる", async ({
           overlap: 120,
           min_chars: 40,
           delimiter: "\\n\\n",
-          context_header_enabled: false,
-        }),
+              }),
       });
       return;
     }
@@ -235,7 +232,6 @@ test("文書分割設定は方式とパラメータを保存できる", async ({
   await minChars.fill("40");
   const chunkSize = page.getByRole("spinbutton", { name: "chunk サイズ(文字)", exact: true });
   await chunkSize.fill("1000");
-  await page.getByRole("switch", { name: "文脈ヘッダを検索対象へ追加" }).click();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
 
   await page.getByRole("button", { name: "保存" }).click();
@@ -247,7 +243,6 @@ test("文書分割設定は方式とパラメータを保存できる", async ({
     overlap: 120,
     min_chars: 40,
     delimiter: "\\n\\n",
-    context_header_enabled: false,
     ...SMALL_TO_BIG_DEFAULTS,
   });
   await expectNoHorizontalOverflow(page);
@@ -282,7 +277,6 @@ test("文書分割設定は固定分割符を保存できる", async ({ page }) 
     overlap: 120,
     min_chars: 120,
     delimiter: "---SECTION---",
-    context_header_enabled: true,
     ...SMALL_TO_BIG_DEFAULTS,
   });
   await expectNoHorizontalOverflow(page);
@@ -489,39 +483,10 @@ test("文書分割の設定は、方式を切り替えて隠れた欄の不正�
   expect(savedPayload).toMatchObject({ strategy: "small_to_big", min_chars: 120 });
 });
 
-test("small-to-big でも文脈ヘッダを既定 OFF から切り替えて保存できる", async ({ page }) => {
-  let enabled = false;
-  await page.route("**/api/settings/chunking", async (route) => {
-    if (route.request().method() === "PATCH") enabled = route.request().postDataJSON().context_header_enabled;
-    await route.fulfill({ json: chunkingEnvelope({ strategy: "small_to_big", context_header_enabled: enabled }) });
-  });
-  await page.goto("/settings/chunking");
-  const toggle = page.getByRole("switch", { name: "文脈ヘッダを検索対象へ追加" });
-  await expect(toggle).not.toBeChecked();
-  for (const next of [true, false]) {
-    await toggle.click();
-    await page.getByRole("button", { name: "保存", exact: true }).click();
-    await expect(page.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
-    await page.reload();
-    await expect(toggle).toBeChecked({ checked: next });
-  }
-  await expectNoPageOverflow(page);
-});
-
-
-test("RAPTOR の階層の要約プロンプトは文書分割の後に共通の編集操作を使う", { tag: "@responsive" }, async ({ page }) => {
+test("文脈ヘッダの切替と RAPTOR の設定は文書分割に出さない", { tag: "@responsive" }, async ({ page }) => {
   await mockChunkingSettings(page);
-  const requests = await mockFeaturePrompts(page);
   await page.goto("/settings/chunking");
-  await expect(page.getByRole("heading", { name: "RAPTOR の階層の要約", exact: true })).toBeVisible();
-  await expect(page.getByText(/章節の要約とは独立した機能/)).toBeVisible();
-  for (const [key, title] of [
-    ["raptor_summary_system", "RAPTOR の階層の要約のシステムプロンプト"],
-    ["raptor_summary", "RAPTOR の階層の要約プロンプト"],
-  ]) {
-    await verifyFeaturePrompt(page, key, title);
-  }
-  expect(requests.map((item) => item.method)).toEqual(["PUT", "DELETE", "PUT", "DELETE"]);
-  await page.getByRole("region", { name: "通知", exact: true }).getByRole("button", { name: "閉じる", exact: true }).evaluateAll((buttons) => buttons.forEach((button) => (button as HTMLButtonElement).click()));
-  await page.screenshot({ path: test.info().outputPath("raptor-prompts.png"), fullPage: true });
+  await expect(page.getByRole("switch", {name: "文脈ヘッダを検索対象へ追加"})).toHaveCount(0);
+  await expect(page.getByText("RAPTOR の階層の要約", {exact:true})).toHaveCount(0);
+  await expectNoPageOverflow(page);
 });

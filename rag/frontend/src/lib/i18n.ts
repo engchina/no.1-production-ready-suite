@@ -3844,10 +3844,7 @@ export const ja = {
   "settings.answerPrompts.raptor_summary_system.title": "RAPTOR の階層の要約のシステムプロンプト",
   "settings.answerPrompts.raptor_summary_system.description": "文書分割後、RAPTOR の階層の要約が有効なときに使う共通の指示です。保存した内容は次の処理から使い、処理済みの文書には再処理するまで反映しません。",
   "settings.answerPrompts.raptor_summary_system.field": "プロンプト",
-  "settings.answerPrompts.raptor_summary.title": "RAPTOR の階層の要約プロンプト",
-  "settings.answerPrompts.raptor_summary.description": "文書分割後、RAPTOR の階層の要約が有効なときに Chunk のまとまりごとに使います。保存した内容は次の処理から使い、処理済みの文書には再処理するまで反映しません。",
-  "settings.answerPrompts.raptor_summary.field": "プロンプト",
-  "settings.raptor.description": "文書解析の章節の要約の後、文書を Chunk に分割してから、RAPTOR で階層ごとの要約を作り、Embedding・索引へ進みます。章節の要約とは独立した機能です。backend の RAPTOR 設定が有効なときだけ実行し、既定は無効です。",
+  "settings.raptor.description": "文書解析の章節の要約の後、文書を Chunk に分割してから、RAPTOR で階層ごとの要約を作り、Embedding・索引へ進みます。章節の要約とは独立した機能です。この設定を有効にすると、次の取込・再処理から実行します。既定は無効です。",
   "settings.answerPrompts.stage.external_ocr": "外部の Dots.OCR で読み取る",
   "settings.answerPrompts.stage.external_ocr.condition": "文書解析の使用エンジンが「Dots.OCR」のとき（ページごと）",
   "settings.answerPrompts.stage.picture_description": "図・画像の説明",
@@ -3867,7 +3864,7 @@ export const ja = {
     "解析後の処理の「章節の要約」を有効にしたとき（対象数の上限は文書解析の設定に表示）",
   "settings.answerPrompts.stage.raptor_summary": "RAPTOR の階層の要約",
   "settings.answerPrompts.stage.raptor_summary.condition":
-    "RAPTOR の階層の要約を backend の設定で有効にしたとき（既定は無効）",
+    "文書解析の「RAPTOR の階層の要約」を有効にしたとき（既定は無効）",
   "settings.answerPrompts.stage.support_guide_conditions": "質問から業務ガイドの自由入力条件を読み取る",
   "settings.answerPrompts.stage.support_guide_conditions.condition":
     "回答・確認の対象に選んだ業務ガイドに、利用者が答える未確認の自由入力条件があるとき",
@@ -3909,7 +3906,7 @@ export const ja = {
   "settings.answerPrompts.stage.answer_validation.condition":
     "生成後の LLM 監査を有効にしたとき、検索した根拠から生成した最終回答の検証、または MCP の資料との照合（rag_validate_answer）を呼んだとき",
   "settings.answerPrompts.part.assumptionSystem": "「前提を示して回答する」のときに追加する system 指示",
-  "settings.answerPrompts.part.system": "system プロンプト",
+  "settings.answerPrompts.part.system": "システムプロンプト",
   "settings.answerPrompts.part.template": "入力テンプレート",
   "settings.answerPrompts.part.correctness": "回答の正確性の判定",
   "settings.answerPrompts.part.scope": "評価範囲の固定",
@@ -3921,15 +3918,15 @@ export const ja = {
   "settings.answerPrompts.part.compactRule": "通った判定の理由を省く規則（設定で有効なときだけ足す）",
   "settings.answerPrompts.part.detailedSystem": "詳細な LLM 監査（未使用の根拠も列挙します。業務ガイドの下書きの試答で使用）",
   "settings.answerPrompts.part.factSystem": "標準の LLM 監査（主張・要求・業務ガイドの要件を判定し、未使用の根拠は列挙しません）",
-  "settings.answerPrompts.part.auditSystem": "監査の system プロンプト",
+  "settings.answerPrompts.part.auditSystem": "監査の システムプロンプト",
   "settings.answerPrompts.part.answerChoice":
     "確認の自由入力の答えから選択肢を決める（選択肢そのものでない答えのときだけ）",
   "settings.answerPrompts.part.tableRevision":
     "根拠の表と食い違う値を表の正しい値に直す（取り違えがあるときだけ）",
   "settings.answerPrompts.part.premiseConsistency":
     "利用者の確認の答えの条件・制約との両立の判定（確認の答えがあるときだけ）",
-  "settings.answerPrompts.part.documentSystem": "文書を選ぶ system プロンプト",
-  "settings.answerPrompts.part.refineSystem": "同じ章の条を足す system プロンプト",
+  "settings.answerPrompts.part.documentSystem": "文書を選ぶ システムプロンプト",
+  "settings.answerPrompts.part.refineSystem": "同じ章の条を足す システムプロンプト",
   "settings.answerPrompts.part.catalogReview": "条の目録で選んだ条が支える説明を検討する指示（設定で有効にしたとき、生成が条を引かなかったときだけ）",
   "settings.queryHistory.title": "質問履歴",
   "settings.queryHistory.description":
@@ -3971,7 +3968,7 @@ export const ja = {
     "標準 RAG は検索した根拠からそのまま回答を作ります。CRAG は必要なときだけ選ぶ方式で、検索結果を AI が評価し、根拠が足りなければ検索文を書き換えて探し直します（最大 3 回）。評価の AI の呼び出しが増え、回答までの時間が長くなります。",
   "settings.answering.neighborChildCount": "根拠の前後から加える数",
   "settings.answering.neighborChildCountHint":
-    "根拠のチャンクの前後から文脈に加えるチャンクの数です。0 は加えません。",
+    "根拠のチャンクの前後から文脈に加えるチャンクの数です。",
   "settings.answering.entityExpansion": "実体・別名による検索拡張",
   "settings.answering.entityExpansionHint": "質問と上位の検索候補に含まれる実体の名称・ID・別名を手がかりに、同じ対象の定義と、その属性で結び付く対象の根拠を 1 段だけ検索候補に加えます。実体・別名索引を作った文書だけに効きます。AI の呼び出しは増えません。文書構造による検索拡張と併用できます。全体の検索に適用します。",
   "settings.answering.sectionExpansion": "章節で広げる根拠",

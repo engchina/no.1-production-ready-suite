@@ -330,7 +330,6 @@ def test_catalog_uses_current_image_template_with_runtime_rules() -> None:
         "field_extraction",
         "navigation_summary",
         "raptor_summary_system",
-        "raptor_summary",
     ],
 )
 def test_feature_prompts_save_and_reset_with_their_screen_permission(
@@ -346,7 +345,7 @@ def test_feature_prompts_save_and_reset_with_their_screen_permission(
     ]:
         auth.user_with_permissions(name, [permission])
     headers = {name: login(client, name) for name in ("parser", "chunking", "answer")}
-    owner = "chunking" if key.startswith("raptor") else "parser"
+    owner = "parser"
     path = f"/api/settings/answer-prompts/{key}"
     for name in headers:
         response = client.put(path, json={"content": "合成の独自指示"}, headers=headers[name])
@@ -378,8 +377,7 @@ async def test_saved_summary_prompts_reach_the_model_without_cross_pipeline_leak
         async def answer_prompt_overrides(self) -> dict[str, str]:
             return {
                 "navigation_summary": "独自の章節指示",
-                "raptor_summary": "独自の階層指示",
-                "raptor_summary_system": "独自の共通指示",
+                "raptor_summary_system": "独自の共通指示\n独自の階層指示",
             }
 
     class Model:
@@ -411,7 +409,7 @@ async def test_saved_summary_prompts_reach_the_model_without_cross_pipeline_leak
     summaries = await pipeline._augment_with_raptor("trace", chunks, None)
     assert len(summaries) > len(chunks)
     assert calls[0] == ("独自の章節指示", None)
-    assert all(call == ("独自の階層指示", "独自の共通指示") for call in calls[1:])
+    assert all(call == ("", "独自の共通指示\n独自の階層指示") for call in calls[1:])
     unsaved = IngestionPipeline(oracle=cast(Any, object()), settings=Settings())
     assert await unsaved._stage_prompt("navigation_summary", "既定") == "既定"
 

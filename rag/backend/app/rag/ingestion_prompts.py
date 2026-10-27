@@ -51,8 +51,10 @@ NAVIGATION_SUMMARY_PROMPT = (
 )
 
 # RAPTOR 再帰要約索引: chunk の群の要約。
-RAPTOR_SUMMARY_SYSTEM_PROMPT = "## 目的\n\nあなたは文書を階層的に要約するアシスタントです。"
-RAPTOR_SUMMARY_PROMPT = "## 目的\n\n次のテキスト群の要点を簡潔な日本語で要約してください。"
+RAPTOR_SUMMARY_SYSTEM_PROMPT = (
+    "## 目的\n\nあなたは文書を階層的に要約するアシスタントです。"
+    "\n次のテキスト群の要点を簡潔な日本語で要約してください。"
+)
 
 __all__ = [
     "FIELD_EXTRACTION_PART_HEADER",
@@ -60,6 +62,5 @@ __all__ = [
     "FIELD_EXTRACTION_PROMPT",
     "HEADING_LEVEL_PROMPT",
     "NAVIGATION_SUMMARY_PROMPT",
-    "RAPTOR_SUMMARY_PROMPT",
     "RAPTOR_SUMMARY_SYSTEM_PROMPT",
 ]

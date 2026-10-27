@@ -184,9 +184,14 @@ for (const viewport of [
       "使われる条件: 検索した根拠から回答を生成するとき"
     );
     const generation = stages.getByTestId("answer-prompt-stage-generation");
+    await expect(page.getByTestId("answer-prompt-stages-card")).toBeVisible();
+    expect(await page.getByTestId("answer-prompt-stages-card").evaluate(node => parseFloat(getComputedStyle(node).borderTopWidth))).toBeGreaterThan(0);
+
     await generation.locator("summary").click();
     await expect(generation).toContainText("「前提を示して回答する」のときに追加する system 指示");
     await expect(generation).toContainText("未確定の条件を明示する。");
+    await expect(generation).toContainText("システムプロンプト");
+    await expect(generation).not.toContainText("system プロンプト");
     await generation.screenshot({ path: testInfo.outputPath("assumption-system-instructions.png") });
     await expect(stages.getByTestId("answer-prompt-stage-evaluation")).toHaveCount(0);
     await expect(stages.getByTestId("answer-prompt-stage-answer_validation")).toContainText("資料との照合");

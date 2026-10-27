@@ -42,7 +42,6 @@ type BooleanConfigField =
   | "field_extraction_enabled"
   | "navigation_summary_enabled"
   | "auto_chunk_after_extract_enabled"
-  | "chunk_context_header_enabled"
   | "auto_index_after_chunk_enabled"
   | "entity_index_enabled";
 
@@ -153,13 +152,6 @@ export const RECIPE_CONFIG_ITEMS = [
     field: "chunking_strategy",
     kind: "select",
     label: "knowledgeBases.adapter.field.chunkingStrategy",
-    phase: "CHUNK",
-    globalSettings: { route: APP_ROUTES.settingsChunking },
-  },
-  {
-    field: "chunk_context_header_enabled",
-    kind: "boolean",
-    label: "documents.processingConfig.contextHeader",
     phase: "CHUNK",
     globalSettings: { route: APP_ROUTES.settingsChunking },
   },

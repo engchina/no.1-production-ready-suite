@@ -1027,7 +1027,7 @@ class Settings(
         ),
     )
     rag_chunk_context_header_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             "embedding 入力の先頭へ「文書名 > section_path」の文脈ヘッダを前置する"
             "(Anthropic Contextual Retrieval の決定論版)。保存 chunk 本文・引用表示は変えない。"

@@ -561,7 +561,45 @@ END;
             sql=evaluation_job_calibration_kind_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261027_001_raptor_prompt_consolidation",
+            table_name="rag_answer_prompts",
+            sql=raptor_prompt_consolidation_sql(),
+        )
+    )
     return sections
+
+
+def raptor_prompt_consolidation_sql() -> str:
+    """保存した両方の指示を結合し、旧指示を監査用に残す。適用は migration ledger で一度だけ。"""
+    return """
+MERGE INTO rag_answer_prompts target
+USING (
+    SELECT 'raptor_summary_system' AS prompt_key,
+        COALESCE(
+            (SELECT content FROM rag_answer_prompts WHERE prompt_key = 'raptor_summary_system'),
+            TO_CLOB('## 目的' || CHR(10) || CHR(10)
+                || 'あなたは文書を階層的に要約するアシスタントです。')
+        ) || CHR(10) || CHR(10) || COALESCE(
+            (SELECT content FROM rag_answer_prompts WHERE prompt_key = 'raptor_summary'),
+            TO_CLOB('## 目的' || CHR(10) || CHR(10)
+                || '次のテキスト群の要点を簡潔な日本語で要約してください。')
+        ) AS content
+    FROM dual
+    WHERE EXISTS (
+        SELECT 1 FROM rag_answer_prompts
+        WHERE prompt_key IN ('raptor_summary_system', 'raptor_summary')
+    )
+) source
+ON (target.prompt_key = source.prompt_key)
+WHEN MATCHED THEN UPDATE SET target.content = source.content, target.updated_at = SYSTIMESTAMP
+WHEN NOT MATCHED THEN INSERT (prompt_key, content) VALUES (source.prompt_key, source.content);
+
+UPDATE rag_answer_prompts
+SET prompt_key = 'raptor_summary_archived'
+WHERE prompt_key = 'raptor_summary';
+""".strip()
 
 
 def evaluation_calibration_migration_sql() -> str:

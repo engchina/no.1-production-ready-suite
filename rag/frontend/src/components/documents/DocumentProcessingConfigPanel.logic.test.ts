@@ -29,7 +29,6 @@ describe("選択中レシピの設定の項目と並び順", () => {
       "章節の要約",
       "抽出後に Chunk 作成へ進む",
       "文書分割",
-      "文脈ヘッダを検索対象へ追加",
       "Chunk 後に Embedding / 索引へ進む",
       "実体・別名索引",
       "文書構造索引の構築",
@@ -39,8 +38,8 @@ describe("選択中レシピの設定の項目と並び順", () => {
   it("上書きの件数の対象は項目の正本と同じで、重複しない", () => {
     expect(RECIPE_CONFIG_FIELDS).toEqual(RECIPE_CONFIG_ITEMS.map((item) => item.field));
     expect(new Set(RECIPE_CONFIG_FIELDS).size).toBe(RECIPE_CONFIG_FIELDS.length);
-    // 要約にだけ無かった文脈ヘッダも、両方の表示の対象に入る。
-    expect(RECIPE_CONFIG_FIELDS).toContain("chunk_context_header_enabled");
+    // 文脈ヘッダは全体の環境設定だけで決める。
+    expect(RECIPE_CONFIG_FIELDS).not.toContain("chunk_context_header_enabled");
   });
 
   it("工程ごとに分けても、つなげると元の並びに戻る", () => {
@@ -85,7 +84,6 @@ describe("グローバル設定を開くリンク", () => {
       section_rules_mode: "/settings/parser-adapters#post-parse-section-rules",
       auto_chunk_after_extract_enabled: "/settings/pipeline#pipeline-gate-auto-chunk",
       chunking_strategy: "/settings/chunking",
-      chunk_context_header_enabled: "/settings/chunking",
       auto_index_after_chunk_enabled: "/settings/pipeline#pipeline-gate-auto-index",
       // 実体・別名索引も全体の既定を設定画面で選ぶ。
       entity_index_enabled: "/settings/entity-index",

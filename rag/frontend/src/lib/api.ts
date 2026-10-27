@@ -899,7 +899,6 @@ export interface DocumentChunkPreviewRequest {
   chunk_parent_target_chars?: number;
   chunk_parent_max_pages?: number;
   chunk_parent_max_children?: number;
-  chunk_context_header_enabled?: boolean;
 }
 
 export interface DocumentChunkPreviewStats {
@@ -1269,7 +1268,6 @@ export interface DocumentProcessingConfigData {
 }
 
 export interface DocumentProcessingConfig extends KnowledgeBaseIngestionConfig {
-  chunk_context_header_enabled: boolean | null;
   /** 章節の抽出規則の方式（#715）。null は全体の既定に従う。 */
   section_rules_mode?: SectionRulesMode | null;
 }
@@ -1688,7 +1686,7 @@ export interface QuerySuggestionsData {
   suggestions: { question: string; count: number }[];
 }
 
-export type AnswerPromptKey = "vlm_answer" | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary" | "raptor_summary_system" | "raptor_summary";
+export type AnswerPromptKey = "vlm_answer" | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary" | "raptor_summary_system";
 
 /** 機能別の設定画面で編集できるプロンプト。 */
 export interface AnswerPromptView {
@@ -2475,6 +2473,7 @@ export interface ParserAdapterSettingsData {
   navigation_summary_enabled: boolean;
   /** 1 文書の取込で要約する章節数の実効上限。読み取り専用。 */
   navigation_summary_max_nodes?: number;
+  raptor_enabled?: boolean;
   /** 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。1〜16。#2002）。 */
   vision_concurrency?: number;
   /** MinerU のライセンスの条件の確認（#3359）。確認するまで MinerU を選べない。 */
@@ -2505,6 +2504,7 @@ export interface ParserAdapterSettingsUpdate {
   heading_level_inference_enabled?: boolean;
   field_extraction_enabled?: boolean;
   navigation_summary_enabled?: boolean;
+  raptor_enabled?: boolean;
   vision_concurrency?: number;
 }
 
@@ -2736,7 +2736,6 @@ export interface ChunkingSettingsUpdate {
   overlap: number;
   min_chars: number;
   delimiter: string;
-  context_header_enabled: boolean;
   /** 親子階層（small-to-big）の分割パラメータ(子と親の大きさの 5 項目)。 */
   chunk_child_target_chars: number;
   chunk_table_child_target_chars: number;

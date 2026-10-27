@@ -558,6 +558,13 @@ for (const width of [1280, 375]) {
     await mockRetrievalCards(page, undefined, displayStages);
     await page.goto("/settings/retrieval");
     const prompts = page.getByRole("region", { name: "検索に使うプロンプト", exact: true });
+    const card = page.getByTestId("answer-prompt-stages-card");
+    await expect(card).toBeVisible();
+    const bounds = await card.boundingBox();
+    const reference = await page.getByTestId("answering-settings-card").boundingBox();
+    expect(Math.abs(bounds!.width-reference!.width)).toBeLessThanOrEqual(1);
+    expect(await card.evaluate(node => parseFloat(getComputedStyle(node).borderTopWidth))).toBeGreaterThan(0);
+
     await expect(prompts.getByRole("heading", { level: 3 })).toHaveText(["質問の解釈", "検索", "根拠の判定"]);
     const expected = displayStages.filter((stage) => ["question", "retrieval", "grounding"].includes(stage.phase));
     await expect(prompts.locator("details")).toHaveCount(expected.length);
@@ -603,3 +610,11 @@ for (const width of [1280, 375]) {
     await expectNoPageOverflow(page);
   });
 }
+
+ test("根拠の前後から加える数に不要なゼロの説明を表示しない", {tag: "@responsive"}, async ({page}) => {
+  await mockLocalAuth(page);
+  await mockRetrievalCards(page);
+  await page.goto("/settings/retrieval");
+  await expect(page.getByText("根拠のチャンクの前後から文脈に加えるチャンクの数です。", {exact:true})).toBeVisible();
+  await expect(page.getByText("0 は加えません。", {exact:false})).toHaveCount(0);
+ });

@@ -503,7 +503,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 109
+    assert len(statements) == 111
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -601,6 +601,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261022_001_cited_evidence",
         "20261026_001_evaluation_calibration",
         "20261026_002_evaluation_job_calibration_kind",
+        "20261027_001_raptor_prompt_consolidation",
     ]
 
 
