@@ -251,3 +251,40 @@ async def test_clarification_api_matches_resolved_question(
     assert matched == ["対象 A の手順は？ 条件 B との違いは？"]
     assert result.data is not None and result.data.question_context_token
     assert len(calls) == 1
+
+
+async def test_blocked_confirmation_also_excludes_assistant_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.rag.guardrails import GuardrailResult
+
+    policy = GuardrailPolicy(Settings())
+    monkeypatch.setattr(
+        policy,
+        "validate_query",
+        lambda text: GuardrailResult(
+            allowed="合成の拒否対象" not in text, sanitized_text=text, findings=[]
+        ),
+    )
+    user = StoredMessage(
+        id="user-a",
+        conversation_id="conversation-a",
+        role="USER",
+        content="その手順は？",
+        status="COMPLETE",
+        created_at=datetime.now(UTC),
+        clarification={
+            "outcome": "answered",
+            "entries": [{"prompt": "対象は？", "selected": ["合成の拒否対象"]}],
+        },
+    )
+    assistant = StoredMessage(
+        id="assistant-a",
+        conversation_id="conversation-a",
+        role="ASSISTANT",
+        content="合成の回答。",
+        reply_to_message_id="user-a",
+        status="COMPLETE",
+        created_at=datetime.now(UTC),
+    )
+    assert await chat._build_safe_history([user, assistant], policy) == []

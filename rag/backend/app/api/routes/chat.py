@@ -609,6 +609,9 @@ async def _build_safe_history(
             )
             if checked.allowed:
                 turns.append(ChatTurn(role="USER", content=checked.sanitized_text))
+            else:
+                allowed_user_ids.discard(message.id)
+                blocked_user_ids.add(message.id)
         elif message.role == "ASSISTANT":
             if message.status != "COMPLETE":
                 continue
@@ -638,6 +641,7 @@ async def prepare_chat_question(
     token: str | None = None,
 ) -> tuple[str, str | None]:
     """現在の権限で文脈を読み、確認と検索が使う質問を一度だけ補完する。"""
+    query = query.strip()
     messages: list[StoredMessage] = []
     owner: str | None = None
     if conversation_id:
