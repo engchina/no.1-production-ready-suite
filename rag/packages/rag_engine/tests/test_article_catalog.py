@@ -387,8 +387,8 @@ def test_catalog_articles_do_not_raise_the_top_document_score():
 
 def test_catalog_article_sharing_a_parent_does_not_change_the_hit_parents():
     """選んだ条が検索の根拠と同じ親にあっても、検索の根拠の親の選び方（順位・数）は選んだ条が無いときと同じ。"""
-    shared = replace(_context_record("art1", "child", article=True), parent_chunk_uid="uid:m2-p")
     children = [_context_record(f"m{index}", "child") for index in range(4)]
+    shared = replace(_context_record("art1", "child", article=True), parent_chunk_uid="uid:m2-p", source=children[2].source)
     with_article = [shared, *children]
 
     bundle = _bundle(with_article, top_k=4, max_records=2, catalog_records=2)
