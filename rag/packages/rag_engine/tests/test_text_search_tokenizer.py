@@ -15,6 +15,7 @@ from rag_engine.retrieval.text_search_tokenizer import (
     TextSearchTokenizerConfig,
     _sudachi_available,
     build_oracle_text_query,
+    build_oracle_text_query_with_trace,
     escape_oracle_text_term,
     normalize_text_search_index_text,
     normalize_text_search_text,
@@ -76,6 +77,13 @@ class TextSearchTokenizerTests(unittest.TestCase):
         self.assertLessEqual(len(query), MAX_ORACLE_TEXT_QUERY_CHARS)
         self.assertTrue(query.endswith("*0.5"))
         self.assertLessEqual(len(build_oracle_text_query(terms, max_chars=40)), 40)
+
+    def test_character_limit_skips_long_term_and_retains_following_short_terms(self):
+        plan = build_oracle_text_query_with_trace(["x" * 80, "id-12", "5"], max_chars=24)
+        self.assertEqual(plan.tokens, ("id-12", "5"))
+        self.assertEqual(plan.omitted_tokens, ("x" * 80,))
+        self.assertEqual(plan.query, "{id-12} ACCUM {5}")
+        self.assertLessEqual(len(plan.query), 24)
 
     def test_fingerprint_is_stable_for_same_config(self):
         config = TextSearchTokenizerConfig(latin_stemmer="none")
@@ -150,6 +158,35 @@ class ScriptOnlyFallbackTests(unittest.TestCase):
         self.assertEqual(result.candidate_count, 13)
         self.assertEqual(result.truncated_count, 10)
         self.assertIn("表示", result.truncated_tokens)
+
+    def test_explicit_codes_versions_and_numeric_conditions_survive_keyword_overflow(self):
+        keywords = [f"候補語{letter}" for letter in "abcdefghijkl"]
+        result = tokenize_text_search_query_with_trace(
+            " ".join((*keywords, "ID-789 v2.3 2026/10/27 50以上")),
+            domain_keywords=keywords,
+            max_tokens=4,
+        )
+        self.assertEqual(set(result.tokens), {"id-789", "v2.3", "2026/10/27", "50"})
+        self.assertEqual(set(result.protected_tokens), set(result.tokens))
+        self.assertEqual(result.omitted_protected_tokens, ())
+        self.assertNotIn("789", result.protected_tokens)
+        self.assertNotIn("2", result.protected_tokens)
+        self.assertEqual(result.oracle_text_query, build_oracle_text_query(result.tokens, weights=result.weights))
+
+    def test_overflow_reports_unsearched_explicit_terms_without_claiming_coverage(self):
+        result = tokenize_text_search_query_with_trace("ID-123 ID-456 ID-789", max_tokens=2)
+        self.assertEqual(len(result.tokens), 2)
+        self.assertEqual(len(result.omitted_protected_tokens), 1)
+        self.assertTrue(result.truncated)
+        self.assertEqual(set(result.protected_tokens), set(result.tokens) | set(result.omitted_protected_tokens))
+
+    def test_trace_matches_actual_query_after_character_limit(self):
+        result = tokenize_text_search_query_with_trace("ID-123 v2.3 50", max_query_chars=14)
+        self.assertLessEqual(len(result.oracle_text_query), 14)
+        self.assertTrue(result.character_limit_tokens)
+        self.assertTrue(result.omitted_protected_tokens)
+        self.assertTrue(all(escape_oracle_text_term(term) in result.oracle_text_query for term in result.tokens))
+        self.assertEqual(result.oracle_text_query, oracle_text_query_for_question("ID-123 v2.3 50", max_chars=14))
 
     def test_sudachi_failure_during_tokenization_falls_back_to_script_runs(self):
         with (

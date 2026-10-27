@@ -3501,6 +3501,11 @@ def build_question_text_search_info(
                     "truncated_count": tokenization.truncated_count,
                     "truncated_tokens": list(tokenization.truncated_tokens),
                     "candidate_tokens": list(tokenization.candidate_tokens),
+                    "protected_tokens": list(tokenization.protected_tokens),
+                    "omitted_protected_tokens": list(tokenization.omitted_protected_tokens),
+                    "character_limit_tokens": list(tokenization.character_limit_tokens),
+                    "oracle_text_query": oracle_query,
+                    "oracle_text_query_chars": len(oracle_query),
                 }
             )
         terms = query_terms[0] if query_terms else ()
