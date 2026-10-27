@@ -193,3 +193,10 @@ def test_caller_planned_queries_are_not_implicitly_expanded():
     )
     assert results == []
     assert trace["skipped"] == "caller_planned"
+
+
+def test_exhausted_evidence_budget_does_not_spend_queries():
+    results, trace, budget, _ = _run([_target("Q1", "新検索")], usage=CoverageUsage(chunks=4))
+    assert not results
+    assert trace["requests"][0]["status"] == "unsearched_evidence_budget"
+    assert budget.remaining == 8

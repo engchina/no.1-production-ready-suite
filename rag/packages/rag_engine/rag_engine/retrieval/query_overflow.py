@@ -23,7 +23,7 @@ class OverflowSearch:
 
 
 def _key(query: str) -> str:
-    return " ".join(normalize_text_search_text(query).split())
+    return " ".join(normalize_text_search_text(query).split()).rstrip("。?？!！")
 
 
 def search_overflow_requests(
@@ -95,6 +95,9 @@ def search_overflow_requests(
         # 1 要求と共有条件だけでも識別子が収まらない場合、条件を勝手に組み替えて検索しない。
         if tokens.omitted_protected_tokens or not tokens.oracle_text_query:
             row["status"] = "unsearched_query_overflow"
+            continue
+        if coverage_budget.max_chunks <= usage.chunks:
+            row["status"] = "unsearched_evidence_budget"
             continue
         if extra_budget.remaining <= 0:
             row["status"] = "unsearched_budget"

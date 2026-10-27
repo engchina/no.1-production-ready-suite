@@ -14,7 +14,7 @@ Oracle Text の式は既存の 24 語・3,800 文字の枠を維持する。質�
 | `no_candidates` | 実行したが、回答用の根拠レコードはなかった |
 | `failed` / `reused_failed` | 実行が失敗した / 同じ失敗を再実行しなかった |
 | `reused` / `already_searched` | 分割結果を再利用した / 主の検索か先行検索で同じ原文を実行済み |
-| `unsearched_budget` / `unsearched_deadline` | 共有の回数 / 期限で未検索 |
+| `unsearched_budget` / `unsearched_deadline` / `unsearched_evidence_budget` | 共有の回数 / 期限 / 追加根拠数の枠で未検索 |
 | `unsearched_query_overflow` | 1 要求と共有条件だけでも保護した語が収まらず未検索 |
 | `unsearched_tokenization_failed` | 語の抽出が失敗して未検索 |
 

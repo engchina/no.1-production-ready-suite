@@ -252,6 +252,7 @@ from rag_engine.retrieval.request_coverage import (
     COVERAGE_SCHEMA_VERSION,
     CoverageBudget,
     CoverageUsage,
+    TargetedRetrieval,
     coverage_counts,
     coverage_targets,
     re_retrieval_skip_reason,
@@ -4716,7 +4717,7 @@ def answer_question_result(
 
         # 超限した検索文は原要求ごとに補い、以後の補查と同じ枠・期限・既検索文を使う。
         extra_budget = ExtraRetrievalBudget.from_settings(settings)
-        coverage_usage = CoverageUsage()
+        coverage_usage = CoverageUsage(searched_queries=list(crag_rewrites))
         overflow_settings = replace(settings, document_selection_enabled=False, screen_linking_enabled=False, article_catalog_enabled=False)
         overflow_config = normalize_text_search_tokenizer_config(_question_text_search_tokenizer_config(settings))
         overflow_keywords = (
@@ -4753,26 +4754,34 @@ def answer_question_result(
             skip_reason="caller_planned" if caller_planned else "original_query_only",
         )
         overflow_added: set[str] = set()
-        for result in overflow_results:
-            remaining_chunks = max(0, _request_coverage_budget(settings).max_chunks - len(overflow_added))
-            if not remaining_chunks:
-                break
-            before = {record.chunk_uid or record.id for record in context.records}
+        existing_overflow_ids = {record.chunk_uid or record.id for record in context.records}
+        overflow_parents = select_new_parents(
+            [TargetedRetrieval(result.request_id, (result.query,), result.context.evidence_tree) for result in overflow_results],
+            existing_overflow_ids,
+            _request_coverage_budget(settings).max_chunks,
+        )
+        if overflow_parents:
+            bundle = context_bundle_from_parent_evidence(
+                tuple(replace(parent, reason="query_overflow") for _, parent in overflow_parents), max_chars=MAX_CONTEXT_CHARS
+            )
             candidate = _merge_crag_evidence(
                 context,
-                result.context,
+                AnswerContext(records=list(bundle.records), text=bundle.text, evidence=bundle.evidence, evidence_tree=bundle.evidence_tree),
                 normalized_question,
-                max_records=len(context.records) + remaining_chunks,
+                max_records=len(context.records) + len(bundle.records),
                 max_chars=MAX_CONTEXT_CHARS * 2,
             )
-            after = {record.chunk_uid or record.id for record in candidate.records}
-            if before <= after:
+            merged_ids = {record.chunk_uid or record.id for record in candidate.records}
+            if existing_overflow_ids <= merged_ids:
                 context = replace(
                     candidate,
                     expansion_records=tuple(
                         dict(
                             (record.chunk_uid or record.id, record)
-                            for record in (*context.expansion_records, *result.context.expansion_records)
+                            for record in (
+                                *context.expansion_records,
+                                *(record for result in overflow_results for record in result.context.expansion_records),
+                            )
                         ).values()
                     ),
                     preferred_child_ids=context.preferred_child_ids,
@@ -4780,7 +4789,7 @@ def answer_question_result(
                     deferred_records=context.deferred_records,
                     document_selection=context.document_selection,
                 )
-                overflow_added.update(after - before)
+                overflow_added = merged_ids - existing_overflow_ids
         coverage_usage.chunks += len(overflow_added)
         overflow_trace["added_chunk_ids"] = sorted(overflow_added)
         if overflow_trace.get("triggered"):
