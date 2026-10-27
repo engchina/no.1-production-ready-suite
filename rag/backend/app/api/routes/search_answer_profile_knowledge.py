@@ -18,6 +18,12 @@ from app.api.routes.search import (
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import get_settings
+from app.rag.domain_keyword_import import (
+    PREVIEW_ROWS,
+    KeywordImportMode,
+    import_keywords,
+    read_keyword_excel,
+)
 from app.rag.query_history import query_history_suggestions
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (
@@ -67,6 +73,9 @@ from app.schemas.search_answer_profile_knowledge import (
     ClarificationSuggestionsData,
     ClarificationSuggestRequest,
     DomainKeywordCandidateData,
+    DomainKeywordImportData,
+    DomainKeywordImportPreviewData,
+    DomainKeywordImportRowData,
     DomainKeywordsData,
     DomainKeywordSuggestionData,
     DomainKeywordsUpdate,
@@ -129,6 +138,63 @@ async def put_domain_keywords(
     return ApiResponse(
         data=DomainKeywordsData(
             search_answer_profile_id=search_answer_profile_id, keywords=keywords
+        )
+    )
+
+
+async def _keyword_excel_rows(file: UploadFile) -> list[tuple[int, str]]:
+    content = await file.read(MAX_FAQ_EXCEL_BYTES + 1)
+    if len(content) > MAX_FAQ_EXCEL_BYTES:
+        raise HTTPException(status_code=413, detail="Excel ファイルが大きすぎます(上限 10MB)。")
+    try:
+        return await asyncio.to_thread(read_keyword_excel, content, file.filename or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{search_answer_profile_id}/domain-keywords/import/preview",
+    response_model=ApiResponse[DomainKeywordImportPreviewData],
+)
+async def preview_domain_keyword_import(
+    search_answer_profile_id: str, file: Annotated[UploadFile, File()]
+) -> ApiResponse[DomainKeywordImportPreviewData]:
+    await _require_search_answer_profile(OracleClient(), search_answer_profile_id)
+    rows = await _keyword_excel_rows(file)
+    return ApiResponse(
+        data=DomainKeywordImportPreviewData(
+            total=len(rows),
+            rows=[
+                DomainKeywordImportRowData(row=number, keyword=word)
+                for number, word in rows[:PREVIEW_ROWS]
+            ],
+        )
+    )
+
+
+@router.post(
+    "/{search_answer_profile_id}/domain-keywords/import",
+    response_model=ApiResponse[DomainKeywordImportData],
+)
+async def import_domain_keyword_excel(
+    search_answer_profile_id: str,
+    file: Annotated[UploadFile, File()],
+    mode: Annotated[KeywordImportMode, Form()] = "INSERT",
+) -> ApiResponse[DomainKeywordImportData]:
+    oracle = OracleClient()
+    await _require_search_answer_profile(oracle, search_answer_profile_id)
+    rows = await _keyword_excel_rows(file)
+    try:
+        keywords, inserted = await import_keywords(
+            oracle, search_answer_profile_id, [word for _, word in rows], mode=mode
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(
+        data=DomainKeywordImportData(
+            search_answer_profile_id=search_answer_profile_id,
+            keywords=keywords,
+            inserted_count=inserted,
         )
     )
 

@@ -22,6 +22,7 @@ from pr_system_settings.auth.errors import (
 from pytest import MonkeyPatch
 
 from app.api.routes import knowledge_bases as knowledge_bases_route
+from app.api.routes import search_answer_profile_knowledge as profile_knowledge_route
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
 from app.config import get_settings
 from app.main import app
@@ -202,7 +203,12 @@ class ScopedFakeOracle:
 @pytest.fixture
 def scoped_oracle(monkeypatch: MonkeyPatch) -> ScopedFakeOracle:
     fake = ScopedFakeOracle()
-    for module in (search_answer_profiles_route, knowledge_bases_route, security_router_module):
+    for module in (
+        search_answer_profiles_route,
+        profile_knowledge_route,
+        knowledge_bases_route,
+        security_router_module,
+    ):
         monkeypatch.setattr(module, "OracleClient", lambda *_args, **_kwargs: fake)
     return fake
 
@@ -536,6 +542,8 @@ def test_user_without_roles_is_denied_everything_except_auth(
     assert client.get("/api/auth/me", headers=headers).status_code == 200
     for method, path in (
         ("GET", "/api/search-answer-profiles"),
+        ("POST", "/api/search-answer-profiles/bv-1/domain-keywords/import/preview"),
+        ("POST", "/api/search-answer-profiles/bv-1/domain-keywords/import"),
         ("GET", "/api/knowledge-bases"),
         ("GET", "/api/security/permissions"),
         ("GET", "/api/security/users"),
@@ -660,6 +668,13 @@ def test_scope_filters_search_answer_profile_list_and_detail(
     assert listed.json()["data"]["total"] == 1
     assert client.get("/api/search-answer-profiles/bv-1", headers=headers).status_code == 200
     assert client.get("/api/search-answer-profiles/bv-2", headers=headers).status_code == 404
+    for suffix in ("import/preview", "import"):
+        response = client.post(
+            f"/api/search-answer-profiles/bv-2/domain-keywords/{suffix}",
+            files={"file": ("keywords.xlsx", b"unread", "application/octet-stream")},
+            headers=headers,
+        )
+        assert response.status_code == 404
     # 作成・アーカイブは rag.search_answer_profiles.manage が必要。
     assert (
         client.post("/api/search-answer-profiles/bv-1/archive", headers=headers).status_code == 403

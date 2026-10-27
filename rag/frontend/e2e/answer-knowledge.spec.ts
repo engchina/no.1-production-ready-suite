@@ -63,16 +63,6 @@ async function mockSearchAnswerProfileApi(
   await page.route("**/api/search-answer-profiles**", async (route: Route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
-    if (path.endsWith("/domain-keywords/suggest")) {
-      return route.fulfill({
-        json: envelope({
-          candidates: [
-            { keyword: "伝票区分", score: 1.2, frequency: 9, chunk_count: 5, document_count: 2 },
-          ],
-          processed_chunk_count: 20,
-        }),
-      });
-    }
     if (path.endsWith("/domain-keywords")) {
       return route.fulfill({ json: envelope({ search_answer_profile_id: "bv-1", keywords: ["受注番号"] }) });
     }
@@ -148,9 +138,10 @@ for (const viewport of [
 
     await page.getByRole("tab", { name: "ドメインキーワード" }).click();
     await expect(page.getByLabel("登録キーワード（1 行に 1 語）")).toHaveValue("受注番号");
-    await page.getByRole("button", { name: "候補を生成" }).click();
-    await page.getByRole("button", { name: "伝票区分" }).click();
-    await expect(page.getByLabel("登録キーワード（1 行に 1 語）")).toHaveValue("受注番号\n伝票区分");
+    await expect(page.getByRole("heading", { name: "Excel 取込" })).toBeVisible();
+    await expect(page.getByLabel("取込む Excel ファイル")).toBeVisible();
+    await expect(page.getByRole("button", { name: "取込", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "候補を生成" })).toHaveCount(0);
 
     await page.getByRole("tab", { name: "用語・同義語" }).click();
     await expect(page.getByRole("rowheader", { name: "受注" })).toBeVisible();
@@ -566,3 +557,77 @@ for (const graph of [
     await page.screenshot({ path: test.info().outputPath("graph-zero-diagnostic.png") });
   });
 }
+
+test("キーワードの Excel 取込はプレビュー・未保存保護・追加・全置換を共通の構成で扱う", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockCommon(page);
+  await mockSearchAnswerProfileApi(page);
+  let keywords = ["既存語"];
+  let imports = 0;
+  await page.route("**/api/search-answer-profiles/bv-1/domain-keywords**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/preview")) {
+      return route.fulfill({ json: envelope({ total: 2, rows: [{ row: 2, keyword: "追加語" }, { row: 3, keyword: "条件語" }] }) });
+    }
+    if (path.endsWith("/import")) {
+      imports++;
+      keywords = route.request().postData()?.includes("REPLACE") ? ["追加語", "条件語"] : ["既存語", "追加語", "条件語"];
+      return route.fulfill({ json: envelope({ search_answer_profile_id: "bv-1", keywords, inserted_count: 2 }) });
+    }
+    if (route.request().method() === "PUT") keywords = route.request().postDataJSON().keywords;
+    return route.fulfill({ json: envelope({ search_answer_profile_id: "bv-1", keywords }) });
+  });
+  await page.goto("/search-answer-profiles?id=bv-1");
+  await page.getByRole("tab", { name: "ドメインキーワード" }).click();
+  const editor = page.getByLabel("登録キーワード（1 行に 1 語）");
+  await expect(editor).toHaveValue("既存語");
+  const file = page.getByLabel("取込む Excel ファイル");
+  await file.setInputFiles({ name: "keywords.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from("synthetic mocked workbook") });
+  await expect(page.getByText("有効なキーワード 2 件（先頭 10 件を表示）")).toBeVisible();
+  const button = page.getByRole("button", { name: "取込", exact: true });
+  await editor.fill("未保存語");
+  await expect(button).toBeDisabled();
+  await expect(page.getByText("左の変更を保存してから取り込んでください。")).toBeVisible();
+  await editor.fill("既存語");
+  await button.click();
+  await expect(editor).toHaveValue("既存語\n追加語\n条件語");
+  expect(imports).toBe(1);
+  await page.getByLabel("取込モード").click();
+  await page.getByRole("option", { name: "全置換（Excel の語のみ）" }).click();
+  await button.click();
+  const dialog = page.getByRole("alertdialog", { name: "登録キーワードを全置換しますか？" });
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  expect(imports).toBe(1);
+  await button.click();
+  await dialog.getByRole("button", { name: "取込", exact: true }).click();
+  await expect(editor).toHaveValue("追加語\n条件語");
+  expect(imports).toBe(2);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("keyword-excel.png"), fullPage: true });
+});
+
+test("キーワード Excel の遅い旧プレビューとファイル検証エラーから取込を実行しない", async ({ page }) => {
+  await mockCommon(page);
+  await mockSearchAnswerProfileApi(page);
+  let releaseFirst: () => void = () => {};
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  let previews = 0;
+  await page.route("**/domain-keywords/import/preview", async (route) => {
+    previews++;
+    if (previews === 1) {
+      await firstGate;
+      return route.fulfill({ json: envelope({ total: 1, rows: [{ row: 2, keyword: "旧語" }] }) });
+    }
+    return route.fulfill({ status: 422, json: { data: null, error_messages: ["KEYWORD 列を指定してください。"], warning_messages: [] } });
+  });
+  await page.goto("/search-answer-profiles?id=bv-1");
+  await page.getByRole("tab", { name: "ドメインキーワード" }).click();
+  const file = page.getByLabel("取込む Excel ファイル");
+  const upload = { name: "keywords.xlsx", mimeType: "application/octet-stream", buffer: Buffer.from("synthetic") };
+  await file.setInputFiles(upload);
+  await expect(page.locator("[data-processing-label]").filter({ hasText: "Excel のキーワードを確認しています" })).toBeVisible();
+  await file.setInputFiles({ ...upload, name: "second.xlsx" });
+  await expect(page.getByText("KEYWORD 列を指定してください。")).toBeVisible();
+  releaseFirst();
+  await expect(page.getByRole("button", { name: "取込", exact: true })).toBeDisabled();
+  await expect(page.getByText("旧語", { exact: true })).toHaveCount(0);
+});

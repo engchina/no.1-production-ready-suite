@@ -27,6 +27,7 @@ import {
   type BatchUploadResult,
   type KnowledgeBaseSummary,
   type HuggingFaceSettingsUpdate,
+  type DomainKeywordImportMode,
   type DocumentApproveRequest,
   type DocumentChunkPreviewRequest,
   type DocumentReviewEditsRequest,
@@ -1278,10 +1279,18 @@ export function useSaveDomainKeywords(searchAnswerProfileId: string) {
   });
 }
 
-/** 参照 KB からドメインキーワード候補を生成する(保存しない)。 */
-export function useSuggestDomainKeywords(searchAnswerProfileId: string) {
+/** Excel 取込後の保存値を左の編集欄にも反映する。 */
+export function useImportDomainKeywords(searchAnswerProfileId: string) {
+  const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.suggestDomainKeywords(searchAnswerProfileId),
+    mutationFn: (args: { file: File; mode: DomainKeywordImportMode }) =>
+      api.importDomainKeywords(searchAnswerProfileId, args.file, args.mode),
+    onSuccess: (data) => {
+      qc.setQueryData(
+        ["search-answer-profiles", searchAnswerProfileId, "domain-keywords"],
+        data,
+      );
+    },
   });
 }
 
