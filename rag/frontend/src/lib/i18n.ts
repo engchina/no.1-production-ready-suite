@@ -4073,6 +4073,7 @@ export const ja = {
   "feedback.reason.missing_knowledge": "ナレッジ不足（必要な情報が登録文書にない）",
   "feedback.reason.outdated_source": "情報が古い（出典が現在の仕様・運用と違う）",
   "feedback.reason.ambiguous_question": "質問が曖昧（意図や前提を特定できない）",
+  "feedback.page.refresh": "最新情報を取得",
   "feedback.page.title": "利用者フィードバック",
   "feedback.page.subtitle": "回答と引用への評価を確認し、改善が必要な箇所を特定します。",
   "feedback.scope.allTitle": "すべての利用者のフィードバックを表示しています",
@@ -4127,7 +4128,8 @@ export const ja = {
   "feedback.surface.chat": "チャット",
   "feedback.surface.unknown": "不明（旧データ）",
   "feedback.table.targetSource": "対象 / 送信元",
-  "feedback.table.question": "問題の概要",
+  "feedback.table.question": "質問",
+  "feedback.table.date": "日時",
   "feedback.pager.label": "フィードバックのページ",
 
   "feedback.detail.title": "フィードバック詳細",
