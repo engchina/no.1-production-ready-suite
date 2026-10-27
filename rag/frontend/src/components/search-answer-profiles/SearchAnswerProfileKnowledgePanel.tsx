@@ -27,18 +27,21 @@ import {
   useImportDomainKeywords,
 } from "@/lib/queries";
 
+import { QuestionUnderstandingPanel } from "./QuestionUnderstandingPanel";
 import { DomainKeywordExcelImport } from "./DomainKeywordExcelImport";
 import { ApprovedFaqManager } from "./ApprovedFaqManager";
 import { RuntimeKnowledgeManager, runtimeKindLabel } from "./RuntimeKnowledgeManager";
 import { SupportGuideManager } from "./SupportGuideManager";
 
-type KnowledgeTab = "approvedFaq" | "terms" | "domainKeywords" | "rules" | "supportGuides";
+type KnowledgeTab = "approvedFaq" | "questionUnderstanding" | "terms" | "domainKeywords" | "rules" | "supportGuides";
 
 /** 検索・回答プロファイル単位の知識(ドメインキーワード等)。編集中の検索・回答プロファイルにだけ表示する。 */
 export function SearchAnswerProfileKnowledgePanel({
   searchAnswerProfileId,
+  readOnly = false,
 }: {
   searchAnswerProfileId: string;
+  readOnly?: boolean;
 }) {
   // よく使う Approved FAQ を先頭・既定のタブにする(#636)。
   const [tab, setTab] = useState<KnowledgeTab>("approvedFaq");
@@ -57,21 +60,17 @@ export function SearchAnswerProfileKnowledgePanel({
           value={tab}
           onChange={async (value) => {
             // 業務ガイドは編集中の入力が多いので、タブを離れる前に未保存の変更を確かめる。
-            if (tab === "supportGuides" && !(await confirmPendingLeave())) return;
+            if (!(await confirmPendingLeave())) return;
             setTab(value as KnowledgeTab);
           }}
-          // 回答フローで使う順に並べる（#682）: 類似問の提示 → 用語・同義語で質問を広げる →
-          // ドメインキーワードでキーワード検索の語を切り出す → 回答ルールを回答の生成に渡す →
-          // 業務ガイドで確かめる条件と手順を示す（#1237。回答への適用は別の Issue）。
+          // 最初の主な利用段階の順。分岐や後の再利用で実行する段階は変わる。
           items={[
             { id: "approvedFaq", label: t("searchAnswerProfiles.faq.title") },
+            { id: "questionUnderstanding", label: t("searchAnswerProfiles.questionUnderstanding.title") },
             { id: "terms", label: runtimeKindLabel("terms") },
-            {
-              id: "domainKeywords",
-              label: t("searchAnswerProfiles.domainKeywords.title"),
-            },
             { id: "rules", label: runtimeKindLabel("rules") },
             { id: "supportGuides", label: t("supportGuides.title") },
+            { id: "domainKeywords", label: t("searchAnswerProfiles.domainKeywords.title") },
           ]}
         />
         <div
@@ -79,7 +78,9 @@ export function SearchAnswerProfileKnowledgePanel({
           id={`search-answer-profile-knowledge-panel-${tab}`}
           aria-labelledby={`search-answer-profile-knowledge-tab-${tab}`}
         >
-          {tab === "domainKeywords" ? (
+          {tab === "questionUnderstanding" ? (
+            <QuestionUnderstandingPanel key={searchAnswerProfileId} searchAnswerProfileId={searchAnswerProfileId} readOnly={readOnly} />
+          ) : tab === "domainKeywords" ? (
             <DomainKeywordsEditor searchAnswerProfileId={searchAnswerProfileId} />
           ) : tab === "approvedFaq" ? (
             <ApprovedFaqManager searchAnswerProfileId={searchAnswerProfileId} />
