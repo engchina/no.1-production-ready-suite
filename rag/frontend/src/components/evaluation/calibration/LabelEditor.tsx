@@ -1,7 +1,7 @@
 import {
   Banner,
   Button,
-  FieldLegend,
+  Fieldset,
   SelectField,
   TextareaField,
 } from "@production-ready/ui";
@@ -49,7 +49,6 @@ export function LabelEditor({
     label: t(`evaluation.calibration.errorType.${item.id}` as I18nKey),
     description: item.title,
   }));
-  const legendId = `${idPrefix}-label-legend`;
   return (
     <form
       className="grid min-w-0 gap-4"
@@ -64,18 +63,13 @@ export function LabelEditor({
         onSubmit(draft);
       }}
     >
-      <fieldset
-        className="grid min-w-0 gap-2"
-        aria-describedby={labelError ? `${idPrefix}-label-error` : undefined}
+      <Fieldset
+        id={`${idPrefix}-label`}
+        legend={t("evaluation.calibration.editor.label")}
+        required
+        error={labelError}
       >
-        <FieldLegend id={legendId} required>
-          {t("evaluation.calibration.editor.label")}
-        </FieldLegend>
-        <div
-          className="flex min-w-0 flex-wrap gap-2"
-          role="group"
-          aria-labelledby={legendId}
-        >
+        <div className="flex min-w-0 flex-wrap gap-2">
           {CALIBRATION_LABELS.map((label) => {
             const selected = draft.label === label;
             return (
@@ -99,16 +93,7 @@ export function LabelEditor({
         <p className="text-xs text-fg-muted">
           {t("evaluation.calibration.editor.labelHelp")}
         </p>
-        {labelError ? (
-          <p
-            id={`${idPrefix}-label-error`}
-            role="alert"
-            className="text-sm text-danger-fg"
-          >
-            {labelError}
-          </p>
-        ) : null}
-      </fieldset>
+      </Fieldset>
       <SelectField<string>
         id={`${idPrefix}-error-type`}
         label={t("evaluation.calibration.editor.errorType")}
