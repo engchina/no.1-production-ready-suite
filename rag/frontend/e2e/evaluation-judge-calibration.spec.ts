@@ -39,6 +39,23 @@ async function shot(target: Locator, testInfo: TestInfo, step: string, viewport:
   if (size) await page.setViewportSize(size);
 }
 
+/** 表のセルの文字が 1 行に収まる（375px で列が細く潰れて折り返さない。#3583）。 */
+async function expectOneLine(target: Locator) {
+  await expect(target).toBeVisible();
+  const { height, lineHeight } = await target.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const style = getComputedStyle(element);
+    const fontSize = Number.parseFloat(style.fontSize);
+    const parsed = Number.parseFloat(style.lineHeight);
+    return {
+      height: range.getBoundingClientRect().height,
+      lineHeight: Number.isFinite(parsed) ? parsed : fontSize * 1.5,
+    };
+  });
+  expect(height).toBeLessThan(lineHeight * 1.5);
+}
+
 async function mockEvaluationBasics(page: Page) {
   await mockLocalAuth(page);
   await page.route("**/api/settings/evaluation-suite", (route) =>
@@ -138,6 +155,7 @@ for (const viewport of VIEWPORTS) {
     await expect(page.getByRole("tab", { name: "判定の校正" })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByTestId("judge-calibration-steps")).toBeVisible();
     await expect(page.getByTestId("calibration-label-sets").getByText("校正の集合 A")).toBeVisible();
+    await expectOneLine(page.getByTestId("calibration-label-sets").getByRole("rowheader", { name: "校正の集合 A" }));
 
     // 1. 記入の集合を作る（終わった品質評価を選ぶ）。
     await page.getByRole("button", { name: "記入の集合を作る" }).click();
@@ -160,6 +178,7 @@ for (const viewport of VIEWPORTS) {
     const annotator = page.getByTestId("calibration-annotator");
     await expect(annotator.getByRole("status")).toHaveText("1 / " + JUDGE_CALIBRATION_ROWS + " 行");
     await expect(annotator.getByTestId("calibration-criterion")).toBeVisible();
+    await expectOneLine(page.getByTestId("calibration-my-progress").getByRole("rowheader", { name: "正確性" }));
     await expect(annotator).not.toContainText("a2");
     await annotator.getByTestId("calibration-annotate-save").click();
     await expect(annotator.getByRole("alert")).toHaveText("判定を選んでください。");
@@ -181,6 +200,7 @@ for (const viewport of VIEWPORTS) {
     await detail.getByRole("tab", { name: "2. 一致と裁定" }).click();
     const agreement = page.getByTestId("calibration-aspect-agreement");
     await expect(agreement).toContainText("a1–a2");
+    await expectOneLine(agreement.getByRole("rowheader", { name: "正確性" }));
     const rows = page.getByTestId("calibration-agreement-rows");
     await expect(rows.getByRole("row")).toHaveCount(3);
     await rows.getByRole("button").first().click();
