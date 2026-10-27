@@ -40,7 +40,7 @@ import {
   ThumbsDown,
   ThumbsUp,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { EmptyState, ErrorState } from "@/components/StateViews";
@@ -99,7 +99,11 @@ export function FeedbackClient() {
   const urlState = useMemo(() => parseFeedbackUrl(searchParams), [searchParams]);
   // B 型の選択は URL の `feedback` が唯一の情報源（共有の useUrlSelection。#2283）。先頭の行を自動で選ばない。
   // 1 ペイン（xl 未満）で一覧から詳細へ入るときは履歴に積み、「一覧へ戻る」とブラウザの「戻る」で一覧へ戻る。
-  const selection = useUrlSelection({ param: "feedback", searchParams, setSearchParams, singlePane: true });
+  // URL が先に更新された直後も、古い行の callback でページ条件を巻き戻さない。
+  const setSelectionSearchParams = useCallback((next: (previous: URLSearchParams) => URLSearchParams, options?: { replace?: boolean }) => {
+    setSearchParams(next(new URLSearchParams(window.location.search)), options);
+  }, [setSearchParams]);
+  const selection = useUrlSelection({ param: "feedback", searchParams, setSearchParams: setSelectionSearchParams, singlePane: true });
   const selectedId = selection.selectedId;
   const params = useMemo(() => feedbackListParams(urlState), [urlState]);
   const query = useFeedbackDashboard(params);

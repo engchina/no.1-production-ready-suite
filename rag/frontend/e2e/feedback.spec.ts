@@ -129,11 +129,13 @@ test("全幅の一覧を検索・数値ページングし、全幅の詳細の�
 
   await page.screenshot({ path: testInfo.outputPath("feedback-root-cause-desktop.png"), fullPage: true });
 
+  await expect(page).toHaveURL(/size=25/);
   // 再読込しても URL から同じ行を選んだ状態に戻る。
   await page.reload();
   await expect(page.getByTestId("feedback-row-feedback-answer")).toHaveAttribute("aria-current", "true");
   await expect(page.getByRole("region", { name: "フィードバック詳細" })).toBeVisible();
 
+  await expect(page).toHaveURL(/size=25/);
   // 前へ / 次へ（詳細の上端の行）は一覧の今の並びの前後へ移る（単一ペインの選択は履歴に積む）。
   await page.getByTestId("feedback-detail-pager-next").click();
   await expect(page).toHaveURL(/feedback=feedback-citation/);
@@ -143,6 +145,7 @@ test("全幅の一覧を検索・数値ページングし、全幅の詳細の�
   await expect(page).toHaveURL(/feedback=feedback-answer/);
   await expect(page.getByTestId("feedback-detail-pager-previous")).toBeDisabled();
 
+  await expect(page).toHaveURL(/size=25/);
   await page.getByTestId("feedback-detail-back").click();
   await expect(list).toBeVisible();
   await expect(page).toHaveURL(/size=25/);

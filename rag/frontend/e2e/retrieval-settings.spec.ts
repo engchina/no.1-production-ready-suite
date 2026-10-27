@@ -619,6 +619,6 @@ for (const width of [1280, 375]) {
   await mockLocalAuth(page);
   await mockRetrievalCards(page);
   await page.goto("/settings/retrieval");
-  await expect(page.getByText("根拠のチャンクの前後から文脈に加えるチャンクの数です。", {exact:true})).toBeVisible();
+  await expect(page.getByText("当たった根拠の前と後から、それぞれ最大でこの数のチャンクを文脈に加えます。同じ親やページの範囲、取得できる根拠、入力上限によって実際の数は減ります。", {exact:true})).toBeVisible();
   await expect(page.getByText("0 は加えません。", {exact:false})).toHaveCount(0);
  });
