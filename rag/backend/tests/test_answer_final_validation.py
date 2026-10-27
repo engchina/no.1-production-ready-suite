@@ -46,7 +46,7 @@ async def test_final_validation_follows_audit_mode_and_preserves_failed_verdict(
     if mode == "none":
         validator.assert_not_awaited()
         callback.assert_not_awaited()
-        assert "answer_validation" not in outcome.diagnostics
+        assert outcome.diagnostics["answer_validation"] == {"status": "not_run", "valid": False}
         return
     validator.assert_awaited_once_with(
         "合成の質問",
@@ -84,16 +84,22 @@ async def test_final_validation_failure_remains_unverified(monkeypatch: pytest.M
 
 
 @pytest.mark.parametrize("valid", [None, True, False])
-async def test_failed_final_verdict_is_not_reused_as_supported(
+@pytest.mark.parametrize("version", ["", "same", "different"])
+async def test_failed_or_unversioned_final_verdict_is_not_reused_as_supported(
     monkeypatch: pytest.MonkeyPatch,
     valid: bool | None,
+    version: str,
 ) -> None:
     from app.rag.answer_engine import ANSWER_CITATION_LINES_KEY
     from app.rag.answer_validation import audited_answer_lines
 
     diagnostics: dict[str, Any] = {"envelope": {"items": []}}
     if valid is not None:
-        diagnostics["answer_validation"] = {"valid": valid}
+        diagnostics["answer_validation"] = {
+            "valid": valid,
+            "status": "completed",
+            "reuse_context": version,
+        }
 
     class Oracle:
         async def get_answer_record(self, trace_id: str) -> dict[str, Any]:
@@ -114,6 +120,6 @@ async def test_failed_final_verdict_is_not_reused_as_supported(
         lambda *args: {"合成の回答": ["chunk-1"]},
     )
     reused = await audited_answer_lines(
-        cast(Any, Oracle()), ["trace-1"], {"chunk-1": {"text": "合成の根拠"}}
+        cast(Any, Oracle()), ["trace-1"], {"chunk-1": {"text": "合成の根拠"}}, reuse_context="same"
     )
-    assert reused == ({} if valid is False else {"合成の回答": ["chunk-1"]})
+    assert reused == ({"合成の回答": ["chunk-1"]} if valid is True and version == "same" else {})

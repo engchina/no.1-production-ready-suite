@@ -207,7 +207,8 @@ class GuideStepFulfillmentTest(unittest.TestCase):
                     self.assertNotIn(followup, marks(response))
                     self.assertEqual(_requests(response)["guide:s2"], "addressed")
                 elif not included:
-                    self.assertIn("item_check", marks(response)[followup])
+                    self.assertIn(followup, response.answer_text)
+                    self.assertNotIn("item_check", marks(response).get(followup, []))
                 else:
                     self.assertNotEqual(_requests(response)["guide:s2"], "addressed")
 

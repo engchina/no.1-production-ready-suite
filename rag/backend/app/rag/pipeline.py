@@ -658,7 +658,7 @@ class RagPipeline:
             # 安全処理後の本文へ、変更前の本文の検査済み表示を引き継がない。
             previous_validation = outcome.diagnostics.get("answer_validation")
             outcome.diagnostics["answer_validation"] = {
-                **(previous_validation if isinstance(previous_validation, dict) else {}),
+                "previous_body_validation": previous_validation,
                 "status": "body_changed",
                 "valid": False,
                 "reuse_context": "",

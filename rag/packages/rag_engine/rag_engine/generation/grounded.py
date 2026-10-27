@@ -3129,6 +3129,7 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
             review = review.model_copy(
                 update={"support": "unsupported", "reason": "出力ファイルの項目定義と対象の一致を確認できません。" + review.reason}
             )
+        entry.review_assessment["effective_support"] = review.support
         if fields is not None and fields.definition_quote.strip():
             definition = fields.definition_quote.strip()
             source_texts = [span["text"], *span.get("document_texts", ())]

@@ -168,4 +168,7 @@ async def test_saved_validation_and_evaluation_follow_the_final_body(
     assert validation["valid"] is (not changed)
     assert validation["status"] == ("body_changed" if changed else "completed")
     assert validation["reuse_context"] == ("" if changed else "version-a")
+    if changed:
+        assert "claim_checks" not in validation and "counts" not in validation
+        assert isinstance(validation["previous_body_validation"], dict)
     assert oracle.saved[-1]["evaluation_input"]["answer_text"] == final_text
