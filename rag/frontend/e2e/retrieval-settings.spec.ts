@@ -558,7 +558,7 @@ for (const width of [1280, 375]) {
   test(`検索プロンプトは処理順・使用条件・読み取り専用で確認できる (${width}px)`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     await mockAuthUser(page, { permissions: ["menu.settings_retrieval"] });
-    const displayStages = FLOW_STAGES.map((stage) => stage.id === "history_rewrite" ? {
+    const displayStages = [{ id: "rule_selection", phase: "question", prompts: [{ id: "system", content: "## Step 1: 選択を確かめる\n合成の条件。\n\n## Step 2: 結果を返す\nJSON のみ。" }] }, ...FLOW_STAGES].map((stage) => stage.id === "history_rewrite" ? {
       ...stage, prompts: [{ id: "system", content: "## 目的と手順\n\n- 合成の対象名を補います。\n- 質問だけを 1 行で返します。" }],
     } : stage);
     await mockRetrievalCards(page, undefined, displayStages);
@@ -588,6 +588,7 @@ for (const width of [1280, 375]) {
     await expect(prompts.getByTestId("answer-prompt-stage-support_guide_conditions")).toHaveCount(0);
     await expect(prompts.getByTestId("answer-prompt-stage-history_rewrite")).toContainText("書き換えを有効にしたとき");
     await expect(prompts.getByTestId("answer-prompt-stage-section_extraction")).toContainText("原文抽出は既定で無効");
+    await expect(prompts.getByTestId("answer-prompt-stage-rule_selection")).toContainText("曖昧な条件は確認に残します");
     const rewrite = prompts.getByTestId("answer-prompt-stage-history_rewrite");
     await rewrite.locator("summary").click();
     await expect(rewrite.getByRole("textbox")).toHaveValue(/\n- .+\n- /);

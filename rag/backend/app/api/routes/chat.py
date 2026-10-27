@@ -66,7 +66,13 @@ from app.rag.chat_answer_runs import (
     get_chat_answer_run_service,
 )
 from app.rag.chat_attachments import attach_to_conversation, delete_conversation_attachments
-from app.rag.chat_question_token import context_digest, issue_question_token, read_question_token
+from app.rag.chat_question_token import (
+    context_digest,
+    issue_question_token,
+    read_question_token,
+    read_rule_selection_answers,
+    read_rule_selection_elapsed,
+)
 from app.rag.document_sections_service import current_section_pages
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import elapsed_ms, new_trace_id
@@ -110,6 +116,7 @@ from app.schemas.chat import (
 )
 from app.schemas.common import ApiResponse, Page
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
+from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 from app.security.dependencies import current_principal
 from app.security.user_names import display_names_by_user_hash
 
@@ -850,6 +857,11 @@ async def _prepare_chat_turn(
         filters=filters,
         conditions=conditions,
     )
+    if request.question_context_token:
+        base_request._rule_selection_state["prepared"] = True
+        base_request._rule_selection_state["elapsed_seconds"] = read_rule_selection_elapsed(
+            settings.app_service_token_secret, request.question_context_token
+        )
     # 履歴は今回のユーザー発話を保存する前に読む(自分自身を含めない)。
     prior_messages = await oracle.list_messages(conversation_id)
     (
@@ -865,6 +877,14 @@ async def _prepare_chat_turn(
         if request.question_context_token and settings.rag_history_rewrite_enabled
         else _guide_user_context(prior_messages),
         interactive=True,
+        confirmed_rule_answers=tuple(
+            ClarificationAnswer.model_validate(value)
+            for value in read_rule_selection_answers(
+                settings.app_service_token_secret, request.question_context_token
+            )
+        )
+        if request.question_context_token
+        else (),
         answered_rule_ids=(request.clarification.rule_id,)
         if request.clarification is not None
         and not request.clarification.rule_id.startswith(GUIDE_CLARIFICATION_PREFIX)

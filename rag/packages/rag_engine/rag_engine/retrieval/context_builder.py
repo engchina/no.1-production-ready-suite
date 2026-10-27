@@ -993,10 +993,16 @@ def record_context_key(record: Any) -> str:
     return _scoped_record_context_key("record", record, record_id)
 
 
+def _scoped_uid_key(record: Any, uid: str) -> str:
+    key = f"chunk_uid:{uid}"
+    scope = (getattr(record, "metadata", None) or {}).get("context_page_ranges", "")
+    return f"{key}::page_scope:{scope}" if scope else key
+
+
 def _record_chunk_context_key(record: Any) -> str:
     chunk_uid = str(getattr(record, "chunk_uid", "") or "").strip()
     if chunk_uid:
-        return f"chunk_uid:{chunk_uid}"
+        return _scoped_uid_key(record, chunk_uid)
     chunk_id = str(getattr(record, "chunk_id", "") or "").strip()
     if not chunk_id:
         return ""
@@ -1006,7 +1012,7 @@ def _record_chunk_context_key(record: Any) -> str:
 def _record_parent_context_key(record: Any) -> str:
     parent_chunk_uid = str(getattr(record, "parent_chunk_uid", "") or "").strip()
     if parent_chunk_uid:
-        return f"chunk_uid:{parent_chunk_uid}"
+        return _scoped_uid_key(record, parent_chunk_uid)
     parent_chunk_id = str(getattr(record, "parent_chunk_id", "") or "").strip()
     if not parent_chunk_id:
         return ""
@@ -1043,7 +1049,9 @@ def _scoped_record_context_key(kind: str, record: Any, value: str) -> str:
     source_run_id = str(getattr(record, "source_run_id", "") or "")
     source = str(getattr(record, "source", "") or getattr(record, "source_file_name", "") or "")
     engine = _record_engine(record)
-    scope_parts = (source_run_id, source, engine)
+    scope_parts: tuple[str, ...] = (source_run_id, source, engine)
+    if page_scope := str((getattr(record, "metadata", None) or {}).get("context_page_ranges", "")):
+        scope_parts = (*scope_parts, page_scope)
     if not any(scope_parts):
         return f"{kind}:{value}" if value else kind
     escaped = [part.replace("::", r"\::") for part in (kind, *scope_parts, value)]

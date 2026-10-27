@@ -43,7 +43,9 @@ from app.rag.answer_timeout import (
     run_answer_with_timeout,
 )
 from app.rag.audit import record_rag_search_audit
+from app.rag.chat_question_token import context_digest
 from app.rag.diagnostics import build_search_diagnostics
+from app.rag.document_sections_service import current_section_pages
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
@@ -55,6 +57,7 @@ from app.rag.pipeline import RagPipeline, SearchStageProgress
 from app.rag.question_understanding import profile_language_scope
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
+from app.rag.rule_selection import apply_rule_selection_scope, recognize_rule_selections
 from app.rag.run_history import RunRecorder, search_run_conditions
 from app.rag.saved_evidence import withhold_saved_answer
 from app.rag.search_answer_profile_config import (
@@ -63,7 +66,11 @@ from app.rag.search_answer_profile_config import (
     resolve_search_answer_profile_settings,
     validate_profile_answer_model,
 )
-from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
+from app.rag.search_answer_profile_knowledge import (
+    RUNTIME_KNOWLEDGE_KIND,
+    clarification_document_ids,
+    load_domain_keywords,
+)
 from app.rag.stored_answer import stored_citation_metadata
 from app.rag.support_guide_conditions import (
     resolve_answered_conditions,
@@ -102,6 +109,7 @@ from app.schemas.search import (
     format_search_id_filter,
 )
 from app.schemas.search_answer_profile import SearchAnswerProfileDetail
+from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 from app.schemas.settings import FieldDefinitionData, SearchExtractionFieldsData
 from app.schemas.support_guide import SupportGuideContent
 from app.security.permissions import SCOPE_FORBIDDEN_CODE
@@ -307,6 +315,7 @@ async def _resolve_query_context(
     interactive: bool = False,
     guide_preview: GuidePreview | None = None,
     answered_rule_ids: Sequence[str] = (),
+    confirmed_rule_answers: Sequence[ClarificationAnswer] = (),
 ) -> tuple[SearchRequest, Settings, str | None, str | None]:
     """検索の有効 request / Settings と適用済みの Search Answer Profile id を返す。
 
@@ -368,6 +377,81 @@ async def _resolve_query_context(
             runtime_knowledge = await oracle.get_search_answer_profile_knowledge(
                 view.id, RUNTIME_KNOWLEDGE_KIND
             )
+            selection_state = dict(effective_request._rule_selection_state)
+            selection_binding = context_digest(
+                [runtime_knowledge, request.query, request.original_question]
+            )
+            recognized_answers = tuple(
+                answer
+                for answer in confirmed_rule_answers
+                if answer.rule_id not in answered_rule_ids
+            )
+            if selection_state.get("binding") == selection_binding:
+                recognized_answers = tuple(
+                    ClarificationAnswer.model_validate(value)
+                    for value in selection_state.get("answers", [])
+                )
+            elif not selection_state.get("prepared"):
+                selection_usage: dict[str, float] = {}
+                selection_rules = (runtime_knowledge or {}).get("rules", [])
+                if not isinstance(selection_rules, list):
+                    selection_rules = []
+                recognized_answers = await recognize_rule_selections(
+                    {
+                        **(runtime_knowledge or {}),
+                        "rules": [
+                            rule
+                            for rule in selection_rules
+                            if isinstance(rule, dict)
+                            and str(rule.get("id", "")) not in answered_rule_ids
+                        ],
+                    },
+                    request.query,
+                    settings,
+                    source_text="\n".join(
+                        [*guide_context, request.original_question or request.query]
+                    ),
+                    answers=recognized_answers,
+                    usage=selection_usage,
+                )
+                selection_state["elapsed_seconds"] = float(
+                    selection_state.get("elapsed_seconds", 0.0)
+                ) + selection_usage.get("elapsed_seconds", 0.0)
+            selection_state.update(
+                binding=selection_binding,
+                answers=[answer.model_dump() for answer in recognized_answers],
+            )
+            effective_request = apply_rule_selection_scope(
+                effective_request,
+                runtime_knowledge or {},
+                recognized_answers,
+                current_pages=await current_section_pages(
+                    oracle,
+                    {
+                        doc
+                        for answer in recognized_answers
+                        for doc in clarification_document_ids(runtime_knowledge or {}, answer)
+                    },
+                )
+                if recognized_answers
+                else None,
+            )
+            effective_request._rule_selection_state = selection_state
+            initial_budget = float(
+                selection_state.setdefault(
+                    "initial_budget_seconds", settings.rag_answer_timeout_seconds
+                )
+            )
+            remaining_budget = max(
+                0.0, initial_budget - float(selection_state.get("elapsed_seconds", 0.0))
+            )
+            settings = settings.model_copy(
+                update={
+                    "rag_answer_timeout_seconds": min(
+                        settings.rag_answer_timeout_seconds, remaining_budget
+                    )
+                }
+            )
             if guide_preview is not None:
                 # 管理画面から明示した下書きの試答だけ、この回答に限って有効にする。
                 settings = settings.model_copy(update={"rag_support_guide_enabled": True})
@@ -380,6 +464,7 @@ async def _resolve_query_context(
                     conditions=request.conditions,
                     guide={},
                     answered_rule_ids=answered_rule_ids,
+                    confirmed_answers=recognized_answers,
                 )
                 settings = settings.model_copy(
                     update={
@@ -475,7 +560,7 @@ async def _resolve_query_context(
                             EVIDENCE_CONDITIONS_KEY: evidence_condition_candidates(match),
                             # 根拠で条件が決まったときの手順の計画（#2689）。
                             EVIDENCE_PLANS_KEY: evidence_plans(match),
-                            # 手順別検索の計画は回答フローだけで使う。
+                            # 手順ごとの検索（#2395）。回答フローだけが使う。
                             "step_plan": guide_step_plan(match),
                             # 業務ガイドの窓口・引き継ぐ条件・承認（#2792。資料と分けて出す）。
                             "notices": guide_notices(match),
@@ -499,6 +584,7 @@ async def _resolve_query_context(
                 conditions=request.conditions,
                 guide=settings.rag_support_guide or {},
                 answered_rule_ids=answered_rule_ids,
+                confirmed_answers=recognized_answers,
             )
             if (
                 profile_config.clarification_policy == "assume"

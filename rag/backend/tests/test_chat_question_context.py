@@ -241,7 +241,7 @@ async def test_clarification_api_matches_resolved_question(
 
     monkeypatch.setattr(route, "load_runtime_knowledge_payload", empty)
     monkeypatch.setattr(
-        route, "suggest_clarification", lambda _payload, query: matched.append(query)
+        route, "suggest_clarification", lambda _payload, query, **kwargs: matched.append(query)
     )
     result = await route.post_clarification_suggest(
         "profile-a",
@@ -339,3 +339,111 @@ async def test_prepared_question_rejects_changed_global_language_pack(context_se
         assert rejected.value.status_code == 409
     finally:
         set_default_pack(old)
+
+
+async def test_signed_rule_facts_reach_execution_without_second_recognition(
+    context_setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.rag.chat_question_token import (
+        read_rule_selection_answers,
+        read_rule_selection_elapsed,
+        with_rule_selection_answers,
+    )
+    from app.schemas.chat import ChatMessageRequest
+
+    oracle, settings, _calls = context_setup
+    query = "その設定は？"
+    _, token = await chat.prepare_chat_question(
+        oracle, "conversation-a", "profile-a", query, settings
+    )
+    assert token
+    facts = [{"rule_id": "r1", "option_ids": ["a"], "other_text": ""}]
+    token = with_rule_selection_answers(
+        settings.app_service_token_secret, token, facts, elapsed_seconds=3
+    )
+    assert read_rule_selection_answers(settings.app_service_token_secret, token) == facts
+    assert read_rule_selection_elapsed(settings.app_service_token_secret, token) == 3
+    captured = []
+
+    async def resolve(request: Any, effective: Any, **kwargs: Any) -> Any:
+        captured.append((request, kwargs))
+        return request, effective, None, None
+
+    async def append(message: StoredMessage) -> StoredMessage:
+        return message
+
+    monkeypatch.setattr(chat, "_resolve_query_context", resolve)
+    monkeypatch.setattr(oracle, "append_message", append, raising=False)
+    await chat._prepare_chat_turn(
+        oracle,
+        "conversation-a",
+        "profile-a",
+        ChatMessageRequest(
+            content=query,
+            question_context_token=token,
+        ),
+        settings,
+    )
+    assert captured[0][1]["confirmed_rule_answers"][0].option_ids == ["a"]
+    assert captured[0][0]._rule_selection_state == {"prepared": True, "elapsed_seconds": 3}
+    with pytest.raises(ValueError):
+        read_rule_selection_answers(settings.app_service_token_secret, token + "changed")
+
+
+@pytest.mark.parametrize("known", [True, False])
+async def test_confirmation_api_keeps_unknown_and_shares_positive_choice(
+    context_setup: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    known: bool,
+) -> None:
+    import json
+    from copy import deepcopy
+
+    from app.api.routes import search_answer_profile_knowledge as route
+    from app.rag import rule_selection
+    from app.rag.chat_question_token import read_rule_selection_answers
+    from app.schemas.search_answer_profile_knowledge import ClarificationSuggestRequest
+    from tests.test_rule_selection import PAYLOAD
+
+    oracle, settings, _calls = context_setup
+    settings.rag_support_guide_enabled = False
+    settings.rag_history_rewrite_enabled = False
+    oracle.view.config.query.support_guide_enabled = False
+    payload = deepcopy(PAYLOAD)
+    text = "設定はモードAを選びます" if known else "設定はモードAではない。まだ未定です"
+    captured = []
+
+    async def load(*args: Any) -> dict[str, Any]:
+        return payload
+
+    class Client:
+        async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
+            captured.append(json.loads(context))
+            return json.dumps(
+                {
+                    "conditions": [
+                        {
+                            "condition_id": "rule-1",
+                            "status": "known" if known else "unknown",
+                            "option_ids": ["a"] if known else [],
+                            "evidence": [text] if known else [],
+                        }
+                    ]
+                }
+            )
+
+    monkeypatch.setattr(route, "OracleClient", lambda: oracle)
+    monkeypatch.setattr(route, "get_settings", lambda: settings)
+    monkeypatch.setattr(route, "load_runtime_knowledge_payload", load)
+    monkeypatch.setattr(rule_selection, "condition_client", lambda settings: Client())
+    result = await route.post_clarification_suggest(
+        "profile-a", ClarificationSuggestRequest(query=text, conversation_id="conversation-a")
+    )
+    assert result.data is not None
+    assert (result.data.suggestion is None) == known
+    assert len(captured) == 1
+    token = result.data.question_context_token
+    assert token
+    facts = read_rule_selection_answers(settings.app_service_token_secret, token)
+    assert len(facts) == int(known)
+    assert captured[0]["user_statements"].endswith(text)

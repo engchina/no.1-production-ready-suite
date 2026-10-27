@@ -18,6 +18,7 @@ from app.api.routes.search import (
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import get_settings
+from app.rag.chat_question_token import with_rule_selection_answers
 from app.rag.domain_keyword_import import (
     PREVIEW_ROWS,
     KeywordImportMode,
@@ -26,6 +27,7 @@ from app.rag.domain_keyword_import import (
 )
 from app.rag.query_history import query_history_suggestions
 from app.rag.question_understanding import profile_language_scope
+from app.rag.rule_selection import recognize_rule_selections
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (
     APPROVED_FAQ_PREVIEW_ROWS,
@@ -70,6 +72,7 @@ from app.schemas.search_answer_profile_knowledge import (
     ApprovedFaqSuggestionData,
     ApprovedFaqSuggestionsData,
     ApprovedFaqSuggestRequest,
+    ClarificationAnswer,
     ClarificationSuggestionData,
     ClarificationSuggestionsData,
     ClarificationSuggestRequest,
@@ -599,20 +602,54 @@ async def post_clarification_suggest(
     settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
     with profile_language_scope(settings):
         query, context_token = await prepare_chat_question(
-            oracle, request.conversation_id, search_answer_profile_id, request.query, settings
+            oracle,
+            request.conversation_id,
+            search_answer_profile_id,
+            request.query,
+            settings,
+            force_token=True,
         )
+
+        recognized_answers: tuple[ClarificationAnswer, ...] = ()
+        recognition_usage: dict[str, float] = {}
 
         def response(
             data: ClarificationSuggestionsData,
         ) -> ApiResponse[ClarificationSuggestionsData]:
-            data.question_context_token = context_token
+            token = context_token
+            if token and (recognized_answers or recognition_usage):
+                token = with_rule_selection_answers(
+                    settings.app_service_token_secret,
+                    token,
+                    [answer.model_dump() for answer in recognized_answers],
+                    elapsed_seconds=recognition_usage.get("elapsed_seconds", 0.0),
+                )
+            data.question_context_token = token
             return ApiResponse(data=data)
 
         # 方針が「前提を示して回答する」なら確認を出さない（#1839）。
         if view.config.clarification_policy == "assume":
             return response(ClarificationSuggestionsData())
         payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
-        found = await asyncio.to_thread(suggest_clarification, payload, query)
+        source_text = "\n".join(
+            [
+                *(
+                    _guide_user_context(await oracle.list_messages(request.conversation_id))
+                    if request.conversation_id
+                    else ()
+                ),
+                request.query,
+            ]
+        )
+        recognized_answers = await recognize_rule_selections(
+            payload, query, settings, source_text=source_text, usage=recognition_usage
+        )
+        found = await asyncio.to_thread(
+            suggest_clarification,
+            payload,
+            query,
+            answers=recognized_answers if context_token else (),
+        )
         if found is None:
             # 業務ガイドの不明・矛盾の条件（選択肢付き）を、ルールの確認と同じ形で聞く（#1238）。
             # 適用範囲は検索と同じ手がかりで確かめる（#1278）。
