@@ -1022,7 +1022,7 @@ function searchStreamBody(answer = "上限額を確認しました。"): string 
 }
 
 // アーカイブ済みは読み取り専用。上書き中の項目の選択欄も操作できず、未保存の変更を作らない。
-test("アーカイブ済みの検索・回答プロファイルは上書き中の項目の選択欄も変更できない", async ({ page }) => {
+test("アーカイブ済みの検索・回答プロファイルは上書き中の項目の選択欄も変更できない", { tag: "@responsive" }, async ({ page }) => {
   const archived = {
     ...accountingView,
     id: "bv-old",
@@ -1054,10 +1054,23 @@ test("アーカイブ済みの検索・回答プロファイルは上書き中�
     await route.fulfill(envelope(archived));
   });
 
+  await page.route("**/api/search-answer-profiles/bv-old/question-understanding", (route) => route.fulfill({ json: {
+    data: {
+      fields: [{ section: "question_cues", key: "cause_cues", kind: "words", choices: [], ingest: false, max_chars: 40 }],
+      builtin: { question_cues: { cause_cues: ["なぜ"] } }, overrides: {},
+      effective: { question_cues: { cause_cues: ["なぜ"] } }, hash: "synthetic",
+    }, error_messages: [], warning_messages: [],
+  } }));
   await page.goto("/search-answer-profiles?id=bv-old");
   await expect(page.getByText("アーカイブ済みの検索・回答プロファイルは編集・保存できません。")).toBeVisible();
   await expect(page.getByRole("combobox", { name: "安全チェック" })).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "質問の拡張" })).toHaveCount(0);
+  await page.getByRole("tab", { name: "質問の理解", exact: true }).click();
+  const understanding = page.getByTestId("question-understanding-panel");
+  await expect(understanding.getByRole("textbox", { name: "原因を尋ねる語", exact: true })).toBeDisabled();
+  await expect(understanding.getByRole("button", { name: "質問の理解を保存", exact: true })).toBeDisabled();
+  await expect(understanding.getByRole("textbox", { name: "テストする質問", exact: true })).toBeEnabled();
+  await expectNoPageOverflow(page);
 });
 
 // 知識（登録済みQ&A・用語・ドメインキーワード・ルール）の読み込みに失敗したら、空（0 件）と見せずに
