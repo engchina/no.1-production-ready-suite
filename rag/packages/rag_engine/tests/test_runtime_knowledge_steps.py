@@ -133,14 +133,14 @@ def test_matched_terms_and_rules_show_their_own_counts_matches_and_impacts(tmp_p
     assert terms["有効な登録"] == "1 件（登録 2 件）"
     assert terms["一致した用語"] == "合成用語A（別名: 合成別名A）"
     assert terms["影響"] == "一致した用語の別名を補助の検索文に加えます。"
-    assert "一致した回答ルール" not in terms
+    assert "採用した確認・回答ルール" not in terms
 
     rules = _fields(steps[RULES_STEP])
-    assert rules["目的"] == "登録済みの回答ルールを質問に当て、回答の参考にします。"
+    assert rules["目的"] == "確認・回答ルールの用途・優先度・排他設定から、確認と回答の指示を選びます。"
     assert rules["結果"] == "一致: 合成回答ルールA"
     assert rules["有効な登録"] == "2 件（登録 3 件）"
-    assert rules["一致した回答ルール"] == "合成回答ルールA"
-    assert rules["影響"] == "一致した回答ルールを回答時の参考情報として渡します。"
+    assert rules["採用した確認・回答ルール"] == "合成回答ルールA"
+    assert rules["影響"] == "回答生成に使う指示 1 件を渡します。"
     assert "一致した用語" not in rules and "一致したルール" not in rules
 
 
@@ -178,7 +178,7 @@ def test_no_match_shows_result_without_impact(tmp_path: Path) -> None:
     assert terms["有効な登録"] == "1 件（登録 1 件）" and rules["有効な登録"] == "1 件（登録 1 件）"
     for fields in (terms, rules):
         assert "影響" not in fields
-    assert "一致した用語" not in terms and "一致した回答ルール" not in rules
+    assert "一致した用語" not in terms and "採用した確認・回答ルール" not in rules
 
 
 def test_only_inactive_registrations_guide_to_the_use_setting(tmp_path: Path) -> None:
@@ -229,3 +229,14 @@ def test_chosen_conditions_are_shown_in_the_rules_step(tmp_path: Path, scope: tu
     steps = _steps(result)
     assert "確認で選んだ条件: 合成の条件 A" in steps[RULES_STEP]["details"]["lines"]
     assert not any("確認で選んだ条件" in line for line in steps[TERMS_STEP].get("details", {}).get("lines", []))
+
+
+def test_confirmation_only_rules_describe_confirmation_without_generation_impact(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "rk.json",
+        rules=[_RULE | {"purpose": "confirmation", "content": "", "clarification": {"question": "対象は？", "options": []}}],
+    )
+    rules = _fields(_steps(_run(path))[RULES_STEP])
+    assert rules["採用した確認・回答ルール"] == "合成回答ルールA"
+    assert rules["影響"] == "回答前の確認に使う設定 1 件を採用しました。"
+    assert "回答生成に使う" not in str(rules)

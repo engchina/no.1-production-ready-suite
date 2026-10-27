@@ -4388,7 +4388,7 @@ def answer_question_result(
             if runtime_knowledge.matched_terms:
                 step.impact("一致した用語の別名を補助の検索文に加えます。")
 
-    with _execution_step("回答ルールの確認", "登録済みの回答ルールを質問に当て、回答の参考にします。") as step:
+    with _execution_step("回答ルールの確認", "確認・回答ルールの用途・優先度・排他設定から、確認と回答の指示を選びます。") as step:
         if _record_runtime_knowledge_load(step, runtime_knowledge):
             step.result(runtime_rules_status(runtime_knowledge))
             if runtime_knowledge.loaded:
@@ -4396,9 +4396,13 @@ def answer_question_result(
                     "有効な登録",
                     f"{runtime_knowledge.active_rule_count} 件（登録 {runtime_knowledge.registered_rule_count} 件）",
                 )
-            step.field("一致した回答ルール", join_values(rule.title or rule.rule_id for rule in runtime_knowledge.matched_rules))
-            if runtime_knowledge.matched_rules:
-                step.impact("一致した回答ルールを回答時の参考情報として渡します。")
+            step.field("採用した確認・回答ルール", join_values(rule.title or rule.rule_id for rule in runtime_knowledge.matched_rules))
+            generation_rules = runtime_knowledge.rules_for_stage("generation")
+            confirmation_rules = runtime_knowledge.rules_for_stage("confirmation")
+            if generation_rules:
+                step.impact(f"回答生成に使う指示 {len(generation_rules)} 件を渡します。")
+            if confirmation_rules:
+                step.impact(f"回答前の確認に使う設定 {len(confirmation_rules)} 件を採用しました。")
         if scope is not None:
             runtime_knowledge = runtime_knowledge.with_scope(*scope)
             step.add(f"確認で選んだ条件: {runtime_knowledge.scope_context}")
@@ -4745,7 +4749,8 @@ def answer_question_result(
             coverage_budget=_request_coverage_budget(settings),
             usage=coverage_usage,
             searched_queries=retrieval_queries,
-            allow_split=not caller_planned,
+            allow_split=not caller_planned and not getattr(settings, "retrieval_original_query_only", False),
+            skip_reason="caller_planned" if caller_planned else "original_query_only",
         )
         overflow_added: set[str] = set()
         for result in overflow_results:
@@ -4780,7 +4785,7 @@ def answer_question_result(
         overflow_trace["added_chunk_ids"] = sorted(overflow_added)
         if overflow_trace.get("triggered"):
             with _execution_step(
-                "検索上限の要求別補完", "全文検索の上限で省略した要求を、元の要求と共通条件のまま検索します。"
+                "検索上限の要求別補完", "全文検索の語数上限に達した質問を、元の要求と共通条件に分けて検索します。"
             ) as overflow_step:
                 statuses = [str(row["status"]) for row in overflow_trace["requests"]]
                 overflow_step.result(f"要求 {len(statuses)} 件、新しい根拠 {len(overflow_added)} 件")
