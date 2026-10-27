@@ -89,7 +89,7 @@
 - **ハードコードしない。** 特定の文書・業務・質問・データに合わせた語・規則・閾値・手順をコード（分岐・正規表現・プロンプトの例）に書かない。必要なら skill（`skills/<name>/SKILL.md`）か設定（`.env`・設定画面・検索・回答プロファイル・言語資源）に置き、コードは汎用の仕組みにする。
 - OCI / Oracle / LLM を呼ぶ層は CI では決定論スタブ / 録画応答でテストし、実サービスは手動 / ステージングで確かめる。
 - 実装と同時にテストを追加・更新し、該当範囲の lint・型チェック・テストの結果を報告する。ローカルでは変更した範囲だけを検査し、全件は CI に任せる（[docs/agents/ci.md](./docs/agents/ci.md)「ローカルの検証の範囲」）。
-- 文書（.docx / .pptx / .xlsx / .pdf）の生成は対応する skill（`document-skills:*` / `pdf`）を使う。
+- Excel（.xlsx / .xlsm / .csv / .tsv）の作成・編集・分析は Codex の `spreadsheet` skill を使う（[導入と検証](./docs/agents/spreadsheets.md)）。その他の文書（.docx / .pptx / .pdf）の生成は対応する skill（`document-skills:*` / `pdf`）を使う。
 - **LLM に渡す文（プロンプト・skill・MCP の説明）を書く・変える前に [docs/agents/prompts.md](./docs/agents/prompts.md) を読む。** 1 つの規則は 1 つの層にだけ書き、コードで保証できることはコードに置き、経緯や内部の仕組みを書かない。変えたら同じ PR で関係するテストを直し、最初のターンに渡す字数の前後を PR に書く。
 
 ## 配備
