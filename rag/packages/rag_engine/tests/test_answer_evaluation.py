@@ -17,12 +17,14 @@ from rag_engine.adapters.oci import InvalidStructuredOutput
 from rag_engine.config import get_settings
 from rag_engine.evaluation.answer_eval import (
     CLAIM_PROMPT,
+    CORRECTNESS_PROMPT,
     COVERAGE_PROMPT,
     MAX_EVALUATION_INPUT_BYTES,
     QUESTION_EVIDENCE_ID,
     QUESTION_SOURCE_ID,
     REFERENCE_UNCITED,
     RUBRIC_VERSION,
+    SCOPE_PROMPT,
     AnswerCorrectnessOutput,
     AnswerEvaluationOutput,
     ClaimCheck,
@@ -117,6 +119,10 @@ def test_completed_returns_checks_without_scores_and_judges_claims_with_cited_ev
     )
     with patch(PARSE, side_effect=judge(supported, calls=calls)) as parse:
         result = evaluate_answer_payload(data, object(), provider_id="chosen")
+    expected_systems = {ClaimJudgement: CLAIM_PROMPT, CoverageOutput: COVERAGE_PROMPT, AnswerCorrectnessOutput: CORRECTNESS_PROMPT}
+    for call in parse.call_args_list:
+        assert call.args[0] == expected_systems[call.args[3]]
+        assert call.args[0].startswith("## Step 1:")
     assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 12
     assert result["requirement_coverage"] == 1.0
     # 点数・合否は付けない。評価の基準の閾値による合否は backend が計算する(#680)。
@@ -1195,6 +1201,7 @@ def test_scope_with_mostly_unknown_unit_ids_is_retried_with_the_item_numbers():
     with patch(PARSE, side_effect=[bad, good]) as parse:
         scope = _prepare_standard_scope(data, object(), None)
     assert parse.call_count == 2 and scope.dropped_requirements == 0
+    assert all(call.args[0] == SCOPE_PROMPT and call.args[0].startswith("## Step 1:") for call in parse.call_args_list)
     feedback = json.loads(parse.call_args_list[1].args[1])["validation_feedback"]
     assert "1・3 番目" in feedback and "S1" in feedback and "S12" in feedback and "質問の文を項目にしない" in feedback
 

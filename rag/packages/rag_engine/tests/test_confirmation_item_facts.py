@@ -156,7 +156,7 @@ class WhoCanAnswerDefinitionTest(unittest.TestCase):
     def sections(self):
         from rag_engine.models.llm import ExternalDataItem
 
-        prompt = grounded.GENERATE_SYSTEM_PROMPT.split("4.5 ", 1)[1].split("4.6 ", 1)[0]
+        prompt = grounded.GENERATE_SYSTEM_PROMPT.split("### 未確認事項・実データ・別の資料", 1)[1].split("### 方針と items の対応", 1)[0]
         return prompt, ExternalDataItem.model_fields["who_can_answer"].description
 
     def test_ledger_values_are_document_not_system(self):

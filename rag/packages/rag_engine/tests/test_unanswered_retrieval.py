@@ -11,7 +11,7 @@ from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import answering as a
 from rag_engine.retrieval.extra_retrieval import ExtraRetrievalBudget
-from rag_engine.retrieval.request_coverage import CoverageUsage, RequestTarget, assess_targets
+from rag_engine.retrieval.request_coverage import CoverageUsage, RequestTarget, request_rows
 
 QUESTION = "対象Aの設定を変更する方法は？"
 OLD_TEXT = "対象Aの設定を変更する機能の概要。手順の記載はありません。"
@@ -37,7 +37,7 @@ def cover(ctx, config, *, usage=None, unanswered=None, extra=None, question=QUES
         retrieval_scope="knowledge_base",
         classification_filter=None,
         runtime_knowledge=None,
-        searched_queries=(question,),
+        searched_queries=("別の初回検索文",),
         usage=usage,
         unanswered_requests=unanswered,
         extra_budget=extra,
@@ -46,11 +46,9 @@ def cover(ctx, config, *, usage=None, unanswered=None, extra=None, question=QUES
 
 def test_high_word_overlap_does_not_assert_answerability():
     target = RequestTarget("Q1", "request", "要求", tuple(f"語{i}" for i in range(8)))
-    row = assess_targets([target], [("r", " ".join(f"語{i}" for i in range(7)))])[0]
-    assert row["status"] == "supported" and row["best_ratio"] == 0.875
-    assert row["assessment"] == "lexical" and row["answerability"] == "unassessed"
-    assert "回答可能性は未判定" in a._COVERAGE_SKIP_LABELS["all_covered"]
-    assert "語の一致が多い" in a._coverage_step_lines({"requests": [row]})[0]
+    row = request_rows([target])[0]
+    assert row["status"] == "unassessed" and "best_ratio" not in row
+    assert row["assessment"] == "not_performed" and row["answerability"] == "unassessed"
 
 
 def test_post_generation_missing_overrides_high_word_overlap_without_using_reason(monkeypatch):
@@ -58,10 +56,10 @@ def test_post_generation_missing_overrides_high_word_overlap_without_using_reaso
     monkeypatch.setattr(a, "_coverage_tokenizer", lambda _: lambda text: [term for term in ("対象A", "設定", "変更") if term in text])
     old = context(parent("old", OLD_TEXT))
     merged, trace = cover(old, settings(), unanswered=[{"request_id": "Q1", "status": "missing", "reason": "検索に入れない文"}])
-    assert trace["requests"][0]["status"] == "supported"
+    assert trace["requests"][0]["status"] == "unassessed"
     assert trace["requests"][0]["answer_status"] == "missing"
     assert trace["phase"] == "after_generation"
-    assert calls == [(QUESTION, ("対象a 設定 変更",))]
+    assert calls == [(QUESTION, (QUESTION,))]
     assert {r.chunk_uid for r in merged.records} == {"run:old", "run:new"}
 
 
@@ -73,7 +71,14 @@ def test_pre_and_post_generation_share_all_limits(monkeypatch):
     calls = _patch_search(monkeypatch, {"請求書の再発行方法は？": context(p("new", "請求書 再発行"))})
     usage, extra = CoverageUsage(), ExtraRetrievalBudget(5)
     old = context(p("old", "受注 登録"))
-    first, _ = cover(old, _settings(request_coverage_max_queries=1), usage=usage, extra=extra, question=two_requests)
+    first, _ = cover(
+        old,
+        _settings(request_coverage_max_queries=1),
+        usage=usage,
+        extra=extra,
+        question=two_requests,
+        unanswered=[{"request_id": "Q2", "status": "missing"}],
+    )
     assert usage.queries == 1
     second, trace = cover(
         first,
@@ -193,18 +198,19 @@ def test_main_answer_flow_wires_recovery_and_respects_disabled_setting(monkeypat
     )
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         result = a.answer_question_result(
-            QUESTION,
+            "初回に指定された検索文",
             "run",
             ["docling"],
             config,
             query_strategy=a.SIMPLE_RETRIEVAL_LABEL,
             answer_flow=a.STANDARD_ANSWER_FLOW,
             retrieval_scope=a.RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
+            request_question=QUESTION,
         )
     assert len(calls) == (2 if enabled else 1)
     assert len(model.prompts) == (2 if enabled else 1)
     if enabled:
-        assert calls[1][1] == ("対象a 設定 変更",)
+        assert calls[1][1] == (QUESTION,)
         trace = result.generation_trace["request_coverage"]["after_generation"][0]
         assert trace["re_retrieval"]["applied"] is True
         assert NEW_TEXT in result.answer
@@ -272,6 +278,39 @@ def test_focused_query_preserves_explicit_target_context():
         budget=CoverageBudget(),
         retrieve=lambda text, queries: calls.append((text, queries)),
         tokenize=lambda text: [],
-        searched_queries=(question,),
+        searched_queries=("別の初回検索文",),
     )
-    assert calls == [(question, ("対象b 設定 変更",))]
+    assert calls == [(question, (question,))]
+
+
+def test_unknown_child_id_is_not_assigned_to_original_request(monkeypatch):
+    calls = _patch_search(monkeypatch, {})
+    _, trace = cover(context(parent("old", OLD_TEXT)), settings(), unanswered=[{"request_id": "Q1.fabricated", "status": "missing"}])
+    assert calls == []
+    assert trace["unmapped_request_ids"] == ["Q1.fabricated"]
+    assert trace["re_retrieval"]["skipped"] == "unmapped_requests"
+
+
+def test_same_query_is_shared_between_distinct_request_ids():
+    from rag_engine.retrieval.request_coverage import CoverageBudget, run_targeted_retrievals
+
+    calls = []
+    targets = [RequestTarget("Q1", "request", "対象の作成方法は？", ()), RequestTarget("Q2", "request", "対象の作成方法は？", ())]
+    rows = [{"id": target.id, "status": "unassessed", "answer_status": "missing"} for target in targets]
+
+    def retrieve(text, queries):
+        calls.append(queries)
+        return context(parent("shared", NEW_TEXT))
+
+    results, _ = run_targeted_retrievals(rows, targets, budget=CoverageBudget(), retrieve=retrieve, tokenize=lambda text: ())
+    assert len(calls) == 1
+    assert [result.request_id for result in results] == ["Q1", "Q2"]
+    assert [result.reused for result in results] == [False, True]
+    assert results[0].parents == results[1].parents
+
+
+def test_equal_token_sets_preserve_distinct_original_request_ids(monkeypatch):
+    from rag_engine.retrieval.request_coverage import coverage_targets
+
+    targets = coverage_targets("設定を作成する方法は？設定を削除する方法は？", lambda text: ["設定"])
+    assert [target.id for target in targets] == ["Q1", "Q2"]

@@ -190,7 +190,7 @@ def test_image_selection_reaches_relevant_operation_after_first_four(tmp_path):
     assert answer_image_evidence(records, tmp_path, max_images=0) == ()
 
 
-def test_operation_support_has_explicit_capacity_without_evicting_primary():
+def test_parent_context_does_not_use_operation_support_capacity():
     primary = record("p1", "画面", chunk_level="parent", metadata={"section_path": ["〔返品理由入力〕"]})
     support = record("p2", "鉛筆の操作", chunk_level="parent", metadata={"section_path": ["〔返品理由入力〕"]})
     child = record("c1", "画面", chunk_level="child", parent_chunk_id="p1")
@@ -206,8 +206,8 @@ def test_operation_support_has_explicit_capacity_without_evicting_primary():
             support_record_limit=1,
         )
     )
-    assert {r.id for r in result.records} == {"p1", "p2"}
-    assert any(p.reason == "same_operation_context" for p in result.evidence_tree)
+    assert [r.id for r in result.records] == ["p1"]
+    assert all(p.reason != "same_operation_context" for p in result.evidence_tree)
 
 
 def test_evaluation_does_not_repeat_child_text_already_in_parent():

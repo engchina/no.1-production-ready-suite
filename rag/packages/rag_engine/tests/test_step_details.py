@@ -139,9 +139,8 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
 
     def test_hidden_steps_still_explain_why_nothing_happened(self):
         steps = _by_name(self.run_flow())
-        coverage = _fields(steps["要求ごとの根拠の確認"])
-        # 探し直しをしたか・しなかった理由を、工程を省いても段に残す（1 要求の一部の根拠は探し直す。#2810）。
-        self.assertRegex(coverage["根拠が足りない要求の探し直し"], r"^(しない（.+）|\d+ 件の要求で実行)$")
+        # 生成前に語の一致で根拠の充足を判定した工程は表示しない。
+        self.assertNotIn("要求ごとの根拠の確認", steps)
         self.assertEqual("根拠に画像がありません", _fields(steps["回答に添付する画像"])["結果"])
         # 記録の文（question_display）からは従来どおり省く。
         result = self.run_flow()

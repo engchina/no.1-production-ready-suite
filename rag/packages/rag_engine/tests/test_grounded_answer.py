@@ -52,9 +52,11 @@ class FakeModel:
 
     def __init__(self, drafts, audits):
         self.drafts, self.audits, self.prompts = list(drafts), list(audits), []
+        self.captured_system_prompts = []
 
     def __call__(self, system, prompt, settings, schema, **options):
         self.prompts.append((schema.__name__, prompt))
+        self.captured_system_prompts.append((schema.__name__, system))
         source = self.drafts if schema is GroundedDraft else self.audits
         value = source.pop(0) if len(source) > 1 else source[0]
         return schema.model_validate(value(prompt) if callable(value) else value)
@@ -975,7 +977,7 @@ class GroundedAnswerTest(unittest.TestCase):
         prompt = grounded.GENERATE_SYSTEM_PROMPT
         # 方針は items 向けに書く (#960)。本文の構成を述べる「別の節にする」は残さず、未確認事項・条件・実データの行き先だけ対応付ける。
         self.assertNotIn("別の節にする", prompt)
-        mapping = prompt.split("5.1 方針と items の対応\n", 1)[1].split("5.2 ", 1)[0]
+        mapping = prompt.split("### 方針と items の対応\n", 1)[1].split("### 根拠が無い場合", 1)[0]
         for field in ("kind=gap", "condition", "external_data_items"):
             self.assertIn(field, mapping)
 
@@ -1183,8 +1185,8 @@ class GroundedAnswerTest(unittest.TestCase):
         lines = grounded.AUDIT_SYSTEM_PROMPT.splitlines()
         # 行末の改行が抜けると、因果の断定の規則が function_limits の規則の続きとして読まれる。
         self.assertIn("- 観測結果から原因・成功・解消を断定する text も、quote にその因果がなければ unsupported。", lines)
-        # 節見出し（「3.1 support…」）と節の間の空行以外は 1 行 1 規則 (#932)。
-        self.assertTrue(all(line.startswith(("- ", ("## "))) or re.match(r"^\d(?:\.\d)?\.? ", line) or not line for line in lines))
+        # Step と小節の見出しと節の間の空行以外は 1 行 1 規則 (#932)。
+        self.assertTrue(all(line.startswith(("- ", "## ", "### ")) or re.match(r"^\d(?:\.\d)?\.? ", line) or not line for line in lines))
 
     def test_deterministic_checks_warn_on_claims_the_quote_cannot_carry(self):
         """質問が尋ねた対象と合わない item、画面の表示例の値を規則として述べた item は、監査が支持しても警告を付ける。
