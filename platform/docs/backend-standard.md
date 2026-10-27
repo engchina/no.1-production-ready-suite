@@ -368,3 +368,5 @@ Agent の既存の終了イベントは実行 span とは別の log として扱
 4. HTTPS と3製品のログイン、`/api/ready`、サービス管理の環境表示を確認する。
 
 Terraform の環境入力は3製品共通の `platform_environment`（既定 `staging`）を使う。staging / production で HTTPS を無効にした構成は配備前に拒否する。
+
+チャット添付の初期配備は 3 製品とも無効です。製品ごとに設定 API で有効化した保存値は再配備でも維持します。`.env` に有効化の既定値は置きません。

@@ -57,6 +57,9 @@ test("全幅の一覧を検索・数値ページングし、全幅の詳細の�
   await mockFeedback(page, requestedUrls);
 
   await page.goto("/feedback?period=30&sort=newest&size=50&page=1");
+  const paging = page.getByTestId("feedback-pagination");
+  await expect(paging.getByRole("textbox", { name: "ページ番号" })).toHaveValue("1");
+  await expect(paging.getByRole("button", { name: "前へ", exact: true })).toBeDisabled();
 
   await expect(page.getByRole("heading", { name: "利用者フィードバック" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "問題の概要" })).toBeVisible();

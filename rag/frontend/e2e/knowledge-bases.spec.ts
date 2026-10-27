@@ -1,3 +1,4 @@
+import { expectGrowingList } from "./_list-viewport";
 import { expect, type Page, test } from "./fixtures/test";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
@@ -1134,3 +1135,11 @@ function makeDocument(overrides: Partial<DocumentSummary> & { id: string; file_n
     ...overrides,
   };
 }
+
+test("主一覧は高い画面の余白へ拡張し、ページ送りを維持する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const state = createKnowledgeBaseState();
+  state.knowledgeBases = Array.from({ length: 60 }, (_, i) => makeKnowledgeBase({ id: `viewport-${i}`, name: `ナレッジベース ${i}` }));
+  await mockKnowledgeBaseApi(page, state);
+  await page.goto("/knowledge-bases");
+  await expectGrowingList(page, testInfo, "knowledge-bases");
+});

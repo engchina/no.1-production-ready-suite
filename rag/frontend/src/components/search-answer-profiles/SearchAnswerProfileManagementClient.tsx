@@ -506,6 +506,7 @@ function SearchAnswerProfileList({
               })}
               stickyHeader
               visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+              growToViewport
               scrollAriaLabel={t("searchAnswerProfiles.list.scrollLabel")}
               scrollTestId="search-answer-profiles-scroll-region"
               tableClassName="w-full min-w-[51.43rem] text-sm"

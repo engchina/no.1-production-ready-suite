@@ -188,7 +188,7 @@ for (const viewport of [
     expect(await page.getByTestId("answer-prompt-stages-card").evaluate(node => parseFloat(getComputedStyle(node).borderTopWidth))).toBeGreaterThan(0);
 
     await generation.locator("summary").click();
-    await expect(generation).toContainText("「前提を示して回答する」のときに追加する system 指示");
+    await expect(generation).toContainText("「前提を示して回答する」のときに追加する システムプロンプト");
     await expect(generation).toContainText("未確定の条件を明示する。");
     await expect(generation).toContainText("システムプロンプト");
     await expect(generation).not.toContainText("system プロンプト");

@@ -372,6 +372,7 @@ export function FeedbackClient() {
                 listFooter={
                   page && page.total > 0 ? (
                     <OffsetPagination
+                      showSinglePage
                       offset={offsetForPage(urlState.page, urlState.pageSize)}
                       limit={urlState.pageSize}
                       total={page.total}

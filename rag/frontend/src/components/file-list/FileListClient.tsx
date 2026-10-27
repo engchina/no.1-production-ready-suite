@@ -776,6 +776,7 @@ export function FileListClient() {
               rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
               stickyHeader
               visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+              growToViewport
               scrollAriaLabel={t("fileList.scrollLabel")}
               scrollTestId="file-list-scroll-region"
               tableClassName="w-full min-w-[70rem] text-sm"

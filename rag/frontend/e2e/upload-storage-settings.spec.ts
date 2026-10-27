@@ -207,7 +207,7 @@ test("保存の後の再取得に失敗してもフォームを残し、警告�
   await expect(localDir).toHaveValue("/u01/data/changed");
 });
 
-test("アップロード画面から現在の保存先と設定導線を確認できる", async ({
+test("アップロード画面は現在の保存先を表示し、保存先設定の導線を出さない", { tag: "@responsive" }, async ({
   page,
 }) => {
   await mockUploadStorageSettings(page, () => ({
@@ -241,8 +241,7 @@ test("アップロード画面から現在の保存先と設定導線を確認�
   expect(acceptedTypes).not.toContain("audio/");
   expect(acceptedTypes).not.toContain(".mp3");
   await expect(page.getByText("example-namespace/rag-originals")).toBeVisible();
-  await page.getByRole("link", { name: "保存先設定" }).click();
-  await expect(page).toHaveURL(/\/settings\/upload-storage$/);
+  await expect(page.getByRole("link", { name: "保存先設定" })).toHaveCount(0);
 });
 
 test("アップロード時に選択したナレッジベースへ所属できる", async ({ page }) => {

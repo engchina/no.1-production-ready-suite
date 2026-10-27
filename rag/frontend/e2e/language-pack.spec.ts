@@ -177,10 +177,11 @@ test("言語資源の試すは、保存した値と編集中の値で例の文�
   expect(saved.overrides).toBeNull();
 });
 
-test("言語資源の保存の履歴から前の版に戻す。編集中は戻せない（#2181）", async ({ page }) => {
+test("言語資源の保存の履歴から前の版に戻す。編集中は戻せない（#2181）", { tag: "@responsive" }, async ({ page }) => {
   const { restored } = await mockLanguagePack(page);
   await page.goto("/settings/language-pack");
 
+  await expect(page.getByText(/新しい順に 5 件まで残します/)).toBeVisible();
   const history = page.getByRole("table", { name: "保存の履歴" });
   await expect(history.getByRole("row")).toHaveCount(3);
   const currentRow = history.getByRole("row").filter({ hasText: "今の版" });

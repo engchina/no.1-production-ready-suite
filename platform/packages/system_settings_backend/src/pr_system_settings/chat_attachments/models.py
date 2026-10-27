@@ -252,7 +252,7 @@ class ChatAttachmentLimitsData(BaseModel):
     # 受け付ける拡張子（`.pdf` など。画面の `accept` と案内）。
     accept: list[str]
     # 製品の「運用設定 › チャットの添付」で有効か（無効なら画面は添付の操作を出さない）。
-    enabled: bool = True
+    enabled: bool = False
     # 画像を読み取れるモデル（既定の Vision モデル）があるか。画像は無くても添付でき（#2652）、
     # 読み取るときにモデルが無いことを示す。
     image_enabled: bool

@@ -31,7 +31,7 @@ from rag_parser_core.language import (
 
 LANGUAGE_PACK_FILE_MODE = 0o600
 # 残す版の数（新しい順）。
-LANGUAGE_PACK_HISTORY_LIMIT = 50
+LANGUAGE_PACK_HISTORY_LIMIT = 5
 
 
 def history_path(path: Path) -> Path:
@@ -77,7 +77,9 @@ class LanguagePackStore:
         except (FileNotFoundError, ValueError):
             return []
         versions = data.get("versions") if isinstance(data, Mapping) else None
-        return [dict(version) for version in versions or [] if isinstance(version, Mapping)]
+        return [dict(version) for version in versions or [] if isinstance(version, Mapping)][
+            :LANGUAGE_PACK_HISTORY_LIMIT
+        ]
 
     def save(
         self,

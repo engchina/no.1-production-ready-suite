@@ -696,6 +696,8 @@ export interface OffsetPaginationProps {
   /** 表示件数の選択肢（10 / 25 / 50 / 100。既定 25）。 */
   pageSizeOptions?: readonly number[];
   labels?: Partial<PaginationLabels>;
+  /** 単一ページでもページ番号と移動操作を表示する。 */
+  showSinglePage?: boolean;
   disabled?: boolean;
   ariaLabel?: string;
   testId?: string;
@@ -717,6 +719,7 @@ export function OffsetPagination({
   onPageSizeChange,
   pageSizeOptions,
   labels,
+  showSinglePage,
   disabled,
   ariaLabel,
   testId,
@@ -742,6 +745,7 @@ export function OffsetPagination({
       pageSizeOptions={pageSizeOptions}
       onPageSizeChange={onPageSizeChange}
       labels={labels}
+      showSinglePage={showSinglePage}
       disabled={disabled}
       ariaLabel={ariaLabel}
       testId={testId}
