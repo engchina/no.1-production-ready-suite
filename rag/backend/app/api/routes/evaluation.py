@@ -25,6 +25,13 @@ from rag_engine.evaluation.answer_eval import standard_scope_cache
 from rag_parser_core.language import current_pack
 from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
 
+from app.api.routes.search import (
+    SEARCH_ANSWER_PROFILE_NOT_FOUND_PREFIX,
+    ensure_search_answer_profile_has_knowledge_bases,
+    ensure_search_answer_profile_knowledge_bases_permitted,
+    ensure_search_answer_profile_not_archived,
+    permitted_knowledge_base_ids,
+)
 from app.clients.ai_calls import make_ai_caller
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oracle import OracleClient
@@ -157,16 +164,38 @@ async def submit_run_evaluation_job(
     return ApiResponse(data=job)
 
 
+async def _evaluation_profile_knowledge_bases(profile_id: str) -> list[str]:
+    """Excel の照合範囲を検索・回答と同じ参照 KB・権限から解決する。"""
+    view = await OracleClient().get_search_answer_profile(profile_id)
+    if view is None:
+        raise HTTPException(
+            status_code=404, detail=f"{SEARCH_ANSWER_PROFILE_NOT_FOUND_PREFIX}{profile_id}"
+        )
+    ensure_search_answer_profile_not_archived(view, profile_id)
+    ids = view.config.normalized_knowledge_base_ids()
+    ensure_search_answer_profile_has_knowledge_bases(ids)
+    ensure_search_answer_profile_knowledge_bases_permitted(ids)
+    permitted = permitted_knowledge_base_ids(ids)
+    return ids if permitted is None else permitted
+
+
 @router.get("/cases/template")
 async def download_evaluation_template(
     knowledge_base_ids: Annotated[list[str] | None, Query()] = None,
+    search_answer_profile_id: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
 ) -> Response:
     """評価リクエストの Excel のテンプレート（#2065。見出し・記入の説明・記入例・文書一覧）。
 
-    `knowledge_base_ids` を渡すと、そのナレッジベースの文書（ファイル名・文書 ID・形式・ページ数 /
-    シート名・アップロード日）を「文書一覧」のシートに入れる（#2086）。
+    `search_answer_profile_id` があれば参照 KB を解決する。
+    無ければ `knowledge_base_ids` の文書を使う。
+    ファイル名・文書 ID・形式・ページ数 / シート名・アップロード日を
+    「文書一覧」のシートに入れる（#2086）。
     """
-    kb_ids = normalize_search_id_list(knowledge_base_ids or [])
+    kb_ids = (
+        await _evaluation_profile_knowledge_bases(search_answer_profile_id)
+        if search_answer_profile_id
+        else normalize_search_id_list(knowledge_base_ids or [])
+    )
     documents: list[EvaluationDocumentRef] = []
     if kb_ids:
         documents = await _with_document_locations(await _knowledge_base_documents(kb_ids))
@@ -181,15 +210,21 @@ async def download_evaluation_template(
 @router.post("/cases/import", response_model=ApiResponse[EvaluationImportResult])
 async def import_evaluation_cases(
     file: Annotated[UploadFile, File()],
-    knowledge_base_ids: Annotated[list[str], Form()],
+    knowledge_base_ids: Annotated[list[str] | None, Form()] = None,
+    search_answer_profile_id: Annotated[str | None, Form(min_length=1, max_length=128)] = None,
 ) -> ApiResponse[EvaluationImportResult]:
     """評価リクエストの Excel を検証し、評価のケースにする（#2065。保存しない）。
 
-    構造（見出し・必須・長さ・行数・根拠の書き方）を検証し、根拠のファイル名を選んだナレッジベースの
-    文書の ID にする。誤りは行・列・理由で返し（HTTP は 200）、1 つでもあればケースを返さない。
+    構造（見出し・必須・長さ・行数・根拠の書き方）を検証し、根拠のファイル名を選んだプロファイルの
+    参照 KB（プロファイルの指定が無ければ明示の KB）の文書の ID にする。
+    誤りは行・列・理由で返し（HTTP は 200）、1 つでもあればケースを返さない。
     評価の実行は、返したケースで `POST /jobs/run` を呼ぶ。
     """
-    kb_ids = normalize_search_id_list(knowledge_base_ids)
+    kb_ids = (
+        await _evaluation_profile_knowledge_bases(search_answer_profile_id)
+        if search_answer_profile_id
+        else normalize_search_id_list(knowledge_base_ids or [])
+    )
     if not kb_ids:
         raise HTTPException(status_code=422, detail="ナレッジベースを選んでください。")
     file_name = PurePath(file.filename or "").name or "evaluation.xlsx"
@@ -197,6 +232,7 @@ async def import_evaluation_cases(
     result = EvaluationImportResult(
         file_name=file_name,
         row_count=0,
+        search_answer_profile_id=search_answer_profile_id,
         knowledge_base_ids=kb_ids,
         max_rows=EVALUATION_EXCEL_MAX_ROWS,
         max_bytes=EVALUATION_EXCEL_MAX_BYTES,

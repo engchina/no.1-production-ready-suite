@@ -732,7 +732,7 @@ def _reject_duplicate_case_ids(cases: list[EvaluationCase]) -> None:
 class EvaluationRunRequest(BaseModel):
     """評価実行リクエスト。
 
-    回答エンジンの全体の既定で評価する(検索・回答プロファイルは受け取らない。#301)。検索の方式(mode)と
+    検索・回答プロファイルを指定すると、その設定で評価する。検索の方式(mode)と
     rerank の件数(rerank_top_n)は回答エンジンが使わないため持たない(#591。以前の golden set の
     指定は無視する)。
     """
@@ -747,9 +747,7 @@ class EvaluationRunRequest(BaseModel):
     rag_overrides: EvaluationRagOverrides | None = None
     # 検索・回答プロファイル（任意。#1249）。指定しなければ全体の既定で評価する（#301）。
     search_answer_profile_id: str | None = Field(default=None, max_length=128)
-    # 比べる検索・回答プロファイル（任意。#2402）。指定すると、同じケースをナレッジベースの範囲
-    # （`knowledge_base_ids`）と、このプロファイルの範囲（参照 KB・業務ガイド・ルール）の 2 回流し、
-    # 結果の `comparison` に後者を入れる。`search_answer_profile_id` とは一緒に指定しない。
+    # 同じケースを別の検索・回答プロファイルでも評価する。
     compare_search_answer_profile_id: str | None = Field(default=None, max_length=128)
 
     @field_validator("filters")
@@ -772,11 +770,13 @@ class EvaluationRunRequest(BaseModel):
             self.compare_search_answer_profile_id = (
                 self.compare_search_answer_profile_id.strip() or None
             )
-        if self.compare_search_answer_profile_id and self.search_answer_profile_id:
-            raise ValueError(
-                "compare_search_answer_profile_id は search_answer_profile_id と"
-                "一緒に指定できません（比べる元はナレッジベースの範囲です）。"
-            )
+        if self.search_answer_profile_id is not None:
+            self.search_answer_profile_id = self.search_answer_profile_id.strip() or None
+        if (
+            self.compare_search_answer_profile_id
+            and self.compare_search_answer_profile_id == self.search_answer_profile_id
+        ):
+            raise ValueError("比べる検索・回答プロファイルは、評価するものと別にしてください。")
         self.filters, self.knowledge_base_ids = _sync_knowledge_base_filter(
             self.filters,
             self.knowledge_base_ids,
@@ -944,6 +944,7 @@ class EvaluationImportResult(BaseModel):
     # 警告（#2086）。評価は実行できる（形式に合わない位置の条件・同じ名前の文書など）。
     warnings: list[EvaluationImportIssue] = Field(default_factory=list)
     warning_count: int = 0
+    search_answer_profile_id: str | None = None
     knowledge_base_ids: list[str] = Field(default_factory=list)
     document_names: dict[str, str] = Field(default_factory=dict)
     max_rows: int

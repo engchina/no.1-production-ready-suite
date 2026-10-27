@@ -1903,6 +1903,7 @@ export interface EvaluationImportResult {
   error_count: number;
   warnings: EvaluationImportIssue[];
   warning_count: number;
+  search_answer_profile_id?: string | null;
   knowledge_base_ids: string[];
   document_names: Record<string, string>;
   max_rows: number;
@@ -1919,11 +1920,11 @@ export type EvaluationThresholds = Partial<Record<EvaluationMetricName, number |
 
 /**
  * 画面からの評価の request（#2065）。評価の基準は常に設定の既定（suite・thresholds を送らない）、
- * 検索の対象は選んだナレッジベース。ケースは評価リクエストの Excel の検証の結果。
+ * 検索・回答の設定は選んだプロファイル。ケースは評価リクエストの Excel の検証の結果。
  */
 export interface EvaluationRunRequestBody {
   cases: EvaluationCase[];
-  knowledge_base_ids: string[];
+  search_answer_profile_id: string;
   /** 比べる検索・回答プロファイル（#2402）。同じケースをプロファイルの範囲でも流す。 */
   compare_search_answer_profile_id?: string | null;
 }
@@ -4191,17 +4192,17 @@ export const api = {
   submitRunEvaluationJob: (body: EvaluationRunRequestBody) =>
     request<EvaluationJob>("/api/evaluation/jobs/run", jsonBody(body)),
   // 評価リクエストの Excel（#2065）。テンプレートのダウンロードと、アップロードした Excel の検証。
-  // テンプレートは選んだナレッジベースの文書の一覧（ファイル名・文書 ID）を「文書一覧」に入れる（#2086）。
-  downloadEvaluationTemplate: (knowledgeBaseIds: readonly string[] = []) => {
+  // テンプレートは選んだプロファイルが参照する文書の一覧（ファイル名・文書 ID）を「文書一覧」に入れる（#2086）。
+  downloadEvaluationTemplate: (searchAnswerProfileId: string | null = null) => {
     const query = new URLSearchParams();
-    for (const id of knowledgeBaseIds) query.append("knowledge_base_ids", id);
+    if (searchAnswerProfileId) query.set("search_answer_profile_id", searchAnswerProfileId);
     const suffix = query.size > 0 ? `?${query.toString()}` : "";
     return requestFile(`/api/evaluation/cases/template${suffix}`, "evaluation_request_template.xlsx");
   },
-  importEvaluationCases: (file: File, knowledgeBaseIds: string[]) => {
+  importEvaluationCases: (file: File, searchAnswerProfileId: string) => {
     const body = new FormData();
     body.append("file", file);
-    for (const id of knowledgeBaseIds) body.append("knowledge_base_ids", id);
+    body.append("search_answer_profile_id", searchAnswerProfileId);
     return request<EvaluationImportResult>("/api/evaluation/cases/import", { method: "POST", body });
   },
   /** 回答の過程から評価の期待の下書きを作る（#2402。1 回 10 行まで。保存しない）。 */
