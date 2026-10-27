@@ -1,6 +1,7 @@
 """Excel の検証・プレビュー非保存・取込モードを実データを使わず確かめる。"""
 
 import io
+from collections.abc import Sequence
 
 import pytest
 from openpyxl import Workbook  # type: ignore[import-untyped]
@@ -21,7 +22,7 @@ def store(monkeypatch: pytest.MonkeyPatch) -> FakeKnowledgeOracle:
     return fake
 
 
-def excel(rows: list[list[object]]) -> dict[str, tuple[str, bytes, str]]:
+def excel(rows: Sequence[Sequence[object]]) -> dict[str, tuple[str, bytes, str]]:
     workbook = Workbook()
     sheet = workbook.active
     assert sheet is not None
