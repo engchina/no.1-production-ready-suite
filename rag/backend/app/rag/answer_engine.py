@@ -280,9 +280,20 @@ def _validation_details(validation: Mapping[str, Any]) -> dict[str, Any]:
                     "not_run": "未実行",
                     "no_evidence": "根拠なし",
                     "body_changed": "本文の変更後は未確認",
+                    "input_too_large": "照合の入力上限超過",
                 }.get(str(validation.get("status")), "未確認"),
             },
             {"label": "判定した段落", "value": str(len(validation.get("claim_checks") or []))},
+            *(
+                [
+                    {
+                        "label": "未照合の確認条件",
+                        "value": str(validation["unassessed_premises_count"]),
+                    }
+                ]
+                if validation.get("unassessed_premises_count")
+                else []
+            ),
         ],
     }
 
@@ -796,6 +807,33 @@ class AnswerScope:
     search_terms: tuple[str, ...] = ()
     # 回答の末尾に出す対象の範囲(例: 「出張旅費規程」の「第6条」(p.2))。
     label: str = ""
+    # 実際に選んだ答え・自由入力だけ。設定された指示や仮定を利用者の事実にしない。
+    confirmed_premises: tuple[tuple[str, str], ...] = ()
+
+
+def _confirmed_validation_premises(
+    settings: Settings, scope: AnswerScope | None
+) -> list[dict[str, str]]:
+    """生成に渡した確定条件を最終照合へ渡す。展示用 context の文章は解析しない。"""
+    pairs = list(scope.confirmed_premises) if scope is not None else []
+    known = (settings.rag_support_guide or {}).get("known_conditions")
+    if settings.rag_support_guide_enabled and isinstance(known, list):
+        for item in known:
+            if (
+                not isinstance(item, Mapping)
+                or item.get("source") not in {"user", "question"}
+                or item.get("state") != "known"
+            ):
+                continue
+            question = str(item.get("label") or "").strip()
+            answer = str(item.get("value") or "").strip()
+            if question and answer:
+                pairs.append((question, answer))
+    return [
+        {"question": question, "answer": answer}
+        for question, answer in dict.fromkeys(pairs)
+        if answer.strip()
+    ]
 
 
 class AnswerEngine:
@@ -1026,7 +1064,12 @@ class AnswerEngine:
             outcome.diagnostics["answer_validation"] = {"status": "not_run", "valid": False}
             return
         # answer_validation は engine の設定変換も使うため、循環 import を避けてここで読む。
-        from app.rag.answer_validation import EvidenceRef, validate_answer
+        from app.rag.answer_validation import (
+            MAX_PREMISES,
+            AnswerValidation,
+            EvidenceRef,
+            validate_answer,
+        )
 
         name = ANSWER_VALIDATION_STEP
         started = time.monotonic()
@@ -1037,13 +1080,22 @@ class AnswerEngine:
         # 回答フローの工程と同じ工程の span にする（処理の経過の行。#3226）。
         with _answer_step_span(name) as span:
             try:
-                result = await validate_answer(
-                    request.query,
-                    outcome.answer,
-                    [EvidenceRef(chunk.document_id, chunk.chunk_id) for chunk in outcome.citations],
-                    self._settings,
-                    oracle=self._oracle,
-                )
+                premises = _confirmed_validation_premises(self._settings, self._scope)
+                if len(premises) > MAX_PREMISES:
+                    # 一部の確定条件を黙って省いて「確認済み」にしない。
+                    result = AnswerValidation(status="input_too_large", valid=False)
+                else:
+                    result = await validate_answer(
+                        request.original_question or request.query,
+                        outcome.answer,
+                        [
+                            EvidenceRef(chunk.document_id, chunk.chunk_id)
+                            for chunk in outcome.citations
+                        ],
+                        self._settings,
+                        oracle=self._oracle,
+                        premises=premises,
+                    )
                 llm_usage = dict(result.llm_usage)
                 validation: dict[str, Any] = {
                     "status": result.status,
@@ -1053,6 +1105,10 @@ class AnswerEngine:
                     "claim_checks": list(result.claim_checks),
                     "missing_evidence_count": len(result.missing_evidence),
                     "stale_evidence_count": len(result.stale_evidence),
+                    "confirmed_premises_count": len(premises),
+                    "unassessed_premises_count": len(premises)
+                    if len(premises) > MAX_PREMISES
+                    else 0,
                 }
             except Exception:  # noqa: BLE001 - 検証の失敗は未確認として残し、回答の記録を失わない。
                 logger.warning("answer final validation failed", exc_info=True)

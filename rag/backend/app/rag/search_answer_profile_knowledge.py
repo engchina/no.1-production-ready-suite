@@ -749,6 +749,12 @@ def resolve_clarification(
         context="\n".join(lines),
         search_terms=tuple(term for option in options for term in option.search_terms),
         label="、".join(labels),
+        confirmed_premises=(
+            (
+                clarification.question,
+                "、".join([*(option.label for option in options), *([other] if other else [])]),
+            ),
+        ),
     )
     return scope, page_ranges
 

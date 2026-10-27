@@ -1512,6 +1512,8 @@ def test_engine_settings_pass_the_validation_input_budget(tmp_path: Path) -> Non
         "gaps",
         "guide",
         "model",
+        "profile",
+        "runtime",
     ],
 )
 def test_review_reuse_invalidates_changed_dependencies(changed: str) -> None:
@@ -1541,7 +1543,14 @@ def test_review_reuse_invalidates_changed_dependencies(changed: str) -> None:
         "gaps": ["不足A"],
         "guide": GuideCheckRef("profile-a", "guide-a", 2),
     }
-    if changed == "model":
+    if changed in {"profile", "runtime"}:
+        name = (
+            "rag_search_answer_profile_revision"
+            if changed == "profile"
+            else "rag_runtime_knowledge"
+        )
+        arguments["settings"] = settings.model_copy(update={name: {"revision": "b"}})
+    elif changed == "model":
         arguments["settings"] = settings.model_copy(
             update={"oci_enterprise_ai_default_text_model": "test-model-b"}
         )

@@ -295,6 +295,8 @@ def validation_reuse_context(
             "question": question,
             "answer": answer,
             "prompts": prompt_version,
+            "profile_revision": settings.rag_search_answer_profile_revision,
+            "runtime_knowledge": settings.rag_runtime_knowledge,
             "model": model_id,
             "connection": {
                 "id": connection.connection_id,
