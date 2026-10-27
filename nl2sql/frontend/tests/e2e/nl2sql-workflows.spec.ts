@@ -5882,6 +5882,7 @@ test("実行結果は要約・表の中のスクロールのプレビューと�
   await expect(sheet).toBeVisible();
   await expect(sheet.getByRole("button", { name: "CSV をダウンロード" })).toBeVisible();
   const pagination = page.getByTestId("query-results-all-pagination");
+  await expect(pagination.getByRole("button", { name: "次へ" })).toBeInViewport();
   await expect(pagination).toContainText("1–25 / 27 件");
   await expect(pagination).toContainText("1 / 2 ページ");
   const allTable = page.getByTestId("query-results-all-table");

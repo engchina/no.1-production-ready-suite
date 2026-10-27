@@ -79,6 +79,7 @@ describe("RolePermissionsPage", () => {
     const html = render(<RolePermissionsPage api={api} canManage targets={ragTargets} />);
     expect(html).toContain("権限管理");
     expect(html).toContain('data-testid="security-permissions-loading"');
+    expect(html).toContain("権限を読込中");
     expect(html).toContain('data-testid="security-permissions-actions"');
     expect(html).toContain('data-testid="security-permissions-search"');
     // 一覧の列は狭いので、利用できる対象の件数は列にせず詳細に出す（#2282）。

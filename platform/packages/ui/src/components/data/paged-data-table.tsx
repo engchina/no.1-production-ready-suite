@@ -27,6 +27,10 @@ export type PagedDataTableProps<T> = Omit<DataTableProps<T>, "stickyHeader" | "v
   /** 制御式のページ番号（作業状態に保持するとき。UX 契約 workspace-state.md）。 */
   page?: number;
   onPageChange?: (page: number) => void;
+  /** ページ送りの位置。結果シートでは表より前に置き、開いた直後に操作できるようにする。 */
+  paginationPosition?: "top" | "bottom";
+  /** 1 ページでもページ送りを表示する。 */
+  showSinglePagePagination?: boolean;
   paginationTestId?: string;
   paginationAriaLabel?: string;
   /** list は実測の 5 / 8 行。bounded は長いセルも共通の高さ上限で止める。page は親でスクロールする。 */
@@ -51,6 +55,8 @@ export function PagedDataTable<T>({
   onPageChange,
   paginationTestId,
   paginationAriaLabel,
+  paginationPosition = "bottom",
+  showSinglePagePagination = false,
   viewport = "list",
   className,
   ...props
@@ -67,8 +73,24 @@ export function PagedDataTable<T>({
     onPageChange,
     resetKey: selectable ? combinedResetKey : resetKey,
   });
+  const pagination = (
+    <Pagination
+      page={page}
+      totalPages={totalPages}
+      range={range}
+      onPageChange={setPage}
+      pageSize={selectable ? size : undefined}
+      pageSizeOptions={pageSizeOptions}
+      onPageSizeChange={selectable ? (next) => (onPageSizeChange ?? setInnerPageSize)(next) : undefined}
+      labels={paginationLabels}
+      ariaLabel={paginationAriaLabel}
+      showSinglePage={showSinglePagePagination}
+      testId={paginationTestId}
+    />
+  );
   return (
-    <div className="grid min-w-0 gap-2">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2">
+      {paginationPosition === "top" ? pagination : null}
       <DataTable<T>
         {...props}
         rows={pageItems}
@@ -81,18 +103,7 @@ export function PagedDataTable<T>({
         className={cn(viewport === "bounded" && INFORMATION_LIST_SCROLL_CLASS, className)}
         scrollWithinParent={viewport === "page"}
       />
-      <Pagination
-        page={page}
-        totalPages={totalPages}
-        range={range}
-        onPageChange={setPage}
-        pageSize={selectable ? size : undefined}
-        pageSizeOptions={pageSizeOptions}
-        onPageSizeChange={selectable ? (next) => (onPageSizeChange ?? setInnerPageSize)(next) : undefined}
-        labels={paginationLabels}
-        ariaLabel={paginationAriaLabel}
-        testId={paginationTestId}
-      />
+      {paginationPosition === "bottom" ? pagination : null}
     </div>
   );
 }

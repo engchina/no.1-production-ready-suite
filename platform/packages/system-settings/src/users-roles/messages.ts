@@ -36,7 +36,8 @@ export const USERS_ROLES_MESSAGES = {
     "ドラッグ・左右の矢印キーで一覧の幅を変更・ダブルクリックか Home で既定の幅に戻す",
   "security.common.loadError":
     "読み込みに失敗しました。接続状態と権限を確認して再試行してください。",
-  "security.common.loading": "セキュリティ設定を読み込んでいます。",
+  "security.users.loading": "ユーザーを読込中",
+  "security.roles.loading": "ロールを読込中",
   // 一覧 + 詳細の詳細の上端の「前へ / 次へ」（#2282）。
   "security.common.next": "次へ",
   "security.common.no": "いいえ",

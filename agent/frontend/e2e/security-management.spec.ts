@@ -194,3 +194,23 @@ test("API キーの管理は専用権限で開け、削除を確定できる", {
   await page.goto("/settings/security/api-keys");
   await expect(page).toHaveURL(/\/forbidden$/);
 });
+
+
+test("管理画面の読込表示は対象を短く示して一覧の幅に収まる", { tag: "@responsive" }, async ({ page, mockApi }) => {
+  mockApi.setCurrentUser(SECURITY_ADMIN);
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/api/security/**", async route => { await pending; await route.fallback(); });
+  try {
+    for (const [kind, label] of [["users", "ユーザーを読込中"], ["roles", "ロールを読込中"], ["permissions", "権限を読込中"]]) {
+      await page.goto(`/settings/security/${kind}`);
+      const loading = page.getByTestId(`security-${kind}-loading`);
+      await expect(loading.locator("[data-processing-label]")).toHaveText(label);
+      await expect(loading.locator("[data-processing-label]")).toBeVisible();
+      await expect(loading).toContainText("経過時間");
+      const size = await loading.locator("[data-processing-label]").evaluate(node => ({height: node.getBoundingClientRect().height, line: parseFloat(getComputedStyle(node).lineHeight)}));
+      expect(size.height).toBeLessThanOrEqual(size.line * 2 + 1);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+    }
+  } finally { release(); }
+});
