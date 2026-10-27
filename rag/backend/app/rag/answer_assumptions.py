@@ -7,6 +7,7 @@ from app.rag.search_answer_profile_knowledge import (
     rule_answer,
     unanswered_rule_clarifications,
 )
+from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 
 
 def with_answer_assumptions(
@@ -17,6 +18,7 @@ def with_answer_assumptions(
     conditions: Mapping[str, str],
     guide: Mapping[str, Any],
     answered_rule_ids: Sequence[str] = (),
+    confirmed_answers: Sequence[ClarificationAnswer] = (),
 ) -> dict[str, Any]:
     """保存値を変えず、今回の回答用に方針と未回答事項を重ねる。"""
     result = dict(payload or {})
@@ -26,7 +28,9 @@ def with_answer_assumptions(
     if policy != "assume":
         return result
     pending: list[dict[str, Any]] = []
-    for rule, clarification in unanswered_rule_clarifications(result, question):
+    for rule, clarification in unanswered_rule_clarifications(
+        result, question, answers=confirmed_answers
+    ):
         rule_id = str(rule.get("id", ""))
         answer = conditions.get(f"rule:{rule_id}", "")
         if rule_id in answered_rule_ids or (answer and rule_answer(result, rule_id, answer)):

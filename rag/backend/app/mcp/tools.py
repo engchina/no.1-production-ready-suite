@@ -176,6 +176,7 @@ from app.rag.profile_recommendation import (
     recommend_search_answer_profiles,
 )
 from app.rag.rate_limit import enforce_rate_limit
+from app.rag.rule_selection import apply_rule_selection_scope, recognize_rule_selections
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (
     clarification_document_ids,
@@ -4230,7 +4231,31 @@ async def rule_clarification_step(
         return request, scope
     if view.config.clarification_policy == "assume":
         return request, None
-    found = await asyncio.to_thread(suggest_clarification, payload, arguments.query)
+    selection_settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
+    selection_usage: dict[str, float] = {}
+    selected_answers = await recognize_rule_selections(
+        payload, arguments.query, selection_settings, usage=selection_usage
+    )
+    request._rule_selection_state["prepared"] = True
+    request._rule_selection_state["elapsed_seconds"] = selection_usage.get("elapsed_seconds", 0.0)
+    request = apply_rule_selection_scope(
+        request,
+        payload,
+        selected_answers,
+        current_pages=await current_section_pages(
+            oracle,
+            {
+                doc
+                for answer in selected_answers
+                for doc in clarification_document_ids(payload, answer)
+            },
+        )
+        if selected_answers
+        else None,
+    )
+    found = await asyncio.to_thread(
+        suggest_clarification, payload, arguments.query, answers=selected_answers
+    )
     if found is None:
         return request, None
     rule, clarification = found

@@ -88,11 +88,11 @@ def test_clarification_is_saved_on_the_rule_and_suggested_for_matching_questions
         "expense",
     ]
 
-    # 質問で既に答えている(選択肢の名前・検索に足す語が入っている)ときは聞き返さない。
+    # 語の出現だけでは回答済みにしない。意味を認識できない場合は確認を保つ。
     answered = client.post(
         f"{BASE}/clarifications/suggest", json={"query": "出張の申請の期限はいつですか"}
     ).json()["data"]
-    assert answered["suggestion"] is None
+    assert answered["suggestion"] is not None
     # ルールに一致しない質問にも出さない。
     unrelated = client.post(f"{BASE}/clarifications/suggest", json={"query": "日当はいくら"})
     assert unrelated.json()["data"]["suggestion"] is None
