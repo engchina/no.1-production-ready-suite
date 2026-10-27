@@ -570,7 +570,7 @@ for (const width of [1280, 375]) {
     expect(await card.evaluate(node => parseFloat(getComputedStyle(node).borderTopWidth))).toBeGreaterThan(0);
 
     await expect(prompts.getByRole("heading", { level: 3 })).toHaveText(["質問の解釈", "検索", "根拠の判定"]);
-    const expected = displayStages.filter((stage) => ["question", "retrieval", "grounding"].includes(stage.phase));
+    const expected = displayStages.filter((stage) => stage.id !== "support_guide_conditions" && ["question", "retrieval", "grounding"].includes(stage.phase));
     await expect(prompts.locator("details")).toHaveCount(expected.length);
     for (const stage of expected) {
       const panel = prompts.getByTestId(`answer-prompt-stage-${stage.id}`);
@@ -583,7 +583,7 @@ for (const width of [1280, 375]) {
     }
     await expect(prompts.getByRole("button", { name: "プロンプトを保存" })).toHaveCount(0);
     await expect(prompts.getByTestId("answer-prompt-stage-generation")).toHaveCount(0);
-    await expect(prompts.getByTestId("answer-prompt-stage-support_guide_conditions")).toContainText("利用者が答える未確認の自由入力条件があるとき");
+    await expect(prompts.getByTestId("answer-prompt-stage-support_guide_conditions")).toHaveCount(0);
     await expect(prompts.getByTestId("answer-prompt-stage-history_rewrite")).toContainText("書き換えを有効にしたとき");
     await expect(prompts.getByTestId("answer-prompt-stage-section_extraction")).toContainText("原文抽出は既定で無効");
     const rewrite = prompts.getByTestId("answer-prompt-stage-history_rewrite");

@@ -157,6 +157,7 @@ for (const viewport of [
     // 取込は解析と索引に分け、独立した準備の後に検索・回答・評価を並べる。
     await expect(stages.getByRole("heading", { level: 3 })).toHaveText([
       "業務ガイドの準備",
+      "質問の解釈",
       "回答の生成",
       "監査",
     ]);
@@ -168,8 +169,17 @@ for (const viewport of [
     )).toBe(true);
     await expect(stages.getByTestId("answer-prompt-stage-audit")).toContainText("生成後の LLM 監査を有効にしたとき（既定は無効）");
     await expect(stages.getByTestId("answer-prompt-stage-application")).toContainText("生成後の LLM 監査が有効で");
-    for (const phase of ["質問の解釈", "検索", "根拠の判定"]) {
+    for (const phase of ["検索", "根拠の判定"]) {
       await expect(stages.getByRole("region", { name: phase, exact: true })).toHaveCount(0);
+    }
+    const conditions = stages.getByTestId("answer-prompt-stage-support_guide_conditions");
+    await expect(conditions).toHaveCount(1);
+    await conditions.locator("summary").click();
+    const conditionSource = conditions.getByRole("textbox");
+    await expect(conditionSource).toHaveAttribute("readonly", "");
+    await expect(conditionSource).toHaveValue(FLOW_STAGES.find((stage) => stage.id === "support_guide_conditions")!.prompts[0].content);
+    for (const id of ["history_rewrite", "field_filter", "routing", "expansion"]) {
+      await expect(stages.getByTestId(`answer-prompt-stage-${id}`)).toHaveCount(0);
     }
     await expect(stages.getByTestId("answer-prompt-stage-faq_answer")).toContainText("検索しない");
     await expectNoPageOverflow(page);
