@@ -74,6 +74,24 @@ class ContextBuilderTests(unittest.TestCase):
             ref["vision_context_record_refs"] = [dict(ref["vision_context_record_refs"][0], partially_visible=visibility)]
             self.assertEqual(len(build(anchor=replace(picture, source_record_refs=(ref,))).records), 1)
 
+    def test_neighbors_from_another_page_scope_are_not_reused(self):
+        scope = '[{"document_id":"doc-1","page_start":2,"page_end":2}]'
+        anchor = _chunk_record("hit", "child", 2, "", "指定した本文", metadata={"chunk_strategy": "fixed", "context_page_ranges": scope})
+        other = _chunk_record("outside", "child", 3, "", "別の範囲の本文", metadata={"chunk_strategy": "fixed", "context_page_ranges": ""})
+        result = build_chunk_context_bundle(
+            ContextBuildRequest(
+                question="合成の質問",
+                ranked_children=[anchor],
+                active_records=[anchor, other],
+                top_k=1,
+                neighbor_child_count=3,
+                max_records=5,
+                max_chars=5000,
+            )
+        )
+        self.assertNotIn("別の範囲の本文", result.text)
+        self.assertIn("指定した本文", result.text)
+
     def test_build_chunk_context_uses_parent_once_and_child_tree_roles(self):
         long_parent_text = "parent evidence " + ("full synthesis " * 120) + "tail marker"
         records = [
