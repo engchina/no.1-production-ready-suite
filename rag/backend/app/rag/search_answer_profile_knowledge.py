@@ -509,10 +509,10 @@ def preview_runtime_knowledge(
 def match_runtime_knowledge(
     payload: Mapping[str, object], question: str
 ) -> RuntimeKnowledgeContext:
-    """質問に当たる有効な用語・同義語と回答ルールを、一致の強い順にすべて返す(件数で切らない。保存しない)。
+    """質問に当たる用語と、用途・排他・明示優先度で採用した確認・回答ルールを返す（保存しない）。
 
-    照合と有効の判定(承認済み・見直し待ちだけ)は回答生成と同じ。件数・字数で切って省いた数を
-    示すのは呼び出し元(MCP の根拠の取得。#2701)。
+    照合・有効状態・用途と排他の判定は回答生成と同じ。生成側は rules_for_stage で取り出す。
+    件数・字数で切って省いた数を示すのは呼び出し元(MCP の根拠の取得。#2701)。
     """
     with _runtime_knowledge_dir(payload) as (work_dir, path):
         return build_runtime_knowledge_context(
