@@ -652,6 +652,22 @@ class RagPipeline:
                 allowed=True, sanitized_text=outcome.answer, findings=[]
             )
         final_answer = answer_guardrail.sanitized_text
+        if outcome.evaluation_input is not None:
+            outcome.evaluation_input["answer_text"] = final_answer
+        if final_answer != outcome.answer:
+            # 安全処理後の本文へ、変更前の本文の検査済み表示を引き継がない。
+            previous_validation = outcome.diagnostics.get("answer_validation")
+            outcome.diagnostics["answer_validation"] = {
+                **(previous_validation if isinstance(previous_validation, dict) else {}),
+                "status": "body_changed",
+                "valid": False,
+                "reuse_context": "",
+                "previous_status": previous_validation.get("status")
+                if isinstance(previous_validation, dict)
+                else None,
+            }
+            outcome.diagnostics["needs_human_review"] = True
+            outcome.diagnostics["confidence"] = "low"
         # 回答の注意書き（#2405）。回答の確定の後に、本文とは別の項目として付ける。
         # 窓口の案内は検索・回答プロファイルの上書きと業務ガイドの引き継ぎで決める（#2400）。
         notice = (

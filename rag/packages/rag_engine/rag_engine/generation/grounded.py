@@ -6,11 +6,10 @@
 - 本文から外すのは、LLM 監査が根拠と矛盾（contradicted）と判定した item だけ。
 - 根拠で確かめられない item（監査の unsupported、未知の Evidence ID、原文と一致しない引用）は
   言い換えを本文に残し、段落に印（unverified）を付ける。
-- ITEM_CHECKS・旧版の根拠・監査の not_applicable は、言い換えを残して警告（warning）を付ける。
+- 字句の不一致では意味の不支持を確定せず、モデルの支持判定と適用性の採否方針を分ける。
 - 「参考情報」の節は、システムが補った原文（必須根拠・確定操作・但し書き・拒答の関連原文）と、
   適用が未確認の説明の原文を示す。
-- 文書固有の知識は SPAN_TAGGERS（原文へのタグ付け）と ITEM_CHECKS（item の検査）に
-  関数として並べる。質問ID・ファイル名・ページによる分岐は置かない。
+- 文書固有の知識を質問ID・ファイル名・ページの分岐で補わない。
 """
 
 from __future__ import annotations
@@ -57,7 +56,7 @@ from rag_engine.generation.interaction_grounding import interaction_binding_erro
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
-from rag_engine.generation.value_grounding import ABSENT_VALUE_REASON, CURRENT_VALUE_REASON, unsupported_document_value_claim
+from rag_engine.generation.value_grounding import CURRENT_VALUE_REASON, unsupported_document_value_claim
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
 from rag_engine.models.llm import (
     CatalogEvidenceReviews,
@@ -1391,6 +1390,8 @@ class CheckedItem:
     reasons: list[str] = field(default_factory=list)
     added: bool = False  # モデルの草稿ではなく、必須根拠・確定操作としてシステムが補った原文
     quote_match: str = "exact"  # 引用の結び付け方。"fuzzy" は文単位の近似一致（#711）。trace 用
+    citation_resolution: dict[str, str] = field(default_factory=dict)
+    review_assessment: dict[str, Any] = field(default_factory=dict)
     hints: list[str] = field(default_factory=list)  # ITEM_HINTS の該当。印は付けず監査へ渡す手がかり (#1090)
     carried: bool = False  # 前の round から引き継いだ item（当該 round の草稿にはない）。監査対象に含める (#1011)
     withdrawn: bool = False  # 監査が contradicted / not_applicable と判定して撤回した item (#1011)
@@ -1438,7 +1439,7 @@ class CheckedItem:
     @property
     def confirmed(self) -> bool:
         """引用と照合し、印の無い（確かめた）説明として本文に出す item か。"""
-        return self.published and self.span is not None and not self.state
+        return self.published and self.span is not None and not self.state and self.item.applies != "unverified"
 
 
 _PROCEDURE_KINDS = frozenset({"operation", "confirmation"})
@@ -1865,32 +1866,9 @@ def verify(
     checked: list[CheckedItem] = []
     dropped: list[dict] = []
     views = {id(span): check_view(span) for span in spans}
-    view_spans = list(views.values())
-    contract = task_contract(question)
-    primary_document = _document_key(spans[0]) if spans else ()
-    guide_source_ids = set(guide_sources)
-    substituted: dict[str, str] = {}
     context_ids = _context_request_ids(question)
-    # 小問ごとの文脈を再利用し、他の小問のエラーや対象名を持ち込まない。
-    check_contexts: dict[str, dict[str, Any]] = {}
 
-    def check_context(text: str) -> dict[str, Any]:
-        if text not in check_contexts:
-            local_contract = task_contract(text)
-            local_errors = local_contract["error_messages"]
-            check_contexts[text] = {
-                "contract": local_contract,
-                "objects": _missing_question_objects(text, view_spans),
-                "errors": local_errors,
-                "missing_errors": _missing_question_errors(local_errors, view_spans),
-                "targets": _missing_question_targets(
-                    [target for target in local_contract["action_targets"] if target not in local_contract["business_objects"]], view_spans
-                ),
-                "terms": _question_terms(text, local_contract),
-            }
-        return check_contexts[text]
-
-    def check_citation(index: int, item: GroundedItem, scoped_question: str, local: dict[str, Any]) -> CitationCheck:
+    def check_citation(index: int, item: GroundedItem) -> CitationCheck:
         """出典が 1 つの item を原文と照合し、決定的な検査の印を付ける（公開する item・指摘・別対象の置き換え）。"""
         result: CheckedItem | None = None
         notes: list[dict] = []
@@ -1965,82 +1943,31 @@ def verify(
             span,
             quote_match=match.get("kind", "exact"),
             draft_index=index,
+            citation_resolution={
+                "requested_evidence_id": item.evidence_id,
+                "requested_quote": item.quote,
+                "resolved_evidence_id": span["evidence_id"],
+                "resolved_quote": quote,
+                "method": match.get("kind", "exact"),
+            },
         )
+        if candidate.quote_match in {"fuzzy", "prefix"}:
+            candidate.unmatched = True
+            candidate.mark("quote_unmatched", "引用元の候補はありますが、元の引用の逐語一致は確認できていません。")
         if scope_unsettled:
             candidate.mark("unassessed", "質問の対象と根拠の対応を確かめられなかった")
         entry = candidate
         check_item = _check_item(entry.item)
-        for check in ITEM_CHECKS:
-            reason = check(scoped_question, check_item, view)
-            if reason:
-                # 根拠のどこにも無い数値は、規則の検査の注意ではなく、根拠で確かめられない説明（#3088）。
-                entry.document_value_issue |= check is _check_value and reason == CURRENT_VALUE_REASON
-                absent = check is _check_value and reason.startswith(ABSENT_VALUE_REASON)
-                _mark_check(entry, ITEM_CHECK_NAMES[check], reason, code="unsupported" if absent else "item_check")
         if conflict := _table_binding_conflict(check_item, view):
             # 表が否定した対応は、根拠と矛盾した説明として本文から外し、正しい対応を理由に出す（#2998）。
             note = _quote_note(entry)
             entry.remove(f"根拠の表では{conflict}です。" + (f"{note}" if note else ""), reason=f"表の対応: {conflict}")
             entry.table_conflict = conflict
-        for check in ITEM_HINTS:
-            hint = check(scoped_question, check_item, view)
-            if hint:
-                entry.hints.append(hint)
-        conflicting = _generated_values_absent_from_document_text(scoped_question, entry, spans)
-        if conflicting:
-            # 生成説明にだけある値は画面の表示例で、利用者の実値ではない。答えに使えば誤りなので警告を付ける (#1100)。
-            _mark_check(entry, GENERATED_VALUE_CHECK, "生成説明の値『" + "』『".join(conflicting) + "』が同じ機能の本文にない")
-        for asked, other in _substituted_objects(local["objects"], entry.item.text):
-            _mark_check(entry, QUESTION_TARGET_CHECK, f"質問の対象『{asked}』は根拠になく、別の対象『{other}』の説明")
-            subs.setdefault(asked, other)
-        if (
-            local["missing_errors"]
-            and entry.item.kind in {"operation", "confirmation", "rule"}
-            and not _unit_mentions_error(view, local["errors"])
-        ):
-            # 質問のエラー文が根拠のどこにもなく、この item の機能ユニットが質問のどのエラーにも触れていない。
-            # 別のエラー（質問と異なるエラー番号）の手順を適用扱いにしない (#686)。原因・規則の説明（rule）も同じ:
-            # 別エラーの原因を質問のエラーの原因として確かめた事項にしない (#993)。
-            _mark_check(
-                entry,
-                QUESTION_ERROR_CHECK,
-                "質問のエラー『"
-                + "』『".join(local["missing_errors"])
-                + "』は根拠になく、"
-                + ("別のエラーの説明" if entry.item.kind == "rule" else "別の箇所の手順"),
-            )
-        if (
-            local["terms"]
-            # 根拠計画を通過した説明は質問の語が無い表も扱う。計画外は上で除外済み。
-            and not any("evidence_scope" in plan.model_fields_set for plan in _item_request_plans(item, draft))
-            and entry.item.kind in {"operation", "confirmation"}
-            and primary_document
-            and _document_key(entry.span) != primary_document
-            and not _document_mentions_question(view, local["terms"])
-            and str(span.get("source_id") or "") not in guide_source_ids
-        ):
-            # 最上位候補以外の文書で、本文・見出し・同じ文書の本文が質問の語を 1 つも含まない。別業務の資料の
-            # 確定操作（「確認」ボタンを押下して変更を確定します）を質問の手順に混ぜない (#731)。gap は出さない。
-            # 最上位候補の文書は検索が質問に最も関係すると判断したもので、対象が別名でも手順は残す（#673 と同じ扱い）。
-            # ガイドが集めた前提・後続手順も質問の語を持たないことがある。適用可否は対象の検査と監査で確かめる。
-            _mark_check(entry, OTHER_DOCUMENT_CHECK, "質問の語を含まない別文書の手順")
-        if local["targets"] and entry.item.kind in {"operation", "confirmation"}:
-            # 質問の操作対象（「社印」）が根拠のどこにもない。資料にある別の対象（「角印」）の手順を適用扱いにしない (#700)。
-            _mark_check(entry, QUESTION_TARGET_CHECK, "質問の対象『" + "』『".join(local["targets"]) + "』は根拠になく、別の箇所の手順")
-            for asked in local["targets"]:
-                subs.setdefault(asked, "")
-        for asked in _claims_about_absent_object([*local["objects"], *local["targets"]], entry.item):
-            # 「地区別売上集計表は…CSV として出力して作成します」のように、資料にない対象を主語に
-            # 資料の別内容を結び付けた定義。引用が述部を支持していても対象の話ではない (#673)。
-            _mark_check(entry, QUESTION_TARGET_CHECK, f"質問の対象『{asked}』は根拠になく、その対象についての説明")
-            subs.setdefault(asked, "")
         return entry, notes, subs
 
     for index, item in enumerate(draft.items):
         if item.kind != "gap":
             item = _inline_evidence(item, spans)
-        scoped_question = item_question(question, item.request_id)
-        local = check_context(scoped_question)
         if item.kind == "gap":
             if item.request_id in context_ids:
                 # 背景文（kind=context）は答える対象ではない。それに対する gap は利用者に意味がない (#650)。
@@ -2065,29 +1992,10 @@ def verify(
             checked.append(CheckedItem(item.model_copy(update={"citations": [], "applies": "matched", "condition": ""})))
             continue
         # 出典ごとに照合・検査し、通った出典を 1 つの主張にまとめる（#3526）。
-        results = [check_citation(index, cited, scoped_question, local) for cited in item.single_citations()[:MAX_ITEM_CITATIONS]]
+        results = [check_citation(index, cited) for cited in item.single_citations()[:MAX_ITEM_CITATIONS]]
         kept_entries, notes, subs = merge_citations(index, item, results)
         checked.extend(kept_entries)
         dropped.extend(notes)
-        for asked, other in subs.items():
-            substituted.setdefault(asked, other)
-    for asked in substituted:
-        # 別対象の手順で答えた item には警告を付け、質問の対象が資料にないことを本文で伝える (#642)。
-        checked.append(CheckedItem(GroundedItem(kind="gap", text=f"『{asked}』は取得した資料に記載がありません。")))
-    subquestions = [unit for unit in contract["request_units"] if unit.get("subquestion")]
-    error_scopes = (
-        [(str(unit["id"]), item_question(question, str(unit["id"]))) for unit in subquestions]
-        if len(subquestions) > 1
-        else [("", question)]
-    )
-    for request_id, text in error_scopes:
-        local = check_context(text)
-        for asked in local["missing_errors"]:
-            checked.append(
-                CheckedItem(
-                    GroundedItem(kind="gap", request_id=request_id, text=missing_error_gap(asked, local["contract"]["business_objects"]))
-                )
-            )
     # 別機能の操作は render が手順を分けて示す。同じ文書の版違いだけは利用者に確認を求める。
     if evidence_scope_error([e.span for e in checked if e.span and e.item.kind == "operation"]).startswith("同一文書の異なる版"):
         checked.append(
@@ -2254,6 +2162,8 @@ def recover_audited_quotes(
         entry.hints = replacement.hints
         entry.unmatched = False
         entry.quote_match = "audited_paraphrase"
+        entry.citation_resolution["support_quote"] = quote
+        entry.citation_resolution["support_check"] = "audited_paraphrase"
         if entry.draft_index is not None:
             recovered.add(entry.draft_index)
     return recovered
@@ -3118,7 +3028,7 @@ def _article_unit(span: Mapping[str, Any] | None) -> bool:
 
 def _accepted_review(review: Any) -> bool:
     """出典が説明を支え、質問に当てはまらないとは判定されなかったか。"""
-    return review.support == "supported" and review.applicability != "not_applicable"
+    return review.support == "supported" and (review.applicability != "not_applicable" or review.applicability_action == "record_only")
 
 
 def settle_citation_reviews(
@@ -3198,6 +3108,16 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
         if not 0 <= review.index < len(checked):
             continue
         entry = checked[review.index]
+        entry.review_assessment = {
+            "support": review.support,
+            "applicability": review.applicability,
+            "applicability_action": review.applicability_action,
+            "policy_reason": review.applicability_policy_reason,
+            "reason": review.reason,
+        }
+        # 元のモデル判定は上に保持し、本文の採用を適用確認済みへの昇格と区別する。
+        if review.applicability_action == "record_only" and entry.item.applies == "matched":
+            entry.item = entry.item.model_copy(update={"applies": "unverified", "condition": ""})
         span = entry.span
         if entry.removed or span is None:
             continue
@@ -3216,7 +3136,7 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
             entry.remove(review.reason, reason=reason)
             entry.withdrawn = True
             continue
-        if review.applicability == "not_applicable":
+        if review.applicability == "not_applicable" and review.applicability_action == "apply":
             entry.mark("target_mismatch", review.reason, reason=reason)
             entry.withdrawn = True
             if review.support == "unsupported" and not entry.carried:
@@ -3226,7 +3146,11 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
             if review.support == "unsupported" and _is_route_navigation(entry.item, span):
                 continue  # 見出しの画面経路を開くだけの item は、引用に経路がなくても印を付けない (#629)
             entry.mark("unsupported", review.reason, reason=reason)
-        elif review.applicability in {"conditional", "unknown"} and entry.item.applies == "matched":
+        elif (
+            review.applicability_action == "apply"
+            and review.applicability in {"conditional", "unknown"}
+            and entry.item.applies == "matched"
+        ):
             entry.item = _normalized(entry.item.model_copy(update={"applies": "conditional", "condition": review.condition.strip()}), span)
             if entry.item.applies != "conditional":
                 entry.item = entry.item.model_copy(update={"applies": "unverified"})
@@ -4432,6 +4356,8 @@ class Round:
                     "evidence_id": e.item.evidence_id,
                     "quote_only": e.quote_only,
                     "quote_match": e.quote_match,
+                    "citation_resolution": dict(e.citation_resolution),
+                    "review_assessment": dict(e.review_assessment),
                     "applies": e.item.applies,
                     "reasons": e.reasons,
                     "hints": e.hints,
@@ -4445,6 +4371,19 @@ class Round:
                 for e in self.checked
             ],
             "audit": self.audit.model_dump() if self.audit else None,
+            "review_execution": (
+                "partial"
+                if self.audit_cut and self.audit is not None
+                else "timed_out"
+                if self.audit_cut
+                else "partial"
+                if self.audit_calls and self.timing.get("audit") == AUDIT_MODE_NONE
+                else "completed"
+                if self.audit_calls and self.audit is not None
+                else "error"
+                if self.audit_calls
+                else "not_run"
+            ),
             "audit_calls": self.audit_calls,
             "audited_items": self.audited_items,
             "carried_over": self.carried,
@@ -5832,11 +5771,6 @@ def run_round(
         apply_application_audit(applications, audit)
     # 撤回 = 撤回の候補を当該 round の監査が contradicted / not_applicable と判定したもの。新しい主張の印は撤回に数えない。
     withdrawn = [e for e in checked if e.withdrawn and id(e) in restated]
-    limits = list(dict.fromkeys(fold_width(limit) for entry in checked if entry.span for limit in entry.span.get("limits", ())))
-    # 未説明を述べる原文そのものの引用は、保証の裏付けにはならない。
-    quotes = fold_width(
-        "".join(entry.item.quote for entry in checked if entry.span and not check_cues().unexplained.search(entry.item.quote))
-    )
     # summary の扱い（#2738）: 根拠と矛盾して外した主張を断定するときだけ中立の定型文にする。それ以外の確かめきれない
     # summary は残し、段落に警告（summary_unaudited）を付ける。監査していない summary・監査対象の item がない round の
     # summary（items の範囲を超えた保証を含み得る。#621）、保証の過剰、原因の推測（#713）、全要求が missing（#732）、
@@ -5854,12 +5788,6 @@ def run_round(
         if audit.summary_supported
         else "監査が summary を不支持"
     )
-    if not summary_warning:
-        summary_warning = guarantees_unexplained(str(draft.summary), quotes, limits)
-    if not summary_warning and task_contract(question)["asks_cause"]:
-        # 原因を尋ねる質問では、確かめた引用にない原因候補の列挙に警告を付ける (#713)。
-        verified_quotes = fold_width("".join(e.item.quote for e in checked if e.confirmed))
-        summary_warning = speculative_causes(str(draft.summary), verified_quotes, question)
     if not summary_warning and audit is not None and _all_requests_missing(audit, question):
         # 監査が背景以外の全要求を missing と判定した round では、summary の結論は要求に答えていない (#732)。
         summary_warning = "全要求が missing"
@@ -5870,30 +5798,24 @@ def run_round(
     if not summary_warning and published and not any(e.confirmed for e in published):
         # 本文の説明がすべて印つき（未確認・要注意）なら、summary の結論も確かめた説明で裏付けられていない（#2738）。
         summary_warning = "確かめた説明が無い"
-    if not summary_warning:
-        # 印の付いた（未確認・要注意の）item の主張を summary が断定していれば、summary にも警告を付ける（#2738）。
-        # 根拠に結べなかった説明（span なし。本文では「資料の出典を確かめられない説明」）も印の付いた主張に数える（#3068）。
-        summary_warning = summary_asserts_denied(
-            str(draft.summary),
-            [e.item.text for e in checked if e.published and e.state and not e.added],
-            [e.item.text for e in checked if e.confirmed],
-            subject="印の付いた主張",
-            distinctive_ratio=True,
-        )
-    # 要約にだけ書いた数値も、本文の説明と同じ数値の裏付けの検査に掛ける。根拠のどこにも無い数値（資料の外から
-    # 足した値）や表示例・画像の説明にだけある値を断定する要約に、値つきの警告を付ける（#3090）。
-    if not summary_warning and (value_reason := unsupported_document_value_claim(str(draft.summary), spans, question)):
-        summary_warning = f"値：{value_reason}"
-    # 根拠と矛盾して外した item の主張を summary が断定していれば、summary は中立文にする。本文から外しても、
-    # 冒頭の要約から同じ誤案内が残っていた (#1013)。
-    summary_reason = summary_asserts_denied(
-        str(draft.summary),
-        [e.item.text for e in checked if e.removed and not e.added],
-        [e.item.text for e in published],
+    # 同じ主張そのものの再掲だけを結び付ける。言い換えの類似度では摘要の意味を判定しない。
+    summary_reason = next(
+        (
+            "根拠と矛盾して外した主張を summary が断定: " + e.item.text
+            for e in checked
+            if e.removed and not e.added and str(draft.summary).strip() == e.item.text.strip()
+        ),
+        "",
     )
-    # 要約にだけ書かれた削除対象も、本文と同じ対象の照合を通す（#2722）。
-    # 原文どおりの手順は残し、対象の対応を確かめられない操作を冒頭で断定しない。
-    summary_reason = summary_reason or summary_deletion_error(str(draft.summary), checked)
+    if not summary_warning:
+        summary_warning = next(
+            (
+                "印の付いた主張を summary が断定: " + e.item.text
+                for e in checked
+                if e.published and e.state and not e.added and str(draft.summary).strip() == e.item.text.strip()
+            ),
+            "",
+        )
     if any(entry.get("scope_excluded") for entry in dropped):
         summary_reason = summary_reason or "要求の根拠計画にない説明を除外したため、要約の結論を保留"
     summary = answer_labels().neutral_summary if summary_reason else draft.summary
@@ -6005,21 +5927,25 @@ def _parse_audit(
     return applicability_policy(audit)
 
 
-# 回答の後の監査で回答に反映しない適用性の判定（#2837）。業界の回答時の検査（groundedness / faithfulness）は、説明が
-# 取得した根拠に裏付けられるか（support）だけを判定する。根拠の対象が質問の対象と同じか（関連性・適用性）は、検索の
-# 範囲（業務ガイドの手順の参照・プロファイルの KB・rerank）と規則の検査で扱い、LLM の判定は記録と評価にだけ使う。
+# 適用性の原判定を本文への反映方針と分ける（#2837、#3685）。
 _RECORDED_APPLICABILITY = frozenset({"not_applicable", "unknown"})
 
 
 def applicability_policy(audit: GroundedAudit) -> GroundedAudit:
-    """監査の not_applicable / unknown を matched として扱い、答えた値を observed_applicability に残す（#2837）。
+    """適用性の原判定を保持し、本文への採否とは分ける。
 
-    原文に明記された適用条件（conditional と condition）は引用に裏付けられた条件なので、そのまま使う。
+    対象違い・不明のモデル判定だけで前提手順を外さず、明示した原文の適用条件は本文に反映する。
     """
     reviews = [
-        review.model_copy(update={"applicability": "matched", "observed_applicability": review.applicability})
-        if review.applicability in _RECORDED_APPLICABILITY
-        else review
+        review.model_copy(
+            update={
+                "observed_applicability": review.applicability,
+                "applicability_action": "record_only" if review.applicability in _RECORDED_APPLICABILITY else "apply",
+                "applicability_policy_reason": "モデルの適用性判定だけでは本文の不採用・適用確認を確定しない。"
+                if review.applicability in _RECORDED_APPLICABILITY
+                else "",
+            }
+        )
         for review in audit.reviews
     ]
     return audit.model_copy(update={"reviews": reviews})

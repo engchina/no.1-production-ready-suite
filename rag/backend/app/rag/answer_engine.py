@@ -270,6 +270,18 @@ def _validation_details(validation: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "fields": [
             {"label": "照合の結果", "value": "確認済み" if validation.get("valid") else "未確認"},
+            {
+                "label": "照合の実行",
+                "value": {
+                    "completed": "完了",
+                    "partial": "一部未確認",
+                    "timed_out": "時間上限",
+                    "error": "実行失敗",
+                    "not_run": "未実行",
+                    "no_evidence": "根拠なし",
+                    "body_changed": "本文の変更後は未確認",
+                }.get(str(validation.get("status")), "未確認"),
+            },
             {"label": "判定した段落", "value": str(len(validation.get("claim_checks") or []))},
         ],
     }
@@ -921,7 +933,6 @@ class AnswerEngine:
             for key, value in current_pack().sections["answer_labels"].items()
             if isinstance(value, str)
         }
-        await self._validate_outcome(request, outcome, step_callback=step_callback)
         if self._scope is not None:
             outcome.diagnostics["scope"] = {
                 "label": self._scope.label,
@@ -932,6 +943,7 @@ class AnswerEngine:
                 outcome = replace(
                     outcome, answer=f"{outcome.answer}\n\n（対象: {self._scope.label}）"
                 )
+        await self._validate_outcome(request, outcome, step_callback=step_callback)
         outcome.diagnostics["models"] = self._models_used(
             attached_images=_attached_image_count(result),
             rerank_failed=state.degraded.failed("rerank"),
@@ -1011,6 +1023,7 @@ class AnswerEngine:
     ) -> None:
         """LLM 監査が有効な回答の最終の本文を、MCP と共通の検証で確かめる。"""
         if self._settings.rag_answer_audit_mode == "none" or not outcome.answer.strip():
+            outcome.diagnostics["answer_validation"] = {"status": "not_run", "valid": False}
             return
         # answer_validation は engine の設定変換も使うため、循環 import を避けてここで読む。
         from app.rag.answer_validation import EvidenceRef, validate_answer
@@ -1035,6 +1048,7 @@ class AnswerEngine:
                 validation: dict[str, Any] = {
                     "status": result.status,
                     "valid": result.valid,
+                    "reuse_context": result.reuse_context,
                     "counts": dict(result.counts),
                     "claim_checks": list(result.claim_checks),
                     "missing_evidence_count": len(result.missing_evidence),
@@ -3864,6 +3878,7 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         # 採用した草稿の監査の目的との合い方(#2402。aligned / partial / off_target)。品質評価が
         # 目的外の割合を集計する。
         "goal_alignment": adopted_goal_alignment(result.generation_trace),
+        "generation_review": adopted_review_contract(result.generation_trace),
         "procedure_quotes": dict((result.generation_trace or {}).get("procedure_quotes") or {}),
         "execution_steps": steps,
         "evidence_tree": tree,
@@ -3904,6 +3919,39 @@ def _guide_step_diagnostics(generation_trace: object) -> dict[str, Any]:
             key: embedding.get(key) for key in _GUIDE_STEP_EMBEDDING_FIELDS
         }
     return diagnostics
+
+
+def adopted_review_contract(generation_trace: object) -> dict[str, Any]:
+    """採用した草稿の引用照合と意味の監査を別々に記録する。"""
+    rounds = generation_trace.get("rounds") if isinstance(generation_trace, Mapping) else None
+    adopted = (
+        next(
+            (row for row in reversed(rounds) if isinstance(row, Mapping) and row.get("accepted")),
+            None,
+        )
+        if isinstance(rounds, list)
+        else None
+    )
+    if adopted is None:
+        return {"execution": "not_run", "items": []}
+    return {
+        "execution": adopted.get("review_execution", "not_run"),
+        "items": [
+            {
+                key: row.get(key)
+                for key in (
+                    "evidence_id",
+                    "quote_match",
+                    "citation_resolution",
+                    "review_assessment",
+                    "removed",
+                    "withdrawn",
+                )
+            }
+            for row in adopted.get("items", [])
+            if isinstance(row, Mapping)
+        ],
+    }
 
 
 def adopted_goal_alignment(generation_trace: object) -> str | None:

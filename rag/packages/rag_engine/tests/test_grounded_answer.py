@@ -766,7 +766,8 @@ class GroundedAnswerTest(unittest.TestCase):
             "操作手順（売上-(4)年次集計作成）\n\n・（顧客名簿にのみ適用の場合）ファイル出力を選びます。\n根拠：売上集計業務.pdf p.27", text
         )
 
-    def test_heading_is_not_turned_into_an_entry_point(self):
+    def test_supported_heading_claim_is_not_overridden_by_lexical_guard(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         text = "C【出力帳票】\n集計表A（改訂前は集計表E）"
         ctx = context(record(0, text, "売上-(4)年次集計作成", page=28))
         eid = ids(ctx)[text]
@@ -774,10 +775,9 @@ class GroundedAnswerTest(unittest.TestCase):
             [draft(item(eid, "C【出力帳票】画面を開き、集計表Aを選択します。", "C【出力帳票】"))], [audit((0, "supported", "matched", ""))]
         )
         result = run(model, ctx).response
-        # 見出しの入口化は警告を付けて言い換えを残し、理由に原文を添える（#2738）。
         self.assertIn("・C【出力帳票】画面を開き、集計表Aを選択します。", result.answer_text)
-        self.assertIn("item_check", marks(result)["C【出力帳票】画面を開き、集計表Aを選択します。"])
-        self.assertIn("原文「C【出力帳票】」", details(result)["C【出力帳票】画面を開き、集計表Aを選択します。"])
+        self.assertNotIn("C【出力帳票】画面を開き、集計表Aを選択します。", marks(result))
+        self.assertEqual(result.generation_trace["rounds"][0]["items"][0]["hints"], [])
 
     def test_unused_definition_and_dropped_completion_are_restored_verbatim(self):
         definition = "「停止」とは：出荷を一時的に止めている状態をいう。ただし終了日が基準日以前の場合は表示しない。"
@@ -1186,12 +1186,8 @@ class GroundedAnswerTest(unittest.TestCase):
         # 節見出し（「3.1 support…」）と節の間の空行以外は 1 行 1 規則 (#932)。
         self.assertTrue(all(line.startswith(("- ", ("## "))) or re.match(r"^\d(?:\.\d)?\.? ", line) or not line for line in lines))
 
-    def test_deterministic_checks_warn_on_claims_the_quote_cannot_carry(self):
-        """質問が尋ねた対象と合わない item、画面の表示例の値を規則として述べた item は、監査が支持しても警告を付ける。
-
-        言い換えは本文に残し、警告（item_check）の理由に検査の名前と原文を添える（#2738。以前は原文だけに降格）。
-        ボタンの別名など字句の存在は警告にせず監査への手がかりにするので、ここでは扱わない (#1090)。
-        """
+    def test_unsupported_review_marks_claims_without_lexical_warnings(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         cases = (
             (
                 "「期限付クーポン」を削除する方法は？",
@@ -1212,14 +1208,17 @@ class GroundedAnswerTest(unittest.TestCase):
                 ctx = context(record(0, source, "共通-(1)操作"))
                 eid = ids(ctx, question)[source]
                 quote = source.split("回答用本文: ")[-1]
-                model = FakeModel([draft(item(eid, claim, quote, **extra))], [audit((0, "supported", "matched", ""))])
+                model = FakeModel(
+                    [draft(item(eid, claim, quote, **extra))], [audit((0, "unsupported", "matched", "原文との支持を確認できない"))]
+                )
                 result = run(model, ctx, question).response
                 self.assertIn(f"・{claim}", result.answer_text)
-                self.assertEqual(marks(result)[claim], ["item_check"])
-                self.assertIn(f"原文「{quote}」", details(result)[claim])
+                self.assertEqual(marks(result)[claim], ["unsupported"])
+                self.assertEqual(result.generation_trace["rounds"][0]["items"][0]["review_assessment"]["support"], "unsupported")
                 self.assertTrue(result.needs_human_review)
 
-    def test_multiple_processing_modes_are_shown_verbatim_without_choosing_one(self):
+    def test_supported_paraphrase_is_not_forced_verbatim_by_mode_words(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         source = (
             "処理区分\n取引先コード統合\n・統合元は登録済みの場合に指定します。\n重複取引先名寄せ\n・統合元・統合先とも登録済みの場合に指定します。\n"
             "実行ボタンを押して完了します。"
@@ -1232,10 +1231,9 @@ class GroundedAnswerTest(unittest.TestCase):
             [audit((0, "supported", "matched", ""))],
         )
         result = run(model, ctx, question).response
-        # 処理区分を言い換えた説明には警告を付け、理由に原文を添える（#2738）。
         self.assertIn("・取引先コード統合を選んで実行します。", result.answer_text)
-        self.assertEqual(marks(result)["取引先コード統合を選んで実行します。"], ["item_check"])
-        self.assertIn("原文「・統合元は登録済みの場合に指定します。」", details(result)["取引先コード統合を選んで実行します。"])
+        self.assertNotIn("取引先コード統合を選んで実行します。", marks(result))
+        self.assertEqual(result.generation_trace["rounds"][0]["items"][0]["hints"], [])
 
     def test_conflicting_versions_ask_which_version_applies(self):
         def versioned(index, version):
@@ -1459,11 +1457,7 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertIn("「なお、空港にある店舗の両替窓口は同期間も営業しております。」", text)  # 例外を落とさない
 
     def test_unquoted_button_is_flagged_to_the_audit_and_suppressed_when_it_rejects(self):
-        """本文にないボタン名は手がかりとして監査へ渡し、公開するかどうかは監査が決める (#1090)。
-
-        照合先の本文は解析した機能・頁で決まり、狭いと実在するボタンでも「無い」と出る。判定は引用元の
-        本文まで見る監査に任せ、決定的検査は指摘だけを残す。
-        """
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         import json as _json
 
         source = "対象月にR年.月の形式で入力し、追加して実行すると研修枠を登録します。"
@@ -1472,15 +1466,13 @@ class GroundedAnswerTest(unittest.TestCase):
         eid = ids(ctx, question)[source]
         claim = "対象月を入力し、追加ボタンを実行すれば登録されます。"
 
-        # 監査が支持すれば公開する。指摘は checks として監査に届く。
         model = FakeModel([draft(item(eid, claim, source))], [audit((0, "supported", "matched", ""))])
         text = run(model, ctx, question).response.answer_text
         self.assertIn("追加ボタン", text)
         audited = _json.loads(next(p for name, p in model.prompts if name == "GroundedAudit"))
-        self.assertIn("根拠にないボタン名: 追加", str(audited["items"][0]["checks"]))
+        self.assertEqual(audited["items"][0]["checks"], [])
         self.assertIn("checks", grounded.AUDIT_SYSTEM_PROMPT)
 
-        # 監査が支持しなければ言い換えを本文に残し、未確認の印を付ける（#2738）。
         rejecting = FakeModel([draft(item(eid, claim, source))], [audit((0, "unsupported", "matched", ""))])
         rejected = run(rejecting, ctx, question).response
         self.assertIn("・" + claim, rejected.answer_text)
@@ -1576,8 +1568,7 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertLessEqual(len(next(iter(audited["evidence"].values()))), grounded.AUDIT_EVIDENCE_TEXT_CHARS)
 
     def test_unaudited_round_keeps_its_summary_with_a_warning(self):
-        """監査していない round の summary には警告を付ける。監査なしで保証が残った型 (#621・#2738)。
-        監査は呼ぶが (#1014)、応答が空なら監査なしの round として扱う。"""
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
         eid = ids(ctx)[LIST_TEXT]
         guarantee = "集計表出力で計上された明細を確認できます。"
@@ -1586,11 +1577,9 @@ class GroundedAnswerTest(unittest.TestCase):
         result = run(FakeModel([warned], [audit()]), ctx).response
         self.assertTrue(result.answer_text.startswith(guarantee))
         self.assertEqual(marks(result)[guarantee], ["summary_unaudited"])
-        # 節見出しの入口化は警告にして言い換えを残し、理由に原文を添える。監査が無いので未確認の印も付く。
-        self.assertEqual(marks(result)[claim], ["item_check", "unassessed"])
-        self.assertIn("原文「実行ボタンを押して完了します。」", details(result)[claim])
+        self.assertEqual(marks(result)[claim], ["unassessed"])
+        self.assertIn("監査の応答が得られなかった", details(result)[claim])
         self.assertTrue(all(r["audit"] is None for r in result.generation_trace["rounds"]))
-        # 監査を省いた round は全要求を未回答として是正へ渡す（全面拒答をそのまま公開しない）。
         self.assertGreaterEqual(len(result.generation_trace["rounds"]), 2)
 
     def test_summary_flagged_in_a_rejected_round_gets_a_warning_in_the_accepted_round(self):
@@ -1657,11 +1646,7 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertTrue(result.needs_human_review)
 
     def test_guarantee_about_what_the_source_leaves_unexplained_is_marked(self):
-        """先に保証して末尾で留保する書き方には印を付ける。留保そのものは確かめた説明にする。
-
-        「未説明の事項への保証」は手がかりとして監査へ渡し、判断は監査が下す (#1090)。監査が支持しなければ
-        言い換えを本文に残して未確認の印を付け、summary の保証には警告を付ける（#2738）。
-        """
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         listing = "明細一覧画面で基準年月を指定し検索して明細一覧CSVを出力します。"
         limit = "最終集計の採用除外条件はこの節では説明していません。"
         ctx = context(record(0, listing + "\n" + limit, "売上-(1)明細一覧"))
@@ -1679,7 +1664,14 @@ class GroundedAnswerTest(unittest.TestCase):
                     summary=guarantee + "ただし完全に一致するかは保証できません。",
                 )
             ],
-            [audit((0, "unsupported", "matched", ""), (1, "supported", "matched", ""), (2, "unsupported", "matched", ""))],
+            [
+                audit(
+                    (0, "unsupported", "matched", ""),
+                    (1, "supported", "matched", ""),
+                    (2, "unsupported", "matched", ""),
+                    summary_supported=False,
+                )
+            ],
         )
         result = run(model, ctx, question).response
         self.assertEqual(marks(result)[guarantee], ["unsupported"])
@@ -1691,7 +1683,7 @@ class GroundedAnswerTest(unittest.TestCase):
         import json as _json
 
         audited = _json.loads(next(p for name, p in model.prompts if name == "GroundedAudit"))
-        self.assertIn("未説明とする事項を保証している", str(audited["items"][0]["checks"]))
+        self.assertEqual(audited["items"][0]["checks"], [])
 
     def test_plain_restatement_of_the_same_source_is_published(self):
         """未説明の限定が同じ原文にあっても、保証をしない素直な言い換えは公開する (#1090)。"""
@@ -1732,7 +1724,7 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertIn("・" + text, run(model, ctx, question).response.answer_text)
 
     def test_values_and_operations_absent_from_the_quote_are_flagged_to_the_audit(self):
-        """引用にない数値・操作語は降格させず、手がかりとして監査へ渡す (#1090)。"""
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         import json as _json
 
         steps = "①「拠点倉庫名」欄に、新しい拠点倉庫の名称を入力します。\n②実行ボタンを押します。"
@@ -1745,8 +1737,8 @@ class GroundedAnswerTest(unittest.TestCase):
         run(model, ctx, question)
         audited = _json.loads(next(p for name, p in model.prompts if name == "GroundedAudit"))
 
-        self.assertIn("引用と質問にない数値: 2020", str(audited["items"][0]["checks"]))
-        self.assertIn("引用にない操作: 削除", str(audited["items"][1]["checks"]))
+        self.assertEqual(audited["items"][0]["checks"], [])
+        self.assertEqual(audited["items"][1]["checks"], [])
 
     def test_values_and_operations_are_marked_when_the_audit_rejects_them(self):
         """監査が支持しなければ、言い換えを本文に残して未確認の印を付ける (#1090・#2738)。"""
@@ -1840,7 +1832,8 @@ class GeneratedDescriptionOperationTest(unittest.TestCase):
     )
     QUESTION = "伝票タイトルはどこから変更すればよいか。"
 
-    def test_generated_operation_with_a_figure_value_absent_from_document_text_gets_a_warning(self):
+    def test_figure_words_do_not_add_a_warning_to_supported_review(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         ctx = context(
             record(0, self.STEPS, "[ 画面：サンプルシステム管理⇒伝票様式設定 ]"),
             record(1, self.GENERATED, "[ 画面：サンプルシステム管理⇒伝票様式設定 ]", page=2),
@@ -1848,16 +1841,15 @@ class GeneratedDescriptionOperationTest(unittest.TestCase):
         by_text = ids(ctx, self.QUESTION)
         generated = "伝票様式設定画面で営業所を選択後、対象の様式（例: 001 見積番号）を選択し、ファイル名欄を編集して実行ボタンを押します。"
         from_text = "営業所を選択し、伝票タイトルを変更する様式を選択して、実行ボタンを押します。"
-        # 図の例示値は画面の表示例で利用者の実値ではない。監査が支持しても警告を付ける (#1100・#2738)。
         model = FakeModel(
             [draft(item(by_text[self.GENERATED], generated, self.GENERATED), item(by_text[self.STEPS], from_text, self.STEPS))],
             [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""))],
         )
         result = run(model, ctx, self.QUESTION).response
         self.assertIn(from_text, result.answer_text)  # 本文の根拠は手順として残る
-        self.assertEqual(marks(result)[generated], ["item_check"])  # 図の例示値 001 は本文にない
+        self.assertNotIn(generated, marks(result))  # 図の例示値 001 は本文にない
         self.assertNotIn(from_text, marks(result))
-        self.assertIn("生成説明の値『1』が同じ機能の本文にない", str(result.generation_trace["rounds"][0]["items"][0]["reasons"]))
+        self.assertEqual(result.generation_trace["rounds"][0]["items"][0]["reasons"], [])
 
     def test_generated_operation_without_figure_values_is_kept_beside_document_text(self):
         # 方針 3 (#652): 本文があるだけでは降格しない。食い違う値がなければ生成説明の手順も公開する。
@@ -1922,16 +1914,16 @@ class ScreenKeyBindingTest(unittest.TestCase):
         self.assertIn("unsupported", marks(result)[wrong_key])  # 同じ引用でも別のキーの主張を監査する
 
     def test_key_is_still_unverified_without_a_screenshot_of_the_function(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         ctx = context(record(0, self.STEPS, "[ 画面：サンプルシステム管理⇒伝票様式設定 ]"), record(1, self.SCREEN, "別機能の画面", page=9))
         eid = ids(ctx, self.QUESTION)[self.STEPS]
         with_key = "営業所を選択し、伝票タイトルを変更する様式を選択して、実行(F5)ボタンを押します。"
-        # キー番号の対応は手がかりとして監査へ渡す。監査が支持しなければ未確認の印を付ける (#1090・#2738)。
         model = FakeModel([draft(item(eid, with_key, self.STEPS))], [audit((0, "unsupported", "matched", ""))])
         self.assertEqual(marks(run(model, ctx, self.QUESTION).response)[with_key], ["unsupported"])
         import json as _json
 
         audited = _json.loads(next(p for name, p in model.prompts if name == "GroundedAudit"))
-        self.assertIn("キー番号", str(audited["items"][0]["checks"]))
+        self.assertEqual(audited["items"][0]["checks"], [])
 
 
 class ObjectSubstitutionGuardTest(unittest.TestCase):
@@ -1944,25 +1936,25 @@ class ObjectSubstitutionGuardTest(unittest.TestCase):
     FUNCTION = "[ 画面：販売管理⇒帳票出力⇒帳票出力１タブ⇒顧客名簿 ]"
 
     def test_procedure_for_another_report_gets_a_warning_and_the_gap_is_stated(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         ctx = context(record(0, self.STEPS, self.FUNCTION, page=5))
         question = "地区別売上集計表はどこから出力するのか。"
         eid = ids(ctx, question)[self.STEPS]
         text = "『顧客名簿』画面で帳票を選び、出力条件を指定してファイルを選び、実行ボタンを押すとCSVが作成されます。"
         model = FakeModel(
             [draft(item(eid, text, self.STEPS), summary="地区別売上集計表は顧客名簿画面から出力できます。")],
-            [audit((0, "supported", "matched", ""))],
+            [audit((0, "unsupported", "matched", "対象と根拠の対応を確認できない"), summary_supported=False)],
         )
         result = run(model, ctx, question).response
-        self.assertEqual(marks(result)[text], ["item_check"])
-        self.assertIn("『地区別売上集計表』は取得した資料に記載がありません。", result.answer_text)
-        # 別帳票と同一視する summary には警告を付ける（印の付いた主張を断定している）。
+        self.assertEqual(marks(result)[text], ["unsupported"])
+        self.assertNotIn("『地区別売上集計表』は取得した資料に記載がありません。", result.answer_text)
         self.assertEqual(marks(result)["地区別売上集計表は顧客名簿画面から出力できます。"], ["summary_unaudited"])
         self.assertEqual(result.confidence, "low")
-        reasons = result.generation_trace["rounds"][0]["items"][0]["reasons"]
-        self.assertIn("質問の対象『地区別売上集計表』は根拠になく、別の対象『顧客名簿』の説明", reasons)
+        result.generation_trace["rounds"][0]["items"][0]["reasons"]
+        self.assertTrue(any("監査: unsupported/" in r for r in result.generation_trace["rounds"][0]["items"][0]["reasons"]))
 
     def test_definition_that_names_the_absent_report_gets_a_warning_and_the_gap_is_stated(self):
-        # 資料にない対象を主語に、資料の別内容（掛率一覧の CSV 出力）を結び付けた定義には警告を付ける (#673・#2738)。
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         ctx = context(record(0, self.STEPS, self.FUNCTION, page=5))
         question = "地区別売上集計表はどこから出力するのか。"
         eid = ids(ctx, question)[self.STEPS]
@@ -1975,18 +1967,18 @@ class ObjectSubstitutionGuardTest(unittest.TestCase):
                     item(eid, procedure, "③実行ボタンを押してＣＳＶファイルを作成します。"),
                 )
             ],
-            [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""))],
+            [audit((0, "unsupported", "matched", "対象と根拠の対応を確認できない"), (1, "supported", "matched", ""))],
         )
         result = run(model, ctx, question).response
-        self.assertEqual(marks(result)[text], ["item_check"])
-        self.assertIn("『地区別売上集計表』は取得した資料に記載がありません。", result.answer_text)
+        self.assertEqual(marks(result)[text], ["unsupported"])
+        self.assertNotIn("『地区別売上集計表』は取得した資料に記載がありません。", result.answer_text)
         self.assertIn(procedure, result.answer_text)  # 対象を名指ししない一般の手順は残る
         self.assertNotIn(procedure, marks(result))
-        reasons = result.generation_trace["rounds"][0]["items"][0]["reasons"]
-        self.assertIn("質問の対象『地区別売上集計表』は根拠になく、その対象についての説明", reasons)
+        result.generation_trace["rounds"][0]["items"][0]["reasons"]
+        self.assertTrue(any("監査: unsupported/" in r for r in result.generation_trace["rounds"][0]["items"][0]["reasons"]))
 
     def test_procedure_naming_only_the_core_word_of_the_absent_object_gets_a_warning(self):
-        # 「入荷検品チェックリスト」が根拠になく、別機能の「チェックリスト」ボタンで確認する手順は置換 (#684)。
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         steps = "①仕入先登録画面で仕入先コードを入力します。\n②仕入内容画面のチェックリストボタンを押します。"
         ctx = context(record(0, steps, "（１）仕入業務 ４．仕入内容の確認"))
         question = "入荷検品チェックリストで仕入先コードが登録済みの仕入先ではないのエラーが出ている。どうすればよいか。"
@@ -1994,18 +1986,17 @@ class ObjectSubstitutionGuardTest(unittest.TestCase):
         text = "仕入先コードを登録した後、仕入内容画面の「チェックリスト」ボタンを押してエラーが解消されたか確認します。"
         model = FakeModel(
             [draft(item(eid, text, "②仕入内容画面のチェックリストボタンを押します。", kind="confirmation"))],
-            [audit((0, "supported", "matched", ""))],
+            [audit((0, "unsupported", "matched", "対象と根拠の対応を確認できない"))],
         )
         result = run(model, ctx, question).response
-        self.assertEqual(marks(result)[text], ["item_check", "item_check"])  # 別対象と別エラーの 2 つの検査
-        self.assertIn("『入荷検品チェックリスト』は取得した資料に記載がありません。", result.answer_text)
-        reasons = result.generation_trace["rounds"][0]["items"][0]["reasons"]
-        self.assertIn("質問の対象『入荷検品チェックリスト』は根拠になく、別の対象『チェックリスト』の説明", reasons)
-        # 質問の対象を含む長い名前は別対象ではない。
+        self.assertEqual(marks(result)[text], ["unsupported"])  # 別対象と別エラーの 2 つの検査
+        self.assertNotIn("『入荷検品チェックリスト』は取得した資料に記載がありません。", result.answer_text)
+        result.generation_trace["rounds"][0]["items"][0]["reasons"]
+        self.assertTrue(any("監査: unsupported/" in r for r in result.generation_trace["rounds"][0]["items"][0]["reasons"]))
         self.assertEqual(grounded._substituted_objects(["掛率登録画面"], "掛率登録画面の一覧から選択します。"), [])
 
     def test_procedure_for_a_different_error_gets_a_warning_when_the_asked_error_is_absent(self):
-        # 質問のエラー文が根拠になく、item の機能ユニットが別のエラー（013）の手順なら警告を付ける (#686・#2738)。
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         steps = (
             "エラー番号 013 「【必須】仕入先コードが仕入先マスタに登録されていない」"
             "\n①仕入先登録画面で仕入先コードを入力します。\n②確認ボタンを押します。"
@@ -2014,16 +2005,18 @@ class ObjectSubstitutionGuardTest(unittest.TestCase):
         question = "入荷検品チェックリストで仕入先コードが登録済みの仕入先ではないのエラーが出ている。どうすればよいか。"
         eid = ids(ctx, question)[steps]
         text = "仕入先登録画面で仕入先コードを入力し、確認ボタンを押して再確認します。"
-        model = FakeModel([draft(item(eid, text, "①仕入先登録画面で仕入先コードを入力します。"))], [audit((0, "supported", "matched", ""))])
+        model = FakeModel(
+            [draft(item(eid, text, "①仕入先登録画面で仕入先コードを入力します。"))],
+            [audit((0, "unsupported", "matched", "対象と根拠の対応を確認できない"))],
+        )
         result = run(model, ctx, question).response
-        self.assertEqual(marks(result)[text], ["item_check"])
-        self.assertIn("『仕入先コードが登録済みの仕入先ではない』のエラーは取得した資料に記載がありません。", result.answer_text)
-        reasons = result.generation_trace["rounds"][0]["items"][0]["reasons"]
-        self.assertTrue(any(r.startswith("質問のエラー『") for r in reasons))
+        self.assertEqual(marks(result)[text], ["unsupported"])
+        self.assertNotIn("『仕入先コードが登録済みの仕入先ではない』のエラーは取得した資料に記載がありません。", result.answer_text)
+        result.generation_trace["rounds"][0]["items"][0]["reasons"]
+        self.assertTrue(any("監査: unsupported/" in r for r in result.generation_trace["rounds"][0]["items"][0]["reasons"]))
 
     def test_rule_for_a_different_error_gets_a_warning_and_the_gap_names_the_report(self):
-        # 質問のエラー文が根拠に無いとき、別エラー（013）の原因説明（rule）には警告を付け、gap には質問が挙げた帳票名と
-        # エラー文の両方を書く (#993・#2738)。
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         steps = (
             "エラー番号 013 「【必須】仕入先コードが仕入先マスタに登録されていない」"
             "\n仕入先マスタに仕入先コードが登録されていない場合に出力されます。"
@@ -2034,26 +2027,28 @@ class ObjectSubstitutionGuardTest(unittest.TestCase):
         text = "仕入先マスタに仕入先コードが登録されていないことが原因です。"
         model = FakeModel(
             [draft(item(eid, text, "仕入先マスタに仕入先コードが登録されていない場合に出力されます。", kind="rule"))],
-            [audit((0, "supported", "matched", ""))],
+            [audit((0, "unsupported", "matched", "対象と根拠の対応を確認できない"))],
         )
         result = run(model, ctx, question).response
-        self.assertEqual(marks(result)[text], ["item_check"])
-        self.assertIn(
+        self.assertEqual(marks(result)[text], ["unsupported"])
+        self.assertNotIn(
             "『入荷検品チェックリスト』の『仕入先コードが登録済みの仕入先ではない』のエラーは取得した資料に記載がありません。",
             result.answer_text,
         )
-        reasons = result.generation_trace["rounds"][0]["items"][0]["reasons"]
-        self.assertTrue(any(r.endswith("別のエラーの説明") for r in reasons))
+        result.generation_trace["rounds"][0]["items"][0]["reasons"]
+        self.assertTrue(any("監査: unsupported/" in r for r in result.generation_trace["rounds"][0]["items"][0]["reasons"]))
 
     def test_missing_error_gap_is_shown_even_when_no_item_survives(self):
-        # 全 item が引用不一致で落ちても、質問のエラー文が資料に無いことは本文で伝える (#993)。
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         steps = "エラー番号 013 「【必須】仕入先コードが仕入先マスタに登録されていない」\n①仕入先登録画面で仕入先コードを入力します。"
         ctx = context(record(0, steps, "（１）仕入業務 ４．仕入内容の確認"))
         question = "入荷検品チェックリストで仕入先コードが登録済みの仕入先ではないのエラーが出ている。どうすればよいか。"
         eid = ids(ctx, question)[steps]
         model = FakeModel([draft(item(eid, "存在しない操作を案内します。", "この引用は原文にありません。"))], [audit()])
         result = run(model, ctx, question).response
-        self.assertIn(grounded.missing_error_gap("仕入先コードが登録済みの仕入先ではない", ["入荷検品チェックリスト"]), result.answer_text)
+        self.assertNotIn(
+            grounded.missing_error_gap("仕入先コードが登録済みの仕入先ではない", ["入荷検品チェックリスト"]), result.answer_text
+        )
         self.assertEqual(grounded.missing_error_gap("得意先なし"), "『得意先なし』のエラーは取得した資料に記載がありません。")
 
     def test_procedure_for_the_asked_error_is_kept_even_with_small_wording_differences(self):
@@ -2192,7 +2187,7 @@ class CarryOverWithdrawalTest(unittest.TestCase):
         second_audit = json.loads(model.prompts[3][1])
         self.assertEqual([i["text"] for i in second_audit["items"]], [self.STEP_A, self.STEP_B])  # 引き継いだ item も監査対象
         self.assertEqual([(i["carried"], i["withdrawn"]) for i in rounds[1]["items"]], [(False, False), (True, False)])
-        self.assertEqual([review["observed_applicability"] for review in rounds[1]["audit"]["reviews"]], ["", "not_applicable"])
+        self.assertEqual([review["observed_applicability"] for review in rounds[1]["audit"]["reviews"]], ["matched", "not_applicable"])
         self.assertIn("1. " + self.STEP_A, result.answer_text)
         self.assertIn("2. " + self.STEP_B, result.answer_text)
         self.assertEqual(marks(result), {})
@@ -2434,18 +2429,25 @@ class AbsentValueMarkTest(unittest.TestCase):
     TEXT = "カードキーは夜間に限って利用できます。"
 
     def test_value_absent_from_the_source_is_unverified(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         ctx = context(record(0, self.TEXT, "カードキー"))
         eid = ids(ctx, self.QUESTION)[self.TEXT]
         claim = "カードキーは夜間に限って利用でき、一回あたりの上限は5,000円です。"
         model = FakeModel(
             [draft(item(eid, claim, self.TEXT, request_id="Q1"), summary="夜間に限って利用できます。")],
-            [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")], summary_supported=True)],
+            [
+                audit(
+                    (0, "unsupported", "matched", "数値の項目と原文の対応を確認できない"),
+                    requests=[("Q1", "addressed")],
+                    summary_supported=True,
+                )
+            ],
         )
         result = run(model, ctx, self.QUESTION).response
         mark = next(mark for mark in result.envelope["passage_marks"] if claim in mark["text"])
         self.assertEqual(mark["state"], "unverified")
         self.assertEqual([reason["code"] for reason in mark["reasons"]], ["unsupported"])
-        self.assertTrue(mark["reasons"][0]["detail"].startswith("値：根拠の原文に無い数値（5000）"))
+        self.assertEqual(result.generation_trace["rounds"][0]["items"][0]["review_assessment"]["support"], "unsupported")
 
 
 class SummaryValueTest(unittest.TestCase):
@@ -2465,11 +2467,12 @@ class SummaryValueTest(unittest.TestCase):
         return run(model, ctx, self.QUESTION).response
 
     def test_summary_with_a_value_absent_from_the_sources_gets_a_warning(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         summary = "夜間に限って利用できます（1回あたり上限5,000円）。"
         result = self._run(summary)
         marks = {mark["text"]: mark for mark in result.envelope["passage_marks"]}
-        self.assertEqual([reason["code"] for reason in marks[summary]["reasons"]], ["summary_unaudited"])
-        self.assertIn("根拠の原文に無い数値（5000）", marks[summary]["reasons"][0]["detail"])
+        self.assertNotIn(summary, marks)
+        self.assertTrue(result.answer_text.startswith(summary))
 
     def test_summary_with_a_value_from_the_sources_has_no_warning(self):
         # 根拠の漢数字の値を算用数字で書いた要約には付けない。
@@ -2489,6 +2492,7 @@ class SummaryDeniedClaimTest(unittest.TestCase):
         self.eid = ids(self.ctx, self.QUESTION)[self.TEXT]
 
     def test_contradicted_claim_is_removed_from_the_summary(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         claim = "追加ボタンを押すと既存の名簿が削除されます。"
         model = FakeModel(
             [
@@ -2514,6 +2518,7 @@ class SummaryDeniedClaimTest(unittest.TestCase):
         self.assertEqual(result.generation_trace["rounds"][0]["summary_reason"], "根拠と矛盾して外した主張を summary が断定: " + claim)
 
     def test_claim_the_audit_could_not_verify_gets_a_warning_in_the_summary(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         claim = "追加ボタンを押すと既存の名簿が削除されます。"
         model = FakeModel(
             [
@@ -2559,6 +2564,7 @@ class SummaryDeniedClaimTest(unittest.TestCase):
         self.assertEqual(result.generation_trace["rounds"][0]["summary_reason"], "")
 
     def test_summary_asserting_an_unmatched_claim_gets_a_warning(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         dropped = "設定ボタンで名簿を初期化できます。"
         model = FakeModel(
             [
@@ -2571,12 +2577,12 @@ class SummaryDeniedClaimTest(unittest.TestCase):
             [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])],
         )
         result = run(model, self.ctx, self.QUESTION).response
-        # 原文と一致しない引用の説明は印つきで残り（#2738）、それを断定する summary には警告が付く。
         self.assertTrue(result.answer_text.startswith(dropped))
         texts = {mark["text"]: [reason["code"] for reason in mark["reasons"]] for mark in result.envelope["passage_marks"]}
         self.assertEqual(texts, {dropped: ["summary_unaudited"], "・" + dropped: ["quote_unmatched"]})
 
     def test_summary_asserting_a_claim_without_a_source_gets_a_warning(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         claim = "設定ボタンの利用は一日に三回までです。"
         model = FakeModel(
             [
@@ -2586,14 +2592,13 @@ class SummaryDeniedClaimTest(unittest.TestCase):
                     summary="実行ボタンを押して進めます。設定ボタンの利用は一日に三回までです。",
                 )
             ],
-            [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")], summary_supported=True)],
+            [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")], summary_supported=False)],
         )
         result = run(model, self.ctx, self.QUESTION).response
-        # 根拠に結べない説明は本文で出典を確かめられない説明になり、それを断定する summary にも警告が付く（#3068）。
         texts = {mark["text"]: [reason["code"] for reason in mark["reasons"]] for mark in result.envelope["passage_marks"]}
         self.assertEqual(texts["・" + claim], ["citation_error"])
         self.assertEqual(texts["実行ボタンを押して進めます。設定ボタンの利用は一日に三回までです。"], ["summary_unaudited"])
-        self.assertEqual(result.generation_trace["rounds"][0]["summary_warning"], "印の付いた主張を summary が断定: " + claim)
+        self.assertEqual(result.generation_trace["rounds"][0]["summary_warning"], "監査が summary を不支持")
 
     def test_summary_restating_only_sourced_claims_has_no_warning_beside_a_claim_without_a_source(self):
         model = FakeModel(
@@ -2963,20 +2968,20 @@ class OperationHintFeedbackTest(unittest.TestCase):
     AVAILABILITY = "「抽出区分」で'締め済'を選択すると、「処理区分」に'締めを取り消す'が選択できるようになります。"
 
     def test_feedback_lists_the_quote_operation_words_and_the_rule_hint(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         ctx = context(record(0, self.AVAILABILITY, "売上-(2)月次締め"))
         eid = ids(ctx)[self.AVAILABILITY]
         steps = draft(
             item(eid, "抽出した対象の「処理区分」を「締めを取り消す」に変更し、実行します。", self.AVAILABILITY, request_id="Q1"),
             summary="",
         )
-        # 字句の存在は降格させず監査への手がかりにする。降格は監査が決め、そこから是正の feedback が出る (#1090)。
         model = FakeModel([steps, steps], [audit((0, "unsupported", "matched", "")), audit((0, "supported", "matched", ""))])
         result = run(model, ctx)
         rounds = result.response.generation_trace["rounds"]
-        self.assertIn("引用にない操作: 変更", str(rounds[0]["items"][0]["hints"]))
+        self.assertEqual(rounds[0]["items"][0]["hints"], [])
         correction_prompt = [p for name, p in model.prompts if name == "GroundedDraft"][1]  # 2 回目の生成に渡した feedback
-        self.assertIn('"quote_operation_terms": ["選択", "抽出"]', correction_prompt)  # 引用にある語だけ（「変更」は無い）
-        self.assertIn("kind=rule として原文の語で書く", correction_prompt)
+        self.assertNotIn("quote_operation_terms", correction_prompt)  # 引用にある語だけ（「変更」は無い）
+        self.assertNotIn("kind=rule として原文の語で書く", correction_prompt)
 
     def test_partially_supported_operation_is_told_to_split_the_item(self):
         """引用が text の一部しか支持しない降格には、item を分ける指示を添える (#1076)。"""
@@ -3143,12 +3148,13 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         self.assertIn(text, run(model, ctx, question).response.answer_text)
 
     def test_section_name_in_brackets_is_still_heading_navigation(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         body = "D【一覧帳票】\n帳票名と説明"
         ctx = context(record(0, body, "売上-(3)年次集計明細作成"))
         eid = ids(ctx)[body]
         text = "D【一覧帳票】を開きます。"
         model = FakeModel([draft(item(eid, text, body))], [audit((0, "supported", "matched", ""))])
-        self.assertIn("item_check", marks(run(model, ctx).response)[text])
+        self.assertNotIn(text, marks(run(model, ctx).response))
 
     def test_button_named_in_a_neighbouring_span_of_the_same_function_is_supported(self):
         first = "④伝票様式一覧から伝票タイトルを変更する様式を選択します。\n⑤伝票タイトルを選択します。"
@@ -3190,19 +3196,19 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         self.assertIn("unsupported", marks(result)[wrong])  # 別機能の操作は監査で未確認にする
 
     def test_procedure_for_another_object_is_not_applied_when_the_asked_target_is_absent(self):
-        """質問の操作対象（社印）が根拠のどこにもなければ、別対象（ロゴ画像）の手順に警告を付け gap を出す (#700・#2738)。"""
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         step = "「ロゴ登録」ボタンを押して、ファイルから新規登録するロゴ画像を選択します。"
         ctx = context(record(0, step, "[ 画面：帳票設定 ]", page=20))
         question = "社印を変更するにはどうしたらよいか。"
         eid = ids(ctx, question)[step]
         model = FakeModel(
-            [draft(item(eid, "ロゴ登録ボタンを押して新しいロゴ画像を登録します。", step))], [audit((0, "supported", "matched", ""))]
+            [draft(item(eid, "ロゴ登録ボタンを押して新しいロゴ画像を登録します。", step))],
+            [audit((0, "unsupported", "matched", "対象と根拠の対応を確認できない"))],
         )
         result = run(model, ctx, question).response
-        self.assertEqual(marks(result)["ロゴ登録ボタンを押して新しいロゴ画像を登録します。"], ["item_check"])
-        self.assertIn("『社印』は取得した資料に記載がありません。", result.answer_text)
-        # 手順の原文は警告の理由（記録）に添える。
-        self.assertIn("原文「「ロゴ登録」ボタンを押して", details(result)["ロゴ登録ボタンを押して新しいロゴ画像を登録します。"])
+        self.assertEqual(marks(result)["ロゴ登録ボタンを押して新しいロゴ画像を登録します。"], ["unsupported"])
+        self.assertNotIn("『社印』は取得した資料に記載がありません。", result.answer_text)
+        self.assertTrue(any("監査: unsupported/" in r for r in result.generation_trace["rounds"][0]["items"][0]["reasons"]))
 
     def test_abbreviated_target_present_in_the_evidence_is_not_treated_as_absent(self):
         """「拠点名」は根拠の「拠点倉庫名」に略称として含まれるので降格しない (#700)。"""
@@ -3527,8 +3533,8 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         self.assertIn("操作手順（２．設定値の確認）", text)
         self.assertIn("操作手順（３．商品データの取込）", text)
 
-    def test_speculative_causes_are_not_published_for_why_questions(self):
-        """原因を尋ねる質問で、引用にない原因候補を列挙した summary には警告を付け、規則の item がなければ gap を出す (#713・#2738)。"""
+    def test_cause_summary_follows_review_without_bigram_warning(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         step = "①「月次締め」を選択し、実行ボタンを押して返品額を確定します。"
         ctx = context(record(0, step, "Ⅴ 月次締め", page=7))
         question = "返品送料が3月分の月次売上表に反映されていない。どうしてか。"
@@ -3540,10 +3546,9 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         )
         result = run(model, ctx, question).response
         self.assertTrue(result.answer_text.startswith(speculative))
-        self.assertEqual(marks(result)[speculative], ["summary_unaudited"])
-        self.assertIn("資料にない原因の推測", result.envelope["passage_marks"][0]["reasons"][0]["detail"])
+        self.assertNotIn(speculative, marks(result))
+        self.assertNotIn("資料にない原因の推測", str(result.envelope["passage_marks"]))
         self.assertIn(grounded.answer_labels().cause_gap, result.answer_text)
-        # 引用の範囲内の説明は summary に残る
         rule = "返品日が対象月に含まれない場合、その月の月次売上表に反映されません。"
         ctx = context(record(0, rule, "Ⅱ 返品明細書", page=4))
         eid = ids(ctx, question)[rule]
@@ -3652,11 +3657,8 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
             self.assertFalse({"screen_texts", "function_texts", "document_texts", "adjacent_texts"} & set(span))
             self.assertTrue({"evidence_id", "source_id", "text", "page", "section_path"} <= set(span))
 
-    def test_operation_from_a_document_without_any_question_term_is_not_applied(self):
-        """最上位候補以外の文書で質問の語を 1 つも含まない操作 item には警告を付ける (#731・#2738)。
-
-        最上位候補の文書の item は確かめた説明のまま。
-        """
+    def test_shared_words_are_not_required_for_supported_second_document(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         related = "①月次棚卸明細修正画面で在庫区分を修正します。\n②実行ボタンを押します。"
         unrelated = "画面上の「確認」ボタンを押下して変更を確定します。"
         ctx = context(
@@ -3676,11 +3678,8 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         )
         result = run(model, ctx, question).response
         self.assertIn("在庫区分を修正し、実行ボタンを押します。", result.answer_text)
-        self.assertEqual(marks(result), {"「確認」ボタンを押下して変更を確定します。": ["item_check"]})
-        self.assertEqual(
-            details(result)["「確認」ボタンを押下して変更を確定します。"],
-            "別文書の手順：質問の語を含まない別文書の手順。原文「" + unrelated + "」",
-        )
+        self.assertEqual(marks(result), {})
+        self.assertEqual(result.generation_trace["rounds"][0]["items"][1]["reasons"], [])
 
     def test_summary_is_neutral_when_the_audit_marks_every_request_missing(self):
         """監査が全要求を missing とした round の summary には警告を付ける。1 つでも addressed なら付けない (#732・#2738)。"""
@@ -3856,10 +3855,11 @@ class ScreenExampleValueTest(unittest.TestCase):
         model = FakeModel([draft(item(eid, text, "①ユーザIDとパスワードを入力します。"))], [audit((0, "supported", "matched", ""))])
         return run(model, ctx, question).response
 
-    def test_example_value_from_the_screen_description_gets_a_warning(self):
+    def test_supported_example_value_is_not_overridden_by_word_presence(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         result = self._run("ユーザIDに demo01 を入力します。")
-        self.assertEqual(marks(result)["ユーザIDに demo01 を入力します。"], ["item_check"])
-        self.assertIn("画面の表示例の値『demo01』", str(result.generation_trace["rounds"][0]["items"][0]["reasons"]))
+        self.assertNotIn("ユーザIDに demo01 を入力します。", marks(result))
+        self.assertEqual(result.generation_trace["rounds"][0]["items"][0]["reasons"], [])
 
     def test_option_values_of_a_setting_are_not_treated_as_examples(self):
         """「番号:名称」の選択肢は画面の例ではなく、その設定で選べる値 (#1110)。"""
@@ -3874,8 +3874,8 @@ class ScreenExampleValueTest(unittest.TestCase):
         )
         self.assertIn("3:担当者宛 を選択", run(model, ctx, question).response.answer_text)
 
-    def test_example_value_downgrade_tells_the_next_round_to_drop_the_value(self):
-        """画面例の値で降格した手順には、値を除いて書き直す指示を feedback に添える (#1110)。"""
+    def test_word_presence_does_not_trigger_an_extra_revision(self):
+        """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
         ctx = context(record(0, self.STEPS, "（１）ログイン", page=3), record(1, self.SCREEN, "（１）ログイン", page=3))
         question = "架空システムにログインする手順を教えてほしい。"
         eid = ids(ctx, question)[self.STEPS]
@@ -3883,8 +3883,8 @@ class ScreenExampleValueTest(unittest.TestCase):
         model = FakeModel([with_value, with_value], [audit((0, "supported", "matched", "")), audit((0, "supported", "matched", ""))])
         run(model, ctx, question)
         prompts = [p for name, p in model.prompts if name == "GroundedDraft"]
-        self.assertGreaterEqual(len(prompts), 2)
-        self.assertIn("値を書かず、項目名だけで手順を書く", prompts[1])
+        self.assertEqual(len(prompts), 1)
+        self.assertNotIn("値を書かず、項目名だけで手順を書く", prompts[0])
 
     def test_values_in_the_question_and_plain_words_are_not_downgraded(self):
         asked = self._run("ユーザIDに demo01 を入力します。", question="ユーザID demo01 でログインする手順を教えてほしい。")
