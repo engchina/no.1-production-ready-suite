@@ -1557,3 +1557,14 @@ describe("document delete confirmation", () => {
     expect((await pending).id).toBe("doc-1");
   });
 });
+
+
+it("結果 Excel の取得は job ID と入力を POST し、ファイル名を保持する", async () => {
+  const fetchMock=vi.fn().mockResolvedValue(new Response("xlsx",{status:200,headers:{"Content-Disposition":'attachment; filename="evaluation_results.xlsx"'}}));
+  vi.stubGlobal("fetch",fetchMock);
+  const body={rows:[],cases:[],profile_name:"プロファイル A",compare_profile_name:null};
+  const file=await api.downloadEvaluationResults("job/1",body);
+  expect(fetchMock.mock.calls[0][0]).toBe("/api/evaluation/jobs/job%2F1/results.xlsx");
+  expect(fetchMock.mock.calls[0][1]).toMatchObject({method:"POST",body:JSON.stringify(body),credentials:"same-origin"});
+  expect(file.fileName).toBe("evaluation_results.xlsx");
+});

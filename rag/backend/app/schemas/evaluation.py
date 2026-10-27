@@ -635,6 +635,7 @@ class EvaluationMetrics(BaseModel):
     response_decision_accuracy: float | None = None
     metric_case_counts: dict[str, int] = Field(default_factory=dict)
     passed: bool | None = None
+    applied_thresholds: dict[str, float] = Field(default_factory=dict)
     threshold_failures: list[EvaluationThresholdFailure] = Field(default_factory=list)
     failure_reason_counts: dict[str, int] = Field(default_factory=dict)
     category_breakdown: dict[str, EvaluationCategorySummary] = Field(default_factory=dict)
@@ -949,3 +950,12 @@ class EvaluationImportResult(BaseModel):
     document_names: dict[str, str] = Field(default_factory=dict)
     max_rows: int
     max_bytes: int
+
+
+class EvaluationResultExportRequest(BaseModel):
+    """実行時に画面へ保持した入力。指標は所有者を検証した job から取得する。"""
+
+    rows: list[EvaluationImportRow] = Field(default_factory=list, max_length=200)
+    cases: list[EvaluationCase] = Field(default_factory=list, max_length=200)
+    profile_name: str | None = Field(default=None, max_length=256)
+    compare_profile_name: str | None = Field(default=None, max_length=256)

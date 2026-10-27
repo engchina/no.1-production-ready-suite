@@ -14,7 +14,7 @@ import {
 import { Download, FileSpreadsheet } from "lucide-react";
 import { useId, useRef, useState, type DragEvent } from "react";
 
-import type { EvaluationImportIssue, EvaluationImportResult, EvaluationImportRow } from "@/lib/api";
+import type { EvaluationCase, EvaluationImportIssue, EvaluationImportResult, EvaluationImportRow } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useClientListPaging } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
@@ -285,18 +285,20 @@ function EvaluationImportSummary({ result }: { result: EvaluationImportResult })
           <EvaluationImportIssueTable issues={warnings} label={t("evaluation.import.warningsLabel")} />
         </div>
       ) : null}
-      <EvaluationImportPreview rows={result.rows} />
+      <EvaluationImportPreview rows={result.rows} cases={result.cases} />
     </div>
   );
 }
 
-function EvaluationImportPreview({ rows }: { rows: EvaluationImportRow[] }) {
+function EvaluationImportPreview({ rows, cases }: { rows: EvaluationImportRow[]; cases: EvaluationCase[] }) {
+  const answers = new Map(cases.map(item => [item.id, item.standard_answer]));
   const paging = useClientListPaging(
     "evaluation.previewPaging",
     `${rows.length}:${rows[0]?.case_id ?? ""}:${rows.at(-1)?.case_id ?? ""}`
   );
   return (
     <PagedDataTable<EvaluationImportRow>
+      viewport="bounded"
       paginationLabels={paginationLabels()}
       {...paging}
       pageSizeOptions={PAGE_SIZE_OPTIONS}
@@ -306,7 +308,7 @@ function EvaluationImportPreview({ rows }: { rows: EvaluationImportRow[] }) {
       scrollAriaLabel={t("evaluation.import.previewLabel")}
       scrollTestId="evaluation-import-preview"
       paginationTestId="evaluation-import-pagination"
-      tableClassName="w-full min-w-[22.86rem] text-sm md:min-w-[40rem]"
+      tableClassName="w-full min-w-[90rem] text-sm"
       columns={[
         {
           key: "row",
@@ -324,7 +326,7 @@ function EvaluationImportPreview({ rows }: { rows: EvaluationImportRow[] }) {
         {
           key: "evidence",
           header: t("evaluation.import.column.evidence"),
-          className: "break-words text-xs text-fg-muted",
+          className: "min-w-[12rem] break-words text-xs text-fg-muted",
           render: (row) =>
             row.evidence.length ? (
               <ul className="grid gap-0.5">
@@ -338,37 +340,28 @@ function EvaluationImportPreview({ rows }: { rows: EvaluationImportRow[] }) {
               t("evaluation.import.noEvidenceUnanswerable")
             ),
         },
-        // 案内すべき画面（#2402）。書いた行があるときだけ出す。
-        ...(rows.some((row) => row.required_answer_points?.length)
-          ? [
-              {
-                key: "screens",
-                header: t("evaluation.import.column.screens"),
-                className: "break-words text-xs text-fg-muted",
-                render: (row: EvaluationImportRow) =>
-                  row.required_answer_points?.length ? (
-                    <ul className="grid gap-0.5">
-                      {row.required_answer_points.map((line, index) => (
-                        <li key={`${index}:${line}`}>{line}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    "—"
-                  ),
-              },
-            ]
-          : []),
+        {
+          key: "standard_answer",
+          header: t("evaluation.import.column.standardAnswer"),
+          className: "min-w-[16rem] whitespace-pre-wrap break-words text-xs text-fg-muted",
+          render: row => answers.get(row.case_id) ?? row.standard_answer_preview ?? "—",
+        },
+        {
+          key: "screens",
+          header: t("evaluation.import.column.screens"),
+          className: "min-w-[12rem] whitespace-pre-wrap break-words text-xs text-fg-muted",
+          render: row => row.required_answer_points?.join("\n") || "—",
+        },
         {
           key: "expected_response_decision",
           header: t("evaluation.import.column.decision"),
           render: (row) => row.expected_response_decision ? t(`evaluation.decision.${row.expected_response_decision}`) : t("evaluation.metric.unassessed"),
         },
         {
-          key: "standard_answer",
-          header: t("evaluation.import.column.standardAnswer"),
-          headerClassName: "hidden md:table-cell",
-          className: "hidden break-words text-xs text-fg-muted md:table-cell",
-          render: (row) => row.standard_answer_preview ?? "—",
+          key: "answer_process",
+          header: t("evaluation.import.column.process"),
+          className: "min-w-[16rem] whitespace-pre-wrap break-words text-xs text-fg-muted",
+          render: row => row.answer_process || "—",
         },
       ]}
     />

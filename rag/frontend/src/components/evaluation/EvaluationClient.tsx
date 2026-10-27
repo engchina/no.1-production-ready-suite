@@ -9,7 +9,6 @@ import {
   CardHeader,
   CardTitle,
   DataTable,
-  FormGrid,
   ProcessingIndicator,
   Skeleton,
   StatusBadge,
@@ -26,13 +25,14 @@ import {
   BarChart3,
   CheckCircle2,
   ClipboardCheck,
+  Download,
   Minus,
   Settings2,
   TrendingDown,
   TrendingUp,
   XCircle,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, createContext, useContext, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { listCountProps, useClientListPaging } from "@/lib/list-paging";
@@ -117,6 +117,13 @@ import {
   evaluationUploadSelectionError,
 } from "./EvaluationRequestUpload";
 
+const ResultExportContext = createContext<{
+  jobId: string;
+  input: EvaluationImportResult | null;
+  profileName: string | null;
+  compareProfileName: string | null;
+} | null>(null);
+
 const COMPARE_SWITCH_ID = "evaluation-compare-switch";
 const COMPARE_PROFILE_ID = "evaluation-compare-profile";
 /** アップロードの上限（backend の `EVALUATION_EXCEL_MAX_ROWS` / `_BYTES`。検証の前の案内に出す）。 */
@@ -157,6 +164,9 @@ export function EvaluationClient() {
     "evaluation.import",
     null,
     isImportResult
+  );
+  const [runInputSnapshot, setRunInputSnapshot] = useWorkspaceState<EvaluationImportResult | null>(
+    "evaluation.runInput", null, isImportResult
   );
   // 実行した評価のケースの見出し（結果の表の質問・期待する根拠）。Excel を差し替えても結果と合う。
   const [runCaseLabels, setRunCaseLabels] = useWorkspaceState<EvaluationCaseLabels>(
@@ -339,6 +349,7 @@ export function EvaluationClient() {
         ...(compareId ? { compare_search_answer_profile_id: compareId } : {}),
       });
       setRunCaseLabels(buildEvaluationCaseLabels(runInput));
+      setRunInputSnapshot(runInput);
       setRunProfileName(profiles.find((profile) => profile.id === profileId)?.name ?? profileId);
       setRunCompareName(
         compareId ? (profiles.find((profile) => profile.id === compareId)?.name ?? compareId) : null
@@ -414,22 +425,22 @@ export function EvaluationClient() {
                 )}
                 <p className="mt-1 text-xs text-fg-muted">{t("evaluation.knowledgeBaseScope.helper")}</p>
               </div>
-              <FormGrid columns={1}>
-                <EvaluationRequestUpload
-                  fileName={fileName}
-                  result={shownResult}
-                  validating={validating}
-                  disabled={runMutation.isPending}
-                  error={uploadError}
-                  notice={uploadNotice}
-                  maxRows={EVALUATION_EXCEL_MAX_ROWS}
-                  maxMegabytes={EVALUATION_EXCEL_MAX_MEGABYTES}
-                  templateDownloading={templateDownloading}
-                  templateError={templateError}
-                  onFiles={selectFiles}
-                  onDownloadTemplate={() => void downloadTemplate()}
-                />
-              </FormGrid>
+
+              <EvaluationRequestUpload
+                fileName={fileName}
+                result={shownResult}
+                validating={validating}
+                disabled={runMutation.isPending}
+                error={uploadError}
+                notice={uploadNotice}
+                maxRows={EVALUATION_EXCEL_MAX_ROWS}
+                maxMegabytes={EVALUATION_EXCEL_MAX_MEGABYTES}
+                templateDownloading={templateDownloading}
+                templateError={templateError}
+                onFiles={selectFiles}
+                onDownloadTemplate={() => void downloadTemplate()}
+              />
+
               {shownResult && shownResult.error_count === 0 && processRows.length ? (
                 <EvaluationProcessDrafts
                   rows={processRows}
@@ -492,7 +503,9 @@ export function EvaluationClient() {
             state={runJob}
             renderResult={(job) =>
               job.run_result ? (
-                job.run_result.comparison ? (
+                <ResultExportContext.Provider value={{jobId:job.job_id,input:runInputSnapshot,
+                  profileName:runProfileName,compareProfileName:runCompareName}}>
+                {job.run_result.comparison ? (
                   <EvaluationComparisonResult
                     metrics={job.run_result}
                     baseName={runProfileName}
@@ -501,7 +514,8 @@ export function EvaluationClient() {
                   />
                 ) : (
                   <EvaluationResult metrics={job.run_result} caseLabels={runCaseLabels} />
-                )
+                )}
+                </ResultExportContext.Provider>
               ) : null
             }
           />
@@ -1003,19 +1017,6 @@ function EvaluationResult({
         />
       ))}
 
-      {metrics.threshold_failures.length ? (
-        <Banner severity="warning" title={t("evaluation.thresholdFailures")}>
-          <ul className="space-y-1">
-            {metrics.threshold_failures.map((failure) => (
-              <li key={failure.metric}>
-                {metricLabel(failure.metric)}: {formatMetricValue(failure.actual)} /{" "}
-                {formatMetricValue(failure.threshold)}
-              </li>
-            ))}
-          </ul>
-        </Banner>
-      ) : null}
-
       <CategoryBreakdown metrics={metrics} />
       <DecisionBreakdown metrics={metrics} />
 
@@ -1069,13 +1070,24 @@ function MetricGroup({
         {metricNames.map((metric) => {
           const value = metricValue(metrics, metric);
           const count = metricCaseCount(metrics, metric);
+          const threshold = metrics.applied_thresholds?.[metric]
+            ?? metrics.threshold_failures.find(failure => failure.metric === metric)?.threshold;
           return (
             <Card key={metric} data-testid={`evaluation-metric-${metric}`}>
               <CardContent className="space-y-1.5 pt-5">
                 <p className="text-xs font-medium text-fg-muted" title={metricDescription(metric)}>
                   {metricLabel(metric)}
                 </p>
-                <p className="tnum text-2xl font-semibold text-fg">{formatMetricValue(value)}</p>
+                <p className="tnum text-2xl font-semibold text-fg">
+                  {formatMetricValue(value)}
+                  {threshold != null ? (
+                    <span className="text-sm font-normal text-fg-muted"
+                      aria-label={t("evaluation.metric.threshold", {value:formatMetricValue(threshold)})}
+                      data-testid={`evaluation-threshold-${metric}`}>
+                      {" / "}{formatMetricValue(threshold)}
+                    </span>
+                  ) : null}
+                </p>
                 <div className="flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
                   {value === null ? (
                     <span>
@@ -1109,6 +1121,29 @@ function CaseTable({
   metrics: EvaluationMetrics;
   caseLabels: EvaluationCaseLabels;
 }) {
+  const exportContext = useContext(ResultExportContext);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const download = async () => {
+    if (!exportContext || downloading) return;
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const input = exportContext.input;
+      const fallbackRows = Object.entries(caseLabels).map(([case_id, label]) => ({
+        row: Number(case_id.replace("row-", "")) || 0, case_id,
+        question: label.question, evidence: label.evidence.map(item => item.label),
+        standard_answer_preview: null, has_standard_answer: false,
+      }));
+      saveDownloadedFile(await api.downloadEvaluationResults(exportContext.jobId, {
+        rows: input?.rows ?? fallbackRows, cases: input?.cases ?? [],
+        profile_name: exportContext.profileName, compare_profile_name: exportContext.compareProfileName,
+      }));
+      toast.success(t("evaluation.export.done"));
+    } catch (error) {
+      setDownloadError(error instanceof ApiError ? error.message : t("evaluation.export.error"));
+    } finally { setDownloading(false); }
+  };
   const results = metrics.case_results;
   // 評価の結果ごとに 1 ページ目から。結果は trace の ID（ケースごとに一意）で見分ける（#1891）。
   const paging = useClientListPaging(
@@ -1129,8 +1164,16 @@ function CaseTable({
           className="min-w-0 flex-1"
           testId="evaluation-case-toolbar"
         />
+        {exportContext ? (
+          <Button type="button" size="sm" variant="secondary" icon={Download}
+            loading={downloading} onClick={() => void download()}>
+            {t("evaluation.export.action")}
+          </Button>
+        ) : null}
       </div>
+      {downloadError ? <Banner severity="danger">{downloadError}</Banner> : null}
       <PagedDataTable<EvaluationCaseResult>
+        viewport="bounded"
         paginationLabels={paginationLabels()}
         {...paging}
         pageSizeOptions={PAGE_SIZE_OPTIONS}

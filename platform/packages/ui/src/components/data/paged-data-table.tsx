@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 
-import { INFORMATION_TABLE_ROW_CLASS, INFORMATION_TABLE_VISIBLE_ROWS } from "../../lib/list-density";
+import { INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_ROW_CLASS, INFORMATION_TABLE_VISIBLE_ROWS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
 import { DataTable, type DataTableProps } from "./data-table";
 import { DEFAULT_PAGE_SIZE, Pagination, usePagination, type PaginationLabels } from "./pagination";
@@ -29,8 +29,8 @@ export type PagedDataTableProps<T> = Omit<DataTableProps<T>, "stickyHeader" | "v
   onPageChange?: (page: number) => void;
   paginationTestId?: string;
   paginationAriaLabel?: string;
-  /** page は全行を並べて親の本文でスクロールする。既定は一覧の 5 / 8 行。 */
-  viewport?: "list" | "page";
+  /** list は実測の 5 / 8 行。bounded は長いセルも共通の高さ上限で止める。page は親でスクロールする。 */
+  viewport?: "list" | "page" | "bounded";
 };
 
 /**
@@ -52,6 +52,7 @@ export function PagedDataTable<T>({
   paginationTestId,
   paginationAriaLabel,
   viewport = "list",
+  className,
   ...props
 }: PagedDataTableProps<T>) {
   const [innerPageSize, setInnerPageSize] = useState(pageSize);
@@ -76,7 +77,8 @@ export function PagedDataTable<T>({
           return { ...extra, className: cn(INFORMATION_TABLE_ROW_CLASS, extra?.className) };
         }}
         stickyHeader
-        visibleRows={viewport === "page" ? undefined : INFORMATION_TABLE_VISIBLE_ROWS}
+        visibleRows={viewport === "list" ? INFORMATION_TABLE_VISIBLE_ROWS : undefined}
+        className={cn(viewport === "bounded" && INFORMATION_LIST_SCROLL_CLASS, className)}
         scrollWithinParent={viewport === "page"}
       />
       <Pagination

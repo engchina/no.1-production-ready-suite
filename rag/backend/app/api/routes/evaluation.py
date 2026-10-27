@@ -62,6 +62,7 @@ from app.rag.evaluation_jobs import (
     get_evaluation_job_service,
 )
 from app.rag.evaluation_process import guide_process_row, process_draft
+from app.rag.evaluation_results_excel import evaluation_results_xlsx
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.support_guide_process_import import (
     GuideDraftLlm,
@@ -81,6 +82,7 @@ from app.schemas.evaluation import (
     EvaluationMetrics,
     EvaluationProcessDraftData,
     EvaluationProcessDraftRequest,
+    EvaluationResultExportRequest,
     EvaluationRunRequest,
 )
 from app.schemas.search import normalize_search_id_list
@@ -430,6 +432,20 @@ async def get_evaluation_job(job_id: str) -> ApiResponse[EvaluationJob]:
     except EvaluationJobNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ApiResponse(data=job)
+
+
+@router.post("/jobs/{job_id}/results.xlsx")
+async def export_evaluation_results(job_id: str, body: EvaluationResultExportRequest) -> Response:
+    """投入した利用者の完了した結果を、画面の実行時の入力と合わせて出力する。"""
+    job = (await get_evaluation_job(job_id)).data
+    if job is None or job.status != "SUCCEEDED" or job.run_result is None:
+        raise HTTPException(status_code=409, detail="完了した品質評価の結果だけを書き出せます。")
+    content = await asyncio.to_thread(evaluation_results_xlsx, job.run_result, body)
+    return Response(
+        content,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": 'attachment; filename="evaluation_results.xlsx"'},
+    )
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=ApiResponse[EvaluationJob])

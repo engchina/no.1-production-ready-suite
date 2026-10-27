@@ -4289,6 +4289,9 @@ export const ja = {
   "evaluation.ingestionQuality.warning.unsupportedOdtRtf": "ODT・RTF(要変換)",
   "evaluation.ingestionQuality.parser.legacy": "旧形式",
   "evaluation.thresholdFailures": "閾値未達",
+  "evaluation.export.action": "Excel をダウンロード",
+  "evaluation.export.done": "評価結果の Excel をダウンロードしました。",
+  "evaluation.export.error": "評価結果をダウンロードできませんでした。もう一度試してください。",
   "evaluation.cases": "ケース別結果",
   "evaluation.knowledgeBaseScope.helper":
     "選んだ検索・回答プロファイルの設定で評価します。期待する根拠のファイル名は、参照するナレッジベースの文書と照合します。",
@@ -4542,6 +4545,7 @@ export const ja = {
   "evaluation.compare.tab.base": "主条件: {name}",
   "evaluation.compare.tab.compared": "検索・回答プロファイル: {name}",
   "evaluation.import.column.screens": "必須の回答要点",
+  "evaluation.import.column.process": "回答の過程",
   "evaluation.import.column.decision": "期待する応答の判断",
   "evaluation.process.title": "回答の過程から作る期待の下書き",
   "evaluation.process.description":

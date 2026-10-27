@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "./fixtures/test";
+import { expect, type Locator, type Page, test } from "./fixtures/test";
 
 import { measureShellHiddenOverflow } from "../../../platform/packages/ui/e2e/layout-checks";
 import {
@@ -651,6 +651,8 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
   await mockEvaluationJobs(page,{autoComplete:true,runResult:()=>({...base,...values,passed:false,metric_case_counts:counts,threshold_failures:[{metric:"mrr",actual:0.5,threshold:0.6}],failure_reason_counts:{unexpected_handling:1},category_breakdown:{clarification_required:{case_count:1,error_count:0,metrics:values,metric_case_counts:counts}}})});
   await page.goto("/evaluation");await prepareEvaluationRun(page);await page.getByRole("button",{name:"評価実行"}).click();
   const mrr=page.getByTestId("evaluation-metric-mrr");
+  await expect(page.getByTestId("evaluation-threshold-mrr")).toHaveText(" / 60%");
+  await expect(page.getByRole("alert").filter({hasText:"閾値未達"})).toHaveCount(0);
   await expect(mrr).toContainText("50%");await expect(mrr).toContainText("対象 1 件");await expect(mrr.locator("[data-status-variant]")).toHaveText("閾値未達");
   await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("0%");
   await expect(page.getByTestId("evaluation-category-breakdown").getByRole("row",{name:/条件の確認が要る/})).toContainText("50%");
@@ -658,3 +660,63 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
   await expectNoPageOverflow(page);
  });
 }
+
+
+test("Excel の六列を全幅で表示し、長い 1 行も表の中で縦横スクロールする", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const evidence = Array.from({length:30}, (_, i) => ({id:`e-${i}`,document_id:"doc-a",label:`資料 A.pdf | p.${i+1}`,page_start:i+1}));
+  const standard = "合成の標準回答です。\n".repeat(60) + "標準回答の末尾";
+  const process = "合成の回答手順です。\n".repeat(30) + "回答の過程の末尾";
+  await mockEvaluationImport(page, () => evaluationImportResult({
+    row_count:1,
+    cases:[{id:"row-2",query:"合成の質問",relevant_document_ids:["doc-a"],required_evidence:evidence,standard_answer:standard}],
+    rows:[{row:2,case_id:"row-2",question:"合成の質問",evidence:evidence.map(e=>e.label),standard_answer_preview:"短いプレビュー",has_standard_answer:true,required_answer_points:["合成の要点"],expected_response_decision:"answer",answer_process:process}],
+    document_names:{"doc-a":"資料 A.pdf"},
+  }));
+  const metrics = evaluationMetrics("standard");
+  await mockEvaluationJobs(page, {autoComplete:true,runResult:()=>({...metrics,case_count:1,case_results:[{...metrics.case_results[0],case_id:"row-2"}]})});
+  await page.goto("/evaluation");
+  await chooseEvaluationProfile(page);
+  await uploadEvaluationExcel(page);
+  const preview=page.getByTestId("evaluation-import-preview");
+  await expect(preview).toBeVisible();
+  for(const name of ["質問","期待する根拠","標準回答","必須の回答要点","期待する応答の判断","回答の過程"]) {
+    await expect(preview.getByRole("columnheader",{name,exact:true})).toBeAttached();
+  }
+  await expect(preview).toContainText("標準回答の末尾");
+  await expect(preview).toContainText("回答の過程の末尾");
+  const uploadBox=await page.getByTestId("evaluation-request-upload").boundingBox();
+  const formBox=await page.getByRole("form",{name:"評価の条件"}).boundingBox();
+  expect(Math.abs((uploadBox?.width ?? 0)-(formBox?.width ?? 0))).toBeLessThanOrEqual(1);
+  const checkBounds = async (region: Locator) => {
+    const box=await region.evaluate(node=>({height:node.clientHeight,content:node.scrollHeight,
+      cap:parseFloat(getComputedStyle(document.documentElement).fontSize)*(matchMedia("(min-width: 48rem)").matches?28:17.5)}));
+    expect(Math.abs(box.height-box.cap)).toBeLessThanOrEqual(2);
+    expect(box.content).toBeGreaterThan(box.height);
+    await region.evaluate(node=>node.scrollTo({top:node.scrollHeight,left:node.scrollWidth}));
+    await expect.poll(()=>region.evaluate(node=>node.scrollHeight-node.scrollTop-node.clientHeight)).toBeLessThanOrEqual(1);
+  };
+  await checkBounds(preview);
+  await expectNoPageOverflow(page);
+  await preview.screenshot({path:testInfo.outputPath("excel-six-columns.png")});
+  await page.getByRole("button",{name:"評価実行"}).click();
+  const result=page.getByTestId("evaluation-case-scroll-region");
+  await expect(result).toBeVisible();
+  await checkBounds(result);
+  expect(await result.locator("thead").evaluate(node=>getComputedStyle(node).position)).toBe("sticky");
+  await expectNoPageOverflow(page);
+  const exportRequests: Record<string,unknown>[]=[];
+  await page.route("**/api/evaluation/jobs/*/results.xlsx", async route=>{
+    exportRequests.push(route.request().postDataJSON());
+    await route.fulfill({status:200,headers:{"Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "Content-Disposition":'attachment; filename="evaluation_results.xlsx"'},body:"xlsx"});
+  });
+  await mockEvaluationImport(page,()=>evaluationImportResult({file_name:"replacement.xlsx"}));
+  await uploadEvaluationExcel(page,"replacement.xlsx");
+  await expect(page.getByTestId("evaluation-import-ready")).toContainText("replacement.xlsx");
+  const downloaded=page.waitForEvent("download");
+  await page.getByRole("button",{name:"Excel をダウンロード",exact:true}).click();
+  expect((await downloaded).suggestedFilename()).toBe("evaluation_results.xlsx");
+  expect(exportRequests[0]).toMatchObject({cases:[{query:"合成の質問",standard_answer:standard}],
+    rows:[{question:"合成の質問",answer_process:process}],profile_name:"プロファイル A"});
+
+});

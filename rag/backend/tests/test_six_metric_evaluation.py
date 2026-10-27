@@ -237,3 +237,10 @@ def test_retrieval_scores_preserve_precision_before_aggregation() -> None:
     result = score_case_answers(case, [(answer, {})])
     assert result.mrr == 1 / 3
     assert result.required_evidence_recall == 1 / 3
+
+
+def test_result_preserves_applied_thresholds() -> None:
+    result = summarize_case_results(
+        [], thresholds=EvaluationThresholds(mrr=0.6, answer_correctness=0.9)
+    )
+    assert result.applied_thresholds == {"mrr": 0.6, "answer_correctness": 0.9}
