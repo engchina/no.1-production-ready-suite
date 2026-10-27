@@ -278,3 +278,33 @@ test("判定の校正の管理の権限が無い記入者には、記入だけ�
   await expect(page.getByRole("tab", { name: "2. 一致と裁定" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "JSON を書き出す" })).toHaveCount(0);
 });
+
+test("記入の集合を削除しても、消した集合の詳細と行を取り直さない (#3587)", async ({ page }) => {
+  await mockEvaluationBasics(page);
+  await mockEvaluationJobs(page, { runResult: () => answerMetrics(), autoComplete: true });
+  await mockJudgeCalibration(page, { withSet: true });
+  await page.goto("/evaluation?tab=calibration");
+  await page.getByTestId("calibration-label-sets").getByRole("button", { name: "校正の集合 A" }).click();
+  const detail = page.getByTestId("calibration-detail");
+  await expect(detail.getByRole("heading", { name: "校正の集合 A" })).toBeVisible();
+  await expect(page.getByTestId("calibration-annotator").getByRole("status")).toBeVisible();
+
+  const afterDelete: string[] = [];
+  let deleted = false;
+  page.on("response", (response) => {
+    const url = new URL(response.url());
+    if (!url.pathname.includes("/api/evaluation/calibration/label-sets/")) return;
+    if (response.request().method() === "DELETE") {
+      deleted = true;
+      return;
+    }
+    if (deleted) afterDelete.push(response.request().method() + " " + url.pathname + " " + response.status());
+  });
+  await detail.getByRole("button", { name: "削除" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await dialog.getByRole("button", { name: "削除する" }).click();
+  await expect(detail).toHaveCount(0);
+  await expect(page.getByTestId("calibration-label-sets").getByRole("button", { name: "校正の集合 A" })).toHaveCount(0);
+  expect(deleted).toBe(true);
+  expect(afterDelete).toEqual([]);
+});

@@ -490,6 +490,10 @@ export async function mockJudgeCalibration(
     const set = sets.find((item) => item.id === setId);
     if (!set) return route.fulfill({ status: 404, json: { data: null, error_messages: ["記入の集合が見つかりません。"] } });
     if (sub === "" && method === "GET") return route.fulfill({ json: envelope(detail(set.id, set.name)) });
+    if (sub === "" && method === "DELETE") {
+      sets.splice(sets.indexOf(set), 1);
+      return route.fulfill({ json: envelope({ deleted: true }) });
+    }
     if (sub === "/rows") {
       const aspect = url.searchParams.get("aspect");
       const status = url.searchParams.get("status") ?? "all";

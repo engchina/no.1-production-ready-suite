@@ -131,11 +131,19 @@ export function useImportLabelSet() {
   });
 }
 
+/**
+ * 記入の集合を消す。削除で変わる一覧と校正の状態だけを取り直す（#3587）。消した集合の詳細・行は、
+ * 詳細を閉じる前に取り直すと 404 になるので invalidate しない（集合の ID は使い回されない）。
+ */
 export function useDeleteLabelSet() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.deleteLabelSet(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: calibrationKeys.all }),
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: calibrationKeys.labelSets }),
+        qc.invalidateQueries({ queryKey: calibrationKeys.status }),
+      ]),
   });
 }
 
