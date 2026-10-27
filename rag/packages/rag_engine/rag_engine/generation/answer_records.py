@@ -7,7 +7,7 @@ import re
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from rag_engine.chunking import CHILD_CHUNK_LEVEL, PARENT_CHUNK_LEVEL, ChunkingResult, DocumentChunk
 from rag_engine.config import RRF_K, Settings  # noqa: F401  RRF_K は互換のためここからも参照できる
@@ -166,7 +166,7 @@ def _retrieval_candidate_limit(top_k: int, settings: Settings | None = None) -> 
 
 
 def _engine_labels(raw_engines: Any) -> dict[str, str]:
-    labels = {}
+    labels: dict[str, str] = {}
     if not isinstance(raw_engines, list):
         return labels
     for raw_engine in raw_engines:
@@ -415,7 +415,7 @@ def _keep_entity_expansion_positions(
         index = rerank.get("candidate_index") if isinstance(rerank, dict) else None
         if is_reserved_entity_expansion(record) and isinstance(index, int) and index not in kept:
             metadata = dict(record.metadata)
-            metadata["rerank"] = {**rerank, "kept_position": "entity_expansion"}
+            metadata["rerank"] = {**cast(dict[str, Any], rerank), "kept_position": "entity_expansion"}
             kept[index] = replace(record, metadata=metadata)
             continue
         rest.append(record)
@@ -453,6 +453,7 @@ def _retrieval_channels(record: AnswerRecord) -> tuple[str, ...]:
     metadata = record.metadata if isinstance(record.metadata, dict) else {}
     hybrid = metadata.get("adb_hybrid") if isinstance(metadata.get("adb_hybrid"), dict) else {}
     raw_channels = hybrid.get("retrieval_channels") if isinstance(hybrid, dict) else ()
+    values: tuple[Any, ...]
     if isinstance(raw_channels, str):
         values = (raw_channels,)
     elif isinstance(raw_channels, (list, tuple, set)):
@@ -688,7 +689,7 @@ def _same_page_chunk_neighbors(
 def _first_source_seq(ranges: Sequence[dict[str, int]]) -> int | None:
     for item in ranges:
         try:
-            return int(item.get("seq_start"))
+            return int(cast(int, item.get("seq_start")))
         except (TypeError, ValueError):
             continue
     return None
