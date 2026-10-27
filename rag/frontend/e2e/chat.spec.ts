@@ -1806,7 +1806,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`近い承認済み FAQ があれば、類似問か「どれでもない」を選んでから回答する（#684） (${viewport.name})`, async ({
+  test(`近い登録済みQ&Aがあれば、類似問か「どれでもない」を選んでから回答する（#684） (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -1834,9 +1834,9 @@ for (const viewport of [
     // 回答を作る前に、最大 3 件の類似問と「どれでもない」を出す。選ぶまで送らない（飛ばす操作は無い）。
     const choice = page.getByTestId("chat-approved-faq-choice");
     await expect(choice).toContainText("経費の上限は？");
-    await expect(choice.getByRole("button", { name: "この類似問で回答する" })).toHaveCount(3);
+    await expect(choice.getByRole("button", { name: "このQ&Aで回答する" })).toHaveCount(3);
     await expect(
-      choice.getByRole("button", { name: "どれでもない（類似問を使わずに回答する）" })
+      choice.getByRole("button", { name: "どれでもない（資料を検索する）" })
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "送信" })).toBeDisabled();
     expect(suggestQueries).toEqual([{ query: "経費の上限は？", purpose: "chat" }]);
@@ -1846,7 +1846,7 @@ for (const viewport of [
     // 選ぶ前に画面を離れて戻っても（再読込を含む）、同じ質問と候補が残る（作業状態。#702）。
     await page.reload();
     await expect(choice).toContainText("経費の上限は？");
-    await expect(choice.getByRole("button", { name: "この類似問で回答する" })).toHaveCount(3);
+    await expect(choice.getByRole("button", { name: "このQ&Aで回答する" })).toHaveCount(3);
     expect(suggestQueries).toHaveLength(1);
 
     // 選んだ類似問の id を質問と一緒に送る。
@@ -1859,7 +1859,7 @@ for (const viewport of [
     await composer.fill("交通費は？");
     await page.getByRole("button", { name: "送信" }).click();
     await page
-      .getByRole("button", { name: "どれでもない（類似問を使わずに回答する）" })
+      .getByRole("button", { name: "どれでもない（資料を検索する）" })
       .click();
     await expect.poll(() => streamBodies.length).toBe(2);
     expect(streamBodies[1]).toMatchObject({ content: "交通費は？" });
@@ -1868,12 +1868,12 @@ for (const viewport of [
 }
 
 
-// #737: 承認済み FAQ から回答したときは、根拠に FAQ の原文（回答した時点）を出典として出す。
+// #737: 登録済みQ&Aから回答したときは、根拠に FAQ の原文（回答した時点）を出典として出す。
 for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`承認済み FAQ の回答では、FAQ の質問と承認済みの回答の原文を出典に出す (${viewport.name})`, async ({
+  test(`登録済みQ&Aの回答では、FAQ の質問と承認済みの回答の原文を出典に出す (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -1885,7 +1885,7 @@ for (const viewport of [
     };
     const streamBody = [
       sseStart,
-      `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "上限は 10 万円です。\n\n（出典: 承認済み FAQ「経費精算の上限はいくらですか？」）" })}\n\n`,
+      `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "上限は 10 万円です。\n\n（出典: 登録済みQ&A「経費精算の上限はいくらですか？」）" })}\n\n`,
       `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
       `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
     ].join("");
@@ -1898,8 +1898,8 @@ for (const viewport of [
     await page.getByRole("button", { name: "送信" }).click();
 
     const panel = await openAnswerProcessDetails(page, "chat-answer-progress");
-    await expect(panel.getByText("承認済み FAQ から回答")).toBeVisible();
-    const source = panel.getByRole("region", { name: "回答の出典: 承認済み FAQ" });
+    await expect(panel.getByText("登録済みQ&Aから回答")).toBeVisible();
+    const source = panel.getByRole("region", { name: "回答の出典: 登録済みQ&A" });
     await expect(source).toContainText("経費精算の上限はいくらですか？");
     // 原文は言い換えず、改行も保って出す。
     await expect(source.getByText(/1 回の申請の上限は 10 万円です。\s+超える場合は部長の承認が必要です。/)).toBeVisible();

@@ -1060,7 +1060,7 @@ test("アーカイブ済みの検索・回答プロファイルは上書き中�
   await expect(page.getByRole("combobox", { name: "質問の拡張" })).toHaveCount(0);
 });
 
-// 知識（承認済み FAQ・用語・ドメインキーワード・ルール）の読み込みに失敗したら、空（0 件）と見せずに
+// 知識（登録済みQ&A・用語・ドメインキーワード・ルール）の読み込みに失敗したら、空（0 件）と見せずに
 // 失敗と再試行を出す。空の一覧・既定のオンのスイッチ・空の編集欄を出すと、保存済みの知識が無いと誤解する。
 test("検索・回答プロファイルの知識の読み込みに失敗すると、空ではなく失敗と再試行を出す", async ({ page }) => {
   // 取得ごとに既定の再試行（3 回）を待つため長めにする。
@@ -1095,7 +1095,7 @@ test("検索・回答プロファイルの知識の読み込みに失敗する�
   // 既定の再試行（3 回）の後に失敗を出す。
   await expect(panel.getByText("知識を読み込めませんでした。")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId("approved-faq-enabled")).toBeDisabled();
-  await expect(panel.getByText("承認済み FAQ はまだありません")).toHaveCount(0);
+  await expect(panel.getByText("登録済みQ&Aはまだありません")).toHaveCount(0);
 
   // 用語・同義語と回答ルールは同じ取得・同じ部品なので、用語・同義語で確かめる。
   await page.getByRole("tab", { name: "用語・同義語" }).click();
