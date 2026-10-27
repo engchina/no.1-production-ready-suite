@@ -5,7 +5,7 @@ Agent の画面は、RAG / NL2SQL と同じ共通認証（platform の `pr_syste
 `AGENT_ROLE_*` テーブルに保存します。local でも production でも同じ Oracle のテーブルを使います（#750）。
 Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）は #750 で削除しました。
 
-## 1. 認証モード（`AGENT_AUTH_MODE`）
+## 1. 認証モード（`PLATFORM_AUTH_MODE`）
 
 | 値 | 画面と API | ユーザー・ロール | 用途 |
 |---|---|---|---|
@@ -206,7 +206,7 @@ Run は RAG から受け取った根拠（ツールの結果・`tool.completed` 
 1. 共通 `.env`（`platform/.env`）に `PLATFORM_ADMIN_LOGIN_USER_ID=system_admin` と `PLATFORM_ADMIN_LOGIN_USER_PASSWORD`
    （12〜30 文字、大文字・小文字・数字を含み、`admin` と `"` を含まない）があることを確認する（RAG / NL2SQL と共通）。
    HTTPS で配信している場合は `PLATFORM_AUTH_COOKIE_SECURE=true`。
-2. `agent/backend/.env` に `AGENT_AUTH_MODE=production` を書く。
+2. `agent/backend/.env` に `PLATFORM_AUTH_MODE=authenticated` を書く。
 3. テーブルを作る: `cd agent/backend && uv sync --locked --no-dev && uv run python -m app.cli.agent_system_schema --initialize`（画面の 運用設定 > システムテーブル でもよい）。
 4. Nginx の Basic 認証を廃止する（Resource Manager の stack で配備した instance）。`/etc/nginx/sites-available/production-ready-agent` から
    `auth_basic` / `auth_basic_user_file` を削除し、`location /api/` の `proxy_set_header Host` を `$http_host` にして

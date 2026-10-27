@@ -404,7 +404,7 @@ def fake_service(monkeypatch: pytest.MonkeyPatch) -> _FakeNl2SqlService:
 def users(monkeypatch: pytest.MonkeyPatch) -> Iterator[_Users]:
     monkeypatch.setattr("app.security.dependencies.run_in_threadpool", _inline_threadpool)
     settings = get_settings()
-    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_mode", "authenticated")
     monkeypatch.setattr(settings, "app_service_token_secret", SECRET)
     monkeypatch.setattr(settings, "nl2sql_persistence_mode", "memory")
     reset_security_service()
@@ -1277,8 +1277,8 @@ def test_local_mode_uses_local_debug_user_without_token(
     """ローカル実行モードは token なしで全権限。実 service（deterministic）でジョブを実行する。"""
 
     settings = get_settings()
-    monkeypatch.setattr(settings, "app_auth_enabled", True)
-    monkeypatch.setattr(settings, "debug", True)
+    monkeypatch.setattr(settings, "auth_mode", "local")
+    monkeypatch.setattr(settings, "auth_mode", "local")
     monkeypatch.setattr(settings, "environment", "local")
     monkeypatch.setattr(mcp_tools, "JOB_POLL_INTERVAL_SECONDS", 0.01)
 

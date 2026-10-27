@@ -349,3 +349,22 @@ GenAI の属性は semantic conventions 1.44.0 の `gen_ai.operation.name` / `ge
 Agent の既存の終了イベントは実行 span とは別の log として扱う。`AGENT_OPENTELEMETRY_ENDPOINT` はイベントの OTLP/HTTP logs（`/v1/logs`）へ送り、実測 trace は `PLATFORM_TRACE_OTLP_ENDPOINT`（`/v1/traces`）へ送る。従来の traces の URL を設定していた場合、イベントの送信先を logs に変更する。webhook / Langfuse のイベント連携も、通常送信から件数に上限のある queue を使う。再送は失敗した送信先に限り、停止では共通の待ち時間の上限まで待つ。配送の満杯・再送・送信完了は `agent_trace_deliveries_total` で確認する。サンプルで落とした失敗イベントだけを完全な trace として残す例外は設けない。
 
 表示用の span summary は Run / job / 実行履歴の既存 JSON に保存し、既存の所有者と system_admin の参照判定を通す。RAG の回答保存中の snapshot は未終了の span を作らず partial とする。実行履歴と完了した応答には実測済みの記録を渡す。Agent の承認前後の実行区間は `trace_segments` に保存し、同じ Run ID と trace ID で対応付ける。保存する区間と span の上限は `PLATFORM_TRACE_UI_MAX_SEGMENTS` / `PLATFORM_TRACE_UI_MAX_SPANS` で設定し、欠落を完全として表示しない。
+
+
+## 実行環境とログイン認証
+
+3 製品は `pr_backend_core.config.RuntimeSettings` を使う。環境は共通の `platform/.env` の `PLATFORM_ENVIRONMENT`（`local` / `staging` / `production`）、認証方式は `PLATFORM_AUTH_MODE`（`local` / `authenticated`）で指定する。コードと `.env.example` の既定値は `staging` + `authenticated`。環境変数で渡す場合も同じ名前を使う。
+
+- `local` + `local` を明示したときだけ、全権限のローカル利用者でログインを省略する。
+- `staging` と `production` は `authenticated` と `PLATFORM_AUTH_COOKIE_SECURE=true` を必須にする。readiness の安全検査とサービス制御の可否もこの区分を使う。
+- `is_production` は正式な本番の識別、`is_deployed` は検証・本番に共通の安全検査に使う。個別に文字列を判定しない。
+- `dev` / `development` / `prod` や認証方式の `production` は受け付けない。旧い製品別の環境・認証・DEBUG 変数は読まない。
+
+### 既存環境の更新
+
+1. 共通 `.env` に `PLATFORM_ENVIRONMENT=staging`（正式な本番は `production`）、`PLATFORM_AUTH_MODE=authenticated`、`PLATFORM_AUTH_COOKIE_SECURE=true` を設定する。
+2. 各製品の `.env` から `RAG_ENVIRONMENT` / `NL2SQL_ENVIRONMENT` / `AGENT_ENVIRONMENT`、`RAG_AUTH_MODE` / `AGENT_AUTH_MODE`、`NL2SQL_APP_AUTH_ENABLED` / `NL2SQL_DEBUG` を削除する。旧値への互換は持たない。
+3. 古いコードが `.env` を再読込して免ログインに切り替わらないよう、旧変数の削除はコード更新とサービスの停止・再起動を一体で行う。秘密の値は表示・commit しない。
+4. HTTPS と3製品のログイン、`/api/ready`、サービス管理の環境表示を確認する。
+
+Terraform の環境入力は3製品共通の `platform_environment`（既定 `staging`）を使う。staging / production で HTTPS を無効にした構成は配備前に拒否する。

@@ -269,7 +269,7 @@ def test_build_removals_are_plain_sentences_with_reason_and_condition() -> None:
 
 @pytest.mark.rule_parser
 def test_removals_come_first_in_prior_findings(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "app_auth_enabled", False)
+    monkeypatch.setattr(get_settings(), "auth_mode", "local")
     rt, _legacy = runtime()
     svc = MarkdownOntologyWorkspace(rt)
     assert svc.build_removals("sales") == []
@@ -292,7 +292,7 @@ def test_removed_definitions_reach_the_next_build_llm_input(
 
     from test_nl2sql_ontology_build import _FakeEnterpriseAiClient, _wait_for_job
 
-    monkeypatch.setattr(get_settings(), "app_auth_enabled", False)
+    monkeypatch.setattr(get_settings(), "auth_mode", "local")
     rt, legacy = runtime()
     payload = [d.model_dump(mode="json") for d in model()]
     payload.append(
@@ -417,7 +417,7 @@ def test_checkpoint_is_not_saved_after_the_profile_is_deleted(
 
     from app.features.nl2sql.ontology_service import OntologyNotFoundError
 
-    monkeypatch.setattr(get_settings(), "app_auth_enabled", False)
+    monkeypatch.setattr(get_settings(), "auth_mode", "local")
     rt, legacy = runtime()
     legacy._enterprise_ai_client = _FakeEnterpriseAiClient(
         json.dumps({"definitions": [d.model_dump(mode="json") for d in model()]})
@@ -433,7 +433,7 @@ def test_checkpoint_is_not_saved_after_the_profile_is_deleted(
     assert checkpoints == []
     # 削除済みの判定は、業務プロファイルが見つからないときだけ。
     monkeypatch.undo()
-    monkeypatch.setattr(get_settings(), "app_auth_enabled", False)
+    monkeypatch.setattr(get_settings(), "auth_mode", "local")
 
     def missing(_profile_id: str) -> Any:
         raise OntologyNotFoundError("NL2SQL_PROFILE_NOT_FOUND", "x")

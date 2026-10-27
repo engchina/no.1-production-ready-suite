@@ -209,9 +209,9 @@ async def _wait_for_entered(entered: threading.Event) -> None:
 
 def _enable_local_debug_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "debug", True)
+    monkeypatch.setattr(settings, "auth_mode", "local")
     monkeypatch.setattr(settings, "environment", "local")
-    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_mode", "local")
 
 
 @dataclass(slots=True)

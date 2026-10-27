@@ -2623,7 +2623,7 @@ export interface ServiceStatusData extends ServiceCatalogItemData {
   status: ServiceRuntimeStatus;
 }
 
-export type DeploymentMode = "dev" | "prod";
+export type DeploymentMode = "local" | "staging" | "production";
 
 export interface ServiceCatalogData {
   control_enabled: boolean;

@@ -247,7 +247,7 @@ def test_system_access_is_explicit_and_restored() -> None:
     assert current_audit_request_context() is NO_ACCESS_AUDIT_REQUEST_CONTEXT
 
 
-@pytest.mark.parametrize("auth_mode", ["production", "local"])
+@pytest.mark.parametrize("auth_mode", ["authenticated", "local"])
 def test_request_without_a_principal_starts_with_no_access(
     monkeypatch: pytest.MonkeyPatch, auth_mode: str
 ) -> None:
@@ -273,7 +273,7 @@ def test_request_without_a_principal_starts_with_no_access(
     assert response.status_code == 200
     [context] = seen
     assert context.request_id
-    if auth_mode == "production":
+    if auth_mode == "authenticated":
         assert context.user_id_hash is None
         assert context.allowed_document_ids == frozenset()
         assert context.allowed_category_names == frozenset()

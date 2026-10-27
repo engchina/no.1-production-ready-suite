@@ -60,7 +60,7 @@ locals {
 
   # rag/backend/.env（RAG_*）。backend が python-dotenv で読み、OCI parser の unit も EnvironmentFile で読む。
   # ログインは共通認証（構成管理者 system_admin と、ユーザー管理で作る DB ユーザー。#214）。
-  # RAG_ENVIRONMENT は init_script.sh が書く systemd の unit の Environment が正本、service URL と
+  # PLATFORM_ENVIRONMENT は init_script.sh が書く systemd の unit の Environment が正本、service URL と
   # PLATFORM_LOCAL_STORAGE_DIR / PLATFORM_OCI_CONFIG_FILE は Settings の既定値（127.0.0.1:<port>・
   # /u01/data/production-ready-rag・実行ユーザーの ~/.oci/config）を使うため、ここには書かない。
   # サービス管理画面の起動 / 停止は、sudoers で許可した unit の systemctl だけを実行する（#286）。
@@ -70,7 +70,6 @@ locals {
 RAG_APP_VERSION=0.1.0
 RAG_LOG_LEVEL=INFO
 
-RAG_AUTH_MODE=production
 RAG_AUDIT_CONTEXT_HASH_SALT=
 
 RAG_PARSER_ADAPTER_BACKEND=docling
@@ -90,13 +89,10 @@ EOT
   nl2sql_backend_env = <<-EOT
 NL2SQL_APP_VERSION=0.1.0
 NL2SQL_LOG_LEVEL=INFO
-NL2SQL_ENVIRONMENT=${var.nl2sql_app_environment}
 NL2SQL_SERVICE_NAME=production-ready-nl2sql
 NL2SQL_CORS_ORIGINS=["http://localhost","http://127.0.0.1"]
 NL2SQL_ENABLE_METRICS=true
-NL2SQL_DEBUG=false
 
-NL2SQL_APP_AUTH_ENABLED=true
 
 NL2SQL_ORACLE_DEEPSEC_ENABLED=${var.nl2sql_oracle_deepsec_enabled}
 NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER
@@ -125,11 +121,9 @@ EOT
   agent_backend_env = <<-EOT
 AGENT_APP_VERSION=0.1.0
 AGENT_LOG_LEVEL=INFO
-AGENT_ENVIRONMENT=production
 AGENT_SERVICE_NAME=production-ready-agent
 AGENT_CORS_ORIGINS=["http://localhost","http://127.0.0.1"]
 
-AGENT_AUTH_MODE=production
 
 AGENT_RUNTIME_REPOSITORY_BACKEND=${var.agent_runtime_repository_backend}
 AGENT_RUNTIME_DISPATCH_MODE=in_process
@@ -166,6 +160,8 @@ EOT
   # Cookie は HTTPS が on なら Secure にする（3 製品で同じ。#1316）。
   # 時間帯（PLATFORM_TIMEZONE。#3255）は suite-init.sh が Compute の OS の時間帯にも使う。
   platform_env = <<-EOT
+PLATFORM_ENVIRONMENT=${var.platform_environment}
+PLATFORM_AUTH_MODE=authenticated
 PLATFORM_TIMEZONE=${var.timezone}
 
 PLATFORM_OCI_REGION=${var.region}

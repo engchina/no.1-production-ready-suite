@@ -78,7 +78,7 @@ Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 - 起動 = `systemctl enable --now`、停止 = `systemctl disable --now`。利用者が最後に操作した状態が再起動・再配備後も保たれる。
 - backend は、sudoers で許可した unit の `systemctl` / `journalctl` だけを `sudo -n` で実行する。unit 名は
   `app/services/catalog.py` の allowlist で検証し、argv は固定(任意のコマンドは実行できない)。
-- 本番は `RAG_SERVICE_CONTROL_ENABLED=true`(Terraform の stack の既定)のときだけ操作でき、開発(`RAG_ENVIRONMENT=development`)は自動で有効。
+- 本番は `RAG_SERVICE_CONTROL_ENABLED=true`(Terraform の stack の既定)のときだけ操作でき、開発(`PLATFORM_ENVIRONMENT=local`)は自動で有効。
 - 開発環境の unit と sudoers は `scripts/rag-services.sh install` で登録する(systemd の無い環境は
   `scripts/rag-services.sh run <service>` で前面に起動)。手順は [docs/deployment.md](./docs/deployment.md)。
 

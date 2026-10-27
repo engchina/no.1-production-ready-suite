@@ -410,7 +410,7 @@ class _FreeLineParser:
 def _free_line_workspace(
     monkeypatch: pytest.MonkeyPatch, extra: list[str]
 ) -> tuple[Any, MarkdownOntologyWorkspace, _FreeLineParser, str]:
-    monkeypatch.setattr(get_settings(), "app_auth_enabled", False)
+    monkeypatch.setattr(get_settings(), "auth_mode", "local")
     monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
     rt, legacy = runtime()
     base = render_concepts(model()).rstrip("\n").splitlines()
@@ -515,7 +515,7 @@ def test_build_marks_ai_output_as_ai_and_drops_its_unused_shared_property(
     from app.features.nl2sql.ontology_build import OntologyBuildService
     from app.features.nl2sql.ontology_definition_service import ProfileOntologyDefinitionService
 
-    monkeypatch.setattr(get_settings(), "app_auth_enabled", False)
+    monkeypatch.setattr(get_settings(), "auth_mode", "local")
     rt, legacy = runtime()
     payload = [d.model_dump(mode="json") for d in model()]
     payload.append(

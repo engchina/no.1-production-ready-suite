@@ -1810,7 +1810,7 @@ async def test_http_delete_profile_source_document_removes_only_matching_profile
     for source in (sales_source, sales_keep, finance_source):
         build_service._save_source_document(source)  # noqa: SLF001 - API cleanup contract setup
     settings = get_settings()
-    monkeypatch.setattr(settings, "app_auth_enabled", False)
+    monkeypatch.setattr(settings, "auth_mode", "local")
     monkeypatch.setattr(ontology_router_module, "ontology_runtime", api)
     monkeypatch.setattr(ontology_router_module, "ontology_build_service", build_service)
 
@@ -1887,7 +1887,7 @@ async def test_http_ontology_build_cleans_uploaded_sources_when_start_fails(
 
     source_storage = _RecordingSourceStorage()
     build_service = _FailingBuildService()
-    monkeypatch.setattr(get_settings(), "app_auth_enabled", False)
+    monkeypatch.setattr(get_settings(), "auth_mode", "local")
     monkeypatch.setattr(ontology_router_module, "ontology_runtime", api)
     monkeypatch.setattr(ontology_router_module, "ontology_source_storage", source_storage)
     monkeypatch.setattr(ontology_router_module, "ontology_build_service", build_service)
@@ -1957,7 +1957,7 @@ async def test_http_ontology_build_idempotent_replay_discards_new_uploads(
     source_storage = _RecordingSourceStorage()
     build_service = OntologyBuildService(api, source_storage=source_storage)  # type: ignore[arg-type]
     settings = get_settings()
-    monkeypatch.setattr(settings, "app_auth_enabled", False)
+    monkeypatch.setattr(settings, "auth_mode", "local")
     monkeypatch.setattr(settings, "nl2sql_ontology_worker_mode", "external")
     monkeypatch.setattr(ontology_router_module, "ontology_runtime", api)
     monkeypatch.setattr(ontology_router_module, "ontology_source_storage", source_storage)
@@ -2011,7 +2011,7 @@ async def test_http_ontology_build_replay_race_discards_uploads_not_used_by_retu
 
     api, store, _legacy = runtime
     settings = get_settings()
-    monkeypatch.setattr(settings, "app_auth_enabled", False)
+    monkeypatch.setattr(settings, "auth_mode", "local")
     monkeypatch.setattr(settings, "local_storage_dir", str(tmp_path))
     monkeypatch.setattr(settings, "upload_storage_backend", "local")
     monkeypatch.setattr(settings, "max_upload_bytes", 1024 * 1024)
@@ -2075,7 +2075,7 @@ async def test_http_ontology_build_discards_earlier_uploads_when_later_file_is_i
 
     api, store, _legacy = runtime
     settings = get_settings()
-    monkeypatch.setattr(settings, "app_auth_enabled", False)
+    monkeypatch.setattr(settings, "auth_mode", "local")
     monkeypatch.setattr(settings, "local_storage_dir", str(tmp_path))
     monkeypatch.setattr(settings, "upload_storage_backend", "local")
     monkeypatch.setattr(settings, "max_upload_bytes", 1024 * 1024)
@@ -2118,7 +2118,7 @@ async def test_http_ontology_build_rejects_too_many_source_files(
 
     source_storage = _UnexpectedSourceStorage()
     settings = get_settings()
-    monkeypatch.setattr(settings, "app_auth_enabled", False)
+    monkeypatch.setattr(settings, "auth_mode", "local")
     monkeypatch.setattr(ontology_router_module, "ontology_source_storage", source_storage)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -2152,9 +2152,9 @@ async def test_ontology_proposals_does_not_block_unrelated_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "debug", True)
+    monkeypatch.setattr(settings, "auth_mode", "local")
     monkeypatch.setattr(settings, "environment", "local")
-    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_mode", "local")
 
     started = threading.Event()
     release = threading.Event()

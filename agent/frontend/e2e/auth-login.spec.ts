@@ -5,7 +5,7 @@ import { expect, test, type MockApi } from "./fixtures/mock-api";
 import { expandSidebarSections, openSidebarNav } from "./fixtures/nav";
 
 // 共通認証のログイン・パスワード変更・セッション切れ（#215）。
-// production（`AGENT_AUTH_MODE=production`）の DB ユーザーでログインし、失敗・強制パスワード変更・
+// production（`PLATFORM_AUTH_MODE=authenticated`）の DB ユーザーでログインし、失敗・強制パスワード変更・
 // 401 でログインへ戻る流れと、状態を変える API に CSRF header（共有の Cookie `pr_csrf`。#1565）を付けることを確かめる。
 
 const VIEWPORTS = [
@@ -248,7 +248,7 @@ for (const viewport of VIEWPORTS) {
       expect(mockApi.lastRequest("POST", "/api/auth/logout")?.headers["x-csrf-token"]).toBe(CSRF_TOKEN);
     });
 
-    test("ローカル（AGENT_AUTH_MODE=local）はログインせずに全画面を使え、アカウント欄にログイン省略を示す（#307）", async ({ page }) => {
+    test("ローカル（PLATFORM_AUTH_MODE=local）はログインせずに全画面を使え、アカウント欄にログイン省略を示す（#307）", async ({ page }) => {
       // fixture の既定はローカルの全権限の利用者。`/` はナビの最初の画面（チャット。#768）へ移す（#262）。
       await page.goto("/");
       await expect(page).toHaveURL(/\/chat$/);

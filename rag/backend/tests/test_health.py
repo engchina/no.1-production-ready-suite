@@ -167,12 +167,13 @@ def test_readiness_oci_requires_enterprise_ai_model_catalog(
     assert resp.json()["data"]["checks"]["enterprise_ai"] == "missing"
 
 
+@pytest.mark.parametrize("environment", ["staging", "production"])
 def test_readiness_production_oci_requires_audit_salt(
-    monkeypatch: MonkeyPatch, wallet_dir: Path
+    monkeypatch: MonkeyPatch, wallet_dir: Path, environment: str
 ) -> None:
     _configure_oci_readiness(
         monkeypatch,
-        environment="production",
+        environment=environment,
         audit_context_hash_salt="",
         oracle_wallet_dir=str(wallet_dir),
     )
@@ -192,12 +193,13 @@ def test_readiness_production_oci_requires_audit_salt(
     }
 
 
+@pytest.mark.parametrize("environment", ["staging", "production"])
 def test_readiness_production_oci_complete_config_is_ok(
-    monkeypatch: MonkeyPatch, wallet_dir: Path
+    monkeypatch: MonkeyPatch, wallet_dir: Path, environment: str
 ) -> None:
     _configure_oci_readiness(
         monkeypatch,
-        environment="production",
+        environment=environment,
         audit_context_hash_salt="production-audit-salt",
         oracle_wallet_dir=str(wallet_dir),
     )
@@ -586,7 +588,7 @@ def _configure_oci_readiness(
     oracle_client_lib_dir: str = "",
     oracle_wallet_dir: str,
     oci_genai_embedding_dim: int = 1536,
-    environment: str = "development",
+    environment: str = "local",
     audit_context_hash_salt: str = "",
 ) -> None:
     settings = get_settings()

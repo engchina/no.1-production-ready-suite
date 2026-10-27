@@ -11,6 +11,7 @@ import asyncio
 import os
 import stat
 from collections.abc import Iterator
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal, get_args
 
@@ -59,6 +60,7 @@ from app.services.systemd import (
     systemctl_show_argv,
     validate_unit,
 )
+from tests.security_support import enable_production_auth, login_configured_admin
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -847,7 +849,7 @@ def test_probe_unconfigured_when_url_blank(
     monkeypatch: MonkeyPatch, fake_http: type[_FakeAsyncClient]
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")
+    monkeypatch.setattr(settings, "environment", "production")
     monkeypatch.setattr(settings, "rag_parser_docling_service_url", "")
     statuses = _probe_statuses(settings, ["parser-docling"])
     assert statuses["parser-docling"] == "unconfigured"
@@ -858,14 +860,17 @@ def test_probe_unconfigured_when_url_blank(
 
 def test_list_service_catalog_returns_catalog_prod(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")
+    enable_production_auth(monkeypatch)
+    headers = login_configured_admin(client)
+    monkeypatch.setattr(client, "request", partial(client.request, headers=headers))
+    monkeypatch.setattr(settings, "environment", "production")
     monkeypatch.setattr(settings, "rag_service_control_enabled", False)
     resp = client.get("/api/services/catalog")
     assert resp.status_code == 200
     data = resp.json()["data"]
     # prod + flag OFF は可視化のみ。
     assert data["control_enabled"] is False
-    assert data["deployment_mode"] == "prod"
+    assert data["deployment_mode"] == "production"
     assert {s["service_id"] for s in data["services"]} == {e.service_id for e in SERVICE_CATALOG}
     docling = next(s for s in data["services"] if s["service_id"] == "parser-docling")
     assert docling["systemd_unit"] == DOCLING_UNIT
@@ -886,17 +891,20 @@ def test_list_service_catalog_exposes_model_cache_path() -> None:
 
 def test_list_service_catalog_dev_auto_enables_control(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "dev")
+    monkeypatch.setattr(settings, "environment", "local")
     monkeypatch.setattr(settings, "rag_service_control_enabled", False)
     data = client.get("/api/services/catalog").json()["data"]
     # dev は flag OFF でも制御を自動有効化。
     assert data["control_enabled"] is True
-    assert data["deployment_mode"] == "dev"
+    assert data["deployment_mode"] == "local"
 
 
 def test_list_service_catalog_does_not_probe_status(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")
+    enable_production_auth(monkeypatch)
+    headers = login_configured_admin(client)
+    monkeypatch.setattr(client, "request", partial(client.request, headers=headers))
+    monkeypatch.setattr(settings, "environment", "production")
     monkeypatch.setattr(settings, "rag_service_control_enabled", False)
 
     async def fail_probe(_settings: Any, _entry: ServiceCatalogEntry) -> str:
@@ -972,7 +980,10 @@ def test_get_service_logs_unknown_service_is_404() -> None:
 
 def test_control_rejected_when_disabled_in_prod(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")
+    enable_production_auth(monkeypatch)
+    headers = login_configured_admin(client)
+    monkeypatch.setattr(client, "request", partial(client.request, headers=headers))
+    monkeypatch.setattr(settings, "environment", "production")
     monkeypatch.setattr(settings, "rag_service_control_enabled", False)
     fake = _FakeSystemd().install(monkeypatch)
     assert client.post("/api/services/parser-docling/start").status_code == 409
@@ -1099,17 +1110,17 @@ def test_control_failures_map_to_http_status(
 def test_is_dev_mode_maps_environment() -> None:
     settings = get_settings()
     for value, expected in (
-        ("development", True),
-        ("dev", True),
-        ("", True),
+        ("staging", False),
+        ("local", True),
+        ("", False),
         ("production", False),
-        ("PROD", False),
+        ("prod", False),
     ):
         object.__setattr__(settings, "environment", value)
         try:
             assert is_dev_mode(settings) is expected
         finally:
-            object.__setattr__(settings, "environment", "dev")
+            object.__setattr__(settings, "environment", "local")
 
 
 def test_resolve_service_base_url_does_not_rewrite_legacy_docker_name(
@@ -1117,7 +1128,7 @@ def test_resolve_service_base_url_does_not_rewrite_legacy_docker_name(
 ) -> None:
     """以前の Docker Compose の service 名は読み替えない(#356)。設定値をそのまま使う。"""
     settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "dev")
+    monkeypatch.setattr(settings, "environment", "local")
     monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://parser-docling:8000")
     assert (
         resolve_service_base_url(settings, "rag_parser_docling_service_url")
@@ -1127,7 +1138,7 @@ def test_resolve_service_base_url_does_not_rewrite_legacy_docker_name(
 
 def test_resolve_service_base_url_dev_respects_overrides(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "dev")
+    monkeypatch.setattr(settings, "environment", "local")
     # 明示上書き(host != service 名)は尊重する。
     monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://127.0.0.1:9999")
     assert (
@@ -1141,7 +1152,7 @@ def test_resolve_service_base_url_dev_respects_overrides(monkeypatch: MonkeyPatc
 
 def test_resolve_service_base_url_prod_uses_setting(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "prod")
+    monkeypatch.setattr(settings, "environment", "production")
     monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://10.0.0.5:18020/")
     assert (
         resolve_service_base_url(settings, "rag_parser_docling_service_url")
@@ -1154,7 +1165,7 @@ def test_parser_client_service_url_uses_resolved_setting(monkeypatch: MonkeyPatc
     from app.clients.parser_service import ParserServiceClient
 
     settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "dev")
+    monkeypatch.setattr(settings, "environment", "local")
     monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://127.0.0.1:18020/")
     assert ParserServiceClient(settings).service_url("docling") == "http://127.0.0.1:18020"
 
@@ -1163,7 +1174,7 @@ def test_preprocess_service_url_uses_resolved_setting(monkeypatch: MonkeyPatch) 
     from app.rag.preprocess_strategy import preprocess_service_url
 
     settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "dev")
+    monkeypatch.setattr(settings, "environment", "local")
     monkeypatch.setattr(
         settings, "rag_preprocess_csv_to_jsonl_service_url", "http://127.0.0.1:18012/"
     )

@@ -39,7 +39,7 @@ def readiness_checks(settings: Settings) -> dict[str, str]:
         "oracle": _oracle_check(settings),
     }
     checks.update(_upload_storage_checks(settings))
-    checks.update(_production_safety_checks(settings))
+    checks.update(_deployed_safety_checks(settings))
     return checks
 
 
@@ -68,9 +68,9 @@ def pending_legacy_local_storage_dir(
     return str(legacy)
 
 
-def _production_safety_checks(settings: Settings) -> dict[str, str]:
-    """production 環境で必須にする安全設定を確認する。"""
-    if not _is_production(settings):
+def _deployed_safety_checks(settings: Settings) -> dict[str, str]:
+    """staging / production 環境で必須にする安全設定を確認する。"""
+    if not settings.is_deployed:
         return {}
     return {
         "audit_context_salt": (
@@ -172,8 +172,3 @@ def _required_values_check(*values: str) -> str:
 def _is_present(value: str) -> bool:
     """空白のみの値を未設定として扱う。"""
     return bool(value.strip())
-
-
-def _is_production(settings: Settings) -> bool:
-    """RAG_ENVIRONMENT=production を production 判定に使う。"""
-    return settings.environment.strip().lower() == "production"

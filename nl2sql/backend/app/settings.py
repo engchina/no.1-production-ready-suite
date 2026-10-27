@@ -80,8 +80,6 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     model_config = product_settings_config(prefix="NL2SQL_", backend_dir=BACKEND_DIR)
 
     service_name: str = "production-ready-nl2sql"
-    # 参考実装互換の DEBUG。認証 bypass は NL2SQL_ENVIRONMENT=local のときだけ許可する。
-    debug: bool = False
     enable_metrics: bool = True
     oracle_user: str = ""
     oracle_password: str = ""
@@ -342,11 +340,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     nl2sql_feedback_vector_table: str = "NL2SQL_FEEDBACK_VECTORS"
     nl2sql_feedback_vector_index: str = "NL2SQL_FEEDBACK_VEC_IDX"
 
-    # アプリケーション認証/RBAC。local/CI は NL2SQL_APP_AUTH_ENABLED=false を明示する。
-    app_auth_enabled: bool = True
+    # アプリケーション認証/RBAC。local/CI は PLATFORM_AUTH_MODE=local を明示する。
     app_admin_login_user_id: str = ""
     app_admin_login_user_password: str = ""
-    app_auth_cookie_secure: bool = False
     # ログインの Cookie は 3 製品で共有する（共通 `.env` の PLATFORM_AUTH_*_COOKIE_NAME。#1565）。
     app_auth_session_cookie_name: str = DEFAULT_SESSION_COOKIE_NAME
     app_auth_csrf_cookie_name: str = DEFAULT_CSRF_COOKIE_NAME
@@ -374,27 +370,13 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
 
     @model_validator(mode="after")
     def validate_security_boundaries(self) -> Settings:
-        """非 local 環境で debug bypass と非 Secure cookie を fail-closed にする。"""
+        """製品固有の DB 接続の条件を検証する。"""
         if self.oracle_deepsec_enabled and self.oracle_driver_mode.strip().lower() != "thin":
             raise ValueError(
                 "NL2SQL_ORACLE_DEEPSEC_ENABLED=true の場合は "
                 "PLATFORM_ORACLE_DRIVER_MODE=thin が必要です。"
             )
-        if self.environment.strip().lower() == "local":
-            return self
-        if self.debug:
-            raise ValueError("非 local 環境では NL2SQL_DEBUG=true を指定できません。")
-        if self.app_auth_enabled and not self.app_auth_cookie_secure:
-            raise ValueError(
-                "非 local 環境で認証を有効にする場合は "
-                "PLATFORM_AUTH_COOKIE_SECURE=true が必要です。"
-            )
         return self
-
-    @property
-    def local_debug_enabled(self) -> bool:
-        """local 開発だけで有効になる fail-closed debug mode。"""
-        return self.debug and self.environment.strip().lower() == "local"
 
     @property
     def resolved_oci_config_profile(self) -> str:

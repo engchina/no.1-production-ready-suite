@@ -21,13 +21,15 @@ from pr_backend_core.config import isolate_env_files_for_tests
 # 手元の `.env`（共通・製品）を読ませない。`app` の import の前に呼ぶ（3 製品で同じ。#1972）。
 isolate_env_files_for_tests("NL2SQL_")
 
+os.environ["PLATFORM_ENVIRONMENT"] = "local"
+os.environ["PLATFORM_AUTH_MODE"] = "local"
+
+
 os.environ["NL2SQL_ENABLE_METRICS"] = "false"
-os.environ["NL2SQL_DEBUG"] = "false"
 os.environ["NL2SQL_SYNTHETIC_WORKER_MODE"] = "external"
 os.environ["NL2SQL_RUNTIME_MODE"] = "deterministic"
 os.environ["NL2SQL_PERSISTENCE_MODE"] = "memory"
 os.environ["NL2SQL_SELECT_AI_CREDENTIAL_NAME"] = ""
-os.environ["NL2SQL_APP_AUTH_ENABLED"] = "false"
 os.environ["PLATFORM_ORACLE_USER"] = "APP"
 os.environ["NL2SQL_ORACLE_DEEPSEC_ENABLED"] = "false"
 # 業務データの SELECT の間だけ session の時間帯を切り替える経路（#3265）を通すため、

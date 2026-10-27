@@ -83,10 +83,10 @@ def test_audit_reports_unknown_duplicate_malformed_and_security_combinations(
 ) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "NL2SQL_ENVIRONMENT=production\n"
-        "NL2SQL_DEBUG=true\n"
-        "NL2SQL_DEBUG=false\n"
-        "NL2SQL_APP_AUTH_ENABLED=true\n"
+        "PLATFORM_ENVIRONMENT=production\n"
+        "PLATFORM_AUTH_MODE=local\n"
+        "PLATFORM_AUTH_MODE=authenticated\n"
+        "PLATFORM_AUTH_MODE=authenticated\n"
         "UNKNOWN_SETTING=value\n"
         "not an assignment\n",
         encoding="utf-8",
@@ -105,7 +105,7 @@ def test_audit_reports_unknown_duplicate_malformed_and_security_combinations(
     assert "ENV_ACTUAL_DUPLICATE_KEYS" in codes
     assert "ENV_ACTUAL_MALFORMED_LINES" in codes
     assert "ENV_ACTUAL_UNKNOWN_KEYS" in codes
-    assert "NONLOCAL_AUTH_COOKIE_NOT_SECURE" in codes
+    assert "INVALID_RUNTIME_SETTINGS" in codes
 
 
 def test_audit_rejects_deepsec_with_thick_driver(tmp_path: Path) -> None:

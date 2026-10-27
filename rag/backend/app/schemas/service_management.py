@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+from pr_backend_core.config import Environment
 from pydantic import BaseModel, Field
 
 from app.services.catalog import (
@@ -14,7 +15,7 @@ from app.services.catalog import (
 )
 from app.services.status import ServiceRuntimeStatus
 
-DeploymentMode = Literal["dev", "prod"]
+DeploymentMode = Environment
 ServiceLogsSource = Literal["journald"]
 
 
@@ -69,12 +70,12 @@ class ServiceCatalogData(BaseModel):
     """サービス一覧の静的メタデータ + 制御可否 + 配備モード。"""
 
     control_enabled: bool = Field(
-        description="起動/停止制御が有効か。False なら可視化のみ。dev は自動的に有効。",
+        description="起動/停止制御が有効か。False なら可視化のみ。local は自動的に有効。",
     )
     deployment_mode: DeploymentMode = Field(
         description=(
-            "RAG_ENVIRONMENT 由来。dev/prod とも systemd の unit を操作する。"
-            "dev は起動/停止を自動で有効にする。"
+            "PLATFORM_ENVIRONMENT 由来。全環境で systemd の unit を操作する。"
+            "local は起動/停止を自動で有効にする。"
         ),
     )
     services: list[ServiceCatalogItemData] = Field(default_factory=list)

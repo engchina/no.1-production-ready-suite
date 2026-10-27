@@ -87,13 +87,13 @@ async function mockServices(
   page: Page,
   options: {
     controlEnabled?: boolean;
-    deploymentMode?: "dev" | "prod";
+    deploymentMode?: "local" | "staging" | "production";
     services?: ServiceRow[];
   } = {}
 ) {
   const state = {
     control_enabled: options.controlEnabled ?? false,
-    deployment_mode: options.deploymentMode ?? "prod",
+    deployment_mode: options.deploymentMode ?? "production",
     services: options.services ?? defaultServices(),
   };
   await page.route("**/api/services/catalog", async (route) => {
@@ -290,7 +290,7 @@ for (const viewport of [
 
 test("制御無効時(prod)は起動/停止ボタンが disabled", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
-  await mockServices(page, { controlEnabled: false, deploymentMode: "prod" });
+  await mockServices(page, { controlEnabled: false, deploymentMode: "production" });
 
   await page.goto("/settings/services");
 
@@ -312,7 +312,7 @@ test("制御無効時(prod)は起動/停止ボタンが disabled", async ({ page
 
 test("dev モードは systemd バッジと有効化された制御を表示する", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
-  await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+  await mockServices(page, { controlEnabled: true, deploymentMode: "local" });
 
   await page.goto("/settings/services");
 
@@ -329,7 +329,7 @@ test("dev モードは systemd バッジと有効化された制御を表示す�
 
 test("稼働中のサービスは操作メニューから確認なしで再起動できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
-  await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+  await mockServices(page, { controlEnabled: true, deploymentMode: "local" });
 
   await page.goto("/settings/services");
 
@@ -351,7 +351,7 @@ test("unit が未登録・起動失敗のサービスは状態と案内を出す
         ? { ...service, status: "failed" as const }
         : service
   );
-  await mockServices(page, { controlEnabled: true, deploymentMode: "prod", services });
+  await mockServices(page, { controlEnabled: true, deploymentMode: "production", services });
 
   await page.goto("/settings/services");
 
@@ -373,7 +373,7 @@ test("実行コマンドは既定で折りたたまれ、展開すると systemd
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
-  await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+  await mockServices(page, { controlEnabled: true, deploymentMode: "local" });
 
   await page.goto("/settings/services");
 
@@ -469,7 +469,7 @@ for (const viewport of [
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+    await mockServices(page, { controlEnabled: true, deploymentMode: "local" });
 
     await page.goto("/settings/services");
     await expect(page.getByRole("heading", { name: "マイクロサービス" })).toBeVisible();
@@ -522,7 +522,7 @@ for (const viewport of [
       const match = request.url().match(/\/api\/services\/([^/]+)\/(status|start|stop|restart)/);
       if (match) statusRequests.push(`${decodeURIComponent(match[1])}:${match[2]}`);
     });
-    await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+    await mockServices(page, { controlEnabled: true, deploymentMode: "local" });
 
     await page.goto("/settings/services");
     const row = page.getByTestId("service-row-parser-oci-document-understanding");
@@ -553,7 +553,7 @@ for (const viewport of [
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+    await mockServices(page, { controlEnabled: true, deploymentMode: "local" });
 
     await page.goto("/settings/services");
     await expect(page.getByTestId("service-row-parser-docling")).toBeVisible();
@@ -717,4 +717,13 @@ test("既定の解析サービスには使用方針と停止の影響を表示�
   await expect(row.getByText("停止中です。このエンジン", { exact: false })).toBeVisible();
   await expect(row).toContainText("取込前に起動してください");
   await expectNoPageOverflow(page);
+});
+
+
+test("検証環境の表示と制御制限が画面幅に依存しない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockServices(page, { controlEnabled: false, deploymentMode: "staging" });
+  await page.goto("/settings/services");
+  await expect(page.getByText("検証 (systemd)")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Docling 起動" })).toBeDisabled();
+  await page.screenshot({ path: testInfo.outputPath("staging-services.png"), fullPage: true });
 });

@@ -605,7 +605,7 @@ def _translate_domain_errors[A, R](
 def _actor(request: Request) -> tuple[str, bool]:
     principal = principal_from_request(request)
     if principal is None:
-        # 認証無効（NL2SQL_APP_AUTH_ENABLED=false）は画面の route と同じく actor 制約を外す。
+        # ローカル実行（PLATFORM_AUTH_MODE=local）は画面の route と同じく actor 制約を外す。
         return "", False
     return principal.user_uuid, principal.is_system_admin
 
@@ -1382,6 +1382,6 @@ def build_mcp_server(request: Request) -> McpServer:
 def has_any_permission_for(request: Request) -> Callable[[frozenset[str]], bool]:
     principal = principal_from_request(request)
     if principal is None:
-        # 認証無効（NL2SQL_APP_AUTH_ENABLED=false）は他の API と同じく権限を判定しない。
+        # ローカル実行（PLATFORM_AUTH_MODE=local）は他の API と同じく権限を判定しない。
         return lambda _permissions: True
     return principal.has_any_permission

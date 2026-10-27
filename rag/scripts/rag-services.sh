@@ -229,7 +229,7 @@ install_services() {
       log "${unit}: 最後の操作が「停止」なので停止のままにします。"
     fi
   done
-  log "backend は RAG_ENVIRONMENT=development で起動すると、サービス管理画面から操作できます。"
+  log "backend は PLATFORM_ENVIRONMENT=local で起動すると、サービス管理画面から操作できます。"
 }
 
 uninstall_services() {

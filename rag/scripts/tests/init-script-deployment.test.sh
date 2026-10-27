@@ -142,11 +142,12 @@ run_runtime_env_case() (
   source "${REPO_DIR}/init_script.sh"
 
   cat > "${APP_ROOT}/props/backend.env" <<'EOF'
-RAG_AUTH_MODE=production
 RAG_PARSER_ADAPTER_BACKEND='unst$ructured'
 RAG_AUDIT_CONTEXT_HASH_SALT=
 EOF
   cat > "${APP_ROOT}/props/platform.env" <<'EOF'
+PLATFORM_ENVIRONMENT=staging
+PLATFORM_AUTH_MODE=authenticated
 PLATFORM_ORACLE_USER='rag_app'
 PLATFORM_ORACLE_PASSWORD='Db$Pass#123'
 EOF
@@ -408,7 +409,7 @@ second_log="${TEST_TMP_DIR}/systemd/second-systemctl.log"
 grep -Fqx "ExecStart=${rag_dir}/backend/.venv/bin/gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --bind 127.0.0.1:8000 --workers 2 --timeout 60 --graceful-timeout 30 --keep-alive 5 --error-logfile - --no-control-socket" "${backend_unit}" \
   || fail "backend が venv の gunicorn で 127.0.0.1:8000 だけに bind していない"
 grep -Fqx "User=${service_user}" "${backend_unit}" || fail "backend が SERVICE_USER で動いていない"
-grep -Fqx 'Environment=RAG_ENVIRONMENT=prod' "${backend_unit}" || fail "backend の RAG_ENVIRONMENT が prod ではない"
+! grep -q 'Environment=PLATFORM_ENVIRONMENT=' "${backend_unit}" || fail "共通の環境設定を unit で上書きしています"
 grep -Fqx 'Environment=RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED=false' "${backend_unit}" \
   || fail "backend の in-process worker を無効にしていない（取込ジョブを二重に実行しうる）"
 grep -Fqx "ExecStart=${rag_dir}/backend/.venv/bin/python -m app.rag.ingestion_worker" "${worker_unit}" \

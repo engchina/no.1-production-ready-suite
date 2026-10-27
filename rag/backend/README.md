@@ -99,9 +99,9 @@ Object Storage は `PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_N
 
 ## 認証
 
-`RAG_AUTH_MODE=local` ではログインを要求しません。全権限・対象範囲の制限なしのローカル利用者として動き、UI もログイン画面とログアウト導線を表示しません。開発・CI の既定値です。
+`PLATFORM_AUTH_MODE=local` ではログインを要求しません。全権限・対象範囲の制限なしのローカル利用者として動き、UI もログイン画面とログアウト導線を表示しません。開発・CI の既定値です。
 
-`RAG_AUTH_MODE=production` では、3製品共通の認証（`pr_system_settings.auth`。#212 / #214）でログインします。
+`PLATFORM_AUTH_MODE=authenticated` では、3製品共通の認証（`pr_system_settings.auth`。#212 / #214）でログインします。
 
 - 利用者: 構成管理者 `system_admin`（共通 `.env` の `PLATFORM_ADMIN_LOGIN_USER_ID` / `PLATFORM_ADMIN_LOGIN_USER_PASSWORD`）と、「ユーザーとロール」で作る DB ユーザー（`PLATFORM_USERS` などを NL2SQL / Agent と共有）。
 - セッション: Cookie `pr_session`（HttpOnly）と `pr_csrf`（名前は共通 `.env` の `PLATFORM_AUTH_SESSION_COOKIE_NAME` / `PLATFORM_AUTH_CSRF_COOKIE_NAME`）。3 製品で共有し、1 回のログインで NL2SQL / Agent も使えます。ログアウトは全製品で共通です（#1565）。更新系の API は `X-CSRF-Token` header に `pr_csrf` の値が必要です。期限・ロック・パスワード方針・`Secure` 属性は共通 `.env` の `PLATFORM_AUTH_*`。
@@ -114,7 +114,7 @@ Object Storage は `PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_N
 
 `POST /api/mcp` は Agent（Production Control Plane）が RAG を利用者として呼ぶための MCP サーバーです（#232。共通部品は `pr_backend_core.mcp`、契約は `platform/docs/backend-standard.md`「製品間の連携」）。`initialize` / `ping` / `tools/list` / `tools/call` だけを扱い、GET は 405 です。
 
-- 認証: `Authorization: Bearer <サービストークン>`（`aud=rag`、`sub`=利用者の `user_uuid`、既定 60 秒）。署名鍵は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`（32 文字以上。空なら 503）。Cookie と CSRF は使いません。token なし・不正・期限切れは 401、無効な利用者・初回パスワード変更待ちは 403。`RAG_AUTH_MODE=local` では token を見ず、全権限のローカル利用者です。
+- 認証: `Authorization: Bearer <サービストークン>`（`aud=rag`、`sub`=利用者の `user_uuid`、既定 60 秒）。署名鍵は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`（32 文字以上。空なら 503）。Cookie と CSRF は使いません。token なし・不正・期限切れは 401、無効な利用者・初回パスワード変更待ちは 403。`PLATFORM_AUTH_MODE=local` では token を見ず、全権限のローカル利用者です。
 - 利用者: token の `sub` の利用者の現在のロール・権限・対象範囲をそのまま使います（回答履歴・rate limit も同じ利用者）。token の `agent_id` / `run_id` は hash して監査 context の agent / thread に入れます（`X-RAG-Agent-ID` / `X-RAG-Thread-ID` header は使いません）。
 - manifest: `/mcp` は「認証済みなら通す」で登録し、権限はツールごとに判定します（`tools/list` は使えるツールだけを返し、権限のないツールの呼び出しは `MCP_TOOL_FORBIDDEN`）。
 
@@ -134,7 +134,7 @@ RAG のチャット（会話の作成・送信・取得）は画面の機能で�
 
 `GET /api/ready` は外部 API へ ping せず、デプロイ時に注入される設定を依存グループ単位で検証します。
 
-checks は `oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` です。`RAG_ENVIRONMENT=production` では追加で `audit_context_salt` を返し、`RAG_AUDIT_CONTEXT_HASH_SALT` の注入を必須にします。すべて `ok` のときだけ HTTP 200 になり、`ok` 以外の値が含まれる場合は HTTP 503 / `status=degraded` を返します。Oracle の判定はシステム設定 > データベースと同じ platform の `database_readiness` です（#325）。`PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_DSN` に加え、`PLATFORM_ORACLE_WALLET_DIR`（Thick mode では `PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin`）に接続用の Wallet ファイル（Thin: `tnsnames.ora` / `ewallet.pem`、Thick: `tnsnames.ora` / `sqlnet.ora` / `cwallet.sso`）がそろい、暗号化された `ewallet.pem` を `PLATFORM_ORACLE_WALLET_PASSWORD`（無ければ `PLATFORM_ORACLE_PASSWORD`）で復号でき、DSN が Wallet の別名なら `tnsnames.ora` にあることを要求します。値は `ok` / `missing` / `wallet_not_found` / `wallet_password_invalid` / `invalid` です。
+checks は `oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` です。`PLATFORM_ENVIRONMENT=production` では追加で `audit_context_salt` を返し、`RAG_AUDIT_CONTEXT_HASH_SALT` の注入を必須にします。すべて `ok` のときだけ HTTP 200 になり、`ok` 以外の値が含まれる場合は HTTP 503 / `status=degraded` を返します。Oracle の判定はシステム設定 > データベースと同じ platform の `database_readiness` です（#325）。`PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_DSN` に加え、`PLATFORM_ORACLE_WALLET_DIR`（Thick mode では `PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin`）に接続用の Wallet ファイル（Thin: `tnsnames.ora` / `ewallet.pem`、Thick: `tnsnames.ora` / `sqlnet.ora` / `cwallet.sso`）がそろい、暗号化された `ewallet.pem` を `PLATFORM_ORACLE_WALLET_PASSWORD`（無ければ `PLATFORM_ORACLE_PASSWORD`）で復号でき、DSN が Wallet の別名なら `tnsnames.ora` にあることを要求します。値は `ok` / `missing` / `wallet_not_found` / `wallet_password_invalid` / `invalid` です。
 以前の RAG は DB パスワードがあれば Wallet を見ずに `ok` としていましたが、#325 からは **DB パスワードがあっても Wallet が不備なら `wallet_not_found`（DB の状態 API では `not_configured`）** になります。既存環境で `/api/ready` が 503 になった場合は、システム設定 > データベースで Wallet を登録し直してください。
 レスポンスには設定値や secret は含めません。
 
@@ -205,9 +205,9 @@ chunking は `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` で制御し、通常方式�
 
 ## 検索フィルター
 
-RAG は単一 tenant で動かします。`RAG_AUTH_MODE=production` では client の `X-Tenant-ID` を使わず、tenant の条件なしで動きます（client が tenant を切り替えて別の tenant のデータを指定できないようにするため。#225）。`RAG_AUTH_MODE=local` では、HTTP header `X-Tenant-ID` がある場合、アップロード時に tenant id を hash 化して document に保存し、文書一覧、詳細、重複判定、検索 retrieval は同じ `tenant_id_hash` のデータだけを対象にします（開発・テスト用）。raw tenant id は DB / レスポンス / 監査ログへ保存しません。tenant header がない場合は全体を参照できます。
+RAG は単一 tenant で動かします。`PLATFORM_AUTH_MODE=authenticated` では client の `X-Tenant-ID` を使わず、tenant の条件なしで動きます（client が tenant を切り替えて別の tenant のデータを指定できないようにするため。#225）。`PLATFORM_AUTH_MODE=local` では、HTTP header `X-Tenant-ID` がある場合、アップロード時に tenant id を hash 化して document に保存し、文書一覧、詳細、重複判定、検索 retrieval は同じ `tenant_id_hash` のデータだけを対象にします（開発・テスト用）。raw tenant id は DB / レスポンス / 監査ログへ保存しません。tenant header がない場合は全体を参照できます。
 
-`RAG_AUTH_MODE=local` で、認証ゲートウェイやアプリケーション権限層が `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与した場合、文書一覧、詳細、chunk count、検索 retrieval はその document/category scope にも閉じます。header が存在するが有効値が 0 件の場合は deny-all、未指定の場合だけ制限なしです。これらの raw scope 値は監査ログへ出しません。`production` では client の範囲 header（`X-User-ID` / `X-RAG-Allowed-*`）を使わず、ログインした利用者の権限から範囲を決めます。
+`PLATFORM_AUTH_MODE=local` で、認証ゲートウェイやアプリケーション権限層が `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与した場合、文書一覧、詳細、chunk count、検索 retrieval はその document/category scope にも閉じます。header が存在するが有効値が 0 件の場合は deny-all、未指定の場合だけ制限なしです。これらの raw scope 値は監査ログへ出しません。`production` では client の範囲 header（`X-User-ID` / `X-RAG-Allowed-*`）を使わず、ログインした利用者の権限から範囲を決めます。
 
 `POST /api/search` の `filters` は Oracle retrieval に適用されます。対応 key は `document_id`、`file_name`、`category_name`、`status`、`content_kind`、`section_title`、`section_path` です。`content_kind=table` で表 chunk だけ、`content_kind=figure` で図・画像説明 chunk だけ、`section_path` で特定章節だけを候補にできます。未対応 key、未対応 status、未対応 `content_kind` は 422 を返します。
 `mode`・`strategy`・`rerank_top_n`・`generation_profile`（旧 standard の回答エンジンの指定）は #595 で削除しました。送っても 422 にせず読み捨てます。

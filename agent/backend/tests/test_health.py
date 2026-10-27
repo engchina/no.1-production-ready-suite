@@ -866,7 +866,7 @@ def test_database_status_missing_settings_is_not_configured(monkeypatch: MonkeyP
 
 def test_database_status_does_not_short_circuit_local_auth(monkeypatch: MonkeyPatch) -> None:
     """local でもユーザー・ロールは共通 DB にあるため、DB を確かめる（RAG と同じ。#750 / #751）。"""
-    for auth_mode in ("local", "production"):
+    for auth_mode in ("local", "authenticated"):
         settings = Settings(
             _env_file=None, auth_mode=auth_mode, oracle_user="", oracle_dsn="", oracle_password=""
         )

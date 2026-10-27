@@ -989,7 +989,7 @@ async def test_system_table_post_requires_csrf_and_sql_execute_permission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "app_auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_mode", "authenticated")
     monkeypatch.setattr(settings, "app_auth_session_cookie_name", "pr_session")
     monkeypatch.setattr(settings, "app_auth_csrf_cookie_name", "pr_csrf")
 
