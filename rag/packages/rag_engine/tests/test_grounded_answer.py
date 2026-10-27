@@ -52,11 +52,11 @@ class FakeModel:
 
     def __init__(self, drafts, audits):
         self.drafts, self.audits, self.prompts = list(drafts), list(audits), []
-        self.systems = []
+        self.captured_system_prompts = []
 
     def __call__(self, system, prompt, settings, schema, **options):
         self.prompts.append((schema.__name__, prompt))
-        self.systems.append((schema.__name__, system))
+        self.captured_system_prompts.append((schema.__name__, system))
         source = self.drafts if schema is GroundedDraft else self.audits
         value = source.pop(0) if len(source) > 1 else source[0]
         return schema.model_validate(value(prompt) if callable(value) else value)

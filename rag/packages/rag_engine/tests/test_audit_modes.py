@@ -328,7 +328,7 @@ def test_executed_generation_and_audit_use_steps_without_changing_mode_contract(
         model = FakeModel([draft(item(eid, STEP, STEP))], [response if detailed else _fact(response)])
         mode = grounded.AUDIT_MODE_DETAILED if detailed else grounded.AUDIT_MODE_STANDARD
         _run(model, ctx, mode, answer_audit_compact_reasons=True)
-        generation, audit_call = model.systems
+        generation, audit_call = model.captured_system_prompts
         assert generation == ("GroundedDraft", grounded.GENERATE_SYSTEM_PROMPT)
         expected_schema = "GroundedAudit" if detailed else "GroundedFactAudit"
         assert audit_call == (expected_schema, grounded.audit_system_prompt(detailed=detailed, compact_reasons=True))

@@ -205,7 +205,7 @@ def test_grounded_item_listing_values_of_several_rows_is_kept() -> None:
 
 def test_audit_prompt_judges_the_relation_not_the_shared_words() -> None:
     assert RELATION_SUPPORT_RULES in grounded.AUDIT_SYSTEM_PROMPT
-    section = grounded.AUDIT_SYSTEM_PROMPT.split("3.1 support", 1)[1].split("3.2 applicability", 1)[0]
+    section = grounded.AUDIT_SYSTEM_PROMPT.split("## Step 2:", 1)[1].split("## Step 3:", 1)[0]
     assert RELATION_SUPPORT_RULES in section  # support の判定の規則
     # function_context・evidence の語で支持済みにするのは、同じ対象の記載のときだけ。
     rules = [line for line in grounded.AUDIT_SYSTEM_PROMPT.splitlines() if line.startswith("- function_context は")]
