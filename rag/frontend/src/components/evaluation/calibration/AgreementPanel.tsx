@@ -320,6 +320,7 @@ function AspectAgreementTable({
             key: "aspect",
             header: t("evaluation.calibration.progress.aspect"),
             rowHeader: true,
+            className: "whitespace-nowrap",
             render: (row) => aspectLabel(row.aspect),
           },
           {

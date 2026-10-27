@@ -284,6 +284,8 @@ function LabelSetTable({
           key: "name",
           header: t("evaluation.calibration.sets.column.name"),
           rowHeader: true,
+          // 375px でもほかの列（折り返さない）に押されて 1 文字ずつ折り返さないよう、最小幅を持たせる（#3583）。
+          className: "min-w-[10rem] break-words",
           render: (row) => (
             <RowTitleButton
               title={row.name}
