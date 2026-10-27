@@ -263,7 +263,7 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   await expect(card.getByText("回答で引用", { exact: true })).toBeVisible();
   await expect(panel.getByText(/^根拠の構成/)).toHaveCount(0);
   await expect(panel.getByTestId("answer-graph-expansion")).toHaveText(
-    "関係情報で加えた根拠 2 件: manual.pdf > 第 3 章 取消の手順（2 件）"
+    "文書構造による検索拡張で加えた根拠 2 件: manual.pdf > 第 3 章 取消の手順（2 件）"
   );
   // 「詳細」はチャットと同じ回答の記録の詳細だけ（開始・トレース ID・旧「処理時間: …」の行は出さない。#2118）。
   await expect(process.getByText("トレース ID")).toHaveCount(0);
@@ -318,7 +318,7 @@ async function mockAnswerStream(page: Page, graphExpansion?: Record<string, unkn
     insufficient_reason: "",
     generated_queries: ["受注 取消 手順"],
     execution_steps: [{ name: "質問の理解", status: "complete", elapsed_seconds: 0.3, llm_calls: 1 }],
-    // 関係情報で加えた根拠（#2055）。処理の経過の「詳細」に件数と使った見出しを出す。
+    // 文書構造による検索拡張で加えた根拠（#2055）。処理の経過の「詳細」に件数と使った見出しを出す。
     graph_expansion: graphExpansion ?? {
       added_count: 2,
       entities: [{ entity: "manual.pdf > 第 3 章 取消の手順", added_count: 2 }],
@@ -540,7 +540,7 @@ for (const graph of [
     const panel = await openAnswerProcessDetails(page, "search-run-progress");
     const diagnostic = panel.getByTestId("answer-graph-expansion");
     await expect(diagnostic).toContainText("0 件");
-    await expect(diagnostic).toContainText(graph.graph_available ? "既に候補・文脈に含まれています" : "利用できる関係情報がありません");
+    await expect(diagnostic).toContainText(graph.graph_available ? "既に候補・文脈に含まれています" : "利用できる文書構造索引がありません");
     await page.screenshot({ path: test.info().outputPath("graph-zero-diagnostic.png") });
   });
 }

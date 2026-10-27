@@ -379,12 +379,12 @@ class KnowledgeBaseQueryConfig(BaseModel):
     # 質問から抽出項目の条件を読み取る(#652)。LLM の呼び出しが 1 回増える。
     auto_field_filter_enabled: bool | None = None
     # 質問と上位の候補の実体から、実体の表との SQL の join で関連する chunk を 1 段だけ足す
-    # (#1362 / #1388)。LLM は呼ばない。None は既定(on。#1402)、false は使わない。実体は
-    # 文書レシピで実体の抽出を選んだ文書にだけある。全体の環境変数は持たない。
+    # (#1362 / #1388)。LLM は呼ばない。実体・別名索引を作った文書だけが対象。
+    # 検索方法の全体設定(既定 OFF)だけで決め、プロファイルでは保存・適用しない。
     entity_expansion_enabled: bool | None = None
     # 1 回の検索で足す chunk 数の上限。None は既定(6)。
     entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
-    # 関係情報(関係情報の構築で作った章節・表の見出しの entity と chunk の対応)で検索の候補を
+    # 関係情報(文書構造索引の構築で作った章節・表の見出しの entity と chunk の対応)で検索の候補を
     # 足す(#2055)。LLM は呼ばない。None は全体の既定(OFF。検索方法の画面)。
     graph_expansion_enabled: bool | None = None
     # 1 回の検索で足す chunk 数の上限。None は全体の既定(6)。ON / OFF と同じく、検索・回答

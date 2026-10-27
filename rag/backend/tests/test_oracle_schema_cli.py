@@ -384,7 +384,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "rag_answer_records" not in retire_migration
     assert "rag_graph_" not in retire_migration
     assert "rag_search_audit" not in retire_migration
-    # 関係情報の構築の保存値 full を entities へ書き換える（#621）。値があるときだけ置き換える。
+    # 文書構造索引の構築の保存値 full を entities へ書き換える（#621）。値があるときだけ置き換える。
     profile_migration = sql.split("-- migration: 20260930_006_graph_profile_entities", 1)[1].split(
         "-- migration: ", 1
     )[0]
@@ -410,7 +410,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     for table in ("RAG_GRAPH_CLAIMS", "RAG_GRAPH_COMMUNITY_SUMMARIES"):
         assert f"table_name = '{table}'" in graph_migration
         assert f"'DROP TABLE {table.lower()} CASCADE CONSTRAINTS PURGE'" in graph_migration
-    # 関係情報グラフが読む表は残す。
+    # 文書構造グラフが読む表は残す。
     for table in ("rag_graph_entities", "rag_graph_relationships", "rag_graph_entity_chunks"):
         assert table not in graph_migration
     # 取込 job の抽出の段の進捗の列を足すだけ（#1999）。JSON 型ではなく CLOB で持つ。
