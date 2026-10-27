@@ -260,7 +260,7 @@ for (const viewport of [
       await expect(card).not.toContainText("DocRAG");
       await expect(card.getByRole("switch")).toHaveCount(7);
       expect(await card.getByRole("switch").evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))))
-        .toEqual(["質問から項目の条件を読み取る", "名称・別名でつながる根拠", "関係情報で根拠を広げる", "画面目録で操作画面を探す", "Rerank で検索候補を並べ替える", "章節で広げる根拠", "根拠の無い要求を探し直す"]);
+        .toEqual(["質問から項目の条件を読み取る", "実体・別名による検索拡張", "文書構造による検索拡張", "画面目録で操作画面を探す", "Rerank で検索候補を並べ替える", "章節で広げる根拠", "根拠の無い要求を探し直す"]);
       const strategy = page.getByRole("combobox", { name: "質問の拡張", exact: true });
       await expect(strategy).toContainText("自動ルーティング");
       // 回答の生成方式の既定は標準 RAG。先頭に「（既定）」付きで並べ、CRAG は任意で AI の呼び出しが増えると説明する（#3509）。
@@ -277,10 +277,14 @@ for (const viewport of [
       await expect(requestCoverage).not.toBeChecked();
       const autoFieldFilter = page.getByRole("switch", { name: "質問から項目の条件を読み取る" });
       await expect(autoFieldFilter).not.toBeChecked();
-      // 関係情報で根拠を広げる（#2055）は既定で無効。AI の呼び出しが増えないことを説明に出す。
-      const graphExpansion = page.getByRole("switch", { name: "関係情報で根拠を広げる" });
+      // 文書構造による検索拡張（#2055）は既定で無効。AI の呼び出しが増えないことを説明に出す。
+      const graphExpansion = page.getByRole("switch", { name: "文書構造による検索拡張" });
       await expect(graphExpansion).not.toBeChecked();
+      await graphExpansion.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: test.info().outputPath("entity-structure-expansion.png") });
       await expect(graphExpansion).toHaveAccessibleDescription(/AI の呼び出しは増えません/);
+      await expect(graphExpansion).toHaveAccessibleDescription(/文書構造索引.*併用でき.*重複して加えません/);
+      await expect(page.getByRole("switch", { name: "実体・別名による検索拡張" })).toHaveAccessibleDescription(/名称・ID・別名.*1 段.*文書構造による検索拡張と併用/);
       const save = page.getByRole("button", { name: "回答の設定を保存", exact: true });
       await expect(save).toBeDisabled();
 

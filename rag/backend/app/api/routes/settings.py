@@ -920,7 +920,7 @@ async def update_evaluation_settings(
 
 @router.get("/entity-index", response_model=ApiResponse[EntityIndexSettingsData])
 async def get_entity_index_settings() -> ApiResponse[EntityIndexSettingsData]:
-    """名称・別名の索引を構築する全体の既定を返す。"""
+    """実体・別名索引を構築する全体の既定を返す。"""
     return ApiResponse(
         data=EntityIndexSettingsData(enabled=get_settings().rag_entity_index_enabled)
     )
@@ -935,8 +935,8 @@ async def update_entity_index_settings(
     _write_env_values(
         BACKEND_ENV_FILE,
         {"RAG_ENTITY_INDEX_ENABLED": str(payload.enabled).lower()},
-        section_comment="# 名称・別名の索引",
-        error_detail="名称・別名の索引の設定を保存できませんでした。",
+        section_comment="# 実体・別名索引",
+        error_detail="実体・別名索引の設定を保存できませんでした。",
     )
     settings.rag_entity_index_enabled = payload.enabled
     return ApiResponse(data=EntityIndexSettingsData(enabled=payload.enabled))
@@ -944,7 +944,7 @@ async def update_entity_index_settings(
 
 @router.get("/graph", response_model=ApiResponse[GraphSettingsData])
 async def get_graph_settings() -> ApiResponse[GraphSettingsData]:
-    """関係情報の構築の選択(構築する / しない)を返す。"""
+    """文書構造索引の構築の選択(構築する / しない)を返す。"""
     return ApiResponse(data=_graph_settings_data(get_settings()))
 
 
@@ -952,7 +952,7 @@ async def get_graph_settings() -> ApiResponse[GraphSettingsData]:
 async def update_graph_settings(
     payload: GraphSettingsUpdate,
 ) -> ApiResponse[GraphSettingsData]:
-    """関係情報設定を backend/.env と現在プロセスへ反映する。"""
+    """文書構造索引の設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
     candidate = settings.model_copy(
         update={"rag_graph_profile": normalize_graph_profile(payload.profile)}
@@ -1428,7 +1428,7 @@ def _optional_bool(value: bool | None, fallback: bool) -> bool:
 
 
 def _graph_settings_data(settings: Settings) -> GraphSettingsData:
-    """Settings から関係情報設定の表示用データを作る。"""
+    """Settings から文書構造索引の設定の表示用データを作る。"""
     runtime = graph_adapter_runtime_settings(settings)
     return GraphSettingsData(
         profile=runtime.profile,
@@ -1442,12 +1442,12 @@ def _graph_settings_data(settings: Settings) -> GraphSettingsData:
 
 
 def _persist_graph_settings(settings: Settings) -> None:
-    """関係情報設定を backend/.env へ永続化する。"""
+    """文書構造索引の設定を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
         {"RAG_GRAPH_PROFILE": settings.rag_graph_profile},
-        section_comment="# 関係情報の構築",
-        error_detail="関係情報設定を backend/.env へ保存できませんでした。",
+        section_comment="# 文書構造索引の構築",
+        error_detail="文書構造索引の設定を backend/.env へ保存できませんでした。",
     )
 
 

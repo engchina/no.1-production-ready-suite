@@ -1,11 +1,11 @@
-"""関係情報の構築アダプター(構築する / しない)。
+"""文書構造索引の構築アダプター(構築する / しない)。
 
 決定論ロジックは共有パッケージ ``rag_pipeline_core.graph`` を単一ソースとして使い、backend の中で
 解決する(サービスへは委譲しない。#3218)。
 
 - ``off``(既定): 構築しない。
 - ``entities``: 文書と章・節の見出しのつながり(entity + relationship)を構築する。LLM は使わない
-  (``app/rag/graph_index.py``)。構築した関係情報はナレッジベースの「関係情報グラフ」で見られ、
+  (``app/rag/graph_index.py``)。構築した関係情報はナレッジベースの「文書構造グラフ」で見られ、
   ``rag_graph_expansion_enabled``(既定 OFF)を ON にすると回答の検索の候補を広げるのにも使う
   (``app/rag/graph_expansion.py``。#2055)。
 
@@ -28,7 +28,7 @@ GRAPH_PROFILE_ORDER: tuple[GraphProfileName, ...] = ("off", "entities")
 
 @dataclass(frozen=True)
 class GraphAdapterParams:
-    """関係情報の構築へ渡す解決済みパラメータ。"""
+    """文書構造索引の構築へ渡す解決済みパラメータ。"""
 
     profile: GraphProfileName
     enabled: bool
@@ -44,7 +44,7 @@ class GraphProfileStatus:
 
 @dataclass(frozen=True)
 class GraphAdapterRuntimeSettings:
-    """関係情報の構築の非機密 runtime snapshot。"""
+    """文書構造索引の構築の非機密 runtime snapshot。"""
 
     profile: GraphProfileName
     enabled: bool
@@ -61,7 +61,7 @@ def normalize_graph_profile(value: object) -> GraphProfileName:
 
 
 def resolve_graph_adapter(settings: Settings) -> GraphAdapterParams:
-    """Settings から関係情報の構築の解決済みパラメータを作る。"""
+    """Settings から文書構造索引の構築の解決済みパラメータを作る。"""
     profile = normalize_graph_profile(getattr(settings, "rag_graph_profile", DEFAULT_GRAPH_PROFILE))
     resolved = resolve_graph_profile(profile)
     return GraphAdapterParams(
@@ -71,7 +71,7 @@ def resolve_graph_adapter(settings: Settings) -> GraphAdapterParams:
 
 
 def graph_adapter_runtime_settings(settings: Settings) -> GraphAdapterRuntimeSettings:
-    """Settings から関係情報の構築の snapshot を作る。"""
+    """Settings から文書構造索引の構築の snapshot を作る。"""
     params = resolve_graph_adapter(settings)
     return GraphAdapterRuntimeSettings(
         profile=params.profile,

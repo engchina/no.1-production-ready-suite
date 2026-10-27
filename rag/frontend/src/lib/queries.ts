@@ -2040,7 +2040,7 @@ export function useExternalParserStatus(
   });
 }
 
-/** 名称・別名の索引を構築する全体の既定。 */
+/** 実体・別名索引を構築する全体の既定。 */
 export function useEntityIndexSettings() {
   return useQuery({
     queryKey: queryKeys.entityIndexSettings,
@@ -2060,7 +2060,7 @@ export function useUpdateEntityIndexSettings() {
   });
 }
 
-/** 関係情報の構築（構築する / しない）の設定。 */
+/** 文書構造索引の構築（構築する / しない）の設定。 */
 export function useGraphSettings() {
   return useQuery<GraphSettingsData>({
     queryKey: queryKeys.graphSettings,
@@ -2069,7 +2069,7 @@ export function useGraphSettings() {
   });
 }
 
-/** 関係情報の構築の設定をランタイム保存。 */
+/** 文書構造索引の構築の設定をランタイム保存。 */
 export function useUpdateGraphSettings() {
   const qc = useQueryClient();
   return useMutation({

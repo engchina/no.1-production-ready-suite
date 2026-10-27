@@ -1,6 +1,6 @@
 """関係情報（文書・章節・表 / 図の見出しの entity と chunk の対応）で検索の候補を広げる（#2055）。
 
-「関係情報の構築」（``app.rag.graph_index``。取込で LLM を呼ばずに作る）の表（
+「文書構造索引の構築」（``app.rag.graph_index``。取込で LLM を呼ばずに作る）の表（
 ``rag_graph_entities`` / ``rag_graph_entity_chunks``）を、回答の検索で読む。GraphRAG / LightRAG の
 local search（当たった chunk の entity から、その entity の他の chunk へ広げる）の考え方を、構造の
 関係情報に当てはめたもの。LLM は呼ばない。

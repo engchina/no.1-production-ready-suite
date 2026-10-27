@@ -384,7 +384,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "rag_answer_records" not in retire_migration
     assert "rag_graph_" not in retire_migration
     assert "rag_search_audit" not in retire_migration
-    # 関係情報の構築の保存値 full を entities へ書き換える（#621）。値があるときだけ置き換える。
+    # 文書構造索引の構築の保存値 full を entities へ書き換える（#621）。値があるときだけ置き換える。
     profile_migration = sql.split("-- migration: 20260930_006_graph_profile_entities", 1)[1].split(
         "-- migration: ", 1
     )[0]
@@ -410,7 +410,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     for table in ("RAG_GRAPH_CLAIMS", "RAG_GRAPH_COMMUNITY_SUMMARIES"):
         assert f"table_name = '{table}'" in graph_migration
         assert f"'DROP TABLE {table.lower()} CASCADE CONSTRAINTS PURGE'" in graph_migration
-    # 関係情報グラフが読む表は残す。
+    # 文書構造グラフが読む表は残す。
     for table in ("rag_graph_entities", "rag_graph_relationships", "rag_graph_entity_chunks"):
         assert table not in graph_migration
     # 取込 job の抽出の段の進捗の列を足すだけ（#1999）。JSON 型ではなく CLOB で持つ。
@@ -503,7 +503,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 109
+    assert len(statements) == 111
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -601,6 +601,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261022_001_cited_evidence",
         "20261026_001_evaluation_calibration",
         "20261026_002_evaluation_job_calibration_kind",
+        "20261027_001_raptor_prompt_consolidation",
     ]
 
 

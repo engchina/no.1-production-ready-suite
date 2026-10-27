@@ -964,14 +964,14 @@ GraphProfileName = GraphProfile
 
 
 class GraphProfileStatusData(BaseModel):
-    """関係情報の構築の 1 プロファイル(off = 構築しない / entities = 構築する)の選択状態。"""
+    """文書構造索引の構築の 1 プロファイル(off = 構築しない / entities = 構築する)の選択状態。"""
 
     name: GraphProfileName
     selected: bool
 
 
 class EntityIndexSettingsData(BaseModel):
-    """名称・別名の索引を構築する全体の既定。"""
+    """実体・別名索引を構築する全体の既定。"""
 
     enabled: bool
 

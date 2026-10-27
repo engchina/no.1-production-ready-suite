@@ -1043,7 +1043,7 @@ export interface KnowledgeBaseIngestionConfig {
   chunk_parent_max_children?: number | null;
   graph_profile: GraphProfileName | null;
   /**
-   * 名称・別名の索引（#1362 / #1388）。索引の保存の後に、表の行・本文の定義の形から実体を作る。null は全体の
+   * 実体・別名索引（#1362 / #1388）。索引の保存の後に、表の行・本文の定義の形から実体を作る。null は全体の
    * 既定（無効）に従う。列名は表の行の名前・属性にする列（空は列名で決める）。
    */
   entity_index_enabled?: boolean | null;
@@ -1077,14 +1077,14 @@ export interface KnowledgeBaseQueryConfig {
   // 質問から抽出項目の条件を読み取る(LLM の呼び出しが 1 回増える。#652)。
   auto_field_filter_enabled?: boolean | null;
   /**
-   * 実体でつながる根拠を 1 段広げる(#1388。LLM は呼ばない)。null / 未指定は既定(使う。#1402)、false は使わない。
-   * 文書レシピで名称・別名の索引を有効にした文書にだけ効く。
+   * 実体・別名による検索拡張(LLM は呼ばない)。検索方法の全体設定だけで決め、プロファイルでは保存しない。
+   * 文書レシピで実体・別名索引を有効にした文書にだけ効く。
    */
   entity_expansion_enabled?: boolean | null;
   /** 1 回の検索で加える根拠の上限(1〜20)。null は既定(6)。 */
   entity_expansion_max_chunks?: number | null;
   /**
-   * 関係情報(関係情報の構築で作った章節・表の見出しと根拠の対応)で根拠の候補を広げる(#2055。AI は呼ばない)。
+   * 文書構造索引で根拠の候補を広げる(AI は呼ばない)。検索方法の全体設定だけで決める。
    * null / 未指定は全体の既定(検索方法の画面。既定は使わない)。
    */
   graph_expansion_enabled?: boolean | null;
@@ -1122,7 +1122,7 @@ export interface InheritedAnswerContactData {
   contact: string;
 }
 
-/** 参照するナレッジベースで名称・別名の索引を持つ文書の数(#1388)。 */
+/** 参照するナレッジベースで実体・別名索引を持つ文書の数(#1388)。 */
 export interface EntityIndexCoverageData {
   document_count: number;
 }
@@ -2871,7 +2871,7 @@ export interface EvaluationSettingsUpdate {
   suite: EvaluationSuiteName;
 }
 
-// --- 設定: 関係情報の構築 ---
+// --- 設定: 文書構造索引の構築 ---
 /** off = 構築しない(既定)、entities = 文書と章・節の見出しのつながりを構築する(#621)。 */
 export type GraphProfileName = "off" | "entities";
 
@@ -3802,7 +3802,7 @@ export const api = {
   /** 継承するシステム設定の窓口（プロファイルの画面の権限で読む。#2683）。 */
   getInheritedAnswerContact: () =>
     request<InheritedAnswerContactData>("/api/search-answer-profiles/inherited-contact"),
-  /** 参照するナレッジベースで名称・別名の索引を持つ文書の数(拡張の開閉の案内。#1388)。 */
+  /** 参照するナレッジベースで実体・別名索引を持つ文書の数(拡張の開閉の案内。#1388)。 */
   entityIndexCoverage: (knowledgeBaseIds: string[]) =>
     request<EntityIndexCoverageData>(
       "/api/search-answer-profiles/entity-index-coverage",
@@ -4527,7 +4527,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  // 設定: 関係情報の構築
+  // 設定: 文書構造索引の構築
   getEntityIndexSettings: () => request<EntityIndexSettingsData>("/api/settings/entity-index"),
   updateEntityIndexSettings: (body: EntityIndexSettingsData) =>
     request<EntityIndexSettingsData>("/api/settings/entity-index", { method: "PATCH", body: JSON.stringify(body) }),

@@ -24,7 +24,7 @@ const RECIPE_DEFAULTS = {
   chunk_overlap: 120,
   chunk_min_chars: 120,
   graph_profile: "off",
-  // 名称・別名の索引の全体の既定は OFF（#3008）。
+  // 実体・別名索引の全体の既定は OFF（#3008）。
   entity_index_enabled: false,
   entity_name_columns: [],
   entity_attribute_columns: [],
@@ -106,16 +106,16 @@ test("取込・検索・回答設定の概要ハブが工程をフェーズ別�
     "href",
     "/settings/retrieval"
   );
-  // 関係情報の工程は取込時の構築の設定なので「関係情報の構築」の名前でナレッジ構築フェーズに並ぶ(#301)。
+  // 関係情報の工程は取込時の構築の設定なので「文書構造索引」の名前でナレッジ構築フェーズに並ぶ(#301)。
   await expect(
     page
       .getByRole("region", { name: "ナレッジ構築" })
-      .getByRole("link", { name: "関係情報の構築 の設定を開く" })
+      .getByRole("link", { name: "文書構造索引 の設定を開く" })
   ).toHaveAttribute("href", "/settings/graph");
 
   const ingestion = page.getByRole("region", { name: "ナレッジ構築" });
-  await expect(ingestion.getByRole("link", { name: "名称・別名の索引 の設定を開く" })).toContainText("5.");
-  await expect(ingestion.getByRole("link", { name: "関係情報の構築 の設定を開く" })).toContainText("6.");
+  await expect(ingestion.getByRole("link", { name: "実体・別名索引 の設定を開く" })).toContainText("5.");
+  await expect(ingestion.getByRole("link", { name: "文書構造索引 の設定を開く" })).toContainText("6.");
   await expect(page.getByRole("link", { name: "検索方法 の設定を開く" })).toContainText("7.");
   await expect(page.getByRole("link", { name: "評価の基準 の設定を開く" })).toContainText("10.");
 
@@ -157,7 +157,7 @@ test("サイドバーの取込・検索・回答設定の名前と順番は設�
   expect(sidebarNames).toEqual(cardNames);
 });
 
-// #528: レシピ 13 項目を、選択中レシピの設定と同じ処理順で出す（名称・別名の索引は #1388）。
+// #528: レシピ 13 項目を、選択中レシピの設定と同じ処理順で出す（実体・別名索引は #1388）。
 const PROCESSING_ORDER = [
   "preprocess_profile",
   "auto_parse_after_preprocess_enabled",
@@ -295,7 +295,7 @@ test("権限のない設定画面へのリンクは出さない", async ({ page 
   await page.goto("/settings/pipeline");
   const items = page.getByTestId("pipeline-recipe-defaults");
   await expect(items.locator("[data-config-field]")).toHaveCount(PROCESSING_ORDER.length);
-  await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(2);
+  await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(1);
   await expect(
     items.getByRole("link", { name: "文書分割 を設定する画面を開く" })
   ).toHaveAttribute("href", "/settings/chunking");

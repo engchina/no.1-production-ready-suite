@@ -35,7 +35,7 @@ describe("設定の概要の取込の流れ", () => {
         items: ["文書分割"],
         gate: "Chunk 後に Embedding / 索引へ進む",
       },
-      { phase: "Embedding / 索引", items: ["名称・別名の索引", "関係情報の構築"], gate: null },
+      { phase: "Embedding / 索引", items: ["実体・別名索引", "文書構造索引の構築"], gate: null },
     ]);
   });
 

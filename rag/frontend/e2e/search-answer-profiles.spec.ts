@@ -229,10 +229,10 @@ test("検索方法の全体設定の項目は表示せず、古い個別設定�
   for (const name of ["質問の拡張", "回答の生成方式", "根拠の前後から加える数", "回答の検索のオプション", "手順ごとの検索の上限", "手順ごとの検索の時間上限（秒）"]) {
     await expect(page.getByRole("heading", { name, exact: true })).toHaveCount(0);
   }
-  for (const name of ["Rerank で検索候補を並べ替える", "質問から項目の条件を読み取る", "関係情報で根拠を広げる", "画面目録で操作画面を探す", "根拠の無い要求を探し直す", "業務ガイドの手順ごとに探す"]) {
+  for (const name of ["Rerank で検索候補を並べ替える", "質問から項目の条件を読み取る", "文書構造による検索拡張", "画面目録で操作画面を探す", "根拠の無い要求を探し直す", "業務ガイドの手順ごとに探す"]) {
     await expect(page.getByRole("group", { name, exact: true })).toHaveCount(0);
   }
-  for (const name of ["名称・別名でつながる根拠", "章節で広げる根拠"]) {
+  for (const name of ["実体・別名による検索拡張", "章節で広げる根拠"]) {
     await expect(page.getByText(name, { exact: true })).toHaveCount(0);
   }
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の設定の検証用");

@@ -3,7 +3,7 @@ import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
 test.beforeEach(async ({ page }) => { await mockLocalAuth(page); });
 
-test("名称・別名の索引は既定 OFF で、切り替え・保存・再読込ができる", { tag: "@responsive" }, async ({ page }) => {
+test("実体・別名索引は既定 OFF で、切り替え・保存・再読込ができる", { tag: "@responsive" }, async ({ page }) => {
   let enabled = false;
   const patches: unknown[] = [];
   await page.route("**/api/settings/entity-index", async (route) => {
@@ -15,7 +15,9 @@ test("名称・別名の索引は既定 OFF で、切り替え・保存・再読
     await route.fulfill({ json: { data: { enabled }, error_messages: [], warning_messages: [] } });
   });
   await page.goto("/settings/entity-index");
-  await expect(page.getByText(/検索で利用するかは、検索方法の「名称・別名でつながる根拠」/)).toBeVisible();
+  await expect(page.getByText(/検索で利用するかは、検索方法の「実体・別名による検索拡張」/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "実体・別名索引", exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "実体・別名索引の構築", exact: true })).toBeVisible();
   const toggle = page.getByRole("radio", { name: /^構築する/ });
   const off = page.getByRole("radio", { name: /^構築しない/ });
   const save = page.getByRole("button", { name: "保存", exact: true });
@@ -36,7 +38,7 @@ test("名称・別名の索引は既定 OFF で、切り替え・保存・再読
   await page.screenshot({ path: test.info().outputPath("entity-index.png"), fullPage: true });
 });
 
-test("名称・別名の索引は保存失敗時に選択を残して再試行できる", { tag: "@responsive" }, async ({ page }) => {
+test("実体・別名索引は保存失敗時に選択を残して再試行できる", { tag: "@responsive" }, async ({ page }) => {
   let fail = true;
   await page.route("**/api/settings/entity-index", async (route) => {
     if (route.request().method() === "PATCH" && fail) {

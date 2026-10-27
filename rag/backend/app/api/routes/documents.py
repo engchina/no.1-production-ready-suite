@@ -1960,16 +1960,20 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
                 chunk_set.layer_statuses.graph = chunk_set.layer_statuses.graph.model_copy(
                     update={
                         "status": DocumentLayerStatusName.ERROR,
-                        "reason": "索引の処理に失敗したため、関係情報の構築は完了していません。",
+                        "reason": (
+                            "索引の処理に失敗したため、文書構造索引の構築は完了していません。"
+                        ),
                     }
                 )
             elif count > 0 or chunk_set.status == "INDEXED":
                 chunk_set.layer_statuses.graph = chunk_set.layer_statuses.graph.model_copy(
                     update={
                         "status": DocumentLayerStatusName.MATERIALIZED,
-                        "reason": f"関係情報を構築済みです（{count} 件）。"
+                        "reason": f"文書構造索引を構築済みです（{count} 件）。"
                         if count
-                        else "関係情報の構築は完了しましたが、対象の見出しがありません（0 件）。",
+                        else (
+                            "文書構造索引の構築は完了しましたが、対象の見出しがありません（0 件）。"
+                        ),
                     }
                 )
         chunk_sets.append(chunk_set)
@@ -2282,7 +2286,7 @@ def _layer_statuses_for_chunk_set(
             effective_by_kb,
             persisted_layers or {},
             layer="graph",
-            user_label="関係情報",
+            user_label="文書構造索引",
             current_inputs=current_inputs,
         ),
         navigation=_layer_status_for_chunk_set(
@@ -2379,7 +2383,7 @@ def _requested_layer_status(
 # 派生情報レイヤー(chunk_set に重なる層)と利用者向けの名前。
 _ARTIFACT_LAYER_LABELS: tuple[tuple[str, str], ...] = (
     ("metadata", "項目抽出"),
-    ("graph", "関係情報"),
+    ("graph", "文書構造索引"),
     ("navigation", "ナビゲーション"),
 )
 
@@ -2475,9 +2479,9 @@ async def _record_recipe_artifact_layers(
             count = counts.get(chunk_set_id, 0)
             status = DocumentLayerStatusName.MATERIALIZED
             reason = (
-                f"関係情報を構築済みです（{count} 件）。"
+                f"文書構造索引を構築済みです（{count} 件）。"
                 if count
-                else "関係情報の構築は完了しましたが、対象の見出しがありません（0 件）。"
+                else "文書構造索引の構築は完了しましたが、対象の見出しがありません（0 件）。"
             )
         await oracle.upsert_artifact_layer(
             layer_id=_recipe_layer_id(chunk_set_id, settings, layer),

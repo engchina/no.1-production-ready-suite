@@ -1,8 +1,9 @@
 """関係情報の表を回答の検索で読む SQL（#2055）。
 
-表（``rag_graph_entities`` / ``rag_graph_entity_chunks``。#621・#2051）は取込の「関係情報の構築」
-（``app.rag.graph_index``）が作る。entity の ``knowledge_base_id`` は取込の時点の所属のスナップ
-ショットなので、検索の範囲には使わない。どの SQL も entity に対応する chunk と文書を、検索と同じ
+表（``rag_graph_entities`` / ``rag_graph_entity_chunks``。#621・#2051）は
+取込の「文書構造索引の構築」（``app.rag.graph_index``）が作る。
+entity の ``knowledge_base_id`` は取込時の所属なので、検索の範囲には使わない。
+どの SQL も entity に対応する chunk と文書を、検索と同じ
 見え方の条件（``_oracle_retrieval_where``。tenant・ナレッジベースの範囲・利用者の権限・有効な
 chunk_set・旧版の扱い）で join し、範囲の外の chunk を返さない（名前の一致の候補も、範囲の中に
 chunk を持つ entity だけ）。entity と chunk の対応は FK でつながっていない（chunk_set の GC で

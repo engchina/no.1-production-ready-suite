@@ -22,7 +22,7 @@ import { useValuesChanged } from "@/lib/render-sync";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
-/** 名称・別名の索引を構築する全体の既定。文書レシピの明示設定は変更しない。 */
+/** 実体・別名索引を構築する全体の既定。文書レシピの明示設定は変更しない。 */
 export function EntityIndexSettingsClient() {
   const query = useEntityIndexSettings();
   const save = useUpdateEntityIndexSettings();
@@ -58,7 +58,7 @@ export function EntityIndexSettingsClient() {
               <Tags size={20} aria-hidden />
             </div>
             <div className="min-w-0">
-              <CardTitle>{t("nav.settingsEntityIndex")}</CardTitle>
+              <CardTitle>{t("settings.entityIndex.title")}</CardTitle>
               <CardDescription>{t("settings.entityIndex.description")}</CardDescription>
             </div>
           </div>
