@@ -54,6 +54,7 @@ from app.clients.oracle import OracleClient
 from app.clients.support_guide_store import SupportGuideStore
 from app.config import (
     Settings,
+    enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
     enterprise_ai_reasoning_effort_to_send,
 )
@@ -287,6 +288,7 @@ def validation_reuse_context(
     段落間の依存を確定できないため、回答全体の変更は再監査する。保存するのは内容の digest だけ。
     """
     model_id = enterprise_ai_default_model_id(settings)
+    connection = enterprise_ai_connection_for_model(settings, model_id)
     return _sha256(
         {
             "policy": "review-contract-v1",
@@ -294,11 +296,17 @@ def validation_reuse_context(
             "answer": answer,
             "prompts": prompt_version,
             "model": model_id,
+            "connection": {
+                "id": connection.connection_id,
+                "url": connection.base_url,
+                "project": connection.project_ocid,
+            },
             "reasoning": enterprise_ai_reasoning_effort_to_send(settings, model_id),
             "audit_settings": {
                 key: value
                 for key, value in settings.model_dump(mode="json").items()
                 if key.startswith("rag_answer_")
+                or key in {"rag_audit_reasoning_effort", "rag_judge_reasoning_effort"}
             },
             "evidence": list(evidence),
             "premises": list(premises),
@@ -331,7 +339,7 @@ async def audited_answer_lines(
     引用の本文と変わっていないものだけを使う。監査が時間の上限で切れた回答（#1516）の説明は
     監査されていないので使わない。
     """
-    from rag_engine.evaluation.answer_validation import audited_answer_items
+    from rag_engine.evaluation.answer_validation import audited_answer_items, audited_line_key
 
     audited: dict[str, list[str]] = {}
     if not reuse_context:
@@ -354,6 +362,17 @@ async def audited_answer_lines(
         budget = diagnostics.get("round_budget")
         if isinstance(budget, Mapping) and budget.get("adopted_audit_cut"):
             continue
+        # 最終監査で実際に支持した主張と出典の組に限る。複数出典・依存が不明な組は再監査する。
+        supported_pairs: dict[str, set[str]] = {}
+        for claim in validation.get("claim_checks") or ():
+            if not isinstance(claim, Mapping) or claim.get("status") != "supported":
+                continue
+            if "," in str(claim.get("evidence_id") or ""):
+                continue
+            source_id = str(claim.get("source_id") or "")
+            key = audited_line_key(str(claim.get("answer_quote") or ""))
+            if key and source_id in readable:
+                supported_pairs.setdefault(key, set()).add(source_id)
         envelope = diagnostics.get("envelope")
         items = envelope.get("items") if isinstance(envelope, Mapping) else None
         citations = row.get("citations_json")
@@ -377,10 +396,14 @@ async def audited_answer_lines(
         ).items():
             # 根拠を今読めて、記録したときから本文が変わっていない（版・権限の変化を
             # 読み直しで確かめる）。
-            if all(
-                chunk_id in readable
-                and str(readable[chunk_id].get("text") or "") == stored.get(chunk_id)
-                for chunk_id in chunk_ids
+            if (
+                len(chunk_ids) == 1
+                and supported_pairs.get(key) == set(chunk_ids)
+                and all(
+                    chunk_id in readable
+                    and str(readable[chunk_id].get("text") or "") == stored.get(chunk_id)
+                    for chunk_id in chunk_ids
+                )
             ):
                 audited.setdefault(key, chunk_ids)
     return audited

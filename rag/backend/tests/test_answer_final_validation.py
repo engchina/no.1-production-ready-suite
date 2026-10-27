@@ -99,6 +99,9 @@ async def test_failed_or_unversioned_final_verdict_is_not_reused_as_supported(
             "valid": valid,
             "status": "completed",
             "reuse_context": version,
+            "claim_checks": [
+                {"status": "supported", "answer_quote": "合成の回答", "source_id": "chunk-1"}
+            ],
         }
 
     class Oracle:

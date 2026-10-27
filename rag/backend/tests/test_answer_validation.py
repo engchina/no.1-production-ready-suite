@@ -1260,6 +1260,13 @@ class _RecordOracle(_Oracle):
                     "status": "completed",
                     "valid": True,
                     "reuse_context": context,
+                    "claim_checks": [
+                        {
+                            "status": "supported",
+                            "answer_quote": "有効期限は最長 30 日です。",
+                            "source_id": "c1",
+                        }
+                    ],
                 },
                 "envelope": {
                     "items": [
@@ -1560,6 +1567,26 @@ async def test_review_reuse_never_trusts_incomplete_or_legacy_records(status: st
             ["trace-1"],
             {"c1": {"text": "有効期限は最長 30 日です。"}},
             reuse_context=context,
+        )
+        == {}
+    )
+
+
+@pytest.mark.parametrize("source_id,evidence_id", [("c2", "E2"), ("c1", "E1,E2")])
+async def test_reuse_requires_the_final_audits_actual_claim_source_pair(
+    source_id: str, evidence_id: str
+) -> None:
+    from app.rag.answer_validation import audited_answer_lines
+
+    oracle = _RecordOracle()
+    validation = oracle.record["diagnostics_json"]["answer_validation"]
+    validation["claim_checks"][0].update(source_id=source_id, evidence_id=evidence_id)
+    assert (
+        await audited_answer_lines(
+            cast(Any, oracle),
+            ["trace-1"],
+            {"c1": {"text": "有効期限は最長 30 日です。"}},
+            reuse_context=validation["reuse_context"],
         )
         == {}
     )
