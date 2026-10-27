@@ -554,6 +554,13 @@ for (const width of [1280, 375]) {
     await mockRetrievalCards(page, undefined, displayStages);
     await page.goto("/settings/retrieval");
     const prompts = page.getByRole("region", { name: "検索に使うプロンプト", exact: true });
+    const card = page.getByTestId("answer-prompt-stages-card");
+    await expect(card).toBeVisible();
+    const bounds = await card.boundingBox();
+    const reference = await page.getByTestId("answering-settings-card").boundingBox();
+    expect(Math.abs(bounds!.width-reference!.width)).toBeLessThanOrEqual(1);
+    expect(await card.evaluate(node => parseFloat(getComputedStyle(node).borderTopWidth))).toBeGreaterThan(0);
+
     await expect(prompts.getByRole("heading", { level: 3 })).toHaveText(["質問の解釈", "検索", "根拠の判定"]);
     const expected = displayStages.filter((stage) => ["question", "retrieval", "grounding"].includes(stage.phase));
     await expect(prompts.locator("details")).toHaveCount(expected.length);

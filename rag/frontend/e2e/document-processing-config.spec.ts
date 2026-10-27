@@ -47,7 +47,6 @@ function config(): DocumentProcessingConfig {
     chunk_size: 800,
     chunk_overlap: null,
     chunk_min_chars: null,
-    chunk_context_header_enabled: null,
     graph_profile: null,
     field_extraction_enabled: null,
     vision_enabled: null,
@@ -585,7 +584,6 @@ const PROCESSING_ORDER = [
   "navigation_summary_enabled",
   "auto_chunk_after_extract_enabled",
   "chunking_strategy",
-  "chunk_context_header_enabled",
   "auto_index_after_chunk_enabled",
   "entity_index_enabled",
   "graph_profile",
@@ -621,8 +619,7 @@ test("要約と上書きの一覧は、同じ項目を取込の処理順に並�
   const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
   const summary = panel.getByTestId("document-processing-config-summary");
   await expect(summary.locator("[data-config-field]")).toHaveCount(PROCESSING_ORDER.length);
-  // 以前は要約に無かった文脈ヘッダも出す。
-  await expect(summary).toContainText("文脈ヘッダを検索対象へ追加");
+  await expect(summary).not.toContainText("文脈ヘッダを検索対象へ追加");
   expect(await fieldsInReadingOrder(summary)).toEqual(PROCESSING_ORDER);
   await summary.locator('[data-config-field="section_rules_mode"]').scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("recipe-summary-order.png") });
@@ -641,15 +638,8 @@ test("要約と上書きの一覧は、同じ項目を取込の処理順に並�
   await editor.locator('[data-config-field="section_rules_mode"]').scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("recipe-editor-order.png") });
   await expect(panel).toContainText("すべてグローバル継承");
-  // 文脈ヘッダを上書きすると、件数と要約のカードの両方に反映される。
-  await editor
-    .locator('[data-config-field="chunk_context_header_enabled"]')
-    .getByText("上書き", { exact: true })
-    .click();
-  await expect(panel).toContainText(`個別設定 1 / ${PROCESSING_ORDER.length} 項目`);
-  await expect(
-    summary.locator('[data-config-field="chunk_context_header_enabled"]')
-  ).toContainText("上書き");
+  // 文脈ヘッダは全体設定だけで決まり、レシピには出ない。
+  await expect(editor.locator('[data-config-field="chunk_context_header_enabled"]')).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
@@ -724,8 +714,8 @@ test("権限のない設定画面へのグローバル設定のリンクは出�
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
   const editor = panel.getByTestId("document-processing-config-editor-items");
   await expect(editor.locator("[data-config-field]")).toHaveCount(EDITOR_ORDER.length);
-  // 文書分割と文脈ヘッダ（どちらも文書分割の画面）だけ。
-  await expect(editor.getByRole("link", { name: / のグローバル設定を開く$/ })).toHaveCount(2);
+  // 文書分割の画面だけ。
+  await expect(editor.getByRole("link", { name: / のグローバル設定を開く$/ })).toHaveCount(1);
 });
 
 test("レシピ比較で空の引用を理由付きの状態として表示する", async ({ page }) => {
@@ -1206,7 +1196,6 @@ test("確認待ちレシピの分割を一時設定でプレビューする", as
   expect(state.previewPosts()).toBe(1);
   expect(state.previewPayload()).toMatchObject({
     chunk_size: 640,
-    chunk_context_header_enabled: true,
   });
   await expectNoPageOverflow(page);
 });
