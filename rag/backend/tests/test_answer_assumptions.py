@@ -15,6 +15,7 @@ from app.rag.answer_assumptions import with_answer_assumptions
 from app.rag.answer_engine import AnswerEngine
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.schemas.search import SearchRequest
+from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 from app.schemas.support_guide import SupportGuideContent
 from tests.test_answer_engine import FakeGenAi, FakeOracle, _fake_llm
 from tests.test_search_answer_profile_domain_keywords import FakeKnowledgeOracle
@@ -88,7 +89,14 @@ def test_answered_conditions_are_not_marked_unknown(
     question: str, conditions: dict[str, str]
 ) -> None:
     result = with_answer_assumptions(
-        PAYLOAD, policy="assume", question=question, conditions=conditions, guide={}
+        PAYLOAD,
+        policy="assume",
+        question=question,
+        conditions=conditions,
+        guide={},
+        confirmed_answers=(ClarificationAnswer(rule_id="r1", option_ids=["a"]),)
+        if not conditions
+        else (),
     )
     assert result["unconfirmed_conditions"] == []
 

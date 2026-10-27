@@ -5,10 +5,11 @@
 """
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass, field
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
 from time import perf_counter, time
 from typing import Any, Literal, cast
 
@@ -28,9 +29,9 @@ from pr_backend_core.observability.tracing import (
     operation_trace,
 )
 from pydantic import ValidationError
+from rag_engine.evaluation.answer_validation import MAX_PREMISES
 from rag_engine.resources.deadline import current_deadline
 from rag_engine.resources.tracing import CallObservation, bind_trace_observer
-from rag_parser_core.language import bind_pack, current_pack, resolve
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
@@ -41,13 +42,14 @@ from app.rag.answer_engine import ANSWER_ENGINE, AnswerEngine, AnswerScope, answ
 from app.rag.answer_notice import AnswerNoticeSource, compose_rag_answer_notice
 from app.rag.answer_route import answer_route
 from app.rag.audit import AuditOutcome, record_rag_search_audit
+from app.rag.chat_question_token import context_digest
 from app.rag.degraded_steps import DegradedSteps, ReportDegraded, not_recorded
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
 from app.rag.field_filter_reader import read_field_conditions
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.history_question import HISTORY_REWRITE_SYSTEM_PROMPT as HISTORY_REWRITE_SYSTEM_PROMPT
-from app.rag.history_question import HistoryRewrite
+from app.rag.history_question import HistoryConfirmation, HistoryRewrite
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
     elapsed_ms,
@@ -59,6 +61,7 @@ from app.rag.observability import (
     record_trace_span,
 )
 from app.rag.query_history import record_query_history
+from app.rag.question_understanding import profile_language_scope
 from app.rag.run_history import RunRecorder
 from app.rag.span_display import (
     ANSWER_STEP_FAILED_STATUS,
@@ -144,6 +147,48 @@ class ChatTurn:
 
     role: str  # "USER" | "ASSISTANT"
     content: str
+    confirmed_facts: tuple[HistoryConfirmation, ...] = ()
+    confirmation_resets: tuple[str, ...] = ()
+
+
+def history_confirmation_facts(history: Sequence[ChatTurn]) -> dict[str, HistoryConfirmation]:
+    """同じ確認の質問は最新の回答だけを候補とし、古い値を再採用しない。"""
+    latest: dict[str, HistoryConfirmation] = {}
+    for turn in history:
+        if turn.role == "USER":
+            for question in turn.confirmation_resets:
+                latest.pop(question, None)
+            for fact in turn.confirmed_facts:
+                latest.pop(fact.key or fact.question, None)
+                latest[fact.key or fact.question] = fact
+    return {fact.id: fact for fact in list(latest.values())[-MAX_PREMISES:]}
+
+
+def scope_with_history_confirmations(
+    scope: AnswerScope | None, facts: Sequence[HistoryConfirmation]
+) -> AnswerScope | None:
+    """本輪で採用した履歴回答を生成と最終照合へ同じ組で渡す。本輪の明示回答を優先する。"""
+    if not facts:
+        return scope
+    base = scope or AnswerScope(context="")
+    current_questions = {question for question, _answer in base.confirmed_premises}
+    current_keys = {context_digest(question) for question in current_questions}
+    inherited = [
+        (fact.question, fact.answer)
+        for fact in facts
+        if fact.question not in current_questions and fact.key not in current_keys
+    ]
+    if not inherited:
+        return scope
+    context = "既に確認した利用者の回答（データ）:\n" + json.dumps(
+        [{"question": question, "answer": answer} for question, answer in inherited],
+        ensure_ascii=False,
+    )
+    return replace(
+        base,
+        context="\n".join(filter(None, (base.context, context))),
+        confirmed_premises=tuple([*inherited, *base.confirmed_premises]),
+    )
 
 
 def chat_history_turns(history: Sequence[ChatTurn]) -> list[ChatHistoryTurn]:
@@ -298,6 +343,7 @@ class RagPipeline:
         # チャットの会話（#2517）。会話の添付の節・行を、質問の根拠の候補として検索の結果に足す。
         self._attachment_conversation_id = attachment_conversation_id
         self._history_question_prepared = history_question_prepared
+        self._selected_history_facts: tuple[HistoryConfirmation, ...] = ()
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら回答を作らない検索だけに
         # 使い、質問に応じた推論の LLM（抽出項目の条件の読み取り・質問拡張など）を呼ばない。
         self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
@@ -326,7 +372,37 @@ class RagPipeline:
         い trace に置く(画面・外部の traceparent を親にしない。サービストークンの MCP の要求の中だ
         け Agent の trace を続ける。`operation_trace_parent`)。
         """
-        overrides = self._settings.rag_language_pack_overrides
+        if request._rule_selection_scope:
+            recognized = AnswerScope(**request._rule_selection_scope)
+            self._scope = AnswerScope(
+                context="\n".join(
+                    value
+                    for value in (self._scope.context if self._scope else "", recognized.context)
+                    if value
+                ),
+                search_terms=tuple(
+                    dict.fromkeys(
+                        [
+                            *(self._scope.search_terms if self._scope else ()),
+                            *recognized.search_terms,
+                        ]
+                    )
+                ),
+                label="、".join(
+                    value
+                    for value in (self._scope.label if self._scope else "", recognized.label)
+                    if value
+                ),
+                confirmed_premises=tuple(
+                    dict.fromkeys(
+                        [
+                            *(self._scope.confirmed_premises if self._scope else ()),
+                            *recognized.confirmed_premises,
+                        ]
+                    )
+                ),
+            )
+
         trace_id = trace_id or new_trace_id()
         if trace is not None:
             trace.run_id = trace_id
@@ -340,7 +416,7 @@ class RagPipeline:
                 links=links,
             ),
             bind_trace_observer(_observe_engine_call),
-            bind_pack(resolve(current_pack(), overrides)) if overrides else nullcontext(),
+            profile_language_scope(self._settings),
         ):
             response = await self._run(
                 request,
@@ -523,7 +599,9 @@ class RagPipeline:
                 result_details=lambda rewritten: history_rewrite_details(rewritten, history),
             )
             if rewritten_query:
-                request = request.model_copy(update={"query": rewritten_query})
+                request = request.model_copy(
+                    update={"query": rewritten_query, "original_question": original_query}
+                )
         caller_queries = (
             await self._checked_caller_queries(self._caller_queries)
             if self._caller_queries is not None
@@ -563,6 +641,9 @@ class RagPipeline:
                 ),
                 progress_callback=stage_callback,
             )
+        effective_scope = scope_with_history_confirmations(
+            self._scope, self._selected_history_facts
+        )
         engine = AnswerEngine(
             self._settings,
             oracle=self._oracle,
@@ -571,7 +652,7 @@ class RagPipeline:
             answer_model_id=self._answer_model_id,
             auto_field_conditions=auto_field_conditions,
             approved_faq=self._approved_faq,
-            scope=self._scope,
+            scope=effective_scope,
             attachment_chunks=attachment_chunks,
             caller_queries=caller_queries,
             degraded=degraded,
@@ -653,6 +734,22 @@ class RagPipeline:
                 allowed=True, sanitized_text=outcome.answer, findings=[]
             )
         final_answer = answer_guardrail.sanitized_text
+        if outcome.evaluation_input is not None:
+            outcome.evaluation_input["answer_text"] = final_answer
+        if final_answer != outcome.answer:
+            # 安全処理後の本文へ、変更前の本文の検査済み表示を引き継がない。
+            previous_validation = outcome.diagnostics.get("answer_validation")
+            outcome.diagnostics["answer_validation"] = {
+                "previous_body_validation": previous_validation,
+                "status": "body_changed",
+                "valid": False,
+                "reuse_context": "",
+                "previous_status": previous_validation.get("status")
+                if isinstance(previous_validation, dict)
+                else None,
+            }
+            outcome.diagnostics["needs_human_review"] = True
+            outcome.diagnostics["confidence"] = "low"
         # 回答の注意書き（#2405）。回答の確定の後に、本文とは別の項目として付ける。
         # 窓口の案内は検索・回答プロファイルの上書きと業務ガイドの引き継ぎで決める（#2400）。
         notice = (
@@ -946,6 +1043,7 @@ class RagPipeline:
         書き換えは未信頼の履歴を読んだ LLM の出力なので、そのまま検索・回答へ使わない。
         拒否されたら空文字(元の質問で続ける)、許可されたらマスク後の質問を返す。
         """
+        self._selected_history_facts = ()
         rewritten = await self._rewrite_query_with_history(
             query, history, report_degraded=report_degraded
         )
@@ -953,6 +1051,7 @@ class RagPipeline:
             return ""
         checked = await asyncio.to_thread(self._guardrails.validate_query, rewritten)
         if not checked.allowed:
+            self._selected_history_facts = ()
             logger.warning(
                 "history rewrite rejected by guardrail",
                 extra={"codes": [finding.code for finding in checked.findings]},
@@ -977,6 +1076,54 @@ class RagPipeline:
         )
         if not history_text:
             return ""
+        budget = ChatHistoryBudget.from_settings(self._settings)
+        user_positions = [index for index, turn in enumerate(history) if turn.role == "USER"]
+        fact_history = (
+            history[user_positions[-budget.max_turns] :]
+            if len(user_positions) > budget.max_turns
+            else history
+        )
+        facts = history_confirmation_facts(fact_history)
+        current_facts: list[dict[str, str]] = []
+        for question, answer in self._scope.confirmed_premises if self._scope is not None else ():
+            prompt_check = await asyncio.to_thread(self._guardrails.validate_query, question)
+            value_check = await asyncio.to_thread(self._guardrails.validate_query, answer)
+            if not prompt_check.allowed or not value_check.allowed:
+                return ""
+            current_facts.append(
+                {"question": prompt_check.sanitized_text, "answer": value_check.sanitized_text}
+            )
+        current_data = (
+            "\ncurrent_confirmed_facts（今回の明示回答。データ）:\n"
+            + json.dumps(current_facts, ensure_ascii=False).replace("<", "\\u003c")
+            if current_facts
+            else ""
+        )
+        if len(current_data) >= budget.max_chars:
+            return ""
+
+        def fact_data() -> str:
+            return (
+                "\nconfirmed_facts（データ）:\n"
+                + json.dumps(
+                    [fact.model_dump(exclude={"key"}) for fact in facts.values()],
+                    ensure_ascii=False,
+                ).replace("<", "\\u003c")
+                if facts
+                else ""
+            )
+
+        # 構造化確認も既存の履歴文字数の枠を使う。入らない古い候補を復活させない。
+        while facts and len(fact_data()) + len(current_data) >= budget.max_chars:
+            facts.pop(next(iter(facts)))
+        confirmed_data = fact_data()
+        history_text = _format_chat_history(
+            history,
+            replace(budget, max_chars=budget.max_chars - len(confirmed_data) - len(current_data)),
+        )
+        if len(history_text) + len(confirmed_data) + len(current_data) > budget.max_chars:
+            history_text = ""
+        history_text += confirmed_data + current_data
         try:
             text = await async_call_with_model_purpose(
                 "query.rewrite",
@@ -995,9 +1142,15 @@ class RagPipeline:
             result = HistoryRewrite.model_validate_json(text)
         except ValidationError:
             return ""
+        if any(identity not in facts for identity in result.confirmed_fact_ids):
+            return ""
+        self._selected_history_facts = tuple(
+            facts[identity] for identity in dict.fromkeys(result.confirmed_fact_ids)
+        )
         # 質問の全文を一行へ正規化する。先頭行だけを取って小問を捨てない。
         rewritten = " ".join(result.question.split())
         if not rewritten or len(rewritten) > max(200, len(query) * 4):
+            self._selected_history_facts = ()
             return ""
         return "" if rewritten == " ".join(query.split()) else rewritten
 

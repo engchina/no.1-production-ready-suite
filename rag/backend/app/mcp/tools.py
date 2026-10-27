@@ -175,7 +175,9 @@ from app.rag.profile_recommendation import (
     ProfileCandidate,
     recommend_search_answer_profiles,
 )
+from app.rag.question_understanding import profile_language_scope
 from app.rag.rate_limit import enforce_rate_limit
+from app.rag.rule_selection import apply_rule_selection_scope, recognize_rule_selections
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (
     clarification_document_ids,
@@ -4205,53 +4207,85 @@ async def rule_clarification_step(
         # プロファイルが無いときの 404 は検索が返す。
         return request, None
     search_route.ensure_search_answer_profile_not_archived(view, profile_id)
-    payload = await load_runtime_knowledge_payload(oracle, profile_id)
-    for key, value in arguments.conditions.items():
-        rule_id = key.removeprefix(RULE_CONDITION_PREFIX)
-        if rule_id == key or not rule_matches(payload, arguments.query, rule_id):
-            continue
-        answer = rule_answer(payload, rule_id, value)
-        resolved = (
-            resolve_clarification(
-                payload,
-                answer,
-                await current_section_pages(oracle, clarification_document_ids(payload, answer)),
-            )
-            if answer is not None
-            else None
-        )
-        if resolved is None:
-            continue
-        scope, page_ranges = resolved
-        if page_ranges:
-            request = request.model_copy(
-                update={"filters": {**request.filters, PAGE_RANGES_FILTER_KEY: page_ranges}}
-            )
-        return request, scope
-    if view.config.clarification_policy == "assume":
-        return request, None
-    found = await asyncio.to_thread(suggest_clarification, payload, arguments.query)
-    if found is None:
-        return request, None
-    rule, clarification = found
-    rule_id = str(rule.get("id", ""))
-    return SearchOutput(
-        answer=f"回答の前に確認が必要です: {clarification.question}",
-        trace_id=new_trace_id(),
-        guardrail_warnings=[],
-        outcome="needs_clarification",
-        clarifications=[
-            GuideClarification(
-                condition_id=f"{RULE_CONDITION_PREFIX}{rule_id}",
-                label=str(rule.get("title", "") or rule_id),
-                question=clarification.question,
-                options=[option.label for option in clarification.options],
-                multiple=clarification.multiple,
-            )
-        ],
-        evidence=[],
-        evidence_omitted=0,
+    settings, _ = resolve_search_answer_profile_settings(
+        get_settings(), view.config, apply_answer_model=False
     )
+    with profile_language_scope(settings):
+        payload = await load_runtime_knowledge_payload(oracle, profile_id)
+        for key, value in arguments.conditions.items():
+            rule_id = key.removeprefix(RULE_CONDITION_PREFIX)
+            if rule_id == key or not rule_matches(payload, arguments.query, rule_id):
+                continue
+            answer = rule_answer(payload, rule_id, value)
+            resolved = (
+                resolve_clarification(
+                    payload,
+                    answer,
+                    await current_section_pages(
+                        oracle, clarification_document_ids(payload, answer)
+                    ),
+                )
+                if answer is not None
+                else None
+            )
+            if resolved is None:
+                continue
+            scope, page_ranges = resolved
+            if page_ranges:
+                request = request.model_copy(
+                    update={"filters": {**request.filters, PAGE_RANGES_FILTER_KEY: page_ranges}}
+                )
+            return request, scope
+        if view.config.clarification_policy == "assume":
+            return request, None
+        selection_settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
+        selection_usage: dict[str, float] = {}
+        selected_answers = await recognize_rule_selections(
+            payload, arguments.query, selection_settings, usage=selection_usage
+        )
+        request._rule_selection_state["prepared"] = True
+        request._rule_selection_state["elapsed_seconds"] = selection_usage.get(
+            "elapsed_seconds", 0.0
+        )
+        request = apply_rule_selection_scope(
+            request,
+            payload,
+            selected_answers,
+            current_pages=await current_section_pages(
+                oracle,
+                {
+                    doc
+                    for answer in selected_answers
+                    for doc in clarification_document_ids(payload, answer)
+                },
+            )
+            if selected_answers
+            else None,
+        )
+        found = await asyncio.to_thread(
+            suggest_clarification, payload, arguments.query, answers=selected_answers
+        )
+        if found is None:
+            return request, None
+        rule, clarification = found
+        rule_id = str(rule.get("id", ""))
+        return SearchOutput(
+            answer=f"回答の前に確認が必要です: {clarification.question}",
+            trace_id=new_trace_id(),
+            guardrail_warnings=[],
+            outcome="needs_clarification",
+            clarifications=[
+                GuideClarification(
+                    condition_id=f"{RULE_CONDITION_PREFIX}{rule_id}",
+                    label=str(rule.get("title", "") or rule_id),
+                    question=clarification.question,
+                    options=[option.label for option in clarification.options],
+                    multiple=clarification.multiple,
+                )
+            ],
+            evidence=[],
+            evidence_omitted=0,
+        )
 
 
 async def _older_versions(
@@ -4858,37 +4892,38 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             view, arguments.search_answer_profile_id
         )
         settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
-        if not settings.rag_support_guide_enabled:
-            return LookupGuidesOutput(guides=[])
-        guides, failed = await search_route.load_published_guides(oracle, view.id)
-        if failed:
-            # 読めなかったことを「当たるガイドが無い」（0 件）と区別する（#1278）。
-            raise HTTPException(status_code=503, detail=GUIDES_UNAVAILABLE_MESSAGE)
-        context = await search_route.support_guide_context(
-            oracle, guides, arguments.query, search_route.profile_scope_filters(view)
-        )
-        # 検索と同じく、用語の別名で展開し、ON なら意味の照合を使う（#2398）。
-        query = await build_guide_query(
-            oracle,
-            settings,
-            view.id,
-            guides,
-            arguments.query,
-            await load_runtime_knowledge_payload(oracle, view.id),
-        )
-        matches = rank_guides(
-            guides, query, arguments.conditions, limit=arguments.limit, context=context
-        )
-        if arguments.conditions:
-            # 確認に自由入力で答えた選択式の条件は、答えの文が選んだ選択肢に決める（#2726）。
-            resolved = await asyncio.gather(
-                *(
-                    resolve_answered_conditions(match, arguments.conditions, settings)
-                    for match in matches
-                )
+        with profile_language_scope(settings):
+            if not settings.rag_support_guide_enabled:
+                return LookupGuidesOutput(guides=[])
+            guides, failed = await search_route.load_published_guides(oracle, view.id)
+            if failed:
+                # 読めなかったことを「当たるガイドが無い」（0 件）と区別する（#1278）。
+                raise HTTPException(status_code=503, detail=GUIDES_UNAVAILABLE_MESSAGE)
+            context = await search_route.support_guide_context(
+                oracle, guides, arguments.query, search_route.profile_scope_filters(view)
             )
-            matches = [item for item in resolved if isinstance(item, GuideMatch)]
-        return LookupGuidesOutput(guides=[_lookup_item(match) for match in matches])
+            # 検索と同じく、用語の別名で展開し、ON なら意味の照合を使う（#2398）。
+            query = await build_guide_query(
+                oracle,
+                settings,
+                view.id,
+                guides,
+                arguments.query,
+                await load_runtime_knowledge_payload(oracle, view.id),
+            )
+            matches = rank_guides(
+                guides, query, arguments.conditions, limit=arguments.limit, context=context
+            )
+            if arguments.conditions:
+                # 確認に自由入力で答えた選択式の条件は、答えの文が選んだ選択肢に決める（#2726）。
+                resolved = await asyncio.gather(
+                    *(
+                        resolve_answered_conditions(match, arguments.conditions, settings)
+                        for match in matches
+                    )
+                )
+                matches = [item for item in resolved if isinstance(item, GuideMatch)]
+            return LookupGuidesOutput(guides=[_lookup_item(match) for match in matches])
 
     async def retrieve_evidence(arguments: RetrieveEvidenceInput) -> RetrieveEvidenceOutput:
         # planning=rag: 検索の画面・チャットと同じ流れで質問の理解・拡張・文書の検索（rerank

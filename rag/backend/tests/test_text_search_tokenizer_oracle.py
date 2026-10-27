@@ -229,3 +229,63 @@ def test_compatibility_characters_hit_when_index_text_is_normalized_on_real_orac
         connection.close()
 
     assert misses == []
+
+
+@pytest.mark.usefixtures("oracle_db")
+@pytest.mark.parametrize("overflow", ["tokens", "characters"])
+def test_overflow_preserves_explicit_conditions_in_executed_oracle_query(overflow: str) -> None:
+    """語数・文字数で省略しても、実際の CONTAINS の bind に保護条件を残す。"""
+    from rag_engine.retrieval.text_search_tokenizer import (
+        MAX_ORACLE_TEXT_QUERY_CHARS,
+        tokenize_text_search_query_with_trace,
+    )
+
+    keywords = [f"候補語{letter}" for letter in "abcdefghijklmnopqrstuvxyz"]
+    prefix = (
+        " ".join(keywords) if overflow == "tokens" else "x" * (MAX_ORACLE_TEXT_QUERY_CHARS + 100)
+    )
+    question = prefix + " ID-789 v2.3 2026/10/27 50以上"
+    settings = Settings(rag_domain_keywords=keywords)
+    tokenization = tokenize_text_search_query_with_trace(question, domain_keywords=keywords)
+    query = _oracle_text_query(question, settings=settings)
+    assert query == tokenization.oracle_text_query
+    assert query is not None
+    assert len(query) <= MAX_ORACLE_TEXT_QUERY_CHARS
+    assert {"id-789", "v2.3", "2026/10/27", "50"} <= set(tokenization.tokens)
+    assert tokenization.truncated
+    if overflow == "characters":
+        assert tokenization.character_limit_tokens
+    table = f"RAG_TMP_OVERFLOW_{uuid4().hex[:8].upper()}"
+    connection = _oracle_test_db._connect()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            f"CREATE TABLE {table} (doc_id VARCHAR2(16) PRIMARY KEY, body VARCHAR2(4000))"
+        )
+        cursor.executemany(
+            f"INSERT INTO {table} (doc_id, body) VALUES (:1, :2)",
+            [
+                (
+                    "target",
+                    _text_search_index_text(
+                        "対象 ID-789、版 v2.3、日付 2026/10/27、数値条件 50 の合成資料。"
+                    ),
+                ),
+                (
+                    "other",
+                    _text_search_index_text(
+                        "対象 ID-999、版 v9.9、日付 2025/01/01、数値条件 5 の合成資料。"
+                    ),
+                ),
+            ],
+        )
+        connection.commit()
+        cursor.execute(
+            f"CREATE INDEX {table}_TX ON {table} (body) INDEXTYPE IS CTXSYS.CONTEXT "
+            + oracle_text_index_parameters_sql()
+        )
+        cursor.execute(f"SELECT doc_id FROM {table} WHERE CONTAINS(body, :q, 1) > 0", {"q": query})
+        assert "target" in {str(row[0]) for row in cursor.fetchall()}
+    finally:
+        cursor.execute(f"DROP TABLE {table} PURGE")
+        connection.close()

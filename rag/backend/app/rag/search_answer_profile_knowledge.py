@@ -9,8 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import tempfile
-import unicodedata
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -573,27 +572,28 @@ async def save_rule_clarification(
     return updated
 
 
-def _already_answered(question: str, clarification: RuleClarification) -> bool:
-    """質問に選択肢の表示名か検索に足す語が既に入っていれば、聞き返さない。"""
-    normalized = unicodedata.normalize("NFKC", question).casefold()
-    return any(
-        unicodedata.normalize("NFKC", word).casefold() in normalized
-        for option in clarification.options
-        for word in (option.label, *option.search_terms)
-        if word.strip()
+def _already_answered(clarification: RuleClarification, answer: ClarificationAnswer | None) -> bool:
+    """語の出現ではなく、現在の選択肢に対する明示的な選択だけを確定する。"""
+    if answer is None or not answer.option_ids or answer.other_text.strip():
+        return False
+    selected = set(answer.option_ids)
+    return (
+        len(selected) == len(answer.option_ids)
+        and selected <= {option.id for option in clarification.options}
+        and (clarification.multiple or len(selected) == 1)
     )
 
 
 def suggest_clarification(
-    payload: Mapping[str, object], question: str
+    payload: Mapping[str, object], question: str, *, answers: Sequence[ClarificationAnswer] = ()
 ) -> tuple[Mapping[str, object], RuleClarification] | None:
     """質問に一致したルールのうち、確認を持つ最初の 1 件(質問で既に答えているものは除く)。"""
-    found = unanswered_rule_clarifications(payload, question)
+    found = unanswered_rule_clarifications(payload, question, answers=answers)
     return found[0] if found else None
 
 
 def unanswered_rule_clarifications(
-    payload: Mapping[str, object], question: str
+    payload: Mapping[str, object], question: str, *, answers: Sequence[ClarificationAnswer] = ()
 ) -> list[tuple[Mapping[str, object], RuleClarification]]:
     """一致したルールの未回答の確認事項。確認の提示と前提の明示で同じ判定を使う。"""
     found: list[tuple[Mapping[str, object], RuleClarification]] = []
@@ -603,7 +603,9 @@ def unanswered_rule_clarifications(
         if rule is None:
             continue
         clarification = rule_clarification(rule)
-        if clarification is not None and not _already_answered(question, clarification):
+        selections = [answer for answer in answers if answer.rule_id == matched.rule_id]
+        answer = selections[0] if len(selections) == 1 else None
+        if clarification is not None and not _already_answered(clarification, answer):
             found.append((rule, clarification))
     return found
 
@@ -749,6 +751,12 @@ def resolve_clarification(
         context="\n".join(lines),
         search_terms=tuple(term for option in options for term in option.search_terms),
         label="、".join(labels),
+        confirmed_premises=(
+            (
+                clarification.question,
+                "、".join([*(option.label for option in options), *([other] if other else [])]),
+            ),
+        ),
     )
     return scope, page_ranges
 

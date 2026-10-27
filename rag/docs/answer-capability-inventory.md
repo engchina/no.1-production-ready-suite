@@ -143,6 +143,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 | kind | 処理 | 記録する箇所 |
 |---|---|---|
+| `query_overflow` | 全文検索の超限補完に使う語の抽出（失敗は未検索として保存し、既存根拠を維持する） | `rag/packages/rag_engine/rag_engine/retrieval/query_overflow.py::search_overflow_requests` |
 | `prompt_overrides` | 編集した回答のプロンプトの読み込み | `rag/backend/app/rag/answer_engine.py::AnswerEngine._run` |
 | `business_names` | 業務の名前の読み込み | `rag/backend/app/rag/answer_engine.py::AnswerEngine._business_names` |
 | `entity_expansion` | 実体の拡張 | `rag/backend/app/rag/answer_engine.py::AnswerEngine._entity_expansion` |

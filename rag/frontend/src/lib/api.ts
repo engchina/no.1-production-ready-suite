@@ -2685,6 +2685,12 @@ export interface LanguagePackData {
   outdated_documents?: number | null;
 }
 
+export interface QuestionUnderstandingPreviewData {
+  original_text: string;
+  saved: { inquiry: Record<string, unknown>; task_contract: Record<string, unknown>; hash: string };
+  draft: { inquiry: Record<string, unknown>; task_contract: Record<string, unknown>; hash: string };
+}
+
 export interface LanguagePackPreviewResult {
   references: { label: string; kind: string; key: string; document_title: string | null }[];
   title_keys: string[];
@@ -3827,6 +3833,16 @@ export const api = {
         method: "POST",
       },
     ),
+  getQuestionUnderstanding: (id: string) =>
+    request<LanguagePackData>(`/api/search-answer-profiles/${id}/question-understanding`),
+  saveQuestionUnderstanding: (id: string, overrides: LanguagePackSections) =>
+    request<LanguagePackData>(`/api/search-answer-profiles/${id}/question-understanding`, {
+      method: "PUT", body: JSON.stringify({ overrides }),
+    }),
+  previewQuestionUnderstanding: (id: string, text: string, overrides: LanguagePackSections) =>
+    request<QuestionUnderstandingPreviewData>(`/api/search-answer-profiles/${id}/question-understanding/preview`, {
+      method: "POST", body: JSON.stringify({ text, overrides }),
+    }),
   getDomainKeywords: (id: string) =>
     request<DomainKeywordsData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/domain-keywords`,

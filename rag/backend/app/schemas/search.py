@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from pr_backend_core.api.validation import validation_error_messages
 from pydantic import (
@@ -224,6 +224,10 @@ class SearchRequest(BaseModel):
     """
 
     model_config = ConfigDict(extra="ignore")
+
+    # サーバーで原文照合した選択の前提。外部入力・API出力には含めない。
+    _rule_selection_scope: dict[str, Any] = PrivateAttr(default_factory=dict)
+    _rule_selection_state: dict[str, Any] = PrivateAttr(default_factory=dict)
 
     query: str = Field(..., min_length=1)
     # 利用者の元の質問(#2261)。呼び出し元(業務 Agent)が検索文 query を短く言い換えたときに渡す。

@@ -290,6 +290,6 @@ def test_rule_purpose_controls_confirmation_and_keeps_known_conditions(
         ]
     }
     assert bool(unanswered_rule_clarifications(data, "設定の手順")) is expected
-    assert unanswered_rule_clarifications(data, "対象 A の設定の手順") == []
+    assert bool(unanswered_rule_clarifications(data, "対象 A の設定の手順")) is expected
     data["rules"][0]["status"] = "deprecated"
     assert unanswered_rule_clarifications(data, "設定の手順") == []
