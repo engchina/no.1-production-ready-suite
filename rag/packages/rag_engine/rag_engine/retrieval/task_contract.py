@@ -175,9 +175,8 @@ def generic_target_words() -> frozenset[str]:
 
 
 def _requester_terms_pattern() -> str:
-    from rag_engine.resources.runtime import current_profile
 
-    terms = [*_cues().words["requester_terms"], *current_profile().requester_terms]
+    terms = _cues().words["requester_terms"]
     return "|".join(re.escape(term) for term in dict.fromkeys(term for term in terms if term))
 
 

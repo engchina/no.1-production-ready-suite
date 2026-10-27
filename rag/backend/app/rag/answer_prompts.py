@@ -11,7 +11,7 @@ from __future__ import annotations
 import tempfile
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 
@@ -297,20 +297,20 @@ def readonly_prompt_stages(
 def prompt_overrides(overrides: Mapping[str, str]) -> Iterator[None]:
     """rag_engine の read_prompt が overrides を返すように、同期処理の間だけ runtime を有効にする。
 
-    profile は今の current_profile()(runtime なしの既定)に上書きだけを足し、ほかの挙動を変えない。
+    現在の指示の上書きを引き継ぎ、このスコープで指定した内容を優先する。
     保存先(paths.prompts)を持たないので、read_prompt はファイルを読まず上書きか既定値を返す。
     """
     if not overrides:
         yield
         return
-    from rag_engine.resources.runtime import ResourcePaths, Runtime, current_profile
+    from rag_engine.resources.runtime import ResourcePaths, Runtime, current_runtime
 
-    profile = current_profile()
-    merged = {**dict(profile.prompt_overrides), **dict(overrides)}
+    current = current_runtime()
+    merged = {**dict(current.prompt_overrides if current else ()), **dict(overrides)}
     with tempfile.TemporaryDirectory(prefix="rag-engine-prompts-") as work:
         runtime = Runtime(
             ResourcePaths(workspace=Path(work), output=Path(work)),
-            replace(profile, prompt_overrides=tuple(merged.items())),
+            prompt_overrides=tuple(merged.items()),
         )
         with runtime.activate():
             yield

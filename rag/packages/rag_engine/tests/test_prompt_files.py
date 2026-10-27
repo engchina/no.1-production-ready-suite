@@ -112,20 +112,19 @@ class PromptFileTests(unittest.TestCase):
         settings = get_settings(environ={}, dotenv_path=None)
         self.assertIsNone(settings.workspace_dir)
         self.assertIsNone(settings.prompt_dir)
-        with create_oracle_application(Path.cwd(), settings=settings, profile=settings.profile) as application:
+        with create_oracle_application(Path.cwd(), settings=settings) as application:
             ui_path = prompt_files.get_prompt_file(VLM_ANSWER_PROMPT_KEY).path
             with application.runtime.activate():
                 self.assertEqual(prompt_files.get_prompt_file(VLM_ANSWER_PROMPT_KEY).path, ui_path.resolve())
 
     def test_runtime_without_prompt_directory_refuses_to_save_what_it_never_reads(self):
-        from rag_engine.profiles import load_profile
         from rag_engine.resources.runtime import ResourcePaths, Runtime
 
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "prompts").mkdir()
             (root / "prompts" / "vlm_answer.txt").write_text("読まれない {{question}} {{answer_context}}", encoding="utf-8")
-            with Runtime(ResourcePaths(root, root / "output"), load_profile("legacy")).activate():
+            with Runtime(ResourcePaths(root, root / "output")).activate():
                 self.assertEqual(read_prompt(VLM_ANSWER_PROMPT_KEY), DEFAULT_VLM_ANSWER_PROMPT)
                 with self.assertRaisesRegex(ValueError, "prompt_dir"):
                     save_prompt(VLM_ANSWER_PROMPT_KEY, "{{question}} {{answer_context}}")

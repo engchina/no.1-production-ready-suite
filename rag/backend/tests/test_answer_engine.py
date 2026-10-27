@@ -665,24 +665,11 @@ def test_build_engine_settings_configures_rerank(tmp_path: Any) -> None:
     assert _rerank_configured(engine_settings) is True
 
 
-def test_answer_engine_profile_default_matches_answer_flow(tmp_path: Any) -> None:
-    """RAG_ANSWER_PROFILE の既定は、回答フローが実際に使う profile(legacy)と一致する(#300)。
-
-    回答フローは rag_engine の current_profile()(runtime なしの既定 = legacy)を使い、
-    rag_poc と同じ日本語問い合わせ規則で動く。以前は既定が generic で、設定と挙動が食い違っていた。
-    """
-    from rag_engine.resources.runtime import current_profile
-
+def test_answer_engine_has_no_domain_profile_setting(tmp_path: Any) -> None:
     from app.rag.answer_engine import build_engine_settings
 
-    settings = Settings()
-    engine_settings = build_engine_settings(settings, output_dir=tmp_path)
-
-    assert Settings.model_fields["rag_answer_profile"].default == "legacy"
-    assert settings.rag_answer_profile == "legacy"
-    assert engine_settings.profile == "legacy"
-    assert current_profile().name == engine_settings.profile
-    assert current_profile().japanese_inquiry_rules is True
+    assert "rag_answer_profile" not in Settings.model_fields
+    assert not hasattr(build_engine_settings(Settings(), output_dir=tmp_path), "profile")
 
 
 async def test_rerank_enabled_calls_backend_rerank(
@@ -1419,13 +1406,8 @@ async def test_answer_engine_rewrite_is_rechecked_by_guardrail(
 
 
 @pytest.fixture
-def business_profile(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
-    """業務名の規則(business_patterns)を持つ domain profile に差し替える。
-
-    質問の業務名は検索範囲の大分類の語の一覧から照合し、この規則は使わない(#553)ことを確かめる。
-    """
-    from rag_engine.profiles import load_profile
-
+def retired_profile_file(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """廃止した外部ファイルが残っていても、検索範囲の分類だけで照合する。"""
     path = tmp_path / "domain_profile.json"
     path.write_text(
         json.dumps(
@@ -1435,9 +1417,7 @@ def business_profile(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
         encoding="utf-8",
     )
     monkeypatch.setenv("RAG_ENGINE_DOMAIN_PROFILE_FILE", str(path))
-    load_profile.cache_clear()
     yield path
-    load_profile.cache_clear()
 
 
 def _doc_chunk(
@@ -1589,7 +1569,7 @@ async def test_answer_engine_business_filter_keeps_candidates_without_match(
 
 
 async def test_answer_engine_business_names_do_not_come_from_domain_profile(
-    monkeypatch: pytest.MonkeyPatch, business_profile: Any
+    monkeypatch: pytest.MonkeyPatch, retired_profile_file: Any
 ) -> None:
     """domain profile の business_patterns は質問の業務名に使わない(#553)。
 

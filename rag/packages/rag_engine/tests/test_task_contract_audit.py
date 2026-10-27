@@ -196,19 +196,8 @@ def test_extra_coverage_item_is_retried_with_explicit_fixed_ids_and_feedback():
     assert len(calls) == 2 and len(result["standard_answer_scope"]["requirements"]) == 1
 
 
-def test_requester_terms_come_from_generic_defaults_and_the_domain_profile():
-    """問い合わせ元の語は一般語の既定と profile の requester_terms。業種固有の語はコードに置かない (#849)。"""
-    from types import SimpleNamespace
-    from unittest.mock import patch
-
+def test_requester_terms_use_generic_language_resources():
     from rag_engine.retrieval import task_contract as module
 
-    cached = getattr(module, "_task_contract", None)  # 結果は lru_cache されるため profile を変えたら消す
-    assert module.task_contract("顧客から取引先一覧のCSV提供の依頼があった")["requester_mentions"]
-    assert not module.task_contract("本部から取引先一覧のCSV提供の依頼があった")["requester_mentions"]
-    with patch("rag_engine.resources.runtime.current_profile", return_value=SimpleNamespace(requester_terms=("本部",))):
-        if cached is not None:
-            cached.cache_clear()
-        assert module.task_contract("本部から売上一覧のCSV提供の依頼があった")["requester_mentions"]
-    if cached is not None:
-        cached.cache_clear()
+    assert module.task_contract("顧客から一覧のCSV提供の依頼があった")["requester_mentions"]
+    assert not module.task_contract("組織Aから一覧のCSV提供の依頼があった")["requester_mentions"]

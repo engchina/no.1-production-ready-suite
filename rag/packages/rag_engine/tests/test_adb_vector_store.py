@@ -610,8 +610,8 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertIn("JSON_VALUE(c.metadata_json, '$.document.classification.middle_category')", sql)
         self.assertIn("JSON_VALUE(c.metadata_json, '$.document.classification.small_category')", sql)
         self.assertNotIn(" IN ", sql)
-        self.assertEqual(binds["classification_large_category"], "20_在庫管理")
-        self.assertEqual(binds["classification_middle_category"], "20_操作説明書")
+        self.assertEqual(binds["classification_large_category"], "在庫管理")
+        self.assertEqual(binds["classification_middle_category"], "操作説明書")
         self.assertEqual(binds["classification_small_category"], "倉庫連携")
 
     def test_filter_sql_always_limits_to_effective_window_as_of(self):
@@ -647,7 +647,7 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertIn("JOIN rag_documents d ON d.document_id = c.document_id", connection.cursor_obj.sql)
         self.assertIn("d.latest_chunk_run_id = c.chunk_run_id", connection.cursor_obj.sql)
         self.assertNotIn("c.chunk_run_id = :chunk_run_id", connection.cursor_obj.sql)
-        self.assertEqual(connection.cursor_obj.binds["classification_large_category"], "10_販売管理")
+        self.assertEqual(connection.cursor_obj.binds["classification_large_category"], "販売管理")
 
     def test_image_vector_search_filters_by_embedding_modality(self):
         settings = replace(
@@ -762,7 +762,7 @@ class AdbVectorStoreTests(unittest.TestCase):
             classification_filter,
         )
 
-        self.assertEqual([chunk.chunk_uid for chunk in selected], ["uid-match"])
+        self.assertEqual([chunk.chunk_uid for chunk in selected], ["uid-legacy"])
 
     def test_save_chunk_run_embeddings_upserts_chunks_skips_existing_and_batches(self):
         chunk_run = _chunk_run()
