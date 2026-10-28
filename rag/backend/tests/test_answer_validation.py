@@ -1152,9 +1152,16 @@ async def test_ledger_rows_with_written_locations_are_supported(
     monkeypatch.setattr(answer_eval, "parse_text_response", _location_aware_model)
     refs = [EvidenceRef(document_id, chunk_id) for document_id, chunk_id in chunks]
     assert len(refs) == 30
+    # 場所の伝達だけを検査するため、対象の3行を取り出し、各説明に実際の出典を付ける。
+    # 無出典の結論や、別の規程の説明をスタブの supported で通すことはしない。
+    answer = "\n\n".join(
+        line.strip() + "\n根拠：system-ledger.xlsx"
+        for line in _PMS_SEVERITY_ANSWER.splitlines()
+        if line.startswith("  - 行")
+    )
     result = await validate_answer(
         "略称が PMS のシステムは 2 つあります。重要度が高いのはどちらですか？",
-        _PMS_SEVERITY_ANSWER,
+        answer,
         refs,
         get_settings(),
         oracle=cast(Any, oracle),
@@ -1204,8 +1211,8 @@ def test_evidence_location_matches_the_mcp_locator() -> None:
 # #1527: rag_search の回答の監査を通った説明と本文・根拠が同じ段落は、その判定を使い
 # モデルに渡さない。
 _RAG_ANSWER = (
-    "有効期限は最長 30 日です。\n\n資料により確認できた事項\n\n・有効期限は最長 30 日です。\n"
-    "根拠：manual.pdf p.1"
+    "有効期限は最長 30 日です。\n根拠：manual.pdf p.1\n\n"
+    "資料により確認できた事項\n\n・有効期限は最長 30 日です。\n根拠：manual.pdf p.1"
 )
 
 
@@ -1252,7 +1259,7 @@ class _RecordOracle(_Oracle):
                     "chunk_id": "c1",
                     "document_id": "d1",
                     "text": stored_text,
-                    "metadata": {"answer_citation_lines": [1]},
+                    "metadata": {"answer_citation_lines": [1, 2]},
                 }
             ],
             "diagnostics_json": {

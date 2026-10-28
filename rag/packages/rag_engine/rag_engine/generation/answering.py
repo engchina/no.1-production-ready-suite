@@ -191,6 +191,7 @@ from rag_engine.generation.query_prompts import (
     _retrieval_queries,
     _text_search_query_source,
 )
+from rag_engine.generation.request_recovery import request_recovery_plan
 from rag_engine.generation.step_details import (
     add_evidence_lines,
     aspect_labels,
@@ -1105,6 +1106,8 @@ def build_crag_answer_context(
     runtime_knowledge: RuntimeKnowledgeContext | None = None,
     vector_only_queries: Sequence[str] = (),
     search_notice: str = "",
+    extra_budget: ExtraRetrievalBudget | None = None,
+    coverage_usage: CoverageUsage | None = None,
 ) -> tuple[AnswerContext, tuple[str, ...], tuple[CragRetrievalAttempt, ...]]:
     """最大3回の評価で検索改写・局所拡張を選び、回答用根拠と回復traceを返す。
 
@@ -1125,37 +1128,85 @@ def build_crag_answer_context(
 
     for attempt_number in range(1, CRAG_MAX_RETRIEVAL_ATTEMPTS + 1):
         retrieval_queries = _dedupe_queries((*base_queries, *alternative_operation_queries(question, best_context.records), *rewrites))
+        executed_queries: tuple[str, ...] = ()
         active_query = rewrites[-1] if rewrites else question
         if pending_context is not None:
             context, pending_context = pending_context, None
         else:
-            with _execution_step(f"文書検索（{attempt_number}回目）", _SEARCH_PURPOSE if attempt_number == 1 else "") as step:
-                known = {_dedupe_query_key(query) for query in base_queries}
-                added = [query for query in retrieval_queries if _dedupe_query_key(query) not in known]
-                step.add(
-                    f"検索文: 確定済みの {len(retrieval_queries) - len(added)} 本" + (f" + 今回追加した {len(added)} 本" if added else "")
+            search_queries = retrieval_queries
+            if attempt_number > 1:
+                searched = (
+                    coverage_usage.searched_queries
+                    if coverage_usage is not None
+                    else [q for previous in attempts for q in previous.retrieval_queries]
                 )
-                step.add(*(f"  {number}. {_display_query(query)}" for number, query in enumerate(added, 1)))
+                done = {_dedupe_query_key(query) for query in searched}
+                search_queries = tuple(query for query in retrieval_queries if _dedupe_query_key(query) not in done)
+                from rag_engine.resources.deadline import remaining_seconds
+
+                left = remaining_seconds()
+                stop = (
+                    "deadline"
+                    if left is not None and left <= 0
+                    else "extra_retrieval_budget"
+                    if extra_budget is not None and not extra_budget.remaining
+                    else "same_query"
+                    if not search_queries
+                    else ""
+                )
+                if stop:
+                    attempts[-1] = replace(attempts[-1], stop_reason=stop)
+                    break
+                if extra_budget is not None:
+                    extra_budget.take("crag")
+            if coverage_usage is not None:
+                coverage_usage.searched_queries.extend(search_queries)
+            executed_queries = tuple(search_queries)
+            search_started = monotonic()
+            try:
+                with _execution_step(f"文書検索（{attempt_number}回目）", _SEARCH_PURPOSE if attempt_number == 1 else "") as step:
+                    known = {_dedupe_query_key(query) for query in base_queries}
+                    added = [query for query in search_queries if _dedupe_query_key(query) not in known]
+                    step.add(
+                        f"検索文: 確定済みの {len(search_queries) - len(added)} 本" + (f" + 今回追加した {len(added)} 本" if added else "")
+                    )
+                    step.add(*(f"  {number}. {_display_query(query)}" for number, query in enumerate(added, 1)))
+                    if attempt_number == 1:
+                        _record_search_conditions(step, classification_filter, search_notice)
+                    context = build_adb_hybrid_answer_context(
+                        question,
+                        run_id,
+                        preferred_engines,
+                        settings,
+                        top_k=top_k,
+                        neighbor_child_count=neighbor_child_count,
+                        max_records=max_records,
+                        max_chars=max_chars,
+                        retrieval_queries=search_queries,
+                        rerank_enabled=rerank_enabled,
+                        inquiry_conditions=inquiry_conditions,
+                        retrieval_scope=retrieval_scope,
+                        classification_filter=classification_filter,
+                        runtime_knowledge=runtime_knowledge,
+                        vector_only_queries=vector_only_queries,
+                    )
+                    _record_search_result(step, context)
+            except Exception as exc:
+                from rag_engine.resources.deadline import check_deadline
+
+                check_deadline()
                 if attempt_number == 1:
-                    _record_search_conditions(step, classification_filter, search_notice)
-                context = build_adb_hybrid_answer_context(
-                    question,
-                    run_id,
-                    preferred_engines,
-                    settings,
-                    top_k=top_k,
-                    neighbor_child_count=neighbor_child_count,
-                    max_records=max_records,
-                    max_chars=max_chars,
-                    retrieval_queries=retrieval_queries,
-                    rerank_enabled=rerank_enabled,
-                    inquiry_conditions=inquiry_conditions,
-                    retrieval_scope=retrieval_scope,
-                    classification_filter=classification_filter,
-                    runtime_knowledge=runtime_knowledge,
-                    vector_only_queries=vector_only_queries,
+                    raise
+                report_degraded("crag_retrieval", exc)
+                attempts[-1] = replace(
+                    attempts[-1],
+                    stop_reason="retrieval_error",
+                    recovery_trace={**attempts[-1].recovery_trace, "retrieval_error": type(exc).__name__},
                 )
-                _record_search_result(step, context)
+                break
+            finally:
+                if attempt_number > 1 and coverage_usage is not None:
+                    coverage_usage.elapsed_seconds += max(0.0, monotonic() - search_started)
         new_evidence_count = _new_evidence_count(context.records, seen_evidence)
         if attempt_number > 1 and best_context.records and not new_evidence_count:
             # rewrite が同じ本文を返した場合も、未閲覧の同一機能文脈を試してから停止する。
@@ -1170,6 +1221,7 @@ def build_crag_answer_context(
                         attempt=attempt_number,
                         query=active_query,
                         retrieval_queries=tuple(retrieval_queries),
+                        executed_queries=executed_queries,
                         sufficient=False,
                         stop_reason="no_new_evidence",
                         reason="補正検索と局所拡張で新しい本文が得られないため、取得済みの根拠で回答する。",
@@ -1178,6 +1230,8 @@ def build_crag_answer_context(
                 break
             context = recovered
             new_evidence_count = _new_evidence_count(context.records, seen_evidence)
+        if attempt_number > 1 and coverage_usage is not None:
+            coverage_usage.chunks += new_evidence_count
         seen_evidence.extend(context.records)
         if context.records and context.text.strip():
             # 評価器は前の回の根拠を起点に文脈の追加を選ぶことがある。pool は置き換えず全回の和集合にする。
@@ -1210,6 +1264,7 @@ def build_crag_answer_context(
                     attempt=attempt_number,
                     query=active_query.strip(),
                     retrieval_queries=_dedupe_queries(retrieval_queries),
+                    executed_queries=executed_queries,
                     sufficient=True,
                     reason="規則の信号が強いため LLM の評価を省略: " + " / ".join(skip["lines"]),
                     new_evidence_count=new_evidence_count,
@@ -1248,6 +1303,7 @@ def build_crag_answer_context(
                     attempt=attempt_number,
                     query=active_query.strip(),
                     retrieval_queries=_dedupe_queries(retrieval_queries),
+                    executed_queries=executed_queries,
                     sufficient=False,
                     reason="CRAG retrieval evaluator failed; using the best available retrieval context.",
                     grade_error=type(exc).__name__,  # 例外の型の名前だけ（本文は残さない。#3259）
@@ -1272,7 +1328,12 @@ def build_crag_answer_context(
                 )
             if attempt_number >= CRAG_MAX_RETRIEVAL_ATTEMPTS and attempt.rewritten_query:
                 attempt = replace(attempt, rewritten_query="")
-            attempt = replace(attempt, new_evidence_count=new_evidence_count, document_selection=dict(context.document_selection))
+            attempt = replace(
+                attempt,
+                new_evidence_count=new_evidence_count,
+                document_selection=dict(context.document_selection),
+                executed_queries=executed_queries,
+            )
             attempts.append(attempt)
 
             status = "十分" if attempt.sufficient else "不足"
@@ -2329,15 +2390,24 @@ def synthesize_grounded_answer(
         )
         retrieval_remedy = None
         # 生成の gap は監査の要求判定と独立して補查する。監査が要求を返さない場合も失わない。
-        retrieval_by_id = {
-            str(entry["request_id"]): {key: value for key, value in entry.items() if key in {"request_id", "status"}}
-            for entry in best[0].unanswered
-            if entry.get("reviewed")
-        }
-        for item in best[0].draft.items:
-            if item.kind == "gap" and item.request_id:
-                retrieval_by_id[item.request_id] = {"request_id": item.request_id, "status": "missing"}
-        retrieval_requests = list(retrieval_by_id.values())
+        recovery_plan = request_recovery_plan(
+            best[0].unanswered if audit_mode != grounded.AUDIT_MODE_NONE and best[0].review_execution == "completed" else (),
+            [item.request_id for item in best[0].draft.items if item.kind == "gap" and item.request_id],
+            {str(span["evidence_id"]) for span in best[2]},
+        )
+        rounds[-1]["request_recovery"] = {"phase": "after_generation", "decisions": recovery_plan}
+        correction_ids = {row["request_id"] for row in recovery_plan if row["action"] == "correction"}
+        material_missing_ids = {row["request_id"] for row in recovery_plan if row["action"] == "retrieval"}
+        remedy_ids = correction_ids | (material_missing_ids if audit_mode == grounded.AUDIT_MODE_DETAILED else set())
+        if feedback.get("unanswered_requests"):
+            feedback["unanswered_requests"] = [row for row in feedback["unanswered_requests"] if row["request_id"] in remedy_ids]
+            if not feedback["unanswered_requests"]:
+                feedback.pop("unanswered_requests")
+            if set(feedback) == {"supported_items"}:
+                feedback = {}
+        retrieval_requests = [
+            {"request_id": row["request_id"], "status": row["status"]} for row in recovery_plan if row["action"] == "retrieval"
+        ]
         if recover_requests is not None and retrieval_requests and not retrieval_attempted and number < max_rounds - 1:
             retrieval_attempted = True
             if budget.allows_round(number + 1):
@@ -2358,6 +2428,39 @@ def synthesize_grounded_answer(
                         retrieval_step.result("新しい根拠を追加できなかったため、取得済みの資料で回答を確定します")
             else:
                 rounds[-1]["request_retrieval"] = {"applied": False, "skipped": "deadline"}
+        for decision in recovery_plan:
+            if decision["action"] == "retrieval":
+                retrieval_result = rounds[-1].get("request_retrieval", {})
+                details = retrieval_result.get("re_retrieval", {})
+                skipped = retrieval_result.get("skipped") or details.get("skipped")
+                failed = retrieval_result.get("error") or any(query.get("error") for query in details.get("queries", ()))
+                decision["execution"] = (
+                    "partial"
+                    if failed and retrieval_remedy
+                    else "error"
+                    if failed
+                    else "not_run"
+                    if skipped or not retrieval_result
+                    else "completed"
+                )
+                decision["stop_reason"] = (
+                    "disabled"
+                    if recover_requests is None
+                    else "correction_limit"
+                    if number >= max_rounds - 1
+                    else "already_attempted"
+                    if "request_retrieval" not in rounds[-1] and retrieval_attempted
+                    else "retrieval_error"
+                    if failed
+                    else skipped or ("no_new_evidence" if not retrieval_remedy else "")
+                )
+                decision["added_evidence_count"] = len(retrieval_remedy["added_chunk_ids"]) if retrieval_remedy else 0
+            elif decision["action"] == "correction":
+                decision["execution"] = "planned" if audit_mode == grounded.AUDIT_MODE_DETAILED and feedback else "not_run"
+                decision["stop_reason"] = "" if decision["execution"] == "planned" else "audit_mode"
+            else:
+                decision["execution"] = "not_run"
+                decision["stop_reason"] = "unverified"
         budget.note(current, feedback, accepted=accepted)
         if not feedback or number == max_rounds - 1:
             if feedback and max_rounds < grounded.MAX_ROUNDS:
@@ -2369,6 +2472,8 @@ def synthesize_grounded_answer(
                 }
             break
         needs_content = any(feedback.get(key) for key in ("unanswered_requests", "unused_evidence_ids", "goal_alignment"))
+        if correction_ids and retrieval_remedy is None:
+            needs_content = False
         remedy: dict[str, Any] | None = retrieval_remedy
         if remedy is None and needs_content and not expanded:
             expanded = True
@@ -2396,7 +2501,18 @@ def synthesize_grounded_answer(
         # 同じなら、次の組も良くならない。同じ根拠のまま作り直す（指摘の反映）のは、残った指摘が根拠の不足
         # （草稿が「資料に記載が無い」と答えた要求）だけのときはしない。
         stop_reason = grounded.no_improvement_reason(number, accepted=accepted, feedback=feedback, previous=previous_feedback)
-        if not stop_reason and remedy["remedy"] == "correction" and grounded.evidence_shortage_only(feedback, best[0]):
+        if (
+            not stop_reason
+            and remedy["remedy"] == "correction"
+            and not correction_ids
+            and (
+                grounded.evidence_shortage_only(feedback, best[0])
+                or (
+                    material_missing_ids
+                    and not any(feedback.get(key) for key in (*grounded.STANDARD_CORRECTION_KEYS, "document_value_issues"))
+                )
+            )
+        ):
             stop_reason = grounded.NO_IMPROVEMENT_EVIDENCE_ONLY
         if stop_reason:
             _stop_without_improvement(budget, rounds, stop_reason, number, feedback)
@@ -4728,6 +4844,8 @@ def answer_question_result(
         flow_step.field("設定", answer_flow_label(selected_answer_flow))
         crag_attempts: tuple[CragRetrievalAttempt, ...] = ()
         crag_rewrites: tuple[str, ...] = ()
+        extra_budget = ExtraRetrievalBudget.from_settings(settings)
+        coverage_usage = CoverageUsage()
         try:
             if selected_answer_flow == CRAG_ANSWER_FLOW:
                 context, crag_rewrites, crag_attempts = build_crag_answer_context(
@@ -4746,6 +4864,8 @@ def answer_question_result(
                     runtime_knowledge=runtime_knowledge,
                     vector_only_queries=expansion.vector_only_queries,
                     search_notice=legacy_notice,
+                    extra_budget=extra_budget,
+                    coverage_usage=coverage_usage,
                 )
                 if crag_attempts:
                     with _execution_step("検索語の再確定（書き換え後）") as keyword_step:
@@ -4836,8 +4956,6 @@ def answer_question_result(
             )
 
         # 超限した検索文は原要求ごとに補い、以後の補查と同じ枠・期限・既検索文を使う。
-        extra_budget = ExtraRetrievalBudget.from_settings(settings)
-        coverage_usage = CoverageUsage(searched_queries=list(crag_rewrites))
         overflow_settings = replace(settings, document_selection_enabled=False, screen_linking_enabled=False, article_catalog_enabled=False)
         overflow_config = normalize_text_search_tokenizer_config(_question_text_search_tokenizer_config(settings))
         overflow_keywords = (
@@ -5120,7 +5238,7 @@ def answer_question_result(
                 extra_budget=extra_budget,
                 usage=coverage_usage,
                 unanswered_requests=unanswered,
-                searched_queries=crag_attempts[-1].retrieval_queries if crag_attempts else retrieval_queries,
+                searched_queries=coverage_usage.searched_queries if crag_attempts else retrieval_queries,
             )
             request_coverage.setdefault("after_generation", []).append(trace)
             if trace.get("re_retrieval", {}).get("applied"):
@@ -5151,7 +5269,7 @@ def answer_question_result(
         response, context = grounded_answer.response, grounded_answer.context
         response = replace(
             response,
-            generation_trace={**(response.generation_trace or {}), **evidence_trace},
+            generation_trace={**(response.generation_trace or {}), **evidence_trace, "extra_retrieval_budget": extra_budget.to_payload()},
         )
         image_evidence, image_prompt_mode = grounded_answer.image_evidence, grounded_answer.image_prompt_mode
         if legacy_notice:

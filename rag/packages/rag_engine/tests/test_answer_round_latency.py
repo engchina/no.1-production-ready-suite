@@ -101,7 +101,18 @@ class DowngradedOnlySynthesizeTest(unittest.TestCase):
         model = FakeModel(
             [first, second, second],
             [
-                audit((0, "supported", "matched", ""), requests=[("Q1", "partial")]),
+                audit(
+                    (0, "supported", "matched", ""),
+                    requests=[
+                        {
+                            "request_id": "Q1",
+                            "status": "partial",
+                            "reason": "抽出条件の原文が未取得",
+                            "evidence_status": "missing",
+                            "evidence_ids": [],
+                        }
+                    ],
+                ),
                 audit(
                     (0, "supported", "matched", ""),
                     (1, "supported", "matched", ""),

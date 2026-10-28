@@ -162,6 +162,8 @@ def test_recovery_does_not_repeat_generation_without_new_evidence(monkeypatch, k
     if kind == "failure":
         trace = result.response.generation_trace["rounds"][0]["request_retrieval"]
         assert trace == {"error": "RuntimeError", "applied": False}
+        decision = result.response.generation_trace["rounds"][0]["request_recovery"]["decisions"][0]
+        assert decision["execution"] == "error" and decision["stop_reason"] == "retrieval_error"
 
 
 def test_missing_audit_does_not_trigger_search_when_draft_has_no_gap(monkeypatch):
@@ -229,7 +231,7 @@ def test_same_focused_query_is_not_repeated_across_phases(monkeypatch):
     assert trace["re_retrieval"]["skipped"] == "same_query"
 
 
-def test_audit_partial_request_triggers_retrieval_even_without_gap(monkeypatch):
+def test_audit_confirmed_material_shortage_triggers_retrieval_even_without_gap(monkeypatch):
     from test_grounded_answer import audit
 
     old = context(parent("old", OLD_TEXT))
@@ -242,6 +244,7 @@ def test_audit_partial_request_triggers_retrieval_even_without_gap(monkeypatch):
             audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")]),
         ],
     )
+    model.audits[0]["request_reviews"][0]["evidence_status"] = "missing"
     calls = []
 
     def recover(ctx, unanswered):
@@ -314,3 +317,199 @@ def test_equal_token_sets_preserve_distinct_original_request_ids(monkeypatch):
 
     targets = coverage_targets("設定を作成する方法は？設定を削除する方法は？", lambda text: ["設定"])
     assert [target.id for target in targets] == ["Q1", "Q2"]
+
+
+@pytest.mark.parametrize("audit_mode", ["none", "standard", "detailed"])
+@pytest.mark.parametrize("evidence_status", ["unknown", "available"])
+def test_available_or_unverified_material_never_triggers_another_search(monkeypatch, audit_mode, evidence_status):
+    from test_grounded_answer import audit
+
+    old = context(parent("old", OLD_TEXT))
+    eid = ids(old, QUESTION)[OLD_TEXT]
+    first = draft(item(eid, OLD_TEXT, OLD_TEXT, request_id="Q1"))
+    assessment = audit((0, "supported", "matched", ""), requests=[("Q1", "partial")])
+    assessment["request_reviews"][0].update(evidence_status=evidence_status, evidence_ids=[eid] if evidence_status == "available" else [])
+    completed = audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])
+    if audit_mode == "standard":
+        assessment.pop("unused_evidence_ids")
+        completed.pop("unused_evidence_ids")
+    model = FakeModel([first], [assessment, completed])
+    searches = []
+    unused = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = a.synthesize_grounded_answer(
+            QUESTION,
+            old,
+            settings(answer_audit_mode=audit_mode),
+            image_prompt_mode="text_only",
+            recover_requests=lambda *args: searches.append(args),
+        )
+    assert not searches
+    generation_calls = [schema for schema, _ in model.prompts if schema == "GroundedDraft"]
+    assert len(generation_calls) == (2 if audit_mode == "detailed" and evidence_status == "available" else 1)
+    assert OLD_TEXT in result.response.answer_text
+    if audit_mode == "none":
+        assert all(schema == "GroundedDraft" for schema, _ in model.prompts)
+    else:
+        decision = result.response.generation_trace["rounds"][0]["request_recovery"]["decisions"][0]
+        assert decision["action"] == ("correction" if evidence_status == "available" else "retain")
+
+
+@pytest.mark.parametrize("coverage_enabled", [False, True])
+@pytest.mark.parametrize("extra_limit", [0, 1])
+def test_recovery_setting_and_shared_budget_are_independent_switches(monkeypatch, tmp_path, coverage_enabled, extra_limit):
+    old = context(parent("old", OLD_TEXT))
+    merged = context(parent("old", OLD_TEXT), parent("new", NEW_TEXT))
+    eid = ids(merged, QUESTION)[NEW_TEXT]
+    model = FakeModel([gap(), draft(item(eid, NEW_TEXT, NEW_TEXT, request_id="Q1"))], [])
+    searches = []
+
+    def search(question, *args, **kwargs):
+        searches.append(kwargs.get("retrieval_queries"))
+        return old if len(searches) == 1 else context(parent("new", NEW_TEXT))
+
+    monkeypatch.setattr(a, "check_adb_hybrid_search_ready", lambda **kwargs: None)
+    monkeypatch.setattr(a, "build_adb_hybrid_answer_context", search)
+    monkeypatch.setattr(a, "_coverage_tokenizer", lambda _: lambda text: [term for term in ("対象A", "設定", "変更") if term in text])
+    unused = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
+    config = settings(
+        request_coverage_retrieval_enabled=coverage_enabled,
+        extra_retrieval_max_queries=extra_limit,
+        output_dir=tmp_path,
+        answer_audit_mode="none",
+        section_expansion_enabled=False,
+        domain_keywords_override=(),
+    )
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = a.answer_question_result(
+            "初回に指定された検索文",
+            "run",
+            ["docling"],
+            config,
+            query_strategy=a.SIMPLE_RETRIEVAL_LABEL,
+            answer_flow=a.STANDARD_ANSWER_FLOW,
+            retrieval_scope=a.RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
+            request_question=QUESTION,
+        )
+    recovered = coverage_enabled and extra_limit > 0
+    assert len(searches) == (2 if recovered else 1)
+    assert len(model.prompts) == (2 if recovered else 1)
+    assert result.answer
+
+
+def test_crag_consumption_is_shared_with_post_generation_retrieval(monkeypatch):
+    old = context(parent("old", OLD_TEXT))
+    calls = []
+    extra, usage = ExtraRetrievalBudget(1), CoverageUsage()
+    first = a.CragRetrievalAttempt(1, QUESTION, (QUESTION,), False, rewritten_query="対象Aの設定を保存する手順は？")
+    monkeypatch.setattr(a, "build_adb_hybrid_answer_context", lambda *args, **kwargs: calls.append(kwargs["retrieval_queries"]) or old)
+    monkeypatch.setattr(a, "_grade_crag_retrieval", lambda *args, **kwargs: first)
+    a.build_crag_answer_context(QUESTION, "run", ["docling"], settings(), extra_budget=extra, coverage_usage=usage)
+    assert len(calls) == 2
+    assert calls[0] == (QUESTION,)
+    assert calls[1] == ("対象Aの設定を保存する手順は？",)
+    assert extra.used == {"crag": 1}
+    assert usage.elapsed_seconds >= 0
+    _, trace = cover(old, settings(), usage=usage, extra=extra, unanswered=[{"request_id": "Q1", "status": "missing"}])
+    assert len(calls) == 2
+    assert trace["re_retrieval"]["skipped"] == "no_budget"
+
+
+@pytest.mark.parametrize("audit_mode", ["standard", "detailed"])
+def test_invalid_material_references_remain_unverified_without_search_or_rewrite(monkeypatch, audit_mode):
+    from test_grounded_answer import audit
+
+    old = context(parent("old", OLD_TEXT))
+    eid = ids(old, QUESTION)[OLD_TEXT]
+    assessment = audit((0, "supported", "matched", ""), requests=[("Q1", "partial")])
+    assessment["request_reviews"][0].update(evidence_status="available", evidence_ids=["fabricated"])
+    if audit_mode == "standard":
+        assessment.pop("unused_evidence_ids")
+    model = FakeModel([draft(item(eid, OLD_TEXT, OLD_TEXT, request_id="Q1"))], [assessment])
+    unused = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = a.synthesize_grounded_answer(
+            QUESTION, old, settings(answer_audit_mode=audit_mode), image_prompt_mode="text_only", recover_requests=unused
+        )
+    assert len([schema for schema, _ in model.prompts if schema == "GroundedDraft"]) == 1
+    decision = result.response.generation_trace["rounds"][0]["request_recovery"]["decisions"][0]
+    assert decision["cause"] == "unverified_evidence" and decision["action"] == "retain"
+    assert OLD_TEXT in result.response.answer_text
+
+
+def test_standard_audit_can_retrieve_confirmed_material_shortage(monkeypatch):
+    from test_grounded_answer import audit
+
+    old = context(parent("old", OLD_TEXT))
+    merged = context(parent("old", OLD_TEXT), parent("new", NEW_TEXT))
+    old_id, new_id = ids(old, QUESTION)[OLD_TEXT], ids(merged, QUESTION)[NEW_TEXT]
+    first = audit((0, "supported", "matched", ""), requests=[("Q1", "partial")])
+    first["request_reviews"][0]["evidence_status"] = "missing"
+    second = audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])
+    for assessment in (first, second):
+        assessment.pop("unused_evidence_ids")
+    model = FakeModel(
+        [draft(item(old_id, OLD_TEXT, OLD_TEXT, request_id="Q1")), draft(item(new_id, NEW_TEXT, NEW_TEXT, request_id="Q1"))],
+        [first, second],
+    )
+    calls = []
+
+    def recover(ctx, unanswered):
+        calls.append(unanswered)
+        return merged, {"applied": True}
+
+    unused = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = a.synthesize_grounded_answer(
+            QUESTION, old, settings(answer_audit_mode="standard"), image_prompt_mode="text_only", recover_requests=recover
+        )
+    assert calls == [[{"request_id": "Q1", "status": "partial"}]]
+    assert len(model.prompts) == 4
+    assert NEW_TEXT in result.response.answer_text
+
+
+@pytest.mark.parametrize("crag_enabled", [False, True])
+@pytest.mark.parametrize("coverage_enabled", [False, True])
+def test_two_stage_switch_matrix_uses_existing_generation_and_optional_grading(monkeypatch, tmp_path, crag_enabled, coverage_enabled):
+    old = context(parent("old", OLD_TEXT))
+    merged = context(parent("old", OLD_TEXT), parent("new", NEW_TEXT))
+    new_id = ids(merged, QUESTION)[NEW_TEXT]
+    model = FakeModel([gap(), draft(item(new_id, NEW_TEXT, NEW_TEXT, request_id="Q1"))], [])
+    searches, grades = [], []
+
+    def search(*args, **kwargs):
+        searches.append(kwargs.get("retrieval_queries"))
+        return old if len(searches) == 1 else context(parent("new", NEW_TEXT))
+
+    def grade(*args, **kwargs):
+        grades.append(1)
+        return a.CragRetrievalAttempt(1, QUESTION, tuple(args[3]), True)
+
+    monkeypatch.setattr(a, "check_adb_hybrid_search_ready", lambda **kwargs: None)
+    monkeypatch.setattr(a, "build_adb_hybrid_answer_context", search)
+    monkeypatch.setattr(a, "_grade_crag_retrieval", grade)
+    monkeypatch.setattr(a, "_coverage_tokenizer", lambda _: lambda text: ("設定",))
+    unused = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
+    config = settings(
+        request_coverage_retrieval_enabled=coverage_enabled,
+        extra_retrieval_max_queries=1,
+        output_dir=tmp_path,
+        answer_audit_mode="none",
+        section_expansion_enabled=False,
+        domain_keywords_override=(),
+    )
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = a.answer_question_result(
+            "初回の検索文",
+            "run",
+            ["docling"],
+            config,
+            query_strategy=a.SIMPLE_RETRIEVAL_LABEL,
+            answer_flow=a.CRAG_ANSWER_FLOW if crag_enabled else a.STANDARD_ANSWER_FLOW,
+            retrieval_scope=a.RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
+            request_question=QUESTION,
+        )
+    assert len(grades) == int(crag_enabled)
+    assert len(searches) == 1 + int(coverage_enabled)
+    assert len(model.prompts) == 1 + int(coverage_enabled)
+    assert result.answer

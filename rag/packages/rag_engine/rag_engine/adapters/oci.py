@@ -62,7 +62,9 @@ from rag_engine.resources.llm_usage import (
 )
 from rag_engine.resources.tracing import observe_call
 
-VISION_SYSTEM_PROMPT = "あなたは問い合わせRAG用の画像説明作成担当です。\n\n## 手順\n\n1. JSONだけを返してください。\n"
+VISION_SYSTEM_PROMPT = (
+    "## Step 1: 画像説明を作成する\nあなたは問い合わせRAG用の画像説明作成担当です。\n\n## Step 2: 結果を返す\nJSONだけを返してください。\n"
+)
 API_SIGNING_KEY_FIELDS = ("user", "tenancy", "fingerprint", "key_file", "region")
 
 
@@ -210,6 +212,7 @@ def _picture_output_contract() -> str:
     """実際の検証モデルから契約を生成し、プロンプト内の固定 JSON 例との乖離を防ぎます。"""
     schema = _compact_schema(PictureDescriptionOutput.model_json_schema())
     return (
+        "## Step 7: 構造化出力契約に従って返す\n"
         "実行時の構造化出力契約（出力形式は以下を優先。上記の読取・業務説明方針は維持）:\n"
         "required の全キーを返し、該当しない文字列は空文字、配列は空配列にしてください。\n"
         + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))

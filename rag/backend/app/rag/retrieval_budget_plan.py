@@ -42,7 +42,7 @@ class ComparisonPlan(TypedDict):
 
 
 def prepare_plan(
-    request: EvaluationRunRequest, *, total_caps: Sequence[int] = ()
+    request: EvaluationRunRequest, *, total_caps: Sequence[int] = (), recovery_matrix: bool = False
 ) -> ComparisonPlan:
     """ケース・範囲・モデル以外の既存入力を保ち、一度に一項目だけ変える。"""
     if request.compare_search_answer_profile_id:
@@ -103,6 +103,30 @@ def prepare_plan(
                 "environment_overlay": {"RAG_RERANK_CANDIDATE_LIMIT": str(cap)},
             }
         )
+    if recovery_matrix:
+        if total_caps:
+            raise ValueError("補救の比較と候補上限の比較は別の実験にしてください。")
+        variants = []
+        for crag, coverage in ((False, False), (True, False), (False, True), (True, True)):
+            overrides = (
+                request.rag_overrides.model_dump(exclude_none=True) if request.rag_overrides else {}
+            )
+            changed = request.model_copy(
+                update={
+                    "rag_overrides": EvaluationRagOverrides(
+                        **{**overrides, "answer_flow": "crag" if crag else "standard_rag"}
+                    )
+                }
+            )
+            variants.append(
+                {
+                    "id": f"recovery-crag-{int(crag)}-coverage-{int(coverage)}",
+                    "request": changed.model_dump(mode="json", exclude_none=True),
+                    "environment_overlay": {
+                        "RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED": str(coverage).lower()
+                    },
+                }
+            )
     digest = hashlib.sha256(
         json.dumps(baseline, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
@@ -121,9 +145,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("request", type=Path, help="既存 EvaluationRunRequest JSON")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--total-cap", type=int, action="append", default=[])
+    parser.add_argument(
+        "--recovery-matrix",
+        action="store_true",
+        help="生成前 CRAG と生成後不足補查の四条件を準備する",
+    )
     args = parser.parse_args(argv)
     request = EvaluationRunRequest.model_validate_json(args.request.read_text(encoding="utf-8"))
-    plan = prepare_plan(request, total_caps=args.total_cap)
+    plan = prepare_plan(request, total_caps=args.total_cap, recovery_matrix=args.recovery_matrix)
     # 既存結果や入力を上書きせず、新しい比較のディレクトリだけを作る。
     args.output_dir.mkdir(parents=True, exist_ok=False)
     for variant in plan["variants"]:

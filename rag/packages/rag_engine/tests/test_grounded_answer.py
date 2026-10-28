@@ -104,12 +104,14 @@ def removed(result):
 
 
 def audit(*reviews, requests=(), unused=(), summary_supported=True):
-    # requests は (id, status) または (id, status, reason)。
+    # requests は (id, status)、(id, status, reason)、または材料の有無を明示する dict。
     return {
         "goal_alignment": "aligned",
         "summary_supported": summary_supported,
         "reviews": [{"index": i, "support": s, "applicability": a, "condition": c, "reason": "r"} for i, s, a, c in reviews],
-        "request_reviews": [{"request_id": r[0], "status": r[1], "reason": r[2] if len(r) > 2 else "r"} for r in requests],
+        "request_reviews": [
+            r if isinstance(r, dict) else {"request_id": r[0], "status": r[1], "reason": r[2] if len(r) > 2 else "r"} for r in requests
+        ],
         "unused_evidence_ids": list(unused),
     }
 
@@ -798,8 +800,9 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertIn("実行ボタンを押して完了", run(model, ctx).response.answer_text)
 
     def test_worse_correction_keeps_the_supported_partial_answer(self):
-        ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
-        eid = ids(ctx)[LIST_TEXT]
+        source_text = LIST_TEXT + "\n結果を確認します。"
+        ctx = context(record(0, source_text, "売上-(3)年次集計明細作成"))
+        eid = ids(ctx)[source_text]
         good = draft(
             item(eid, "一覧表を選択し、処理を選択します。", "一覧表を選択し、処理を選択します。", request_id="Q1"),
             item(eid, "実行ボタンを押して完了します。", "実行ボタンを押して完了します。", request_id="Q1"),
@@ -808,7 +811,19 @@ class GroundedAnswerTest(unittest.TestCase):
         model = FakeModel(
             [good, worse],
             [
-                audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed"), ("Q2", "missing")]),
+                audit(
+                    (0, "supported", "matched", ""),
+                    (1, "supported", "matched", ""),
+                    requests=[
+                        {
+                            "request_id": "Q1",
+                            "status": "partial",
+                            "reason": "結果の確認手順が省略されている",
+                            "evidence_status": "available",
+                            "evidence_ids": [eid],
+                        }
+                    ],
+                ),
                 audit(),
             ],
         )
@@ -820,14 +835,31 @@ class GroundedAnswerTest(unittest.TestCase):
 
     def test_failed_correction_round_publishes_the_accepted_answer(self):
         """是正 round の LLM 例外で、採用済みの 1 回目の回答を捨てない (#748)。"""
-        ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
-        eid = ids(ctx)[LIST_TEXT]
+        source_text = LIST_TEXT + "\n結果を確認します。"
+        ctx = context(record(0, source_text, "売上-(3)年次集計明細作成"))
+        eid = ids(ctx)[source_text]
         good = draft(item(eid, "一覧表を選択し、処理を選択します。", "一覧表を選択し、処理を選択します。", request_id="Q1"))
 
         def broken(prompt):
             raise RuntimeError("read timed out")
 
-        model = FakeModel([good, broken], [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed"), ("Q2", "missing")])])
+        model = FakeModel(
+            [good, broken],
+            [
+                audit(
+                    (0, "supported", "matched", ""),
+                    requests=[
+                        {
+                            "request_id": "Q1",
+                            "status": "partial",
+                            "reason": "結果の確認手順が省略されている",
+                            "evidence_status": "available",
+                            "evidence_ids": [eid],
+                        }
+                    ],
+                )
+            ],
+        )
         result = run(model, ctx)
         self.assertIn("・一覧表を選択し、処理を選択します。", result.response.answer_text)
         rounds = result.response.generation_trace["rounds"]
@@ -856,7 +888,23 @@ class GroundedAnswerTest(unittest.TestCase):
             self.assertIn("抽出条件で店舗を指定します。", prompt)
             return first
 
-        model = FakeModel([first, second], [audit((0, "supported", "matched", ""), requests=[("Q1", "partial")])])
+        model = FakeModel(
+            [first, second],
+            [
+                audit(
+                    (0, "supported", "matched", ""),
+                    requests=[
+                        {
+                            "request_id": "Q1",
+                            "status": "partial",
+                            "reason": "抽出条件の材料が入力にない",
+                            "evidence_status": "missing",
+                            "evidence_ids": [],
+                        }
+                    ],
+                )
+            ],
+        )
         result = run(model, ctx)
         self.assertEqual(result.response.generation_trace["rounds"][0]["remedy"]["remedy"], "context")
         self.assertEqual({r.id for r in result.context.records}, {"r0"})  # 改善しない候補の文脈は採用しない
@@ -1259,14 +1307,27 @@ class GroundedAnswerTest(unittest.TestCase):
         import tempfile
         from unittest.mock import patch
 
+        question = QUESTION + "。出力結果の確認手順も教えてください。"
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
-        eid = ids(ctx)[LIST_TEXT]
+        eid = ids(ctx, question)[LIST_TEXT]
         step = draft(
             item(eid, "一覧表を選択し、処理を選択します。", "一覧表を選択し、処理を選択します。", request_id="Q1"),
             item(eid, "実行ボタンを押して完了します。", "実行ボタンを押して完了します。", request_id="Q1"),
         )
         partial, complete = (
-            audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", status)])
+            audit(
+                (0, "supported", "matched", ""),
+                (1, "supported", "matched", ""),
+                requests=[
+                    {
+                        "request_id": "Q2",
+                        "status": status,
+                        "reason": "結果の確認手順",
+                        "evidence_status": "missing" if status == "partial" else "unknown",
+                        "evidence_ids": [],
+                    }
+                ],
+            )
             for status in ("partial", "addressed")
         )
         text_model = FakeModel([step, step], [partial, complete])
@@ -1293,7 +1354,7 @@ class GroundedAnswerTest(unittest.TestCase):
                     },
                     dotenv_path=None,
                 )
-                result = synthesize_grounded_answer(QUESTION, ctx, settings, image_prompt_mode="text_only")
+                result = synthesize_grounded_answer(question, ctx, settings, image_prompt_mode="text_only")
         return result, calls, image.name
 
     def test_missing_content_attaches_source_images_once_for_vision_model(self):
@@ -1307,13 +1368,17 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertLessEqual(result.response.generation_trace["llm_calls"], 6)
 
     def test_missing_content_does_not_switch_non_vision_model_to_another_provider(self):
-        """回答のモデルが画像を読めないなら Vision モデルへ切替えず、指摘の反映だけで是正する（#3444）。"""
+        """画像を読めず追加の確認で材料が増えない場合は、モデルを切り替えず根拠付きの部分回答を保つ。"""
         result, calls, _ = self._run_missing_content_remedy(False)
         self.assertEqual(calls, [])
         self.assertEqual(result.image_prompt_mode, "text_only")
         decision = result.response.generation_trace["image_fallback"]
         self.assertEqual((decision["reason"], decision["source_provider"]), ("not_needed", "enterprise-ai"))
-        self.assertEqual([r.get("remedy", {}).get("remedy") for r in result.response.generation_trace["rounds"]][:1], ["correction"])
+        self.assertEqual(result.response.generation_trace["llm_calls"], 2)
+        self.assertEqual(len(result.response.generation_trace["rounds"]), 1)
+        self.assertEqual(result.response.generation_trace["round_budget"]["stop"]["reason"], "no_improvement_evidence_only")
+        self.assertIn("実行ボタンを押して完了します。", result.response.answer_text)
+        self.assertTrue(result.response.needs_human_review)
 
     def test_wrong_id_is_rebound_by_unique_quote_and_invented_conditions_are_not_shown(self):
         """IDの取り違えだけで正しい引用を捨てない。原文にない前提は条件として表示しない。"""
@@ -1365,7 +1430,18 @@ class GroundedAnswerTest(unittest.TestCase):
         model = FakeModel(
             [refusal, recovered],
             [
-                audit(requests=[("Q1", "missing", "手順の原文が未使用")], unused=["E1"]),
+                audit(
+                    requests=[
+                        {
+                            "request_id": "Q1",
+                            "status": "missing",
+                            "reason": "手順の原文が未使用",
+                            "evidence_status": "available",
+                            "evidence_ids": [eid],
+                        }
+                    ],
+                    unused=["E1"],
+                ),
                 audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")]),
             ],
         )
@@ -1587,17 +1663,41 @@ class GroundedAnswerTest(unittest.TestCase):
 
     def test_summary_flagged_in_a_rejected_round_gets_a_warning_in_the_accepted_round(self):
         """初回監査が見逃した summary の保証を、後続 round の監査が不支持としたら警告を付ける (#621・#2738)。"""
-        ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
-        eid = ids(ctx)[LIST_TEXT]
+        source_text = LIST_TEXT + "\n結果を確認します。"
+        ctx = context(record(0, source_text, "売上-(3)年次集計明細作成"))
+        eid = ids(ctx)[source_text]
         guarantee = "集計表出力で計上された明細を確認できます。"
         good = draft(
             item(eid, "一覧表を選択し、処理を選択します。", "一覧表を選択し、処理を選択します。", request_id="Q1"),
             item(eid, "実行ボタンを押して完了します。", "実行ボタンを押して完了します。", request_id="Q1"),
             summary=guarantee,
         )
-        first = audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "partial")])
+        first = audit(
+            (0, "supported", "matched", ""),
+            (1, "supported", "matched", ""),
+            requests=[
+                {
+                    "request_id": "Q1",
+                    "status": "partial",
+                    "reason": "結果の確認手順が省略されている",
+                    "evidence_status": "available",
+                    "evidence_ids": [eid],
+                }
+            ],
+        )
         second = audit(
-            (0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "partial")], summary_supported=False
+            (0, "supported", "matched", ""),
+            (1, "supported", "matched", ""),
+            requests=[
+                {
+                    "request_id": "Q1",
+                    "status": "partial",
+                    "reason": "結果の確認手順が省略されている",
+                    "evidence_status": "available",
+                    "evidence_ids": [eid],
+                }
+            ],
+            summary_supported=False,
         )
         result = run(FakeModel([good], [first, second]), ctx).response
         self.assertEqual([r["accepted"] for r in result.generation_trace["rounds"]], [True, False])
@@ -1616,7 +1716,18 @@ class GroundedAnswerTest(unittest.TestCase):
         model = FakeModel(
             [draft(select), draft(select, execute, altered)],
             [
-                audit((0, "supported", "matched", ""), requests=[("Q1", "partial")]),
+                audit(
+                    (0, "supported", "matched", ""),
+                    requests=[
+                        {
+                            "request_id": "Q1",
+                            "status": "partial",
+                            "reason": "実行操作の省略",
+                            "evidence_status": "available",
+                            "evidence_ids": [eid],
+                        }
+                    ],
+                ),
                 audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")]),
             ],
         )
@@ -2167,23 +2278,32 @@ class CarryOverWithdrawalTest(unittest.TestCase):
     STEP_B = "実行ボタンを押して完了します。"
 
     def setUp(self):
-        self.ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
-        self.eid = ids(self.ctx)[LIST_TEXT]
+        source_text = LIST_TEXT + "\n結果を確認します。"
+        self.ctx = context(record(0, source_text, "売上-(3)年次集計明細作成"))
+        self.eid = ids(self.ctx)[source_text]
         self.both = draft(
             item(self.eid, self.STEP_A, self.STEP_A, request_id="Q1"), item(self.eid, self.STEP_B, self.STEP_B, request_id="Q1")
         )
         self.only_a = draft(item(self.eid, self.STEP_A, self.STEP_A, request_id="Q1"))
-        # Q2 missing で是正 round（指摘の反映）に進む。
+        # 入力にある結果確認の操作を草稿が省略したため、局所是正に進む。
         self.first = audit(
-            (0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed"), ("Q2", "missing")]
+            (0, "supported", "matched", ""),
+            (1, "supported", "matched", ""),
+            requests=[
+                {
+                    "request_id": "Q1",
+                    "status": "partial",
+                    "reason": "結果の確認手順が省略されている",
+                    "evidence_status": "available",
+                    "evidence_ids": [self.eid],
+                }
+            ],
         )
 
     def test_carried_claim_is_re_audited_and_not_applicable_is_only_recorded(self):
         # 2 回目の草稿は STEP_B を落とし、引き継がれた STEP_B（index 1）を監査が not_applicable と判定する。
         # 適用性の判定は回答に反映せず記録に残す（#2837。回答時の検査は根拠の裏付け（support）だけ）。
-        second = audit(
-            (0, "supported", "matched", ""), (1, "supported", "not_applicable", ""), requests=[("Q1", "addressed"), ("Q2", "missing")]
-        )
+        second = audit((0, "supported", "matched", ""), (1, "supported", "not_applicable", ""), requests=[("Q1", "partial")])
         model = FakeModel([self.both, self.only_a], [self.first, second])
         result = run(model, self.ctx).response
         rounds = result.generation_trace["rounds"]
@@ -2197,9 +2317,7 @@ class CarryOverWithdrawalTest(unittest.TestCase):
 
     def test_carried_claim_keeps_its_support_when_the_re_audit_only_says_unsupported(self):
         # 言い換えの支持は前の round で確定済み。引き継いだ item への unsupported は監査の揺れとして無視する。
-        second = audit(
-            (0, "supported", "matched", ""), (1, "unsupported", "matched", ""), requests=[("Q1", "addressed"), ("Q2", "missing")]
-        )
+        second = audit((0, "supported", "matched", ""), (1, "unsupported", "matched", ""), requests=[("Q1", "partial")])
         model = FakeModel([self.both, self.only_a], [self.first, second])
         result = run(model, self.ctx).response
         rounds = result.generation_trace["rounds"]
@@ -2211,7 +2329,7 @@ class CarryOverWithdrawalTest(unittest.TestCase):
         second = audit(
             (0, "supported", "matched", ""),
             (1, "supported", "conditional", "処理を選択"),  # 原文にある条件
-            requests=[("Q1", "addressed"), ("Q2", "addressed")],
+            requests=[("Q1", "addressed")],
         )
         model = FakeModel([self.both, self.only_a], [self.first, second])
         result = run(model, self.ctx).response
@@ -2219,10 +2337,8 @@ class CarryOverWithdrawalTest(unittest.TestCase):
 
     def test_withdrawal_is_counted_only_in_the_round_that_withdrew(self):
         # 3 round 目は 2 round 目で撤回済みの item を引き継ぐが、当該 round の撤回には数えない。
-        second = audit(
-            (0, "supported", "matched", ""), (1, "contradicted", "matched", ""), requests=[("Q1", "addressed"), ("Q2", "missing")]
-        )
-        third = audit((0, "supported", "matched", ""), requests=[("Q1", "addressed"), ("Q2", "missing")])
+        second = audit((0, "supported", "matched", ""), (1, "contradicted", "matched", ""), requests=[("Q1", "partial")])
+        third = audit((0, "supported", "matched", ""), requests=[("Q1", "partial")])
         spans = _grounded_spans(QUESTION, self.ctx, (), None)
         rounds = []
         for draft_value, audit_value in ((self.both, self.first), (self.only_a, second), (self.only_a, third)):
@@ -2244,9 +2360,7 @@ class CarryOverWithdrawalTest(unittest.TestCase):
         self.assertFalse(grounded.better(rounds[2], rounds[1]))  # 同じ内容の round は採用しない
 
     def test_previous_round_items_are_not_mutated_by_the_next_audit(self):
-        second = audit(
-            (0, "supported", "matched", ""), (1, "contradicted", "matched", ""), requests=[("Q1", "addressed"), ("Q2", "missing")]
-        )
+        second = audit((0, "supported", "matched", ""), (1, "contradicted", "matched", ""), requests=[("Q1", "partial")])
         first_round = grounded.run_round(
             QUESTION,
             _grounded_spans(QUESTION, self.ctx, (), None),
@@ -2684,7 +2798,8 @@ class ApplicabilityAuditTest(unittest.TestCase):
 
     def test_audit_prompt_requires_positive_support_and_rejects_other_function_operations(self):
         rules = [line for line in grounded.AUDIT_SYSTEM_PROMPT.splitlines() if line.startswith("- ")]
-        self.assertTrue(any(line.startswith("- supported は") and "積極的に裏付ける" in line and "unsupported" in line for line in rules))
+        self.assertTrue(any("citations" in line and "操作・対象・適用条件・順序" in line and "supported" in line for line in rules))
+        self.assertTrue(any("function_context・未引用の補助資料・見出し" in line and "支持根拠として使わない" in line for line in rules))
         self.assertTrue(any("共通の操作語" in line and "not_applicable" in line for line in rules))
         self.assertTrue(
             any(

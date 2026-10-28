@@ -351,6 +351,7 @@ class CragRetrievalAttempt:
     missing_aspects: tuple[str, ...] = ()
     new_evidence_count: int = 0
     stop_reason: str = ""
+    executed_queries: tuple[str, ...] = ()
     recovery_action: str = "rewrite"
     recovery_anchor_ids: tuple[str, ...] = ()
     recovery_trace: dict[str, Any] = field(default_factory=dict)
@@ -363,6 +364,7 @@ class CragRetrievalAttempt:
             "attempt": self.attempt,
             "query": self.query,
             "retrieval_queries": list(self.retrieval_queries),
+            "executed_queries": list(self.executed_queries),
             "sufficient": self.sufficient,
             "confidence": self.confidence,
             "relevant_chunk_ids": list(self.relevant_chunk_ids),

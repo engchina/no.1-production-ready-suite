@@ -86,6 +86,8 @@ def _audit(quotes: list[str]) -> Callable[..., ClaimAuditOutput]:
 
 def _statuses(answer: str, quotes: list[str], *, embed: Any = None, steps: list[dict[str, Any]] = STEPS) -> dict[str, str]:
     items = [{key: item[key] for key in ("id", "page_start", "page_end", "text")} | {"source": "manual.pdf"} for item in EVIDENCE]
+    # 各説明の実際の出典を付け、意味の対応付けと手順の充足を検査する。
+    answer = "\n\n".join(part if part.startswith("#") else part + "\n根拠：manual.pdf p.3" for part in answer.split("\n\n"))
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=_audit(quotes)):
         claims = validate_answer_claims("質問", answer, items, settings=None)
     result = validate_guide_steps(_plan(steps), claims["claim_checks"], EVIDENCE, embed=embed)
