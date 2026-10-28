@@ -280,7 +280,9 @@ class GuideStepFulfillmentTest(unittest.TestCase):
         self.assertEqual(len(_drafts(model)), 1)
         self.assertEqual(_requests(result)["guide:s2"], "missing")
         self.assertEqual(result.envelope["outcome"], "conditional")
-        self.assertIn("業務ガイドの手順「反映ボタンで確定する」は、取得した資料で説明を確かめられませんでした。", result.answer_text)
+        self.assertIn(
+            "業務ガイドの手順「反映ボタンで確定する」は、今回の回答に渡した資料で必要な根拠を確認できていません。", result.answer_text
+        )
 
     def test_optional_branch_step_is_not_required(self):
         """条件が決まらない分岐の手順は、説明が無くても充足の判定に数えない。"""

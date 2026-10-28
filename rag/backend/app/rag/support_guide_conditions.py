@@ -15,6 +15,7 @@ from typing import Literal
 
 from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pydantic import BaseModel, ConfigDict, Field
+from rag_engine.resources.runtime import resolve_prompt
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.config import Settings
@@ -101,7 +102,9 @@ async def resolve_text_conditions(
             "質問から明示された条件値を取り出してください。\nJSON Schema:\n"
             + json.dumps(ConditionValues.model_json_schema(), ensure_ascii=False),
             context,
-            system_prompt=CONDITION_SYSTEM_PROMPT,
+            system_prompt=resolve_prompt(
+                "support_guide_conditions.system", CONDITION_SYSTEM_PROMPT
+            ),
             response_schema=ConditionValues.model_json_schema(),
             response_schema_name="support_guide_conditions",
         )
@@ -203,7 +206,9 @@ async def resolve_answered_conditions(
             "確認の答えが選んだ選択肢を決めてください。\nJSON Schema:\n"
             + json.dumps(AnswerChoices.model_json_schema(), ensure_ascii=False),
             context,
-            system_prompt=ANSWER_SYSTEM_PROMPT,
+            system_prompt=resolve_prompt(
+                "support_guide_conditions.answerChoice", ANSWER_SYSTEM_PROMPT
+            ),
             response_schema=AnswerChoices.model_json_schema(),
             response_schema_name="support_guide_answer_choices",
         )

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from pr_backend_core.logging import safe_exception_fields
 from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pydantic import ValidationError
+from rag_engine.resources.runtime import resolve_prompt
 
 from app.config import settings_today
 from app.rag.degraded_steps import ReportDegraded, not_recorded
@@ -86,7 +87,7 @@ async def read_field_conditions(
             llm.generate,
             question,
             context,
-            system_prompt=FIELD_FILTER_SYSTEM_PROMPT,
+            system_prompt=resolve_prompt("field_filter.system", FIELD_FILTER_SYSTEM_PROMPT),
         )
     except Exception as exc:  # noqa: BLE001 - 読み取りは補助。条件なしで検索を続ける。
         logger.warning("field filter read failed", extra={**safe_exception_fields(exc)})

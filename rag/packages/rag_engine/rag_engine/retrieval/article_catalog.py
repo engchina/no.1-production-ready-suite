@@ -28,6 +28,7 @@ from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import alternation, char_class, parse_number, text_patterns
 
 from rag_engine.dependencies import report_degraded
+from rag_engine.resources.runtime import resolve_prompt
 
 # 候補の record の metadata に付ける印（選んだ順・文書・目録の行）。回答の根拠 span では、目録で選んだ条の child に
 # 重なる根拠の印（bool）にも使う。回答はこの根拠を必ず検討する（要求の計画で使うか unrelated かを決める。#3526）。
@@ -191,7 +192,7 @@ def select_articles(
         selection = call_with_model_purpose(
             "evidence.select_article",
             parse_text,
-            ARTICLE_SELECTION_SYSTEM_PROMPT,
+            resolve_prompt("article_catalog.system", ARTICLE_SELECTION_SYSTEM_PROMPT),
             catalog_prompt(question, catalog, limit=limit, terms=terms),
             settings,
             ArticleIssueSelection,
@@ -414,7 +415,7 @@ def refine_articles(
         selection = call_with_model_purpose(
             "evidence.refine_article",
             parse_text,
-            ARTICLE_REFINE_SYSTEM_PROMPT,
+            resolve_prompt("article_catalog.refineSystem", ARTICLE_REFINE_SYSTEM_PROMPT),
             refine_prompt(question, catalog, picked, candidates, limit=limit, terms=terms),
             settings,
             ArticleIssueSelection,
@@ -459,7 +460,7 @@ def select_documents(
         selection = call_with_model_purpose(
             "evidence.select_document",
             parse_text,
-            ARTICLE_DOCUMENT_SELECTION_SYSTEM_PROMPT,
+            resolve_prompt("article_catalog.documentSystem", ARTICLE_DOCUMENT_SELECTION_SYSTEM_PROMPT),
             document_prompt(question, documents, limit=limit),
             settings,
             ArticleSelection,

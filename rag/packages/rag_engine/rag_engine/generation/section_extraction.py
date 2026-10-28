@@ -59,6 +59,7 @@ from rag_engine.generation.section_expansion import (
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
 from rag_engine.models.llm import SectionExtractionOutput
 from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline, current_deadline
+from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.retrieval.evidence_selection import record_location_label
 
@@ -534,7 +535,7 @@ class SectionExtractor:
                 output = call_with_model_purpose(
                     "evidence.extract",
                     self.parse_text,
-                    EXTRACTION_SYSTEM_PROMPT,
+                    resolve_prompt("section_extraction.system", EXTRACTION_SYSTEM_PROMPT),
                     prompt,
                     self.settings,
                     SectionExtractionOutput,

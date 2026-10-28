@@ -338,3 +338,22 @@ def test_executed_generation_and_audit_use_steps_without_changing_mode_contract(
         assert "support" in audit_call[1] and "applicability" in audit_call[1]
         assert ("unused_evidence:" in audit_call[1]) is detailed
         assert [name for name, _ in model.prompts] == ["GroundedDraft", expected_schema]
+
+
+def test_no_audit_keeps_summary_but_records_validation_as_not_run():
+    operation = "設定を開き、変更を反映します。"
+    summary = "設定の変更を反映できます。"
+    ctx = context(record(0, operation, "設定画面"))
+    eid = ids(ctx)[operation]
+    model = FakeModel([draft(item(eid, operation, operation), summary=summary)], [])
+
+    result = _run(model, ctx, grounded.AUDIT_MODE_NONE).response
+
+    assert summary in result.answer_text
+    assert _audit_inputs(model) == []
+    round_note = result.generation_trace["round_budget"]["rounds"][0]
+    assert round_note["accepted"] is True
+    assert round_note["acceptance_scope"] == "draft_selection"
+    assert round_note["summary_validation"] == "not_run"
+    assert "summary_supported" not in round_note
+    assert any(mark["text"] == summary and "summary_unaudited" in str(mark["reasons"]) for mark in result.envelope["passage_marks"])

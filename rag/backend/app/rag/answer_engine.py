@@ -47,6 +47,7 @@ from pr_backend_core.timezones import configured_timezone_name
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
 from rag_engine.resources.deadline import check_deadline, current_deadline
+from rag_engine.resources.runtime import saved_prompt_overrides
 from rag_engine.resources.tracing import observe_call
 from rag_engine.retrieval.article_catalog import ARTICLE_UNIT_KEY
 from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
@@ -952,7 +953,9 @@ class AnswerEngine:
             degraded=self._degraded if self._degraded is not None else DegradedSteps(),
         )
         try:
-            overrides = await self._oracle.answer_prompt_overrides()
+            overrides = saved_prompt_overrides()
+            if overrides is None:
+                overrides = await self._oracle.answer_prompt_overrides()
         except Exception as exc:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で回答を続ける。
             logger.warning("answer prompt overrides load failed", exc_info=True)
             state.record_degraded("prompt_overrides", exc)
@@ -4225,15 +4228,22 @@ _GUIDE_STEP_EMBEDDING_FIELDS = ("calls", "texts", "elapsed_ms", "failed")
 def _guide_step_diagnostics(generation_trace: object) -> dict[str, Any]:
     """回答の記録に残す業務ガイドの手順の充足と embedding の呼び出し(#2686)。
 
-    手順は id・状態・必須かだけ、呼び出しは回数・文の数・時間・失敗かだけにする(手順の題名・
-    根拠の本文・引用は記録に増やさない)。業務ガイドに沿わない回答・呼ばなかった回答では空。
+    手順は id・状態・必須かと、対応の方法・item の index・各段の根拠 ID を残す。手順の題名・
+    根拠の本文・引用は記録に増やさない。業務ガイドに沿わない回答・呼ばなかった回答では空。
     """
     trace = generation_trace if isinstance(generation_trace, Mapping) else {}
     diagnostics: dict[str, Any] = {}
     coverage = trace.get("guide_step_coverage")
     if isinstance(coverage, list) and coverage:
         diagnostics["guide_step_coverage"] = [
-            {key: step.get(key) for key in _GUIDE_STEP_COVERAGE_FIELDS}
+            {
+                **{key: step.get(key) for key in _GUIDE_STEP_COVERAGE_FIELDS},
+                **{
+                    key: step[key]
+                    for key in ("assignment", "evidence_flow")
+                    if isinstance(step.get(key), Mapping)
+                },
+            }
             for step in coverage
             if isinstance(step, Mapping)
         ]

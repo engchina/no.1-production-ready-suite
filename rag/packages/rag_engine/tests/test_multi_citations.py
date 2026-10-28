@@ -107,7 +107,8 @@ def test_a_citation_whose_quote_is_not_in_the_evidence_is_dropped_and_the_claim_
     assert result.answer_text.count(CLAIM) == 1
     assert len(_citation_lines(result.answer_text)) == 1
     assert _sources(result) == {"規則A.xml"}
-    assert not marks(result)
+    assert CLAIM not in marks(result)
+    assert all(reasons == ["summary_unaudited"] for reasons in marks(result).values())
     dropped = result.generation_trace["rounds"][0]["dropped"]
     assert [entry.get("citation_dropped") for entry in dropped] == [True]
     assert all(entry["ignored"] for entry in dropped)
@@ -269,7 +270,8 @@ def test_a_claim_citing_the_body_line_under_the_heading_is_confirmed():
 
     result = _run(model, ctx)
 
-    assert not marks(result)
+    assert CLAIM not in marks(result)
+    assert all(reasons == ["summary_unaudited"] for reasons in marks(result).values())
     assert len(_citation_lines(result.answer_text)) == 1
 
 

@@ -49,3 +49,34 @@ _current: ContextVar[Runtime | None] = ContextVar("rag_engine_runtime", default=
 def current_runtime() -> Runtime | None:
     """有効なアプリ資源を返す。互換関数の直接呼び出し時は None。"""
     return _current.get()
+
+
+def resolve_prompt(key: str, default: str) -> str:
+    """有効な要求の指示を返す。保存値が無ければ組み込みの指示を使う。"""
+    runtime = current_runtime()
+    if runtime is None:
+        return default
+    return dict(runtime.prompt_overrides).get(key, default)
+
+
+@contextmanager
+def bind_prompt_overrides(overrides: dict[str, str]) -> Iterator[None]:
+    """ファイルを作らず、親の資源と指示を引き継ぐ要求単位のスコープ。"""
+    parent = current_runtime()
+    paths = parent.paths if parent else ResourcePaths(workspace=Path.cwd(), output=Path.cwd())
+    merged = {**dict(parent.prompt_overrides if parent else ()), **overrides}
+    token = _prompt_snapshot.set(tuple(merged.items()))
+    try:
+        with Runtime(paths, tuple(merged.items()), parent.model_pool if parent else None).activate():
+            yield
+    finally:
+        _prompt_snapshot.reset(token)
+
+
+_prompt_snapshot: ContextVar[tuple[tuple[str, str], ...] | None] = ContextVar("rag_prompt_snapshot", default=None)
+
+
+def saved_prompt_overrides() -> dict[str, str] | None:
+    """要求の開始時に読んだ保存値。None はまだ読み込んでいない状態。"""
+    snapshot = _prompt_snapshot.get()
+    return dict(snapshot) if snapshot is not None else None

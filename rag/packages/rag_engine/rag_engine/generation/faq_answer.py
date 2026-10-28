@@ -8,6 +8,8 @@ from typing import Any
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, Field
 
+from rag_engine.resources.runtime import resolve_prompt
+
 SYSTEM_PROMPT = (
     "あなたは社内の承認済み FAQ をもとに回答する担当者です。\n"
     "利用者は、自分の質問と同じ趣旨の承認済み FAQ（類似問とその承認済"
@@ -53,7 +55,7 @@ def answer_from_approved_faq(question: str, faq_question: str, faq_answer: str, 
     draft = call_with_model_purpose(
         "answer.generate",
         parse_text_response,
-        SYSTEM_PROMPT,
+        resolve_prompt("faq_answer.system", SYSTEM_PROMPT),
         faq_answer_prompt(question, faq_question, faq_answer),
         settings,
         FaqAnswerDraft,

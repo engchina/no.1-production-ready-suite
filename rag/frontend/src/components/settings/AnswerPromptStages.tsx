@@ -5,7 +5,7 @@ import { FileText } from "lucide-react";
 import type { AnswerPromptStage } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 
-import { AnswerPromptCard } from "./AnswerPromptEditor";
+import { AnswerPromptCard, AnswerPromptPanel } from "./AnswerPromptEditor";
 import { groupStagesByPhase } from "./answer-prompt.logic";
 
 /**
@@ -54,7 +54,11 @@ export function AnswerPromptStages({
                     data-testid={`answer-prompt-stage-${stage.id}`}
                   >
                     {stage.prompts.map((part) => (
-                      <TextareaField
+                      part.prompt_key ? <AnswerPromptPanel
+                        key={part.id}
+                        promptKey={part.prompt_key}
+                        fieldLabel={t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
+                      /> : <TextareaField
                         key={part.id}
                         id={`answer-prompt-${stage.id}-${part.id}`}
                         label={t(`settings.answerPrompts.part.${part.id}` as I18nKey)}

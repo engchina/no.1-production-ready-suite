@@ -726,29 +726,23 @@ class QueryHistorySettingsUpdate(QueryHistorySettingsData):
 class AnswerPromptView(BaseModel):
     """編集できるプロンプト(回答生成 vlm_answer / 図・画像の読み取り image_retrieval)。"""
 
-    key: Literal[
-        "vlm_answer",
-        "image_retrieval",
-        "external_ocr",
-        "heading_levels",
-        "field_extraction",
-        "navigation_summary",
-        "raptor_summary_system",
-    ]
+    key: str
     content: str
     default_content: str
     customized: bool
     required_placeholders: list[str]
+    required_tokens: list[str] = Field(default_factory=list)
     updated_at: datetime | None = None
 
 
 class AnswerPromptPart(BaseModel):
     id: str
     content: str
+    prompt_key: str | None = None
 
 
 class AnswerPromptStage(BaseModel):
-    """取込から評価までの 1 段の読み取り専用プロンプト(コードで管理)。"""
+    """取込から評価までの 1 段の指示と、編集可能な指示の key。"""
 
     id: str
     # 処理の順の区分(answer_prompts.PROMPT_PHASES)。画面はこの順に見出しを付けて並べる。

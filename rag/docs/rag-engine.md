@@ -76,7 +76,7 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 | 分類フィルタ・基準日 | 検索要求 | RAG 検索 > 詳細条件 >「文書の分類で絞り込む」（`filters` の `large_category` / `middle_category` / `small_category` / `as_of`） |
 | 旧版を含める | 検索要求 | `filters` の `include_superseded=true`（既定は含めない。#1248）。MCP の `rag_search` / `rag_retrieve_evidence` は真偽値の引数 `include_superseded: true`（#1392） |
 
-| 回答生成のプロンプト（`vlm_answer`） | global | 取込・検索・回答設定 > 回答プロンプト（取込から評価までの各段のプロンプトを、使われる条件とともに読み取り専用で表示。一覧は `app/rag/answer_prompts.py` の `PROMPT_STAGES`） |
+| 回答生成のプロンプト（`vlm_answer`） | global | 取込・検索・回答設定 > 回答プロンプト（検索・回答・評価の各段のプロンプトを、使われる条件とともに各設定画面で編集。一覧は `app/rag/answer_prompts.py` の `PROMPT_STAGES`） |
 | 図・画像の読み取りプロンプト（`image_retrieval`） | global | 取込・検索・回答設定 > 文書解析（常に表示。文書のレシピで Vision を有効にしたとき、解析エンジンに関係なく使う） |
 
 KB（ナレッジベース）は検索対象の範囲を決めるだけで、上記のどれも持たない。
@@ -614,3 +614,11 @@ LlamaIndex AutoMerging 風の分割方式「親子階層」は削除し、一覧
 別名は検索・回答プロファイルの「用語・同義語」、検索で保護する語は「ドメインキーワード」、回答前の確認と回答の指示はページ管理のルール・ガイドを使用する。一般的な日本語の質問理解・条件の読取り・言語資源は維持する。旧ファイルの内容をこれらの設定へ自動コピーしない。
 
 SDK の `DomainProfile`、`Runtime.profile`、`create_oracle_application(profile=...)` は削除した。Runtime の Prompt 上書きは `prompt_overrides`、Prompt ファイルの保存先は `ResourcePaths.prompts` / `Settings.prompt_dir` で明示する。
+
+### 指示の保存と検査状態の区別（#3753）
+
+検索・回答・監査・評価の指示は、各設定画面で保存・変更の破棄・既定への復帰を共通操作で扱う。`既定に戻す` は保存前の編集であり、保存時にその key の上書きを消す。保存した指示は API の要求に固定して worker thread・子 task へ引き継ぎ、構造化出力の型や認可は変更しない。
+
+手順の根拠の関連付けと、説明・引用による手順への対応付けは別の段である。`guide.step_coverage[].assignment` は引用した item、割り当てた item、対応の方法と公開可能かを残す。`evidence_flow` は関連付けた source の数・実際の回答材料の evidence ID・引用した evidence ID を分けて残す。必須手順の直接の根拠を各手順に一つずつ先に原文予算へ配り、任意の章節だけで予算を使い切らない。予算の上限自体は増やさない。`unused` は資料の不在と断定せず、回答と手順の対応が未確定であることを示す。`round_budget.rounds[].accepted` は草稿の採否で、`acceptance_scope=draft_selection` を記録する。監査を行わなかった要約は `summary_validation=not_run` とし、`summary_supported=true` を記録しない。
+
+既知の条件に当たる分岐の note は、資料の操作の根拠と分け、業務ガイド由来の案内として必ず本文に出す。未知・矛盾した条件の分岐の note は自動適用しない。

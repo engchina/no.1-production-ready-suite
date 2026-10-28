@@ -12,6 +12,7 @@ from rag_engine.generation.answer_models import AnswerContext, AnswerRecord, _de
 from rag_engine.generation.answer_payload import _evidence_id_key, _records_for_prompt_injection_scan
 from rag_engine.generation.answer_records import MAX_CONTEXT_RECORDS, _answer_context_from_ranked
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers, render_prompt_template
+from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.retrieval.character_forms import fold_width
 from rag_engine.retrieval.context_builder import ContextParentEvidence, context_bundle_from_parent_evidence, record_context_key
 from rag_engine.retrieval.context_recovery import recover_context_records
@@ -214,7 +215,7 @@ def _build_crag_grade_prompt(
         if id_aliases is not None:
             model_candidates, recovery_options = _alias_candidate_ids(model_candidates, recovery_options, id_aliases)
     return render_prompt_template(
-        CRAG_GRADE_PROMPT_TEMPLATE,
+        resolve_prompt("crag.template", CRAG_GRADE_PROMPT_TEMPLATE),
         {
             "question": fold_width(question).strip(),
             "recovery_options": dump(recovery_options),

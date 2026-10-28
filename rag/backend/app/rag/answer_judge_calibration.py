@@ -227,9 +227,16 @@ def judge_prompt_sha256() -> str:
     指示の名前・数が変わっても、module の大文字の ``*_PROMPT`` の文字列を名前の順に hash する。
     """
     from rag_engine.evaluation import answer_eval
+    from rag_engine.resources.runtime import resolve_prompt
 
+    keys = {
+        "SCOPE_PROMPT": "scope",
+        "COVERAGE_PROMPT": "coverage",
+        "CLAIM_PROMPT": "claim",
+        "CORRECTNESS_PROMPT": "correctness",
+    }
     prompts = sorted(
-        (name, value)
+        (name, resolve_prompt(f"evaluation.{keys[name]}", value) if name in keys else value)
         for name, value in vars(answer_eval).items()
         if name.isupper() and name.endswith("PROMPT") and isinstance(value, str)
     )

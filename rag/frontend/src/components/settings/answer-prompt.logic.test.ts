@@ -65,3 +65,11 @@ describe("プロンプトの表示先", () => {
     expect(isRetrievalPromptStage({ id: "retrieval", phase: "retrieval" })).toBe(true);
   });
 });
+
+
+it("単一括弧の入力テンプレートの差し込み口も保存前に検査する", () => {
+  expect(answerPromptError("## Step 1: {question}", "指示", [], ["{question}", "{context}"]))
+    .toBe("必須の placeholder がありません: {context}");
+  expect(answerPromptError("## Step 1: {question} {context}", "指示", [], ["{question}", "{context}"]))
+    .toBeNull();
+});

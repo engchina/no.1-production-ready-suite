@@ -1727,7 +1727,7 @@ export interface QuerySuggestionsData {
   suggestions: { question: string; count: number }[];
 }
 
-export type AnswerPromptKey = "vlm_answer" | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary" | "raptor_summary_system";
+export type AnswerPromptKey = `${string}.${string}` | "vlm_answer" | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary" | "raptor_summary_system";
 
 /** 機能別の設定画面で編集できるプロンプト。 */
 export interface AnswerPromptView {
@@ -1736,6 +1736,7 @@ export interface AnswerPromptView {
   default_content: string;
   customized: boolean;
   required_placeholders: string[];
+  required_tokens?: string[];
   updated_at: string | null;
 }
 
@@ -1760,7 +1761,7 @@ export type AnswerPromptPhase =
 export interface AnswerPromptStage {
   id: string;
   phase: AnswerPromptPhase;
-  prompts: { id: string; content: string }[];
+  prompts: { id: string; content: string; prompt_key?: AnswerPromptKey | null }[];
 }
 
 export interface FeedbackApprovedFaqPromotion {

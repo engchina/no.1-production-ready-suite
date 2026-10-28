@@ -129,7 +129,10 @@ async def test_guide_steps_add_step_b_and_reference_page_evidence(
     # 手順ごとの充足（#2686）は id・状態・必須かだけを回答の診断に写す。
     coverage = outcome.diagnostics["guide_step_coverage"]
     assert [step["step_id"] for step in coverage] == ["s1", "s2"]
-    assert all(set(step) == {"step_id", "status", "required"} for step in coverage)
+    assert all(
+        set(step) == {"step_id", "status", "required", "assignment", "evidence_flow"}
+        for step in coverage
+    )
 
 
 async def test_guide_steps_skip_without_answer_decision_or_when_disabled(
@@ -381,6 +384,7 @@ def test_guide_notices_reach_the_answer_plan_apart_from_the_documents() -> None:
         "handoff_conditions": ["種類が分からない場合"],
         "approval_required": True,
         "approval_note": "担当者の承認",
+        "branch_notes": [],
     }
     # 承認が係る手順（s3）が分かっている条件で外れれば、承認は案内しない。
     excluded = match_guide([("g", 1, content)], "設定 A を変えたい", {"kind": "甲"})

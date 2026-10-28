@@ -142,7 +142,7 @@ def test_summary_uses_the_audit_instead_of_deletion_word_heuristics(summary_key,
         ).response
     assert response.answer_text.startswith(case[summary_key])
     warning = response.generation_trace["rounds"][0].get("summary_warning")
-    assert bool(warning) is (mode == "detailed" and summary_key != "correct_summary")
+    assert bool(warning) is (mode == "none" or summary_key != "correct_summary")
     if mode == "none":
         assert response.generation_trace["rounds"][0]["review_execution"] == "not_run"
     assert case["evidence"] in response.answer_text
