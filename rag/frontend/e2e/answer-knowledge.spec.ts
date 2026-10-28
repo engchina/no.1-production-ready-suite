@@ -120,14 +120,15 @@ for (const viewport of [
 
     const panel = page.getByRole("heading", { name: "プロファイルの知識" });
     await expect(panel).toBeVisible();
-    // 先頭・既定のタブは 登録済みQ&A（#636）。以降は回答フローで使う順（#682）。
+    // 登録済みQ&A を既定とし、主な利用段階に沿って並べる。
     const tabs = page.getByRole("tablist", { name: "プロファイルの知識" }).getByRole("tab");
     await expect(tabs).toHaveText([
       "登録済みQ&A",
+      "質問の理解",
       "用語・同義語",
-      "ドメインキーワード",
       "確認・回答ルール",
       "業務ガイド",
+      "ドメインキーワード",
     ]);
     await expect(page.getByRole("tab", { name: "登録済みQ&A" })).toHaveAttribute(
       "aria-selected",

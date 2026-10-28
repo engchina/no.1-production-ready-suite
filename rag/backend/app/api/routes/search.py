@@ -54,6 +54,7 @@ from app.rag.observability import (
     record_rag_request,
 )
 from app.rag.pipeline import RagPipeline, SearchStageProgress
+from app.rag.question_understanding import profile_language_scope
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
 from app.rag.rule_selection import apply_rule_selection_scope, recognize_rule_selections
@@ -363,238 +364,246 @@ async def _resolve_query_context(
             apply_answer_model=request.generate_answer
             or _answer_model_registered(global_settings, profile_config),
         )
-        # 回答の記録に残す検索・回答プロファイルの版（#1276）。
-        settings = settings.model_copy(
-            update={"rag_search_answer_profile_revision": search_answer_profile_revision(view)}
-        )
-        # 検索・回答プロファイルのドメインキーワードは全文検索で 1 語として優先する。
-        domain_keywords = await load_domain_keywords(oracle, view.id)
-        if domain_keywords:
-            settings = settings.model_copy(update={"rag_domain_keywords": domain_keywords})
-        # 用語・同義語と回答ルールは回答エンジンだけが使う。
-        runtime_knowledge = await oracle.get_search_answer_profile_knowledge(
-            view.id, RUNTIME_KNOWLEDGE_KIND
-        )
-        selection_state = dict(effective_request._rule_selection_state)
-        selection_binding = context_digest(
-            [runtime_knowledge, request.query, request.original_question]
-        )
-        recognized_answers = tuple(
-            answer for answer in confirmed_rule_answers if answer.rule_id not in answered_rule_ids
-        )
-        if selection_state.get("binding") == selection_binding:
+        with profile_language_scope(settings):
+            # 回答の記録に残す検索・回答プロファイルの版（#1276）。
+            settings = settings.model_copy(
+                update={"rag_search_answer_profile_revision": search_answer_profile_revision(view)}
+            )
+            # 検索・回答プロファイルのドメインキーワードは全文検索で 1 語として優先する。
+            domain_keywords = await load_domain_keywords(oracle, view.id)
+            if domain_keywords:
+                settings = settings.model_copy(update={"rag_domain_keywords": domain_keywords})
+            # 用語・同義語と回答ルールは回答エンジンだけが使う。
+            runtime_knowledge = await oracle.get_search_answer_profile_knowledge(
+                view.id, RUNTIME_KNOWLEDGE_KIND
+            )
+            selection_state = dict(effective_request._rule_selection_state)
+            selection_binding = context_digest(
+                [runtime_knowledge, request.query, request.original_question]
+            )
             recognized_answers = tuple(
-                ClarificationAnswer.model_validate(value)
-                for value in selection_state.get("answers", [])
+                answer
+                for answer in confirmed_rule_answers
+                if answer.rule_id not in answered_rule_ids
             )
-        elif not selection_state.get("prepared"):
-            selection_usage: dict[str, float] = {}
-            selection_rules = (runtime_knowledge or {}).get("rules", [])
-            if not isinstance(selection_rules, list):
-                selection_rules = []
-            recognized_answers = await recognize_rule_selections(
-                {
-                    **(runtime_knowledge or {}),
-                    "rules": [
-                        rule
-                        for rule in selection_rules
-                        if isinstance(rule, dict)
-                        and str(rule.get("id", "")) not in answered_rule_ids
-                    ],
-                },
-                request.query,
-                settings,
-                source_text="\n".join([*guide_context, request.original_question or request.query]),
-                answers=recognized_answers,
-                usage=selection_usage,
-            )
-            selection_state["elapsed_seconds"] = float(
-                selection_state.get("elapsed_seconds", 0.0)
-            ) + selection_usage.get("elapsed_seconds", 0.0)
-        selection_state.update(
-            binding=selection_binding,
-            answers=[answer.model_dump() for answer in recognized_answers],
-        )
-        effective_request = apply_rule_selection_scope(
-            effective_request,
-            runtime_knowledge or {},
-            recognized_answers,
-            current_pages=await current_section_pages(
-                oracle,
-                {
-                    doc
-                    for answer in recognized_answers
-                    for doc in clarification_document_ids(runtime_knowledge or {}, answer)
-                },
-            )
-            if recognized_answers
-            else None,
-        )
-        effective_request._rule_selection_state = selection_state
-        initial_budget = float(
-            selection_state.setdefault(
-                "initial_budget_seconds", settings.rag_answer_timeout_seconds
-            )
-        )
-        remaining_budget = max(
-            0.0, initial_budget - float(selection_state.get("elapsed_seconds", 0.0))
-        )
-        settings = settings.model_copy(
-            update={
-                "rag_answer_timeout_seconds": min(
-                    settings.rag_answer_timeout_seconds, remaining_budget
+            if selection_state.get("binding") == selection_binding:
+                recognized_answers = tuple(
+                    ClarificationAnswer.model_validate(value)
+                    for value in selection_state.get("answers", [])
                 )
-            }
-        )
-        if guide_preview is not None:
-            # 管理画面から明示した下書きの試答だけ、この回答に限って有効にする。
-            settings = settings.model_copy(update={"rag_support_guide_enabled": True})
-        if not settings.rag_support_guide_enabled:
+            elif not selection_state.get("prepared"):
+                selection_usage: dict[str, float] = {}
+                selection_rules = (runtime_knowledge or {}).get("rules", [])
+                if not isinstance(selection_rules, list):
+                    selection_rules = []
+                recognized_answers = await recognize_rule_selections(
+                    {
+                        **(runtime_knowledge or {}),
+                        "rules": [
+                            rule
+                            for rule in selection_rules
+                            if isinstance(rule, dict)
+                            and str(rule.get("id", "")) not in answered_rule_ids
+                        ],
+                    },
+                    request.query,
+                    settings,
+                    source_text="\n".join(
+                        [*guide_context, request.original_question or request.query]
+                    ),
+                    answers=recognized_answers,
+                    usage=selection_usage,
+                )
+                selection_state["elapsed_seconds"] = float(
+                    selection_state.get("elapsed_seconds", 0.0)
+                ) + selection_usage.get("elapsed_seconds", 0.0)
+            selection_state.update(
+                binding=selection_binding,
+                answers=[answer.model_dump() for answer in recognized_answers],
+            )
+            effective_request = apply_rule_selection_scope(
+                effective_request,
+                runtime_knowledge or {},
+                recognized_answers,
+                current_pages=await current_section_pages(
+                    oracle,
+                    {
+                        doc
+                        for answer in recognized_answers
+                        for doc in clarification_document_ids(runtime_knowledge or {}, answer)
+                    },
+                )
+                if recognized_answers
+                else None,
+            )
+            effective_request._rule_selection_state = selection_state
+            initial_budget = float(
+                selection_state.setdefault(
+                    "initial_budget_seconds", settings.rag_answer_timeout_seconds
+                )
+            )
+            remaining_budget = max(
+                0.0, initial_budget - float(selection_state.get("elapsed_seconds", 0.0))
+            )
+            settings = settings.model_copy(
+                update={
+                    "rag_answer_timeout_seconds": min(
+                        settings.rag_answer_timeout_seconds, remaining_budget
+                    )
+                }
+            )
+            if guide_preview is not None:
+                # 管理画面から明示した下書きの試答だけ、この回答に限って有効にする。
+                settings = settings.model_copy(update={"rag_support_guide_enabled": True})
+            if not settings.rag_support_guide_enabled:
+                runtime_knowledge = await asyncio.to_thread(
+                    with_answer_assumptions,
+                    runtime_knowledge,
+                    policy=profile_config.clarification_policy,
+                    question=request.query,
+                    conditions=request.conditions,
+                    guide={},
+                    answered_rule_ids=answered_rule_ids,
+                    confirmed_answers=recognized_answers,
+                )
+                settings = settings.model_copy(
+                    update={
+                        "rag_support_guide": {},
+                        "rag_runtime_knowledge": runtime_knowledge or {},
+                    }
+                )
+                return effective_request, settings, None, view.id if (applied or kb_ids) else None
+            # 公開した業務ガイドのうち、質問に合う 1 つを選ぶ（#1238）。適用範囲は質問と検索の
+            # 絞り込みの手がかりで確かめる（#1278）。
+            guides, guides_failed = await load_published_guides(oracle, view.id)
+            if guide_preview is not None:
+                guides = with_draft(guides, guide_preview)
+                # 下書きの試答は業務ガイドの要件ごとの充足まで詳しく監査する(#2795)。
+                settings = settings.model_copy(
+                    update={
+                        "rag_guide_preview": guide_preview.marker(),
+                        "rag_answer_audit_mode": "detailed",
+                    }
+                )
+            guide_text = "\n".join([*guide_context, request.query])
+            # 照合の前に用語の別名で展開し、ON なら意味の照合の埋め込みを作る（#2398）。
+            query = await build_guide_query(
+                oracle,
+                settings,
+                view.id,
+                guides,
+                guide_text,
+                runtime_knowledge,
+                unsaved=frozenset({guide_preview.guide_id})
+                if guide_preview is not None
+                else frozenset(),
+            )
+            # 上位のガイドが近いときに確かめるのは、回答を作る検索・MCP だけ（チャットは送信の前の
+            # 確認の判定で確かめる）。
+            close_margin = (
+                settings.rag_support_guide_close_match_margin
+                if settings.rag_support_guide_close_match_clarification_enabled
+                and request.generate_answer
+                and not interactive
+                else None
+            )
+            selected = select_guide(
+                guides,
+                query,
+                request.conditions,
+                interactive=interactive,
+                context=await support_guide_context(
+                    oracle, guides, guide_text, effective_request.filters
+                ),
+                close_margin=close_margin,
+            )
+            # 確認に自由入力で答えた選択式の条件は、答えの文が選んだ選択肢に決める（#2726）。
+            selected = await resolve_answered_conditions(
+                selected, request.conditions, settings, interactive=interactive
+            )
+            if request.generate_answer:
+                selected = await resolve_text_conditions(
+                    selected, guide_text, settings, interactive=interactive
+                )
+            if guides_failed:
+                # 読めなかったことを回答の診断に残す（ガイドを使わずに答える。#1278）。
+                settings = settings.model_copy(
+                    update={"rag_support_guide": {GUIDE_LOAD_FAILED_KEY: True}}
+                )
+            if isinstance(selected, GuideChoice):
+                settings = settings.model_copy(
+                    update={
+                        "rag_support_guide": {
+                            **selected.summary(),
+                            **query_summary(query),
+                            "clarifications": selected.clarifications(),
+                            "short_answer": selected.short_answer(),
+                        }
+                    }
+                )
+            elif selected is not None:
+                match = selected
+                runtime_knowledge = with_guide_rule(runtime_knowledge, match)
+                settings = settings.model_copy(
+                    update={
+                        "rag_support_guide": {
+                            **match.summary(),
+                            **query_summary(query),
+                            **(
+                                {"draft": True}
+                                if guide_preview is not None
+                                and match.guide_id == guide_preview.guide_id
+                                else {}
+                            ),
+                            "clarifications": clarification_questions(match),
+                            # 回答の根拠で決められる条件の候補（#2404。画面の図の項目の種類）。
+                            EVIDENCE_CONDITIONS_KEY: evidence_condition_candidates(match),
+                            # 根拠で条件が決まったときの手順の計画（#2689）。
+                            EVIDENCE_PLANS_KEY: evidence_plans(match),
+                            # 手順ごとの検索（#2395）。回答フローだけが使う。
+                            "step_plan": guide_step_plan(match),
+                            # 業務ガイドの窓口・引き継ぐ条件・承認（#2792。資料と分けて出す）。
+                            "notices": guide_notices(match),
+                            "short_answer": (
+                                short_circuit_answer(match)
+                                if match.decision in {"clarify", "handoff"}
+                                else ""
+                            ),
+                            # 引き継ぎの窓口（#2400。回答の注意書きで同じ窓口の案内を重ねない）。
+                            GUIDE_HANDOFF_CONTACT_KEY: (
+                                match.content.handoff.contact if match.decision == "handoff" else ""
+                            ),
+                        }
+                    }
+                )
             runtime_knowledge = await asyncio.to_thread(
                 with_answer_assumptions,
                 runtime_knowledge,
                 policy=profile_config.clarification_policy,
                 question=request.query,
                 conditions=request.conditions,
-                guide={},
+                guide=settings.rag_support_guide or {},
                 answered_rule_ids=answered_rule_ids,
                 confirmed_answers=recognized_answers,
             )
-            settings = settings.model_copy(
-                update={"rag_support_guide": {}, "rag_runtime_knowledge": runtime_knowledge or {}}
-            )
-            return effective_request, settings, None, view.id if (applied or kb_ids) else None
-        # 公開した業務ガイドのうち、質問に合う 1 つを選ぶ（#1238）。適用範囲は質問と検索の
-        # 絞り込みの手がかりで確かめる（#1278）。
-        guides, guides_failed = await load_published_guides(oracle, view.id)
-        if guide_preview is not None:
-            guides = with_draft(guides, guide_preview)
-            # 下書きの試答は業務ガイドの要件ごとの充足まで詳しく監査する(#2795)。
-            settings = settings.model_copy(
-                update={
-                    "rag_guide_preview": guide_preview.marker(),
-                    "rag_answer_audit_mode": "detailed",
-                }
-            )
-        guide_text = "\n".join([*guide_context, request.query])
-        # 照合の前に用語の別名で展開し、ON なら意味の照合の埋め込みを作る（#2398）。
-        query = await build_guide_query(
-            oracle,
-            settings,
-            view.id,
-            guides,
-            guide_text,
-            runtime_knowledge,
-            unsaved=frozenset({guide_preview.guide_id})
-            if guide_preview is not None
-            else frozenset(),
-        )
-        # 上位のガイドが近いときに確かめるのは、回答を作る検索・MCP だけ（チャットは送信の前の
-        # 確認の判定で確かめる）。
-        close_margin = (
-            settings.rag_support_guide_close_match_margin
-            if settings.rag_support_guide_close_match_clarification_enabled
-            and request.generate_answer
-            and not interactive
-            else None
-        )
-        selected = select_guide(
-            guides,
-            query,
-            request.conditions,
-            interactive=interactive,
-            context=await support_guide_context(
-                oracle, guides, guide_text, effective_request.filters
-            ),
-            close_margin=close_margin,
-        )
-        # 確認に自由入力で答えた選択式の条件は、答えの文が選んだ選択肢に決める（#2726）。
-        selected = await resolve_answered_conditions(
-            selected, request.conditions, settings, interactive=interactive
-        )
-        if request.generate_answer:
-            selected = await resolve_text_conditions(
-                selected, guide_text, settings, interactive=interactive
-            )
-        if guides_failed:
-            # 読めなかったことを回答の診断に残す（ガイドを使わずに答える。#1278）。
-            settings = settings.model_copy(
-                update={"rag_support_guide": {GUIDE_LOAD_FAILED_KEY: True}}
-            )
-        if isinstance(selected, GuideChoice):
-            settings = settings.model_copy(
-                update={
-                    "rag_support_guide": {
-                        **selected.summary(),
-                        **query_summary(query),
-                        "clarifications": selected.clarifications(),
-                        "short_answer": selected.short_answer(),
+            if (
+                profile_config.clarification_policy == "assume"
+                and settings.rag_support_guide.get("decision") == "clarify"
+            ):
+                # 確認カードの代わりに、未確定の条件を示して根拠に基づく回答を生成する。
+                settings = settings.model_copy(
+                    update={
+                        "rag_support_guide": {
+                            **settings.rag_support_guide,
+                            "decision": "branch",
+                            "short_answer": "",
+                        }
                     }
-                }
-            )
-        elif selected is not None:
-            match = selected
-            runtime_knowledge = with_guide_rule(runtime_knowledge, match)
-            settings = settings.model_copy(
-                update={
-                    "rag_support_guide": {
-                        **match.summary(),
-                        **query_summary(query),
-                        **(
-                            {"draft": True}
-                            if guide_preview is not None
-                            and match.guide_id == guide_preview.guide_id
-                            else {}
-                        ),
-                        "clarifications": clarification_questions(match),
-                        # 回答の根拠で決められる条件の候補（#2404。画面の図の項目の種類）。
-                        EVIDENCE_CONDITIONS_KEY: evidence_condition_candidates(match),
-                        # 根拠で条件が決まったときの手順の計画（#2689）。
-                        EVIDENCE_PLANS_KEY: evidence_plans(match),
-                        # 手順ごとの検索（#2395）の手順。回答フローだけが使う（要約には出さない）。
-                        "step_plan": guide_step_plan(match),
-                        # 業務ガイドの窓口・引き継ぐ条件・承認（#2792。資料と分けて出す）。
-                        "notices": guide_notices(match),
-                        "short_answer": (
-                            short_circuit_answer(match)
-                            if match.decision in {"clarify", "handoff"}
-                            else ""
-                        ),
-                        # 引き継ぎの窓口（#2400。回答の注意書きで同じ窓口の案内を重ねない）。
-                        GUIDE_HANDOFF_CONTACT_KEY: (
-                            match.content.handoff.contact if match.decision == "handoff" else ""
-                        ),
-                    }
-                }
-            )
-        runtime_knowledge = await asyncio.to_thread(
-            with_answer_assumptions,
-            runtime_knowledge,
-            policy=profile_config.clarification_policy,
-            question=request.query,
-            conditions=request.conditions,
-            guide=settings.rag_support_guide or {},
-            answered_rule_ids=answered_rule_ids,
-            confirmed_answers=recognized_answers,
-        )
-        if (
-            profile_config.clarification_policy == "assume"
-            and settings.rag_support_guide.get("decision") == "clarify"
-        ):
-            # 確認カードの代わりに、未確定の条件を示して根拠に基づく回答を生成する。
-            settings = settings.model_copy(
-                update={
-                    "rag_support_guide": {
-                        **settings.rag_support_guide,
-                        "decision": "branch",
-                        "short_answer": "",
-                    }
-                }
-            )
-        if runtime_knowledge:
-            settings = settings.model_copy(update={"rag_runtime_knowledge": runtime_knowledge})
-        applied_view = view.id if (applied or kb_ids) else None
-        return effective_request, settings, None, applied_view
+                )
+            if runtime_knowledge:
+                settings = settings.model_copy(update={"rag_runtime_knowledge": runtime_knowledge})
+            applied_view = view.id if (applied or kb_ids) else None
+            return effective_request, settings, None, applied_view
 
     request = _scope_request_knowledge_bases(request)
     return request, settings, None, None

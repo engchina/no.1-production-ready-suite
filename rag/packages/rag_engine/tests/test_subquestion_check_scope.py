@@ -1,4 +1,4 @@
-"""別小問のエラー・対象で正しい説明を警告しない。"""
+"""小問の語の有無から、支持や不足を自動判定しない。"""
 
 import pytest
 from test_grounded_answer import context, draft, item, record
@@ -28,7 +28,7 @@ def verify(question=QUESTION, second_id="Q2"):
 
 def test_error_from_first_subquestion_does_not_warn_other_operations():
     checked = verify()
-    assert any("E-SAMPLE" in reason for reason in checked[0].reasons)
+    assert not any("E-SAMPLE" in reason for reason in checked[0].reasons)
     for entry in checked[1:3]:
         assert not any("E-SAMPLE" in reason for reason in entry.reasons)
 
@@ -38,22 +38,22 @@ def test_child_request_uses_parent_subquestion():
     assert not any("E-SAMPLE" in reason for reason in checked[1].reasons)
 
 
-def test_unknown_request_id_keeps_full_question_checks():
+def test_unknown_request_id_does_not_create_word_checks():
     checked = verify(second_id="unknown")
-    assert any("E-SAMPLE" in reason for reason in checked[1].reasons)
+    assert not any("E-SAMPLE" in reason for reason in checked[1].reasons)
 
 
-def test_missing_error_gap_is_bound_to_first_subquestion():
+def test_missing_error_word_does_not_invent_a_gap():
     checked = verify()
     gaps = [entry.item for entry in checked if entry.item.kind == "gap" and "E-SAMPLE" in entry.item.text]
-    assert gaps
+    assert not gaps
     assert all(entry.request_id == "Q1" for entry in gaps)
     assert all("項目A" not in entry.text for entry in gaps)
 
 
-def test_single_question_keeps_existing_error_check():
+def test_single_question_does_not_turn_absent_error_words_into_a_verdict():
     checked = verify(question="取込画面で「E-SAMPLE」のエラーが出ます。対処方法は？")
-    assert any("E-SAMPLE" in reason for reason in checked[1].reasons)
+    assert not any("E-SAMPLE" in reason for reason in checked[1].reasons)
 
 
 @pytest.mark.parametrize("suffix", ["", ".R1"])

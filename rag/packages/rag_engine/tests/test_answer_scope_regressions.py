@@ -419,7 +419,7 @@ def test_missing_section_metadata_is_planned_before_the_answer_and_cannot_be_ove
 
 
 @pytest.mark.parametrize("correction_rounds, repair", [(1, True), (1, False), (0, False)])
-def test_csv_current_value_warning_is_rephrased_in_none_mode(correction_rounds, repair):
+def test_none_mode_does_not_rephrase_csv_values_from_word_presence(correction_rounds, repair):
     from dataclasses import replace
 
     from test_grounded_answer import FakeModel, context, ids, marks, record
@@ -454,16 +454,10 @@ def test_csv_current_value_warning_is_rephrased_in_none_mode(correction_rounds, 
             replace(get_settings(), answer_audit_mode="none", answer_max_correction_rounds=correction_rounds),
             image_prompt_mode="text_only",
         ).response
-    if not repair:
-        assert wrong in result.answer_text
-        assert "item_check" in marks(result)[wrong]
-        assert len(model.prompts) == 1 + correction_rounds
-        return
-    assert corrected in result.answer_text
-    assert wrong not in result.answer_text
-    assert not marks(result)
-    assert [name for name, _ in model.prompts] == ["GroundedDraft", "GroundedDraft"]
-    assert wrong in model.prompts[1][1]
+    # 「現在」の語だけでは実測値かどうかを決めず、監査なしでは自動修正もしない。
+    assert wrong in result.answer_text
+    assert "item_check" not in marks(result).get(wrong, [])
+    assert len(model.prompts) == 1
 
 
 @pytest.mark.parametrize("plan_kind", ["absent", "legacy", "scoped"])
@@ -503,4 +497,4 @@ def test_planned_table_evidence_does_not_need_question_words(plan_kind):
         payload["request_coverage"][0].pop("evidence_scope")
     result, _ = verify("入力ファイルの更新方法を教えてください。", GroundedDraft.model_validate(payload), spans)
     entry = next(e for e in result if e.item.evidence_id == "rows")
-    assert any(OTHER_DOCUMENT_CHECK in str(mark) for mark in entry.marks) is (plan_kind != "scoped")
+    assert not any(OTHER_DOCUMENT_CHECK in str(mark) for mark in entry.marks)

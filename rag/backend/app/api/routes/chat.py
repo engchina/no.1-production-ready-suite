@@ -11,7 +11,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Annotated
@@ -69,14 +69,22 @@ from app.rag.chat_attachments import attach_to_conversation, delete_conversation
 from app.rag.chat_question_token import (
     context_digest,
     issue_question_token,
-    read_question_token,
+    read_question_context,
     read_rule_selection_answers,
     read_rule_selection_elapsed,
 )
 from app.rag.document_sections_service import current_section_pages
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
+from app.rag.history_question import HistoryConfirmation
 from app.rag.observability import elapsed_ms, new_trace_id
-from app.rag.pipeline import ChatTurn, RagPipeline, storage_failure
+from app.rag.pipeline import (
+    ChatTurn,
+    RagPipeline,
+    history_confirmation_facts,
+    scope_with_history_confirmations,
+    storage_failure,
+)
+from app.rag.question_understanding import profile_language_scope
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import (
     caller_owns,
@@ -615,7 +623,51 @@ async def _build_safe_history(
                 else result
             )
             if checked.allowed:
-                turns.append(ChatTurn(role="USER", content=checked.sanitized_text))
+                facts: list[HistoryConfirmation] = []
+                resets: list[str] = []
+                record = _saved_clarification(message)
+                owner = current_audit_request_context().user_id_hash
+                if (
+                    record is not None
+                    and record.outcome == "answered"
+                    and message.user_id_hash in (None, owner)
+                ):
+                    for index, entry in enumerate(record.entries):
+                        values = [
+                            *entry.selected,
+                            *([entry.other_text] if entry.other_text else []),
+                        ]
+                        if not values:
+                            continue
+                        prompt_check = await asyncio.to_thread(
+                            guardrails.validate_query, entry.prompt
+                        )
+                        value_check = await asyncio.to_thread(
+                            guardrails.validate_query, "、".join(values)
+                        )
+                        if prompt_check.allowed and value_check.allowed:
+                            facts.append(
+                                HistoryConfirmation(
+                                    id=f"{message.id}:{index}",
+                                    key=context_digest(entry.prompt),
+                                    question=prompt_check.sanitized_text,
+                                    answer=value_check.sanitized_text,
+                                )
+                            )
+                if (
+                    record is not None
+                    and record.outcome == "skipped"
+                    and message.user_id_hash in (None, owner)
+                ):
+                    resets = [context_digest(entry.prompt) for entry in record.entries]
+                turns.append(
+                    ChatTurn(
+                        role="USER",
+                        content=checked.sanitized_text,
+                        confirmed_facts=tuple(facts),
+                        confirmation_resets=tuple(resets),
+                    )
+                )
             else:
                 allowed_user_ids.discard(message.id)
                 blocked_user_ids.add(message.id)
@@ -646,6 +698,7 @@ async def prepare_chat_question(
     settings: Settings,
     *,
     token: str | None = None,
+    confirmed_facts: list[HistoryConfirmation] | None = None,
     force_token: bool = False,
 ) -> tuple[str, str | None]:
     """現在の権限で文脈を読み、確認と検索が使う質問を一度だけ補完する。"""
@@ -667,46 +720,65 @@ async def prepare_chat_question(
     view = await oracle.get_search_answer_profile(search_answer_profile_id)
     if view is not None:
         settings, _ = resolve_search_answer_profile_settings(settings, view.config)
-    binding = {
-        "conversation": conversation_id,
-        "owner": owner,
-        "profile": search_answer_profile_id,
-        "query": context_digest(query),
-        "revision": context_digest([asdict(message) for message in messages]),
-        "policy": context_digest(
-            [
-                settings.model_dump(mode="json"),
-                view.model_dump(mode="json") if view else None,
-                await load_runtime_knowledge_payload(oracle, search_answer_profile_id),
-                await _published_guides(oracle, search_answer_profile_id),
-            ]
-        ),
-    }
-    guardrails = GuardrailPolicy(settings)
-    checked = await asyncio.to_thread(guardrails.validate_query, query)
-    if not checked.allowed:
-        return query, None
-    if token:
+    with profile_language_scope(settings) as language_pack:
+        binding = {
+            "conversation": conversation_id,
+            "owner": owner,
+            "profile": search_answer_profile_id,
+            "query": context_digest(query),
+            "revision": context_digest([asdict(message) for message in messages]),
+            "policy": context_digest(
+                [
+                    settings.model_dump(mode="json"),
+                    language_pack.hash,
+                    view.model_dump(mode="json") if view else None,
+                    await load_runtime_knowledge_payload(oracle, search_answer_profile_id),
+                    await _published_guides(oracle, search_answer_profile_id),
+                ]
+            ),
+        }
+        guardrails = GuardrailPolicy(settings)
+        checked = await asyncio.to_thread(guardrails.validate_query, query)
+        if not checked.allowed:
+            return query, None
+        history = await _build_safe_history(messages, guardrails)
+        facts = history_confirmation_facts(history)
+        if token:
+            try:
+                question, selected = read_question_context(
+                    settings.app_service_token_secret, token, binding
+                )
+                if any(identity not in facts for identity in selected):
+                    raise ValueError("確認回答の参照が現在の履歴にありません。")
+            except (ValueError, SignedUrlUnavailableError) as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="会話または設定が変わりました。質問を送信し直してください。",
+                ) from exc
+            if confirmed_facts is not None:
+                confirmed_facts.extend(facts[identity] for identity in selected)
+            return question, token
+        question = checked.sanitized_text
+        selected_facts: tuple[HistoryConfirmation, ...] = ()
+        if history and settings.rag_history_rewrite_enabled:
+            pipeline = RagPipeline(settings=settings, guardrails=guardrails)
+            question = await pipeline._safe_rewritten_query(question, history) or question
+            selected_facts = pipeline._selected_history_facts
+        if confirmed_facts is not None:
+            confirmed_facts.extend(selected_facts)
+        # 署名鍵が未設定なら補完を共有せず、正式送信側で現在の履歴を読む。
+        if not settings.app_service_token_secret:
+            return question, None
         try:
-            question = read_question_token(settings.app_service_token_secret, token, binding)
-        except (ValueError, SignedUrlUnavailableError) as exc:
-            raise HTTPException(
-                status_code=409, detail="会話または設定が変わりました。質問を送信し直してください。"
-            ) from exc
+            token = issue_question_token(
+                settings.app_service_token_secret,
+                binding,
+                question,
+                confirmed_fact_ids=tuple(fact.id for fact in selected_facts),
+            )
+        except SignedUrlUnavailableError:
+            return question, None
         return question, token
-    history = await _build_safe_history(messages, guardrails)
-    question = checked.sanitized_text
-    if history and settings.rag_history_rewrite_enabled:
-        pipeline = RagPipeline(settings=settings, guardrails=guardrails)
-        question = await pipeline._safe_rewritten_query(question, history) or question
-    # 署名鍵が未設定なら補完を共有せず、正式送信側で現在の履歴を読む。
-    if not settings.app_service_token_secret:
-        return question, None
-    try:
-        token = issue_question_token(settings.app_service_token_secret, binding, question)
-    except SignedUrlUnavailableError:
-        return question, None
-    return question, token
 
 
 @dataclass(frozen=True, slots=True)
@@ -832,6 +904,7 @@ async def _prepare_chat_turn(
         clarification_log = clarification_record(
             payload, request.clarification.rule_id, request.clarification
         )
+    inherited_facts: list[HistoryConfirmation] = []
     prepared_question, _ = (
         await prepare_chat_question(
             oracle,
@@ -840,10 +913,39 @@ async def _prepare_chat_turn(
             request.content,
             settings,
             token=request.question_context_token,
+            confirmed_facts=inherited_facts,
         )
         if request.question_context_token
         else (request.content, None)
     )
+    if request.question_context_token and request.clarification is not None:
+        # token の準備後に新しく答えた条件を、以前の補完句と古い事実で上書きしない。
+        prepared_question = request.content
+        inherited_facts = []
+    # 同輪の明示回答は履歴より優先する。設定文や展示用 context は読み取らない。
+    if scope is not None and guide_reply and clarification_log is not None:
+        current_confirmation = ChatClarificationRecord.model_validate(clarification_log)
+        scope = replace(
+            scope,
+            confirmed_premises=tuple(
+                (
+                    entry.prompt,
+                    "、".join([*entry.selected, *([entry.other_text] if entry.other_text else [])]),
+                )
+                for entry in current_confirmation.entries
+                if entry.selected or entry.other_text
+            ),
+        )
+    reset_questions: set[str] = set()
+    if clarification_log is not None and clarification_log.get("outcome") == "skipped":
+        reset_questions = {
+            context_digest(entry.prompt)
+            for entry in ChatClarificationRecord.model_validate(clarification_log).entries
+        }
+        inherited_facts = [
+            fact for fact in inherited_facts if (fact.key or fact.question) not in reset_questions
+        ]
+    scope = scope_with_history_confirmations(scope, inherited_facts)
     base_request = SearchRequest(
         query=prepared_question,
         original_question=request.content if prepared_question != request.content else None,
@@ -898,6 +1000,18 @@ async def _prepare_chat_turn(
     ):
         raise HTTPException(status_code=409, detail=DUPLICATE_MESSAGE_ID_MESSAGE)
     history = await _build_safe_history(prior_messages, guardrails)
+    if reset_questions:
+        history = [
+            replace(
+                turn,
+                confirmed_facts=tuple(
+                    fact
+                    for fact in turn.confirmed_facts
+                    if (fact.key or fact.question) not in reset_questions
+                ),
+            )
+            for turn in history
+        ]
     now = datetime.now(UTC)
     user_message = await oracle.append_message(
         StoredMessage(

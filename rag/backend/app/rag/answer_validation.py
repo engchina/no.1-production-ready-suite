@@ -52,7 +52,12 @@ from rag_parser_core.sheet_records import (
 
 from app.clients.oracle import OracleClient
 from app.clients.support_guide_store import SupportGuideStore
-from app.config import Settings
+from app.config import (
+    Settings,
+    enterprise_ai_connection_for_model,
+    enterprise_ai_default_model_id,
+    enterprise_ai_reasoning_effort_to_send,
+)
 from app.rag.answer_checks import (
     AnswerFinding,
     check_impact,
@@ -63,6 +68,7 @@ from app.rag.answer_engine import (
     _sheet_location,
     build_engine_settings,
 )
+from app.rag.answer_provenance import _sha256, answer_prompt_version
 from app.rag.answer_threads import (
     ANSWER_DEADLINE_GRACE_SECONDS,
     run_answer_in_thread,
@@ -140,6 +146,7 @@ class AnswerValidation:
     guide_steps: list[dict[str, Any]] = field(default_factory=list)
     guide_step_embedding: dict[str, Any] | None = None
     llm_usage: dict[str, Any] = field(default_factory=dict)
+    reuse_context: str = ""
 
 
 def evidence_location(metadata: Mapping[str, Any]) -> dict[str, Any]:
@@ -263,10 +270,69 @@ async def _guide_findings(
 MAX_ANSWER_TRACE_IDS = 10
 
 
+def validation_reuse_context(
+    question: str,
+    answer: str,
+    settings: Settings,
+    *,
+    prompt_version: str,
+    evidence: Sequence[Mapping[str, Any]],
+    premises: Sequence[Mapping[str, Any]],
+    data_results: Sequence[Mapping[str, Any]],
+    guide: GuideCheckRef | None,
+    requests: Sequence[Mapping[str, str]] | None,
+    gaps: Sequence[str],
+) -> str:
+    """依存する本文・前提・根拠・モデル・指示・判定方針が同じときだけ再利用する。
+
+    段落間の依存を確定できないため、回答全体の変更は再監査する。保存するのは内容の digest だけ。
+    """
+    model_id = enterprise_ai_default_model_id(settings)
+    connection = enterprise_ai_connection_for_model(settings, model_id)
+    return _sha256(
+        {
+            "policy": "review-contract-v1",
+            "question": question,
+            "answer": answer,
+            "prompts": prompt_version,
+            "profile_revision": settings.rag_search_answer_profile_revision,
+            "runtime_knowledge": settings.rag_runtime_knowledge,
+            "model": model_id,
+            "connection": {
+                "id": connection.connection_id,
+                "url": connection.base_url,
+                "project": connection.project_ocid,
+            },
+            "reasoning": enterprise_ai_reasoning_effort_to_send(settings, model_id),
+            "audit_settings": {
+                key: value
+                for key, value in settings.model_dump(mode="json").items()
+                if key.startswith("rag_answer_")
+                or key in {"rag_audit_reasoning_effort", "rag_judge_reasoning_effort"}
+            },
+            "evidence": list(evidence),
+            "premises": list(premises),
+            "data_results": list(data_results),
+            "guide": {
+                "profile": guide.search_answer_profile_id,
+                "id": guide.guide_id,
+                "revision": guide.revision,
+                "conditions": dict(guide.conditions),
+            }
+            if guide
+            else None,
+            "requests": list(requests) if requests is not None else None,
+            "gaps": list(gaps),
+        }
+    )
+
+
 async def audited_answer_lines(
     oracle: OracleClient,
     trace_ids: Sequence[str],
     readable: Mapping[str, Mapping[str, Any]],
+    *,
+    reuse_context: str = "",
 ) -> dict[str, list[str]]:
     """回答の記録の、監査を通った説明の本文 → 根拠の chunk の id（#1527。`audited_answer_items`）。
 
@@ -275,9 +341,11 @@ async def audited_answer_lines(
     引用の本文と変わっていないものだけを使う。監査が時間の上限で切れた回答（#1516）の説明は
     監査されていないので使わない。
     """
-    from rag_engine.evaluation.answer_validation import audited_answer_items
+    from rag_engine.evaluation.answer_validation import audited_answer_items, audited_line_key
 
     audited: dict[str, list[str]] = {}
+    if not reuse_context:
+        return audited
     for trace_id in list(dict.fromkeys(trace_ids))[:MAX_ANSWER_TRACE_IDS]:
         row = await oracle.get_answer_record(trace_id)
         if row is None:
@@ -286,11 +354,27 @@ async def audited_answer_lines(
         if not isinstance(diagnostics, Mapping):
             continue
         validation = diagnostics.get("answer_validation")
-        if isinstance(validation, Mapping) and validation.get("valid") is not True:
+        if (
+            not isinstance(validation, Mapping)
+            or validation.get("valid") is not True
+            or validation.get("status") != "completed"
+            or validation.get("reuse_context") != reuse_context
+        ):
             continue
         budget = diagnostics.get("round_budget")
         if isinstance(budget, Mapping) and budget.get("adopted_audit_cut"):
             continue
+        # 最終監査で実際に支持した主張と出典の組に限る。複数出典・依存が不明な組は再監査する。
+        supported_pairs: dict[str, set[str]] = {}
+        for claim in validation.get("claim_checks") or ():
+            if not isinstance(claim, Mapping) or claim.get("status") != "supported":
+                continue
+            if "," in str(claim.get("evidence_id") or ""):
+                continue
+            source_id = str(claim.get("source_id") or "")
+            key = audited_line_key(str(claim.get("answer_quote") or ""))
+            if key and source_id in readable:
+                supported_pairs.setdefault(key, set()).add(source_id)
         envelope = diagnostics.get("envelope")
         items = envelope.get("items") if isinstance(envelope, Mapping) else None
         citations = row.get("citations_json")
@@ -314,10 +398,14 @@ async def audited_answer_lines(
         ).items():
             # 根拠を今読めて、記録したときから本文が変わっていない（版・権限の変化を
             # 読み直しで確かめる）。
-            if all(
-                chunk_id in readable
-                and str(readable[chunk_id].get("text") or "") == stored.get(chunk_id)
-                for chunk_id in chunk_ids
+            if (
+                len(chunk_ids) == 1
+                and supported_pairs.get(key) == set(chunk_ids)
+                and all(
+                    chunk_id in readable
+                    and str(readable[chunk_id].get("text") or "") == stored.get(chunk_id)
+                    for chunk_id in chunk_ids
+                )
             ):
                 audited.setdefault(key, chunk_ids)
     return audited
@@ -406,9 +494,11 @@ async def _validate_answer(
         "guide_revision": guide_revision,
     }
     items: list[dict[str, Any]] = []
+    evidence_versions: dict[str, dict[str, Any]] = {}
     # 根拠の chunk の id → 文書の id（業務ガイドの手順の参照の照合に使う。監査のモデルには
     # 渡さない）。
     documents: dict[str, str] = {}
+    reuse_context = ""
     missing: list[EvidenceRef] = []
     stale: list[EvidenceRef] = []
     with observe_call("stage", EVIDENCE_LOAD_STAGE):
@@ -419,6 +509,16 @@ async def _validate_answer(
                 (stale if exists else missing).append(ref)
                 continue
             metadata = dict(chunk.metadata)
+            evidence_versions[chunk.chunk_id] = {
+                key: metadata.get(key)
+                for key in (
+                    "recipe_id",
+                    "chunk_set_id",
+                    "artifact_id",
+                    "source_run_id",
+                    "chunk_strategy",
+                )
+            }
             # 図の根拠には種類を付ける（図の見た目だけで決まる主張を本文の照合と分ける。#2678）。
             figure = figure_evidence_type(metadata)
             documents[chunk.chunk_id] = chunk.document_id
@@ -437,10 +537,32 @@ async def _validate_answer(
                     "text": chunk.text,
                 }
             )
-        # RAG の回答の監査を通った説明と本文・根拠が同じ段落は、その判定を使う（#1527）。
+        # 指示の版を読めなければ再利用しない。旧記録も版が無いため再監査する。
+        try:
+            overrides = await oracle.answer_prompt_overrides()
+            reuse_context = validation_reuse_context(
+                question,
+                answer,
+                settings,
+                prompt_version=answer_prompt_version(overrides),
+                evidence=[
+                    {**item, "artifact_version": evidence_versions[item["id"]]} for item in items
+                ],
+                premises=premises,
+                data_results=data_results,
+                guide=guide,
+                requests=requests,
+                gaps=gaps,
+            )
+        except Exception:  # noqa: BLE001 - 再利用できなくても通常の監査を続ける。
+            reuse_context = ""
+
         audited = (
             await audited_answer_lines(
-                oracle, answer_trace_ids, {item["id"]: item for item in items}
+                oracle,
+                answer_trace_ids,
+                {item["id"]: item for item in items},
+                reuse_context=reuse_context,
             )
             if answer_trace_ids and items
             else {}
@@ -565,6 +687,7 @@ async def _validate_answer(
         guide_steps=guide_steps,
         guide_step_embedding=step_embedding,
         llm_usage=dict(usage),
+        reuse_context=reuse_context,
         **deterministic,
     )
 
