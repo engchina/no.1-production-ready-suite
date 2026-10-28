@@ -71,13 +71,24 @@ class OutputContractTests(unittest.TestCase):
         self.assertIn("name / value / state / kind", rules)
         self.assertIn("unknown にし、項目名や値から推測しない", rules)
 
-    def test_saved_template_json_example_gains_kind(self) -> None:
+    def test_saved_json_is_preserved_and_fixed_contract_defines_kind(self) -> None:
         old = (
             '  "form_fields": [{"name": "項目名", "value": "表示値。空欄なら空文字", "state": '
             '"selected / unselected / enabled / disabled / required / optional / unknown"}],'
         )
-        refined = refine_image_retrieval_prompt("方針\n{\n" + old + "\n}")
-        self.assertIn('"kind": "select / text / checkbox / radio / date / button / unknown"', refined)
+        from rag_engine.adapters.oci import _picture_output_contract, _render_prompt
+
+        saved = "方針\n{\n" + old + "\n}"
+        refined = refine_image_retrieval_prompt(saved)
+        self.assertIn(saved, refined)
+        rendered = _render_prompt({}, template=saved)
+        self.assertIn(saved, rendered)
+        contract = _picture_output_contract()
+        self.assertTrue(rendered.endswith(contract))
+        schema = json.loads(contract.rsplit("\n", 1)[1])
+        field = schema["$defs"]["FormFieldOutput"]
+        self.assertIn("kind", field["required"])
+        self.assertEqual(tuple(field["properties"]["kind"]["enum"]), FORM_FIELD_KINDS)
 
     def test_language_pack_labels_every_kind_except_unknown(self) -> None:
         self.assertEqual(FORM_FIELD_KIND_CHOICES, tuple(kind for kind in FORM_FIELD_KINDS if kind != "unknown"))
