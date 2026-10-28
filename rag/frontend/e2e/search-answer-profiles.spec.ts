@@ -1420,6 +1420,7 @@ test("質問の理解は段階順の独立 Tab で差分を保存し、認識結
   const metadata = () => ({ fields, builtin, overrides, effective: { question_cues: { ...builtin.question_cues, ...overrides.question_cues } }, hash: `synthetic-${saves}` });
   await page.route("**/api/search-answer-profiles/bv-default/question-understanding", async (route) => {
     if (route.request().method() === "PUT") {
+      expect(route.request().headers()["content-type"]).toBe("application/json");
       savedBody = route.request().postDataJSON();
       overrides = (savedBody as { overrides: typeof overrides }).overrides;
       saves++;
@@ -1427,6 +1428,7 @@ test("質問の理解は段階順の独立 Tab で差分を保存し、認識結
     await route.fulfill({ json: { data: metadata(), error_messages: [], warning_messages: [] } });
   });
   await page.route("**/api/search-answer-profiles/bv-default/question-understanding/preview", async (route) => {
+    expect(route.request().headers()["content-type"]).toBe("application/json");
     previewBody = route.request().postDataJSON();
     const result = { inquiry: { request_kind: "cause" }, task_contract: { requests: ["合成の要求"] }, hash: "synthetic-preview" };
     await route.fulfill({ json: { data: { original_text: (previewBody as { text: string }).text, saved: result, draft: result }, error_messages: [], warning_messages: [] } });
