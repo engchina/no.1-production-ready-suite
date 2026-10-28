@@ -620,12 +620,12 @@ const agentJa = {
   "settings.database.systemTables.error.recovery":
     "状態を再取得し、Oracle のロック状態を確認して再試行してください。",
   "settings.database.systemTables.recreate.sectionDescription":
-    "ロールに付けた Agent の権限と利用できる業務 Agentを削除して再作成します。元に戻せません。3 製品共通のユーザー・ロール（PLATFORM_*）と、RAG / NL2SQL のテーブルは削除しません。",
+    "Agent の実行履歴、保存済みの定義（業務 Agent・スキル・MCP 接続など）、利用状況の集計データ、ロールの権限と利用できる業務 Agent の割り当てを削除して再作成します。削除したデータは復元できません。3 製品共通のユーザー・ロール（PLATFORM_*）と、RAG / NL2SQL のテーブルは削除しません。",
   "settings.database.systemTables.confirmation.helper":
     "この操作は取り消せません。{phrase} と正確に入力し、続く確認ダイアログでも承認してください。",
-  "settings.database.systemTables.confirm.title": "Agent の権限の割り当てを削除しますか？",
+  "settings.database.systemTables.confirm.title": "Agent の実行履歴・保存済みの定義・権限の割り当てを削除しますか？",
   "settings.database.systemTables.confirm.description":
-    "管理対象の Agent のテーブルを削除して再作成します。ロールに付けた Agent の権限と利用できる業務 Agentは復元できません。",
+    "管理対象の Agent のテーブルを削除して再作成します。実行履歴、保存済みの定義（業務 Agent・スキル・MCP 接続など）、利用状況の集計データ、ロールの権限と利用できる業務 Agent の割り当ては復元できません。3 製品共通のユーザー・ロール（PLATFORM_*）と、RAG / NL2SQL のテーブルは削除しません。",
   "nav.section.settings": "システム設定",
   "nav.settingsAppearance": "外観と証明書",
   "nav.settingsAnswerNotice": "回答の注意書き",
