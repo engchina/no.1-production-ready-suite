@@ -1224,6 +1224,29 @@ export function useSearchAnswerProfiles(params: {
   });
 }
 
+/** 単一選択の候補。後続ページも揃えてから、名前・参照 KB・選択中の対象を解決する。 */
+export function useAllSearchAnswerProfiles(params: { status?: SearchAnswerProfileStatus }) {
+  return useQuery({
+    queryKey: ["search-answer-profiles", { ...params, scope: "all-choices" }],
+    queryFn: async () => {
+      const first = await api.listSearchAnswerProfiles({ ...params, limit: 50, offset: 0 });
+      const items = [...first.items];
+      const warnings = [...first.warning_messages];
+      let page = first;
+      while (page.has_next && page.items.length > 0) {
+        page = await api.listSearchAnswerProfiles({
+          ...params,
+          limit: 50,
+          offset: page.offset + page.items.length,
+        });
+        items.push(...page.items);
+        warnings.push(...page.warning_messages);
+      }
+      return { ...first, items, has_next: page.has_next, warning_messages: warnings };
+    },
+  });
+}
+
 /** 検索・回答プロファイル詳細(config・参照 KB を含む)。 */
 export function useSearchAnswerProfile(id: string | null) {
   return useQuery({

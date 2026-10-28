@@ -1996,7 +1996,7 @@ for (const viewport of [
     await expect(choice.getByRole("button", { name: "確認をやめる" })).toHaveCount(0);
     await expect(choice.getByRole("textbox", { name: "その他（自由入力）" })).toBeVisible();
     await expect(page.getByRole("button", { name: "送信" })).toBeDisabled();
-    expect(clarifyQueries).toEqual([{ query: "申請の期限は？" }]);
+    expect(clarifyQueries).toEqual([{ query: "申請の期限は？", conversation_id: "conv-1" }]);
     expect(streamBodies).toEqual([]);
     await expectNoPageOverflow(page);
     for (const colorScheme of ["light", "dark"] as const) {
@@ -2893,4 +2893,78 @@ test("同頁の説明ごとに出典を開き、複数の確定箇所と保存�
   await page.screenshot({ path: testInfo.outputPath("item-citations-chat.png"), fullPage: true });
   await page.reload();
   await expectItemCitationSources(page, answer);
+});
+
+// #3721: 確認用トークンを会話未選択のまま作らない。
+for (const withConfirmation of [false, true]) {
+  test(`初回送信は会話を確定してから質問の文脈を準備する（確認${withConfirmation ? "あり" : "なし"}）`, async ({ page }) => {
+    await mockChat(page);
+    const order: string[] = [];
+    const preparations: Record<string, unknown>[] = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/chat/conversations" && request.method() === "POST") {
+        order.push("create");
+      }
+    });
+    await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", (route) =>
+      route.fulfill({ json: { data: { suggestions: [] }, error_messages: [], warning_messages: [] } })
+    );
+    await page.route("**/api/search-answer-profiles/*/clarifications/suggest", async (route) => {
+      order.push("prepare");
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      preparations.push(body);
+      await route.fulfill({ json: {
+        data: {
+          suggestion: withConfirmation ? clarificationSuggestion : null,
+          question_context_token: `context-for-${String(body.conversation_id)}`,
+        }, error_messages: [], warning_messages: [],
+      } });
+    });
+    await page.route("**/api/chat/conversations/*/messages/stream", async (route) => {
+      order.push("send");
+      if (route.request().postDataJSON().question_context_token !== "context-for-conv-1") {
+        await route.fulfill({ status: 409, json: {
+          data: null, error_messages: ["会話または設定が変わりました。"], warning_messages: [],
+        } });
+        return;
+      }
+      await route.fallback();
+    });
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
+    await page.getByRole("textbox", { name: "質問", exact: true }).fill("利用条件を教えてください。");
+    await page.getByRole("button", { name: "送信", exact: true }).click();
+    if (withConfirmation) {
+      const choice = page.getByTestId("chat-clarification-choice");
+      await choice.getByRole("checkbox", { name: /出張旅費/ }).check();
+      await choice.getByRole("button", { name: "この内容で回答", exact: true }).click();
+    }
+    await expect(page.getByTestId("chat-answer-body").getByText(assistantMessage.content, { exact: true })).toBeVisible();
+    expect(order).toEqual(["create", "prepare", "send"]);
+    expect(preparations).toEqual([{ query: "利用条件を教えてください。", conversation_id: "conv-1" }]);
+    await expect(page.getByTestId("chat-send-failure")).toHaveCount(0);
+  });
+}
+
+test("初回の会話作成に失敗しても質問を残し、再送信で会話を作れる", async ({ page }) => {
+  await mockChat(page);
+  let creates = 0;
+  await page.route("**/api/chat/conversations", async (route) => {
+    if (route.request().method() === "POST" && ++creates === 1) {
+      await route.fulfill({ status: 503, json: {
+        data: null, error_messages: ["会話を作成できませんでした。"], warning_messages: [],
+      } });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  await page.getByRole("textbox", { name: "質問", exact: true }).fill("利用条件を教えてください。");
+  await page.getByRole("button", { name: "送信", exact: true }).click();
+  await expect(page.getByTestId("chat-send-failure")).toContainText("会話を作成できませんでした。");
+  await expect(page.getByTestId("chat-live-turn")).toContainText("利用条件を教えてください。");
+  await page.getByRole("button", { name: "再送信", exact: true }).click();
+  await expect(page.getByTestId("chat-answer-body").getByText(assistantMessage.content, { exact: true })).toBeVisible();
+  expect(creates).toBe(2);
 });

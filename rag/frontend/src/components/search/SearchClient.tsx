@@ -52,7 +52,7 @@ import { isSubmitEnter } from "@/lib/keyboard";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import {
-  useSearchAnswerProfiles,
+  useAllSearchAnswerProfiles,
   useSearchExtractionFields,
 } from "@/lib/queries";
 import { isNullableString, useWorkspaceState } from "@/lib/workspace-state";
@@ -204,7 +204,7 @@ export function SearchClient() {
   const [faqAnswer, setFaqAnswer] = useState<ApprovedFaqSuggestionData | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const navigate = useNavigate();
-  const searchAnswerProfilesQuery = useSearchAnswerProfiles({ status: "ACTIVE", limit: 50, offset: 0 });
+  const searchAnswerProfilesQuery = useAllSearchAnswerProfiles({ status: "ACTIVE" });
   const searchAnswerProfiles = searchAnswerProfilesQuery.data?.items ?? [];
   // 復元した検索・回答プロファイルがアーカイブ・削除されていたら選択を外す（別の対象へ置き換えない）。
   const searchAnswerProfileMissing =

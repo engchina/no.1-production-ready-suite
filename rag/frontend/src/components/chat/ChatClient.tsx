@@ -92,7 +92,7 @@ import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { isNullableString, useWorkspaceState } from "@/lib/workspace-state";
 import {
-  useSearchAnswerProfiles,
+  useAllSearchAnswerProfiles,
   useCompareModels,
   useConversation,
   useConversations,
@@ -674,7 +674,7 @@ export function ChatClient() {
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
 
-  const searchAnswerProfilesQuery = useSearchAnswerProfiles({ status: "ACTIVE", limit: 50, offset: 0 });
+  const searchAnswerProfilesQuery = useAllSearchAnswerProfiles({ status: "ACTIVE" });
   const searchAnswerProfiles = searchAnswerProfilesQuery.data?.items ?? [];
   // 選択中の検索・回答プロファイル・会話・入力中の下書きは、ページを行き来しても再読込しても残す
   // （workspace-state.md）。URL の deep-link があればそちらを優先する。
@@ -1141,16 +1141,44 @@ export function ChatClient() {
     void clarifyOrDeliver(content, controller, retryContent);
   }
 
+  /** 確認と正式送信が同じ会話を使うよう、文脈の準備より前に会話を確定する。 */
+  async function conversationForSend(controller: AbortController): Promise<string | null> {
+    if (controller.signal.aborted || !searchAnswerProfileId) return null;
+    if (activeIdRef.current) return activeIdRef.current;
+    const created = await createConversation.mutateAsync({ search_answer_profile_id: searchAnswerProfileId });
+    if (controller.signal.aborted) return null;
+    queryClient.setQueryData(queryKeys.conversation(created.id), created);
+    setConversationOffset(0);
+    activeIdRef.current = created.id;
+    setActiveId(created.id);
+    return created.id;
+  }
+
   /**
    * 質問が検索・回答プロファイルのルールの確認に当たれば、回答の前に確認の質問を出す（#717）。1 つの質問で聞き返すのは
    * 1 回だけ。照会に失敗したときは確認を使わずに送る。
    */
   async function clarifyOrDeliver(content: string, controller: AbortController, retryContent?: string) {
     if (!searchAnswerProfileId) return;
+    let conversationId: string | null;
+    try {
+      conversationId = await conversationForSend(controller);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setLiveTurn((current) => current ? {
+          ...current,
+          pending: withOptimisticChatStatus(current.pending, "failed"),
+          failureMessage: error instanceof ApiError ? error.message : t("chat.error.send"),
+        } : current);
+        releaseController(controller);
+      }
+      return;
+    }
+    if (!conversationId || controller.signal.aborted) return;
     let suggestion: ClarificationSuggestionData | null = null;
     let questionContextToken: string | undefined;
     try {
-      const prepared = await api.suggestClarification(searchAnswerProfileId, content, activeId);
+      const prepared = await api.suggestClarification(searchAnswerProfileId, content, conversationId);
       suggestion = prepared.suggestion ?? null;
       questionContextToken = prepared.question_context_token ?? undefined;
     } catch {
@@ -1316,20 +1344,10 @@ export function ChatClient() {
         eventsOnConnection += 1;
       },
     };
-    let conversationId = activeId;
     let resumeFailures = 0;
     try {
-      if (!conversationId) {
-        // 会話を選んでいなければ、最初の送信で会話を作る（会話の履歴を開かずに始められる。#664）。
-        // 質問は作成を待たずに出している（#907）。
-        const created = await createConversation.mutateAsync({ search_answer_profile_id: searchAnswerProfileId });
-        conversationId = created.id;
-        // 作った会話の内容（空）を先に入れ、読み込み中の表示で送信中の質問を隠さない。
-        queryClient.setQueryData(queryKeys.conversation(created.id), created);
-        setConversationOffset(0);
-        setActiveId(created.id);
-        if (controller.signal.aborted) return;
-      }
+      const conversationId = await conversationForSend(controller);
+      if (!conversationId || controller.signal.aborted) return;
       const attachmentIds = outgoingAttachmentsRef.current.ids;
       outgoingAttachmentsRef.current = { ids: [], items: [] };
       const body = {

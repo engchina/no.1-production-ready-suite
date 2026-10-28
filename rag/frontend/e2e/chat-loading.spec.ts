@@ -264,3 +264,44 @@ test("「新しい会話」で会話を作った直後から入力でき、内�
   await expect(page.getByTestId("chat-run-stop")).toBeEnabled();
   release();
 });
+
+// #3739: 先頭ページより後の対象も名前で選択でき、復元時も内部IDを表示しない。
+test("51件目以降の検索・回答プロファイルを選び、再読込後も名前を表示する", async ({ page }, testInfo) => {
+  await setup(page, { noConversations: true });
+  const first = Array.from({ length: 50 }, (_, i) => ({
+    ...searchAnswerProfile, id: `profile-${i}`, name: `検証用_プロファイル${i + 1}`,
+  }));
+  const target = { ...searchAnswerProfile, name: "検証用_後続プロファイル" };
+  const offsets: number[] = [];
+  await page.route("**/api/search-answer-profiles**", async (route) => {
+    const url = new URL(route.request().url());
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    offsets.push(offset);
+    await route.fulfill({ json: envelope({
+      items: offset === 0 ? first : [target], total: 51, limit: 50, offset, has_next: offset === 0,
+    }) });
+  });
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, target.name);
+  const selected = page.locator("#chat-search-answer-profile");
+  await expect(selected).toHaveText(target.name);
+  expect(offsets).toContain(50);
+  await page.reload();
+  await expect(selected).toHaveText(target.name);
+  await page.screenshot({ path: testInfo.outputPath("chat-profile-after-first-page.png") });
+});
+
+test("プロファイルの後続ページに失敗したら、不完全な候補で送信させない", async ({ page }) => {
+  await setup(page, { noConversations: true });
+  await page.route("**/api/search-answer-profiles**", async (route) => {
+    const offset = Number(new URL(route.request().url()).searchParams.get("offset") ?? 0);
+    await route.fulfill(offset === 0 ? { json: envelope({
+      items: [searchAnswerProfile], total: 51, limit: 50, offset: 0, has_next: true,
+    }) } : { status: 503, json: {
+      data: null, error_messages: ["後続の候補を取得できませんでした。"], warning_messages: [],
+    } });
+  });
+  await page.goto("/chat?search_answer_profile_id=bv-1");
+  await expect(page.getByText("後続の候補を取得できませんでした。", { exact: true })).toBeVisible({ timeout: RETRY_TIMEOUT });
+  await expect(page.getByRole("button", { name: "送信", exact: true })).toHaveCount(0);
+});
