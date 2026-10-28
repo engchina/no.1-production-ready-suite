@@ -4420,7 +4420,11 @@ class Round:
                 "claim_support": {
                     "execution": self.review_execution,
                     "items": [
-                        {"index": index, "status": entry.review_assessment.get("effective_support", "unknown")}
+                        {
+                            "index": index,
+                            "status": entry.review_assessment.get("effective_support", "unknown"),
+                            "applicability": entry.review_assessment.get("applicability", "unknown"),
+                        }
                         for index, entry in enumerate(self.checked)
                         if entry.item.kind != "gap"
                     ],

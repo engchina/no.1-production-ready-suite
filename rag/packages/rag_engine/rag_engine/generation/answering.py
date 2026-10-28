@@ -1221,6 +1221,7 @@ def build_crag_answer_context(
                         attempt=attempt_number,
                         query=active_query,
                         retrieval_queries=tuple(retrieval_queries),
+                        executed_queries=executed_queries,
                         sufficient=False,
                         stop_reason="no_new_evidence",
                         reason="補正検索と局所拡張で新しい本文が得られないため、取得済みの根拠で回答する。",
@@ -1263,6 +1264,7 @@ def build_crag_answer_context(
                     attempt=attempt_number,
                     query=active_query.strip(),
                     retrieval_queries=_dedupe_queries(retrieval_queries),
+                    executed_queries=executed_queries,
                     sufficient=True,
                     reason="規則の信号が強いため LLM の評価を省略: " + " / ".join(skip["lines"]),
                     new_evidence_count=new_evidence_count,
@@ -1301,6 +1303,7 @@ def build_crag_answer_context(
                     attempt=attempt_number,
                     query=active_query.strip(),
                     retrieval_queries=_dedupe_queries(retrieval_queries),
+                    executed_queries=executed_queries,
                     sufficient=False,
                     reason="CRAG retrieval evaluator failed; using the best available retrieval context.",
                     grade_error=type(exc).__name__,  # 例外の型の名前だけ（本文は残さない。#3259）
@@ -5235,7 +5238,7 @@ def answer_question_result(
                 extra_budget=extra_budget,
                 usage=coverage_usage,
                 unanswered_requests=unanswered,
-                searched_queries=crag_attempts[-1].retrieval_queries if crag_attempts else retrieval_queries,
+                searched_queries=coverage_usage.searched_queries if crag_attempts else retrieval_queries,
             )
             request_coverage.setdefault("after_generation", []).append(trace)
             if trace.get("re_retrieval", {}).get("applied"):
