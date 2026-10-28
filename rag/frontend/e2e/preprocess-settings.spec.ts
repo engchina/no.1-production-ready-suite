@@ -82,11 +82,12 @@ test("前処理設定取得に失敗したら再試行できる", async ({ page 
 });
 
 test("前処理設定はファイル準備方式を保存できる", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 760 });
+  let savedContentType: string | undefined;
   let savedPayload: unknown = null;
   await page.route("**/api/settings/preprocess", async (route) => {
     if (route.request().method() === "PATCH") {
       savedPayload = route.request().postDataJSON();
+      savedContentType = route.request().headers()["content-type"];
       await route.fulfill({ json: preprocessEnvelope({ profile: "office_to_pdf" }) });
       return;
     }
@@ -105,6 +106,7 @@ test("前処理設定はファイル準備方式を保存できる", async ({ pa
   await expect(page.getByText("ファイル準備の設定を保存しました。")).toBeVisible();
   await expect(page.getByText("未保存の変更があります。")).toHaveCount(0);
   expect(savedPayload).toEqual({ profile: "office_to_pdf" });
+  expect(savedContentType).toBe("application/json");
   await expectNoHorizontalOverflow(page);
 });
 
