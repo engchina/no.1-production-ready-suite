@@ -341,6 +341,35 @@ export function resolveCitationLine(
   return index < 0 ? null : fromMatch(index, citations);
 }
 
+/** 一つの出典行が持つ全確定箇所と、別に残る未確定の候補を返す。旧本文の項目は再配置しない。 */
+export function resolveCitationLineTargets(
+  ordinal: number | undefined,
+  ref: AnswerCitationRef | null,
+  citations: readonly RetrievedChunk[],
+): CitationTarget[] {
+  const seen = new Set<string>();
+  const exact = ordinal == null ? [] : citations.flatMap((chunk, index): CitationTarget[] => {
+    if (chunk.metadata.answer_citation_provenance !== PROVENANCE_CHILD
+      || !lineNumbers(chunk.metadata.answer_citation_lines).includes(ordinal)) return [];
+    const key = chunk.chunk_id ? `${chunk.document_id}:${chunk.chunk_id}` : String(index);
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{ index, position: { kind: "exact" } }];
+  });
+  if (!exact.length) {
+    const fallback = resolveCitationLine(ordinal, ref, citations);
+    return fallback ? [fallback] : [];
+  }
+  const confirmed = new Set(exact.map((target) => target.index));
+  const candidates = citations.flatMap((chunk, index) =>
+    !confirmed.has(index) && ordinal != null
+      && lineNumbers(chunk.metadata.answer_citation_candidate_lines).includes(ordinal) ? [index] : [],
+  );
+  return candidates.length
+    ? [...exact, { index: candidates[0], position: { kind: "unresolved", reason: "candidates", candidates } }]
+    : exact;
+}
+
 /** {@link resolveCitationLine} の開く引用の位置だけ（当たる引用が無ければ -1）。 */
 export function matchCitationLine(
   ordinal: number | undefined,

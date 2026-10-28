@@ -149,14 +149,14 @@ def _parent_span() -> dict:
     }
 
 
-def test_merged_citation_line_keeps_every_supporting_child() -> None:
-    """同じ出典・頁の説明を 1 つの出典行にまとめても、それぞれの説明を支える子をすべて残す。"""
+def test_each_item_citation_line_keeps_only_its_supporting_child() -> None:
+    """同じ出典・頁でも項目ごとの出典行へ分け、その説明を支える子だけを残す。"""
     span = _parent_span()
     entries = [_entry("合成の注意書きです。", span), _entry("右の枠に結果 C が出ます。", dict(span, evidence_id="E-b"))]
     body, refs = grounded.render_with_citations("", entries)
-    assert body.count(grounded.answer_labels().citation_prefix) == 1
-    assert refs[0]["scope_source_ids"] == ["doc:c-h", "doc:c-f"]
-    assert refs[0]["evidence_ids"] == ["E-a", "E-b"]
+    assert body.count(grounded.answer_labels().citation_prefix) == 2
+    assert [ref["scope_source_ids"] for ref in refs] == [["doc:c-h"], ["doc:c-f"]]
+    assert [ref["evidence_ids"] for ref in refs] == [["E-a"], ["E-b"]]
 
 
 def test_unlocated_quote_leaves_candidates_instead_of_the_first_child() -> None:

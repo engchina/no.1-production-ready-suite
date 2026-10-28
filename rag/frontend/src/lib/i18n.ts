@@ -3719,6 +3719,8 @@ export const ja = {
   "search.faq.matched": "一致した Q&A: {question}",
   "search.answerDetails.models": "使用したモデル",
   "search.answerDetails.questionType": "問い合わせ型: {value}",
+  "search.answerText.citationPart": "箇所 {number}/{total}：{citation}",
+  "search.answerText.citationCandidates": "位置未確定の候補：{citation}",
   "search.answerText.openCitation": "{citation} の原文を開く",
   // 本文の根拠の行が指す箇所を確定できないとき（#2710）。
   "search.citationPosition.unresolvedTitle": "この根拠の行の位置は確定していません",
