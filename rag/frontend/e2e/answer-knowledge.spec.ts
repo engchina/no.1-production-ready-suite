@@ -673,3 +673,21 @@ test("照合テストで保留した排他設定を管理者へ示す", { tag: "
   await expect(page.getByText(/排他設定の競合により保留しました: 合成ルール A、合成ルール B/)).toBeVisible();
   await expectNoPageOverflow(page);
 });
+
+test("検索の回答は同頁の説明と全確定根拠の対応を保つ", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const { itemCitationText, itemCitationChunks, expectItemCitationSources } = await import("./_item-citations");
+  await mockCommon(page);
+  await mockSearchAnswerProfileApi(page);
+  await page.route("**/api/search/stream", route => route.fulfill({
+    headers: { "content-type": "text/event-stream" },
+    body: [
+      `event: metadata\ndata: ${JSON.stringify({ trace_id: "trace-items", elapsed_ms: 20, guardrail_warnings: [], diagnostics: {} })}\n\n`,
+      `event: delta\ndata: ${JSON.stringify({ text: itemCitationText })}\n\n`,
+      `event: citations\ndata: ${JSON.stringify(itemCitationChunks)}\n\n`,
+      `event: done\ndata: ${JSON.stringify({ trace_id: "trace-items" })}\n\n`,
+    ].join(""),
+  }));
+  await selectSearchAnswerProfileAndAsk(page, "合成の説明を確認してください。");
+  await expectItemCitationSources(page, page.getByTestId("answer-text"));
+  await page.screenshot({ path: testInfo.outputPath("item-citations-search.png"), fullPage: true });
+});

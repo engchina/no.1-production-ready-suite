@@ -102,3 +102,23 @@ def test_unknown_parent_or_missing_refs_leave_citations_unchanged() -> None:
     )
     assert _lines(unchanged) == {}
     assert _lines(unchanged, ANSWER_CITATION_CANDIDATE_LINES_KEY) == {}
+
+
+def test_each_item_has_its_own_citation_line_even_when_reusing_same_page_or_child() -> None:
+    citations = [_chunk("a", 1), _chunk("b", 1), _chunk("candidate", 1)]
+    parents = [_parent("parent", ("a", True), ("b", True), ("candidate", False))]
+    refs = [
+        {"source_id": "parent", "scope_source_ids": ["a"], "page": 1},
+        {"source_id": "parent", "scope_source_ids": ["b"], "page": 1},
+        {"source_id": "parent", "scope_source_ids": ["a", "b"], "page": 1},
+        {
+            "source_id": "parent",
+            "scope_source_ids": [],
+            "candidate_source_ids": ["candidate"],
+            "page": 1,
+        },
+    ]
+    result = _with_citation_lines(citations, parents, refs)
+    assert _lines(result) == {"a": [1, 3], "b": [2, 3]}
+    assert _lines(result, ANSWER_CITATION_CANDIDATE_LINES_KEY) == {"candidate": [4]}
+    assert result[2].metadata.get(ANSWER_CITATION_PROVENANCE_KEY) is None

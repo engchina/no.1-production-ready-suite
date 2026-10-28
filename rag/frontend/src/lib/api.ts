@@ -3437,6 +3437,8 @@ export const api = {
     request<LanguagePackReprocessingTargets>("/api/documents/language-pack/reprocessing-targets", jsonBody({ document_ids, expected_release_id })),
   enqueueLanguagePackReprocessing: (expected_release_id: string, targets: { document_id: string; recipe_id: string; phase: IngestionJobPhase; expected_config_revision: number }[]) =>
     request<LanguagePackReprocessingResult>("/api/documents/language-pack/reprocessing-jobs", jsonBody({ expected_release_id, targets })),
+  getDocumentCitationChunk: (id: string, chunkId: string) =>
+    request<RetrievedChunk>(`/api/documents/${encodeURIComponent(id)}/chunks/${encodeURIComponent(chunkId)}`),
   getDocument: (id: string) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
   listDocumentChunkSets: (id: string) =>

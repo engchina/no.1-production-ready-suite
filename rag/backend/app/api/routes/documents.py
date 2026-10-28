@@ -196,7 +196,7 @@ from app.schemas.knowledge_base import (
     KnowledgeBaseRef,
 )
 from app.schemas.language_pack_release import LanguagePackIndexRelation
-from app.schemas.search import normalize_search_id_list
+from app.schemas.search import RetrievedChunk, normalize_search_id_list
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -6164,3 +6164,14 @@ def _normalize_upload_knowledge_base_ids(values: list[str] | None) -> list[str]:
     for value in values:
         expanded.extend(value.split(","))
     return normalize_search_id_list(expanded)
+
+
+@router.get("/{document_id}/chunks/{chunk_id}", response_model=ApiResponse[RetrievedChunk])
+async def get_document_citation_chunk(
+    document_id: str, chunk_id: str
+) -> ApiResponse[RetrievedChunk]:
+    """閲覧可能な現行の根拠だけを ID で読み、原文の位置を返す。検索は行わない。"""
+    chunk = await OracleClient().retrievable_chunk(document_id, chunk_id)
+    if chunk is None:
+        raise HTTPException(status_code=404, detail="この根拠は現在の閲覧範囲では表示できません。")
+    return ApiResponse(data=chunk)

@@ -397,6 +397,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("DELETE", f"{_D}/sections"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/ingestion-segments"): _DOCUMENT_WORKSPACE,
     ("GET", _D): _DOCUMENT_VIEW,
+    ("GET", f"{_D}/chunks/{{chunk_id}}"): _DOCUMENT_VIEW,
     ("DELETE", _D): _any(MENU_FILE_LIST),
     ("GET", f"{_D}/knowledge-bases"): _DOCUMENT_WORKSPACE,
     ("PUT", f"{_D}/knowledge-bases"): _DOCUMENT_WORKSPACE,

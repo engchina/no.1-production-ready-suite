@@ -116,11 +116,11 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
         </CardContent>
       </Card>
 
-      {/* 関係情報(文書と章・節の見出しのつながり)の俯瞰。展開時のみ subgraph を取得。 */}
-      <KnowledgeBaseGraphView knowledgeBaseId={kb.id} />
-
-      {/* 項目抽出で取り出す項目の定義(#548)。無ければ全体の既定を使う。構築設定として、構築フローの直前に置く(#555)。 */}
+      {/* 項目抽出で取り出す項目の定義。無ければ全体の既定を使う。 */}
       <KnowledgeBaseExtractionFields knowledgeBaseId={kb.id} editable={isActive} />
+
+      {/* 項目の定義の後に文書の構造を確認する。展開時のみ subgraph を取得。 */}
+      <KnowledgeBaseGraphView knowledgeBaseId={kb.id} />
 
       {/* このナレッジ単体で検索の手応えを確認する(検索・回答プロファイル不要)。構築の設定(関係情報・抽出する項目)を
           見た後に、最後に検索で確かめる流れにするため、いちばん下に置く(#616)。 */}
