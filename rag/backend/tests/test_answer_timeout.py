@@ -57,8 +57,9 @@ def test_answer_timeout_message_names_stage_and_retry() -> None:
     assert "（時間切れになった工程: 処理）" in answer_timeout_message("unknown_stage", 30)
     assert "時間内に終わりませんでした" in answer_timeout_message("answer", None)
     # 回答フローの各工程（#593）は利用者向けの名前にする（#2096。画面の処理の経過と同じ名前）。
-    assert "（時間切れになった工程: 検索文から根拠の候補を集める（1 回目））" in answer_timeout_message(
-        "answer_step:文書検索（1回目）", 30
+    assert (
+        "（時間切れになった工程: 検索文から根拠の候補を集める（1 回目））"
+        in answer_timeout_message("answer_step:文書検索（1回目）", 30)
     )
     assert "（時間切れになった工程: 資料を探す検索表現を作る）" in answer_timeout_message(
         "answer_step:質問拡張戦略", 30
