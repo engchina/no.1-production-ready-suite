@@ -1347,3 +1347,16 @@ test.describe("実行履歴の詳細の長い章節の根拠（#3422）", { tag:
     await expectNoPageOverflow(page);
   });
 });
+
+test("保存した回答の記録から同頁の説明と全確定根拠を開ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const { itemCitationText, itemCitationChunks, expectItemCitationSources } = await import("./_item-citations");
+  await mockDatabaseReady(page);
+  await mockLocalAuth(page);
+  await mockRuns(page, [run(0, {
+    question: "合成の質問", search_answer_profile_name: "プロファイル A",
+    answer_generated: true, answer: itemCitationText, citations: itemCitationChunks, citation_count: 2,
+  })]);
+  await page.goto("/history/run-0");
+  await expectItemCitationSources(page, page.getByTestId("answer-text"));
+  await page.screenshot({ path: testInfo.outputPath("item-citations-history.png"), fullPage: true });
+});

@@ -286,3 +286,20 @@ def test_heading_only_quotes_require_structural_heading_provenance():
     assert not grounded.heading_only_quote("期限が重なる場合は、先の期限を優先する。", span)
     assert not grounded.heading_only_quote("2.8 期限が重なる場合\n先の期限を優先する。", span)
     assert not grounded.heading_only_quote("期限が重なる場合", {"section_path": []})
+
+
+def test_one_item_same_document_and_page_keeps_all_confirmed_chunks_in_one_line():
+    first_text = "合成の項目 A。\n合成の保存操作を実行します。"
+    second_text = "合成の項目 B。\n合成の保存操作を実行します。"
+    quote = "合成の保存操作を実行します。"
+    ctx = context(
+        record(0, first_text, "合成 A", page=1, source="document-a.pdf"),
+        record(1, second_text, "合成 B", page=1, source="document-a.pdf"),
+    )
+    labels = ids(ctx, QUESTION)
+    first, second = labels[first_text], labels[second_text]
+    model = FakeModel([draft(_cite((first, quote), (second, quote), text=quote), summary="")], [])
+    result = _run(model, ctx)
+    assert result.answer_text.count(quote) == 1
+    assert len(_citation_lines(result.answer_text)) == 1
+    assert result.generation_trace["citation_lines"][0]["evidence_ids"] == [first, second]

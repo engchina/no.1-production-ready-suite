@@ -130,7 +130,7 @@ class GroundedAnswerTest(unittest.TestCase):
         result = run(model, ctx).response
         self.assertEqual(
             result.answer_text,
-            "集計表出力から明細一覧を出力できます。\n\n操作手順（売上-(3)年次集計明細作成）\n\n1. 一覧表を選択し、処理を選択します。\n"
+            "集計表出力から明細一覧を出力できます。\n\n操作手順（売上-(3)年次集計明細作成）\n\n1. 一覧表を選択し、処理を選択します。\n根拠：売上集計業務.pdf p.20\n"
             "2. 実行ボタンを押して完了します。\n根拠：売上集計業務.pdf p.20",
         )
         self.assertEqual((result.confidence, result.needs_human_review, result.insufficient_reason), ("high", False, ""))
@@ -2420,7 +2420,7 @@ class RenderStepOrderTest(unittest.TestCase):
                 self.entry("値を入力します。", "F2 詳細入力"),
             ],
         )
-        self.assertIn("操作手順（F1 設定一覧）\n\n1. 項目を選択します。\n2. 保存ボタンを押します。", body)
+        self.assertIn("操作手順（F1 設定一覧）\n\n1. 項目を選択します。\n根拠：架空設定手順.pdf p.1\n2. 保存ボタンを押します。", body)
         self.assertEqual(body.count("操作手順（F1 設定一覧）"), 1)
 
 
@@ -2779,7 +2779,7 @@ class DocumentGroupedProcedureTest(unittest.TestCase):
         a2 = self.entry("実行ボタンを押します。", "出力様式設定", "架空変更手順.pdf")
         body = grounded.render("", [b1, a1, a2])
         self.assertLess(body.index("対象を選択"), body.index("名前を直接入力"))  # 操作 item が最も多い文書（主文書）が先
-        self.assertIn("操作手順（出力様式設定）\n\n1. 対象を選択します。\n2. 実行ボタンを押します。", body)
+        self.assertIn("操作手順（出力様式設定）\n\n1. 対象を選択します。\n根拠：架空変更手順.pdf p.1\n2. 実行ボタンを押します。", body)
         self.assertEqual(body.count("操作手順（出力様式設定）"), 1)  # 別文書を挟んでも同じ文書の手順は 1 つの節
         self.assertIn("操作手順（帳票設定）\n\n・名前を直接入力します。", body)
 
@@ -2821,21 +2821,30 @@ class DocumentGroupedProcedureTest(unittest.TestCase):
         self.assertLess(block.index("[E3]"), block.index("[E2]"))
 
     def test_render_with_citations_returns_one_ref_per_citation_line_in_text_order(self):
-        """本文の出典行ごとの根拠を本文の順に返す。同じ出典が続いて出典行を省いた分は返さない (#1330)。"""
+        """同じ出典が続いても説明ごとの根拠を本文の順に返す。"""
         a1 = self.entry("対象を選択します。", "出力様式設定", "架空変更手順.pdf")
         b1 = self.entry("名前を直接入力します。", "帳票設定", "架空管理説明書.pdf")
         a2 = self.entry("実行ボタンを押します。", "出力様式設定", "架空変更手順.pdf")
         for entry, source_id in ((a1, "P-a1"), (b1, "P-b1"), (a2, "P-a2")):
             entry.span.update(evidence_id="E" + source_id, source_id=source_id)
+        a1.span["scope_source_ids"] = ["c-a1"]
         a2.span["scope_source_ids"] = ["c-a2"]
         body, refs = grounded.render_with_citations("", [b1, a1, a2])
         self.assertEqual(body, grounded.render("", [b1, a1, a2]))
         lines = [line for line in body.split("\n") if line.startswith(grounded.answer_labels().citation_prefix)]
         self.assertEqual(len(refs), len(lines))
-        # a1 と a2 は同じ出典・頁が続くので出典行は a2 の後の 1 行。主文書の手順が先。
-        self.assertEqual([ref["source_id"] for ref in refs], ["P-a2", "P-b1"])
-        self.assertEqual(refs[0]["scope_source_ids"], ["c-a2"])
-        self.assertEqual((refs[1]["evidence_id"], refs[1]["page"]), ("EP-b1", 1))
+        # 同じ文書・頁の二つの項目はそれぞれ出典を持つ。主文書の手順が先。
+        self.assertEqual([ref["source_id"] for ref in refs], ["P-a1", "P-a2", "P-b1"])
+        self.assertEqual([ref["scope_source_ids"] for ref in refs[:2]], [["c-a1"], ["c-a2"]])
+        self.assertEqual((refs[2]["evidence_id"], refs[2]["page"]), ("EP-b1", 1))
+        rendered = body.splitlines()
+        for entry in (a1, a2, b1):
+            line = next(index for index, value in enumerate(rendered) if entry.item.text in value)
+            self.assertTrue(rendered[line + 1].startswith(grounded.answer_labels().citation_prefix))
+        # 同一 chunk の再利用でも二つの項目を別の出典行へ対応させる。
+        a2.span["scope_source_ids"] = ["c-a1"]
+        _, reused = grounded.render_with_citations("", [a1, a2])
+        self.assertEqual([ref["scope_source_ids"] for ref in reused], [["c-a1"], ["c-a1"]])
 
     def setUp(self):
         self.ctx = context(
@@ -2874,7 +2883,7 @@ class DocumentGroupedProcedureTest(unittest.TestCase):
             self.QUESTION,
         ).response
         text = result.answer_text
-        self.assertIn("操作手順（架空変更手順 > 出力様式設定）\n\n1. 出力様式一覧から対象を選択します。\n2. 実行ボタンを押します。", text)
+        self.assertIn("操作手順（架空変更手順 > 出力様式設定）\n\n1. 出力様式一覧から対象を選択します。\n根拠：架空変更手順.pdf p.20\n2. 実行ボタンを押します。", text)
         self.assertIn("操作手順（架空管理説明書）\n\n・ファイル名欄に新しい名前を直接入力します。", text)
         self.assertNotIn("の場合）", text)
         self.assertLess(text.index("実行ボタンを押します"), text.index("ファイル名欄に新しい名前"))

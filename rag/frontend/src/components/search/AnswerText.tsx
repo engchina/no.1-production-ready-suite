@@ -17,7 +17,7 @@ import {
   citationLocation,
   parseAnswerText,
   parseCitationLine,
-  resolveCitationLine,
+  resolveCitationLineTargets,
   type AnswerTextBlock,
   type AnswerTextEntry,
   type CitationTarget,
@@ -118,18 +118,25 @@ export function AnswerText({
     </AnswerSections>
   );
 
-  function toCitation(citation: string, ordinal: number | undefined): AnswerCitationRef {
+  function toCitations(citation: string, ordinal: number | undefined): AnswerCitationRef[] {
     const ref = parseCitationLine(citation, format);
-    const target = resolveCitationLine(ordinal, ref, citations);
-    return target == null
-      ? { key: citation, label: citation }
-      : {
-          key: citation,
-          label: citation,
-          location: citationLocation(citation, ref?.fileName),
-          ariaLabel: t("search.answerText.openCitation", { citation }),
-          onOpen: () => source.open(target),
-        };
+    const targets = resolveCitationLineTargets(ordinal, ref, citations);
+    if (!targets.length) return [{ key: `${ordinal}:${citation}`, label: citation }];
+    return targets.map((target, index) => {
+      const label = targets.length === 1 ? citation : t(
+        target.position.kind === "unresolved"
+          ? "search.answerText.citationCandidates"
+          : "search.answerText.citationPart",
+        { citation, number: index + 1, total: targets.filter((entry) => entry.position.kind === "exact").length },
+      );
+      return {
+        key: `${ordinal}:${citations[target.index].document_id}:${citations[target.index].chunk_id}:${target.position.kind}`,
+        label,
+        location: citationLocation(citation, ref?.fileName),
+        ariaLabel: t("search.answerText.openCitation", { citation: label }),
+        onOpen: () => source.open(target),
+      };
+    });
   }
 
   function renderSectionLink(text: string, title: string) {
@@ -160,7 +167,7 @@ export function AnswerText({
     return {
       key: String(index),
       content: entry.text,
-      citations: entry.citations.map((citation, position) => toCitation(citation, entry.citationLines[position])),
+      citations: entry.citations.flatMap((citation, position) => toCitations(citation, entry.citationLines[position])),
       extra: renderSectionLink(entry.text, title),
     };
   }
