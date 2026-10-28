@@ -10,6 +10,7 @@ from app.clients.language_pack_release_store import (
     LanguagePackReleaseStore,
     _release,
     _validated,
+    language_pack_release_statements,
 )
 from app.clients.oracle import OracleClient
 from app.schemas.language_pack_release import LanguagePackRelease, LanguagePackReleaseState
@@ -35,6 +36,12 @@ def test_snapshot_requires_every_field_and_checks_hash() -> None:
         _validated({"locale": "ja"})
     with pytest.raises(ValueError, match="照合"):
         _release({**row, "content_hash": "0" * 64})
+
+
+def test_hash_columns_preserve_digest_without_fixed_width_padding() -> None:
+    sql = language_pack_release_statements()
+    assert "content_hash VARCHAR2(64) NOT NULL" in sql
+    assert "ingest_hash VARCHAR2(64) NOT NULL" in sql
 
 
 @pytest.mark.parametrize("revision,current", [(2, None), (1, "release-b"), (0, "release-a")])

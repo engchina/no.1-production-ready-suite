@@ -8,6 +8,7 @@ from rag_parser_core.language import builtin_pack
 
 from app.api.routes import documents
 from app.clients import language_pack_release_store
+from app.rag import published_language_runtime
 from app.schemas.language_pack_release import LanguagePackRelease
 
 
@@ -35,6 +36,7 @@ def install_language_release_stub(monkeypatch: pytest.MonkeyPatch) -> LanguagePa
     async def initialized(_oracle: Any = None) -> Store:
         return Store(_oracle)
 
+    monkeypatch.setattr(published_language_runtime, "initialized_release_store", initialized)
     monkeypatch.setattr(documents, "initialized_release_store", initialized)
     monkeypatch.setattr(language_pack_release_store, "LanguagePackReleaseStore", Store)
     return release

@@ -32,9 +32,17 @@ async def test_releases_are_atomic_immutable_and_complete(monkeypatch: pytest.Mo
     store = module.LanguagePackReleaseStore(client)
     initial = builtin_pack().to_dict()
     try:
-        first, simultaneous = await asyncio.gather(
-            store.ensure_initialized(initial), store.ensure_initialized(initial)
+        initialized = await asyncio.gather(
+            store.ensure_initialized(initial),
+            store.ensure_initialized(initial),
+            return_exceptions=True,
         )
+        # 片方が失敗しても他方の DB スレッドが終わるまで待ち、cleanup と競合させない。
+        for outcome in initialized:
+            if isinstance(outcome, BaseException):
+                raise outcome
+        first, simultaneous = initialized
+        assert not isinstance(first, BaseException) and not isinstance(simultaneous, BaseException)
         assert first.current == simultaneous.current
         assert (await store.list()).total == 1
         changed = deepcopy(initial)
