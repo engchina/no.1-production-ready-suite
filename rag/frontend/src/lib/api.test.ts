@@ -48,6 +48,22 @@ describe("api.request envelope", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/ready/database", expect.anything());
   });
 
+  it("ファイル準備の保存は JSON の Content-Type と変換方式を送る", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ data: { profile: "office_to_pdf" }, error_messages: [], warning_messages: [] })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.updatePreprocessSettings({ profile: "office_to_pdf" });
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/settings/preprocess");
+    expect(init.method).toBe("PATCH");
+    expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+    expect(JSON.parse(init.body as string)).toEqual({ profile: "office_to_pdf" });
+    expect(result.profile).toBe("office_to_pdf");
+  });
+
   it("エラー時は error_messages を持つ ApiError を投げる", async () => {
     vi.stubGlobal(
       "fetch",

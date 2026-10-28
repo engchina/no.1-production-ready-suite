@@ -4540,6 +4540,7 @@ export const api = {
   updatePreprocessSettings: (body: PreprocessSettingsUpdate) =>
     request<PreprocessSettingsData>("/api/settings/preprocess", {
       method: "PATCH",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
   getLanguagePack: () => request<LanguagePackData>("/api/settings/language-pack"),
