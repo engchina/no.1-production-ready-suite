@@ -168,6 +168,7 @@ export function ApprovedFaqManager({
         />
       ) : (
       <PagedDataTable<ApprovedFaqRecordData>
+        showSinglePagePagination
         paginationLabels={paginationLabels()}
         {...paging}
         pageSizeOptions={PAGE_SIZE_OPTIONS}

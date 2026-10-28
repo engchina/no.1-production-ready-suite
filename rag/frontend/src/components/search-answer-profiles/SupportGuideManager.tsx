@@ -110,6 +110,7 @@ export function SupportGuideManager({ searchAnswerProfileId }: { searchAnswerPro
     />
   ) : (
     <PagedDataTable<SupportGuideSummary>
+      showSinglePagePagination
       paginationLabels={paginationLabels()}
       {...paging}
       pageSizeOptions={PAGE_SIZE_OPTIONS}

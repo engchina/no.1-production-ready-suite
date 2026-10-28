@@ -1,6 +1,6 @@
 import { expectGrowingList } from "./_list-viewport";
 import { expect, type Page, test } from "./fixtures/test";
-import { findClippedPlaceholders, findFloatingFormActionBars } from "../../../platform/packages/ui/e2e/layout-checks";
+import { findClippedPlaceholders, findFloatingFormActionBars, jumpToPage } from "../../../platform/packages/ui/e2e/layout-checks";
 import {
   expectNoPageOverflow,
   expectSearchablePanelFits,
@@ -14,6 +14,79 @@ const GLOBAL_QUERY_FIELDS = [
   "graph_expansion_enabled", "graph_expansion_max_chunks", "screen_linking_enabled", "request_coverage_retrieval_enabled",
   "guide_step_retrieval_enabled", "guide_step_max_queries", "guide_step_deadline_seconds",
 ];
+
+// #3719: 空・単一ページでも表示し、4一覧のページ操作と作業状態を確かめる。
+for (const [tab, paginationId, kind] of [
+  ["登録済みQ&A", "approved-faq-pagination", "faq"],
+  ["用語・同義語", "runtime-knowledge-terms-pagination", "terms"],
+  ["確認・回答ルール", "runtime-knowledge-rules-pagination", "rules"],
+  ["業務ガイド", "support-guides-pagination", "guides"],
+]) {
+  test(`知識一覧のページング: ${tab}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await mockDefaultSearchAnswerProfile(page, () => {});
+    let count = 0;
+    const rows = () => Array.from({ length: count }, (_, index) => {
+      const name = `項目 ${String(index + 1).padStart(3, "0")}`;
+      return {
+        id: `item-${index}`, question: name, answer: "合成の回答", alternate_questions: [],
+        term: name, aliases: [], description: "合成の説明", title: name, content: "合成の指示",
+        triggers: [], status: kind === "guides" ? "active" : "approved",
+        guide_id: `guide-${index}`, published_revision: null, draft_revision: 1,
+        has_unpublished_changes: true, updated_at: "2026-10-01T00:00:00Z", updated_by: null,
+      };
+    });
+    const response = (data: unknown) => ({ json: { data, error_messages: [], warning_messages: [] } });
+    await page.route("**/api/search-answer-profiles/bv-default/approved-faq", (route) =>
+      route.fulfill(response({ records: kind === "faq" ? rows() : [], enabled: true })));
+    await page.route("**/api/search-answer-profiles/bv-default/runtime-knowledge", (route) =>
+      route.fulfill(response({ terms: kind === "terms" ? rows() : [], rules: kind === "rules" ? rows() : [] })));
+    await page.route("**/api/search-answer-profiles/bv-default/support-guides**", (route) =>
+      route.fulfill(response(rows())));
+    const open = async () => { await page.getByRole("tab", { name: tab, exact: true }).click(); };
+    await page.goto("/search-answer-profiles?id=bv-default");
+    await open();
+    const pagination = page.getByTestId(paginationId);
+    await expect(pagination).toContainText("0–0 / 0 件");
+    await expect(pagination.getByRole("button", { name: "前へ", exact: true })).toBeDisabled();
+    await expect(pagination.getByRole("button", { name: "次へ", exact: true })).toBeDisabled();
+    await pagination.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`${kind}-empty.png`) });
+
+    count = 61;
+    await page.reload();
+    await open();
+    const panel = page.getByRole("tabpanel");
+    await expect(pagination).toContainText("1–25 / 61 件");
+    await expect(panel.getByRole("rowheader")).toHaveCount(25);
+    await expect(panel.getByRole("rowheader").first()).toHaveText("項目 001");
+    await jumpToPage(pagination, 3);
+    await expect(pagination).toContainText("51–61 / 61 件");
+    await expect(panel.getByRole("rowheader")).toHaveCount(11);
+    await expect(panel.getByRole("rowheader").first()).toHaveText("項目 051");
+    await expect(pagination.getByRole("button", { name: "次へ", exact: true })).toBeDisabled();
+    await page.reload();
+    await open();
+    await expect(pagination).toContainText("51–61 / 61 件");
+    await pagination.getByRole("combobox", { name: "表示件数", exact: true }).click();
+    await page.getByRole("option", { name: "10 件", exact: true }).click();
+    await expect(pagination).toContainText("1–10 / 61 件");
+    await expect(panel.getByRole("rowheader")).toHaveCount(10);
+    await pagination.getByRole("button", { name: "次へ", exact: true }).click();
+    await expect(pagination).toContainText("11–20 / 61 件");
+    await expect(panel.getByRole("rowheader").first()).toHaveText("項目 011");
+    await pagination.getByRole("button", { name: "前へ", exact: true }).click();
+    await expect(pagination).toContainText("1–10 / 61 件");
+    await page.screenshot({ path: testInfo.outputPath(`${kind}-paging.png`) });
+    await expectNoPageOverflow(page);
+
+    count = 1;
+    await page.reload();
+    await open();
+    await expect(pagination).toContainText("1–1 / 1 件");
+    await expect(panel.getByRole("rowheader")).toHaveCount(1);
+    await expect(pagination.getByRole("button", { name: "次へ", exact: true })).toBeDisabled();
+  });
+}
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);

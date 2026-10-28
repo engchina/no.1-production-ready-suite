@@ -262,6 +262,7 @@ export function RuntimeKnowledgeManager({
     />
   ) : (
     <PagedDataTable<Row>
+      showSinglePagePagination
       paginationLabels={paginationLabels()}
       {...paging}
       pageSizeOptions={PAGE_SIZE_OPTIONS}
