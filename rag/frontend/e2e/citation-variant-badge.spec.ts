@@ -142,7 +142,7 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
   ]);
   expect(resultsBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(processBox?.y ?? Number.POSITIVE_INFINITY);
   // 完了したら工程の一覧を閉じる（チャットと同じ。#2118）。押すと開く。
-  const searchStep = process.locator("li").filter({ hasText: "文書の検索" });
+  const searchStep = process.locator("li").filter({ hasText: "検索文から根拠の候補を集める" });
   await expect(searchStep).toBeHidden();
   await page.getByTestId("search-run-progress-summary").click();
   await expect(searchStep).toBeVisible();
