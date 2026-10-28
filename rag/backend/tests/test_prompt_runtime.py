@@ -43,7 +43,7 @@ async def test_saved_instructions_are_isolated_between_tasks_and_threads() -> No
             threaded = await asyncio.to_thread(resolve_prompt, "evaluation.coverage", "builtin")
             return direct, threaded
 
-    assert await asyncio.gather(request("first"), request("second")) == [
+    assert list(await asyncio.gather(request("first"), request("second"))) == [
         ("first", "first"),
         ("second", "second"),
     ]
@@ -118,6 +118,7 @@ def test_only_confirmed_branch_notes_are_rendered_from_the_guide() -> None:
         notices = guide_notices(match)
         assert notices["branch_notes"] == expected
         plan = GuidePlan.from_payload("g", 1, [{"id": "a", "title": "設定を開く"}], notices=notices)
+        assert plan is not None
         assert guide_notice_lines("", [], branch_notes=plan.branch_notes) == expected
 
 

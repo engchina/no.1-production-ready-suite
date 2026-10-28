@@ -704,7 +704,7 @@ test("図・画像の読み取りプロンプトは Vision の項目の中で編
   const visionItem = page.locator("#post-parse-vision");
   await visionItem.locator("summary", { hasText: "図・画像の読み取りプロンプト" }).click();
   await expect(visionItem).toContainText("解析エンジンに関係なく");
-  await expect(visionItem.getByText("既定値", { exact: true })).toBeVisible();
+  await expect(visionItem.getByText("既定値", { exact: true })).toHaveCount(0);
   await visionItem.getByLabel("プロンプト").fill("図の要点を短く {{image_metadata}}");
   await visionItem.getByRole("button", { name: "プロンプトを保存" }).click();
   await expect.poll(() => saved).toEqual({ content: "図の要点を短く {{image_metadata}}" });

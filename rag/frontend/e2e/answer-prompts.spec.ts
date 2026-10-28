@@ -110,7 +110,7 @@ for (const viewport of [
 
     await field.fill("独自 {{question}} {{answer_context}}");
     await save.click();
-    await expect(page.getByText("プロンプトを保存しました。")).toBeVisible();
+    await expect(page.getByText("プロンプトを保存しました。").last()).toBeVisible();
     await expect(page.getByText(/^編集済み/)).toBeVisible();
 
     await page.getByRole("button", { name: "既定に戻す" }).click();
@@ -120,7 +120,7 @@ for (const viewport of [
     await expect(field).toHaveValue("独自 {{question}} {{answer_context}}");
     await page.getByRole("button", { name: "既定に戻す" }).click();
     await save.click();
-    await expect(page.getByText("プロンプトを保存しました。")).toBeVisible();
+    await expect(page.getByText("プロンプトを保存しました。").last()).toBeVisible();
     await expect(field).toHaveValue("既定のテンプレート {{question}} {{answer_context}}");
     expect(requests.map((request) => request.method)).toEqual(["PUT", "DELETE"]);
 
