@@ -357,6 +357,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/documents/delete-impact"): _any(MENU_FILE_LIST),
     # 一覧の「条件に一致する文書をすべて選ぶ」の ID（一括の操作と同じ画面。#2674）。
     ("GET", "/documents/ids"): _any(MENU_FILE_LIST),
+    ("POST", "/documents/language-pack/reprocessing-targets"): _any(MENU_FILE_LIST),
+    ("POST", "/documents/language-pack/reprocessing-jobs"): _any(MENU_FILE_LIST),
     # 分類の入力の候補（分類の編集と同じ権限。#547）。
     # 分類の一覧は、管理の画面と、文書の詳細・RAG 検索の分類の選択肢が読む（#2131）。
     ("GET", "/document-categories"): _any(
@@ -642,10 +644,19 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/settings/language-pack"): _any(
         MENU_SETTINGS_LANGUAGE_PACK, SEARCH_ANSWER_PROFILES_MANAGE
     ),
-    ("PUT", "/settings/language-pack"): _any(MENU_SETTINGS_LANGUAGE_PACK),
+    ("GET", "/settings/language-pack/draft"): _any(MENU_SETTINGS_LANGUAGE_PACK),
+    ("GET", "/settings/language-pack/draft/comparison"): _any(MENU_SETTINGS_LANGUAGE_PACK),
+    ("PUT", "/settings/language-pack/draft"): _any(MENU_SETTINGS_LANGUAGE_PACK),
     ("POST", "/settings/language-pack/preview"): _any(MENU_SETTINGS_LANGUAGE_PACK),
-    ("GET", "/settings/language-pack/history"): _any(MENU_SETTINGS_LANGUAGE_PACK),
-    ("POST", "/settings/language-pack/history/{version_id}/restore"): _any(
+    ("POST", "/settings/language-pack/publish"): _any(MENU_SETTINGS_LANGUAGE_PACK),
+    ("GET", "/settings/language-pack/releases"): _any(MENU_SETTINGS_LANGUAGE_PACK),
+    ("GET", "/settings/language-pack/releases/compare"): _any(
+        MENU_SETTINGS_LANGUAGE_PACK, MENU_FILE_LIST
+    ),
+    ("GET", "/settings/language-pack/releases/{release_id}"): _any(
+        MENU_SETTINGS_LANGUAGE_PACK, MENU_FILE_LIST
+    ),
+    ("POST", "/settings/language-pack/releases/{release_id}/restore"): _any(
         MENU_SETTINGS_LANGUAGE_PACK
     ),
     # 回答履歴の保存設定は、検索・チャットの回答履歴表示も読む。

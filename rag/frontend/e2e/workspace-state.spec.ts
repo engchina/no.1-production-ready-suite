@@ -1,3 +1,4 @@
+import { openFileListFilters, closeFileListFilters } from "./_helpers";
 import { expect, type Page, test } from "./fixtures/test";
 
 import {
@@ -310,15 +311,19 @@ test.describe("作業状態の保持", () => {
 
     await page.goto("/file-list");
     // 状態の絞り込みは選択の欄（11 種の ToggleChip の折り返しをやめた。#578）。
+    await openFileListFilters(page);
     await page.getByRole("combobox", { name: "状態" }).click();
     await page.getByRole("option", { name: "エラー", exact: true }).click();
+    await closeFileListFilters(page);
     const search = page.getByRole("searchbox", { name: "ファイル名で検索" });
     await search.fill("policy");
     await search.press("Enter");
     await page.getByRole("checkbox", { name: "この行を選択" }).check();
 
     const expectRestored = async () => {
+      await openFileListFilters(page);
       await expect(page.getByRole("combobox", { name: "状態" })).toHaveAttribute("data-value", "ERROR");
+      await closeFileListFilters(page);
       await expect(page.getByRole("searchbox", { name: "ファイル名で検索" })).toHaveValue("policy");
       await expect(page.getByRole("checkbox", { name: "この行を選択" })).not.toBeChecked();
       expect(documentRequests.at(-1)).toContain("status=ERROR");

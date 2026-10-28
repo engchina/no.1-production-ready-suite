@@ -109,6 +109,7 @@ from app.config import (
     reject_roadmap_parser_adapter_backend,
 )
 from app.schemas.document import DocumentProcessingConfig
+from app.schemas.language_pack_release import LanguagePackRelease
 
 ParserAdapterBackendName = Literal[
     "docling",
@@ -561,6 +562,8 @@ class LanguagePackData(BaseModel):
     hash: str
     # 今の言語資源で分割していない文書の数(分割し直しが要る。DB に届かなければ None)。
     outdated_documents: int | None = None
+    unrecorded_documents: int | None = None
+    current_release: LanguagePackRelease | None = None
 
 
 class LanguagePackUpdate(BaseModel):

@@ -1,3 +1,4 @@
+import { openFileListFilters, closeFileListFilters } from "./_helpers";
 import { expectGrowingList } from "./_list-viewport";
 import type { SourceProfile } from "../src/lib/api";
 import { expect, type Page, test } from "./fixtures/test";
@@ -261,8 +262,10 @@ test(
     await expect(bulkActions).toContainText("条件に一致する 60 件をすべて選択中");
 
     // 条件を変えたら全件の選択を解除し、新しい一覧を読み込む間は前の条件の件数を出さず、押せない。
+    await openFileListFilters(page);
     await page.getByRole("combobox", { name: "状態" }).click();
     await page.getByRole("option", { name: "ファイル準備待ち", exact: true }).click();
+    await closeFileListFilters(page);
     await expect(bulkActions).toContainText("新しい条件の一覧を読み込んでいます。");
     await expect(bulkActions).not.toContainText("60 件");
     await expect(bulkActions.getByTestId("file-list-select-all-matching")).toHaveCount(0);
@@ -336,8 +339,10 @@ test("ファイル準備確認待ちで絞り込める", async ({ page }) => {
 
   await page.goto("/file-list");
   // 状態の絞り込みは選択の欄（#578）。
-  await page.getByRole("combobox", { name: "状態" }).click();
+  await openFileListFilters(page);
+    await page.getByRole("combobox", { name: "状態" }).click();
   await page.getByRole("option", { name: "ファイル準備確認待ち" }).click();
+  await closeFileListFilters(page);
 
   await expect(page.getByRole("link", { name: "prepared.pdf" })).toBeVisible();
   await expect(page.getByRole("link", { name: "indexed.pdf" })).toHaveCount(0);
@@ -711,4 +716,82 @@ test("主一覧は高い画面の余白へ拡張し、ページ送りを維持�
   await mockFileListApi(page, Array.from({ length: 60 }, (_, i) => documentSummary(`viewport-${i}`, `sample-${i}.pdf`, "INDEXED")));
   await page.goto("/file-list");
   await expectGrowingList(page, testInfo, "file-list");
+});
+
+
+test("言語資源の対象条件・版の内訳を一覧とページ送りで維持する", { tag: "@responsive" }, async ({ page }) => {
+  const documents = Array.from({ length: 30 }, (_, index) => ({
+    ...documentSummary(`release-doc-${index}`, `sample-${index}.txt`, "INDEXED"), category_name: null,
+    language_pack: { current_release_id: "release-current", current_version: 3, recipes: [
+      { recipe_id: "recipe-1", chunk_set_id: "chunks-1", release_id: "release-old", version: 1, ingest_hash: "old", relation: "different", built_at: null, job_id: null, target_release_id: null },
+      { recipe_id: "recipe-2", chunk_set_id: "chunks-2", release_id: "release-current", version: 3, ingest_hash: "new", relation: "current", built_at: null, job_id: null, target_release_id: null },
+    ] },
+  }));
+  const requests: URL[] = [];
+  await mockFileListApi(page, documents, {}, url => requests.push(url));
+  await page.goto("/file-list?language_pack_relation=different&current_release_id=release-current");
+  await expect.poll(() => requests.some(url => url.searchParams.get("language_pack_relation") === "different" && url.searchParams.get("current_release_id") === "release-current")).toBe(true);
+  await expect(page.getByText("複数の版").first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "使用版と差分" }).first()).toHaveAttribute("href", "/documents/release-doc-0?language_pack=1");
+  await page.getByTestId("file-list-pagination").getByRole("button", { name: "次へ", exact: true }).click();
+  await expect.poll(() => requests.filter(url => url.searchParams.get("language_pack_relation") === "different").at(-1)?.searchParams.get("offset")).toBe("25");
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: test.info().outputPath("document-language-versions.png"), fullPage: true });
+});
+
+
+test("ページをまたぐ選択から実在のレシピを確認し、固定版と設定版で一括再処理して部分失敗を残す", { tag: "@responsive" }, async ({ page }) => {
+  const documents = Array.from({ length: 30 }, (_, index) => ({ ...documentSummary(`batch-doc-${index}`, `sample-${index}.txt`, "INDEXED"), category_name: null, language_pack: { current_release_id: "release-current", current_version: 3, recipes: [] } }));
+  await mockFileListApi(page, documents);
+  const submissions: Record<string, unknown>[] = [];
+  const idsQueries: URL[] = [];
+  page.on("request", request => { if (new URL(request.url()).pathname.endsWith("/documents/ids")) idsQueries.push(new URL(request.url())); });
+  await page.route("**/api/documents/language-pack/reprocessing-targets", async route => {
+    const payload = route.request().postDataJSON();
+    expect(payload.document_ids).toHaveLength(30); expect(payload.expected_release_id).toBe("release-current");
+    await route.fulfill({ json: { data: { current_release: { id: "release-current", version: 3, effective: {}, hash: "current", ingest_hash: "current", published_at: "2026-10-17T00:00:00Z", published_by: null, previous_id: null, restored_from: null, change_note: "" }, targets: [
+      { document_id: "batch-doc-0", file_name: "sample-0.txt", recipe_id: "recipe-2", slot_no: 2, config_revision: 4, used_release_id: "release-old", used_ingest_hash: "old", relation: "different" },
+      { document_id: "batch-doc-29", file_name: "sample-29.txt", recipe_id: "recipe-3", slot_no: 3, config_revision: 7, used_release_id: "release-old", used_ingest_hash: "old", relation: "different" },
+    ], unavailable_count: 28 }, error_messages: [], warning_messages: [] } });
+  });
+  const comparisons: URL[] = [];
+  await page.route("**/api/settings/language-pack/releases/compare?*", async route => {
+    comparisons.push(new URL(route.request().url()));
+    await route.fulfill({ json: { data: { before_id: "release-old", after_id: "release-current", differences: [{ section: "numbers", key: "article_units", before: ["条"], after: ["条", "款"], ingest: true }], ingest_changed: true, impact_requires_review: false, affected_stages: ["EXTRACT", "CHUNK", "INDEX"] }, error_messages: [], warning_messages: [] } });
+  });
+  await page.route("**/api/documents/language-pack/reprocessing-jobs", async route => {
+    submissions.push(route.request().postDataJSON());
+    await route.fulfill({ json: { data: { accepted_count: 1, rejected_count: 1, items: [
+      { document_id: "batch-doc-0", recipe_id: "recipe-2", job_id: "job-accepted", outcome: "accepted", reason: null },
+      { document_id: "batch-doc-29", recipe_id: "recipe-3", job_id: null, outcome: "rejected", reason: "レシピの設定版が更新されました。" },
+    ] }, error_messages: [], warning_messages: [] } });
+  });
+  await page.goto("/file-list?language_pack_relation=different&current_release_id=release-current");
+  await page.getByRole("checkbox", { name: "すべて選択", exact: true }).check();
+  await page.getByRole("button", { name: "条件に一致する 30 件をすべて選択", exact: true }).click();
+  const panel = page.getByTestId("language-pack-bulk-reprocess");
+  await panel.getByRole("button", { name: "選択文書の再処理を確認する" }).click();
+  await expect(panel.getByText("対象を確認できない文書 28 件")).toBeVisible();
+  expect(idsQueries.at(-1)?.searchParams.get("language_pack_relation")).toBe("different");
+  expect(idsQueries.at(-1)?.searchParams.get("current_release_id")).toBe("release-current");
+  const targets = panel.getByRole("table", { name: "再処理するレシピを選ぶ" });
+  await expect(targets.getByRole("checkbox", { checked: true })).toHaveCount(0);
+  await targets.getByRole("checkbox", { name: "すべて選択", exact: true }).check();
+  await panel.getByRole("button", { name: "選択レシピの差分と影響を確認する" }).click();
+  await expect(panel.getByText("sample-0.txt / レシピ2、sample-29.txt / レシピ3", { exact: true })).toBeVisible();
+  expect(comparisons).toHaveLength(1);
+  expect(comparisons[0].searchParams.get("before_id")).toBe("release-old");
+  expect(comparisons[0].searchParams.get("after_id")).toBe("release-current");
+  await panel.getByRole("combobox", { name: "再処理を始める工程" }).click();
+  await page.getByRole("option", { name: "Chunk 作成", exact: true }).click();
+  await panel.getByRole("button", { name: "再処理する (2)", exact: true }).click();
+  const dialog = page.getByRole("alertdialog"); await expect(dialog).toContainText("2 文書・2 レシピ");
+  await dialog.getByRole("button", { name: "再処理する", exact: true }).click();
+  await expect.poll(() => submissions).toEqual([{ expected_release_id: "release-current", targets: [
+    { document_id: "batch-doc-0", recipe_id: "recipe-2", phase: "CHUNK", expected_config_revision: 4 },
+    { document_id: "batch-doc-29", recipe_id: "recipe-3", phase: "CHUNK", expected_config_revision: 7 },
+  ] }]);
+  await expect(panel.getByText("受付 1 レシピ・受付不可 1 レシピ。処理結果は各文書の状態で確認してください。", { exact: true })).toBeVisible();
+  await expect(panel.getByText("sample-29.txt: レシピの設定版が更新されました。", { exact: true })).toBeVisible();
+  await expectNoPageOverflow(page);
 });

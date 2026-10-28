@@ -30,75 +30,71 @@ function envelope(data: unknown) {
   return { data, error_messages: [], warning_messages: [] };
 }
 
-async function mockLanguagePack(page: Page) {
+async function mockLanguagePack(page: Page, builtin: Record<string, Record<string, unknown>> = BUILTIN) {
   const saved: { overrides: Record<string, Record<string, unknown>> | null } = { overrides: null };
   const previews: Record<string, unknown>[] = [];
   const restored: string[] = [];
-  await page.route("**/api/settings/language-pack/history", async (route) => {
-    await route.fulfill({
-      json: envelope({
-        versions: [
-          {
-            id: "v2",
-            saved_at: "2026-10-17T09:00:00Z",
-            saved_by: "管理者",
-            hash: "a",
-            ingest_hash: "ia",
-            restored_from: null,
-            changed_fields: 0,
-          },
-          {
-            id: "v1",
-            saved_at: "2026-10-16T09:00:00Z",
-            saved_by: "管理者",
-            hash: "b",
-            ingest_hash: "ib",
-            restored_from: null,
-            changed_fields: 2,
-          },
-        ],
-      }),
-    });
+  const publications: Record<string, unknown>[] = [];
+  const release = (version: number, effective = structuredClone(builtin)) => ({ id: `v${version}`, version, effective, hash: `hash${version}`, ingest_hash: `ingest${version}`, published_at: "2026-10-17T09:00:00Z", published_by: "管理者", previous_id: null, restored_from: null, change_note: "合成の設定変更" });
+  let current = release(2);
+  let draftEffective = structuredClone(builtin);
+  let revision = 1;
+  const state = () => ({ current, draft_revision: revision, draft_effective: draftEffective });
+  await page.route("**/api/settings/language-pack/draft", async route => {
+    if (route.request().method() === "PUT") {
+      expect(route.request().headers()["content-type"]).toBe("application/json");
+      const payload = route.request().postDataJSON();
+      expect(payload.expected_revision).toBe(revision);
+      saved.overrides = payload.overrides;
+      draftEffective = structuredClone(builtin);
+      for (const [section, values] of Object.entries(saved.overrides!)) Object.assign(draftEffective[section], values);
+      revision += 1;
+    }
+    await route.fulfill({ json: envelope(state()) });
   });
-  await page.route("**/api/settings/language-pack/history/*/restore", async (route) => {
-    restored.push(route.request().url().split("/history/")[1].split("/")[0]);
-    const overrides = { numbers: { article_units: ["条", "款"] } };
-    const effective = structuredClone(BUILTIN) as Record<string, Record<string, unknown>>;
-    Object.assign(effective.numbers, overrides.numbers);
-    await route.fulfill({ json: envelope({ fields: FIELDS, builtin: BUILTIN, overrides, effective, hash: "b" }) });
+  await page.route("**/api/settings/language-pack/draft/comparison?*", async route => {
+    const url = new URL(route.request().url()); expect(url.searchParams.get("expected_revision")).toBe(String(revision)); expect(url.searchParams.get("expected_current_id")).toBe(current.id);
+    const differences = Object.entries(draftEffective).flatMap(([section, fields]) => Object.entries(fields).flatMap(([key, after]) => {
+      const before = current.effective[section]?.[key];
+      return JSON.stringify(before) === JSON.stringify(after) ? [] : [{ section, key, before, after, ingest: true }];
+    }));
+    await route.fulfill({ json: envelope({ before_id: current.id, after_id: `draft:${revision}`, differences, ingest_changed: differences.length > 0, impact_requires_review: false, affected_stages: differences.length ? ["EXTRACT", "CHUNK", "INDEX"] : [] }) });
   });
-  await page.route("**/api/settings/language-pack/preview", async (route) => {
-    previews.push(route.request().postDataJSON() as Record<string, unknown>);
-    const result = (headingKeys: string[]) => ({
-      references: [{ label: "第二款", kind: "article", key: "2", document_title: null }],
-      title_keys: ["第二款届出"],
-      heading_keys: headingKeys,
-    });
+  await page.route("**/api/settings/language-pack/releases?*", async route => {
+    await route.fulfill({ json: envelope({ releases: [current, release(1, { ...builtin, numbers: { ...builtin.numbers, article_units: ["条", "款"] } })], total: 2 }) });
+  });
+  await page.route("**/api/settings/language-pack/releases/v*", async route => {
+    const id = route.request().url().split("/releases/")[1];
+    const version = Number(id.slice(1));
+    await route.fulfill({ json: envelope(version === current.version ? current : release(version, { ...builtin, numbers: { ...builtin.numbers, article_units: ["条", "款"] } })) });
+  });
+  await page.route("**/api/settings/language-pack/releases/compare?*", async route => route.fulfill({ json: envelope({ before_id: "v1", after_id: current.id, differences: [{ section: "numbers", key: "article_units", before: ["条", "款"], after: ["条"], ingest: true }], ingest_changed: true, impact_requires_review: true, affected_stages: [] }) }));
+  await page.route("**/api/settings/language-pack/releases/*/restore", async route => {
+    restored.push(route.request().url().split("/releases/")[1].split("/")[0]);
+    const body = route.request().postDataJSON();
+    expect(body.expected_current_id).toBe(current.id);
+    expect(body.expected_revision).toBe(revision);
+    draftEffective = { ...builtin, numbers: { ...builtin.numbers, article_units: ["条", "款"] } };
+    current = release(3, draftEffective); revision += 1;
+    await route.fulfill({ json: envelope(state()) });
+  });
+  await page.route("**/api/settings/language-pack/publish", async route => {
+    expect(route.request().headers()["content-type"]).toBe("application/json");
+    const body = route.request().postDataJSON(); publications.push(body);
+    expect(body.expected_current_id).toBe(current.id); expect(body.expected_revision).toBe(revision);
+    current = release(3, draftEffective); revision += 1;
+    await route.fulfill({ json: envelope(state()) });
+  });
+  await page.route("**/api/settings/language-pack/preview", async route => {
+    previews.push(route.request().postDataJSON());
+    const result = (headingKeys: string[]) => ({ references: [{ label: "第二款", kind: "article", key: "2", document_title: null }], title_keys: ["第二款届出"], heading_keys: headingKeys });
     await route.fulfill({ json: envelope({ saved: result([]), draft: result(["article:2"]) }) });
   });
-  await page.route("**/api/settings/language-pack", async (route) => {
-    if (route.request().method() === "PUT") {
-      saved.overrides = (route.request().postDataJSON() as { overrides: Record<string, Record<string, unknown>> })
-        .overrides;
-      const effective = structuredClone(BUILTIN) as Record<string, Record<string, unknown>>;
-      for (const [section, values] of Object.entries(saved.overrides)) Object.assign(effective[section], values);
-      await route.fulfill({
-        json: envelope({ fields: FIELDS, builtin: BUILTIN, overrides: saved.overrides, effective, hash: "b" }),
-      });
-      return;
-    }
-    await route.fulfill({
-      json: envelope({
-        fields: FIELDS,
-        builtin: BUILTIN,
-        overrides: {},
-        effective: BUILTIN,
-        hash: "a",
-        outdated_documents: 3,
-      }),
-    });
+  await page.route("**/api/settings/language-pack", async route => {
+    expect(route.request().method()).toBe("GET");
+    await route.fulfill({ json: envelope({ fields: FIELDS, builtin, overrides: {}, effective: current.effective, hash: current.hash, current_release: current, outdated_documents: 3, unrecorded_documents: 2 }) });
   });
-  return { saved, previews, restored };
+  return { saved, previews, restored, publications, readState: state };
 }
 
 test.beforeEach(async ({ page }) => {
@@ -119,7 +115,7 @@ for (const viewport of [
 
     await expect(page.getByRole("heading", { name: "言語資源", level: 1 })).toBeVisible();
     // 今の言語資源で分割していない文書の数を案内する（#2181）。
-    await expect(page.getByText("今の言語資源で分割していない文書が 3 件あります")).toBeVisible();
+    await expect(page.getByText("取込設定に差分のある文書 3 件")).toBeVisible();
     const tabs = page.getByRole("tablist", { name: "言語資源", exact: true });
     await expect(tabs.getByRole("tab")).toHaveText([
       "番号の書き方",
@@ -141,7 +137,7 @@ for (const viewport of [
     const pairs = page.getByLabel("括弧書きの括弧", { exact: true });
     await pairs.fill("()\n(");
     await tabs.getByRole("tab", { name: "番号の書き方" }).click();
-    await page.getByRole("button", { name: "保存" }).click();
+    await page.getByRole("button", { name: "草稿を保存" }).click();
     await expect(page.getByText("開きと閉じの 2 文字で書いてください（例: 「」）。")).toBeVisible();
     await expect(pairs).toBeFocused();
     expect(saved.overrides).toBeNull();
@@ -149,13 +145,13 @@ for (const viewport of [
     await pairs.fill("()\n【】");
     await page.getByRole("combobox", { name: "文字の正規化" }).click();
     await page.getByRole("option", { name: "NFC（全角と半角をそろえない）" }).click();
-    await page.getByRole("button", { name: "保存" }).click();
-    await expect(page.getByText("言語資源を保存しました。")).toBeVisible();
+    await page.getByRole("button", { name: "草稿を保存" }).click();
+    await expect(page.getByText("草稿を保存しました。")).toBeVisible();
     expect(saved.overrides).toEqual({
       numbers: { article_units: ["条", "款"] },
       symbols: { normalization: "NFC" },
     });
-    await expect(page.getByRole("button", { name: "保存" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "草稿を保存" })).toBeDisabled();
     await expectNoPageOverflow(page);
   });
 }
@@ -170,39 +166,56 @@ test("言語資源の試すは、保存した値と編集中の値で例の文�
 
   const result = page.getByTestId("language-preview-result");
   await expect(result.getByRole("region", { name: "編集中の言語資源" })).toContainText("article:2");
-  await expect(result.getByRole("region", { name: "保存した言語資源" })).toContainText("なし");
+  await expect(result.getByRole("region", { name: "公開中の言語資源" })).toContainText("なし");
   expect(previews).toEqual([
     { text: "第二款 届出\n第二款を参照", overrides: { numbers: { article_units: ["条", "款"] } } },
   ]);
   expect(saved.overrides).toBeNull();
 });
 
-test("言語資源の保存の履歴から前の版に戻す。編集中は戻せない（#2181）", { tag: "@responsive" }, async ({ page }) => {
+test("公開版は読み取り専用で差分を確認して再公開し、編集中は回退できない", { tag: "@responsive" }, async ({ page }) => {
   const { restored } = await mockLanguagePack(page);
   await page.goto("/settings/language-pack");
-
-  await expect(page.getByText(/新しい順に 5 件まで残します/)).toBeVisible();
-  const history = page.getByRole("table", { name: "保存の履歴" });
+  const history = page.getByRole("table", { name: "公開版の履歴" });
   await expect(history.getByRole("row")).toHaveCount(3);
-  const currentRow = history.getByRole("row").filter({ hasText: "今の版" });
-  await expect(currentRow.getByRole("button", { name: "この版に戻す" })).toHaveCount(0);
-  const olderRow = history.getByRole("row").filter({ hasText: "既定と違う項目 2 件" });
-  const restore = olderRow.getByRole("button", { name: "この版に戻す" });
-
-  // 編集中の変更があるあいだは戻さない。
-  const units = page.getByLabel("条の単位", { exact: true });
-  await units.fill("条\n款");
-  await expect(restore).toBeDisabled();
-  await page.getByRole("button", { name: "変更を破棄" }).click();
-  await expect(restore).toBeEnabled();
-
-  await restore.click();
+  await history.getByRole("button", { name: "v1", exact: true }).click();
+  const details = page.getByRole("region", { name: "公開版の内容（読み取り専用）" });
+  await expect(details.getByLabel("条の単位", { exact: true })).toBeDisabled();
+  await expect(details.getByLabel("条の単位", { exact: true })).toHaveValue("条\n款");
+  const restore = details.getByRole("button", { name: "この内容を再公開する" });
+  const units = page.locator("#language-numbers-article-units");
+  await units.fill("条\n款"); await expect(restore).toBeDisabled();
+  await page.getByRole("button", { name: "変更を破棄", exact: true }).click();
+  await expect(restore).toBeEnabled(); await restore.click();
   const dialog = page.getByRole("alertdialog");
-  await expect(dialog).toContainText("取込の項目が今と違うため");
-  await dialog.getByRole("button", { name: "この版に戻す" }).click();
-  await expect(page.getByText("前の版に戻しました。")).toBeVisible();
-  expect(restored).toEqual(["v1"]);
+  await expect(dialog).toContainText("自動では再処理しません");
+  await dialog.getByRole("button", { name: "この内容を再公開する" }).click();
+  await expect.poll(() => restored).toEqual(["v1"]);
   await expect(units).toHaveValue("条\n款");
+  await expectNoPageOverflow(page);
+});
+
+test("草稿保存は公開版を変えず、差分確認後の公開だけが現在版を更新する", { tag: "@responsive" }, async ({ page }) => {
+  const { publications } = await mockLanguagePack(page);
+  await page.goto("/settings/language-pack");
+  await page.locator("#language-numbers-article-units").fill("条\n款");
+  await page.getByRole("button", { name: "草稿を保存", exact: true }).click();
+  await expect(page.getByText("現在使用中 v2")).toBeVisible();
+  expect(publications).toEqual([]);
+  const publish = page.getByRole("button", { name: "公開する", exact: true });
+  await expect(publish).toBeDisabled();
+  await page.getByRole("button", { name: "差分と影響を確認する" }).click();
+  await expect(page.getByRole("table", { name: "設定の差分" })).toBeVisible();
+  await page.locator("#language-numbers-article-units").fill("条\n款\n項");
+  await page.getByRole("button", { name: "草稿を保存", exact: true }).click();
+  await expect(publish).toBeDisabled();
+  await page.getByRole("button", { name: "差分と影響を確認する" }).click();
+  await publish.click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "公開する", exact: true }).click();
+  await expect(page.getByText("現在使用中 v3")).toBeVisible();
+  expect(publications).toEqual([{ expected_revision: 3, expected_current_id: "v2", change_note: "" }]);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: test.info().outputPath("language-release-published.png"), fullPage: true });
 });
 
 test("言語資源は使い道の組と節の 2 段のタブで開き、項目を名前で探せる（#2181）", { tag: "@responsive" }, async ({ page }) => {
@@ -214,7 +227,7 @@ test("言語資源は使い道の組と節の 2 段のタブで開き、項目�
   ];
   const missingRequest = "『{text}』については、根拠付きの説明を十分に示せていません。";
   const builtin = { ...BUILTIN, search_terms: { stopwords: ["こと"] }, answer_labels: { citation_prefix: "根拠：", missing_request_template: missingRequest } };
-  await mockLanguagePack(page);
+  await mockLanguagePack(page, builtin);
   await page.route("**/api/settings/language-pack", (route) =>
     route.fulfill({ json: envelope({ fields, builtin, overrides: {}, effective: builtin, hash: "a" }) }),
   );
@@ -247,12 +260,12 @@ test("言語資源のゼロ倍率は欄で拒否し、正しい倍率だけを�
   await page.goto("/settings/language-pack");
   const field = page.getByLabel("漢数字の位取りの字と倍率", { exact: true });
   await field.fill("十=0");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await page.getByRole("button", { name: "草稿を保存", exact: true }).click();
   await expect(page.getByText("数は 1 以上で書いてください。", { exact: true })).toBeVisible();
   await expect(field).toBeFocused();
   expect(saved.overrides).toBeNull();
   await field.fill("十=10\n百=100\n千=1000");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await page.getByRole("button", { name: "草稿を保存", exact: true }).click();
   await expect.poll(() => saved.overrides).toEqual({ numbers: { kanji_multipliers: ["十=10", "百=100", "千=1000"] } });
   await expectNoPageOverflow(page);
   await page.screenshot({ path: test.info().outputPath("numeric-mapping.png"), fullPage: true });
@@ -260,9 +273,9 @@ test("言語資源のゼロ倍率は欄で拒否し、正しい倍率だけを�
 
 
 test("数量の混在表記の語は質問用の言語資源で確認できる", async ({ page }) => {
-  await mockLanguagePack(page);
   const fields = [...FIELDS, { section: "question_cues", key: "mixed_number_notation_cues", kind: "words", choices: [], ingest: false, max_chars: 40 }];
   const builtin = { ...BUILTIN, question_cues: { mixed_number_notation_cues: ["混在", "組み合"] } };
+  await mockLanguagePack(page, builtin);
   await page.route("**/api/settings/language-pack", route => route.fulfill({ json: envelope({ fields, builtin, overrides: {}, effective: builtin, hash: "a" }) }));
   await page.goto("/settings/language-pack");
   await page.getByRole("tablist", { name: "言語資源の使い道" }).getByRole("tab", { name: "質問を読む" }).click();
@@ -272,4 +285,80 @@ test("数量の混在表記の語は質問用の言語資源で確認できる",
     await expectNoPageOverflow(page);
     await page.screenshot({ path: test.info().outputPath(`mixed-number-${width}.png`) });
   }
+});
+
+
+test("公開が競合したら現在版を成功表示せず再確認する", { tag: "@responsive" }, async ({ page }) => {
+  await mockLanguagePack(page);
+  await page.route("**/api/settings/language-pack/publish", route => route.fulfill({ status: 409, json: { data: null, error_messages: ["公開版が更新されました。再読み込みしてください。"], warning_messages: [] } }));
+  await page.goto("/settings/language-pack");
+  await page.locator("#language-numbers-article-units").fill("条\n款");
+  await page.getByRole("button", { name: "草稿を保存", exact: true }).click();
+  await page.getByRole("button", { name: "差分と影響を確認する" }).click();
+  await page.getByRole("button", { name: "公開する", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "公開する", exact: true }).click();
+  await expect(page.getByText("公開版が更新されました。再読み込みしてください。", { exact: true })).toBeVisible();
+  await expect(page.getByText("現在使用中 v2")).toBeVisible();
+  await expectNoPageOverflow(page);
+});
+
+test("公開版の履歴はサーバーのページ条件で読み、表示件数の変更時に先頭へ戻る", { tag: "@responsive" }, async ({ page }) => {
+  await mockLanguagePack(page);
+  const requests: string[] = [];
+  await page.route("**/api/settings/language-pack/releases?*", async route => {
+    const url = new URL(route.request().url()); requests.push(url.search);
+    const offset = Number(url.searchParams.get("offset")); const limit = Number(url.searchParams.get("limit"));
+    const releases = Array.from({ length: Math.min(limit, 35 - offset) }, (_, index) => ({ id: `v${35-offset-index}`, version: 35-offset-index, effective: BUILTIN, hash: "a", ingest_hash: "a", published_at: "2026-10-17T09:00:00Z", published_by: null, previous_id: null, restored_from: null, change_note: "合成の変更" }));
+    await route.fulfill({ json: envelope({ releases, total: 35 }) });
+  });
+  await page.goto("/settings/language-pack");
+  await page.getByRole("button", { name: "次へ", exact: true }).click();
+  await expect.poll(() => requests.at(-1)).toBe("?offset=25&limit=25");
+  await page.getByRole("combobox", { name: "表示件数", exact: true }).click();
+  await page.getByRole("option", { name: "50 件", exact: true }).click();
+  await expect.poll(() => requests.at(-1)).toBe("?offset=0&limit=50");
+  await expectNoPageOverflow(page);
+});
+
+
+test("差分と版未記録の件数から現在版に固定した対象一覧へ移る", { tag: "@responsive" }, async ({ page }) => {
+  await mockLanguagePack(page); await page.goto("/settings/language-pack");
+  const links = page.getByRole("link", { name: "対象文書を確認する" });
+  await expect(links.nth(0)).toHaveAttribute("href", "/file-list?language_pack_relation=different&current_release_id=v2");
+  await expect(links.nth(1)).toHaveAttribute("href", "/file-list?language_pack_relation=unrecorded&current_release_id=v2");
+  await expect(page.getByText("使用版が未記録の文書 2 件")).toBeVisible();
+  await expectNoPageOverflow(page);
+});
+
+
+test("草稿の競合後は変更の破棄を確認して最新の草稿を読み、古い内容を新revisionで再送しない", { tag: "@responsive" }, async ({ page }) => {
+  const { readState } = await mockLanguagePack(page);
+  let conflicted = false;
+  await page.route("**/api/settings/language-pack/draft", async route => {
+    if (route.request().method() === "PUT") { conflicted = true; return route.fulfill({ status: 409, json: { data: null, error_messages: ["別の利用者が草稿を更新しました。"], warning_messages: [] } }); }
+    if (!conflicted) return route.fallback();
+    await route.fulfill({ json: envelope({ ...readState(), draft_revision: 2, draft_effective: { ...BUILTIN, numbers: { ...BUILTIN.numbers, article_units: ["条", "項"] } } }) });
+  });
+  await page.goto("/settings/language-pack");
+  const units = page.locator("#language-numbers-article-units");
+  await units.fill("条\n款"); await page.getByRole("button", { name: "草稿を保存", exact: true }).click();
+  await expect(page.getByText("別の利用者が草稿を更新しました。", { exact: true })).toBeVisible();
+  await expect(units).toHaveValue("条\n款");
+  await page.getByRole("button", { name: "再試行", exact: true }).click();
+  const dialog = page.getByRole("alertdialog"); await expect(dialog).toContainText("編集中の変更を破棄");
+  await dialog.getByRole("button", { name: "最新の草稿を読み込む", exact: true }).click();
+  await expect(units).toHaveValue("条\n項");
+  await expect(page.getByRole("button", { name: "草稿を保存", exact: true })).toBeDisabled();
+});
+
+
+test("索引が参照する過去版は現在の履歴ページに無くても ID で読み取り専用表示する", { tag: "@responsive" }, async ({ page }) => {
+  const { readState } = await mockLanguagePack(page);
+  await page.route("**/api/settings/language-pack/releases?*", route => route.fulfill({ json: envelope({ releases: [readState().current], total: 1 }) }));
+  await page.goto("/settings/language-pack?release=v1");
+  const details = page.getByRole("region", { name: "公開版の内容（読み取り専用）" });
+  await expect(details.getByRole("heading")).toContainText("v1");
+  await expect(details.getByLabel("公開時の完全な設定", { exact: true })).toHaveAttribute("readonly");
+  await expect(details.getByLabel("条の単位", { exact: true })).toHaveValue("条\n款");
+  await expectNoPageOverflow(page);
 });

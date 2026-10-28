@@ -1,50 +1,128 @@
-"""言語資源の画面の API(#2181): 取得・保存(組み込みとの差だけ)・形の誤り・試す・解析への反映。"""
+"""言語資源の下書き・不変な公開版・CAS・検証・試行の API 契約。"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from rag_parser_core.language import builtin_pack, current_pack
 
-from app.config import get_settings, resolve_language_pack_file
+from app.api.routes import language_pack
+from app.clients.oracle import OracleClient
 from app.main import app
-from app.rag.cross_references import extract_references
+from tests.language_release_api_support import FakeReleaseStore
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
 
 
-def test_get_returns_builtin_fields_and_effective_values() -> None:
+@pytest.fixture(autouse=True)
+def release_store(monkeypatch: pytest.MonkeyPatch) -> FakeReleaseStore:
+    store = FakeReleaseStore()
+
+    async def initialized() -> FakeReleaseStore:
+        return store
+
+    async def count(_self: OracleClient, **_kwargs: Any) -> int:
+        return 0
+
+    monkeypatch.setattr(language_pack, "release_store", initialized)
+    monkeypatch.setattr(OracleClient, "count_documents", count)
+    return store
+
+
+def test_get_returns_complete_published_snapshot() -> None:
     data = client.get("/api/settings/language-pack").json()["data"]
-    assert data["overrides"] == {}
     assert data["effective"] == data["builtin"]
     assert data["hash"] == builtin_pack().hash
-    kinds = {(f["section"], f["key"]): f["kind"] for f in data["fields"]}
-    assert kinds[("numbers", "kanji_digits")] == "char_values"
-    assert kinds[("symbols", "normalization")] == "choice"
-    assert "附則" in data["builtin"]["references"]["part_prefixes"]
+    assert data["current_release"]["effective"] == builtin_pack().to_dict()
+    assert data["current_release"]["version"] == 1
 
 
-def test_put_saves_only_differences_and_changes_extraction() -> None:
-    assert [s.kind for s in extract_references("第二款を参照")] != ["article"]
-    overrides = {"numbers": {"article_units": ["条", " 款 ", "款"]}}
+def test_draft_comparison_is_read_only_and_bound_to_both_revisions() -> None:
+    saved = client.put(
+        "/api/settings/language-pack/draft",
+        json={
+            "overrides": {"entity_cues": {"alias_column_words": ["合成の語"]}},
+            "expected_revision": 1,
+        },
+    )
+    assert saved.status_code == 200
+    url = "/api/settings/language-pack/draft/comparison"
+    query = {"expected_revision": 2, "expected_current_id": "synthetic-1"}
+    comparison = client.get(url, params=query)
+    assert comparison.status_code == 200
+    assert comparison.json()["data"]["affected_stages"] == ["INDEX"]
+    assert comparison.json()["data"]["after_id"] == "draft:2"
+    assert (
+        client.get("/api/settings/language-pack").json()["data"]["current_release"]["version"] == 1
+    )
+    for wrong in ({**query, "expected_revision": 1}, {**query, "expected_current_id": "previous"}):
+        assert client.get(url, params=wrong).status_code == 409
 
-    resp = client.put("/api/settings/language-pack", json={"overrides": overrides})
 
-    assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert data["overrides"] == {"numbers": {"article_units": ["条", "款"]}}
-    saved = json.loads(Path(resolve_language_pack_file(get_settings())).read_text("utf-8"))
-    assert saved == {"overrides": {"numbers": {"article_units": ["条", "款"]}}}
-    assert current_pack().hash == data["hash"]
-    assert [(s.kind, s.key) for s in extract_references("第二款を参照")] == [("article", "2")]
+def test_draft_publish_restore_cas_and_paginated_immutable_releases() -> None:
+    before = client.get("/api/settings/language-pack").json()["data"]
+    saved = client.put(
+        "/api/settings/language-pack/draft",
+        json={
+            "overrides": {"numbers": {"article_units": ["条", " 款 ", "款"]}},
+            "expected_revision": 1,
+        },
+    )
+    assert saved.status_code == 200
+    state = saved.json()["data"]
+    assert state["draft_revision"] == 2
+    assert state["draft_effective"]["numbers"]["article_units"] == ["条", "款"]
+    assert client.get("/api/settings/language-pack").json()["data"] == before
+    assert (
+        client.put(
+            "/api/settings/language-pack/draft", json={"overrides": {}, "expected_revision": 1}
+        ).status_code
+        == 409
+    )
+    payload = {"expected_revision": 2, "expected_current_id": "synthetic-1"}
+    published = client.post("/api/settings/language-pack/publish", json=payload)
+    assert published.status_code == 200
+    assert client.post("/api/settings/language-pack/publish", json=payload).status_code == 409
+    assert (
+        client.get("/api/settings/language-pack/releases/synthetic-1").json()["data"]
+        == before["current_release"]
+    )
+    page = client.get("/api/settings/language-pack/releases?limit=1&offset=1").json()["data"]
+    assert page["total"] == 2 and page["releases"][0]["id"] == "synthetic-1"
+    restored = client.post(
+        "/api/settings/language-pack/releases/synthetic-1/restore",
+        json={"expected_revision": 3, "expected_current_id": "synthetic-2"},
+    )
+    assert restored.status_code == 200
+    now = restored.json()["data"]["current"]
+    assert now["id"] == "synthetic-3" and now["restored_from"] == "synthetic-1"
+    assert now["effective"] == before["current_release"]["effective"]
+    assert (
+        client.post(
+            "/api/settings/language-pack/releases/missing/restore",
+            json={"expected_revision": 4, "expected_current_id": "synthetic-3"},
+        ).status_code
+        == 404
+    )
 
-    # 空の上書きで組み込みに戻る。
-    reset = client.put("/api/settings/language-pack", json={"overrides": {}}).json()["data"]
-    assert reset["overrides"] == {}
-    assert current_pack().hash == builtin_pack().hash
+
+def test_preview_compares_current_and_draft_without_publishing() -> None:
+    response = client.post(
+        "/api/settings/language-pack/preview",
+        json={
+            "text": "第二款 見出し\n第二款を参照",
+            "overrides": {"numbers": {"article_units": ["条", "款"]}},
+        },
+    )
+    assert response.status_code == 200
+    result = response.json()["data"]
+    assert "article:2" in result["draft"]["heading_keys"]
+    assert "article:2" not in result["saved"]["heading_keys"]
+    assert client.get("/api/settings/language-pack/draft").json()["data"]["draft_revision"] == 1
 
 
 @pytest.mark.parametrize(
@@ -73,36 +151,12 @@ def test_put_saves_only_differences_and_changes_extraction() -> None:
     ],
 )
 def test_put_rejects_malformed_values(section: str, key: str, value: object) -> None:
-    resp = client.put("/api/settings/language-pack", json={"overrides": {section: {key: value}}})
+    resp = client.put(
+        "/api/settings/language-pack/draft",
+        json={"overrides": {section: {key: value}}, "expected_revision": 1},
+    )
     assert resp.status_code == 422
     assert f"{section}.{key}" in json.dumps(resp.json(), ensure_ascii=False)
-    assert current_pack().hash == builtin_pack().hash
-
-
-def test_reload_reads_other_worker_save_and_ignores_broken_file() -> None:
-    path = Path(resolve_language_pack_file(get_settings()))
-    path.write_text(json.dumps({"overrides": {"numbers": {"article_units": ["款"]}}}), "utf-8")
-    get_settings()
-    assert current_pack().words("numbers", "article_units") == ("款",)
-    path.write_text("{broken", "utf-8")
-    get_settings()
-    assert current_pack().hash == builtin_pack().hash
-
-
-def test_preview_compares_saved_and_draft() -> None:
-    resp = client.post(
-        "/api/settings/language-pack/preview",
-        json={
-            "text": "第二款 届出\n第二款を参照",
-            "overrides": {"numbers": {"article_units": ["条", "款"]}},
-        },
-    )
-    assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert [r["kind"] for r in data["draft"]["references"]] == ["article"]
-    assert "article:2" in data["draft"]["heading_keys"]
-    assert "article:2" not in data["saved"]["heading_keys"]
-    # 試すだけで保存しない。
     assert current_pack().hash == builtin_pack().hash
 
 
@@ -137,50 +191,6 @@ def test_every_field_has_screen_label_and_help() -> None:
     assert missing == []
 
 
-def test_get_reports_documents_outside_current_pack(monkeypatch: pytest.MonkeyPatch) -> None:
-    """今の言語資源の取込の項目で分割していない文書の数を出す(#2181)。
-
-    DB に届かなければ数を出さない。
-    """
-    from app.clients.oracle import OracleClient
-
-    async def count(self: OracleClient, pack_hash: str) -> int:
-        assert pack_hash == current_pack().ingest_hash
-        return 7
-
-    monkeypatch.setattr(OracleClient, "count_documents_outside_language_pack", count)
-    assert client.get("/api/settings/language-pack").json()["data"]["outdated_documents"] == 7
-
-    async def broken(self: OracleClient, pack_hash: str) -> int:
-        raise RuntimeError("ORA-12541")
-
-    monkeypatch.setattr(OracleClient, "count_documents_outside_language_pack", broken)
-    assert client.get("/api/settings/language-pack").json()["data"]["outdated_documents"] is None
-
-
-def test_history_lists_saved_versions_and_restores_one() -> None:
-    """保存ごとに版を残し、前の版に戻せる。戻したことも新しい版として残す(#2181 段 6)。"""
-    first = {"numbers": {"article_units": ["条", "款"]}}
-    client.put("/api/settings/language-pack", json={"overrides": first})
-    client.put("/api/settings/language-pack", json={"overrides": {}})
-
-    versions = client.get("/api/settings/language-pack/history").json()["data"]["versions"]
-    assert [v["changed_fields"] for v in versions[:2]] == [0, 1]
-    older = versions[1]
-    assert older["hash"] != versions[0]["hash"]
-
-    restored = client.post(f"/api/settings/language-pack/history/{older['id']}/restore")
-    assert restored.status_code == 200
-    assert restored.json()["data"]["overrides"] == first
-    latest = client.get("/api/settings/language-pack/history").json()["data"]["versions"][0]
-    assert latest["restored_from"] == older["id"]
-    assert latest["changed_fields"] == 1
-
-    missing = client.post("/api/settings/language-pack/history/0000/restore")
-    assert missing.status_code == 404
-    client.put("/api/settings/language-pack", json={"overrides": {}})
-
-
 @pytest.mark.parametrize(
     ("key", "value"),
     [
@@ -192,18 +202,18 @@ def test_history_lists_saved_versions_and_restores_one() -> None:
 )
 def test_numeric_mapping_rejection_preserves_saved_pack(key: str, value: list[str]) -> None:
     accepted = client.put(
-        "/api/settings/language-pack", json={"overrides": {"numbers": {"article_units": ["款"]}}}
+        "/api/settings/language-pack/draft",
+        json={"overrides": {"numbers": {"article_units": ["款"]}}, "expected_revision": 1},
     )
     assert accepted.status_code == 200
-    path = Path(resolve_language_pack_file(get_settings()))
-    before = path.read_bytes()
+    before = client.get("/api/settings/language-pack/draft").json()["data"]
     response = client.put(
-        "/api/settings/language-pack", json={"overrides": {"numbers": {key: value}}}
+        "/api/settings/language-pack/draft",
+        json={"overrides": {"numbers": {key: value}}, "expected_revision": 2},
     )
     assert response.status_code == 422
     assert f"numbers.{key}" in json.dumps(response.json())
-    assert path.read_bytes() == before
-    assert current_pack().hash == accepted.json()["data"]["hash"]
+    assert client.get("/api/settings/language-pack/draft").json()["data"] == before
 
 
 def test_numeric_mapping_metadata_exposes_minimum() -> None:
@@ -211,25 +221,3 @@ def test_numeric_mapping_metadata_exposes_minimum() -> None:
     minimums = {f["key"]: f["min_value"] for f in fields if f["section"] == "numbers"}
     assert minimums["kanji_digits"] == 0
     assert minimums["roman_digits"] == minimums["kanji_multipliers"] == 1
-
-
-def test_history_retains_only_five_latest_versions_and_restore_is_capped() -> None:
-    """6 件目で古い版を外し、復元でも最新 5 件に収める。"""
-    ids = []
-    for _ in range(6):
-        assert client.put("/api/settings/language-pack", json={"overrides": {}}).status_code == 200
-        ids.append(
-            client.get("/api/settings/language-pack/history").json()["data"]["versions"][0]["id"]
-        )
-    versions = client.get("/api/settings/language-pack/history").json()["data"]["versions"]
-    assert [v["id"] for v in versions] == list(reversed(ids[-5:]))
-    settings = get_settings()
-    from app.rag.language_pack_store import history_path
-
-    stored = json.loads(history_path(resolve_language_pack_file(settings)).read_text())
-    assert len(stored["versions"]) == 5
-    assert client.post(f"/api/settings/language-pack/history/{ids[0]}/restore").status_code == 404
-    assert client.post(f"/api/settings/language-pack/history/{ids[-2]}/restore").status_code == 200
-    versions = client.get("/api/settings/language-pack/history").json()["data"]["versions"]
-    assert len(versions) == 5
-    assert versions[0]["restored_from"] == ids[-2]
