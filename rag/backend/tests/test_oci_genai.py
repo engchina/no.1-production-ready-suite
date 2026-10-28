@@ -557,5 +557,6 @@ async def test_embedding_purpose_uses_declared_input_type_and_preserves_probe(
     assert result == [[1.0, 0.0, 0.0]]
     assert captured[0].get("pr.gen_ai.purpose") == ("connection.check" if probe else purpose)
     assert captured[0]["gen_ai.request.model"] == "cohere.embed-v4.0"
+    assert sdk.last_embed_request is not None
     assert sdk.last_embed_request.input_type == input_type
     assert sdk.embed_calls == 1
