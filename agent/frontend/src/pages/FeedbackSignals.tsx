@@ -131,7 +131,7 @@ export function SignalsContent({
   }
   return (
     <div className="space-y-4">
-      <Card>
+      <Card className={selectedId ? "hidden" : undefined}>
         <CardHeader>
           <CardTitle>{t("feedback.signals.summary.title")}</CardTitle>
           <CardDescription>{t("feedback.signals.summary.description")}</CardDescription>
@@ -177,14 +177,15 @@ export function SignalsContent({
           </CardContent>
         </Card>
       ) : (
-        // B 型の一覧 + 詳細（共有 ListDetailLayout。#2283）。xl 以上は「狭い一覧 | 広い詳細」、xl 未満は 1 ペイン。
+        // 質問とシグナルを全幅の一覧で比較し、選んだ実行は全幅の詳細で読む。
         <ListDetailLayout
           id="feedback-signals"
+          layout="single"
           listLabel={t("feedback.signals.list.title")}
           detailLabel={t("feedback.signals.detail.title")}
           storagePrefix={AGENT_LIST_DETAIL_STORAGE_PREFIX}
           listHeader={
-            <div className="grid gap-2">
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_16rem] sm:items-center">
               <h2 className="text-sm font-semibold text-fg">{t("feedback.signals.list.title")}</h2>
               {/* 件数: 種類の絞り込み中は「N 件（全 M 件）」。M は期間・業務 Agent の確かめるべき実行の全件（#1891）。 */}
               <ListToolbar count={listCount(summary.flagged, report.total, filtered)} testId="signals-list-toolbar" />
@@ -281,8 +282,7 @@ function SignalCounts({ summary, previous }: { summary: SignalSummary; previous:
 }
 
 /**
- * 一覧の列（ListDetailLayout の狭い列。#2283）の行。質問（2 行まで）と補足 1 行（シグナル・実行日時）だけにし、
- * 状態・業務 Agent・利用者は詳細で見る（page-archetypes.md §1 B「一覧の行」）。
+ * 全幅の比較一覧。desktop は質問・シグナル・実行日時を列に分け、狭い画面は質問の下へ補足をまとめる。
  */
 function SignalList({
   items,
@@ -299,12 +299,13 @@ function SignalList({
       header: t("feedback.column.question"),
       rowHeader: true,
       className: "py-2.5 align-top",
+      headerClassName: "lg:w-[50%]",
       render: (item) => (
         <RowTitleButton
           title={item.question}
           maxLines={2}
           subtitle={
-            <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 lg:hidden">
               {item.signals.map((kind) => (
                 <SignalBadge key={kind} kind={kind} />
               ))}
@@ -316,6 +317,24 @@ function SignalList({
           onClick={() => onSelect(item.run_id)}
         />
       ),
+    },
+    {
+      key: "signals",
+      header: t("feedback.signals.column.signals"),
+      headerClassName: "hidden lg:table-cell lg:w-[32%]",
+      className: "hidden lg:table-cell align-top",
+      render: (item) => (
+        <span className="flex flex-wrap gap-1">
+          {item.signals.map((kind) => <SignalBadge key={kind} kind={kind} />)}
+        </span>
+      ),
+    },
+    {
+      key: "created_at",
+      header: t("feedback.signals.column.createdAt"),
+      headerClassName: "hidden lg:table-cell lg:w-[18%]",
+      className: "hidden lg:table-cell align-top tabular-nums",
+      render: (item) => formatDateTime(item.created_at),
     },
   ];
   return (
