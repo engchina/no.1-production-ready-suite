@@ -130,7 +130,7 @@ export function AnswerText({
         { citation, number: index + 1, total: targets.filter((entry) => entry.position.kind === "exact").length },
       );
       return {
-        key: `${ordinal}:${citations[target.index].document_id}:${citations[target.index].chunk_id}:${target.position.kind}`,
+        key: `${ordinal}:${citations[target.index].document_id}:${citations[target.index].chunk_id ?? target.index}:${target.position.kind}`,
         label,
         location: citationLocation(citation, ref?.fileName),
         ariaLabel: t("search.answerText.openCitation", { citation: label }),

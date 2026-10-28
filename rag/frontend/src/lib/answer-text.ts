@@ -347,11 +347,15 @@ export function resolveCitationLineTargets(
   ref: AnswerCitationRef | null,
   citations: readonly RetrievedChunk[],
 ): CitationTarget[] {
-  const exact = ordinal == null ? [] : citations.flatMap((chunk, index): CitationTarget[] =>
-    chunk.metadata.answer_citation_provenance === PROVENANCE_CHILD
-      && lineNumbers(chunk.metadata.answer_citation_lines).includes(ordinal)
-      ? [{ index, position: { kind: "exact" } }] : [],
-  );
+  const seen = new Set<string>();
+  const exact = ordinal == null ? [] : citations.flatMap((chunk, index): CitationTarget[] => {
+    if (chunk.metadata.answer_citation_provenance !== PROVENANCE_CHILD
+      || !lineNumbers(chunk.metadata.answer_citation_lines).includes(ordinal)) return [];
+    const key = chunk.chunk_id ? `${chunk.document_id}:${chunk.chunk_id}` : String(index);
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{ index, position: { kind: "exact" } }];
+  });
   if (!exact.length) {
     const fallback = resolveCitationLine(ordinal, ref, citations);
     return fallback ? [fallback] : [];

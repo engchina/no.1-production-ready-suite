@@ -294,6 +294,7 @@ describe("resolveCitationLine", () => {
     const unused = located("unused", {});
     const citations = [first, second, candidate, unused];
     expect(resolveCitationLineTargets(1, ref, citations)).toEqual([{ index: 0, position: { kind: "exact" } }]);
+    expect(resolveCitationLineTargets(1, ref, [first, first])).toHaveLength(1);
     expect(resolveCitationLineTargets(2, ref, citations)).toEqual([
       { index: 0, position: { kind: "exact" } },
       { index: 1, position: { kind: "exact" } },
