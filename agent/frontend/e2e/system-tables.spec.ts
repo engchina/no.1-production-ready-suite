@@ -17,6 +17,51 @@ async function expectNoPageOverflow(page: Page) {
     .toBeLessThanOrEqual(0);
 }
 
+test(
+  "全再作成の削除範囲と保持範囲を操作前と最終確認で示し、キャンセルでは削除しない",
+  { tag: "@responsive" },
+  async ({ page, mockApi }, testInfo) => {
+    await page.goto("/settings/system-tables");
+    const recreateSection = page.locator('section[aria-labelledby="recreate-system-tables-title"]');
+    const deletedData = [
+      "実行履歴",
+      "保存済みの定義（業務 Agent・スキル・MCP 接続など）",
+      "利用状況の集計データ",
+      "ロールの権限と利用できる業務 Agent の割り当て",
+    ];
+    const preservedData = "3 製品共通のユーザー・ロール（PLATFORM_*）と、RAG / NL2SQL のテーブルは削除しません。";
+    for (const data of deletedData) await expect(recreateSection).toContainText(data);
+    await expect(recreateSection).toContainText(preservedData);
+
+    const confirmation = recreateSection.getByRole("textbox");
+    const recreate = recreateSection.getByRole("button", { name: "すべて再作成", exact: true });
+    await confirmation.fill("架空検証用・再作成しない");
+    await expect(recreateSection.getByText("不一致", { exact: true })).toBeVisible();
+    await expect(recreate).toBeDisabled();
+    expect(mockApi.lastRequest("POST", "/api/settings/database/system-tables/initialize")).toBeUndefined();
+
+    await confirmation.fill("RECREATE_AGENT_SYSTEM_TABLES");
+    await expect(recreateSection.getByText("確認済み", { exact: true })).toBeVisible();
+    await expect(recreate).toBeEnabled();
+    await expectNoPageOverflow(page);
+    await recreateSection.screenshot({ path: testInfo.outputPath("recreate-warning.png") });
+    await recreate.click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog.getByRole("heading")).toHaveText("Agent の実行履歴・保存済みの定義・権限の割り当てを削除しますか？");
+    for (const data of deletedData) await expect(dialog).toContainText(data);
+    await expect(dialog).toContainText(preservedData);
+    await expect(dialog).toContainText("復元できません");
+    await expect(dialog.getByRole("button", { name: "キャンセル", exact: true })).toBeInViewport();
+    await expect(dialog.getByRole("button", { name: "すべて再作成", exact: true })).toBeInViewport();
+    await expectNoPageOverflow(page);
+    await dialog.screenshot({ path: testInfo.outputPath("recreate-confirmation.png") });
+    expect(mockApi.lastRequest("POST", "/api/settings/database/system-tables/initialize")).toBeUndefined();
+    await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(mockApi.lastRequest("POST", "/api/settings/database/system-tables/initialize")).toBeUndefined();
+  },
+);
+
 for (const viewport of VIEWPORTS) {
   test.describe(`システムテーブル (${viewport.name})`, () => {
     test.beforeEach(async ({ page }) => {
