@@ -38,7 +38,7 @@ def test_search_api_returns_504_when_pipeline_times_out(
     assert body["data"] is None
     # どの工程で時間切れになったか（最後に始まった工程）と、再試行の案内を返す（#375）。
     assert body["error_messages"] == [answer_timeout_message("answer", 0.05)]
-    assert "質問の理解から回答の作成まで" in body["error_messages"][0]
+    assert "質問の条件を整理して回答を作る" in body["error_messages"][0]
     assert "もう一度送信してください" in body["error_messages"][0]
 
     audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")

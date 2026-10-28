@@ -482,14 +482,14 @@ async def test_rag_spans_carry_the_rag_step_names_for_other_products(
     }
     assert names == {
         "rag.search": None,
-        "rag.retrieval": "検索",
-        "rag.engine.stage": "文書の検索（2 回目）",
+        "rag.retrieval": "文書から根拠の候補を検索する",
+        "rag.engine.stage": "検索文から根拠の候補を集める（2 回目）",
         "gen_ai.embeddings": None,
     }
     assert {row["product"] for row in rows.values()} == {"rag"}
     # 工程の定義の値（工程名・LLM の回数）はそのまま残す。
     assert json.loads(rows["rag.engine.stage"]["display_params_json"]) == {
-        "display_name": "文書の検索（2 回目）",
+        "display_name": "検索文から根拠の候補を集める（2 回目）",
         "name": "文書検索（2回目）",
         "llm_calls": 1,
     }
