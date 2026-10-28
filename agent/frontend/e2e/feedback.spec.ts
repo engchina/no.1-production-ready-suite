@@ -636,4 +636,16 @@ test("評価の詳細 URL を開くと保存した見方に関わらず評価の
   await expect(page.getByRole("tab", { name: "利用者の評価", exact: true })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("tab", { name: "確かめるべき実行", exact: true }).click();
   await expect(page).not.toHaveURL(/feedback=/);
+  await expect(page.getByRole("tab", { name: "確かめるべき実行", exact: true })).toHaveAttribute("aria-selected", "true");
+});
+
+test("評価の詳細から最初のクリックでシグナルへ切り替わる", { tag: "@responsive" }, async ({ page, mockApi }) => {
+  seedReport(mockApi);
+  await page.goto("/feedback?feedback=run-a");
+  await expect(page.getByTestId("feedback-detail")).toBeVisible();
+  const signals = page.getByRole("tab", { name: "確かめるべき実行", exact: true });
+  await signals.click();
+  await expect(signals).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tabpanel", { name: "確かめるべき実行", exact: true })).toBeVisible();
+  await expect(page).not.toHaveURL(/feedback=/);
 });

@@ -113,12 +113,21 @@ for (const viewport of VIEWPORTS) {
       expect(listBox!.width).toBeCloseTo(layoutBox!.width, 0);
       const countToolbar = page.getByTestId("signals-list-toolbar");
       expect(await countToolbar.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
+      // 主一覧は外側のカードを持たず、件数は表の右端、見出しは共通 Section の大きさにする。
+      const appearance = await list.evaluate((element) => {
+        const style = getComputedStyle(element);
+        const heading = element.querySelector("h2")!;
+        return { border: style.borderTopWidth, shadow: style.boxShadow, position: style.position, fontSize: getComputedStyle(heading).fontSize };
+      });
+      expect(appearance).toEqual({ border: "0px", shadow: "none", position: "static", fontSize: "16px" });
+      const [toolbarBox, mainListBox] = await Promise.all([countToolbar.boundingBox(), list.boundingBox()]);
+      expect(toolbarBox!.x + toolbarBox!.width).toBeCloseTo(mainListBox!.x + mainListBox!.width, 0);
       const table = page.getByRole("table", { name: "確かめるべき実行の一覧" });
       await expect(table.getByRole("columnheader", { name: "シグナル", exact: true })).toHaveCount(viewport.width >= 1024 ? 1 : 0);
       const toolRow = table.getByRole("row", { name: /run-tool/ });
       await expect(toolRow).toContainText("ツールの失敗");
       await expect(toolRow).toContainText("答えられなかった");
-      // 一覧の列（狭い列）の行は質問とシグナル・実行日時だけ。状態・業務 Agent・利用者は詳細で見る（#2283）。
+      // 主一覧は質問とシグナル・実行日時を比較し、業務 Agent と利用者は詳細で見る。
       await expect(toolRow).not.toContainText("山田 太郎");
       await expect(table.getByRole("row", { name: /run-failed/ })).toContainText("実行の失敗・取り消し");
 
@@ -471,4 +480,49 @@ test("シグナルの詳細 URL を開くと保存した評価のタブから切
   await expect(page.getByRole("tab", { name: "確かめるべき実行", exact: true })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("tab", { name: "利用者の評価", exact: true }).click();
   await expect(page).not.toHaveURL(/signal=/);
+  await expect(page.getByRole("tab", { name: "利用者の評価", exact: true })).toHaveAttribute("aria-selected", "true");
 });
+
+test("スクロール後も最初のクリックで評価のタブへ切り替わる", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  seedSignals(mockApi, Array.from({ length: 25 }, (_, index) => signalItem(`run-${index}`, ["tool_failed"])));
+  await page.goto("/feedback");
+  await expect(page.getByTestId("signals-summary")).toBeVisible();
+  const ratings = page.getByRole("tab", { name: "利用者の評価", exact: true });
+  const signals = page.getByRole("tab", { name: "確かめるべき実行", exact: true });
+  const main = page.getByRole("main");
+  await main.evaluate((element) => { element.scrollTop = 500; });
+  // desktop は貼り付いたヘッダー、375px はタブを再び見せた位置から操作する。
+  if (testInfo.project.name !== "desktop") await ratings.scrollIntoViewIfNeeded();
+  if (testInfo.project.name === "desktop") {
+    expect(await main.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  }
+  const box = await ratings.boundingBox();
+  if (!box) throw new Error("評価のタブがありません");
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(ratings).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("signals-summary")).not.toBeVisible();
+  await signals.click();
+  await expect(signals).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("signals-summary")).toBeVisible();
+});
+
+for (const signal of ["", "run-tool"]) {
+  test(`シグナル URL から最初のクリックで評価へ切り替わる (${signal || "選択なし"})`, { tag: "@responsive" }, async ({ page, mockApi }) => {
+    seedSignals(mockApi);
+    await page.goto(`/feedback?signal=${signal}`);
+    await expect(page.getByTestId(signal ? "signals-detail" : "signals-summary")).toBeVisible();
+    const ratings = page.getByRole("tab", { name: "利用者の評価", exact: true });
+    const signals = page.getByRole("tab", { name: "確かめるべき実行", exact: true });
+    await ratings.click();
+    await expect(ratings).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tabpanel", { name: "利用者の評価", exact: true })).toBeVisible();
+    await expect(page).not.toHaveURL(/signal=/);
+    await page.reload();
+    await expect(ratings).toHaveAttribute("aria-selected", "true");
+    await ratings.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(signals).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("End");
+    await expect(ratings).toHaveAttribute("aria-selected", "true");
+  });
+}
