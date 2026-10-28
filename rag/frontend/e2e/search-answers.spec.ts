@@ -603,3 +603,24 @@ test("検索前の案内の開き括弧を次の文に付ける", {tag:"@respons
   expect(text.some(t=>t.startsWith("「") && t.includes("LLM"))).toBe(true);
   await expectNoPageOverflow(page);
 });
+
+// #3739: チャットと同じ選択部品を使う RAG 検索も、後続ページを検索対象にする。
+test("RAG検索で51件目以降のプロファイルを検索し、再読込後も選択を保持する", async ({ page }, testInfo) => {
+  const profiles = Array.from({ length: 50 }, (_, i) => view(`profile-${i}`, `検証用_候補${i + 1}`, 1));
+  const target = view("profile-last", "検証用_最後の候補", 1);
+  const offsets: number[] = [];
+  await page.route("**/api/search-answer-profiles?**", async (route) => {
+    const offset = Number(new URL(route.request().url()).searchParams.get("offset") ?? 0);
+    offsets.push(offset);
+    await route.fulfill(envelope({
+      items: offset === 0 ? profiles : [target], total: 51, limit: 50, offset, has_next: offset === 0,
+    }));
+  });
+  await page.goto("/search");
+  await selectSearchAnswerProfile(page, target.name);
+  await expect(page.getByRole("button", { name: new RegExp(target.name) })).toBeVisible();
+  expect(offsets).toContain(50);
+  await page.reload();
+  await expect(page.getByRole("button", { name: new RegExp(target.name) })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("search-profile-after-first-page.png") });
+});
