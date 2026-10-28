@@ -98,25 +98,24 @@ locals {
 
 resource "oci_database_autonomous_database" "generated_database_autonomous_database" {
   count                                          = local.create_new_adb ? 1 : 0
-  is_free_tier                                   = var.adb_is_free_tier
   admin_password                                 = var.adb_password
   autonomous_maintenance_schedule_type           = "REGULAR"
-  backup_retention_period_in_days                = var.adb_is_free_tier ? null : var.adb_backup_retention_period_in_days
+  backup_retention_period_in_days                = var.adb_backup_retention_period_in_days
   character_set                                  = "AL32UTF8"
   compartment_id                                 = var.adb_compartment_ocid
-  compute_count                                  = var.adb_is_free_tier ? null : var.adb_compute_count
-  compute_model                                  = var.adb_is_free_tier ? null : var.adb_compute_model
-  data_storage_size_in_tbs                       = var.adb_is_free_tier ? null : var.adb_data_storage_size_in_tbs
+  compute_count                                  = var.adb_compute_count
+  compute_model                                  = var.adb_compute_model
+  data_storage_size_in_tbs                       = var.adb_data_storage_size_in_tbs
   db_name                                        = var.adb_name
   db_version                                     = var.adb_db_version
   db_workload                                    = var.adb_workload
   display_name                                   = local.adb_display_name
-  is_auto_scaling_enabled                        = var.adb_is_free_tier ? false : var.adb_is_auto_scaling_enabled
-  is_auto_scaling_for_storage_enabled            = var.adb_is_free_tier ? false : var.adb_is_auto_scaling_for_storage_enabled
+  is_auto_scaling_enabled                        = var.adb_is_auto_scaling_enabled
+  is_auto_scaling_for_storage_enabled            = var.adb_is_auto_scaling_for_storage_enabled
   is_dedicated                                   = "false"
   is_mtls_connection_required                    = var.adb_is_mtls_connection_required
   is_preview_version_with_service_terms_accepted = "false"
-  license_model                                  = var.adb_is_free_tier ? "LICENSE_INCLUDED" : var.license_model
+  license_model                                  = var.license_model
   ncharacter_set                                 = "AL16UTF16"
   subnet_id                                      = local.adb_private_endpoint_enabled ? var.adb_subnet_id : null
   whitelisted_ips                                = local.adb_secure_acl_enabled ? local.adb_whitelisted_ips : null
@@ -129,7 +128,7 @@ resource "oci_database_autonomous_database" "generated_database_autonomous_datab
   }
 
   dynamic "resource_pool_summary" {
-    for_each = !var.adb_is_free_tier && var.adb_is_elastic_pool_enabled ? [1] : []
+    for_each = var.adb_is_elastic_pool_enabled ? [1] : []
 
     content {
       pool_size                = var.adb_resource_pool_size
@@ -146,26 +145,6 @@ resource "oci_database_autonomous_database_wallet" "generated_autonomous_databas
 
   # ADB の入力と製品の選択は、Compute の台数に関係なく1回だけ検証したいので、常に1つ作る Wallet に置く。
   lifecycle {
-    precondition {
-      condition     = !var.adb_is_free_tier || local.create_new_adb
-      error_message = "adb_is_free_tier は新規 ADB の作成専用です。既存 ADB は既存の設定で利用します。"
-    }
-    precondition {
-      condition     = !var.adb_is_free_tier || !local.adb_private_endpoint_enabled
-      error_message = "Always Free ADB では private endpoint を使用できません。パブリック・エンドポイントのアクセス・タイプを明示的に選択してください。"
-    }
-    precondition {
-      condition     = !var.adb_is_free_tier || !var.adb_is_elastic_pool_enabled
-      error_message = "Always Free ADB では elastic pool を使用できません。"
-    }
-    precondition {
-      condition     = !var.adb_is_free_tier || contains(["LH", "OLTP"], var.adb_workload)
-      error_message = "Suite の Always Free ADB は SQL*Net を使用できる LH または OLTP を選択してください。AJD は provider の無料構成非対応、APEX は Suite の DB 接続非対応です。"
-    }
-    precondition {
-      condition     = !var.adb_is_free_tier || contains(["19c", "26ai"], var.adb_db_version)
-      error_message = "Always Free ADB は 19c または 26ai を選択してください。Vector Search を使う製品は 26ai が必要です。ホーム・リージョンと提供状況を確認してください。"
-    }
     precondition {
       condition     = length(local.selected_products) > 0
       error_message = "配備する製品を1つ以上選択してください（deploy_rag / deploy_nl2sql / deploy_agent）。"

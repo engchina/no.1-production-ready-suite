@@ -720,72 +720,33 @@ root の [README.md](../README.md)「OCI へのデプロイ」のボタンも `r
 | `adb_name` の既定 `RAGADB` / `NL2SQLADB` / `AGENTADB` | `SUITEADB` |
 | NL2SQL の `adb_workload` の既定 `LH` | `LH`（#1558。統合の当初は `OLTP` だった） |
 
-## Always Free を任意に使う
+## Always Free ADB を手動作成して利用する場合
 
-有料構成が既定です。Compute と新規 ADB は、それぞれ独立して無料構成を選べます。
-無料構成は検証用で、3 製品・文書解析のインストール成功や実用性能を保証するものではありません。
-実 OCI の Arm 配備と負荷試験は別途必要です。
+この stack は Always Free の Compute / ADB を作成しません。
+Compute の新規作成は x86 の E4 / E5 Flex、新規 ADB は有料構成です。
 
-| 対象 | 有料の既定 | Always Free を選んだ場合 |
-|---|---|---|
-| 有効化 | どちらも無効 | `compute_always_free_enabled=true` / `adb_is_free_tier=true` |
-| Compute shape / OS | E5 Flex / Oracle Linux 9 x86 | A1 Flex / Oracle Linux 9 Arm。リージョンに合う固定 image を自動選択 |
-| OCPU | 4 | `compute_always_free_ocpus`、1 または 2、既定 2 |
-| メモリ | 32 GB | `compute_always_free_memory_in_gbs`、整数 1〜12 GB、既定 12 |
-| 起動ボリューム | 200 GB / 10 VPUs/GB | `compute_always_free_boot_volume_size_in_gbs`、整数 50〜200 GB、既定 200。性能は 10 VPUs/GB 固定 |
-| ADB workload | LH | Suite は LH または OLTP。APEX は SQL*Net 非対応、AJD はこの provider の無料設定非対応 |
-| ADB CPU | 2 ECPU | サービスが固定する 1 OCPU。ECPU 数・compute model は送信しない |
-| ADB 容量 | 1 TB | サービスが固定する 20 GB。TB / GB 容量を送信しない |
-| ADB 自動拡張 / elastic pool | 自動拡張は無効 | 自動拡張は無効固定。elastic pool は使用不可 |
-| ADB ライセンス | LICENSE_INCLUDED | LICENSE_INCLUDED 固定。Always Free はライセンス種別ではなく `is_free_tier` |
-| ADB バックアップ保持 | 1 日 | 保持日数は送信しない。利用者による時点復旧・長期 / 手動バックアップは使えない |
-| ADB 接続 | private endpoint | private endpoint 非対応。ACL 付きパブリック接続を推奨し、アクセス・タイプは利用者が明示的に指定 |
-| bastion | 任意 | Always Free Compute とは併用不可（既存の Chrome 配備は x86 専用） |
+Always Free ADB が必要な場合は、OCI コンソールで事前に手動作成し、フォームで
+「既存の Autonomous AI Database を選択」を指定してください。
 
-無料構成で非表示になる有料用入力は使用しません。CLI でも同じ分岐です。ADB の表示名・DB 名・ADMIN パスワード・
-アプリ用ユーザー・ACL は引き続き設定します。既存 ADB を使う場合は `adb_is_free_tier=false` のまま、
-既存 ADB の設定を使用します。Terraform から既存 ADB を無料へ変更しません。
+1. tenancy のホーム・リージョンで Always Free ADB を作成します。Suite の SQL*Net 接続が使える
+   workload と、必要な製品機能に対応する DB バージョンを選びます。
+   APEX Service は SQL*Net 接続を提供しません。Vector Search を利用する場合は対応する DB バージョンが必要です。
+2. Always Free ADB は private endpoint 非対応です。パブリック・エンドポイントの ACL、
+   Compute からの接続経路（Service Gateway または固定出口 IP）、mTLS 接続の条件を手動で設定します。
+   stack の新規 ADB 用ネットワーク入力は、既存 ADB の設定を変更しません。
+3. `adb_compartment_ocid` にその ADB のコンパートメント、`adb_deployment_mode` に `USE_EXISTING`、
+   `existing_adb_ocid` に手動作成した ADB の OCID を指定します。
+4. 既定のアプリ用 DB ユーザーを使う場合は、`existing_adb_admin_password` と
+   `adb_app_user_name` / `adb_app_user_password` を指定します。使わない場合は、必要な権限を持つ
+   `existing_oracle_user` / `existing_oracle_password` を指定します。
+   `existing_oracle_dsn` は空欄なら選択した ADB の DB 名から `<db_name>_high` を使います。
 
-```hcl
-# tenancy のホーム・リージョンを選択する（stack は東京 / 大阪に対応）。
-compute_always_free_enabled                 = true
-compute_always_free_ocpus                   = 2
-compute_always_free_memory_in_gbs           = 12
-compute_always_free_boot_volume_size_in_gbs = 200
-bastion_enabled                            = false
-adb_deployment_mode                        = "CREATE_NEW"
-adb_is_free_tier                           = true
-adb_workload                               = "LH"
-adb_db_version                             = "26ai"
-adb_network_access_type                    = "許可されたIPおよびVCN限定のセキュア・アクセス"
-# VCN ACL の場合は、接続元 VCN と Service Gateway の経路を別途用意する。
-# IP ACL の場合は、固定出口のパブリック IP / CIDR を指定する。
-```
+stack は既存 ADB の Wallet を生成して接続先へ渡します。既存 ADB の無料 / 有料の種別、
+CPU・容量・ネットワークは変更しません。無料枠の残量と制約、実際の接続・初期化・同時接続数・性能は
+利用する環境で確認してください。Compute や AI の利用料が無料になる設定ではありません。
 
-無料枠はこの stack 専用ではありません。ホーム・リージョン、tenancy 内の既存リソース・使用量・残り枠、
-A1 の空き容量を OCI コンソールで確認してください。Terraform は残り枠や課金を保証しません。
-無料専用アカウントの A1 は合計 2 OCPU / 12 GB（1,500 OCPU 時間 / 9,000 GB 時間 / 月）、
-有料 tenancy の A1 無償枠は 3,000 OCPU 時間 / 18,000 GB 時間 / 月と公式料金表に記載されています。
-この無料構成は前者の上限を採用します。起動・ブロックボリューム合計 200 GB は他の VM とも共有します。
-AI の推論・embedding・rerank、追加リソース等が無料になる設定ではありません。
+公式資料:
 
-ADB の新規作成ガイドでは、対応する東京・大阪はいずれも Always Free の新しい DB バージョンの提供対象です。
-Always Free 専用ページには古い地域の限定リストも残っており、記述が一致しません。
-最終的な提供バージョンはホーム・リージョンの OCI コンソールで確認してください。
-Vector Search を使う製品で古い DB バージョンを選ばないでください。
-無料 ADB は同時セッション数に制限があり、7 日間の非稼働で自動停止、停止後の長期非稼働で削除される場合があります。
-Compute にも非稼働時の回収条件があります。
-
-有料 / 無料の切替は新しい stack で行ってください。既存リソースの切替は CPU・容量・image の変更や
-Compute の再作成を伴い、ADB の API は `is_free_tier` と他の属性の同時変更を制限します。
-この設定で既存 ADB を有料から無料に変換することはできません。
-
-公式資料（2026-10-28 確認）:
-
-- [Always Free Resources](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
-- [Always Free Autonomous AI Database](https://docs.oracle.com/en-us/iaas/autonomous-database-serverless/doc/autonomous-always-free.html)
-- [ADB の新規作成と地域別の提供状況](https://docs.oracle.com/en/cloud/paas/autonomous-database/serverless/adbsb/autonomous-provision.html)
-- [OCI provider 8.24.0 の ADB パラメータ](https://github.com/oracle/terraform-provider-oci/blob/v8.24.0/website/docs/r/database_autonomous_database.html.markdown)
-- [Oracle Linux 9 Arm image と地域別 OCID](https://docs.oracle.com/en-us/iaas/images/oracle-linux-9x/oracle-linux-9-8-aarch64-2026-09-18-0.htm)
-- [APEX Service の SQL*Net 制限](https://docs.oracle.com/en/cloud/paas/apex/gsadd/restrictions-and-limitations.html)
-- [有料 tenancy の A1 無償枠](https://www.oracle.com/cloud/price-list/)
+- [Always Free Autonomous AI Database の制約](https://docs.oracle.com/en-us/iaas/autonomous-database-serverless/doc/autonomous-always-free.html)
+- [Autonomous AI Database の作成](https://docs.oracle.com/en/cloud/paas/autonomous-database/serverless/adbsb/autonomous-provision.html)
+- [APEX Service の接続制約](https://docs.oracle.com/en/cloud/paas/apex/gsadd/restrictions-and-limitations.html)
