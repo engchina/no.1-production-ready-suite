@@ -21,6 +21,7 @@ from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, Field
 
 from rag_engine.dependencies import report_degraded
+from rag_engine.resources.runtime import resolve_prompt
 
 # 番号付きの画面見出し（「（２）帳票印字設定」「（Ｄ）請求処理」「(3)…」）。目録に入れる見出しの形。
 _NUMBERED_HEADING = re.compile(r"^[（(][0-9０-９Ａ-ＺA-Zａ-ｚ]{1,3}[）)]")
@@ -145,7 +146,15 @@ def link_screens(
     prompt = json.dumps({"question": question, "catalog": text}, ensure_ascii=False)
     try:
         return validated_links(
-            call_with_model_purpose("evidence.select_screen", parse_text, LINK_SYSTEM_PROMPT, prompt, settings, ScreenLinks), catalog
+            call_with_model_purpose(
+                "evidence.select_screen",
+                parse_text,
+                resolve_prompt("screen_linking.system", LINK_SYSTEM_PROMPT),
+                prompt,
+                settings,
+                ScreenLinks,
+            ),
+            catalog,
         )
     except Exception as exc:  # noqa: BLE001 - 画面の選択は補助。選ばずに検索を続ける。
         report_degraded("screen_link", exc)

@@ -54,6 +54,7 @@ from rag_engine.generation.operation_audit import (
     table_header_lines,
 )
 from rag_engine.resources.deadline import DeadlineExceeded, current_deadline
+from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.retrieval.character_forms import fold_text_with_positions, fold_width
 
 logger = logging.getLogger(__name__)
@@ -567,7 +568,7 @@ def _prepare_standard_scope(
     inputs = {"question": payload.get("question"), "standard_answer_units": standard_answer_units(standard_answer)}
 
     return _parse_checked(  # type: ignore[no-any-return]
-        SCOPE_PROMPT,
+        resolve_prompt("evaluation.scope", SCOPE_PROMPT),
         inputs,
         settings,
         StandardAnswerScope,
@@ -700,7 +701,9 @@ def _shared_standard_scope(payload, settings, provider_id, on_retry: RetryRecord
             str(payload.get("question") or ""),
             str(payload.get("standard_answer") or ""),
             _judge_model(settings, provider_id),
-            SCOPE_PROMPT_SHA,
+            hashlib.sha256(
+                (resolve_prompt("evaluation.scope", SCOPE_PROMPT) + _json(StandardAnswerScope.model_json_schema())).encode("utf-8")
+            ).hexdigest(),
         ]
     )
     return cache.get_or_prepare(hashlib.sha256(key.encode("utf-8")).hexdigest(), prepare)
@@ -1367,11 +1370,11 @@ def _claim_inputs(
     inputs: dict[str, Any] = dict(
         passage=dict(id=passage["id"], text=passage["text"]), context=list(context), evidence_items=[question_item]
     )
-    if _request_bytes(CLAIM_PROMPT, inputs, ClaimJudgement) > budget:
+    if _request_bytes(resolve_prompt("evaluation.claim", CLAIM_PROMPT), inputs, ClaimJudgement) > budget:
         raise EvaluationInputTooLarge
     for fragment in _evidence_fragments(_distinct_nodes(nodes)):
         candidate = {**inputs, "evidence_items": [*inputs["evidence_items"], fragment]}
-        if _request_bytes(CLAIM_PROMPT, candidate, ClaimJudgement) > budget:
+        if _request_bytes(resolve_prompt("evaluation.claim", CLAIM_PROMPT), candidate, ClaimJudgement) > budget:
             break
         inputs = candidate
     return inputs
@@ -1441,7 +1444,14 @@ def _judge_coverage(
 
     inputs = {**fixed, "requirements": [dict(item) for item in requirements]}
     output = _parse_checked(
-        COVERAGE_PROMPT, inputs, settings, CoverageOutput, provider_id, check, max_input_bytes=budget, on_retry=on_retry
+        resolve_prompt("evaluation.coverage", COVERAGE_PROMPT),
+        inputs,
+        settings,
+        CoverageOutput,
+        provider_id,
+        check,
+        max_input_bytes=budget,
+        on_retry=on_retry,
     )
     return [
         CoverageCheck(
@@ -1497,7 +1507,14 @@ def _judge_claim(
 
     try:
         output = _parse_checked(
-            CLAIM_PROMPT, inputs, settings, ClaimJudgement, provider_id, check, max_input_bytes=budget, on_retry=on_retry
+            resolve_prompt("evaluation.claim", CLAIM_PROMPT),
+            inputs,
+            settings,
+            ClaimJudgement,
+            provider_id,
+            check,
+            max_input_bytes=budget,
+            on_retry=on_retry,
         )
     except EvaluationContractError:
         if not last:
@@ -1595,10 +1612,17 @@ def evaluate_answer_payload(
     coverage_fixed = dict(question=question, answer_passages=_coverage_passages(answer_text))
     try:
         # 大きな生成回答も範囲の固定の前に止め、不要なネットワーク呼び出しを避ける。
-        if _request_bytes(COVERAGE_PROMPT, {**coverage_fixed, "requirements": []}, CoverageOutput) > budget:
+        if (
+            _request_bytes(resolve_prompt("evaluation.coverage", COVERAGE_PROMPT), {**coverage_fixed, "requirements": []}, CoverageOutput)
+            > budget
+        ):
             raise EvaluationInputTooLarge
         scope_inputs = dict(question=question, standard_answer=str(payload.get("standard_answer") or ""))
-        if has_standard and _request_bytes(SCOPE_PROMPT, scope_inputs, StandardAnswerScope) > MAX_EVALUATION_INPUT_BYTES:
+        if (
+            has_standard
+            and _request_bytes(resolve_prompt("evaluation.scope", SCOPE_PROMPT), scope_inputs, StandardAnswerScope)
+            > MAX_EVALUATION_INPUT_BYTES
+        ):
             raise EvaluationInputTooLarge
         if not has_standard:
             standard_scope = StandardAnswerScope.model_construct(requirements=[], excluded_case_data=[])
@@ -1731,7 +1755,7 @@ def _judge_correctness(
 ) -> AnswerCorrectnessOutput:
     """標準回答に照らした正確性を判定する（質問・標準回答・回答の本文だけを渡す）。"""
     return _parse_checked(
-        CORRECTNESS_PROMPT,
+        resolve_prompt("evaluation.correctness", CORRECTNESS_PROMPT),
         inputs,
         settings,
         AnswerCorrectnessOutput,

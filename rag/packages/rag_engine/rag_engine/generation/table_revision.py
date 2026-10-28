@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel, ConfigDict, Field
 
 from rag_engine.generation.table_binding import states_value, table_corrections, table_mismatch_notes, unbound_table_values
+from rag_engine.resources.runtime import resolve_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,11 @@ def revise_table_passage(
     }
     try:
         output = TableRevision.model_validate(
-            parse(REVISION_SYSTEM_PROMPT, json.dumps(inputs, ensure_ascii=False), TableRevision).model_dump()
+            parse(
+                resolve_prompt("answer_validation.tableRevision", REVISION_SYSTEM_PROMPT),
+                json.dumps(inputs, ensure_ascii=False),
+                TableRevision,
+            ).model_dump()
         )
     except Exception:  # noqa: BLE001 - 直せなければ外す（段落・根拠の本文は記録しない）。
         logger.warning("table revision failed")

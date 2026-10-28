@@ -977,6 +977,13 @@ def guide_notices(match: GuideMatch) -> dict[str, Any]:
         "handoff_conditions": list(match.content.handoff.conditions),
         "approval_required": approval,
         "approval_note": impact.approval_note if approval else "",
+        "branch_notes": list(
+            dict.fromkeys(
+                branch.note.strip()
+                for branch, applies in visible_plan(match)[1]
+                if applies is True and branch.note.strip()
+            )
+        ),
     }
 
 

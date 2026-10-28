@@ -100,7 +100,7 @@ for (const viewport of [
 
     const field = page.getByLabel("テンプレート");
     const save = page.getByRole("button", { name: "プロンプトを保存" });
-    await expect(page.getByText("既定値", { exact: true })).toBeVisible();
+    await expect(page.getByText("既定値", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "既定に戻す" })).toBeDisabled();
     await field.fill("質問だけ {{question}}");
     await save.click();
@@ -114,8 +114,13 @@ for (const viewport of [
     await expect(page.getByText(/^編集済み/)).toBeVisible();
 
     await page.getByRole("button", { name: "既定に戻す" }).click();
-    await page.getByRole("alertdialog", { name: "既定のプロンプトに戻しますか？" }).getByRole("button", { name: "既定に戻す" }).click();
-    await expect(page.getByText("既定のプロンプトに戻しました。")).toBeVisible();
+    await expect(page.getByText("既定の内容に戻しました。保存すると反映されます。")).toBeVisible();
+    expect(requests.map((request) => request.method)).toEqual(["PUT"]);
+    await page.getByRole("button", { name: "変更を破棄" }).click();
+    await expect(field).toHaveValue("独自 {{question}} {{answer_context}}");
+    await page.getByRole("button", { name: "既定に戻す" }).click();
+    await save.click();
+    await expect(page.getByText("プロンプトを保存しました。")).toBeVisible();
     await expect(field).toHaveValue("既定のテンプレート {{question}} {{answer_context}}");
     expect(requests.map((request) => request.method)).toEqual(["PUT", "DELETE"]);
 
@@ -323,3 +328,49 @@ for (const width of [1280, 375]) {
     await expectNoPageOverflow(page);
   });
 }
+
+// 新しい工程別の編集欄もテンプレートと同じ保存・破棄・復帰の契約を使う。
+test("資料との照合の指示を保存でき、既定への復帰は保存まで取り消せる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const key = "answer_validation.system";
+  const builtin = "## Step 1: 資料と説明を確認する\n合成の指示。";
+  let custom: string | null = null;
+  const methods: string[] = [];
+  await page.route("**/api/settings/answer-prompts**", async (route) => {
+    const method = route.request().method();
+    if (method !== "GET") {
+      methods.push(method);
+      custom = method === "DELETE" ? null : route.request().postDataJSON().content;
+    }
+    const envelope = answerPromptsEnvelope("既定 {{question}} {{answer_context}}", false, [
+      { id: "answer_validation", phase: "audit", prompts: [{ id: "system", content: custom ?? builtin, prompt_key: key }] },
+    ]);
+    envelope.data.prompts.push({ key, content: custom ?? builtin, default_content: builtin,
+      customized: custom !== null, required_placeholders: [], updated_at: null });
+    await route.fulfill({ json: envelope });
+  });
+  await page.goto("/settings/prompts");
+  const stage = page.getByTestId("answer-prompt-stage-answer_validation");
+  await stage.locator("summary").click();
+  const field = stage.getByRole("textbox");
+  const save = stage.getByRole("button", { name: "プロンプトを保存" });
+  const reset = stage.getByRole("button", { name: "既定に戻す" });
+  await expect(field).toBeEditable();
+  await field.fill("## Step 1: 合成の確認を追加する");
+  await save.click();
+  await expect(save).toBeDisabled();
+  await reset.click();
+  await expect(field).toHaveValue(builtin);
+  expect(methods).toEqual(["PUT"]);
+  await stage.getByRole("button", { name: "変更を破棄" }).click();
+  await expect(field).toHaveValue("## Step 1: 合成の確認を追加する");
+  await reset.click();
+  await save.click();
+  await expect(save).toBeDisabled();
+  expect(methods).toEqual(["PUT", "DELETE"]);
+  await expect(page.getByText("既定値", { exact: true })).toHaveCount(0);
+  const resetBox = await reset.boundingBox();
+  const fieldBox = await field.boundingBox();
+  expect(resetBox!.y + resetBox!.height).toBeLessThanOrEqual(fieldBox!.y);
+  await expectNoPageOverflow(page);
+  await stage.screenshot({ path: testInfo.outputPath("editable-stage.png") });
+});

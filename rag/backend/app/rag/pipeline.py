@@ -31,6 +31,7 @@ from pr_backend_core.observability.tracing import (
 from pydantic import ValidationError
 from rag_engine.evaluation.answer_validation import MAX_PREMISES
 from rag_engine.resources.deadline import current_deadline
+from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.tracing import CallObservation, bind_trace_observer
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
@@ -1130,7 +1131,9 @@ class RagPipeline:
                 self._llm.generate,
                 query,
                 history_text,
-                system_prompt=HISTORY_REWRITE_SYSTEM_PROMPT,
+                system_prompt=resolve_prompt(
+                    "history_rewrite.system", HISTORY_REWRITE_SYSTEM_PROMPT
+                ),
                 response_schema=HistoryRewrite.model_json_schema(),
                 response_schema_name="history_rewrite",
             )

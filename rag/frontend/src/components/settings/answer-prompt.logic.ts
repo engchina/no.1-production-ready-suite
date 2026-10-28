@@ -9,12 +9,14 @@ import { requiredTextError } from "@/lib/required-fields";
 export function answerPromptError(
   content: string,
   fieldLabel: string,
-  requiredPlaceholders: readonly string[]
+  requiredPlaceholders: readonly string[],
+  requiredTokens: readonly string[] = []
 ): string | null {
   const empty = requiredTextError(content, t("validation.required", { field: fieldLabel }));
   if (empty) return empty;
   const missing = requiredPlaceholders
     .map((name) => `{{${name}}}`)
+    .concat([...requiredTokens])
     .filter((placeholder) => !content.includes(placeholder));
   return missing.length
     ? t("settings.answerPrompts.missingPlaceholders", { names: missing.join("、") })

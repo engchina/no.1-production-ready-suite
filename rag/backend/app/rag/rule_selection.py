@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pr_backend_core.observability.tracing import observed_span
 from pydantic import BaseModel, ConfigDict, Field
+from rag_engine.resources.runtime import resolve_prompt
 
 from app.config import Settings
 from app.rag.guardrails import GuardrailPolicy
@@ -136,9 +137,11 @@ async def recognize_rule_selections(
                 raw = await async_call_with_model_purpose(
                     "query.conditions",
                     condition_client(settings).generate,
-                    RULE_SELECTION_INPUT_PROMPT,
+                    resolve_prompt("rule_selection.instruction", RULE_SELECTION_INPUT_PROMPT),
                     context,
-                    system_prompt=RULE_SELECTION_SYSTEM_PROMPT,
+                    system_prompt=resolve_prompt(
+                        "rule_selection.system", RULE_SELECTION_SYSTEM_PROMPT
+                    ),
                     response_schema=RuleSelections.model_json_schema(),
                     response_schema_name="rule_clarification_selections",
                 )

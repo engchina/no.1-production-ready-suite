@@ -31,6 +31,7 @@ from rag_engine.generation.crag_support import MAX_GENERATED_QUERY_CHARS
 from rag_engine.knowledge.classification import ClassificationFilter
 from rag_engine.knowledge.prompt_files import render_prompt_template
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
+from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse
 from rag_engine.retrieval.task_contract import task_contract
 
@@ -264,7 +265,7 @@ QUERY_EXPANSION_PROMPT_TEMPLATE = (
 def _build_query_routing_prompt(question: str) -> str:
     """検索方法と実データ依存を混同しない二軸のルーティング指示を作成します。"""
     return render_prompt_template(
-        QUERY_ROUTING_PROMPT_TEMPLATE,
+        resolve_prompt("routing.template", QUERY_ROUTING_PROMPT_TEMPLATE),
         {
             "question": question.strip(),
             "task_contract": _prompt_task_contract(question),
@@ -275,7 +276,7 @@ def _build_query_routing_prompt(question: str) -> str:
 def _build_query_expansion_prompt(question: str, strategy: str) -> str:
     """選択済みの戦略で検索文を作る指示を作成します（自動ルーティングが検索文を返さないときの補助呼出にも使う）。"""
     return render_prompt_template(
-        QUERY_EXPANSION_PROMPT_TEMPLATE,
+        resolve_prompt("expansion.template", QUERY_EXPANSION_PROMPT_TEMPLATE),
         {
             "strategy_label": query_strategy_label(strategy),
             "question": question.strip(),

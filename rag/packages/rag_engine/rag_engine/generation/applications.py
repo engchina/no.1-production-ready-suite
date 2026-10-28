@@ -30,6 +30,7 @@ from rag_parser_core.language.text import text_patterns
 from rag_engine.generation import passage_marks
 from rag_engine.generation.grounding_cues import grounding_cues
 from rag_engine.models.llm import ApplicationAudit, ApplicationDraft, GroundedApplication, GroundedAudit
+from rag_engine.resources.runtime import resolve_prompt
 
 # 回答の本文の節の見出し。
 APPLICATIONS_SECTION_TITLE = "質問の条件への当てはめ"
@@ -409,7 +410,13 @@ def run_application_step(
     """当てはめだけを作り、検査と監査を通す。公開できる当てはめと、監査が支持した結論の文（無ければ空）を返す。"""
     inputs, supported = application_step_inputs(question, checked, request_units)
     draft = call_with_model_purpose(
-        "answer.generate", parse_text, APPLICATION_SYSTEM_PROMPT, render_prompt(inputs), settings, ApplicationDraft, provider_id=provider_id
+        "answer.generate",
+        parse_text,
+        resolve_prompt("application.system", APPLICATION_SYSTEM_PROMPT),
+        render_prompt(inputs),
+        settings,
+        ApplicationDraft,
+        provider_id=provider_id,
     )
     applications = check_applications(question, draft.applications, supported)
     for application in applications:
@@ -420,7 +427,7 @@ def run_application_step(
     audit = call_with_model_purpose(
         "answer.audit",
         parse_text,
-        APPLICATION_AUDIT_SYSTEM_PROMPT,
+        resolve_prompt("application.auditSystem", APPLICATION_AUDIT_SYSTEM_PROMPT),
         render_prompt({**inputs, "applications": candidates, "summary": draft.summary}),
         audit_settings,
         ApplicationAudit,

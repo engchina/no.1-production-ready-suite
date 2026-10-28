@@ -69,6 +69,8 @@ from app.config import (
 from app.rag.answer_prompts import (
     EDITABLE_PROMPT_KEYS,
     readonly_prompt_stages,
+    required_tokens,
+    stage_prompt_permission,
 )
 from app.rag.answer_prompts import default_prompt as default_answer_prompt
 from app.rag.answer_prompts import required_placeholders as answer_prompt_required_placeholders
@@ -711,7 +713,7 @@ def _require_answer_prompt_permission(request: Request, key: str) -> None:
     route の manifest は回答プロンプト・文書解析のどちらかの権限で通すので、ここで key ごとに
     その画面の権限を求める。知らない key はこの後の 404 に任せる。
     """
-    permission = ANSWER_PROMPT_EDIT_PERMISSIONS.get(key)
+    permission = ANSWER_PROMPT_EDIT_PERMISSIONS.get(key) or stage_prompt_permission(key)
     if permission is None:
         return
     principal = getattr(request.state, "principal", None)
@@ -733,6 +735,7 @@ def _answer_prompts_data(saved: dict[str, dict[str, object]]) -> AnswerPromptsDa
                     "default_content": default_answer_prompt(key),
                     "customized": row is not None,
                     "required_placeholders": list(answer_prompt_required_placeholders(key)),
+                    "required_tokens": list(required_tokens(key)),
                     "updated_at": row["updated_at"] if row else None,
                 }
             )

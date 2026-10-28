@@ -841,7 +841,7 @@ async def test_validate_answer_checks_each_guide_step_by_its_main_operation(
         ("guide_step_unexplained", "s2"),
     ]
     assert result.findings[0].message == (
-        "業務ガイドの手順「値の登録」は、取得した資料で説明を確かめられませんでした。"
+        "業務ガイドの手順「値の登録」は、回答の説明との対応を確定できていません。説明と引用を確認してください。"
     )
 
     # 説明の段落の順が手順の依存と逆なら、題名が回答に無くても順序の誤りにする。

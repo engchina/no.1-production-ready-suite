@@ -40,6 +40,7 @@ from typing import Any
 from rag_engine.evaluation.answer_validation import MAX_DATA_RESULTS, MAX_PREMISES, is_premise_id
 from rag_engine.generation.table_records import TABLE_RECORD_KEY
 from rag_engine.resources.deadline import remaining_seconds
+from rag_engine.resources.runtime import bind_prompt_overrides, saved_prompt_overrides
 from rag_engine.resources.tracing import bind_trace_observer, observe_call
 from rag_parser_core.sheet_records import (
     ROW_BASIS_CSV,
@@ -538,8 +539,10 @@ async def _validate_answer(
                 }
             )
         # 指示の版を読めなければ再利用しない。旧記録も版が無いため再監査する。
+        overrides = saved_prompt_overrides()
         try:
-            overrides = await oracle.answer_prompt_overrides()
+            if overrides is None:
+                overrides = await oracle.answer_prompt_overrides()
             reuse_context = validation_reuse_context(
                 question,
                 answer,
@@ -555,6 +558,7 @@ async def _validate_answer(
                 gaps=gaps,
             )
         except Exception:  # noqa: BLE001 - 再利用できなくても通常の監査を続ける。
+            overrides = {}
             reuse_context = ""
 
         audited = (
@@ -591,6 +595,7 @@ async def _validate_answer(
         with (
             tempfile.TemporaryDirectory(prefix="rag-engine-validate-") as work,
             bind_llm_usage() as calls,
+            bind_prompt_overrides(overrides or {}),
         ):
             engine_settings = build_engine_settings(settings, output_dir=Path(work))
             try:

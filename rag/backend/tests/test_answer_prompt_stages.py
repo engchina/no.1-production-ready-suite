@@ -16,7 +16,12 @@ from pathlib import Path
 
 import pytest
 
-from app.rag.answer_prompts import PROMPT_PHASES, PROMPT_STAGES, readonly_prompt_stages
+from app.rag.answer_prompts import (
+    PROMPT_PHASES,
+    PROMPT_STAGES,
+    STAGE_PROMPT_REFS,
+    readonly_prompt_stages,
+)
 
 BACKEND = Path(__file__).resolve().parents[1]
 RAG = BACKEND.parent
@@ -304,3 +309,18 @@ def test_query_strategy_display_uses_actual_step_prompts() -> None:
     ):
         assert prompt in displayed
         assert prompt.startswith("## Step 1:")
+
+
+def test_every_editable_stage_has_a_runtime_override_lookup() -> None:
+    used = {
+        node.args[0].value
+        for _module, path in _runtime_files()
+        for node in ast.walk(_tree(path))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "resolve_prompt"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    }
+    assert set(STAGE_PROMPT_REFS) <= used

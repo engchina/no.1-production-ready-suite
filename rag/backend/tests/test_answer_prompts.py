@@ -171,8 +171,12 @@ def test_retrieval_and_evaluation_permissions_can_read_but_cannot_edit_prompts(
     assert result.status_code == 200
     assert any(stage["phase"] == "retrieval" for stage in result.json()["data"]["stages"])
     path = f"/api/settings/answer-prompts/{key}"
-    assert client.put(path, json={"content": "合成の指示"}, headers=headers).status_code == 403
-    assert client.delete(path, headers=headers).status_code == 403
+    allowed = ANSWER_PROMPT_EDIT_PERMISSIONS[key] == permission
+    content = default_prompt(key)
+    assert client.put(path, json={"content": content}, headers=headers).status_code == (
+        200 if allowed else 403
+    )
+    assert client.delete(path, headers=headers).status_code == (200 if allowed else 403)
     assert fake.saved == {}
 
 

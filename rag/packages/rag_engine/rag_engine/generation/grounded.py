@@ -80,6 +80,7 @@ from rag_engine.resources.deadline import (
     deadline_cut_short,
 )
 from rag_engine.resources.llm_usage import usage_delta, usage_line, usage_snapshot
+from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY, ARTICLE_UNIT_KEY
 from rag_engine.retrieval.character_forms import fold_model_view, fold_text, fold_text_with_positions, fold_width
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
@@ -546,8 +547,12 @@ def audit_system_prompt(*, compact_reasons: bool = False, detailed: bool = True)
 
     ``detailed`` が False（通常の回答。#2795）なら、未使用の根拠の行を除いた指示にする。
     """
-    base = AUDIT_SYSTEM_PROMPT if detailed else FACT_AUDIT_SYSTEM_PROMPT
-    return base + AUDIT_COMPACT_REASON_RULE if compact_reasons else base
+    base = (
+        resolve_prompt("audit.detailedSystem", AUDIT_SYSTEM_PROMPT)
+        if detailed
+        else resolve_prompt("audit.factSystem", FACT_AUDIT_SYSTEM_PROMPT)
+    )
+    return base + resolve_prompt("audit.compactRule", AUDIT_COMPACT_REASON_RULE) if compact_reasons else base
 
 
 # 監査に渡す同じ機能の本文の上限（機能ごと）。手順は隣の span にあることが多く、機能全体を渡す必要はない。
@@ -4539,7 +4544,9 @@ def guide_step_evidence_lines(guide_steps: Sequence[tuple[str, str, Sequence[str
     """業務ガイドの手順ごとの根拠の行（#2395）。手順の根拠の chunk を、渡す根拠の表示 ID（E1…）にする。"""
     labels: dict[str, list[str]] = {}
     for span in spans:
-        labels.setdefault(str(span.get("source_id") or ""), []).append(span["label"])
+        for source in (span.get("source_id"), *(span.get("source_aliases") or ())):
+            if source:
+                labels.setdefault(str(source), []).append(span["label"])
     lines = []
     for step_id, title, sources in guide_steps:
         found = list(dict.fromkeys(label for source in sources for label in labels.get(str(source), ())))
@@ -4801,21 +4808,27 @@ def guide_step_assignment(
     """
     by_source: dict[str, list[dict]] = {}
     for span in spans:
-        by_source.setdefault(str(span.get("source_id") or ""), []).append(span)
+        for source in (span.get("source_id"), *(span.get("source_aliases") or ())):
+            if source:
+                by_source.setdefault(str(source), []).append(span)
     optional_ids = set(optional)
     terms = step_terms or {}
     step_spans: dict[str, list[dict]] = {}
     cited: dict[str, list[int]] = {}
     for step_id, _title, sources in guide_steps:
         source_ids = {str(source) for source in sources}
-        step_spans[step_id] = [span for source in dict.fromkeys(source_ids) for span in by_source.get(source, ())]
+        candidates = [span for source in dict.fromkeys(source_ids) for span in by_source.get(source, ())]
+        step_spans[step_id] = list({id(span): span for span in candidates}.values())
         cited[step_id] = [
             index
             for index, entry in enumerate(checked)
             if entry.span
             and entry.item.kind != "gap"
             and (
-                str(entry.span.get("source_id") or "") in source_ids
+                bool(
+                    source_ids
+                    & {str(source) for source in (entry.span.get("source_id"), *(entry.span.get("source_aliases") or ())) if source}
+                )
                 or (
                     len(_compact(entry.item.quote)) >= _GUIDE_STEP_QUOTE_MIN_CHARS
                     and any(quote_in_text(entry.item.quote, str(span.get("text") or "")) for span in step_spans[step_id])
@@ -4847,11 +4860,24 @@ def guide_step_assignment(
         for index, score in pairs
         if len(citing[index]) > 1 and anchors[step_id][1] and score >= anchors[step_id][0]
     }
+    # 説明と引用の両方が、ほかの手順と重ならない操作の手がかりを述べている場合。
+    # 根拠全体の最長の一文だけに依存せず、本文のどの節の説明も候補にする。
+    distinctive_owned: set[tuple[str, int]] = set()
+    words_by_step = {step_id: _guide_words(text) for step_id, text in descriptions.items()}
+    for step_id, indexes in cited.items():
+        others = set().union(*(words for other, words in words_by_step.items() if other != step_id))
+        distinctive = words_by_step[step_id] - others
+        strongest = max((len(distinctive & _guide_words(sentence)) for sentence in sentences[step_id]), default=0)
+        for index in indexes:
+            entry = checked[index]
+            overlap = distinctive & _guide_words(entry.item.text) & _guide_words(entry.item.quote)
+            if len(overlap) >= max(_GUIDE_STEP_ANCHOR_MIN_WORDS, strongest):
+                distinctive_owned.add((step_id, index))
     # 語で決まらない共有の item。引用の無い item は意味でも照らせないので、意味の判定ではどの手順の説明にもしない。
     undecided = {
         index: (checked[index].item.quote.strip(), step_ids)
         for index, step_ids in citing.items()
-        if len(step_ids) > 1 and not any((step_id, index) in word_owned for step_id in step_ids)
+        if len(step_ids) > 1 and not any((step_id, index) in word_owned or (step_id, index) in distinctive_owned for step_id in step_ids)
     }
     owners = (
         _guide_semantic_owners(descriptions, sentences, {index: value for index, value in undecided.items() if value[0]}, semantics)
@@ -4864,7 +4890,11 @@ def guide_step_assignment(
             return True
         # 意味の判定が使えない・失敗したときは語で決まる item だけ（#2685。手順の語が根拠の文に無い・1 語しか当たらない
         # 手順は、共有の item をその手順の説明にしない安全側）。
-        return (step_id, index) in word_owned or (owners is not None and step_id in owners.get(index, ()))
+        return (
+            (step_id, index) in distinctive_owned
+            or (step_id, index) in word_owned
+            or (owners is not None and step_id in owners.get(index, ()))
+        )
 
     # 手順の item（index と、引用が含む手順の語の数）。語の数の多い順。
     own = {
@@ -4912,6 +4942,33 @@ def guide_step_assignment(
                 "evidence_refs": [
                     {"evidence_id": span["evidence_id"], "text": str(span.get("text") or "")[:80]} for span in step_spans[step_id]
                 ],
+                "evidence_flow": {
+                    "linked_source_count": len(set(_sources)),
+                    "context_evidence_ids": list(dict.fromkeys(span["evidence_id"] for span in step_spans[step_id])),
+                    "cited_evidence_ids": list(
+                        dict.fromkeys(checked[index].span["evidence_id"] for index in cited[step_id] if checked[index].span)
+                    ),
+                },
+                "assignment": {
+                    "cited_item_indexes": cited[step_id],
+                    "assigned_item_indexes": [index for index, owner in assigned.items() if owner == step_id],
+                    "candidates": [
+                        {
+                            "item_index": index,
+                            "method": "distinctive_operation"
+                            if (step_id, index) in distinctive_owned
+                            else "exclusive_source"
+                            if len(citing[index]) == 1
+                            else "word_anchor"
+                            if (step_id, index) in word_owned
+                            else "semantic_anchor"
+                            if owners is not None and step_id in owners.get(index, ())
+                            else "unresolved",
+                            "publishable": publishable(index),
+                        }
+                        for index in cited[step_id]
+                    ],
+                },
             }
         )
     return coverage, assigned
@@ -5101,7 +5158,9 @@ def guide_step_gap_line(step: dict[str, Any]) -> str:
         )
     if step.get("status") == GUIDE_STEP_NOT_SEARCHED:
         return f"業務ガイドの手順「{step['title']}」は、手順ごとの検索を時間・回数の上限で打ち切ったため、資料で確かめていません。"
-    return f"業務ガイドの手順「{step['title']}」は、取得した資料で説明を確かめられませんでした。"
+    if step.get("status") == GUIDE_STEP_UNUSED:
+        return f"業務ガイドの手順「{step['title']}」は、回答の説明との対応を確定できていません。説明と引用を確認してください。"
+    return f"業務ガイドの手順「{step['title']}」は、今回の回答に渡した資料で必要な根拠を確認できていません。"
 
 
 # ---- 根拠の出所（#2792） ----------------------------------------------------------
@@ -5189,7 +5248,9 @@ def detach_unsourced(checked: Sequence[CheckedItem]) -> int:
     return count
 
 
-def guide_notice_lines(contact: str, conditions: Sequence[str], approval_note: str = "", approval_required: bool = False) -> list[str]:
+def guide_notice_lines(
+    contact: str, conditions: Sequence[str], approval_note: str = "", approval_required: bool = False, *, branch_notes: Sequence[str] = ()
+) -> list[str]:
     """業務ガイドの設定（窓口・引き継ぐ条件・承認）から決める案内の行（#2792）。資料の記載ではない。"""
     labels = answer_labels()
     lines = []
@@ -5198,6 +5259,7 @@ def guide_notice_lines(contact: str, conditions: Sequence[str], approval_note: s
         lines.append(labels.guide_handoff(contact.strip(), "／".join(conditions)))
     if approval_required:
         lines.append(labels.guide_approval(approval_note.strip()))
+    lines.extend(dict.fromkeys(note.strip() for note in branch_notes if note.strip()))
     return lines
 
 
@@ -5401,7 +5463,7 @@ def run_round(
         return call_with_model_purpose(
             "answer.scope",
             parse_text,
-            SCOPE_PLAN_SYSTEM_PROMPT,
+            resolve_prompt("generation.instruction", SCOPE_PLAN_SYSTEM_PROMPT),
             json.dumps(
                 {
                     "question_contract": _contract_view(question),
@@ -5450,7 +5512,9 @@ def run_round(
             neutralize_boundary_markers(fold_width(format_functions(selected))),
         )
         prompt += "\n要求ごとの根拠計画:\n" + scope_plan.model_dump_json()
-    generation_system = GENERATE_SYSTEM_PROMPT + (ASSUMPTION_SYSTEM_PROMPT if assume_unconfirmed else "")
+    generation_system = resolve_prompt("generation.system", GENERATE_SYSTEM_PROMPT) + (
+        resolve_prompt("generation.assumptionSystem", ASSUMPTION_SYSTEM_PROMPT) if assume_unconfirmed else ""
+    )
     if image_paths:
         try:
             draft = call_with_model_purpose(
@@ -5544,7 +5608,7 @@ def run_round(
             reviews = call_with_model_purpose(
                 "evidence.grade",
                 parse_text,
-                CATALOG_REVIEW_SYSTEM_PROMPT,
+                resolve_prompt("generation.catalogReview", CATALOG_REVIEW_SYSTEM_PROMPT),
                 catalog_review_input(question, draft, unreviewed),
                 settings,
                 CatalogEvidenceReviews,
@@ -5814,7 +5878,7 @@ def run_round(
         "監査対象の item がない"
         if not auditable
         else "監査なし"
-        if audit is None
+        if audit is None or audit_mode == AUDIT_MODE_NONE
         else ""
         if audit.summary_supported
         else "監査が summary を不支持"
@@ -5914,7 +5978,9 @@ def deterministic_audit(question: str, checked: Sequence[CheckedItem]) -> Ground
         own = [entry for entry in entries if owns(str(unit["id"]), entry.item.request_id)]
         status = "addressed" if any(entry.confirmed for entry in own) else "partial" if own else "missing"
         reviews.append({"request_id": unit["id"], "status": status, "reason": "説明の有無で判定（監査なし）"})
-    return GroundedAudit.model_validate({"reviews": [], "request_reviews": reviews, "summary_supported": True, "goal_alignment": "aligned"})
+    return GroundedAudit.model_validate(
+        {"reviews": [], "request_reviews": reviews, "summary_supported": False, "goal_alignment": "aligned"}
+    )
 
 
 # 未回答の確認事項を理由に gap だけで答えた草稿への指摘（#3069）。条件付きの説明の書き方は生成の指示にある。
@@ -6193,7 +6259,10 @@ class RoundBudget:
         }
         if accepted is not None:
             note["accepted"] = accepted
-        if current.audit is not None:
+            note["acceptance_scope"] = "draft_selection"
+        audited = current.audit is not None and current.timing.get("audit") != AUDIT_MODE_NONE
+        note["summary_validation"] = "completed" if audited else "not_run"
+        if audited:
             note["summary_supported"] = bool(current.audit.summary_supported)
         self.notes.append(note)
 

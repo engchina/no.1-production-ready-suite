@@ -3,11 +3,12 @@
 rag_poc はプロンプトをファイル(`prompts/<key>.txt`)へ保存したが、rag では DB
 (`rag_answer_prompts`)に保存し、rag_engine の runtime の ``prompt_overrides`` で渡す。
 回答生成・文書解析・文書分割の編集可能な指示は、それぞれの設定画面で管理する。
-共通の応答形式やそのほかの固定指示はコードで管理する。
+検索・回答・監査・評価の自然言語の指示も編集でき、応答の型はコードで管理する。
 """
 
 from __future__ import annotations
 
+import re
 import tempfile
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -36,10 +37,16 @@ ANSWER_PROMPT_MAX_CHARS = 50_000
 def default_prompt(key: str) -> str:
     if key in INGESTION_PROMPT_REFS:
         return prompt_constant(INGESTION_PROMPT_REFS[key])
+    if key in STAGE_PROMPT_REFS:
+        return prompt_constant(STAGE_PROMPT_REFS[key])
     return PROMPT_FILES[key].default_content or ""
 
 
 def required_placeholders(key: str) -> tuple[str, ...]:
+    if key in STAGE_PROMPT_REFS:
+        return tuple(
+            dict.fromkeys(re.findall(r"{{([A-Za-z_][A-Za-z_0-9]*)}}", default_prompt(key)))
+        )
     return () if key in INGESTION_PROMPT_REFS else PROMPT_FILES[key].required_placeholders
 
 
@@ -52,6 +59,7 @@ def validate_prompt(key: str, content: str) -> None:
     missing = [
         f"{{{{{name}}}}}" for name in required_placeholders(key) if f"{{{{{name}}}}}" not in content
     ]
+    missing.extend(token for token in required_tokens(key) if token not in content)
     if missing:
         raise ValueError(f"必須の placeholder がありません: {', '.join(missing)}")
 
@@ -266,6 +274,42 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
 )
 
 
+# 実行の段に対応する自然言語の指示。既存の解析設定の key は維持する。
+STAGE_PROMPT_REFS = {
+    f"{stage.id}.{part_id}": ref
+    for stage in PROMPT_STAGES
+    if stage.phase not in {"ingestion", "indexing"}
+    for part_id, ref in stage.parts
+}
+EDITABLE_PROMPT_KEYS = (*EDITABLE_PROMPT_KEYS, *STAGE_PROMPT_REFS)
+
+
+def required_tokens(key: str) -> tuple[str, ...]:
+    """入力テンプレートの単一括弧の差し込み口を保持する。"""
+    if key not in STAGE_PROMPT_REFS:
+        return ()
+    return tuple(
+        dict.fromkeys(re.findall(r"(?<!{){[A-Za-z_][A-Za-z_0-9]*}(?!})", default_prompt(key)))
+    )
+
+
+def stage_prompt_permission(key: str) -> str | None:
+    """指示の配置先の設定権限。条件の認識は回答プロンプトに置く。"""
+    for stage in PROMPT_STAGES:
+        if key not in {f"{stage.id}.{part}" for part, _ref in stage.parts}:
+            continue
+        if stage.phase == "evaluation":
+            return "menu.settings_evaluation"
+        if stage.id != "support_guide_conditions" and stage.phase in {
+            "question",
+            "retrieval",
+            "grounding",
+        }:
+            return "menu.settings_retrieval"
+        return "menu.settings_prompts"
+    return None
+
+
 def prompt_constant(ref: str) -> str:
     """``module:定数名`` の定数の内容。"""
     module_name, _, name = ref.partition(":")
@@ -281,7 +325,15 @@ def readonly_prompt_stages(
     by_ref = {ref: saved[key] for key, ref in INGESTION_PROMPT_REFS.items() if key in saved}
     for stage in PROMPT_STAGES:
         parts = [
-            {"id": part_id, "content": by_ref.get(ref, prompt_constant(ref))}
+            {
+                "id": part_id,
+                "content": saved.get(
+                    f"{stage.id}.{part_id}", by_ref.get(ref, prompt_constant(ref))
+                ),
+                "prompt_key": f"{stage.id}.{part_id}"
+                if f"{stage.id}.{part_id}" in STAGE_PROMPT_REFS
+                else None,
+            }
             for part_id, ref in stage.parts
         ]
         if stage.id == "picture_description":

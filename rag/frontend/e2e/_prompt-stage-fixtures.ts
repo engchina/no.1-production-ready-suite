@@ -1,4 +1,4 @@
-export type StageFixture = { id: string; phase: string; prompts: { id: string; content: string }[] };
+export type StageFixture = { id: string; phase: string; prompts: { id: string; content: string; prompt_key?: "answer_validation.system" }[] };
 
 export const DEFAULT_STAGES: StageFixture[] = [
   { id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] },

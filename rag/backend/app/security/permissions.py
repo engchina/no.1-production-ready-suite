@@ -17,6 +17,8 @@ from dataclasses import dataclass
 
 from pr_system_settings.auth.dependencies import UNCLASSIFIED_PERMISSION as UNCLASSIFIED_PERMISSION
 
+from app.rag.answer_prompts import STAGE_PROMPT_REFS, stage_prompt_permission
+
 # 利用者の範囲（検索・回答プロファイル / ナレッジベース）外の対
 # 象を指定したときの 403 の error_code（#224）。
 #
@@ -679,10 +681,18 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
         MENU_SETTINGS_EVALUATION,
     ),
     ("PUT", "/settings/answer-prompts/{key}"): _any(
-        MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS, MENU_SETTINGS_CHUNKING
+        MENU_SETTINGS_PROMPTS,
+        MENU_SETTINGS_PARSER_ADAPTERS,
+        MENU_SETTINGS_CHUNKING,
+        MENU_SETTINGS_RETRIEVAL,
+        MENU_SETTINGS_EVALUATION,
     ),
     ("DELETE", "/settings/answer-prompts/{key}"): _any(
-        MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS, MENU_SETTINGS_CHUNKING
+        MENU_SETTINGS_PROMPTS,
+        MENU_SETTINGS_PARSER_ADAPTERS,
+        MENU_SETTINGS_CHUNKING,
+        MENU_SETTINGS_RETRIEVAL,
+        MENU_SETTINGS_EVALUATION,
     ),
     # 抽出項目は文書ワークスペース（処理設定）と文書解析の設定画面が読む。
     ("GET", "/settings/extraction-fields"): _any(
@@ -748,6 +758,17 @@ ANSWER_PROMPT_EDIT_PERMISSIONS: dict[str, str] = {
     "navigation_summary": MENU_SETTINGS_PARSER_ADAPTERS,
     "raptor_summary_system": MENU_SETTINGS_PARSER_ADAPTERS,
 }
+
+
+# 配置先と保存先の対応は指示の一覧を正本にする。
+
+ANSWER_PROMPT_EDIT_PERMISSIONS.update(
+    {
+        key: permission
+        for key in STAGE_PROMPT_REFS
+        if (permission := stage_prompt_permission(key)) is not None
+    }
+)
 
 
 def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:

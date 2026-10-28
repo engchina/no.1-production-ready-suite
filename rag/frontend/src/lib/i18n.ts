@@ -1807,7 +1807,7 @@ export const ja = {
   "settings.retrieval.actions.unsaved": "未保存の変更があります。",
   "settings.retrieval.actions.reset": "変更を破棄",
   "settings.prompts.subtitle":
-    "回答を作るときに回答モデルへ渡す指示のテンプレートを編集します。回答生成・監査・資料との照合のプロンプトとその条件も確認できます。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。",
+    "回答を作るときに使う各工程の指示を編集します。回答生成・監査・資料との照合のプロンプトとその条件も確認できます。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。",
   "settings.guardrail.subtitle":
     "OCI Guardrails による質問と回答の安全チェックを有効・無効にします。",
   "chat.guardrail": "安全チェック",
@@ -3882,6 +3882,7 @@ export const ja = {
     "「図・画像を AI で読み取る」を使うとき（全体の既定か文書のレシピで有効にしたとき）、解析エンジンに関係なく画像ごとに画像対応モデルへ渡す指示です。保存した内容は次に解析する文書から使い、解析済みの文書には再解析するまで反映しません。",
   "settings.answerPrompts.image_retrieval.field": "プロンプト",
   "settings.answerPrompts.default": "既定値",
+  "settings.answerPrompts.resetPending": "既定の内容に戻しました。保存すると反映されます。",
   "settings.answerPrompts.customized": "編集済み（{value}）",
   "settings.answerPrompts.placeholders": "必須の placeholder: {names}。欠けていると保存できません。",
   "settings.answerPrompts.save": "プロンプトを保存",
@@ -3898,10 +3899,10 @@ export const ja = {
   "settings.answerPrompts.loading": "プロンプトを読み込んでいます",
   "settings.answerPrompts.loadError": "プロンプトを読み込めませんでした。",
   "settings.retrieval.prompts.title": "検索に使うプロンプト",
-  "settings.retrieval.prompts.description": "質問の解釈、検索、根拠の判定ごとに、使う条件とモデルに渡す指示を確認できます。表示順は処理の目安です。設定や検索結果によって省略・再実行され、CRAG では検索と判定を繰り返す場合があります。すべて読み取り専用です。",
+  "settings.retrieval.prompts.description": "質問の解釈、検索、根拠の判定ごとに、使う条件とモデルに渡す指示を確認できます。表示順は処理の目安です。設定や検索結果によって省略・再実行され、CRAG では検索と判定を繰り返す場合があります。各指示を編集し、保存すると次の処理から反映されます。",
   "settings.answerPrompts.stages.title": "処理の各段のプロンプト",
   "settings.answerPrompts.stages.description":
-    "回答生成・監査・資料との照合ごとに、使う条件と指示を示します。設定や判定によって省略・再生成される場合があります。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。各段の中はモデルへ渡す順です。業務ガイドの準備は独立した処理で、Q&A は検索による回答とは別の経路です。回答テンプレートだけ編集でき、ほかの指示は読み取り専用です。",
+    "回答生成・監査・資料との照合ごとに、使う条件と指示を示します。設定や判定によって省略・再生成される場合があります。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。各段の中はモデルへ渡す順です。業務ガイドの準備は独立した処理で、Q&A は検索による回答とは別の経路です。各指示を編集・保存できます。",
   "settings.answerPrompts.phase.ingestion": "文書解析",
   "settings.answerPrompts.phase.question": "質問の解釈",
   "settings.answerPrompts.phase.retrieval": "検索",
@@ -3920,7 +3921,7 @@ export const ja = {
   "settings.answerPrompts.phase.generation.description": "登録済みQ&Aを選んだ場合は Q&A の経路、それ以外は検索した根拠による生成です。後者の システムプロンプトと入力テンプレートをこの順に示します。",
   "settings.answerPrompts.phase.audit.description": "回答の生成後に使う監査・資料との照合の指示です。RAG では LLM 監査が有効なときに使います（既定は無効）。MCP の資料との照合は独立して呼び出します。",
   "settings.evaluation.prompts.title": "品質評価のプロンプト",
-  "settings.evaluation.prompts.description": "品質評価と保存した回答の評価で使う指示です。読み取り専用です。",
+  "settings.evaluation.prompts.description": "品質評価と保存した回答の評価で使う指示を編集・保存します。",
   "settings.answerPrompts.phase.evaluation.description": "品質評価では、利用できる標準回答・必須要点・取得した根拠に応じて、モデルが回答の網羅性・忠実性・正確性を判定します。必要な情報がない指標や判定を完了できない指標は未評価です。検索と応答判断の指標はコードで計算します。資料との照合は回答プロンプトで確認できます。",
   "settings.answerPrompts.condition": "使われる条件: {condition}",
   "settings.answerPrompts.fixedRules": "共通の読み取り指示（読み取り専用）",

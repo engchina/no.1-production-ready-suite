@@ -109,6 +109,7 @@ class GuidePlan:
     handoff_conditions: tuple[str, ...] = ()
     approval_required: bool = False
     approval_note: str = ""
+    branch_notes: tuple[str, ...] = ()
 
     @property
     def reference_ranges(self) -> tuple[tuple[str, int | None, int | None], ...]:
@@ -212,6 +213,7 @@ class GuidePlan:
             handoff_conditions=tuple(str(item) for item in notices.get("handoff_conditions") or () if str(item).strip()),
             approval_required=notices.get("approval_required") is True,
             approval_note=str(notices.get("approval_note") or ""),
+            branch_notes=tuple(str(item).strip() for item in notices.get("branch_notes") or () if str(item).strip()),
         )
 
 

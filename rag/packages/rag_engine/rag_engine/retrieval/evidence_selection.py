@@ -332,6 +332,7 @@ def evidence_spans(
     definitions_only: bool = False,
     scope_records: Sequence[Any] = (),
     whole_records: bool = False,
+    priority_source_groups: Sequence[Sequence[str]] = (),
 ) -> list[dict[str, Any]]:
     """原文の文字予算内で安定IDを付け、照合済みanchorsの本文と頁を優先する。
 
@@ -376,6 +377,24 @@ def evidence_spans(
     ordered = _same_unit_first(list(unique.items()), question)
     if labels:
         ordered.sort(key=lambda item: -len(definition_ranges(item[1].text, labels)))
+    # 必須手順の直接の根拠を各手順に一つずつ先に割り当てる。件数・文字予算は増やさない。
+    # 同じ機能の説明や任意の章節が、後続の必須手順の原文を予算外へ押し出さないようにする。
+    priority_keys: set[str] = set()
+    if priority_source_groups:
+        groups = [set(sources) for sources in priority_source_groups]
+        selected: list[tuple[str, Any]] = []
+        selected_keys: set[str] = set()
+        for sources in groups:
+            match = next((item for item in ordered if item[0] not in selected_keys and member_keys[item[0]] & sources), None)
+            if match is not None:
+                selected.append(match)
+                selected_keys.add(match[0])
+                priority_keys.add(match[0])
+        wanted = set().union(*groups)
+        remaining_guided = [item for item in ordered if item[0] not in selected_keys and member_keys[item[0]] & wanted]
+        selected.extend(remaining_guided)
+        selected_keys.update(item[0] for item in remaining_guided)
+        ordered = [*selected, *(item for item in ordered if item[0] not in selected_keys)]
 
     # 後続の候補の短い原文範囲（各親 NATIVE_RESERVE_CAP まで）の分は先に取り置き、先頭の候補の生成説明に
     # 予算を使い切らせない (#730)。21 親のうち 17 番目の親の ※ 注記（標準回答の操作）が予算外に落ちていた。
@@ -442,6 +461,9 @@ def evidence_spans(
             allowance = min(remaining, max(1, budget // max(1, len(unique))))
         # 取り置き分を超えない。ただし自分の必須範囲（原文・定義・照合済み child）は確保する。
         allowance = min(allowance, max(needed, remaining - reserve_after[index + 1]))
+        if key in priority_keys:
+            # 任意の資料の取り置きより、各必須手順の直接の根拠に残予算を公平に配る。
+            allowance = min(remaining, max(allowance, remaining // max(1, len(priority_keys) - index)))
         if whole:
             allowance = min(remaining, max(allowance, len(text)))
         excerpt = evidence_excerpt(question, text, allowance, required_ranges=required, required_only=definitions_only)

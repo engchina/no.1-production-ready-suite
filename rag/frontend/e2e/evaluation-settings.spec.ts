@@ -222,3 +222,17 @@ test("回答の品質評価だけを評価の基準で読み取れる", { tag: "
   await page.screenshot({ path: test.info().outputPath("quality-evaluation-prompt.png") });
   await expectNoPageOverflow(page);
 });
+
+test("評価の基準の指示の編集内容を保存できる", { tag: "@responsive" }, async ({ page }) => {
+  await mockEvaluation(page, "standard");
+  const { mockEditableStage } = await import("./_feature-prompt-helpers");
+  const requests = await mockEditableStage(page, "evaluation", "evaluation", "coverage");
+  await page.goto("/settings/evaluation");
+  const stage = page.getByTestId("answer-prompt-stage-evaluation");
+  await stage.locator("summary").click();
+  await stage.getByRole("textbox").fill("## Step 1: 合成の評価指示");
+  await stage.getByRole("button", { name: "プロンプトを保存" }).click();
+  await expect(stage.getByRole("button", { name: "プロンプトを保存" })).toBeDisabled();
+  expect(requests).toEqual([{ key: "evaluation.coverage", method: "PUT", content: "## Step 1: 合成の評価指示" }]);
+  await expectNoHorizontalOverflow(page);
+});

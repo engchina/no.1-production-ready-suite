@@ -625,3 +625,17 @@ for (const width of [1280, 375]) {
   await expect(page.getByText("当たった根拠の前と後から、それぞれ最大でこの数のチャンクを文脈に加えます。同じ親やページの範囲、取得できる根拠、入力上限によって実際の数は減ります。", {exact:true})).toBeVisible();
   await expect(page.getByText("0 は加えません。", {exact:false})).toHaveCount(0);
  });
+
+test("検索方法の指示の編集内容を保存できる", { tag: "@responsive" }, async ({ page }) => {
+  await mockRetrievalCards(page);
+  const { mockEditableStage } = await import("./_feature-prompt-helpers");
+  const requests = await mockEditableStage(page, "routing", "question", "system");
+  await page.goto("/settings/retrieval");
+  const stage = page.getByTestId("answer-prompt-stage-routing");
+  await stage.locator("summary").click();
+  await stage.getByRole("textbox").fill("## Step 1: 合成の検索指示");
+  await stage.getByRole("button", { name: "プロンプトを保存" }).click();
+  await expect(stage.getByRole("button", { name: "プロンプトを保存" })).toBeDisabled();
+  expect(requests).toEqual([{ key: "routing.system", method: "PUT", content: "## Step 1: 合成の検索指示" }]);
+  await expectNoPageOverflow(page);
+});

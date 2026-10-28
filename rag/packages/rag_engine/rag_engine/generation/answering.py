@@ -219,6 +219,7 @@ from rag_engine.knowledge.runtime_knowledge import (
 )
 from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput, RerankTextRank
 from rag_engine.models.storage import AdbHybridSearchUnavailable
+from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.tracing import observe_call
 from rag_engine.retrieval.article_catalog import is_added_catalog_article
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
@@ -1591,7 +1592,7 @@ def _grade_crag_retrieval(
     output = call_with_model_purpose(
         "evidence.grade",
         parse_text_response,
-        CRAG_GRADER_SYSTEM_PROMPT,
+        resolve_prompt("crag.system", CRAG_GRADER_SYSTEM_PROMPT),
         # 詰めた入力 (#1528) は候補を JSON の空白なし・chunk_uid だけで書き、候補の数を max_candidates にする。
         _build_crag_grade_prompt(
             question,
@@ -1734,6 +1735,11 @@ def _grounded_spans(
     budget_option: dict[str, Any] = {"budget": int(budget)} if budget else {}
     if whole_records:
         budget_option["whole_records"] = True
+    if runtime_knowledge is not None and runtime_knowledge.guide_steps:
+        optional = set(runtime_knowledge.guide_optional_steps)
+        budget_option["priority_source_groups"] = [
+            sources for step_id, _title, sources in sorted(runtime_knowledge.guide_steps, key=lambda step: step[0] in optional)
+        ]
     from rag_engine.generation.grounded import tag_spans
     from rag_engine.retrieval.metadata_context import with_child_contexts
 
@@ -3412,7 +3418,7 @@ def build_query_expansion(
             output = call_with_model_purpose(
                 "query.expand",
                 parse_text_response,
-                QUERY_EXPANSION_SYSTEM_PROMPT,
+                resolve_prompt("expansion.system", QUERY_EXPANSION_SYSTEM_PROMPT),
                 prompt,
                 settings_for_llm_purpose(settings, LLM_PURPOSE_STRATEGY),
                 QueryExpansionOutput,
@@ -3773,7 +3779,11 @@ def _article_inputs_key(settings: Settings) -> tuple[object, ...]:
         ARTICLE_SELECTION_SYSTEM_PROMPT,
     )
 
-    instructions = (ARTICLE_SELECTION_SYSTEM_PROMPT, ARTICLE_REFINE_SYSTEM_PROMPT, ARTICLE_DOCUMENT_SELECTION_SYSTEM_PROMPT)
+    instructions = (
+        resolve_prompt("article_catalog.system", ARTICLE_SELECTION_SYSTEM_PROMPT),
+        resolve_prompt("article_catalog.refineSystem", ARTICLE_REFINE_SYSTEM_PROMPT),
+        resolve_prompt("article_catalog.documentSystem", ARTICLE_DOCUMENT_SELECTION_SYSTEM_PROMPT),
+    )
     prompts = hashlib.sha256("\n\0".join(instructions).encode("utf-8")).hexdigest()[:16]
     provider_id = str(getattr(settings, "default_answer_llm", "") or "")
     try:
@@ -4926,7 +4936,11 @@ def answer_question_result(
                 guide_title=guide_plan.title,
                 guide_notices=tuple(
                     guide_notice_lines(
-                        guide_plan.contact, guide_plan.handoff_conditions, guide_plan.approval_note, guide_plan.approval_required
+                        guide_plan.contact,
+                        guide_plan.handoff_conditions,
+                        guide_plan.approval_note,
+                        guide_plan.approval_required,
+                        branch_notes=guide_plan.branch_notes,
                     )
                 ),
             )
@@ -4972,6 +4986,16 @@ def answer_question_result(
                         guide_step.impact(f"手順の根拠 {len(guide_step_trace['added_chunk_ids'])} 件を回答の材料に加えます。")
         # 手順別の検索で新たに得た根拠も、要求ごとの判定に渡す前に最低範囲を読む。
         context, section_expansion = complete_sections(context, "guide_steps")
+        if guide_plan is not None and runtime_knowledge is not None and runtime_knowledge.guide_steps:
+            # 章節の拡張が child を parent に置き換えた後の ID も、参照の頁から手順に結び直す。
+            expanded_sources = reference_step_sources(guide_plan, context.records)
+            runtime_knowledge = replace(
+                runtime_knowledge,
+                guide_steps=tuple(
+                    (step_id, title, tuple(dict.fromkeys((*sources, *expanded_sources.get(step_id, ())))))
+                    for step_id, title, sources in runtime_knowledge.guide_steps
+                ),
+            )
         if not context.records or not context.text.strip():
             flow_step.status = "根拠不足で終了"
             flow_step.add("回答に使える根拠がありません。" + ("回答文の生成は未実行です。" if generate_answer else ""))
@@ -5429,7 +5453,7 @@ def _route_query_strategy(
     output = call_with_model_purpose(
         "query.route",
         parse_text_response,
-        QUERY_ROUTING_SYSTEM_PROMPT,
+        resolve_prompt("routing.system", QUERY_ROUTING_SYSTEM_PROMPT),
         _build_query_routing_prompt(question),
         # 戦略の判定と検索文の生成は、根拠の評価と別の推論の量で呼ぶ (#1499。low では戦略の選択がぶれた)。
         settings_for_llm_purpose(settings, LLM_PURPOSE_STRATEGY),
