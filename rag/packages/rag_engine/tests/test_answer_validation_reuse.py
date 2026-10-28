@@ -6,6 +6,7 @@ RAG の回答の監査を通った説明と本文・根拠が同じ段落は、�
 import json
 from unittest.mock import patch
 
+from rag_engine.evaluation.answer_eval import _evidence_fragments
 from rag_engine.evaluation.answer_validation import (
     REUSED_CLAIM_REASON,
     ClaimAuditOutput,
@@ -72,7 +73,10 @@ def test_audited_items_follow_the_citation_lines() -> None:
 
 def test_all_passages_reused_does_not_call_the_model() -> None:
     audited = audited_answer_items(RAG_ANSWER, ITEMS, CITATION_LINES)
-    answer = "承認の記録は、承認した日から**5年間**保管します。\n\n- 申請画面で「承認依頼」を押します。"
+    answer = (
+        "承認の記録は、承認した日から**5年間**保管します。\n根拠：approval-rules.pdf p.1\n\n"
+        "- 申請画面で「承認依頼」を押します。\n根拠：manual.pdf p.3"
+    )
     with patch("rag_engine.evaluation.answer_eval.parse_text_response") as never:
         result = validate_answer_claims("保管期間は？", answer, EVIDENCE, settings=None, audited=audited)
         never.assert_not_called()
@@ -86,7 +90,13 @@ def test_all_passages_reused_does_not_call_the_model() -> None:
 def test_only_unmatched_passages_go_to_the_model() -> None:
     audited = audited_answer_items(RAG_ANSWER, ITEMS, CITATION_LINES)
     # 1 行目は監査済みと同じ。2 行目は言い換え（本文が違う）、3 行目は条件つきの説明なので再利用しない。
-    answer = "\n".join(["承認の記録は、承認した日から5年間保管します。", "記録は 5 年で破棄します。", "・承認者を選びます。"])
+    answer = "\n\n".join(
+        [
+            "承認の記録は、承認した日から5年間保管します。\n根拠：approval-rules.pdf p.1",
+            "保管期間は 5 年です。\n根拠：approval-rules.pdf p.1",
+            "・承認者を選びます。\n根拠：manual.pdf p.3",
+        ]
+    )
     seen: list[list[str]] = []
 
     def parse(system, inputs, settings, schema, provider_id=None):
@@ -99,7 +109,11 @@ def test_only_unmatched_passages_go_to_the_model() -> None:
                         "answer_quote": "段落",
                         "answer_passage_id": item["id"],
                         "status": "supported",
-                        "evidence_id": [i for i in payload["evidence_items"] if i.get("id") != "question:1"][0]["evidence_id"],
+                        "evidence_id": next(
+                            i["evidence_id"]
+                            for i in payload["evidence_items"]
+                            if i.get("id") == ("c-manual" if "承認者" in item["text"] else "c-rule")
+                        ),
                         "source_id": "",
                         "evidence_quote": "",
                         "reason": "根拠に記載",
@@ -111,7 +125,7 @@ def test_only_unmatched_passages_go_to_the_model() -> None:
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
         result = validate_answer_claims("保管期間は？", answer, EVIDENCE, settings=None, audited=audited)
-    assert seen == [["記録は 5 年で破棄します。", "・承認者を選びます。"]]
+    assert seen == [["保管期間は 5 年です。", "・承認者を選びます。"]]
     assert result["counts"] == {"supported": 3}
     assert result["claim_checks"][0]["reason"] == REUSED_CLAIM_REASON
     assert len(result["reused_passage_ids"]) == 1
@@ -145,3 +159,31 @@ def test_reuse_needs_the_evidence_to_be_reread() -> None:
     assert model.call_count == 1
     assert result["counts"] == {"unsupported": 1}
     assert result["reused_passage_ids"] == []
+
+
+def test_reuse_resolves_actual_citation_across_fragments_of_the_same_chunk() -> None:
+    """内部の片段 ID が複数に分かれても、実際の出典と監査済みの chunk が同じなら再利用する。"""
+    audited = audited_answer_items(RAG_ANSWER, ITEMS, CITATION_LINES)
+    answer = "承認の記録は、承認した日から5年間保管します。\n根拠：approval-rules.pdf p.1"
+    evidence = [{**EVIDENCE[0], "text": EVIDENCE[0]["text"] + "\n補足の説明。" * 600}]
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response") as never:
+        result = validate_answer_claims("保管期間は？", answer, evidence, settings=None, audited=audited)
+    never.assert_not_called()
+    assert result["counts"] == {"supported": 1}
+    assert result["claim_checks"][0]["source_id"] == "c-rule"
+    fragments = list(_evidence_fragments(evidence))
+    assert len(fragments) > 1 and len({row["evidence_id"] for row in fragments}) > 1
+    assert result["evidence_ids"] == ["c-rule"]
+    assert len(result["reused_passage_ids"]) == 1
+
+
+def test_reuse_does_not_promote_a_claim_citing_a_different_chunk() -> None:
+    """本文と保存済み判定が同じでも、実際の出典が別なら支持済みにしない。"""
+    audited = audited_answer_items(RAG_ANSWER, ITEMS, CITATION_LINES)
+    answer = "承認の記録は、承認した日から5年間保管します。\n根拠：manual.pdf p.3"
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response") as never:
+        result = validate_answer_claims("保管期間は？", answer, EVIDENCE, settings=None, audited=audited)
+    never.assert_not_called()
+    claim = result["claim_checks"][0]
+    assert claim["status"] == "unassessed"
+    assert claim["support_check"] == "uncited_evidence"

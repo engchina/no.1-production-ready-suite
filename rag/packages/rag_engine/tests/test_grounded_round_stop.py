@@ -97,7 +97,35 @@ class SynthesizeRoundStopTest(unittest.TestCase):
         ctx = replace(context(shown), expansion_records=(shown, hidden))
         eid = ids(ctx)[shown.text]
         first = draft(item(eid, "一覧表を選択します。", "一覧表を選択します。", request_id="Q1"))
-        model = FakeModel([first], [audit((0, "supported", "matched", ""), requests=[("Q1", "partial")])])
+        model = FakeModel(
+            [first],
+            [
+                audit(
+                    (0, "supported", "matched", ""),
+                    requests=[
+                        {
+                            "request_id": "Q1",
+                            "status": "partial",
+                            "reason": "抽出条件の材料が不足",
+                            "evidence_status": "missing",
+                            "evidence_ids": [],
+                        }
+                    ],
+                ),
+                audit(
+                    (0, "supported", "matched", ""),
+                    requests=[
+                        {
+                            "request_id": "Q1",
+                            "status": "partial",
+                            "reason": "抽出条件の説明が省略されている",
+                            "evidence_status": "available",
+                            "evidence_ids": [ids(context(shown, hidden))[hidden.text]],
+                        }
+                    ],
+                ),
+            ],
+        )
         result = run(model, ctx).response
         rounds = result.generation_trace["rounds"]
         self.assertEqual(len(_drafts(model)), 2)
@@ -120,7 +148,22 @@ class SynthesizeRoundStopTest(unittest.TestCase):
         first = draft(item(eid, GOOD, GOOD, request_id="Q1"), _gap("Q2"))
         model = FakeModel(
             [first],
-            [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed"), ("Q2", "missing")])],
+            [
+                audit(
+                    (0, "supported", "matched", ""),
+                    (1, "supported", "matched", ""),
+                    requests=[
+                        ("Q1", "addressed"),
+                        {
+                            "request_id": "Q2",
+                            "status": "missing",
+                            "reason": "抽出条件の材料が不足",
+                            "evidence_status": "missing",
+                            "evidence_ids": [],
+                        },
+                    ],
+                )
+            ],
         )
         result = run(model, ctx, question="明細一覧表を出力する手順と、店舗の抽出条件を教えてください").response
         self.assertEqual(len(_drafts(model)), 1)
@@ -139,7 +182,18 @@ class SynthesizeRoundStopTest(unittest.TestCase):
         model = FakeModel(
             [draft(select), draft(select, execute)],
             [
-                audit((0, "supported", "matched", ""), requests=[("Q1", "partial")]),
+                audit(
+                    (0, "supported", "matched", ""),
+                    requests=[
+                        {
+                            "request_id": "Q1",
+                            "status": "partial",
+                            "reason": "実行操作の説明が省略されている",
+                            "evidence_status": "available",
+                            "evidence_ids": [eid],
+                        }
+                    ],
+                ),
                 audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")]),
             ],
         )

@@ -80,6 +80,7 @@ def test_recovery_matrix_preserves_scope_and_prepares_only_four_conditions() -> 
         parsed = EvaluationRunRequest.model_validate(variant["request"])
         assert parsed.cases == original.cases and parsed.filters == original.filters
         assert parsed.search_answer_profile_id == original.search_answer_profile_id
+        assert parsed.rag_overrides is not None
         assert parsed.rag_overrides.rerank_enabled is True
         assert parsed.rag_overrides.reference_expansion_enabled is True
         observed.add(

@@ -468,8 +468,13 @@ class AnswerExecutionTests(unittest.TestCase):
 
     def test_second_crag_search_failure_keeps_first_attempt(self):
         self.search.side_effect = [self.context, generation.AdbHybridSearchUnavailable("search unavailable")]
-        self.parse.side_effect = None
-        self.parse.return_value = _crag_grade(sufficient=False, rewritten_query="追加検索")
+
+        def parse(system, prompt, settings, schema, **options):
+            if schema is generation.CragRetrievalGradeOutput:
+                return _crag_grade(sufficient=False, rewritten_query="追加検索")
+            return echo_model(system, prompt, settings, schema, **options)
+
+        self.parse.side_effect = parse
         result = self.run_answer(answer_flow=generation.CRAG_ANSWER_FLOW_LABEL)
         self.assert_order(
             result.question_display,
@@ -478,10 +483,13 @@ class AnswerExecutionTests(unittest.TestCase):
             heading("補正検索の準備"),
             heading("文書検索（2回目）"),
             "状態: エラーで中断",
-            "状態: 中止",
+            heading("回答文の生成と根拠確認（1回目）"),
         )
         self.assertNotRegex(result.question_display, heading("根拠確認（2回目）"))
-        self.assertNotIn("回答文の生成（", result.question_display)
+        self.assertEqual(result.crag_attempts[0]["stop_reason"], "retrieval_error")
+        self.assertEqual(result.crag_attempts[0]["recovery_trace"]["retrieval_error"], "AdbHybridSearchUnavailable")
+        self.assertEqual(self.search.call_count, 2)
+        self.assertTrue(result.answer_text)
 
     def test_llm_error_has_trace_and_does_not_leak_into_next_request(self):
         self.parse.side_effect = RuntimeError("LLM unavailable")

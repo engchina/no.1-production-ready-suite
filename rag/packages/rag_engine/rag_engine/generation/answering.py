@@ -2428,7 +2428,18 @@ def synthesize_grounded_answer(
         for decision in recovery_plan:
             if decision["action"] == "retrieval":
                 retrieval_result = rounds[-1].get("request_retrieval", {})
-                decision["execution"] = "error" if retrieval_result.get("error") else "completed" if retrieval_result else "not_run"
+                details = retrieval_result.get("re_retrieval", {})
+                skipped = retrieval_result.get("skipped") or details.get("skipped")
+                failed = retrieval_result.get("error") or any(query.get("error") for query in details.get("queries", ()))
+                decision["execution"] = (
+                    "partial"
+                    if failed and retrieval_remedy
+                    else "error"
+                    if failed
+                    else "not_run"
+                    if skipped or not retrieval_result
+                    else "completed"
+                )
                 decision["stop_reason"] = (
                     "disabled"
                     if recover_requests is None
@@ -2436,9 +2447,9 @@ def synthesize_grounded_answer(
                     if number >= max_rounds - 1
                     else "already_attempted"
                     if "request_retrieval" not in rounds[-1] and retrieval_attempted
-                    else retrieval_result.get("skipped")
-                    or retrieval_result.get("re_retrieval", {}).get("skipped")
-                    or ("no_new_evidence" if not retrieval_remedy else "")
+                    else "retrieval_error"
+                    if failed
+                    else skipped or ("no_new_evidence" if not retrieval_remedy else "")
                 )
                 decision["added_evidence_count"] = len(retrieval_remedy["added_chunk_ids"]) if retrieval_remedy else 0
             elif decision["action"] == "correction":
@@ -2480,13 +2491,6 @@ def synthesize_grounded_answer(
                 image_candidates = candidates
                 remedy = {"remedy": "images", "image_ids": [i["image_id"] for i in candidates]}
         if remedy is None:
-            if (
-                material_missing_ids
-                and not correction_ids
-                and not any(feedback.get(key) for key in (*grounded.STANDARD_CORRECTION_KEYS, "document_value_issues"))
-            ):
-                _stop_without_improvement(budget, rounds, grounded.NO_IMPROVEMENT_EVIDENCE_ONLY, number, feedback)
-                break
             if corrected:
                 break
             remedy = {"remedy": "correction"}
@@ -2498,7 +2502,13 @@ def synthesize_grounded_answer(
             not stop_reason
             and remedy["remedy"] == "correction"
             and not correction_ids
-            and grounded.evidence_shortage_only(feedback, best[0])
+            and (
+                grounded.evidence_shortage_only(feedback, best[0])
+                or (
+                    material_missing_ids
+                    and not any(feedback.get(key) for key in (*grounded.STANDARD_CORRECTION_KEYS, "document_value_issues"))
+                )
+            )
         ):
             stop_reason = grounded.NO_IMPROVEMENT_EVIDENCE_ONLY
         if stop_reason:

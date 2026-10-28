@@ -162,6 +162,8 @@ def test_recovery_does_not_repeat_generation_without_new_evidence(monkeypatch, k
     if kind == "failure":
         trace = result.response.generation_trace["rounds"][0]["request_retrieval"]
         assert trace == {"error": "RuntimeError", "applied": False}
+        decision = result.response.generation_trace["rounds"][0]["request_recovery"]["decisions"][0]
+        assert decision["execution"] == "error" and decision["stop_reason"] == "retrieval_error"
 
 
 def test_missing_audit_does_not_trigger_search_when_draft_has_no_gap(monkeypatch):

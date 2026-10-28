@@ -334,8 +334,10 @@ def test_all_default_stage_instructions_follow_ordered_steps() -> None:
         ("generation", "assumptionSystem"): 6,
     }
     for stage in readonly_prompt_stages():
-        for part in stage["prompts"]:
-            identity = (stage["id"], part["id"])
+        parts = stage["prompts"]
+        assert isinstance(parts, list)
+        for part in parts:
+            identity = (str(stage["id"]), str(part["id"]))
             content = str(part["content"])
             if identity == ("audit", "compactRule"):
                 # 判定の理由の書き方は監査の最後の Step 内の追加規則。
@@ -352,11 +354,12 @@ def test_every_catalog_default_is_the_executed_instruction_constant() -> None:
     """画面だけの見出し変換を認めず、既定値と実行用の定数を一致させる。"""
     from app.rag.answer_prompts import prompt_constant
 
-    displayed = {
-        (stage["id"], part["id"]): part["content"]
-        for stage in readonly_prompt_stages()
-        for part in stage["prompts"]
-    }
+    displayed: dict[tuple[str, str], str] = {}
+    for displayed_stage in readonly_prompt_stages():
+        parts = displayed_stage["prompts"]
+        assert isinstance(parts, list)
+        for part in parts:
+            displayed[str(displayed_stage["id"]), str(part["id"])] = str(part["content"])
     for stage in PROMPT_STAGES:
         for part_id, ref in stage.parts:
             assert displayed[stage.id, part_id] == prompt_constant(ref)

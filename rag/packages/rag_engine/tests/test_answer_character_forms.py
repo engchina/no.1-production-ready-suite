@@ -127,7 +127,7 @@ def test_grounded_answer_reads_half_width_and_cites_the_original():
 
 def test_answer_validation_reads_folded_evidence_and_keeps_the_original_quote():
     evidence = [{"id": "c1", "source": "保守計画.pdf", "page_start": 3, "page_end": 3, "text": PLAN}]
-    answer = "HRM の変更は第2水曜 22:00〜24:00 の保守枠で実施します。"
+    answer = "HRM の変更は第2水曜 22:00〜24:00 の保守枠で実施します。\n根拠：保守計画.pdf p.3"
     seen = {}
 
     def parse(system, inputs, settings, schema, provider_id=None):

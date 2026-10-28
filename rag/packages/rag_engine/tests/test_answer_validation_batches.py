@@ -19,8 +19,8 @@ from rag_engine.evaluation.answer_validation import (
 from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline, expire_deadline
 
 EVIDENCE = [{"id": "c1", "source": "manual.pdf", "page_start": 1, "page_end": 1, "text": "検証用アカウントの有効期限は最長 30 日です。"}]
-# 主張の段落が 5 つの回答（見出し・出典の行は無い）。
-ANSWER = "\n\n".join(f"区分 {index} の検証用アカウントの有効期限は最長 30 日です。" for index in range(1, 6))
+# 主張の段落が5つの回答。各段落に実際の出典を付け、並行・期限の境界だけを検査する。
+ANSWER = "\n\n".join(f"区分 {index} の検証用アカウントの有効期限は最長 30 日です。\n根拠：manual.pdf p.1" for index in range(1, 6))
 PATCH = "rag_engine.evaluation.answer_eval.parse_text_response"
 
 
@@ -109,7 +109,7 @@ def test_batches_are_audited_in_parallel_up_to_the_limit_with_the_same_inputs() 
     assert result["status"] == "completed"
     assert result["counts"] == {"supported": 5}
     # 判定は回答の段落の順。
-    assert [claim["answer_quote"] for claim in result["claim_checks"]] == ANSWER.split("\n\n")
+    assert [claim["answer_quote"] for claim in result["claim_checks"]] == [part.split("\n", 1)[0] for part in ANSWER.split("\n\n")]
 
 
 def test_batches_past_the_deadline_become_unassessed_and_the_rest_is_returned() -> None:
@@ -130,7 +130,7 @@ def test_batches_past_the_deadline_become_unassessed_and_the_rest_is_returned() 
     assert result["status"] == STATUS_PARTIAL
     assert result["counts"] == {"supported": 3, "unassessed": 2}
     unassessed = [claim for claim in result["claim_checks"] if claim["status"] == "unassessed"]
-    assert [claim["answer_quote"] for claim in unassessed] == ANSWER.split("\n\n")[2:4]
+    assert [claim["answer_quote"] for claim in unassessed] == [part.split("\n", 1)[0] for part in ANSWER.split("\n\n")][2:4]
     assert {claim["reason"] for claim in unassessed} == {TIMED_OUT_REASON}
     assert len(result["timed_out_passage_ids"]) == 2
     assert deadline.remaining() and not deadline.expired

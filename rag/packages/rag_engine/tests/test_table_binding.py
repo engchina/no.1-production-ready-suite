@@ -207,9 +207,11 @@ def test_audit_prompt_judges_the_relation_not_the_shared_words() -> None:
     assert RELATION_SUPPORT_RULES in grounded.AUDIT_SYSTEM_PROMPT
     section = grounded.AUDIT_SYSTEM_PROMPT.split("## Step 2:", 1)[1].split("## Step 3:", 1)[0]
     assert RELATION_SUPPORT_RULES in section  # support の判定の規則
-    # function_context・evidence の語で支持済みにするのは、同じ対象の記載のときだけ。
-    rules = [line for line in grounded.AUDIT_SYSTEM_PROMPT.splitlines() if line.startswith("- function_context は")]
-    assert len(rules) == 1 and "同じ対象について述べられていれば" in rules[0]
+    # 同じ対象の記載でも、未引用の補助資料を支持根拠へ転用しない。
+    rules = [line for line in section.splitlines() if line.startswith("- support は実際の引用集合だけで判定する。")]
+    assert len(rules) == 1
+    assert "function_context・未引用の補助資料・見出し" in rules[0]
+    assert "支持根拠として使わない" in rules[0]
 
 
 # ---- 行と列の構造での照合（#2659。値の形に依らない） ----------------------------------------------------
