@@ -8,6 +8,7 @@ test("実体・別名索引は既定 OFF で、切り替え・保存・再読込
   const patches: unknown[] = [];
   await page.route("**/api/settings/entity-index", async (route) => {
     if (route.request().method() === "PATCH") {
+      expect(route.request().headers()["content-type"]).toBe("application/json");
       const payload = route.request().postDataJSON();
       patches.push(payload);
       enabled = payload.enabled;
@@ -42,6 +43,7 @@ test("実体・別名索引は保存失敗時に選択を残して再試行で�
   let fail = true;
   await page.route("**/api/settings/entity-index", async (route) => {
     if (route.request().method() === "PATCH" && fail) {
+      expect(route.request().headers()["content-type"]).toBe("application/json");
       fail = false;
       await route.fulfill({ status: 500, json: { data: null, error_messages: ["設定を保存できませんでした。再試行してください。"], warning_messages: [] } });
       return;

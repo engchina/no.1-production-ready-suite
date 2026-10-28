@@ -4641,7 +4641,11 @@ export const api = {
   // 設定: 文書構造索引の構築
   getEntityIndexSettings: () => request<EntityIndexSettingsData>("/api/settings/entity-index"),
   updateEntityIndexSettings: (body: EntityIndexSettingsData) =>
-    request<EntityIndexSettingsData>("/api/settings/entity-index", { method: "PATCH", body: JSON.stringify(body) }),
+    request<EntityIndexSettingsData>("/api/settings/entity-index", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   getGraphSettings: () => request<GraphSettingsData>("/api/settings/graph"),
   updateGraphSettings: (body: GraphSettingsUpdate) =>
     request<GraphSettingsData>("/api/settings/graph", {
