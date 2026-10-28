@@ -653,6 +653,7 @@ test("評価の詳細から最初のクリックでシグナルへ切り替わ�
 for (const resize of [false, true]) {
   test(`評価ケース追加の通知を閉じずに一覧へ戻れる (${resize ? "縮小後" : "最初から375px"})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
     await page.setViewportSize({ width: resize ? 1440 : 375, height: 900 });
+    await useTheme(page, resize ? "dark" : "light");
     seedDislikedRun(mockApi);
     const detail = await openDislikedDetail(page);
     await detail.getByTestId("feedback-add-case-toggle").click();
