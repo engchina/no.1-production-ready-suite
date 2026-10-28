@@ -3916,11 +3916,11 @@ export const api = {
     request<LanguagePackData>(`/api/search-answer-profiles/${id}/question-understanding`),
   saveQuestionUnderstanding: (id: string, overrides: LanguagePackSections) =>
     request<LanguagePackData>(`/api/search-answer-profiles/${id}/question-understanding`, {
-      method: "PUT", body: JSON.stringify({ overrides }),
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ overrides }),
     }),
   previewQuestionUnderstanding: (id: string, text: string, overrides: LanguagePackSections) =>
     request<QuestionUnderstandingPreviewData>(`/api/search-answer-profiles/${id}/question-understanding/preview`, {
-      method: "POST", body: JSON.stringify({ text, overrides }),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, overrides }),
     }),
   getDomainKeywords: (id: string) =>
     request<DomainKeywordsData>(
