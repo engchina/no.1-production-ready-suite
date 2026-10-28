@@ -4183,6 +4183,11 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "crag_attempt_count": len(result.crag_attempts or ()),
         # 要求ごとの根拠の覆域と、根拠の無い要求の再検索(#1279)。
         "request_coverage": dict((result.generation_trace or {}).get("request_coverage") or {}),
+        "request_recovery": [
+            dict(row["request_recovery"])
+            for row in (result.generation_trace or {}).get("rounds", ())
+            if isinstance(row, Mapping) and isinstance(row.get("request_recovery"), Mapping)
+        ],
         # 業務ガイドの手順ごとの検索(#2395)。業務ガイドの記録(diagnostics.guide)に移す。
         **(
             {"guide_step_retrieval": dict(trace)}
@@ -4270,6 +4275,11 @@ def adopted_review_contract(generation_trace: object) -> dict[str, Any]:
         return {"execution": "not_run", "items": []}
     return {
         "execution": adopted.get("review_execution", "not_run"),
+        **(
+            {"dimensions": dict(adopted["validation_dimensions"])}
+            if isinstance(adopted.get("validation_dimensions"), Mapping)
+            else {}
+        ),
         "items": [
             {
                 key: row.get(key)

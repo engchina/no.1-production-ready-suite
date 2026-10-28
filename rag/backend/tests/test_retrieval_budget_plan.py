@@ -68,3 +68,32 @@ def test_cli_generates_valid_inputs_and_refuses_to_overwrite(tmp_path: Path) -> 
 def test_invalid_cap_never_prepares_requests(cap: int) -> None:
     with pytest.raises(ValueError):
         prepare_plan(request(), total_caps=[cap])
+
+
+def test_recovery_matrix_preserves_scope_and_prepares_only_four_conditions() -> None:
+    original = request()
+    plan = prepare_plan(original, recovery_matrix=True)
+    assert len(plan["variants"]) == 4
+    assert not plan["executed"]
+    observed = set()
+    for variant in plan["variants"]:
+        parsed = EvaluationRunRequest.model_validate(variant["request"])
+        assert parsed.cases == original.cases and parsed.filters == original.filters
+        assert parsed.search_answer_profile_id == original.search_answer_profile_id
+        assert parsed.rag_overrides.rerank_enabled is True
+        assert parsed.rag_overrides.reference_expansion_enabled is True
+        observed.add(
+            (
+                parsed.rag_overrides.answer_flow,
+                variant["environment_overlay"]["RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED"],
+            )
+        )
+    assert observed == {
+        ("standard_rag", "false"),
+        ("standard_rag", "true"),
+        ("crag", "false"),
+        ("crag", "true"),
+    }
+    assert original == request()
+    with pytest.raises(ValueError):
+        prepare_plan(original, recovery_matrix=True, total_caps=[100])

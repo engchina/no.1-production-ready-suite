@@ -34,8 +34,10 @@ from rag_engine.evaluation.answer_eval import (
     _answer_passages,
     _bind_claims,
     _evidence_fragments,
+    _EvidenceIndex,
     _json,
     _parse_checked,
+    _passage_citations,
     _span_for_misnamed_id,
     _spans_for_ids,
     _spans_for_passage_citations,
@@ -80,7 +82,8 @@ from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests,
 #     推した構造を supported にしない（画像で確かめたかは呼び出し側が Run の記録で決める）。図の項目だけで裏付けた supported は
 #     その段落だけで 1 回確かめ直す（support_check=figure_recheck。#2678）。
 # 16: 原質問の状態と操作対象も、確認の答えと同じ条件整合の検査に渡す（#2653）。
-VALIDATION_RUBRIC_VERSION = 16
+# 17: 最終検証の支持を段落の実際の引用集合に限定し、未確認の対象は判定を保留する。
+VALIDATION_RUBRIC_VERSION = 17
 
 # 図の見た目だけで決まる主張（要素の配置・矢印の向き・つながり・分岐への所属など、図の本文が明示しない内容）の判定。
 # 根拠の本文では確かめられず、図の画像を読んだかどうかで扱いが決まる（#2678。検証に通さない判定に数える）。
@@ -153,7 +156,8 @@ VALIDATION_SYSTEM_PROMPT = (
 - 2 つ以上の根拠を合わせて裏付ける主張（ある根拠で対象の区分・担当を確かめ、別の根拠でその区分・担当の規則を確かめる多段の結論など）は、使った根拠の evidence_id をすべて「,」で区切って evidence_id に書く。
 - evidence_id は evidence_items の evidence_id の値（E で始まる値）を省かず・短くせずにそのまま書く。id（chunk の id）や回答に書かれた ID を evidence_id に書かない。
 - 回答に書かれた根拠の ID（【証拠 ID …】など）は evidence_items の id に当たる。ID の照合はシステムが行うので、ID の書き方ではなく裏付けの有無で判定する。
-- 段落に根拠の ID が無い（結論・まとめの段落など）ときは、その主張を裏付ける evidence_items を選び、その evidence_id を evidence_id に書く。
+- passage_citations は段落に実際に付いた出典の evidence_id の集合。資料の主張は、この集合だけで対象・操作・条件・順序を裏付ける。複数の出典を共同で使ってよいが、未引用の資料を代わりに選ばない。
+- 出典が無い、出典の対応が未確認、対象との一致が unknown の資料の主張は unassessed。質問・利用者の答え・照会結果は資料の内容の裏付けに使わない。
 - citation_error は、段落が書いた根拠の ID が evidence_items に無いときだけに使う。段落に ID が無いことを citation_error にしない。
 
 ## Step 4: 矛盾・支持不足・未確認を区別する
@@ -494,18 +498,75 @@ def _passage_check(passages: Sequence[Mapping[str, str]], answer_text: str):
     return check
 
 
-def _bind_validation(output: ClaimAuditOutput, catalog: Mapping[str, Mapping[str, Any]], passages: Sequence[Mapping[str, str]]):
+def _bind_validation(
+    output: ClaimAuditOutput,
+    catalog: Mapping[str, Mapping[str, Any]],
+    passages: Sequence[Mapping[str, str]],
+):
     """監査の判定を根拠へ結び付け（``_bind_claims``）、監査が写した原文を ``support_quote`` に残す。
 
     結び付けで ``evidence_quote`` は根拠の本文に置き換わるので、監査が裏付けとして写した原文は先に取っておき、
     ``_enforce_support`` が根拠の本文と照らす（#2659）。
     """
-    bound = _bind_claims(output, catalog, passages, passage_citations=True)
+    binding_claims = []
+    for claim in output.claim_checks:
+        # 複数の実際の引用に分かれた原文を、単一の片段に無いだけで引用エラーにしない。
+        selected = _spans_for_ids(claim.model_copy(update={"evidence_quote": ""}), catalog) or []
+        joint = "\n".join(str(span.get("text") or "") for span in selected)
+        binding_claims.append(
+            claim.model_copy(update={"evidence_quote": ""})
+            if len(selected) > 1 and claim.evidence_quote and quote_in_text(claim.evidence_quote, joint)
+            else claim
+        )
+    binding_output = output.model_copy(update={"claim_checks": binding_claims})
+    bound = _bind_claims(binding_output, catalog, passages, passage_citations=True)
     claims = [
         claim.model_copy(update={"support_quote": original.evidence_quote.strip(), "support_check": ""})
         for original, claim in zip(output.claim_checks, bound.claim_checks, strict=True)
     ]
     return bound.model_copy(update={"claim_checks": claims})
+
+
+def _actual_citation_ids(answer_text: str, catalog: Mapping[str, Mapping[str, Any]]) -> dict[str, list[str]]:
+    """段落の実際の出典の行・IDだけを片段へ結び付ける。"""
+    index = _EvidenceIndex(list(catalog.values()), ())
+    citations, _groups = _passage_citations(answer_text)
+    result = {}
+    for passage_id, lines in citations.items():
+        nodes = [node for line in lines for node in index.resolve(line)]
+        chunks = {str(node.get("id") or "") for node in nodes}
+        result[passage_id] = [eid for eid, node in catalog.items() if str(node.get("id") or "") in chunks]
+    return result
+
+
+def _limit_citation_scope(
+    claims: Sequence[ValidationClaimCheck],
+    catalog: Mapping[str, Mapping[str, Any]],
+    answer_text: str,
+) -> list[ValidationClaimCheck]:
+    """既存の支持判定を実際の引用集合に制限し、未引用の資料による昇格を防ぐ。"""
+    citation_ids = _actual_citation_ids(answer_text, catalog) if answer_text else {}
+    result = []
+    for claim in claims:
+        if claim.status == "supported":
+            actual = set(citation_ids.get(claim.answer_passage_id, ()))
+            # 単独の段落を検査する呼び出しでは、段落内の ID も同じ規則で解決する。
+            if not answer_text:
+                nodes = _EvidenceIndex(list(catalog.values()), ()).resolve(claim.answer_quote)
+                chunks = {str(node.get("id") or "") for node in nodes}
+                actual = {eid for eid, node in catalog.items() if str(node.get("id") or "") in chunks}
+            selected = [catalog[eid.strip()] for eid in claim.evidence_id.split(",") if eid.strip() in catalog]
+            if not selected and claim.source_id:
+                selected = [node for node in catalog.values() if str(node.get("id") or "") == claim.source_id]
+            documents = [node for node in selected if not is_premise_id(node.get("id"))]
+            if not selected and not is_premise_id(claim.source_id):
+                claim = _not_supported(claim, "unassessed", "uncited_evidence", "支持に使った資料の本文と実際の出典を確認できません。")
+            elif documents and any(str(node.get("evidence_id") or "") not in actual for node in documents):
+                claim = _not_supported(
+                    claim, "unassessed", "uncited_evidence", "実際に引用した資料の集合では、この主張の裏付けを確認できません。"
+                )
+        result.append(claim)
+    return result
 
 
 def _not_supported(claim: ValidationClaimCheck, status: str, check: str, reason: str) -> ValidationClaimCheck:
@@ -523,12 +584,12 @@ def _not_supported(claim: ValidationClaimCheck, status: str, check: str, reason:
 
 def _support_texts(claim: ValidationClaimCheck, catalog: Mapping[str, Mapping[str, Any]], texts: Mapping[str, str]) -> list[str]:
     """判定を結び付けた根拠の本文（分割する前の全文。結び付けた片段の chunk ごと）。"""
-    chunk_ids = {claim.source_id}
+    chunk_ids = [claim.source_id]
     for token in str(claim.evidence_id or "").split(","):
         span = catalog.get(token.strip())
         if span is not None:
-            chunk_ids.add(str(span.get("id") or ""))
-    return [texts[chunk_id] for chunk_id in chunk_ids if chunk_id in texts]
+            chunk_ids.append(str(span.get("id") or ""))
+    return [texts[chunk_id] for chunk_id in dict.fromkeys(chunk_ids) if chunk_id in texts]
 
 
 # ---- 原質問・確認の答えとの両立（#2653・#2726） ---------------------------------------------------------------
@@ -662,8 +723,7 @@ def _enforce_support(
     ならない。次のどれかに当たる supported は採らない（否定の判定は変えない）。
 
     - 監査が裏付けとして写した原文（support_quote）が、結び付けた根拠の本文に無い → citation_error（quote_unmatched）。
-    - 監査が、根拠の記載の対象は段落の対象と別（not_applicable）とした → unsupported。``unknown`` は採否に使わない
-      （実の LLM の確認で、対象が同じ正しい段落にも多く付いた。確かめられない段落は監査の判定〔unsupported〕に任せる）。
+    - 根拠の記載の対象が段落の対象と別（not_applicable）なら unsupported、一致が未確認（unknown）なら unassessed。
     - 段落が、根拠の表の別の行の区分・名前（別の列の見出し）と値を結び付けている（決定的な照合。`unbound_table_values`）
       → contradicted（表が否定した対応。理由に表の正しい対応を書く。#2998）。
     - 監査の理由だけが、根拠の表と違う対応を「記載あり」と述べている → unsupported（段落は外さない）。
@@ -682,11 +742,14 @@ def _enforce_support(
             )
         elif claim.status == "supported":
             quote = claim.support_quote
-            if quote and not any(quote_in_text(quote, text) for text in _support_texts(claim, catalog, texts)):
+            support_texts = _support_texts(claim, catalog, texts)
+            if quote and not (any(quote_in_text(quote, text) for text in support_texts) or quote_in_text(quote, "\n".join(support_texts))):
                 claim = _not_supported(
                     claim, "citation_error", SUPPORT_QUOTE_UNMATCHED, "裏付けとして写した原文が、結び付けた根拠に見当たりません。"
                 )
                 claim = claim.model_copy(update={"reference_check": REFERENCE_QUOTE_UNMATCHED})
+            elif claim.applicability == "unknown":
+                claim = _not_supported(claim, "unassessed", "target_unverified", "主張と引用資料の対象の一致を確認できません。")
             elif claim.applicability == "not_applicable":
                 claim = _not_supported(claim, "unsupported", SUPPORT_TARGET_MISMATCH, "根拠は段落・質問と別の対象についての記載です。")
             elif (fields := output_field_claim(claim.output_fields, claim.answer_quote)) is not None and (
@@ -1221,6 +1284,7 @@ def validate_answer_claims(
     reaudited: list[str] = []
     timed_out: list[Mapping[str, str]] = []
     catalog = {item["evidence_id"]: item for item in evidence}
+    fixed["passage_citations"] = _actual_citation_ids(answer_text, catalog)
     if remaining:
         batches = passage_batches(remaining, batch_passages)
 
@@ -1283,6 +1347,7 @@ def validate_answer_claims(
     claims = _revise_table_claims(claims, table_texts, settings, provider_id)
     # 図の項目だけで裏付けた supported は、図の見た目だけで決まる主張でないかを確かめ直す（#2678）。
     claims, figure_rechecked = _recheck_figure_supported(claims, fixed, passages, evidence, catalog, settings, provider_id)
+    claims = _limit_citation_scope(claims, catalog, answer_text)
     counts: dict[str, int] = {}
     for claim in claims:
         counts[claim.status] = counts.get(claim.status, 0) + 1

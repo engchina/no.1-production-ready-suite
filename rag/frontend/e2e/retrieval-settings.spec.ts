@@ -266,7 +266,8 @@ for (const viewport of [
       // 回答の生成方式の既定は標準 RAG。先頭に「（既定）」付きで並べ、CRAG は任意で AI の呼び出しが増えると説明する（#3509）。
       const answerFlow = page.getByRole("combobox", { name: "回答の生成方式", exact: true });
       await expect(answerFlow).toContainText("標準 RAG（既定）");
-      await expect(answerFlow).toHaveAccessibleDescription(/CRAG は必要なときだけ選ぶ方式.*AI の呼び出しが増え/);
+      await expect(answerFlow).toHaveAccessibleDescription(/CRAG は必要なときだけ選ぶ方式.*回答生成前.*AI の呼び出しが増え/);
+      await expect(answerFlow).toHaveAccessibleDescription(/生成後の再検索・監査とは別の設定.*自動では有効にしません/);
       await expect(page.getByRole("switch", { name: "Rerank で検索候補を並べ替える" })).toBeChecked();
       await page.getByRole("switch", { name: "質問から項目の条件を読み取る" }).scrollIntoViewIfNeeded();
       await page.screenshot({ path: test.info().outputPath("retrieval-option-order.png") });
@@ -276,7 +277,9 @@ for (const viewport of [
       const requestCoverage = page.getByRole("switch", { name: "根拠の無い要求を探し直す" });
       await expect(requestCoverage).not.toBeChecked();
       await expect(requestCoverage).toHaveAccessibleDescription(/語の一致率で回答可能性を判定せず/);
-      await expect(requestCoverage).toHaveAccessibleDescription(/実行した監査.*共有上限を守り.*モデル呼び出しと待ち時間が増え/);
+      await expect(requestCoverage).toHaveAccessibleDescription(/実行した監査が材料不足と判定.*共有上限を守り.*モデル呼び出しと待ち時間が増え/);
+      await expect(requestCoverage).toHaveAccessibleDescription(/材料が既にある.*再検索せず.*その内容を修正/);
+      await expect(requestCoverage).toHaveAccessibleDescription(/未検証を材料不足と決めず.*監査や CRAG を自動では有効にしません.*既定は無効/);
       await requestCoverage.scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath(`settings-${viewport.name}-${theme}.png`) });
       await expect(answerFlow).toHaveAccessibleDescription(/初回を含め最大 3 段.*書き換えは最大 2 回/);

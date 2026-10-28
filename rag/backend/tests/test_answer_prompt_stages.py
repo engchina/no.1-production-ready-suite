@@ -324,3 +324,39 @@ def test_every_editable_stage_has_a_runtime_override_lookup() -> None:
         and isinstance(node.args[0].value, str)
     }
     assert set(STAGE_PROMPT_REFS) <= used
+
+
+def test_all_default_stage_instructions_follow_ordered_steps() -> None:
+    """追加部品は組立先の Step を継続し、それ以外は Step 1 から始める。"""
+    continuations = {
+        ("picture_description", "picture"): 6,
+        ("picture_description", "table"): 6,
+        ("generation", "assumptionSystem"): 6,
+    }
+    for stage in readonly_prompt_stages():
+        for part in stage["prompts"]:
+            identity = (stage["id"], part["id"])
+            content = str(part["content"])
+            if identity == ("audit", "compactRule"):
+                # 判定の理由の書き方は監査の最後の Step 内の追加規則。
+                assert content.lstrip().startswith("### ")
+                assert not re.search(r"^## ", content, re.M)
+                continue
+            steps = [int(n) for n in re.findall(r"^## Step (\d+): \S", content, re.M)]
+            first = continuations.get(identity, 1)
+            assert steps and steps == list(range(first, first + len(steps))), identity
+            assert not re.search(r"^## (?!Step \d+:)", content, re.M), identity
+
+
+def test_every_catalog_default_is_the_executed_instruction_constant() -> None:
+    """画面だけの見出し変換を認めず、既定値と実行用の定数を一致させる。"""
+    from app.rag.answer_prompts import prompt_constant
+
+    displayed = {
+        (stage["id"], part["id"]): part["content"]
+        for stage in readonly_prompt_stages()
+        for part in stage["prompts"]
+    }
+    for stage in PROMPT_STAGES:
+        for part_id, ref in stage.parts:
+            assert displayed[stage.id, part_id] == prompt_constant(ref)

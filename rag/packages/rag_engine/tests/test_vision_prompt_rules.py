@@ -232,3 +232,19 @@ def test_rules_mark_screenshot_values_as_examples_unless_the_text_specifies_them
     assert "原則として文書の例示であり" in rules and "「画面例では」「入力例として」を付け" in rules
     assert "指定・限定している場合だけ" in rules
     assert "「画面例では〇〇」と書き" in DOCUMENT_VALUE_POLICY
+
+
+def test_default_vision_request_has_one_ordered_step_sequence_for_each_target():
+    """共通 field 規則は小節にし、対象別指示と実行時の schema まで連番にする。"""
+    import re
+
+    for target_kind in ("picture", "table"):
+        prompt = _render_prompt({}, target_kind=target_kind, template=DEFAULT_IMAGE_RETRIEVAL_PROMPT)
+        assert [int(n) for n in re.findall(r"^## Step (\d+):", prompt, re.M)] == list(range(1, 8))
+        assert prompt.count(RULES_START) == prompt.count(RULES_END) == 1
+        assert prompt.index(RULES_END) < prompt.index("## Step 6:") < prompt.index("## Step 7:")
+        assert "{{image_metadata}}" not in prompt
+        assert "{{image}}" not in prompt
+        # 出力契約を Step 形式にしても、文字列値の創作を許さない。
+        assert "必須キーを埋めるために情報を創作しない" in prompt
+        assert '"required"' in prompt

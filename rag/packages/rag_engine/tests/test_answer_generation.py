@@ -1946,7 +1946,7 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertEqual(build_context.call_args_list[0].kwargs["retrieval_queries"], ("original question",))
         self.assertEqual(
             build_context.call_args_list[1].kwargs["retrieval_queries"],
-            ("original question", "better query"),
+            ("better query",),
         )
         self.assertEqual(
             [call.args[3] for call in parse.call_args_list],
@@ -2153,7 +2153,7 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertEqual(build_context.call_count, 3)
         self.assertEqual(
             build_context.call_args_list[-1].kwargs["retrieval_queries"],
-            ("original question", "rewrite two", "rewrite three"),
+            ("rewrite three",),
         )
         self.assertEqual(result.generated_queries, ())
         self.assertEqual(len(result.crag_attempts), 3)
@@ -2478,7 +2478,7 @@ class AnswerGenerationTests(unittest.TestCase):
         )
         self.assertEqual(
             build_context.call_args_list[1].kwargs["retrieval_queries"],
-            ("original question", "expanded query", "corrective rewrite"),
+            ("corrective rewrite",),
         )
         self.assertIn("（1 本の検索文を追加）", result.question_display)
         self.assertIn(QUESTION_DISPLAY_METADATA_SEPARATOR, result.question_display)

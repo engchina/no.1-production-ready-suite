@@ -543,8 +543,8 @@ class GroundedItemReview(_StrictModel):
     """1 item の局所監査。引用が言い換えを支持するかと、質問への適用性を分ける。"""
 
     index: int = Field(description="監査対象 items の index。")
-    support: Literal["supported", "unsupported", "contradicted"] = Field(
-        description="supported=quote が text を裏付ける。unsupported=text が quote（と function_context）にない操作・値・効果・原因を足している。contradicted=quote と逆。"
+    support: Literal["supported", "unsupported", "contradicted", "unknown"] = Field(
+        description="supported=実際の引用集合が主張全体を支え、この引用も寄与。unsupported=引用にない操作・対象・条件・順序を補う。contradicted=引用と逆。unknown=判定不能。"
     )
     applicability: Literal["matched", "conditional", "not_applicable", "unknown"] = Field(
         description="matched=質問の対象の種類に当てはまる（一般手順でよい）。conditional=原文の条件の成立が質問から確認できない。not_applicable=別の対象・項目・業務向け。unknown=対象の種類が同じか判断できない。"
@@ -609,6 +609,11 @@ class GroundedRequestReview(_StrictModel):
         description="addressed=items が答えている。partial=一部。missing=無い。context=背景で答える対象ではない。"
     )
     reason: str = Field(description="質問と同じ言語で短く。")
+    evidence_status: Literal["available", "missing", "unknown"] = Field(
+        default="unknown",
+        description="要求に必要な材料が入力にある=available、足りない=missing、判断不能=unknown。回答の有無と別に判定する。",
+    )
+    evidence_ids: list[str] = Field(default_factory=list, max_length=64, description="available の判定を支える入力の evidence_id。")
 
 
 class GuideRequirementReview(_StrictModel):
