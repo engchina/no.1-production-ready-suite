@@ -40,6 +40,7 @@ from app.schemas.document import (
     IngestionJobPhase,
     IngestionJobStatus,
 )
+from tests.language_release_support import install_language_release_stub
 
 _ACTIVE_DOCUMENT_STATUSES = {
     FileStatus.PREPROCESSING,
@@ -107,6 +108,12 @@ class _LeaseQueueStore:
             heartbeat_at=heartbeat_at,
         )
         self.documents.setdefault(document_id, FileStatus.UPLOADED)
+
+    async def pin_ingestion_job_language_pack(self, job_id: str, release_id: str) -> str:
+        row = self.rows[job_id]
+        identity = row.job.language_pack_release_id or release_id
+        row.job = row.job.model_copy(update={"language_pack_release_id": identity})
+        return identity
 
     def job(self, job_id: str) -> IngestionJob:
         return self.rows[job_id].job
@@ -961,6 +968,7 @@ class _Pipeline:
 
 @pytest.fixture
 def pipeline(monkeypatch: pytest.MonkeyPatch, store: _LeaseQueueStore) -> _Pipeline:
+    install_language_release_stub(monkeypatch)
     pipeline = _Pipeline()
 
     async def reset_outputs(*args: object, **kwargs: object) -> None:

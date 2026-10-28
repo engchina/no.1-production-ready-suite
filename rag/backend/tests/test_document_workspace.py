@@ -43,6 +43,7 @@ from app.schemas.extraction import (
     StructuredExtraction,
 )
 from app.schemas.knowledge_base import KnowledgeBaseRef
+from tests.language_release_support import install_language_release_stub
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -384,6 +385,12 @@ class FakeWorkspaceOracle:
         self.ingestion_jobs[job.id] = job
         return job
 
+    async def pin_ingestion_job_language_pack(self, job_id: str, release_id: str) -> str:
+        job = self.ingestion_jobs[job_id]
+        identity = job.language_pack_release_id or release_id
+        self.ingestion_jobs[job_id] = job.model_copy(update={"language_pack_release_id": identity})
+        return identity
+
     async def get_ingestion_job(self, job_id: str) -> IngestionJob | None:
         return self.ingestion_jobs.get(job_id)
 
@@ -713,6 +720,7 @@ def fake_cleanup_store(fake_document_dependencies: FakeWorkspaceOracle) -> FakeD
 
 @pytest.fixture(autouse=True)
 def fake_document_dependencies(monkeypatch: pytest.MonkeyPatch) -> FakeWorkspaceOracle:
+    install_language_release_stub(monkeypatch)
     fake_oracle = FakeWorkspaceOracle()
     monkeypatch.setattr(documents_route, "OracleClient", lambda: fake_oracle)
     monkeypatch.setattr(

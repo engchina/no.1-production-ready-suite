@@ -11,6 +11,7 @@ fixture が skip し、作成行は cleanup_to_baseline で後始末する)。
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -44,7 +45,9 @@ def _list_selects(pool: FakeOraclePool) -> list[str]:
     ]
 
 
-async def test_list_documents_selects_status_from_first_recipe() -> None:
+async def test_list_documents_selects_status_from_first_recipe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """一覧の列の状態は、レシピ1の状態(無ければ文書の状態)を `status` として読む。"""
     pool = FakeOraclePool(
         execute_results=[
@@ -56,6 +59,8 @@ async def test_list_documents_selects_status_from_first_recipe() -> None:
         ]
     )
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    # 公開版の取得は独立に検証し、このテストでは元の文書 SQL の応答だけを供給する。
+    monkeypatch.setattr(client, "document_language_pack_uses", AsyncMock(return_value={}))
 
     documents = await client.list_documents(limit=10)
 
