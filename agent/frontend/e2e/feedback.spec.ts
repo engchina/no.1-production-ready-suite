@@ -649,3 +649,37 @@ test("評価の詳細から最初のクリックでシグナルへ切り替わ�
   await expect(page.getByRole("tabpanel", { name: "確かめるべき実行", exact: true })).toBeVisible();
   await expect(page).not.toHaveURL(/feedback=/);
 });
+
+for (const resize of [false, true]) {
+  test(`評価ケース追加の通知を閉じずに一覧へ戻れる (${resize ? "縮小後" : "最初から375px"})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    await page.setViewportSize({ width: resize ? 1440 : 375, height: 900 });
+    seedDislikedRun(mockApi);
+    const detail = await openDislikedDetail(page);
+    await detail.getByTestId("feedback-add-case-toggle").click();
+    const form = detail.getByTestId("feedback-add-case-form");
+    await form.locator("#feedback-add-case-new-set-name").fill("架空の検証用・長い名前を持つフィードバック確認の評価セット");
+    await form.getByTestId("feedback-add-case-submit").click();
+    const notification = page.getByRole("region", { name: "通知", exact: true });
+    await expect(notification).toContainText("評価ケースを追加しました");
+    if (resize) await page.setViewportSize({ width: 375, height: 900 });
+    const back = page.getByTestId("feedback-detail-back");
+    await expect(back).toBeVisible();
+    await back.scrollIntoViewIfNeeded();
+    await expect.poll(async () => {
+      const [toastBox, backBox] = await Promise.all([notification.boundingBox(), back.boundingBox()]);
+      return toastBox && backBox ? backBox.y - toastBox.y - toastBox.height : -1;
+    }).toBeGreaterThanOrEqual(0);
+    await page.screenshot({ path: testInfo.outputPath(`toast-back-${resize}.png`) });
+    await back.click();
+    await expect(page.getByTestId("list-detail-feedback-ratings-list")).toBeVisible();
+    await expect(notification.getByRole("button", { name: "評価セットを開く", exact: true })).toBeVisible();
+    if (resize) {
+      await notification.getByRole("button", { name: "評価セットを開く", exact: true }).click();
+      await expect(page).toHaveURL(/\/evaluation\?id=/);
+    } else {
+      await notification.getByRole("button", { name: "閉じる", exact: true }).click();
+    }
+    await expect.poll(() => page.evaluate(() => document.documentElement.style.getPropertyValue("--toast-top-clearance"))).toBe("");
+    await expect(notification).not.toContainText("評価ケースを追加しました");
+  });
+}

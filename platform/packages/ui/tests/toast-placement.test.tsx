@@ -42,6 +42,7 @@ describe("resolveToastPlacement", () => {
     const { mode, style } = resolveToastPlacement({ narrow: true });
     expect(mode).toBe("top-bar");
     expect(style.top).toBe("max(0.5rem, env(safe-area-inset-top))");
+    expect(style.maxHeight).toBe("min(var(--toast-max-height-narrow), calc(100dvh - max(0.5rem, env(safe-area-inset-top)) - 1rem))");
     expect(style.left).toBe("calc(1rem + var(--control-height-touch))");
     expect(style.right).toBe("max(1rem, env(safe-area-inset-right))");
     expect(style.bottom).toBeUndefined();

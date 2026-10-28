@@ -118,32 +118,36 @@ export function AppShell({
         {drawer ? (
           // 上端のバー（サイドバーと同じ反転面）。本文のスクロールの外に置き、どこまでスクロールしてもメニューに届く。
           // <header> にしない（md 以上に無い banner の landmark を増やさず、PageHeader の <header> と取り違えない）。
-          <div
-            data-surface="inverted"
-            data-testid="nav-drawer-bar"
-            className="flex h-14 shrink-0 items-center gap-2 border-b border-border bg-surface px-2 text-fg-muted"
-            inert={backgroundInert}
-          >
-            <Button
-              ref={triggerRef}
-              type="button"
-              variant="ghost"
-              iconOnly
-              touchTarget
-              icon={Menu}
-              aria-label={navDrawerLabels.menu}
-              aria-expanded={open}
-              aria-controls={drawerId}
-              data-testid="nav-drawer-trigger"
-              onClick={() => setOpen(true)}
-            />
-            {brand ? (
-              <div className="min-w-0 text-fg" title={brand.full}>
-                <span className="block truncate whitespace-nowrap text-sm font-bold leading-5">{brand.line1}</span>
-                <span className="block truncate whitespace-nowrap text-xs font-semibold leading-4 text-fg-muted">{brand.line2}</span>
-              </div>
-            ) : null}
-          </div>
+          <>
+            <div
+              data-nav-drawer-bar=""
+              data-surface="inverted"
+              data-testid="nav-drawer-bar"
+              className="flex h-14 shrink-0 items-center gap-2 border-b border-border bg-surface px-2 text-fg-muted"
+              inert={backgroundInert}
+            >
+              <Button
+                ref={triggerRef}
+                type="button"
+                variant="ghost"
+                iconOnly
+                touchTarget
+                icon={Menu}
+                aria-label={navDrawerLabels.menu}
+                aria-expanded={open}
+                aria-controls={drawerId}
+                data-testid="nav-drawer-trigger"
+                onClick={() => setOpen(true)}
+              />
+              {brand ? (
+                <div className="min-w-0 text-fg" title={brand.full}>
+                  <span className="block truncate whitespace-nowrap text-sm font-bold leading-5">{brand.line1}</span>
+                  <span className="block truncate whitespace-nowrap text-xs font-semibold leading-4 text-fg-muted">{brand.line2}</span>
+                </div>
+              ) : null}
+            </div>
+            <div aria-hidden className="h-[var(--toast-top-clearance,0px)] shrink-0" />
+          </>
         ) : (
           sidebar
         )}
