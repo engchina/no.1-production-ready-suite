@@ -92,6 +92,7 @@ jobs:
         run: |
           bash -n stack/extract_wallet.sh
           terraform fmt -check -recursive stack
+          python scripts/test_always_free.py
           (cd stack && terraform init -backend=false && terraform validate)
           python scripts/package_stack.py --output "${RUNNER_TEMP}/production-ready-suite-terraform-stack.zip"
           python scripts/verify_stack_contract.py "${RUNNER_TEMP}/production-ready-suite-terraform-stack.zip"

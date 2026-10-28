@@ -719,3 +719,73 @@ root の [README.md](../README.md)「OCI へのデプロイ」のボタンも `r
 | `instance_display_name` / `instance_flex_shape_ocpus` / `instance_flex_shape_memory` / `instance_boot_volume_size` | `<製品>_instance_display_name` / `<製品>_instance_flex_shape_ocpus` / `<製品>_instance_flex_shape_memory` / `<製品>_instance_boot_volume_size` |
 | `adb_name` の既定 `RAGADB` / `NL2SQLADB` / `AGENTADB` | `SUITEADB` |
 | NL2SQL の `adb_workload` の既定 `LH` | `LH`（#1558。統合の当初は `OLTP` だった） |
+
+## Always Free を任意に使う
+
+有料構成が既定です。Compute と新規 ADB は、それぞれ独立して無料構成を選べます。
+無料構成は検証用で、3 製品・文書解析のインストール成功や実用性能を保証するものではありません。
+実 OCI の Arm 配備と負荷試験は別途必要です。
+
+| 対象 | 有料の既定 | Always Free を選んだ場合 |
+|---|---|---|
+| 有効化 | どちらも無効 | `compute_always_free_enabled=true` / `adb_is_free_tier=true` |
+| Compute shape / OS | E5 Flex / Oracle Linux 9 x86 | A1 Flex / Oracle Linux 9 Arm。リージョンに合う固定 image を自動選択 |
+| OCPU | 4 | `compute_always_free_ocpus`、1 または 2、既定 2 |
+| メモリ | 32 GB | `compute_always_free_memory_in_gbs`、整数 1〜12 GB、既定 12 |
+| 起動ボリューム | 200 GB / 10 VPUs/GB | `compute_always_free_boot_volume_size_in_gbs`、整数 50〜200 GB、既定 200。性能は 10 VPUs/GB 固定 |
+| ADB workload | LH | Suite は LH または OLTP。APEX は SQL*Net 非対応、AJD はこの provider の無料設定非対応 |
+| ADB CPU | 2 ECPU | サービスが固定する 1 OCPU。ECPU 数・compute model は送信しない |
+| ADB 容量 | 1 TB | サービスが固定する 20 GB。TB / GB 容量を送信しない |
+| ADB 自動拡張 / elastic pool | 自動拡張は無効 | 自動拡張は無効固定。elastic pool は使用不可 |
+| ADB ライセンス | LICENSE_INCLUDED | LICENSE_INCLUDED 固定。Always Free はライセンス種別ではなく `is_free_tier` |
+| ADB バックアップ保持 | 1 日 | 保持日数は送信しない。利用者による時点復旧・長期 / 手動バックアップは使えない |
+| ADB 接続 | private endpoint | private endpoint 非対応。ACL 付きパブリック接続を推奨し、アクセス・タイプは利用者が明示的に指定 |
+| bastion | 任意 | Always Free Compute とは併用不可（既存の Chrome 配備は x86 専用） |
+
+無料構成で非表示になる有料用入力は使用しません。CLI でも同じ分岐です。ADB の表示名・DB 名・ADMIN パスワード・
+アプリ用ユーザー・ACL は引き続き設定します。既存 ADB を使う場合は `adb_is_free_tier=false` のまま、
+既存 ADB の設定を使用します。Terraform から既存 ADB を無料へ変更しません。
+
+```hcl
+# tenancy のホーム・リージョンを選択する（stack は東京 / 大阪に対応）。
+compute_always_free_enabled                 = true
+compute_always_free_ocpus                   = 2
+compute_always_free_memory_in_gbs           = 12
+compute_always_free_boot_volume_size_in_gbs = 200
+bastion_enabled                            = false
+adb_deployment_mode                        = "CREATE_NEW"
+adb_is_free_tier                           = true
+adb_workload                               = "LH"
+adb_db_version                             = "26ai"
+adb_network_access_type                    = "許可されたIPおよびVCN限定のセキュア・アクセス"
+# VCN ACL の場合は、接続元 VCN と Service Gateway の経路を別途用意する。
+# IP ACL の場合は、固定出口のパブリック IP / CIDR を指定する。
+```
+
+無料枠はこの stack 専用ではありません。ホーム・リージョン、tenancy 内の既存リソース・使用量・残り枠、
+A1 の空き容量を OCI コンソールで確認してください。Terraform は残り枠や課金を保証しません。
+無料専用アカウントの A1 は合計 2 OCPU / 12 GB（1,500 OCPU 時間 / 9,000 GB 時間 / 月）、
+有料 tenancy の A1 無償枠は 3,000 OCPU 時間 / 18,000 GB 時間 / 月と公式料金表に記載されています。
+この無料構成は前者の上限を採用します。起動・ブロックボリューム合計 200 GB は他の VM とも共有します。
+AI の推論・embedding・rerank、追加リソース等が無料になる設定ではありません。
+
+ADB の新規作成ガイドでは、対応する東京・大阪はいずれも Always Free の新しい DB バージョンの提供対象です。
+Always Free 専用ページには古い地域の限定リストも残っており、記述が一致しません。
+最終的な提供バージョンはホーム・リージョンの OCI コンソールで確認してください。
+Vector Search を使う製品で古い DB バージョンを選ばないでください。
+無料 ADB は同時セッション数に制限があり、7 日間の非稼働で自動停止、停止後の長期非稼働で削除される場合があります。
+Compute にも非稼働時の回収条件があります。
+
+有料 / 無料の切替は新しい stack で行ってください。既存リソースの切替は CPU・容量・image の変更や
+Compute の再作成を伴い、ADB の API は `is_free_tier` と他の属性の同時変更を制限します。
+この設定で既存 ADB を有料から無料に変換することはできません。
+
+公式資料（2026-10-28 確認）:
+
+- [Always Free Resources](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
+- [Always Free Autonomous AI Database](https://docs.oracle.com/en-us/iaas/autonomous-database-serverless/doc/autonomous-always-free.html)
+- [ADB の新規作成と地域別の提供状況](https://docs.oracle.com/en/cloud/paas/autonomous-database/serverless/adbsb/autonomous-provision.html)
+- [OCI provider 8.24.0 の ADB パラメータ](https://github.com/oracle/terraform-provider-oci/blob/v8.24.0/website/docs/r/database_autonomous_database.html.markdown)
+- [Oracle Linux 9 Arm image と地域別 OCID](https://docs.oracle.com/en-us/iaas/images/oracle-linux-9x/oracle-linux-9-8-aarch64-2026-09-18-0.htm)
+- [APEX Service の SQL*Net 制限](https://docs.oracle.com/en/cloud/paas/apex/gsadd/restrictions-and-limitations.html)
+- [有料 tenancy の A1 無償枠](https://www.oracle.com/cloud/price-list/)

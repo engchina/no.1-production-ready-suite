@@ -759,9 +759,9 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             "compartment_id      = var.compartment_ocid",
             'user_data"           = local.cloud_init_user_data',
             "display_name = var.instance_display_name",
-            "memory_in_gbs             = var.instance_flex_shape_memory",
-            "ocpus                     = var.instance_flex_shape_ocpus",
-            "boot_volume_size_in_gbs = var.instance_boot_volume_size",
+            "memory_in_gbs             = var.compute_always_free_enabled ? var.compute_always_free_memory_in_gbs : var.instance_flex_shape_memory",
+            "ocpus                     = var.compute_always_free_enabled ? var.compute_always_free_ocpus : var.instance_flex_shape_ocpus",
+            "boot_volume_size_in_gbs = var.compute_always_free_enabled ? var.compute_always_free_boot_volume_size_in_gbs : var.instance_boot_volume_size",
             'trimspace(var.app_admin_login_user_password) != ""',
             # 公開の port に SSH・よく使われる service・Compute の中で使う port を使わせない（#1316）。
             "condition     = length(local.public_ports_reserved) == 0",
@@ -777,7 +777,7 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
     if "oci_core_network_security_group" in compute or "nsg_ids" in compute:
         raise AssertionError("The stack must not create NSGs; allow 443 / 80 in the subnet security list")
     instance_resources = re.findall(r'(?m)^resource "oci_core_instance" "([a-z_]+)"', compute)
-    if instance_resources != ["suite"] or "for_each" in compute or re.search(r"(?m)^\s*count\s*=", compute):
+    if instance_resources != ["suite"] or re.search(r"(?m)^  for_each\s*=", compute) or re.search(r"(?m)^\s*count\s*=", compute):
         raise AssertionError("every selected product must run on the single Compute instance oci_core_instance.suite")
 
     normalized = re.sub(r"[ \t]+", " ", locals_source)
