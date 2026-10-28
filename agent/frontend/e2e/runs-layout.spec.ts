@@ -846,3 +846,23 @@ for (const path of ["/runs", "/runs?id=run-layout", "/runs?id=new"]) {
     await expect(page.getByRole("link", { name: "本文へスキップ" })).toBeFocused();
   });
 }
+
+
+test("/runs の主一覧は表示領域に合わせて伸び、小画面は標準密度を保つ", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  const mobile = testInfo.project.name === "mobile-375";
+  if (!mobile) await page.setViewportSize({ width: 1440, height: 1300 });
+  for (let index = 0; index < 35; index += 1) seedRun(mockApi, `height-run-${index}`);
+  await page.goto("/runs");
+  const scroll = page.getByTestId("run-scroll-region");
+  await expect(scroll.locator("tbody tr")).toHaveCount(25);
+  const delta = () => scroll.evaluate((node) => {
+    const count = window.matchMedia("(min-width: 768px)").matches ? 8 : 5;
+    return node.getBoundingClientRect().bottom - node.querySelectorAll("tbody tr")[count - 1].getBoundingClientRect().bottom;
+  });
+  if (mobile) await expect.poll(async () => Math.abs(await delta())).toBeLessThanOrEqual(3);
+  else await expect.poll(delta).toBeGreaterThan(100);
+  const metrics = await scroll.evaluate((node) => ({ height: node.clientHeight, content: node.scrollHeight }));
+  expect(metrics.content).toBeGreaterThan(metrics.height);
+  await expect(scroll).toHaveAttribute("role", "region");
+  await page.screenshot({ path: testInfo.outputPath("run-height.png"), fullPage: true });
+});

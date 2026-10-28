@@ -7,11 +7,16 @@ import {
   Button,
   ButtonLink,
   SideSheet,
+  ListToolbar,
+  Pagination,
+  usePagination,
   toast,
   useConfirm,
   apiErrorMessage,
 } from "@production-ready/ui";
 
+import { agentPaginationLabels, usePersistedServerPaging } from "@/components/ListViews";
+import { listTotal } from "@/components/ListFilters";
 import { SkillUpdateDiffDisclosure } from "@/components/agents/SkillUpdateDiff";
 import { agentApi, type AgentProfile, type AgentSkill, type SkillUpdatePublishResult } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -93,6 +98,11 @@ export function SkillUpdatesPanel({
   const [open, setOpen] = useState(false);
   // 選んだ業務 Agent（既定はすべて）。一覧から消えた業務 Agent は数えない。
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
+  const paging = usePersistedServerPaging("skillUpdates");
+  const { page, setPage, totalPages, pageItems, range } = usePagination(updated, paging.pageSize, {
+    page: paging.page,
+    onPageChange: paging.setPage,
+  });
   const selected = updated.filter((agent) => !excluded.has(agent.id));
   const evaluationSets = useQuery({
     queryKey: ["evaluation-sets", "all"],
@@ -174,8 +184,9 @@ export function SkillUpdatesPanel({
               </Button>
             </div>
           ) : null}
+          <ListToolbar count={listTotal(updated.length)} testId="agent-skill-updates-toolbar" />
           <ul className="space-y-3">
-            {updated.map((agent) => {
+            {pageItems.map((agent) => {
               const sets = (evaluationSets.data?.sets ?? []).filter((set) => set.agent_id === agent.id).length;
               const helperId = `agent-skill-update-${agent.id}-helper`;
               return (
@@ -229,6 +240,16 @@ export function SkillUpdatesPanel({
               );
             })}
           </ul>
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            range={range}
+            onPageChange={setPage}
+            pageSize={paging.pageSize}
+            onPageSizeChange={paging.setPageSize}
+            labels={agentPaginationLabels()}
+            testId="agent-skill-updates-pagination"
+          />
         </div>
       </SideSheet>
     </>

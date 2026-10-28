@@ -832,6 +832,7 @@ function RunHistoryList({
         {/* 5 秒ごとの再取得で行が変わっても、ページは作業状態に残して戻さない（戻すのは絞り込みを変えたときだけ）。 */}
         <div className="grid min-w-0 gap-2">
           <RunHistoryTable
+            growToViewport
             rows={page.items}
             toItem={toItem}
             onOpen={(run) => onSelect(run.id)}
