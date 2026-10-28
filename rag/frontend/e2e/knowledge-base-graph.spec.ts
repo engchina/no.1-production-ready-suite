@@ -116,13 +116,22 @@ test("関係情報が無い KB は空状態を出す", async ({ page }) => {
 });
 
 // 開閉の見出しは共有の Disclosure の高さ（lg 40px・タッチ端末 44px）。以前は手書きの min-h-11 で 38.5px（#1135）。
-test("文書構造グラフの開閉の見出しは Disclosure の高さで、開閉の状態を持つ", { tag: "@responsive" }, async ({ page }) => {
+test("文書構造グラフは抽出項目と検索テストの間にあり、標準の高さとキーボードで開閉する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockKb(page, { status: "empty", nodes: [], edges: [], truncated: false });
   await page.goto("/knowledge-bases/kb-1");
 
   const expected = await expectedControlHeight(page, "lg");
   const summary = disclosureSummary(page, "文書構造グラフを表示");
   await expect(summary).toBeVisible();
+  const fields = page.getByRole("heading", { name: "抽出する項目", exact: true });
+  const search = page.getByRole("heading", { name: "このナレッジで検索テスト", exact: true });
+  await expect(fields).toBeVisible();
+  await expect(search).toBeVisible();
+  const [fieldsBox, graphBox, searchBox] = await Promise.all([
+    fields.boundingBox(), summary.boundingBox(), search.boundingBox(),
+  ]);
+  expect(fieldsBox!.y + fieldsBox!.height).toBeLessThan(graphBox!.y);
+  expect(graphBox!.y + graphBox!.height).toBeLessThan(searchBox!.y);
   expect(Math.round((await summary.boundingBox())?.height ?? 0)).toBe(expected);
 
   // キーボード（Enter）で開閉でき、開くと見出しの文言が「隠す」になる。
@@ -135,6 +144,8 @@ test("文書構造グラフの開閉の見出しは Disclosure の高さで、�
   await page.keyboard.press("Enter");
   await expect(page.locator("#knowledge-base-graph")).toHaveCount(0);
   await expect(disclosureSummary(page, "文書構造グラフを表示")).toBeVisible();
+  await summary.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("knowledge-base-section-order.png"), fullPage: false });
 });
 
 // DB が止まっていて関係情報を取得できない（backend は空 + warning_messages で縮退する）ときは、
