@@ -21,7 +21,7 @@ from rag_engine.knowledge.prompt_files import (
     PROMPT_FILES,
     VLM_ANSWER_PROMPT_KEY,
 )
-from rag_engine.parsing.vision_prompt_rules import refine_image_retrieval_prompt
+from rag_engine.parsing.vision_prompt_rules import split_image_retrieval_prompt
 
 INGESTION_PROMPT_REFS = {
     "external_ocr": "app.clients.external_parser:DOTS_OCR_PROMPT",
@@ -106,6 +106,7 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "ingestion",
         (
             ("system", "rag_engine.adapters.oci:VISION_SYSTEM_PROMPT"),
+            ("rules", "rag_engine.parsing.vision_prompt_rules:VISION_EXTRACTION_INSTRUCTION"),
             ("picture", "rag_engine.parsing.vision_prompt_rules:PICTURE_EXTRACTION_INSTRUCTION"),
             ("table", "rag_engine.parsing.vision_prompt_rules:TABLE_EXTRACTION_INSTRUCTION"),
         ),
@@ -278,7 +279,7 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
 STAGE_PROMPT_REFS = {
     f"{stage.id}.{part_id}": ref
     for stage in PROMPT_STAGES
-    if stage.phase not in {"ingestion", "indexing"}
+    if stage.phase not in {"ingestion", "indexing"} or stage.id == "picture_description"
     for part_id, ref in stage.parts
 }
 EDITABLE_PROMPT_KEYS = (*EDITABLE_PROMPT_KEYS, *STAGE_PROMPT_REFS)
@@ -298,6 +299,8 @@ def stage_prompt_permission(key: str) -> str | None:
     for stage in PROMPT_STAGES:
         if key not in {f"{stage.id}.{part}" for part, _ref in stage.parts}:
             continue
+        if stage.id == "picture_description":
+            return "menu.settings_parser_adapters"
         if stage.phase == "evaluation":
             return "menu.settings_evaluation"
         if stage.id != "support_guide_conditions" and stage.phase in {
@@ -316,12 +319,30 @@ def prompt_constant(ref: str) -> str:
     return str(getattr(import_module(module_name), name))
 
 
+def separate_vision_prompt_rows(
+    saved: dict[str, dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    """旧一体型の保存内容を、読取時だけ独立した編集欄へ投影する。"""
+    result = {key: dict(row) for key, row in saved.items()}
+    row = result.get(IMAGE_RETRIEVAL_PROMPT_KEY)
+    if row is not None:
+        body, legacy = split_image_retrieval_prompt(str(row["content"]))
+        row["content"] = body
+        if legacy is not None and "picture_description.rules" not in result:
+            result["picture_description.rules"] = {**row, "content": legacy}
+    return result
+
+
 def readonly_prompt_stages(
     *, image_prompt: str | None = None, overrides: Mapping[str, str] | None = None
 ) -> list[dict[str, object]]:
     """処理順の固定指示と、図の読み取りで実際に使うテンプレートを示す。"""
     stages: list[dict[str, object]] = []
-    saved = overrides or {}
+    saved = dict(overrides or {})
+    if image_prompt is not None:
+        _body, legacy = split_image_retrieval_prompt(image_prompt)
+        if legacy is not None:
+            saved.setdefault("picture_description.rules", legacy)
     by_ref = {ref: saved[key] for key, ref in INGESTION_PROMPT_REFS.items() if key in saved}
     for stage in PROMPT_STAGES:
         parts = [
@@ -342,12 +363,17 @@ def readonly_prompt_stages(
                 1,
                 {
                     "id": "template",
-                    "content": refine_image_retrieval_prompt(
+                    "content": split_image_retrieval_prompt(
                         image_prompt
                         if image_prompt is not None
                         else default_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
-                    ).strip(),
+                    )[0],
                 },
+            )
+            from rag_engine.adapters.oci import _picture_output_contract
+
+            parts.append(
+                {"id": "contract", "content": _picture_output_contract(), "prompt_key": None}
             )
         stages.append({"id": stage.id, "phase": stage.phase, "prompts": parts})
     return stages

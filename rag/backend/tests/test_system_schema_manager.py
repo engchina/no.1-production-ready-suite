@@ -63,6 +63,10 @@ class _FakeCursor:
         self.rowcount = 0
         self.database.executed.append(upper)
 
+        if "EXECUTE IMMEDIATE 'DROP TABLE RAG_QUERY_HISTORY PURGE'" in upper:
+            self.database.objects.pop(("RAG_QUERY_HISTORY", "TABLE"), None)
+            self.database.objects.pop(("RAG_QUERY_HISTORY_PROFILE_IDX", "INDEX"), None)
+            return
         if upper.startswith("DECLARE"):
             # 列を無ければ足す migration（`ALTER TABLE <表> ADD (<列> ...)`）を fake で適用する。
             for table, columns in self.database.removed_columns.items():
@@ -544,7 +548,6 @@ def test_update_restores_columns_removed_by_retracted_migration() -> None:
     manager.initialize()
     database.removed_columns = {
         "RAG_DOCUMENTS": {"CLASSIFICATION"},
-        "RAG_QUERY_HISTORY": {"CLASSIFICATION_FILTER"},
     }
     database.migrations.pop(_RESTORE_CLASSIFICATION_MIGRATION)
 
@@ -558,13 +561,13 @@ def test_update_restores_columns_removed_by_retracted_migration() -> None:
 
     assert result["status"] == "ready"
     assert result["missing_columns"] == []
-    assert database.removed_columns == {"RAG_DOCUMENTS": set(), "RAG_QUERY_HISTORY": set()}
+    assert database.removed_columns == {"RAG_DOCUMENTS": set()}
 
 
 def test_managed_columns_cover_every_managed_table() -> None:
     assert set(MANAGED_COLUMNS) == set(MANAGED_TABLES)
     assert "CLASSIFICATION" in MANAGED_COLUMNS["RAG_DOCUMENTS"]
-    assert "CLASSIFICATION_FILTER" in MANAGED_COLUMNS["RAG_QUERY_HISTORY"]
+    assert "RAG_QUERY_HISTORY" not in MANAGED_COLUMNS
     # 表制約の行は列に数えない。
     assert not any(
         column in {"CONSTRAINT", "PRIMARY", "UNIQUE", "FOREIGN", "CHECK"}
@@ -686,6 +689,7 @@ def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
         _RETIRE_GRAPH_CLAIMS_MIGRATION,
         "20261003_001_search_answer_profiles",
         "20261016_001_retire_evaluation_compare",
+        "20261029_001_retire_query_history",
     } == marked
     assert all(migration.destructive_note for migration in MIGRATIONS if migration.destructive)
     # 印は checksum（SQL だけ）に影響しない（適用済みの DB を outdated にしない）。
@@ -1252,3 +1256,25 @@ def test_language_release_fresh_schema_and_incremental_upgrade_share_complete_co
     assert upgraded["status"] == "ready"
     assert upgraded["missing_columns"] == []
     assert not any(statement.startswith("DROP") for statement in database.executed[start:])
+
+
+def test_retired_query_history_requires_explicit_migration_and_keeps_chat_records() -> None:
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    name = "20261029_001_retire_query_history"
+    database.migrations.pop(name)
+    database.objects[("RAG_QUERY_HISTORY", "TABLE")] = datetime.now(UTC)
+    database.objects[("RAG_QUERY_HISTORY_PROFILE_IDX", "INDEX")] = datetime.now(UTC)
+    before = manager.status()
+    assert [item["name"] for item in before["pending_destructive_migrations"]] == [name]
+    with pytest.raises(SystemSchemaError) as error:
+        manager.initialize()
+    assert error.value.code == DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED
+    assert ("RAG_QUERY_HISTORY", "TABLE") in database.objects
+    manager.initialize(allow_destructive=True)
+    assert ("RAG_QUERY_HISTORY", "TABLE") not in database.objects
+    assert ("RAG_QUERY_HISTORY_PROFILE_IDX", "INDEX") not in database.objects
+    for table in ("RAG_CONVERSATIONS", "RAG_MESSAGES", "RAG_ANSWER_RECORDS", "RAG_RUN_HISTORY"):
+        assert (table, "TABLE") in database.objects
+    assert manager.initialize()["status"] == "ready"

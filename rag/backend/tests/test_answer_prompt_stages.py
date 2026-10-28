@@ -331,6 +331,7 @@ def test_all_default_stage_instructions_follow_ordered_steps() -> None:
     continuations = {
         ("picture_description", "picture"): 6,
         ("picture_description", "table"): 6,
+        ("picture_description", "contract"): 7,
         ("generation", "assumptionSystem"): 6,
     }
     for stage in readonly_prompt_stages():
@@ -339,7 +340,7 @@ def test_all_default_stage_instructions_follow_ordered_steps() -> None:
         for part in parts:
             identity = (str(stage["id"]), str(part["id"]))
             content = str(part["content"])
-            if identity == ("audit", "compactRule"):
+            if identity in {("audit", "compactRule"), ("picture_description", "rules")}:
                 # 判定の理由の書き方は監査の最後の Step 内の追加規則。
                 assert content.lstrip().startswith("### ")
                 assert not re.search(r"^## ", content, re.M)

@@ -114,7 +114,6 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "search_answer_profiles",
         "answer_records",
         "answer_prompts",
-        "query_history",
         "run_history",
         "document_categories",
         "document_cleanups",
@@ -504,7 +503,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 123
+    assert len(statements) == 124
     assert all(
         statement.startswith(
             ("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT", "CREATE")
@@ -607,6 +606,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261027_001_raptor_prompt_consolidation",
         "20261028_001_language_pack_releases",
         "20261028_002_language_pack_artifacts",
+        "20261029_001_retire_query_history",
     ]
 
 
@@ -793,3 +793,13 @@ def test_fresh_base_contains_release_tables_and_all_artifact_provenance_columns(
     upgrade = migrations["20261028_002_language_pack_artifacts"].sql
     assert "user_tab_columns" in upgrade and "IF v_count = 0" in upgrade
     assert "DROP" not in upgrade and "DELETE" not in upgrade
+
+
+def test_checked_in_migration_artifacts_match_the_generator() -> None:
+    artifacts = Path(__file__).resolve().parents[2] / "artifacts"
+    assert (artifacts / "oracle-schema-migration.sql").read_text() == (
+        oracle_schema.oracle_schema_migration_sql()
+    )
+    assert json.loads((artifacts / "oracle-schema-migration.manifest.json").read_text()) == (
+        oracle_schema.oracle_schema_migration_manifest()
+    )

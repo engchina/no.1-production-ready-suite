@@ -105,14 +105,6 @@ async function mockApi(page: Page) {
         auto_field_filter_enabled: false,
         config_source: "runtime",
       },
-      "/api/settings/answer-records": { retention_days: 90, config_source: "runtime" },
-      "/api/settings/query-history": {
-        enabled: false,
-        retention_days: 90,
-        min_count: 3,
-        suggestion_limit: 5,
-        blocklist: [],
-      },
     };
     if (url.pathname in retrievalCards) {
       await route.fulfill({

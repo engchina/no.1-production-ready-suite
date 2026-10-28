@@ -706,23 +706,6 @@ class AnswerRecordSettingsData(BaseModel):
     config_source: Literal["runtime"] = "runtime"
 
 
-class QueryHistorySettingsData(BaseModel):
-    """質問履歴の設定(rag_poc の QUERY_HISTORY_*)。"""
-
-    enabled: bool
-    retention_days: int = Field(ge=0, le=3650)
-    min_count: int = Field(ge=1, le=1000)
-    suggestion_limit: int = Field(ge=1, le=20)
-    blocklist: list[str] = Field(default_factory=list, max_length=200)
-
-
-class QueryHistorySettingsUpdate(QueryHistorySettingsData):
-    @field_validator("blocklist")
-    @classmethod
-    def _clean_blocklist(cls, value: list[str]) -> list[str]:
-        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
-
-
 class AnswerPromptView(BaseModel):
     """編集できるプロンプト(回答生成 vlm_answer / 図・画像の読み取り image_retrieval)。"""
 

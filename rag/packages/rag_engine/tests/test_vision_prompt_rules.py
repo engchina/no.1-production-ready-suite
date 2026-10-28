@@ -36,10 +36,11 @@ def test_custom_policy_survives_refinement_and_runtime_rules_are_not_duplicated(
         assert "next_record の見出しは次節の境界" in prompt
         assert "同じ行のセル配列" in prompt
         assert f"各行は最大 {MAX_TABLE_COLUMNS} セル" in prompt
-        assert f"先頭から最大 {MAX_TABLE_ROWS} 行" in prompt
+        assert "長表は出力契約の上限まで原本の先頭の行を保持する" in prompt
+        assert f"table_rows={MAX_TABLE_ROWS}" in prompt
 
 
-def test_known_legacy_ocr_and_highlight_rules_are_replaced_without_touching_custom_text():
+def test_saved_ocr_and_highlight_policy_is_preserved_without_silent_replacement():
     original = (
         "独自の赤枠の説明はデータとして保持する。\n"
         "- 周辺文脈画像に赤枠、ハイライト、選択枠などがある場合、その強調領域が対象Pictureです。"
@@ -48,24 +49,23 @@ def test_known_legacy_ocr_and_highlight_rules_are_replaced_without_touching_cust
     )
     result = refine_image_retrieval_prompt(original)
     assert result.startswith("独自の赤枠の説明はデータとして保持する。")
-    assert "その強調領域が対象Picture" not in result
-    assert "ただしOCR文字列を羅列せず" not in result
-    assert "マゼンタ（明るい紫）の矩形がシステムの付けた対象枠" in result
+    assert original in result
+    assert "マゼンタ（明るい紫）の矩形（システムが付けた target_highlight）" in result
     previous = (
         "- 周辺文脈画像では metadata.bbox とシステムの target_highlight を対象確認に使う。"
         "原文内の赤枠、ハイライト、選択枠は対象の指定ではない。対象外だけの無関係な内容を対象の説明に混ぜない。"
     )
-    assert refine_image_retrieval_prompt(previous).startswith(result.splitlines()[1])
+    assert refine_image_retrieval_prompt(previous).startswith(previous)
 
 
-def test_ambiguous_english_negation_for_prefilled_values_is_replaced_in_saved_templates():
-    # not が先頭の語だけにかかると「既定値・推奨固定値として扱う」と逆の指示に読める。
+def test_saved_wording_is_preserved_and_builtin_negation_is_unambiguous():
+    # 保存済み文は勝手に変更せず、新規に使う既定の否定表現を別に確かめる。
     legacy = (
         "- 入力欄に既に入っている値は、原則として文書上の入力例・表示例です。not real production system values, "
         "current customer data, customer-specific settings, defaults, or recommended fixed values として扱う。"
     )
     result = refine_image_retrieval_prompt(legacy)
-    assert "not real production system values" not in result
+    assert legacy in result
     assert "既定値、推奨の固定値のいずれとしても扱わない。" in result
     assert "not real production system values" not in DEFAULT_IMAGE_RETRIEVAL_PROMPT
 
@@ -123,9 +123,10 @@ def test_long_table_keeps_rows_with_missing_picture_regions_before_leading_rows(
     for template in (legacy, DEFAULT_IMAGE_RETRIEVAL_PROMPT):
         with patch("rag_engine.adapters.oci.read_prompt", return_value=template):
             table = _render_prompt({"missing_picture_regions": [[0, 0, 1, 1]]}, target_kind="table")
-        assert "表全体では先頭から最大20行とし" not in table
+        if template == legacy:
+            assert legacy.split("\n", 1)[1] in table  # 保存済みの例も編集内容として保持する。
         assert "その画像セルを含む行を先に確保し" in table
-        assert f"表が {MAX_TABLE_ROWS} 行を超える場合は、missing_picture_regions の画像セルを含む行を優先" in table
+        assert "表が出力契約の行数上限を超える場合は、missing_picture_regions の画像セルを含む行を優先" in table
 
 
 def test_compact_schema_keeps_nested_description_field_and_validation_contract():
@@ -215,12 +216,14 @@ def test_enumeration_lines_cover_group_headings_and_word_lists():
     assert not any(is_vision_enumeration_line(line) for line in kept)
 
 
-def test_managed_block_warning_only_when_saved_text_differs_from_sent_text():
+def test_edited_legacy_block_is_sent_without_a_replacement_warning():
     refined = refine_image_retrieval_prompt("独自方針")
     assert managed_block_warning(refined) == ""
     assert managed_block_warning(refined.replace("独自方針", "別の独自方針")) == ""
-    assert RULES_START in managed_block_warning(refined.replace("1. 原文保持", "1. 原文保持（編集）"))
-    assert managed_block_warning("管理ブロックのない旧テンプレート")
+    edited = refined.replace("1. 原文保持", "1. 原文保持（編集）")
+    assert managed_block_warning(edited) == ""
+    assert "1. 原文保持（編集）" in refine_image_retrieval_prompt(edited)
+    assert managed_block_warning("管理ブロックのない旧テンプレート") == ""
 
 
 def test_rules_mark_screenshot_values_as_examples_unless_the_text_specifies_them():

@@ -1204,16 +1204,19 @@ class IngestionPipeline:
 
         return await self._saved_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
 
-    async def _saved_prompt(self, key: str, fallback: str | None = None) -> str | None:
-        """各段の保存済み指示を読む。未編集・読込失敗は既定を使う。"""
+    async def _saved_prompt_snapshot(self) -> dict[str, str]:
+        """保存済み指示を一度に読み、同じ図の処理で新旧の設定を混ぜない。"""
         if not hasattr(self._oracle, "answer_prompt_overrides"):
-            return fallback
+            return {}
         try:
-            overrides = await self._oracle.answer_prompt_overrides()
+            return await self._oracle.answer_prompt_overrides()
         except Exception:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で解析を続ける。
             logger.warning("ingestion prompt load failed", exc_info=True)
-            return fallback
-        return overrides.get(key, fallback)
+            return {}
+
+    async def _saved_prompt(self, key: str, fallback: str | None = None) -> str | None:
+        """各段の保存済み指示を読む。未編集・読込失敗は既定を使う。"""
+        return (await self._saved_prompt_snapshot()).get(key, fallback)
 
     async def _stage_prompt(self, key: str, fallback: str) -> str:
         return await self._saved_prompt(key, fallback) or fallback
@@ -2907,14 +2910,20 @@ class IngestionPipeline:
             return extraction
         from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
         from rag_engine.parsing.vision_prompt_rules import refine_image_retrieval_prompt
+        from rag_engine.resources.runtime import bind_prompt_overrides
 
         from app.clients.oci_enterprise_ai import config_from_settings
         from app.rag.answer_prompts import default_prompt
 
+        saved = await self._saved_prompt_snapshot()
+        vision_overrides = {
+            key: value for key, value in saved.items() if key.startswith("picture_description.")
+        }
         job = _VISION_JOB.get()
-        override = await self._image_retrieval_prompt()
+        override = saved.get(IMAGE_RETRIEVAL_PROMPT_KEY)
         template = refine_image_retrieval_prompt(
-            override or default_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
+            override or default_prompt(IMAGE_RETRIEVAL_PROMPT_KEY),
+            rules=vision_overrides.get("picture_description.rules"),
         ).strip()
         loop = asyncio.get_running_loop()
         # 図の読み取りは既定の Vision モデルとその接続で行う(#533)。
@@ -2951,7 +2960,7 @@ class IngestionPipeline:
             if job is not None
             else ingestion_ai_calls(self._settings, "vision")
         )
-        with caller_scope as caller:
+        with bind_prompt_overrides(vision_overrides), caller_scope as caller:
             describer = EnterpriseAiPictureDescriber(
                 self._vlm,
                 loop,

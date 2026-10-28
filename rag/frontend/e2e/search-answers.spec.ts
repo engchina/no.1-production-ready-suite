@@ -53,10 +53,6 @@ test.beforeEach(async ({ page }) => {
       await route.fulfill(envelope({ suggestions: [] }));
       return;
     }
-    if (pathname.endsWith("/query-suggestions")) {
-      await route.fulfill(envelope({ suggestions: [] }));
-      return;
-    }
     await route.fulfill(
       envelope({ items: VIEWS, total: VIEWS.length, limit: 50, offset: 0, has_next: false })
     );

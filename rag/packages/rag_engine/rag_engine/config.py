@@ -12,12 +12,6 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from rag_engine.adapters.oracle.connection import AdbSettings
 
-from rag_engine.knowledge.query_history import (
-    QUERY_HISTORY_DEFAULT_MIN_COUNT,
-    QUERY_HISTORY_DEFAULT_MIN_UNIQUE_RUNS,
-    QUERY_HISTORY_DEFAULT_RETENTION_DAYS,
-    QUERY_HISTORY_DEFAULT_SUGGESTION_LIMIT,
-)
 from rag_engine.retrieval.text_search_tokenizer import (
     DEFAULT_TEXT_SEARCH_TOKENIZER_LATIN_STEMMER,
     DEFAULT_TEXT_SEARCH_TOKENIZER_SUDACHI_DICT,
@@ -198,12 +192,6 @@ class Settings:
     port: int
     output_dir: Path
     runtime_knowledge_path: Path | None
-    query_history_enabled: bool
-    query_history_retention_days: int
-    query_history_min_count: int
-    query_history_min_unique_runs: int
-    query_history_suggestion_limit: int
-    query_history_blocklist_path: Path | None
     render_dpi: int
     max_default_pages: int
     enabled_engines: list[str]
@@ -512,7 +500,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         ENTERPRISE_AI_LLM_PROVIDER,
     )
     runtime_knowledge_raw = env.get("RUNTIME_KNOWLEDGE_PATH", "").strip()
-    query_history_blocklist_raw = env.get("QUERY_HISTORY_BLOCKLIST_PATH", "").strip()
     cache_dir_raw = env.get("RAG_ENGINE_ARTICLE_CATALOG_CACHE_DIR", "").strip()
     settings = Settings(
         original_query_weighting_enabled=_env_bool(env, "RETRIEVAL_ORIGINAL_QUERY_WEIGHTING", True),
@@ -526,12 +513,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         port=_env_int(env, "RAG_ENGINE_PORT", 8080),
         output_dir=Path(env.get("RAG_ENGINE_OUTPUT_DIR", ".runs")),
         runtime_knowledge_path=Path(runtime_knowledge_raw).expanduser() if runtime_knowledge_raw else None,
-        query_history_enabled=_env_bool(env, "QUERY_HISTORY_ENABLED", False),
-        query_history_retention_days=max(0, _env_int(env, "QUERY_HISTORY_RETENTION_DAYS", QUERY_HISTORY_DEFAULT_RETENTION_DAYS)),
-        query_history_min_count=max(1, _env_int(env, "QUERY_HISTORY_MIN_COUNT", QUERY_HISTORY_DEFAULT_MIN_COUNT)),
-        query_history_min_unique_runs=max(1, _env_int(env, "QUERY_HISTORY_MIN_UNIQUE_RUNS", QUERY_HISTORY_DEFAULT_MIN_UNIQUE_RUNS)),
-        query_history_suggestion_limit=max(1, _env_int(env, "QUERY_HISTORY_SUGGESTION_LIMIT", QUERY_HISTORY_DEFAULT_SUGGESTION_LIMIT)),
-        query_history_blocklist_path=Path(query_history_blocklist_raw).expanduser() if query_history_blocklist_raw else None,
         render_dpi=_env_int(env, "RAG_ENGINE_RENDER_DPI", 300),
         max_default_pages=_env_int(env, "RAG_ENGINE_MAX_DEFAULT_PAGES", 1),
         enabled_engines=enabled_engines,

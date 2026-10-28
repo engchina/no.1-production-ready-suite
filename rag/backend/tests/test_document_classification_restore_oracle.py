@@ -51,12 +51,6 @@ BEGIN
             || 'ABSENT ON NULL RETURNING JSON) END '
             || 'WHERE effective_period IS NOT NULL';
     END IF;
-    SELECT COUNT(*) INTO v_count
-    FROM user_tab_columns
-    WHERE table_name = 'RAG_QUERY_HISTORY' AND column_name = 'CLASSIFICATION_FILTER';
-    IF v_count > 0 THEN
-        EXECUTE IMMEDIATE 'ALTER TABLE rag_query_history DROP COLUMN classification_filter';
-    END IF;
 END;"""
 
 
@@ -155,7 +149,6 @@ async def test_restore_classification_after_retracted_migration_on_real_oracle(
             )
             connection.commit()
             assert not _column_exists(cursor, "RAG_DOCUMENTS", "CLASSIFICATION")
-            assert not _column_exists(cursor, "RAG_QUERY_HISTORY", "CLASSIFICATION_FILTER")
 
             # Issue の症状: 分類の一覧の API が ORA-00904 で 500 になる。
             assert (await _list_categories()).status_code == 500
@@ -168,10 +161,6 @@ async def test_restore_classification_after_retracted_migration_on_real_oracle(
                 "table_name": "RAG_DOCUMENTS",
                 "column_name": "CLASSIFICATION",
             } in before["missing_columns"]
-            assert {
-                "table_name": "RAG_QUERY_HISTORY",
-                "column_name": "CLASSIFICATION_FILTER",
-            } in before["missing_columns"]
             # データを消す migration ではないので、承認は要らない。
             assert _RESTORE not in {
                 item["name"] for item in before["pending_destructive_migrations"]
@@ -183,7 +172,6 @@ async def test_restore_classification_after_retracted_migration_on_real_oracle(
             assert after["missing_columns"] == []
             assert _RESTORE in after["applied_versions"]
             assert _column_exists(cursor, "RAG_DOCUMENTS", "CLASSIFICATION")
-            assert _column_exists(cursor, "RAG_QUERY_HISTORY", "CLASSIFICATION_FILTER")
 
             # 利用者が保存し直した分類は、もう一度当てても上書きしない（冪等）。
             await oracle.save_document_classification(

@@ -1689,3 +1689,65 @@ test("章節の要約は実効の対象数上限を示し不要な比較文を�
   await expectNoPageOverflow(page);
   await panel.screenshot({path: test.info().outputPath("raptor-setting.png")});
  });
+
+
+test("画像の自然言語指示は保存・再読込でき、出力契約は読み取り専用", { tag: "@responsive" }, async ({ page }) => {
+  await mockParserAdaptersWithPostParse(page, { vision_enabled: false, field_extraction_enabled: false, navigation_summary_enabled: false });
+  await mockExtractionFields(page);
+  const parts = [["system", "システムプロンプト"], ["picture", "図・画像を読むときの対象の指示"], ["table", "表を読むときの対象の指示"], ["rules", "共通の読み取り指示"]] as const;
+  const saved = new Map<string, string>();
+  const requests: string[] = [];
+  const builtin = "## Step 1: 合成の既定指示";
+  await page.route("**/api/settings/answer-prompts**", async (route) => {
+    const method = route.request().method();
+    const key = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1)!);
+    if (method === "PUT") saved.set(key, route.request().postDataJSON().content);
+    if (method === "DELETE") saved.delete(key);
+    if (method !== "GET") requests.push(`${method}:${key}`);
+    await route.fulfill({ json: { data: {
+      prompts: ["image_retrieval", ...parts.map(([id]) => `picture_description.${id}`)].map(key => ({ key, content: saved.get(key) ?? builtin, default_content: builtin, customized: saved.has(key), required_placeholders: [], updated_at: null })),
+      stages: [{ id: "picture_description", phase: "ingestion", prompts: [...parts.map(([id]) => ({ id, content: builtin, prompt_key: `picture_description.${id}` })), { id: "contract", content: "## Step 7: 固定の出力契約", prompt_key: null }] }],
+    }, error_messages: [], warning_messages: [] } });
+  });
+  async function openInstructions() {
+    await page.goto("/settings/parser-adapters");
+    const vision = page.locator("#post-parse-vision");
+    await vision.locator("summary", { hasText: "図・画像の読み取りプロンプト" }).click();
+    await vision.locator("summary", { hasText: "図・画像の指示と出力形式" }).click();
+    return vision.getByTestId("vision-prompt-parts");
+  }
+  let instructions = await openInstructions();
+  for (const [part, label] of parts) {
+    const key = `picture_description.${part}`;
+    let field = instructions.getByRole("textbox", { name: label, exact: true });
+    let actions = field.locator("xpath=ancestor::div[.//*[@role='group']][1]").getByRole("group");
+    await field.fill("## Step 1: 保存する合成の指示");
+    const custom = await field.inputValue();
+    await actions.getByRole("button", { name: "プロンプトを保存", exact: true }).click();
+    await expect.poll(() => saved.get(key)).toBe(custom);
+    instructions = await openInstructions();
+    field = instructions.getByRole("textbox", { name: label, exact: true });
+    actions = field.locator("xpath=ancestor::div[.//*[@role='group']][1]").getByRole("group");
+    await expect(field).toHaveValue(custom);
+    await field.fill("破棄する内容");
+    await actions.getByRole("button", { name: "変更を破棄", exact: true }).click();
+    await expect(field).toHaveValue(custom);
+    const count = requests.length;
+    await actions.getByRole("button", { name: "既定に戻す", exact: true }).click();
+    await expect(field).toHaveValue(builtin);
+    expect(requests).toHaveLength(count);
+    await actions.getByRole("button", { name: "変更を破棄", exact: true }).click();
+    await expect(field).toHaveValue(custom);
+    await actions.getByRole("button", { name: "既定に戻す", exact: true }).click();
+    await actions.getByRole("button", { name: "プロンプトを保存", exact: true }).click();
+    await expect.poll(() => saved.has(key)).toBe(false);
+    await expect(field).toHaveValue(builtin);
+  }
+  await expect(instructions.getByRole("textbox", { name: "出力形式と上限（読み取り専用）", exact: true })).toHaveAttribute("readonly", "");
+  await expect(instructions.getByText("既定値", { exact: true })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await instructions.locator("summary").first().scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath("vision-editable-instructions.png") });
+  await instructions.getByRole("textbox", { name: "出力形式と上限（読み取り専用）", exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath("vision-contract-readonly.png") });
+});

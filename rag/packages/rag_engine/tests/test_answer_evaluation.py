@@ -161,7 +161,7 @@ def test_no_standard_answer_skips_network_and_keeps_external_status():
 
 def test_error_does_not_prevent_answer_persistence_or_leak_details():
     with TemporaryDirectory() as tmp:
-        settings = replace(get_settings(), output_dir=Path(tmp), query_history_enabled=False)
+        settings = replace(get_settings(), output_dir=Path(tmp))
         result = AnswerQuestionResult(
             answer="回答",
             answer_text="回答",
@@ -202,7 +202,7 @@ def test_evidence_body_is_not_truncated_for_evaluation():
 
 def test_successful_evaluation_is_saved_and_keeps_generation_external_state():
     with TemporaryDirectory() as tmp:
-        settings = replace(get_settings(), output_dir=Path(tmp), query_history_enabled=False)
+        settings = replace(get_settings(), output_dir=Path(tmp))
         result = AnswerQuestionResult(
             answer="回答",
             answer_text="回答",
@@ -684,7 +684,7 @@ def test_oversized_fixed_input_skips_network_and_explains_scope_reduction():
 @pytest.mark.parametrize("status", ["no_standard_answer", "error", "input_too_large"])
 def test_unfinished_evaluation_preserves_original_review_state(status):
     with TemporaryDirectory() as tmp:
-        settings = replace(get_settings(), output_dir=Path(tmp), query_history_enabled=False)
+        settings = replace(get_settings(), output_dir=Path(tmp))
         generated = AnswerQuestionResult(
             answer="回答",
             original_question="質問",

@@ -421,6 +421,7 @@ jobs:
               - "platform/packages/system_settings_backend/src/pr_system_settings/auth/migrations.py"
               - "platform/packages/system_settings_backend/src/pr_system_settings/auth/store.py"
             rag_oracle:
+              - "rag/artifacts/oracle-schema-migration.*"
               - "rag/packages/rag_engine/rag_engine/retrieval/text_search_tokenizer.py"
               - "rag/backend/app/rag/system_schema*.py"
               - "rag/backend/app/rag/oracle_schema.py"
@@ -433,6 +434,7 @@ jobs:
               - "rag/backend/tests/_oracle_test_db.py"
               - "rag/backend/tests/_ai_stubs.py"
               - "rag/backend/tests/test_*oracle*.py"
+              - "rag/backend/tests/test_query_history_retirement.py"
               - "rag/backend/tests/test_document_categories.py"
               - "rag/backend/app/clients/support_guide_store.py"
               - "rag/backend/app/clients/language_pack_release_store.py"

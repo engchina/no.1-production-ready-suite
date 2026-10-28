@@ -1449,7 +1449,7 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertEqual([name for name, _ in model.prompts], ["GroundedDraft", "GroundedAudit", "GroundedDraft", "GroundedAudit"])
         first_audit = json.loads(model.prompts[1][1])
         self.assertEqual(first_audit["items"], [])  # 監査対象の item は無いが、要求と未使用根拠は渡す
-        self.assertEqual(first_audit["unused_evidence"][0]["evidence_id"], "E1")
+        self.assertEqual(first_audit["unused_evidence"][0]["evidence_id"], eid)
         self.assertIn('"unused_evidence_ids": ["E1"]', model.prompts[2][1])  # 見落とした根拠を表示 ID で是正へ渡す
         rounds = result.generation_trace["rounds"]
         self.assertEqual((rounds[0]["audit_calls"], rounds[0]["audited_items"]), (1, 0))
@@ -1476,9 +1476,9 @@ class GroundedAnswerTest(unittest.TestCase):
 
         spans = [span("E1", "帳票の一覧です。"), span("E2", LIST_TEXT), span("E3", "備考欄です。")]
         unused = grounded._unused_evidence(QUESTION, spans, {"e3"})
-        self.assertEqual([u["evidence_id"] for u in unused], ["E2", "E1"])
+        self.assertEqual([u["evidence_id"] for u in unused], ["e2", "e1"])
         many = [span(f"E{i}", "備考欄です。") for i in range(1, 60)] + [span("E99", LIST_TEXT)]
-        self.assertEqual(grounded._unused_evidence(QUESTION, many, set())[0]["evidence_id"], "E99")
+        self.assertEqual(grounded._unused_evidence(QUESTION, many, set())[0]["evidence_id"], "e99")
         self.assertEqual(len(grounded._unused_evidence(QUESTION, many, set())), grounded.AUDIT_UNUSED_EVIDENCE_LIMIT)
         # 関連度順だけだと質問の語を多く含む別機能の説明が上限を埋める。機能ごとに 1 件ずつ回し、全機能を先に一巡させる。
         noisy = [
@@ -1486,7 +1486,7 @@ class GroundedAnswerTest(unittest.TestCase):
         ]
         quiet = {**span("E99", "ユーザ名を登録します。"), "function": ("対象機能",)}
         chosen = grounded._unused_evidence(QUESTION, [*noisy, quiet], set())
-        self.assertEqual(chosen[1]["evidence_id"], "E99")
+        self.assertEqual(chosen[1]["evidence_id"], "e99")
         self.assertEqual(len(chosen), grounded.AUDIT_UNUSED_EVIDENCE_LIMIT)
 
     def test_off_target_audit_of_a_gap_only_round_does_not_add_the_off_goal_gap(self):

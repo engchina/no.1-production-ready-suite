@@ -932,7 +932,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     ]);
     await page.route("**/api/search-answer-profiles**", async (route) => {
       const pathname = new URL(route.request().url()).pathname;
-      if (pathname.endsWith("/query-suggestions") || pathname.endsWith("/approved-faq/suggest")) {
+      if (pathname.endsWith("/approved-faq/suggest")) {
         await route.fulfill({ json: apiEnvelope({ suggestions: [] }) });
         return;
       }
@@ -1010,7 +1010,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await page.route("**/api/search-answer-profiles**", async (route) => {
       const pathname = new URL(route.request().url()).pathname;
       if (pathname.includes("deleted-profile")) profileRequests.push(pathname);
-      if (pathname.endsWith("/query-suggestions") || pathname.endsWith("/approved-faq/suggest")) {
+      if (pathname.endsWith("/approved-faq/suggest")) {
         await route.fulfill({ json: apiEnvelope({ suggestions: [] }) });
         return;
       }

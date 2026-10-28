@@ -222,15 +222,20 @@ export function FeaturePromptDisclosure({ promptKey }: { promptKey: AnswerPrompt
 }
 
 
-/** 画像の読み取りに必ず適用する共通規則は、テンプレートと同じ場所で確認できる。 */
+/** 画像の編集可能な指示と、固定の出力契約を同じ場所で確認する。 */
 function VisionPromptRules() {
   const query = useAnswerPrompts();
   const parts = query.data?.stages.find((stage) => stage.id === "picture_description")?.prompts.filter((part) => part.id !== "template") ?? [];
   if (!parts.length) return null;
   return (
-    <Disclosure summary={t("settings.answerPrompts.fixedRules")} surface="sunken" contentClassName="space-y-3">
+    <Disclosure summary={t("settings.answerPrompts.fixedRules")} surface="sunken" contentClassName="space-y-3" data-testid="vision-prompt-parts">
+      <p className="text-sm text-fg-muted">{t("settings.answerPrompts.visionInstructions.description")}</p>
       {parts.map((part) => (
-        <TextareaField key={part.id} id={`picture-prompt-rule-${part.id}`} label={t(`settings.answerPrompts.part.${part.id}` as I18nKey)} value={part.content} readOnly monospace rows={12} />
+        part.prompt_key ? <AnswerPromptPanel
+          key={part.id}
+          promptKey={part.prompt_key}
+          fieldLabel={t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
+        /> : <TextareaField key={part.id} id={`picture-prompt-rule-${part.id}`} label={t(`settings.answerPrompts.part.${part.id}` as I18nKey)} value={part.content} readOnly monospace rows={12} />
       ))}
     </Disclosure>
   );

@@ -1803,7 +1803,7 @@ export const ja = {
   "settings.services.item.parserOciDocumentUnderstanding": "OCI Document Understanding",
   "settings.services.loadError": "サービス一覧を取得できませんでした。",
   "settings.retrieval.subtitle":
-    "回答の検索方法と生成方式の全体設定、および回答の記録の保存期間・質問履歴を設定します。",
+    "回答の検索方法と生成方式の全体設定、および検索に使うプロンプトを設定します。",
   "settings.retrieval.actions.unsaved": "未保存の変更があります。",
   "settings.retrieval.actions.reset": "変更を破棄",
   "settings.prompts.subtitle":
@@ -3924,7 +3924,8 @@ export const ja = {
   "settings.evaluation.prompts.description": "品質評価と保存した回答の評価で使う指示を編集・保存します。",
   "settings.answerPrompts.phase.evaluation.description": "品質評価では、利用できる標準回答・必須要点・取得した根拠に応じて、モデルが回答の網羅性・忠実性・正確性を判定します。必要な情報がない指標や判定を完了できない指標は未評価です。検索と応答判断の指標はコードで計算します。資料との照合は回答プロンプトで確認できます。",
   "settings.answerPrompts.condition": "使われる条件: {condition}",
-  "settings.answerPrompts.fixedRules": "共通の読み取り指示（読み取り専用）",
+  "settings.answerPrompts.fixedRules": "図・画像の指示と出力形式",
+  "settings.answerPrompts.visionInstructions.description": "保存した指示は次の画像の読み取りから使います。処理済みの文書への反映には再処理が必要です。出力形式と上限は読み取り専用です。保存済みの出力例を編集しても、固定の項目・型・件数上限は変わりません。",
   "settings.answerPrompts.noPlaceholders": "必須の placeholder はありません。",
   "settings.answerPrompts.external_ocr.title": "Dots.OCR の読み取りプロンプト",
   "settings.answerPrompts.external_ocr.description": "文書解析で Dots.OCR を使用するときに、ページごとに渡す指示です。保存した内容は次の処理から使い、処理済みの文書には再処理するまで反映しません。",
@@ -3946,7 +3947,7 @@ export const ja = {
   "settings.answerPrompts.stage.external_ocr.condition": "文書解析の使用エンジンが「Dots.OCR」のとき（ページごと）",
   "settings.answerPrompts.stage.picture_description": "図・画像の説明",
   "settings.answerPrompts.stage.picture_description.condition":
-    "「図・画像を AI で読み取る」を有効にしたとき（図・表の画像ごと）。入力テンプレートは保存した内容に実行時の共通規則を適用して表示します。編集は文書解析の「図・画像の読み取りプロンプト」",
+    "「図・画像を AI で読み取る」を有効にしたとき（図・表の画像ごと）。指示は文書解析の「図・画像の読み取りプロンプト」で編集します。出力形式と上限は読み取り専用です。",
   "settings.answerPrompts.stage.heading_levels": "見出しの階層を推定する",
   "settings.answerPrompts.stage.heading_levels.condition":
     "解析後の処理の「見出しの階層の推定（AI）」を有効にし、Docling の解析結果で、しおりの階層を使えず、階層が未判定の見出しの割合と見出し数が設定の条件を満たすとき（文書ごと。再試行あり）",
@@ -4014,6 +4015,8 @@ export const ja = {
   "settings.answerPrompts.part.instruction": "指示",
   "settings.answerPrompts.part.picture": "図・画像を読むときの対象の指示",
   "settings.answerPrompts.part.table": "表を読むときの対象の指示",
+  "settings.answerPrompts.part.rules": "共通の読み取り指示",
+  "settings.answerPrompts.part.contract": "出力形式と上限（読み取り専用）",
   "settings.answerPrompts.part.compactRule": "通った判定の理由を省く規則（設定で有効なときだけ足す）",
   "settings.answerPrompts.part.detailedSystem": "詳細な LLM 監査（未使用の根拠も列挙します。業務ガイドの下書きの試答で使用）",
   "settings.answerPrompts.part.factSystem": "標準の LLM 監査（主張・要求・業務ガイドの要件を判定し、未使用の根拠は列挙しません）",
@@ -4027,32 +4030,6 @@ export const ja = {
   "settings.answerPrompts.part.documentSystem": "文書を選ぶ システムプロンプト",
   "settings.answerPrompts.part.refineSystem": "同じ章の条を足す システムプロンプト",
   "settings.answerPrompts.part.catalogReview": "条の目録で選んだ条が支える説明を検討する指示（設定で有効にしたとき、生成が条を引かなかったときだけ）",
-  "settings.queryHistory.title": "質問履歴",
-  "settings.queryHistory.description":
-    "回答の処理に成功した質問を検索・回答プロファイルごとに保存し、同じ質問の回数が最小回数に達したものを RAG 検索の候補として出します。回答の正確性を評価した結果ではありません。質問の本文を保存するため、既定では無効です。",
-  "settings.queryHistory.enabled": "質問を保存して候補に使う",
-  "settings.queryHistory.enabledHint":
-    "安全チェック後の質問を保存します。無効にすると新しい履歴の保存と候補の表示を止めますが、保存済みの履歴は削除しません。期限を過ぎた履歴は候補から除き、次の履歴保存時や設定保存時に削除します。",
-  "settings.queryHistory.retention": "履歴の保存期間",
-  "settings.queryHistory.minCount": "候補にする最小回数",
-  "settings.queryHistory.minCountHint": "同じ質問がこの回数以上聞かれたときだけ候補にします。",
-  "settings.queryHistory.limit": "候補の最大件数",
-  "settings.queryHistory.blocklist": "保存・表示しない語",
-  "settings.queryHistory.blocklistHint": "1 行に 1 語。この語を含む質問は保存も表示もしません。",
-  "settings.queryHistory.blocklistTooMany":
-    "保存・表示しない語は {max} 語までです（今は {count} 語）。",
-  "settings.queryHistory.actions.label": "質問履歴の設定の操作",
-  "settings.queryHistory.shortenTitle": "履歴の保存期間を短くしますか？",
-  "settings.queryHistory.shortenDescription":
-    "保存すると、{days} 日より前の質問履歴をすぐに削除します。削除した履歴は元に戻せません。",
-  "settings.queryHistory.shortenConfirm": "短くして保存",
-  "settings.queryHistory.save": "質問履歴の設定を保存",
-  "settings.queryHistory.saved": "質問履歴の設定を保存しました。",
-  "settings.queryHistory.saveError": "質問履歴の設定を保存できませんでした。",
-  "settings.queryHistory.loading": "質問履歴の設定を読み込んでいます",
-  "settings.queryHistory.loadError": "質問履歴の設定を読み込めませんでした。",
-  "search.querySuggestions.title": "よく聞かれている質問",
-  "search.querySuggestions.count": "{count} 回聞かれています",
   "settings.answerRecords.title": "回答の記録の保存期間",
   "settings.answerRecords.description":
     "回答した質問・回答・根拠・実行記録と、チャット・RAG 検索の実行履歴を保存する期間です。既定は無期限で、自動では削除しません。期間を決めたときは、期限を過ぎた記録を次の回答の保存時とこの設定の保存時に削除します。",

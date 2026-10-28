@@ -1,7 +1,6 @@
 """設定 API。"""
 
 import asyncio
-import json
 import logging
 import re
 import stat
@@ -176,8 +175,6 @@ from app.schemas.settings import (
     PreprocessProfileStatusData,
     PreprocessSettingsData,
     PreprocessSettingsUpdate,
-    QueryHistorySettingsData,
-    QueryHistorySettingsUpdate,
     SystemTablesDeleteOrphansRequest,
     SystemTablesInitializeRequest,
     SystemTablesOperationData,
@@ -625,53 +622,6 @@ async def update_answer_record_settings(
     return ApiResponse(data=AnswerRecordSettingsData(retention_days=payload.retention_days))
 
 
-@router.get("/query-history", response_model=ApiResponse[QueryHistorySettingsData])
-async def get_query_history_settings() -> ApiResponse[QueryHistorySettingsData]:
-    """質問履歴の設定を返す。"""
-    return ApiResponse(data=_query_history_settings(get_settings()))
-
-
-@router.patch("/query-history", response_model=ApiResponse[QueryHistorySettingsData])
-async def update_query_history_settings(
-    payload: QueryHistorySettingsUpdate,
-) -> ApiResponse[QueryHistorySettingsData]:
-    """質問履歴の設定を backend/.env と現在プロセスへ反映し、期限切れの履歴を削除する。"""
-    settings = get_settings()
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        {
-            "RAG_QUERY_HISTORY_ENABLED": "true" if payload.enabled else "false",
-            "RAG_QUERY_HISTORY_RETENTION_DAYS": str(payload.retention_days),
-            "RAG_QUERY_HISTORY_MIN_COUNT": str(payload.min_count),
-            "RAG_QUERY_HISTORY_SUGGESTION_LIMIT": str(payload.suggestion_limit),
-            "RAG_QUERY_HISTORY_BLOCKLIST": json.dumps(payload.blocklist, ensure_ascii=False),
-        },
-        section_comment="# 質問履歴",
-        error_detail="質問履歴の設定を backend/.env へ保存できませんでした。",
-    )
-    settings.rag_query_history_enabled = payload.enabled
-    settings.rag_query_history_retention_days = payload.retention_days
-    settings.rag_query_history_min_count = payload.min_count
-    settings.rag_query_history_suggestion_limit = payload.suggestion_limit
-    settings.rag_query_history_blocklist = list(payload.blocklist)
-    if payload.retention_days > 0:
-        try:
-            await OracleClient().purge_query_history(payload.retention_days)
-        except Exception as exc:  # 次の記録時にも削除するため、設定保存は止めない。
-            logger.warning("query history purge failed", extra={**safe_exception_fields(exc)})
-    return ApiResponse(data=_query_history_settings(settings))
-
-
-def _query_history_settings(settings: Settings) -> QueryHistorySettingsData:
-    return QueryHistorySettingsData(
-        enabled=settings.rag_query_history_enabled,
-        retention_days=settings.rag_query_history_retention_days,
-        min_count=settings.rag_query_history_min_count,
-        suggestion_limit=settings.rag_query_history_suggestion_limit,
-        blocklist=list(settings.rag_query_history_blocklist),
-    )
-
-
 @router.get("/answer-prompts", response_model=ApiResponse[AnswerPromptsData])
 async def get_answer_prompts() -> ApiResponse[AnswerPromptsData]:
     """編集できるプロンプト(回答生成・図の読み取り)と、回答フローの各段の読み取り専用プロンプトを返す。"""
@@ -687,12 +637,28 @@ async def put_answer_prompt(
     _require_answer_prompt_permission(request, key)
     try:
         validate_answer_prompt(key, payload.content)
+        if key == "image_retrieval":
+            from rag_engine.parsing.vision_prompt_rules import split_image_retrieval_prompt
+
+            validate_answer_prompt(key, split_image_retrieval_prompt(payload.content)[0])
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="プロンプトが見つかりません。") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     oracle = OracleClient()
-    await oracle.save_answer_prompt(key, payload.content)
+    if key == "image_retrieval":
+        from rag_engine.parsing.vision_prompt_rules import split_image_retrieval_prompt
+
+        previous = await oracle.list_answer_prompts()
+        body, supplied_rules = split_image_retrieval_prompt(payload.content)
+        legacy = split_image_retrieval_prompt(str(previous.get(key, {}).get("content", "")))[1]
+        if supplied_rules is not None:
+            await oracle.save_answer_prompt("picture_description.rules", supplied_rules)
+        elif legacy is not None and "picture_description.rules" not in previous:
+            await oracle.save_answer_prompt("picture_description.rules", legacy)
+        await oracle.save_answer_prompt(key, body)
+    else:
+        await oracle.save_answer_prompt(key, payload.content)
     return ApiResponse(data=_answer_prompts_data(await oracle.list_answer_prompts()))
 
 
@@ -703,6 +669,18 @@ async def reset_answer_prompt(key: str, request: Request) -> ApiResponse[AnswerP
     if key not in EDITABLE_PROMPT_KEYS:
         raise HTTPException(status_code=404, detail="プロンプトが見つかりません。")
     oracle = OracleClient()
+    if key in {"image_retrieval", "picture_description.rules"}:
+        from rag_engine.parsing.vision_prompt_rules import split_image_retrieval_prompt
+
+        previous = await oracle.list_answer_prompts()
+        image = previous.get("image_retrieval")
+        if image:
+            body, legacy = split_image_retrieval_prompt(str(image["content"]))
+            if legacy is not None:
+                if key == "image_retrieval" and "picture_description.rules" not in previous:
+                    await oracle.save_answer_prompt("picture_description.rules", legacy)
+                if key == "picture_description.rules":
+                    await oracle.save_answer_prompt("image_retrieval", body)
     await oracle.delete_answer_prompt(key)
     return ApiResponse(data=_answer_prompts_data(await oracle.list_answer_prompts()))
 
@@ -724,6 +702,9 @@ def _require_answer_prompt_permission(request: Request, key: str) -> None:
 
 
 def _answer_prompts_data(saved: dict[str, dict[str, object]]) -> AnswerPromptsData:
+    from app.rag.answer_prompts import separate_vision_prompt_rows
+
+    saved = separate_vision_prompt_rows(saved)
     prompts = []
     for key in EDITABLE_PROMPT_KEYS:
         row = saved.get(key)

@@ -1712,21 +1712,6 @@ export interface FeedbackDetail extends FeedbackItem {
   execution: FeedbackExecutionInfo;
 }
 
-/** 質問履歴の設定(rag_poc の QUERY_HISTORY_*)。 */
-export interface QueryHistorySettingsData {
-  enabled: boolean;
-  retention_days: number;
-  min_count: number;
-  suggestion_limit: number;
-  blocklist: string[];
-}
-
-export interface QuerySuggestionsData {
-  search_answer_profile_id: string;
-  enabled: boolean;
-  suggestions: { question: string; count: number }[];
-}
-
 export type AnswerPromptKey = `${string}.${string}` | "vlm_answer" | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary" | "raptor_summary_system";
 
 /** 機能別の設定画面で編集できるプロンプト。 */
@@ -4249,20 +4234,6 @@ export const api = {
   },
   getFeedbackDetail: (id: string) =>
     request<FeedbackDetail>(`/api/feedback/${encodeURIComponent(id)}`),
-  getQueryHistorySettings: () => request<QueryHistorySettingsData>("/api/settings/query-history"),
-  updateQueryHistorySettings: (body: QueryHistorySettingsData) =>
-    request<QueryHistorySettingsData>("/api/settings/query-history", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-  getQuerySuggestions: (searchAnswerProfileId: string, query: string, filters: Record<string, string>) =>
-    request<QuerySuggestionsData>(
-      `/api/search-answer-profiles/${encodeURIComponent(searchAnswerProfileId)}/query-suggestions?${new URLSearchParams({
-        q: query,
-        ...filters,
-      }).toString()}`,
-    ),
   getAnswerPrompts: () => request<AnswerPromptsData>("/api/settings/answer-prompts"),
   saveAnswerPrompt: (key: AnswerPromptKey, content: string) =>
     request<AnswerPromptsData>(`/api/settings/answer-prompts/${key}`, {

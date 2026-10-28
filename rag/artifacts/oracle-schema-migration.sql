@@ -3571,3 +3571,296 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261022_001_cited_evidence
+DECLARE
+    v_conflicts NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_conflicts FROM rag_answer_records
+    WHERE (JSON_EXISTS(evaluation_input_json, '$.used_images')
+           AND JSON_EXISTS(evaluation_input_json, '$.cited_evidence'))
+       OR (JSON_EXISTS(evaluation_input_json, '$.used_image_ids')
+           AND JSON_EXISTS(evaluation_input_json, '$.cited_evidence_ids'))
+       OR JSON_EXISTS(evaluation_input_json, '$.used_images[*].evidence_id');
+    IF v_conflicts > 0 THEN
+        RAISE_APPLICATION_ERROR(-20001,
+            '引用証拠の新旧キーが重複しています。重複を解消してください。');
+    END IF;
+    UPDATE rag_answer_records
+    SET evaluation_input_json = JSON_TRANSFORM(
+        evaluation_input_json,
+        RENAME '$.used_images' = 'cited_evidence',
+        RENAME '$.used_image_ids' = 'cited_evidence_ids',
+        RENAME '$.cited_evidence[*].image_id' = 'evidence_id'
+    )
+    WHERE JSON_EXISTS(evaluation_input_json, '$.used_images')
+       OR JSON_EXISTS(evaluation_input_json, '$.used_image_ids');
+END;
+/
+
+-- migration: 20261026_001_evaluation_calibration
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_LABEL_SETS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_evaluation_label_sets ( '
+            || 'label_set_id    VARCHAR2(64) PRIMARY KEY, '
+            || 'tenant_id_hash  VARCHAR2(64), '
+            || 'name            VARCHAR2(200 CHAR) NOT NULL, '
+            || 'origin          VARCHAR2(16) NOT NULL, '
+            || 'rubric_id       VARCHAR2(80) NOT NULL, '
+            || 'rubric_version  VARCHAR2(40), '
+            || 'rubric_sha256   VARCHAR2(64), '
+            || 'items_sha256    VARCHAR2(64) NOT NULL, '
+            || 'item_count      NUMBER(10) DEFAULT 0 NOT NULL, '
+            || 'split_policy    JSON, '
+            || 'sources         JSON, '
+            || 'created_by_hash VARCHAR2(64), '
+            || 'created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'CONSTRAINT rag_evaluation_label_sets_origin_ck CHECK (origin IN (''jobs'', ''import'')) '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_EVALUATION_LABEL_SETS_TENANT_CREATED_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_evaluation_label_sets_tenant_created_idx '
+            || 'ON rag_evaluation_label_sets (tenant_id_hash, created_at DESC)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_LABEL_ITEMS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_evaluation_label_items ( '
+            || 'label_set_id    VARCHAR2(64) NOT NULL, '
+            || 'item_id         VARCHAR2(200 CHAR) NOT NULL, '
+            || 'item_order      NUMBER(10) NOT NULL, '
+            || 'split           VARCHAR2(16) NOT NULL, '
+            || 'origin          VARCHAR2(16) NOT NULL, '
+            || 'excluded        NUMBER(1) DEFAULT 0 NOT NULL, '
+            || 'item_json       JSON NOT NULL, '
+            || 'CONSTRAINT rag_evaluation_label_items_pk PRIMARY KEY (label_set_id, item_id), '
+            || 'CONSTRAINT rag_evaluation_label_items_set_fk FOREIGN KEY (label_set_id) '
+            || 'REFERENCES rag_evaluation_label_sets (label_set_id) ON DELETE CASCADE, '
+            || 'CONSTRAINT rag_evaluation_label_items_split_ck CHECK (split IN (''dev'', ''holdout'')), '
+            || 'CONSTRAINT rag_evaluation_label_items_origin_ck CHECK (origin IN (''human'', ''synthetic'')), '
+            || 'CONSTRAINT rag_evaluation_label_items_excluded_ck CHECK (excluded IN (0, 1)) '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_LABELS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_evaluation_labels ( '
+            || 'label_set_id    VARCHAR2(64) NOT NULL, '
+            || 'item_id         VARCHAR2(200 CHAR) NOT NULL, '
+            || 'aspect          VARCHAR2(80) NOT NULL, '
+            || 'role            VARCHAR2(16) NOT NULL, '
+            || 'annotator_code  VARCHAR2(40) NOT NULL, '
+            || 'annotator_hash  VARCHAR2(64), '
+            || 'label           VARCHAR2(16) NOT NULL, '
+            || 'error_type      VARCHAR2(40), '
+            || 'note            VARCHAR2(2000 CHAR), '
+            || 'created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'CONSTRAINT rag_evaluation_labels_pk '
+            || 'PRIMARY KEY (label_set_id, item_id, aspect, role, annotator_code), '
+            || 'CONSTRAINT rag_evaluation_labels_item_fk FOREIGN KEY (label_set_id, item_id) '
+            || 'REFERENCES rag_evaluation_label_items (label_set_id, item_id) ON DELETE CASCADE, '
+            || 'CONSTRAINT rag_evaluation_labels_role_ck CHECK (role IN (''annotation'', ''adjudication'')), '
+            || 'CONSTRAINT rag_evaluation_labels_label_ck CHECK (label IN (''pass'', ''fail'', ''cannot_judge'')) '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_EVALUATION_LABELS_ANNOTATOR_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_evaluation_labels_annotator_idx '
+            || 'ON rag_evaluation_labels (label_set_id, annotator_hash)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_CALIBRATIONS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_evaluation_calibrations ( '
+            || 'calibration_id       VARCHAR2(64) PRIMARY KEY, '
+            || 'label_set_id         VARCHAR2(64) NOT NULL, '
+            || 'tenant_id_hash       VARCHAR2(64), '
+            || 'user_id_hash         VARCHAR2(64), '
+            || 'status               VARCHAR2(16) NOT NULL, '
+            || 'repeats              NUMBER(2) DEFAULT 1 NOT NULL, '
+            || 'judge_model_id       VARCHAR2(200 CHAR), '
+            || 'judge_rubric_version VARCHAR2(40), '
+            || 'prompt_sha256        VARCHAR2(64), '
+            || 'labels_sha256        VARCHAR2(64), '
+            || 'passed               NUMBER(1), '
+            || 'error_message        VARCHAR2(2000 CHAR), '
+            || 'summary_json         JSON, '
+            || 'report_json          JSON, '
+            || 'created_at           TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'finished_at          TIMESTAMP WITH TIME ZONE, '
+            || 'CONSTRAINT rag_evaluation_calibrations_set_fk FOREIGN KEY (label_set_id) '
+            || 'REFERENCES rag_evaluation_label_sets (label_set_id) ON DELETE CASCADE, '
+            || 'CONSTRAINT rag_evaluation_calibrations_status_ck '
+            || 'CHECK (status IN (''RUNNING'', ''SUCCEEDED'', ''FAILED'', ''CANCELLED'')), '
+            || 'CONSTRAINT rag_evaluation_calibrations_passed_ck CHECK (passed IN (0, 1)) '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_EVALUATION_CALIBRATIONS_SET_CREATED_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_evaluation_calibrations_set_created_idx '
+            || 'ON rag_evaluation_calibrations (label_set_id, created_at DESC)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_EVALUATION_CALIBRATIONS_JUDGE_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_evaluation_calibrations_judge_idx '
+            || 'ON rag_evaluation_calibrations (tenant_id_hash, judge_model_id, prompt_sha256, status)';
+    END IF;
+END;
+/
+
+-- migration: 20261026_002_evaluation_job_calibration_kind
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOBS';
+    IF v_count > 0 THEN
+        SELECT COUNT(*) INTO v_count
+        FROM user_constraints
+        WHERE table_name = 'RAG_EVALUATION_JOBS'
+          AND constraint_name = 'RAG_EVALUATION_JOBS_KIND_CK';
+        IF v_count > 0 THEN
+            EXECUTE IMMEDIATE
+                'ALTER TABLE rag_evaluation_jobs DROP CONSTRAINT rag_evaluation_jobs_kind_ck';
+        END IF;
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_evaluation_jobs ADD CONSTRAINT rag_evaluation_jobs_kind_ck '
+            || 'CHECK (kind IN (''run'', ''calibration''))';
+    END IF;
+END;
+/
+
+-- migration: 20261027_001_raptor_prompt_consolidation
+MERGE INTO rag_answer_prompts target
+USING (
+    SELECT 'raptor_summary_system' AS prompt_key,
+        COALESCE(
+            (SELECT content FROM rag_answer_prompts WHERE prompt_key = 'raptor_summary_system'),
+            TO_CLOB('## 目的' || CHR(10) || CHR(10)
+                || 'あなたは文書を階層的に要約するアシスタントです。')
+        ) || CHR(10) || CHR(10) || COALESCE(
+            (SELECT content FROM rag_answer_prompts WHERE prompt_key = 'raptor_summary'),
+            TO_CLOB('## 目的' || CHR(10) || CHR(10)
+                || '次のテキスト群の要点を簡潔な日本語で要約してください。')
+        ) AS content
+    FROM dual
+    WHERE EXISTS (
+        SELECT 1 FROM rag_answer_prompts
+        WHERE prompt_key IN ('raptor_summary_system', 'raptor_summary')
+    )
+) source
+ON (target.prompt_key = source.prompt_key)
+WHEN MATCHED THEN UPDATE SET target.content = source.content, target.updated_at = SYSTIMESTAMP
+WHEN NOT MATCHED THEN INSERT (prompt_key, content) VALUES (source.prompt_key, source.content);
+
+UPDATE rag_answer_prompts
+SET prompt_key = 'raptor_summary_archived'
+WHERE prompt_key = 'raptor_summary';
+
+-- migration: 20261028_001_language_pack_releases
+CREATE TABLE rag_language_pack_releases (
+    release_id VARCHAR2(64) PRIMARY KEY,
+    version NUMBER(19) NOT NULL UNIQUE,
+    effective_json JSON NOT NULL,
+    content_hash VARCHAR2(64) NOT NULL,
+    ingest_hash VARCHAR2(64) NOT NULL,
+    published_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    published_by VARCHAR2(256),
+    previous_id VARCHAR2(64),
+    restored_from VARCHAR2(64),
+    change_note VARCHAR2(2000),
+    CONSTRAINT rag_lang_release_version_ck CHECK (version >= 1),
+    CONSTRAINT rag_lang_release_previous_fk FOREIGN KEY (previous_id)
+        REFERENCES rag_language_pack_releases (release_id),
+    CONSTRAINT rag_lang_release_restore_fk FOREIGN KEY (restored_from)
+        REFERENCES rag_language_pack_releases (release_id)
+);
+CREATE TABLE rag_language_pack_state (
+    singleton_id NUMBER(1) PRIMARY KEY,
+    draft_revision NUMBER(19) NOT NULL,
+    draft_effective_json JSON NOT NULL,
+    current_release_id VARCHAR2(64),
+    CONSTRAINT rag_lang_state_singleton_ck CHECK (singleton_id = 1),
+    CONSTRAINT rag_lang_state_revision_ck CHECK (draft_revision >= 1),
+    CONSTRAINT rag_lang_state_current_fk FOREIGN KEY (current_release_id)
+        REFERENCES rag_language_pack_releases (release_id)
+);
+CREATE INDEX rag_lang_release_previous_idx ON rag_language_pack_releases (previous_id);
+CREATE INDEX rag_lang_release_restore_idx ON rag_language_pack_releases (restored_from);
+CREATE INDEX rag_lang_state_current_idx ON rag_language_pack_state (current_release_id);
+
+-- migration: 20261028_002_language_pack_artifacts
+DECLARE v_count NUMBER; BEGIN
+                SELECT COUNT(*) INTO v_count FROM user_tab_columns
+                WHERE table_name = 'RAG_INGESTION_JOBS' AND column_name = 'LANGUAGE_PACK_RELEASE_ID';
+                IF v_count = 0 THEN EXECUTE IMMEDIATE
+                    'ALTER TABLE RAG_INGESTION_JOBS ADD (LANGUAGE_PACK_RELEASE_ID VARCHAR2(64))'; END IF;
+            END;
+            /
+DECLARE v_count NUMBER; BEGIN
+                SELECT COUNT(*) INTO v_count FROM user_tab_columns
+                WHERE table_name = 'RAG_CHUNK_SETS' AND column_name = 'LANGUAGE_PACK_RELEASE_ID';
+                IF v_count = 0 THEN EXECUTE IMMEDIATE
+                    'ALTER TABLE RAG_CHUNK_SETS ADD (LANGUAGE_PACK_RELEASE_ID VARCHAR2(64))'; END IF;
+            END;
+            /
+DECLARE v_count NUMBER; BEGIN
+                SELECT COUNT(*) INTO v_count FROM user_tab_columns
+                WHERE table_name = 'RAG_CHUNK_SETS' AND column_name = 'LANGUAGE_PACK_INGEST_HASH';
+                IF v_count = 0 THEN EXECUTE IMMEDIATE
+                    'ALTER TABLE RAG_CHUNK_SETS ADD (LANGUAGE_PACK_INGEST_HASH VARCHAR2(64))'; END IF;
+            END;
+            /
+DECLARE v_count NUMBER; BEGIN
+                SELECT COUNT(*) INTO v_count FROM user_tab_columns
+                WHERE table_name = 'RAG_CHUNK_SETS' AND column_name = 'LANGUAGE_PACK_JOB_ID';
+                IF v_count = 0 THEN EXECUTE IMMEDIATE
+                    'ALTER TABLE RAG_CHUNK_SETS ADD (LANGUAGE_PACK_JOB_ID VARCHAR2(64))'; END IF;
+            END;
+            /
+DECLARE v_count NUMBER; BEGIN
+                SELECT COUNT(*) INTO v_count FROM user_tab_columns
+                WHERE table_name = 'RAG_CHUNK_SETS' AND column_name = 'LANGUAGE_PACK_BUILT_AT';
+                IF v_count = 0 THEN EXECUTE IMMEDIATE
+                    'ALTER TABLE RAG_CHUNK_SETS ADD (LANGUAGE_PACK_BUILT_AT TIMESTAMP WITH TIME ZONE)'; END IF;
+            END;
+            /
+DECLARE v_count NUMBER; BEGIN
+            SELECT COUNT(*) INTO v_count FROM user_constraints
+            WHERE constraint_name = 'RAG_INGEST_JOB_LANG_RELEASE_FK';
+            IF v_count = 0 THEN EXECUTE IMMEDIATE
+                'ALTER TABLE RAG_INGESTION_JOBS ADD CONSTRAINT RAG_INGEST_JOB_LANG_RELEASE_FK '
+                || 'FOREIGN KEY (LANGUAGE_PACK_RELEASE_ID) '
+                || 'REFERENCES RAG_LANGUAGE_PACK_RELEASES (RELEASE_ID)'; END IF;
+        END;
+        /
+DECLARE v_count NUMBER; BEGIN
+            SELECT COUNT(*) INTO v_count FROM user_constraints
+            WHERE constraint_name = 'RAG_CHUNK_SET_LANG_RELEASE_FK';
+            IF v_count = 0 THEN EXECUTE IMMEDIATE
+                'ALTER TABLE RAG_CHUNK_SETS ADD CONSTRAINT RAG_CHUNK_SET_LANG_RELEASE_FK '
+                || 'FOREIGN KEY (LANGUAGE_PACK_RELEASE_ID) '
+                || 'REFERENCES RAG_LANGUAGE_PACK_RELEASES (RELEASE_ID)'; END IF;
+        END;
+        /
+
+-- migration: 20261029_001_retire_query_history
+BEGIN
+    EXECUTE IMMEDIATE 'DROP TABLE rag_query_history PURGE';
+EXCEPTION
+    WHEN OTHERS THEN
+        IF SQLCODE != -942 THEN
+            RAISE;
+        END IF;
+END;
+/

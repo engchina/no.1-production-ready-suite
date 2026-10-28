@@ -61,7 +61,6 @@ from app.rag.observability import (
     record_rag_stage,
     record_trace_span,
 )
-from app.rag.query_history import record_query_history
 from app.rag.question_understanding import profile_language_scope
 from app.rag.run_history import RunRecorder
 from app.rag.span_display import (
@@ -837,16 +836,6 @@ class RagPipeline:
                 answer_diagnostics=diagnostics.answer,
                 storage_failures=storage_failures,
             )
-        # 下書きで試した質問と、呼び出し元が作った検索文（#2651。利用者の質問ではない）は、
-        # 利用者の質問の候補（質問履歴）に入れない（#1288）。
-        if (
-            outcome_label == "success"
-            and not self._settings.rag_guide_preview
-            and self._caller_queries is None
-        ):
-            await self._record_query_history(
-                request, query_guardrail.sanitized_text, chat=history is not None
-            )
         return SearchResponse(
             answer=final_answer,
             citations=outcome.citations,
@@ -910,19 +899,6 @@ class RagPipeline:
             guardrail_warnings=query_guardrail.warnings,
             elapsed_ms=elapsed,
             diagnostics=diagnostics,
-        )
-
-    async def _record_query_history(
-        self, request: SearchRequest, question: str, *, chat: bool
-    ) -> None:
-        """回答に成功した質問を質問履歴へ記録する(設定が有効なときだけ。マスク後の質問を使う)。"""
-        await record_query_history(
-            self._oracle,
-            self._settings,
-            search_answer_profile_id=request.search_answer_profile_id,
-            question=question,
-            surface="chat" if chat else "search",
-            filters=request.filters,
         )
 
     async def _save_answer_record(

@@ -178,39 +178,20 @@ async function selectSearchAnswerProfileAndAsk(page: Page, question: string) {
   await page.getByRole("button", { name: "検索", exact: true }).click();
 }
 
-test("よく聞かれている質問を入力欄の下に出し、選ぶと質問欄に入る", async ({ page }) => {
+test("質問履歴の候補を取得せず、質問欄から検索できる", async ({ page }) => {
   await mockCommon(page);
   await mockSearchAnswerProfileApi(page);
-  const requested: string[] = [];
-  await page.route("**/api/search-answer-profiles/bv-1/query-suggestions**", (route) => {
-    requested.push(new URL(route.request().url()).searchParams.get("q") ?? "");
-    return route.fulfill({
-      json: envelope({
-        search_answer_profile_id: "bv-1",
-        enabled: true,
-        suggestions: [
-          { question: "受注を取り消すには？", count: 5 },
-          { question: "受注の締め日は？", count: 3 },
-        ],
-      }),
-    });
+  const candidateRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/query-suggestions")) candidateRequests.push(request.url());
   });
-
   await page.goto("/search");
   await selectSearchAnswerProfile(page, /受注サポート/);
-  const input = page.getByRole("textbox", { name: "RAG 検索" });
-  await input.fill("受注");
-  const suggestions = page.getByRole("list", { name: "よく聞かれている質問" });
-  await expect(suggestions.getByRole("button")).toHaveCount(2);
-  await expect.poll(() => requested.at(-1)).toBe("受注");
-
-  await suggestions.getByRole("button", { name: "受注を取り消すには？" }).click();
-  await expect(input).toHaveValue("受注を取り消すには？");
-  // 質問欄と同じ候補は出さない。
-  await expect(suggestions.getByRole("button")).toHaveCount(1);
+  await page.getByRole("textbox", { name: "RAG 検索" }).fill("合成の質問");
+  await expect(page.getByRole("list", { name: "よく聞かれている質問" })).toHaveCount(0);
+  expect(candidateRequests).toEqual([]);
   await expectNoPageOverflow(page);
 });
-
 test("類似する登録済みQ&Aを提示し、FAQ の回答を LLM なしで表示する", async ({ page }) => {
   await mockCommon(page);
   await mockSearchAnswerProfileApi(page, { suggestions: [faqSuggestion] });

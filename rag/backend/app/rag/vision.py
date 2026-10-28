@@ -182,6 +182,10 @@ class EnterpriseAiPictureDescriber:
         project_id: str = "",
         caller: BoundedCaller | None = None,
     ) -> None:
+        from rag_engine.adapters.oci import VISION_SYSTEM_PROMPT
+        from rag_engine.resources.runtime import resolve_prompt
+
+        self.system_prompt = resolve_prompt("picture_description.system", VISION_SYSTEM_PROMPT)
         self._reader = reader
         self._loop = loop
         self._caller = caller
@@ -239,11 +243,9 @@ class EnterpriseAiPictureDescriber:
         )
 
     async def _describe(self, images: list[bytes], prompt: str, label: str) -> dict[str, Any]:
-        from rag_engine.adapters.oci import VISION_SYSTEM_PROMPT
-
         caller = self._caller
         if caller is None:
-            raw = await _generate(self._reader, images, prompt, system_prompt=VISION_SYSTEM_PROMPT)
+            raw = await _generate(self._reader, images, prompt, system_prompt=self.system_prompt)
             return parse_picture_description(raw)
 
         async def attempt_call(attempt: Attempt) -> dict[str, Any]:
@@ -254,9 +256,7 @@ class EnterpriseAiPictureDescriber:
                 else await asyncio.to_thread(downscale_images, images, attempt.adaptation)
             )
             with sdk_retries_disabled():
-                raw = await _generate(
-                    self._reader, sent, prompt, system_prompt=VISION_SYSTEM_PROMPT
-                )
+                raw = await _generate(self._reader, sent, prompt, system_prompt=self.system_prompt)
             return parse_picture_description(raw)
 
         self._enter()

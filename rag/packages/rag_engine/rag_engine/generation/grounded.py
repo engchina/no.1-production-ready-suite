@@ -435,15 +435,23 @@ AUDIT_SYSTEM_PROMPT = (
         "を先に判定する。\n"
         "- application_reviews: 各 applicati"
         "on の index、valid、reason。\n"
-        "- request_reviews: request_units の"
-        "各 id について、items（valid な applicatio"
+        "- request_reviews: task_contract.request_units の各 id を1回ずつ必ず返す。"
+        "各要求について、items（valid な applicatio"
         "ns を含む）が答えていれば addressed（複数の item "
         "をつないで答えていても addressed）、一部なら partia"
         "l、なければ missing、背景なら context。reason"
         " は質問と同じ言語で書く。\n"
-        "- 各 request_review で回答の充足と材料の有無を分ける。evidence_status は、"
-        "必要な直接根拠が入力にあるが回答が省略した場合 available とし、evidence_ids にその ID を返す。"
-        "材料自体が足りなければ missing、判定不能なら unknown。引用元が関連するだけで available にしない。\n"
+        "- 材料の判定では、各要求について回答がまだ説明していない具体的な操作・条件を reason に短く示す。"
+        "説明済みの前置きと、補写が必要な内容を区別する。\n"
+        "- evidence_status は回答に不足している内容の直接根拠が入力にあるかで決める。"
+        "実際の引用が誤っていても、未引用の直接根拠が不足内容を支えれば available。未引用の根拠で support を supported に戻さない。\n"
+        "- 材料候補: evidence と unused_evidence の両方を調べる。unused_evidence の直接根拠も、補写の材料として同じく使える。\n"
+        "- available の evidence_ids には、不足内容をそのまま補写できる直接根拠の evidence_id を返す。"
+        "説明済みの別操作・同じ画面の概要・見出しが関連するだけでは選ばない。複数の根拠を組み合わせてよい。\n"
+        "- 例: 要求が手順甲と手順乙、回答が手順甲だけなら partial。手順乙を述べる直接根拠があれば available としてその ID を返す。"
+        "手順甲の ID を代わりに返さない。手順乙の記載が無ければ missing。\n"
+        "- 不足内容の直接根拠が入力に無ければ missing、原文の省略や対応の不明で判断できなければ unknown。"
+        "function_context だけに記載があって、対応する evidence_id を特定できない場合も unknown。\n"
         "- unused_evidence_ids: 未使用根拠のうち、質問"
         "への回答に必要なのに items で使われていないものだけを、重要な"
         "順に最大8件挙げる。unused_evidence の text は"
@@ -521,6 +529,7 @@ STANDARD_MAX_ROUNDS = 2
 STANDARD_CORRECTION_KEYS = ("dropped_items", "downgraded_items", "no_cited_evidence", "summary_unsupported")
 # detailed だけの入力・出力の規則の行（監査の指示は 1 行 1 規則なので行の先頭で選ぶ）。
 _DETAILED_AUDIT_LINES = (
+    "- 材料候補:",
     "- unused_evidence:",
     "- unused_evidence_ids:",
     "- unused_evidence に答えがあっても",
@@ -4191,6 +4200,8 @@ class Round:
     applications: list[CheckedApplication] = field(default_factory=list)
     # 業務ガイドの手順ごとの充足（`guide_step_coverage`。#2491）。業務ガイドに沿わない回答では空。
     guide_steps: list[dict[str, Any]] = field(default_factory=list)
+    # 重複した要求判定は採用せず、材料不足と区別して監査の構造エラーとして残す。
+    duplicate_request_ids: tuple[str, ...] = ()
 
     @property
     def addressed(self) -> set[str]:
@@ -4430,10 +4441,24 @@ class Round:
                     ],
                 },
                 "answer_completeness": {
-                    "execution": self.review_execution,
-                    "requests": [row.model_dump() for row in self.audit.request_reviews]
-                    if self.audit and self.review_execution in {"completed", "partial"}
-                    else [],
+                    "execution": "partial" if self.duplicate_request_ids else self.review_execution,
+                    "requests": (
+                        [row.model_dump() for row in self.audit.request_reviews]
+                        if self.audit and self.review_execution in {"completed", "partial"}
+                        else []
+                    )
+                    + [
+                        {
+                            "request_id": request_id,
+                            "reviewed": False,
+                            "review_execution": "error",
+                            "evidence_status": "unknown",
+                            "evidence_ids": [],
+                            "reason": "同じ要求に複数の監査判定があり、充足と材料を確認できません。",
+                        }
+                        for request_id in self.duplicate_request_ids
+                    ],
+                    **({"duplicate_request_ids": list(self.duplicate_request_ids)} if self.duplicate_request_ids else {}),
                 },
             },
             "audit_calls": self.audit_calls,
@@ -5392,7 +5417,9 @@ def _unused_evidence(question: str, spans: Sequence[dict], used: set[str]) -> li
                 queues.remove(queue)
             if len(selected) >= AUDIT_UNUSED_EVIDENCE_LIMIT:
                 break
-    return [{"evidence_id": s["label"], "function": _function_label(s), "text": s["text"][:AUDIT_UNUSED_EVIDENCE_CHARS]} for s in selected]
+    return [
+        {"evidence_id": s["evidence_id"], "function": _function_label(s), "text": s["text"][:AUDIT_UNUSED_EVIDENCE_CHARS]} for s in selected
+    ]
 
 
 def summary_output_fields_error(audit: GroundedAudit | None, spans: Sequence[dict], summary: str) -> str:
@@ -5741,6 +5768,7 @@ def run_round(
         )
     }
     audit, audit_calls, audit_cut = None, 0, False
+    duplicate_request_ids: tuple[str, ...] = ()
     # 印の付いた説明も監査する（根拠と矛盾すれば外す。#2738）。システムが補った原文・外した説明は監査しない。
     auditable = [(index, entry) for index, entry in enumerate(checked) if entry.span and entry.published]
     audit_index = {id(entry): index for index, entry in auditable}
@@ -5885,6 +5913,7 @@ def run_round(
         if audit_usage := usage_delta(usage_before):
             timing["audit_usage"] = audit_usage
         if audit is not None:
+            audit, duplicate_request_ids = _unique_request_reviews(audit)
             audit = settle_citation_reviews(checked, audit, also_audited, dropped)
             recovered = recover_audited_quotes(
                 question, checked, audit, spans, guide_sources=[source for _id, _title, sources in guide_steps for source in sources]
@@ -6001,6 +6030,7 @@ def run_round(
         audit_cut=audit_cut,
         timing=timing,
         applications=applications,
+        duplicate_request_ids=duplicate_request_ids,
         guide_steps=(
             apply_guide_contracts(
                 guide_step_coverage(
@@ -6107,6 +6137,17 @@ def applicability_policy(audit: GroundedAudit) -> GroundedAudit:
         for review in audit.reviews
     ]
     return audit.model_copy(update={"reviews": reviews})
+
+
+def _unique_request_reviews(audit: GroundedAudit) -> tuple[GroundedAudit, tuple[str, ...]]:
+    """同じ要求の複数判定を順序で採用せず、未検証として呼び出し側へ返す。"""
+    counts: dict[str, int] = {}
+    for review in audit.request_reviews:
+        counts[review.request_id] = counts.get(review.request_id, 0) + 1
+    duplicates = tuple(request_id for request_id, count in counts.items() if count > 1)
+    if not duplicates:
+        return audit, ()
+    return audit.model_copy(update={"request_reviews": [row for row in audit.request_reviews if counts[row.request_id] == 1]}), duplicates
 
 
 def _reconcile_request_reviews(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
