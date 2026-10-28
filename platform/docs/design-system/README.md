@@ -1631,7 +1631,9 @@ ChatProgress・RunTimeline・RunTimelineSection の段名と開閉要約は sm�
 
 ### 高い画面での主一覧の表示範囲
 
-文書インデックス・ナレッジベース・検索回答プロファイルの主一覧は `DataTable` の `growToViewport` を使い、desktop では基準の表示行数から画面の余白へ拡張する。ページ送りと下余白に 6rem を残す。少数行は自然な高さ、mobile と既定の一覧は従来の表示行数を維持する。
+文書インデックス・ナレッジベース・検索回答プロファイル・RAG 実行履歴の主一覧は `DataTable` の `growToViewport` を使い、desktop では基準の表示行数から画面の余白へ拡張する。ページ送りと下余白に 6rem を残す。少数行は自然な高さ、mobile と既定の一覧は従来の表示行数を維持する。
+
+フィードバック詳細の根拠のカード一覧も `ViewportScrollRegion` で同じ desktop の余白を活用し、mobile は共通の表示密度を保つ。根拠を開く操作は実行詳細と共通の「根拠を表示」で右側パネルを開く。
 
 ### ページ送りの位置
 

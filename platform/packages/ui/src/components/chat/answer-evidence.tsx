@@ -851,7 +851,7 @@ export function EvidenceSourceSheet({
             </section>
           ) : null}
         </>
-      ) : null}
+      ) : children}
     </SideSheet>
   );
 }

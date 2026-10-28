@@ -3692,13 +3692,12 @@ def render_answer(
     ``guide_notes`` は業務ガイドの（題名, 案内の行）。資料の記載と分けて「業務ガイドの案内」の節に出す（出典の行は
     付けない。#2792）。
     """
-    # 出典行ごとの、その行にまとめた説明（同じ出典・頁が続く説明。#2710）。
+    # 出典行ごとに、その表示項目を支える根拠だけを対応させる。
     citation_entries: list[list[CheckedItem]] = []
     marks: list[dict[str, Any]] = []
 
     def lines(entries: Sequence[CheckedItem], numbered: bool) -> list[str]:
         out: list[str] = []
-        pending: list[CheckedItem] = []
         for number, entry in enumerate(entries, 1):
             item = entry.item
             # 原文の改行（OCR・表題）を残すと1つの引用が複数行に割れる。引用は1行で示す。
@@ -3710,17 +3709,10 @@ def render_answer(
             out.append(line)
             if entry.state and (mark := passage_marks.passage_mark(line, entry.marks)):
                 marks.append(mark)
-            following = entries[number] if number < len(entries) else None
-            keys = _citation_keys(entry)
-            if keys:
-                pending.append(entry)
-            # 同じ出典・頁が続く間は出典行を繰り返さない。行にまとめた説明の根拠はすべて残す（#2710）。出典が複数の
-            # 説明（#3526）は出典ごとに出典行を並べる。
-            if keys and (following is None or _citation_keys(following) != keys):
-                for key in keys:
-                    out.append(key)
-                    citation_entries.append([cited for done in pending for cited in item_citations(done) if _cited_line(cited) == key])
-                pending = []
+            # 同じ文書・頁・chunk を再利用しても、各説明の直下に出典を付ける。
+            for key in _citation_keys(entry):
+                out.append(key)
+                citation_entries.append([cited for cited in item_citations(entry) if _cited_line(cited) == key])
         return out
 
     def mark_application(line: str, application: CheckedApplication) -> None:

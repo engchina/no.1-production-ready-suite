@@ -1,3 +1,4 @@
+import { expectGrowingList } from "./_list-viewport";
 import { expect, type Locator, type Page, test } from "./fixtures/test";
 import { mockTraceApi, ragSpan, savedSpanProgress, SPAN_TRACE_ID, traceSnapshotJson } from "./_chat-progress";
 import {
@@ -298,7 +299,8 @@ async function expectScrollsInsideTable(page: Page, region: Locator) {
   });
   expect(metrics.sticky).toBe("sticky");
   expect(metrics.scrollable).toBe(true);
-  expect(metrics.visibleRows).toBe(expectedRows);
+  if (isNarrow(page)) expect(metrics.visibleRows).toBe(expectedRows);
+  else expect(metrics.visibleRows).toBeGreaterThanOrEqual(expectedRows);
 }
 
 test.describe("実行履歴", { tag: "@responsive" }, () => {
@@ -1346,4 +1348,25 @@ test.describe("実行履歴の詳細の長い章節の根拠（#3422）", { tag:
     await list.getByTestId("evidence-card").first().screenshot({ path: testInfo.outputPath("long-section-path-card.png") });
     await expectNoPageOverflow(page);
   });
+});
+
+test("保存した回答の記録から同頁の説明と全確定根拠を開ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const { itemCitationText, itemCitationChunks, expectItemCitationSources } = await import("./_item-citations");
+  await mockDatabaseReady(page);
+  await mockLocalAuth(page);
+  await mockRuns(page, [run(0, {
+    question: "合成の質問", search_answer_profile_name: "プロファイル A",
+    answer_generated: true, answer: itemCitationText, citations: itemCitationChunks, citation_count: 2,
+  })]);
+  await page.goto("/history/run-0");
+  await expectItemCitationSources(page, page.getByTestId("answer-text"));
+  await page.screenshot({ path: testInfo.outputPath("item-citations-history.png"), fullPage: true });
+});
+
+test("実行履歴の主一覧は高い画面へ拡張してページ送りを保つ", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockDatabaseReady(page);
+  await mockLocalAuth(page);
+  await mockRuns(page, Array.from({ length: 60 }, (_, index) => run(index + 1, { question: `合成の質問 ${index + 1}`, search_answer_profile_name: "プロファイル A" })));
+  await page.goto("/history");
+  await expectGrowingList(page, testInfo, "run-history");
 });

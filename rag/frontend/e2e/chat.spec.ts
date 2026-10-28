@@ -2871,3 +2871,26 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 }
+
+test("同頁の説明ごとに出典を開き、複数の確定箇所と保存後の対応を保つ", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const { itemCitationText, itemCitationChunks, expectItemCitationSources } = await import("./_item-citations");
+  const question = { ...userMessage, content: "合成の説明を確認してください。" };
+  const reply = { ...assistantMessage, content: itemCitationText, citations: itemCitationChunks };
+  const streamBody = [
+    `event: start\ndata: ${JSON.stringify({ conversation_id: "conv-1", user_message: question, columns: [{ model_id: "m1", label: "MODEL 1" }] })}\n\n`,
+    `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: itemCitationText })}\n\n`,
+    `event: citations\ndata: ${JSON.stringify({ model_id: "m1", citations: itemCitationChunks })}\n\n`,
+    `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+  ].join("");
+  await mockChat(page, "ready", [], { streamBody, sentMessages: [question, reply] });
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, searchAnswerProfile.name);
+  await page.getByRole("button", { name: "新しい会話" }).click();
+  await page.getByRole("textbox", { name: "質問", exact: true }).fill(question.content);
+  await page.getByRole("button", { name: "送信", exact: true }).click();
+  const answer = page.getByTestId("answer-text");
+  await expectItemCitationSources(page, answer);
+  await page.screenshot({ path: testInfo.outputPath("item-citations-chat.png"), fullPage: true });
+  await page.reload();
+  await expectItemCitationSources(page, answer);
+});

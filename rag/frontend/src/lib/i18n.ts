@@ -3719,6 +3719,8 @@ export const ja = {
   "search.faq.matched": "一致した Q&A: {question}",
   "search.answerDetails.models": "使用したモデル",
   "search.answerDetails.questionType": "問い合わせ型: {value}",
+  "search.answerText.citationPart": "箇所 {number}/{total}：{citation}",
+  "search.answerText.citationCandidates": "位置未確定の候補：{citation}",
   "search.answerText.openCitation": "{citation} の原文を開く",
   // 本文の根拠の行が指す箇所を確定できないとき（#2710）。
   "search.citationPosition.unresolvedTitle": "この根拠の行の位置は確定していません",
@@ -4156,7 +4158,7 @@ export const ja = {
   "feedback.list.emptyHint": "期間や絞り込み条件を変更するか、検索・チャットで回答を評価してください。",
   "feedback.list.unknownSearchAnswerProfile": "検索・回答プロファイル不明（旧データ）",
   "feedback.list.openConversation": "会話を開く",
-  "feedback.list.openCitation": "引用元を開く",
+  "feedback.list.openCitation": "根拠を表示",
   "feedback.list.selectNamed": "{name} の詳細を表示",
   "feedback.list.hasComment": "コメントあり",
   "feedback.list.legacyPreview": "本文未保存（旧データ）",
