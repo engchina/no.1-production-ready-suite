@@ -12,12 +12,14 @@ import {
   DataTable,
   EmptyState,
   INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
   ListDetailLayout,
   ListDetailPager,
   ListToolbar,
   OffsetPagination,
   PAGE_SIZE_OPTIONS,
   RowTitleButton,
+  Section,
   Skeleton,
   StatusBadge,
   TableSkeleton,
@@ -181,15 +183,15 @@ export function SignalsContent({
         <ListDetailLayout
           id="feedback-signals"
           layout="single"
+          listVariant="table"
           listLabel={t("feedback.signals.list.title")}
           detailLabel={t("feedback.signals.detail.title")}
           storagePrefix={AGENT_LIST_DETAIL_STORAGE_PREFIX}
           listHeader={
-            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_16rem] sm:items-center">
-              <h2 className="text-sm font-semibold text-fg">{t("feedback.signals.list.title")}</h2>
+            <Section title={t("feedback.signals.list.title")}>
               {/* 件数: 種類の絞り込み中は「N 件（全 M 件）」。M は期間・業務 Agent の確かめるべき実行の全件（#1891）。 */}
               <ListToolbar count={listCount(summary.flagged, report.total, filtered)} testId="signals-list-toolbar" />
-            </div>
+            </Section>
           }
           list={
             report.items.length ? (
@@ -348,8 +350,7 @@ function SignalList({
       ariaLabel={t("feedback.signals.list.label")}
       scrollAriaLabel={listScrollLabel(t("feedback.signals.list.label"))}
       stickyHeader
-      // 一覧の列の高さの中で縦にスクロールし、表頭を固定する。列の枠と二重にしない。
-      className="min-h-0 rounded-none border-0"
+      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
       tableClassName="w-full table-fixed"
     />
   );

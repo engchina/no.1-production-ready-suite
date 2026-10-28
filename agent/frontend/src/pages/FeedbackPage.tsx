@@ -102,10 +102,13 @@ function ratingLabel(rating: FeedbackRating): string {
 export function FeedbackPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [savedView, setView] = useWorkspaceState("feedback", "view", "signals" as FeedbackView, isOneOf(VIEWS));
-  const view: FeedbackView = searchParams.has("signal") ? "signals" : searchParams.has("feedback") ? "ratings" : savedView;
+  const selectedView: FeedbackView | null = searchParams.has("signal") ? "signals" : searchParams.has("feedback") ? "ratings" : null;
+  const view = selectedView ?? savedView;
+  // 詳細 URL を開いたときだけ見方を保存する。タブの操作で保存値を変えた途中に、
+  // 遷移前の URL の見方を書き戻すと最初の切り替えが取り消される。
   useEffect(() => {
-    if (savedView !== view) setView(view);
-  }, [savedView, view, setView]);
+    if (selectedView) setView(selectedView);
+  }, [selectedView, setView]);
   const [days, setDays] = useWorkspaceState("feedback", "days", DEFAULT_PERIOD, isPeriod);
   const [agentId, setAgentId] = useWorkspaceState("feedback", "agentId", "", isString);
   const [rating, setRating] = useWorkspaceState("feedback", "rating", "", isRatingFilter);

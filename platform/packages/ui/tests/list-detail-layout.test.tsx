@@ -42,7 +42,7 @@ function setWide(next: boolean) {
 
 const ITEMS = ["alpha", "beta", "gamma"];
 
-function Harness({ initial = null as string | null, single = false }) {
+function Harness({ initial = null as string | null, single = false, table = false }) {
   const [selected, setSelected] = useState<string | null>(initial);
   return (
     <>
@@ -52,6 +52,7 @@ function Harness({ initial = null as string | null, single = false }) {
       <ListDetailLayout
         id="things"
         layout={single ? "single" : "responsive"}
+        listVariant={table ? "table" : "panel"}
         listLabel="項目の一覧"
         detailLabel="項目の詳細"
         listHeader={<input aria-label="検索" data-testid="search" />}
@@ -104,6 +105,27 @@ afterEach(() => {
 });
 
 describe("ListDetailLayout（#2281）", () => {
+  it("表の主一覧でも行から詳細へ進み、戻ると選んだ行にフォーカスを戻す", () => {
+    act(() => root.render(<Harness single table />));
+    expect(listColumn().classList.contains("sticky")).toBe(false);
+    expect(listColumn().classList.contains("border")).toBe(false);
+    const beta = itemButton("beta");
+    act(() => beta.focus());
+    click(beta);
+    expect(listColumn().classList.contains("hidden")).toBe(true);
+    expect($('[data-testid="detail"]').textContent).toBe("beta");
+    click($('[data-testid="back"]'));
+    expect(listColumn().classList.contains("hidden")).toBe(false);
+    expect(document.activeElement).toBe(beta);
+  });
+
+  it("表の指定があっても分割表示では従来の一覧列を使う", () => {
+    act(() => root.render(<Harness table />));
+    expect(layout().dataset.listDetailLayout).toBe("split");
+    expect(listColumn().classList.contains("sticky")).toBe(true);
+    expect(listColumn().classList.contains("border")).toBe(true);
+  });
+
   it("明示した single は desktop でも一覧と全幅の詳細を切り替える", () => {
     act(() => root.render(<Harness single />));
     expect(layout().dataset.listDetailLayout).toBe("single");

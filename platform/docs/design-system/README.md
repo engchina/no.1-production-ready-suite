@@ -859,6 +859,8 @@ import { SearchField } from "@production-ready/ui";
 
 ### `ListDetailLayout`（新規）— ★ 一覧は狭く、詳細は広く。xl 未満は 1 ペイン（#2281）
 
+`ListDetailLayout` の `listVariant="table"` は、1 ペインの主一覧を標準の表として出す。見出しと件数は `listHeader` の `Section` / `ListToolbar`、表の枠と高さは `DataTable` の `visibleRows`、ページ送りは `listFooter` が持つ。外側のカードと固定の高さは付けず、選択・詳細・戻るときのフォーカスの復元は従来どおりとする。2 ペインでは従来の一覧列の構成を使う（#3749）。
+
 `ListDetailLayout layout="single"` は、幅に関わらず全幅の一覧から全幅の詳細へ切り替える選択肢です。既定の `responsive` は xl 以上で分割します。戻る操作は画面の `PageHeader` が持ち、URL の選択は `useUrlSelection` の `singlePane: true` とそろえます（#3635）。
 
 B 型（マスタ詳細の閲覧）の一覧 + 詳細の部品です。以前は `FixedSplitPane` の 1:1 で並べ、1280px で詳細が約 30rem に押し込まれていました（NL2SQL のテーブルの管理の列情報の 6 列が横スクロール・カードの入れ子が 3 段・一覧が 8 行の固定で下に空白・選択が URL に無い・先頭の行を自動で選んでいた）。画面の規則は UX 契約 page-archetypes.md §1 B、props は components-reference.md。
