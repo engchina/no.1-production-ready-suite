@@ -291,3 +291,51 @@ test("MCP 接続の API キーは SecretField（保存済み / 未設定・表�
   await discard.click();
   await expect(page.locator("#mcp-server-auth-mode")).toContainText("なし");
 });
+
+
+test("/agents の主一覧は表示領域に合わせて伸び、小画面は標準密度を保つ", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  const mobile = testInfo.project.name === "mobile-375";
+  if (!mobile) await page.setViewportSize({ width: 1440, height: 1300 });
+  const rows = mockApi.state.agents;
+  const base = rows[0];
+  rows.splice(0, rows.length, ...Array.from({ length: 35 }, (_, index) => ({
+    ...structuredClone(base), id: `height-${index}`, name: `検証 ${index}`,
+  })));
+  await page.goto("/agents");
+  const scroll = page.getByTestId("agents-scroll-region");
+  await expect(scroll.locator("tbody tr")).toHaveCount(25);
+  const delta = () => scroll.evaluate((node) => {
+    const count = window.matchMedia("(min-width: 768px)").matches ? 8 : 5;
+    return node.getBoundingClientRect().bottom - node.querySelectorAll("tbody tr")[count - 1].getBoundingClientRect().bottom;
+  });
+  if (mobile) await expect.poll(async () => Math.abs(await delta())).toBeLessThanOrEqual(3);
+  else await expect.poll(delta).toBeGreaterThan(100);
+  const metrics = await scroll.evaluate((node) => ({ height: node.clientHeight, content: node.scrollHeight }));
+  expect(metrics.content).toBeGreaterThan(metrics.height);
+  await expect(scroll).toHaveAttribute("role", "region");
+  await page.screenshot({ path: testInfo.outputPath("agents-height.png"), fullPage: true });
+});
+
+
+test("/skills の主一覧は表示領域に合わせて伸び、小画面は標準密度を保つ", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  const mobile = testInfo.project.name === "mobile-375";
+  if (!mobile) await page.setViewportSize({ width: 1440, height: 1300 });
+  const rows = mockApi.state.skills;
+  const base = rows[0];
+  rows.splice(0, rows.length, ...Array.from({ length: 35 }, (_, index) => ({
+    ...structuredClone(base), id: `height-${index}`, name: `検証 ${index}`,
+  })));
+  await page.goto("/skills");
+  const scroll = page.getByTestId("skills-scroll-region");
+  await expect(scroll.locator("tbody tr")).toHaveCount(25);
+  const delta = () => scroll.evaluate((node) => {
+    const count = window.matchMedia("(min-width: 768px)").matches ? 8 : 5;
+    return node.getBoundingClientRect().bottom - node.querySelectorAll("tbody tr")[count - 1].getBoundingClientRect().bottom;
+  });
+  if (mobile) await expect.poll(async () => Math.abs(await delta())).toBeLessThanOrEqual(3);
+  else await expect.poll(delta).toBeGreaterThan(100);
+  const metrics = await scroll.evaluate((node) => ({ height: node.clientHeight, content: node.scrollHeight }));
+  expect(metrics.content).toBeGreaterThan(metrics.height);
+  await expect(scroll).toHaveAttribute("role", "region");
+  await page.screenshot({ path: testInfo.outputPath("skills-height.png"), fullPage: true });
+});

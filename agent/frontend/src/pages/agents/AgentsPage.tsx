@@ -488,6 +488,8 @@ function AgentTable({
   return (
     <PagedDataTable
       pageKey="agents"
+      growToViewport
+      scrollTestId="agents-scroll-region"
       resetKey={resetKey}
       rows={agents}
       columns={columns}

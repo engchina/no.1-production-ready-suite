@@ -1,3 +1,5 @@
+import { jumpToPage } from "../../../platform/packages/ui/e2e/layout-checks";
+import { chooseSelectFieldOption } from "./fixtures/select-field";
 import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
@@ -428,3 +430,53 @@ for (const viewport of [
     await page.screenshot({ path: testInfo.outputPath(`agent-versions-retention-${viewport.name}.png`) });
   });
 }
+
+
+test("スキル更新の標準ページングで選択を保ち、表示件数とページを復元できる", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  seedSkillUpdatedAgent(mockApi);
+  const base = mockApi.state.agents.find((item) => item.id === "agent-1855")!;
+  const agents = Array.from({ length: 31 }, (_, index) => ({
+    ...structuredClone(base), id: `paging-agent-${index}`, name: `検証 Agent ${index}`,
+  }));
+  mockApi.state.agents.splice(0, mockApi.state.agents.length, ...agents);
+  await page.goto("/agents");
+  await page.getByTestId("agent-skill-updates-open").click();
+  const sheet = page.getByRole("dialog", { name: "スキルの更新を取り込む" });
+  const pager = sheet.getByTestId("agent-skill-updates-pagination");
+  const cards = sheet.locator("li[data-testid^='agent-skill-update-']");
+  await expect(cards).toHaveCount(25);
+  await expect(sheet.getByTestId("agent-skill-updates-toolbar")).toContainText("全 31 件");
+  await expect(pager).toContainText("1–25 / 31 件");
+  await sheet.getByTestId("agent-skill-update-paging-agent-0").getByRole("checkbox").uncheck();
+  await jumpToPage(pager, 2);
+  await expect(cards).toHaveCount(6);
+  await sheet.getByTestId("agent-skill-update-paging-agent-30").getByRole("checkbox").uncheck();
+  await expect(sheet.getByTestId("agent-skill-updates-publish")).toHaveText("選んだ 29 件を再公開");
+  await pager.getByRole("button", { name: "前へ", exact: true }).click();
+  await expect(sheet.getByTestId("agent-skill-update-paging-agent-0").getByRole("checkbox")).not.toBeChecked();
+  await chooseSelectFieldOption(pager.getByRole("combobox"), "10");
+  await expect(cards).toHaveCount(10);
+  await jumpToPage(pager, 4);
+  await expect(cards).toHaveCount(1);
+  await sheet.getByRole("button", { name: "閉じる", exact: true }).click();
+  await page.reload();
+  await page.getByTestId("agent-skill-updates-open").click();
+  await expect(pager).toContainText("31–31 / 31 件");
+  await expect(pager.getByRole("combobox")).toHaveAttribute("data-value", "10");
+  await sheet.getByRole("button", { name: "選択を外す", exact: true }).click();
+  await sheet.getByTestId("agent-skill-update-paging-agent-30").getByRole("checkbox").check();
+  await jumpToPage(pager, 1);
+  await sheet.getByTestId("agent-skill-update-paging-agent-0").getByRole("checkbox").check();
+  await sheet.getByTestId("agent-skill-updates-publish").click();
+  const confirm = page.getByRole("alertdialog");
+  await confirm.getByRole("button", { name: "選んだ 2 件を再公開", exact: true }).click();
+  await expect(sheet).toBeHidden();
+  expect(mockApi.lastRequest("POST", "/api/agent-skill-updates/publish")?.body).toEqual({
+    agent_ids: ["paging-agent-0", "paging-agent-30"], note: "",
+  });
+  await page.getByTestId("agent-skill-updates-open").click();
+  await sheet.getByRole("button", { name: "すべて選ぶ", exact: true }).click();
+  await expect(sheet.getByTestId("agent-skill-updates-publish")).toHaveText("選んだ 29 件を再公開");
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("skill-updates-paging.png"), fullPage: true });
+});
