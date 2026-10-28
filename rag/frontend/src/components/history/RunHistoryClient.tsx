@@ -301,6 +301,7 @@ export function RunHistoryClient() {
         ) : (page?.total ?? 0) > 0 ? (
           <div className="grid gap-2">
             <RunHistoryTable<RunSummary>
+              growToViewport
               rows={items}
               toItem={toItem}
               onOpen={open}

@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import {
   PageBody,
   Tabs,
@@ -26,15 +27,15 @@ import {
   TimedLoadingState,
   adjacentListItems,
   useConfirm,
-  INFORMATION_LIST_SCROLL_CLASS,
-  INFORMATION_TABLE_FOCUS_CLASS,
+  ViewportScrollRegion,
+  EvidenceSourceButton,
+  useEvidenceSource,
   useUrlSelection,
   INFORMATION_TABLE_ROW_CLASS,
 } from "@production-ready/ui";
 import {
   BookmarkPlus,
   ClipboardList,
-  ExternalLink,
   FileText,
   MessageSquareText,
   RefreshCw,
@@ -44,6 +45,8 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { CitationSourceSheet } from "@/components/search/CitationSourceSheet";
+import { EVIDENCE_LABELS } from "@/components/search/citation-evidence";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { RAG_LIST_DETAIL_STORAGE_PREFIX } from "@/components/layout/EntityLayout";
 import { useAuth } from "@/components/security/AuthProvider";
@@ -52,6 +55,7 @@ import {
   ApiError,
   type CitationFeedbackRating,
   type FeedbackDetail,
+  type FeedbackCitationSnapshot,
   type FeedbackItem,
   type FeedbackSummary,
 } from "@/lib/api";
@@ -729,13 +733,21 @@ function ContentTab({ detail }: { detail: FeedbackDetail }) {
 }
 
 function EvidenceTab({ detail }: { detail: FeedbackDetail }) {
-  // 文書の詳細を開けない利用者には、引用元（文書の詳細）へのリンクを出さない（#303）。
   const canOpenDetail = canOpenDocumentDetail(useAuth().hasPermission);
+  const source = useEvidenceSource<FeedbackCitationSnapshot>();
+  const selected = source.shown;
+  const selectedIndex = selected ? detail.citations.indexOf(selected) : 0;
+  const chunk = useQuery({
+    queryKey: ["feedback-citation-source", detail.feedback_id, selected?.document_id, selected?.chunk_id],
+    queryFn: () => api.getDocumentCitationChunk(selected!.document_id, selected!.chunk_id),
+    enabled: canOpenDetail && source.selected !== null,
+    retry: false,
+  });
   return (
-    <div id="feedback-panel-evidence" role="tabpanel" aria-labelledby="feedback-tab-evidence" tabIndex={0} data-testid="feedback-evidence-scroll" className={cn("space-y-3", INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS)}>
+    <>
+    <ViewportScrollRegion id="feedback-panel-evidence" role="tabpanel" aria-labelledby="feedback-tab-evidence" data-testid="feedback-evidence-scroll" className="space-y-3">
       {detail.citations.length ? detail.citations.map((citation, index) => {
         const targeted = detail.target_type === "citation" && citation.chunk_id === detail.chunk_id;
-        const link = `${APP_ROUTES.documents}/${encodeURIComponent(citation.document_id)}?chunk_id=${encodeURIComponent(citation.chunk_id)}`;
         return (
           <article key={`${citation.chunk_id}-${index}`} data-surface-tint={targeted ? "accent" : undefined} className={cn("rounded-lg border border-border p-3", targeted && "border-accent-emphasis bg-accent-subtle")}>
             <div className="flex items-start justify-between gap-2">
@@ -746,13 +758,16 @@ function EvidenceTab({ detail }: { detail: FeedbackDetail }) {
               {targeted ? <StatusBadge variant="info" icon={false} label={t("feedback.detail.targetCitation")} className="shrink-0" /> : null}
             </div>
             <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-fg/90">{citation.content_preview ?? t("feedback.detail.noCitationPreview")}</p>
-            {canOpenDetail ? <Link to={link} className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"><ExternalLink size={14} aria-hidden />{t("feedback.list.openCitation")}</Link> : null}
+            {canOpenDetail ? <div className="mt-3"><EvidenceSourceButton fileName={citation.file_name ?? citation.document_id} onOpen={() => source.open(citation)} labels={EVIDENCE_LABELS} /></div> : null}
           </article>
         );
       }) : (
         <EmptyState title={t("feedback.detail.noCitations")} hint={t("feedback.detail.noCitationsHint")} />
       )}
-    </div>
+    </ViewportScrollRegion>
+    {canOpenDetail && source.mounted ? <CitationSourceSheet chunk={chunk.isError ? null : chunk.data ?? null} index={selectedIndex} open={source.selected !== null} onClose={source.close} kind={detail.answer ? "answer" : "search"} scores={{ score: null, rerankScore: selected?.rerank_score ?? null }}
+      empty={chunk.isError ? <ErrorState message={chunk.error instanceof ApiError ? chunk.error.message : t("feedback.detail.noCitationsHint")} onRetry={() => void chunk.refetch()} /> : <TimedLoadingState label={t("documents.detail.loading")} operationKey="feedback-citation-source"><Skeleton className="h-40 w-full" /></TimedLoadingState>} /> : null}
+    </>
   );
 }
 

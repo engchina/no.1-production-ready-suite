@@ -977,3 +977,5 @@ export {
   type TraceProgressSnapshot,
   type TraceProgressSnapshotOptions,
 } from "./components/feedback/trace-progress-snapshot";
+
+export { ViewportScrollRegion } from "./components/data/viewport-scroll-region";
