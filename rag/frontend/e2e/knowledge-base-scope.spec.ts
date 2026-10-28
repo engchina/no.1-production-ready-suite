@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "./fixtures/test";
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
+import { closeFileListFilters, expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, openFileListFilters, selectSearchAnswerProfile } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
@@ -33,7 +33,7 @@ test("狭い画面幅(375px)でも検索ページがページを横スクロー�
   await expectNoPageOverflow(page);
 });
 
-test("文書インデックスはナレッジベースで絞り込み、所属を表示する", async ({ page }) => {
+test("文書インデックスはナレッジベースで絞り込み、所属を表示する", { tag: "@responsive" }, async ({ page }) => {
   let lastKnowledgeBaseId: string | null = null;
   await page.route("**/api/documents**", async (route) => {
     const url = new URL(route.request().url());
@@ -60,12 +60,14 @@ test("文書インデックスはナレッジベースで絞り込み、所属�
   });
 
   await page.goto("/file-list");
+  await openFileListFilters(page);
 
   // 検索できる単一選択（#578）: ボタンを押すと検索欄と候補の一覧が開く。
   const filter = page.getByRole("button", { name: /^ナレッジベース/ });
   await filter.click();
   await page.getByRole("listbox", { name: "ナレッジベース" }).getByRole("option", { name: /社内規程/ }).click();
   await expect(filter).toHaveAccessibleName("ナレッジベース 社内規程");
+  await closeFileListFilters(page);
 
   await expect.poll(() => lastKnowledgeBaseId).toBe("kb-1");
   await expect(page.getByRole("link", { name: "policy.txt" })).toBeVisible();
