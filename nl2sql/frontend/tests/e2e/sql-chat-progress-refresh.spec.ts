@@ -171,7 +171,7 @@ async function openSecondQuestion(page: Page) {
   await composer.press("Enter");
   await confirmChatRequirement(page);
   const turn = page.getByTestId("sql-chat-turn").nth(1);
-  await expect(turn.getByTestId("sql-chat-progress-current")).toContainText("質問と対象の表を準備しています");
+  await expect(turn.getByTestId("sql-chat-progress-current")).toContainText("質問と参照できる表を整理しています");
   return turn;
 }
 
@@ -230,7 +230,7 @@ for (const colorScheme of ["light", "dark"] as const) {
       await expect(turn.getByTestId("sql-chat-progress-current").getByTestId("sql-chat-progress-reconnecting")).toHaveCount(0);
       await expect(turn.getByTestId("sql-chat-progress-running").getByTestId("sql-chat-progress-reconnecting")).toHaveCount(1);
       // 今の段階の行は残したまま、遅延の案内の代わりに出す（行を動かさない）。
-      await expect(turn.getByTestId("sql-chat-progress-current")).toContainText("質問と対象の表を準備しています");
+      await expect(turn.getByTestId("sql-chat-progress-current")).toContainText("質問と参照できる表を整理しています");
       await expect(turn.getByTestId("sql-chat-progress-current")).toHaveAttribute("data-reconnecting", "true");
       state.phase = "done";
       await expect(turn.locator("pre")).toContainText("ORDER BY 2 DESC", { timeout: 40_000 });

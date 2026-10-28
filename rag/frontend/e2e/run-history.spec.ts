@@ -635,13 +635,13 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(timeline.locator("details[data-run-timeline-section]")).not.toHaveAttribute("open", "");
     await expect(timeline.locator("[data-run-timeline-step]").first()).toBeHidden();
     await timelineSummary.click();
-    // 行は span の木（#3226）: 包む段（質問の理解から回答の作成まで）と、その子の工程（字下げ）。
+    // 行は span の木（#3226）: 包む段（質問の条件を整理して回答を作る）と、その子の工程（字下げ）。
     await expect(timeline.locator("[data-run-timeline-step]")).toHaveCount(4);
-    await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("質問の理解から回答の作成まで");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("質問の条件を整理して回答を作る");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toHaveAttribute("data-level", "1");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("0.3 秒");
-    await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("質問の理解（Query Understanding）（LLM 1 回・送信 2 回）");
-    await expect(timeline.locator("[data-run-timeline-step]").nth(3)).toContainText("回答の安全チェック");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("質問から対象と条件を読み取る（LLM 1 回・送信 2 回）");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(3)).toContainText("回答に安全上の問題がないか検査する");
     if (!isNarrow(page)) await expect(timeline.locator("[data-run-timeline-bar]").first()).toBeVisible();
     // 段の詳細（#2341）: 行を開くと工程の詳細と技術の値（span の名前）を出す（既定で閉じる）。
     const steps = timeline.locator("[data-run-timeline-step]");
@@ -727,7 +727,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(summary.locator("[data-run-status]")).toHaveCount(0);
     // 失敗は共通の失敗のカード: 止まった段を含む 1 文目・次の操作・開いた「詳細」（#2342）。
     const failure = summary.getByTestId("run-history-failure");
-    await expect(failure.getByRole("alert")).toContainText("「検索」で処理が止まりました。");
+    await expect(failure.getByRole("alert")).toContainText("「文書から根拠の候補を検索する」で処理が止まりました。");
     await expect(failure).toContainText("実行 ID を添えて管理者に連絡してください");
     await expect(failure).toContainText("ORA-03146");
     await expect(summary.locator('[data-run-fact="errorStage"]')).toContainText("検索");
@@ -1089,7 +1089,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await expectNoPageOverflow(page);
   });
 
-  test("用語・同義語の確認と回答ルールの確認は別の段で、それぞれの登録・一致・影響を出す（#3451）", async ({
+  test("一致する用語の別名を検索文に加えると回答ルールの確認は別の段で、それぞれの登録・一致・影響を出す（#3451）", async ({
     page,
   }, testInfo) => {
     await mockLocalAuth(page);
@@ -1136,10 +1136,10 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await page.goto(`/history/${row.run_id}`);
     await page.getByTestId("run-history-timeline-summary").click();
     const steps = page.getByTestId("run-history-timeline").locator("[data-run-timeline-step]");
-    // 包む段 → 質問の理解（Query Understanding） → 用語・同義語の確認 → 回答ルールの確認（同じ段の子でこの順）。
+    // 包む段 → 質問から対象と条件を読み取る → 一致する用語の別名を検索文に加える → 回答ルールの確認（同じ段の子でこの順）。
     await expect(steps).toHaveCount(4);
-    await expect(steps.nth(2)).toContainText("用語・同義語の確認");
-    await expect(steps.nth(3)).toContainText("確認・回答ルールの確認");
+    await expect(steps.nth(2)).toContainText("一致する用語の別名を検索文に加える");
+    await expect(steps.nth(3)).toContainText("確認と回答に使うルールを選ぶ");
     await expect(steps.nth(2)).toHaveAttribute("data-level", "1");
     await expect(steps.nth(3)).toHaveAttribute("data-level", "1");
     await expect(page.getByText("用語・ルールの確認")).toHaveCount(0);
@@ -1225,7 +1225,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
       await page.goto(`/history/${row.run_id}`);
       await page.getByTestId("run-history-timeline-summary").click();
       const steps = page.getByTestId("run-history-timeline").locator("[data-run-timeline-step]");
-      // 包む段 → 質問の理解 → 検索文と検索語の決定。
+      // 包む段 → 質問の理解 → 検索文と全文検索の語を決める。
       await expect(steps).toHaveCount(3);
 
       await steps.nth(1).locator("[data-run-timeline-toggle]").click();

@@ -536,7 +536,11 @@ def observed_span(
     observed = ObservedSpan(sdk_span)
     observed.set_attributes(
         {
-            **(model_purpose_attributes() if name in {"gen_ai.chat", "oracle.select_ai"} else {}),
+            **(
+                model_purpose_attributes()
+                if name in {"gen_ai.chat", "gen_ai.embeddings", "gen_ai.rerank", "oracle.select_ai"}
+                else {}
+            ),
             **(attributes or {}),
         }
     )

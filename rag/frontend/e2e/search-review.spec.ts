@@ -748,7 +748,7 @@ test("RAG 検索の処理の経過は span の木で、2 つ目の「トレー�
     [
       { key: "root", spec: ragSpan.root(), at: [0, 2] },
       { key: "filter", spec: ragSpan.stage("field_filter"), at: [0, 2] },
-      { key: "chat", spec: ragSpan.technical("gen_ai.chat", "filter", { "gen_ai.request.model": "synthetic-model" }), at: [0, 2] },
+      { key: "chat", spec: ragSpan.technical("gen_ai.chat", "filter", { "gen_ai.request.model": "synthetic-model", "pr.gen_ai.purpose": "query.conditions" }), at: [0, 2] },
     ],
     { terminal: "done", base: "2026-01-01T00:00:00Z" }
   );
@@ -763,9 +763,12 @@ test("RAG 検索の処理の経過は span の木で、2 つ目の「トレー�
   await page.getByTestId("search-run-progress-summary").click();
   const process = page.getByTestId("search-run-progress");
   // 段の名前と技術の span の日本語の名前・モデル名。入れ子は span の親子（root は行にしない）。
-  await expect(process.locator("[data-run-timeline-label]")).toHaveText(["検索条件の抽出（Metadata Filter Extraction）", "モデルの呼び出し · synthetic-model"]);
+  await expect(process.locator("[data-run-timeline-label]")).toHaveText(["質問から検索の絞り込み条件を読み取る", "質問から絞り込み条件を読み取る"]);
   await expect(process.locator("[data-run-timeline-step]").nth(1)).toHaveAttribute("data-level", "1");
   await expect(process.locator("[data-run-timeline-step]").nth(1)).toContainText("2.0 秒");
+  const modelStep = process.locator("[data-run-timeline-step]").nth(1);
+  await modelStep.locator('button[aria-expanded="false"]').click();
+  await expect(modelStep).toContainText("synthetic-model");
   const details = page.locator("[data-run-process-details]");
   await expect(details).not.toHaveAttribute("open", "");
   await details.locator(":scope > summary").click();
@@ -823,7 +826,7 @@ for (const scenario of [
 }
 
 test("RAG 検索と履歴の工程の内容・階層・状態・時間が一致する", {tag: "@responsive"}, async ({page}, testInfo) => {
-  // 工程の span の親子（回答生成フロー > 文書検索 > Rerank）と回答の安全チェック（#3226）。
+  // 工程の span の親子（回答生成フロー > 文書検索 > Rerank）と回答に安全上の問題がないか検査する（#3226）。
   const progress_events = savedSpanProgress(
     "synthetic-parity",
     [

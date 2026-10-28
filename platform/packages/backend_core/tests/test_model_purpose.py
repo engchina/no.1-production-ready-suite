@@ -226,3 +226,28 @@ async def test_cancelled_task_restores_its_inherited_context_without_changing_pa
         assert restored == [{"pr.gen_ai.purpose": "answer.generate"}]
         assert model_purpose_attributes() == {"pr.gen_ai.purpose": "answer.generate"}
     assert model_purpose_attributes() == {}
+
+
+@pytest.mark.parametrize("operation", ["gen_ai.embeddings", "gen_ai.rerank"])
+def test_embedding_and_rerank_probe_purpose_does_not_change_normal_calls(
+    tracing_scope: InMemorySpanExporter,
+    operation: str,
+) -> None:
+    with operation_trace("task", operation_id="probe-a") as summary:
+        with observed_span(operation, attributes={"gen_ai.request.model": "model-a"}):
+            pass
+        with (
+            model_call_purpose("connection.check"),
+            observed_span(operation, attributes={"gen_ai.request.model": "model-a"}),
+        ):
+            pass
+        with observed_span(operation):
+            pass
+    spans = [span for span in summary.spans if span.operation_name == operation]
+    assert [span.attributes.get("pr.gen_ai.purpose") for span in spans] == [
+        None,
+        "connection.check",
+        None,
+    ]
+    assert spans[0].attributes["gen_ai.request.model"] == "model-a"
+    assert spans[1].attributes["gen_ai.request.model"] == "model-a"

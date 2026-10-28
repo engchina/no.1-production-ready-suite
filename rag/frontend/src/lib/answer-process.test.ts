@@ -52,15 +52,15 @@ function spanEvents(
 describe("answerStepDisplayName", () => {
   it("backend の工程名を利用者向けの名前にし、回数つきの工程は回数を添える。知らない工程名はそのまま", async () => {
     const { answerStepDisplayName } = await import("./answer-process");
-    expect(answerStepDisplayName("質問拡張戦略")).toBe("質問の言い換え");
-    expect(answerStepDisplayName("Rerank")).toBe("検索結果の並べ替え");
-    expect(answerStepDisplayName("文書検索（2回目）")).toBe("文書の検索（2 回目）");
-    expect(answerStepDisplayName("回答文の生成と根拠確認（1回目）")).toBe("回答の作成と根拠の確認（1 回目）");
-    expect(answerStepDisplayName("検索語の再確定（書き換え後）")).toBe("検索語の決め直し");
+    expect(answerStepDisplayName("質問拡張戦略")).toBe("資料を探す検索表現を作る");
+    expect(answerStepDisplayName("Rerank")).toBe("質問との関連度で候補を並べ替える");
+    expect(answerStepDisplayName("文書検索（2回目）")).toBe("検索文から根拠の候補を集める（2 回目）");
+    expect(answerStepDisplayName("回答文の生成と根拠確認（1回目）")).toBe("回答文を作って根拠と照合する（1 回目）");
+    expect(answerStepDisplayName("検索語の再確定（書き換え後）")).toBe("探し直しに使う検索語を決める");
     // 用語・同義語と回答ルールは別の工程（設定画面のタブの名前と同じ語。#3451）。
-    expect(answerStepDisplayName("用語・同義語の確認")).toBe("用語・同義語の確認");
-    expect(answerStepDisplayName("回答ルールの確認")).toBe("確認・回答ルールの確認");
-    expect(answerStageName("回答ルールの確認")).toBe("確認・回答ルールの確認");
+    expect(answerStepDisplayName("用語・同義語の確認")).toBe("一致する用語の別名を検索文に加える");
+    expect(answerStepDisplayName("回答ルールの確認")).toBe("確認と回答に使うルールを選ぶ");
+    expect(answerStageName("回答ルールの確認")).toBe("確認と回答に使うルールを選ぶ");
     expect(answerStepDisplayName("新しい工程")).toBe("新しい工程");
     expect(answerStepDisplayName("新しい工程（2回目）")).toBe("新しい工程（2回目）");
   });
@@ -180,8 +180,8 @@ describe("RAG_TRACE_DETAILS_LABELS（トレースの span の名前）", () => {
     for (const stage of ["history_rewrite", "field_filter", "answer", "evidence", "retrieval", "answer_guardrail", "answer_record_save", "質問の理解", "根拠検索フロー", "根拠確認（2回目）"]) {
       expect(RAG_TRACE_DETAILS_LABELS.stageName?.(stage, "done")).toBe(answerStageName(stage));
     }
-    expect(answerStageName("evidence")).toBe("質問の理解から根拠の検索まで");
-    expect(answerStageName("根拠検索フロー")).toBe("根拠の検索");
+    expect(answerStageName("evidence")).toBe("質問の条件を整理して根拠を探す");
+    expect(answerStageName("根拠検索フロー")).toBe("回答に使う根拠を検索する");
     expect(answerStageName("未知の工程")).toBeUndefined();
   });
 });

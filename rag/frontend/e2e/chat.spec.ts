@@ -1244,7 +1244,7 @@ for (const theme of ["light", "dark"] as const) {
     });
     const progress = [
       { ...step("s0", "s0", 0, 9), name: "rag.answer", parent_id: undefined, root: true },
-      // 会話を踏まえた質問の書き換えの詳細（#2341。パイプラインの工程の詳細）。
+      // 前の会話を踏まえて質問を補うの詳細（#2341。パイプラインの工程の詳細）。
       step("s1", "history_rewrite", 0, 0.4, undefined, {
         fields: [
           { label: "参照した会話", value: "2 件の発言" },
@@ -1287,7 +1287,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(process.locator("details").first()).toHaveAttribute("open", "");
     const nested = page.getByTestId("chat-answer-progress-step-s4");
     await expect(nested).toHaveAttribute("data-level", "1");
-    await expect(nested).toContainText("文書の検索");
+    await expect(nested).toContainText("検索文から根拠の候補を集める");
     // 計測値（工程の結果・LLM の回数）は名前の後ろの括弧、所要時間は右の列（実行の詳細と同じ RunTimeline。#2265）。
     await expect(nested).toContainText("（該当なし）");
     await expect(nested).toContainText("0.1 秒未満");
@@ -1310,7 +1310,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(nestedDetails).toContainText("検索文: 2 本");
     await nestedToggle.click();
     await expect(nestedDetails).toBeHidden();
-    // パイプラインの工程（会話を踏まえた質問の書き換え）の詳細も同じ形で開ける（#2341）。
+    // パイプラインの工程（前の会話を踏まえて質問を補う）の詳細も同じ形で開ける（#2341）。
     await page.getByTestId("chat-answer-progress-step-s1-toggle").click();
     await expect(page.getByTestId("chat-answer-progress-step-s1-details")).toContainText("合成の書き換えた質問");
     await page.getByTestId("chat-answer-progress-step-s1-toggle").click();
@@ -1319,7 +1319,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(bars).toHaveCount(5);
     if ((page.viewportSize()?.width ?? 1280) >= 1280) await expect(bars.first()).toBeVisible();
     else await expect(bars.first()).toBeHidden();
-    await expect(page.getByTestId("chat-answer-progress-step-s1")).toContainText("会話を踏まえた質問の書き換え");
+    await expect(page.getByTestId("chat-answer-progress-step-s1")).toContainText("前の会話を踏まえて質問を補う");
     // 状態は英語の生の値ではなくアイコンと読み上げの文言で示す。「実行記録」の表示は無い。
     await expect(process.getByText(/complete/)).toHaveCount(0);
     await expect(page.getByText(/実行記録/)).toHaveCount(0);
@@ -2468,7 +2468,7 @@ for (const viewport of [
     await composer.press("Enter");
 
     const failure = page.getByTestId("chat-answer-failure");
-    await expect(failure.getByRole("alert")).toContainText("「文書の検索」で処理が止まりました。");
+    await expect(failure.getByRole("alert")).toContainText("「検索文から根拠の候補を集める」で処理が止まりました。");
     await expect(failure).toContainText("検索処理中にエラーが発生しました。");
     await expect(failure).toContainText("もう一度送信してください。");
     // 技術的な詳細は「詳細」（失敗では開いて出す）。取り直した会話の回答にも引き継ぐ。
@@ -2709,7 +2709,7 @@ test("処理の経過は回答の trace の span の木で、2 つ目の「ト�
   await page.getByTestId("chat-answer-progress-summary").click();
   // 段は処理の経過と同じ名前、技術の span は日本語の名前とモデル名。入れ子は span の親子（root は行にしない）。
   const labels = progressRegion.locator("[data-run-timeline-label]");
-  await expect(labels).toHaveText(["質問の理解から回答の作成まで", "根拠の検索と回答の作成", "モデルの呼び出し · synthetic-model"]);
+  await expect(labels).toHaveText(["質問の条件を整理して回答を作る", "根拠を検索して回答を作る", "モデルを呼び出す（用途の記録なし）"]);
   await expect(progressRegion.locator("[data-run-timeline-step]").nth(2)).toHaveAttribute("data-level", "2");
   await expect(labels.filter({ hasText: /rag\.|gen_ai\./ })).toHaveCount(0);
   // 「処理の詳細」には Trace ID とコピーのボタンを出し、「トレースの詳細」の 2 つ目の表示は無い。
@@ -2765,7 +2765,7 @@ test("span の無い古い形式の処理の経過は、空白にせず古い形
     "この実行は古い形式の記録のため、処理の経過を表示できません。"
   );
   await expect(answer.getByTestId("chat-answer-progress-summary")).toHaveCount(0);
-  await expect(answer.getByText(/文書の検索/)).toHaveCount(0);
+  await expect(answer.getByText(/検索文から根拠の候補を集める/)).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 

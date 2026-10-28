@@ -989,13 +989,17 @@ async def _run_model_settings_test(
             "response_chars": len(text),
         }
     if request.target_type == "embedding":
-        vectors = await OciGenAiClient(settings=settings).embed(
+        vectors = await async_call_with_model_purpose(
+            "connection.check",
+            OciGenAiClient(settings=settings).embed,
             [MODEL_TEST_EMBEDDING_INPUT],
             input_type="SEARCH_QUERY",
         )
         vector = vectors[0] if vectors else []
         return {"vector_dim": len(vector), "input_count": len(vectors)}
-    ranks = await OciGenAiClient(settings=settings).rerank(
+    ranks = await async_call_with_model_purpose(
+        "connection.check",
+        OciGenAiClient(settings=settings).rerank,
         MODEL_TEST_RERANK_QUERY,
         list(MODEL_TEST_RERANK_DOCUMENTS),
         top_n=1,

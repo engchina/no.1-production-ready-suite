@@ -20,7 +20,7 @@ const VIEWPORTS = [
 
 const THREAD_ID = `thread_${"b".repeat(32)}`;
 const RUN_ID = "run-progress";
-const MODEL_CALL = `モデルの呼び出し · ${SYNTHETIC_MODEL}`;
+const MODEL_CALL = "モデルを呼び出す（用途の記録なし）";
 
 function iso(offsetMs: number): string {
   return new Date(Date.now() + offsetMs).toISOString();
@@ -193,7 +193,7 @@ for (const viewport of VIEWPORTS) {
     await expect(turn.getByTestId("chat-progress-step-tool:rag__rag_search")).toContainText(
       "「ナレッジベースの検索」を実行しました"
     );
-    await expect(turn.getByTestId("chat-progress-step-chat-1")).toContainText("進め方を決めました");
+    await expect(turn.getByTestId("chat-progress-step-chat-1")).toContainText("質問に応じた次の操作を選びました");
     await expect(turn.getByTestId("chat-progress-step-chat-2")).toContainText("回答を作りました");
     // 開閉のボタンは既定で閉じる。
     const toggle = turn.getByTestId("chat-progress-step-tool:rag__rag_search-toggle");
@@ -248,13 +248,13 @@ for (const viewport of VIEWPORTS) {
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`progress-plan-${viewport.name}-${theme}.png`) });
 
-      // 2. ツールを呼んでいる（読み直しで span が増える）。終わったモデルの呼び出しは「進め方を決めました」。
+      // 2. ツールを呼んでいる（読み直しで span が増える）。終わったモデルの呼び出しは「質問に応じた次の操作を選びました」。
       run.steps = [toolStep("step-search", "rag__rag_search", "running", { completed_at: null })];
       log
         .step("chat-1", "done", { kind: "plan" })
         .step("tool:rag__rag_search", "running", { params: { tool: "rag__rag_search", run_step: "step-search" } });
       await expect(current).toHaveAttribute("data-step-id", "tool:rag__rag_search");
-      await expect(current).toContainText("処理を実行しています");
+      await expect(current).toContainText("選ばれたツールを呼び出しています");
       await expect(turn.getByTestId("chat-progress-running")).toContainText("処理中（1 ステップ完了）");
       await page.screenshot({ path: testInfo.outputPath(`progress-tool-${viewport.name}-${theme}.png`) });
 
@@ -352,11 +352,11 @@ for (const viewport of VIEWPORTS) {
       await expect(approval).toContainText("承認の判断を受け取りました");
       await expect(approval).toContainText("nl2sql__execute");
       expect((await approval.getAttribute("data-level")) ?? "0").toBe("0");
-      await expect(turn.getByTestId("chat-progress-step-tool:nl2sql__execute")).toContainText("処理を実行しました");
+      await expect(turn.getByTestId("chat-progress-step-tool:nl2sql__execute")).toContainText("選ばれたツールを呼び出しました");
       await expect(turn.getByTestId("chat-progress-step-chat-3")).toHaveAttribute("data-status", "done");
       await expect(turn.getByTestId("chat-progress-step-chat-3")).toContainText("回答を作りました");
-      // ツールを求めたモデルの呼び出しは、進め方の検討として残る。
-      await expect(turn.getByTestId("chat-progress-step-chat-2")).toContainText("進め方を決めました");
+      // ツールを求めたモデルの呼び出しは、質問に応じた次の操作を選ぶとして残る。
+      await expect(turn.getByTestId("chat-progress-step-chat-2")).toContainText("質問に応じた次の操作を選びました");
       // 終端が届いたら、承認待ちの後も会話を取り直して回答を出す（開き直さない）。
       expect(mockApi.requests.some((request) => request.path === `/api/runs/${RUN_ID}/trace`)).toBe(true);
       await expectNoHorizontalOverflow(page);
@@ -489,12 +489,12 @@ test("呼び先の製品の span は書いた製品の工程の名前で出し�
   const list = page.getByTestId("chat-progress");
   const live = await timelineSnapshot(list);
   expect(live.map((row) => [row.text.replace(/ 完了( [\d.]+ 秒)?$/, ""), row.level])).toEqual([
-    ["進め方を決めました", 0],
+    ["質問に応じた次の操作を選びました", 0],
     ["「合成の根拠の取得」を実行しました", 0],
     ["MCP の呼び出し · 合成の根拠の取得", 1],
     ["検索 RAG", 2],
     ["文書の検索", 3],
-    ["埋め込みの作成 · synthetic-embed", 4],
+    ["テキストの埋め込みを作る · synthetic-embed", 4],
     ["ベクトル検索", 4],
     ["回答を作りました", 0],
   ]);
@@ -618,7 +618,7 @@ test("実行の詳細のモデルの呼び出しの行を開くと、入力の�
   run.updated_at = end;
   run.status = "completed";
   // backend の allowlist（`pr_backend_core.observability.tracing`）にある、本文を含まない合成の値だけ（#2583）。
-  const usage = {"gen_ai.operation.name": "chat", "gen_ai.request.model": SYNTHETIC_MODEL, "gen_ai.usage.input_tokens": 1200, "gen_ai.usage.output_tokens": 30};
+  const usage = {"pr.gen_ai.purpose": "agent.choose_action", "gen_ai.operation.name": "chat", "gen_ai.request.model": SYNTHETIC_MODEL, "gen_ai.usage.input_tokens": 1200, "gen_ai.usage.output_tokens": 30};
   const context = {
     "pr.context.instructions.static_fingerprint": "0123456789abcdef",
     "pr.context.instructions.fingerprint": "fedcba9876543210",
@@ -639,7 +639,7 @@ test("実行の詳細のモデルの呼び出しの行を開くと、入力の�
   };
   run.progress_events = new ProgressLog(RUN_ID, () => end, start)
     // 1 回目はプロバイダがキャッシュの値を返さなかった（不明）、2 回目は 0 を返した。
-    .step("chat-1", "done", {startedAt: start, finishedAt: end, kind: "plan", attributes: {...usage, ...context}})
+    .step("chat-1", "done", {startedAt: start, finishedAt: end, attributes: {...usage, ...context}})
     .step("chat-2", "done", {startedAt: start, finishedAt: end, kind: "respond", attributes: {...usage, "gen_ai.usage.cache_read.input_tokens": 0, "pr.context.estimate.input_tokens": 1500}})
     .terminal("done").events;
   run.events = [{id: "end", run_id: RUN_ID, type: "run.completed", message: "", payload: {}, created_at: end}];
@@ -657,8 +657,10 @@ test("実行の詳細のモデルの呼び出しの行を開くと、入力の�
     const values = await step.locator("dd").allInnerTexts();
     return Object.fromEntries(terms.map((term, index) => [term, values[index]]));
   };
+  await expect(timeline.locator('[data-run-timeline-step="chat-1"]')).toContainText("質問に応じた操作または回答を作る");
   const first = await fieldsOf("chat-1");
   expect(first).toMatchObject({
+    "gen_ai.request.model": SYNTHETIC_MODEL,
     "入力トークン": "1200",
     "出力トークン": "30",
     "キャッシュから読んだ入力": "不明",

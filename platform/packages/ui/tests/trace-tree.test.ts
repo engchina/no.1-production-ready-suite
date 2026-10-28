@@ -164,14 +164,28 @@ describe("モデル用途の共通表示", () => {
   it("未知の用途を本文から推測せず、モデル以外の処理に流用しない", () => {
     const steps = traceTimeline({ spans: [
       { ...span("1", "0"), operation_name: "gen_ai.chat", attributes: { "pr.gen_ai.purpose": "unknown-purpose", "gen_ai.request.model": "model-x" } },
-      { ...span("2", "0"), operation_name: "gen_ai.embeddings", attributes: { "pr.gen_ai.purpose": "answer.validate" } },
+      { ...span("2", "0"), operation_name: "http.request", attributes: { "pr.gen_ai.purpose": "answer.validate" } },
     ] }).steps;
-    expect(steps.map(step => step.label)).toEqual(["モデルを呼び出す（用途の記録なし）", "テキストの埋め込みを作る"]);
+    expect(steps.map(step => step.label)).toEqual(["モデルを呼び出す（用途の記録なし）", "HTTP の要求"]);
   });
   it("Select AI の用途と再試行回数を表示する", () => {
     const steps = traceTimeline({ spans: [{ ...span("1", "0"), operation_name: "oracle.select_ai", attributes: {
       "pr.gen_ai.purpose": "sql.generate", "pr.attempt": 2,
     } }] }).steps;
     expect(steps[0].label).toBe("質問に答える SQL を作る（2 回目）");
+  });
+});
+
+
+describe("モデル接続確認の用途", () => {
+  it.each(["gen_ai.chat", "gen_ai.embeddings", "gen_ai.rerank", "oracle.select_ai"])("%s は接続確認を明示し、モデル名を詳細に残す", (operation_name) => {
+    const step = traceTimeline({ spans: [{ ...span("1", "0"), operation_name, attributes: { "pr.gen_ai.purpose": "connection.check", "gen_ai.request.model": "model-probe" } }] }).steps[0];
+    expect(step.label).toBe("モデルが応答するか接続を確かめる");
+    expect(step.details?.fields?.some(field => field.value === "model-probe")).toBe(true);
+  });
+  it.each(["gen_ai.embeddings", "gen_ai.rerank"])("%s の用途未記録は元の操作とモデル名を使う", (operation_name) => {
+    const step = traceTimeline({ spans: [{ ...span("1", "0"), operation_name, attributes: { "gen_ai.request.model": "model-normal" } }] }).steps[0];
+    expect(step.label).toContain("model-normal");
+    expect(step.label).not.toContain("接続を確かめる");
   });
 });

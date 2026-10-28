@@ -98,7 +98,7 @@ describe("詳細の時間と処理の経過", () => {
     expect(label("running", { tool: "rag__rag_search", title: "ナレッジベースの検索" })).toBe(
       "「ナレッジベースの検索」を実行しています"
     );
-    expect(label("failed", { tool: "rag__rag_search", title: " " })).toBe("処理を実行できませんでした");
+    expect(label("failed", { tool: "rag__rag_search", title: " " })).toBe("選ばれたツールを呼び出せませんでした");
   });
 });
 
@@ -170,7 +170,7 @@ describe("処理の経過（span の木。Issue 3226）", () => {
   it("span のイベントを木の順に並べ、実行の全体の span は行にせず、工程の種類で名前を付ける", () => {
     const steps = runTimelineSteps(spanRun(), SPAN_EVENTS);
     expect(steps.map((step) => [step.label, step.level ?? 0])).toEqual([
-      ["進め方を決めました", 0],
+      ["質問に応じた次の操作を選びました", 0],
       ["「ナレッジベースの検索」を実行しました", 0],
       ["MCP の呼び出し", 1],
       ["回答を作りました", 0],
@@ -226,7 +226,7 @@ describe("処理の経過（span の木。Issue 3226）", () => {
     const steps = runTimelineSteps(run({ trace_store: true }), events);
     expect(steps.map((step) => [step.label, step.detail, step.status])).toEqual([
       ["承認の判断を受け取りました", "記録の登録", "done"],
-      ["処理の実行", "承認されませんでした", "skipped"],
+      ["選ばれたツールを呼び出す", "承認されませんでした", "skipped"],
     ]);
   });
 

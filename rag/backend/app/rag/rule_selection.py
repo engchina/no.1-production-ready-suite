@@ -10,6 +10,7 @@ from time import monotonic
 from typing import Literal
 
 from fastapi import HTTPException
+from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pr_backend_core.observability.tracing import observed_span
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -132,7 +133,9 @@ async def recognize_rule_selections(
                 data = json.loads(context)
                 data["user_statements"] = text
                 context = json.dumps(data, ensure_ascii=False)
-                raw = await condition_client(settings).generate(
+                raw = await async_call_with_model_purpose(
+                    "query.conditions",
+                    condition_client(settings).generate,
                     RULE_SELECTION_INPUT_PROMPT,
                     context,
                     system_prompt=RULE_SELECTION_SYSTEM_PROMPT,
