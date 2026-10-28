@@ -67,6 +67,7 @@ variableGroups:
         - adb_deployment_mode
         - "新規 Autonomous AI Database の作成"
     variables:
+      - adb_is_free_tier
       - adb_display_name
       - adb_name
       - adb_workload
@@ -128,6 +129,10 @@ variableGroups:
   - title: Compute
     visible: true
     variables:
+      - compute_always_free_enabled
+      - compute_always_free_ocpus
+      - compute_always_free_memory_in_gbs
+      - compute_always_free_boot_volume_size_in_gbs
       - instance_display_name
       - instance_image_source_id
       - instance_shape
@@ -362,28 +367,36 @@ variables:
   adb_compute_count:
     type: number
     required: true
-    visible: true
+    visible:
+      not:
+        - adb_is_free_tier
     title: "ECPU count"
     default: 2
 
   adb_is_auto_scaling_enabled:
     type: boolean
     required: true
-    visible: true
+    visible:
+      not:
+        - adb_is_free_tier
     title: "CPU auto scaling"
     default: false
 
   adb_data_storage_size_in_tbs:
     type: number
     required: true
-    visible: true
+    visible:
+      not:
+        - adb_is_free_tier
     title: "Storage (TB)"
     default: 1
 
   adb_is_auto_scaling_for_storage_enabled:
     type: boolean
     required: true
-    visible: true
+    visible:
+      not:
+        - adb_is_free_tier
     title: "Storage auto scaling"
     default: false
 
@@ -411,7 +424,9 @@ variables:
   license_model:
     type: enum
     required: true
-    visible: true
+    visible:
+      not:
+        - adb_is_free_tier
     title: "License type"
     enum:
       - "BRING_YOUR_OWN_LICENSE"
@@ -421,7 +436,9 @@ variables:
   adb_backup_retention_period_in_days:
     type: number
     required: true
-    visible: true
+    visible:
+      not:
+        - adb_is_free_tier
     title: "Automatic backup retention period (days)"
     default: 1
 
@@ -612,7 +629,9 @@ variables:
   instance_image_source_id:
     type: enum
     required: true
-    visible: true
+    visible:
+      not:
+        - compute_always_free_enabled
     title: "Compute image"
     description: "Oracle Linux 9 image (Oracle-Linux-9.8-2026.09.18-0) of every Compute instance. Choose it according to your region."
     enum:
@@ -630,7 +649,9 @@ variables:
   instance_shape:
     type: enum
     required: true
-    visible: true
+    visible:
+      not:
+        - compute_always_free_enabled
     title: "Compute shape"
     description: "Shape of the Compute instance that runs every selected product."
     enum:
@@ -641,7 +662,9 @@ variables:
   instance_flex_shape_ocpus:
     type: number
     required: true
-    visible: true
+    visible:
+      not:
+        - compute_always_free_enabled
     title: "Compute OCPUs"
     description: "The selected products share one Compute instance. The RAG CPU document parser (Docling) uses the most; raise it for heavy ingestion."
     default: 4
@@ -649,7 +672,9 @@ variables:
   instance_flex_shape_memory:
     type: number
     required: true
-    visible: true
+    visible:
+      not:
+        - compute_always_free_enabled
     title: "Compute memory (GB)"
     description: "The RAG CPU document parser (Docling) loads ML models; raise it for heavy ingestion."
     default: 32
@@ -657,7 +682,9 @@ variables:
   instance_boot_volume_size:
     type: number
     required: true
-    visible: true
+    visible:
+      not:
+        - compute_always_free_enabled
     title: "Boot volume size (GB)"
     description: "The per-service Python environments and models of the RAG parsers are large. 200 GB covers the three products (the OS and Node.js are shared)."
     default: 200
@@ -665,7 +692,9 @@ variables:
   instance_boot_volume_vpus:
     type: number
     required: true
-    visible: true
+    visible:
+      not:
+        - compute_always_free_enabled
     title: "Boot volume VPUs/GB"
     default: 10
 
@@ -884,6 +913,50 @@ variables:
 
 
 
+
+  compute_always_free_enabled:
+    type: boolean
+    required: true
+    visible: true
+    title: "Always Free 向け Compute を使う（任意）"
+    description: "A1（Arm）と Oracle Linux 9 を使用します。OCPU・メモリ・容量は下の専用欄で指定します。無料専用アカウントは合計 2 OCPU・12 GB、起動・ブロックボリューム合計 200 GB が上限です。ホーム・リージョンと残り枠を確認してください。bastion は使用できません。RAG の実用性能は別途確認が必要です。"
+    default: false
+
+  compute_always_free_ocpus:
+    type: number
+    required: true
+    visible: compute_always_free_enabled
+    title: "Always Free Compute OCPU 数（1〜2）"
+    minimum: 1
+    maximum: 2
+    default: 2
+
+  compute_always_free_memory_in_gbs:
+    type: number
+    required: true
+    visible: compute_always_free_enabled
+    title: "Always Free Compute メモリ（1〜12 GB）"
+    minimum: 1
+    maximum: 12
+    default: 12
+
+  compute_always_free_boot_volume_size_in_gbs:
+    type: number
+    required: true
+    visible: compute_always_free_enabled
+    title: "Always Free 起動ボリューム（50〜200 GB）"
+    description: "性能は Balanced（10 VPUs/GB）固定。他の起動・ブロックボリュームと合計 200 GB 以内にしてください。容量を減らすと Suite のインストール領域が不足する可能性があります。"
+    minimum: 50
+    maximum: 200
+    default: 200
+
+  adb_is_free_tier:
+    type: boolean
+    required: true
+    visible: true
+    title: "新規 ADB を Always Free で作成する（任意）"
+    description: "1 OCPU・20 GB 固定で、ECPU 数・TB 容量・自動拡張・バックアップ保持日数は指定しません。ライセンスは LICENSE_INCLUDED。LH または OLTP を選択し、private endpoint 以外のアクセス・タイプを指定してください。ホーム・リージョンでのみ利用できます。バージョンの提供状況は OCI コンソールで確認してください。"
+    default: false
 
 outputs:
 
