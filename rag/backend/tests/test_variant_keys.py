@@ -1,6 +1,7 @@
 """variant 層別 keying(variant_keys)の決定論ユニットテスト。"""
 
 import pytest
+from rag_parser_core.language import bind_pack, builtin_pack, current_pack, resolve
 
 from app.config import Settings, get_settings
 from app.rag.variant_keys import (
@@ -56,7 +57,14 @@ def test_extraction_recipe_id_keeps_removed_asr_axis_in_hash() -> None:
     assert "rag_parser_asr_enabled" not in subset
     # 削除の前の hash の入力(既定値 True を含む)と同じ ID になる。
     expected = _digest(
-        "er", {"v": KEY_VERSION, "src": SRC, **subset, "rag_parser_asr_enabled": True}
+        "er",
+        {
+            "v": KEY_VERSION,
+            "src": SRC,
+            "language_pack_ingest_hash": current_pack().ingest_hash,
+            **subset,
+            "rag_parser_asr_enabled": True,
+        },
     )
     assert compute_extraction_recipe_id(SRC, settings) == expected
 
@@ -300,9 +308,9 @@ def test_chunk_set_id_uses_legacy_chunking_names_with_current_docling_text_contr
     )
     structure = base.model_copy(update={"rag_chunking_strategy": "structure_aware"})
 
-    assert compute_chunk_set_id(SRC, small_to_big) == "cs_183a30ff6de58b2b"
-    assert compute_chunk_set_id(SRC, tuned) == "cs_141b82c962ed5833"
-    assert compute_chunk_set_id(SRC, structure) == "cs_c80b5b14a2001b73"
+    assert compute_chunk_set_id(SRC, small_to_big) == "cs_47d010dd491c1d60"
+    assert compute_chunk_set_id(SRC, tuned) == "cs_c95b73bc9632c686"
+    assert compute_chunk_set_id(SRC, structure) == "cs_a506a0c75acdc2f1"
 
 
 def test_chunk_set_id_uses_small_to_big_params_only_for_small_to_big() -> None:
@@ -316,3 +324,13 @@ def test_chunk_set_id_uses_small_to_big_params_only_for_small_to_big() -> None:
     structure = small_to_big.model_copy(update={"rag_chunking_strategy": "structure_aware"})
     structure_tuned = structure.model_copy(update={"rag_chunk_child_target_chars": 600})
     assert compute_chunk_set_id(SRC, structure) == compute_chunk_set_id(SRC, structure_tuned)
+
+
+def test_ingest_language_changes_invalidate_extraction_and_search_only_changes_do_not() -> None:
+    settings = Settings(_env_file=None)
+    with bind_pack(builtin_pack()):
+        original = compute_extraction_recipe_id(SRC, settings)
+    with bind_pack(resolve(builtin_pack(), {"question_cues": {"cause_cues": ["理屈"]}})):
+        assert compute_extraction_recipe_id(SRC, settings) == original
+    with bind_pack(resolve(builtin_pack(), {"labels": {"default_document_type": "合成資料"}})):
+        assert compute_extraction_recipe_id(SRC, settings) != original

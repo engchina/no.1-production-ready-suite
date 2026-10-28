@@ -1,3 +1,4 @@
+import { openFileListFilters, closeFileListFilters } from "./_helpers";
 import { expect, type Page, test } from "./fixtures/test";
 import { mockDatabaseReady, mockLocalAuth } from "./_helpers";
 import {
@@ -332,21 +333,26 @@ test.describe("一覧の絞り込みの部品と条件のクリア (#1933)", { t
   test("文書一覧: 選択の絞り込みはボタンの中にラベルを出し、条件があるときだけ「条件をクリア」で既定へ戻す", async ({ page }, testInfo) => {
     await page.goto("/file-list");
     const toolbar = page.getByTestId("file-list-toolbar");
+    await openFileListFilters(page);
     const status = page.getByRole("combobox", { name: "状態" });
     await expect(status).toContainText("状態:すべて");
     // 数百件から選ぶナレッジベースは検索できる選択のまま、ラベルをボタンの中に出す。
-    await expect(toolbar.locator("#file-list-knowledge-base")).toContainText("ナレッジベース:利用できるすべてのナレッジベース");
+    await expect(page.locator("#file-list-knowledge-base")).toContainText("ナレッジベース:利用できるすべてのナレッジベース");
     // 条件が無いあいだは「条件をクリア」を出さない。
     await expect(toolbar.getByRole("button", { name: "条件をクリア" })).toHaveCount(0);
 
     await status.click();
     await page.getByRole("option", { name: "索引済み" }).click();
+    await closeFileListFilters(page);
     await expect(toolbar).toContainText("5 件（全 55 件）");
     // 既定以外は値を強調する（文字でも分かる）。
-    await expect(toolbar.locator('[data-filter-active="true"]')).toHaveCount(1);
+    if (testInfo.project.name === "mobile") await expect(toolbar.getByRole("button", { name: "絞り込み（1）" })).toBeVisible();
+    else await expect(toolbar.locator('[data-filter-active="true"]')).toHaveCount(1);
     // 作業状態に残る（再読込しても同じ絞り込み）。
     await page.reload();
+    await openFileListFilters(page);
     await expect(page.getByRole("combobox", { name: "状態" })).toHaveAttribute("data-value", "INDEXED");
+    await closeFileListFilters(page);
     const search = page.getByRole("searchbox", { name: "ファイル名で検索" });
     await search.fill("doc");
     await search.press("Enter");
@@ -354,7 +360,9 @@ test.describe("一覧の絞り込みの部品と条件のクリア (#1933)", { t
     await page.screenshot({ path: testInfo.outputPath(`file-list-filters-${testInfo.project.name}.png`) });
 
     await toolbar.getByRole("button", { name: "条件をクリア" }).click();
+    await openFileListFilters(page);
     await expect(page.getByRole("combobox", { name: "状態" })).toHaveAttribute("data-value", "ALL");
+    await closeFileListFilters(page);
     await expect(page.getByRole("searchbox", { name: "ファイル名で検索" })).toHaveValue("");
     await expect(toolbar).toContainText("全 55 件");
     await expect(toolbar.getByRole("button", { name: "条件をクリア" })).toHaveCount(0);

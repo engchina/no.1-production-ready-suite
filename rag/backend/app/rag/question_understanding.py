@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from rag_parser_core.language import FIELD_SPECS, LanguagePack, bind_pack, default_pack, resolve
 
 from app.config import Settings
+from app.rag.language_pack_releases import active_release, pack_from_release
 
 # 取込で使う項目・回答の表示や検査の項目は、この編集面から変更しない。
 QUESTION_UNDERSTANDING_SECTIONS = frozenset(
@@ -23,7 +24,9 @@ QUESTION_UNDERSTANDING_KEYS = frozenset(
 
 def resolved_profile_language(settings: Settings) -> LanguagePack:
     """全体の既定へ、この要求で指定されたプロファイルの上書きだけを重ねる。"""
-    return resolve(default_pack(), settings.rag_language_pack_overrides)
+    release = active_release()
+    base = pack_from_release(release) if release is not None else default_pack()
+    return resolve(base, settings.rag_language_pack_overrides)
 
 
 @contextmanager

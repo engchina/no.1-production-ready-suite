@@ -454,3 +454,16 @@ export async function expandSidebarSections(sidebar: Locator, ...titles: string[
     await collapsed.first().click();
   }
 }
+
+/** 文書一覧は 375px では 3 つの絞り込みを共有シートへまとめる。 */
+export async function openFileListFilters(page: Page) {
+  const toolbar = page.getByTestId("file-list-toolbar");
+  if ((await toolbar.getAttribute("data-list-toolbar-filters-layout")) === "sheet" && !(await page.getByTestId("file-list-toolbar-filters-sheet").isVisible())) {
+    await toolbar.getByRole("button", { name: /^絞り込み/ }).click();
+  }
+}
+
+export async function closeFileListFilters(page: Page) {
+  const sheet = page.getByTestId("file-list-toolbar-filters-sheet");
+  if (await sheet.isVisible()) await sheet.getByRole("button", { name: "絞り込みを閉じる" }).click();
+}

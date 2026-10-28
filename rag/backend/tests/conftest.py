@@ -439,3 +439,21 @@ def mineru_selectable(monkeypatch: pytest.MonkeyPatch) -> None:
     from app import config as app_config
 
     monkeypatch.delitem(app_config.ROADMAP_PARSER_ADAPTER_BACKENDS, "mineru")
+
+
+@pytest.fixture(autouse=True)
+def published_language_unit_scope(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HTTP 単体テストだけに公開版の依存を明示供給する。実 DB テストは除外する。"""
+    if "oracle_db" in request.fixturenames:
+        return
+    from app.rag import published_language_runtime
+    from tests.language_release_api_support import FakeReleaseStore
+
+    store = FakeReleaseStore()
+
+    async def initialized() -> FakeReleaseStore:
+        return store
+
+    monkeypatch.setattr(published_language_runtime, "initialized_release_store", initialized)

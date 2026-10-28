@@ -77,6 +77,8 @@ export const FILE_LIST_QUERY_MAX_LENGTH = 200;
 
 export interface FileListView {
   filter: FileListFilter;
+  languagePackRelation?: import("@/lib/api").LanguagePackRelation;
+  languagePackReleaseId?: string;
   q: string;
   knowledgeBaseId: string;
   offset: number;
@@ -98,6 +100,8 @@ export function isFileListView(value: unknown): value is FileListView {
     typeof view === "object" &&
     view !== null &&
     (FILE_LIST_FILTERS as unknown[]).includes(view.filter) &&
+    (view.languagePackRelation === undefined || ["current", "equivalent", "different", "unrecorded"].includes(view.languagePackRelation)) &&
+    (view.languagePackReleaseId === undefined || typeof view.languagePackReleaseId === "string") &&
     typeof view.q === "string" &&
     view.q.length <= FILE_LIST_QUERY_MAX_LENGTH &&
     typeof view.knowledgeBaseId === "string" &&

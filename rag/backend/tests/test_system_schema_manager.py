@@ -1216,3 +1216,39 @@ def test_status_lists_every_managed_object_with_the_summary_counts() -> None:
         if item["object_type"] != "TABLE"
     )
     assert {item["object_type"] for item in objects} >= {"TABLE", "INDEX", "TEXT_PREFERENCE"}
+
+
+def test_language_release_fresh_schema_and_incremental_upgrade_share_complete_contract() -> None:
+    """新規作成と非破壊の更新の両方で、公開版・成果物の必須列を満たす。"""
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    fresh = manager.initialize()
+    assert fresh["status"] == "ready"
+    assert ("RAG_LANGUAGE_PACK_RELEASES", "TABLE") in database.objects
+    assert ("RAG_LANGUAGE_PACK_STATE", "TABLE") in database.objects
+    assert "LANGUAGE_PACK_RELEASE_ID" in MANAGED_COLUMNS["RAG_INGESTION_JOBS"]
+    assert {
+        "LANGUAGE_PACK_RELEASE_ID",
+        "LANGUAGE_PACK_INGEST_HASH",
+        "LANGUAGE_PACK_JOB_ID",
+        "LANGUAGE_PACK_BUILT_AT",
+    } <= set(MANAGED_COLUMNS["RAG_CHUNK_SETS"])
+    assert manager.initialize()["operation"] == "no_op"
+
+    for name in ("20261028_001_language_pack_releases", "20261028_002_language_pack_artifacts"):
+        database.migrations.pop(name)
+    database.removed_columns["RAG_INGESTION_JOBS"] = {"LANGUAGE_PACK_RELEASE_ID"}
+    database.removed_columns["RAG_CHUNK_SETS"] = {
+        "LANGUAGE_PACK_RELEASE_ID",
+        "LANGUAGE_PACK_INGEST_HASH",
+        "LANGUAGE_PACK_JOB_ID",
+        "LANGUAGE_PACK_BUILT_AT",
+    }
+    before = manager.status()
+    assert before["status"] == "outdated"
+    assert before["pending_destructive_migrations"] == []
+    start = len(database.executed)
+    upgraded = manager.initialize()
+    assert upgraded["status"] == "ready"
+    assert upgraded["missing_columns"] == []
+    assert not any(statement.startswith("DROP") for statement in database.executed[start:])

@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from fastapi import HTTPException
+from rag_parser_core.language import builtin_pack
 
 from app.api.routes import documents as documents_route
 from app.api.routes.documents import (
@@ -58,6 +59,7 @@ from app.schemas.document import (
     IngestionSegment,
 )
 from app.schemas.extraction import StructuredExtraction
+from tests.language_release_support import install_language_release_stub
 
 
 def test_document_recipe_schema_enforces_one_slot_per_document_and_max_three() -> None:
@@ -728,6 +730,11 @@ async def test_document_recipe_view_exposes_pending_chunk_set_after_index_failur
     assert recipe.failed_phase == IngestionJobPhase.INDEX
 
 
+@pytest.fixture(autouse=True)
+def _language_release_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_language_release_stub(monkeypatch)
+
+
 class _FakeRecipeJobOracle:
     """EXTRACT job の materialize と job ライフサイクルを支える fake。
 
@@ -739,6 +746,12 @@ class _FakeRecipeJobOracle:
         self.recipe_status = FileStatus.INGESTING
         self.jobs: dict[str, IngestionJob] = {}
         self.config_revision = 1
+
+    async def pin_ingestion_job_language_pack(self, job_id: str, release_id: str) -> str:
+        item = self.jobs[job_id]
+        pinned = item.language_pack_release_id or release_id
+        self.jobs[job_id] = item.model_copy(update={"language_pack_release_id": pinned})
+        return pinned
 
     async def get_document(self, document_id: str) -> DocumentDetail:
         return DocumentDetail(
@@ -1054,7 +1067,11 @@ async def test_recipe_materialize_checks_cancel_before_activate(
             self, *args: object, **kwargs: object
         ) -> dict[str, object]:
             _ = args, kwargs
-            return {"chunk_set_id": "chunk-set-pending"}
+            return {
+                "chunk_set_id": "chunk-set-pending",
+                "language_pack_ingest_hash": builtin_pack().ingest_hash,
+                "language_pack_release_id": "synthetic-release",
+            }
 
         async def count_chunk_set_chunks(self, chunk_set_id: str) -> int:
             _ = chunk_set_id
@@ -1193,7 +1210,11 @@ class _CompletingRecipeOracle(_FakeRecipeJobOracle):
         self, *args: object, **kwargs: object
     ) -> dict[str, object] | None:
         _ = args, kwargs
-        return {"chunk_set_id": "chunk-set-pending"}
+        return {
+            "chunk_set_id": "chunk-set-pending",
+            "language_pack_ingest_hash": builtin_pack().ingest_hash,
+            "language_pack_release_id": "synthetic-release",
+        }
 
     async def graph_entity_counts_for_chunk_sets(self, chunk_set_ids: list[str]) -> dict[str, int]:
         return {chunk_set_id: 4 for chunk_set_id in chunk_set_ids}
@@ -1226,7 +1247,13 @@ class _CompletingRecipeOracle(_FakeRecipeJobOracle):
             "extraction_recipe_id": extraction_recipe_id,
             "status": "materialized",
             "reason": None,
-            "extraction_json": _NAVIGATION_EXTRACTION,
+            "extraction_json": {
+                **_NAVIGATION_EXTRACTION,
+                "parser_artifacts": {
+                    "language_pack_ingest_hash": builtin_pack().ingest_hash,
+                    "language_pack_release_id": "synthetic-release",
+                },
+            },
         }
 
     async def list_document_extraction_field_sets(self, document_id: str) -> list[object]:
@@ -2024,3 +2051,59 @@ async def test_graph_layer_uses_materialization_result(
     assert graph.status == expected
     if chunk_status == "INDEXED":
         assert f"{count} 件" in (graph.reason or "")
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_pending_index_cross_release_clones_before_build_and_preserves_old_set(
+    monkeypatch: pytest.MonkeyPatch, fails: bool
+) -> None:
+    """索引だけに影響する公開版の変更でも、旧 pending 集合を直接更新しない。"""
+    from rag_parser_core.language import resolve
+
+    from app.rag.ingestion_language import ingestion_release_scope
+
+    before = install_language_release_stub(monkeypatch)
+    pack = resolve(builtin_pack(), {"entity_cues": {"alias_column_words": ["合成の別名"]}})
+    after = before.model_copy(
+        update={
+            "id": "synthetic-new-release",
+            "version": 2,
+            "effective": pack.to_dict(),
+            "hash": pack.hash,
+            "ingest_hash": pack.ingest_hash,
+        }
+    )
+
+    class PendingOracle(_CompletingRecipeOracle):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cloned: list[dict[str, str]] = []
+
+        async def clone_recipe_chunk_set_chunks(self, **kwargs: str) -> None:
+            self.cloned.append(kwargs)
+
+    class PendingPipeline(_RecordingRecipePipeline):
+        async def index_chunked(self, *args: object, **kwargs: object) -> None:
+            assert kwargs["chunk_set_id"] != "chunk-set-pending"
+            if fails:
+                raise RuntimeError("合成の索引エラー")
+            await super().index_chunked(*args, **kwargs)
+
+    fake = PendingOracle()
+    monkeypatch.setattr(documents_route, "IngestionPipeline", PendingPipeline)
+    monkeypatch.setattr(documents_route, "get_settings", lambda: _layer_settings(enabled=False))
+    item = _extract_job().model_copy(
+        update={"phase": IngestionJobPhase.INDEX, "status": IngestionJobStatus.RUNNING}
+    )
+    with ingestion_release_scope(after, item.id):
+        if fails:
+            with pytest.raises(RuntimeError, match="合成の索引エラー"):
+                await _materialize_experiment_candidate(fake, item)  # type: ignore[arg-type]
+        else:
+            await _materialize_experiment_candidate(fake, item)  # type: ignore[arg-type]
+    [cloned] = fake.cloned
+    assert cloned["source_chunk_set_id"] == "chunk-set-pending"
+    candidate = cloned["target_chunk_set_id"]
+    assert candidate != "chunk-set-pending"
+    assert "chunk-set-pending" not in fake.chunk_set_rows
+    assert fake.activated == ([] if fails else [candidate])

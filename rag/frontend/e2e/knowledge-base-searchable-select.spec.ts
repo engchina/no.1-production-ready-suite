@@ -1,3 +1,4 @@
+import { openFileListFilters, closeFileListFilters } from "./_helpers";
 import { expect, type Locator, type Page, test } from "./fixtures/test";
 
 import {
@@ -219,6 +220,7 @@ test("文書インデックスの絞り込み: ボタンから検索して選び
   const documentRequests = await mockDocuments(page);
   await page.goto("/file-list");
 
+  await openFileListFilters(page);
   const trigger = page.getByRole("button", { name: /^ナレッジベース/ });
   await expect(trigger).toHaveAccessibleName("ナレッジベース 利用できるすべてのナレッジベース");
   // キーボードで開く: Enter でボタンを押すと検索欄へフォーカスが移る。
@@ -245,6 +247,7 @@ test("文書インデックスの絞り込み: ボタンから検索して選び
 
   // 作業状態の復元: 候補の先頭ページに無い KB も ID で引いて名前を出す。
   await page.reload();
+  await openFileListFilters(page);
   await expect(page.getByRole("button", { name: /^ナレッジベース/ })).toHaveAccessibleName(
     `ナレッジベース ${LONG_NAME}`
   );
@@ -266,6 +269,7 @@ test("文書インデックスの状態は選択の欄 1 つで絞り込む（15
   const documentRequests = await mockDocuments(page);
   await page.goto("/file-list");
 
+  await openFileListFilters(page);
   const status = page.getByRole("combobox", { name: "状態" });
   // ボタンの中に「状態: すべて」（FilterSelect。#1933）。値は data-value で確かめる。
   await expect(status).toContainText("状態:すべて");
@@ -276,6 +280,7 @@ test("文書インデックスの状態は選択の欄 1 つで絞り込む（15
   await page.getByRole("option", { name: "索引済み" }).click();
   await expect.poll(() => documentRequests.at(-1)).toContain("status=INDEXED");
   await expect(page.getByRole("button", { name: "索引済み", exact: true })).toHaveCount(0);
+  await closeFileListFilters(page);
   await expectNoPageOverflow(page);
 });
 
@@ -326,6 +331,7 @@ for (const theme of ["light", "dark"] as const) {
 
     // 文書インデックスの絞り込み（単一選択）
     await page.goto("/file-list");
+    await openFileListFilters(page);
     await page.getByRole("button", { name: /^ナレッジベース/ }).click();
     await expect(page.getByRole("dialog", { name: "ナレッジベース" })).toBeVisible();
     await shoot("file-list");

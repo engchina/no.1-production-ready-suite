@@ -40,6 +40,7 @@ from rag_engine.resources.tracing import observe_call
 from rag_engine.retrieval.search_stages import TEXT_SEARCH_STAGE, VECTOR_SEARCH_STAGE
 from rag_parser_core.xml_tree_json import query_citation_keys
 
+from app.clients.language_pack_release_store import LanguagePackReleaseStore
 from app.clients.oracle_read_stats import (
     current_db_call_stats,
     lobs_as_values_enabled,
@@ -60,11 +61,13 @@ from app.rag.graph_index import (
     GraphIndex,
     GraphRelationship,
 )
+from app.rag.ingestion_language import ingestion_release_job_id
 from app.rag.kb_adapter_config import (
     KnowledgeBaseAdapterConfig,
     KnowledgeBaseQueryConfig,
     parse_adapter_config,
 )
+from app.rag.language_pack_releases import active_release
 from app.rag.request_context import (
     access_scope_context,
     current_audit_request_context,
@@ -105,6 +108,11 @@ from app.schemas.knowledge_base import (
     KnowledgeBaseRef,
     KnowledgeBaseStatus,
     KnowledgeBaseSummary,
+)
+from app.schemas.language_pack_release import (
+    LanguagePackDocumentUse,
+    LanguagePackIndexRelation,
+    LanguagePackRecipeUse,
 )
 from app.schemas.search import (
     EXTRACTION_FIELD_FILTER_KEY,
@@ -2025,6 +2033,33 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
+    async def list_language_reprocessing_targets(
+        self, document_ids: Sequence[str]
+    ) -> list[dict[str, object]]:
+        """選択文書の実在するレシピだけを、同じ利用範囲で一度に読む。"""
+        if not document_ids:
+            return []
+        return await self._fetch_all(
+            """
+            SELECT d.document_id, d.file_name, r.recipe_id, r.slot_no, r.config_revision,
+                cs.language_pack_release_id AS used_release_id,
+                cs.language_pack_ingest_hash AS used_ingest_hash
+            FROM rag_documents d
+            JOIN rag_document_recipes r ON r.document_id = d.document_id
+            LEFT JOIN rag_chunk_sets cs ON cs.recipe_id = r.recipe_id AND cs.is_active = 1
+            JOIN JSON_TABLE(:selected_ids, '$[*]'
+                COLUMNS (document_id VARCHAR2(64) PATH '$')) selected
+                ON selected.document_id = d.document_id
+            WHERE {access_sql}
+            ORDER BY {name_order}, NLSSORT(d.file_name, 'NLS_SORT=JAPANESE_M'),
+                d.file_name, d.document_id, r.slot_no
+            """.format(
+                access_sql=_oracle_access_predicate_sql(alias="d"),
+                name_order=_oracle_natural_name_order_sql("d.file_name"),
+            ),
+            _with_tenant_bind({"selected_ids": json.dumps(list(dict.fromkeys(document_ids)))}),
+        )
+
     async def list_document_recipes(self, document_id: str) -> list[dict[str, object]]:
         """文書レシピを active chunk_set の件数とともに返す(読み取りだけ。書き込まない)。
 
@@ -2151,7 +2186,7 @@ class OracleClient:
             f"""
             SELECT chunk_set_id, document_id, recipe_id, extraction_recipe_id,
                    recipe_subset, status, chunk_count, vector_count, is_active,
-                   created_at, updated_at
+                   created_at, updated_at, language_pack_release_id, language_pack_ingest_hash
             FROM rag_chunk_sets
             WHERE {" AND ".join(clauses)}
             ORDER BY updated_at DESC, chunk_set_id DESC
@@ -2588,6 +2623,7 @@ class OracleClient:
 
         ``extraction_recipe_id`` を渡すと親抽出 recipe への所属を記録する。
         """
+        release = active_release()
         tenant = current_audit_request_context().tenant_id_hash
         binds = {
             "chunk_set_id": chunk_set_id,
@@ -2597,6 +2633,9 @@ class OracleClient:
             "tenant_id_hash": tenant,
             "recipe_subset": _json_bind(recipe_subset),
             "status": status,
+            "language_pack_release_id": release.id if release else None,
+            "language_pack_ingest_hash": release.ingest_hash if release else None,
+            "language_pack_job_id": ingestion_release_job_id(),
         }
 
         def operation(connection: OracleConnectionProtocol) -> None:
@@ -2614,10 +2653,12 @@ class OracleClient:
                     t.updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN INSERT
                     (chunk_set_id, document_id, recipe_id, extraction_recipe_id, tenant_id_hash,
-                     recipe_subset, status)
+                     recipe_subset, status, language_pack_release_id,
+                     language_pack_ingest_hash, language_pack_job_id)
                     VALUES (
                         :chunk_set_id, :document_id, :recipe_id, :extraction_recipe_id,
-                        :tenant_id_hash, :recipe_subset, :status
+                        :tenant_id_hash, :recipe_subset, :status, :language_pack_release_id,
+                        :language_pack_ingest_hash, :language_pack_job_id
                     )
                 """,
                 binds,
@@ -2648,6 +2689,7 @@ class OracleClient:
                 """
                 UPDATE rag_chunk_sets
                 SET status = 'INDEXED',
+                    language_pack_built_at = SYSTIMESTAMP,
                     chunk_count = :chunk_count,
                     vector_count = :vector_count,
                     metrics_json = :metrics_json,
@@ -2746,6 +2788,12 @@ class OracleClient:
         metrics: Mapping[str, object] | None = None,
     ) -> None:
         """extraction recipe 単位の抽出 artifact 状態を冪等に保存する。"""
+        if extraction is not None and (release := active_release()):
+            saved_artifacts = extraction.get("parser_artifacts")
+            artifacts = dict(saved_artifacts) if isinstance(saved_artifacts, Mapping) else {}
+            artifacts["language_pack_release_id"] = release.id
+            artifacts["language_pack_ingest_hash"] = release.ingest_hash
+            extraction = {**extraction, "parser_artifacts": artifacts}
         tenant = current_audit_request_context().tenant_id_hash
         binds = {
             "document_id": document_id,
@@ -3095,6 +3143,8 @@ class OracleClient:
                    cs.is_serving AS is_serving,
                    cs.is_active AS is_active,
                    cs.created_at AS created_at,
+                   cs.language_pack_release_id, cs.language_pack_ingest_hash,
+                   cs.language_pack_job_id, cs.language_pack_built_at,
                    ex.recipe_subset AS extraction_recipe
             FROM rag_chunk_sets cs
             LEFT JOIN rag_document_extractions ex
@@ -3128,6 +3178,10 @@ class OracleClient:
                     "is_serving": is_serving,
                     "is_active": int(str(norm.get("is_active") or 0)) == 1,
                     "created_at": norm.get("created_at"),
+                    "language_pack_release_id": norm.get("language_pack_release_id"),
+                    "language_pack_ingest_hash": norm.get("language_pack_ingest_hash"),
+                    "language_pack_job_id": norm.get("language_pack_job_id"),
+                    "language_pack_built_at": norm.get("language_pack_built_at"),
                     "extraction_id": None,
                     "parser": recipe.get("rag_parser_adapter_backend"),
                     "preprocess": recipe.get("rag_preprocess_profile"),
@@ -4779,9 +4833,13 @@ class OracleClient:
 
         await self._run_transaction(operation)
 
-    async def create_ingestion_job(self, job: IngestionJob) -> IngestionJob:
+    async def create_ingestion_job(
+        self, job: IngestionJob, *, expected_current_release_id: str | None = None
+    ) -> IngestionJob:
         """取込 job を永続化する。"""
-        return await self._create_ingestion_job_with_oracle(job)
+        return await self._create_ingestion_job_with_oracle(
+            job, expected_current_release_id=expected_current_release_id
+        )
 
     async def get_ingestion_job(self, job_id: str) -> IngestionJob | None:
         """取込 job の現在状態を返す。"""
@@ -5017,6 +5075,99 @@ class OracleClient:
         """同一 content hash の既存ドキュメントを返す。"""
         return await self._find_document_by_content_hash_with_oracle(content_sha256)
 
+    async def document_language_pack_uses(
+        self,
+        document_ids: Sequence[str],
+        *,
+        current_release_id: str | None = None,
+    ) -> dict[str, LanguagePackDocumentUse]:
+        if not document_ids:
+            return {}
+        if current_release_id:
+            current = await LanguagePackReleaseStore(self).get(current_release_id)
+        else:
+            from app.rag.published_language import initialized_release_store
+
+            current = await (await initialized_release_store(self)).current()
+        if current is None:
+            raise ValueError("比較対象の言語資源の版が見つかりません。")
+        predicate, binds = _oracle_in_predicate("cs.document_id", "language_document", document_ids)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT cs.document_id, cs.recipe_id, cs.chunk_set_id,
+                cs.language_pack_release_id, cs.language_pack_ingest_hash,
+                cs.language_pack_job_id, cs.language_pack_built_at, rel.version,
+                (SELECT j.language_pack_release_id FROM rag_ingestion_jobs j
+                 WHERE j.document_id = cs.document_id AND j.recipe_id = cs.recipe_id
+                    AND j.status IN ('QUEUED', 'RUNNING')
+                 ORDER BY j.queued_at DESC FETCH FIRST 1 ROWS ONLY) AS target_release_id
+            FROM rag_chunk_sets cs JOIN rag_documents d ON d.document_id = cs.document_id
+            LEFT JOIN rag_language_pack_releases rel ON rel.release_id = cs.language_pack_release_id
+            WHERE {predicate} AND cs.is_active = 1 AND {access}
+            ORDER BY cs.recipe_id, cs.chunk_set_id
+        """,
+                predicate=predicate,
+                access=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind(binds),
+        )
+        result = {
+            identity: LanguagePackDocumentUse(
+                current_release_id=current.id, current_version=current.version
+            )
+            for identity in document_ids
+        }
+        from app.rag.language_pack_releases import index_relation
+
+        for row in rows:
+            identity = str(row["document_id"])
+            used_id = _optional_str(row.get("language_pack_release_id"))
+            used_hash = _optional_str(row.get("language_pack_ingest_hash"))
+            result[identity].recipes.append(
+                LanguagePackRecipeUse(
+                    recipe_id=_optional_str(row.get("recipe_id")),
+                    chunk_set_id=str(row["chunk_set_id"]),
+                    release_id=used_id,
+                    version=_optional_int(row.get("version")),
+                    ingest_hash=used_hash,
+                    relation=index_relation(
+                        used_release_id=used_id, used_ingest_hash=used_hash, current=current
+                    ),
+                    built_at=_optional_datetime(row.get("language_pack_built_at")),
+                    job_id=_optional_str(row.get("language_pack_job_id")),
+                    target_release_id=_optional_str(row.get("target_release_id")),
+                )
+            )
+        job_predicate, job_binds = _oracle_in_predicate(
+            "j.document_id", "language_job_document", document_ids
+        )
+        targets = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT j.document_id, j.recipe_id, j.language_pack_release_id
+            FROM rag_ingestion_jobs j JOIN rag_documents d ON d.document_id = j.document_id
+            WHERE {predicate} AND j.status IN ('QUEUED', 'RUNNING') AND {access}
+            ORDER BY j.queued_at DESC
+        """,
+                predicate=job_predicate,
+                access=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind(job_binds),
+        )
+        for row in targets:
+            use = result[str(row["document_id"])]
+            recipe_id = _optional_str(row.get("recipe_id"))
+            if not any(recipe.recipe_id == recipe_id for recipe in use.recipes):
+                use.recipes.append(
+                    LanguagePackRecipeUse(
+                        recipe_id=recipe_id,
+                        relation=LanguagePackIndexRelation.UNRECORDED,
+                        target_release_id=_optional_str(row.get("language_pack_release_id")),
+                    )
+                )
+        return result
+
     async def list_documents(
         self,
         status: FileStatus | None = None,
@@ -5025,6 +5176,8 @@ class OracleClient:
         offset: int = 0,
         knowledge_base_id: str | None = None,
         queued_phase: IngestionJobPhase | None = None,
+        language_pack_relation: LanguagePackIndexRelation | None = None,
+        current_release_id: str | None = None,
     ) -> list[DocumentSummary]:
         """ドキュメント一覧を返す。
 
@@ -5039,6 +5192,8 @@ class OracleClient:
             offset=offset,
             knowledge_base_id=knowledge_base_id,
             queued_phase=queued_phase,
+            language_pack_relation=language_pack_relation,
+            current_release_id=current_release_id,
         )
 
     async def list_document_ids(
@@ -5048,6 +5203,8 @@ class OracleClient:
         query: str | None = None,
         knowledge_base_id: str | None = None,
         queued_phase: IngestionJobPhase | None = None,
+        language_pack_relation: LanguagePackIndexRelation | None = None,
+        current_release_id: str | None = None,
         limit: int,
     ) -> tuple[list[str], int]:
         """一覧と同じ条件・順(ファイル名の自然順)の文書の ID を最大 ``limit`` 件と、
@@ -5060,6 +5217,8 @@ class OracleClient:
             query=query,
             knowledge_base_id=knowledge_base_id,
             queued_phase=queued_phase,
+            language_pack_relation=language_pack_relation,
+            current_release_id=current_release_id,
         )
         rows = await self._fetch_all(
             _render_sql(
@@ -5080,6 +5239,8 @@ class OracleClient:
             query=query,
             knowledge_base_id=knowledge_base_id,
             queued_phase=queued_phase,
+            language_pack_relation=language_pack_relation,
+            current_release_id=current_release_id,
         )
         return [str(row["document_id"]) for row in rows], total
 
@@ -5133,6 +5294,8 @@ class OracleClient:
         query: str | None = None,
         knowledge_base_id: str | None = None,
         queued_phase: IngestionJobPhase | None = None,
+        language_pack_relation: LanguagePackIndexRelation | None = None,
+        current_release_id: str | None = None,
     ) -> int:
         """条件に一致するドキュメント数を返す(条件は ``list_documents`` と同じ)。"""
         return await self._count_documents_with_oracle(
@@ -5140,6 +5303,8 @@ class OracleClient:
             query=query,
             knowledge_base_id=knowledge_base_id,
             queued_phase=queued_phase,
+            language_pack_relation=language_pack_relation,
+            current_release_id=current_release_id,
         )
 
     async def count_document_chunks(self, document_id: str) -> int:
@@ -5152,7 +5317,11 @@ class OracleClient:
 
     async def get_document(self, document_id: str) -> DocumentDetail | None:
         """ドキュメント詳細を返す(抽出結果などの JSON 列を含む)。"""
-        return await self._get_document_with_oracle(document_id)
+        detail = await self._get_document_with_oracle(document_id)
+        if detail is None:
+            return None
+        uses = await self.document_language_pack_uses([document_id])
+        return detail.model_copy(update={"language_pack": uses.get(document_id)})
 
     async def document_exists(self, document_id: str) -> bool:
         """利用者から見える文書があるかだけを返す(JSON 列は読まない。#341)。"""
@@ -7793,10 +7962,21 @@ class OracleClient:
             file_names,
         )
 
-    async def _create_ingestion_job_with_oracle(self, job: IngestionJob) -> IngestionJob:
+    async def _create_ingestion_job_with_oracle(
+        self, job: IngestionJob, *, expected_current_release_id: str | None = None
+    ) -> IngestionJob:
         """Oracle ingestion job table へ job を作成する。"""
 
         def operation(connection: OracleConnectionProtocol) -> IngestionJob:
+            if expected_current_release_id is not None:
+                state = _fetch_one(
+                    connection,
+                    "SELECT current_release_id FROM rag_language_pack_state "
+                    "WHERE singleton_id = 1 FOR UPDATE",
+                    {},
+                )
+                if state is None or state.get("current_release_id") != expected_current_release_id:
+                    raise ValueError("言語資源の現在版が変わりました。差分を再確認してください。")
             if job.recipe_id is None:
                 if _select_document_state(connection, job.document_id) is None:
                     raise KeyError(f"document_id={job.document_id} は存在しません。")
@@ -7833,6 +8013,29 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
+    async def pin_ingestion_job_language_pack(self, job_id: str, release_id: str) -> str:
+        def operation(connection: OracleConnectionProtocol) -> str:
+            _execute(
+                connection,
+                """
+                UPDATE rag_ingestion_jobs SET language_pack_release_id = :release_id
+                WHERE job_id = :job_id AND language_pack_release_id IS NULL
+            """,
+                {"job_id": job_id, "release_id": release_id},
+            )
+            row = _fetch_one(
+                connection,
+                """
+                SELECT language_pack_release_id FROM rag_ingestion_jobs WHERE job_id = :job_id
+            """,
+                {"job_id": job_id},
+            )
+            if row is None or not row.get("language_pack_release_id"):
+                raise ValueError("処理ジョブの言語資源の版を確定できません。")
+            return str(row["language_pack_release_id"])
+
+        return await self._run_transaction(operation)
+
     async def _get_ingestion_job_with_oracle(self, job_id: str) -> IngestionJob | None:
         """Oracle ingestion job table から job を取得する。"""
         rows = await self._fetch_ingestion_job_rows(
@@ -7843,6 +8046,7 @@ class OracleClient:
                 j.document_id,
                 j.recipe_id,
                 j.recipe_revision,
+                j.language_pack_release_id,
                 j.status,
                 j.phase,
                 j.parser_profile,
@@ -7920,6 +8124,7 @@ class OracleClient:
                 j.document_id,
                 j.recipe_id,
                 j.recipe_revision,
+                j.language_pack_release_id,
                 j.status,
                 j.phase,
                 j.parser_profile,
@@ -7971,6 +8176,7 @@ class OracleClient:
                 j.document_id,
                 j.recipe_id,
                 j.recipe_revision,
+                j.language_pack_release_id,
                 j.status,
                 j.phase,
                 j.parser_profile,
@@ -8304,6 +8510,7 @@ class OracleClient:
                     j.document_id,
                     j.recipe_id,
                     j.recipe_revision,
+                j.language_pack_release_id,
                     j.status,
                     j.phase,
                     j.parser_profile,
@@ -8651,6 +8858,7 @@ class OracleClient:
                     j.document_id,
                     j.recipe_id,
                     j.recipe_revision,
+                j.language_pack_release_id,
                     j.status,
                     j.phase,
                     j.parser_profile,
@@ -8803,6 +9011,7 @@ class OracleClient:
                     j.document_id,
                     j.recipe_id,
                     j.recipe_revision,
+                j.language_pack_release_id,
                     j.status,
                     j.phase,
                     j.parser_profile,
@@ -8910,6 +9119,7 @@ class OracleClient:
                 j.document_id,
                 j.recipe_id,
                 j.recipe_revision,
+                j.language_pack_release_id,
                 j.status,
                 j.phase,
                 j.parser_profile,
@@ -9102,6 +9312,7 @@ class OracleClient:
                     j.document_id,
                     j.recipe_id,
                     j.recipe_revision,
+                j.language_pack_release_id,
                     j.status,
                     j.phase,
                     j.parser_profile,
@@ -9183,6 +9394,8 @@ class OracleClient:
         offset: int,
         knowledge_base_id: str | None,
         queued_phase: IngestionJobPhase | None = None,
+        language_pack_relation: LanguagePackIndexRelation | None = None,
+        current_release_id: str | None = None,
     ) -> list[DocumentSummary]:
         """Oracle document table から一覧取得する。"""
         where_sql, binds = _oracle_document_where(
@@ -9190,6 +9403,8 @@ class OracleClient:
             query=query,
             knowledge_base_id=knowledge_base_id,
             queued_phase=queued_phase,
+            language_pack_relation=language_pack_relation,
+            current_release_id=current_release_id,
         )
         binds.update(offset_fetch_binds(offset=offset, limit=limit))
         limit_clause = offset_fetch_clause(with_limit=limit is not None)
@@ -9217,7 +9432,11 @@ class OracleClient:
             )
             for row in rows
         ]
-        return await self._attach_knowledge_base_refs_to_documents(summaries)
+        summaries = await self._attach_knowledge_base_refs_to_documents(summaries)
+        uses = await self.document_language_pack_uses(
+            [item.id for item in summaries], current_release_id=current_release_id
+        )
+        return [item.model_copy(update={"language_pack": uses.get(item.id)}) for item in summaries]
 
     async def _list_document_extractions_with_oracle(self) -> list[dict[str, object]]:
         """Oracle document table から extraction JSON だけを取得する。"""
@@ -9241,6 +9460,8 @@ class OracleClient:
         query: str | None,
         knowledge_base_id: str | None,
         queued_phase: IngestionJobPhase | None = None,
+        language_pack_relation: LanguagePackIndexRelation | None = None,
+        current_release_id: str | None = None,
     ) -> int:
         """Oracle document table の件数を取得する。"""
         where_sql, binds = _oracle_document_where(
@@ -9248,6 +9469,8 @@ class OracleClient:
             query=query,
             knowledge_base_id=knowledge_base_id,
             queued_phase=queued_phase,
+            language_pack_relation=language_pack_relation,
+            current_release_id=current_release_id,
         )
         row = await self._fetch_one(
             _render_sql(
@@ -9917,6 +10140,17 @@ class OracleClient:
         extraction: StructuredExtraction,
     ) -> DocumentDetail:
         """Oracle document table へ構造化抽出を保存する。"""
+
+        if release := active_release():
+            extraction = extraction.model_copy(
+                update={
+                    "parser_artifacts": {
+                        **extraction.parser_artifacts,
+                        "language_pack_release_id": release.id,
+                        "language_pack_ingest_hash": release.ingest_hash,
+                    }
+                }
+            )
 
         def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
             _execute(
@@ -11454,6 +11688,7 @@ INGESTION_JOB_INSERT_SQL = """
                     document_id,
                     recipe_id,
                     recipe_revision,
+                    language_pack_release_id,
                     tenant_id_hash,
                     status,
                     phase,
@@ -11472,6 +11707,7 @@ INGESTION_JOB_INSERT_SQL = """
                     :document_id,
                     :recipe_id,
                     :recipe_revision,
+                    :language_pack_release_id,
                     :tenant_id_hash,
                     :status,
                     :phase,
@@ -12668,12 +12904,40 @@ def _render_sql(template: str, **parts: str) -> str:
     return rendered
 
 
+def _language_pack_relation_sql(relation: LanguagePackIndexRelation) -> str:
+    active = """SELECT 1 FROM rag_chunk_sets cs
+        WHERE cs.document_id = rag_documents.document_id AND cs.is_active = 1"""
+    known = "cs.language_pack_release_id IS NOT NULL AND cs.language_pack_ingest_hash IS NOT NULL"
+    current_hash = (
+        "(SELECT ingest_hash FROM rag_language_pack_releases "
+        "WHERE release_id = :current_language_release_id)"
+    )
+    different = f"EXISTS ({active} AND {known} AND cs.language_pack_ingest_hash <> {current_hash})"
+    missing = (
+        f"(NOT EXISTS ({active}) OR EXISTS ({active} AND "
+        "(cs.language_pack_release_id IS NULL OR cs.language_pack_ingest_hash IS NULL)))"
+    )
+    if relation == LanguagePackIndexRelation.DIFFERENT:
+        return different
+    if relation == LanguagePackIndexRelation.UNRECORDED:
+        return f"NOT ({different}) AND {missing}"
+    same = f"EXISTS ({active}) AND NOT ({different}) AND NOT ({missing})"
+    other = f"EXISTS ({active} AND cs.language_pack_release_id <> :current_language_release_id)"
+    return (
+        f"{same} AND {other}"
+        if relation == LanguagePackIndexRelation.EQUIVALENT
+        else f"{same} AND NOT ({other})"
+    )
+
+
 def _oracle_document_where(
     *,
     status: FileStatus | None = None,
     query: str | None = None,
     knowledge_base_id: str | None = None,
     queued_phase: IngestionJobPhase | None = None,
+    language_pack_relation: LanguagePackIndexRelation | None = None,
+    current_release_id: str | None = None,
 ) -> tuple[str, dict[str, object]]:
     clauses = _oracle_access_predicates()
     binds = _with_tenant_bind({})
@@ -12720,6 +12984,12 @@ def _oracle_document_where(
             )
         )
         binds.update(knowledge_base_binds)
+    if language_pack_relation is not None:
+        if not current_release_id:
+            raise ValueError("言語資源の比較対象版を指定してください。")
+        clauses.append("superseded_by_document_id IS NULL")
+        clauses.append(_language_pack_relation_sql(language_pack_relation))
+        binds["current_language_release_id"] = current_release_id
     return " AND ".join(clauses), binds
 
 
@@ -14128,6 +14398,7 @@ def _ingestion_job_binds(job: IngestionJob) -> dict[str, object]:
         "document_id": job.document_id,
         "recipe_id": job.recipe_id,
         "recipe_revision": job.recipe_revision,
+        "language_pack_release_id": job.language_pack_release_id,
         "tenant_id_hash": _current_tenant_id_hash(),
         "status": job.status.value,
         "phase": job.phase.value,
@@ -14311,6 +14582,7 @@ def _ingestion_job_from_row(row: Mapping[str, object]) -> IngestionJob:
         document_file_name=_optional_str(row.get("document_file_name")),
         recipe_id=_optional_str(row.get("recipe_id")),
         recipe_revision=_optional_int(row.get("recipe_revision")),
+        language_pack_release_id=_optional_str(row.get("language_pack_release_id")),
         status=_ingestion_job_status(row.get("status")),
         phase=_ingestion_job_phase(row.get("phase")),
         parser_profile=str(row.get("parser_profile") or "enterprise_ai_generic"),
@@ -15533,12 +15805,18 @@ def oracle_ingestion_job_schema_sql(
     recipe_table: str = "rag_document_recipes",
 ) -> str:
     """Oracle ingestion job table の DDL 例を返す。"""
+    language_fk = (
+        "rag_ingest_job_lang_release_fk"
+        if table_name == "rag_ingestion_jobs"
+        else f"{table_name}_lang_release_fk"
+    )
     return f"""
 CREATE TABLE {table_name} (
     job_id           VARCHAR2(64) PRIMARY KEY,
     document_id      VARCHAR2(64) NOT NULL,
     recipe_id        VARCHAR2(64),
     recipe_revision  NUMBER(10),
+    language_pack_release_id VARCHAR2(64),
     tenant_id_hash   CHAR(64),
     status           VARCHAR2(32) NOT NULL,
     phase            VARCHAR2(16) DEFAULT 'PREPROCESS' NOT NULL,
@@ -15555,6 +15833,8 @@ CREATE TABLE {table_name} (
     lease_owner      VARCHAR2(128),
     heartbeat_at     TIMESTAMP WITH TIME ZONE,
     progress_json    CLOB,
+    CONSTRAINT {language_fk}
+        FOREIGN KEY (language_pack_release_id) REFERENCES rag_language_pack_releases (release_id),
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED', 'CANCELLED')),
     CONSTRAINT {table_name}_phase_ck
@@ -15772,6 +16052,10 @@ CREATE TABLE rag_chunk_sets (
     document_id     VARCHAR2(64) NOT NULL,
     recipe_id       VARCHAR2(64),
     extraction_recipe_id VARCHAR2(64),
+    language_pack_release_id VARCHAR2(64),
+    language_pack_ingest_hash VARCHAR2(64),
+    language_pack_job_id VARCHAR2(64),
+    language_pack_built_at TIMESTAMP WITH TIME ZONE,
     tenant_id_hash  CHAR(64),
     recipe_subset   JSON,
     status          VARCHAR2(32) DEFAULT 'INGESTING' NOT NULL,
@@ -15783,6 +16067,8 @@ CREATE TABLE rag_chunk_sets (
     first_page_context JSON,
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_chunk_set_lang_release_fk FOREIGN KEY (language_pack_release_id)
+        REFERENCES rag_language_pack_releases (release_id),
     CONSTRAINT rag_chunk_sets_document_fk
         FOREIGN KEY (document_id) REFERENCES rag_documents (document_id) ON DELETE CASCADE,
     CONSTRAINT rag_chunk_sets_recipe_fk

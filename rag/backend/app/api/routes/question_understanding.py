@@ -4,9 +4,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from rag_engine.retrieval.inquiry_conditions import parse_inquiry_conditions
 from rag_engine.retrieval.task_contract import task_contract
-from rag_parser_core.language import bind_pack, default_pack, overrides_from, resolve
+from rag_parser_core.language import bind_pack, builtin_pack, overrides_from, resolve
 
 from app.clients.oracle import OracleClient
+from app.rag.language_pack_releases import active_release, pack_from_release
 from app.rag.question_understanding import (
     QUESTION_UNDERSTANDING_FIELDS,
     QUESTION_UNDERSTANDING_KEYS,
@@ -51,7 +52,7 @@ async def _view(oracle: OracleClient, profile_id: str) -> SearchAnswerProfileDet
 
 
 def _data(view: SearchAnswerProfileDetail) -> LanguagePackData:
-    base = default_pack()
+    base = pack_from_release(release) if (release := active_release()) else builtin_pack()
     effective = resolve(base, view.config.language_pack)
     return LanguagePackData(
         fields=[
@@ -92,8 +93,9 @@ async def put_question_understanding(
 ) -> ApiResponse[LanguagePackData]:
     oracle = OracleClient()
     await _view(oracle, search_answer_profile_id)
-    values = resolve(default_pack(), request.overrides)
-    overrides = question_understanding_overrides(overrides_from(values, default_pack()))
+    base = pack_from_release(release) if (release := active_release()) else builtin_pack()
+    values = resolve(base, request.overrides)
+    overrides = question_understanding_overrides(overrides_from(values, base))
     try:
         view = await oracle.update_question_understanding(search_answer_profile_id, overrides)
     except KeyError as exc:
@@ -110,7 +112,7 @@ async def preview_question_understanding(
     search_answer_profile_id: str, request: QuestionUnderstandingPreview
 ) -> ApiResponse[dict[str, object]]:
     view = await _view(OracleClient(), search_answer_profile_id)
-    base = default_pack()
+    base = pack_from_release(release) if (release := active_release()) else builtin_pack()
     draft = replace_question_understanding(view.config.language_pack, request.overrides)
     results: dict[str, object] = {"original_text": request.text}
     for name, values in (("saved", view.config.language_pack), ("draft", draft)):
