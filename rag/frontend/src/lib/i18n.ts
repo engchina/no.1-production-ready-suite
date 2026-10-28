@@ -4156,7 +4156,7 @@ export const ja = {
   "feedback.list.emptyHint": "期間や絞り込み条件を変更するか、検索・チャットで回答を評価してください。",
   "feedback.list.unknownSearchAnswerProfile": "検索・回答プロファイル不明（旧データ）",
   "feedback.list.openConversation": "会話を開く",
-  "feedback.list.openCitation": "引用元を開く",
+  "feedback.list.openCitation": "根拠を表示",
   "feedback.list.selectNamed": "{name} の詳細を表示",
   "feedback.list.hasComment": "コメントあり",
   "feedback.list.legacyPreview": "本文未保存（旧データ）",

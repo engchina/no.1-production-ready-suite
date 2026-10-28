@@ -4023,3 +4023,7 @@ NL2SQL のチャット・DB 管理チャットと、Agent のチャット・実�
 
 
 `SelectField` の `wrapOptions`（既定 false）は、展開した選択肢のラベルを省略せず折り返します。番号例などが判断に必要な長い選択肢で使います。欄の幅は従来の width の段で指定します（#3613）。
+
+### `ViewportScrollRegion`
+
+カードの主一覧を標準の 5 / 8 行相当の上限で縦スクロールにする。desktop では主一覧の `DataTable.growToViewport` と同様に、スクロール位置を差し引いた表示領域の下余白まで上限を伸ばす。小さな画面では標準密度を維持する。`RunHistoryTable.growToViewport` は同じ指定を内側の `DataTable` に渡す。

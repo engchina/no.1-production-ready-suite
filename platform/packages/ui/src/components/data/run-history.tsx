@@ -534,6 +534,8 @@ export type RunHistoryLabelsInput = Partial<Omit<RunHistoryLabels, "columns" | "
 };
 
 export interface RunHistoryTableProps<T> {
+  /** 主一覧で広い画面の下の余白を活用する（DataTable と同じ基準）。 */
+  growToViewport?: boolean;
   rows: readonly T[];
   /** 製品の行を共通の形に写す。 */
   toItem: (row: T) => RunHistoryItem;
@@ -584,6 +586,7 @@ const WIDE_ONLY = "hidden @4xl:table-cell";
  */
 export function RunHistoryTable<T>({
   rows,
+  growToViewport = false,
   toItem,
   onOpen,
   showKind = true,
@@ -761,11 +764,13 @@ export function RunHistoryTable<T>({
         selectedRowKey={selectedRunId}
         stickyHeader
         visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+        growToViewport={growToViewport}
         loading={loading}
         empty={empty}
         ariaLabel={labels.table}
         scrollAriaLabel={labels.table}
         testId={testId}
+        scrollTestId={testId ? `${testId}-scroll-region` : undefined}
         tableClassName="w-full text-sm"
         rowProps={(row) => {
           const item = toItem(row);

@@ -3366,6 +3366,8 @@ export const api = {
       `/api/documents${qs ? `?${qs}` : ""}`,
     );
   },
+  getDocumentCitationChunk: (id: string, chunkId: string) =>
+    request<RetrievedChunk>(`/api/documents/${encodeURIComponent(id)}/chunks/${encodeURIComponent(chunkId)}`),
   getDocument: (id: string) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
   listDocumentChunkSets: (id: string) =>

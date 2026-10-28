@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { EvidenceSourceSheet, evidencePreviewFocus } from "@production-ready/ui";
 
 import { DocumentPreview } from "@/components/documents/DocumentPreview";
@@ -25,8 +26,14 @@ export function CitationSourceSheet({
   onClose,
   kind = "answer",
   position = { kind: "exact" },
+  empty,
+  scores,
 }: {
   chunk: RetrievedChunk | null;
+  /** 根拠の位置を取得中、または現在は閲覧できない場合の状態。 */
+  empty?: ReactNode;
+  /** 位置だけを ID で読んだ場合は、保存時のスコアだけを表示する。 */
+  scores?: { score: number | null; rerankScore: number | null };
   /** 根拠の番号（0 始まり）。 */
   index: number;
   open: boolean;
@@ -41,7 +48,7 @@ export function CitationSourceSheet({
     <EvidenceSourceSheet
       open={open}
       onClose={onClose}
-      item={chunk ? citationEvidenceItem(chunk) : null}
+      item={chunk ? { ...citationEvidenceItem(chunk), ...scores } : null}
       index={index}
       labels={EVIDENCE_LABELS}
       kind={kind}
@@ -59,7 +66,7 @@ export function CitationSourceSheet({
           : undefined
       }
     >
-      {chunk ? <CitationSourcePreview chunk={chunk} open={open} highlight={!unresolved} /> : null}
+      {chunk ? <CitationSourcePreview chunk={chunk} open={open} highlight={!unresolved} /> : empty}
     </EvidenceSourceSheet>
   );
 }

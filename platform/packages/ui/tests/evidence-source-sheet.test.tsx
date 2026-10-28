@@ -94,6 +94,15 @@ afterEach(() => {
 });
 
 describe("EvidenceSourceSheet", () => {
+  it("根拠を取得する前と取得失敗でも子の状態をパネル内に表示する", () => {
+    act(() => root.render(<EvidenceSourceSheet open onClose={() => undefined} item={null} index={0}><p role="status">取得中</p></EvidenceSourceSheet>));
+    expect(sheet()?.textContent).toContain("取得中");
+    expect(sheet()?.querySelector('[data-testid="evidence-source-summary"]')).toBeNull();
+    act(() => root.render(<EvidenceSourceSheet open onClose={() => undefined} item={null} index={0}><p role="alert">閲覧できません</p></EvidenceSourceSheet>));
+    expect(sheet()?.textContent).toContain("閲覧できません");
+    expect(sheet()?.querySelector('[data-testid="evidence-source-preview"]')).toBeNull();
+  });
+
   it("一度開くまでは描かず、開くと右の wide のパネルに要約（番号・文書名・引用の印・経路・チップ・スコア）を出す（操作の行は持たない。#2462）", () => {
     act(() => root.render(<Harness />));
     expect(sheet()).toBeNull();
