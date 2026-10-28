@@ -13576,7 +13576,15 @@ test("synthetic completion uses a top toast without a result action or another g
   await expect(notifications).toContainText("APP.INVOICES");
   await expect(page.getByText("合成データの生成が完了しました", { exact: true })).toHaveCount(1);
   await expect(page.getByRole("link", { name: "結果を確認" })).toHaveCount(0);
-  expect((await heading.boundingBox())?.y).toBe(before?.y);
+  if (testInfo.project.name === "mobile-375") {
+    // 複数行の通知が本文を覆わないよう、上端のバーを超える高さを確保する（#3751）。
+    await expect.poll(async () => {
+      const [toastBox, headingBox] = await Promise.all([notifications.boundingBox(), heading.boundingBox()]);
+      return toastBox && headingBox ? headingBox.y - toastBox.y - toastBox.height : -1;
+    }).toBeGreaterThanOrEqual(0);
+  } else {
+    expect((await heading.boundingBox())?.y).toBe(before?.y);
+  }
   // #1728: 通知は決まった 1 か所に出す（desktop は画面の右下、375px は上端のバー）。
   await expectToastPlacement(page);
   await expectNoHorizontalScroll(page);
@@ -13585,6 +13593,7 @@ test("synthetic completion uses a top toast without a result action or another g
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/admin-sql$/);
   await expect(notifications.getByRole("status")).toHaveCount(0);
+  await expect.poll(async () => (await heading.boundingBox())?.y).toBe(before?.y);
   expect(writes).toBe(0);
 });
 
