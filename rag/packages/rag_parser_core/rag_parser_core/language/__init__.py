@@ -1066,6 +1066,10 @@ def pack_from_payload(payload: Mapping[str, Mapping[str, Any]] | str | None) -> 
         payload = json.loads(payload) if payload.strip() else None
     if not payload:
         return None
+    if "snapshot" in payload:
+        if set(payload) != {"snapshot"} or not isinstance(payload["snapshot"], Mapping):
+            raise LanguagePackError("完全な言語資源の形式が正しくありません。")
+        return build_pack(payload["snapshot"])
     return resolve(builtin_pack(), payload)
 
 

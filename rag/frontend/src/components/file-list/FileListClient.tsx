@@ -27,11 +27,13 @@ import {
   useActionPending,
   ApiErrorBanner,
 } from "@production-ready/ui";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { CheckSquare, History, RefreshCw, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
+import { LanguagePackBulkReprocess } from "@/components/documents/LanguagePackBulkReprocess";
+import { LanguagePackUseSummary } from "@/components/documents/LanguagePackDocumentPanel";
 import { DegradedBanner } from "@/components/DegradedBanner";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -123,6 +125,23 @@ export function FileListClient() {
   // 一括削除につながる行の選択は保存せず、ページを離れたら解除する。
   const [view, setView] = useWorkspaceState("fileList.view", INITIAL_VIEW, isFileListView);
   const { filter, q, knowledgeBaseId, offset, limit } = view;
+  const [languageParams, setLanguageParams] = useSearchParams();
+  const rawRelation = languageParams.get("language_pack_relation");
+  const languageRelation = rawRelation && ["current", "equivalent", "different", "unrecorded"].includes(rawRelation) ? rawRelation as import("@/lib/api").LanguagePackRelation : view.languagePackRelation;
+  const languageReleaseId = languageParams.get("current_release_id") ?? view.languagePackReleaseId;
+  const languageScope = { language_pack_relation: languageRelation, current_release_id: languageReleaseId };
+  const setLanguageRelation = (value: string) => {
+    setLanguageParams((current) => { const next = new URLSearchParams(current); next.delete("current_release_id"); if (value === "ALL") next.delete("language_pack_relation"); else next.set("language_pack_relation", value); return next; });
+    setView((current) => ({ ...current, offset: 0, languagePackRelation: value === "ALL" ? undefined : value as import("@/lib/api").LanguagePackRelation, languagePackReleaseId: undefined }));
+  };
+  const languageLinkApplied = useRef(false);
+  useEffect(() => {
+    if (languageLinkApplied.current || !rawRelation || !["current", "equivalent", "different", "unrecorded"].includes(rawRelation)) return;
+    languageLinkApplied.current = true;
+    const releaseId = languageParams.get("current_release_id") ?? undefined;
+    // 件数からの対象リンクは、以前の検索語・KB・状態を混ぜず同じ対象集合を開く。
+    setView((current) => ({ ...current, offset: 0, q: "", filter: "ALL", knowledgeBaseId: "ALL", languagePackRelation: rawRelation as import("@/lib/api").LanguagePackRelation, languagePackReleaseId: releaseId }));
+  }, [rawRelation, languageParams, setView]);
   const setFilter = (next: FileListFilter) => setView((current) => ({ ...current, filter: next }));
   const setQ = (next: string) => setView((current) => ({ ...current, q: next }));
   const setKnowledgeBaseId = (next: string) =>
@@ -162,6 +181,7 @@ export function FileListClient() {
   const query = useDocuments(
     {
       ...filterParams,
+      ...languageScope,
       q: q || undefined,
       knowledge_base_id: knowledgeBaseId === "ALL" ? undefined : knowledgeBaseId,
       limit,
@@ -170,7 +190,7 @@ export function FileListClient() {
     { graceActive }
   );
   // 件数の「N 件（全 M 件）」の M。絞り込み中だけ、条件を外した件数を 1 件ぶんの取得で数える（#1891）。
-  const filtered = q !== "" || filter !== "ALL" || knowledgeBaseId !== "ALL";
+  const filtered = q !== "" || filter !== "ALL" || knowledgeBaseId !== "ALL" || Boolean(languageRelation);
   const allTotal = useListTotal(
     "documents",
     {},
@@ -242,7 +262,7 @@ export function FileListClient() {
   };
   // 条件（状態・検索語・ナレッジベース・ページ）が変わったら、どの経路で変わっても選択を解除する
   // （削除・アーカイブ済みの KB の絞り込みを「すべて」に戻すときなど、resetView を通らない変更を含む。#2696）。
-  const selectionScope = JSON.stringify([filter, q, knowledgeBaseId, offset, limit]);
+  const selectionScope = JSON.stringify([filter, q, knowledgeBaseId, offset, limit, languageRelation, languageReleaseId]);
   const selectionScopeRef = useRef(selectionScope);
   const clearSelected = selection.clear;
   useEffect(() => {
@@ -321,6 +341,7 @@ export function FileListClient() {
         // 一覧と同じ条件の文書を、上限まで新しい順に読む（受付の判定はサーバーが文書ごとに行う）。
         const list = await api.listDocumentIds({
           ...filterParams,
+      ...languageScope,
           q: q || undefined,
           knowledge_base_id: knowledgeBaseId === "ALL" ? undefined : knowledgeBaseId,
           limit: BULK_INGESTION_MAX_DOCUMENTS,
@@ -533,6 +554,7 @@ export function FileListClient() {
                 // 最も長い状態（「状態: Embedding / 索引の順番待ち」）が切れない幅（#613・#2677）。
                 width="md"
               />
+              <FilterSelect id="file-list-language-relation" label={t("settings.language.release.relationFilter")} value={languageRelation ?? "ALL"} options={[{ value: "ALL", label: t("fileList.filterAll") }, ...(["current", "equivalent", "different", "unrecorded"] as const).map((value) => ({ value, label: t(`settings.language.release.relation.${value}`) }))]} onValueChange={setLanguageRelation} width="lg" />
               <SearchableSelectField
                 id="file-list-knowledge-base"
                 label={t("fileList.knowledgeBaseFilter.label")}
@@ -572,10 +594,11 @@ export function FileListClient() {
               />
             </>
           }
-          activeFilterCount={[isFilterActive(filter, "ALL"), isFilterActive(knowledgeBaseId, "ALL")].filter(Boolean).length}
+          filtersLayout="sheet"
+          activeFilterCount={[isFilterActive(filter, "ALL"), isFilterActive(knowledgeBaseId, "ALL"), Boolean(languageRelation)].filter(Boolean).length}
           searchActive={q !== ""}
           onClearFilters={() =>
-            resetView(() => setView((current) => ({ ...current, q: "", filter: "ALL", knowledgeBaseId: "ALL" })))
+            resetView(() => { setLanguageRelation("ALL"); setView((current) => ({ ...current, q: "", filter: "ALL", knowledgeBaseId: "ALL" })); })
           }
           labels={listToolbarLabels()}
           count={listCountProps({
@@ -708,6 +731,12 @@ export function FileListClient() {
           </div>
         ) : null}
 
+        <LanguagePackBulkReprocess key={`${selectionScope}:${Array.from(selection.selected).join(",")}`} disabled={bulkBusy || listStale || selectedCount === 0} expectedReleaseId={languageReleaseId ?? items.find((item) => item.language_pack)?.language_pack?.current_release_id} loadDocumentIds={async () => {
+          if (!matchingActive) return selectedDocuments.map((document) => document.id);
+          const targets = await api.listDocumentIds({ ...filterParams, ...languageScope, q: q || undefined, knowledge_base_id: knowledgeBaseId === "ALL" ? undefined : knowledgeBaseId, limit: BULK_INGESTION_MAX_DOCUMENTS });
+          if (targets.total > targets.ids.length) throw new Error(t("settings.language.release.tooManyTargets", { count: targets.total, max: BULK_INGESTION_MAX_DOCUMENTS }));
+          return targets.ids;
+        }} />
         {/* 一括投入の結果は一括操作のバーの直下に残す（次の実行・閉じるまで。messaging.md §10）。 */}
         {bulkError ? (
           <ApiErrorBanner
@@ -1040,6 +1069,7 @@ function documentColumns({
         </div>
       ),
     },
+    { key: "language_pack", header: t("settings.language.release.usedVersion"), render: (doc) => <LanguagePackUseSummary use={doc.language_pack} documentId={doc.id} /> },
     {
       key: "size",
       header: t("fileList.col.size"),

@@ -10,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 from pr_backend_core.oracle_session import init_oracle_session
@@ -762,7 +763,9 @@ async def test_oracle_client_persists_documents_through_pool() -> None:
     assert "INSERT INTO rag_document_knowledge_bases" in pool.connection.many_calls[0].statement
 
 
-async def test_oracle_client_get_document_restores_preprocess_artifact() -> None:
+async def test_oracle_client_get_document_restores_preprocess_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """文書詳細は保存済みファイル準備 artifact を欠落させず返す。"""
     row = _oracle_document_row(status="PREPROCESSED")
     row["preprocess_artifact"] = json.dumps(
@@ -783,6 +786,8 @@ async def test_oracle_client_get_document_restores_preprocess_artifact() -> None
         ]
     )
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    # 公開版の取得は独立に検証し、このテストでは元の文書 SQL の応答だけを供給する。
+    monkeypatch.setattr(client, "document_language_pack_uses", AsyncMock(return_value={}))
 
     detail = await client.get_document("doc-1")
 

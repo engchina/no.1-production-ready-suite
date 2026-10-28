@@ -522,7 +522,47 @@ export interface IngestionJobProgress {
   updated_at: string;
 }
 
+export type LanguagePackRelation = "current" | "equivalent" | "different" | "unrecorded";
+export interface LanguagePackRecipeUse {
+  recipe_id: string | null;
+  chunk_set_id: string | null;
+  release_id: string | null;
+  version: number | null;
+  ingest_hash: string | null;
+  relation: LanguagePackRelation;
+  built_at: string | null;
+  job_id: string | null;
+  target_release_id: string | null;
+}
+export interface LanguagePackReprocessingTarget {
+  document_id: string;
+  file_name: string;
+  recipe_id: string;
+  slot_no: number;
+  config_revision: number;
+  used_release_id: string | null;
+  used_ingest_hash: string | null;
+  relation: LanguagePackRelation;
+}
+export interface LanguagePackReprocessingTargets {
+  current_release: LanguagePackRelease;
+  targets: LanguagePackReprocessingTarget[];
+  unavailable_count: number;
+}
+export interface LanguagePackReprocessingResult {
+  items: { document_id: string; recipe_id: string; job_id: string | null; outcome: "accepted" | "rejected"; reason: string | null }[];
+  accepted_count: number;
+  rejected_count: number;
+}
+
+export interface LanguagePackDocumentUse {
+  current_release_id: string;
+  current_version: number;
+  recipes: LanguagePackRecipeUse[];
+}
+
 export interface DocumentSummary {
+  language_pack?: LanguagePackDocumentUse | null;
   id: string;
   file_name: string;
   status: FileStatus;
@@ -2683,6 +2723,8 @@ export interface LanguagePackData {
   hash: string;
   /** 今の言語資源で分割していない文書の数（分割し直しが要る。DB に届かなければ null）。 */
   outdated_documents?: number | null;
+  unrecorded_documents?: number | null;
+  current_release?: LanguagePackRelease;
 }
 
 export interface QuestionUnderstandingPreviewData {
@@ -2702,22 +2744,43 @@ export interface LanguagePackPreviewData {
   draft: LanguagePackPreviewResult;
 }
 
-/** 言語資源の保存の版（新しい順。#2181）。 */
-export interface LanguagePackHistoryVersion {
+export interface LanguagePackRelease {
   id: string;
-  saved_at: string;
-  saved_by: string | null;
+  version: number;
+  effective: LanguagePackSections;
   hash: string;
-  /** 取込の項目の hash（前の版と違えば、戻すと文書の分割し直しが要る）。 */
-  ingest_hash: string | null;
-  /** 前の版に戻したときの、戻した元の版の id。 */
+  ingest_hash: string;
+  published_at: string;
+  published_by: string | null;
+  previous_id: string | null;
   restored_from: string | null;
-  /** 組み込みと違う項目の数。 */
-  changed_fields: number;
+  change_note: string;
 }
 
-export interface LanguagePackHistoryData {
-  versions: LanguagePackHistoryVersion[];
+export interface LanguagePackReleaseState {
+  draft_revision: number;
+  draft_effective: LanguagePackSections;
+  current: LanguagePackRelease;
+}
+
+export interface LanguagePackReleaseList {
+  releases: LanguagePackRelease[];
+  total: number;
+}
+
+export interface LanguagePackPublishRequest {
+  expected_revision: number;
+  expected_current_id: string;
+  change_note: string;
+}
+
+export interface LanguagePackReleaseComparison {
+  before_id: string;
+  after_id: string;
+  differences: { section: string; key: string; before: LanguagePackValue | null; after: LanguagePackValue | null; ingest: boolean }[];
+  ingest_changed: boolean;
+  impact_requires_review: boolean;
+  affected_stages: string[];
 }
 
 export interface ChunkingSettingsData {
@@ -3349,6 +3412,8 @@ export const api = {
       queued_phase?: IngestionJobPhase;
       q?: string;
       knowledge_base_id?: string;
+      language_pack_relation?: LanguagePackRelation;
+      current_release_id?: string;
       limit?: number;
       offset?: number;
     } = {},
@@ -3361,11 +3426,17 @@ export const api = {
       search.set("knowledge_base_id", params.knowledge_base_id);
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
+    if (params.language_pack_relation) search.set("language_pack_relation", params.language_pack_relation);
+    if (params.current_release_id) search.set("current_release_id", params.current_release_id);
     const qs = search.toString();
     return requestDegradable<Page<DocumentSummary>>(
       `/api/documents${qs ? `?${qs}` : ""}`,
     );
   },
+  prepareLanguagePackReprocessing: (document_ids: string[], expected_release_id: string) =>
+    request<LanguagePackReprocessingTargets>("/api/documents/language-pack/reprocessing-targets", jsonBody({ document_ids, expected_release_id })),
+  enqueueLanguagePackReprocessing: (expected_release_id: string, targets: { document_id: string; recipe_id: string; phase: IngestionJobPhase; expected_config_revision: number }[]) =>
+    request<LanguagePackReprocessingResult>("/api/documents/language-pack/reprocessing-jobs", jsonBody({ expected_release_id, targets })),
   getDocumentCitationChunk: (id: string, chunkId: string) =>
     request<RetrievedChunk>(`/api/documents/${encodeURIComponent(id)}/chunks/${encodeURIComponent(chunkId)}`),
   getDocument: (id: string) =>
@@ -3461,6 +3532,8 @@ export const api = {
       queued_phase?: IngestionJobPhase;
       q?: string;
       knowledge_base_id?: string;
+      language_pack_relation?: LanguagePackRelation;
+      current_release_id?: string;
       limit?: number;
     } = {},
   ) => {
@@ -3470,6 +3543,8 @@ export const api = {
     if (params.q) search.set("q", params.q);
     if (params.knowledge_base_id) search.set("knowledge_base_id", params.knowledge_base_id);
     if (params.limit != null) search.set("limit", String(params.limit));
+    if (params.language_pack_relation) search.set("language_pack_relation", params.language_pack_relation);
+    if (params.current_release_id) search.set("current_release_id", params.current_release_id);
     const qs = search.toString();
     return request<DocumentIdList>(`/api/documents/ids${qs ? `?${qs}` : ""}`);
   },
@@ -3600,11 +3675,13 @@ export const api = {
     id: string,
     recipeId: string,
     phase: IngestionJobPhase = "PREPROCESS",
+    expectedLanguagePackReleaseId?: string,
+    expectedConfigRevision?: number,
   ) =>
     request<IngestionJob>(
       `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
         recipeId,
-      )}/ingestion-jobs?phase=${encodeURIComponent(phase)}`,
+      )}/ingestion-jobs?phase=${encodeURIComponent(phase)}${expectedLanguagePackReleaseId ? `&expected_language_pack_release_id=${encodeURIComponent(expectedLanguagePackReleaseId)}` : ""}${expectedConfigRevision != null ? `&expected_config_revision=${expectedConfigRevision}` : ""}`,
       { method: "POST" },
     ),
   retryFailedDocumentIngestionSegments: (
@@ -4466,19 +4543,21 @@ export const api = {
       body: JSON.stringify(body),
     }),
   getLanguagePack: () => request<LanguagePackData>("/api/settings/language-pack"),
-  updateLanguagePack: (overrides: LanguagePackSections) =>
-    request<LanguagePackData>("/api/settings/language-pack", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ overrides }),
-    }),
-  getLanguagePackHistory: () =>
-    request<LanguagePackHistoryData>("/api/settings/language-pack/history"),
-  restoreLanguagePack: (versionId: string) =>
-    request<LanguagePackData>(
-      `/api/settings/language-pack/history/${encodeURIComponent(versionId)}/restore`,
-      { method: "POST" },
-    ),
+  getLanguagePackDraft: () => request<LanguagePackReleaseState>("/api/settings/language-pack/draft"),
+  compareLanguagePackDraft: (expected_revision: number, expected_current_id: string) =>
+    request<LanguagePackReleaseComparison>(`/api/settings/language-pack/draft/comparison?${new URLSearchParams({ expected_revision: String(expected_revision), expected_current_id })}`),
+  updateLanguagePackDraft: (expected_revision: number, overrides: LanguagePackSections) =>
+    request<LanguagePackReleaseState>("/api/settings/language-pack/draft", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision, overrides }) }),
+  getLanguagePackReleases: (offset: number, limit: number) =>
+    request<LanguagePackReleaseList>(`/api/settings/language-pack/releases?offset=${offset}&limit=${limit}`),
+  getLanguagePackRelease: (id: string) =>
+    request<LanguagePackRelease>(`/api/settings/language-pack/releases/${encodeURIComponent(id)}`),
+  compareLanguagePackReleases: (before_id: string, after_id: string) =>
+    request<LanguagePackReleaseComparison>(`/api/settings/language-pack/releases/compare?${new URLSearchParams({ before_id, after_id })}`),
+  publishLanguagePack: (body: LanguagePackPublishRequest) =>
+    request<LanguagePackReleaseState>("/api/settings/language-pack/publish", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+  restoreLanguagePackRelease: (id: string, body: LanguagePackPublishRequest) =>
+    request<LanguagePackReleaseState>(`/api/settings/language-pack/releases/${encodeURIComponent(id)}/restore`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
   previewLanguagePack: (text: string, overrides: LanguagePackSections) =>
     request<LanguagePackPreviewData>("/api/settings/language-pack/preview", {
       method: "POST",

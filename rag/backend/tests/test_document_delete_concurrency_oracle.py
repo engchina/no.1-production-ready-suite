@@ -172,5 +172,7 @@ async def test_failed_delete_rolls_back_document_and_cleanup_record(
             document.file_name,
             DocumentCleanupTargets(prefixes=(f"artifacts/{token}/",)),
         )
+    # 失敗の注入は削除 transaction だけに限定し、確認時の公開版の読取も通常経路で行う。
+    monkeypatch.setattr(client, "_run_transaction", run_transaction)
     assert await client.get_document(document.id) is not None
     assert await store.find_for_document(document.id) is None

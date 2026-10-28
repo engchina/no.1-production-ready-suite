@@ -41,6 +41,7 @@ from app.schemas.classification import (
 )
 from app.schemas.common import JsonValue
 from app.schemas.knowledge_base import KnowledgeBaseRef
+from app.schemas.language_pack_release import LanguagePackDocumentUse
 
 __all__ = [
     "SourceModality",
@@ -244,6 +245,7 @@ class IngestionJob(BaseModel):
     document_file_name: str | None = None
     recipe_id: str | None = None
     recipe_revision: int | None = Field(default=None, ge=1)
+    language_pack_release_id: str | None = None
     status: IngestionJobStatus
     phase: IngestionJobPhase = IngestionJobPhase.PREPROCESS
     parser_profile: str
@@ -326,6 +328,7 @@ class DocumentSummary(BaseModel):
 
     id: str
     file_name: str
+    language_pack: LanguagePackDocumentUse | None = None
     status: FileStatus
     category_name: str | None = None
     content_type: str | None = None

@@ -57,6 +57,7 @@ export type WorkspaceField =
   | "evaluation.calibration.jobId"
   | "feedback.search"
   | "history.view"
+  | "language-releases.paging"
   // クライアント側で全件を持つ一覧のページと表示件数（#1891。lib/list-paging.ts の useClientListPaging）
   | "evaluation.casesPaging"
   | "evaluation.previewPaging"

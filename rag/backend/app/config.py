@@ -2884,7 +2884,6 @@ def get_settings() -> Settings:
     reload_env_settings_if_changed(settings)
     reload_persisted_model_settings_if_changed(settings)
     PARSER_SETTINGS_STORE.reload_if_changed(settings)
-    LANGUAGE_PACK_STORE.reload_if_changed(resolve_language_pack_file(settings))
     return settings
 
 

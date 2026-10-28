@@ -68,7 +68,6 @@ import {
   type ChunkingSettingsData,
   type ChunkingSettingsUpdate,
   type LanguagePackData,
-  type LanguagePackHistoryData,
   type LanguagePackSections,
   type PreprocessSettingsData,
   type PreprocessSettingsUpdate,
@@ -118,6 +117,8 @@ export const queryKeys = {
     queued_phase?: IngestionJobPhase;
     q?: string;
     knowledge_base_id?: string;
+    language_pack_relation?: import("./api").LanguagePackRelation;
+    current_release_id?: string;
     limit?: number;
     offset?: number;
   }) => ["documents", params] as const,
@@ -341,6 +342,8 @@ export function useDocuments(
     queued_phase?: IngestionJobPhase;
     q?: string;
     knowledge_base_id?: string;
+    language_pack_relation?: import("./api").LanguagePackRelation;
+    current_release_id?: string;
     limit?: number;
     offset?: number;
   },
@@ -353,6 +356,8 @@ export function useDocuments(
       queued_phase: params.queued_phase,
       q: params.q,
       knowledge_base_id: params.knowledge_base_id,
+      language_pack_relation: params.language_pack_relation,
+      current_release_id: params.current_release_id,
       limit: params.limit,
       offset: params.offset,
     }),
@@ -2278,39 +2283,6 @@ export function useLanguagePack() {
     queryKey: queryKeys.languagePack,
     queryFn: api.getLanguagePack,
     retry: false,
-  });
-}
-
-/** 言語資源の全体の上書きを保存する（組み込みと違う項目だけ）。 */
-export function useUpdateLanguagePack() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (overrides: LanguagePackSections) => api.updateLanguagePack(overrides),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.languagePack, data);
-      void qc.invalidateQueries({ queryKey: queryKeys.languagePackHistory });
-    },
-  });
-}
-
-/** 言語資源の保存の版（新しい順）。 */
-export function useLanguagePackHistory() {
-  return useQuery<LanguagePackHistoryData>({
-    queryKey: queryKeys.languagePackHistory,
-    queryFn: api.getLanguagePackHistory,
-    retry: false,
-  });
-}
-
-/** 前の版の言語資源に戻す（戻したことも新しい版として残る）。 */
-export function useRestoreLanguagePack() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (versionId: string) => api.restoreLanguagePack(versionId),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.languagePack, data);
-      void qc.invalidateQueries({ queryKey: queryKeys.languagePackHistory });
-    },
   });
 }
 

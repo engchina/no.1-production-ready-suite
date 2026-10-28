@@ -18,6 +18,7 @@ from app.clients.document_category_store import oracle_document_category_schema_
 from app.clients.document_cleanup_store import oracle_document_cleanup_schema_sql
 from app.clients.entity_store import oracle_entity_schema_sql
 from app.clients.evaluation_calibration_store import oracle_evaluation_calibration_schema_sql
+from app.clients.language_pack_release_store import language_pack_release_statements
 from app.clients.oracle import (
     oracle_answer_prompt_schema_sql,
     oracle_answer_record_schema_sql,
@@ -51,6 +52,7 @@ from app.clients.support_guide_store import (
     oracle_support_guide_revision_schema_sql,
     oracle_support_guide_schema_sql,
 )
+from app.rag.ingestion_language import language_pack_artifact_statements
 from app.rag.request_context import with_system_access
 from app.rag.search_answer_profile_migration import rename_sql as search_answer_profile_rename_sql
 from app.rag.vector_index_adapter import default_vector_index_build
@@ -169,6 +171,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="system_schema_control",
             table_name="rag_schema_operations",
             sql=oracle_system_schema_control_sql(),
+        ),
+        OracleSchemaSection(
+            name="language_pack_releases",
+            table_name="rag_language_pack_releases",
+            sql=language_pack_release_statements(),
         ),
         OracleSchemaSection(
             name="documents",
@@ -566,6 +573,20 @@ END;
             name="20261027_001_raptor_prompt_consolidation",
             table_name="rag_answer_prompts",
             sql=raptor_prompt_consolidation_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261028_001_language_pack_releases",
+            table_name="rag_language_pack_releases",
+            sql=language_pack_release_statements(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261028_002_language_pack_artifacts",
+            table_name="rag_chunk_sets",
+            sql=language_pack_artifact_statements(),
         )
     )
     return sections

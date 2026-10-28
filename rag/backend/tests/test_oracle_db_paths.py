@@ -14,6 +14,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -324,10 +325,12 @@ async def test_document_exists_and_summary_do_not_select_json_columns() -> None:
     _assert_no_json_columns(selects)
 
 
-async def test_list_documents_does_not_select_json_columns() -> None:
+async def test_list_documents_does_not_select_json_columns(monkeypatch: pytest.MonkeyPatch) -> None:
     """取込中にポーリングされる文書一覧は、要約に使わない JSON 列を読まない。"""
     pool = FakeOraclePool(execute_results=[[_document_state_row()], []])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    # 公開版の取得は独立に検証し、このテストでは元の文書 SQL の応答だけを供給する。
+    monkeypatch.setattr(client, "document_language_pack_uses", AsyncMock(return_value={}))
 
     documents = await client.list_documents(limit=10)
 

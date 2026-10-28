@@ -84,6 +84,7 @@ from app.rag.ingestion import (
     document_artifact_prefixes,
     record_boundary_failure_message,
 )
+from app.rag.ingestion_language import artifact_language_compatible, ingestion_release_scope
 from app.rag.ingestion_progress import track_ingestion_progress
 from app.rag.ingestion_worker import request_ingestion_worker_wakeup
 from app.rag.kb_adapter_config import (
@@ -92,6 +93,7 @@ from app.rag.kb_adapter_config import (
     resolve_effective_adapter_config,
     resolve_effective_settings,
 )
+from app.rag.language_pack_releases import active_release, pack_from_release
 from app.rag.layer_fingerprint import (
     changed_layer_inputs,
     current_field_definitions,
@@ -105,6 +107,7 @@ from app.rag.mineru_license import (
 )
 from app.rag.navigation import build_navigation_tree
 from app.rag.parser_source_guard import check_parser_source, settings_convert_source
+from app.rag.published_language import initialized_release_store
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
 from app.rag.search_answer_profile_config import MAX_SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES
@@ -192,6 +195,7 @@ from app.schemas.knowledge_base import (
     DocumentKnowledgeBaseReplaceRequest,
     KnowledgeBaseRef,
 )
+from app.schemas.language_pack_release import LanguagePackIndexRelation
 from app.schemas.search import RetrievedChunk, normalize_search_id_list
 
 router = APIRouter()
@@ -553,6 +557,21 @@ async def _delete_orphan_upload_object(storage: ObjectStorageClient, object_path
 _KNOWLEDGE_BASE_FILTER_MAX_LENGTH = 33 * MAX_SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES
 
 
+async def _language_pack_document_filter(
+    oracle: OracleClient,
+    relation: LanguagePackIndexRelation | None,
+    current_release_id: str | None,
+) -> dict[str, Any]:
+    if relation is None and current_release_id is None:
+        return {}
+    current = await (await initialized_release_store(oracle)).current()
+    if current_release_id and current_release_id != current.id:
+        raise HTTPException(
+            status_code=409, detail="言語資源の現在版が変わりました。条件を再確認してください。"
+        )
+    return {"language_pack_relation": relation, "current_release_id": current.id}
+
+
 @router.get("", response_model=ApiResponse[Page[DocumentSummary]])
 async def list_documents(
     paging: Annotated[OffsetParams, Depends(offset_params(default=50, max_limit=200))],
@@ -564,6 +583,8 @@ async def list_documents(
         default=None, min_length=1, max_length=_KNOWLEDGE_BASE_FILTER_MAX_LENGTH
     ),
     queued_phase: IngestionJobPhase | None = None,
+    language_pack_relation: LanguagePackIndexRelation | None = None,
+    current_release_id: str | None = Query(default=None, min_length=1, max_length=64),
 ) -> ApiResponse[Page[DocumentSummary]]:
     """取込対象ドキュメントの一覧を返す。DB 停止時は空一覧 + warning で縮退する。
 
@@ -578,6 +599,9 @@ async def list_documents(
         )
     oracle = OracleClient()
     settings = get_settings()
+    release_filter = await _language_pack_document_filter(
+        oracle, language_pack_relation, current_release_id
+    )
 
     async def _load() -> Page[DocumentSummary]:
         documents = await oracle.list_documents(
@@ -587,6 +611,7 @@ async def list_documents(
             offset=paging.offset,
             knowledge_base_id=knowledge_base_id,
             queued_phase=queued_phase,
+            **release_filter,
         )
         await _mark_layers_rebuild_required(oracle, documents, settings)
         documents = await _attach_queue_waits(oracle, documents, settings)
@@ -595,6 +620,7 @@ async def list_documents(
             query=q,
             knowledge_base_id=knowledge_base_id,
             queued_phase=queued_phase,
+            **release_filter,
         )
         return paginate(documents, total=total, limit=paging.limit, offset=paging.offset)
 
@@ -617,6 +643,8 @@ async def list_document_ids(
     q: str | None = Query(default=None, min_length=1, max_length=200),
     knowledge_base_id: str | None = Query(default=None, min_length=1, max_length=128),
     queued_phase: IngestionJobPhase | None = None,
+    language_pack_relation: LanguagePackIndexRelation | None = None,
+    current_release_id: str | None = Query(default=None, min_length=1, max_length=64),
     limit: int = Query(default=BULK_INGESTION_MAX_DOCUMENTS, ge=1, le=BULK_INGESTION_MAX_DOCUMENTS),
 ) -> ApiResponse[DocumentIdList]:
     """一覧と同じ条件の文書の ID(ファイル名の自然順に最大 ``limit`` 件)と件数を返す(#2674)。
@@ -628,11 +656,16 @@ async def list_document_ids(
             status_code=422,
             detail="status と queued_phase は同時に指定できません。",
         )
-    ids, total = await OracleClient().list_document_ids(
+    oracle = OracleClient()
+    release_filter = await _language_pack_document_filter(
+        oracle, language_pack_relation, current_release_id
+    )
+    ids, total = await oracle.list_document_ids(
         status=status,
         query=q,
         knowledge_base_id=knowledge_base_id,
         queued_phase=queued_phase,
+        **release_filter,
         limit=limit,
     )
     return ApiResponse(data=DocumentIdList(ids=ids, total=total, limit=limit))
@@ -1367,10 +1400,20 @@ async def enqueue_document_recipe_job(
     document_id: str,
     recipe_id: str,
     phase: IngestionJobPhase = IngestionJobPhase.PREPROCESS,
+    expected_language_pack_release_id: Annotated[
+        str | None, Query(min_length=1, max_length=64)
+    ] = None,
+    expected_config_revision: Annotated[int | None, Query(ge=1)] = None,
 ) -> ApiResponse[IngestionJob]:
     """レシピ設定の snapshot を持つ独立 job を投入する。文書内実行は worker が直列化する。"""
     try:
-        job = await _enqueue_ingestion_job_for_recipe(document_id, recipe_id, phase=phase)
+        job = await _enqueue_ingestion_job_for_recipe(
+            document_id,
+            recipe_id,
+            phase=phase,
+            expected_language_pack_release_id=expected_language_pack_release_id,
+            expected_config_revision=expected_config_revision,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -1383,6 +1426,8 @@ async def _enqueue_ingestion_job_for_recipe(
     recipe_id: str,
     *,
     phase: IngestionJobPhase,
+    expected_language_pack_release_id: str | None = None,
+    expected_config_revision: int | None = None,
 ) -> IngestionJob:
     """snapshot を作り、Oracle 側の行ロック検証後に recipe job を投入する。"""
     oracle = OracleClient()
@@ -1390,6 +1435,11 @@ async def _enqueue_ingestion_job_for_recipe(
     detail = await oracle.get_document(document_id)
     if row is None or detail is None:
         raise KeyError("レシピが見つかりません。")
+    if (
+        expected_config_revision is not None
+        and int(str(row.get("config_revision") or 1)) != expected_config_revision
+    ):
+        raise ValueError("レシピの改訂が変わりました。対象を確認し直してください。")
     config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
     effective_settings, _ = _merge_document_processing_config(config)
     source_profile = _source_profile_for_detail(detail)
@@ -1403,6 +1453,7 @@ async def _enqueue_ingestion_job_for_recipe(
         parser_profile=source_profile.parser_profile,
         quality_warnings=source_profile.quality_warnings,
         phase=phase,
+        expected_language_pack_release_id=expected_language_pack_release_id,
         settings_overrides={
             "processing_config": config.model_dump(mode="json", exclude_none=True),
             "rag_preprocess_profile": effective_settings.rag_preprocess_profile,
@@ -2058,6 +2109,16 @@ async def _materialize_experiment_candidate(
         if active_extraction_recipe_id is None:
             raise IngestionUserError("索引対象の抽出結果が見つかりません。")
         extraction_recipe_id = str(active_extraction_recipe_id)
+        if release := active_release():
+            artifact = await oracle.get_document_extraction_artifact(
+                document_id=job.document_id, extraction_recipe_id=extraction_recipe_id
+            )
+            payload = (artifact or {}).get("extraction_json") or {}
+            artifacts = payload.get("parser_artifacts", {}) if isinstance(payload, dict) else {}
+            if not await artifact_language_compatible(oracle, artifacts, "CHUNK"):
+                raise IngestionUserError(
+                    "抽出結果の言語資源を再利用できません。文書解析から再処理してください。"
+                )
 
     if job.phase == IngestionJobPhase.INDEX:
         pending = await oracle.get_latest_recipe_chunk_set(
@@ -2072,6 +2133,11 @@ async def _materialize_experiment_candidate(
             if active is None:
                 raise IngestionUserError(
                     "索引対象の Chunk が見つかりません。Chunk 作成から再開してください。"
+                )
+            if active_release() and not await artifact_language_compatible(oracle, active, "INDEX"):
+                raise IngestionUserError(
+                    "有効な Chunk の言語資源が対象版と一致しません。"
+                    "文書解析または Chunk 作成から再処理してください。"
                 )
             await oracle.upsert_chunk_set(
                 chunk_set_id=candidate_chunk_set_id,
@@ -2089,7 +2155,34 @@ async def _materialize_experiment_candidate(
                 target_chunk_set_id=candidate_chunk_set_id,
             )
         else:
-            candidate_chunk_set_id = str(pending["chunk_set_id"])
+            if active_release() and not await artifact_language_compatible(
+                oracle, pending, "INDEX"
+            ):
+                raise IngestionUserError(
+                    "保存した分割結果の言語資源を再利用できません。"
+                    "文書解析または Chunk 作成から再処理してください。"
+                )
+            if (release := active_release()) and pending.get(
+                "language_pack_release_id"
+            ) != release.id:
+                # 旧版の途中成果物は書き換えず、新版の索引を別集合として作る。
+                await oracle.upsert_chunk_set(
+                    chunk_set_id=candidate_chunk_set_id,
+                    document_id=job.document_id,
+                    recipe_id=recipe_id,
+                    extraction_recipe_id=extraction_recipe_id,
+                    recipe_subset=_processing_recipe_snapshot(
+                        candidate_config, effective_candidate_config
+                    ),
+                    status="CHUNKED",
+                )
+                await oracle.clone_recipe_chunk_set_chunks(
+                    recipe_id=recipe_id,
+                    source_chunk_set_id=str(pending["chunk_set_id"]),
+                    target_chunk_set_id=candidate_chunk_set_id,
+                )
+            else:
+                candidate_chunk_set_id = str(pending["chunk_set_id"])
         # 成功の監査・metric は工程の中では記録せず、active への切り替えの後に 1 回だけ記録する
         # (#493 / #504)。
         await pipeline.index_chunked(
@@ -4418,6 +4511,7 @@ async def _create_ingestion_job_record(
     settings_overrides: dict[str, object] | None = None,
     recipe_id: str | None = None,
     recipe_revision: int | None = None,
+    expected_language_pack_release_id: str | None = None,
 ) -> IngestionJob:
     """取込 job を永続化する。``settings_overrides`` 付きはレシピ実験(Phase 3b)ジョブ。"""
     if recipe_id is None:
@@ -4426,11 +4520,21 @@ async def _create_ingestion_job_record(
             recipe = await ensure_recipe(document_id)
             recipe_id = str(recipe["recipe_id"])
             recipe_revision = int(str(recipe.get("config_revision") or 1))
+    release = active_release()
+    if release is None:
+        release = await (await initialized_release_store(oracle)).current()
+        if expected_language_pack_release_id and expected_language_pack_release_id != release.id:
+            raise HTTPException(
+                status_code=409, detail="言語資源の現在版が変わりました。差分を再確認してください。"
+            )
+    elif expected_language_pack_release_id and expected_language_pack_release_id != release.id:
+        raise HTTPException(status_code=409, detail="処理対象の言語資源の版が一致しません。")
     queued_at = datetime.now(UTC)
     settings = get_settings()
     job = IngestionJob(
         id=uuid4().hex,
         document_id=document_id,
+        language_pack_release_id=release.id,
         status=status,
         phase=phase,
         parser_profile=parser_profile,
@@ -4444,6 +4548,10 @@ async def _create_ingestion_job_record(
         finished_at=queued_at if status == IngestionJobStatus.SKIPPED else None,
     )
     try:
+        if expected_language_pack_release_id:
+            return await oracle.create_ingestion_job(
+                job, expected_current_release_id=expected_language_pack_release_id
+            )
         return await oracle.create_ingestion_job(job)
     except ValueError as exc:
         # 同じレシピの待機中・実行中 job がある / レシピ設定が更新された、は競合(409)として返す。
@@ -5146,6 +5254,50 @@ async def _run_ingestion_job(
     if job is None:
         return
 
+    try:
+        store = await initialized_release_store(oracle)
+        release_id = job.language_pack_release_id
+        if release_id is None:
+            current = await store.current()
+            release_id = await oracle.pin_ingestion_job_language_pack(job.id, current.id)
+            job = job.model_copy(update={"language_pack_release_id": release_id})
+        release = await store.get(release_id)
+        if release is None:
+            raise IngestionUserError("固定した言語資源の公開版が見つかりません。")
+        pack_from_release(release)
+    except Exception:
+        await _fail_ingestion_job(
+            oracle, job, "固定した言語資源の公開版を読み込めませんでした。", lease_owner=lease_owner
+        )
+        if propagate_errors:
+            raise
+        return
+    with ingestion_release_scope(release, job.id):
+        await _run_pinned_ingestion_job(
+            oracle, job, propagate_errors=propagate_errors, lease_owner=lease_owner
+        )
+
+
+async def _validate_legacy_language_input(oracle: OracleClient, job: IngestionJob) -> None:
+    release = active_release()
+    detail = await oracle.get_document(job.document_id)
+    extraction = detail.extraction if detail else None
+    artifacts = extraction.get("parser_artifacts", {}) if extraction else {}
+    if release and not await artifact_language_compatible(oracle, artifacts, job.phase.value):
+        raise IngestionUserError(
+            "既存の抽出結果の言語資源を再利用できません。文書解析から再処理してください。"
+        )
+
+
+async def _run_pinned_ingestion_job(
+    oracle: OracleClient,
+    job: IngestionJob,
+    *,
+    propagate_errors: bool = False,
+    lease_owner: str | None = None,
+) -> None:
+    job_id = job.id
+
     async def is_cancelled() -> bool:
         if lease_owner is not None:
             lease = await oracle.get_ingestion_job_lease(job_id)
@@ -5185,11 +5337,13 @@ async def _run_ingestion_job(
                 next_recipe_phase = recipe_result.next_phase
                 recipe_success_outcome = recipe_result.success_outcome
             elif job.phase == IngestionJobPhase.CHUNK:
+                await _validate_legacy_language_input(oracle, job)
                 finished_detail = await _chunk_reviewed_document(
                     job.document_id,
                     cancel_checker=is_cancelled,
                 )
             elif job.phase == IngestionJobPhase.INDEX:
+                await _validate_legacy_language_input(oracle, job)
                 finished_detail = await _index_reviewed_document(
                     job.document_id,
                     cancel_checker=is_cancelled,
