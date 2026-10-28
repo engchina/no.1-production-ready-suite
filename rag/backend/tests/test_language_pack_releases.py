@@ -112,7 +112,7 @@ def test_missing_version_is_not_retroactively_assigned_from_equal_hash() -> None
     ],
 )
 def test_impact_uses_reading_stage_and_checks_reused_earlier_artifacts(
-    section, key, stages, reuse_chunk, reuse_index
+    section: str, key: str, stages: list[str], reuse_chunk: bool, reuse_index: bool
 ) -> None:
     before = release(builtin_pack())
     after = release(resolve(builtin_pack(), {section: {key: ["合成の語"]}}), 2)

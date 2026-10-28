@@ -173,6 +173,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             sql=oracle_system_schema_control_sql(),
         ),
         OracleSchemaSection(
+            name="language_pack_releases",
+            table_name="rag_language_pack_releases",
+            sql=language_pack_release_statements(),
+        ),
+        OracleSchemaSection(
             name="documents",
             table_name="rag_documents",
             sql=oracle_document_schema_sql(),

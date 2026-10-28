@@ -10,6 +10,7 @@ from rag_parser_core.language import builtin_pack
 from app.api.routes import language_pack_reprocessing as routes
 from app.clients.oracle import OracleClient
 from app.main import app
+from app.schemas.language_pack_release import LanguagePackRelease
 from tests.support import AsgiTestClient
 from tests.test_language_pack_releases import release
 
@@ -18,7 +19,7 @@ PREFIX = "/api/documents/language-pack/"
 
 
 @pytest.fixture
-def published(monkeypatch: pytest.MonkeyPatch):
+def published(monkeypatch: pytest.MonkeyPatch) -> LanguagePackRelease:
     value = release(builtin_pack())
     store = SimpleNamespace(current=AsyncMock(return_value=value))
     monkeypatch.setattr(routes, "initialized_release_store", AsyncMock(return_value=store))
@@ -34,7 +35,9 @@ def target(document: str = "document-a", recipe: str = "recipe-a") -> dict[str, 
     }
 
 
-def test_plan_deduplicates_documents_and_returns_real_recipe_targets(monkeypatch, published):
+def test_plan_deduplicates_documents_and_returns_real_recipe_targets(
+    monkeypatch: pytest.MonkeyPatch, published: LanguagePackRelease
+) -> None:
     lookup = AsyncMock(
         return_value=[
             {
@@ -63,7 +66,9 @@ def test_plan_deduplicates_documents_and_returns_real_recipe_targets(monkeypatch
     lookup.assert_awaited_once_with(["document-a", "unavailable"])
 
 
-def test_stale_release_creates_no_job(monkeypatch, published):
+def test_stale_release_creates_no_job(
+    monkeypatch: pytest.MonkeyPatch, published: LanguagePackRelease
+) -> None:
     enqueue = AsyncMock()
     monkeypatch.setattr(routes, "_enqueue_ingestion_job_for_recipe", enqueue)
     response = client.post(
@@ -77,7 +82,9 @@ def test_stale_release_creates_no_job(monkeypatch, published):
     enqueue.assert_not_awaited()
 
 
-def test_jobs_preserve_phase_revision_and_partial_results(monkeypatch, published):
+def test_jobs_preserve_phase_revision_and_partial_results(
+    monkeypatch: pytest.MonkeyPatch, published: LanguagePackRelease
+) -> None:
     enqueue = AsyncMock(
         side_effect=[
             SimpleNamespace(id="job-a"),
@@ -108,7 +115,9 @@ def test_jobs_preserve_phase_revision_and_partial_results(monkeypatch, published
         }
 
 
-def test_duplicate_recipe_is_rejected_before_any_job(monkeypatch, published):
+def test_duplicate_recipe_is_rejected_before_any_job(
+    monkeypatch: pytest.MonkeyPatch, published: LanguagePackRelease
+) -> None:
     enqueue = AsyncMock()
     monkeypatch.setattr(routes, "_enqueue_ingestion_job_for_recipe", enqueue)
     response = client.post(
@@ -123,7 +132,9 @@ def test_duplicate_recipe_is_rejected_before_any_job(monkeypatch, published):
 
 
 @pytest.mark.parametrize("field", ["phase", "expected_config_revision"])
-def test_jobs_require_explicit_phase_and_revision(field, published):
+def test_jobs_require_explicit_phase_and_revision(
+    field: str, published: LanguagePackRelease
+) -> None:
     item = target()
     item.pop(field)
     response = client.post(
@@ -137,12 +148,13 @@ def test_jobs_require_explicit_phase_and_revision(field, published):
 
 
 @pytest.mark.asyncio
-async def test_plan_uses_one_authorized_batch_query(monkeypatch):
+async def test_plan_uses_one_authorized_batch_query(monkeypatch: pytest.MonkeyPatch) -> None:
     query = AsyncMock(return_value=[])
     oracle = OracleClient()
     monkeypatch.setattr(oracle, "_fetch_all", query)
     assert await oracle.list_language_reprocessing_targets(["a", "b", "a"]) == []
     query.assert_awaited_once()
+    assert query.await_args is not None
     sql, binds = query.await_args.args
     assert "JSON_TABLE" in sql
     assert "rag_document_recipes" in sql

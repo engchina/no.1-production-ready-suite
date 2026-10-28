@@ -15805,12 +15805,18 @@ def oracle_ingestion_job_schema_sql(
     recipe_table: str = "rag_document_recipes",
 ) -> str:
     """Oracle ingestion job table の DDL 例を返す。"""
+    language_fk = (
+        "rag_ingest_job_lang_release_fk"
+        if table_name == "rag_ingestion_jobs"
+        else f"{table_name}_lang_release_fk"
+    )
     return f"""
 CREATE TABLE {table_name} (
     job_id           VARCHAR2(64) PRIMARY KEY,
     document_id      VARCHAR2(64) NOT NULL,
     recipe_id        VARCHAR2(64),
     recipe_revision  NUMBER(10),
+    language_pack_release_id VARCHAR2(64),
     tenant_id_hash   CHAR(64),
     status           VARCHAR2(32) NOT NULL,
     phase            VARCHAR2(16) DEFAULT 'PREPROCESS' NOT NULL,
@@ -15827,6 +15833,8 @@ CREATE TABLE {table_name} (
     lease_owner      VARCHAR2(128),
     heartbeat_at     TIMESTAMP WITH TIME ZONE,
     progress_json    CLOB,
+    CONSTRAINT {language_fk}
+        FOREIGN KEY (language_pack_release_id) REFERENCES rag_language_pack_releases (release_id),
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED', 'CANCELLED')),
     CONSTRAINT {table_name}_phase_ck
@@ -16044,6 +16052,10 @@ CREATE TABLE rag_chunk_sets (
     document_id     VARCHAR2(64) NOT NULL,
     recipe_id       VARCHAR2(64),
     extraction_recipe_id VARCHAR2(64),
+    language_pack_release_id VARCHAR2(64),
+    language_pack_ingest_hash VARCHAR2(64),
+    language_pack_job_id VARCHAR2(64),
+    language_pack_built_at TIMESTAMP WITH TIME ZONE,
     tenant_id_hash  CHAR(64),
     recipe_subset   JSON,
     status          VARCHAR2(32) DEFAULT 'INGESTING' NOT NULL,
@@ -16055,6 +16067,8 @@ CREATE TABLE rag_chunk_sets (
     first_page_context JSON,
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_chunk_set_lang_release_fk FOREIGN KEY (language_pack_release_id)
+        REFERENCES rag_language_pack_releases (release_id),
     CONSTRAINT rag_chunk_sets_document_fk
         FOREIGN KEY (document_id) REFERENCES rag_documents (document_id) ON DELETE CASCADE,
     CONSTRAINT rag_chunk_sets_recipe_fk

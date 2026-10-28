@@ -107,6 +107,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [section["name"] for section in manifest["sections"]] == [
         "system_schema_control",
+        "language_pack_releases",
         "documents",
         "document_recipes",
         "knowledge_bases",
@@ -759,3 +760,36 @@ def test_oracle_schema_migration_sql_adds_evaluation_calibration() -> None:
     assert "constraint_name = 'RAG_EVALUATION_JOBS_KIND_CK'" in kind
     assert "'CHECK (kind IN (''run'', ''calibration''))'" in kind
     assert "DELETE" not in kind
+
+
+def test_fresh_base_contains_release_tables_and_all_artifact_provenance_columns() -> None:
+    """新規初期化では migration の再実行なしで公開版と成果物の列を作る。"""
+    from app.rag.system_schema import MANAGED_TABLES
+
+    sql = oracle_schema.oracle_schema_sql().upper()
+    assert sql.index("CREATE TABLE RAG_LANGUAGE_PACK_RELEASES") < sql.index(
+        "CREATE TABLE RAG_INGESTION_JOBS"
+    )
+    assert "CREATE TABLE RAG_LANGUAGE_PACK_STATE" in sql
+    assert {"RAG_LANGUAGE_PACK_RELEASES", "RAG_LANGUAGE_PACK_STATE"} <= set(MANAGED_TABLES)
+    for table in ("RAG_INGESTION_JOBS", "RAG_CHUNK_SETS"):
+        ddl = sql.split(f"CREATE TABLE {table} (", 1)[1].split(";", 1)[0]
+        assert "LANGUAGE_PACK_RELEASE_ID VARCHAR2(64)" in ddl
+        assert "REFERENCES RAG_LANGUAGE_PACK_RELEASES (RELEASE_ID)" in ddl
+        if table == "RAG_CHUNK_SETS":
+            for column in (
+                "LANGUAGE_PACK_INGEST_HASH",
+                "LANGUAGE_PACK_JOB_ID",
+                "LANGUAGE_PACK_BUILT_AT",
+            ):
+                assert column in ddl
+    migrations = {
+        section.name: section for section in oracle_schema.oracle_schema_migration_sections()
+    }
+    assert (
+        "CREATE TABLE rag_language_pack_releases"
+        in migrations["20261028_001_language_pack_releases"].sql
+    )
+    upgrade = migrations["20261028_002_language_pack_artifacts"].sql
+    assert "user_tab_columns" in upgrade and "IF v_count = 0" in upgrade
+    assert "DROP" not in upgrade and "DELETE" not in upgrade
