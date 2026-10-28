@@ -17,6 +17,7 @@ from numbers import Real
 from typing import Any, Literal, Protocol
 
 from pr_backend_core.bounded_calls import KIND_LABELS, Attempt, BoundedCallFailed, ErrorKind
+from pr_backend_core.observability.model_purpose import model_purpose_attributes
 from pr_backend_core.observability.tracing import observed_span
 
 from app.clients.ai_calls import embedding_rejection_reason, ingestion_ai_calls
@@ -272,6 +273,12 @@ class OciGenAiClient:
                 "gen_ai.operation.name": "embeddings",
                 "gen_ai.provider.name": "oracle",
                 "gen_ai.request.model": self._settings.oci_genai_embedding_model,
+                **model_purpose_attributes(
+                    default={
+                        "SEARCH_QUERY": "query.embed",
+                        "SEARCH_DOCUMENT": "document.embed",
+                    }.get(input_type)
+                ),
             },
         ):
             response = await self._sdk_call_runner(lambda: self._client().embed_text(details))

@@ -20,6 +20,7 @@ from pr_backend_core.llm_request_params_httpx import ParameterDroppingClient
 from pr_backend_core.observability.model_purpose import (
     call_with_model_purpose,
     model_call_purpose,
+    model_purpose_attributes,
 )
 from pydantic import BaseModel
 
@@ -1683,7 +1684,17 @@ def _embed_text_batch_once(
         truncate=models.EmbedTextDetails.TRUNCATE_NONE,
         input_type=input_type_value,
     )
-    with observe_call("embeddings", settings.embedding_model):
+    with (
+        model_call_purpose(
+            model_purpose_attributes(
+                default={
+                    models.EmbedTextDetails.INPUT_TYPE_SEARCH_QUERY: "query.embed",
+                    models.EmbedTextDetails.INPUT_TYPE_SEARCH_DOCUMENT: "document.embed",
+                }.get(input_type_value)
+            ).get("pr.gen_ai.purpose")
+        ),
+        observe_call("embeddings", settings.embedding_model),
+    ):
         response = runtime.client.embed_text(
             embed_text_details=request,
             retry_strategy=runtime.oci.retry.NoneRetryStrategy(),
@@ -1747,7 +1758,17 @@ def _embed_image_once(
         truncate=models.EmbedTextDetails.TRUNCATE_NONE,
         input_type=input_type_value,
     )
-    with observe_call("embeddings", settings.embedding_model):
+    with (
+        model_call_purpose(
+            model_purpose_attributes(
+                default={
+                    models.EmbedTextDetails.INPUT_TYPE_SEARCH_QUERY: "query.embed",
+                    models.EmbedTextDetails.INPUT_TYPE_SEARCH_DOCUMENT: "document.embed",
+                }.get(input_type_value)
+            ).get("pr.gen_ai.purpose")
+        ),
+        observe_call("embeddings", settings.embedding_model),
+    ):
         response = runtime.client.embed_text(
             embed_text_details=request,
             retry_strategy=runtime.oci.retry.NoneRetryStrategy(),
