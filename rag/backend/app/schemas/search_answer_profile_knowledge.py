@@ -174,22 +174,6 @@ class RuntimeKnowledgePreviewData(BaseModel):
     conflicting_rules: list[str] = Field(default_factory=list)
 
 
-class QuerySuggestion(BaseModel):
-    """よく聞かれる質問の候補(rag_poc の QueryHistorySuggestion)。"""
-
-    question: str
-    count: int
-
-
-class QuerySuggestionsData(BaseModel):
-    search_answer_profile_id: str
-    enabled: bool
-    suggestions: list[QuerySuggestion] = Field(default_factory=list)
-
-
-# --- ルールの確認の質問(チャットの確認。#717)-------------------------------------------
-
-
 class ClarificationSection(BaseModel):
     """確認の選択肢が指す文書の章節。ページは保存したときの章節のページ範囲。"""
 

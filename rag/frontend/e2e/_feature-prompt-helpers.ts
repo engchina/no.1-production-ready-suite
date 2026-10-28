@@ -26,6 +26,8 @@ export async function verifyFeaturePrompt(page: Page, key: string, title: string
   const editor = page.locator(`#answer-prompt-${key}`);
   await expect(editor).toBeEditable();
   await expect(editor).toHaveValue("合成の既定指示");
+  const actions = disclosure.getByRole("group", { name: "編集内容の操作" });
+  await expect(actions.getByRole("button")).toHaveText(["プロンプトを保存", "変更を破棄", "既定に戻す"]);
   await editor.fill("破棄する指示");
   await disclosure.getByRole("button", { name: "変更を破棄" }).click();
   await expect(editor).toHaveValue("合成の既定指示");

@@ -331,6 +331,7 @@ def test_all_default_stage_instructions_follow_ordered_steps() -> None:
     continuations = {
         ("picture_description", "picture"): 6,
         ("picture_description", "table"): 6,
+        ("picture_description", "contract"): 7,
         ("generation", "assumptionSystem"): 6,
     }
     for stage in readonly_prompt_stages():
@@ -339,13 +340,14 @@ def test_all_default_stage_instructions_follow_ordered_steps() -> None:
         for part in parts:
             identity = (str(stage["id"]), str(part["id"]))
             content = str(part["content"])
-            if identity == ("audit", "compactRule"):
+            if identity in {("audit", "compactRule"), ("picture_description", "rules")}:
                 # 判定の理由の書き方は監査の最後の Step 内の追加規則。
                 assert content.lstrip().startswith("### ")
                 assert not re.search(r"^## ", content, re.M)
                 continue
             steps = [int(n) for n in re.findall(r"^## Step (\d+): \S", content, re.M)]
             first = continuations.get(identity, 1)
+            assert content.lstrip().startswith(f"## Step {first}:"), identity
             assert steps and steps == list(range(first, first + len(steps))), identity
             assert not re.search(r"^## (?!Step \d+:)", content, re.M), identity
 
@@ -363,3 +365,19 @@ def test_every_catalog_default_is_the_executed_instruction_constant() -> None:
     for stage in PROMPT_STAGES:
         for part_id, ref in stage.parts:
             assert displayed[stage.id, part_id] == prompt_constant(ref)
+
+
+def test_default_prompt_steps_have_one_blank_line_between_sections() -> None:
+    """画面とモデルが使う既定指示の Step 境界を読みやすく揃える。"""
+    for stage in readonly_prompt_stages():
+        parts = stage["prompts"]
+        assert isinstance(parts, list)
+        for part in parts:
+            lines = str(part["content"]).splitlines()
+            for index, line in enumerate(lines):
+                if index == 0 or not re.match(r"^## Step \d+:", line):
+                    continue
+                identity = (stage["id"], part["id"], line)
+                assert lines[index - 1] == "", identity
+                if index >= 2:
+                    assert lines[index - 2].strip(), identity

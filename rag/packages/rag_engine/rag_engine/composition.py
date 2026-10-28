@@ -104,7 +104,6 @@ def create_oracle_application(
         workspace_dir=workspace,
         output_dir=path(settings.output_dir),
         runtime_knowledge_path=path(settings.runtime_knowledge_path),
-        query_history_blocklist_path=path(settings.query_history_blocklist_path),
         prompt_dir=path(settings.prompt_dir),
         faq_path=path(settings.faq_path),
     )

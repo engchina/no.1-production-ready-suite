@@ -677,7 +677,6 @@ async def test_oracle_purges_issue_no_sql_without_retention() -> None:
 
     assert await store.purge(retention_days=0) == 0
     assert await client.purge_answer_records(0) == 0
-    assert await client.purge_query_history(0) == 0
     assert await RunHistoryStore(client).purge_runs(0) == 0
     assert connection.calls == []
 

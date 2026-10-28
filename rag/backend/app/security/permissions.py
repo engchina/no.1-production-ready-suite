@@ -483,7 +483,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", f"{_BV}/support-guides/{{guide_id}}/restore"): _any(MENU_SEARCH_ANSWER_PROFILES),
     # 下書きで試す（#1288）。回答を作るが、業務ガイドの管理者だけ（検索の権限では使えない）。
     ("POST", f"{_BV}/support-guides/{{guide_id}}/try"): _any(MENU_SEARCH_ANSWER_PROFILES),
-    ("GET", f"{_BV}/query-suggestions"): _ANSWER_USE,
     # ---- 検索・回答プロファイル: チャット ----
     ("GET", "/chat/models"): _any(MENU_CHAT),
     ("GET", "/chat/conversations"): _any(MENU_CHAT),
@@ -668,8 +667,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/answering"): _any(MENU_SETTINGS_RETRIEVAL),
     ("GET", "/settings/answer-records"): _any(MENU_SETTINGS_RETRIEVAL, MENU_SEARCH, MENU_CHAT),
     ("PATCH", "/settings/answer-records"): _any(MENU_SETTINGS_RETRIEVAL),
-    ("GET", "/settings/query-history"): _any(MENU_SETTINGS_RETRIEVAL),
-    ("PATCH", "/settings/query-history"): _any(MENU_SETTINGS_RETRIEVAL),
     # 編集できるプロンプトは回答プロンプト・文書解析・文書分割の
     # 画面で編集する。検索方法では検索関連の指示を読む。変更（PUT / DELETE）は、
     # route の中で `ANSWER_PROMPT_EDIT_PERMISSIONS` の key ごとの権限も確かめる。

@@ -188,7 +188,6 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | （設定なし: 回答の画像の添付） | — | 回答は選んだ回答モデル（検索・回答プロファイルの回答モデル・チャットの比較の列のモデル・既定のテキストモデル）だけで作り、質問の理解・拡張・生成・作り直し・監査の途中で別のモデルに切り替えない（#3444）。そのモデルがシステム設定 > モデルで「画像入力に対応」なら、回答に渡す根拠の chunk に結び付いた図・画面の画像（切り出しかページの画像。上限 4 件、根拠の順位と質問との関連度の順）を同じ要求に添付する。対応していないモデルは画像を添付せず、取り込み時に作った図の説明（根拠の本文）で答える。質問の語で画像の要否を決めない。既定の Vision モデルは取り込みの処理（図の説明など）だけに使う。旧 `RAG_ANSWER_VISION_ENABLED` は読まない |
 | `RAG_HISTORY_REWRITE_ENABLED` | `true` | チャットで、会話履歴から質問を書き換える |
 | `RAG_ANSWER_RECORD_RETENTION_DAYS` | `0` | 回答の記録とチャット・RAG 検索の実行履歴の保存日数。既定の `0` は無期限で、自動では削除しない（#3235。以前の既定は 90 日）。正の値にすると、回答の保存時と設定の保存時に期限を過ぎた記録を削除する。取込・検索・回答設定 > 検索方法の「回答の記録の保存期間」で変更できる（#593 で回答スタイルの画面から移した） |
-| `RAG_QUERY_HISTORY_RETENTION_DAYS` | `0` | 質問履歴（よく聞かれる質問の候補。`RAG_QUERY_HISTORY_ENABLED` が有効なときだけ記録する）の保存日数。既定の `0` は無期限で、自動では削除しない（#3235。以前の既定は 90 日）。正の値にすると、記録時と設定の保存時に期限を過ぎた履歴を削除する。取込・検索・回答設定 > 検索方法の「質問履歴」で変更できる |
 | `RAG_ENGINE_RENDER_DPI`（docling サービス） | `300` | 解析時のページ画像の解像度。bbox はこの画像の px 座標になる |
 
 **回答の時間の配分（#1516）**: 回答の上限（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒）の中で、章節の拡張・抽出と、
@@ -519,7 +518,6 @@ ai-foundations-lab の検証との照合（#512）:
 
 ## 保存先
 
-- **質問履歴**：`rag_query_history`（検索・回答プロファイル単位。安全チェックでマスクした後の質問・正規化した質問・分類条件）。migration `20260926_005_query_history` で作成する。設定が有効なときだけ、回答に成功した質問（検索とチャット）を記録する。既定の保存期間は無期限で自動では削除せず、保存期間を決めたときは過ぎたものを削除する（#3235）。候補は rag_poc の `suggest_query_history_questions`（最小回数・類似度・分類・除外する語）で出す。
 - **文書の分類と有効期間**：`rag_documents.classification`（JSON）。migration `20260926_001_documents_classification` で列を追加する（取り消した migration `20261016_002_document_effective_period` を当てた DB は、`20261019_001_restore_document_classification` が列を戻す。#2450）。ACL に使う `category_name` とは別に持つ。
 - **検索・回答プロファイルの知識**：`rag_search_answer_profile_knowledge`（検索・回答プロファイル × 種別、rag_poc の JSON payload のまま）。表は「運用設定 > システムテーブル」から、migration `20260925_001_business_view_knowledge` で作成する。
 - **親子チャンク**：子を `rag_chunks` に保存する。親の本文（`parent_text`）、検索用テキスト（`engine_search_text`）、metadata v4（`engine_metadata_json`）は子の metadata に持つ。
@@ -543,7 +541,7 @@ ai-foundations-lab の検証との照合（#512）:
 | 回答の役割・口調・既定の回答言語 | 検索・回答プロファイル「回答プロンプト」 | 削除した（保存済みの値は読み込み時に捨て、次に保存すると消える） |
 
 - 削除した画面の URL（`/settings/grounding`・`/settings/generation`・`/settings/agentic`）は検索方法（`/settings/retrieval`）へ移す。
-- 削除した API は `GET/PATCH /api/settings/retrieval`・`/grounding`・`/generation`・`/agentic`、`GET/POST /api/settings/prompts`・`POST /api/settings/prompts/{version_id}/activate`。回答の設定は `/api/settings/answering`・`/answer-records`・`/query-history`・`/answer-prompts` だけになった。
+- 削除した API は `GET/PATCH /api/settings/retrieval`・`/grounding`・`/generation`・`/agentic`、`GET/POST /api/settings/prompts`・`POST /api/settings/prompts/{version_id}/activate`。回答の設定は `/api/settings/answering`・`/answer-records`・`/answer-prompts` だけになった。
 - 保存済みのロールのメニュー権限 `menu.settings_grounding` / `menu.settings_generation` / `menu.settings_agentic` は読み捨てる。DB の行は #596 のシステムテーブルの更新で削除した（[deployment.md の「既存環境の更新手順（#596）」](./deployment.md)）。
 
 安全チェックは質問と回答の両方に適用する。

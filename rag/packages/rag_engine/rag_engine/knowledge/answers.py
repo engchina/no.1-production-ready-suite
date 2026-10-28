@@ -172,7 +172,6 @@ def save_answer_result(
     評価失敗でも回答は保存する。出典 run のない不足結果は保存しない。
     """
     from rag_engine.generation.answering import answer_result_payload, format_answer_response
-    from rag_engine.knowledge.query_history import append_query_history, load_query_suggestion_blocklist
 
     source_id = str(run_id or result.primary_source_run_id or "").strip()
     if not source_id:
@@ -229,16 +228,6 @@ def save_answer_result(
             )
         )
     write_answer_payload(settings.output_dir, source_id, payload, store=store)
-    append_query_history(
-        output_dir=settings.output_dir,
-        question=result.original_question,
-        enabled=settings.query_history_enabled,
-        run_id=source_id,
-        answer_id=answer_id,
-        retrieval_scope=result.retrieval_scope,
-        classification_filter=result.classification_filter,
-        blocklist=load_query_suggestion_blocklist(settings.output_dir, blocklist_path=settings.query_history_blocklist_path),
-    )
     return SavedAnswer(source_id, answer_id, payload)
 
 
@@ -257,16 +246,5 @@ def save_faq_answer(
         classification_filter=classification_filter,
     )
     write_answer_payload(settings.output_dir, run_id, payload)
-    from rag_engine.knowledge.query_history import append_query_history, load_query_suggestion_blocklist
 
-    append_query_history(
-        output_dir=settings.output_dir,
-        question=str(payload.get("question") or ""),
-        enabled=settings.query_history_enabled,
-        run_id=run_id,
-        answer_id=answer_id,
-        retrieval_scope=APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE,
-        classification_filter=payload["classification_filter"],
-        blocklist=load_query_suggestion_blocklist(settings.output_dir, blocklist_path=settings.query_history_blocklist_path),
-    )
     return SavedAnswer(run_id, answer_id, payload)

@@ -191,6 +191,7 @@ VALIDATION_SYSTEM_PROMPT = (
 - 段落が書いた場所（頁・節・シート・行・セル範囲）は、evidence_items の場所（page_start・page_end・section_path・sheet_name・row_start・row_end・cell_range）と照らす。場所は裏付ける内容ではなく出典の示し方なので、上の「段落の一部」に数えない。
 - 根拠に場所の情報が無い、または表記が違うだけ（「行23」「23 行目」と row_start 23、「行1〜3」と row_start 1・row_end 3、「A11:F11」と cell_range、「p.3」と page_start 3 など）で、内容が根拠で裏付けられるなら supported にする。場所の表記を理由に unsupported にしない。
 - 段落が書いた場所が、内容を裏付ける根拠の場所と食い違う（別のシート・範囲の外の行・別の頁）ときだけ、場所を理由に unsupported にする。
+
 ## Step 5: 判定を応答 schema で返す
 - 各段落の判定だけを構造化して返す。
 """
@@ -606,17 +607,17 @@ PREMISE_CONSISTENCY_SYSTEM_PROMPT = (
     "\n"
     "### 判定する段落（checks。answer_passages の全ての段落を 1 回ずつ）\n"
     "- constraints: 原質問と確認の答えが決めた条件・制約（対象・範囲、除いた操作、実施済み・未実行の状態）を短く書く。未提示の状態・エラー・変更値を補わない。\n"
-    "## Step 2: 段落が勧める内容を特定する\n"
+    "\n## Step 2: 段落が勧める内容を特定する\n"
     "- recommendation: 段落が利用者に勧める操作・結論を、その対象・範囲とともに短く書く。勧めない段落（説明・注意・"
     "確かめられなかった旨）は空文字。\n"
-    "## Step 3: 条件との両立性を判断する\n"
+    "\n## Step 3: 条件との両立性を判断する\n"
     "- conflicts: recommendation が constraints と両立しない（限定より広い範囲・別の対象に及ぶ、除いた対象・操作を"
     "含む、別の処理や状態に対する結論・具体値を今回の操作に当てはめる）。資料に書かれた内容でも、constraints に合う手順が見つからない"
     "代わりに示した内容でも conflicts。\n"
     "- fits: 両立する、または recommendation が空。\n"
     "- 例: 利用者の答えが「項目 A だけを変え、共有グループは変えない」で、段落が「共有グループの表示区分を変えて保存する」"
     "なら conflicts。「共有グループの表示区分を変えると全項目に反映される」という説明だけなら fits。\n"
-    "## Step 4: 各段落の判定を構造化して返す\n"
+    "\n## Step 4: 各段落の判定を構造化して返す\n"
 )
 
 

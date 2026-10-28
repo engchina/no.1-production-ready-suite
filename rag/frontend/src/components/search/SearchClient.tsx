@@ -62,7 +62,6 @@ import { answerAttachedImages, answerModelHeading, parseAnswerDiagnostics, unrea
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { useAuth } from "@/components/security/AuthProvider";
 import { AnswerText } from "./AnswerText";
-import { QuerySuggestions } from "./QuerySuggestions";
 import { ApprovedFaqAnswer, ApprovedFaqSuggestions } from "./ApprovedFaqSuggestions";
 import { ExtractionFieldFilters } from "./ExtractionFieldFilters";
 import {
@@ -759,13 +758,6 @@ export function SearchClient() {
                     className="space-y-0"
                   />
                 </FieldActionRow>
-                <QuerySuggestions
-                  searchAnswerProfileId={confirmedSearchAnswerProfileId}
-                  query={query}
-                  filters={classificationSuggestionFilters(classification)}
-                  disabled={isStreaming}
-                  onSelect={setQuery}
-                />
               </div>
             </CardContent>
           </Card>
@@ -1094,13 +1086,6 @@ function buildSearchFilters({
 }
 
 /** 質問の候補は分類だけで絞る（基準日は候補に関係しない）。 */
-function classificationSuggestionFilters(values: ClassificationFilterValues): Record<string, string> {
-  const filters: Record<string, string> = {};
-  for (const key of ["large_category", "middle_category", "small_category"] as const) {
-    if (values[key].trim()) filters[key] = values[key].trim();
-  }
-  return filters;
-}
 
 function isClassificationFilterValues(value: unknown): value is ClassificationFilterValues {
   return (

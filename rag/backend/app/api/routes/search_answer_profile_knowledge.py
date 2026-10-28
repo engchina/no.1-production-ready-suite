@@ -25,7 +25,6 @@ from app.rag.domain_keyword_import import (
     import_keywords,
     read_keyword_excel,
 )
-from app.rag.query_history import query_history_suggestions
 from app.rag.question_understanding import profile_language_scope
 from app.rag.rule_selection import recognize_rule_selections
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
@@ -83,8 +82,6 @@ from app.schemas.search_answer_profile_knowledge import (
     DomainKeywordsData,
     DomainKeywordSuggestionData,
     DomainKeywordsUpdate,
-    QuerySuggestion,
-    QuerySuggestionsData,
     RuleClarificationRequest,
     RuntimeKnowledgeData,
     RuntimeKnowledgeEditRequest,
@@ -522,48 +519,6 @@ async def post_runtime_knowledge_preview(
                     if item["reason"] == "unresolved_exclusive_conflict"
                 }
             ),
-        )
-    )
-
-
-@router.get(
-    "/{search_answer_profile_id}/query-suggestions",
-    response_model=ApiResponse[QuerySuggestionsData],
-)
-async def get_query_suggestions(
-    search_answer_profile_id: str,
-    q: str = Query(default="", max_length=500),
-    large_category: str = Query(default="", max_length=200),
-    middle_category: str = Query(default="", max_length=200),
-    small_category: str = Query(default="", max_length=200),
-) -> ApiResponse[QuerySuggestionsData]:
-    """検索・回答プロファイルでよく聞かれる質問を、入力中の質問との類似度順に返す(質問履歴が有効なときだけ)。"""
-    settings = get_settings()
-    oracle = OracleClient()
-    await _require_search_answer_profile(oracle, search_answer_profile_id)
-    classification = {
-        key: value
-        for key, value in {
-            "large_category": large_category,
-            "middle_category": middle_category,
-            "small_category": small_category,
-        }.items()
-        if value.strip()
-    }
-    suggestions = await query_history_suggestions(
-        oracle,
-        settings,
-        search_answer_profile_id=search_answer_profile_id,
-        question=q,
-        classification=classification,
-    )
-    return ApiResponse(
-        data=QuerySuggestionsData(
-            search_answer_profile_id=search_answer_profile_id,
-            enabled=settings.rag_query_history_enabled,
-            suggestions=[
-                QuerySuggestion(question=item.question, count=item.count) for item in suggestions
-            ],
         )
     )
 

@@ -39,7 +39,7 @@ async function mockApi(page: Page, attachedImages: number) {
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path.endsWith("/approved-faq/suggest") || path.endsWith("/query-suggestions")) {
+    if (path.endsWith("/approved-faq/suggest")) {
       return route.fulfill({ json: envelope({ suggestions: [] }) });
     }
     return route.fulfill({

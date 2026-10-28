@@ -141,7 +141,7 @@ const VIEWS = [
 async function mockSearchPage(page: Page) {
   await page.route("**/api/search-answer-profiles**", async (route) => {
     const pathname = new URL(route.request().url()).pathname;
-    if (pathname.endsWith("/approved-faq/suggest") || pathname.endsWith("/query-suggestions")) {
+    if (pathname.endsWith("/approved-faq/suggest")) {
       await route.fulfill(envelope({ suggestions: [] }));
       return;
     }

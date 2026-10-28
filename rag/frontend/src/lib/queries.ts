@@ -35,7 +35,6 @@ import {
   type DocumentSummary,
   type DocumentClassification,
   type AnswerPromptKey,
-  type QueryHistorySettingsData,
   type RunHistoryListParams,
   type AnsweringSettingsUpdate,
   type DocumentKnowledgeBaseReplaceRequest,
@@ -1568,37 +1567,6 @@ export function useAnswerRecord(traceId: string | null) {
     queryKey: ["answer-record", traceId],
     queryFn: () => api.getAnswerRecord(traceId as string),
     enabled: Boolean(traceId),
-  });
-}
-
-/** 質問履歴の設定。 */
-export function useQueryHistorySettings() {
-  return useQuery({ queryKey: ["settings", "query-history"], queryFn: api.getQueryHistorySettings });
-}
-
-export function useUpdateQueryHistorySettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: QueryHistorySettingsData) => api.updateQueryHistorySettings(body),
-    onSuccess: (data) => {
-      qc.setQueryData(["settings", "query-history"], data);
-      qc.invalidateQueries({ queryKey: ["query-suggestions"] });
-    },
-  });
-}
-
-/** 検索・回答プロファイルでよく聞かれる質問(質問履歴が有効なときだけ候補が返る)。 */
-export function useQuerySuggestions(
-  searchAnswerProfileId: string | null,
-  query: string,
-  filters: Record<string, string>
-) {
-  return useQuery({
-    queryKey: ["query-suggestions", searchAnswerProfileId, query, filters],
-    queryFn: () => api.getQuerySuggestions(searchAnswerProfileId as string, query, filters),
-    enabled: Boolean(searchAnswerProfileId),
-    staleTime: 30_000,
-    placeholderData: (previous) => previous,
   });
 }
 

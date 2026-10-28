@@ -37,7 +37,6 @@ from app.clients.oracle import (
     oracle_knowledge_base_schema_sql,
     oracle_knowledge_graph_schema_sql,
     oracle_message_schema_sql,
-    oracle_query_history_schema_sql,
     oracle_role_access_schema_sql,
     oracle_search_answer_profile_knowledge_schema_sql,
     oracle_search_answer_profile_schema_sql,
@@ -206,11 +205,6 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="answer_prompts",
             table_name="rag_answer_prompts",
             sql=oracle_answer_prompt_schema_sql(),
-        ),
-        OracleSchemaSection(
-            name="query_history",
-            table_name="rag_query_history",
-            sql=oracle_query_history_schema_sql(),
         ),
         # 実行履歴（チャット・RAG 検索の実行。#1890）。
         OracleSchemaSection(
@@ -589,7 +583,34 @@ END;
             sql=language_pack_artifact_statements(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261029_001_retire_query_history",
+            table_name="rag_query_history",
+            sql=retire_query_history_sql(),
+            destructive_note=(
+                "廃止する質問候補専用の RAG_QUERY_HISTORY と全行、同表の索引・制約を削除します。"
+                "会話・メッセージ・回答の記録・実行履歴は削除しません。"
+                "必要な履歴は適用前に同表を export してください。削除後は復元できません。"
+            ),
+        )
+    )
     return sections
+
+
+def retire_query_history_sql() -> str:
+    """質問候補専用表だけを削除し、未作成・削除済みの環境でも適用する。"""
+    return """
+BEGIN
+    EXECUTE IMMEDIATE 'DROP TABLE rag_query_history PURGE';
+EXCEPTION
+    WHEN OTHERS THEN
+        IF SQLCODE != -942 THEN
+            RAISE;
+        END IF;
+END;
+/
+""".strip()
 
 
 def raptor_prompt_consolidation_sql() -> str:

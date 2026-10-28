@@ -526,10 +526,59 @@
       "sha256": "f2a022d87a58f2b8d094cf144a4e78db5d5d41b84f3d4d32aac09506a93879dd",
       "statement_count": 1,
       "table_name": "rag_documents"
+    },
+    {
+      "destructive": false,
+      "name": "20261022_001_cited_evidence",
+      "sha256": "55b40a98922272add71b0ba2d2a83c0a996e8b068c77ed6f91aacd8b89a0dfd4",
+      "statement_count": 1,
+      "table_name": "rag_answer_records"
+    },
+    {
+      "destructive": false,
+      "name": "20261026_001_evaluation_calibration",
+      "sha256": "d7e64a9fa6dff654e76a85c2205a9dab1b2aecb16eebfae12c986de7be7b389d",
+      "statement_count": 1,
+      "table_name": "rag_evaluation_label_sets"
+    },
+    {
+      "destructive": false,
+      "name": "20261026_002_evaluation_job_calibration_kind",
+      "sha256": "84f9d16a11369d45caf734c59d24a1a7af4652ca4e759de4acc1713ce70057a3",
+      "statement_count": 1,
+      "table_name": "rag_evaluation_jobs"
+    },
+    {
+      "destructive": false,
+      "name": "20261027_001_raptor_prompt_consolidation",
+      "sha256": "5f48c5f8ba061ec3d3364356d3613f978618f826b5fabd28de51e17a05fd23ca",
+      "statement_count": 2,
+      "table_name": "rag_answer_prompts"
+    },
+    {
+      "destructive": false,
+      "name": "20261028_001_language_pack_releases",
+      "sha256": "e0905d83fd99c2240c5a8a32a485bed2d99faa9c6d8a732f7546d5c80cb987df",
+      "statement_count": 5,
+      "table_name": "rag_language_pack_releases"
+    },
+    {
+      "destructive": false,
+      "name": "20261028_002_language_pack_artifacts",
+      "sha256": "bfd2fdc79a3647b97736eedbbc7fc16c211922b1392b100de66d811d89a3708c",
+      "statement_count": 7,
+      "table_name": "rag_chunk_sets"
+    },
+    {
+      "destructive": true,
+      "name": "20261029_001_retire_query_history",
+      "sha256": "d3e80d6a5f85c9622b8c55e317876d5260d5bfbb893160b1252dadfedf62980b",
+      "statement_count": 1,
+      "table_name": "rag_query_history"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "e54416a3a25df1e31e559d22ada5ba1e4bee9b4796e7dcea607e0e15d483524c",
-  "statement_count": 106
+  "sha256": "c3f68e2d5f01d88d5b5d83922db0c7874e329c3f356671c58ae7a538fdf6362e",
+  "statement_count": 124
 }
