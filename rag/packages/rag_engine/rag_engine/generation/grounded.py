@@ -320,7 +320,7 @@ AUDIT_SYSTEM_PROMPT = (
     # 語・値が根拠のどこかにあることで、別の行・別の成果物の関係を支持済みにしていた (#2659・#2657)。
     + RELATION_SUPPORT_RULES
     + (
-        "## Step 3: 質問への適用性を確認する（applicability）\n"
+        "\n## Step 3: 質問への適用性を確認する（applicability）\n"
         "- 質問の対象・変更項目・発生条件と quote の前提が一致すれば"
         " matched。quote が同じ業務・機能の種類の一般手順・規則"
         "で、質問固有の値（コード名・グループ名・回数・メニュー名の言い回し）"
@@ -455,7 +455,7 @@ AUDIT_SYSTEM_PROMPT = (
         "- unused_evidence に答えがあっても items が"
         "答えていない要求は missing とし、その根拠を unused_"
         "evidence_ids に挙げる。\n"
-        "## Step 5: 結論・理由を対応付けて JSON を返す\n"
+        "\n## Step 5: 結論・理由を対応付けて JSON を返す\n"
         "- summary_output_fields: summary の"
         "各文を確認し、出力ファイルに列・項目・値があるという主張が1つでもあ"
         "れば、その定義の原文引用と出力対象の一致を返す。後から未確認と留保し"

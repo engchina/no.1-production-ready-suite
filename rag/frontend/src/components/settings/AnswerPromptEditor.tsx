@@ -1,5 +1,4 @@
 import {
-  Button,
   Disclosure,
   Card,
   CardContent,
@@ -134,16 +133,6 @@ function AnswerPromptEditor({ prompt, fieldLabel: suppliedLabel }: { prompt: Ans
       {/* 空のままでは保存できない（既定へ戻すのは「既定に戻す」）ので必須（#531）。 */}
       {/* プロンプトの編集欄はフォームの最大幅まで（1920px で 1 行が長くなりすぎない。#1891）。 */}
       <FormGrid columns={1}>
-      <div className="flex justify-end">
-        <Button
-          variant="ghost"
-          icon={History}
-          disabled={save.isPending || (content === prompt.default_content && (!prompt.customized || restoreDefault))}
-          onClick={reset}
-        >
-          {t("settings.answerPrompts.reset")}
-        </Button>
-      </div>
         <TextareaField
           id={inputId}
           width="full"
@@ -186,7 +175,13 @@ function AnswerPromptEditor({ prompt, fieldLabel: suppliedLabel }: { prompt: Ans
             disabled: !dirty || save.isPending,
             onClick: discard,
           },
-
+          {
+            id: "restore-default",
+            label: t("settings.answerPrompts.reset"),
+            icon: History,
+            disabled: save.isPending || (content === prompt.default_content && (!prompt.customized || restoreDefault)),
+            onClick: reset,
+          },
         ]}
         status={
           save.isError ? (

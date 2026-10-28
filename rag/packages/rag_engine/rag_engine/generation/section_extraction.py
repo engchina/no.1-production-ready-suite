@@ -575,6 +575,7 @@ class SectionExtractor:
     def _prompt(self, question: str, part: _Part, records: Sequence[Any], sources: Sequence[str], refs: dict[int, str]) -> str:
         """質問を先頭（分をまたいで同じ）に、分の本文を後ろに置く（prompt のキャッシュの共通の先頭）。"""
         stage = (
+            "## Step 1: 抽出済みの原文を絞る\n"
             "これは 1 段目で抜き出した原文です。その中から、質問への回答に必要なものだけをもう一度そのまま抜き出してください。\n\n"
             if part.stage > 1
             else ""

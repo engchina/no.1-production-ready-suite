@@ -398,7 +398,6 @@ GUIDE_DRAFT_PROMPT = (
     "（standard_answer）です。節の field は次の項目を"
     "表します（null は見出しの無い文）。\n"
     "\n"
-    "\n"
     "## Step 2: 手順・条件・根拠を対応付ける\n"
     "- steps（回答の手順）: steps に順に入れる。前の手順を済"
     "ませてから行う手順は depends_on に前の手順の\n"

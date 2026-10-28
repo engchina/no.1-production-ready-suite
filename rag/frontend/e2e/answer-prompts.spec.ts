@@ -101,7 +101,12 @@ for (const viewport of [
     const field = page.getByLabel("テンプレート");
     const save = page.getByRole("button", { name: "プロンプトを保存" });
     await expect(page.getByText("既定値", { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "既定に戻す" })).toBeDisabled();
+    const actions = page.getByRole("group", { name: "編集内容の操作" });
+    await expect(actions.getByRole("button")).toHaveText(["プロンプトを保存", "変更を破棄", "既定に戻す"]);
+    await expect(actions.getByRole("button", { name: "既定に戻す" })).toBeDisabled();
+    const fieldBox = await field.boundingBox();
+    const actionBox = await actions.boundingBox();
+    expect(actionBox!.y).toBeGreaterThan(fieldBox!.y + fieldBox!.height);
     await field.fill("質問だけ {{question}}");
     await save.click();
     // 必須の placeholder の欠けは送る前に欄の下へ出し、欄へフォーカスを移す（#1010）。
@@ -109,6 +114,19 @@ for (const viewport of [
     await expect(field).toBeFocused();
 
     await field.fill("独自 {{question}} {{answer_context}}");
+    await actions.scrollIntoViewIfNeeded();
+    const buttonBoxes = await actions.getByRole("button").evaluateAll((buttons) =>
+      buttons.map((button) => { const box = button.getBoundingClientRect(); return { x: box.x, y: box.y, right: box.right, bottom: box.bottom }; })
+    );
+    if (viewport.name === "desktop") {
+      expect(buttonBoxes[0].right).toBeLessThanOrEqual(buttonBoxes[1].x);
+      expect(buttonBoxes[1].right).toBeLessThanOrEqual(buttonBoxes[2].x);
+      expect(buttonBoxes.map((box) => box.y)).toEqual([buttonBoxes[0].y, buttonBoxes[0].y, buttonBoxes[0].y]);
+    } else {
+      expect(buttonBoxes[0].bottom).toBeLessThanOrEqual(buttonBoxes[1].y);
+      expect(buttonBoxes[1].bottom).toBeLessThanOrEqual(buttonBoxes[2].y);
+    }
+    await page.screenshot({ path: testInfo.outputPath("prompt-actions-bottom.png") });
     await save.click();
     await expect(page.getByText("プロンプトを保存しました。").last()).toBeVisible();
     await expect(page.getByText(/^編集済み/)).toBeVisible();
@@ -368,9 +386,11 @@ test("資料との照合の指示を保存でき、既定への復帰は保存�
   await expect(save).toBeDisabled();
   expect(methods).toEqual(["PUT", "DELETE"]);
   await expect(page.getByText("既定値", { exact: true })).toHaveCount(0);
+  const actions = stage.getByRole("group", { name: "編集内容の操作" });
+  await expect(actions.getByRole("button")).toHaveText(["プロンプトを保存", "変更を破棄", "既定に戻す"]);
   const resetBox = await reset.boundingBox();
   const fieldBox = await field.boundingBox();
-  expect(resetBox!.y + resetBox!.height).toBeLessThanOrEqual(fieldBox!.y);
+  expect(resetBox!.y).toBeGreaterThan(fieldBox!.y + fieldBox!.height);
   await expectNoPageOverflow(page);
   await stage.screenshot({ path: testInfo.outputPath("editable-stage.png") });
 });

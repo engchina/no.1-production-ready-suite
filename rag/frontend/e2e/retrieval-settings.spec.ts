@@ -636,6 +636,8 @@ test("検索方法の指示の編集内容を保存できる", { tag: "@responsi
   await page.goto("/settings/retrieval");
   const stage = page.getByTestId("answer-prompt-stage-routing");
   await stage.locator("summary").click();
+  await expect(stage.getByRole("group", { name: "編集内容の操作" }).getByRole("button"))
+    .toHaveText(["プロンプトを保存", "変更を破棄", "既定に戻す"]);
   await stage.getByRole("textbox").fill("## Step 1: 合成の検索指示");
   await stage.getByRole("button", { name: "プロンプトを保存" }).click();
   await expect(stage.getByRole("button", { name: "プロンプトを保存" })).toBeDisabled();
