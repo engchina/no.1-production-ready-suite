@@ -1,13 +1,13 @@
 import type { Page } from "@playwright/test";
 
-import { ProgressLog, SYNTHETIC_MODEL, SYNTHETIC_TRACE_ID } from "./fixtures/chat-progress-events";
+import { ProgressLog, SYNTHETIC_TRACE_ID } from "./fixtures/chat-progress-events";
 import { expect, test, type MockApi } from "./fixtures/mock-api";
 
 // #1160: チャットの回答の作成中に、処理の経過の読み出し（共通の span の表の snapshot。`GET /api/runs/{id}/trace`。
 // #3226 の案 A）が応答しない・失敗し続けても、画面を止めない。「接続を確認しています」を出して読み直し、完了・失敗の
 // 終端まで追う。処理の経過は Run の trace（span の木）の投影。
 
-const MODEL_CALL = `モデルの呼び出し · ${SYNTHETIC_MODEL}`;
+const MODEL_CALL = "モデルを呼び出す（用途の記録なし）";
 
 const THREAD_ID = `thread_${"c".repeat(32)}`;
 const RUN_ID = "run-refresh";

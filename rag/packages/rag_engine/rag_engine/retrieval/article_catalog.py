@@ -22,6 +22,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, Field
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import alternation, char_class, parse_number, text_patterns
@@ -187,7 +188,9 @@ def select_articles(
     if not catalog.lines or limit <= 0:
         return []
     try:
-        selection = parse_text(
+        selection = call_with_model_purpose(
+            "evidence.select_article",
+            parse_text,
             ARTICLE_SELECTION_SYSTEM_PROMPT,
             catalog_prompt(question, catalog, limit=limit, terms=terms),
             settings,
@@ -408,7 +411,9 @@ def refine_articles(
         lead = str(leads.get(catalog.section_ids[index]) or "").strip()
         candidates[index] = f"{title}｜{lead}" if lead else catalog.lines[index].strip()
     try:
-        selection = parse_text(
+        selection = call_with_model_purpose(
+            "evidence.refine_article",
+            parse_text,
             ARTICLE_REFINE_SYSTEM_PROMPT,
             refine_prompt(question, catalog, picked, candidates, limit=limit, terms=terms),
             settings,
@@ -451,8 +456,13 @@ def select_documents(
     if not documents or limit <= 0:
         return []
     try:
-        selection = parse_text(
-            ARTICLE_DOCUMENT_SELECTION_SYSTEM_PROMPT, document_prompt(question, documents, limit=limit), settings, ArticleSelection
+        selection = call_with_model_purpose(
+            "evidence.select_document",
+            parse_text,
+            ARTICLE_DOCUMENT_SELECTION_SYSTEM_PROMPT,
+            document_prompt(question, documents, limit=limit),
+            settings,
+            ArticleSelection,
         )
     except Exception as exc:  # noqa: BLE001 - 文書の選択は補助。候補の文書だけで続ける。
         report_degraded("article_document_selection", exc)

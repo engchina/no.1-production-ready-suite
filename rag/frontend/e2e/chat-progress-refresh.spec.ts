@@ -340,7 +340,7 @@ async function send(page: Page) {
   await page.getByRole("textbox").fill(QUESTION);
   await page.getByRole("button", { name: "送信" }).click();
   const current = page.getByTestId("chat-answer-progress-current");
-  await expect(current).toContainText("文書の検索", { timeout: 5_000 });
+  await expect(current).toContainText("検索文から根拠の候補を集める", { timeout: 5_000 });
   return current;
 }
 
@@ -408,7 +408,7 @@ for (const colorScheme of ["light", "dark"] as const) {
         // 保存済みの作成中の回答（今の段階）が出て、送信のボタンは「停止」のまま。
         const saved = page.getByTestId("chat-saved-streaming-turn");
         await expect(saved).toBeVisible({ timeout: 10_000 });
-        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("文書の検索");
+        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("検索文から根拠の候補を集める");
         await expect(page.getByTestId("chat-live-turn")).toHaveCount(0);
         await expect(page.getByTestId("chat-run-stop")).toHaveAccessibleName("停止");
         await applyTheme(page, colorScheme);
@@ -429,20 +429,20 @@ for (const colorScheme of ["light", "dark"] as const) {
         const state = await mockChatPage(page, null, { reply: "streaming", existingUserId: "u-saved" });
         await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
         const saved = page.getByTestId("chat-saved-streaming-turn");
-        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("文書の検索", {
+        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("検索文から根拠の候補を集める", {
           timeout: 10_000,
         });
         // 回答の trace の API は表の span を読み直して届ける（別の worker が書いた span。#3226）。会話の取得が
         // まだ前の段階でも、新しい段階を出し、会話の取り直しで前の段階に戻さない。
         await expect.poll(() => state.progressRequests.some((item) => item.path.endsWith("/messages/a1/trace"))).toBe(true);
         state.streamAhead = reranking;
-        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("検索結果の並べ替え", {
+        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("質問との関連度で候補を並べ替える", {
           timeout: 10_000,
         });
         await expect(saved.getByTestId("chat-answer-progress-running")).toContainText("処理中（2 ステップ完了）");
         const conversationReads = state.conversationRequests;
         await expect.poll(() => state.conversationRequests, { timeout: 10_000 }).toBeGreaterThan(conversationReads);
-        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("検索結果の並べ替え");
+        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("質問との関連度で候補を並べ替える");
         await expect(page.getByTestId("chat-run-stop")).toHaveAccessibleName("停止");
         await applyTheme(page, colorScheme);
         await expectNoPageOverflow(page);
@@ -516,7 +516,7 @@ for (const colorScheme of ["light", "dark"] as const) {
       const reconnecting = page.getByTestId("chat-answer-progress-reconnecting");
       await expect(reconnecting).toHaveText("接続を確認しています。", { timeout: 40_000 });
       // 今の段階の行は残したまま、遅延の案内の代わりに出す。
-      await expect(current).toContainText("文書の検索");
+      await expect(current).toContainText("検索文から根拠の候補を集める");
       await expect(current).toHaveAttribute("data-reconnecting", "true");
       // 案内は見出し「処理中（N ステップ完了）」の直下に出す（今の段階の行の下には出さない。#2426）。
       await expect(page.getByTestId("chat-answer-progress-running").getByTestId("chat-answer-progress-reconnecting")).toHaveCount(1);

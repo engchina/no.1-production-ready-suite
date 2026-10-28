@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import HTTPException
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
 
 from app.security.domain import Principal
 from app.security.permissions import PROFILE_MANAGE_PERMISSION
@@ -354,7 +355,9 @@ class ProfileOntologyWorkspaceService(ProfileOntologyDefinitionService):
             raise OntologyGateBlockedError(
                 "ENTERPRISE_AI_UNAVAILABLE", "Enterprise AI が設定されていません。"
             )
-        output = client.generate(
+        output = call_with_model_purpose(
+            "ontology.review",
+            client.generate,
             prompt=instruction,
             context=bundle.model_dump_json(),
             system_prompt=(

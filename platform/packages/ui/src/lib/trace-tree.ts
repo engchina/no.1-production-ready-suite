@@ -44,7 +44,9 @@ export function traceSpanDisplayName(span: TraceSpanNameInput, labels: TraceDeta
     const technical = TECHNICAL_SPANS[span.operationName] ?? (span.operationName.startsWith("gen_ai.") ? { name: "genAi" as const, target: ["gen_ai.request.model"] } : undefined);
     if (!technical) return span.operationName;
     const target = technical.target?.map((key) => textAttribute(span.attributes, key)).find(Boolean);
-    name = target ? `${names[technical.name]} · ${target.slice(0, 128)}` : names[technical.name];
+    const purpose = ["gen_ai.chat", "gen_ai.embeddings", "gen_ai.rerank", "oracle.select_ai"].includes(span.operationName) ? textAttribute(span.attributes, "pr.gen_ai.purpose") : undefined;
+    const purposeName = purpose ? labels.modelPurposes?.[purpose] : undefined;
+    name = purposeName || (span.operationName === "gen_ai.chat" ? names.chat : target ? `${names[technical.name]} · ${target.slice(0, 128)}` : names[technical.name]);
   }
   const attempt = span.attributes["pr.attempt"];
   return typeof attempt === "number" && Number.isInteger(attempt) && attempt > 1 ? names.attempt(name, attempt) : name;

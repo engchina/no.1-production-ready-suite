@@ -1118,7 +1118,7 @@ for (const width of [1280, 375]) {
     // 完了した段階の一覧は既定で開く（#2096。行が増えていく）。
     await expect(progress.locator("details").first()).toHaveAttribute("open", "");
     const prepared = progress.getByTestId("sql-chat-progress-step-prepare_context");
-    await expect(prepared).toContainText("質問と対象の表を準備しました");
+    await expect(prepared).toContainText("質問と参照できる表を整理しました");
     await expect(prepared).toContainText("1.0 秒");
     expect(
       await page.evaluate(
@@ -1155,7 +1155,7 @@ for (const width of [1280, 375]) {
       ],
     });
     await expect(current).toHaveAttribute("data-step-id", "format_results");
-    await expect(current).toContainText("結果をまとめています");
+    await expect(current).toContainText("SQL の実行結果を表示用に整えています");
     await expect(completed).toContainText("処理中（5 ステップ完了）");
     // 一度出た遅延の案内は、始まったばかりの段階に変わっても処理が終わるまで消さない（#2426）。
     await expect(slowNotice).toHaveText("通常より時間がかかっています。");
@@ -1203,7 +1203,7 @@ for (const width of [1280, 375]) {
     await summary.click();
     await expect(progress.locator("details").first()).toHaveAttribute("open", "");
     await expect(progress.getByTestId("sql-chat-progress-step-safety_check")).toContainText(
-      "SQL の安全性を確認しました（APP.EMPLOYEE）",
+      "SQL の種類と参照範囲を検査しました（APP.EMPLOYEE）",
     );
     const bars = progress.locator("[data-run-timeline-bar]");
     await expect(bars).toHaveCount(6);
@@ -2312,7 +2312,7 @@ test("処理の経過は span の木で、段の中のモデルの呼び出し�
     progress_events: jobProgressEvents("chat-1", { at: now, terminal: "done", steps: {
       queue: "done",
       prepare_context: "done",
-      generate_sql: { status: "done", params: { engine: "enterprise_ai_direct" }, children: [{ name: "gen_ai.chat", status: "done", attributes: { "gen_ai.request.model": "synthetic-model" } }] },
+      generate_sql: { status: "done", params: { engine: "enterprise_ai_direct" }, children: [{ name: "gen_ai.chat", status: "done", attributes: { "gen_ai.request.model": "synthetic-model", "pr.gen_ai.purpose": "sql.generate" } }] },
       safety_check: "done",
       execute_sql: "done",
       format_results: "done",
@@ -2329,9 +2329,11 @@ test("処理の経過は span の木で、段の中のモデルの呼び出し�
   const generate = progress.getByTestId("sql-chat-progress-step-generate_sql");
   await expect(generate).toContainText("SQL を生成しました");
   const model = progress.getByTestId("sql-chat-progress-step-generate_sql.1");
-  await expect(model).toContainText("モデルの呼び出し");
-  await expect(model).toContainText("synthetic-model");
-  await expect(progress.locator('[data-level="1"]')).toContainText("モデルの呼び出し");
+  await expect(model).toContainText("質問に答える SQL を作る");
+  await expect(model).not.toContainText("用途の記録なし");
+  await progress.getByTestId("sql-chat-progress-step-generate_sql.1-toggle").click();
+  await expect(progress.getByTestId("sql-chat-progress-step-generate_sql.1-details")).toContainText("synthetic-model");
+  await expect(progress.locator('[data-level="1"]')).toContainText("質問に答える SQL を作る");
   // 「トレースの詳細」の 2 つ目の表示は無い。Trace ID は処理の詳細にコピーのボタンと出す。
   await expect(page.getByText("トレースの詳細")).toHaveCount(0);
   await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);

@@ -27,6 +27,7 @@ from pr_backend_core.bounded_calls import (
     BoundedCallFailed,
 )
 from pr_backend_core.logging import safe_exception_fields
+from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pydantic import ValidationError
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_source
 from rag_parser_core.language import LANGUAGE_PACK_HASH_KEY, current_pack
@@ -2688,7 +2689,9 @@ class IngestionPipeline:
 
         async def once(_: Attempt) -> str:
             with sdk_retries_disabled():
-                return await self._vlm.generate(
+                return await async_call_with_model_purpose(
+                    "document.infer_headings",
+                    self._vlm.generate,
                     prompt,
                     plan.payload,
                     response_schema=HEADING_LEVELS_RESPONSE_SCHEMA,
@@ -2772,7 +2775,9 @@ class IngestionPipeline:
 
             async def once(_: Attempt) -> list[FieldValueCandidate]:
                 with sdk_retries_disabled():
-                    raw = await self._vlm.generate(
+                    raw = await async_call_with_model_purpose(
+                        "document.extract",
+                        self._vlm.generate,
                         prompt,
                         unit.text,
                         response_schema=FIELD_EXTRACTION_RESPONSE_SCHEMA,
@@ -3252,7 +3257,9 @@ class IngestionPipeline:
                     else text[: max(200, len(text) >> attempt.adaptation)]
                 )
                 with sdk_retries_disabled():
-                    return await self._vlm.generate(prompt, source)
+                    return await async_call_with_model_purpose(
+                        "document.summarize", self._vlm.generate, prompt, source
+                    )
 
             try:
                 # 章節の要約は上限つきの並行で呼ぶ(#2002。rag_navigation_summary_concurrency)。
@@ -3685,7 +3692,13 @@ class IngestionPipeline:
                 else text[: max(200, len(text) >> attempt.adaptation)]
             )
             with sdk_retries_disabled():
-                return await self._vlm.generate("", source, system_prompt=system_prompt)
+                return await async_call_with_model_purpose(
+                    "document.summarize",
+                    self._vlm.generate,
+                    "",
+                    source,
+                    system_prompt=system_prompt,
+                )
 
         try:
             with ingestion_ai_calls(self._settings, "raptor_summary") as caller:

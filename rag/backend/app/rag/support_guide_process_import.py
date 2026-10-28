@@ -39,6 +39,7 @@ from typing import Any, Literal, Protocol
 from openpyxl import load_workbook  # type: ignore[import-untyped]
 from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
 from pr_backend_core.bounded_calls import Attempt
+from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from rag_parser_core.language import LanguagePack
 from rag_parser_core.language.markers import marker_patterns
@@ -1020,7 +1021,9 @@ async def draft_guides(
     """
 
     async def once(row: SupportGuideProcessRow, _: Attempt) -> str:
-        return await llm.generate(
+        return await async_call_with_model_purpose(
+            "guide.draft",
+            llm.generate,
             GUIDE_DRAFT_PROMPT,
             draft_context(row, headings),
             system_prompt=GUIDE_DRAFT_SYSTEM_PROMPT,

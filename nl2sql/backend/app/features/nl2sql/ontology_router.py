@@ -22,6 +22,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from pr_backend_core import ApiResponse
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pr_backend_core.observability.model_usage import RunModelUsage, collect_model_usage
 from pr_backend_core.timezones import local_today
 from pr_system_settings.auth.visibility import (
@@ -3896,7 +3897,9 @@ class OntologyApiRuntime:
                 model_id = ""
         try:
             with observe_stage("interpret_enterprise_ai"):
-                raw = generate(
+                raw = call_with_model_purpose(
+                    "query.route",
+                    generate,
                     prompt=question,
                     context=context,
                     system_prompt=system_prompt,

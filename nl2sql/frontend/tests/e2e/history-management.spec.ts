@@ -710,7 +710,7 @@ test("詳細は概要 → 処理の経過（処理の詳細を含む）→ SQL �
   await expect(timeline.locator("[data-trace-id-row]")).toHaveCount(1);
   const failed = rows.nth(3);
   await expect(failed).toHaveAttribute("data-status", "failed");
-  await expect(failed).toContainText("モデルの呼び出し");
+  await expect(failed).toContainText("モデルを呼び出す（用途の記録なし）");
   const toggle = failed.locator("[data-run-timeline-toggle]");
   const expanded = await toggle.getAttribute("aria-expanded");
   await toggle.focus();
@@ -814,7 +814,7 @@ test("ブロックした実行は概要に理由を出し、無い実行・見�
   await expect(page.getByTestId("history-detail-blocked")).toContainText("安全性の判定で SQL の実行を止めました");
   await page.getByTestId("history-detail-timeline-summary").click();
   await expect(
-    page.getByTestId("history-detail-timeline").locator("[data-run-timeline-step]").filter({ hasText: "SQL の安全性を確認できませんでした" })
+    page.getByTestId("history-detail-timeline").locator("[data-run-timeline-step]").filter({ hasText: "SQL の種類と参照範囲を検査できませんでした" })
   ).toHaveAttribute("data-status", "failed");
   await expect(summary.locator('[data-run-fact="rows"] dd')).toHaveText("未実行");
 

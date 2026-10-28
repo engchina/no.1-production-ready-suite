@@ -29,6 +29,7 @@ from typing import Any, cast, get_args
 from uuid import uuid4
 
 from pr_backend_core.bounded_calls import BoundedCallAborted, SyncBoundedCaller
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from sqlglot import parse_one
 
 from app.features.nl2sql.ai_calls import (
@@ -4044,7 +4045,9 @@ class OntologyBuildService:
             supports_budget = False
         if supports_budget and budget > 0:
             return str(
-                client.generate(
+                call_with_model_purpose(
+                    "ontology.build",
+                    client.generate,
                     prompt=task.prompt,
                     context=task.context,
                     system_prompt=_EXTRACTION_SYSTEM_PROMPT,
@@ -4053,7 +4056,9 @@ class OntologyBuildService:
                 )
             )
         return str(
-            client.generate(
+            call_with_model_purpose(
+                "ontology.build",
+                client.generate,
                 prompt=task.prompt,
                 context=task.context,
                 system_prompt=_EXTRACTION_SYSTEM_PROMPT,
@@ -4563,7 +4568,9 @@ class OntologyBuildService:
                             _generate_image: Any = generate_image,
                         ) -> str:
                             return TextOutput.model_validate_json(
-                                _generate_image(
+                                call_with_model_purpose(
+                                    "document.read",
+                                    _generate_image,
                                     image,
                                     f"この資料の {page} ページ目を日本語で正確に"
                                     "文字起こししてください。",

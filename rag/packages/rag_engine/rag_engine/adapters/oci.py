@@ -17,6 +17,11 @@ from pathlib import Path
 from typing import Any
 
 from pr_backend_core.llm_request_params_httpx import ParameterDroppingClient
+from pr_backend_core.observability.model_purpose import (
+    call_with_model_purpose,
+    model_call_purpose,
+    model_purpose_attributes,
+)
 from pydantic import BaseModel
 
 from rag_engine.config import (
@@ -259,6 +264,7 @@ def parse_text_response[StructuredOutputT: BaseModel](
     text_format: type[StructuredOutputT],
     *,
     provider_id: str | None = None,
+    purpose: str | None = None,
 ) -> StructuredOutputT:
     """text-only LLM 呼び出しを構造化 output model として解析します。"""
     provider = _validated_llm_provider(
@@ -266,7 +272,8 @@ def parse_text_response[StructuredOutputT: BaseModel](
         provider_id or settings.default_answer_llm,
         require_vision=False,
     )
-    return _parse_text_with_retry(system_prompt, prompt, settings, text_format, provider)
+    with model_call_purpose(purpose):
+        return _parse_text_with_retry(system_prompt, prompt, settings, text_format, provider)
 
 
 def parse_image_response[StructuredOutputT: BaseModel](
@@ -295,6 +302,7 @@ def parse_multimodal_response[StructuredOutputT: BaseModel](
     text_format: type[StructuredOutputT],
     *,
     provider_id: str | None = None,
+    purpose: str | None = None,
 ) -> StructuredOutputT:
     """複数画像付き LLM 呼び出しを構造化 output model として解析します。"""
     paths = [Path(path) for path in image_paths if Path(path).is_file()]
@@ -305,13 +313,15 @@ def parse_multimodal_response[StructuredOutputT: BaseModel](
             settings,
             text_format,
             provider_id=provider_id,
+            purpose=purpose,
         )
     provider = _validated_llm_provider(
         settings,
         provider_id or settings.default_answer_llm,
         require_vision=True,
     )
-    return _parse_multimodal_with_retry(system_prompt, prompt, paths, settings, text_format, provider)
+    with model_call_purpose(purpose):
+        return _parse_multimodal_with_retry(system_prompt, prompt, paths, settings, text_format, provider)
 
 
 def _parse_text_with_retry[StructuredOutputT: BaseModel](
@@ -1520,9 +1530,12 @@ def describe_picture(
             settings,
             PictureDescriptionOutput,
             provider_id=settings.default_vision_llm,
+            purpose="document.read",
         )
     else:
-        parsed = parse_image_response(
+        parsed = call_with_model_purpose(
+            "document.read",
+            parse_image_response,
             VISION_SYSTEM_PROMPT,
             prompt,
             image_path,
@@ -1671,7 +1684,17 @@ def _embed_text_batch_once(
         truncate=models.EmbedTextDetails.TRUNCATE_NONE,
         input_type=input_type_value,
     )
-    with observe_call("embeddings", settings.embedding_model):
+    with (
+        model_call_purpose(
+            model_purpose_attributes(
+                default={
+                    models.EmbedTextDetails.INPUT_TYPE_SEARCH_QUERY: "query.embed",
+                    models.EmbedTextDetails.INPUT_TYPE_SEARCH_DOCUMENT: "document.embed",
+                }.get(input_type_value)
+            ).get("pr.gen_ai.purpose")
+        ),
+        observe_call("embeddings", settings.embedding_model),
+    ):
         response = runtime.client.embed_text(
             embed_text_details=request,
             retry_strategy=runtime.oci.retry.NoneRetryStrategy(),
@@ -1735,7 +1758,17 @@ def _embed_image_once(
         truncate=models.EmbedTextDetails.TRUNCATE_NONE,
         input_type=input_type_value,
     )
-    with observe_call("embeddings", settings.embedding_model):
+    with (
+        model_call_purpose(
+            model_purpose_attributes(
+                default={
+                    models.EmbedTextDetails.INPUT_TYPE_SEARCH_QUERY: "query.embed",
+                    models.EmbedTextDetails.INPUT_TYPE_SEARCH_DOCUMENT: "document.embed",
+                }.get(input_type_value)
+            ).get("pr.gen_ai.purpose")
+        ),
+        observe_call("embeddings", settings.embedding_model),
+    ):
         response = runtime.client.embed_text(
             embed_text_details=request,
             retry_strategy=runtime.oci.retry.NoneRetryStrategy(),

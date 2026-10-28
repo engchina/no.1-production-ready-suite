@@ -529,3 +529,44 @@ def test_image_without_any_image_model_is_reported_as_not_read(
     run = runtime_repository.get_run(run_id)
     evidence = [item for item in run.artifacts if item.kind == "answer_evidence"]
     assert all(not artifact.content.get("items") for artifact in evidence)
+
+
+@pytest.mark.asyncio
+async def test_image_reader_records_document_read_purpose_without_source_content(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    import openai
+    from pr_backend_core.observability.tracing import operation_trace
+
+    calls: list[dict[str, Any]] = []
+
+    async def create(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return SimpleNamespace(output_text="合成の読み取り結果", usage=None)
+
+    monkeypatch.setattr(attachment_module, "get_settings", lambda: SimpleNamespace())
+    monkeypatch.setattr(attachment_module, "_image_model_id", lambda: "vision-model-a")
+    monkeypatch.setattr(
+        attachment_module,
+        "enterprise_ai_connection_for_model",
+        lambda *_: SimpleNamespace(
+            base_url="https://model.example.test/v1", api_key="synthetic", project_ocid=None
+        ),
+    )
+    monkeypatch.setattr(attachment_module, "enterprise_ai_reasoning", lambda *_: None)
+    monkeypatch.setattr(attachment_module, "enterprise_ai_output_token_budget", lambda *_: 16)
+    monkeypatch.setattr(builtin_runtime, "enterprise_ai_http_client", lambda *_: None)
+    monkeypatch.setattr(
+        openai, "AsyncOpenAI", lambda **_: SimpleNamespace(responses=SimpleNamespace(create=create))
+    )
+    reader = attachment_module._image_reader("合成の指示")
+    assert reader is not None
+    with operation_trace("agent.execute", operation_id="synthetic-image-purpose") as summary:
+        assert await reader(b"synthetic-image", "image/png") == "合成の読み取り結果"
+    chat = next(span for span in summary.spans if span.operation_name == "gen_ai.chat")
+    assert chat.attributes["pr.gen_ai.purpose"] == "document.read"
+    assert chat.attributes["gen_ai.request.model"] == "vision-model-a"
+    assert len(calls) == 1 and calls[0]["store"] is False
+    assert calls[0]["input"][0]["content"][0]["text"] == "合成の指示"
+    assert "合成の指示" not in summary.model_dump_json()
+    assert "synthetic-image" not in json.dumps(chat.attributes)

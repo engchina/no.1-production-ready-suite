@@ -1,11 +1,13 @@
 """OCI Generative AI adapter 境界のテスト。"""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pr_backend_core.observability.model_purpose import model_call_purpose
 
 from app.clients.oci_auth import OciPrivateKeyPassPhraseRequiredError
 from app.clients.oci_genai import (
@@ -515,3 +517,46 @@ def _vector_for_text(text: str) -> list[float]:
 async def _run_inline(operation: Callable[[], Any]) -> Any:
     """テストでは同期 fake を同一 thread で実行する。"""
     return operation()
+
+
+@pytest.mark.parametrize(
+    "input_type,purpose",
+    [
+        ("SEARCH_QUERY", "query.embed"),
+        ("SEARCH_DOCUMENT", "document.embed"),
+        ("CLASSIFICATION", None),
+        ("CLUSTERING", None),
+    ],
+)
+@pytest.mark.parametrize("probe", [False, True])
+async def test_embedding_purpose_uses_declared_input_type_and_preserves_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    input_type: str,
+    purpose: str | None,
+    probe: bool,
+) -> None:
+    from app.clients import oci_genai
+
+    captured: list[dict[str, object]] = []
+
+    @contextmanager
+    def capture(name: str, *, kind: str, attributes: dict[str, object]) -> Iterator[None]:
+        assert name == "gen_ai.embeddings" and kind == "client"
+        captured.append(attributes)
+        yield
+
+    monkeypatch.setattr(oci_genai, "observed_span", capture)
+    sdk = FakeGenAiInferenceClient(
+        embed_response=SimpleNamespace(data=SimpleNamespace(embeddings=[[1.0, 0.0, 0.0]]))
+    )
+    client = OciGenAiClient(
+        settings=_oci_settings(), inference_client=sdk, sdk_call_runner=_run_inline
+    )
+    with model_call_purpose("connection.check" if probe else None):
+        result = await client.embed(["合成の入力"], input_type=input_type)  # type: ignore[arg-type]
+    assert result == [[1.0, 0.0, 0.0]]
+    assert captured[0].get("pr.gen_ai.purpose") == ("connection.check" if probe else purpose)
+    assert captured[0]["gen_ai.request.model"] == "cohere.embed-v4.0"
+    assert sdk.last_embed_request is not None
+    assert sdk.last_embed_request.input_type == input_type
+    assert sdk.embed_calls == 1

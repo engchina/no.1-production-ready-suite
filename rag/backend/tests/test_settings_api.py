@@ -16,8 +16,10 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import dotenv_values
+from pr_backend_core.observability.model_purpose import model_purpose_attributes
 from pr_system_settings import database as shared_database
 from pr_system_settings import oci_connectivity
+from pr_system_settings.model import ModelSettingsTestRequest
 from pr_system_settings.model_test_input import MODEL_TEST_IMAGE_BYTES
 from pytest import MonkeyPatch
 
@@ -1609,6 +1611,7 @@ def test_model_settings_test_embedding_uses_candidate_model(
             observed_settings.append(settings)
 
         async def embed(self, texts: list[str], *, input_type: str) -> list[list[float]]:
+            assert model_purpose_attributes() == {"pr.gen_ai.purpose": "connection.check"}
             assert texts == ["モデル接続テスト"]
             assert input_type == "SEARCH_QUERY"
             return [[0.0] * 1536]
@@ -3766,3 +3769,28 @@ def test_entity_index_settings_keep_runtime_on_save_failure(
     response = client.patch("/api/settings/entity-index", json={"enabled": True})
     assert response.status_code == 500
     assert settings.rag_entity_index_enabled is False
+
+
+def test_model_settings_rerank_probe_has_explicit_purpose(monkeypatch: MonkeyPatch) -> None:
+    class FakeGenAiClient:
+        def __init__(self, settings: Settings) -> None:
+            pass
+
+        async def rerank(
+            self, query: str, documents: list[str], *, top_n: int
+        ) -> list[tuple[int, float]]:
+            assert model_purpose_attributes() == {"pr.gen_ai.purpose": "connection.check"}
+            assert query and documents and top_n == 1
+            return [(0, 0.9)]
+
+    monkeypatch.setattr(settings_routes, "OciGenAiClient", FakeGenAiClient)
+    response = asyncio.run(
+        settings_routes._run_model_settings_test(
+            get_settings(),
+            ModelSettingsTestRequest.model_validate(
+                {"target_type": "rerank", "settings": _payload()}
+            ),
+        )
+    )
+    assert response == {"ranked_count": 1, "top_score": 0.9}
+    assert model_purpose_attributes() == {}

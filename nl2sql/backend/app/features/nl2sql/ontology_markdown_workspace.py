@@ -9,6 +9,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, Field
 
 from app.security.permissions import SQL_EXECUTE_PERMISSION
@@ -1071,7 +1072,9 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
             payload["known_definitions"] = [
                 {"kind": d.kind, "api_name": d.api_name, "name_ja": d.name_ja} for d in known
             ]
-        output = client.generate(
+        output = call_with_model_purpose(
+            "ontology.build",
+            client.generate,
             prompt=(
                 "この Markdown の全13分類の業務定義を漏れなく抽出してください。"
                 if lines is None

@@ -6,6 +6,8 @@ import logging
 import time
 from collections.abc import Callable
 
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
+
 from .enterprise_ai_client import EnterpriseAiDirectClient, EnterpriseAiDirectError
 from .structured_outputs import QuestionOutput, StructureOutput, response_format
 
@@ -79,7 +81,13 @@ def generate_stage[T](
         if remaining <= 0:
             raise ReverseStageError(stage, "deadline", attempt - 1)
         try:
-            raw = client.generate(
+            raw = call_with_model_purpose(
+                {
+                    "structure_analysis": "sql.structure",
+                    "logical_structure": "sql.logical_structure",
+                    "business_question": "sql.reverse",
+                }.get(stage, ""),
+                client.generate,
                 response_format=response_format(
                     QuestionOutput if stage == "business_question" else StructureOutput
                 ),

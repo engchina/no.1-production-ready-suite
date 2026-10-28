@@ -20,6 +20,7 @@ from pr_backend_core.chat_history import (
 )
 from pr_backend_core.logging import safe_error_code, safe_exception_fields
 from pr_backend_core.observability.genai import record_genai_usage
+from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pr_backend_core.observability.tracing import (
     ObservedSpan,
     SpanDisplay,
@@ -1124,7 +1125,9 @@ class RagPipeline:
             history_text = ""
         history_text += confirmed_data + current_data
         try:
-            text = await self._llm.generate(
+            text = await async_call_with_model_purpose(
+                "query.rewrite",
+                self._llm.generate,
                 query,
                 history_text,
                 system_prompt=HISTORY_REWRITE_SYSTEM_PROMPT,

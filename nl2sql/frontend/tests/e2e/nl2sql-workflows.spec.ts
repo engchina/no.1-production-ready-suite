@@ -6077,7 +6077,7 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
     await expect(progress).toBeVisible();
     await expect(progress).toHaveAttribute("data-job-status", "running");
     await expect(prepare).toHaveAttribute("data-status", "done");
-    await expect(prepare).toContainText("質問と対象の表を準備しました");
+    await expect(prepare).toContainText("質問と参照できる表を整理しました");
     // 実行中の span の行（#3226）。
     await expect(generate).toHaveAttribute("data-status", "running");
     await expect(generate).toHaveAttribute("aria-current", "step");
@@ -20394,8 +20394,9 @@ test("SQL 生成の処理の経過は span の木で、段の中のモデルの�
   await expect(page.getByTestId("nl2sql-job-summary")).toHaveText(/^処理の経過（7 ステップ・/);
   await page.getByTestId("nl2sql-job-summary").click();
   const progress = page.getByTestId("nl2sql-job");
-  await expect(progress.getByTestId("nl2sql-job-step-generate_sql.1")).toContainText("モデルの呼び出し");
-  await expect(progress.locator('[data-level="1"]')).toContainText("synthetic-model");
+  await expect(progress.getByTestId("nl2sql-job-step-generate_sql.1")).toContainText("モデルを呼び出す（用途の記録なし）");
+  await progress.getByTestId("nl2sql-job-step-generate_sql.1-toggle").click();
+  await expect(progress.getByTestId("nl2sql-job-step-generate_sql.1-details")).toContainText("synthetic-model");
   // 「トレースの詳細」の 2 つ目の表示は無い。Trace ID は処理の詳細に出す。
   await expect(page.getByText("トレースの詳細")).toHaveCount(0);
   await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);

@@ -12,10 +12,10 @@ describe("RAG の失敗を共通の失敗の表示に写す（Issue 2342）", ()
       stage: "文書検索",
       occurredAt: "2026-10-18T06:30:41Z",
     });
-    expect(failure.summary).toBe("「文書の検索」で処理が止まりました。");
+    expect(failure.summary).toBe("「検索文から根拠の候補を集める」で処理が止まりました。");
     expect(failure.cause).toBe("検索処理中にエラーが発生しました。");
     expect(failure.nextAction).toContain("トレース ID を添えて管理者に連絡");
-    expect(failure).toMatchObject({ failedStep: "文書の検索", errorCode: "ORA-03146", traceId: "trace-1" });
+    expect(failure).toMatchObject({ failedStep: "検索文から根拠の候補を集める", errorCode: "ORA-03146", traceId: "trace-1" });
   });
 
   it("工程の分からない失敗（保存済みの ERROR の回答）は定型の 1 文目にする", () => {
@@ -23,9 +23,9 @@ describe("RAG の失敗を共通の失敗の表示に写す（Issue 2342）", ()
   });
 
   it("止まった段はパイプラインの工程・回答フローの工程のどちらの名前でも引く", () => {
-    expect(failedStageLabel("answer_record_save")).toBe("回答の記録の保存");
-    expect(failedStageLabel("answer_step:文書検索（2回目）")).toBe("文書の検索（2 回目）");
-    expect(failedStageLabel("文書検索")).toBe("文書の検索");
+    expect(failedStageLabel("answer_record_save")).toBe("質問と回答と根拠の記録を保存する");
+    expect(failedStageLabel("answer_step:文書検索（2回目）")).toBe("検索文から根拠の候補を集める（2 回目）");
+    expect(failedStageLabel("文書検索")).toBe("検索文から根拠の候補を集める");
   });
 
   it("保存できなかった記録は、保存できなかったものごとの影響とコードを warning にする", () => {
@@ -40,13 +40,13 @@ describe("RAG の失敗を共通の失敗の表示に写す（Issue 2342）", ()
     expect(notice?.summary).toBe("回答は表示していますが、一部を保存できませんでした。");
     expect(notice?.cause?.split("\n")).toHaveLength(2);
     expect(notice?.errorCode).toBe("ORA-03146・ORA-40441");
-    expect(notice?.failedStep).toBe("回答の記録の保存・会話への回答の保存");
+    expect(notice?.failedStep).toBe("質問と回答と根拠の記録を保存する・回答を会話に保存する");
   });
 
   it("実行の詳細は失敗した実行だけ、チャットと同じ 1 文目にする", () => {
     expect(runFailure({ status: "success", error_stage: null, error_type: null, error_code: null })).toBeNull();
     expect(
       runFailure({ status: "error", error_stage: "retrieval", error_type: "DatabaseError", error_code: "ORA-03146" })
-    ).toMatchObject({ summary: "「検索」で処理が止まりました。", errorCode: "ORA-03146", failedStep: "検索" });
+    ).toMatchObject({ summary: "「文書から根拠の候補を検索する」で処理が止まりました。", errorCode: "ORA-03146", failedStep: "文書から根拠の候補を検索する" });
   });
 });

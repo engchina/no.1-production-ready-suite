@@ -112,7 +112,7 @@ test("工程の span に名前を付け、実行の全体は行にしない（�
   );
   assert.deepEqual(
     running.map((step) => step.label),
-    ["処理を開始しました", "質問と対象の表を準備しました", "SQL を生成しています"],
+    ["処理を開始しました", "質問と参照できる表を整理しました", "SQL を生成しています"],
   );
   assert.equal(running[2].status, "running");
   assert.equal(running[2].detail, "Select AI");
@@ -129,7 +129,7 @@ test("段の中の span（モデルの呼び出し）は段の下に入れ子で
   const steps = view(list);
   assert.equal(steps.length, 3);
   assert.equal(steps[2].level, 1);
-  assert.match(steps[2].label, /モデルの呼び出し/);
+  assert.match(steps[2].label, /モデルを呼び出す（用途の記録なし）/);
   assert.equal(chatProgressTraceIdOf(list), TRACE_ID);
 });
 
@@ -154,7 +154,7 @@ test("完了したジョブは参照した表と取得した行数を補足す�
   assert.equal(steps[3].detail, "APP.A, APP.B, APP.C ほか 1 件");
   assert.equal(steps[4].label, "SQL を実行しました");
   assert.equal(steps[4].detail, "1,234 行");
-  assert.equal(steps[5].label, "結果をまとめました");
+  assert.equal(steps[5].label, "SQL の実行結果を表示用に整えました");
   assert.equal(chatProgressTerminalOf(list), "done");
 
   // 表が 3 件以下なら件数を足さない。未知の生成方法・形の違う値は出さない。
@@ -229,7 +229,7 @@ test("Select AI / Agent の SQL で省略した安全性の確認は、未実行
     ),
   );
   assert.equal(steps[3].status, "skipped");
-  assert.equal(steps[3].label, "SQL の安全性の確認");
+  assert.equal(steps[3].label, "SQL の種類と参照範囲を検査する");
   assert.equal(steps[3].detail, "Select AI が生成した SELECT 文のため省略しました");
   assert.equal(steps[4].status, "done");
 });
@@ -261,7 +261,7 @@ test("生成だけのターンは実行を「未実行」にして結果の整�
         format_results: { status: "running" },
       }),
     ).slice(4),
-    ["SQL の実行:skipped", "結果をまとめています:running"],
+    ["SQL の実行:skipped", "SQL の実行結果を表示用に整えています:running"],
   );
 });
 
@@ -272,7 +272,7 @@ test("DB 管理チャットの SQL の確認は安全性の確認と同じ名前
       check: { status: "done", kind: "db_admin_check", params: { statements: 2, read_only: 1, change: 0, blocked: 1 } },
     }),
   );
-  assert.equal(steps[1].label, "SQL の安全性を確認しました");
+  assert.equal(steps[1].label, "SQL の種類と参照範囲を検査しました");
   assert.equal(steps[1].detail, "読み取り専用 1・実行できない 1");
   const single = (params: ChatProgressParams) =>
     view(events({ check: { status: "done", kind: "db_admin_check", params } }))[0].detail;
@@ -325,7 +325,7 @@ test("段の span の名前は処理の経過の工程と同じ", () => {
   const stageName = NL2SQL_TRACE_DETAILS_LABELS.stageName;
   assert.equal(stageName, chatStageName);
   assert.equal(stageName?.("generate_sql", "done"), "SQL を生成しました");
-  assert.equal(stageName?.("safety_check", "failed"), "SQL の安全性を確認できませんでした");
+  assert.equal(stageName?.("safety_check", "failed"), "SQL の種類と参照範囲を検査できませんでした");
   assert.equal(stageName?.("execute_sql", "cancelled"), "SQL の実行");
   assert.equal(stageName?.("unknown_stage", "done"), undefined);
   // 画面の製品（#3272。別の製品が書いた span は NL2SQL の工程の定義で訳さない）。

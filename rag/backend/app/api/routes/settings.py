@@ -14,6 +14,7 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pr_backend_core.logging import safe_exception_fields
+from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pr_system_settings.answer_notice import build_answer_notice_router
 from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE, SecurityApiError
 from pr_system_settings.chat_attachments import build_chat_attachment_settings_router
@@ -968,13 +969,17 @@ async def _run_model_settings_test(
 ) -> dict[str, str | int | float | bool | None]:
     """対象モデルの実 API 呼び出しを行い、表示用 details を返す（共有 router の hook）。"""
     if request.target_type == "enterprise_text":
-        text = await OciEnterpriseAiClient(settings=settings).generate(
+        text = await async_call_with_model_purpose(
+            "connection.check",
+            OciEnterpriseAiClient(settings=settings).generate,
             MODEL_TEST_TEXT_PROMPT,
             model_test_text_context("Production Ready RAG"),
         )
         return {"response_chars": len(text), "surface": "llm"}
     if request.target_type == "enterprise_vision":
-        text = await OciEnterpriseAiClient(settings=settings).generate_from_image(
+        text = await async_call_with_model_purpose(
+            "connection.check",
+            OciEnterpriseAiClient(settings=settings).generate_from_image,
             MODEL_TEST_IMAGE_BYTES,
             MODEL_TEST_VISION_PROMPT,
             mime_type=MODEL_TEST_IMAGE_MIME_TYPE,
@@ -984,13 +989,17 @@ async def _run_model_settings_test(
             "response_chars": len(text),
         }
     if request.target_type == "embedding":
-        vectors = await OciGenAiClient(settings=settings).embed(
+        vectors = await async_call_with_model_purpose(
+            "connection.check",
+            OciGenAiClient(settings=settings).embed,
             [MODEL_TEST_EMBEDDING_INPUT],
             input_type="SEARCH_QUERY",
         )
         vector = vectors[0] if vectors else []
         return {"vector_dim": len(vector), "input_count": len(vectors)}
-    ranks = await OciGenAiClient(settings=settings).rerank(
+    ranks = await async_call_with_model_purpose(
+        "connection.check",
+        OciGenAiClient(settings=settings).rerank,
         MODEL_TEST_RERANK_QUERY,
         list(MODEL_TEST_RERANK_DOCUMENTS),
         top_n=1,

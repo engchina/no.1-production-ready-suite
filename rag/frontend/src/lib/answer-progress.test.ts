@@ -39,14 +39,14 @@ describe("answer-progress（Issue 375）", () => {
     expect(answerProgressLabel([])).toBe("回答を生成しています（検索の準備）");
     expect(answerProgressLabel([], { generateAnswer: false })).toBe("検索しています（検索の準備）");
     expect(answerProgressLabel([{ stage: "history_rewrite", outcome: "started" }])).toBe(
-      "回答を生成しています（会話を踏まえた質問の書き換え）"
+      "回答を生成しています（前の会話を踏まえて質問を補う）"
     );
     expect(answerProgressLabel([{ stage: "retrieval", outcome: "started" }])).toBe(
-      "回答を生成しています（検索）"
+      "回答を生成しています（文書から根拠の候補を検索する）"
     );
     // 回答を作らない RAG 検索の全体（#3506）。
     expect(answerProgressLabel([{ stage: "evidence", outcome: "started" }], { generateAnswer: false })).toBe(
-      "検索しています（質問の理解から根拠の検索まで）"
+      "検索しています（質問の条件を整理して根拠を探す）"
     );
     expect(answerStageLabel("unknown_stage")).toBe(t("search.stage.processing"));
   });
@@ -78,7 +78,7 @@ describe("answer-progress（Issue 375）", () => {
       "utf-8"
     );
     expect(engineSource).toContain(`ANSWER_STEP_STAGE_PREFIX = "${ANSWER_STEP_STAGE_PREFIX}"`);
-    expect(answerStageLabel("answer_step:文書検索（1回目）")).toBe("文書の検索（1 回目）");
+    expect(answerStageLabel("answer_step:文書検索（1回目）")).toBe("検索文から根拠の候補を集める（1 回目）");
     expect(answerStageLabel("answer_step:")).toBe(t("search.stage.processing"));
     const events: AnswerStageEvent[] = [
       { stage: "answer", outcome: "started" },
@@ -86,9 +86,9 @@ describe("answer-progress（Issue 375）", () => {
       { stage: "answer_step:質問の理解", outcome: "success" },
       { stage: "answer_step:文書検索", outcome: "started" },
     ];
-    expect(answerProgressLabel(events)).toBe("回答を生成しています（文書の検索）");
+    expect(answerProgressLabel(events)).toBe("回答を生成しています（検索文から根拠の候補を集める）");
     expect(answerProgressLabel(events.slice(0, 3))).toBe(
-      "回答を生成しています（質問の理解から回答の作成まで）"
+      "回答を生成しています（質問の条件を整理して回答を作る）"
     );
   });
 });

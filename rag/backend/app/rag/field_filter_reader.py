@@ -15,6 +15,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from pr_backend_core.logging import safe_exception_fields
+from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pydantic import ValidationError
 
 from app.config import settings_today
@@ -80,7 +81,13 @@ async def read_field_conditions(
         f"今日の日付: {(today or settings_today()).isoformat()}"
     )
     try:
-        raw = await llm.generate(question, context, system_prompt=FIELD_FILTER_SYSTEM_PROMPT)
+        raw = await async_call_with_model_purpose(
+            "query.conditions",
+            llm.generate,
+            question,
+            context,
+            system_prompt=FIELD_FILTER_SYSTEM_PROMPT,
+        )
     except Exception as exc:  # noqa: BLE001 - 読み取りは補助。条件なしで検索を続ける。
         logger.warning("field filter read failed", extra={**safe_exception_fields(exc)})
         report_degraded("field_filter", exc)

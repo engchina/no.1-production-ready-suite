@@ -839,7 +839,7 @@ def test_stream_message_timeout_names_stage_and_saves_error(
     assert (user.role, user.status) == ("USER", "COMPLETE")
     assert (assistant.role, assistant.status) == ("ASSISTANT", "ERROR")
     assert assistant.content == expected
-    assert "質問の理解から回答の作成まで" in assistant.content
+    assert "質問の条件を整理して回答を作る" in assistant.content
     assert assistant.reply_to_message_id == user.id
 
 

@@ -326,7 +326,7 @@ describe("span の段（#3226）", () => {
     const steps = chatProgressStepsFromEvents(events, definitions, "t");
     expect(steps.map((step) => [step.label, step.level ?? 0])).toEqual([
       ["工程 検索", 0],
-      ["埋め込みの作成 · embed-x", 1],
+      ["テキストの埋め込みを作る · embed-x", 1],
       ["MCP の呼び出し", 1],
       ["history_rewrite", 0],
     ]);
@@ -357,7 +357,7 @@ describe("span の段（#3226）", () => {
     expect(steps.map((step) => [step.label, step.level ?? 0])).toEqual([
       ["ツールの実行 · tool_a", 0],
       ["MCP の呼び出し · tool_a", 1],
-      ["モデルの呼び出し · m", 2],
+      ["モデルを呼び出す（用途の記録なし）", 2],
       ["MCP の呼び出し", 1],
     ]);
     expect(steps[1].details?.fields).toContainEqual({ label: "mcp.method.name", value: "tools/call", mono: true });
@@ -387,7 +387,7 @@ describe("span の段（#3226）", () => {
       ["ツールの実行（画面の定義）", 0, null],
       ["MCP の呼び出し · tool_a", 1, null],
       ["表示の工程 A", 2, "RAG"],
-      ["埋め込みの作成 · embed-x", 3, null],
+      ["テキストの埋め込みを作る · embed-x", 3, null],
       ["表示の段 B", 2, "RAG"],
     ]);
     expect(steps[2].meta).toBeUndefined();
@@ -397,7 +397,7 @@ describe("span の段（#3226）", () => {
     const inRag = chatProgressStepsFromEvents(events.slice(3), own, "t", { traceLabels: ragLabels });
     expect(inRag.map((step) => [step.label, step.product ?? null])).toEqual([
       ["工程 工程 A", null],
-      ["埋め込みの作成 · embed-x", null],
+      ["テキストの埋め込みを作る · embed-x", null],
       ["表示の段 B", null],
     ]);
     // 製品の無い古い記録は今までどおり（定義で名前を付け、製品名を出さない）。
@@ -409,7 +409,7 @@ describe("span の段（#3226）", () => {
   it("実行中の span は実行中の行として出し、古い形式の段だけの記録は span の記録としない", () => {
     seq = 0;
     const running = chatProgressStepsFromEvents([span("r", undefined, "op", "running", { root: true }), span("x", "r", "gen_ai.chat", "running", { attributes: { "gen_ai.request.model": "m" } })], {}, "t");
-    expect(running).toMatchObject([{ label: "モデルの呼び出し · m", status: "running" }]);
+    expect(running).toMatchObject([{ label: "モデルを呼び出す（用途の記録なし）", status: "running" }]);
     const legacy: ChatProgressEvent[] = [{ schema_version: 1, seq: 1, target_id: "t", attempt: 0, emitted_at: at(1), type: "step", step_id: "s1", status: "done" }];
     expect(chatProgressHasSpans(legacy)).toBe(false);
   });

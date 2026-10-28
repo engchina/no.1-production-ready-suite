@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Literal
 
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, ValidationError, field_validator
 from sqlglot import exp, parse_one
 from sqlglot.errors import ParseError
@@ -1231,7 +1232,9 @@ def call_requirement_llm(
         options["strict_max_output_tokens"] = True
     started = time.perf_counter()
     try:
-        raw = generate(
+        raw = call_with_model_purpose(
+            "requirement.clarify",
+            generate,
             prompt=prompt,
             context=json.dumps(
                 context_payload(context, mode=mode, draft=draft),

@@ -111,6 +111,7 @@ def test_job_generation_retry_and_execution_nest_under_their_stages(
     # SQL の生成の LLM の呼び出しは、再試行も含めて生成の工程の子（試行ごとの兄弟）。
     chats = [row for row in rows if row["name"] == "gen_ai.chat"]
     assert len(chats) == 2 and len(calls) == 2
+    assert {_attributes(row)["pr.gen_ai.purpose"] for row in chats} == {"sql.generate"}
     assert {row["parent_span_id"] for row in chats} == {generate["span_id"]}
     attempts = sorted(chats, key=lambda row: _attributes(row)["pr.attempt"])
     assert [(_attributes(row)["pr.attempt"], row["status"]) for row in attempts] == [
@@ -147,6 +148,7 @@ def test_select_ai_agent_fallback_is_a_sibling_of_the_failed_team_call() -> None
         (generate_id, "failed"),
         (generate_id, "done"),
     ]
+    assert {span.attributes["pr.gen_ai.purpose"] for span in calls} == {"sql.generate"}
     assert calls[0].attributes["error.type"] == "RuntimeError"
     assert calls[0].finished_at is not None
     assert calls[0].finished_at <= calls[1].started_at

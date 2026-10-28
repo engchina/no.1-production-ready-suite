@@ -40,6 +40,8 @@ from contextvars import copy_context
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
+
 from rag_engine.generation.answer_models import AnswerRecord
 from rag_engine.generation.section_expansion import (
     SECTION_CONTEXT_ROLE,
@@ -529,8 +531,14 @@ class SectionExtractor:
         try:
             # 抽出は回答の時間の上限から生成の分を残した範囲で終える（LLM の 1 回の timeout も縮める）。
             with bind_deadline(Deadline(left, parent=current_deadline())):
-                output = self.parse_text(
-                    EXTRACTION_SYSTEM_PROMPT, prompt, self.settings, SectionExtractionOutput, provider_id=self.provider_id
+                output = call_with_model_purpose(
+                    "evidence.extract",
+                    self.parse_text,
+                    EXTRACTION_SYSTEM_PROMPT,
+                    prompt,
+                    self.settings,
+                    SectionExtractionOutput,
+                    provider_id=self.provider_id,
                 )
         except DeadlineExceeded:
             part.status = "time"

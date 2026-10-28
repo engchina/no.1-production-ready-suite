@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Literal
 
+from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
@@ -94,7 +95,9 @@ async def resolve_text_conditions(
         ensure_ascii=False,
     )
     try:
-        raw = await condition_client(settings).generate(
+        raw = await async_call_with_model_purpose(
+            "query.conditions",
+            condition_client(settings).generate,
             "質問から明示された条件値を取り出してください。\nJSON Schema:\n"
             + json.dumps(ConditionValues.model_json_schema(), ensure_ascii=False),
             context,
@@ -194,7 +197,9 @@ async def resolve_answered_conditions(
         ensure_ascii=False,
     )
     try:
-        raw = await condition_client(settings).generate(
+        raw = await async_call_with_model_purpose(
+            "query.conditions",
+            condition_client(settings).generate,
             "確認の答えが選んだ選択肢を決めてください。\nJSON Schema:\n"
             + json.dumps(AnswerChoices.model_json_schema(), ensure_ascii=False),
             context,

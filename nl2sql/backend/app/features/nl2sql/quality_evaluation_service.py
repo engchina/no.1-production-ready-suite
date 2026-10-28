@@ -22,6 +22,7 @@ from openpyxl.styles import Alignment, Font, PatternFill  # type: ignore[import-
 from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
 from pr_backend_core.api import paginate
 from pr_backend_core.bounded_calls import BoundedCallAborted, BoundedCallFailed, SyncBoundedCaller
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pr_backend_core.observability.request_context import bind_log_context
 
 from app.settings import get_settings
@@ -1558,7 +1559,9 @@ class QualityEvaluationService:
             },
             ensure_ascii=False,
         )
-        raw = self._nl2sql._enterprise_ai_client.generate(  # noqa: SLF001
+        raw = call_with_model_purpose(
+            "evaluation.judge",
+            self._nl2sql._enterprise_ai_client.generate,  # noqa: SLF001
             prompt=prompt,
             context=schema_context,
             system_prompt=system_prompt,

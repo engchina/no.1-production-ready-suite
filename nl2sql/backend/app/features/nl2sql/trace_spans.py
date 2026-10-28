@@ -58,11 +58,11 @@ type SpanDetails = dict[str, dict[str, Any]]
 # `chat.progress.<工程>.idle`）と同じにする（frontend の `sql-chat-progress.test.ts` が照合する）。
 STAGE_DISPLAY_NAMES: dict[str, str] = {
     "queue": "処理の開始",
-    "prepare_context": "質問と対象の表の準備",
+    "prepare_context": "質問と参照できる表を整理する",
     "generate_sql": "SQL の生成",
-    "safety_check": "SQL の安全性の確認",
+    "safety_check": "SQL の種類と参照範囲を検査する",
     "execute_sql": "SQL の実行",
-    "format_results": "結果のまとめ",
+    "format_results": "SQL の実行結果を表示用に整える",
 }
 
 
