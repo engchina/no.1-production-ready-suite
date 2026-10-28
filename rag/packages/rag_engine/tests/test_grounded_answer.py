@@ -130,7 +130,8 @@ class GroundedAnswerTest(unittest.TestCase):
         result = run(model, ctx).response
         self.assertEqual(
             result.answer_text,
-            "集計表出力から明細一覧を出力できます。\n\n操作手順（売上-(3)年次集計明細作成）\n\n1. 一覧表を選択し、処理を選択します。\n根拠：売上集計業務.pdf p.20\n"
+            "集計表出力から明細一覧を出力できます。\n\n操作手順（売上-(3)年次集計明細作成）\n\n1. 一覧表を選択し、処理を選択します。\n"
+            "根拠：売上集計業務.pdf p.20\n"
             "2. 実行ボタンを押して完了します。\n根拠：売上集計業務.pdf p.20",
         )
         self.assertEqual((result.confidence, result.needs_human_review, result.insufficient_reason), ("high", False, ""))
@@ -2883,7 +2884,11 @@ class DocumentGroupedProcedureTest(unittest.TestCase):
             self.QUESTION,
         ).response
         text = result.answer_text
-        self.assertIn("操作手順（架空変更手順 > 出力様式設定）\n\n1. 出力様式一覧から対象を選択します。\n根拠：架空変更手順.pdf p.20\n2. 実行ボタンを押します。", text)
+        self.assertIn(
+            "操作手順（架空変更手順 > 出力様式設定）\n\n1. 出力様式一覧から対象を選択します。\n"
+            "根拠：架空変更手順.pdf p.20\n2. 実行ボタンを押します。",
+            text,
+        )
         self.assertIn("操作手順（架空管理説明書）\n\n・ファイル名欄に新しい名前を直接入力します。", text)
         self.assertNotIn("の場合）", text)
         self.assertLess(text.index("実行ボタンを押します"), text.index("ファイル名欄に新しい名前"))
