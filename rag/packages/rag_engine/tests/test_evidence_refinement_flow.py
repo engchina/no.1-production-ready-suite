@@ -84,7 +84,7 @@ def payload(*, gap: bool = False) -> dict[str, Any]:
                 "kind": "operation",
                 "text": OPEN,
                 "request_id": "Q1",
-                "citations": [{"evidence_id": "E1", "line_start": None, "line_end": None}],
+                "citations": [{"evidence_id": "E1", "line_start": 1, "line_end": 1}],
             }
         ],
     }
@@ -297,7 +297,7 @@ def test_kept_nonconsecutive_label_id_and_numeric_range_are_not_rebound(monkeypa
 def test_actual_joint_citations_keep_both_original_sources_and_their_order() -> None:
     value = payload()
     value["items"][0]["text"] = OPEN + SAVE
-    value["items"][0]["citations"].append({"evidence_id": "E2", "line_start": None, "line_end": None})
+    value["items"][0]["citations"].append({"evidence_id": "E2", "line_start": 1, "line_end": 1})
     value["request_coverage"][0]["evidence_ids"].append("E2")
     value["request_coverage"][0]["evidence_scope"].append({"evidence_id": "E2", "target": "対象A", "relation": "direct"})
     parser = Parser([value])

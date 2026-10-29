@@ -4,7 +4,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from pydantic import Field, StrictInt
+from pydantic import Field, PrivateAttr, StrictInt
 
 from rag_engine.generation.citation_wire import LINE_END_DESCRIPTION, LINE_START_DESCRIPTION, bind_wire_range
 from rag_engine.models.llm import GroundedDraft, _StrictModel
@@ -23,6 +23,7 @@ class CitationRangeUpdate(_StrictModel):
 
 
 class CitationRangeRepair(_StrictModel):
+    _provider_output_text: str | None = PrivateAttr(default=None)
     ranges: list[CitationRangeUpdate]
 
 

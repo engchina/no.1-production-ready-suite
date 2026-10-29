@@ -91,7 +91,7 @@ def run(*, request_case="valid", omit_requirement=False, retry_case=None, use_al
         QUESTION,
         spans,
         get_settings(environ={}, dotenv_path=None),
-        prompt="合成の入力",
+        prompt=grounded.format_functions(spans),
         image_paths=(),
         provider_id=None,
         parse_text=parser,

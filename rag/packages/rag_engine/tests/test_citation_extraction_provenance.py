@@ -38,8 +38,8 @@ def test_valid_range_binds_the_exact_span_without_a_second_text_match(monkeypatc
     assert proof["resolved_evidence_id"] == evidence[0]["evidence_id"]
     assert proof["source"] == "sample.pdf" and proof["source_id"] == evidence[0]["source_id"]
     assert proof["content_sha256"] == hashlib.sha256(evidence[0]["text"].encode()).hexdigest()
-    assert proof["sent_view_status"] == "matched"
-    assert proof["sent_view_sha256"] == proof["view_sha256"]
+    assert proof["sent_view_status"] == "prepared"
+    assert proof["prepared_view_sha256"] == proof["view_sha256"]
     assert entry.review_assessment == {} and not dropped
 
 
@@ -187,7 +187,7 @@ def test_display_snapshots_are_isolated_between_request_contexts():
     local.run(grounded.format_functions, first)
     grounded.format_functions(second)
     first_entry, _ = local.run(check, item(first[0]["label"], "1"), first)
-    assert first_entry.citation_resolution["sent_view_status"] == "matched"
+    assert first_entry.citation_resolution["sent_view_status"] == "prepared"
     outside_entry, _ = check(item(first[0]["label"], "1"), first)
     assert outside_entry.citation_resolution["sent_view_status"] == "not_recorded"
 
@@ -231,7 +231,7 @@ def test_width_normalization_in_the_display_does_not_change_raw_source_authentic
     source_hash = hashlib.sha256(evidence[0]["text"].encode()).hexdigest()
     entry, _ = check(item(evidence[0]["label"], "1"), evidence)
     assert entry.citation_resolution["content_sha256"] == source_hash
-    assert entry.citation_resolution["sent_view_status"] == "matched"
+    assert entry.citation_resolution["sent_view_status"] == "prepared"
     assert entry.citation_resolution["authenticity"] == "verified"
     assert entry.citation_resolution["resolved_quote"].startswith("ＡＢＣ：")
 

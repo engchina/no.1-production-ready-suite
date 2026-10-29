@@ -83,6 +83,8 @@ def referenced_document_ids(value: object) -> set[str]:
     while stack:
         node = stack.pop()
         if isinstance(node, dict):
+            if node.get("capture_scope") == "generation_citation_trace":
+                found.update(_capture_document_ids(node))
             document_id = _document_id(node)
             if document_id is not None:
                 found.add(document_id)
@@ -92,6 +94,18 @@ def referenced_document_ids(value: object) -> set[str]:
     return found
 
 
+def _capture_document_ids(node: dict[str, object]) -> set[str]:
+    """生応答は複数の根拠を含むため、参照全体を一括して認可する。"""
+    values = node.get("document_ids")
+    if not isinstance(values, list):
+        return set()
+    return {
+        value
+        for value in values
+        if isinstance(value, str) and value and not value.startswith(ATTACHMENT_DOCUMENT_PREFIX)
+    }
+
+
 def prune_unreadable(value: object, readable: set[str]) -> object:
     """記録の中の、見る人が今見られない文書を指す要素を除く（一覧の要素は除き、項目は消す）。
 
@@ -99,10 +113,17 @@ def prune_unreadable(value: object, readable: set[str]) -> object:
     """
 
     def unreadable(node: object) -> bool:
+        if isinstance(node, dict) and node.get("capture_scope") == "generation_citation_trace":
+            return (
+                node.get("document_scope_status") != "complete"
+                or not _capture_document_ids(node) <= readable
+            )
         document_id = _document_id(node)
         return document_id is not None and document_id not in readable
 
     if isinstance(value, dict):
+        if value.get("capture_scope") == "generation_citation_trace" and unreadable(value):
+            return {"capture_scope": "generation_citation_trace", "status": "withheld"}
         return {
             key: prune_unreadable(item, readable)
             for key, item in value.items()

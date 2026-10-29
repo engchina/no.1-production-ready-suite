@@ -34,7 +34,7 @@ def check(text: str, *, lines: str = "1", interval: tuple[int | None, int | None
 
 @pytest.mark.parametrize("text", ["=" * 99, "===", "---", "***", "___", "|---|---|", "```", "===\n---\n***", "＝＝＝"])
 def test_structural_only_quotes_keep_authenticity_but_are_unusable(text: str) -> None:
-    entry, dropped = check(text, lines="", interval=(None, None))
+    entry, dropped = check(text)
     assert entry.published and not entry.confirmed and not entry.removed
     assert entry.quote_match == "exact"
     proof = entry.citation_resolution
@@ -63,7 +63,7 @@ def test_valid_integer_range_may_extract_only_a_separator_from_a_mixed_source() 
 
 @pytest.mark.parametrize("text", ["可", "0", "12", "=", "==", ">", "○", "→", "≠", "1 + 2 = 3", "a === b", "されます。\n---", BODY])
 def test_short_content_and_meaningful_symbols_are_not_rejected(text: str) -> None:
-    entry, dropped = check(text, lines="", interval=(None, None))
+    entry, dropped = check(text)
     assert entry.published and entry.quote_match == "exact"
     assert entry.citation_resolution["authenticity"] == "verified"
     assert entry.citation_resolution.get("content_usability") != "unusable"

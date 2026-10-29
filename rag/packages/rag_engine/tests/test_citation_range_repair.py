@@ -131,7 +131,8 @@ def test_numbered_unit_includes_unnumbered_physical_newlines() -> None:
 
 
 def test_short_unnumbered_multiline_block_uses_null_for_whole_text() -> None:
-    spans = evidence(SHORT)
+    # 旧形式の未番号根拠を、現在の生成表示へ変換せず検証する。
+    spans = [dict(span) for span in evidence(SHORT)]
     assert grounded.numbered_text(SHORT) == SHORT and "\n" in SHORT
     repaired, diagnostic = apply_range_repair(
         proposal(), response(None, None), [target(count=len(grounded.citation_units(SHORT)), numbered=False)]
@@ -252,6 +253,11 @@ def test_existing_correction_round_uses_one_range_only_call_and_does_not_run_dis
     assert repaired.timing["generation_calls"] == 1
     assert repaired.timing["citation_range_repair"]["status"] == "completed"
     assert repaired.review_execution == "not_run"
+    captured = repaired.citation_trace["outputs"][0]
+    assert captured["parsed_output_representation"] == "citation_range_repair"
+    assert captured["input_system_prompt"] == configured_system
+    assert captured["raw_output_status"] == "not_recorded"
+    assert captured["parsed_output"]["ranges"][0]["line_start"] == 3
 
 
 @pytest.mark.parametrize("change", ["identity", "text"])

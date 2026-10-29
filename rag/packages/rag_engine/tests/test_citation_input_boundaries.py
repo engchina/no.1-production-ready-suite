@@ -59,7 +59,7 @@ def test_short_labels_values_and_table_data_remain_quotable(text: str) -> None:
     assert [row["text"] for row in spans] == [text]
     spans = grounded.tag_spans("表示内容", spans)
     grounded.format_functions(spans)
-    proposal = GroundedItem(kind="rule", text=text, citations=[GroundedCitation(evidence_id=spans[0]["label"])])
+    proposal = GroundedItem(kind="rule", text=text, citations=[GroundedCitation(evidence_id=spans[0]["label"], lines="1")])
     cited, error = grounded.cited_quote(proposal, spans)
     assert not error and cited.quote == text
 

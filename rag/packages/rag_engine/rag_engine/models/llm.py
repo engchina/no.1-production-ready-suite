@@ -520,6 +520,9 @@ class GuideRequirementCoverage(_StrictModel):
 class GroundedDraft(_StrictModel):
     """主張と引用の対で構成する回答草稿。本文の体裁は render が決定的に組み立てる。"""
 
+    # SDK が返した本文。モデルの出力schemaや通常のmodel_dumpには入れない。
+    _provider_output_text: str | None = PrivateAttr(default=None)
+
     request_coverage: list[RequestCoverage] = Field(
         default_factory=list, max_length=64, description="要求単位ごとに使う根拠の計画。items より先に書く。"
     )
