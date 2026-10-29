@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
@@ -10,6 +11,20 @@ from typing import Any
 from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.crag_support import _crag_context_fingerprint, _crag_quote_matches
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
+
+# 生成の入口の判定（``generation_decision``）。生成を止めるのは、同じ根拠を評価し終えて、回答できる部分が
+# 1 件も無いと評価が返したとき（``no_answerable_part``）だけ。写しの照合の失敗・評価の失敗や省略・評価の後の
+# 根拠の追加は未確認（判定不能）で、不足を確かめていないので、取得済みの根拠で生成へ進み、理由を記録する。
+GATE_VERIFIED_PART = "verified_answerable_part"
+GATE_UNVERIFIED_PART = "answerable_part_unverified"
+GATE_GRADING_INCOMPLETE = "grading_incomplete"
+GATE_CONTEXT_CHANGED = "context_changed_without_reassessment"
+GATE_NO_ANSWERABLE_PART = "no_answerable_part"
+
+# 生成の指示へ渡さない、診断だけの欄。
+_DIAGNOSTIC_KEYS = frozenset(
+    {"input_budget_chars", "generation_context_spans", "input_stage", "generation_decision", "unverified_binding_reasons"}
+)
 
 
 def latest_assessment(attempts: Sequence[Any], expansion: Any) -> dict[str, Any] | None:
@@ -74,6 +89,25 @@ def generation_view(
         row["status"] = "supported" if valid else "unknown"
         parts.append(row)
     states = [row.get("status") for row in checks]
+    supported_part = any(row["status"] == "supported" for row in parts)
+    if supported_part:
+        decision = GATE_VERIFIED_PART
+    elif parts:
+        # 評価は回答できる部分を返したが、その写しを生成の根拠で確かめられない（判定不能）。不足とは扱わない。
+        decision = GATE_UNVERIFIED_PART
+    elif assessment.get("grade_execution", "completed") != "completed":
+        decision = GATE_GRADING_INCOMPLETE
+    elif changed:
+        decision = GATE_CONTEXT_CHANGED
+    else:
+        decision = GATE_NO_ANSWERABLE_PART
+    unverified = Counter(
+        proof["binding_reason"]
+        for row in parts
+        if row["status"] != "supported"
+        for proof in row["evidence"]
+        if proof["binding_reason"] != "matched"
+    )
     coverage = (
         "complete"
         if states and all(state == "supported" for state in states)
@@ -84,7 +118,9 @@ def generation_view(
         else "unknown"
     )
     return {
-        "generation_usable": any(row["status"] == "supported" for row in parts),
+        "generation_usable": supported_part,
+        "generation_decision": decision,
+        "unverified_binding_reasons": dict(sorted(unverified.items())),
         "required_aspect_coverage": coverage,
         "aspect_checks": checks,
         "answerable_parts": parts,
@@ -107,9 +143,7 @@ def prompt_context(view: Mapping[str, Any] | None) -> str:
     if view is None:
         return ""
     # 診断だけの提示記録は生成指示へ加えず、既存の観点・実引用だけを渡す。
-    prompt_view = {
-        key: value for key, value in view.items() if key not in {"input_budget_chars", "generation_context_spans", "input_stage"}
-    }
+    prompt_view = {key: value for key, value in view.items() if key not in _DIAGNOSTIC_KEYS}
     for key in ("aspect_checks", "answerable_parts"):
         prompt_view[key] = [
             {
@@ -163,6 +197,10 @@ def project_partial_answer(
         return current, {"applied": False, "reason": "semantic_audit_diagnostic_only"}
     if view is None or view.get("required_aspect_coverage") == "complete":
         return current, {"applied": False}
+    if not any(part.get("status") == "supported" for part in view.get("answerable_parts") or ()):
+        # 確かめた直接の原文が無いので、部分回答の範囲を決められない。生成の説明は通常の検査のまま残し、
+        # 未確認の観点は gap_lines で示す（写しの照合の失敗を、回答の削除に変えない）。
+        return current, {"applied": False, "reason": view.get("generation_decision") or GATE_UNVERIFIED_PART}
     from rag_engine.generation import grounded
 
     allowed = [
@@ -195,11 +233,26 @@ def project_partial_answer(
     }
 
 
+def gate_record(view: Mapping[str, Any] | None) -> dict[str, Any]:
+    """生成の入口の判定の記録。生成へ進んだときに、確かめられなかった理由を残す。"""
+    if view is None:
+        return {}
+    return {
+        "generation_usable": bool(view.get("generation_usable")),
+        "reason": view.get("generation_decision") or "",
+        "unverified_binding_reasons": dict(view.get("unverified_binding_reasons") or {}),
+    }
+
+
 def refusal_response(question: str, view: Mapping[str, Any] | None, *, runtime_knowledge: Any = None) -> Any:
-    """直接回答できる部分がないときは、生成を呼ばず未確認の範囲を返す。"""
+    """評価が回答できる部分は無いと返したときだけ、生成を呼ばず未確認の範囲を返す。
+
+    写しを確かめられない・評価が終わっていない・評価の後に根拠が変わったときは、不足を確かめていないので None
+    （生成へ進む）を返す。
+    """
     from rag_engine.generation.answer_models import AnswerResponse
 
-    if view is None or view["generation_usable"]:
+    if view is None or view.get("generation_decision") != GATE_NO_ANSWERABLE_PART:
         return None
     lines = gap_lines(question, view)
     labels = answer_labels()
@@ -217,10 +270,6 @@ def refusal_response(question: str, view: Mapping[str, Any] | None, *, runtime_k
         insufficient_reason="\n".join(lines) or labels.crag_refusal_summary,
         generation_trace={
             "crag_assessment": view,
-            "crag_generation_gate": {
-                "generation_usable": False,
-                "generation_calls": 0,
-                "reason": "no_verified_answerable_part",
-            },
+            "crag_generation_gate": {**gate_record(view), "generation_calls": 0},
         },
     )

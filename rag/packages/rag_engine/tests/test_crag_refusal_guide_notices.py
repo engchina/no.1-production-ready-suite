@@ -17,7 +17,11 @@ NOTICE = "条件Aの場合は担当窓口に処理を依頼してください。
 
 
 def view():
-    return {"generation_usable": False, "aspect_checks": [{"aspect": "procedure", "status": "unknown"}]}
+    return {
+        "generation_usable": False,
+        "generation_decision": c.GATE_NO_ANSWERABLE_PART,
+        "aspect_checks": [{"aspect": "procedure", "status": "unknown"}],
+    }
 
 
 def test_confirmed_notice_survives_zero_generation_refusal_as_guide_information():
