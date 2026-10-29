@@ -1079,6 +1079,7 @@ class GroundedAnswerTest(unittest.TestCase):
             | external_kinds
             | {"bbox", "context_bbox", "target_highlight", "asset_kind"}
             | set(_answer_image_metadata([]))
+            | {"guide_task_scope"}  # 生成入力で読む、出力欄ではないガイドの確定範囲。
         )
         named = set(re.findall(r"[a-z]+(?:_[a-z]+)+", grounded.GENERATE_SYSTEM_PROMPT))
         values = {

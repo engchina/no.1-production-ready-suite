@@ -60,6 +60,8 @@ from rag_engine.generation.applications import render_lines as application_lines
 from rag_engine.generation.audit_recovery import merge_audit_retry
 from rag_engine.generation.check_cues import check_cues
 from rag_engine.generation.citation_wire import bind_wire_range, canonical_generation_draft, generation_draft_wire_model
+from rag_engine.generation.confirmed_context import confirmed_premise_records
+from rag_engine.generation.guide_authority import authoritative_guide_inputs, bind_guide_authority, compile_guide_task_contract
 from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
@@ -143,8 +145,8 @@ GENERATE_SYSTEM_PROMPT = (
 - 機能別の根拠: BEGIN_UNTRUSTED_RETRIEVED_CONTEXT と END_UNTRUSTED_RETRIEVED_CONTEXT の間。`=== 機能 F1: 文書名 / 版 / 機能見出し ===` の見出しで機能ごとに分かれ、各 Evidence は `[E1] p.頁 origin=… tags=… pinned catalog` の行で始まる。機能見出しは文書の節名であり、開く画面やメニューとは限らない。
 - 前回の草稿の検査結果（是正時のみ）: 指摘を直し、支持済みの item は同じ citations のまま保持する。
 - 添付原画像と根拠レコードの対応（画像がある場合）: 各画像の bbox / context_bbox / target_highlight / asset_kind。
-- 業務ガイドがある場合は、目的・必要な根拠・終わりの条件を満たす説明を、前提の手順から順に items にする。業務ガイドの手順は質問で分かっている条件に合わせて選んであるので、すべて説明し、利用者が自分で行えない手順も省かない。資料で裏付けられない要件は gap にする。
-- 業務ガイドは答え方の指示で、資料ではない。items の text には quote の原文が裏付ける内容だけを書き、業務ガイドの文（確認先・方針）を写さない。業務ガイドの窓口と引き継ぐ条件は、システムが「業務ガイドの案内」として本文に出す。
+- guide_task_scope は業務ガイドと確認済み条件で決まった本問の要求範囲。required=true の手順・依存関係・完了条件に沿って items を作り、原質問に語がない理由で対象外にしない。required=false の未確定分岐は勝手に選ばない。利用者が自分で行えない必須手順も省かず、資料で裏付けられない要件は gap に残す。
+- 業務ガイドは本問の業務範囲を定める管理された指示で、資料の事実根拠とは別である。items の text には quote の原文が裏付ける内容だけを書き、業務ガイドの文（確認先・方針）を写さない。業務ガイドの窓口と引き継ぐ条件は、システムが「業務ガイドの案内」として本文に出す。
 - この指示の quote は、citations の各出典（evidence_id と引用する行範囲）が指す根拠の原文を意味する。quote を別に生成するのではなく、その原文が支える内容を書く。
 #### Evidence の見出し行
 - origin（見出し行では `origin=` と表記）: document_text は解析された本文、image_extraction は画像からの生成説明・OCR、unclassified は未分類。
@@ -320,7 +322,7 @@ AUDIT_SYSTEM_PROMPT = (
         "各片の citations はこの item が実際に引用した原文の範囲だけから選び、evidence_id と連続した支持原文を写す。"
         "引用集合がその片全体を支持すると確認したときだけ supported。別資料の内容で補わず、支持できる片がなければ空にする。\n"
         "- text が quote の規則を述べ、quote にある例外・ただし書き・適用の条件だけを省いているときは unsupported にせず supported とし、"
-        "省いた例外・条件は applicability で扱う。\n"
+        "省いた例外・条件は source_applicability で扱う。\n"
         "- 実データが未提供という理由だけで unsupported や n"
         "ot_applicable にしない。原文どおりの説明は suppo"
         "rted。\n"
@@ -336,12 +338,12 @@ AUDIT_SYSTEM_PROMPT = (
     # 語・値が根拠のどこかにあることで、別の行・別の成果物の関係を支持済みにしていた (#2659・#2657)。
     + RELATION_SUPPORT_RULES
     + (
-        "\n## Step 3: 質問への適用性を確認する（applicability）\n"
+        "\n## Step 3: 引用資料の対象と条件を確認する（source_applicability）\n"
         "- 質問の対象・変更項目・発生条件と quote の前提が一致すれば"
         " matched。quote が同じ業務・機能の種類の一般手順・規則"
         "で、質問固有の値（コード名・グループ名・回数・メニュー名の言い回し）"
         "が無いだけなら matched とする（資料は一般手順を書く）。\n"
-        "- applicability は quote の対象が質問の対象と"
+        "- source_applicability は quote の対象が本問の要求範囲の対象と"
         "一致するかで決め、その item 1 つが質問のすべて（承認者・期限"
         "・時間帯など）に答えているかでは決めない。「この item だけでは"
         "質問に直接答えていない」は not_applicable の理由にな"
@@ -383,13 +385,13 @@ AUDIT_SYSTEM_PROMPT = (
         "の承認の期限は？」に対する「A システムの担当部署: 経」「略号「経"
         "」: 経理部」「経理部の承認者は管理本部長」は、どれも期限を述べてい"
         "ないが途中の段なので matched）。\n"
-        "- guide_steps の evidence_ids を引いた "
-        "item は、その手順を質問の目的を果たす手順に含めて判定する。質問"
-        "の文がその手順（前提・後続の手順）に触れていないことは not_ap"
-        "plicable・unknown の理由にならない。後続手順の画面や機能が原質問と異なるだけでは対象違いにしない。"
+        "- guide_task_scope は業務ガイドと確認済み条件で決まった本問の要求範囲。required=true の手順・依存・完了条件を、原質問に語がない理由で対象外にしない。"
+        "未確認分岐を選ばず、各要求の説明と根拠を確認する。資料不足なら要求を残して不足を示し、操作を作らない。"
+        "guide_step_candidates は出典だけの候補で、引用の意味支持や完了の証明ではない。"
+        "source_applicability は実際の引用資料が操作と確認済み条件に適合するかだけを判定し、source_condition に原文の条件を書く。"
         "引用原文がガイドの手順と両立しない別の対象・条件に明示的に限定される場合は not_applicable。"
         "ガイドは適用する手順を定めるが、操作・対象・順序の支持は引用原文で別に判定する。\n"
-        "- applicability の「質問の対象」は質問が尋ねている物"
+        "- 資料適用性の「質問の対象」は質問と業務ガイドが定める物"
         "（システム・部署・画面・帳票・業務）で、尋ねている項目（期限・承認者"
         "・時間帯・保管期間）ではない。尋ねている項目を quote が述べて"
         "いないことは not_applicable の理由にならない。\n"
@@ -445,7 +447,7 @@ AUDIT_SYSTEM_PROMPT = (
         " answer_quote を返す（not_mentioned なら"
         "空）。\n"
         "- reviews: 各 item の index、support、"
-        "applicability、condition、reason、out"
+        "source_applicability、source_condition、reason、out"
         "put_fields。出力の項目を主張するitemでは、eviden"
         "ceとfunction_contextが示す根拠の役割と成果物の一致"
         "を先に判定する。\n"
@@ -525,7 +527,7 @@ AUDIT_COMPACT_REASON_RULE = (
     "### 出力する理由の書き方\n"
     "\n"
     "- reason を書くのは判定が通らなかったものだけ: suppo"
-    "rt=supported かつ applicability=matc"
+    "rt=supported かつ source_applicability=matc"
     "hed の review と、status=addressed の "
     'request_review は reason を空文字（""）にす'
     "る。それ以外（unsupported・contradicted・co"
@@ -3245,7 +3247,9 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
         entry = checked[review.index]
         entry.review_assessment = {
             "support": review.observed_support or review.support,
-            "applicability": review.applicability,
+            "applicability": review.observed_applicability or review.applicability,
+            "source_applicability": review.source_applicability,
+            "business_scope": review.business_scope,
             "pre_audit_applicability": entry.item.applies,
             "pre_audit_condition": entry.item.condition,
             "applicability_action": review.applicability_action,
@@ -4848,9 +4852,16 @@ class Round:
                         if entry.item.kind != "gap"
                     ],
                 },
+                "business_task_scope": {
+                    "source": "compiled_business_guide",
+                    "execution": "resolved" if self.timing.get("guide_task_scope") else "not_provided",
+                    "steps": self.timing.get("guide_task_scope", []),
+                    "confirmed_premises": self.timing.get("confirmed_premises", []),
+                },
                 "business_applicability": {
                     "execution": self.review_execution,
                     "confirmed_premises": self.timing.get("confirmed_premises", []),
+                    "guide_task_scope": self.timing.get("guide_task_scope", []),
                     "items": [
                         {
                             "index": index,
@@ -4858,6 +4869,8 @@ class Round:
                             "condition": entry.item.condition,
                             "pre_audit_status": entry.review_assessment.get("pre_audit_applicability", entry.item.applies),
                             "observed_status": entry.review_assessment.get("applicability", "unknown"),
+                            "source_applicability": entry.review_assessment.get("source_applicability"),
+                            "business_scope": entry.review_assessment.get("business_scope", {}),
                             "action": entry.review_assessment.get("applicability_action", "not_run"),
                             "policy_effect": "retain_unverified"
                             if entry.review_assessment.get("applicability_action") == "record_only" and entry.item.applies == "unverified"
@@ -6118,6 +6131,7 @@ def run_round(
     guide_step_semantics: GuideStepSemantics | None = None,
     guide_unsearched_steps: Sequence[str] = (),
     guide_step_contracts: Sequence[dict[str, Any]] = (),
+    guide_task_scope: Sequence[dict[str, Any]] = (),
     guide_notices: Sequence[str] = (),
     audit_mode: str = AUDIT_MODE_DETAILED,
     invalid_output: Callable[[Exception], bool] | None = None,
@@ -6150,11 +6164,11 @@ def run_round(
     正式名で書いた根拠の対象を別と判定しないよう、監査の入力に渡す。
     """
     audit_settings = settings if audit_settings is None else audit_settings
-    premise_sources = {(label, value): source for label, value, source in confirmed_premise_sources if source in {"user", "question"}}
-    premise_records = [
-        {"question": label, "answer": value, **({"source": premise_sources[label, value]} if (label, value) in premise_sources else {})}
-        for label, value in confirmed_premises
-    ]
+    premise_records = confirmed_premise_records(confirmed_premises, confirmed_premise_sources)
+    if guide_task_scope:
+        guide_steps, guide_optional_steps, guide_step_contracts = authoritative_guide_inputs(
+            guide_task_scope, guide_steps, guide_step_contracts
+        )
     detailed = audit_mode == AUDIT_MODE_DETAILED
     # 監査なしの型は業務ガイドの要件を判定しない（手順の充足は決定的な対応付けだけ。#2800）。
     contracts = () if audit_mode == AUDIT_MODE_NONE else guide_step_contracts
@@ -6177,6 +6191,7 @@ def run_round(
                     "question_contract": _contract_view(question),
                     "glossary": [dict(term) for term in glossary],
                     "guide_contracts": list(guide_step_contracts),
+                    "guide_task_scope": list(guide_task_scope),
                     "guide_steps": guide_step_evidence_lines(guide_steps, spans),
                     "evidence": [
                         {
@@ -6387,6 +6402,8 @@ def run_round(
         timing["request_plan_repair"] = {"calls": plan_repair_calls, "scope": "request_plan_and_draft"}
     if premise_records:
         timing["confirmed_premises"] = premise_records
+    if guide_task_scope:
+        timing["guide_task_scope"] = list(guide_task_scope)
     if plan_errors:
         timing["request_plan_errors"] = plan_errors
     if catalog_review:
@@ -6489,9 +6506,14 @@ def run_round(
             for _, entry in audited
             for cited in item_citations(entry)
         }
+        question_contract = _contract_view(question)
+        if guide_task_scope:
+            question_contract["original_question"] = question
+        effective_contract = compile_guide_task_contract(question_contract, guide_task_scope)
         inputs = {
-            "question": question,
-            "task_contract": _contract_view(question),
+            "question": effective_contract.get("current_request", question) if guide_task_scope else question,
+            **({"original_question": question} if guide_task_scope else {}),
+            "task_contract": effective_contract,
             "summary": str(draft.summary),
             "items": [
                 {
@@ -6545,6 +6567,8 @@ def run_round(
             inputs["glossary"] = [dict(term) for term in glossary]
         if premise_records:
             inputs["confirmed_premises"] = premise_records
+        if guide_task_scope:
+            inputs["guide_task_scope"] = list(guide_task_scope)
         if detailed:
             inputs["unused_evidence"] = _unused_evidence(question, spans, used)
         if contracts:
@@ -6666,6 +6690,12 @@ def run_round(
                     if key not in adopted and key not in (*duplicate_request_ids, *invalid_request_result_ids)
                 )
                 invalid_request_ids = tuple(sorted(set(returned_request_ids) - set(expected_request_ids)))
+            if guide_task_scope:
+                audit = bind_guide_authority(
+                    audit,
+                    guide_task_scope,
+                    {row["index"]: row.get("guide_step_candidates", ()) for row in inputs["items"]},
+                )
             audit = citation_support_policy(checked, audit, also_audited)
             audit = settle_citation_reviews(checked, audit, also_audited, dropped)
             recovered = recover_audited_quotes(
@@ -6880,18 +6910,25 @@ def applicability_policy(audit: GroundedAudit) -> GroundedAudit:
 
     対象違い・不明のモデル判定だけで前提手順を外さず、明示した原文の適用条件は本文に反映する。
     """
-    reviews = [
-        review.model_copy(
-            update={
-                "observed_applicability": review.applicability,
-                "applicability_action": "record_only" if review.applicability in _RECORDED_APPLICABILITY else "apply",
-                "applicability_policy_reason": "モデルの適用性判定だけでは本文の不採用・適用確認を確定しない。"
-                if review.applicability in _RECORDED_APPLICABILITY
-                else "",
-            }
+    reviews = []
+    for review in audit.reviews:
+        # 旧判定は観察として保持し、独立した資料条件の判定がある場合だけそれを採用する。
+        material = review.source_applicability if review.source_applicability is not None else review.applicability
+        reviews.append(
+            review.model_copy(
+                update={
+                    "observed_applicability": review.observed_applicability or review.applicability,
+                    "applicability": material,
+                    "condition": review.source_condition if review.source_applicability is not None else review.condition,
+                    "applicability_action": "record_only" if material in _RECORDED_APPLICABILITY else "apply",
+                    "applicability_policy_reason": "資料の条件適合を独立判定し、業務ガイドの必須範囲を再裁定しない。"
+                    if review.source_applicability is not None
+                    else "モデルの適用性判定だけでは本文の不採用・適用確認を確定しない。"
+                    if material in _RECORDED_APPLICABILITY
+                    else "",
+                }
+            )
         )
-        for review in audit.reviews
-    ]
     return audit.model_copy(update={"reviews": reviews})
 
 

@@ -135,6 +135,31 @@ class GuidePlan:
         return tuple((step.step_id, step.retrieval_hints[:MAX_STEP_HINTS]) for step in self.steps if step.retrieval_hints)
 
     @property
+    def task_scope(self) -> tuple[dict[str, Any], ...]:
+        """分岐確定後の回答範囲。根拠の取得・支持状態とは独立に全手順を保持する。"""
+        contracts = {contract["step_id"]: contract for contract in self.step_contracts}
+        return tuple(
+            {
+                "guide_id": self.guide_id,
+                "revision": self.revision,
+                "step_id": step.step_id,
+                "title": step.title,
+                "required": step.required,
+                "depends_on": list(step.depends_on),
+                "purpose": step.purpose,
+                "evidence_requirements": list(step.evidence_requirements),
+                "done_when": step.done_when,
+                "requirements": contracts.get(step.step_id, {}).get(
+                    "requirements",
+                    [{"id": f"{step.step_id}:0", "text": step.done_when or step.title, "kind": "completion"}]
+                    if step.done_when or step.title
+                    else [],
+                ),
+            }
+            for step in self.steps
+        )
+
+    @property
     def step_contracts(self) -> tuple[dict[str, Any], ...]:
         """手順の目的・根拠の要件・完了条件と前提手順を監査へ渡す。"""
         return tuple(

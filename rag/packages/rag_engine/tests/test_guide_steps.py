@@ -342,7 +342,8 @@ def test_guide_step_instructions_keep_steps_the_user_cannot_perform() -> None:
     """
     from rag_engine.generation.grounded import _GUIDE_STEP_HINT, GENERATE_SYSTEM_PROMPT
 
-    guide_line = next(line for line in GENERATE_SYSTEM_PROMPT.splitlines() if line.startswith("- 業務ガイドがある場合は"))
-    assert "すべて説明し、利用者が自分で行えない手順も省かない" in guide_line
+    guide_line = next(line for line in GENERATE_SYSTEM_PROMPT.splitlines() if line.startswith("- guide_task_scope は"))
+    assert "利用者が自分で行えない必須手順も省かず" in guide_line
+    assert "required=true" in guide_line and "required=false" in guide_line
     assert "外れる操作は混ぜない" not in guide_line
     assert "条件" not in _GUIDE_STEP_HINT

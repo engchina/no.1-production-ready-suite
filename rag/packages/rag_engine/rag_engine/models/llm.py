@@ -608,6 +608,14 @@ class GroundedItemReview(_StrictModel):
     applicability: Literal["matched", "conditional", "not_applicable", "unknown"] = Field(
         description="matched=質問の対象の種類に当てはまる（一般手順でよい）。conditional=原文の条件の成立が質問から確認できない。not_applicable=別の対象・項目・業務向け。unknown=対象の種類が同じか判断できない。"
     )
+    source_applicability: Literal["matched", "conditional", "not_applicable", "unknown"] | None = Field(
+        default=None,
+        description="実際の引用資料の対象・前提が、この操作と確認済み条件へ適用できるか。業務ガイドで決まった必須範囲を再裁定しない。matched=適合、conditional=原文条件が未確認、not_applicable=原文が別対象へ限定、unknown=判断不能、null=未検証。",
+    )
+    source_condition: str = Field(default="", description="source_applicability=conditional のとき実際の引用原文にある条件。")
+    business_scope: SkipJsonSchema[dict[str, Any]] = Field(
+        default_factory=dict, description="コードが確定したガイド範囲。モデルの判定ではない。"
+    )
     condition: str = Field(default="", description="conditional のとき原文の条件。")
     reason: str = Field(description="判定の根拠を短く。")
     support_quote: str = Field(

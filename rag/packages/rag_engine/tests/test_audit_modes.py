@@ -55,7 +55,7 @@ def test_standard_prompt_drops_only_the_completeness_rules():
     for kept in (
         "## Step 2: 各主張を原文と照合する（support）",
         "contradicted",
-        "## Step 3: 質問への適用性を確認する（applicability）",
+        "## Step 3: 引用資料の対象と条件を確認する（source_applicability）",
         "summary_supported",
         "goal_alignment",
         "request_reviews",

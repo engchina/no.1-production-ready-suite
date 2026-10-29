@@ -48,6 +48,11 @@ def legacy_audit_to_wire_fixture(value: Mapping[str, Any] | BaseModel, schema: t
     raw = value.model_dump() if isinstance(value, BaseModel) else dict(value)
     audit = GroundedAudit.model_validate(raw)
     result = audit.model_dump(mode="json")
+    # 旧fixtureが明示した資料適用の観察を新wireへ移す。実応答の欠落値は補わない。
+    for row in result["reviews"]:
+        if row.get("source_applicability") is None:
+            row["source_applicability"] = row["applicability"]
+            row["source_condition"] = row["condition"]
     for field, identity in [("request_reviews", "request_id"), ("guide_requirement_reviews", "requirement_id")]:
         rows = result[field]
         ids = [row[identity] for row in rows]
