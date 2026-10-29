@@ -2090,15 +2090,20 @@ def _grounded_spans(
     *,
     budget: int | None = None,
     whole_records: bool = False,
+    crag_assessment: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """全出典へ本文予算を配分して原文を選び、機能キー・タグ・必須根拠を付ける。
 
     budget は原文の総予算（文字。`RAG_ENGINE_EVIDENCE_BUDGET_CHARS`）。None なら `evidence_spans` の既定値 (#1054)。
     whole_records は全部の根拠が予算に入るとき切らずに渡す（章節の拡張。#1436）。
+    crag_assessment は CRAG の評価。評価が写しを確かめた原文を、予算の中で必須の範囲にする（#3840）。
     """
     budget_option: dict[str, Any] = {"budget": int(budget)} if budget else {}
     if whole_records:
         budget_option["whole_records"] = True
+    quotes = crag_generation.verified_quotes(crag_assessment)
+    if quotes:
+        budget_option["verified_quotes"] = quotes
     if runtime_knowledge is not None and runtime_knowledge.guide_steps:
         optional = set(runtime_knowledge.guide_optional_steps)
         budget_option["priority_source_groups"] = [
@@ -2569,6 +2574,7 @@ def synthesize_grounded_answer(
             image_evidence,
             runtime_knowledge,
             budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
+            crag_assessment=crag_assessment,
         )
         gate_view = crag_generation.generation_view(
             crag_assessment, gate_spans, context, budget_chars=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None)
@@ -2697,6 +2703,7 @@ def synthesize_grounded_answer(
             runtime_knowledge,
             budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
             whole_records=evidence_budget_chars is not None,
+            crag_assessment=crag_assessment,
         )
         crag_view = crag_generation.generation_view(
             crag_assessment, spans, context, budget_chars=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None)
@@ -5884,6 +5891,7 @@ def answer_question_result(
                 image_evidence,
                 runtime_knowledge,
                 budget=_section_evidence_budget(context, settings, section_expansion),
+                crag_assessment=crag_assessment,
             )
             if crag_assessment is not None
             else ()

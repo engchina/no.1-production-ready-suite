@@ -7,6 +7,7 @@
 - ``fold_text``: NFKC と波線・ダッシュの同一視。全文検索の索引（``normalize_text_search_index_text``。#1336）と
   引用の照合に使う。丸数字・ローマ数字・㈱ なども同じ形にする（``①`` → ``1``）。
 - ``fold_text_with_positions``: ``fold_text`` の形と、各文字の元の位置。そろえた形で見つけた引用を原文の範囲へ戻す。
+- ``find_width_folded``: ``fold_width`` の形で空白を除いて写しを探し、原文の範囲を返す（引用の写しの照合と同じ比べ方）。
 - ``fold_width``: 全角・半角の違い（Unicode の ``<wide>`` / ``<narrow>`` の互換文字）だけを NFKC の形にする。
   回答のモデルと、モデルの説明を根拠と比べる検査に渡す形（#1350）。``fold_text`` の一部なので、モデルがこの形で
   引用しても ``fold_text`` の照合で原文に一致する。丸数字（``①``）は手順の区切り、``Ⅴ`` は章の番号としてモデルと
@@ -102,6 +103,31 @@ def fold_text_with_positions(text: Any) -> tuple[str, list[int]]:
     return "".join(chars), positions
 
 
+def find_width_folded(text: Any, quote: Any) -> tuple[int, int] | None:
+    """``fold_width`` の形で空白を除いた写しが ``text`` にあれば、最初に現れる原文の範囲 (start, end) を返します。
+
+    比べ方は「表記の幅と空白だけを同一視する」引用の写しの照合と同じで、意味の近さ・部分の一致には広げない。
+    範囲は文字の塊（基底の文字と結合文字・半角の濁点）の単位で原文へ戻す。
+    """
+    target = "".join(fold_width(quote).split())
+    value = str(text or "")
+    if not target or not value:
+        return None
+    chars: list[str] = []
+    bounds: list[tuple[int, int]] = []
+    for start, cluster in _clusters(value):
+        for char in fold_width(cluster):
+            if not char.isspace():
+                chars.append(char)
+                bounds.append((start, start + len(cluster)))
+    at = "".join(chars).find(target)
+    if at < 0:
+        return None
+    start, end = bounds[at][0], bounds[at + len(target) - 1][1]
+    # 塊ごとの形が全体の形と違う稀な場合は、範囲を返さない（照合と同じ形で確かめた範囲だけを返す）。
+    return (start, end) if target in "".join(fold_width(value[start:end]).split()) else None
+
+
 def fold_model_view(value: Any) -> Any:
     """dict / list / tuple の中の文字列（dict の文字列の key を含む）を ``fold_width`` でそろえた写しを返します。
 
@@ -117,4 +143,4 @@ def fold_model_view(value: Any) -> Any:
     return value
 
 
-__all__ = ["SYMBOL_FOLD", "fold_model_view", "fold_text", "fold_text_with_positions", "fold_width"]
+__all__ = ["SYMBOL_FOLD", "find_width_folded", "fold_model_view", "fold_text", "fold_text_with_positions", "fold_width"]
