@@ -2301,12 +2301,16 @@ class ValidatedGuideStep(BaseModel):
     required: bool = Field(
         description="回答の充足で必須の手順か（分かっている条件で決まらない分岐の手順は false）。"
     )
-    status: Literal["explained", "reference_only", "unused", "no_evidence"] = Field(
+    status: Literal[
+        "explained", "partial", "unknown", "reference_only", "unused", "no_evidence", "not_searched"
+    ] = Field(
         description=(
-            "explained=手順の主の操作を根拠で裏付けた段落で説明した / "
+            "explained=必須の操作・対象・条件・順序を、根拠で裏付けた説明として確認した / "
+            "partial=手順の一部だけ説明を確認した / unknown=説明の充足を検証できていない / "
             "reference_only=根拠の原文を参考として示しただけ / "
             "unused=手順の根拠は渡した根拠にあるが、手順を説明した段落が無い / "
-            "no_evidence=手順の根拠が渡した根拠に無い（その手順の根拠を集めていない）。"
+            "no_evidence=手順の根拠が渡した根拠に無い（その手順の根拠を集めていない）/ "
+            "not_searched=上限で検索を打ち切り、充足を検証していない。"
         )
     )
 

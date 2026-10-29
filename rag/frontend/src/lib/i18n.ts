@@ -5097,8 +5097,12 @@ export const ja = {
   // 下書きで試した回答の、業務ガイドの手順ごとの充足（#2686）。
   "supportGuides.try.steps": "手順の説明",
   "supportGuides.try.stepsMissing": "必須の手順のうち {count} 件を、回答で説明できていません。",
+  "supportGuides.try.stepsPartial": "必須の手順のうち {count} 件は、一部のみ説明を確認しました。",
+  "supportGuides.try.stepsUnknown": "必須の手順のうち {count} 件は、充足を確認できていません。",
   "supportGuides.try.stepOptional": "分岐の手順（必須ではない）",
   "supportGuides.try.stepStatus.explained": "説明した",
+  "supportGuides.try.stepStatus.partial": "一部のみ確認済み",
+  "supportGuides.try.stepStatus.unknown": "未検証",
   "supportGuides.try.stepStatus.reference_only": "資料の原文だけ",
   "supportGuides.try.stepStatus.unused": "説明していない",
   "supportGuides.try.stepStatus.no_evidence": "根拠が見つからない",

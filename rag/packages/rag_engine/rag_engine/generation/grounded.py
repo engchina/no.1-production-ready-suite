@@ -3788,6 +3788,7 @@ def render_answer(
     confirmations: Sequence[str] = (),
     *,
     unverified: Sequence[str] = (),
+    unverified_requirements: Sequence[str] = (),
     deadline: Sequence[str] = (),
     applications: Sequence[CheckedApplication] = (),
     subquestions: Sequence[dict] = (),
@@ -3892,7 +3893,9 @@ def render_answer(
     warnings = [dict(item) for item in answer_warnings]
     if removed_lines := passage_marks.removed_section_lines(removed):
         sections.append((answer_labels().removed_section, removed_lines))
-    if marked_lines := passage_marks.marked_section_lines(merged, warnings):
+    marked_lines = passage_marks.marked_section_lines(merged, warnings)
+    marked_lines.extend(f"{bullet}{line}" for line in dict.fromkeys(unverified_requirements))
+    if marked_lines:
         sections.append((answer_labels().marked_section, marked_lines))
     body = "\n\n".join([*blocks, *(title + "\n\n" + "\n".join(content) for title, content in sections)])
     text = "\n\n".join(part for part in (summary.strip(), body) if part)
@@ -4911,14 +4914,16 @@ def guide_step_evidence_lines(guide_steps: Sequence[tuple[str, str, Sequence[str
 
 
 # 業務ガイドの手順の充足（#2491）。生成・監査・是正・回答の構造で同じ単位を使う。
-GUIDE_STEP_EXPLAINED = "explained"  # 手順の根拠を引いた説明を公開した
+GUIDE_STEP_EXPLAINED = "explained"  # 全要件を実際の本文と支持済みの説明に対応付けた
+GUIDE_STEP_UNKNOWN = "unknown"  # 対応の候補はあるが本文の全充足を確認していない
+GUIDE_STEP_PARTIAL = "partial"  # 同次監査で必要内容の一部の説明を確認した
 GUIDE_STEP_REFERENCE_ONLY = "reference_only"  # 手順の根拠を原文のまま示したか、印の付いた（確かめられない）説明だけ
 GUIDE_STEP_UNUSED = "unused"  # 手順の根拠は回答の材料にあるが、説明に引いていない
 GUIDE_STEP_NO_EVIDENCE = "no_evidence"  # 手順の根拠が回答の材料に無い
 # 手順ごとの検索を期限・回数の上限で打ち切り、その手順を検索しなかった（根拠が無いのは資料に無いからとは限らない。#2706）。
 GUIDE_STEP_NOT_SEARCHED = "not_searched"
 # 同じ根拠のまま作り直せば直せる手順の状態（根拠が材料にある）。
-GUIDE_STEP_REGENERABLE = frozenset({GUIDE_STEP_REFERENCE_ONLY, GUIDE_STEP_UNUSED})
+GUIDE_STEP_REGENERABLE = frozenset({GUIDE_STEP_REFERENCE_ONLY, GUIDE_STEP_UNUSED, GUIDE_STEP_PARTIAL})
 # 手順の根拠と同じ原文を別の根拠から引いた説明を数える、引用の最短の長さ（短い語句はどの本文にも当たる）。
 _GUIDE_STEP_QUOTE_MIN_CHARS = 12
 
@@ -5138,28 +5143,14 @@ def guide_step_assignment(
     semantics: GuideStepSemantics | None = None,
     unsearched: Sequence[str] = (),
 ) -> tuple[list[dict[str, Any]], dict[int, str]]:
-    """業務ガイドの手順ごとの充足（#2491・#2649・#2685・#2706）と、手順の説明にした item（index → 手順 id）。
+    """手順の資料と回答itemの候補対応を記録する。全充足はapply_guide_contractsで別に確かめる。
 
-    手順の根拠（手順ごとの検索で取った chunk）を引いた item を手順の引用とする。同じ本文が別の chunk にも
-    あるので、手順の根拠の本文と照合できる引用（``_GUIDE_STEP_QUOTE_MIN_CHARS`` 以上）も手順の根拠を引いたと数える。
+    source IDと、同一の原文を持つ別chunkへの引用で候補を集める。共有候補の語・embeddingは操作範囲の
+    対応付けにだけ用い、広い原文引用やsourceの一致を本文の全充足へ昇格させない。独立した候補は
+    一つのitemを複数手順へ、一つの手順を複数itemへ保持できる。戻り値のindex→step IDは互換の代表値。
 
-    1 つの item が複数の手順の引用になる（手順が根拠の chunk を共有する・同じ原文が別の手順の根拠にもある）と、
-    chunk の共通の一文（末尾の確定の操作など）だけで全手順を説明したことになる（#2649）。そこで、複数の手順の
-    引用になる item は、まず語で決める: 引用（原文）が手順の語（題名と ``step_terms`` の検索の手がかり）を、手順の
-    根拠の中で手順の語を最も多く含む文（手順の主の操作の文。語で 1 つに決まるとき）と同じ数以上含めば、その手順の
-    item。どの手順でも語で決まらない item（手順の語が根拠に無い・主の操作の文が語で 1 つに決まらない・引用が語で
-    主の操作の文に届かない）は、``semantics`` が使えれば意味の近さで決める（`_guide_semantic_owners`）。使えない・
-    失敗なら語で決まる item だけを手順の説明にし、語で決まらない共有の item はどの手順の説明にもしない（#2685。
-    手順の語が 1 語しか当たらない文は共通の文のことがあるので、それで対応付けない）。独立に対応付けた item は複数の手順を説明してよい。単なる根拠の共有だけでは充足にしない。
-
-    ``unsearched`` は手順ごとの検索を期限・回数の上限で打ち切って検索しなかった手順（#2706）。その手順の根拠は
-    分からないので、1 つの手順の根拠だけを引いた item でも、検索しなかった手順と根拠を共有しうる item として、
-    共有の item と同じ判定（語・意味）を通す（共通の文だけの item を手順の説明にしない）。
-
-    手順の item に確かめた説明（原文のみ提示でも適用未確認でも印つきでもない）を割り当てられれば explained。手順の
-    item が原文のみ提示・適用未確認（unverified。「参考情報」の節に出る）・印の付いた説明（#2738）だけなら reference_only、
-    根拠は回答の材料にあるが手順の説明を引いていなければ unused、材料に無ければ no_evidence（検索しなかった手順は
-    not_searched）。required は回答の充足で必須の手順か（``optional`` は条件が決まらない分岐の行き先とその後続）。
+    未検索・根拠なし・未引用・参考情報を区別し、本文の対応と全要件の観察が未検証ならunknownとする。
+    word/semantic/exclusive_sourceの候補があるだけではexplainedにしない。本文はこの関数で削除しない。
     """
     by_source: dict[str, list[dict]] = {}
     for span in spans:
@@ -5271,9 +5262,11 @@ def guide_step_assignment(
     coverage: list[dict[str, Any]] = []
     for step_id, title, _sources in guide_steps:
         if step_id in explained:
-            status = GUIDE_STEP_EXPLAINED
+            status = GUIDE_STEP_UNKNOWN
         elif any(not publishable(index) for index, _score in own[step_id]):
             status = GUIDE_STEP_REFERENCE_ONLY
+        elif cited[step_id]:
+            status = GUIDE_STEP_UNKNOWN
         elif step_spans[step_id]:
             status = GUIDE_STEP_UNUSED
         elif step_id in unknown:
@@ -5296,7 +5289,21 @@ def guide_step_assignment(
                         dict.fromkeys(checked[index].span["evidence_id"] for index in cited[step_id] if checked[index].span)
                     ),
                 },
+                "validation": {
+                    "source_association": {"execution": "completed", "linked": bool(step_spans[step_id])},
+                    "body_coverage": {"execution": "not_run", "status": "unknown", "reason": "candidate_association_only"},
+                },
                 "assignment": {
+                    "assessment": "candidate_only",
+                    "candidate_status": "matched"
+                    if step_id in explained
+                    else "reference_only"
+                    if any(not publishable(index) for index, _score in own[step_id])
+                    else "unmatched"
+                    if step_spans[step_id]
+                    else "not_searched"
+                    if step_id in unknown
+                    else "no_evidence",
                     "cited_item_indexes": cited[step_id],
                     "assigned_item_indexes": assigned_by_step[step_id],
                     "candidates": [
@@ -5336,35 +5343,52 @@ def _requirement_answer_text(checked: Sequence[CheckedItem], notices: Sequence[s
 _QUOTED_REQUIREMENT_STATES = frozenset({"explained", "stated_unavailable"})
 
 
-def requirement_quote_matches(review: Any, checked: Sequence[CheckedItem], notices: Sequence[str] = ()) -> bool:
-    """要件の監査の ``answer_quote`` が、引いた index（items と業務ガイドの案内の行）に属する文か（#2649・#2811）。
+def requirement_answer_spans(review: Any, checked: Sequence[CheckedItem], notices: Sequence[str] = ()) -> list[dict[str, Any]]:
+    """監査の抜粋を実際の本文へ束縛する。引用原文から本文の説明を補わない。"""
+    cited = list(review.item_indexes)
+    if not cited or not all(0 <= index < len(checked) + len(notices) for index in cited):
+        return []
+    quote = review.answer_quote.strip()
+    if not quote:
+        return []
+    texts = {index: checked[index].item.text if index < len(checked) else notices[index - len(checked)] for index in cited}
+    # 一つの本文に含まれれば、その連続範囲を使う。複数段落の抜粋は文単位で共同対応させる。
+    excerpts = (
+        [quote]
+        if any(quote_in_text(quote, text) for text in texts.values())
+        else [part.strip() for line in quote.splitlines() for part in check_cues().quote_sentence_split.split(line) if part.strip()]
+    )
+    result: list[dict[str, Any]] = []
+    for excerpt in excerpts:
+        matches = []
+        for index, text in texts.items():
+            # 幅などの表示上の差を受け入れても、元の本文中の位置を確定できない抜粋は順序の証明にしない。
+            if not quote_in_text(excerpt, text):
+                continue
+            start = text.find(excerpt)
+            if start < 0:
+                matches.append({"item_index": index, "start": None, "end": None, "ambiguous": True})
+            else:
+                matches.append(
+                    {"item_index": index, "start": start, "end": start + len(excerpt), "ambiguous": text.find(excerpt, start + 1) >= 0}
+                )
+        if not matches:
+            return []
+        for match in matches:
+            result.append({**match, "ambiguous": match["ambiguous"] or len(matches) > 1})
+    return result
 
-    引いた item の説明の文か、その item の根拠の原文（モデルは同じ item の原文を写すことが多い）のどちらかに当たれば
-    受ける。資料に無いことを示した判定（stated_unavailable）で引いた index がすべて不足の item か案内の行なら、
-    その行自体が不足の明示なので引用が空でも受ける。
-    """
+
+def requirement_quote_matches(review: Any, checked: Sequence[CheckedItem], notices: Sequence[str] = ()) -> bool:
+    """同次観察のanswer_quoteが、指した利用者向け本文に実在するかを検査する。"""
     cited = list(review.item_indexes)
     if not cited or not all(0 <= index < len(checked) + len(notices) for index in cited):
         return False
-    quote = review.answer_quote.strip()
-    if not quote:
+    if not review.answer_quote.strip():
         return review.answer_state == "stated_unavailable" and all(
             index >= len(checked) or checked[index].item.kind == "gap" for index in cited
         )
-    sources = "\n".join(checked[index].item.quote for index in cited if index < len(checked) and checked[index].item.quote)
-    answer = _requirement_answer_text(checked, notices, cited)
-    if quote_in_text(quote, answer) or (sources and quote_in_text(quote, sources)):
-        return True
-    # 複数の説明と原文の抜粋を一続きにした引用も、各文を引いた item の中だけで照合する。
-    # 文字・数値の置換や語の断片の継ぎ合わせは受けず、要件全体の意味の判断は監査に任せる。
-    excerpts = [part.strip() for part in check_cues().quote_sentence_split.split(quote) if part.strip()]
-    cited_texts = [
-        text
-        for index in cited
-        for text in ((checked[index].item.text, checked[index].item.quote) if index < len(checked) else (notices[index - len(checked)],))
-        if text
-    ]
-    return len(excerpts) > 1 and all(any(quote_in_text(part, text) for text in cited_texts) for part in excerpts)
+    return bool(requirement_answer_spans(review, checked, notices))
 
 
 # 要件の監査の観察（`GuideRequirementReview.answer_state`）から要件の充足を決める規則（#2800）。モデルには回答が要件を
@@ -5395,6 +5419,8 @@ def apply_guide_contracts(
     contracts: Sequence[dict[str, Any]],
     audit: GroundedAudit | None,
     notices: Sequence[str] = (),
+    *,
+    review_execution: str | None = None,
 ) -> list[dict[str, Any]]:
     """要件の全件を、監査の後も確かめた説明に対応付ける。未回答・重複・不正な index は充足にしない。
 
@@ -5409,6 +5435,8 @@ def apply_guide_contracts(
     result = [{**step} for step in coverage]
     by_id = {step["step_id"]: step for step in result}
     indexes: dict[str, set[int]] = {}
+    body_spans: dict[str, list[dict[str, Any]]] = {}
+    execution = review_execution or ("completed" if audit is not None else "not_run")
     for contract in contracts:
         step_id = contract["step_id"]
         if step_id not in by_id:
@@ -5416,6 +5444,7 @@ def apply_guide_contracts(
         step = by_id[step_id]
         requirements = []
         indexes[step_id] = set()
+        body_spans[step_id] = []
         for requirement in contract["requirements"]:
             matches = reviews.get(requirement["id"], ())
             review = matches[0] if len(matches) == 1 else None
@@ -5431,39 +5460,81 @@ def apply_guide_contracts(
             valid = bool(cited) and all(citable(index) for index in cited)
             quote_matches = review is not None and requirement_quote_matches(review, checked, notices)
             status = requirement_status(review, requirement, checked, notices)
-            if status == "addressed" and not (valid and quote_matches):
-                status = "partial"
-            requirements.append({**requirement, "status": status, "reason": review.reason if review else "要件の監査がない"})
+            if status in {"addressed", "partial"} and not (valid and quote_matches):
+                status = "unknown"
+            proof = requirement_answer_spans(review, checked, notices) if review is not None and valid and quote_matches else []
+            requirements.append(
+                {**requirement, "status": status, "reason": review.reason if review else "要件の監査がない", "body_spans": proof}
+            )
             if status == "addressed":
                 indexes[step_id].update(cited)
+                body_spans[step_id].extend(proof)
         step["requirements"] = requirements
-        if requirements and all(entry["status"] == "addressed" for entry in requirements):
-            # 共有 chunk の代表の一文ではなく、全要件を支持済みの説明に対応付けた場合だけ充足。
+        statuses = {entry["status"] for entry in requirements}
+        if requirements and statuses == {"addressed"}:
             step["status"] = GUIDE_STEP_EXPLAINED
-        elif step["status"] == GUIDE_STEP_EXPLAINED:
-            step["status"] = GUIDE_STEP_UNUSED
-    # 同じ説明を複数の手順で使える。各要件の観察と引用の検証は上で個別に行う。
+        elif step["status"] not in {GUIDE_STEP_NO_EVIDENCE, GUIDE_STEP_NOT_SEARCHED}:
+            if statuses & {"addressed", "partial"}:
+                step["status"] = GUIDE_STEP_PARTIAL
+            elif "unknown" in statuses or not requirements:
+                if step["status"] != GUIDE_STEP_REFERENCE_ONLY:
+                    step["status"] = GUIDE_STEP_UNKNOWN
+            elif step["status"] != GUIDE_STEP_REFERENCE_ONLY:
+                step["status"] = GUIDE_STEP_UNUSED
+        step.setdefault("validation", {})["body_coverage"] = {
+            "execution": execution,
+            "status": step["status"],
+            "reason": "requirement_observations" if audit is not None else "requirement_review_not_run",
+        }
 
-    def first_operation(step_id: str) -> int | None:
-        # 順序は利用者が行う操作の説明の並びで比べる（#2732・#2795）。規則・要約・不足の文の位置は実行の順を表さない。
-        operations = [
-            index for index in indexes.get(step_id, ()) if 0 <= index < len(checked) and checked[index].item.kind in _PROCEDURE_KINDS
+    def operation_spans(step_id: str) -> list[dict[str, Any]]:
+        return [
+            proof
+            for proof in body_spans.get(step_id, ())
+            if proof["item_index"] < len(checked) and checked[proof["item_index"]].item.kind in _PROCEDURE_KINDS
         ]
-        return min(operations) if operations else None
+
+    def determinate(proofs: Sequence[dict[str, Any]]) -> bool:
+        return bool(proofs) and all(proof["start"] is not None and not proof["ambiguous"] for proof in proofs)
 
     for contract in contracts:
         step_id = contract["step_id"]
-        current = first_operation(step_id)
-        if current is None:
+        if step_id not in by_id:
             continue
-        wrong_order = [
-            predecessor
-            for predecessor in contract.get("depends_on", ())
-            if (before := first_operation(predecessor)) is not None and before > current
-        ]
+        current = operation_spans(step_id)
+        # 規則・案内・条件への言及は、実行操作の本文位置に数えない。
+        if not current:
+            continue
+        wrong_order, uncertain = [], []
+        for predecessor in contract.get("depends_on", ()):
+            before = operation_spans(predecessor)
+            if not before:
+                continue
+            # 広い同一段落や重なる抜粋では、語の出現順を実操作順序に置き換えない。
+            if (
+                not determinate(current)
+                or not determinate(before)
+                or any(
+                    left["item_index"] == right["item_index"] and max(left["start"], right["start"]) < min(left["end"], right["end"])
+                    for left in before
+                    for right in current
+                )
+            ):
+                uncertain.append(predecessor)
+                continue
+            last_predecessor = max((proof["item_index"], proof["end"]) for proof in before)
+            first_current = min((proof["item_index"], proof["start"]) for proof in current)
+            if last_predecessor > first_current:
+                wrong_order.append(predecessor)
+        step = by_id[step_id]
         if wrong_order:
-            by_id[step_id]["status"] = GUIDE_STEP_UNUSED
-            by_id[step_id]["order_errors"] = wrong_order
+            step["status"] = GUIDE_STEP_PARTIAL
+            step["order_errors"] = wrong_order
+            step["validation"]["body_coverage"].update(status=GUIDE_STEP_PARTIAL, reason="operation_order_mismatch")
+        elif uncertain and step["status"] == GUIDE_STEP_EXPLAINED:
+            step["status"] = GUIDE_STEP_UNKNOWN
+            step["order_unverified"] = uncertain
+            step["validation"]["body_coverage"].update(status=GUIDE_STEP_UNKNOWN, reason="operation_order_unverified")
     return result
 
 
@@ -5486,7 +5557,7 @@ def guide_step_gap_line(step: dict[str, Any]) -> str:
         )
     if step.get("status") == GUIDE_STEP_NOT_SEARCHED:
         return f"業務ガイドの手順「{step['title']}」は、手順ごとの検索を時間・回数の上限で打ち切ったため、資料で確かめていません。"
-    if step.get("status") == GUIDE_STEP_UNUSED:
+    if step.get("status") in {GUIDE_STEP_UNUSED, GUIDE_STEP_UNKNOWN, GUIDE_STEP_PARTIAL}:
         return f"業務ガイドの手順「{step['title']}」は、回答の説明との対応を確定できていません。説明と引用を確認してください。"
     return f"業務ガイドの手順「{step['title']}」は、今回の回答に渡した資料で必要な根拠を確認できていません。"
 
@@ -6276,7 +6347,7 @@ def run_round(
                         "field": "guide_requirement_reviews",
                         "required_once": missing_requirements,
                         "invalid_answer_quotes": invalid_answer_quotes,
-                        "message": "required_once の要件 id は1回ずつ判定してください。invalid_answer_quotes の判定は、item_indexes が指す item の text か quote から answer_quote をそのまま写してください。回答が要件に触れていなければ not_mentioned としてください。全要件の判定を含む監査を返してください。",
+                        "message": "required_once の要件 id は1回ずつ判定してください。invalid_answer_quotes の判定は、item_indexes が指す item の text（完了条件で許された案内は guide_notes）から answer_quote をそのまま写してください。資料の引用から写さないでください。回答が要件に触れていなければ not_mentioned としてください。全要件の判定を含む監査を返してください。",
                     }
                     audit_prompt = json.dumps(fold_model_view(inputs), ensure_ascii=False)
                 # reviews も request_reviews も空の応答は監査として使えない。そのまま使うと addressed が空になり、
@@ -6431,8 +6502,8 @@ def run_round(
                     guide_steps, checked, spans, guide_optional_steps, guide_step_terms, guide_step_semantics, guide_unsearched_steps
                 ),
                 checked,
-                contracts,
-                audit,
+                guide_step_contracts,
+                audit if audit_mode != AUDIT_MODE_NONE else None,
                 guide_notices,
             )
             if guide_steps
