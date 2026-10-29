@@ -1597,6 +1597,48 @@ def _attachment_label(label: str, spans: Sequence[dict]) -> bool:
 _MISSING_REQUEST_PLAN = "説明に使う要求ごとの根拠計画がありません。"
 
 
+def _misattributed_scopes(plan: RequestCoverage, spans: Sequence[dict]) -> dict[str, list[str]]:
+    """direct の照合に写した原文が、指した根拠に無く送信した別の根拠にある計画の行（出典 ID の取り違え。#3804）。
+
+    戻り値は計画の表示 ID → 原文がある根拠の表示 ID。モデル自身の記述どうしの矛盾なので意味の判断は要らない。
+    linked の原文は関係を明記した別の根拠にあってよいので対象外。どこにも無い原文（言い換え）・指した根拠にも
+    ある原文・添付の根拠も、取り違えと言い切れないので対象外にする。別の ID へは付け替えない（作り直しに任せる）。
+    """
+    found: dict[str, list[str]] = {}
+    used = set(plan.evidence_ids)
+    for scope in plan.evidence_scope:
+        quote = scope.link_quote.strip()
+        label = scope.evidence_id
+        if scope.relation != "direct" or not quote or label not in used or label in found or _attachment_label(label, spans):
+            continue
+        named = _label_spans(label, spans)
+        if not named or any(quote_in_text(quote, str(span.get("text") or "")) for span in named):
+            continue
+        named_ids = {span["evidence_id"] for span in named}
+        others = [
+            str(span.get("label") or span["evidence_id"])
+            for span in spans
+            if span["evidence_id"] not in named_ids and quote_in_text(quote, str(span.get("text") or ""))
+        ]
+        if others:
+            found[label] = list(dict.fromkeys(others))
+    return found
+
+
+def _misattributed_labels(item: GroundedItem, draft: GroundedDraft, spans: Sequence[dict]) -> list[str]:
+    """説明が出典に引いた根拠のうち、その小問の計画で原文と ID が食い違う表示 ID（#3804）。"""
+    labels = {label for plan in _item_request_plans(item, draft) for label in _misattributed_scopes(plan, spans)}
+    flagged = {span["evidence_id"]: label for label in labels for span in _label_spans(label, spans)}
+    return list(
+        dict.fromkeys(
+            flagged[span["evidence_id"]]
+            for cited in item.citations
+            for span in _label_spans(cited.evidence_id, spans)
+            if span["evidence_id"] in flagged
+        )
+    )
+
+
 def _request_plan_errors(draft: GroundedDraft, spans: Sequence[dict] = ()) -> list[str]:
     """計画と説明の構造の不整合を列挙する。旧形式の応答は追加の欄を要求しない。"""
     errors = []
@@ -1615,6 +1657,11 @@ def _request_plan_errors(draft: GroundedDraft, spans: Sequence[dict] = ()) -> li
                 errors.append(f"{plan.request_id}: unrelated の {label} は evidence_ids と items に使えません。")
             elif scopes[0].relation == "linked" and not scopes[0].link_quote.strip():
                 errors.append(f"{plan.request_id}: linked の {label} は関係を明記した原文が必要です。")
+        for label, others in _misattributed_scopes(plan, spans).items():
+            errors.append(
+                f"{plan.request_id}: {label} の照合に写した原文は {label} に無く、{'・'.join(others)} にあります。"
+                "その原文で説明するなら、計画と items の出典をその原文がある根拠にしてください。"
+            )
     return errors
 
 
@@ -2022,6 +2069,10 @@ def verify(
             candidate.mark("quote_unmatched", "引用元の候補はありますが、元の引用の逐語一致は確認できていません。")
         if scope_unsettled:
             candidate.mark("unassessed", "質問の対象と根拠の対応を確かめられなかった")
+        if misattributed := _misattributed_labels(item, draft, spans):
+            # 計画に写した原文が出典の根拠に無く別の根拠にある（#3804）。本文は外さず、別の ID へも付け替えず、
+            # 出典の支持を確かめていない印を付ける（支持の成功にも失敗にもしない）。
+            candidate.mark("unassessed", f"根拠計画で {'・'.join(misattributed)} に写した原文が、その出典の根拠に無い")
         entry = candidate
         check_item = _check_item(entry.item)
         if conflict := _table_binding_conflict(check_item, view):
@@ -6555,7 +6606,7 @@ def run_round(
                 {
                     "invalid_request_plan": plan_errors,
                     "previous_draft": draft.model_dump(mode="json"),
-                    "instruction": "対象の照合が抜けた根拠を照合し、unrelated を計画と説明から除き、根拠計画と items が対応する完全な草稿を返してください。",
+                    "instruction": "invalid_request_plan の指摘をすべて直し（対象の照合が抜けた根拠は照合し、unrelated は計画と説明から除く）、根拠計画と items が対応する完全な草稿を返してください。",
                 },
                 ensure_ascii=False,
             )
