@@ -25,6 +25,7 @@ from pr_backend_core.observability.model_usage import RunModelUsage
 from pr_backend_core.observability.tracing import finish_operation_trace
 
 from app.config import Settings
+from app.rag.semantic_audit_policy import semantic_audit_is_diagnostic_only
 from app.rag.stored_answer import stored_citations
 from app.schemas.history import ValidationExecution
 from app.schemas.search import (
@@ -104,6 +105,8 @@ def answer_validation_execution(
         return "timed_out"
     if status == "partial":
         return "partial"
+    if semantic_audit_is_diagnostic_only(diagnostics or {}):
+        return "unknown"
     if status in {"completed", "ok", "validated"}:
         if validation.get("valid") is True:
             return "passed"
@@ -122,6 +125,8 @@ def answer_verification(diagnostics: Mapping[str, Any] | None) -> RunVerificatio
     """
     if diagnostics is None:
         return None
+    if semantic_audit_is_diagnostic_only(diagnostics):
+        return "unverified"
     validation = diagnostics.get("answer_validation")
     if isinstance(validation, Mapping):
         if validation.get("valid") is True:

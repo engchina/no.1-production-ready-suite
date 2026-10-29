@@ -131,6 +131,7 @@ from app.rag.graph_expansion import (
     graph_expansion_metadata,
     plan_graph_expansion,
 )
+from app.rag.semantic_audit_policy import semantic_audit_is_diagnostic_only
 from app.rag.span_display import ANSWER_STEP_KIND, answer_step_details, answer_step_params
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import passage_mark_record, stored_evaluation_input
@@ -300,6 +301,17 @@ def _validation_details(validation: Mapping[str, Any]) -> dict[str, Any]:
                 else []
             ),
         ],
+    }
+
+
+def _diagnostic_validation(validation: dict[str, Any]) -> dict[str, Any]:
+    """実行結果を残し、意味の正否を未検証として区別する。"""
+    return {
+        **validation,
+        "raw_valid": validation.get("valid"),
+        "valid": None,
+        "semantic_status": "unknown",
+        "automatic_actions": False,
     }
 
 
@@ -1124,6 +1136,10 @@ class AnswerEngine:
                 if self._settings.rag_answer_audit_mode == "none"
                 else "empty_answer",
             }
+            if semantic_audit_is_diagnostic_only(outcome.diagnostics):
+                outcome.diagnostics["answer_validation"] = _diagnostic_validation(
+                    outcome.diagnostics["answer_validation"]
+                )
             return
         # answer_validation は engine の設定変換も使うため、循環 import を避けてここで読む。
         from app.rag.answer_validation import (
@@ -1139,6 +1155,7 @@ class AnswerEngine:
             await step_callback(name, "started", 0.0, {})
         state = "success"
         llm_usage: dict[str, Any] = {}
+        diagnostic_only = semantic_audit_is_diagnostic_only(outcome.diagnostics)
         # 回答フローの工程と同じ工程の span にする（処理の経過の行。#3226）。
         with _answer_step_span(name) as span:
             try:
@@ -1186,12 +1203,19 @@ class AnswerEngine:
                 }
                 state = "error"
                 span.set_status("failed")
+            if diagnostic_only:
+                validation = _diagnostic_validation(validation)
             span.set_display(
                 params=answer_step_params({"llm_calls": int(llm_usage.get("calls") or 0)}),
                 details=answer_step_details(_validation_details(validation)),
             )
+        if diagnostic_only:
+            outcome.diagnostics["needs_human_review"] = True
         outcome.diagnostics["answer_validation"] = validation
-        if not validation["valid"]:
+        deterministic_failure = bool(
+            validation.get("missing_evidence_count") or validation.get("stale_evidence_count")
+        )
+        if deterministic_failure or (not diagnostic_only and not validation["valid"]):
             outcome.diagnostics["needs_human_review"] = True
             outcome.diagnostics["confidence"] = "low"
             envelope = outcome.diagnostics.get("envelope")
@@ -4258,6 +4282,13 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         # 目的外の割合を集計する。
         "goal_alignment": adopted_goal_alignment(result.generation_trace),
         "generation_review": adopted_review_contract(result.generation_trace),
+        **(
+            {"semantic_audit_policy": dict(policy)}
+            if isinstance(
+                policy := (result.generation_trace or {}).get("semantic_audit_policy"), Mapping
+            )
+            else {}
+        ),
         "crag_assessment": dict((result.generation_trace or {}).get("crag_assessment") or {}),
         "crag_generation_gate": dict(
             (result.generation_trace or {}).get("crag_generation_gate") or {}
