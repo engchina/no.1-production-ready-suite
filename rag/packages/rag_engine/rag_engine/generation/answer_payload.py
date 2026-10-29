@@ -667,6 +667,7 @@ def _rerank_scores_from_evidence(
                 "candidate_index": metadata.get("candidate_index"),
                 "rank": metadata.get("rank"),
                 "relevance_score": metadata.get("relevance_score"),
+                "question_relevance_score": metadata.get("question_relevance_score"),
                 "min_relevance_score": metadata.get("min_relevance_score"),
                 "filtered": bool(metadata.get("filtered")),
                 "skipped": bool(metadata.get("skipped")),

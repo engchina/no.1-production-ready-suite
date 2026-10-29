@@ -2614,8 +2614,8 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertEqual(matched_term_query(SimpleNamespace(matched_terms=())), "")
         self.assertEqual(matched_term_query(None), "")
 
-    def test_rerank_skips_queries_that_only_extend_the_original(self):
-        """原質問の後ろに用語を足しただけの検索文は rerank の検索文に数えない（#2163）。"""
+    def test_rerank_retains_queries_with_additional_conditions(self):
+        """原質問を含んでいても追加条件を持つ検索文は別に比べる。"""
         from types import SimpleNamespace
 
         from rag_engine.generation.answering import _best_rerank_ranks
@@ -2627,8 +2627,8 @@ class AnswerGenerationTests(unittest.TestCase):
             return [RerankTextRank(0, 0.5)]
 
         with patch("rag_engine.generation.answering.rerank_text_with_scores", side_effect=fake_rerank):
-            _best_rerank_ranks("原質問", ["原質問\n用語 別名", "要求の一部"], ["a"], None, SimpleNamespace(add=lambda m: None))
-        self.assertEqual(called, ["原質問", "要求の一部"])
+            _best_rerank_ranks("原質問", ["原質問\n追加条件", "要求の一部"], ["a"], None, SimpleNamespace(add=lambda m: None))
+        self.assertEqual(called, ["原質問", "原質問\n追加条件", "要求の一部"])
 
     def test_rerank_uses_best_score_over_original_and_extra_queries(self):
         """要求の一部にだけ答える候補も、検索文との関連度が高ければ上位にする。追加の検索文の失敗は飛ばす（#2161）。"""

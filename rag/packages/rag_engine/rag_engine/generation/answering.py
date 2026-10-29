@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from time import monotonic
 from typing import Any, cast
+from uuid import uuid4
 
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from rag_parser_core.language import current_pack
@@ -224,6 +225,7 @@ from rag_engine.knowledge.runtime_knowledge import (
 )
 from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput, RerankTextRank
 from rag_engine.models.storage import AdbHybridSearchUnavailable
+from rag_engine.resources.rerank_diagnostics import bind_rerank_context
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.tracing import observe_call
 from rag_engine.retrieval.article_catalog import is_added_catalog_article
@@ -257,6 +259,7 @@ from rag_engine.retrieval.guide_steps import (
 )
 from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse, parse_inquiry_conditions
 from rag_engine.retrieval.operation_context import alternative_operation_queries
+from rag_engine.retrieval.query_identity import normalized_query_key
 from rag_engine.retrieval.query_overflow import search_overflow_requests
 from rag_engine.retrieval.question_planning import QuestionPlan, plan_question
 from rag_engine.retrieval.reference_follow import follow_reference_sources, is_followed_reference
@@ -351,6 +354,7 @@ def rerank_records(
     business_domains: Sequence[str] | None = None,
     screen_terms: Sequence[str] | None = None,
     extra_queries: Sequence[str] = (),
+    rerank_phase: str = "other",
 ) -> list[AnswerRecord]:
     """候補 record を外部 rerank model で再順位付けし、質問が名指しした業務の候補に絞り、名指しした画面の候補を先頭へ寄せます。
 
@@ -364,7 +368,14 @@ def rerank_records(
     """
     with _execution_step("Rerank", "検索の候補を、質問との関連度（並べ替えのモデル）の高い順に並べ替えます。") as step:
         ranked = _rerank_records(
-            question, records, settings, step, enabled=enabled, candidate_limit=candidate_limit, extra_queries=extra_queries
+            question,
+            records,
+            settings,
+            step,
+            enabled=enabled,
+            candidate_limit=candidate_limit,
+            extra_queries=extra_queries,
+            rerank_phase=rerank_phase,
         )
         record_retrieval_stage({"stage": "rerank_output", "selected_ids": [retrieval_record_id(record) for record in ranked]})
         conditions = parse_inquiry_conditions(question) if business_domains is None or screen_terms is None else None
@@ -451,23 +462,59 @@ MAX_EXTRA_RERANK_QUERIES = 6
 
 
 def _best_rerank_ranks(
-    question: str, extra_queries: Sequence[str], documents: list[str], settings: Settings | None, step: Any
+    question: str,
+    extra_queries: Sequence[str],
+    documents: list[str],
+    settings: Settings | None,
+    step: Any,
+    *,
+    rerank_phase: str = "other",
+    candidate_ids: Sequence[str] = (),
 ) -> list[RerankTextRank]:
     """原質問と検索文ごとに rerank し、候補ごとの関連度の最高値で並べた順位（#2161）。
 
     原質問の rerank の失敗は呼び出し元へ伝える（取得順に戻す）。追加の検索文の失敗はその検索文だけ飛ばす。
     """
-    ranks = rerank_text_with_scores(question, documents, settings, top_n=len(documents))
-    # 原質問を含む検索文（原質問の後ろに用語を足しただけの拡張）は、原質問とほぼ同じなので数えない（#2163）。
-    queries = [q for q in dict.fromkeys(str(q).strip() for q in extra_queries) if q and question.strip() not in q]
+    batch_id = uuid4().hex
+    query_receipts: list[dict[str, Any]] = []
+
+    def run_query(query: str, index: int) -> list[RerankTextRank]:
+        started = monotonic()
+        status = "error"
+        try:
+            with bind_rerank_context(
+                phase=rerank_phase, batch_id=batch_id, query_index=index, query_role="original" if index == 0 else "supplement"
+            ) as receipt:
+                receipt.describe_inputs(query, documents, model=str(getattr(settings, "rerank_model", "") or ""), top_n=len(documents))
+                result = rerank_text_with_scores(query, documents, settings, top_n=len(documents))
+                status = "completed"
+                return result
+        finally:
+            row = {
+                **receipt.to_dict(),
+                "logical_status": "cancelled" if receipt.status == "cancelled" else status,
+                "logical_elapsed_seconds": monotonic() - started,
+            }
+            query_receipts.append(row)
+            record_retrieval_stage({"stage": "rerank_query", **row})
+
+    ranks = run_query(question, 0)
+    # 表記だけ異なる検索文は一度だけ比べ、追加条件を含む別の質問は保持する。
+    seen = {normalized_query_key(question)}
+    queries: list[str] = []
+    for value in extra_queries:
+        query = str(value).strip()
+        key = normalized_query_key(query)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        queries.append(query)
     queries = queries[:MAX_EXTRA_RERANK_QUERIES]
-    if not queries:
-        return list(ranks)
     best = {rank.index: rank.relevance_score for rank in ranks}
     used = 0
-    for query in queries:
+    for query_index, query in enumerate(queries, 1):
         try:
-            extra = rerank_text_with_scores(query, documents, settings, top_n=len(documents))
+            extra = run_query(query, query_index)
         except Exception as exc:  # noqa: BLE001 - 追加の検索文の失敗は原質問の順位で補う
             # 飛ばした検索文を、呼び出し元の診断に残す（「検索文 N 本」の数だけでは分からない。#3286）。
             report_degraded("rerank_extra_query", exc)
@@ -477,13 +524,30 @@ def _best_rerank_ranks(
             score = rank.relevance_score
             if score is not None and (best.get(rank.index) is None or score > (best[rank.index] or 0.0)):
                 best[rank.index] = score
-    step.add(f"関連度は原質問と検索文 {used} 本の最高値で比べます。")
+    if queries:
+        step.add(f"関連度は原質問と検索文 {used} 本の最高値で比べます。")
     # 原質問だけの関連度も残す（文書の絞り込みが原質問の点数でも比べる。#3504）。
     question_scores = {rank.index: rank.relevance_score for rank in ranks}
-    return [
+    merged = [
         RerankTextRank(index=index, relevance_score=score, question_relevance_score=question_scores.get(index))
         for index, score in sorted(best.items(), key=lambda item: -(item[1] if item[1] is not None else -1.0))
     ]
+    if not queries:
+        merged = list(ranks)
+    record_retrieval_stage(
+        {
+            "stage": "rerank_score_comparison",
+            "batch_id": batch_id,
+            "phase": rerank_phase,
+            "candidate_ids": list(candidate_ids),
+            "candidate_count": len(documents),
+            "aggregation": "max",
+            "queries": query_receipts,
+            "original_ranks": [{"index": rank.index, "score": rank.relevance_score} for rank in ranks],
+            "merged_ranks": [{"index": rank.index, "score": rank.relevance_score} for rank in merged],
+        }
+    )
+    return merged
 
 
 def _rerank_skip_reason(records: Sequence[AnswerRecord], settings: Settings | None, *, enabled: bool) -> str:
@@ -506,6 +570,7 @@ def _rerank_records(
     enabled: bool,
     candidate_limit: int | None,
     extra_queries: Sequence[str] = (),
+    rerank_phase: str = "other",
 ) -> list[AnswerRecord]:
     """rerank 本体。無効・未設定・失敗時は取得順を保持する。
 
@@ -532,7 +597,15 @@ def _rerank_records(
     step.field("並べ替える候補", f"{len(rerankable_candidates)} 件" + (f"（ほか {len(remainder)} 件は取得順のまま）" if remainder else ""))
     documents = [_rerank_document(record) for record in rerankable_candidates]
     try:
-        reranked = _best_rerank_ranks(question, extra_queries, documents, settings, step)
+        reranked = _best_rerank_ranks(
+            question,
+            extra_queries,
+            documents,
+            settings,
+            step,
+            rerank_phase=rerank_phase,
+            candidate_ids=[retrieval_record_id(record) for record in rerankable_candidates],
+        )
     except Exception as exc:
         # 取得の順で続けたことを、呼び出し元の診断に残す（工程の文言だけでは縮退が分からない。#3286）。
         report_degraded("rerank", exc)
@@ -919,6 +992,7 @@ def build_adb_hybrid_answer_context(
     max_chars: int = MAX_CONTEXT_CHARS,
     retrieval_queries: Sequence[str] | None = None,
     rerank_enabled: bool = True,
+    rerank_phase: str = "other",
     inquiry_conditions: InquiryConditionParse | None = None,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     classification_filter: ClassificationFilter | None = None,
@@ -1035,6 +1109,7 @@ def build_adb_hybrid_answer_context(
         enabled=rerank_enabled,
         # 検索に使った検索文（分解・規定の書き方など）でも関連度を測り、最高値で並べる（#2161）。
         extra_queries=queries[1:],
+        rerank_phase=rerank_phase,
         business_domains=inquiry_conditions.business_domains if inquiry_conditions is not None else None,
         screen_terms=inquiry_conditions.screen_terms if inquiry_conditions is not None else None,
     )
@@ -1187,6 +1262,7 @@ def build_crag_answer_context(
                         max_records=max_records,
                         max_chars=max_chars,
                         retrieval_queries=search_queries,
+                        rerank_phase="main_search" if attempt_number == 1 else "crag_recovery",
                         rerank_enabled=rerank_enabled,
                         inquiry_conditions=inquiry_conditions,
                         retrieval_scope=retrieval_scope,
@@ -3259,6 +3335,7 @@ def _cover_missing_requests(
             neighbor_child_count=neighbor_child_count,
             max_records=per_query,
             retrieval_queries=queries,
+            rerank_phase="missing_requirement",
             rerank_enabled=rerank_enabled,
             inquiry_conditions=inquiry_conditions,
             retrieval_scope=retrieval_scope,
@@ -3416,6 +3493,7 @@ def _cover_guide_steps(
             neighbor_child_count=neighbor_child_count,
             max_records=per_query,
             retrieval_queries=queries,
+            rerank_phase="guide_step",
             rerank_enabled=rerank_enabled,
             inquiry_conditions=inquiry_conditions,
             retrieval_scope=retrieval_scope,
@@ -4117,7 +4195,7 @@ def _normalized_catalog_question(question: str) -> str:
 
     同じ文の再実行を同じ key にする。LLM に渡す質問は変えない。
     """
-    return " ".join(unicodedata.normalize("NFKC", question).split())
+    return normalized_query_key(question)
 
 
 def _catalog_digest(catalog: Any) -> str:
@@ -5098,6 +5176,7 @@ def answer_question_result(
                         top_k=chunk_top_k,
                         neighbor_child_count=chunk_neighbor_count,
                         retrieval_queries=retrieval_queries,
+                        rerank_phase="main_search",
                         rerank_enabled=effective_rerank_enabled,
                         inquiry_conditions=inquiry_conditions,
                         retrieval_scope=selected_retrieval_scope,
@@ -5171,6 +5250,7 @@ def answer_question_result(
                 top_k=chunk_top_k,
                 neighbor_child_count=chunk_neighbor_count,
                 retrieval_queries=(query,),
+                rerank_phase="missing_requirement",
                 rerank_enabled=effective_rerank_enabled,
                 inquiry_conditions=inquiry_conditions,
                 retrieval_scope=selected_retrieval_scope,
@@ -5642,7 +5722,26 @@ def _expand_context_by_sections(
         # 章節の制御用の互換値だけを分ける。診断には生成可用性と観点の状態を保持する。
         return replace(attempt, sufficient=attempt.sufficient and not attempt.missing_aspects)
 
-    rerank = rerank_text_with_scores if rerank_enabled and _rerank_configured(settings) else None
+    def section_rerank(query: str, documents: list[str], settings: Settings, top_n: int | None = None) -> list[RerankTextRank]:
+        started = monotonic()
+        status = "error"
+        try:
+            with bind_rerank_context(phase="section_expansion", batch_id=uuid4().hex, query_index=0, query_role="original") as receipt:
+                receipt.describe_inputs(query, documents, model=settings.rerank_model, top_n=top_n if top_n is not None else len(documents))
+                result = rerank_text_with_scores(query, documents, settings, top_n=top_n)
+                status = "completed"
+                return result
+        finally:
+            record_retrieval_stage(
+                {
+                    "stage": "rerank_query",
+                    **receipt.to_dict(),
+                    "logical_status": "cancelled" if receipt.status == "cancelled" else status,
+                    "logical_elapsed_seconds": monotonic() - started,
+                }
+            )
+
+    rerank = section_rerank if rerank_enabled and _rerank_configured(settings) else None
     from rag_engine.generation.section_extraction import SectionExtractor
 
     # 予算に入らない章節は、質問に関係する原文を抜き出してから統合する (#1437)。回答全体の期限と根拠入力の予算を共有する。

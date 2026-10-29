@@ -287,7 +287,12 @@ def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation
                 params: Mapping[str, object] | None = None,
                 details: Mapping[str, object] | None = None,
             ) -> None:
-                pass
+                if operation == "rerank":
+                    span.set_display(
+                        kind=kind,
+                        params=params,
+                        details=answer_step_details(details) if details is not None else None,
+                    )
 
         yield Observation()
 
