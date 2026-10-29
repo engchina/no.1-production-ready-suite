@@ -118,7 +118,8 @@ def test_range_from_a_longer_other_block_does_not_apply_to_the_shorter_target_bl
 
 
 def test_numbered_unit_includes_unnumbered_physical_newlines() -> None:
-    text = "画面を開きます。\n対象を選びます。\n" + "補足説明。" * 10 + "\n" + LONG
+    # 物理行が CITE_UNIT_SPLIT_MAX_LINES を超える短い行のまとまりは、v5 でも 1 単位（番号の無い改行を含む）。
+    text = "画面を開きます。\n対象を選びます。\n条件を確かめます。\n値を入れます。\n" + "補足説明。" * 10 + "\n" + LONG
     units = grounded.citation_units(text)
     start, end = units[0]
     assert "\n" in text[start:end]
@@ -135,7 +136,7 @@ def test_short_unnumbered_multiline_block_uses_null_for_whole_text() -> None:
     spans = [dict(span) for span in evidence(SHORT)]
     assert grounded.numbered_text(SHORT) == SHORT and "\n" in SHORT
     repaired, diagnostic = apply_range_repair(
-        proposal(), response(None, None), [target(count=len(grounded.citation_units(SHORT)), numbered=False)]
+        proposal(), response(None, None), [target(count=len(grounded._legacy_citation_units(SHORT)), numbered=False)]
     )
     cited, error = grounded.cited_quote(repaired.items[0], spans)
     assert not error and cited.quote == SHORT and repaired.items[0].citations[0]._wire_range == (None, None)
@@ -145,7 +146,7 @@ def test_short_unnumbered_multiline_block_uses_null_for_whole_text() -> None:
 def test_one_one_on_an_unnumbered_single_unit_block_is_the_whole_text_like_null() -> None:
     """番号なしで単位 1 つの根拠では (1,1) も null と同じ全文の指定として受け、通常の照合と同じ結果にする（#3778）。"""
     spans = [dict(span) for span in evidence(SHORT)]
-    assert len(grounded.citation_units(SHORT)) == 1
+    assert len(grounded._legacy_citation_units(SHORT)) == 1
     repaired, diagnostic = apply_range_repair(proposal(), response(1, 1), [target(count=1, numbered=False)])
     assert diagnostic["status"] == "completed" and not diagnostic["rejected"]
     citation = repaired.items[0].citations[0]

@@ -68,13 +68,13 @@ def test_offsets_and_new_view_quote_use_same_original_heading_and_body() -> None
     evidence = span(text)
     prompt = grounded.format_functions([evidence])
     view = grounded._citation_view(evidence)
-    assert view.contract_version == "explicit_units_v4"
+    assert view.contract_version == "explicit_units_v5"
     assert prompt.count("1| ") == 1 and prompt.count("2| ") == 1
     assert view.units == ((0, len("■ 概要\n" + BODY)), (len("■ 概要\n" + BODY) + 1, len(text)))
     item = GroundedItem(kind="operation", text="対象の説明を案内します。", citations=[GroundedCitation(evidence_id="E1", lines="1")])
     quoted, error = grounded.cited_quote(item, [evidence])
     assert not error and quoted.quote == "■ 概要\n" + BODY
-    assert quoted.citations[0]._extraction["citation_unit_contract"] == "explicit_units_v4"
+    assert quoted.citations[0]._extraction["citation_unit_contract"] == "explicit_units_v5"
 
 
 def test_uncached_legacy_and_cached_v2_keep_old_unit_interpretation() -> None:
@@ -107,4 +107,7 @@ def test_uncached_legacy_and_cached_v2_keep_old_unit_interpretation() -> None:
 
 @pytest.mark.parametrize("text", ["実行", "42", "項目 | 値\nA | 1"])
 def test_standalone_short_content_is_preserved_without_deletion(text: str) -> None:
-    assert grounded.citation_units(text) == [(0, len(text))]
+    assert grounded.citation_units(text, contract_version="explicit_units_v4") == [(0, len(text))]
+    # v5 は物理行の少ない本文を物理行ごとの単位に分ける。分けても原文は欠けない。
+    units = grounded.citation_units(text)
+    assert [text[start:end] for start, end in units] == text.split("\n")

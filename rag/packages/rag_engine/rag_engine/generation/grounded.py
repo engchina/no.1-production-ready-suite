@@ -4209,9 +4209,14 @@ _CLAIM_UNIT_WINDOW = 3
 _CLAIM_UNIT_MIN_SHARE = 0.5
 
 
-# 今の生成が根拠に付ける引用単位の契約。保存・送信済みの視図は記録した版の単位で読み直す（#3685・#3824）。
-CITATION_UNIT_CONTRACT = "explicit_units_v4"
-_EXPLICIT_UNIT_CONTRACTS = frozenset({"explicit_units_v2", "explicit_units_v3", CITATION_UNIT_CONTRACT})
+# 今の生成が根拠に付ける引用単位の契約。保存・送信済みの視図は記録した版の単位で読み直す（#3685・#3824・#3847）。
+CITATION_UNIT_CONTRACT = "explicit_units_v5"
+# ``citation_units`` で単位を作る版（v2 は ``_legacy_citation_units`` の単位に番号を付けた版）。
+_VERSIONED_UNIT_CONTRACTS = frozenset({"explicit_units_v3", "explicit_units_v4", CITATION_UNIT_CONTRACT})
+_EXPLICIT_UNIT_CONTRACTS = frozenset({"explicit_units_v2", *_VERSIONED_UNIT_CONTRACTS})
+# explicit_units_v5 で物理行ごとの単位に分ける、短い行をまとめた単位の物理行（空行を除く）の数の上限。
+# これを超える単位（OCR・表の 1 語ずつの断片が続く行）はまとめたままにし、番号で入力を膨らませない。
+CITE_UNIT_SPLIT_MAX_LINES = 4
 
 
 def _step_line(text: str, start: int) -> bool:
@@ -4219,19 +4224,26 @@ def _step_line(text: str, start: int) -> bool:
     return (start == 0 or text[start - 1] == "\n") and check_cues().step_line_start.match(text, start) is not None
 
 
-def citation_units(text: str, *, step_lines: bool = True) -> list[tuple[int, int]]:
+def citation_units(text: str, *, contract_version: str = CITATION_UNIT_CONTRACT) -> list[tuple[int, int]]:
     """明示された見出しと直後の分割不能な長文を、同じ原文単位で示す。
 
-    ``step_lines``（``explicit_units_v4``）では、本文の手順の番号で始まる行を前の行にまとめず、手順ごとに番号を
-    付ける。単位の先頭にだけ番号が付くため、複数の手順が 1 単位になると、本文の手順の番号を引用単位の番号と
-    読み違える（#3824）。手順の続きの行は従来どおりその手順の単位に含める。False は ``explicit_units_v3``。
+    単位の先頭にだけ番号が付くため、複数の物理行が 1 単位になると、モデルが本文の手順の番号や物理行を数えて
+    引用単位の番号と読み違える。``explicit_units_v4`` 以降は手順の番号で始まる行を前の行にまとめず（#3824）、
+    ``explicit_units_v5`` はさらに物理行の少ない単位を物理行ごとに分ける（#3847）。``explicit_units_v3`` は
+    どちらもしない。
     """
     from rag_parser_core.language.markers import marker_patterns
 
+    if contract_version not in _VERSIONED_UNIT_CONTRACTS:
+        raise ValueError(f"citation_units は {sorted(_VERSIONED_UNIT_CONTRACTS)} の版だけを扱う: {contract_version}")
+    step_lines = contract_version != "explicit_units_v3"
+    physical_lines = contract_version == CITATION_UNIT_CONTRACT
     units: list[tuple[int, int]] = []
-    for start, end in _legacy_citation_units(text, step_lines=step_lines):
+    for start, end in _legacy_citation_units(text, step_lines=step_lines, physical_lines=physical_lines):
         body = text[start:end]
-        if units and "\n" not in body:
+        # v5 では短い見出しと短い行は物理行ごとに番号を持つ。見出しを結ぶのは、短い行のまとめに入らない長さ
+        # （見出しが孤立する長い本文。#3685）のときだけ。
+        if units and "\n" not in body and not (physical_lines and end - units[-1][0] <= CITE_UNIT_MAX_CHARS):
             before_start, before_end = units[-1]
             prefix = text[before_start:before_end].strip()
             # 箇条書きの印が明示された単一行だけを対象にし、空段落や表をまたがない。
@@ -4256,12 +4268,13 @@ def citation_units(text: str, *, step_lines: bool = True) -> list[tuple[int, int
     return units
 
 
-def _legacy_citation_units(text: str, *, step_lines: bool = False) -> list[tuple[int, int]]:
+def _legacy_citation_units(text: str, *, step_lines: bool = False, physical_lines: bool = False) -> list[tuple[int, int]]:
     """根拠の本文の引用の単位（本文の中の開始・終了の位置）。
 
     続く短い行は ``CITE_UNIT_MAX_CHARS`` まで 1 つの単位にまとめ、それを超える行は文の区切りで分ける
     （OCR・表の 1 語ずつの行に番号を付けて入力を膨らませない）。空の行だけの単位は作らない。
-    ``step_lines`` なら、本文の手順の番号で始まる行は前の単位にまとめない。
+    ``step_lines`` なら、本文の手順の番号で始まる行は前の単位にまとめない。``physical_lines`` なら、まとめた
+    単位のうち物理行（空行を除く）が ``CITE_UNIT_SPLIT_MAX_LINES`` 以下のものを物理行ごとの単位に戻す。
     """
     pieces: list[tuple[int, int]] = []
     position = 0
@@ -4284,7 +4297,24 @@ def _legacy_citation_units(text: str, *, step_lines: bool = False) -> list[tuple
             units[-1] = (units[-1][0], end)
         else:
             units.append((start, end))
-    return units
+    if not physical_lines:
+        return units
+    split: list[tuple[int, int]] = []
+    for start, end in units:
+        lines = _physical_lines(text, start, end)
+        split.extend(lines if 1 < len(lines) <= CITE_UNIT_SPLIT_MAX_LINES else [(start, end)])
+    return split
+
+
+def _physical_lines(text: str, start: int, end: int) -> list[tuple[int, int]]:
+    """``text[start:end]`` の空でない物理行の位置（字下げは行に含める）。"""
+    lines: list[tuple[int, int]] = []
+    position = start
+    for line in text[start:end].split("\n"):
+        if line.strip():
+            lines.append((position, position + len(line)))
+        position += len(line) + 1
+    return lines
 
 
 def _numbered(text: str, units: Sequence[tuple[int, int]]) -> bool:
@@ -4377,8 +4407,8 @@ def _citation_view(span: Mapping[str, Any], *, explicit_units: bool | None = Non
             contract_version = cached[1].contract_version
         explicit_units = contract_version in _EXPLICIT_UNIT_CONTRACTS
     units = tuple(
-        citation_units(text, step_lines=contract_version == CITATION_UNIT_CONTRACT)
-        if contract_version in {"explicit_units_v3", CITATION_UNIT_CONTRACT}
+        citation_units(text, contract_version=contract_version)
+        if contract_version in _VERSIONED_UNIT_CONTRACTS
         else _legacy_citation_units(text)
     )
     numbered = bool(units) if explicit_units else _numbered(text, units)
