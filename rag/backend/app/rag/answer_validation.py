@@ -149,6 +149,33 @@ class AnswerValidation:
     guide_step_embedding: dict[str, Any] | None = None
     llm_usage: dict[str, Any] = field(default_factory=dict)
     reuse_context: str = ""
+    # 原質問・確認の答えとの両立の比較（#3800。`premise_consistency_checks`）の、段落ごとの採否。
+    # 段落の ID・実行の状態・判定・採否の code だけを残す（モデルが書いた制約・推奨・原文は
+    # 残さない）。
+    premise_consistency_checks: list[dict[str, Any]] = field(default_factory=list)
+
+
+# 両立の比較の記録に残す項目（#3800）。値はすべて ID・状態・語彙の code で、自由記述を含まない。
+PREMISE_CHECK_FIELDS = (
+    "answer_passage_id",
+    "status",
+    "decision",
+    "adopted",
+    "fit",
+    "constraint_scope",
+    "passage_mode",
+)
+
+
+def premise_check_records(checks: object) -> list[dict[str, Any]]:
+    """engine の両立の比較の診断から、記録に残す項目だけを取り出す（#3800）。"""
+    if not isinstance(checks, list):
+        return []
+    return [
+        {key: item[key] for key in PREMISE_CHECK_FIELDS if key in item}
+        for item in checks
+        if isinstance(item, Mapping)
+    ]
 
 
 def evidence_location(metadata: Mapping[str, Any]) -> dict[str, Any]:
@@ -696,6 +723,7 @@ async def _validate_answer(
         guide_step_embedding=step_embedding,
         llm_usage=dict(usage),
         reuse_context=reuse_context,
+        premise_consistency_checks=premise_check_records(result.get("premise_consistency_checks")),
         **deterministic,
     )
 
@@ -710,5 +738,6 @@ __all__ = [
     "evidence_location",
     "is_premise_id",
     "is_valid",
+    "premise_check_records",
     "validate_answer",
 ]
