@@ -72,14 +72,14 @@ class GeneratorEvidenceTests(TestCase):
     def test_complete_text_of_every_parent_reaches_one_generation_prompt(self):
         from grounded_stub import echo_model
 
+        from rag_engine.generation.citation_wire import generation_draft_wire_model
         from rag_engine.generation.grounded import numbered_text
-        from rag_engine.models.llm import GroundedDraft
 
         evidence = tuple(Evidence(f"p{n}", f"START_{n}\n" + "A" * 2900 + f"TAIL_{n}") for n in range(6))
         with TemporaryDirectory() as directory, create_oracle_application(directory) as app:
             with patch("rag_engine.generation.answering.parse_text_response", side_effect=echo_model) as parse:
                 app.generator.generate(GenerationRequest("question", evidence))
-            prompts = [call.args[1] for call in parse.call_args_list if call.args[3] is GroundedDraft]
+            prompts = [call.args[1] for call in parse.call_args_list if call.args[3] is generation_draft_wire_model()]
             self.assertEqual(len(prompts), 1)
             for item in evidence:
                 # 長い根拠は行番号を付けて示す（#2830）。番号の付いた全文が 1 回の prompt に入る。

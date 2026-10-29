@@ -119,7 +119,16 @@ def test_excluded_operation_is_not_reintroduced_by_the_summary_without_an_audit(
     model = FakeModel(
         [
             {
-                "request_coverage": [{"request_id": "Q1", "evidence_ids": [labels[correct]]}],
+                "request_coverage": [
+                    {
+                        "request_id": "Q1",
+                        "evidence_ids": [labels[correct]],
+                        "evidence_scope": [
+                            {"evidence_id": labels[correct], "target": "更新", "relation": "direct", "link_quote": ""},
+                            {"evidence_id": labels[other], "target": "独立した設定", "relation": "unrelated", "link_quote": ""},
+                        ],
+                    }
+                ],
                 "items": [
                     {"kind": "operation", "request_id": "Q1", "text": text, "citations": [{"quote": text, "evidence_id": labels[text]}]}
                     for text in (correct, other)
@@ -381,7 +390,10 @@ def test_missing_section_metadata_is_planned_before_the_answer_and_cannot_be_ove
     plan = {
         "request_id": "Q1",
         "evidence_ids": [labels[correct]],
-        "evidence_scope": [{"evidence_id": labels[correct], "target": "CSV の更新", "relation": "direct", "link_quote": ""}],
+        "evidence_scope": [
+            {"evidence_id": labels[correct], "target": "CSV の更新", "relation": "direct", "link_quote": ""},
+            {"evidence_id": labels[other], "target": "独立した設定", "relation": "unrelated", "link_quote": ""},
+        ],
     }
     model = FakeModel(
         [
@@ -414,7 +426,9 @@ def test_missing_section_metadata_is_planned_before_the_answer_and_cannot_be_ove
             CASES["summary"]["question"], ctx, replace(get_settings(), answer_audit_mode="none"), image_prompt_mode="text_only"
         ).response
     assert correct in result.answer_text and other not in result.answer_text
-    assert calls == [RequestScopePlan, GroundedDraft]
+    from rag_engine.generation.citation_wire import generation_draft_wire_model
+
+    assert calls == [RequestScopePlan, generation_draft_wire_model()]
     assert result.generation_trace["llm_calls"] == 2
 
 

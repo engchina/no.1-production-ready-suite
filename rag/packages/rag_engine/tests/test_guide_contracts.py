@@ -250,7 +250,7 @@ def test_one_operation_does_not_complete_a_distinct_missing_step():
     assert [step["status"] for step in result] == ["explained", "unused"]
 
 
-def test_generation_receives_requirements_and_missing_audit_rows_are_retried():
+def test_generation_receives_requirements_and_missing_audit_rows_remain_unverified():
     from dataclasses import replace
 
     from test_grounded_answer import FakeModel, draft, item
@@ -273,9 +273,10 @@ def test_generation_receives_requirements_and_missing_audit_rows_are_retried():
     model = FakeModel([draft(item(labels[STEP_A], STEP_A, STEP_A), item(labels[STEP_B], STEP_B, STEP_B))], [incomplete, complete])
     result = _run(model, ctx, knowledge).response
     assert "guide_contracts" in _drafts(model)[0]
-    assert _audits(model)[1]["validation_error"]["required_once"] == ["s1:0", "s2:0"]
-    assert all(step["status"] == "explained" for step in result.generation_trace["rounds"][0]["guide_steps"])
-    assert len(_audits(model)) == 2
+    steps = result.generation_trace["rounds"][0]["guide_steps"]
+    assert all(step["status"] != "explained" for step in steps)
+    assert all(requirement["status"] == "unknown" for step in steps for requirement in step["requirements"])
+    assert len(_audits(model)) == 1
 
 
 @pytest.mark.parametrize("supported", [True, False])
