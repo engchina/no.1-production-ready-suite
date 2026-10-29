@@ -49,12 +49,12 @@ def is_audit_wire(schema: object) -> bool:
 
 
 def _value_schema(model: type[BaseModel], identity: str, name: str) -> type[BaseModel]:
-    fields = {key: (info.annotation, deepcopy(info)) for key, info in model.model_fields.items() if key != identity}
+    fields: dict[str, Any] = {key: (info.annotation, deepcopy(info)) for key, info in model.model_fields.items() if key != identity}
     return create_model(name, __config__=ConfigDict(extra="forbid"), **fields)
 
 
 def _keys_schema(ids: tuple[str, ...], value: type[BaseModel], name: str) -> type[BaseModel]:
-    fields = {f"key_{i}": (value, Field(..., alias=key)) for i, key in enumerate(ids)}
+    fields: dict[str, Any] = {f"key_{i}": (value, Field(..., alias=key)) for i, key in enumerate(ids)}
     return create_model(name, __config__=ConfigDict(extra="forbid", populate_by_name=False), **fields)
 
 
@@ -72,7 +72,7 @@ def audit_wire_schema(
     suffix = sha256(json.dumps([expected_ids, requirement_ids], ensure_ascii=False).encode()).hexdigest()[:16]
     request_value = _value_schema(GroundedRequestReview, "request_id", "BoundRequestValue")
     requirement_value = _value_schema(GuideRequirementReview, "requirement_id", "BoundRequirementValue")
-    fields = {
+    fields: dict[str, Any] = {
         key: (info.annotation, deepcopy(info))
         for key, info in canonical.model_fields.items()
         if key not in {"request_reviews", "guide_requirement_reviews"}
@@ -311,5 +311,8 @@ def canonical_audit_result(value: object, schema: type[BaseModel]) -> AuditWireR
     if isinstance(value, schema) and is_audit_wire(schema):
         node = schema.model_json_schema()
         raw = _schema_view(value.model_dump(mode="json", by_alias=True), node, node.get("$defs", {}))
-        return decode_audit_wire(json.dumps(raw, ensure_ascii=False), schema)
+        result = decode_audit_wire(json.dumps(raw, ensure_ascii=False), schema)
+        # 型付きstubの既定値展開を、実際のraw応答のstrict検証と混同しない。
+        result.validation.update(source="typed_wire_value", transport_not_observed=True, strict_wire_validation="not_observed")
+        return result
     raise AuditWireContractError("invalid_audit_wire")
