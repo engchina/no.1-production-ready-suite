@@ -2375,7 +2375,8 @@ class ValidateAnswerOutput(VersionedOutput):
         description=(
             "guide の手順ごとの説明の充足（分かっている条件で外れた分岐の手順は含めない。guide を"
             "渡さないか、段落の判定が出なければ空）。本文の充足検査が完了し、不足を確認した必須の"
-            "手順だけを guide_step_unexplained の finding にする。未実行・未確認は validation に残る。"
+            "手順だけを guide_step_unexplained の finding にする。"
+            "未実行・未確認は validation に残る。"
         ),
     )
     reused_claims: int = Field(
