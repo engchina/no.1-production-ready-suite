@@ -3,7 +3,7 @@
 from dataclasses import replace
 
 import pytest
-from test_grounded_answer import FakeModel, audit, context, draft, ids, item, record
+from test_grounded_answer import FakeModel, audit, context, draft, ids, item, observed_audit, record
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -135,7 +135,7 @@ def test_one_fragment_may_be_jointly_supported_by_two_actual_citations():
     assert entry.confirmed
 
 
-def test_single_existing_audit_keeps_open_and_does_not_revive_compound_summary():
+def test_uncalibrated_partial_contradiction_keeps_original_body_and_summary():
     question = "対象画面を開く操作と保存の可否は？"
     ctx = context(record(0, SOURCE, "設定", source="操作説明.pdf"))
     eid = ids(ctx, question)[SOURCE]
@@ -153,10 +153,14 @@ def test_single_existing_audit_keeps_open_and_does_not_revive_compound_summary()
             replace(get_settings(environ={}, dotenv_path=None), answer_max_correction_rounds=0),
             image_prompt_mode="text_only",
         ).response
-    assert OPEN in response.answer_text
-    assert BAD not in response.answer_text
-    assert response.answer_text.startswith(grounded.answer_labels().neutral_summary)
+    assert COMPOUND in response.answer_text
+    assert response.answer_text.startswith(COMPOUND)
     assert len([name for name, _prompt in model.prompts if name in {"GroundedAudit", "GroundedFactAudit"}]) == 1
     trace = response.generation_trace["rounds"][0]
     assert trace["draft"]["items"][0]["text"] == COMPOUND
-    assert trace["items"][0]["review_assessment"]["partial_salvage"]["original_text"] == COMPOUND
+    assert "partial_salvage" not in trace["items"][0]["review_assessment"]
+    assert trace["items"][0]["review_assessment"]["effective_support"] == "unknown"
+    raw = observed_audit(response)["reviews"][0]
+    assert raw["support"] == "contradicted"
+    assert raw["supported_fragments"][0]["text"] == OPEN
+    assert not response.envelope["removed_passages"]

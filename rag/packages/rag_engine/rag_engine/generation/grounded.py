@@ -52,7 +52,6 @@ from rag_engine.generation.answer_policy import RELATION_SUPPORT_RULES
 from rag_engine.generation.applications import (
     APPLICATIONS_SECTION_TITLE,
     CheckedApplication,
-    apply_application_audit,
     check_applications,
 )
 from rag_engine.generation.applications import audit_view as application_audit_view
@@ -67,6 +66,7 @@ from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
 from rag_engine.generation.request_recovery import relabel_recovery_reviews
+from rag_engine.generation.semantic_observation import diagnostic_only, observation_policy, unverified_projection
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
 from rag_engine.generation.value_grounding import CURRENT_VALUE_REASON, unsupported_document_value_claim
@@ -4649,6 +4649,8 @@ class Round:
     @property
     def verified(self) -> int:
         # 確かめた説明（印の無い説明）の数。公開できる当てはめも数える（当てはめが通った是正 round を採用する。#2155）。
+        if diagnostic_only(self.timing):
+            return 0
         return sum(1 for entry in self.checked if entry.confirmed) + sum(
             1 for application in self.applications if application.published and not application.marks
         )
@@ -4733,6 +4735,11 @@ class Round:
             if any(e.span for e in self.checked)
             else "根拠を引用した item がありません。質問に関係する原文が1つでもあれば、その原文を引用して答えられる範囲を示してください。本当に無関係なら gap のままで構いません。",
         }
+        if diagnostic_only(self.timing):
+            deterministic_keys = {"citation_range_issues", "dropped_items", "downgraded_items", "document_value_issues"}
+            if self.timing.get("audit") == AUDIT_MODE_NONE:
+                deterministic_keys.add("no_cited_evidence")
+            result = {key: value for key, value in result.items() if key in deterministic_keys}
         result = {key: value for key, value in result.items() if value}
         if result:
             # 「保持する」対象は前回の草稿にしかない。指摘がある時だけ、公開できた item を添える。
@@ -4757,7 +4764,12 @@ class Round:
                 for e in self.checked
                 if e.confirmed
             ]
-        if self.audit is not None and self.review_execution == "completed" and not self.audit.summary_supported:
+        if (
+            not diagnostic_only(self.timing)
+            and self.audit is not None
+            and self.review_execution == "completed"
+            and not self.audit.summary_supported
+        ):
             result["summary_unsupported"] = {
                 "text": str(self.draft.summary),
                 "hint": "要約を、引用が支持する説明の範囲で書き直してください。未確認の結論を要約に残さないでください。",
@@ -4918,7 +4930,13 @@ class Round:
                     "stage": "generation_round",
                     "execution": "completed",
                     "items": [
-                        {"index": index, "included": entry.published, "removed": entry.removed, "confirmed": entry.confirmed}
+                        {
+                            "index": index,
+                            "included": entry.published,
+                            "removed": entry.removed,
+                            "confirmed": entry.confirmed,
+                            **({"confirmation_scope": "citation_and_basic_checks"} if diagnostic_only(self.timing) else {}),
+                        }
                         for index, entry in enumerate(self.checked)
                         if entry.item.kind != "gap"
                     ],
@@ -6039,6 +6057,8 @@ def finalize_summary(
     application_state: Sequence[tuple[CheckedApplication, str]] = (),
 ) -> Round:
     """最終本文の状態を使い、未確認・撤回した主張を要約で確定し直さない。"""
+    if diagnostic_only(current.timing):
+        return current
     summary = str(current.summary or "").strip()
     if not summary or summary == answer_labels().neutral_summary:
         return current
@@ -6412,10 +6432,7 @@ def run_round(
                 raise
             catalog_review = {"error": type(exc).__name__}
         else:
-            draft, catalog_review = apply_catalog_reviews(draft, unreviewed, reviews)
-            catalog_review["missing"] = [
-                span["label"] for span in unreviewed if span["label"] not in {*catalog_review["cited"], *catalog_review["not_relevant"]}
-            ]
+            catalog_review = {"execution": "completed", "observation": reviews.model_dump(mode="json"), "adopted": False}
         catalog_review.update(reviewed=len(unreviewed), seconds=round(monotonic() - review_started, 1))
         generation_calls += 1
     from rag_engine.generation.number_notation import format_draft_numbers
@@ -6426,6 +6443,7 @@ def run_round(
         draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
     timing["generation_calls"] = generation_calls
+    timing["semantic_audit_policy"] = observation_policy()
     if range_repair:
         timing["citation_range_repair"] = range_repair
     if plan_repair_calls:
@@ -6643,6 +6661,9 @@ def run_round(
         try:
             audit_calls += 1
             audit = _parse_audit(parse_text, audit_system, audit_prompt, audit_settings, provider_id, detailed=detailed)
+            timing.setdefault("semantic_audit_attempts", []).append(
+                {"audit": audit.model_dump(mode="json"), "contract": dict(audit._wire_validation)}
+            )
             expected_requirements = {entry["id"] for contract in contracts for entry in contract["requirements"]}
             returned_requirements = [entry.requirement_id for entry in audit.guide_requirement_reviews]
             missing_requirements = sorted(key for key in expected_requirements if returned_requirements.count(key) != 1)
@@ -6677,6 +6698,9 @@ def run_round(
                 # 支持済み item の多い round が採用されず、是正も起きない (#629)。同じ入力で 1 回だけ再試行する。
                 audit_calls += 1
                 audit = _parse_audit(parse_text, audit_system, audit_prompt, audit_settings, provider_id, detailed=detailed)
+                timing.setdefault("semantic_audit_attempts", []).append(
+                    {"audit": audit.model_dump(mode="json"), "contract": dict(audit._wire_validation)}
+                )
                 if audit_fallback is not None:
                     audit = merge_audit_retry(audit_fallback, audit)
                 if _audit_is_empty(audit):
@@ -6732,18 +6756,25 @@ def run_round(
                     guide_task_scope,
                     {row["index"]: row.get("guide_step_candidates", ()) for row in inputs["items"]},
                 )
-            audit = citation_support_policy(checked, audit, also_audited)
-            audit = settle_citation_reviews(checked, audit, also_audited, dropped)
-            recovered = recover_audited_quotes(
-                question, checked, audit, spans, guide_sources=[source for _id, _title, sources in guide_steps for source in sources]
-            )
-            for entry in dropped:
-                if entry["index"] in recovered:
-                    entry["ignored"] = True
-            apply_audit(checked, audit)
-            checked, audit = deduplicate_audited_items(checked, audit, len(guide_notices))
-            _reconcile_request_reviews(checked, audit)
-            _validate_missing_content_evidence(audit, inputs)
+            timing["semantic_audit_observation"] = {
+                "audit": audit.model_dump(mode="json"),
+                "contract": dict(audit._wire_validation),
+                "adopted": False,
+                "attempts": timing.pop("semantic_audit_attempts", []),
+            }
+            observed_reviews = {review.index: review for review in audit.reviews}
+            for index, entry in auditable:
+                review = observed_reviews.get(index)
+                entry.review_assessment = {
+                    "pre_audit_applicability": entry.item.applies,
+                    "observed_support": review.observed_support or review.support if review else "unknown",
+                    "effective_support": "unknown",
+                    "applicability": review.source_applicability or review.applicability if review else "unknown",
+                    "source_applicability": review.source_applicability if review else None,
+                    "applicability_action": "record_only",
+                    "semantic_audit_policy": observation_policy(),
+                }
+            audit = unverified_projection(audit)
     procedures = [e for e in checked if e.item.kind in _PROCEDURE_KINDS and not e.added]
     timing["procedure_quotes"] = {
         "original": sum(e.span is not None and quote_in_text(e.item.text, e.span["text"]) for e in procedures),
@@ -6754,16 +6785,17 @@ def run_round(
         # 監査なしの型（#2800）: 要求の充足は説明の有無で決め、主張の支持・目的・要約は決定的な検査だけにする。
         audit = deterministic_audit(question, checked)
         timing["audit"] = AUDIT_MODE_NONE
-    if audit is None and spans:
+    if audit is None and spans and not diagnostic_only(timing):
         # 監査が時間の上限で切れた・応答が空だった round の説明は、原文との照合だけを済ませた未確認の説明（#2738）。
         # 引き継いだ item は前の round で監査済み。
         detail = "回答の時間の上限までに監査が終わらなかった" if audit_cut else "監査の応答が得られなかった"
         for _index, entry in auditable:
             if not entry.carried:
                 entry.mark("unassessed", detail)
-    if audit_mode != AUDIT_MODE_NONE:
-        # 監査なしの型では、当てはめは決定的な検査（前提の照合・規則の引用・算式の計算）を通ったものを出す。
-        apply_application_audit(applications, audit)
+    # 原文の一致と意味の支持は別に記録する。本文・適用条件は観察だけでは書き換えない。
+    for entry in checked:
+        if entry.item.kind != "gap" and not entry.removed:
+            entry.review_assessment.setdefault("effective_support", "unknown")
     # 撤回 = 撤回の候補を当該 round の監査が contradicted / not_applicable と判定したもの。新しい主張の印は撤回に数えない。
     withdrawn = [e for e in checked if e.withdrawn and id(e) in restated]
     # summary の扱い（#2738）: 根拠と矛盾して外した主張を断定するときだけ中立の定型文にする。それ以外の確かめきれない
@@ -6771,7 +6803,7 @@ def run_round(
     # summary（items の範囲を超えた保証を含み得る。#621）、保証の過剰、原因の推測（#713）、全要求が missing（#732）、
     # 支持された説明がすべて条件付き・適用未確認（#1012）が警告の理由。
     published = [e for e in checked if e.span and e.published]
-    summary_fields_error = summary_output_fields_error(audit, spans, str(draft.summary))
+    summary_fields_error = ""
     if summary_fields_error and audit is not None:
         audit.summary_supported = False
     summary_warning = summary_fields_error or (
@@ -6783,7 +6815,7 @@ def run_round(
         if audit.summary_supported
         else "監査が summary を不支持"
     )
-    if not summary_warning and audit is not None and _all_requests_missing(audit, question):
+    if not diagnostic_only(timing) and not summary_warning and audit is not None and _all_requests_missing(audit, question):
         # 監査が背景以外の全要求を missing と判定した round では、summary の結論は要求に答えていない (#732)。
         summary_warning = "全要求が missing"
     if not summary_warning and published and all(e.item.applies != "matched" for e in published):
@@ -6813,10 +6845,13 @@ def run_round(
         )
     if any(entry.get("scope_excluded") for entry in dropped):
         summary_reason = summary_reason or "要求の根拠計画にない説明を除外したため、要約の結論を保留"
+    if diagnostic_only(timing):
+        summary_warning = "監査なし" if audit_mode == AUDIT_MODE_NONE else ""
     summary = answer_labels().neutral_summary if summary_reason else draft.summary
     summary_warning = "" if summary_reason or not str(summary or "").strip() else summary_warning
     if (
-        task_contract(question)["asks_cause"]
+        not diagnostic_only(timing)
+        and task_contract(question)["asks_cause"]
         and not any(e.confirmed and e.item.kind == "rule" for e in checked)
         and not any(e.item.kind == "gap" and answer_labels().cause_gap in e.item.text for e in checked)
     ):
@@ -6934,7 +6969,7 @@ def _parse_audit(
     )
     audit = result.audit
     audit._wire_validation = result.validation
-    return applicability_policy(audit)
+    return audit
 
 
 # 適用性の原判定を本文への反映方針と分ける（#2837、#3685）。
@@ -7059,7 +7094,12 @@ def off_goal(current: Round, question: str) -> bool:
     """
     # 本文に出す説明が無い round（gap だけ）の off_target は警告にしない。gap だけの草稿も監査するようになり
     # (#1014)、その監査が「別の対象に答えている」と返しても、別の対象に答えた主張自体が無い。
-    return any(entry.published for entry in current.checked) and current.audit is not None and current.audit.goal_alignment == "off_target"
+    return (
+        not diagnostic_only(current.timing)
+        and any(entry.published for entry in current.checked)
+        and current.audit is not None
+        and current.audit.goal_alignment == "off_target"
+    )
 
 
 def better(candidate: Round, current: Round) -> bool:
@@ -7239,7 +7279,9 @@ class RoundBudget:
             note["acceptance_scope"] = "draft_selection"
         audited = current.audit is not None and current.timing.get("audit") != AUDIT_MODE_NONE
         note["summary_validation"] = "completed" if audited else "not_run"
-        if audited:
+        if diagnostic_only(current.timing):
+            note["summary_validation"] = "unknown" if audited else "not_run"
+        elif audited:
             note["summary_supported"] = bool(current.audit.summary_supported)
         self.notes.append(note)
 

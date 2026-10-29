@@ -163,14 +163,17 @@ def test_unknown_current_values_do_not_discard_supported_general_methods() -> No
     assert methods[CONDITION_C].published
     assert methods[CONDITION_C].review_assessment["applicability"] == "conditional"
     assert "機能Zを備える対象に限り" in methods[CONDITION_C].item.text
-    assert not methods[CONDITION_C].confirmed
+    assert methods[CONDITION_C].review_assessment["effective_support"] == "unknown"
+    assert result.verified == 0
     confirmations = grounded.confirmation_lines(result.draft, QUESTION, spans())
     rendered = grounded.render(result.summary, result.checked, confirmations=confirmations)
     assert METHOD_A in rendered and METHOD_B in rendered and CONDITION_C in rendered
-    assert "本質問の条件への該当は確認できていません" in rendered
+    assert "機能Zを備える対象に限り" in rendered
     assert "資料: 対象Tが機能Zを備えるか" in rendered
     assert "実データ: 項目Xと文字列Yの現在値および相違の原因" in rendered
-    assert all(step["status"] == "explained" for step in result.guide_steps[:2])
+    assert all(step["status"] == "unknown" for step in result.guide_steps[:2])
+    raw = result.timing["semantic_audit_observation"]["audit"]
+    assert all(row["answer_state"] == "explained" for row in raw["guide_requirement_reviews"][:2])
     assert not result.unused
     assert inputs[0]["guide_contracts"]
     plan = request_recovery_plan(result.unanswered, (), {"stable-a", "stable-b", "stable-c"})
@@ -178,18 +181,19 @@ def test_unknown_current_values_do_not_discard_supported_general_methods() -> No
     assert all(row["evidence_status"] == "unknown" for row in result.unanswered)
 
 
-def test_available_omitted_methods_route_to_correction_with_their_own_direct_quotes() -> None:
+def test_available_omitted_methods_keep_direct_quotes_as_diagnostics_without_correction() -> None:
     result, _inputs = run(omit_methods=True)
     plan = request_recovery_plan(result.unanswered, (), {"stable-a", "stable-b", "stable-c"})
     assert [(row["request_id"], row["action"], row["evidence_ids"]) for row in plan] == [
-        ("Q1", "correction", ["stable-a"]),
-        ("Q2", "correction", ["stable-b"]),
+        ("Q1", "retain", []),
+        ("Q2", "retain", []),
         ("Q3", "retain", []),
     ]
-    feedback = result.feedback()["unanswered_requests"]
-    for row, text, key in zip(feedback[:2], TEXTS[:2], ("a", "b"), strict=True):
+    raw = result.timing["semantic_audit_observation"]["audit"]["request_reviews"]
+    for row, text, key in zip(raw[:2], TEXTS[:2], ("a", "b"), strict=True):
         assert row["missing_content"] == text
         assert row["evidence_support"] == [{"evidence_id": f"stable-{key}", "source": f"document_{key}.pdf", "quote": text}]
+    assert not result.feedback().get("unanswered_requests")
     assert not any(row["action"] == "retrieval" for row in plan)
 
 
@@ -199,6 +203,8 @@ def test_unknown_target_capability_does_not_certify_unconditional_application(un
     methods = {row.item.text: row for row in result.checked}
     assert all(methods[text].published and methods[text].confirmed for text in TEXTS[:2])
     target = methods[UNCONDITIONAL_C]
-    assert not target.confirmed
-    assert target.review_assessment["effective_support"] == ("unknown" if unknown_c else "unsupported")
+    assert target.published and target.item.text == UNCONDITIONAL_C
+    assert target.review_assessment["effective_support"] == "unknown"
+    assert target.review_assessment["observed_support"] == ("unknown" if unknown_c else "unsupported")
+    assert result.verified == 0
     assert result.guide_steps[2]["status"] != "explained"

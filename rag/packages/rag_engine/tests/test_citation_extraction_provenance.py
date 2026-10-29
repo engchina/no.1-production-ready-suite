@@ -173,7 +173,11 @@ def test_authentic_extraction_does_not_upgrade_semantic_support(review):
     semantic = trace["validation_dimensions"]["claim_support"]
     # このfixtureは主張だけを判定し、要求の判定は返さないため監査全体はpartial。
     assert semantic["execution"] == ("partial" if review == "unsupported" else review)
-    assert semantic["items"][0]["status"] == ("unsupported" if review == "unsupported" else "unknown")
+    assert semantic["items"][0]["status"] == "unknown"
+    if review == "unsupported":
+        observation = result.timing["semantic_audit_observation"]
+        assert observation["adopted"] is False
+        assert observation["audit"]["reviews"][0]["support"] == "unsupported"
     assert not any(mark["code"] in grounded.CITATION_EXTRACTION_CODES | {"quote_unmatched"} for mark in trace["items"][0].get("marks", []))
 
 

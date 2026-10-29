@@ -177,10 +177,9 @@ for (const viewport of [
       // 根拠の無い要求を探し直す（#1279）は既定で無効。
       const requestCoverage = page.getByRole("switch", { name: "根拠の無い要求を探し直す" });
       await expect(requestCoverage).not.toBeChecked();
-      await expect(requestCoverage).toHaveAccessibleDescription(/語の一致率で回答可能性を判定せず/);
-      await expect(requestCoverage).toHaveAccessibleDescription(/実行した監査が材料不足と判定.*共有上限を守り.*モデル呼び出しと待ち時間が増え/);
-      await expect(requestCoverage).toHaveAccessibleDescription(/材料が既にある.*再検索せず.*その内容を修正/);
-      await expect(requestCoverage).toHaveAccessibleDescription(/未検証を材料不足と決めず.*監査や CRAG を自動では有効にしません.*既定は無効/);
+      await expect(requestCoverage).toHaveAccessibleDescription(/回答生成が明示した根拠不足.*回数・時間の予算内/);
+      await expect(requestCoverage).toHaveAccessibleDescription(/既にある根拠で説明が抜けた場合.*材料不足として検索し直す設定ではありません/);
+      await expect(requestCoverage).toHaveAccessibleDescription(/未校正の意味監査の結果だけでは、追加検索や再生成を行いません/);
       await requestCoverage.scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath(`settings-${viewport.name}-${theme}.png`) });
       await expect(answerFlow).toHaveAccessibleDescription(/初回を含め最大 3 段.*書き換えは最大 2 回/);
@@ -261,6 +260,8 @@ for (const viewport of [
     const discard = card.getByRole("button", { name: "変更を破棄", exact: true });
     await expect(card.getByRole("heading", { name: "生成後の回答確認", exact: true })).toBeVisible();
     await expect(page.getByTestId("answering-audit-mode")).toContainText("引用ID・引用範囲の基本確認は、設定に関わらず実行します。");
+    await expect(card).toContainText("回答生成が明示した根拠不足の要求は、回数・時間の予算内");
+    await expect(card).toContainText("未校正の意味監査の結果だけでは、追加検索や再生成を行いません。");
     await expect(audit).toContainText("実行しない");
     await expect(audit).toHaveAccessibleDescription(/自動の生成後の LLM 監査.*行いません.*引用の ID・行範囲・原文との照合/);
     const options = card.getByRole("group", { name: "回答の検索のオプション", exact: true });
@@ -274,7 +275,7 @@ for (const viewport of [
     await audit.click();
     await expect(page.getByRole("option")).toHaveText(["実行しない", "標準", "詳細"]);
     await page.getByRole("option", { name: "標準", exact: true }).click();
-    await expect(audit).toHaveAccessibleDescription(/事実の問題を最大 1 回是正.*説明の抜けだけでは作り直しません/);
+    await expect(audit).toHaveAccessibleDescription(/未校正の意味判定による自動是正は行いません.*是正予算は最大 1 回.*初回を含め最大 2 回/);
     await expect(save).toBeEnabled();
     await discard.click();
     await expect(audit).toContainText("実行しない");
@@ -283,7 +284,7 @@ for (const viewport of [
     for (const label of ["詳細", "実行しない", "標準"]) {
       await audit.click();
       await page.getByRole("option", { name: label, exact: true }).click();
-      if (label === "詳細") await expect(audit).toHaveAccessibleDescription(/説明の抜けも含めて最大 2 回是正/);
+      if (label === "詳細") await expect(audit).toHaveAccessibleDescription(/意味判定や説明の抜けの診断だけでは作り直しません.*是正予算は最大 2 回.*合計最大 3 回/);
       await save.click();
       await expect(save).toBeDisabled();
       await page.reload();

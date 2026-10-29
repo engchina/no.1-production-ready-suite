@@ -2699,7 +2699,7 @@ def synthesize_grounded_answer(
             best_number = number
             best_unread_sections = tuple(unread_sections)
         assert best is not None
-        if current.audit is not None and not current.audit.summary_supported:
+        if not grounded.diagnostic_only(current.timing) and current.audit is not None and not current.audit.summary_supported:
             summary_flags.append((number, current.unpublished_claims, str(current.draft.summary)))
         rounds.append({**current.trace(), "accepted": accepted})
         # 採用しなかった草稿の指摘ではなく、公開候補に残る不足を次の是正へ渡す。
@@ -2965,11 +2965,15 @@ def synthesize_grounded_answer(
     application_summary = ""
     application_basis: tuple = ()
     application_state: tuple = ()
-    if audit_mode != grounded.AUDIT_MODE_NONE and answer_applications.application_step_needed(
-        question,
-        current.summary == grounded.answer_labels().neutral_summary or bool(current.summary_warning),
-        current.checked,
-        current.applications,
+    if (
+        not grounded.diagnostic_only(current.timing)
+        and audit_mode != grounded.AUDIT_MODE_NONE
+        and answer_applications.application_step_needed(
+            question,
+            current.summary == grounded.answer_labels().neutral_summary or bool(current.summary_warning),
+            current.checked,
+            current.applications,
+        )
     ):
         application_step["ran"] = True
         step_basis = grounded.summary_basis_snapshot(
@@ -3210,10 +3214,11 @@ def synthesize_grounded_answer(
     unverified = any(e.item.applies == "unverified" for e in unsettled)
     # 印・外した段落の数（#2738。評価と比較に使う）。
     mark_counts = passage_marks.mark_counts(passage_record)
-    trace = {
+    trace: dict[str, Any] = {
         "pipeline": "grounded",
         **({"crag_assessment": crag_view, "crag_partial_projection": crag_projection} if crag_view is not None else {}),
         "audit_mode": audit_mode,
+        **{key: current.timing[key] for key in ("semantic_audit_policy", "semantic_audit_observation") if key in current.timing},
         "evidence_refinement": refinement.diagnostics,
         "task_contract": task_contract(question),
         "selected_evidence": [_public_span(s) for s in spans],

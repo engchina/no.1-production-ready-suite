@@ -45,12 +45,13 @@ def test_related_source_and_exact_quote_do_not_override_unsupported_claim():
     )
     entry = next(row for row in result.checked if row.item.text == OPERATION)
     assert entry.span and entry.quote_match == "exact"
-    assert entry.review_assessment["support"] == "unsupported"
-    assert not entry.confirmed and result.verified == 0
+    assert entry.review_assessment["observed_support"] == "unsupported"
+    assert entry.review_assessment["effective_support"] == "unknown"
+    assert entry.published and result.verified == 0
     assert inputs[0]["items"][0]["quote"] == RELATED
     dimensions = result.trace()["validation_dimensions"]
     assert dimensions["citation_validity"]["items"][0]["citations"][0]["status"] == "matched"
-    assert dimensions["claim_support"]["items"][0]["status"] == "unsupported"
+    assert dimensions["claim_support"]["items"][0]["status"] == "unknown"
 
 
 @pytest.mark.parametrize("support", ["supported", "unsupported"])
@@ -64,17 +65,19 @@ def test_record_only_retains_body_but_records_its_actual_applicability_effect(su
     )
     dimensions = result.trace()["validation_dimensions"]
     assert dimensions["citation_validity"]["items"][0]["citations"][0]["status"] == "matched"
-    assert dimensions["claim_support"]["items"][0]["status"] == support
+    assert dimensions["claim_support"]["items"][0]["status"] == "unknown"
+    assert result.timing["semantic_audit_observation"]["audit"]["reviews"][0]["support"] == support
     application = dimensions["business_applicability"]["items"][0]
     assert application["pre_audit_status"] == "matched"
     assert application["observed_status"] == "not_applicable"
-    assert application["status"] == "unverified"
-    assert application["action"] == "record_only" and application["policy_effect"] == "retain_unverified"
-    assert application["confirmation_source"] == "unverified"
+    assert application["status"] == "matched"
+    assert application["action"] == "record_only" and application["policy_effect"] == "retain_current_state"
+    assert application["confirmation_source"] == "generation_and_basic_checks"
     retained = dimensions["body_retention"]["items"][0]
-    assert retained["included"] and not retained["removed"] and not retained["confirmed"]
+    assert retained["included"] and not retained["removed"] and retained["confirmed"]
+    assert retained["confirmation_scope"] == "citation_and_basic_checks"
     assert dimensions["body_retention"]["stage"] == "generation_round"
-    assert dimensions["answer_completeness"]["requests"][0]["status"] == "partial"
+    assert dimensions["answer_completeness"]["requests"][0]["status"] == "unknown"
 
 
 def test_generated_operation_without_a_matching_source_is_not_confirmed():
@@ -147,8 +150,8 @@ def test_incomplete_check_has_no_semantic_support_verdict(execution, monkeypatch
         result, _ = run_round(ctx, draft(item(eid, OPERATION, OPERATION)), {}, mode="none")
     trace = result.trace()
     assert trace["review_execution"] != "completed"
-    assert all(not row.review_assessment for row in result.checked)
-    assert all(not row.get("review_assessment", {}).get("effective_support") for row in trace["items"])
+    assert all(not row.review_assessment.get("observed_support") for row in result.checked)
+    assert all(row.get("review_assessment", {}).get("effective_support") in {None, "unknown"} for row in trace["items"])
     dimensions = trace["validation_dimensions"]
     assert dimensions["citation_validity"]["execution"] == "completed"
     assert dimensions["claim_support"]["execution"] == execution
@@ -157,7 +160,7 @@ def test_incomplete_check_has_no_semantic_support_verdict(execution, monkeypatch
     assert dimensions["answer_completeness"]["requests"] == []
 
 
-def test_irrelevant_citation_is_removed_without_losing_joint_supporting_sources():
+def test_irrelevant_citation_observation_does_not_remove_joint_citation_sources():
     ctx = context(record(0, OPERATION, "対象Aの設定"), record(1, CONDITION, "対象Aの設定"), record(2, RELATED, "対象Aの設定"))
     refs = ids(ctx, QUESTION)
     proposal = draft(
@@ -177,8 +180,10 @@ def test_irrelevant_citation_is_removed_without_losing_joint_supporting_sources(
     assert all(len(row["citations"]) == 3 for row in inputs[0]["items"] if row["text"] == CLAIM)
     claim = next(row for row in result.checked if row.item.text == CLAIM)
     retained = {entry.span["evidence_id"] for entry in grounded.item_citations(claim)}
-    assert retained == {refs[OPERATION], refs[CONDITION]}
-    assert refs[RELATED] not in retained
+    assert retained == {refs[OPERATION], refs[CONDITION], refs[RELATED]}
+    raw = result.timing["semantic_audit_observation"]["audit"]["reviews"]
+    assert [row["support"] for row in raw] == ["supported", "supported", "unsupported"]
+    assert result.verified == 0
 
 
 def test_uncited_neighbor_is_not_part_of_the_claims_citation_set():
@@ -193,7 +198,8 @@ def test_uncited_neighbor_is_not_part_of_the_claims_citation_set():
     assert rows
     # 未引用の隣接資料は要求の材料探索に使えても、この主張の引用集合には昇格させない。
     assert all(row["citations"] == [{"evidence_id": refs[RELATED], "quote": RELATED}] for row in rows)
-    assert all(not row.confirmed for row in result.checked if row.item.text == OPERATION)
+    assert all(row.review_assessment["effective_support"] == "unknown" for row in result.checked if row.item.text == OPERATION)
+    assert result.verified == 0
 
 
 def test_supported_claim_does_not_imply_complete_answer():
@@ -206,8 +212,11 @@ def test_supported_claim_does_not_imply_complete_answer():
     )
     dimensions = result.trace()["validation_dimensions"]
     assert dimensions["citation_validity"]["items"][0]["citations"][0]["status"] == "matched"
-    assert dimensions["claim_support"]["items"][0]["status"] == "supported"
-    assert dimensions["answer_completeness"]["requests"][0]["status"] == "partial"
+    assert dimensions["claim_support"]["items"][0]["status"] == "unknown"
+    assert dimensions["answer_completeness"]["requests"][0]["status"] == "unknown"
+    raw = result.timing["semantic_audit_observation"]["audit"]
+    assert raw["reviews"][0]["support"] == "supported"
+    assert raw["request_reviews"][0]["status"] == "partial"
 
 
 def test_unknown_support_is_retained_as_unknown_with_a_warning():
@@ -219,8 +228,9 @@ def test_unknown_support_is_retained_as_unknown_with_a_warning():
         audit((0, "unknown", "matched", ""), requests=[("Q1", "partial")], summary_supported=False),
     )
     entry = next(row for row in result.checked if row.item.text == OPERATION)
-    assert entry.published and not entry.confirmed
-    assert entry.review_assessment["support"] == "unknown"
+    assert entry.published and result.verified == 0
+    assert entry.review_assessment["observed_support"] == "unknown"
+    assert entry.review_assessment["effective_support"] == "unknown"
     dimensions = result.trace()["validation_dimensions"]
     assert dimensions["claim_support"]["execution"] == "completed"
     assert dimensions["claim_support"]["items"][0]["status"] == "unknown"
@@ -246,7 +256,12 @@ def test_joint_citation_contradiction_is_not_hidden_by_discarding_the_source():
     )
     result, _ = run_round(ctx, proposal, audit((0, "unsupported", "matched", ""), (1, "contradicted", "matched", "条件が逆")))
     checked = next(row for row in result.checked if row.item.text == claim)
-    assert checked.removed and checked.review_assessment["support"] == "contradicted"
+    assert checked.published and not checked.removed
+    raw = result.timing["semantic_audit_observation"]["audit"]["reviews"]
+    assert [row["support"] for row in raw] == ["unsupported", "contradicted"]
+    assert checked.review_assessment["effective_support"] == "unknown"
+    assert len(list(grounded.item_citations(checked))) == 2
+    assert result.verified == 0
 
 
 def test_unknown_support_is_retained_without_becoming_a_rewrite_reason():

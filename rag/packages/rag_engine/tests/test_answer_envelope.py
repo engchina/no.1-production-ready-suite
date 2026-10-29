@@ -10,7 +10,7 @@ from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION, build
 
 
 class AnswerEnvelopeFromGroundedAnswerTest(unittest.TestCase):
-    def test_supported_matched_items_are_answered_with_items_and_requests(self):
+    def test_observed_supported_items_keep_body_with_unverified_requests(self):
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
         eid = ids(ctx)[LIST_TEXT]
         steps = draft(item(eid, "一覧表を選択し、処理を選択します。", "一覧表を選択し、処理を選択します。", request_id="Q1"))
@@ -22,26 +22,26 @@ class AnswerEnvelopeFromGroundedAnswerTest(unittest.TestCase):
             ctx,
         ).response.envelope
         self.assertEqual(envelope["schema_version"], ENVELOPE_SCHEMA_VERSION)
-        self.assertEqual(envelope["outcome"], "answered")
-        self.assertEqual(envelope["requests"][0]["status"], "addressed")
+        self.assertEqual(envelope["outcome"], "conditional")
+        self.assertEqual(envelope["requests"][0]["status"], "unknown")
         self.assertEqual(envelope["items"][0]["kind"], "operation")
         self.assertEqual(envelope["items"][0]["evidence_id"], eid)
         self.assertEqual(envelope["items"][0]["location"], "p.20")
         self.assertEqual(envelope["items"][0]["mark"], "")
-        self.assertEqual(envelope["handoff_reasons"], [])
+        self.assertEqual(envelope["handoff_reasons"], ["unverified_requests"])
         self.assertEqual((envelope["passage_marks"], envelope["removed_passages"], envelope["answer_warnings"]), ([], [], []))
 
-    def test_conditional_item_makes_the_answer_conditional_with_the_condition(self):
+    def test_observed_condition_does_not_rewrite_generated_item(self):
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
         eid = ids(ctx)[LIST_TEXT]
         steps = draft(item(eid, "一覧表を選択し、処理を選択します。", "一覧表を選択し、処理を選択します。", request_id="Q1"))
         conditional = audit((0, "supported", "conditional", "処理を選択"), requests=[("Q1", "addressed")])
         envelope = run(FakeModel([steps], [conditional]), ctx).response.envelope
         self.assertEqual(envelope["outcome"], "conditional")
-        self.assertEqual(envelope["conditions"], ["処理を選択"])
-        self.assertEqual(envelope["items"][0]["applies"], "conditional")
+        self.assertEqual(envelope["conditions"], [])
+        self.assertEqual(envelope["items"][0]["applies"], "matched")
 
-    def test_missing_request_is_conditional_and_listed(self):
+    def test_observed_missing_request_remains_unverified_and_listed(self):
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
         eid = ids(ctx)[LIST_TEXT]
         steps = draft(item(eid, "一覧表を選択し、処理を選択します。", "一覧表を選択し、処理を選択します。", request_id="Q1"))
@@ -49,8 +49,8 @@ class AnswerEnvelopeFromGroundedAnswerTest(unittest.TestCase):
         envelope = run(FakeModel([steps], [partial]), ctx).response.envelope
         self.assertEqual(envelope["outcome"], "conditional")
         statuses = {r["id"]: r["status"] for r in envelope["requests"]}
-        self.assertEqual(statuses["Q1"], "missing")
-        self.assertIn("unanswered_requests", envelope["handoff_reasons"])
+        self.assertEqual(statuses["Q1"], "unknown")
+        self.assertIn("unverified_requests", envelope["handoff_reasons"])
 
     def test_refusal_is_insufficient_evidence_even_when_related_quotes_are_shown(self):
         rule = "⑤本部からの連絡メモが届くと「連」と表示されるので、ボタンを押します。"

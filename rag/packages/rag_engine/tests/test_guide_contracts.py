@@ -351,7 +351,8 @@ def test_invalid_answer_proof_uses_one_bounded_audit_retry(repair):
     first_round = result.generation_trace["rounds"][0]
     assert first_round["audit_calls"] == 2
     first_step = next(s for s in first_round["guide_steps"] if s["step_id"] == "s1")
-    assert (first_step["status"] == "explained") is repair
+    assert first_step["status"] == "unknown"
+    assert first_round["timing"]["semantic_audit_observation"]["adopted"] is False
 
 
 def test_partly_explained_quote_does_not_retry_the_audit():

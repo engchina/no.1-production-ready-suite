@@ -76,14 +76,16 @@ def test_contract_failures_do_not_become_missing_material_or_remove_valid_body(r
 def test_valid_review_remains_completed():
     current = run_review([("Q1", "addressed")])
     assert current.review_execution == "completed"
-    assert current.addressed == {"Q1"} and current.unanswered == []
-    assert current.trace()["validation_dimensions"]["answer_completeness"]["execution"] == "completed"
+    assert current.addressed == set() and current.unanswered[0]["status"] == "unknown"
+    assert current.timing["semantic_audit_observation"]["audit"]["request_reviews"][0]["status"] == "addressed"
+    assert current.trace()["validation_dimensions"]["answer_completeness"]["execution"] == "partial"
 
 
 def test_valid_partial_review_keeps_its_material_unknown_without_inventing_failure():
     current = run_review([("Q1", "partial")])
     assert current.missing_request_ids == current.invalid_request_ids == current.duplicate_request_ids == ()
-    assert current.unanswered[0]["status"] == "partial"
+    assert current.unanswered[0]["status"] == "unknown"
+    assert current.timing["semantic_audit_observation"]["audit"]["request_reviews"][0]["status"] == "partial"
     assert current.unanswered[0]["evidence_status"] == "unknown"
 
 
@@ -130,7 +132,8 @@ def test_invalid_enum_preserves_unverified_body_and_reports_execution_error_not_
     [unverified] = current.unanswered
     assert unverified["status"] == "unknown" and unverified["reviewed"] is False
     entry = next(entry for entry in current.checked if entry.item.text == TEXT)
-    assert entry.published and not entry.confirmed and not entry.removed
+    assert entry.published and entry.confirmed and not entry.removed
+    assert current.verified == 0  # confirmed は原文・基本検査のみ。
 
 
 def test_invalid_generated_gap_is_retained_without_search_and_valid_body_survives():

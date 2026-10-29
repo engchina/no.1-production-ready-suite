@@ -106,7 +106,7 @@ def test_unperformed_or_failed_semantic_review_preserves_body_and_known_sources(
 
 
 @pytest.mark.parametrize("mode", ["none", "detailed"])
-def test_final_envelope_keeps_body_and_distinguishes_unreviewed_from_completed_steps(mode):
+def test_final_envelope_keeps_body_and_distinguishes_execution_from_guide_completion(mode):
     from dataclasses import replace
     from pathlib import Path
 
@@ -158,9 +158,10 @@ def test_final_envelope_keeps_body_and_distinguishes_unreviewed_from_completed_s
         assert all(row["validation"]["body_coverage"]["execution"] == "not_run" for row in response.generation_trace["guide_step_coverage"])
     else:
         assert [schema for schema, _prompt in model.prompts] == ["GroundedDraftWire", "GroundedAudit"]
-        assert guide_requests == {"guide:s1": "addressed", "guide:s2": "addressed"}
-        assert response.envelope["outcome"] == "answered"
-        assert all(row["status"] == "explained" for row in response.generation_trace["guide_step_coverage"])
+        assert guide_requests == {"guide:s1": "unknown", "guide:s2": "unknown"}
+        assert response.envelope["outcome"] == "conditional"
+        assert all(row["status"] == "unknown" for row in response.generation_trace["guide_step_coverage"])
+        assert response.generation_trace["semantic_audit_observation"]["adopted"] is False
 
 
 def test_predecessor_must_finish_before_the_next_step_even_across_multiple_items():
