@@ -1890,6 +1890,7 @@ def verify(
     spans: Sequence[dict],
     *,
     guide_sources: Sequence[str] = (),
+    guide_ids: Sequence[str] = (),
     plan_unsettled: Sequence[str] = (),
 ) -> tuple[list[CheckedItem], list[dict]]:
     """原文照合と規則の検査で段落の印を付ける。必須根拠と確定操作の欠落は原文で補う。
@@ -1915,7 +1916,7 @@ def verify(
         notes: list[dict] = []
         subs: dict[str, str] = {}
         # 行の範囲で指した引用は、その原文を quote にする（#2830）。
-        item, cite_error = cited_quote(item, spans)
+        item, cite_error = cited_quote(item, spans, guide_ids=guide_ids)
         provenance = _citation_extraction(item)
         match: dict = {}
         if provenance.get("status") == "extracted":
@@ -4315,11 +4316,9 @@ def citation_range_issues(checked: Sequence[CheckedItem], dropped: Sequence[Mapp
     return [{"item_index": index, "evidence_id": evidence_id, "reason_code": reason} for index, evidence_id, reason in sorted(unique)]
 
 
-def cited_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem, str]:
+def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequence[str] = ()) -> tuple[GroundedItem, str]:
     """本検証の ID と行から原文を抽出する。抽出・提示版・意味支持を別々に記録する。"""
     item = _with_extraction(item, {})  # モデルや旧 round の内部 flag は採用しない。
-    if item.kind == "gap" or (item.quote.strip() and not item.lines.strip()):
-        return item, ""  # システムの補写・旧形式の自由引用は従来の原文照合に進む。
     metadata = {
         "requested_evidence_id": item.evidence_id,
         "requested_lines": item.lines,
@@ -4333,6 +4332,11 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem
         return _with_extraction(item, {**metadata, "reason_code": code}, quote=""), detail
 
     named = _line_citation_spans(item, spans)
+    if item.kind != "gap" and item.evidence_id and not named and item.evidence_id in guide_ids:
+        metadata.update(requested_id_namespace="business_guide", expected_id_namespace="document_evidence")
+        return fail("citation_id_namespace", passage_marks.reason("citation_id_namespace")["label"])
+    if item.kind == "gap" or (item.quote.strip() and not item.lines.strip()):
+        return item, ""  # システムの補写・旧形式の自由引用は従来の原文照合に進む。
     if not named:
         return fail("citation_id_invalid", "引用の ID が今回の根拠にありません。今回の根拠に表示された ID を指定してください。")
     if len(named) != 1:
@@ -5793,6 +5797,7 @@ def guide_step_gap_line(step: dict[str, Any]) -> str:
 CITATION_EXTRACTION_CODES = frozenset(
     {
         "citation_id_invalid",
+        "citation_id_namespace",
         "citation_id_ambiguous",
         "citation_range_missing",
         "citation_range_invalid",
@@ -6466,6 +6471,12 @@ def run_round(
         draft,
         spans,
         guide_sources=[source for _step_id, _title, sources in guide_steps for source in sources],
+        guide_ids=list(
+            dict.fromkeys(
+                [identity for identity, _title, _sources in guide_steps]
+                + [str(row[key]) for row in guide_task_scope for key in ("guide_id", "step_id") if row.get(key)]
+            )
+        ),
         plan_unsettled=plan_unsettled,
     )
     for entry in dropped:

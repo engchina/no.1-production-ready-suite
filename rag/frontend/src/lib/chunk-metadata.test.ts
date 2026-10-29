@@ -145,3 +145,19 @@ describe("citationSourceUrl", () => {
     expect(citationMetadataChips({context_header_enabled: false})).toEqual([{id: "context_header_enabled", value: "false"}]);
     expect(citationMetadataChips({})).toEqual([{id: "context_header_enabled", value: "unknown"}]);
  });
+
+
+describe("citation support display", () => {
+  it.each(["not_run", "partial", "error", "completed"])("%s の unknown を確認済みと数えず、回答使用数は保つ", (execution) => {
+    const chunk = { metadata: { evidence_model_used: true, evidence_answer_use: "confirmed", evidence_claim_support: { execution, status: "unknown" } } };
+    expect(citationAnswerUse(chunk)).toBeNull();
+    expect(citationCountLabel([chunk])).toContain("回答で引用 1 件");
+    expect(citationCountLabel([chunk])).not.toContain("該当確認済み");
+    expect(citationCountLabel([chunk])).not.toContain("参考");
+  });
+  it("記録された支持と旧記録を区別する", () => {
+    const metadata = { evidence_model_used: true, evidence_answer_use: "confirmed" };
+    expect(citationAnswerUse({ metadata })).toBe("confirmed");
+    expect(citationAnswerUse({ metadata: { ...metadata, evidence_claim_support: { execution: "completed", status: "supported" } } })).toBe("confirmed");
+  });
+});

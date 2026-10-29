@@ -88,6 +88,7 @@ from app.rag.answer_provenance import answer_prompt_version
 from app.rag.answer_threads import run_answer_in_thread
 from app.rag.chat_attachments import is_attachment_chunk
 from app.rag.chunking_small_to_big import engine_search_text
+from app.rag.citation_status import citation_support_display
 from app.rag.context_page_scope import CONTEXT_PAGE_SCOPE, contained, positive
 from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
@@ -4088,6 +4089,7 @@ def _answer_use(child: Mapping[str, Any]) -> str | None:
 
 def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
     """rag_poc の AnswerQuestionResult を backend の回答・引用・診断へ写す。"""
+    support_display = citation_support_display(result.generation_trace)
     tree: list[dict[str, Any]] = []
     # (並びの順位, chunk_id, 根拠の子, 検索で当たった子の関連度の順位（無ければ 0）)。
     ordered: list[tuple[int, str, dict[str, Any], int]] = []
@@ -4154,6 +4156,11 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             **chunk.metadata,
             "evidence_role": evidence["role"],
             "evidence_model_used": evidence["is_model_used"],
+            **(
+                {"evidence_claim_support": dict(support_display)}
+                if support_display is not None
+                else {}
+            ),
         }
         if evidence.get("answer_use"):
             # 回答に使った箇所の使われ方（画面の件数・バッジと MCP の answer_use。#2040）。

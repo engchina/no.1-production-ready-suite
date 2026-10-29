@@ -648,6 +648,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
             "citation_error",
             "quote_unmatched",
             "citation_id_invalid",
+            "citation_id_namespace",
             "citation_id_ambiguous",
             "citation_range_missing",
             "citation_range_invalid",
