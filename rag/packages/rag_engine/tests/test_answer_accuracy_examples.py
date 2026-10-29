@@ -43,6 +43,10 @@ def test_original_question_state_is_checked_without_a_clarification_answer(quest
                             "constraints": "対象は処理 A",
                             "recommendation": "処理 B の確定後の訂正と具体値の設定",
                             "fit": "conflicts",
+                            "constraint_scope": "content",
+                            "passage_mode": "execution",
+                            "constraint_quote": payload["question"],
+                            "passage_quote": passage["text"],
                         }
                     ]
                 }
