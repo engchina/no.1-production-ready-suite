@@ -748,6 +748,8 @@ class GroundedFactAudit(_StrictModel):
 class GroundedAudit(_StrictModel):
     """監査は降格と不足の指摘だけを行い、原文一致した内容を削除しない。"""
 
+    _wire_validation: dict[str, Any] = PrivateAttr(default_factory=dict)
+
     reviews: list[GroundedItemReview] = Field(max_length=40, description="各 item の局所監査。")
     guide_requirement_reviews: list[GuideRequirementReview] = Field(
         default_factory=list,

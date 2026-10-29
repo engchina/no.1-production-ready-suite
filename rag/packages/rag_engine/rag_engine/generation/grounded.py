@@ -66,6 +66,7 @@ from rag_engine.generation.table_binding import table_mismatch_notes, unbound_ta
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
 from rag_engine.generation.value_grounding import CURRENT_VALUE_REASON, unsupported_document_value_claim
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
+from rag_engine.models.audit_wire import audit_wire_schema, canonical_audit_result
 from rag_engine.models.llm import (
     CatalogEvidenceReviews,
     GroundedAudit,
@@ -262,6 +263,8 @@ AUDIT_SYSTEM_PROMPT = (
         "### 監査入力（JSON）\n"
         "- question / task_contract: 原質問と、変"
         "更してはいけない目的・条件（current_request、request_units など）。\n"
+        "- confirmed_premises: 利用者の回答や明示した質問で確認済みの条件（question、answer）。"
+        "適用条件は原質問とこれらの条件を合わせて判断する。\n"
         "- summary: 草稿の結論。\n"
         "- items: 監査対象。index、request_id、kin"
         "d、text（言い換え）、applies、condition、quo"
@@ -381,9 +384,9 @@ AUDIT_SYSTEM_PROMPT = (
         "- guide_steps の evidence_ids を引いた "
         "item は、その手順を質問の目的を果たす手順に含めて判定する。質問"
         "の文がその手順（前提・後続の手順）に触れていないことは not_ap"
-        "plicable・unknown の理由にならない。手順の根拠でも、"
-        "quote の対象（画面・機能・業務）が質問の対象と別なら not_"
-        "applicable。\n"
+        "plicable・unknown の理由にならない。後続手順の画面や機能が原質問と異なるだけでは対象違いにしない。"
+        "引用原文がガイドの手順と両立しない別の対象・条件に明示的に限定される場合は not_applicable。"
+        "ガイドは適用する手順を定めるが、操作・対象・順序の支持は引用原文で別に判定する。\n"
         "- applicability の「質問の対象」は質問が尋ねている物"
         "（システム・部署・画面・帳票・業務）で、尋ねている項目（期限・承認者"
         "・時間帯・保管期間）ではない。尋ねている項目を quote が述べて"
@@ -4467,12 +4470,13 @@ class Round:
     duplicate_request_ids: tuple[str, ...] = ()
     missing_request_ids: tuple[str, ...] = ()
     invalid_request_ids: tuple[str, ...] = ()
+    invalid_request_result_ids: tuple[str, ...] = ()
     expected_request_ids: tuple[str, ...] = ()
     returned_request_ids: tuple[str, ...] = ()
 
     @property
     def request_contract_status(self) -> str:
-        if self.duplicate_request_ids or self.invalid_request_ids:
+        if self.duplicate_request_ids or self.invalid_request_ids or self.invalid_request_result_ids:
             return "error"
         if self.missing_request_ids:
             return "partial"
@@ -4484,13 +4488,14 @@ class Round:
         reasons = {
             **{key: "要求の監査判定が返されておらず、充足と材料を確認できません。" for key in self.missing_request_ids},
             **{key: "同じ要求に複数の監査判定があり、充足と材料を確認できません。" for key in self.duplicate_request_ids},
+            **{key: "要求の監査判定が出力形式を満たさず、充足と材料を確認できません。" for key in self.invalid_request_result_ids},
         }
         return [
             {
                 "request_id": key,
                 "status": "unknown",
                 "reviewed": False,
-                "review_execution": "error" if key in self.duplicate_request_ids else "not_run",
+                "review_execution": "error" if key in (*self.duplicate_request_ids, *self.invalid_request_result_ids) else "not_run",
                 "evidence_status": "unknown",
                 "evidence_ids": [],
                 "reason": reason,
@@ -4672,6 +4677,10 @@ class Round:
     def review_execution(self) -> str:
         if self.timing.get("audit_error_type"):
             return "timed_out" if self.audit_cut else "error"
+        if self.timing.get("audit_retry_incomplete"):
+            return "partial"
+        if self.audit is not None and self.audit._wire_validation.get("status") in {"partial", "error"}:
+            return "partial"
         return (
             "partial"
             if self.audit_cut and self.audit is not None
@@ -4781,6 +4790,9 @@ class Round:
                         "missing_request_ids": list(self.missing_request_ids),
                         "invalid_request_ids": list(self.invalid_request_ids),
                         "duplicate_request_ids": list(self.duplicate_request_ids),
+                        **(
+                            {"invalid_request_result_ids": list(self.invalid_request_result_ids)} if self.invalid_request_result_ids else {}
+                        ),
                     },
                     "requests": (
                         [row.model_dump() for row in self.audit.request_reviews]
@@ -6000,6 +6012,7 @@ def run_round(
     invalid_output: Callable[[Exception], bool] | None = None,
     glossary: Sequence[Mapping[str, Any]] = (),
     assume_unconfirmed: bool = False,
+    confirmed_premises: Sequence[tuple[str, str]] = (),
 ) -> Round:
     """生成と監査。計画の構造不正だけは、生成を一度やり直す。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
@@ -6274,9 +6287,11 @@ def run_round(
         )
     }
     audit, audit_calls, audit_cut = None, 0, False
+    audit_fallback = None
     duplicate_request_ids: tuple[str, ...] = ()
     missing_request_ids: tuple[str, ...] = ()
     invalid_request_ids: tuple[str, ...] = ()
+    invalid_request_result_ids: tuple[str, ...] = ()
     expected_request_ids: tuple[str, ...] = ()
     returned_request_ids: tuple[str, ...] = ()
     # 印の付いた説明も監査する（根拠と矛盾すれば外す。#2738）。システムが補った原文・外した説明は監査しない。
@@ -6355,6 +6370,8 @@ def run_round(
         }
         if glossary:
             inputs["glossary"] = [dict(term) for term in glossary]
+        if confirmed_premises:
+            inputs["confirmed_premises"] = [{"question": label, "answer": value} for label, value in confirmed_premises]
         if detailed:
             inputs["unused_evidence"] = _unused_evidence(question, spans, used)
         if contracts:
@@ -6400,8 +6417,16 @@ def run_round(
                     and not requirement_quote_matches(entry, checked, guide_notices)
                 }
             )
-            if _audit_is_empty(audit) or missing_requirements or invalid_answer_quotes:
-                if missing_requirements or invalid_answer_quotes:
+            if _audit_is_empty(audit) or invalid_answer_quotes:
+                if not _audit_is_empty(audit):
+                    audit_fallback = audit.model_copy(
+                        update={
+                            "guide_requirement_reviews": [
+                                row for row in audit.guide_requirement_reviews if row.requirement_id not in invalid_answer_quotes
+                            ]
+                        }
+                    )
+                if invalid_answer_quotes:
                     inputs["validation_error"] = {
                         "field": "guide_requirement_reviews",
                         "required_once": missing_requirements,
@@ -6414,7 +6439,9 @@ def run_round(
                 audit_calls += 1
                 audit = _parse_audit(parse_text, audit_system, audit_prompt, audit_settings, provider_id, detailed=detailed)
                 if _audit_is_empty(audit):
-                    audit = None  # 監査なしの round として扱い、全要求を未回答にして是正へ進む
+                    audit = audit_fallback
+                    if audit_fallback is not None:
+                        timing["audit_retry_incomplete"] = True
         except Exception as exc:
             # 監査の失敗だけでは生成済みの本文を捨てない。権限拒否・取り消し・外側の期限は中断を維持する。
             cut_short = deadline_cut_short()
@@ -6427,7 +6454,7 @@ def run_round(
                 or (isinstance(exc, DeadlineExceeded) and not cut_short)
             ):
                 raise
-            audit = None
+            audit = audit_fallback
             audit_cut = cut_short or isinstance(exc, (TimeoutError, TimeoutException, APITimeoutError))
             timing["audit_error_type"] = type(exc).__name__
             timing["audit_failure"] = structured_failure_details(exc, GroundedAudit if detailed else GroundedFactAudit)
@@ -6435,10 +6462,20 @@ def run_round(
         if audit_usage := usage_delta(usage_before):
             timing["audit_usage"] = audit_usage
         if audit is not None:
+            if audit._wire_validation:
+                timing["audit_contract"] = audit._wire_validation
             returned_request_ids = tuple(row.request_id for row in audit.request_reviews)
             audit, duplicate_request_ids, missing_request_ids, invalid_request_ids = _validate_request_review_contract(
                 audit, inputs["task_contract"].get("request_units", [])
             )
+            if audit._wire_validation.get("request_binding"):
+                binding = audit._wire_validation["request_binding"]
+                returned_request_ids = tuple(binding["raw_key_sequence"])
+                states = binding["states"]
+                duplicate_request_ids = tuple(key for key, state in states.items() if state == "duplicate")
+                invalid_request_result_ids = tuple(key for key, state in states.items() if state == "invalid")
+                missing_request_ids = tuple(key for key, state in states.items() if state == "missing")
+                invalid_request_ids = tuple(sorted(set(returned_request_ids) - set(expected_request_ids)))
             audit = citation_support_policy(checked, audit, also_audited)
             audit = settle_citation_reviews(checked, audit, also_audited, dropped)
             recovered = recover_audited_quotes(
@@ -6554,6 +6591,7 @@ def run_round(
         duplicate_request_ids=duplicate_request_ids,
         missing_request_ids=missing_request_ids,
         invalid_request_ids=invalid_request_ids,
+        invalid_request_result_ids=invalid_request_result_ids,
         expected_request_ids=expected_request_ids,
         returned_request_ids=returned_request_ids,
         guide_steps=(
@@ -6629,14 +6667,15 @@ def _parse_audit(
     parse_text: Callable[..., Any], system: str, prompt: str, settings: Any, provider_id: str | None, *, detailed: bool
 ) -> GroundedAudit:
     """監査を 1 回呼ぶ。通常の回答（#2795）は事実の監査の schema で受け、判定しない項目を空にして写す。"""
-    if detailed:
-        audit = call_with_model_purpose("answer.audit", parse_text, system, prompt, settings, GroundedAudit, provider_id=provider_id)
-    else:
-        audit = GroundedAudit.model_validate(
-            call_with_model_purpose(
-                "answer.audit", parse_text, system, prompt, settings, GroundedFactAudit, provider_id=provider_id
-            ).model_dump()
-        )
+    inputs = json.loads(prompt)
+    request_ids = tuple(row["id"] for row in inputs.get("task_contract", {}).get("request_units", []))
+    requirement_ids = tuple(row["id"] for contract in inputs.get("guide_contracts", []) for row in contract.get("requirements", []))
+    schema = audit_wire_schema(GroundedAudit if detailed else GroundedFactAudit, request_ids, requirement_ids)
+    result = canonical_audit_result(
+        call_with_model_purpose("answer.audit", parse_text, system, prompt, settings, schema, provider_id=provider_id), schema
+    )
+    audit = result.audit
+    audit._wire_validation = result.validation
     return applicability_policy(audit)
 
 
