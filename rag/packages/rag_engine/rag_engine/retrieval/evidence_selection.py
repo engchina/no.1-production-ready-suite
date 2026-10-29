@@ -13,6 +13,7 @@ from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import range_class
 
 from rag_engine.parsing.content_labels import content_labels
+from rag_engine.parsing.structural_text import structural_only
 from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY, ARTICLE_UNIT_KEY, is_catalog_article
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, definition_windows
@@ -344,6 +345,16 @@ def _union_source_ranges(ranges: Sequence[tuple[str, int, int]]) -> list[tuple[s
     return merged
 
 
+def _citation_partition_boundary(text: str, position: int) -> bool:
+    """子・由来の境界だけでは文中を独立した引用候補へ切り分けない。"""
+    if position <= 0 or position >= len(text):
+        return True
+    if text[position - 1] == "\n" or text[position] == "\n":
+        return True
+    preceding = text[:position].rstrip(" \t")
+    return bool(preceding) and preceding[-1] in current_pack().words("question_cues", "unit_split_chars")
+
+
 def evidence_spans(
     question: str,
     records: Sequence[Any],
@@ -368,6 +379,18 @@ def evidence_spans(
     # 本文が同じ根拠（record_fingerprint）を先にまとめる。
     same_text: dict[str, list[Any]] = {}
     for record in records:
+        if structural_only(record.text):
+            if diagnostics is not None:
+                diagnostics.append(
+                    {
+                        "stage": "excluded",
+                        "reason_code": "structural_only",
+                        "source_id": getattr(record, "chunk_uid", "") or record.id,
+                        "start": 0,
+                        "end": len(record.text),
+                    }
+                )
+            continue
         same_text.setdefault(record_fingerprint(record), []).append(record)
     first_keys = {id(members[0]): key for key, members in same_text.items()}
     # 複数レシピ融合で元の文書の範囲が同じ根拠を 1 つにまとめ、まとめた根拠の ID は別名に残す (#1331)。
@@ -590,17 +613,37 @@ def evidence_spans(
             if offset < 0:
                 continue
             boundaries = [*((a, b) for a, b, _ in located), *native_ranges, *((a, b) for a, b, _, _ in scoped)]
-            cuts = sorted({0, len(part), *[edge - offset for a, b in boundaries for edge in (a, b) if offset < edge < offset + len(part)]})
-            parts.extend(part[a:b] for a, b in zip(cuts, cuts[1:], strict=False))
+            edges = sorted({edge for a, b in boundaries for edge in (a, b) if offset < edge < offset + len(part)})
+            deferred = [edge for edge in edges if not _citation_partition_boundary(text, edge)]
+            if deferred and diagnostics is not None:
+                diagnostics.append(
+                    {
+                        "stage": "boundary_preserved",
+                        "reason_code": "mid_sentence_boundary",
+                        "source_id": getattr(record, "chunk_uid", "") or record.id,
+                        "positions": deferred,
+                    }
+                )
+            cuts = sorted({0, len(part), *(edge - offset for edge in edges if edge not in deferred)})
+            parts.extend((offset + a, offset + b) for a, b in zip(cuts, cuts[1:], strict=False))
             cursor = offset + len(part)
         cursor = 0
-        for part in parts:
+        for start, end in parts:
+            part = text[start:end]
             if not part:
                 continue
-            start = text.find(part, cursor)
-            if start < 0:
+            if structural_only(part):
+                if diagnostics is not None:
+                    diagnostics.append(
+                        {
+                            "stage": "excluded",
+                            "reason_code": "structural_only",
+                            "source_id": getattr(record, "chunk_uid", "") or record.id,
+                            "start": start,
+                            "end": end,
+                        }
+                    )
                 continue
-            end = start + len(part)
             source_id = getattr(record, "chunk_uid", "") or record.id
             span_id = "E" + hashlib.sha256(f"{source_id}:{start}:{end}:{part}".encode()).hexdigest()[:20]
             pages = {page for a, b, page in located if a <= start and end <= b}

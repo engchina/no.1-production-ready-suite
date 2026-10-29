@@ -3973,6 +3973,7 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
         text = parent_text
         metadata = dict(members[0].metadata)
         _merge_member_metadata(metadata, members)
+        _restore_parent_native_ranges(text, metadata, members, state)
         metadata.pop("rrf_score", None)
         if element_ids := list(
             dict.fromkeys(
@@ -4018,6 +4019,86 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
             )
         )
     return parents
+
+
+def _restore_parent_native_ranges(
+    parent_text: str, metadata: dict[str, Any], members: Sequence[Any], state: _SearchState
+) -> None:
+    """子の原文座標を、同じ版の親に一意に置ける場合だけ親の座標へ移す。"""
+    layout = metadata.get("layout")
+    if not isinstance(layout, dict) or "native_text_ranges" not in layout:
+        return
+    layout = dict(layout)
+    layout.pop("native_text_ranges", None)
+    metadata["layout"] = layout
+    sources = [state.chunks.get(child.chunk_uid) for child in members]
+    parent_conflict = any(
+        source is not None and source.metadata.get("parent_text") != parent_text
+        for source in sources
+    )
+    first_source = sources[0]
+    translated: list[dict[str, Any]] = []
+    for child, source in zip(members, sources, strict=True):
+        child_layout = child.metadata.get("layout")
+        if not isinstance(child_layout, dict) or "native_text_ranges" not in child_layout:
+            continue
+        ranges = child_layout["native_text_ranges"]
+        reason = ""
+        offset = -1
+        if parent_conflict:
+            reason = "parent_text_conflict"
+        elif source is None or first_source is None:
+            reason = "source_missing"
+        elif (
+            source.document_id != first_source.document_id
+            or any(
+                source.metadata.get(key, "") != first_source.metadata.get(key, "")
+                for key in ("chunk_set_id", "recipe_id")
+            )
+            or source.text != child.text
+            or source.document_id != child.metadata.get("document_id")
+            or any(
+                source.metadata.get(key, "") != child.metadata.get(key, "")
+                for key in ("chunk_set_id", "recipe_id")
+            )
+        ):
+            reason = "source_version_mismatch"
+        else:
+            offset = parent_text.find(child.text) if child.text else -1
+            if offset < 0:
+                reason = "child_text_missing"
+            elif parent_text.find(child.text, offset + 1) >= 0:
+                reason = "child_text_ambiguous"
+        valid: list[dict[str, Any]] = []
+        invalid = not isinstance(ranges, list)
+        if not reason and isinstance(ranges, list):
+            for entry in ranges:
+                if not isinstance(entry, dict):
+                    invalid = True
+                    continue
+                start, end = entry.get("start"), entry.get("end")
+                if (
+                    type(start) is not int
+                    or type(end) is not int
+                    or not 0 <= start < end <= len(child.text)
+                ):
+                    invalid = True
+                    continue
+                value = {**entry, "start": offset + start, "end": offset + end}
+                if value not in translated:
+                    translated.append(value)
+                valid.append(value)
+        state.retrieval_stages.append(
+            {
+                "stage": "parent_native_range_coordinates",
+                "source_id": child.chunk_uid,
+                "status": "unknown" if reason or invalid else "verified",
+                "reason": reason or ("invalid_child_range" if invalid else "unique_child_offset"),
+                "translated_range_count": len(valid),
+            }
+        )
+    if translated:
+        layout["native_text_ranges"] = translated
 
 
 # 子ごとに持つ一覧の metadata。親は今回の子の全員の値を合わせる(先頭の子だけにしない。#3478)。
