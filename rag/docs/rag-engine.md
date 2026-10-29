@@ -234,6 +234,12 @@ token を出す。
 `RAG_LLM_RUNAWAY_DETECTION_ENABLED=false` で切れる）。行ごとに値が変わる表・一覧は打ち切らない。打ち切った呼び出しは
 `incomplete_reasons` に理由、送り直しは `runaway_resends` に残る。工程の記録は呼び出しの回数（`llm_calls`）と API への送信の
 回数（`llm_sends`。送り直しで多いときだけ）を分け、画面は「LLM 1 回・送信 2 回」と示す。
+streaming しない呼び出し（停滞の検出が OFF・回答の期限が無い文脈）は途中で打ち切れないので、出力の上限で未完了になった応答の
+出力の文に同じ基準の暴走（空白が 2,000 文字続いた箇所・末尾の繰り返し）があれば、上限を 2 倍に広げる送り直しをせず、streaming と
+同じく推論の量を下げて 1 回だけ送り直す（#3835。広げても空白・繰り返しが続くだけ。`oci._runaway_response_reason`）。理由は同じく
+`incomplete_reasons` に残り、送り直しても暴走した呼び出しの失敗の詳細（生成後監査では `audit_failure`）は分類 `runaway_output` と
+打ち切りの理由（`cutoff_reason`）を持つ。生成後監査の固定キーの wire では、値と次の key の間（JSON の構造の空白）で空白が続く
+暴走が出る。strict の JSON schema は構造の空白を制限できず、自由記述の欄の `maxLength` では防げない（#3835 の固定入力の比較）。
 
 **停滞した LLM の呼び出しの送り直し（#1926）**: OCI Enterprise AI の呼び出しは、まれ（#1912 の記録の 206 件で約 1%）に
 通常の 1/10 以下の速さ（13〜23 token/秒。中央値 224）に落ち、同じ token 数で 36 秒 → 183 秒かかった。回答の期限がある文脈では
