@@ -2944,9 +2944,10 @@ def synthesize_grounded_answer(
         guide_coverage,
         current.checked,
         # 監査なしの型は要件を判定しない（決定的な対応付けの充足。#2800）。
-        runtime_knowledge.guide_step_contracts if runtime_knowledge and audit_mode != grounded.AUDIT_MODE_NONE else (),
-        current.audit,
+        runtime_knowledge.guide_step_contracts if runtime_knowledge else (),
+        current.audit if audit_mode != grounded.AUDIT_MODE_NONE else None,
         guide_notices,
+        review_execution=current.review_execution,
     )
     guide_gaps = [grounded.guide_step_gap_line(step) for step in grounded.unexplained_guide_steps(guide_coverage)]
     unanswered += guide_gaps

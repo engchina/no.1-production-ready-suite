@@ -20,14 +20,16 @@ def entry(text):
 
 def test_one_paragraph_can_explain_two_independently_matched_steps():
     coverage, representative = grounded.guide_step_assignment(STEPS, [entry(FIRST + SECOND)], [SPAN])
-    assert [step["status"] for step in coverage] == ["explained", "explained"]
+    assert [step["status"] for step in coverage] == ["unknown", "unknown"]
+    assert all(step["validation"]["body_coverage"]["execution"] == "not_run" for step in coverage)
     assert [step["assignment"]["assigned_item_indexes"] for step in coverage] == [[0], [0]]
     assert representative == {0: "a"}
 
 
 def test_shared_common_action_does_not_explain_either_specific_step():
     coverage, _ = grounded.guide_step_assignment(STEPS, [entry(COMMON), entry(COMMON)], [SPAN])
-    assert [step["status"] for step in coverage] == ["unused", "unused"]
+    assert [step["status"] for step in coverage] == ["unknown", "unknown"]
+    assert all(step["assignment"]["assigned_item_indexes"] == [] for step in coverage)
 
 
 def test_each_step_keeps_all_its_matched_paragraphs():

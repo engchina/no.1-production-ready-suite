@@ -437,6 +437,8 @@ class SupportGuideApi {
                 { step_id: "step2", title: "再設定の画面を案内する", status: "reference_only", required: true },
                 { step_id: "step3", title: "別の窓口を案内する", status: "unused", required: false },
                 { step_id: "step4", title: "完了を知らせる", status: "not_searched", required: true },
+                { step_id: "step5", title: "設定を確かめる", status: "unknown", required: true },
+                { step_id: "step6", title: "結果を確認する", status: "partial", required: true },
               ]
             : [],
           elapsed_ms: 4200,
@@ -1163,16 +1165,26 @@ for (const theme of ["light", "dark"] as const) {
     // 手順ごとの充足（#2686）。説明できていない必須の手順の数と、手順ごとの状態を文言で示す。
     const steps = result.getByTestId("support-guide-try-steps");
     await expect(steps.getByTestId("support-guide-try-steps-missing")).toHaveText(
-      "必須の手順のうち 2 件を、回答で説明できていません。",
+      "必須の手順のうち 1 件を、回答で説明できていません。",
+    );
+    await expect(steps.getByTestId("support-guide-try-steps-unknown")).toHaveText(
+      "必須の手順のうち 2 件は、充足を確認できていません。",
+    );
+    await expect(steps.getByTestId("support-guide-try-steps-partial")).toHaveText(
+      "必須の手順のうち 1 件は、一部のみ説明を確認しました。",
     );
     const stepRows = steps.getByTestId("support-guide-try-step");
-    await expect(stepRows).toHaveCount(4);
+    await expect(stepRows).toHaveCount(6);
     await expect(stepRows.nth(0)).toContainText("本人であることを確かめる");
     await expect(stepRows.nth(0)).toContainText("説明した");
     await expect(stepRows.nth(1)).toContainText("資料の原文だけ");
     await expect(stepRows.nth(2)).toContainText("説明していない");
     await expect(stepRows.nth(2)).toContainText("分岐の手順（必須ではない）");
     await expect(stepRows.nth(3)).toContainText("検索を打ち切った");
+    await expect(stepRows.nth(4)).toContainText("未検証");
+    await expect(stepRows.nth(5)).toContainText("一部のみ確認済み");
+    await expect(steps).toBeVisible();
+    await steps.screenshot({ path: testInfo.outputPath(`support-guide-coverage-${theme}.png`) });
     await expect(result).toContainText("ポータルの「パスワードを忘れた」から再設定します。");
     const notice = result.getByRole("status").filter({ hasText: "回答の注意書き" });
     await notice.scrollIntoViewIfNeeded();

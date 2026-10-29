@@ -43,7 +43,7 @@ def test_all_requirements_required_even_when_primary_operation_is_explained():
     result = grounded.apply_guide_contracts(
         coverage("a"), [entry()], [contract("a", "対象選択", "保存して確定")], audit(review("a:0", [0]), review("a:1", [], "missing"))
     )
-    assert result[0]["status"] == "unused"
+    assert result[0]["status"] == "partial"
     assert result[0]["requirements"][1]["status"] == "missing"
 
 
@@ -71,7 +71,7 @@ def test_dependency_order_is_checked():
     result = grounded.apply_guide_contracts(
         coverage("open", "edit"), [entry(), entry()], contracts, audit(review("open:0", [1]), review("edit:0", [0]))
     )
-    assert result[1]["status"] == "unused"
+    assert result[1]["status"] == "partial"
     assert result[1]["order_errors"] == ["open"]
     result = grounded.apply_guide_contracts(
         coverage("open", "edit"), [entry(), entry()], contracts, audit(review("open:0", [0]), review("edit:0", [1]))
@@ -127,7 +127,7 @@ def test_review_requires_a_quote_that_actually_exists_in_answer(quote):
     assert result[0]["status"] != "explained"
 
 
-def test_review_quote_may_copy_the_cited_items_source_quote():
+def test_source_quote_is_not_a_proof_of_what_the_answer_explained():
     # モデルは引いた item の説明の文ではなく根拠の原文を写すことが多い（#2811）。引いた item に属する文なら受ける。
     paraphrase = grounded.CheckedItem(
         GroundedItem(
@@ -138,7 +138,7 @@ def test_review_quote_may_copy_the_cited_items_source_quote():
     result = grounded.apply_guide_contracts(
         coverage("a"), [paraphrase], [contract("a", "対象選択")], audit({**review("a:0", [0]), "answer_quote": "一覧から対象を選択します"})
     )
-    assert result[0]["status"] == "explained"
+    assert result[0]["status"] == "unknown"
 
 
 @pytest.mark.parametrize("indexes", [[0, 1], [1, 0]])
@@ -166,7 +166,7 @@ def test_requirement_quote_can_combine_excerpts_from_several_items(indexes):
     assert result[0]["status"] == "explained"
 
 
-def test_requirement_quote_can_combine_answer_text_and_its_source_quote():
+def test_requirement_quote_requires_each_combined_excerpt_to_be_answer_text():
     items = [
         grounded.CheckedItem(
             GroundedItem(
@@ -187,7 +187,7 @@ def test_requirement_quote_can_combine_answer_text_and_its_source_quote():
     ]
     observation = {**review("a:0", [0, 1]), "answer_quote": "担当者は一覧で対象を選びます。承認後、一日以内に設定します。"}
     result = grounded.apply_guide_contracts(coverage("a"), items, [contract("a", "担当者と設定までの期間")], audit(observation))
-    assert result[0]["status"] == "explained"
+    assert result[0]["status"] == "unknown"
 
 
 @pytest.mark.parametrize(

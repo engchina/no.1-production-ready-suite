@@ -18,6 +18,7 @@ import type {
   SupportGuideConditionType,
   SupportGuideContent,
   SupportGuideDiffSection,
+  SupportGuideDraftTryStep,
   SupportGuideImpactScope,
   SupportGuideIssue,
   SupportGuidePageRange,
@@ -876,14 +877,26 @@ export const SUPPORT_GUIDE_DECISION_VARIANT = {
   handoff: "warning",
 } as const satisfies Record<SupportGuideAnswerSummary["decision"], string>;
 
-/** 業務ガイドの手順の充足（#2686）→ StatusBadge の variant。説明できていない手順は注意・根拠なしは危険。 */
+/** 充足の未検証は不足と区別し、中性の表示にする。 */
 export const SUPPORT_GUIDE_STEP_STATUS_VARIANT = {
   explained: "success",
+  partial: "warning",
+  unknown: "neutral",
   reference_only: "warning",
   unused: "warning",
   no_evidence: "danger",
   not_searched: "warning",
 } as const satisfies Record<SupportGuideStepStatus, string>;
+
+/** 必須の手順だけを、確認した不足・部分的な説明・未検証に分けて数える。 */
+export function supportGuideStepCounts(steps: readonly SupportGuideDraftTryStep[]) {
+  const required = steps.filter((step) => step.required);
+  return {
+    missing: required.filter((step) => ["reference_only", "unused", "no_evidence"].includes(step.status)).length,
+    partial: required.filter((step) => step.status === "partial").length,
+    unknown: required.filter((step) => ["unknown", "not_searched"].includes(step.status)).length,
+  };
+}
 
 /** 試すときに値を選べる条件の選択肢（選択・はい / いいえ）。文字の条件は入力欄にする。 */
 export function tryConditionOptions(condition: SupportGuideCondition): string[] {

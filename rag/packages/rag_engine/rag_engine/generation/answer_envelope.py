@@ -52,6 +52,8 @@ GUIDE_STEP_REQUEST_PREFIX = "guide:"
 GUIDE_STEP_REQUEST_ID_CHARS = 64
 _GUIDE_STEP_STATUS: dict[str, RequestStatus] = {
     "explained": "addressed",
+    "unknown": "unknown",
+    "partial": "partial",
     "reference_only": "partial",
     "unused": "missing",
     "no_evidence": "missing",

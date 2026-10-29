@@ -5004,6 +5004,8 @@ export interface SupportGuideAnswerSummary {
 /** 業務ガイドの手順の充足（#2491）。 */
 export type SupportGuideStepStatus =
   | "explained"
+  | "partial"
+  | "unknown"
   | "reference_only"
   | "unused"
   | "no_evidence"

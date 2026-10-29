@@ -518,7 +518,7 @@ class SupportGuideDraftTryRequest(BaseModel):
 
 # 業務ガイドの手順の充足（#2491。rag_engine の guide_step_coverage の状態）。
 SupportGuideStepStatus = Literal[
-    "explained", "reference_only", "unused", "no_evidence", "not_searched"
+    "explained", "partial", "unknown", "reference_only", "unused", "no_evidence", "not_searched"
 ]
 SUPPORT_GUIDE_STEP_STATUSES: tuple[str, ...] = get_args(SupportGuideStepStatus)
 
@@ -530,7 +530,8 @@ class SupportGuideDraftTryStep(BaseModel):
     title: str
     status: SupportGuideStepStatus = Field(
         description=(
-            "explained=手順の根拠を引いた説明を公開した / "
+            "explained=手順の必須要件すべてを根拠で裏付けた説明として確認した / "
+            "partial=手順の一部だけ説明を確認した / unknown=説明の充足を検証できていない / "
             "reference_only=根拠を原文のまま示しただけ / "
             "unused=根拠は回答の材料にあるが説明に引いていない / no_evidence=根拠が材料に無い / "
             "not_searched=手順ごとの検索を時間・回数の上限で打ち切り、検索しなかった。"

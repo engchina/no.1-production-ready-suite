@@ -34,7 +34,20 @@ import {
   splitLines,
   supportGuideExportFileName,
   supportGuideState,
+  supportGuideStepCounts,
+  SUPPORT_GUIDE_STEP_STATUS_VARIANT,
 } from "./support-guide-form";
+
+describe("手順の充足の集計", () => {
+  it("未検証と部分的な説明を不足に混ぜず、任意の手順は数えない", () => {
+    const statuses = ["explained", "reference_only", "unused", "no_evidence", "not_searched", "unknown", "partial"] as const;
+    const rows = statuses.map((status) => ({ step_id: status, title: status, status, required: true }));
+    expect(supportGuideStepCounts(rows)).toEqual({ missing: 3, partial: 1, unknown: 2 });
+    expect(supportGuideStepCounts(rows.map((row) => ({ ...row, required: false })))).toEqual({ missing: 0, partial: 0, unknown: 0 });
+    expect(SUPPORT_GUIDE_STEP_STATUS_VARIANT.unknown).toBe("neutral");
+    expect(SUPPORT_GUIDE_STEP_STATUS_VARIANT.partial).toBe("warning");
+  });
+});
 
 const content: SupportGuideContent = {
   schema_version: 2,
