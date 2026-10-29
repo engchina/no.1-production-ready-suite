@@ -1996,8 +1996,9 @@ class Settings(
             "根拠の本文・前置き・出典情報をこの予算で選ぶ。"
             "全体設定だけで決め、検索・回答プロファイル・KB・文書レシピでは上書きしない。"
             "章節の拡張（rag_section_expansion_input_token_percent）は読む章節を"
-            "入力 token の上限で別に数え、現在は広げた根拠をこの予算を超えて渡すことがある。"
-            "使った予算と送った根拠の文字数は回答の診断の evidence_budget に残る。"
+            "入力 token の上限で別に数え、広げた根拠もこの予算を超えて渡さない。"
+            "使った予算・送った根拠の文字数・入らなかった理由は"
+            "回答の診断の evidence_budget に残る。"
         ),
     )
     rag_answer_timeout_seconds: float = Field(

@@ -636,9 +636,29 @@ def test_known_gaps_and_budget_follow_the_last_grade():
     assert _known_gaps(attempts, expansion) == ("requested_result",)
     context = _seed_context("c31a", "c32a")
     settings = _settings(evidence_budget_chars=100)
-    # 広げたときの原文の予算は、入力 token の上限（モデルの入力の上限 × 50%）を超えない。
-    assert _section_evidence_budget(context, settings, expansion) == 660
+    # 広げたときの原文の予算は、設定の文字予算を超えない（#3776。以前は全文 + 1 割の 660 まで広げていた）。
+    assert _section_evidence_budget(context, settings, expansion) == 100
+    assert _section_evidence_budget(context, _settings(evidence_budget_chars=48000), expansion) == 48000
     assert _section_evidence_budget(context, settings, None) is None
+
+
+def test_section_budget_shortfall_is_recorded():
+    """広げた根拠が文字予算に入らなかった量と理由を診断に残す（#3776）。"""
+    from rag_engine.generation.answering import _evidence_budget_trace
+
+    context = _seed_context("c31a", "c32a")
+    total = sum(len(record.text) for record in context.records)
+    tight = _evidence_budget_trace(_settings(evidence_budget_chars=100), 100, [], context)
+    assert (tight["effective_chars"], tight["requested_chars"]) == (100, total + total // 10)
+    assert tight["shortfall_reason"] == "evidence_budget"
+    assert tight["effective_exceeds_configured"] is False
+    roomy = _evidence_budget_trace(_settings(evidence_budget_chars=48000), 48000, [], context)
+    assert roomy["shortfall_reason"] == ""
+    # 入力 token の上限を超える文脈は、文字予算より先にその理由を残す。
+    over = _evidence_budget_trace(_settings(evidence_budget_chars=48000, answer_max_input_tokens=400), 200, [], context)
+    assert over["shortfall_reason"] == "input_tokens"
+    # 章節を広げていない回答には、広げた量の項目を出さない。
+    assert "requested_chars" not in _evidence_budget_trace(_settings(evidence_budget_chars=100), None, [], context)
 
 
 def test_whole_records_keep_section_text_when_it_fits():

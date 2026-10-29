@@ -375,6 +375,11 @@ async def test_answer_diagnostics_keep_the_evidence_budget(
     assert budget["effective_chars"] >= 1
     assert budget["source"] in {"configured", "section_expansion"}
     assert budget["evidence_block_chars"] >= budget["evidence_text_chars"] > 0
+    expanded = (
+        {"requested_chars", "shortfall_reason"}
+        if budget["source"] == "section_expansion"
+        else set()
+    )
     assert set(budget) == {
         "configured_chars",
         "effective_chars",
@@ -384,7 +389,11 @@ async def test_answer_diagnostics_keep_the_evidence_budget(
         "evidence_text_chars",
         "evidence_block_chars",
         "evidence_block_tokens_estimate",
+        *expanded,
     }
+    # 章節を広げても、使った予算は設定の文字予算を超えない。
+    assert budget["effective_chars"] <= 64000
+    assert budget["effective_exceeds_configured"] is False
 
 
 async def test_execution_steps_carry_structured_details(monkeypatch: pytest.MonkeyPatch) -> None:

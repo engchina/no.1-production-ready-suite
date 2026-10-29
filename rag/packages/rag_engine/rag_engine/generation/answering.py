@@ -2421,21 +2421,29 @@ def _public_span(span: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in span.items() if key not in _CHECK_ONLY_SPAN_KEYS}
 
 
-def _evidence_budget_trace(settings: Settings, evidence_budget_chars: int | None, spans: Sequence[dict[str, Any]]) -> dict[str, Any]:
+def _evidence_budget_trace(
+    settings: Settings,
+    evidence_budget_chars: int | None,
+    spans: Sequence[dict[str, Any]],
+    context: AnswerContext | None = None,
+) -> dict[str, Any]:
     """生成に渡した根拠の文字予算の診断（#3776）。技術の数値だけを残し、本文・プロンプトは残さない。
 
     configured_chars は設定の文字予算（``evidence_budget_chars``。backend の ``RAG_EVIDENCE_BUDGET_CHARS``）、
     effective_chars は根拠の選択に実際に使った予算（章節を広げたときは ``_section_evidence_budget`` の値）。
     evidence_block_chars は生成の入力の根拠ブロックの文字数（出典情報・補助情報・書式を含む）、
     evidence_text_chars はそのうち根拠の本文の文字数の合計。token は ``estimate_tokens`` の見積もり。
+    章節を広げたときは、広げた根拠を切らずに渡すのに要る文字の見積もり（requested_chars。本文の合計と前置きの 1 割）と、
+    予算に入らなかった理由（shortfall_reason: ``input_tokens`` = 入力 token の上限 / ``evidence_budget`` =
+    文字予算 / 空 = 入った）を残す。
     """
     from rag_engine.generation.grounded import evidence_block_text
-    from rag_engine.generation.section_expansion import estimate_tokens
+    from rag_engine.generation.section_expansion import SectionExpansionLimits, context_tokens, estimate_tokens
 
-    configured = int(getattr(settings, "evidence_budget_chars", 0) or 0) or EVIDENCE_BUDGET_CHARS
+    configured = _configured_evidence_budget(settings)
     effective = int(evidence_budget_chars or configured)
     block = evidence_block_text(spans)
-    return {
+    trace: dict[str, Any] = {
         "configured_chars": configured,
         "effective_chars": effective,
         "source": "section_expansion" if evidence_budget_chars is not None else "configured",
@@ -2445,6 +2453,17 @@ def _evidence_budget_trace(settings: Settings, evidence_budget_chars: int | None
         "evidence_block_chars": len(block),
         "evidence_block_tokens_estimate": estimate_tokens(block),
     }
+    if evidence_budget_chars is not None and context is not None:
+        total = sum(len(str(getattr(record, "text", "") or "")) for record in context.records)
+        requested = total + total // 10
+        over_tokens = context_tokens(context) > SectionExpansionLimits.from_settings(settings).input_tokens
+        trace.update(
+            {
+                "requested_chars": requested,
+                "shortfall_reason": "input_tokens" if over_tokens else "evidence_budget" if requested > effective else "",
+            }
+        )
+    return trace
 
 
 def _span_document_id(span: Mapping[str, Any] | None) -> str:
@@ -2493,8 +2512,8 @@ def synthesize_grounded_answer(
     unread_sections は章節の拡張が上限で読めなかった章節（``UnreadSection`` か文。#1436）。本文の「回答に未反映の
     関連章節」に出し、回答を条件つき（conditional）にする。出すのは、回答が根拠にした文書と ``unread_documents``
     （業務ガイドの手順の参照の文書）の章節だけで、行数に上限がある（#2828。``answer_unread_view``）。
-    evidence_budget_chars は章節を広げたときの原文の予算（文字）で、渡すと広げた根拠を予算の中で切らずに渡す
-    （None は `settings.evidence_budget_chars`）。
+    evidence_budget_chars は章節を広げたときの原文の予算（文字。設定の文字予算を超えない。#3776）で、渡すと広げた
+    根拠の全文が予算に入るときは切らずに渡す（None は `settings.evidence_budget_chars`）。
 
     是正は1回につき1手段（既取得poolからの同機能根拠の追加、原画像の添付、指摘の反映）。
     支持済みの要求を失うか問題が増える候補は採用せず、最良の回を公開する。
@@ -3272,7 +3291,7 @@ def synthesize_grounded_answer(
         "task_contract": task_contract(question),
         "selected_evidence": [_public_span(s) for s in spans],
         # 根拠の文字予算: 設定値・実際に使った値・送った根拠ブロックの文字数と見積もり token（#3776）。
-        "evidence_budget": _evidence_budget_trace(settings, evidence_budget_chars, spans),
+        "evidence_budget": _evidence_budget_trace(settings, evidence_budget_chars, spans, context),
         "same_unit_fill": unit_fill,
         "rounds": rounds,
         "round_budget": budget.trace(current),
@@ -6136,24 +6155,28 @@ def _known_gaps(attempts: Sequence[CragRetrievalAttempt], expansion: Any) -> tup
 
 
 def _section_evidence_budget(context: AnswerContext, settings: Settings, expansion: Any) -> int | None:
-    """章節を広げたときの原文の予算（文字）。広げた根拠を切らずに渡せるよう、入力の上限の範囲で広げる (#1436)。
+    """章節を広げたときの原文の予算（文字）。設定の文字予算を上限にする (#1436・#3776)。
 
-    根拠全体の見積もりが token の上限内なら、文字予算を全原文の長さまで確保する。
-    超える場合は文字予算も上限内に絞る。補完をしていなければ None（既定の `evidence_budget_chars`）。
+    広げた根拠の全文が予算に入るときは切らずに渡し（``evidence_spans`` の whole_records）、入らなければ通常の配分
+    （必須の根拠・照合済みの anchor を先にした配分）にする。以前は全文の長さまで予算を黙って広げていた
+    （``max(予算, 全文 + 1 割)``）。根拠全体の見積もりが入力 token の上限を超える場合は、文字予算もその上限内に絞る。
+    入らなかった量と理由は ``_evidence_budget_trace`` が診断に残す。補完をしていなければ None（既定の
+    `evidence_budget_chars`）。
     """
     if expansion is None or not (expansion.applied or expansion.trace.get("minimum_scope_complete")):
         return None
-    from rag_engine.generation.section_expansion import SectionExpansionLimits
+    from rag_engine.generation.section_expansion import SectionExpansionLimits, context_tokens
 
-    base = int(getattr(settings, "evidence_budget_chars", 0) or 0)
-    total = sum(len(str(getattr(record, "text", "") or "")) for record in context.records)
+    base = _configured_evidence_budget(settings)
     limit = SectionExpansionLimits.from_settings(settings).input_tokens
-    from rag_engine.generation.section_expansion import context_tokens
-
     if context_tokens(context) > limit:
-        return max(1, min(base or limit, limit))
-    # ASCII の原文も、token と文字数を混同して切らない。全量が token 予算内なら全文を渡す。
-    return max(base, total + total // 10)
+        return max(1, min(base, limit))
+    return base
+
+
+def _configured_evidence_budget(settings: Settings) -> int:
+    """設定の根拠の文字予算（``evidence_budget_chars``。無ければ ``EVIDENCE_BUDGET_CHARS``）。"""
+    return int(getattr(settings, "evidence_budget_chars", 0) or 0) or EVIDENCE_BUDGET_CHARS
 
 
 def load_answer_chunks(output_dir: str | Path, run_id: Any, preferred_engines: Iterable[str]) -> list[AnswerRecord]:
