@@ -159,6 +159,7 @@ from rag_engine.generation.answer_records import (
     rank_records_with_rrf,
     validate_run_id,
 )
+from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.crag_support import (
     MAX_GENERATED_QUERY_CHARS,
     _build_crag_grade_prompt,
@@ -2096,6 +2097,7 @@ def _grounded_prompt(
     known_gaps: Sequence[str] = (),
     field_kind_note: str = "",
     crag_assessment: Mapping[str, Any] | None = None,
+    confirmed_premises: Sequence[dict[str, str]] = (),
 ) -> str:
     """編集可能テンプレートへ、質問・画像の対応・機能別の根拠と補助情報を差し込む。
 
@@ -2108,7 +2110,11 @@ def _grounded_prompt(
     preface = "\n\n".join(
         section
         for section in (
+            ("confirmed_premises:\n" + json.dumps(list(confirmed_premises), ensure_ascii=False)) if confirmed_premises else "",
             runtime_knowledge.prompt_context() if runtime_knowledge is not None and runtime_knowledge.has_matches else "",
+            ("guide_task_scope:\n" + json.dumps(runtime_knowledge.guide_task_scope, ensure_ascii=False))
+            if runtime_knowledge is not None and runtime_knowledge.guide_task_scope
+            else "",
             inquiry_conditions.prompt_context() if inquiry_conditions is not None and inquiry_conditions.has_signals else "",
             (
                 "検索前の暫定データ確認観点（最終判定ではなく再確認する）:\n"
@@ -2553,6 +2559,7 @@ def synthesize_grounded_answer(
             known_gaps=known_gaps,
             field_kind_note=form_field_kinds.prompt_note(field_kinds, resolved_conditions, spans),
             crag_assessment=crag_view,
+            confirmed_premises=confirmed_premise_records(settings.confirmed_premises, settings.confirmed_premise_sources),
         )
         with (
             budget.round(),
@@ -2597,6 +2604,7 @@ def synthesize_grounded_answer(
                     glossary=_audit_glossary(runtime_knowledge),
                     confirmed_premises=settings.confirmed_premises,
                     confirmed_premise_sources=settings.confirmed_premise_sources,
+                    guide_task_scope=runtime_knowledge.guide_task_scope if runtime_knowledge else (),
                 )
                 if number == 0:
                     # 監査の推論の量は、監査をする型のときだけ書く（#2966）。
@@ -5371,6 +5379,7 @@ def answer_question_result(
             runtime_knowledge = replace(
                 runtime_knowledge,
                 guide_title=guide_plan.title,
+                guide_task_scope=guide_plan.task_scope,
                 guide_notices=tuple(
                     guide_notice_lines(
                         guide_plan.contact,

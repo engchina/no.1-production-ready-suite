@@ -7,11 +7,12 @@ from contextlib import suppress
 from copy import deepcopy
 from functools import lru_cache
 from hashlib import sha256
+from types import GenericAlias
 from typing import Any, ClassVar, cast, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, create_model
 
-from rag_engine.models.llm import GroundedAudit, GroundedFactAudit, GroundedRequestReview, GuideRequirementReview
+from rag_engine.models.llm import GroundedAudit, GroundedFactAudit, GroundedItemReview, GroundedRequestReview, GuideRequirementReview
 from rag_engine.resources.structured_failures import structured_failure_details
 
 
@@ -53,6 +54,22 @@ def _value_schema(model: type[BaseModel], identity: str, name: str) -> type[Base
     return create_model(name, __config__=ConfigDict(extra="forbid"), **fields)
 
 
+@lru_cache(maxsize=1)
+def _review_wire_schema() -> type[BaseModel]:
+    """業務範囲をモデルに再裁定させず、資料条件だけを出力契約にする。"""
+    public = GroundedItemReview.model_json_schema()["properties"]
+    fields: dict[str, Any] = {
+        key: (info.annotation, deepcopy(info))
+        for key, info in GroundedItemReview.model_fields.items()
+        if key in public and key not in {"applicability", "condition", "source_applicability"}
+    }
+    fields["source_applicability"] = (
+        GroundedItemReview.model_fields["applicability"].annotation,
+        Field(..., description=GroundedItemReview.model_fields["source_applicability"].description),
+    )
+    return create_model("SourceItemReview", __config__=ConfigDict(extra="forbid"), **fields)
+
+
 def _keys_schema(ids: tuple[str, ...], value: type[BaseModel], name: str) -> type[BaseModel]:
     fields: dict[str, Any] = {f"key_{i}": (value, Field(..., alias=key)) for i, key in enumerate(ids)}
     return create_model(name, __config__=ConfigDict(extra="forbid", populate_by_name=False), **fields)
@@ -77,6 +94,7 @@ def audit_wire_schema(
         for key, info in canonical.model_fields.items()
         if key not in {"request_reviews", "guide_requirement_reviews"}
     }
+    fields["reviews"] = (GenericAlias(list, _review_wire_schema()), deepcopy(canonical.model_fields["reviews"]))
     fields["request_reviews"] = (
         _keys_schema(expected_ids, request_value, "BoundRequestKeys_" + suffix),
         Field(..., description="固定された要求キーの判定内容。キーのIDを値に重ねて書かない。"),
@@ -120,7 +138,8 @@ def _duplicate_paths(value: object, path: tuple[str | int, ...] = ()) -> list[tu
 @lru_cache(maxsize=128)
 def _field_schema(canonical: type[BaseModel], name: str) -> type[BaseModel]:
     info = canonical.model_fields[name]
-    fields: dict[str, Any] = {name: (info.annotation, deepcopy(info))}
+    annotation = GenericAlias(list, _review_wire_schema()) if name == "reviews" else info.annotation
+    fields: dict[str, Any] = {name: (annotation, deepcopy(info))}
     return create_model("AuditField_" + name, **fields)
 
 
@@ -224,7 +243,7 @@ def decode_audit_wire(text: str, schema: type[BaseModel]) -> AuditWireResult:
     if unknown_top:
         errors.append({"code": "extra_audit_fields", "count": len(unknown_top)})
     bound_fields = {"request_reviews", "guide_requirement_reviews"}
-    for name, info in canonical.model_fields.items():
+    for name in canonical.model_fields:
         if name in bound_fields:
             continue
         try:
@@ -249,7 +268,8 @@ def decode_audit_wire(text: str, schema: type[BaseModel]) -> AuditWireResult:
                 if name == "summary_output_fields"
                 else []
             )
-            element = get_args(info.annotation)[0] if get_origin(info.annotation) is list else None
+            annotation = _field_schema(canonical, name).model_fields[name].annotation
+            element = get_args(annotation)[0] if get_origin(annotation) is list else None
             if isinstance(element, type) and issubclass(element, BaseModel) and isinstance(value.get(name), list):
                 kept, valid_indices, invalid_indices = [], [], []
                 for index, entry in enumerate(value[name]):
@@ -270,6 +290,14 @@ def decode_audit_wire(text: str, schema: type[BaseModel]) -> AuditWireResult:
     normalized.update(request_reviews=requests, guide_requirement_reviews=requirements)
     errors.extend(request_errors)
     errors.extend(requirement_errors)
+    normalized["reviews"] = [
+        {
+            **row.model_dump(),
+            "applicability": row.source_applicability,
+            "condition": row.source_condition,
+        }
+        for row in normalized.get("reviews", [])
+    ]
     audit = GroundedAudit.model_validate(normalized)
     validation = {
         "status": "completed" if not errors else "partial" if all(e["code"] == "missing_bound_key" for e in errors) else "error",
