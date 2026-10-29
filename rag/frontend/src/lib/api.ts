@@ -2803,6 +2803,7 @@ export interface ChunkingSettingsUpdate {
 /** 回答の検索と生成の全体既定(全体設定だけで決め、検索・回答プロファイルでは上書きしない。#593)。 */
 export interface AnsweringSettingsData {
   answer_audit_mode: "none" | "standard" | "detailed";
+  answer_evidence_refinement_mode: "legacy" | "cited_only" | "cited_required";
   query_strategy: QueryStrategyName;
   answer_flow: AnswerFlowName;
   neighbor_child_count: number;
