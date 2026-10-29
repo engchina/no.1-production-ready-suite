@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ModelWrapValidatorHandler, PrivateAttr, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
 
@@ -522,6 +524,8 @@ class GroundedDraft(_StrictModel):
 
     # SDK が返した本文。モデルの出力schemaや通常のmodel_dumpには入れない。
     _provider_output_text: str | None = PrivateAttr(default=None)
+    # 検証の前に最初の 1 件へ寄せた、同じ内容の entry の数（欄ごと。#3849）。原文は _provider_output_text に残る。
+    _collapsed_duplicates: dict[str, int] = PrivateAttr(default_factory=dict)
 
     request_coverage: list[RequestCoverage] = Field(
         default_factory=list, max_length=64, description="要求単位ごとに使う根拠の計画。items より先に書く。"
@@ -559,9 +563,87 @@ class GroundedDraft(_StrictModel):
         description="high=主要な説明と適用条件に直接の根拠がある。medium=一部に不確実性がある。low=案内自体に根拠が乏しい。"
     )
 
+    @model_validator(mode="wrap")
+    @classmethod
+    def _collapse_duplicate_entries(cls, data: Any, handler: ModelWrapValidatorHandler[GroundedDraft]) -> GroundedDraft:
+        """同じ内容の計画・説明の繰り返しを最初の 1 件に寄せてから検証する（#3849）。
+
+        長い出力では、モデルが同じ要求の計画を内容を変えずに上限まで繰り返すことがある。寄せるのは内容がすべて
+        同じ entry だけで、内容の違う entry は 1 件も落とさない（件数の上限は寄せた後の件数で判定するので、内容の
+        違う entry が上限を超える出力は従来どおり検証で不合格になる）。items を寄せたら、当てはめが指す index を
+        寄せた先に付け替える。寄せた数は ``_collapsed_duplicates`` に残す。
+        """
+        collapsed: dict[str, int] = {}
+        if isinstance(data, Mapping):
+            data = dict(data)
+            for field in ("request_coverage", "guide_coverage"):
+                kept, _index, removed = _collapse_identical(data.get(field))
+                if removed:
+                    data[field] = kept
+                    collapsed[field] = removed
+            kept, index, removed = _collapse_identical(data.get("items"))
+            if removed:
+                data["items"] = kept
+                collapsed["items"] = removed
+                data["applications"] = _reindex_applications(data.get("applications"), index)
+        draft = handler(data)
+        if collapsed:
+            draft._collapsed_duplicates = collapsed
+        return draft
+
     def confirmation_items(self) -> list[dict[str, Any]]:
         """確認の項目の事実（`answer_envelope.settle_confirmation_items` の入力。#1492）。"""
         return [item.model_dump() for item in self.external_data_items]
+
+
+def _entry_key(entry: Any) -> str | None:
+    """entry の内容の比較の鍵（JSON の object だけ。比べられない値は None で、寄せない）。"""
+    if not isinstance(entry, Mapping):
+        return None
+    try:
+        return json.dumps(entry, sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return None
+
+
+def _collapse_identical(entries: Any) -> tuple[Any, dict[int, int], int]:
+    """内容がすべて同じ entry を最初の 1 件に寄せた一覧、元の index → 寄せた後の index、寄せた数。"""
+    if not isinstance(entries, list):
+        return entries, {}, 0
+    kept: list[Any] = []
+    first: dict[str, int] = {}
+    index: dict[int, int] = {}
+    for position, entry in enumerate(entries):
+        key = _entry_key(entry)
+        if key is not None and key in first:
+            index[position] = first[key]
+            continue
+        if key is not None:
+            first[key] = len(kept)
+        index[position] = len(kept)
+        kept.append(entry)
+    return kept, index, len(entries) - len(kept)
+
+
+def _reindex_applications(applications: Any, index: Mapping[int, int]) -> Any:
+    """当てはめの ``item_indexes`` を、寄せた後の items の index にする（範囲外の値はそのまま検査に回す）。"""
+    if not isinstance(applications, list):
+        return applications
+    result: list[Any] = []
+    for application in applications:
+        indexes = application.get("item_indexes") if isinstance(application, Mapping) else None
+        if not isinstance(indexes, list):
+            result.append(application)
+            continue
+        moved: list[Any] = []
+        for value in indexes:
+            value = index.get(value, value) if type(value) is int else value
+            # 寄せた 2 つの item を指していたら 1 回にする（同じ item を 2 回当てはめない）。
+            if type(value) is int and value in moved:
+                continue
+            moved.append(value)
+        result.append({**application, "item_indexes": moved})
+    return result
 
 
 class OutputFieldEvidence(_StrictModel):
