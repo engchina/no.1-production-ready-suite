@@ -98,6 +98,8 @@ def canonical_generation_draft(value: BaseModel) -> GroundedDraft:
         if "citations" in item:
             item["citations"] = converted
     draft = GroundedDraft.model_validate(raw)
+    if isinstance(value, GroundedDraft):
+        draft._provider_output_text = value._provider_output_text
     for item, own in zip(draft.items, ranges, strict=True):
         for citation, interval in zip(item.citations, own, strict=True):
             citation._wire_range = interval

@@ -33,6 +33,7 @@ from typing import Any
 from httpx import TimeoutException
 from openai import APITimeoutError
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
+from pydantic import BaseModel
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import alternation, arabic_numbers
 
@@ -4119,6 +4120,10 @@ def _numbered(text: str, units: Sequence[tuple[int, int]]) -> bool:
 def numbered_text(text: str) -> str:
     """長い根拠の本文に行番号を付ける。短い根拠は本文のまま示し、引用は全文になる（入力を増やさない）。"""
     units = citation_units(text)
+    return _numbered_text(text, units)
+
+
+def _numbered_text(text: str, units: Sequence[tuple[int, int]]) -> str:
     if not _numbered(text, units):
         return text
     return "\n".join(f"{number}| {text[start:end]}" for number, (start, end) in enumerate(units, 1))
@@ -4176,6 +4181,7 @@ class CitationView:
     source: str
     text: str
     units: tuple[tuple[int, int], ...]
+    rendered: str
     view_sha256: str
 
 
@@ -4185,14 +4191,17 @@ _CITATION_VIEWS: ContextVar[dict[int, tuple[dict, CitationView]] | None] = Conte
 
 def _citation_view(span: Mapping[str, Any]) -> CitationView:
     text = str(span.get("text") or "")
-    displayed = neutralize_boundary_markers(fold_width(_rendered_evidence_span(span)))
+    units = tuple(citation_units(text))
+    rendered = _rendered_evidence_span(span, units=units)
+    displayed = neutralize_boundary_markers(fold_width(rendered))
     return CitationView(
         str(span.get("evidence_id", "")),
         str(span.get("label", "")),
         str(span.get("source_id", "")),
         str(span.get("source", "")),
         text,
-        tuple(citation_units(text)),
+        units,
+        rendered,
         hashlib.sha256(displayed.encode()).hexdigest(),
     )
 
@@ -4362,7 +4371,9 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequenc
             return fail(
                 "citation_version_mismatch", "提示した根拠と現在の本文・ID・出典・行の版が一致しません。現在の引用を確定できません。"
             )
-    text, units = view.text, view.units
+    # 現在の版と一致した後は、送信時に固定した本文と引用単位から取り出す。
+    extraction_view = sent if isinstance(sent, CitationView) else view
+    text, units = extraction_view.text, extraction_view.units
     if not units:
         return fail("citation_extraction_failed", "指定した根拠に抽出できる本文がありません。")
     first, last, origin = 1, len(units), "whole_text"
@@ -4479,7 +4490,7 @@ def _source_note(span: dict) -> str:
     return f"\n{CONTEXT_NOTE_BEGIN}\n" + "\n".join(parts) + f"\n{CONTEXT_NOTE_END}" if parts else ""
 
 
-def _rendered_evidence_span(span: Mapping[str, Any]) -> str:
+def _rendered_evidence_span(span: Mapping[str, Any], *, units: Sequence[tuple[int, int]] | None = None) -> str:
     """モデルへ示す根拠ブロック。引用行の本文と、引用対象外の補助情報を同じ版で記録する。"""
     return (
         f"[{span['label']}] {span.get('location') or 'p.' + str(span.get('page', ''))} origin={span.get('origin', 'unclassified')}"
@@ -4488,14 +4499,17 @@ def _rendered_evidence_span(span: Mapping[str, Any]) -> str:
         + (" catalog" if span.get(ARTICLE_CATALOG_KEY) else "")
         + _source_note(dict(span))
         + "\n"
-        + numbered_text(str(span.get("text") or ""))
+        + _numbered_text(str(span.get("text") or ""), units if units is not None else citation_units(str(span.get("text") or "")))
     )
 
 
 def format_functions(spans: Sequence[dict]) -> str:
     """根拠を機能ごとの見出しで分けて提示し、別機能の混合を入力の時点で防ぐ。"""
-    _CITATION_VIEWS.set({id(span): (span, _citation_view(span)) for span in spans})
-    spans = _retrieved_heading_context(spans)
+    originals = spans
+    snapshots = {id(span): (span, _citation_view(span)) for span in originals}
+    _CITATION_VIEWS.set(snapshots)
+    spans = _retrieved_heading_context(originals)
+    displayed_views = {id(shown): snapshots[id(original)][1] for original, shown in zip(originals, spans, strict=True)}
     groups: dict[tuple, list[dict]] = {}
     for span in spans:
         groups.setdefault(span["function"], []).append(span)
@@ -4512,7 +4526,7 @@ def format_functions(spans: Sequence[dict]) -> str:
         header = f"=== 機能 F{number}: {_function_label(members[0])} ==="
         # 文書の補助情報は原文照合の対象外。表示IDの行より前に置くと直前の Evidence の本文に見え、
         # そこからの引用は「原文と一致しない」として削除されるため、IDの後ろに範囲を明示して置く。
-        body = "\n\n".join(_rendered_evidence_span(span) for span in members)
+        body = "\n\n".join(displayed_views[id(span)].rendered for span in members)
         blocks.append(header + "\n" + body)
     return "\n\n".join(blocks)
 
@@ -4566,6 +4580,8 @@ class Round:
     audit_cut: bool = False
     # 生成と監査の秒・prompt の文字数・LLM の token の数（遅い round の理由を確かめる。#1516）。
     timing: dict[str, Any] = field(default_factory=dict)
+    # 回答の権限・保存期間に従う診断。計測値や外部telemetryの属性には入れない。
+    citation_trace: dict[str, Any] = field(default_factory=dict)
     # 規則を質問の事実に当てはめた結果（検査・監査の結果つき。#2155）。
     applications: list[CheckedApplication] = field(default_factory=list)
     # 業務ガイドの手順ごとの充足（`guide_step_coverage`。#2491）。業務ガイドに沿わない回答では空。
@@ -4979,6 +4995,7 @@ class Round:
             **({"summary_warning": self.summary_warning} if self.summary_warning else {}),
             "audit_cut": self.audit_cut,
             "timing": self.timing,
+            **({"generation_citation_trace": self.citation_trace} if self.citation_trace else {}),
             **(
                 {"guide_steps": [{k: v for k, v in step.items() if k != "evidence_refs"} for step in self.guide_steps]}
                 if self.guide_steps
@@ -6289,6 +6306,71 @@ def run_round(
         resolve_prompt("generation.assumptionSystem", ASSUMPTION_SYSTEM_PROMPT) if assume_unconfirmed else ""
     )
     generation_model = generation_draft_wire_model()
+    generation_outputs: list[dict[str, Any]] = []
+    cached_views = _CITATION_VIEWS.get() or {}
+    input_views = tuple(
+        cached[1] for span in spans if (cached := cached_views.get(id(span))) is not None and cached[0] is span
+    )
+    unrecorded_input_ids = [
+        str(span.get("evidence_id", ""))
+        for span in spans
+        if (cached := cached_views.get(id(span))) is None or cached[0] is not span
+    ]
+
+    def snapshot_row(view: CitationView) -> dict[str, Any]:
+        canonical_block = neutralize_boundary_markers(fold_width(view.rendered))
+        prompt_block = next((block for block in (view.rendered, canonical_block) if block in prompt), None)
+        return {
+            "display_id": view.label,
+            "evidence_id": view.evidence_id,
+            "source_id": view.source_id,
+            "source": view.source,
+            "text": view.text,
+            "citation_units": [list(unit) for unit in view.units],
+            "numbered": _numbered(view.text, view.units),
+            "prompt_block": prompt_block,
+            "prompt_block_sha256": hashlib.sha256(prompt_block.encode()).hexdigest() if prompt_block is not None else None,
+            "view_sha256": view.view_sha256,
+            "present_in_prompt": prompt_block is not None,
+        }
+
+    input_snapshot = {
+        "capture_scope": "application_evidence_blocks",
+        "transport_capture": "not_recorded",
+        "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+        "evidence": [snapshot_row(view) for view in input_views],
+        "snapshot_status": "partial" if input_views and unrecorded_input_ids else "recorded" if input_views else "not_recorded",
+        "unrecorded_evidence_ids": unrecorded_input_ids,
+    }
+
+    def canonicalize_output(value: BaseModel, purpose: str, input_prompt: str) -> GroundedDraft:
+        canonical = canonical_generation_draft(value)
+        provider_text = value._provider_output_text if isinstance(value, GroundedDraft) else None
+        generation_outputs.append(
+            {
+                "purpose": purpose,
+                "input_prompt_sha256": hashlib.sha256(input_prompt.encode()).hexdigest(),
+                "raw_output_status": "recorded" if provider_text is not None else "not_recorded",
+                "raw_output_representation": "provider_output_text" if provider_text is not None else None,
+                "provider_capture_scope": "returned_response_only",
+                "provider_output_text": provider_text,
+                "parsed_output_representation": "generation_wire" if isinstance(value, generation_model) else "legacy_parsed_draft",
+                "parsed_output": value.model_dump(mode="json", exclude_unset=True),
+                "canonical_output": canonical.model_dump(mode="json", exclude_unset=True),
+                "citation_bindings": [
+                    {
+                        "item_index": index,
+                        "citations": [
+                            {"evidence_id": citation.evidence_id, "wire_range": citation._wire_range, "lines": citation.lines}
+                            for citation in item.citations
+                        ],
+                    }
+                    for index, item in enumerate(canonical.items)
+                ],
+            }
+        )
+        return canonical
+
     if range_only:
         from rag_engine.generation.citation_range_repair import (
             CITATION_RANGE_REPAIR_SYSTEM_PROMPT,
@@ -6343,7 +6425,7 @@ def run_round(
             draft = call_with_model_purpose(
                 "answer.generate", parse_text, generation_system, prompt, settings, generation_model, provider_id=provider_id
             )
-        draft = canonical_generation_draft(draft)
+        draft = canonicalize_output(draft, "answer.generate", prompt)
         if scope_plan is not None:
             draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
         generation_calls = 1 + int(scope_plan is not None)
@@ -6395,7 +6477,7 @@ def run_round(
             draft = call_with_model_purpose(
                 "answer.repair", parse_text, generation_system, repair_prompt, settings, generation_model, provider_id=provider_id
             )
-        draft = canonical_generation_draft(draft)
+        draft = canonicalize_output(draft, "answer.repair", repair_prompt)
         generation_calls += 1
         if scope_plan is not None:
             draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
@@ -6442,6 +6524,13 @@ def run_round(
     if not range_only:
         draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
+    citation_trace = {
+        "output_capture_scope": "returned_generation_drafts_only",
+        "transport_attempts_recorded": False,
+        "input": input_snapshot,
+        "outputs": generation_outputs,
+        "final_draft": draft.model_dump(mode="json", exclude_unset=True),
+    }
     timing["generation_calls"] = generation_calls
     timing["semantic_audit_policy"] = observation_policy()
     if range_repair:
@@ -6878,6 +6967,7 @@ def run_round(
         summary_warning=summary_warning,
         audit_cut=audit_cut,
         timing=timing,
+        citation_trace=citation_trace,
         applications=applications,
         duplicate_request_ids=duplicate_request_ids,
         missing_request_ids=missing_request_ids,

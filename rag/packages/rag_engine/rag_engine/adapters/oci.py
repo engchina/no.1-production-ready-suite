@@ -36,6 +36,7 @@ from rag_engine.config import (
 from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY, read_prompt, render_prompt_template
 from rag_engine.models.audit_wire import decode_audit_wire, is_audit_wire
 from rag_engine.models.llm import (
+    GroundedDraft,
     PictureDescriptionOutput,
     RerankTextRank,
     TextOutput,
@@ -1458,7 +1459,7 @@ def _parsed_response[StructuredOutputT: BaseModel](
 
     parsed = _value(response, "output_parsed")
     if parsed is not None:
-        return _coerce_parsed_output(parsed, text_format, provider)
+        return _coerce_parsed_output(parsed, text_format, provider, response=response)
 
     refusal = _response_refusal(response)
     if refusal:
@@ -1467,7 +1468,7 @@ def _parsed_response[StructuredOutputT: BaseModel](
     for content in _iter_response_content(response):
         parsed = _value(content, "parsed")
         if parsed is not None:
-            return _coerce_parsed_output(parsed, text_format, provider)
+            return _coerce_parsed_output(parsed, text_format, provider, response=response)
 
     raise RuntimeError(f"{provider.label} の Responses API 応答に parsed output がありません。")
 
@@ -1476,13 +1477,23 @@ def _coerce_parsed_output[StructuredOutputT: BaseModel](
     parsed: Any,
     text_format: type[StructuredOutputT],
     provider: LlmProviderSettings,
+    *,
+    response: Any = None,
 ) -> StructuredOutputT:
     if isinstance(parsed, text_format):
-        return parsed
-    try:
-        return text_format.model_validate(parsed)
-    except Exception as exc:
-        raise InvalidStructuredOutput(f"{provider.label} の LLM parsed output 型が不正です。") from exc
+        output = parsed
+    else:
+        try:
+            output = text_format.model_validate(parsed)
+        except Exception as exc:
+            raise InvalidStructuredOutput(f"{provider.label} の LLM parsed output 型が不正です。") from exc
+    if isinstance(output, GroundedDraft):
+        text = _value(response, "output_text")
+        if not isinstance(text, str):
+            pieces = [_value(content, "text") for content in _iter_response_content(response) if _value(content, "type") == "output_text"]
+            text = "".join(piece for piece in pieces if isinstance(piece, str)) if pieces else None
+        output._provider_output_text = text
+    return output
 
 
 def _response_refusal(response: Any) -> str:
