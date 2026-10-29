@@ -1682,12 +1682,14 @@ def enforce_requirement_rules(
     )
     _fill_period_expressions(items, updated.question_original)
     _drop_settled_period_questions(items)
-    _enforce_periods(
+    period_unanswerable = _enforce_periods(
         items,
         context,
         question=updated.question_original,
         clarified=updated.clarified_question_ja,
     )
+    if period_unanswerable:
+        updated.unanswerable_reason_ja = updated.unanswerable_reason_ja or period_unanswerable
     _settle_unrequested_limit(items)
     _settle_unrequested_shape(items, updated.question_original)
     _enforce_risks(items, context)
@@ -1735,6 +1737,9 @@ def _cap_open_questions(items: list[RequirementItem]) -> int:
     settled = 0
     for item in open_items[MAX_OPEN_QUESTIONS:]:
         if item.section in {RequirementSection.FROM, RequirementSection.SELECT}:
+            continue
+        if item.key == "period_date_column" and not item.columns and not item.candidates:
+            # 日時の型を確認できない項目は、確認件数の上限で推測に変えない。
             continue
         question = item.question_ja
         candidate = item.candidates[0] if item.candidates else None
@@ -2536,7 +2541,7 @@ def _enforce_periods(
     *,
     question: str = "",
     clarified: str = "",
-) -> None:
+) -> str:
     """相対的な期間の表現は、具体的な日付の範囲として必ず利用者に確かめる。
 
     日付の列が複数あっても、利用者が質問で指定した列（`_date_column_named_by_user`）に決まれば
@@ -2549,12 +2554,19 @@ def _enforce_periods(
         if item.section == RequirementSection.PERIOD and item.period is not None
     ]
     if not period_items:
-        return
+        return ""
     tables = from_tables(items)
     date_columns = context.date_columns(tables)
     column_item = next((item for item in items if item.key == "period_date_column"), None)
     chosen_column = ""
-    if column_item is not None and column_item.answered and column_item.columns:
+    unanswerable = ""
+    date_keys = {column.key for column in date_columns}
+    if (
+        column_item is not None
+        and column_item.answered
+        and column_item.columns
+        and column_item.columns[0] in date_keys
+    ):
         chosen_column = column_item.columns[0]
     elif len(date_columns) == 1:
         chosen_column = date_columns[0].key
@@ -2615,14 +2627,41 @@ def _enforce_periods(
                 id=stable_ontology_id("requirement_item", "period_date_column"),
                 key="period_date_column",
                 section=RequirementSection.PERIOD,
-                label_ja="期間で絞る日付の列",
+                label_ja="期間の基準となる日時",
                 status=RequirementStatus.MISSING,
             )
             items.append(column_item)
-        if not column_item.answered:
+        column_item.label_ja = "期間の基準となる日時"
+        column_item.columns = []
+        # 日時の意味と、SQL で安全に扱える型は別に確かめる。文字列の形式は推測しない。
+        available_columns = [
+            column
+            for table in tables
+            if table in context.tables
+            for column in context.tables[table].columns.values()
+        ]
+        named = _date_column_named_by_user(
+            available_columns, question, clarified, llm_column, context
+        )
+        if named or column_item.answered:
+            unanswerable = (
+                "対象データに日付型の項目がなく、安全な日付変換を確認できません。データ管理者に、対象の日時を日付型として"
+                "利用できるようデータ準備を依頼してください。文字列の日付形式は推測しません。"
+            )
             column_item.status = RequirementStatus.MISSING
-            column_item.reason_ja = "使う表に日付の列（DATE / TIMESTAMP）がありません。"
-            column_item.question_ja = "期間で絞る列を、Schema の列名で教えてください。"
+            column_item.question_ja = ""
+            column_item.reason_ja = unanswerable
+            column_item.sql_hint = ""
+            column_item.candidates = []
+        else:
+            column_item.status = RequirementStatus.MISSING
+            column_item.answer_kind = RequirementAnswerKind.FREE_TEXT
+            column_item.reason_ja = "期間の基準となる日時と、そのデータの扱いを確認できていません。"
+            column_item.question_ja = (
+                "期間は、どの出来事・処理の日時を基準にしますか？"
+                "表や列の名前ではなく、業務上の意味で教えてください。"
+            )
+            column_item.candidates = []
     elif chosen_column and column_item is not None and not column_item.answered:
         column_item.status = RequirementStatus.INFERRED
         column_item.columns = [chosen_column]
@@ -2633,10 +2672,16 @@ def _enforce_periods(
         period = item.period
         if period is None:
             continue
+        previous_date_column = period.date_column
+        period.date_column = chosen_column
         if chosen_column:
-            period.date_column = chosen_column
             if chosen_column not in item.columns:
                 item.columns = [chosen_column]
+        else:
+            # 古い下書きやモデルが文字列の日時を選んでも、暗黙変換の SQL を残さない。
+            period.sql_condition = ""
+            item.sql_hint = ""
+            item.columns = [column for column in item.columns if column != previous_date_column]
         if item.answered:
             if period.start_date and period.date_column:
                 period.sql_condition = period_sql_condition(period)
@@ -2727,6 +2772,8 @@ def _enforce_periods(
             if period.expression_ja.strip()
             else "どの期間で絞りますか？"
         )
+
+    return unanswerable
 
 
 # 期間を具体的な日付の範囲で確定すると決まる事項（年度の開始月・基準日・期間の境界）を聞く質問。
@@ -3743,9 +3790,15 @@ def build_requirement_state(session: QuerySession, *, max_review_rounds: int) ->
             f"{message} {' '.join(missing_minimum)}"  # nosec B608
             "SELECT と FROM が明確になるまで SQL の生成に進めません。"
         )
+    # 日時の対象も型も解決できない状態は、再検査の上限だけで生成可能にしない。
+    missing_period_binding = any(
+        item.key == "period_date_column" and not item.columns and not item.candidates
+        for item in draft.items
+    )
     can_apply = (
         status != RequirementPhase.UNANSWERABLE
         and not missing_minimum
+        and not missing_period_binding
         and (not unresolved or limit_reached)
     )
     return RequirementState(
