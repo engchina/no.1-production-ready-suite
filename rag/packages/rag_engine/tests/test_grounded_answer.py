@@ -6,6 +6,7 @@ import unittest
 from dataclasses import replace
 from unittest.mock import patch
 
+from audit_fixtures import legacy_audit_result
 from fictional_examples import DECISION_SCREEN, ERROR_HEADING_15, ERROR_QUESTION_15, ERROR_UNIT_7, ERROR_UNIT_15, STEP_3, STEP_4
 
 from rag_engine.config import get_settings
@@ -20,6 +21,7 @@ from rag_engine.generation.answering import (
     synthesize_grounded_answer,
 )
 from rag_engine.generation.citation_wire import generation_draft_wire_model
+from rag_engine.models.audit_wire import is_audit_wire
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
 LIST_TEXT = "●集計表出力\n一覧表を選択し、処理を選択します。\n実行ボタンを押して完了します。"
@@ -56,14 +58,18 @@ class FakeModel:
         self.captured_system_prompts = []
 
     def __call__(self, system, prompt, settings, schema, **options):
-        self.prompts.append((schema.__name__, prompt))
-        self.captured_system_prompts.append((schema.__name__, system))
+        observed = schema.canonical_schema if is_audit_wire(schema) else schema
+        self.prompts.append((observed.__name__, prompt))
+        self.captured_system_prompts.append((observed.__name__, system))
         is_generation = schema in (GroundedDraft, generation_draft_wire_model())
         source = self.drafts if is_generation else self.audits
         value = source.pop(0) if len(source) > 1 else source[0]
         # 既存のquote/lines fixtureをcanonicalの履歴として再生する。wire型を検証したとは扱わない。
         canonical_schema = GroundedDraft if is_generation else schema
-        return canonical_schema.model_validate(value(prompt) if callable(value) else value)
+        payload = value(prompt) if callable(value) else value
+        if is_audit_wire(schema):
+            return legacy_audit_result(payload, schema)
+        return canonical_schema.model_validate(payload)
 
 
 def run(model, ctx, question=QUESTION):

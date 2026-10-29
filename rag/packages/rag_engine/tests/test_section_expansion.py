@@ -10,6 +10,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from audit_fixtures import legacy_audit_result
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -24,6 +25,7 @@ from rag_engine.generation.answering import (
     synthesize_grounded_answer,
 )
 from rag_engine.generation.citation_wire import generation_draft_wire_model
+from rag_engine.models.audit_wire import is_audit_wire
 from rag_engine.models.llm import GroundedDraft
 from rag_engine.models.storage import StoredChunk
 from rag_engine.retrieval.context_builder import (
@@ -673,6 +675,8 @@ def test_unread_sections_make_the_answer_conditional():
         if schema in (GroundedDraft, generation_draft_wire_model()):
             # 既存quote fixtureのcanonical再生。wire出力の検証とは別。
             return GroundedDraft.model_validate(draft)
+        if is_audit_wire(schema):
+            return legacy_audit_result(audit, schema)
         return schema.model_validate(audit)
 
     unread = [f"「{FILE}」の「第3章 設備ごとの点検」（p.5〜7）は、読み込み量の上限に達したため未反映です。"]
@@ -980,6 +984,8 @@ def test_answer_hides_unread_sections_of_documents_it_does_not_cite():
         if schema in (GroundedDraft, generation_draft_wire_model()):
             # 既存quote fixtureのcanonical再生。wire出力の検証とは別。
             return GroundedDraft.model_validate(draft)
+        if is_audit_wire(schema):
+            return legacy_audit_result(audit, schema)
         return schema.model_validate(audit)
 
     unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731

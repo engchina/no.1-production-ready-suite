@@ -8,10 +8,12 @@ payload の検証を生成の出力形式から独立させる。
 import re
 from unittest.mock import patch
 
+from audit_fixtures import legacy_audit_result
 from pydantic import BaseModel, ConfigDict
 
 from rag_engine.generation import answering, grounded
 from rag_engine.generation.citation_wire import generation_draft_wire_model
+from rag_engine.models.audit_wire import is_audit_wire
 from rag_engine.models.llm import CitedEvidenceOutput, GroundedAudit, GroundedDraft, GroundedFactAudit
 
 
@@ -93,8 +95,9 @@ def echo_model(system, prompt, settings, schema, **options):
         items = [{"kind": "rule", "text": line, "citations": [{"evidence_id": match.group(1), "quote": line}]}] if match else []
         return GroundedDraft.model_validate({"summary": "answer", "items": items, "confidence": "high"})
     # 通常の回答の監査（#2795）は事実の監査の schema で呼ぶ。
-    if schema in (GroundedAudit, GroundedFactAudit):
-        return schema.model_validate(
+    if is_audit_wire(schema) or schema in (GroundedAudit, GroundedFactAudit):
+        parse_fixture = (lambda value: legacy_audit_result(value, schema)) if is_audit_wire(schema) else schema.model_validate
+        return parse_fixture(
             {
                 "goal_alignment": "aligned",
                 "summary_supported": True,

@@ -55,9 +55,9 @@ def run_review(requests):
 def test_contract_failures_do_not_become_missing_material_or_remove_valid_body(requests, missing, invalid, duplicates, validation):
     current = run_review(requests)
     dimension = current.trace()["validation_dimensions"]["answer_completeness"]
-    assert current.review_execution == "completed"
+    assert current.review_execution == "partial"
     assert dimension["execution"] == "partial"
-    assert dimension["review_execution"] == "completed"
+    assert dimension["review_execution"] == "partial"
     assert dimension["contract_validation"] == {
         "status": validation,
         "expected_request_ids": ["Q1"],
@@ -75,6 +75,7 @@ def test_contract_failures_do_not_become_missing_material_or_remove_valid_body(r
 
 def test_valid_review_remains_completed():
     current = run_review([("Q1", "addressed")])
+    assert current.review_execution == "completed"
     assert current.addressed == {"Q1"} and current.unanswered == []
     assert current.trace()["validation_dimensions"]["answer_completeness"]["execution"] == "completed"
 

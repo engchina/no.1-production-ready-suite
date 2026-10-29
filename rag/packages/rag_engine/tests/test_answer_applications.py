@@ -2,9 +2,11 @@
 
 import unittest
 
+from audit_fixtures import legacy_audit_result
 from test_grounded_answer import FakeModel, audit, context, draft, ids, record, run
 
 from rag_engine.generation.applications import APPLICATIONS_SECTION_TITLE, arithmetic_mismatch
+from rag_engine.models.audit_wire import is_audit_wire
 from rag_engine.models.llm import GroundedDraft
 
 RULE_TEXT = "延滞料の計算\n延滞料は、延滞日数に100円を掛けた額とする。"
@@ -121,12 +123,15 @@ class SchemaModel:
         self.responses, self.calls = responses, []
 
     def __call__(self, system, prompt, settings, schema, **options):
-        self.calls.append(schema.__name__)
-        value = self.responses[schema.__name__]
+        observed = schema.canonical_schema if is_audit_wire(schema) else schema
+        self.calls.append(observed.__name__)
+        value = self.responses[observed.__name__]
         if isinstance(value, Exception):
             raise value
         # 生成の既存fixtureはcanonical履歴として再生する。wireの型検証とは別。
         canonical_schema = GroundedDraft if schema.__name__ == "GroundedDraftWire" else schema
+        if is_audit_wire(schema):
+            return legacy_audit_result(value, schema)
         return canonical_schema.model_validate(value)
 
 

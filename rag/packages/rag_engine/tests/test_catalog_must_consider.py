@@ -10,10 +10,13 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 
+from audit_fixtures import legacy_audit_result
+
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import AnswerContext, AnswerRecord, _grounded_spans, synthesize_grounded_answer
+from rag_engine.models.audit_wire import is_audit_wire
 from rag_engine.models.llm import GroundedDraft
 from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY, ARTICLE_UNIT_KEY
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
@@ -93,12 +96,16 @@ class _Model:
         self.audits, self.prompts = list(audits), []
 
     def __call__(self, system, prompt, settings, schema, **options):
-        self.prompts.append((schema.__name__, prompt))
-        source = self.sources.get(schema.__name__, self.audits)
+        observed = schema.canonical_schema if is_audit_wire(schema) else schema
+        self.prompts.append((observed.__name__, prompt))
+        source = self.sources.get(observed.__name__, self.audits)
         value = source.pop(0) if len(source) > 1 else source[0]
         # 生成の既存quote fixtureをcanonical契約で再生する。
         canonical_schema = GroundedDraft if schema.__name__ == "GroundedDraftWire" else schema
-        return canonical_schema.model_validate(value(prompt) if callable(value) else value)
+        payload = value(prompt) if callable(value) else value
+        if is_audit_wire(schema):
+            return legacy_audit_result(payload, schema)
+        return canonical_schema.model_validate(payload)
 
     def names(self) -> list[str]:
         return [name for name, _prompt in self.prompts]

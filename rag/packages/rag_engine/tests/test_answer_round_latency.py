@@ -14,6 +14,7 @@ from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import answering, grounded
 from rag_engine.generation.answering import synthesize_grounded_answer
+from rag_engine.models.audit_wire import is_audit_wire
 from rag_engine.models.llm import GroundedAudit
 
 GOOD = "一覧表を選択し、処理を選択します。"
@@ -41,7 +42,7 @@ class SystemCapturingModel(FakeModel):
         self.systems = []
 
     def __call__(self, system, prompt, settings, schema, **options):
-        self.systems.append((schema.__name__, system))
+        self.systems.append(((schema.canonical_schema if is_audit_wire(schema) else schema).__name__, system))
         return super().__call__(system, prompt, settings, schema, **options)
 
 

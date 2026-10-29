@@ -2,8 +2,11 @@
 
 import json
 
+from audit_fixtures import legacy_audit_result
+
 from rag_engine.config import get_settings
 from rag_engine.generation import grounded
+from rag_engine.models.audit_wire import is_audit_wire
 from rag_engine.models.llm import GroundedAudit, GroundedCitation, GroundedDraft, GroundedItem
 
 QUESTION = "対象の設定を保存する方法は？"
@@ -35,11 +38,13 @@ class Model:
         self.inputs = []
 
     def __call__(self, system, prompt, settings, schema, **options):
-        self.inputs.append((schema.__name__, prompt))
+        observed = schema.canonical_schema if is_audit_wire(schema) else schema
+        self.inputs.append((observed.__name__, prompt))
         if issubclass(schema, GroundedDraft):
             return GroundedDraft(items=[self.proposal], summary="", confidence="low")
-        assert schema.__name__ == "GroundedFactAudit"
-        return schema.model_validate(
+        assert observed.__name__ == "GroundedFactAudit"
+        parse_fixture = (lambda value: legacy_audit_result(value, schema)) if is_audit_wire(schema) else schema.model_validate
+        return parse_fixture(
             {
                 "reviews": [
                     {

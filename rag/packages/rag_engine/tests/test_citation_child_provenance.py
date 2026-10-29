@@ -3,12 +3,15 @@
 同じ親（まとまり）・同じ頁に、見出し・注意の子 H と図の説明の子 F がある合成の文書で確かめる。
 """
 
+from audit_fixtures import legacy_audit_result
+
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answer_payload import answer_evidence_items
 from rag_engine.generation.answering import AnswerContext, AnswerRecord, _grounded_spans, synthesize_grounded_answer
 from rag_engine.generation.citation_wire import generation_draft_wire_model
+from rag_engine.models.audit_wire import is_audit_wire
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.retrieval.evidence_selection import evidence_spans
@@ -72,6 +75,8 @@ class _Model:
         if schema in (GroundedDraft, generation_draft_wire_model()):
             # 既存quote fixtureを履歴契約で再生する。
             return GroundedDraft.model_validate(self.draft)
+        if is_audit_wire(schema):
+            return legacy_audit_result(self.audit, schema)
         return schema.model_validate(self.audit)
 
 
