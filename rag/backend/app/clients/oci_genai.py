@@ -17,8 +17,17 @@ from numbers import Real
 from typing import Any, Literal, Protocol
 
 from pr_backend_core.bounded_calls import KIND_LABELS, Attempt, BoundedCallFailed, ErrorKind
+from pr_backend_core.chat_progress import chat_progress_details
 from pr_backend_core.observability.model_purpose import model_purpose_attributes
 from pr_backend_core.observability.tracing import observed_span
+from rag_engine.resources.rerank_diagnostics import (
+    RerankCallReceipt,
+    bind_rerank_attempt,
+    current_rerank_attempt,
+    current_rerank_receipt,
+    use_rerank_receipt,
+)
+from rag_engine.retrieval.query_identity import normalized_query_key
 
 from app.clients.ai_calls import embedding_rejection_reason, ingestion_ai_calls
 from app.clients.oci_auth import load_oci_config_without_prompt
@@ -219,32 +228,66 @@ class OciGenAiClient:
 
     async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
         """Cohere Rerank v4 fast で再ランク付けし、(index, score) を返す。"""
-        if top_n < 1:
-            raise ValueError(f"rerank top_n は 1 以上である必要があります。actual={top_n}")
-        if not documents:
-            return []
-        cache_key: str | None = None
-        if not self._rerank_cache_disabled():
-            cache_key = _rerank_cache_key(
-                query=query,
-                documents=documents,
-                top_n=top_n,
-                model_id=self._settings.oci_genai_rerank_model,
-            )
-            cached = self._get_cached_rerank(cache_key)
-            if cached is not None:
-                return cached
+        receipt = current_rerank_receipt() or RerankCallReceipt()
+        receipt.request(query, documents, model=self._settings.oci_genai_rerank_model, top_n=top_n)
+        with (
+            use_rerank_receipt(receipt),
+            observed_span(
+                "rerank.request", kind="internal", attributes=receipt.attributes()
+            ) as span,
+        ):
+            try:
+                if top_n < 1:
+                    raise ValueError(f"rerank top_n は 1 以上である必要があります。actual={top_n}")
+                if not documents:
+                    receipt.status = "skipped"
+                    return []
+                cache_key: str | None = None
+                receipt.cache_state = "disabled" if self._rerank_cache_disabled() else "miss"
+                if receipt.cache_state != "disabled":
+                    cache_key = _rerank_cache_key(
+                        query=query,
+                        documents=documents,
+                        top_n=top_n,
+                        model_id=self._settings.oci_genai_rerank_model,
+                    )
+                    cached = self._get_cached_rerank(cache_key)
+                    if cached is not None:
+                        receipt.cache_state = "hit"
+                        receipt.status = "completed"
+                        return cached
 
-        async def rerank_once(_: Attempt) -> Sequence[tuple[object, object]]:
-            return await self._rerank_with_oci(query, documents, top_n)
+                async def rerank_once(attempt: Attempt) -> Sequence[tuple[object, object]]:
+                    with bind_rerank_attempt(attempt.number):
+                        return await self._rerank_with_oci(query, documents, top_n)
 
-        # OCI SDK の再試行は切っているため、再試行は共通の実行器が受け持つ(#2002)。
-        with ingestion_ai_calls(self._settings, "rerank", total=1) as caller:
-            results = await _unwrapped_item_failure(caller.call(rerank_once, label="rerank"))
-        validated = _validate_rerank_results(results, document_count=len(documents), top_n=top_n)
-        if cache_key is not None:
-            self._store_rerank(cache_key, validated)
-        return validated
+                # OCI SDK の再試行は切り、既存の共通実行器だけで再試行する。
+                with ingestion_ai_calls(self._settings, "rerank", total=1) as caller:
+                    results = await _unwrapped_item_failure(
+                        caller.call(rerank_once, label="rerank")
+                    )
+                validated = _validate_rerank_results(
+                    results, document_count=len(documents), top_n=top_n
+                )
+                if cache_key is not None:
+                    self._store_rerank(cache_key, validated)
+                receipt.status = "completed"
+                return validated
+            except asyncio.CancelledError:
+                receipt.status = "cancelled"
+                span.set_status("cancelled")
+                raise
+            except Exception as exc:
+                receipt.status, receipt.error_type = "error", type(exc).__name__
+                span.set_status("failed")
+                raise
+            finally:
+                span.set_attributes(receipt.attributes())
+                span.set_display(
+                    details=chat_progress_details(
+                        code=[("rerank", json.dumps(receipt.to_dict(), ensure_ascii=False), "json")]
+                    )
+                )
 
     async def _embed_with_oci(
         self,
@@ -299,6 +342,28 @@ class OciGenAiClient:
             compartment_id=self._settings.oci_compartment_id,
             top_n=top_n,
         )
+        receipt = current_rerank_receipt()
+        attempt_number = current_rerank_attempt()
+        attempt: dict[str, Any] | None = None
+
+        def invoke_sdk() -> Any:
+            nonlocal attempt
+            client = self._client()
+            attempt = receipt.begin_sdk(attempt_number) if receipt is not None else None
+            try:
+                response = client.rerank_text(details)
+            except BaseException as exc:
+                if receipt is not None and attempt is not None:
+                    receipt.finish_sdk(
+                        attempt,
+                        "cancelled" if isinstance(exc, asyncio.CancelledError) else "error",
+                        exc,
+                    )
+                raise
+            if receipt is not None and attempt is not None:
+                receipt.finish_sdk(attempt, "completed")
+            return response
+
         with observed_span(
             "gen_ai.rerank",
             kind="client",
@@ -306,9 +371,25 @@ class OciGenAiClient:
                 "gen_ai.operation.name": "rerank",
                 "gen_ai.provider.name": "oracle",
                 "gen_ai.request.model": self._settings.oci_genai_rerank_model,
+                "rerank.attempt_number": attempt_number,
+                "rerank.retry_number": max(0, attempt_number - 1),
+                **(receipt.attributes() if receipt is not None else {}),
+                **model_purpose_attributes(),
             },
-        ):
-            response = await self._sdk_call_runner(lambda: self._client().rerank_text(details))
+        ) as span:
+            try:
+                response = await self._sdk_call_runner(invoke_sdk)
+            finally:
+                if receipt is not None:
+                    span.set_attributes(receipt.attributes())
+                    span.set_attributes(
+                        {
+                            "rerank.status_scope": "sdk_attempt",
+                            "rerank.status": str(attempt["status"])
+                            if attempt is not None
+                            else "not_run",
+                        }
+                    )
         document_ranks = getattr(response.data, "document_ranks", None)
         if not isinstance(document_ranks, list):
             raise ValueError("OCI rerank response に document_ranks がありません。")
@@ -441,7 +522,7 @@ def _rerank_cache_key(
             "kind": "rerank",
             "model_id": model_id,
             "top_n": top_n,
-            "query_sha256": _sha256_text(query),
+            "query_sha256": _sha256_text(normalized_query_key(query)),
             "document_sha256": [_sha256_text(document) for document in documents],
         }
     )

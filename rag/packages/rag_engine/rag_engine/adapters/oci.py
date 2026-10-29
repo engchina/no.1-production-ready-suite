@@ -63,6 +63,13 @@ from rag_engine.resources.llm_usage import (
     record_llm_usage,
     response_usage,
 )
+from rag_engine.resources.rerank_diagnostics import (
+    RerankCallReceipt,
+    bind_rerank_attempt,
+    current_rerank_attempt,
+    current_rerank_receipt,
+    use_rerank_receipt,
+)
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.structured_failures import structured_failure_details
 from rag_engine.resources.tracing import observe_call
@@ -1898,11 +1905,29 @@ def _rerank_text_once(
         top_n=top_n if top_n is not None else len(documents),
         **chunk_options,
     )
-    with observe_call("rerank", settings.rerank_model):
-        response = runtime.client.rerank_text(
-            request,
-            retry_strategy=runtime.oci.retry.NoneRetryStrategy(),
-        )
+    receipt = current_rerank_receipt()
+    with observe_call("rerank", settings.rerank_model) as observation:
+        strategy = runtime.oci.retry.NoneRetryStrategy()
+        attempt = receipt.begin_sdk(current_rerank_attempt()) if receipt is not None else None
+        try:
+            response = runtime.client.rerank_text(request, retry_strategy=strategy)
+        except BaseException as exc:
+            if receipt is not None and attempt is not None:
+                receipt.finish_sdk(attempt, "cancelled" if type(exc).__name__ == "CancelledError" else "error", exc)
+            raise
+        else:
+            if receipt is not None and attempt is not None:
+                receipt.finish_sdk(attempt, "completed")
+        finally:
+            if receipt is not None:
+                snapshot = {
+                    **receipt.to_dict(),
+                    "status_scope": "sdk_attempt",
+                    "status": attempt["status"] if attempt is not None else "not_run",
+                }
+                observation.display(
+                    details={"code": [{"label": "rerank", "text": json.dumps(snapshot, ensure_ascii=False), "language": "json"}]}
+                )
     ranks = getattr(response.data, "document_ranks", None) or []
     ranks_with_scores: list[RerankTextRank] = []
     for rank in ranks:
@@ -1921,14 +1946,37 @@ def _rerank_text_with_retry(
     settings: Settings,
     top_n: int | None = None,
 ) -> list[RerankTextRank]:
-    return _parse_with_retry(
-        lambda: _rerank_text_once(query, documents, settings, top_n=top_n),
-        "OCI rerank",
-        settings,
-        retries=settings.rerank_retries,
-        initial_wait_seconds=settings.rerank_retry_initial_wait_seconds,
-        max_wait_seconds=settings.rerank_retry_max_wait_seconds,
-    )
+    receipt = current_rerank_receipt() or RerankCallReceipt()
+    receipt.request(query, documents, model=settings.rerank_model, top_n=top_n if top_n is not None else len(documents))
+    receipt.cache_state = "disabled"
+    attempt_number = 0
+
+    def operation() -> list[RerankTextRank]:
+        nonlocal attempt_number
+        attempt_number += 1
+        with bind_rerank_attempt(attempt_number):
+            return _rerank_text_once(query, documents, settings, top_n=top_n)
+
+    with use_rerank_receipt(receipt), observe_call("stage", "rerank.request") as observation:
+        try:
+            result = _parse_with_retry(
+                operation,
+                "OCI rerank",
+                settings,
+                retries=settings.rerank_retries,
+                initial_wait_seconds=settings.rerank_retry_initial_wait_seconds,
+                max_wait_seconds=settings.rerank_retry_max_wait_seconds,
+            )
+            receipt.status = "completed"
+            return result
+        except BaseException as exc:
+            receipt.status = "cancelled" if type(exc).__name__ == "CancelledError" else "error"
+            receipt.error_type = type(exc).__name__
+            raise
+        finally:
+            observation.display(
+                details={"code": [{"label": "rerank", "text": json.dumps(receipt.to_dict(), ensure_ascii=False), "language": "json"}]}
+            )
 
 
 def _optional_float(value: Any) -> float | None:

@@ -24,6 +24,7 @@ def step_details_model(value: object) -> ChatProgressStepDetails | None:
         data = {
             "fields": value.get("fields"),
             "lines": value.get("lines"),
+            "code": value.get("code"),
             "truncated": value.get("truncated") is True or None,
         }
     else:
