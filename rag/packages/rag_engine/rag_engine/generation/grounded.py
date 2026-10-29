@@ -1662,7 +1662,8 @@ def _request_plan_errors(draft: GroundedDraft, spans: Sequence[dict] = ()) -> li
                 f"{plan.request_id}: {label} の照合に写した原文は {label} に無く、{'・'.join(others)} にあります。"
                 "その原文で説明するなら、計画と items の出典をその原文がある根拠にしてください。"
             )
-    return errors
+    # 同じ request_id の計画が複数あると同じ指摘が重なる（#3808）。作り直しの入力に同じ文を繰り返さない。
+    return list(dict.fromkeys(errors))
 
 
 def _item_request_plans(item: GroundedItem, draft: GroundedDraft) -> list[RequestCoverage]:

@@ -191,3 +191,10 @@ def test_a_misattribution_left_after_the_one_repair_keeps_the_text_marked_withou
     assert result.generation_trace["llm_calls"] == 2
     assert result.generation_trace["rounds"][0]["timing"]["request_plan_unsettled"]
     assert "写した原文" in str(result.envelope["passage_marks"])
+
+
+def test_duplicate_plans_for_the_same_request_do_not_repeat_an_error():
+    draft = plan_draft(SHIFTED, SHIFTED_ITEMS)
+    doubled = draft.model_copy(update={"request_coverage": [*draft.request_coverage, *draft.request_coverage]})
+    errors = _request_plan_errors(doubled, SPANS)
+    assert len(errors) == len(set(errors)) == 3
