@@ -4351,6 +4351,7 @@ export const ja = {
   "answer.step.redecideKeywords": "探し直しに使う検索語を決める",
   "answer.step.searchDocuments": "検索文から根拠の候補を集める",
   "answer.step.rerank": "質問との関連度で候補を並べ替える",
+  "answer.step.rerankRequest": "候補の並べ替えを要求する",
   "answer.step.selectDocuments": "回答の根拠を探す文書を選ぶ",
   "answer.step.unselectDocuments": "後回しにした文書を検索対象へ戻す",
   "answer.step.checkEvidence": "要求に答える根拠があるか判定する",

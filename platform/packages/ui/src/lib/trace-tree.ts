@@ -14,6 +14,7 @@ const TECHNICAL_SPANS: Readonly<Record<string, { name: Exclude<keyof TraceSpanNa
   "gen_ai.chat": { name: "chat", target: ["gen_ai.request.model"] },
   "gen_ai.embeddings": { name: "embeddings", target: ["gen_ai.request.model"] },
   "gen_ai.rerank": { name: "rerank", target: ["gen_ai.request.model"] },
+  "rerank.request": { name: "rerankRequest" },
   "gen_ai.execute_tool": { name: "executeTool", target: ["gen_ai.tool.name"] },
   "mcp.request": { name: "mcpRequest", target: ["pr.tool.title", "gen_ai.tool.name", "mcp.method.name"] },
   "oracle.select_ai": { name: "selectAi" },

@@ -54,6 +54,8 @@ describe("answerStepDisplayName", () => {
     const { answerStepDisplayName } = await import("./answer-process");
     expect(answerStepDisplayName("質問拡張戦略")).toBe("資料を探す検索表現を作る");
     expect(answerStepDisplayName("Rerank")).toBe("質問との関連度で候補を並べ替える");
+    expect(answerStepDisplayName("rerank.request")).toBe("候補の並べ替えを要求する");
+    expect(answerStageName("rerank.request")).toBe("候補の並べ替えを要求する");
     expect(answerStepDisplayName("文書検索（2回目）")).toBe("検索文から根拠の候補を集める（2 回目）");
     expect(answerStepDisplayName("回答文の生成と根拠確認（1回目）")).toBe("回答文を作って根拠と照合する（1 回目）");
     expect(answerStepDisplayName("検索語の再確定（書き換え後）")).toBe("探し直しに使う検索語を決める");
@@ -184,4 +186,24 @@ describe("RAG_TRACE_DETAILS_LABELS（トレースの span の名前）", () => {
     expect(answerStageName("根拠検索フロー")).toBe("回答に使う根拠を検索する");
     expect(answerStageName("未知の工程")).toBeUndefined();
   });
+});
+
+
+it("リランクの論理要求とSDK試行をstageの有無に関わらず同じ階層で訳す", () => {
+  const events = spanEvents([
+    { id: "1", name: "rag.answer", root: true },
+    { id: "2", parent: "1", name: "rag.engine.stage", attributes: { "pr.stage": "Rerank" } },
+    { id: "3", parent: "2", name: "rerank.request", attributes: { "pr.stage": "rerank.request" } },
+    { id: "4", parent: "3", name: "gen_ai.rerank", attributes: { "gen_ai.request.model": "synthetic-rerank", "pr.attempt": 2 } },
+    { id: "5", parent: "2", name: "rerank.request" },
+  ]);
+  const steps = chatProgressStepsFromEvents(events, CHAT_PROGRESS_DEFINITIONS, "t", { traceLabels: RAG_TRACE_DETAILS_LABELS });
+  expect(steps.map(step => [step.label, step.level ?? 0])).toEqual([
+    ["質問との関連度で候補を並べ替える", 0],
+    ["候補の並べ替えを要求する", 1],
+    ["質問との関連度で候補を並べ替える · synthetic-rerank（2 回目）", 2],
+    ["候補の並べ替えを要求する", 1],
+  ]);
+  expect(steps[1].details?.fields).toContainEqual({ label: "Span name", value: "rerank.request", mono: true });
+  expect(traceTimeline({ spans: events.filter(event => event.type === "step").map(event => ({ span_id: event.step_id, trace_id: event.trace_id, parent_span_id: event.parent_id, operation_name: event.name, status: event.status, started_at: event.started_at, finished_at: event.finished_at, attributes: event.attributes })), root_span_id: "1".repeat(16) }, RAG_TRACE_DETAILS_LABELS).steps[2].label).toBe("候補の並べ替えを要求する");
 });
