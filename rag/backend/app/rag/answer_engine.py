@@ -1184,6 +1184,8 @@ class AnswerEngine:
                     "reuse_context": result.reuse_context,
                     "counts": dict(result.counts),
                     "claim_checks": list(result.claim_checks),
+                    # 原質問・確認の答えとの両立の比較の、段落ごとの採否（#3800。ID と code だけ）。
+                    "premise_consistency_checks": list(result.premise_consistency_checks),
                     "missing_evidence_count": len(result.missing_evidence),
                     "stale_evidence_count": len(result.stale_evidence),
                     "confirmed_premises_count": len(premises),

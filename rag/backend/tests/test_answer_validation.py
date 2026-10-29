@@ -1647,3 +1647,161 @@ async def test_reuse_requires_the_final_audits_actual_claim_source_pair(
         )
         == {}
     )
+
+
+# 原質問・確認の答えとの両立の比較の採否（#3800）。engine の診断のうち ID・状態・code だけを
+# 記録と MCP の出力に渡し、モデルが書いた制約・推奨・原文は残さない。
+_PREMISE_DIAGNOSTICS: list[Any] = [
+    {
+        "answer_passage_id": "A1",
+        "constraints": "合成の制約",
+        "recommendation": "合成の推奨",
+        "fit": "conflicts",
+        "constraint_scope": "execution_only",
+        "passage_mode": "proposal",
+        "constraint_quote": "合成の原文 A",
+        "passage_quote": "合成の原文 B",
+        "status": "completed",
+        "adopted": False,
+        "decision": "execution_prohibition_does_not_prohibit_proposal",
+    },
+    {
+        "answer_passage_id": "A2",
+        "adopted": False,
+        "decision": "missing_passage_id",
+        "fit": "unknown",
+    },
+    "壊れた記録",
+]
+_PREMISE_RECORDS = [
+    {
+        "answer_passage_id": "A1",
+        "status": "completed",
+        "decision": "execution_prohibition_does_not_prohibit_proposal",
+        "adopted": False,
+        "fit": "conflicts",
+        "constraint_scope": "execution_only",
+        "passage_mode": "proposal",
+    },
+    {
+        "answer_passage_id": "A2",
+        "decision": "missing_passage_id",
+        "adopted": False,
+        "fit": "unknown",
+    },
+]
+
+
+async def test_validate_answer_keeps_the_premise_consistency_decisions(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """engine の両立の比較の採否を、技術の項目だけにして結果に残す（#3800）。"""
+
+    def fake_claims(
+        question: str, answer: str, items: list[dict[str, Any]], settings: Any, **options: Any
+    ) -> dict[str, Any]:
+        return {
+            "status": "completed",
+            "counts": {"supported": 1},
+            "claim_checks": [],
+            "premise_consistency_checks": _PREMISE_DIAGNOSTICS,
+        }
+
+    import rag_engine.evaluation.answer_validation as engine_validation
+
+    monkeypatch.setattr(engine_validation, "validate_answer_claims", fake_claims)
+    result = await validate_answer(
+        "q",
+        "承認は得ていません。",
+        [EvidenceRef("d1", "c1")],
+        get_settings(),
+        oracle=cast(Any, _RecordOracle()),
+        premises=[{"question": "合成の確認", "answer": "合成の答え"}],
+    )
+    assert result.premise_consistency_checks == _PREMISE_RECORDS
+    assert "合成" not in json.dumps(result.premise_consistency_checks, ensure_ascii=False)
+
+
+@pytest.mark.parametrize(
+    "checks",
+    [None, "not-a-list", [{"status": "not_run", "decision": "not_required", "adopted": False}]],
+    ids=["missing", "invalid", "not-run"],
+)
+async def test_validate_answer_premise_checks_without_passages(
+    monkeypatch: MonkeyPatch, checks: object
+) -> None:
+    """比較しなかった記録はそのまま残し、無い・壊れた値は空にする（#3800）。"""
+
+    def fake_claims(
+        question: str, answer: str, items: list[dict[str, Any]], settings: Any, **options: Any
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {"status": "completed", "counts": {}, "claim_checks": []}
+        if checks is not None:
+            result["premise_consistency_checks"] = checks
+        return result
+
+    import rag_engine.evaluation.answer_validation as engine_validation
+
+    monkeypatch.setattr(engine_validation, "validate_answer_claims", fake_claims)
+    result = await validate_answer(
+        "q",
+        "承認は得ていません。",
+        [EvidenceRef("d1", "c1")],
+        get_settings(),
+        oracle=cast(Any, _RecordOracle()),
+    )
+    assert result.premise_consistency_checks == (checks if isinstance(checks, list) else [])
+
+
+def test_mcp_validate_answer_returns_the_premise_checks(
+    auth: Any,  # noqa: F811
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """両立の比較の採否を、段落の位置と code で返す（#3800。Agent は結果をそのまま記録する）。"""
+    answer = "合成の案を示します。\n合成の件数は 2 件です。"
+
+    async def fake_validate(
+        question: str, answer: str, refs: list[EvidenceRef], settings: Any, **kwargs: Any
+    ) -> AnswerValidation:
+        return AnswerValidation(
+            status="completed",
+            valid=True,
+            counts={"supported": 2},
+            premise_consistency_checks=[
+                *_PREMISE_RECORDS,
+                {"answer_passage_id": "A9", "decision": "unknown_passage_id", "adopted": False},
+                {"status": "failed", "decision": "check_failed", "adopted": False},
+            ],
+        )
+
+    monkeypatch.setattr(mcp_tools, "validate_answer", fake_validate)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call(
+        "rag_validate_answer",
+        {
+            "query": "q",
+            "answer": answer,
+            "evidence": [{"document_id": "d1", "chunk_id": "c1"}],
+            "premises": [{"question": "合成の確認", "answer": "合成の答え"}],
+        },
+        _token(user.user_uuid),
+    )["structuredContent"]
+    checks = body["premise_checks"]
+    first, second = (
+        answer[item["answer_range"]["start"] : item["answer_range"]["end"]] for item in checks[:2]
+    )
+    assert (first, second) == ("合成の案を示します。", "合成の件数は 2 件です。")
+    assert checks[0] == {
+        "answer_range": checks[0]["answer_range"],
+        "status": "completed",
+        "decision": "execution_prohibition_does_not_prohibit_proposal",
+        "adopted": False,
+        "fit": "conflicts",
+        "constraint_scope": "execution_only",
+        "passage_mode": "proposal",
+    }
+    # 回答に無い段落の ID・段落に結び付かない記録は位置を null にして残す。
+    assert [(item["answer_range"], item["decision"], item["status"]) for item in checks[2:]] == [
+        (None, "unknown_passage_id", None),
+        (None, "check_failed", "failed"),
+    ]
