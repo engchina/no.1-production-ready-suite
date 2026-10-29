@@ -104,7 +104,14 @@ def test_legacy_draft_is_not_rewritten(lines):
     "start,end,count,numbered,lines,reason,whole",
     [
         (2, 3, 4, True, "2-3", None, False),
-        (1, 1, 1, False, "1", None, False),
+        # 番号なしで単位 1 つの (1,1) は null と同じ全文の指定にそろえる（#3778）。
+        (1, 1, 1, False, "1", None, True),
+        # 番号ありの単位 1 つ、番号なしで単位が 2 つ以上の整数の指定は今どおり範囲として扱う。
+        (1, 1, 1, True, "1", None, False),
+        (1, 1, 2, False, "1", None, False),
+        (0, 0, 1, False, "0", "citation_range_out_of_bounds", False),
+        (2, 1, 3, False, "2-1", "citation_range_invalid", False),
+        (1, None, 1, False, "", "citation_range_invalid", False),
         (None, None, 1, False, "", None, True),
         (None, None, 4, True, "", "citation_range_missing", False),
         (None, 2, 4, True, "", "citation_range_invalid", False),
@@ -276,13 +283,12 @@ def test_out_of_bounds_ranges_on_an_unnumbered_block_keep_other_citations_and_bo
 
 @pytest.mark.parametrize("start,end", [(1, 1), (None, None)], ids=["one", "null"])
 def test_unnumbered_single_unit_block_extracts_the_whole_text_for_one_and_null(start, end):
-    """今の振る舞いの固定（#3778）: 番号なしの単位 1 つの根拠では、通常の照合は 1 も null も全文を取り出す。
+    """番号なしの単位 1 つの根拠では、(1,1) も null も同じ全文の指定として照合する（#3778）。
 
-    範囲の修復（citation_range_repair）は同じ根拠への 1 を citation_range_invalid として拒む
-    （tests/test_citation_range_repair.py）。2 つの経路の扱いをそろえるかは #3778 で決める。
+    範囲の修復（citation_range_repair）も同じ判定を使う（tests/test_citation_range_repair.py）。
     """
     cited, error = grounded.cited_quote(_single_citation_item(start, end), _short_evidence(legacy=True))
     extraction = grounded._citation_extraction(cited)
     assert not error and cited.quote == SHORT
     assert extraction["status"] == "extracted" and extraction.get("reason_code") is None
-    assert extraction["requested_range_status"] == ("valid" if start == 1 else "not_required")
+    assert (extraction["quote_origin"], extraction["requested_range_status"]) == ("whole_text", "not_required")

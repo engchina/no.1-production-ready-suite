@@ -140,9 +140,45 @@ def test_short_unnumbered_multiline_block_uses_null_for_whole_text() -> None:
     cited, error = grounded.cited_quote(repaired.items[0], spans)
     assert not error and cited.quote == SHORT and repaired.items[0].citations[0]._wire_range == (None, None)
     assert diagnostic["status"] == "completed"
-    invalid, rejected = apply_range_repair(proposal(), response(1, 1), [target(numbered=False, count=1)])
-    assert invalid.items[0].citations[0]._wire_range == (0, 0)
-    assert rejected["rejected"][0]["reason_code"] == "citation_range_invalid"
+
+
+def test_one_one_on_an_unnumbered_single_unit_block_is_the_whole_text_like_null() -> None:
+    """番号なしで単位 1 つの根拠では (1,1) も null と同じ全文の指定として受け、通常の照合と同じ結果にする（#3778）。"""
+    spans = [dict(span) for span in evidence(SHORT)]
+    assert len(grounded.citation_units(SHORT)) == 1
+    repaired, diagnostic = apply_range_repair(proposal(), response(1, 1), [target(count=1, numbered=False)])
+    assert diagnostic["status"] == "completed" and not diagnostic["rejected"]
+    citation = repaired.items[0].citations[0]
+    assert (citation.lines, citation._wire_range) == ("1", (1, 1))
+    cited, error = grounded.cited_quote(repaired.items[0], spans)
+    extraction = grounded._citation_extraction(cited)
+    assert not error and cited.quote == SHORT
+    assert (extraction["quote_origin"], extraction["requested_range_status"]) == ("whole_text", "not_required")
+    assert repaired.items[0].text == CLAIM
+
+
+@pytest.mark.parametrize(
+    "start,end,count",
+    [(0, 0, 1), (0, 1, 1), (2, 2, 1), (3, 5, 1), (1, 2, 1), (1, None, 1), (3, 2, 3), (1, 1, 3), (1, 3, 3)],
+    ids=[
+        "zero",
+        "zero-start",
+        "out-of-bounds",
+        "out-of-bounds-range",
+        "past-end",
+        "half-null",
+        "reversed",
+        "multi-unit-one",
+        "multi-unit-all",
+    ],
+)
+def test_other_integers_on_unnumbered_blocks_stay_rejected_without_clamping(start: int, end: int | None, count: int) -> None:
+    draft = proposal()
+    repaired, diagnostic = apply_range_repair(draft, response(start, end), [target(count=count, numbered=False)])
+    assert diagnostic["status"] == "partial" and not diagnostic["adopted"]
+    assert diagnostic["rejected"] == [{"item_index": 0, "citation_index": 0, "reason_code": "citation_range_invalid"}]
+    # 拒んだ指定は採らず、元の範囲・本文をそのまま残す。
+    assert repaired.model_dump() == draft.model_dump() and repaired.items[0].citations[0]._wire_range == (0, 0)
 
 
 @pytest.mark.parametrize(
