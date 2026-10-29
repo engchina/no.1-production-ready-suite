@@ -106,6 +106,8 @@ def test_only_first_part_is_supported_and_invented_second_part_is_not_published(
     assert "未確認" in result.answer_text
     trace = result.generation_trace
     assert trace["crag_assessment"]["required_aspect_coverage"] == "partial"
+    # parser呼出が成功しても、この準備用spansだけで実送信の証明にはしない。
+    assert trace["crag_assessment"]["input_stage"] == "prepared_for_generation"
     assert trace["crag_partial_projection"]["applied"]
     assert trace["crag_partial_projection"]["omitted_claims"]
     assert result.needs_human_review

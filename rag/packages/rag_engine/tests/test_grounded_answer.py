@@ -3016,8 +3016,8 @@ class DocumentGroupedProcedureTest(unittest.TestCase):
         )
         self.ids = ids(self.ctx, self.QUESTION)
 
-    def test_other_document_steps_are_grouped_after_the_primary_steps_without_a_file_name_condition(self):
-        """別文書の手順は主文書の手順の後にまとめて出す。文書名から推定した業務名を条件に付けない (#1096)。"""
+    def test_other_document_steps_keep_draft_order_without_a_file_name_condition(self):
+        """文書を往復する草稿の順序を保ち、文書名から推定した条件を付けない。"""
         steps = draft(
             item(self.ids[self.SELECT + "\n" + self.RUN], "出力様式一覧から対象を選択します。", self.SELECT, request_id="Q1"),
             item(self.ids[self.INPUT], "ファイル名欄に新しい名前を直接入力します。", self.INPUT, request_id="Q1"),
@@ -3040,14 +3040,13 @@ class DocumentGroupedProcedureTest(unittest.TestCase):
             self.QUESTION,
         ).response
         text = result.answer_text
-        self.assertIn(
-            "操作手順（架空変更手順 > 出力様式設定）\n\n1. 出力様式一覧から対象を選択します。\n"
-            "根拠：架空変更手順.pdf p.20\n2. 実行ボタンを押します。",
-            text,
-        )
+        self.assertIn("操作手順（架空変更手順 > 出力様式設定）\n\n・出力様式一覧から対象を選択します。\n根拠：架空変更手順.pdf p.20", text)
+        self.assertIn("操作手順（架空変更手順 > 出力様式設定）\n\n・実行ボタンを押します。\n根拠：架空変更手順.pdf p.20", text)
+        self.assertEqual(text.count("操作手順（架空変更手順 > 出力様式設定）"), 2)
         self.assertIn("操作手順（架空管理説明書）\n\n・ファイル名欄に新しい名前を直接入力します。", text)
         self.assertNotIn("の場合）", text)
-        self.assertLess(text.index("実行ボタンを押します"), text.index("ファイル名欄に新しい名前"))
+        self.assertLess(text.index("出力様式一覧から対象を選択"), text.index("ファイル名欄に新しい名前"))
+        self.assertLess(text.index("ファイル名欄に新しい名前"), text.index("実行ボタンを押します"))
 
     def test_other_document_steps_for_a_request_the_primary_does_not_answer_stay_unconditional(self):
         steps = draft(

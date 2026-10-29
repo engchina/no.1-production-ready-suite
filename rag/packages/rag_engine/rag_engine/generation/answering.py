@@ -2813,7 +2813,6 @@ def synthesize_grounded_answer(
         spans,
         context,
         budget_chars=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
-        input_stage="actually_sent",
     )
     current, crag_projection = crag_generation.project_partial_answer(
         current, crag_view, spans, audited=audit_mode != grounded.AUDIT_MODE_NONE and current.audit is not None

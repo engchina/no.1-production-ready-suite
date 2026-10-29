@@ -71,6 +71,7 @@ def test_both_early_return_callers_forward_resolved_guide_notices(caller):
         assert all(schema != "GroundedDraft" for schema, _ in calls)
     assert NOTICE in result.answer_text
     assert result.generation_trace["crag_generation_gate"]["generation_calls"] == 0
+    assert result.generation_trace["crag_assessment"]["input_stage"] == "prepared_for_generation"
 
 
 @pytest.mark.parametrize(
