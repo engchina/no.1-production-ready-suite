@@ -576,6 +576,7 @@ def build_engine_settings(
     output_dir: Path,
     runtime_knowledge_path: Path | None = None,
     answer_model_id: str | None = None,
+    scope: AnswerScope | None = None,
 ) -> Any:
     """backend Settings から rag_engine の Settings を作る(env や .env は読まない)。
 
@@ -791,6 +792,10 @@ def build_engine_settings(
     return replace(
         engine_settings,
         domain_keywords_override=tuple(settings.rag_domain_keywords),
+        confirmed_premises=tuple(
+            (item["question"], item["answer"])
+            for item in _confirmed_validation_premises(settings, scope)
+        ),
         known_conditions=guide_known_conditions(
             settings.rag_support_guide if settings.rag_support_guide_enabled else {}
         ),
@@ -979,6 +984,7 @@ class AnswerEngine:
                 output_dir=work_dir,
                 runtime_knowledge_path=runtime_path,
                 answer_model_id=self._answer_model_id,
+                scope=self._scope,
             )
             # 回答の専用の thread で動かし、打ち切り・取り消しを thread に伝える(#1422)。
             result = await run_answer_in_thread(
