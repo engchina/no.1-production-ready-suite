@@ -241,7 +241,7 @@ def test_a_citation_quoting_only_the_section_heading_is_dropped():
     assert [entry["reason"] for entry in dropped if entry.get("citation_dropped")] == [grounded.HEADING_ONLY_REASON]
 
 
-def test_a_claim_citing_only_the_section_heading_is_marked_like_an_unfound_quote():
+def test_a_claim_citing_only_the_section_heading_is_marked_without_denial_of_source_authenticity():
     """出典が見出しだけの説明は確かめた説明にしない: 原文に無い引用と同じ印を付け、出典行を付けない（#3544）。"""
     heading = "第三条 提出期限"
     rule = record(0, f"{heading}\n{QUOTE}", heading, page=1, source="規則A.xml")
@@ -252,7 +252,9 @@ def test_a_claim_citing_only_the_section_heading_is_marked_like_an_unfound_quote
 
     result = _run(model, ctx)
 
-    assert marks(result)[CLAIM] == ["quote_unmatched"]
+    assert marks(result)[CLAIM] == ["citation_heading_only"]
+    citation = result.generation_trace["rounds"][0]["validation_dimensions"]["citation_validity"]["items"][0]["citations"][0]
+    assert citation["status"] == "matched" and citation["reason_code"] == "citation_heading_only"
     assert not _citation_lines(result.answer_text)
     assert {entry["answer_use"] for entry in result.cited_evidence} <= {"reference"}
     dropped = result.generation_trace["rounds"][0]["dropped"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import replace
@@ -121,7 +122,7 @@ CRAG_GRADE_PROMPT_TEMPLATE = (
 - 未閲覧資料の内容自体を supported にしない。根拠のある閲覧・照合案内で要求を満たせるかを判定する。
 
 ## Step 4: 十分性と必要な補完を判断する
-- sufficient は回答の生成に使える材料があるかだけを表す。関連する材料で部分回答できる場合も true とし、全ての必須観点を支持したとは扱わない。必須観点の充足は aspect_checks に独立して記す。
+- answerable_parts に、原質問への操作・規則・禁止・確認方法・定義を直接裏付ける部分と原文を示す。requested_result が supported でも業務概説だけなら空にする。sufficient はこの直接答えられる部分があるかを表し、同じ業務の候補が残ることや全観点の充足とは区別する。
 - sufficient=false にするのは、回答に使える材料が無く、候補が明らかに別の話題・機能または別の処理だけの場合。未確認の候補を誤検索と断定しない。
 - excerpt_only=true の候補は抄録。抄録に答えがあれば十分。続き・条件が抄録の外にありそうなら recovery_action で文脈を広げ、記載なしを機能不存在と断定しない。
 - 「すべて挙げて」「5 つすべて」「章ごとに」のような問は、見えている候補で答えられるかではなく、該当の項目が候補にそろっているかを確かめる。候補に見える該当の項目を enumerated_items に資料の順で挙げ（task_contract.enumeration.max_items 件まで。章の範囲（chapters）のある問は章ごとに 1〜2 件）、項目ごとに書かれた候補の chunk_uid と、その箇所の原文の写し（quote。20 字程度。文字を変えない）を付ける。同じ記載を 2 回挙げない。候補に無い項目を推測・一般知識で足さない。
@@ -159,6 +160,14 @@ prompt_injection_warnings:
 - 応答 schema（CragRetrievalGradeOutput）の各項目の説明に従い、JSON だけを返す。
 """
 )
+
+
+def _crag_context_fingerprint(context: AnswerContext) -> str:
+    values = sorted(
+        (record.chunk_uid or record.id, record.text)
+        for record in _records_for_prompt_injection_scan(context.records, context.evidence_tree)
+    )
+    return hashlib.sha256(json.dumps(values, ensure_ascii=False).encode()).hexdigest()
 
 
 def _crag_task_contract(question: str) -> dict[str, Any]:

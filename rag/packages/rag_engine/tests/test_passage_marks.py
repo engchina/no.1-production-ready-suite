@@ -221,3 +221,18 @@ def test_validation_verdicts_map_to_contract_codes(status, support_check, expect
     code = claim_mark_code(status, support_check)
     assert code == expected
     assert not code or code in CODES
+
+
+def test_legacy_language_labels_fall_back_for_new_citation_causes():
+    from rag_parser_core.language import bind_pack, build_pack, builtin_pack
+
+    raw = builtin_pack().to_dict()
+    raw["answer_labels"]["passage_reason_labels"] = [
+        value
+        for value in raw["answer_labels"]["passage_reason_labels"]
+        if not value.split("=", 1)[1].startswith("citation_") or value.endswith("=citation_error")
+    ]
+    with bind_pack(build_pack(raw)):
+        result = passage_marks.reason("citation_extraction_failed")
+    assert result["label"] == CODES["citation_extraction_failed"]["label"]
+    assert passage_marks.passage_mark("合成の説明。", [result])["state"] == "unverified"

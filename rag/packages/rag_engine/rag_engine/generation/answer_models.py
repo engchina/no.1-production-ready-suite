@@ -359,6 +359,8 @@ class CragRetrievalAttempt:
     document_selection: dict[str, Any] = field(default_factory=dict)
 
     generation_usable: bool | None = None
+    answerable_parts: tuple[dict[str, Any], ...] = ()
+    context_fingerprint: str = ""
     required_aspect_coverage: str = "unknown"
     unknown_aspects: tuple[str, ...] = ()
     grade_execution: str = "not_run"
@@ -373,6 +375,8 @@ class CragRetrievalAttempt:
             "executed_queries": list(self.executed_queries),
             "sufficient": self.sufficient,
             "generation_usable": self.sufficient if self.generation_usable is None else self.generation_usable,
+            "answerable_parts": list(self.answerable_parts),
+            "context_fingerprint": self.context_fingerprint,
             "required_aspect_coverage": self.required_aspect_coverage,
             "unknown_aspects": list(self.unknown_aspects),
             "grade_execution": "error" if self.grade_error else self.grade_execution,

@@ -1492,3 +1492,44 @@ def test_stream_message_delivers_answer_when_chat_message_save_fails(
     assert assistant.status == "ERROR"
     assert assistant.content == chat_route.CHAT_ANSWER_NOT_SAVED_MESSAGE
     assert assistant.trace_id == metadata["trace_id"]
+
+
+def test_create_conversation_with_legacy_active_language_pack(
+    fake_oracle: FakeChatOracle, monkeypatch: MonkeyPatch
+) -> None:
+    from rag_parser_core.language import builtin_pack, current_pack
+
+    from app.clients.language_pack_release_store import _release
+    from app.rag import published_language_runtime
+    from tests.test_language_pack_release_store import legacy_release_row
+
+    row = legacy_release_row()
+    seen: list[str] = []
+
+    class LegacyStore:
+        async def current(self):
+            return _release(row)
+
+    async def initialized():
+        return LegacyStore()
+
+    monkeypatch.setattr(published_language_runtime, "initialized_release_store", initialized)
+    original_create = fake_oracle.create_conversation
+
+    async def capture_create(*args, **kwargs):
+        seen.append(current_pack().text("answer_labels", "crag_refusal_summary"))
+        seen.append(current_pack().text("answer_labels", "cause_gap"))
+        return await original_create(*args, **kwargs)
+
+    monkeypatch.setattr(fake_oracle, "create_conversation", capture_create)
+    response = client.post(
+        "/api/chat/conversations",
+        json={"search_answer_profile_id": "bv-1", "title": "合成の互換性確認"},
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["messages"] == []
+    assert seen == [
+        builtin_pack().text("answer_labels", "crag_refusal_summary"),
+        "合成の保存済み文言",
+    ]
+    assert row["effective_json"]["answer_labels"].get("crag_refusal_summary") is None

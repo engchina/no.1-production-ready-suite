@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
 
@@ -154,6 +154,17 @@ class CragEvidenceQuote(_StrictModel):
     quote: str = Field(description="その候補から文字を変えずに写した直接の根拠。")
 
 
+class CragAnswerablePart(_StrictModel):
+    """原質問への部分回答に使える、直接裏付けた操作・規則・確認方法。"""
+
+    aspect: str = Field(description="直接答えられる required_aspects の観点。business_object だけでは回答内容にしない。")
+    kind: Literal["operation", "rule", "verification", "definition"] = Field(
+        description="原質問に対する操作、規則・禁止、実値の確認方法、定義のいずれか。"
+    )
+    claim: str = Field(description="原文が直接裏付ける部分回答。業務の概説や機能名だけを操作・規則に言い換えない。")
+    evidence: list[CragEvidenceQuote] = Field(default_factory=list, description="この部分回答を直接裏付ける候補のIDと原文。")
+
+
 class CragAspectCheck(_StrictModel):
     """質問の必要観点ごとの支持と、候補内の一意な出典ID。"""
 
@@ -215,9 +226,13 @@ class CragRetrievalGradeOutput(_StrictModel):
     aspect_checks: list[CragAspectCheck] = Field(
         default_factory=list, description="required_aspects ごとの判定。relevant な候補を合わせて確認し、全観点を必ず列挙する。"
     )
+    answerable_parts: list[CragAnswerablePart] = Field(
+        default_factory=list,
+        description="原質問の操作・規則・確認方法・定義に直接答えられる部分。業務が同じという概説だけなら空。複数資料の共同支持も可。",
+    )
     reason: str = Field(description="十分・不足の理由を短く。不足なら欠けている観点と、どの候補が最も近いかを書く。")
     sufficient: bool = Field(
-        description="取得済み材料で部分回答の生成へ進めるなら true。全ての必須観点が支持されたという意味ではない。充足は aspect_checks に独立して記す。"
+        description="answerable_parts に直接根拠を示せる部分があるなら true。関連候補や業務概述だけでは true にしない。全観点の充足とは区別する。"
     )
     confidence: float = Field(description="判定の確からしさ（0.0〜1.0）。")
     rewritten_query: str = Field(
@@ -271,6 +286,9 @@ class TextOutput(_StrictModel):
 # confidence、goal_alignment）の順に並べ、結論を先に書かせない。行動方針は GENERATE_SYSTEM_PROMPT / AUDIT_SYSTEM_PROMPT。
 class GroundedCitation(_StrictModel):
     """item の出典 1 つ（根拠の番号と引用する行）。引用の原文はシステムが取り出す（#2830）。"""
+
+    # モデル入力ではなく、本検証で毎回再作成する抽出の記録。旧 round の記録も信用しない。
+    _extraction: dict[str, str] = PrivateAttr(default_factory=dict)
 
     evidence_id: str = Field(description="根拠の先頭にある [E1] 形式の番号（角括弧なし）。")
     lines: str = Field(

@@ -1924,6 +1924,7 @@ class AnswerGenerationTests(unittest.TestCase):
                         confidence=0.92,
                         relevant_chunk_ids=["chunk-good"],
                         reason="根拠が直接回答している",
+                        support_text="better source evidence",
                     ),
                     _answer_output(answer="crag answer", cited_evidence_id="chunk-good"),
                 ],
@@ -2027,7 +2028,13 @@ class AnswerGenerationTests(unittest.TestCase):
             patch(
                 "rag_engine.generation.answering.parse_text_response",
                 side_effect=[
-                    _crag_grade(sufficient=True, confidence=0.96, relevant_chunk_ids=["chunk-legacy"], reason="根拠が十分"),
+                    _crag_grade(
+                        sufficient=True,
+                        confidence=0.96,
+                        relevant_chunk_ids=["chunk-legacy"],
+                        reason="根拠が十分",
+                        support_text="legacy CRAG evidence",
+                    ),
                     _answer_output(answer="legacy crag answer", cited_evidence_id="chunk-legacy"),
                 ],
             ) as parse,
@@ -2077,7 +2084,7 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertNotIn("原質問の検索結果を優先します", result.question_display)
         self.assertIn("全検索文を同じ重みで扱います", result.question_display)
 
-    def test_crag_falls_back_to_available_context_when_grader_fails(self):
+    def test_crag_retains_context_without_generating_when_grader_fails(self):
         settings = get_settings()
         context = _answer_context(
             [
@@ -2109,8 +2116,9 @@ class AnswerGenerationTests(unittest.TestCase):
                 answer_flow=CRAG_ANSWER_FLOW_LABEL,
             )
 
-        self.assertIn("fallback answer", result.answer)
-        self.assertEqual(parse.call_args_list[-1].args[3], AnswerOutput)
+        self.assertNotIn("fallback answer", result.answer)
+        self.assertTrue(result.insufficient_reason)
+        self.assertEqual([call.args[3] for call in parse.call_args_list], [CragRetrievalGradeOutput])
         self.assertEqual(len(result.crag_attempts), 1)
         # 例外の型の名前だけを残し、本文は残さない（#3259）。
         self.assertEqual(result.crag_attempts[0]["grade_error"], "RuntimeError")
@@ -2137,9 +2145,8 @@ class AnswerGenerationTests(unittest.TestCase):
                     _crag_grade(sufficient=False, rewritten_query="rewrite two"),
                     _crag_grade(sufficient=False, rewritten_query="rewrite three"),
                     _crag_grade(sufficient=False, rewritten_query="rewrite four"),
-                    _answer_output(answer="best available answer", cited_evidence_id="chunk-3"),
                 ],
-            ),
+            ) as parse,
         ):
             result = answer_question_result(
                 "original question",
@@ -2150,7 +2157,8 @@ class AnswerGenerationTests(unittest.TestCase):
                 answer_flow=CRAG_ANSWER_FLOW_LABEL,
             )
 
-        self.assertIn("best available answer", result.answer)
+        self.assertTrue(result.insufficient_reason)
+        self.assertEqual([call.args[3] for call in parse.call_args_list], [CragRetrievalGradeOutput] * 3)
         self.assertEqual(build_context.call_count, 3)
         self.assertEqual(
             build_context.call_args_list[-1].kwargs["retrieval_queries"],
@@ -2185,6 +2193,7 @@ class AnswerGenerationTests(unittest.TestCase):
                         confidence=0.95,
                         relevant_chunk_ids=["chunk-beta"],
                         reason="beta が直接回答している",
+                        support_text="beta relevant evidence",
                     ),
                     _answer_output(answer="refined answer", cited_evidence_id="chunk-beta"),
                 ],
@@ -2273,6 +2282,8 @@ class AnswerGenerationTests(unittest.TestCase):
                         confidence=0.95,
                         relevant_chunk_ids=["beta-child"],
                         reason="beta child が直接回答している",
+                        support_text="beta parent synthesis should remain",
+                        support_source_ids=["parent-beta"],
                     ),
                     _answer_output(answer="tree refined answer", cited_evidence_id="beta-child"),
                 ],
@@ -2320,7 +2331,9 @@ class AnswerGenerationTests(unittest.TestCase):
 
         with patch(
             "rag_engine.generation.answering.parse_text_response",
-            return_value=_crag_grade(sufficient=True, confidence=0.9, relevant_chunk_ids=["parent-1"]),
+            return_value=_crag_grade(
+                sufficient=True, confidence=0.9, relevant_chunk_ids=["parent-1"], support_text="parent body with the hit"
+            ),
         ):
             attempt = _grade_crag_retrieval(1, "question", "question", ["question"], context, get_settings())
 
@@ -2404,6 +2417,7 @@ class AnswerGenerationTests(unittest.TestCase):
                         confidence=0.95,
                         relevant_chunk_ids=["child-late"],
                         reason="child anchor が直接回答している",
+                        support_text="late anchor answer detail for grader",
                     ),
                     _answer_output(answer="anchor-aware answer", cited_evidence_id="child-late"),
                 ],
@@ -2419,7 +2433,10 @@ class AnswerGenerationTests(unittest.TestCase):
             )
 
         grade_prompt = parse.call_args_list[0].args[1]
-        self.assertIn("anchor-aware answer", result.answer)
+        # 評価に見えた子の原文が生成文脈に無い場合は、生成済みとは扱わない。
+        self.assertNotIn("anchor-aware answer", result.answer)
+        self.assertTrue(result.insufficient_reason)
+        self.assertEqual(parse.call_count, 1)
         self.assertIn("retrieved_anchor_children", grade_prompt)
         self.assertIn("child-late", grade_prompt)
         self.assertIn("late anchor answer detail for grader", grade_prompt)
@@ -2456,6 +2473,7 @@ class AnswerGenerationTests(unittest.TestCase):
                         sufficient=True,
                         relevant_chunk_ids=["chunk-corrected"],
                         reason="補正後の根拠が十分",
+                        support_text="corrected evidence",
                     ),
                     _answer_output(answer="wrapped crag answer", cited_evidence_id="chunk-corrected"),
                 ],
@@ -3217,20 +3235,25 @@ def _crag_grade(
     relevant_chunk_ids: list[str] | None = None,
     reason: str = "",
     rewritten_query: str = "",
+    support_text: str = "",
+    support_source_ids: list[str] | None = None,
 ) -> CragRetrievalGradeOutput:
     from rag_engine.models.llm import CragCandidateVerdict
 
+    if sufficient:
+        assert support_text and relevant_chunk_ids, "生成可用の試験には実際の候補原文が必要"
+    evidence = [{"source_id": uid, "quote": support_text} for uid in support_source_ids or relevant_chunk_ids or []]
     return CragRetrievalGradeOutput(
         candidate_verdicts=[
             CragCandidateVerdict(chunk_uid=uid, relevant=sufficient, reason="関連" if sufficient else "別の話題")
-            for uid in relevant_chunk_ids or []
+            for uid in dict.fromkeys([*(relevant_chunk_ids or []), *(support_source_ids or [])])
         ],
         sufficient=sufficient,
         confidence=confidence,
         reason=reason,
         rewritten_query=rewritten_query,
         aspect_checks=[
-            dict(aspect=aspect, status="supported", source_ids=relevant_chunk_ids or [], reason="合成根拠の観点を確認")
+            dict(aspect=aspect, status="supported", source_ids=relevant_chunk_ids or [], evidence=evidence, reason="合成根拠の観点を確認")
             for aspect in ["business_object", "requested_result", "applicability", "procedure"]
         ]
         if sufficient
@@ -3238,6 +3261,7 @@ def _crag_grade(
             dict(aspect=aspect, status="missing", source_ids=[], reason="必要な観点の説明がない")
             for aspect in ["business_object", "requested_result", "applicability", "procedure"]
         ],
+        answerable_parts=[dict(aspect="requested_result", kind="rule", claim=support_text, evidence=evidence)] if sufficient else [],
     )
 
 

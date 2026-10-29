@@ -110,6 +110,21 @@ class SectionMapStub:
         )
 
 
+def _direct_answer_part(question: str, context: Any) -> dict[str, Any]:
+    """生成入力に残る原文を、章補完フローの正例へ明示する。"""
+    from rag_engine.generation.answering import _grounded_spans
+
+    span = _grounded_spans(question, context, (), None)[0]
+    return {
+        "aspect": "procedure",
+        "kind": "operation",
+        "claim": span["text"],
+        "status": "supported",
+        "evidence": [{"source_id": span["source_id"], "quote": span["text"]}],
+        "evidence_validation": "matched",
+    }
+
+
 @pytest.fixture
 def section_map(monkeypatch: pytest.MonkeyPatch) -> SectionMapStub:
     stub = SectionMapStub()
@@ -182,19 +197,20 @@ async def test_max_levels_limit_makes_the_answer_conditional(
     ) -> Any:
         if schema is CragRetrievalGradeOutput:
             # 読み取り段数の上限を試すので、未評価ではなく未充足の操作を明示する。
-            return CragRetrievalGradeOutput(
-                sufficient=False,
-                confidence=0.2,
-                reason="文書全体にある後続操作の説明が不足",
-                rewritten_query="",
-                aspect_checks=[
-                    {
-                        "aspect": "procedure",
-                        "status": "missing",
-                        "source_ids": [],
-                        "reason": "後続操作を含む文書全体の読み取りが必要。",
-                    }
-                ],
+            supported = _fake_llm(system, prompt, settings, schema, **options)
+            return supported.model_copy(
+                update={
+                    "sufficient": False,
+                    "reason": "文書全体にある後続操作の説明が不足",
+                    "aspect_checks": [
+                        check.model_copy(
+                            update={"status": "missing", "source_ids": [], "evidence": []}
+                        )
+                        if check.aspect == "procedure"
+                        else check
+                        for check in supported.aspect_checks
+                    ],
+                }
             )
         return _fake_llm(system, prompt, settings, schema, **options)
 
@@ -235,6 +251,7 @@ async def test_initial_sufficient_grade_still_adds_section_text_to_generation(
             query=query,
             retrieval_queries=tuple(queries),
             sufficient=True,
+            answerable_parts=(_direct_answer_part(question, context),),
             relevant_chunk_ids=tuple(
                 child.record.chunk_uid
                 for parent in context.evidence_tree
@@ -253,7 +270,7 @@ async def test_initial_sufficient_grade_still_adds_section_text_to_generation(
 
     assert section_map.reads and section_map.reads[0][0] == "s1"
     assert outcome.diagnostics["section_expansion"]["levels_read"] == 1
-    assert any(SECTION_TAIL[0].text in prompt for prompt in prompts)
+    assert any(SECTION_TAIL[0].text in prompt for prompt in prompts), outcome.diagnostics
 
 
 @pytest.mark.usefixtures("stub_llm")
@@ -601,7 +618,11 @@ async def test_section_completion_reaches_generation_in_both_answer_flows(
     ) -> CragRetrievalAttempt:
         grades.append(attempt)
         return CragRetrievalAttempt(
-            attempt=attempt, query=query, retrieval_queries=tuple(queries), sufficient=True
+            attempt=attempt,
+            query=query,
+            retrieval_queries=tuple(queries),
+            sufficient=True,
+            answerable_parts=(_direct_answer_part(question, context),),
         )
 
     def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
@@ -616,7 +637,7 @@ async def test_section_completion_reaches_generation_in_both_answer_flows(
     )
 
     assert bool(section_map.reads) is enabled
-    assert any(SECTION_TAIL[0].text in prompt for prompt in prompts) is enabled
+    assert any(SECTION_TAIL[0].text in prompt for prompt in prompts) is enabled, outcome.diagnostics
     if flow == "standard_rag":
         assert grades == []
     if enabled:

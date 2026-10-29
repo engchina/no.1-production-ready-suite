@@ -49,7 +49,7 @@ from rag_engine.dependencies import (
     search_adb_hybrid_chunks,
 )
 from rag_engine.generation import applications as answer_applications
-from rag_engine.generation import form_field_kinds, passage_marks
+from rag_engine.generation import crag_generation, form_field_kinds, passage_marks
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     build_envelope,
@@ -162,6 +162,7 @@ from rag_engine.generation.crag_support import (
     MAX_GENERATED_QUERY_CHARS,
     _build_crag_grade_prompt,
     _crag_confidence,
+    _crag_context_fingerprint,
     _crag_grade_candidates,
     _crag_quote_matches,
     _crag_rule_signals,
@@ -1864,7 +1865,34 @@ def _grade_crag_retrieval(
     usable_context = _refine_crag_context(
         context, relevant_chunk_ids, max_chars=max(1, len(context.text)), rejected_chunk_ids=rejected_chunk_ids
     )
-    sufficient = bool(usable_context.records and usable_context.text.strip())
+    answerable_parts = []
+    for part in output.answerable_parts:
+        evidence = [value.model_dump() | {"source_id": canonical(value.source_id)} for value in part.evidence]
+        checked = next((row for row in checks if row["aspect"] == part.aspect), None)
+        supported_part = bool(
+            checked
+            and part.aspect != "business_object"
+            and part.claim.strip()
+            and evidence
+            and (checked["status"] != "data_confirmation" or part.kind == "verification")
+            and all(
+                value["source_id"] in relevant_chunk_ids
+                and value["source_id"] not in blocked_sources | uncertain_error_sources
+                and verified_quote(value["source_id"], value["quote"])
+                for value in evidence
+            )
+        )
+        answerable_parts.append(
+            {
+                **part.model_dump(),
+                "evidence": evidence,
+                "status": "supported" if supported_part else "unknown",
+                "evidence_validation": "matched" if supported_part else "unverified",
+            }
+        )
+    sufficient = bool(
+        usable_context.records and usable_context.text.strip() and any(part["status"] == "supported" for part in answerable_parts)
+    )
     rewrite = _trim_generated_text(output.rewritten_query, MAX_GENERATED_QUERY_CHARS)
     rejected_rewrite = query_rejection_reason(question, rewrite)
     if rejected_rewrite:
@@ -1884,6 +1912,8 @@ def _grade_crag_retrieval(
         missing_aspects=missing_aspects,
         unknown_aspects=unknown_aspects,
         generation_usable=sufficient,
+        answerable_parts=tuple(answerable_parts),
+        context_fingerprint=_crag_context_fingerprint(context),
         required_aspect_coverage=coverage,
         grade_execution="partial" if structure_partial else "completed",
         rule_signals=_crag_rule_signals(question, context, max_candidates=max_candidates if compact else None),
@@ -1964,6 +1994,7 @@ def _grounded_prompt(
     template: str | None = None,
     known_gaps: Sequence[str] = (),
     field_kind_note: str = "",
+    crag_assessment: Mapping[str, Any] | None = None,
 ) -> str:
     """編集可能テンプレートへ、質問・画像の対応・機能別の根拠と補助情報を差し込む。
 
@@ -1985,6 +2016,7 @@ def _grounded_prompt(
             if query_expansion is not None and query_expansion.routing_data_items
             else "",
             field_kind_note,
+            crag_generation.prompt_context(crag_assessment),
         )
         if section
     )
@@ -2280,6 +2312,7 @@ def synthesize_grounded_answer(
     answer_llm_provider: str | None = None,
     query_expansion: QueryExpansionResult | None = None,
     known_gaps: Sequence[str] = (),
+    crag_assessment: Mapping[str, Any] | None = None,
     unread_sections: Sequence[Any] = (),
     unread_documents: Collection[str] = (),
     evidence_budget_chars: int | None = None,
@@ -2303,6 +2336,18 @@ def synthesize_grounded_answer(
     from rag_engine.generation import grounded
     from rag_engine.models.llm import GroundedItem
 
+    if crag_assessment is not None:
+        gate_spans = _grounded_spans(
+            question,
+            context,
+            image_evidence,
+            runtime_knowledge,
+            budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
+        )
+        gate_view = crag_generation.generation_view(crag_assessment, gate_spans, context)
+        refusal = crag_generation.refusal_response(question, gate_view)
+        if refusal is not None:
+            return GroundedAnswer(refusal, context, tuple(image_evidence), image_prompt_mode)
     provider = answer_llm_provider
     source_provider = answer_llm_provider or settings.default_answer_llm
     generation_settings = settings_for_llm_purpose(settings, LLM_PURPOSE_GENERATION)
@@ -2383,6 +2428,7 @@ def synthesize_grounded_answer(
             budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
             whole_records=evidence_budget_chars is not None,
         )
+        crag_view = crag_generation.generation_view(crag_assessment, spans, context)
         prompt = _grounded_prompt(
             question,
             spans,
@@ -2396,6 +2442,7 @@ def synthesize_grounded_answer(
             template=template,
             known_gaps=known_gaps,
             field_kind_note=form_field_kinds.prompt_note(field_kinds, resolved_conditions, spans),
+            crag_assessment=crag_view,
         )
         with (
             budget.round(),
@@ -2745,6 +2792,11 @@ def synthesize_grounded_answer(
     answer_warnings = [passage_marks.answer_warning("off_goal", grounded.answer_labels().off_goal_gap)] if off_goal else []
     if correction_failure:
         answer_warnings.append(passage_marks.answer_warning("correction_failed", correction_failure))
+    crag_view = crag_generation.generation_view(crag_assessment, spans, context)
+    current, crag_projection = crag_generation.project_partial_answer(
+        current, crag_view, spans, audited=audit_mode != grounded.AUDIT_MODE_NONE and current.audit is not None
+    )
+    crag_gaps = crag_generation.gap_lines(question, crag_view)
     # 資料の原文と照合できない説明・業務ガイドの文から来た説明は、資料の出典・回答の根拠の一覧から外す（#2792）。
     grounded.detach_unsourced(current.checked)
     guide_notices = runtime_knowledge.guide_notices if runtime_knowledge is not None else ()
@@ -2753,7 +2805,7 @@ def synthesize_grounded_answer(
     # 出す item（引用元の決まらない印つきの説明を含む）。
     published = [entry for entry in current.checked if entry.span and not entry.removed]
     removed_entries = [entry for entry in current.checked if entry.removed]
-    gaps = [entry.item.text for entry in current.checked if entry.item.kind == "gap"]
+    gaps = [*[entry.item.text for entry in current.checked if entry.item.kind == "gap"], *crag_gaps]
     # 章節の拡張が上限で読めなかった章節 (#1436)。本文の「回答に未反映の関連章節」に出し、回答を条件つきにする。
     # 回答時間の上限で確かめられなかった点（#1516。直していない是正の指摘・終わらなかった監査・生成）は
     # 「回答時間の上限により省略した処理」の節に分けて出す（#2040）。不足・条件つきの判定には両方を使う。
@@ -2800,6 +2852,8 @@ def synthesize_grounded_answer(
     unanswered += guide_gaps
     # 監査が「回答に必要なのに使われていない」と挙げた根拠。言い換えや適用の断定は加えず、原文のみ提示で示す (#1098)。
     needed = grounded.audit_needed_quotes(current, spans, question=question)
+    if crag_projection.get("applied") and not any(entry.published for entry in current.checked):
+        needed = [entry for entry in current.checked if entry.quote_only and entry.span]
     actionable = [entry for entry in current.checked if entry.published]
     # 回答に実際に出す根拠。参照欄と画像の参照はこれに同期する。
     shown = published
@@ -2835,7 +2889,7 @@ def synthesize_grounded_answer(
         rendered = grounded.render_answer(
             current.summary,
             [*current.checked, *extra],
-            [*reviewed_unanswered, *guide_gaps],
+            [*reviewed_unanswered, *guide_gaps, *crag_gaps],
             confirmation_section,
             unverified=unread_lines,
             deadline=deadline_lines,
@@ -2916,6 +2970,7 @@ def synthesize_grounded_answer(
     mark_counts = passage_marks.mark_counts(passage_record)
     trace = {
         "pipeline": "grounded",
+        **({"crag_assessment": crag_view, "crag_partial_projection": crag_projection} if crag_view is not None else {}),
         "audit_mode": audit_mode,
         "task_contract": task_contract(question),
         "selected_evidence": [_public_span(s) for s in spans],
@@ -5363,23 +5418,44 @@ def answer_question_result(
                     evidence_trace["section_expansion"] = completed.trace
             return recovered, trace
 
-        grounded_answer = synthesize_grounded_answer(
-            request_text,
-            context,
-            settings,
-            question_plan=question_plan,
-            runtime_knowledge=runtime_knowledge,
-            inquiry_conditions=inquiry_conditions,
-            image_evidence=image_evidence,
-            image_prompt_mode=image_prompt_mode,
-            answer_llm_provider=answer_llm_provider,
-            query_expansion=expansion,
-            known_gaps=_known_gaps(crag_attempts, section_expansion),
-            unread_sections=unread_for_answer,
-            unread_documents={document_id for document_id, _start, _end in guide_ranges},
-            evidence_budget_chars=_section_evidence_budget(context, settings, section_expansion),
-            recover_requests=recover_requests if settings.request_coverage_retrieval_enabled else None,
+        # 生成の入口で判定し、別の生成実装からも直接根拠の条件を迂回させない。
+        # 通常検索の章補完だけでは、CRAGの部分回答制限を適用しない。
+        crag_assessment = (
+            crag_generation.latest_assessment(crag_attempts, section_expansion) if selected_answer_flow == CRAG_ANSWER_FLOW else None
         )
+        gate_spans = (
+            _grounded_spans(
+                request_text,
+                context,
+                image_evidence,
+                runtime_knowledge,
+                budget=_section_evidence_budget(context, settings, section_expansion),
+            )
+            if crag_assessment is not None
+            else ()
+        )
+        refusal = crag_generation.refusal_response(request_text, crag_generation.generation_view(crag_assessment, gate_spans, context))
+        if refusal is not None:
+            grounded_answer = GroundedAnswer(refusal, context, tuple(image_evidence), image_prompt_mode)
+        else:
+            grounded_answer = synthesize_grounded_answer(
+                request_text,
+                context,
+                settings,
+                question_plan=question_plan,
+                runtime_knowledge=runtime_knowledge,
+                inquiry_conditions=inquiry_conditions,
+                image_evidence=image_evidence,
+                image_prompt_mode=image_prompt_mode,
+                answer_llm_provider=answer_llm_provider,
+                query_expansion=expansion,
+                known_gaps=_known_gaps(crag_attempts, section_expansion),
+                crag_assessment=crag_assessment,
+                unread_sections=unread_for_answer,
+                unread_documents={document_id for document_id, _start, _end in guide_ranges},
+                evidence_budget_chars=_section_evidence_budget(context, settings, section_expansion),
+                recover_requests=recover_requests if settings.request_coverage_retrieval_enabled else None,
+            )
         # 是正で根拠や画像が増えた場合は、回答を生成した入力を参照欄と payload に使う。
         response, context = grounded_answer.response, grounded_answer.context
         response = replace(

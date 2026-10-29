@@ -172,8 +172,36 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
             strategy="simple_retrieval", reason="単純な手順の質問", queries=[]
         )
     if schema is CragRetrievalGradeOutput:
+        candidates = json.loads(
+            prompt.split("BEGIN_UNTRUSTED_CRAG_CANDIDATES\n", 1)[1].split(
+                "END_UNTRUSTED_CRAG_CANDIDATES", 1
+            )[0]
+        )
+        body = "受注番号を入力し、登録ボタンを押します。"
+        candidate = next(row for row in candidates if body in row["text"])
+        source_id = candidate["chunk_uid"]
+        evidence = [{"source_id": source_id, "quote": body}]
         return CragRetrievalGradeOutput(
-            reason="十分", sufficient=True, confidence=0.9, rewritten_query=""
+            reason="登録操作の直接原文がある",
+            sufficient=True,
+            confidence=0.9,
+            rewritten_query="",
+            candidate_verdicts=[
+                dict(chunk_uid=source_id, relevant=True, reason="登録操作を説明する")
+            ],
+            aspect_checks=[
+                dict(
+                    aspect=aspect,
+                    status="supported",
+                    source_ids=[source_id],
+                    evidence=evidence,
+                    reason="候補原文を確認",
+                )
+                for aspect in ["business_object", "requested_result", "applicability", "procedure"]
+            ],
+            answerable_parts=[
+                dict(aspect="procedure", kind="operation", claim=body, evidence=evidence)
+            ],
         )
     if schema is GroundedDraft:
         body = "受注番号を入力し、登録ボタンを押します。"

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/test";
@@ -270,4 +271,43 @@ test("印の付いた説明は確認できた事項と別の節に出す", { tag
   await expect(answer.getByText(note)).toBeVisible();
   await expectNoPageOverflow(page);
   await answer.screenshot({ path: test.info().outputPath(`marked-rules-section-${test.info().project.name}.png`) });
+});
+
+
+// 引用の抽出失敗と意味の判定を混ぜず、backend の label/detail をそのまま読む。
+test("引用の原因別の表示を原文不一致と意味の未確認に分ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const contract = JSON.parse(readFileSync(`${__dirname}/../../../platform/contracts/answer-passages/passage-marks.json`, "utf8")) as { reason_codes: Record<string, { label: string }> };
+  const cases = [
+    ["citation_id_invalid", "参照された ID は今回の根拠集合にありません。"],
+    ["citation_id_ambiguous", "同じ ID に複数の根拠が対応しています。"],
+    ["citation_range_missing", "引用対象の行が指定されていません。"],
+    ["citation_range_invalid", "開始行と終了行の順序が不正です。"],
+    ["citation_range_out_of_bounds", "指定行は送信した根拠の行数を超えています。"],
+    ["citation_extraction_failed", "指定範囲のテキスト抽出が完了しませんでした。"],
+    ["citation_heading_only", "取得した範囲には見出しだけが含まれています。"],
+    ["citation_version_mismatch", "引用元の内容と今回の確認対象の版が一致していません。"],
+    ["unsupported", "原文は一致していますが、この操作を支持していません。"],
+    ["unassessed", "意味の照合は実行していません。"],
+    ["unassessed", "意味の照合に失敗し、支持は未確認です。"],
+  ] as const;
+  const marks = cases.map(([code, detail], index) => ({ text: `合成の説明 ${index + 1}。`, state: "unverified", reasons: [{ code, label: contract.reason_codes[code].label, detail }] }));
+  expect(new Set(marks.slice(0, 8).map(mark => mark.reasons[0].label)).size).toBe(8);
+  const answer = await ask(page, [], undefined, {
+    text: ["資料により確認できた事項", "・確認済みの合成説明。", "根拠で確かめきれていない事項", ...marks.map(mark => "・" + mark.text)].join("\n\n"),
+    passages: { passage_marks: marks, removed_passages: [], answer_warnings: [] },
+  });
+  const toggles = answer.getByTestId("answer-passage-mark-toggle");
+  await expect(toggles).toHaveCount(cases.length);
+  for (let index = 0; index < cases.length; index += 1) {
+    await toggles.nth(index).click();
+    const reason = answer.getByTestId("answer-passage-mark-reasons").nth(index);
+    await expect(reason).toContainText(marks[index].reasons[0].label);
+    await expect(reason).toContainText(cases[index][1]);
+    await expect(reason).not.toContainText(contract.reason_codes.quote_unmatched.label);
+  }
+  await expectNoPageOverflow(page);
+  await toggles.first().scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("citation-cause-reference.png") });
+  await toggles.last().scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("citation-cause-semantic.png") });
 });

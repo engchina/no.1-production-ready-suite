@@ -4,7 +4,13 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-from rag_parser_core.language import FIELD_SPECS, LanguagePack, bind_pack, build_pack
+from rag_parser_core.language import (
+    FIELD_SPECS,
+    LanguagePack,
+    bind_pack,
+    build_pack,
+    stored_pack_hash,
+)
 
 from app.schemas.language_pack_release import (
     LanguagePackFieldDifference,
@@ -43,9 +49,12 @@ _STAGE_ORDER = ("PREPROCESS", "EXTRACT", "CHUNK", "INDEX")
 
 
 def pack_from_release(release: LanguagePackRelease) -> LanguagePack:
-    """後日の既定値を重ねず、保存した完全な設定だけを復元・検証する。"""
+    """保存時の hash を検証し、追加表示文言だけを実行用に補う。"""
     pack = build_pack(release.effective)
-    if pack.hash != release.hash or pack.ingest_hash != release.ingest_hash:
+    if (
+        stored_pack_hash(release.effective, pack) != release.hash
+        or pack.ingest_hash != release.ingest_hash
+    ):
         raise ValueError("言語資源の公開版と保存した内容の照合に失敗しました。")
     return pack
 

@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -21,6 +22,7 @@ import re
 import unicodedata
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
 from time import monotonic
@@ -1886,11 +1888,19 @@ def verify(
         subs: dict[str, str] = {}
         # 行の範囲で指した引用は、その原文を quote にする（#2830）。
         item, cite_error = cited_quote(item, spans)
+        provenance = _citation_extraction(item)
         match: dict = {}
-        span, quote = resolve_evidence(item, spans, match=match)
+        if provenance.get("status") == "extracted":
+            span, quote = _line_citation_spans(item, spans)[0], item.quote
+        elif cite_error:
+            span, quote = None, cite_error
+        else:
+            span, quote = resolve_evidence(item, spans, match=match)
         if span is None:
             # 次の生成は前回の草稿を見られないため、どの item への指摘かを本文で示す。
             entry = {"index": index, "evidence_id": item.evidence_id, "reason": cite_error or quote, "text": item.text, "quote": item.quote}
+            if provenance:
+                entry["citation_resolution"] = dict(provenance)
             miscopied = miscopied_sentence(item, spans)
             if miscopied:
                 entry["miscopied"] = miscopied
@@ -1905,7 +1915,7 @@ def verify(
                     "ratio": nearest["ratio"],
                 }
             # 言い換えは削除せず本文に残して印を付ける（#2738。以前は削除し、近い原文を原文のみ提示にしていた）。
-            if kept := _unmatched_item(item, index, spans, match, quote):
+            if kept := _unmatched_item(item, index, spans, match, cite_error or quote):
                 result = kept
                 entry["kept"] = True
             notes.append(entry)
@@ -1933,11 +1943,19 @@ def verify(
             entry = CheckedItem(
                 _normalized(item.with_citation(evidence_id=span["evidence_id"], quote=quote), view),
                 span,
-                quote_match="unmatched",
+                quote_match=match.get("kind", "exact"),
                 draft_index=index,
                 unmatched=True,
             )
-            entry.mark("quote_unmatched", HEADING_ONLY_DETAIL, reason=HEADING_ONLY_REASON)
+            entry.citation_resolution = {
+                **provenance,
+                "reason_code": "citation_heading_only",
+                "authenticity": "verified",
+                "resolved_evidence_id": span["evidence_id"],
+                "resolved_quote": quote,
+                "method": match.get("kind", "exact"),
+            }
+            entry.mark("citation_heading_only", HEADING_ONLY_DETAIL, reason=HEADING_ONLY_REASON)
             notes.append(
                 {
                     "index": index,
@@ -1945,6 +1963,7 @@ def verify(
                     "reason": HEADING_ONLY_REASON,
                     "text": item.text,
                     "quote": quote,
+                    "citation_resolution": dict(entry.citation_resolution),
                     "kept": True,
                 }
             )
@@ -1955,7 +1974,8 @@ def verify(
             quote_match=match.get("kind", "exact"),
             draft_index=index,
             citation_resolution={
-                "requested_evidence_id": item.evidence_id,
+                **provenance,
+                "requested_evidence_id": provenance.get("requested_evidence_id", item.evidence_id),
                 "requested_quote": item.quote,
                 "resolved_evidence_id": span["evidence_id"],
                 "resolved_quote": quote,
@@ -2102,9 +2122,11 @@ def _unmatched_item(item: GroundedItem, index: int, spans: Sequence[dict], match
         draft_index=index,
         unmatched=True,
     )
+    entry.citation_resolution = _citation_extraction(item)
+    code = entry.citation_resolution.get("reason_code") or code
     note = _quote_note(entry)
     # 引用元が決まらなければ照合の理由、近い原文に結んだならその原文を理由に添える。
-    detail = reason if span is None else (f"最も近い{note}" if nearest and note else "")
+    detail = reason if span is None or entry.citation_resolution else (f"最も近い{note}" if nearest and note else "")
     entry.mark(code, detail, reason=reason)
     return entry
 
@@ -2158,7 +2180,14 @@ def recover_audited_quotes(
         if not 0 <= review.index < len(checked) or sum(r.index == review.index for r in audit.reviews) != 1:
             continue
         entry = checked[review.index]
-        if not entry.unmatched or entry.carried or entry.removed or entry.span is None or review.support != "supported":
+        if (
+            not entry.unmatched
+            or entry.carried
+            or entry.removed
+            or entry.span is None
+            or review.support != "supported"
+            or entry.citation_resolution.get("reason_code") == "citation_version_mismatch"
+        ):
             continue
         quote = _original_quote(review.support_quote, entry.span["text"])
         if not quote:
@@ -2169,7 +2198,9 @@ def recover_audited_quotes(
         if replacement is None or replacement.unmatched or replacement.removed:
             continue
         entry.item, entry.span = replacement.item, replacement.span
-        entry.marks = [mark for mark in entry.marks if mark.get("code") != "quote_unmatched"] + replacement.marks
+        entry.marks = [
+            mark for mark in entry.marks if mark.get("code") not in {"quote_unmatched", *CITATION_EXTRACTION_CODES}
+        ] + replacement.marks
         entry.hints = replacement.hints
         entry.unmatched = False
         entry.quote_match = "audited_paraphrase"
@@ -4027,39 +4058,144 @@ def _claim_units(claim: str, text: str, units: Sequence[tuple[int, int]]) -> tup
     return (first, last) if share >= _CLAIM_UNIT_MIN_SHARE else None
 
 
-def cited_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem, str]:
-    """evidence_id と lines が指す原文を quote にした item と、範囲が不正なときの理由（#2830）。
+@dataclass(frozen=True)
+class CitationView:
+    """モデルへ表示した本文・行区切りのスナップショット。引用の意味支持は表さない。"""
 
-    行番号の無い根拠は全文、行番号の付いた根拠は lines の範囲を引く。lines が番号の列なら最初から最後まで、原文の
-    書き出しならそれを含む行、空なら説明に最もよく重なる行を引く（#3534）。gap・根拠が決まらない item と、lines の無い
-    item に quote が既にあるとき（システムが補った引用・前の組の引き継ぎ）は変えない（従来の照合に任せる）。
-    """
+    evidence_id: str
+    label: str
+    source_id: str
+    source: str
+    text: str
+    units: tuple[tuple[int, int], ...]
+    view_sha256: str
+
+
+# リクエスト局所の実提示記録。span 自身へ proof を埋めず、JSON やモデル入力へ漏らさない。
+_CITATION_VIEWS: ContextVar[dict[int, tuple[dict, CitationView]] | None] = ContextVar("citation_views", default=None)
+
+
+def _citation_view(span: Mapping[str, Any]) -> CitationView:
+    text = str(span.get("text") or "")
+    displayed = neutralize_boundary_markers(fold_width(_rendered_evidence_span(span)))
+    return CitationView(
+        str(span.get("evidence_id", "")),
+        str(span.get("label", "")),
+        str(span.get("source_id", "")),
+        str(span.get("source", "")),
+        text,
+        tuple(citation_units(text)),
+        hashlib.sha256(displayed.encode()).hexdigest(),
+    )
+
+
+def _citation_extraction(item: GroundedItem) -> dict[str, str]:
+    return dict(item.citations[0]._extraction) if item.citations else {}
+
+
+def _with_extraction(item: GroundedItem, metadata: dict[str, str], *, quote: str | None = None) -> GroundedItem:
+    """モデルが返せない内部属性に、現在の検証の結果だけを保存する。"""
+    if not item.citations:
+        return item
+    citation = item.citations[0].model_copy(update={"quote": quote} if quote is not None else {})
+    citation._extraction = dict(metadata)
+    return item.model_copy(update={"citations": [citation, *item.citations[1:]]})
+
+
+def _line_citation_spans(item: GroundedItem, spans: Sequence[dict]) -> list[dict]:
+    # 安定 ID / 表示 ID の一致を、別の本文の出典 alias と混ぜない。
+    direct = [span for span in spans if item.evidence_id and item.evidence_id in {span["evidence_id"], span.get("label")}]
+    return direct if direct else _named_spans(item, spans)
+
+
+def cited_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem, str]:
+    """本検証の ID と行から原文を抽出する。抽出・提示版・意味支持を別々に記録する。"""
+    item = _with_extraction(item, {})  # モデルや旧 round の内部 flag は採用しない。
     if item.kind == "gap" or (item.quote.strip() and not item.lines.strip()):
-        return item, ""
-    named = _named_spans(item, spans)
+        return item, ""  # システムの補写・旧形式の自由引用は従来の原文照合に進む。
+    metadata = {
+        "requested_evidence_id": item.evidence_id,
+        "requested_lines": item.lines,
+        "status": "failed",
+        "authenticity": "unverified",
+        "sent_view_status": "not_recorded",
+        "requested_range_status": "unverified",
+    }
+
+    def fail(code: str, detail: str) -> tuple[GroundedItem, str]:
+        return _with_extraction(item, {**metadata, "reason_code": code}, quote=""), detail
+
+    named = _line_citation_spans(item, spans)
+    if not named:
+        return fail("citation_id_invalid", "引用の ID が今回の根拠にありません。今回の根拠に表示された ID を指定してください。")
     if len(named) != 1:
-        return item, ""
-    text = str(named[0].get("text") or "")
-    units = citation_units(text)
+        return fail("citation_id_ambiguous", "引用の ID が複数の根拠を指しています。一意な表示 ID を指定してください。")
+    span = named[0]
+    view = _citation_view(span)
+    metadata.update(
+        {
+            "resolved_evidence_id": view.evidence_id,
+            "source_id": view.source_id,
+            "source": view.source,
+            "content_sha256": hashlib.sha256(view.text.encode()).hexdigest(),
+            "view_sha256": view.view_sha256,
+            "view_scope": "evidence_block_after_width_and_boundary_normalization",
+        }
+    )
+    snapshot = (_CITATION_VIEWS.get() or {}).get(id(span))
+    sent = snapshot[1] if snapshot is not None and snapshot[0] is span else None
+    if isinstance(sent, CitationView):
+        metadata["sent_view_status"] = "matched" if sent == view else "mismatched"
+        metadata["sent_view_sha256"] = sent.view_sha256
+        if sent != view:
+            return fail(
+                "citation_version_mismatch", "提示した根拠と現在の本文・ID・出典・行の版が一致しません。現在の引用を確定できません。"
+            )
+    text, units = view.text, view.units
     if not units:
-        return item, ""
-    if not _numbered(text, units):
-        return item.with_citation(quote=text[units[0][0] : units[-1][1]].strip()), ""
-    found = _CITE_RANGE.match(item.lines or "")
-    listed = _CITE_LIST.match(item.lines or "")
-    if found:
-        first = int(found.group(1))
-        last = int(found.group(2) or first)
-    elif listed:
-        numbers = [int(value) for value in re.findall(r"\d+", listed.group(0))]
-        first, last = min(numbers), max(numbers)
-    elif located := _lines_text_units(item.lines, text, units) if item.lines.strip() else _claim_units(item.text, text, units):
-        first, last = located
-    else:
-        return item, f"行番号の付いた根拠は lines に引用する行の番号か範囲（1〜{len(units)}）を書く"
-    if not 1 <= first <= last <= len(units):
-        return item, f"lines の範囲 {item.lines} が根拠の行（1〜{len(units)}）の外にある"
-    return item.with_citation(quote=text[units[first - 1][0] : units[last - 1][1]].strip()), ""
+        return fail("citation_extraction_failed", "指定した根拠に抽出できる本文がありません。")
+    first, last, origin = 1, len(units), "whole_text"
+    metadata["requested_range_status"] = "missing" if _numbered(text, units) and not item.lines.strip() else "not_required"
+    if _numbered(text, units) or item.lines.strip():
+        found, listed = _CITE_RANGE.match(item.lines or ""), _CITE_LIST.match(item.lines or "")
+        if found:
+            first, last = int(found.group(1)), int(found.group(2) or found.group(1))
+            origin = "line_range"
+            metadata["requested_range_status"] = "valid"
+        elif listed:
+            numbers = [int(value) for value in re.findall(r"\d+", listed.group(0))]
+            first, last, origin = min(numbers), max(numbers), "line_list"
+            metadata["requested_range_status"] = "valid_list"
+        elif located := _lines_text_units(item.lines, text, units) if item.lines.strip() else _claim_units(item.text, text, units):
+            first, last = located
+            origin = "line_text" if item.lines.strip() else "claim_inferred"
+            metadata["requested_range_status"] = "invalid" if item.lines.strip() else "missing"
+        else:
+            metadata["requested_range_status"] = "invalid" if item.lines.strip() else "missing"
+            code = "citation_range_invalid" if item.lines.strip() else "citation_range_missing"
+            return fail(code, f"引用行を確定できません。今回の根拠の行番号か範囲（1〜{len(units)}）を指定してください。")
+        if first > last:
+            metadata["requested_range_status"] = "invalid"
+            return fail("citation_range_invalid", f"引用行の開始と終了が逆です: {item.lines}")
+        if not 1 <= first <= last <= len(units):
+            metadata["requested_range_status"] = "out_of_bounds"
+            return fail("citation_range_out_of_bounds", f"lines の範囲 {item.lines} が根拠の行（1〜{len(units)}）の外にあります。")
+    start, end = units[first - 1][0], units[last - 1][1]
+    quote = text[start:end].strip()
+    if not quote:
+        return fail("citation_extraction_failed", "指定範囲から原文を抽出できませんでした。")
+    metadata.update(
+        {
+            "status": "extracted",
+            "authenticity": "verified",
+            "quote_origin": origin,
+            "line_first": str(first),
+            "line_last": str(last),
+            "char_start": str(start),
+            "char_end": str(end),
+        }
+    )
+    return _with_extraction(item, metadata, quote=quote), ""
 
 
 def _retrieved_heading_context(spans: Sequence[dict]) -> list[dict]:
@@ -4117,8 +4253,22 @@ def _source_note(span: dict) -> str:
     return f"\n{CONTEXT_NOTE_BEGIN}\n" + "\n".join(parts) + f"\n{CONTEXT_NOTE_END}" if parts else ""
 
 
+def _rendered_evidence_span(span: Mapping[str, Any]) -> str:
+    """モデルへ示す根拠ブロック。引用行の本文と、引用対象外の補助情報を同じ版で記録する。"""
+    return (
+        f"[{span['label']}] {span.get('location') or 'p.' + str(span.get('page', ''))} origin={span.get('origin', 'unclassified')}"
+        + (f" tags={','.join(span['tags'])}" if span.get("tags") else "")
+        + (" pinned" if span.get("pinned") else "")
+        + (" catalog" if span.get(ARTICLE_CATALOG_KEY) else "")
+        + _source_note(dict(span))
+        + "\n"
+        + numbered_text(str(span.get("text") or ""))
+    )
+
+
 def format_functions(spans: Sequence[dict]) -> str:
     """根拠を機能ごとの見出しで分けて提示し、別機能の混合を入力の時点で防ぐ。"""
+    _CITATION_VIEWS.set({id(span): (span, _citation_view(span)) for span in spans})
     spans = _retrieved_heading_context(spans)
     groups: dict[tuple, list[dict]] = {}
     for span in spans:
@@ -4136,16 +4286,7 @@ def format_functions(spans: Sequence[dict]) -> str:
         header = f"=== 機能 F{number}: {_function_label(members[0])} ==="
         # 文書の補助情報は原文照合の対象外。表示IDの行より前に置くと直前の Evidence の本文に見え、
         # そこからの引用は「原文と一致しない」として削除されるため、IDの後ろに範囲を明示して置く。
-        body = "\n\n".join(
-            f"[{span['label']}] {span.get('location') or 'p.' + str(span.get('page', ''))} origin={span.get('origin', 'unclassified')}"
-            + (f" tags={','.join(span['tags'])}" if span["tags"] else "")
-            + (" pinned" if span["pinned"] else "")
-            + (" catalog" if span.get(ARTICLE_CATALOG_KEY) else "")
-            + _source_note(span)
-            + "\n"
-            + numbered_text(span["text"])
-            for span in members
-        )
+        body = "\n\n".join(_rendered_evidence_span(span) for span in members)
         blocks.append(header + "\n" + body)
     return "\n\n".join(blocks)
 
@@ -4404,7 +4545,20 @@ class Round:
                     "carried": e.carried,
                     "withdrawn": e.withdrawn,
                     # 同じ主張の別の出典（#3526）。
-                    **({"also": [{"evidence_id": o.item.evidence_id, "quote": o.item.quote} for o in e.also]} if e.also else {}),
+                    **(
+                        {
+                            "also": [
+                                {
+                                    "evidence_id": o.item.evidence_id,
+                                    "quote": o.item.quote,
+                                    "citation_resolution": dict(o.citation_resolution),
+                                }
+                                for o in e.also
+                            ]
+                        }
+                        if e.also
+                        else {}
+                    ),
                     **({"marks": [dict(mark) for mark in e.marks]} if e.marks else {}),
                     **({"removed": True} if e.removed else {}),
                 }
@@ -4421,7 +4575,16 @@ class Round:
                             "citations": [
                                 {
                                     "evidence_id": cited.item.evidence_id,
-                                    "status": "unmatched" if cited.unmatched or cited.span is None else "matched",
+                                    "status": "matched"
+                                    if cited.citation_resolution.get("authenticity") == "verified"
+                                    else "unmatched"
+                                    if cited.unmatched or cited.span is None
+                                    else "matched",
+                                    **(
+                                        {"reason_code": cited.citation_resolution["reason_code"]}
+                                        if cited.citation_resolution.get("reason_code")
+                                        else {}
+                                    ),
                                     "match": cited.quote_match,
                                 }
                                 for cited in item_citations(entry)
@@ -5244,7 +5407,19 @@ def guide_step_gap_line(step: dict[str, Any]) -> str:
 # 資料の出典を付けてよいのは、検索した資料の原文と照合できた説明だけ。引用が原文と照合できない説明（#2738 で本文に
 # 残す）と、引いた根拠に無く業務ガイドの文から来た説明は、印を付けて残すが資料の出典を付けない。業務ガイドは
 # 運用者が設定した答え方の指示で、資料ではない（確認先・引き継ぐ条件はシステムが「業務ガイドの案内」の節に出す）。
-UNSOURCED_MARK_CODES = frozenset({"quote_unmatched", "citation_error", "guide_text"})
+CITATION_EXTRACTION_CODES = frozenset(
+    {
+        "citation_id_invalid",
+        "citation_id_ambiguous",
+        "citation_range_missing",
+        "citation_range_invalid",
+        "citation_range_out_of_bounds",
+        "citation_extraction_failed",
+        "citation_heading_only",
+        "citation_version_mismatch",
+    }
+)
+UNSOURCED_MARK_CODES = frozenset({"quote_unmatched", "citation_error", "guide_text", *CITATION_EXTRACTION_CODES})
 # 説明の文が業務ガイドの文から来たかの判定。文の語（2 文字組）のうち引いた根拠に無いものの割合が
 # ``GUIDE_TEXT_NOVEL_RATIO`` 以上で、その語のうち業務ガイドの文にあるものの割合が ``GUIDE_TEXT_GUIDE_RATIO`` 以上なら
 # 業務ガイドの文とする。語の少ない文（``GUIDE_TEXT_MIN_WORDS`` 未満）は判定しない。業務ガイドの文は資料の言い回しを

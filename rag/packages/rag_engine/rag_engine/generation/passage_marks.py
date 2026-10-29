@@ -17,6 +17,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Literal
 
+from rag_parser_core.language import builtin_pack
+
 from rag_engine.generation.answer_labels import answer_labels
 
 PassageState = Literal["unverified", "warning"]
@@ -28,6 +30,14 @@ PASSAGE_REASON_STATES: dict[str, PassageState] = {
     "unsupported": UNVERIFIED,
     "citation_error": UNVERIFIED,
     "quote_unmatched": UNVERIFIED,
+    "citation_id_invalid": UNVERIFIED,
+    "citation_id_ambiguous": UNVERIFIED,
+    "citation_range_missing": UNVERIFIED,
+    "citation_range_invalid": UNVERIFIED,
+    "citation_range_out_of_bounds": UNVERIFIED,
+    "citation_extraction_failed": UNVERIFIED,
+    "citation_heading_only": UNVERIFIED,
+    "citation_version_mismatch": UNVERIFIED,
     "unassessed": UNVERIFIED,
     "figure_not_read": UNVERIFIED,
     "target_mismatch": WARNING,
@@ -58,7 +68,12 @@ def reason(code: str, detail: str = "") -> dict[str, str]:
     """理由 1 件（code・label・detail）。code は契約の語彙だけ。"""
     if code not in REASON_CODES:
         raise ValueError(f"段落の印の理由の code ではありません: {code}")
-    return {"code": code, "label": answer_labels().passage_reason_labels.get(code, code), "detail": " ".join(str(detail or "").split())}
+    label = answer_labels().passage_reason_labels.get(code)
+    if not label:
+        label = next(
+            (label for label, value in builtin_pack().mapping("answer_labels", "passage_reason_labels").items() if value == code), code
+        )
+    return {"code": code, "label": label, "detail": " ".join(str(detail or "").split())}
 
 
 def passage_state(reasons: Iterable[Mapping[str, Any]]) -> PassageState | None:

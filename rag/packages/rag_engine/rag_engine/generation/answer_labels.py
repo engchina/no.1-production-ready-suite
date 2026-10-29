@@ -29,6 +29,11 @@ class AnswerLabels:
     deadline_summary: str
     off_goal_gap: str
     cause_gap: str
+    crag_refusal_summary: str
+    crag_missing_aspect_template: str
+    crag_unknown_aspect_template: str
+    crag_quote_only_note: str
+    crag_definition_aspect_template: str
     operation_steps_heading: str
     confirmation_steps_heading: str
     page_location: str
@@ -159,6 +164,11 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         deadline_summary=text("deadline_summary"),
         off_goal_gap=text("off_goal_gap"),
         cause_gap=text("cause_gap"),
+        crag_refusal_summary=text("crag_refusal_summary"),
+        crag_missing_aspect_template=text("crag_missing_aspect_template"),
+        crag_unknown_aspect_template=text("crag_unknown_aspect_template"),
+        crag_quote_only_note=text("crag_quote_only_note"),
+        crag_definition_aspect_template=text("crag_definition_aspect_template"),
         operation_steps_heading=text("operation_steps_heading"),
         confirmation_steps_heading=text("confirmation_steps_heading"),
         page_location=text("page_location"),
