@@ -322,6 +322,7 @@ def test_removing_unresolved_gap_alone_is_not_a_verified_improvement() -> None:
     trace = result.response.generation_trace["evidence_refinement"]
     assert trace["adopted"] is False
     assert trace["adoption"] == "previous_gap_resolution_unverified"
+    assert "no_deterministic_improvement" in trace["adoption_reasons"]
 
 
 def test_legacy_and_opt_in_send_identical_initial_system_schema_and_context() -> None:
@@ -394,47 +395,178 @@ def test_audited_modes_share_generation_budget_without_selection_audit(mode: str
     assert OPEN in result.response.answer_text
 
 
-def test_changed_summary_is_not_adopted_without_new_support() -> None:
-    from rag_engine.generation.refinement_round import retention_check
-    from rag_engine.models.llm import GroundedDraft, GroundedItem
+def _round(entries: list[Any], summary: str = "画面を開く方法です。", **changes: Any) -> Any:
+    from rag_engine.models.llm import GroundedDraft
 
-    item = GroundedItem(kind="operation", text=OPEN)
-    checked = grounded.CheckedItem(item, span={"evidence_id": "e-open", "source_id": "run:open", "text": OPEN})
-    current = grounded.Round(
-        summary="画面を開く方法です。",
-        draft=GroundedDraft(summary="画面を開く方法です。", items=[item], confidence="medium"),
-        checked=[checked],
-        dropped=[],
-        audit=None,
+    return grounded.Round(
+        summary=summary,
+        draft=GroundedDraft(summary=summary, items=[entry.item for entry in entries], confidence="medium"),
+        checked=entries,
+        **{"dropped": [], "audit": None, "requests": [{"id": "Q1", "text": QUESTION}], **changes},
     )
-    candidate = replace(current, summary="変更の確定まで完了できます。")
-    assert retention_check(candidate, current, {}) == (False, "summary_change_support_unverified")
+
+
+def _claim(text: str, source: str, quote: str, *, condition: str = "", marks: tuple[str, ...] = ()) -> Any:
+    from rag_engine.models.llm import GroundedItem
+
+    item = GroundedItem(
+        kind="operation", text=text, request_id="Q1", condition=condition, applies="conditional" if condition else "matched"
+    )
+    entry = grounded.CheckedItem(
+        item.model_copy(update={"quote": quote}),
+        span={"evidence_id": f"e-{source}", "source_id": source, "text": quote},
+        citation_resolution={"source_id": source, "resolved_quote": quote, "status": "extracted", "authenticity": "verified"},
+    )
+    for code in marks:
+        entry.mark(code, "合成の印")
+    return entry
+
+
+NONE_TIMING = {"audit": grounded.AUDIT_MODE_NONE}
+
+
+def test_changed_summary_alone_is_not_a_deterministic_improvement() -> None:
+    from rag_engine.generation.refinement_round import adoption_check
+
+    current = _round([_claim(OPEN, "run:open", OPEN)])
+    candidate = _round([_claim(OPEN, "run:open", OPEN)], summary="変更の確定まで完了できます。", timing=NONE_TIMING)
+    decision = adoption_check(candidate, current, {})
+    assert (decision.adopted, decision.reason) == (False, "no_deterministic_improvement")
+    assert decision.checks["summary_changed"] is True
     assert current.summary == "画面を開く方法です。"
 
 
-def test_new_condition_is_not_adopted_when_absent_from_previous_condition_and_body() -> None:
-    from rag_engine.generation.refinement_round import retention_check
-    from rag_engine.models.llm import GroundedDraft, GroundedItem
+@pytest.mark.parametrize("change", ["reworded", "condition"], ids=["reworded", "condition"])
+def test_none_adopts_reworded_claim_kept_by_anchor_and_marks_it_unassessed(change: str) -> None:
+    from rag_engine.generation.refinement_round import adoption_check
 
-    item = GroundedItem(kind="operation", text=OPEN)
-    span = {"evidence_id": "e-open", "source_id": "run:open", "text": OPEN}
-    current = grounded.Round(
-        summary="画面を開く方法です。",
-        draft=GroundedDraft(summary="画面を開く方法です。", items=[item], confidence="medium"),
-        checked=[grounded.CheckedItem(item, span=span)],
-        dropped=[],
-        audit=None,
+    current = _round([_claim(OPEN, "run:open", OPEN), _claim(SAVE, "run:save", SAVE, marks=("quote_unmatched",))])
+    rewritten = (
+        _claim("一覧で対象を選ぶと詳細画面が開きます。", "run:open", OPEN)
+        if change == "reworded"
+        else _claim(OPEN, "run:open", OPEN, condition="承認済みの場合")
     )
-    changed = item.model_copy(update={"condition": "承認済みの場合", "applies": "conditional"})
-    candidate = replace(current, checked=[grounded.CheckedItem(changed, span=span)])
-    assert retention_check(candidate, current, {}) == (False, "new_condition_support_unverified")
-    assert current.checked[0].item.condition == ""
+    candidate = _round([rewritten], summary="一覧から詳細画面を開けます。", timing=NONE_TIMING)
+    decision = adoption_check(candidate, current, {})
+    assert (decision.adopted, decision.reasons) == (True, ("deterministic_checks_improved",))
+    assert decision.checks["before"]["marked"] == 1 and decision.checks["after"]["marked"] == 0
+    assert decision.checks["previous_confirmed_claims_lost"] == 0
+    assert decision.checks["new_or_reworded_claims"] == decision.checks["unassessed_marked"] == 1
+    adopted = decision.candidate
+    assert [mark["code"] for mark in adopted.checked[0].marks] == ["unassessed"]
+    assert not adopted.checked[0].confirmed and adopted.checked[0].published
+    assert adopted.summary == "一覧から詳細画面を開けます。" and adopted.summary_warning == "監査なし"
+    assert {row.request_id: row.status for row in adopted.audit.request_reviews} == {"Q1": "partial"}
+
+
+def test_verbatim_kept_claim_stays_confirmed_after_adoption() -> None:
+    from rag_engine.generation.refinement_round import adoption_check
+
+    current = _round([_claim(OPEN, "run:open", OPEN)])
+    candidate = _round([_claim(OPEN, "run:open", OPEN), _claim(SAVE, "run:save", SAVE)], timing=NONE_TIMING)
+    decision = adoption_check(candidate, current, {})
+    assert decision.adopted
+    kept, added = decision.candidate.checked
+    assert kept.confirmed and not kept.marks
+    assert [mark["code"] for mark in added.marks] == ["unassessed"]
+
+
+def test_more_confirmed_claims_do_not_replace_a_lost_previous_anchor() -> None:
+    from rag_engine.generation.refinement_round import adoption_check
+
+    current = _round([_claim(OPEN, "run:open", OPEN)])
+    candidate = _round([_claim(SAVE, "run:save", SAVE), _claim(NOISE, "run:noise", NOISE)], timing=NONE_TIMING)
+    decision = adoption_check(candidate, current, {})
+    assert (decision.adopted, decision.reason) == (False, "previous_claim_lost")
+    assert decision.checks["previous_confirmed_claims_lost"] == 1
+    assert not candidate.checked[0].marks, "不採用の候補には印を足さない"
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ("dropped", "citation_errors_increased"),
+        ("plan", "plan_errors_increased"),
+        ("range", "citation_range_errors_increased"),
+    ],
+    ids=["dropped", "plan", "range"],
+)
+def test_new_deterministic_errors_block_adoption(change: str, reason: str) -> None:
+    from rag_engine.generation.refinement_round import adoption_check
+
+    current = _round([_claim(OPEN, "run:open", OPEN)])
+    entries = [_claim(OPEN, "run:open", OPEN), _claim(SAVE, "run:save", SAVE)]
+    changes: dict[str, Any] = {"timing": dict(NONE_TIMING)}
+    if change == "dropped":
+        changes["dropped"] = [{"index": 2, "reason": "合成の不一致"}]
+    elif change == "plan":
+        changes["timing"]["request_plan_errors"] = ["合成の計画の不整合"]
+    else:
+        quote_only = _claim(NOISE, "run:noise", NOISE)
+        quote_only.quote_only = True
+        quote_only.citation_resolution.update(reason_code="citation_range_out_of_bounds", requested_evidence_id="E3")
+        entries.append(quote_only)
+    candidate = _round(entries, **changes)
+    decision = adoption_check(candidate, current, {})
+    assert not decision.adopted
+    assert reason in decision.reasons
+
+
+def test_audited_candidate_is_not_marked_again() -> None:
+    from rag_engine.generation.refinement_round import adoption_check
+
+    current = _round([_claim(OPEN, "run:open", OPEN)])
+    candidate = _round([_claim(OPEN, "run:open", OPEN), _claim(SAVE, "run:save", SAVE)], timing={"audit": "standard"})
+    decision = adoption_check(candidate, current, {})
+    assert decision.adopted and decision.checks["audit_mode"] == "audited"
+    assert decision.checks["unassessed_marked"] == 0
+    assert all(entry.confirmed for entry in decision.candidate.checked)
+
+
+def test_none_adopts_added_guide_step_with_unassessed_mark_end_to_end() -> None:
+    knowledge = RuntimeKnowledgeContext(
+        original_question=QUESTION,
+        expanded_question=QUESTION,
+        path=Path("unused.json"),
+        guide_steps=(("open", "画面を開く", ("run:open",)), ("save", "変更を保存する", ("run:save",))),
+        guide_task_scope=({"step_id": "open", "required": True}, {"step_id": "save", "required": True, "depends_on": ["open"]}),
+    )
+    refined = payload()
+    refined["summary"] = "画面を開いて保存する方法です。"
+    refined["request_coverage"][0]["evidence_ids"].append("E2")
+    refined["request_coverage"][0]["evidence_scope"].append({"evidence_id": "E2", "target": "対象A", "relation": "direct"})
+    refined["items"].append(
+        {"kind": "operation", "text": SAVE, "request_id": "Q1", "citations": [{"evidence_id": "E2", "line_start": 1, "line_end": 1}]}
+    )
+    parser = Parser([payload(), refined])
+    result = run(parser, mode="cited_required", knowledge=knowledge)
+    assert len(parser.calls) == 2
+    trace = result.response.generation_trace["evidence_refinement"]
+    assert trace["adopted"] is True and trace["adoption"] == "deterministic_checks_improved"
+    assert trace["adoption_checks"]["audit_mode"] == "none"
+    assert trace["adoption_checks"]["previous_confirmed_claims_lost"] == 0
+    assert trace["adoption_checks"]["new_or_reworded_claims"] == trace["adoption_checks"]["unassessed_marked"] == 1
+    assert trace["adoption_checks"]["after"]["confirmed"] > trace["adoption_checks"]["before"]["confirmed"]
+    assert OPEN in result.response.answer_text and SAVE in result.response.answer_text
+    assert "確かめが終わっていない" in result.response.answer_text
+    adopted = next(
+        row for row in result.response.generation_trace["rounds"] if row.get("remedy", {}).get("remedy") == "evidence_refinement"
+    )
+    assert adopted["accepted"] is True
+    marks = {row["text"]: [mark["code"] for mark in row.get("marks", ())] for row in adopted["items"]}
+    assert marks[OPEN] == [] and marks[SAVE] == ["unassessed"]
 
 
 @pytest.mark.parametrize("adopted", [False, True])
 def test_context_history_and_final_generation_evidence_have_distinct_scopes(monkeypatch: pytest.MonkeyPatch, adopted: bool) -> None:
-    # 採否比較のstubで分岐だけを通す。実際の品質改善・意味支持の成功は表さない。
-    monkeypatch.setattr(grounded, "better", lambda candidate, current: adopted)
+    from rag_engine.generation import refinement_round
+
+    # 採否の判定のstubで分岐だけを通す。実際の品質改善・意味支持の成功は表さない。
+    monkeypatch.setattr(
+        refinement_round,
+        "adoption_check",
+        lambda candidate, current, selection: refinement_round.AdoptionDecision(adopted, "synthetic", ("synthetic",), {}, candidate),
+    )
     parser = Parser()
     result = run(parser)
     assert len(parser.calls) == 2
