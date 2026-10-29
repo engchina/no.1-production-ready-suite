@@ -65,7 +65,7 @@ from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.guide_authority import authoritative_guide_inputs, bind_guide_authority, compile_guide_task_contract
 from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.interaction_grounding import interaction_binding_error
-from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
+from rag_engine.generation.operation_audit import button_names_absent, deletion_target_supported, missing_operation_terms
 from rag_engine.generation.request_recovery import relabel_recovery_reviews
 from rag_engine.generation.semantic_observation import diagnostic_only, observation_policy, unverified_projection
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
@@ -1212,6 +1212,7 @@ GENERATED_VALUE_CHECK = "生成説明の値"
 QUESTION_TARGET_CHECK = "質問の対象"
 QUESTION_ERROR_CHECK = "質問のエラー"
 OTHER_DOCUMENT_CHECK = "別文書の手順"
+CITED_BUTTON_CHECK = "ボタン名"
 # 警告の理由に添える原文の引用の長さ。
 MARK_QUOTE_MAX_CHARS = 80
 
@@ -2156,6 +2157,10 @@ def verify(
         # 出典ごとに照合・検査し、通った出典を 1 つの主張にまとめる（#3526）。
         results = [check_citation(index, cited) for cited in item.single_citations()[:MAX_ITEM_CITATIONS]]
         kept_entries, notes, subs = merge_citations(index, item, results)
+        for entry in kept_entries:
+            if absent := _cited_button_gaps(question, entry):
+                # 案内したボタン名が、引いたどの原文にも無い（#3822）。本文と出典は変えず、段落に警告を付ける。
+                _mark_check(entry, CITED_BUTTON_CHECK, "引いた原文に無い: " + "、".join(absent))
         checked.extend(kept_entries)
         dropped.extend(notes)
     # 別機能の操作は render が手順を分けて示す。同じ文書の版違いだけは利用者に確認を求める。
@@ -2207,6 +2212,20 @@ def revise_table_conflicts(checked: Sequence[CheckedItem], parse: ParseText) -> 
             entry.correct(result.text, result.note)
             revised += 1
     return revised
+
+
+def _cited_button_gaps(question: str, entry: CheckedItem) -> list[str]:
+    """手順の説明が案内したボタン名のうち、説明が引いたすべての根拠（本文と見出し）に名前が無いもの（#3822）。
+
+    監査が意味の支持を確かめない回答では、引いた原文より細かい操作を含む説明が印なしで通る。名前が原文に無いことは
+    決定的に言えるので、その説明だけに警告を付ける。名前があってもその操作を原文が支えるかは判定しない。
+    出典の照合で既に印の付いた説明（引用範囲の不正・出典の取り違えなど）は、出典そのものが確かでないので重ねない。
+    """
+    if not entry.published or entry.added or entry.state or entry.item.kind not in _PROCEDURE_KINDS:
+        return []
+    views = [check_view(cited.span) for cited in item_citations(entry) if cited.span]
+    texts = [str(part) for view in views for part in (view.get("text", ""), *(view.get("section_path") or ()))]
+    return button_names_absent(fold_model_view(entry.item.text), texts, fold_model_view(question)) if views else []
 
 
 def _mark_check(entry: CheckedItem, name: str, reason: str, *, code: str = "item_check") -> None:
