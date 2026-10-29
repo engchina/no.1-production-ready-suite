@@ -14,8 +14,10 @@ from rag_engine.models.audit_wire import decode_audit_wire, is_audit_wire
 from rag_engine.models.llm import GroundedAudit, GroundedCitation, GroundedDraft, GroundedItem
 
 
-def run(*, request_case="valid", omit_requirement=False, retry_case=None):
+def run(*, request_case="valid", omit_requirement=False, retry_case=None, use_alias=False):
     spans = [evidence()]
+    if use_alias:
+        spans[0]["source_aliases"] = ["guide-source"]
     calls = []
     contracts = [contract("open", OPEN, "設定を保存します。")]
 
@@ -32,6 +34,7 @@ def run(*, request_case="valid", omit_requirement=False, retry_case=None):
         assert is_audit_wire(schema)
         inputs = json.loads(prompt)
         assert inputs["confirmed_premises"] == [{"question": "操作条件", "answer": "条件A"}]
+        assert inputs["guide_steps"][0]["evidence_ids"] == [spans[0]["evidence_id"]]
         assert schema.expected_request_ids == ("Q1",)
         assert schema.expected_requirement_ids == ("open:0", "open:1")
         if retry_case and len(calls) == 3:
@@ -76,7 +79,7 @@ def run(*, request_case="valid", omit_requirement=False, retry_case=None):
         parse_text=parser,
         parse_images=parser,
         audit_mode="detailed",
-        guide_steps=[("open", "画面を開いて保存する", [spans[0]["source_id"]])],
+        guide_steps=[("open", "画面を開いて保存する", ["guide-source" if use_alias else spans[0]["source_id"]])],
         guide_step_contracts=contracts,
         confirmed_premises=(("操作条件", "条件A"),),
     )
@@ -121,6 +124,11 @@ def test_complete_wire_is_recorded_separately_from_partial_business_coverage():
     assert result.timing["audit_contract"]["strict_wire_validation"] == "passed"
     assert result.audit.request_reviews[0].status == "partial"
     assert result.guide_steps[0]["status"] != "explained"
+
+
+def test_guide_source_alias_uses_the_same_ids_as_actual_audit_evidence():
+    result = run(use_alias=True)
+    assert result.audit.reviews[0].support == "supported"
 
 
 @pytest.mark.parametrize("case", ["failure", "empty"])

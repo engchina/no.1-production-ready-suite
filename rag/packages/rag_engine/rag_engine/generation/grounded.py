@@ -6383,11 +6383,13 @@ def run_round(
                 # 業務ガイドの案内の行（本文の「業務ガイドの案内」の節。#2792）。index は items の後ろに続ける。
                 inputs["guide_notes"] = [{"index": len(checked) + offset, "text": note} for offset, note in enumerate(guide_notices)]
         if guide_steps:
-            # 回答が沿う業務ガイドの手順と、手順ごとの根拠の表示 ID（#2491）。質問の文が後続の手順に触れていなくても、
+            # 監査のitems・evidenceと同じIDで手順の根拠を対応付ける。質問の文が後続の手順に触れていなくても、
             # 手順の根拠を引いた説明を質問の対象の手順として判定させる。
             labels: dict[str, list[str]] = {}
             for span in spans:
-                labels.setdefault(str(span.get("source_id") or ""), []).append(span["label"])
+                for source in (span.get("source_id"), *(span.get("source_aliases") or ())):
+                    if source:
+                        labels.setdefault(str(source), []).append(span["evidence_id"])
             inputs["guide_steps"] = [
                 {
                     "step_id": step_id,
