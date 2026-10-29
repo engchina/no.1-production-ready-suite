@@ -586,11 +586,11 @@ export function runTimelineStepIndentStyle(level: number | undefined): CSSProper
 /** 深い木はページではなく一覧の中で横へ移動する。浅い一覧の幅は変えない。 */
 export function RunTimelineViewport({ depth, label, children }: { depth: number; label: string; children: ReactNode }) {
   const deep = depth > RUN_TIMELINE_SCROLL_DEPTH;
+  if (!deep) return <>{children}</>;
   return (
-    <div className="min-w-0 overflow-x-auto" tabIndex={deep ? 0 : undefined}
-      role={deep ? "region" : undefined} aria-label={deep ? label : undefined}
-      data-run-timeline-scroll={deep ? "true" : undefined}>
-      <div className="min-w-0" style={deep ? { minWidth: `${depth + 16}rem` } : undefined}>
+    <div className="min-w-0 overflow-x-auto" tabIndex={0}
+      role="region" aria-label={label} data-run-timeline-scroll="true">
+      <div className="min-w-0" style={{ minWidth: `${depth + 16}rem` }}>
         {children}
       </div>
     </div>

@@ -721,6 +721,7 @@ describe("入れ子の深さ（#3447）", () => {
   it("浅い一覧は既存の幅を保ちスクロール用のフォーカスを増やさない", () => {
     render(<RunTimeline steps={steps.slice(0, 5)} showBars={false} />);
     expect(container.querySelector("[data-run-timeline-scroll]")).toBeNull();
+    expect(container.querySelector(".overflow-x-auto")).toBeNull();
     expect(container.querySelector("[tabindex='0']")).toBeNull();
   });
 
