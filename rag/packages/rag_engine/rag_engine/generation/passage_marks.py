@@ -31,6 +31,7 @@ PASSAGE_REASON_STATES: dict[str, PassageState] = {
     "citation_error": UNVERIFIED,
     "quote_unmatched": UNVERIFIED,
     "citation_id_invalid": UNVERIFIED,
+    "citation_id_namespace": UNVERIFIED,
     "citation_id_ambiguous": UNVERIFIED,
     "citation_range_missing": UNVERIFIED,
     "citation_range_invalid": UNVERIFIED,

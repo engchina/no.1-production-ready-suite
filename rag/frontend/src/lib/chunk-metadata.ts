@@ -110,6 +110,8 @@ export type CitationAnswerUse = "confirmed" | "reference";
 export function citationAnswerUse(chunk: Pick<RetrievedChunk, "metadata">): CitationAnswerUse | null {
   if (citationModelUsed(chunk) !== true) return null;
   const value = chunk.metadata.evidence_answer_use;
+  const support = chunk.metadata.evidence_claim_support;
+  if (value === "confirmed" && support != null && typeof support === "object" && !Array.isArray(support) && (support as Record<string, unknown>).status !== "supported") return null;
   return value === "confirmed" || value === "reference" ? value : null;
 }
 

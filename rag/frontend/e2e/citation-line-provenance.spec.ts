@@ -82,7 +82,7 @@ async function ask(
   page: Page,
   citations: unknown[],
   format?: Record<string, string>,
-  { text = ANSWER, passages }: { text?: string; passages?: Record<string, unknown> } = {}
+  { text = ANSWER, passages, expectedHeading }: { text?: string; passages?: Record<string, unknown>; expectedHeading?: string } = {}
 ) {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
@@ -121,7 +121,7 @@ async function ask(
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("合成の質問");
   await page.getByRole("button", { name: "検索", exact: true }).click();
   const answer = page.getByTestId("answer-text");
-  await expect(answer.getByRole("heading", { name: format?.rules_section ?? "資料により確認できた事項" }).first()).toBeVisible();
+  await expect(answer.getByRole("heading", { name: expectedHeading ?? format?.rules_section ?? "資料により確認できた事項" }).first()).toBeVisible();
   return answer;
 }
 
@@ -368,4 +368,33 @@ test("区切り線だけの引用は局所的に案内し、存在する原文�
   await page.screenshot({ path: testInfo.outputPath("citation-content-unusable-source.png") });
   await closeSheet(page);
   await expect(answer.getByText(operation, { exact: true })).toBeVisible();
+});
+
+
+test("意味確認未実施の操作は本文と引用を保ち、該当確認済みと数えない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const body = "合成の操作を行います。";
+  const source = citation("doc-a:c-o", OPERATION, {
+    evidence_model_used: true,
+    evidence_answer_use: "confirmed",
+    evidence_claim_support: { scope: "answer", execution: "not_run", status: "unknown", policy: "recorded" },
+    answer_citation_lines: [1],
+    answer_citation_provenance: "child",
+  });
+  const answer = await ask(page, [source], undefined, { text: ["操作手順", "・" + body, "根拠：文書 A.pdf p.3"].join("\n"), expectedHeading: "操作手順" });
+  await expect(answer.getByText(body, { exact: true })).toBeVisible();
+  await expect(answer).not.toContainText("未確認");
+  const summary = page.locator("summary").filter({ hasText: "AI に渡した 1 件" });
+  await expect(summary).toContainText("回答で引用 1 件");
+  await expect(summary).not.toContainText("該当確認済み");
+  await expect(summary).not.toContainText("参考");
+  await summary.click();
+  await expect(page.getByText("内容の裏付け確認は未実施", { exact: true })).toBeVisible();
+  await expectNoPageOverflow(page);
+  await page.getByText("内容の裏付け確認は未実施", { exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("citation-support-not-run.png") });
+  await page.getByTestId("evidence-card").getByRole("button", { name: "文書 A.pdf の根拠を表示" }).click();
+  const opened = await openedSheet(page);
+  expect(opened.excerpt).toBe(OPERATION);
+  await closeSheet(page);
+  await expect(answer.getByText(body, { exact: true })).toBeVisible();
 });

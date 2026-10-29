@@ -56,3 +56,16 @@ describe("citationEvidenceItem", () => {
     ]);
   });
 });
+
+it.each([
+  ["not_run", "内容の裏付け確認は未実施"],
+  ["error", "内容確認で実行エラー・裏付け未確定"],
+  ["timed_out", "内容確認が時間切れ・裏付け未確定"],
+  ["completed", "内容確認実行済み・裏付け未確定"],
+  ["partial", "内容確認は一部のみ・裏付け未確定"],
+])("意味支持がunknownなら%sの実行状態を独立表示する", (execution, label) => {
+  const item = citationEvidenceItem({ document_id: "d", chunk_id: "c", text: "原文", score: 1, metadata: { evidence_model_used: true, evidence_answer_use: "confirmed", evidence_claim_support: { scope: "answer", execution, status: "unknown", policy: "diagnostic_only" } } });
+  expect(item.usedInAnswer).toBe(true);
+  expect(item.answerUse).toBeNull();
+  expect(item.tags?.map((tag) => tag.value)).toEqual(["内容の裏付け確認は診断のみ", label]);
+});
