@@ -4253,7 +4253,9 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "grounded_draft": dict((result.generation_trace or {}).get("grounded_draft") or {}),
         # 生成と監査の是正の round の時間の配分(#1516。各組の秒・見積もり・時間で打ち切った理由)。
         "round_budget": dict((result.generation_trace or {}).get("round_budget") or {}),
-        "evidence_refinement": dict((result.generation_trace or {}).get("evidence_refinement") or {}),
+        "evidence_refinement": dict(
+            (result.generation_trace or {}).get("evidence_refinement") or {}
+        ),
         # 質問に名前が出た根拠の画面の図の項目の種類と、それで決まった業務ガイドの条件(#2404)。
         "form_field_kinds": dict((result.generation_trace or {}).get("form_field_kinds") or {}),
         # 採用した草稿の監査の目的との合い方(#2402。aligned / partial / off_target)。品質評価が
