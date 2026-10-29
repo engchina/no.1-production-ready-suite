@@ -167,15 +167,20 @@ _CLOSED_SESSION_STATUSES = frozenset(
     }
 )
 
+# 処理順の Step 形式（docs/agents/prompts.md。#3830）。
 _INSTRUCTIONS = (
     "Production Ready NL2SQL のツールです。利用者が使える業務プロファイルの範囲で、"
-    "自然言語の質問から SQL を生成・実行します。業務プロファイルが分からないときは "
-    "nl2sql_list_profiles / nl2sql_recommend_profile で選び、nl2sql_query に渡してください。"
+    "自然言語の質問から SQL を生成・実行します。\n\n"
+    "## Step 1: 業務プロファイルを選ぶ\n"
+    "業務プロファイルが分からないときは "
+    "nl2sql_list_profiles / nl2sql_recommend_profile で選び、nl2sql_query に渡してください。\n\n"
     # 省略・使えない ID のときの自動の選択は profile_id の説明にある（#2355）。
     # 待つ秒数の上限は wait_seconds の schema（MAX_WAIT_SECONDS）にある。
+    "## Step 2: 実行中の結果を取得する\n"
     "nl2sql_query が pending / running を返したら、job_id を nl2sql_get_job に渡し、"
-    "done / error になるまで続きを取得します。"
+    "done / error になるまで続きを取得します。\n\n"
     # 呼び直しの引数の組み立ては requirement_session_id・answer・skip_clarification の説明にある。
+    "## Step 3: SQL の生成前の確認に答える\n"
     "nl2sql_query が needs_clarification を返したら SQL はまだ作っていません。"
     "requirement.question の問いを利用者に 1 つだけ確かめてから、答えを付けて nl2sql_query を"
     "呼び直します（利用者が確認せずに進めると選んだら skip_clarification）。"

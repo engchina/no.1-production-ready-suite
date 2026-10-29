@@ -443,17 +443,21 @@ GUIDES_UNAVAILABLE_MESSAGE = "業務ガイドを読み込めませんでした�
 SEARCH_ANSWER_PROFILE_READ_PERMISSIONS = ROUTE_PERMISSIONS[("GET", "/search-answer-profiles")]
 SEARCH_PERMISSIONS = frozenset({MENU_SEARCH})
 
+# 処理順の Step 形式（docs/agents/prompts.md。#3830）。
 INSTRUCTIONS = (
-    "Production Ready RAG の検索・回答のツールです。"
+    "Production Ready RAG の検索・回答のツールです。\n\n"
+    "## Step 1: 検索・回答プロファイルを選ぶ\n"
     "検索・回答プロファイルが決まっていなければ、まず rag_recommend_search_answer_profile に"
     "質問を渡して選び（recommended_profile_id が null で候補が複数なら、候補の名前を示して利用者に"
     "確かめる）、その id を rag_search に渡してください。名前で探すときは"
-    " rag_list_search_answer_profiles を使います。"
+    " rag_list_search_answer_profiles を使います。\n\n"
     # 回答前の確認（業務ガイドの条件・検索・回答プロファイルのルールの確認。#2117）。
     # 引数の組み立ては conditions・skip_clarification の説明にある。
+    "## Step 2: 回答前の確認に答える\n"
     "rag_search が outcome=needs_clarification を返したら、clarifications の問いと選択肢を"
-    "利用者に確かめてから、答えを conditions に入れて呼び直してください。"
+    "利用者に確かめてから、答えを conditions に入れて呼び直してください。\n\n"
     # evidence は回答で引用した箇所だけではない（AI に渡した箇所の全体。#2040）。
+    "## Step 3: 結果の根拠を読む\n"
     "evidence は AI に渡した資料の箇所です。used_in_answer は回答で引用した箇所、"
     "answer_use はその使われ方（confirmed=質問の条件への該当確認済みの記載 / "
     "reference=該当が確認できていない参考の記載）です。"
