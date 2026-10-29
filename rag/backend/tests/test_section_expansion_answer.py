@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 
 from app.clients.section_map_store import ReadableChunkSet, SectionChunkRow
 from app.config import PROFILE_ONLY_SETTING_FIELDS, Settings
@@ -260,7 +261,7 @@ async def test_initial_sufficient_grade_still_adds_section_text_to_generation(
         )
 
     def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-        if schema is GroundedDraft:
+        if schema in (GroundedDraft, generation_draft_wire_model()):
             prompts.append(prompt)
         return _fake_llm(system, prompt, settings, schema, **options)
 
@@ -554,7 +555,7 @@ async def test_long_section_is_extracted_then_answered_with_verbatim_quotes(
                 SectionExtractionQuote(chunk_ref="C1", location="", quote="承認は不要です。")
             )
             return SectionExtractionOutput(quotes=quotes)
-        if schema is GroundedDraft:
+        if schema in (GroundedDraft, generation_draft_wire_model()):
             prompts["draft"].append(prompt)
         return _fake_llm(system, prompt, settings, schema, **options)
 
@@ -626,7 +627,7 @@ async def test_section_completion_reaches_generation_in_both_answer_flows(
         )
 
     def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-        if schema is GroundedDraft:
+        if schema in (GroundedDraft, generation_draft_wire_model()):
             prompts.append(prompt)
         return _fake_llm(system, prompt, settings, schema, **options)
 
@@ -798,10 +799,13 @@ async def test_supplemental_searches_complete_new_sections_before_generation(
         def explicit_gap(
             system: str, prompt: str, config: Any, schema: type, **options: Any
         ) -> Any:
-            if schema is GroundedDraft:
+            if schema in (GroundedDraft, generation_draft_wire_model()):
                 generated_prompts.append(prompt)
             result = _fake_llm(system, prompt, config, schema, **options)
-            if schema is GroundedDraft and "変更後に確認を実行します。" not in prompt:
+            if (
+                schema in (GroundedDraft, generation_draft_wire_model())
+                and "変更後に確認を実行します。" not in prompt
+            ):
                 data = result.model_dump(exclude_unset=True)
                 data["items"].append(
                     {

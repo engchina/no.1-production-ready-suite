@@ -7,6 +7,7 @@ from datetime import date
 from typing import Any, cast
 
 import pytest
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import (
     CragRetrievalGradeOutput,
     GroundedAudit,
@@ -203,7 +204,8 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
                 dict(aspect="procedure", kind="operation", claim=body, evidence=evidence)
             ],
         )
-    if schema is GroundedDraft:
+    if schema in (GroundedDraft, generation_draft_wire_model()):
+        # 既存quote fixtureを履歴互換の草稿として返す。生成wireの検証は行わない。
         body = "受注番号を入力し、登録ボタンを押します。"
         match = re.search(r"\[(E[0-9]+)\].*?" + re.escape(body), prompt, re.DOTALL)
         items = (
@@ -2765,7 +2767,7 @@ async def test_search_without_answer_runs_the_chat_evidence_flow(
     # 根拠を集める LLM（質問拡張・CRAG の根拠確認）は同じ。回答の生成と監査だけがチャットに
     # 足される。
     assert search_llm == chat_llm[: len(search_llm)]
-    assert "GroundedDraft" not in search_llm
+    assert not {"GroundedDraft", "GroundedDraftWire"}.intersection(search_llm)
     if answer_flow == "crag":
         assert "CragRetrievalGradeOutput" in search_llm
     # 根拠も同じ。回答は引用した根拠を先頭に出すので、それ以外の根拠の並びを比べる。
@@ -3391,7 +3393,7 @@ async def _answer_with_coverage(
 
     def explicit_gap(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
         result = _fake_llm(system, prompt, config, schema, **options)
-        if schema is GroundedDraft and _INVOICE_TEXT not in prompt:
+        if schema in (GroundedDraft, generation_draft_wire_model()) and _INVOICE_TEXT not in prompt:
             data = result.model_dump(exclude_unset=True)
             data["items"].append(
                 {

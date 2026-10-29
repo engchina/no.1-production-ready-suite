@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_parser_core.language import FIELD_SPECS, builtin_pack, resolve, set_default_pack
 
 from app.config import Settings
@@ -2103,7 +2104,7 @@ def _section_answer_llm(
             if candidate
             else [],
         )
-    if schema is GroundedDraft:
+    if schema in (GroundedDraft, generation_draft_wire_model()):
         # CRAGの判定に含まれる引用ではなく、番号付き根拠ブロックから出典を選ぶ。
         parts = re.split(r"\[(E[0-9]+)\]", prompt)
         ids = [

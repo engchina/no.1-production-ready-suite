@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 from openai import APITimeoutError
 from pr_backend_core.observability.model_purpose import model_purpose_attributes
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import GroundedAudit, GroundedFactAudit
 from rag_engine.resources.deadline import DeadlineExceeded
 
@@ -74,7 +75,7 @@ async def test_formal_answer_entry_passes_mode_and_observes_real_generation_audi
     result = await AnswerEngine(
         settings, oracle=cast(Any, FakeOracle()), genai=cast(Any, FakeGenAi())
     ).run(SearchRequest(query="登録方法と登録後の確認方法は？"))
-    generation = [row for row in calls if row[0] == "GroundedDraft"]
+    generation = [row for row in calls if row[0] in {"GroundedDraft", "GroundedDraftWire"}]
     audits = [row for row in calls if row[0] in {"GroundedAudit", "GroundedFactAudit"}]
     assert generation and all(row[1:] == ("answer.generate", mode) for row in generation)
     assert all(row[2] == mode for row in calls)
@@ -214,7 +215,7 @@ async def test_formal_entry_correction_budget_allows_at_most_two_progressive_reg
         nonlocal generations, audits
         assert config.answer_audit_mode == mode
         assert config.answer_max_correction_rounds == 2
-        if schema is GroundedDraft:
+        if schema in (GroundedDraft, generation_draft_wire_model()):
             generations += 1
             label = re.search(r"\[(E[0-9]+)\]", prompt)
             assert label is not None
@@ -341,7 +342,7 @@ async def test_formal_none_entry_keeps_invalid_id_and_range_checks(
 
     def model(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
         schemas.append(schema.__name__)
-        if schema is GroundedDraft:
+        if schema in (GroundedDraft, generation_draft_wire_model()):
             found = re.search(r"\[(E[0-9]+)\]", prompt)
             assert found is not None
             return GroundedDraft.model_validate(
@@ -376,7 +377,7 @@ async def test_formal_none_entry_keeps_invalid_id_and_range_checks(
         oracle=cast(Any, oracle),
         genai=cast(Any, FakeGenAi()),
     ).run(SearchRequest(query="対象の操作手順は？"))
-    assert schemas == ["GroundedDraft"]
+    assert schemas in (["GroundedDraft"], ["GroundedDraftWire"])
     validator.assert_not_awaited()
     marked = result.diagnostics["envelope"]["passage_marks"]
     assert reason in {proof["code"] for row in marked for proof in row["reasons"]}
