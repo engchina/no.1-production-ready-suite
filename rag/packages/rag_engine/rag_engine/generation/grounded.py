@@ -3884,6 +3884,7 @@ def render_answer(
     summary_reasons: Sequence[Mapping[str, Any]] = (),
     answer_warnings: Sequence[Mapping[str, Any]] = (),
     guide_notes: tuple[str, Sequence[str]] | None = None,
+    guide_notes_first: bool = False,
 ) -> RenderedAnswer:
     """本文を組み立て、出典行ごとの根拠と、段落の印・外した段落・回答全体の警告を返す。
 
@@ -3902,7 +3903,9 @@ def render_answer(
     ``answer_warnings`` を先に）の節を足す（本文だけを読む利用者向け。#2738）。
 
     ``guide_notes`` は業務ガイドの（題名, 案内の行）。資料の記載と分けて「業務ガイドの案内」の節に出す（出典の行は
-    付けない。#2792）。
+    付けない。#2792）。``guide_notes_first`` なら、その節を末尾の節ではなく要約の直後（資料の説明の前）に置く。
+    分かっている条件で選んだ分岐の補足（担当者への依頼など）は、利用者がその条件で必ず守ることなので、資料の手順を
+    読む前に示す（#3769）。節は 1 つだけで、末尾には重ねない。
     """
     # 出典行ごとに、その表示項目を支える根拠だけを対応させる。
     citation_entries: list[list[CheckedItem]] = []
@@ -3966,10 +3969,12 @@ def render_answer(
         sections.append((answer_labels().unverified_section, [f"{bullet}{line}" for line in dict.fromkeys(unverified)]))
     if deadline:
         sections.append((answer_labels().deadline_section, [f"{bullet}{line}" for line in dict.fromkeys(deadline)]))
+    lead: list[tuple[str, list[str]]] = []
     if guide_notes and guide_notes[1]:
         title, notes = guide_notes
         labels = answer_labels()
-        sections.append((labels.guide_notes_section, [labels.guide_notes_note(title), *(f"{bullet}{line}" for line in notes)]))
+        guide_section = (labels.guide_notes_section, [labels.guide_notes_note(title), *(f"{bullet}{line}" for line in notes)])
+        (lead if guide_notes_first else sections).append(guide_section)
     if confirmations:
         sections.append((answer_labels().confirmations_section, [f"{bullet}{line}" for line in confirmations]))
     removed = [
@@ -3986,7 +3991,13 @@ def render_answer(
     marked_lines.extend(f"{bullet}{line}" for line in dict.fromkeys(unverified_requirements))
     if marked_lines:
         sections.append((answer_labels().marked_section, marked_lines))
-    body = "\n\n".join([*blocks, *(title + "\n\n" + "\n".join(content) for title, content in sections)])
+    body = "\n\n".join(
+        [
+            *(title + "\n\n" + "\n".join(content) for title, content in lead),
+            *blocks,
+            *(title + "\n\n" + "\n".join(content) for title, content in sections),
+        ]
+    )
     text = "\n\n".join(part for part in (summary.strip(), body) if part)
     return RenderedAnswer(
         text,

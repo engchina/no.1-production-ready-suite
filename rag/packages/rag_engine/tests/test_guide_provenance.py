@@ -166,3 +166,93 @@ def test_answer_moves_guide_text_out_of_the_document_sections_and_shows_the_guid
     # 監査は案内の行を items の後ろの index で受け取る。
     audits = [prompt for name, prompt in model.prompts if name == "GroundedAudit"]
     assert '"guide_notes"' in audits[0]
+
+
+# 合成の分岐の補足（分かっている条件で選んだ分岐の note。#3769）。
+BRANCH_NOTE = "権限 B を持たない場合は同じ手順を説明し、登録の作業は担当者 Y へ依頼するよう補足する。"
+
+
+def _section_order(text: str) -> list[str]:
+    """本文の段落のうち、要約と節の見出しだけを順に返す（節の位置の確かめ用）。"""
+    labels = grounded.answer_labels()
+    headings = {labels.guide_notes_section, labels.rules_section, labels.marked_section, labels.unsourced_section}
+    paragraphs = [paragraph.strip() for paragraph in text.split("\n\n")]
+    return [paragraphs[0], *(paragraph for paragraph in paragraphs[1:] if paragraph in headings)]
+
+
+def test_guide_notes_first_places_the_single_guide_section_right_after_the_summary():
+    notes = grounded.guide_notice_lines("窓口 X", ["区分を特定できない場合"], branch_notes=[BRANCH_NOTE])
+    entry = _entry("設定画面で設定 A の値を入力します。")
+    labels = grounded.answer_labels()
+
+    first = grounded.render_answer("要約", [entry], guide_notes=("合成ガイド", notes), guide_notes_first=True)
+    default = grounded.render_answer("要約", [entry], guide_notes=("合成ガイド", notes))
+
+    # 要約の直後に案内の節を置き、資料の説明はその後ろ。節は 1 つだけ（末尾に重ねない）。
+    assert first.text.startswith("要約\n\n" + labels.guide_notes_section + "\n\n" + labels.guide_notes_note("合成ガイド") + "\n")
+    assert first.text.count(labels.guide_notes_section) == 1 and first.text.count(BRANCH_NOTE) == 1
+    assert first.text.index(BRANCH_NOTE) < first.text.index("設定 A の値を入力します。")
+    # 置き場所だけが変わり、節の行と出典の行は既定と同じ。
+    assert sorted(first.text.split("\n")) == sorted(default.text.split("\n"))
+    assert first.citation_lines == default.citation_lines
+    # 既定は従来どおり資料の説明の後ろ。
+    assert default.text.index(BRANCH_NOTE) > default.text.index("設定 A の値を入力します。")
+    # 案内の行が無ければ節を作らない。
+    assert (
+        labels.guide_notes_section
+        not in grounded.render_answer("要約", [entry], guide_notes=("合成ガイド", []), guide_notes_first=True).text
+    )
+
+
+def _guide_knowledge(condition_notices: tuple[str, ...]):
+    notes = tuple(grounded.guide_notice_lines("窓口 X", ["区分を特定できない場合"], branch_notes=condition_notices))
+    return replace(
+        _knowledge(GUIDE),
+        guide_step_contracts=(
+            {"step_id": "s1", "purpose": "設定 A の値を入力する。", "requirements": [], "depends_on": []},
+            {"step_id": "s2", "purpose": "反映ボタンで確定する。", "requirements": [], "depends_on": ["s1"]},
+        ),
+        guide_title="合成ガイド",
+        guide_notices=notes,
+        guide_condition_notices=condition_notices,
+    )
+
+
+def _answer_text(knowledge) -> str:
+    ctx = _ab_context()
+    ids = _ids(ctx, knowledge)
+    # 生成は分岐の補足を本文に書かない（利用者が自分で行う手順だけを書く）。
+    model = FakeModel(
+        [
+            draft(
+                item(ids[STEP_A], "設定画面で設定 A の値を入力します。", STEP_A),
+                item(ids[STEP_B], "反映画面で反映ボタンを押して確定します。", STEP_B),
+                summary="設定 A を入力して反映します。",
+            )
+        ],
+        [make_audit((0, "supported", "matched", ""), (1, "supported", "matched", ""))],
+    )
+    return _run(model, ctx, knowledge).response.answer_text
+
+
+def test_condition_selected_branch_note_is_shown_right_after_the_summary_even_if_the_draft_omits_it():
+    """分かっている条件で選んだ分岐の補足は、生成が書かなくても要約の直後の案内の節に出す（#3769）。"""
+    labels = grounded.answer_labels()
+    text = _answer_text(_guide_knowledge((BRANCH_NOTE,)))
+
+    order = _section_order(text)
+    assert order[:2] == ["設定 A を入力して反映します。", labels.guide_notes_section]
+    assert text.count(labels.guide_notes_section) == 1 and text.count(BRANCH_NOTE) == 1
+    assert text.index(BRANCH_NOTE) < text.index("設定画面で設定 A の値を入力します。")
+    # 案内の節は資料の出典を付けない（資料の内容として示さない）。
+    section = text.split(labels.guide_notes_section + "\n\n", 1)[1].split("\n\n", 1)[0]
+    assert labels.citation_prefix not in section
+    assert section.splitlines()[0] == labels.guide_notes_note("合成ガイド")
+
+
+def test_guide_notes_without_a_condition_selected_branch_stay_after_the_document_sections():
+    labels = grounded.answer_labels()
+    text = _answer_text(_guide_knowledge(()))
+
+    assert text.count(labels.guide_notes_section) == 1
+    assert text.index(labels.guide_notes_section) > text.index("設定画面で設定 A の値を入力します。")

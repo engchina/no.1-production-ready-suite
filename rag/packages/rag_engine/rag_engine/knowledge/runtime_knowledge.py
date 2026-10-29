@@ -205,6 +205,8 @@ class RuntimeKnowledgeContext:
     # 業務ガイドの題名と案内の行（窓口・引き継ぐ条件・承認。#2792）。本文の「業務ガイドの案内」の節に資料とは分けて出す。
     guide_title: str = ""
     guide_notices: tuple[str, ...] = ()
+    # guide_notices のうち、分かっている条件で選んだ分岐の補足（#3769）。あれば「業務ガイドの案内」の節を要約の直後に置く。
+    guide_condition_notices: tuple[str, ...] = ()
     # 確認の質問で利用者が選んだ条件のうち、検索文に足した語(with_scope)。出どころの表示に使う。
     scope_search_terms: tuple[str, ...] = ()
 
