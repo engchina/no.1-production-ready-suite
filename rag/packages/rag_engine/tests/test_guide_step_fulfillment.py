@@ -210,9 +210,9 @@ class GuideStepFulfillmentTest(unittest.TestCase):
                     self.assertIn(followup, response.answer_text)
                     self.assertNotIn("item_check", marks(response).get(followup, []))
                 else:
-                    self.assertNotEqual(_requests(response)["guide:s2"], "unknown")
+                    self.assertEqual(_requests(response)["guide:s2"], "unknown")
 
-    def test_reference_only_step_is_regenerated_and_explained(self):
+    def test_observed_reference_only_step_does_not_trigger_regeneration(self):
         """B が監査で質問の対象ではないとされても、作り直しの指摘に手順を渡し、説明できれば充足にする。"""
         ctx, knowledge = _ab_context(), _knowledge(GUIDE)
         eids = _ids(ctx, knowledge)
@@ -228,17 +228,16 @@ class GuideStepFulfillmentTest(unittest.TestCase):
         result = _run(model, ctx, knowledge).response
 
         drafts = _drafts(model)
-        self.assertEqual(len(drafts), 2)
-        # 作り直しの指摘に、説明していない手順と手順の根拠の表示 ID が載る。
-        self.assertIn("guide_steps_unexplained", drafts[1])
-        self.assertIn("反映ボタンで確定する", drafts[1])
+        self.assertEqual(len(drafts), 1)
+        # 未校正の意味観察では、本文を作り直したり未確認の条件を付けたりしない。
+        self.assertIn(b["text"], result.answer_text)
         audits = _audits(model)
         self.assertEqual([step["step_id"] for step in audits[0]["guide_steps"]], ["s1", "s2"])
         self.assertTrue(all(step["evidence_ids"] for step in audits[0]["guide_steps"]))
         rounds = result.generation_trace["rounds"]
         self.assertNotIn("improvement_stop", rounds[0])
-        self.assertEqual([step["status"] for step in rounds[0]["guide_steps"]], ["unknown", "reference_only"])
-        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "unknown", "guide:s2": "unknown"})
+        self.assertEqual([step["status"] for step in rounds[0]["guide_steps"]], ["unknown", "unknown"])
+        self.assertEqual(_requests(result), {"Q1": "unknown", "guide:s1": "unknown", "guide:s2": "unknown"})
         self.assertEqual(result.envelope["outcome"], "conditional")
         self.assertIn(grounded.answer_labels().marked_section, result.answer_text)
 
@@ -254,16 +253,14 @@ class GuideStepFulfillmentTest(unittest.TestCase):
         )
         result = _run(model, ctx, knowledge).response
 
-        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "unknown", "guide:s2": "partial"})
+        self.assertEqual(_requests(result), {"Q1": "unknown", "guide:s1": "unknown", "guide:s2": "unknown"})
         self.assertEqual(result.envelope["outcome"], "conditional")
         self.assertTrue(result.needs_human_review)
-        self.assertIn(
-            "業務ガイドの手順「反映ボタンで確定する」は、資料の記載を参考情報として示したか、根拠で確かめられない説明だけ",
-            result.answer_text,
-        )
-        self.assertIn("反映ボタンで確定する", result.insufficient_reason)
+        self.assertIn(b["text"], result.answer_text)
+        self.assertNotIn("原文に無い条件", result.answer_text)
+        self.assertFalse(result.generation_trace["semantic_audit_observation"]["adopted"])
         coverage = result.generation_trace["guide_step_coverage"]
-        self.assertEqual([step["status"] for step in coverage], ["unknown", "reference_only"])
+        self.assertEqual([step["status"] for step in coverage], ["unknown", "unknown"])
         # 適用が未確認の B は「参考情報」の原文で示し、手順を確かめた説明にはしない（対象違いの印は付けない。#2837）。
         self.assertFalse(
             any(reason["code"] == "target_mismatch" for mark in result.envelope["passage_marks"] for reason in mark["reasons"])
@@ -329,9 +326,9 @@ class GuideStepFulfillmentTest(unittest.TestCase):
 
         requests = _requests(result)
         self.assertEqual(
-            {key: value for key, value in requests.items() if not key.startswith("guide:")}, {"Q1": "addressed", "Q2": "addressed"}
+            {key: value for key, value in requests.items() if not key.startswith("guide:")}, {"Q1": "unknown", "Q2": "unknown"}
         )
-        self.assertEqual(requests["guide:s2"], "partial")
+        self.assertEqual(requests["guide:s2"], "unknown")
         self.assertEqual(result.envelope["outcome"], "conditional")
 
     def test_without_guide_steps_nothing_changes(self):
@@ -343,7 +340,7 @@ class GuideStepFulfillmentTest(unittest.TestCase):
         result = _run(model, ctx, knowledge).response
 
         self.assertNotIn("guide_steps", _audits(model)[0])
-        self.assertEqual(_requests(result), {"Q1": "addressed"})
+        self.assertEqual(_requests(result), {"Q1": "unknown"})
         self.assertNotIn("guide_step_coverage", result.generation_trace)
 
 
@@ -402,7 +399,7 @@ class GuidePlanAfterEvidenceConditionTest(unittest.TestCase):
         coverage = result.generation_trace["guide_step_coverage"]
         # 外れた「分からない場合」の手順は回答の手順から外れ、決まった選択の分岐の手順が必須になる。
         self.assertEqual([(step["step_id"], step["required"]) for step in coverage], [("screen", True), ("code", True)])
-        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:screen": "unknown", "guide:code": "unknown"})
+        self.assertEqual(_requests(result), {"Q1": "unknown", "guide:screen": "unknown", "guide:code": "unknown"})
         self.assertEqual(result.envelope["outcome"], "conditional")
         self.assertEqual([step["step_id"] for step in _audits(model)[0]["guide_steps"]], ["screen", "code"])
         trace = result.generation_trace["form_field_kinds"]
@@ -574,26 +571,23 @@ class GuideStepSharedEvidenceAnswerTest(unittest.TestCase):
     def test_shared_chunk_with_main_operation_as_reference_is_not_answered(self):
         model, result = self._run_shared("conditional")
 
-        # 手順 2 を対象に作り直しを求める（共通の操作だけの公開で充足済みにしない）。
+        # 未校正の観察を充足や再生成に採用せず、既存の操作は残す。
         drafts = _drafts(model)
-        self.assertGreaterEqual(len(drafts), 2)
-        self.assertIn("guide_steps_unexplained", drafts[1])
-        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "unknown", "guide:s2": "partial"})
+        self.assertEqual(len(drafts), 1)
+        self.assertEqual(_requests(result), {"Q1": "unknown", "guide:s1": "unknown", "guide:s2": "unknown"})
         self.assertEqual(result.envelope["outcome"], "conditional")
-        self.assertIn(
-            "業務ガイドの手順「反映ボタンで反映する」は、資料の記載を参考情報として示したか、根拠で確かめられない説明だけ",
-            result.answer_text,
-        )
-        self.assertEqual([step["status"] for step in result.generation_trace["guide_step_coverage"]], ["unknown", "reference_only"])
+        self.assertFalse(result.generation_trace["semantic_audit_observation"]["adopted"])
+        self.assertNotIn("原文に無い条件", result.answer_text)
+        self.assertEqual([step["status"] for step in result.generation_trace["guide_step_coverage"]], ["unknown", "unknown"])
         # 公開できる部分（手順 1 と共通の操作）は部分回答として残す。
         self.assertIn("設定画面で設定 A の値を入力します。", result.answer_text)
         self.assertIn("最後に保存ボタンを押して画面を閉じます。", result.answer_text)
 
-    def test_shared_chunk_explaining_both_steps_is_answered(self):
+    def test_shared_chunk_keeps_steps_unverified_under_diagnostic_policy(self):
         model, result = self._run_shared("matched")
 
         self.assertEqual(len(_drafts(model)), 1)
-        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "unknown", "guide:s2": "unknown"})
+        self.assertEqual(_requests(result), {"Q1": "unknown", "guide:s1": "unknown", "guide:s2": "unknown"})
         self.assertEqual(result.envelope["outcome"], "conditional")
 
 
@@ -664,7 +658,7 @@ class GuideStepUnsearchedAnswerTest(unittest.TestCase):
         result = _run(model, ctx, knowledge).response
 
         self.assertEqual([step["status"] for step in result.generation_trace["guide_step_coverage"]], ["unknown", "not_searched"])
-        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "unknown", "guide:s2": "missing"})
+        self.assertEqual(_requests(result), {"Q1": "unknown", "guide:s1": "unknown", "guide:s2": "missing"})
         self.assertNotEqual(result.envelope["outcome"], "answered")
         self.assertIn("業務ガイドの手順「反映ボタンで反映する」は、手順ごとの検索を時間・回数の上限で打ち切った", result.answer_text)
 
@@ -910,7 +904,7 @@ class GuideStepSpecificOwnerTest(unittest.TestCase):
 class GuideStepSemanticAnswerTest(unittest.TestCase):
     """回答の round と確定で embedding を再利用し、trace に呼び出しを残す（#2649）。"""
 
-    def test_embedding_is_reused_across_rounds(self):
+    def test_embedding_is_reused_without_semantic_regeneration(self):
         ctx = _context(_record(0, SHARED, "設定画面", "run:s"))
         knowledge = _knowledge(REWORDED_GUIDE)
         (eid,) = _ids(ctx, knowledge).values()
@@ -945,9 +939,9 @@ class GuideStepSemanticAnswerTest(unittest.TestCase):
             ).response
 
         rounds = result.generation_trace["rounds"]
-        self.assertEqual(len(_drafts(model)), 2)
-        # 1 回目は手順 2 の主の操作が参考原文だけ（共通の文の公開で説明済みにしない）、2 回目に説明した。
-        self.assertEqual([step["status"] for step in rounds[0]["guide_steps"]], ["unknown", "reference_only"])
+        self.assertEqual(len(_drafts(model)), 1)
+        # 観察による追加生成はしない。対応候補のembeddingは確定処理でも再利用する。
+        self.assertEqual([step["status"] for step in rounds[0]["guide_steps"]], ["unknown", "unknown"])
         self.assertEqual([step["status"] for step in result.generation_trace["guide_step_coverage"]], ["unknown", "unknown"])
         self.assertEqual(result.envelope["outcome"], "conditional")
         # 同じ文の embedding は round と回答の確定で再利用する。
