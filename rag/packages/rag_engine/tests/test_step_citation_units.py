@@ -56,12 +56,14 @@ def test_each_step_line_starts_its_own_unit(markers: tuple[str, str]) -> None:
     text = f"{markers[0]} 画面Aを開く。\n{markers[1]} 項目Bを選ぶ。"
     assert pieces(text) == [f"{markers[0]} 画面Aを開く。", f"{markers[1]} 項目Bを選ぶ。"]
     # 旧契約（explicit_units_v3）は短い行を 1 単位にまとめる。
-    assert pieces(text, step_lines=False) == [text]
+    assert pieces(text, contract_version="explicit_units_v3") == [text]
 
 
 def test_continuation_lines_stay_with_their_step_and_intro_is_separate() -> None:
     text = "次の手順で行う。\n①画面Aを開く。\n  続きの説明。\n②項目Bを選ぶ。"
-    assert pieces(text) == ["次の手順で行う。", "①画面Aを開く。\n  続きの説明。", "②項目Bを選ぶ。"]
+    assert pieces(text, contract_version="explicit_units_v4") == ["次の手順で行う。", "①画面Aを開く。\n  続きの説明。", "②項目Bを選ぶ。"]
+    # v5 は続きの行にも自分の番号を付ける（#3847）。
+    assert pieces(text) == ["次の手順で行う。", "①画面Aを開く。", "  続きの説明。", "②項目Bを選ぶ。"]
 
 
 @pytest.mark.parametrize(
@@ -70,7 +72,7 @@ def test_continuation_lines_stay_with_their_step_and_intro_is_separate() -> None
     ids=["decimal", "inline-markers", "non-numeric-paren", "grouped-number"],
 )
 def test_decimal_inline_and_non_step_markers_are_not_split(text: str) -> None:
-    assert pieces(text) == pieces(text, step_lines=False)
+    assert pieces(text, contract_version="explicit_units_v4") == pieces(text, contract_version="explicit_units_v3")
 
 
 def test_heading_before_steps_keeps_steps_numbered_and_long_body_protection() -> None:
@@ -93,12 +95,12 @@ def test_new_view_numbers_each_step_and_extracts_the_cited_step() -> None:
     evidence = span(STEPS)
     prompt = grounded.format_functions([evidence])
     view = grounded._citation_view(evidence)
-    assert view.contract_version == "explicit_units_v4" and len(view.units) == 3
+    assert view.contract_version == "explicit_units_v5" and len(view.units) == 3
     assert "1| (1) 画面Aを開く。\n2| (2) 項目Bを選ぶ。\n3| (3) 実行を押す。" in prompt
     quoted, error = grounded.cited_quote(item(3, 3), [evidence])
     assert not error and quoted.quote == "(3) 実行を押す。"
     extraction = grounded._citation_extraction(quoted)
-    assert extraction["citation_unit_contract"] == "explicit_units_v4"
+    assert extraction["citation_unit_contract"] == "explicit_units_v5"
     quoted, error = grounded.cited_quote(item(1, 3), [evidence])
     assert not error and quoted.quote == STEPS
 
@@ -106,7 +108,7 @@ def test_new_view_numbers_each_step_and_extracts_the_cited_step() -> None:
 def test_sent_v3_view_keeps_one_unit_and_rejects_the_step_number() -> None:
     evidence = span(STEPS)
     current = grounded._citation_view(evidence, explicit_units=True)
-    units = tuple(grounded.citation_units(STEPS, step_lines=False))
+    units = tuple(grounded.citation_units(STEPS, contract_version="explicit_units_v3"))
     rendered = grounded._rendered_evidence_span(evidence, units=units, numbered=True)
     old = replace(
         current,

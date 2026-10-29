@@ -46,25 +46,28 @@ def extract(proposal: GroundedDraft, evidence: list[dict[str, Any]]) -> tuple[Gr
     return grounded.cited_quote(proposal.items[0], evidence)
 
 
-def test_short_multiline_block_has_one_visible_unit_and_exact_original_quote() -> None:
+def test_short_multiline_block_numbers_each_physical_line_and_quotes_the_original() -> None:
     evidence = [span(1, "開く\n保存")]
     prompt = grounded.format_functions(evidence)
     view = grounded._citation_view(evidence[0])
-    assert len(view.units) == 1
+    assert len(view.units) == 2
     assert view.numbered is True
-    assert view.contract_version == "explicit_units_v4"
-    assert "1| 開く\n保存" in prompt
-    assert "2|" not in prompt
-    cited, error = extract(draft(1, 1), evidence)
+    assert view.contract_version == "explicit_units_v5"
+    assert "1| 開く\n2| 保存" in prompt
+    assert "3|" not in prompt
+    cited, error = extract(draft(1, 2), evidence)
     assert not error and cited.quote == "開く\n保存"
     assert cited.citations[0]._extraction["sent_view_status"] == "prepared"
+    cited, error = extract(draft(2, 2), evidence)
+    assert not error and cited.quote == "保存"
 
 
 @pytest.mark.parametrize("text", ["実行", "42", "項目 | 値\nA | 1"])
 def test_short_button_number_and_table_remain_numbered_original_content(text: str) -> None:
     evidence = [span(1, text)]
-    assert f"1| {text}" in grounded.format_functions(evidence)
-    cited, error = extract(draft(1, 1), evidence)
+    lines = text.split("\n")
+    assert "\n".join(f"{number}| {line}" for number, line in enumerate(lines, 1)) in grounded.format_functions(evidence)
+    cited, error = extract(draft(1, len(lines)), evidence)
     assert not error and cited.quote == text
 
 
@@ -123,9 +126,9 @@ def test_repair_uses_the_same_numbered_short_view_and_changes_only_the_range() -
     checked, dropped = grounded.verify("対象の操作は？", original, evidence)
     targets = grounded.citation_range_targets(original, evidence, checked, dropped)
     assert len(targets) == 1
-    assert targets[0]["unit_count"] == 1 and targets[0]["numbered"] is True
+    assert targets[0]["unit_count"] == 2 and targets[0]["numbered"] is True
     response = CitationRangeRepair.model_validate(
-        {"ranges": [{"item_index": 0, "citation_index": 0, "evidence_id": "E1", "line_start": 1, "line_end": 1}]}
+        {"ranges": [{"item_index": 0, "citation_index": 0, "evidence_id": "E1", "line_start": 1, "line_end": 2}]}
     )
     repaired, diagnostic = apply_range_repair(original, response, targets)
     assert diagnostic["status"] == "completed"

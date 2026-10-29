@@ -55,7 +55,9 @@ def response(start: int | None, end: int | None, *, index: int = 0, identity: st
     )
 
 
-def evidence(text: str = LONG, *, identity: str = "stable-a", source: str = "source-a") -> list[dict[str, Any]]:
+def evidence(
+    text: str = LONG, *, identity: str = "stable-a", source: str = "source-a", origin: str = "document_text"
+) -> list[dict[str, Any]]:
     spans = [
         {
             "evidence_id": identity,
@@ -64,6 +66,7 @@ def evidence(text: str = LONG, *, identity: str = "stable-a", source: str = "sou
             "source": "synthetic.pdf",
             "page": 1,
             "text": text,
+            "origin": origin,
             "function": ("synthetic.pdf", "合成操作"),
             "tags": [],
         }
@@ -118,14 +121,15 @@ def test_range_from_a_longer_other_block_does_not_apply_to_the_shorter_target_bl
 
 
 def test_numbered_unit_includes_unnumbered_physical_newlines() -> None:
+    # 画像からの生成説明・OCR の根拠は、v5 でも短い行を 1 単位にまとめる（番号の無い改行を含む）。
     text = "画面を開きます。\n対象を選びます。\n" + "補足説明。" * 10 + "\n" + LONG
-    units = grounded.citation_units(text)
+    units = grounded.citation_units(text, image_text=True)
     start, end = units[0]
     assert "\n" in text[start:end]
     rendered = grounded.numbered_text(text)
     assert rendered.startswith("1| ") and "\n対象を選びます。" in rendered
     draft, diagnostic = apply_range_repair(proposal(), response(1, 1), [target(count=len(units))])
-    cited, error = grounded.cited_quote(draft.items[0], evidence(text))
+    cited, error = grounded.cited_quote(draft.items[0], evidence(text, origin="image_extraction"))
     assert not error and cited.quote == text[start:end]
     assert diagnostic["status"] == "completed"
 
@@ -135,7 +139,7 @@ def test_short_unnumbered_multiline_block_uses_null_for_whole_text() -> None:
     spans = [dict(span) for span in evidence(SHORT)]
     assert grounded.numbered_text(SHORT) == SHORT and "\n" in SHORT
     repaired, diagnostic = apply_range_repair(
-        proposal(), response(None, None), [target(count=len(grounded.citation_units(SHORT)), numbered=False)]
+        proposal(), response(None, None), [target(count=len(grounded._legacy_citation_units(SHORT)), numbered=False)]
     )
     cited, error = grounded.cited_quote(repaired.items[0], spans)
     assert not error and cited.quote == SHORT and repaired.items[0].citations[0]._wire_range == (None, None)
@@ -145,7 +149,7 @@ def test_short_unnumbered_multiline_block_uses_null_for_whole_text() -> None:
 def test_one_one_on_an_unnumbered_single_unit_block_is_the_whole_text_like_null() -> None:
     """番号なしで単位 1 つの根拠では (1,1) も null と同じ全文の指定として受け、通常の照合と同じ結果にする（#3778）。"""
     spans = [dict(span) for span in evidence(SHORT)]
-    assert len(grounded.citation_units(SHORT)) == 1
+    assert len(grounded._legacy_citation_units(SHORT)) == 1
     repaired, diagnostic = apply_range_repair(proposal(), response(1, 1), [target(count=1, numbered=False)])
     assert diagnostic["status"] == "completed" and not diagnostic["rejected"]
     citation = repaired.items[0].citations[0]

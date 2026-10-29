@@ -32,7 +32,7 @@ def item(evidence_id, lines="", quote=""):
 
 
 def test_short_lines_are_merged_and_long_lines_split_at_sentences():
-    units = grounded.citation_units("あ\nい\n\n" + "う。" * 100)
+    units = grounded.citation_units("あ\nい\n\n" + "う。" * 100, contract_version="explicit_units_v4")
     texts = ["あ\nい\n\n" + "う。" * 100][0]
     assert all(end - start <= grounded.CITE_UNIT_MAX_CHARS for start, end in units)
     assert texts[units[0][0] : units[0][1]].startswith("あ\nい")
