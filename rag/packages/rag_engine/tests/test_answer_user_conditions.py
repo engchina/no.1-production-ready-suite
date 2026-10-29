@@ -55,7 +55,8 @@ def answer(question, texts, external_data_items, *, external_data_required=True)
         "external_data_items": external_data_items,
     }
     reviews = [(index, "supported", "matched", "") for index in range(len(texts))]
-    return run(FakeModel([steps], [audit(*reviews, requests=[("Q1", "addressed")])]), ctx, question).response
+    requests = [(unit["id"], "addressed") for unit in grounded.task_contract(question)["request_units"]]
+    return run(FakeModel([steps], [audit(*reviews, requests=requests)]), ctx, question).response
 
 
 class UserConditionOutcomeTest(unittest.TestCase):

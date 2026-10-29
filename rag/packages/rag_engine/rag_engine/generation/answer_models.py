@@ -341,6 +341,7 @@ class CragRetrievalAttempt:
     rewritten_query: str = ""
     reason: str = ""
     grade_error: str = ""
+    grade_failure: dict[str, Any] = field(default_factory=dict)
     aspect_checks: tuple[dict[str, Any], ...] = ()
     # 候補ごとの関連判定（chunk_uid / relevant / reason）。trace と UI で「なぜ不足か」を候補単位で追える (#983)。
     candidate_verdicts: tuple[dict[str, Any], ...] = ()
@@ -398,6 +399,8 @@ class CragRetrievalAttempt:
         }
         if self.grade_error:
             payload["grade_error"] = self.grade_error
+        if self.grade_failure:
+            payload["grade_failure"] = dict(self.grade_failure)
         return payload
 
 

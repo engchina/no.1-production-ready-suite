@@ -210,7 +210,7 @@ class CragFlowStepDetailsTest(unittest.TestCase):
             )
         steps = _by_name(result)
         first = _fields(steps["根拠確認（1回目）"])
-        self.assertTrue(first["結果"].startswith("生成に使える材料なし"))
+        self.assertTrue(first["結果"].startswith("必要な説明が不足"))
         self.assertEqual(first["判定した根拠"], "1 件")
         self.assertEqual(first["関係あり / なし"], "0 件 / 0 件")
         self.assertEqual(first["次の対処"], "検索文を書き換えて探し直す")

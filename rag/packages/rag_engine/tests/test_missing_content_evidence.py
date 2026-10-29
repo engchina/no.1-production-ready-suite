@@ -158,7 +158,7 @@ def test_duplicate_request_with_a_gap_does_not_block_another_valid_omission_revi
     decisions = result.generation_trace["rounds"][0]["request_recovery"]["decisions"]
     decision = next(row for row in decisions if row["request_id"] == "Q1")
     blocked = next(row for row in decisions if row["request_id"] == "Q2")
-    assert blocked["action"] == "retain" and blocked["cause"] == "review_incomplete"
+    assert blocked["action"] == "retain" and blocked["cause"] == "invalid_request_id"
     assert result.generation_trace["rounds"][0]["validation_dimensions"]["answer_completeness"]["execution"] == "partial"
     assert decision["request_id"] == "Q1" and decision["action"] == "correction"
     assert decision["evidence_ids"] == [eid]
