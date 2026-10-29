@@ -20,7 +20,7 @@ import logging
 import math
 import re
 import unicodedata
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import CancelledError
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
@@ -1600,15 +1600,17 @@ def _attachment_label(label: str, spans: Sequence[dict]) -> bool:
 _MISSING_REQUEST_PLAN = "説明に使う要求ごとの根拠計画がありません。"
 
 
-def _misattributed_scopes(plan: RequestCoverage, spans: Sequence[dict]) -> dict[str, list[str]]:
+def _misattributed_scopes(plan: RequestCoverage, spans: Sequence[dict], cited: Collection[str] = ()) -> dict[str, list[str]]:
     """direct の照合に写した原文が、指した根拠に無く送信した別の根拠にある計画の行（出典 ID の取り違え。#3804）。
 
     戻り値は計画の表示 ID → 原文がある根拠の表示 ID。モデル自身の記述どうしの矛盾なので意味の判断は要らない。
     linked の原文は関係を明記した別の根拠にあってよいので対象外。どこにも無い原文（言い換え）・指した根拠にも
     ある原文・添付の根拠も、取り違えと言い切れないので対象外にする。別の ID へは付け替えない（作り直しに任せる）。
+    対象は evidence_ids の行と、``cited``（その小問の説明が引いた label）の行。evidence_ids に無い direct の行も
+    説明が引けば出典になる（#3827）が、説明が引かない行は出典にならないので作り直しの理由にしない。
     """
     found: dict[str, list[str]] = {}
-    used = set(plan.evidence_ids)
+    used = {*plan.evidence_ids, *cited}
     for scope in plan.evidence_scope:
         quote = scope.link_quote.strip()
         label = scope.evidence_id
@@ -1630,7 +1632,8 @@ def _misattributed_scopes(plan: RequestCoverage, spans: Sequence[dict]) -> dict[
 
 def _misattributed_labels(item: GroundedItem, draft: GroundedDraft, spans: Sequence[dict]) -> list[str]:
     """説明が出典に引いた根拠のうち、その小問の計画で原文と ID が食い違う表示 ID（#3804）。"""
-    labels = {label for plan in _item_request_plans(item, draft) for label in _misattributed_scopes(plan, spans)}
+    cited = [citation.evidence_id for citation in item.citations]
+    labels = {label for plan in _item_request_plans(item, draft) for label in _misattributed_scopes(plan, spans, cited)}
     flagged = {span["evidence_id"]: label for label in labels for span in _label_spans(label, spans)}
     return list(
         dict.fromkeys(
@@ -1642,17 +1645,23 @@ def _misattributed_labels(item: GroundedItem, draft: GroundedDraft, spans: Seque
     )
 
 
-def _unknown_plan_label_errors(draft: GroundedDraft, spans: Sequence[dict]) -> list[str]:
+def _unknown_plan_label_errors(draft: GroundedDraft, spans: Sequence[dict], *, scope_plan: bool = False) -> list[str]:
     """計画の evidence_ids のうち、送った根拠のどれにも当たらない label の指摘（業務ガイドの要件 ID を書いたなど。#3825）。
 
     照合を足しても直らないので、照合の件数ではなく根拠の ID でないことを示す。別の ID へは付け替えない。
     何の根拠も指さないので ``_outside_request_plan`` で何も許可せず、作り直しの後に残っても計画の内外の判定を
     未決にしない（``plan_unsettled`` に入れない）。旧形式の応答（evidence_scope の無い計画）は検査しない。
+    ``scope_plan`` は計画を回答の草稿ではなく計画だけの出力（``RequestScopePlan``。guide_coverage の欄が無い）で
+    立てたか。その計画は作り直さないので、直し方ではなく計画の根拠として扱わないことを書く（#3827）。
     """
+    advice = (
+        "計画の根拠として扱いません（evidence_ids に使えるのは [E1] 形式の根拠の番号だけです）。"
+        if scope_plan
+        else "evidence_ids には [E1] 形式の根拠の番号だけを書き、業務ガイドの要件は guide_coverage の requirement_id に書いてください。"
+    )
     return list(
         dict.fromkeys(
-            f"{plan.request_id}: {label} は Evidence の ID ではありません。"
-            "evidence_ids には [E1] 形式の根拠の番号だけを書き、業務ガイドの要件は guide_coverage の requirement_id に書いてください。"
+            f"{plan.request_id}: {label} は Evidence の ID ではありません。{advice}"
             for plan in draft.request_coverage
             if "evidence_scope" in plan.model_fields_set
             for label in plan.evidence_ids
@@ -1683,7 +1692,13 @@ def _request_plan_errors(draft: GroundedDraft, spans: Sequence[dict], *, unknown
                 errors.append(f"{plan.request_id}: unrelated の {label} は evidence_ids と items に使えません。")
             elif scopes[0].relation == "linked" and not scopes[0].link_quote.strip():
                 errors.append(f"{plan.request_id}: linked の {label} は関係を明記した原文が必要です。")
-        for label, others in _misattributed_scopes(plan, spans).items():
+        cited = [
+            citation.evidence_id
+            for item in draft.items
+            if item.kind != "gap" and any(own is plan for own in _item_request_plans(item, draft))
+            for citation in item.citations
+        ]
+        for label, others in _misattributed_scopes(plan, spans, cited).items():
             errors.append(
                 f"{plan.request_id}: {label} の照合に写した原文は {label} に無く、{'・'.join(others)} にあります。"
                 "その原文で説明するなら、計画と items の出典をその原文がある根拠にしてください。"
@@ -1706,6 +1721,9 @@ def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, 
     """要求の根拠計画を最終説明にも適用する。計画の無い旧応答は従来の原文照合を使う。
 
     会話の添付の根拠（#3228）は、計画に載っていなくても計画の外にしない（利用者が明示した入力）。
+    計画の根拠は evidence_ids の label と、同じ計画の evidence_scope が direct、または原文のある linked と判断した
+    label（schema の evidence_ids の定義と同じ集合。片方にだけ書いた計画を外さない。#3827）。判断が 1 つに
+    まとまらない label・unrelated の label は許可しない。根拠でない label は何の根拠も指さない（#3825）。
     """
     if span.get("conversation_attachment"):
         return False
@@ -1716,7 +1734,7 @@ def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, 
         return True
     labels: set[str] = set()
     for plan in plans:
-        for label in plan.evidence_ids:
+        for label in dict.fromkeys([*plan.evidence_ids, *(scope.evidence_id for scope in plan.evidence_scope)]):
             if "evidence_scope" not in plan.model_fields_set or _attachment_label(label, spans):
                 labels.add(label)
                 continue
@@ -6684,7 +6702,8 @@ def run_round(
         plan_unsettled = _request_plan_errors(draft, spans, unknown_labels=False)
         plan_repair_calls = 1
     plan_unsettled = list(dict.fromkeys([*plan_unsettled, *_plan_undecided_errors(draft, spans)]))
-    plan_ignored = _unknown_plan_label_errors(draft, spans)
+    # 計画だけの出力（answer.scope）で立てた計画には guide_coverage の欄が無く、作り直しも計画を変えない（#3827）。
+    plan_ignored = _unknown_plan_label_errors(draft, spans, scope_plan=scope_plan is not None or plan_recovery == "planned")
     catalog_review: dict[str, Any] = {}
     if getattr(settings, "article_catalog_review", False) and audit_mode == AUDIT_MODE_NONE:
         catalog_review = {"execution": "not_run", "skipped": "audit_disabled", "reviewed": 0}
