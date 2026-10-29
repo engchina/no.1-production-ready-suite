@@ -105,7 +105,9 @@ async def test_formal_answer_entry_passes_mode_and_observes_real_generation_audi
         assert final_validation["automatic_actions"] is False
         assert final_validation["counts"] == {"unsupported": 1}
         assert result.diagnostics["needs_human_review"] is True
-        observed = result.diagnostics["semantic_audit_observation"]["audit"]
+        observed = result.diagnostics["round_budget"]["rounds"][0]["semantic_audit_observation"][
+            "audit"
+        ]
         assert observed["request_reviews"][0]["status"] == "partial"
         assert observed["request_reviews"][0]["evidence_status"] == "unknown"
 
@@ -341,7 +343,9 @@ async def test_formal_entry_does_not_spend_budget_on_uncalibrated_material_obser
     assert result.diagnostics["answer_validation"]["valid"] is None
     assert result.diagnostics["answer_validation"]["raw_valid"] is True
     assert result.diagnostics["answer_validation"]["semantic_status"] == "unknown"
-    observed = result.diagnostics["semantic_audit_observation"]["audit"]
+    observed = result.diagnostics["round_budget"]["rounds"][0]["semantic_audit_observation"][
+        "audit"
+    ]
     assert [row["request_id"] for row in observed["request_reviews"]] == ["Q1", "Q2", "Q3"]
     assert [row["missing_content"] for row in observed["request_reviews"][1:]] == operations[1:]
     assert all(row["evidence_status"] == "available" for row in observed["request_reviews"][1:])
