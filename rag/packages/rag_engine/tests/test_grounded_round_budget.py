@@ -269,13 +269,13 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         self.assertTrue(rounds[0]["audit_cut"])
         self.assertIsNone(rounds[0]["audit"])
         self.assertTrue(result.generation_trace["round_budget"]["adopted_audit_cut"])
-        # 原文と照合した本文は未確認の印とともに保持し、確かめていない要約の結論だけを保留する。
+        # 監査未完了を本文の印や資料不足へ変換せず、草稿と実際の時間切れ診断を残す。
         self.assertIn(GOOD, result.answer_text)
-        self.assertEqual(marks(result)[GOOD], ["unassessed"])
-        self.assertTrue(result.answer_text.startswith(grounded.answer_labels().neutral_summary))
-        self.assertEqual(result.generation_trace["finalization"]["summary"]["status"], "withheld")
+        self.assertNotIn(GOOD, marks(result))
+        self.assertTrue(result.answer_text.startswith(rounds[0]["draft"]["summary"]))
+        self.assertEqual(result.generation_trace["finalization"]["summary"]["status"], "kept")
         self.assertIn("確認（監査）が終わらなかったため", result.answer_text)
-        self.assertEqual(result.envelope["outcome"], "insufficient_evidence")
+        self.assertNotEqual(result.envelope["outcome"], "insufficient_evidence")
 
     def test_audit_cut_correction_round_does_not_replace_the_audited_round(self):
         """是正の round の監査が切れたら、その round（監査なし）を、監査を通った round より採用しない。"""
