@@ -261,6 +261,8 @@ for (const viewport of [
     const discard = card.getByRole("button", { name: "変更を破棄", exact: true });
     await expect(card.getByRole("heading", { name: "生成後の回答確認", exact: true })).toBeVisible();
     await expect(page.getByTestId("answering-audit-mode")).toContainText("引用ID・引用範囲の基本確認は、設定に関わらず実行します。");
+    await expect(card).toContainText("回答生成が明示した根拠不足の要求は、回数・時間の予算内");
+    await expect(card).toContainText("未校正の意味監査の結果だけでは、追加検索や再生成を行いません。");
     await expect(audit).toContainText("実行しない");
     await expect(audit).toHaveAccessibleDescription(/自動の生成後の LLM 監査.*行いません.*引用の ID・行範囲・原文との照合/);
     const options = card.getByRole("group", { name: "回答の検索のオプション", exact: true });
