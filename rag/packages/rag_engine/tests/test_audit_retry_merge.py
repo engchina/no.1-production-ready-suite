@@ -4,9 +4,9 @@ import json
 
 import pytest
 from audit_fixtures import legacy_audit_to_wire_fixture
-from rag_engine.models.audit_wire import audit_wire_schema, decode_audit_wire
 
 from rag_engine.generation.audit_recovery import merge_audit_retry
+from rag_engine.models.audit_wire import audit_wire_schema, decode_audit_wire
 from rag_engine.models.llm import GroundedAudit
 
 
