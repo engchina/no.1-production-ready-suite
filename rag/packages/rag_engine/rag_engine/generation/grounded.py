@@ -71,7 +71,7 @@ from rag_engine.generation.semantic_observation import diagnostic_only, observat
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
 from rag_engine.generation.value_grounding import CURRENT_VALUE_REASON, unsupported_document_value_claim
-from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
+from rag_engine.knowledge.prompt_files import continue_prompt_steps, neutralize_boundary_markers
 from rag_engine.models.audit_wire import audit_wire_schema, canonical_audit_result
 from rag_engine.models.llm import (
     CatalogEvidenceReviews,
@@ -575,7 +575,10 @@ def audit_system_prompt(*, compact_reasons: bool = False, detailed: bool = True)
         if detailed
         else resolve_prompt("audit.factSystem", FACT_AUDIT_SYSTEM_PROMPT)
     )
-    return base + resolve_prompt("audit.compactRule", AUDIT_COMPACT_REASON_RULE) if compact_reasons else base
+    if not compact_reasons:
+        return base
+    # 保存した本体の Step の数が既定と違っても、つないだ規則の番号を続ける（#3810）。
+    return base + continue_prompt_steps(base, resolve_prompt("audit.compactRule", AUDIT_COMPACT_REASON_RULE))
 
 
 # 監査に渡す同じ機能の本文の上限（機能ごと）。手順は隣の span にあることが多く、機能全体を渡す必要はない。
@@ -6417,9 +6420,12 @@ def run_round(
             neutralize_boundary_markers(fold_width(format_functions(selected))),
         )
         prompt += "\n要求ごとの根拠計画:\n" + scope_plan.model_dump_json()
-    generation_system = resolve_prompt("generation.system", GENERATE_SYSTEM_PROMPT) + (
-        resolve_prompt("generation.assumptionSystem", ASSUMPTION_SYSTEM_PROMPT) if assume_unconfirmed else ""
-    )
+    generation_system = resolve_prompt("generation.system", GENERATE_SYSTEM_PROMPT)
+    if assume_unconfirmed:
+        # 保存した本体の Step の数が既定と違っても、前提の部品の番号を本体の続きにする（#3810）。
+        generation_system += continue_prompt_steps(
+            generation_system, resolve_prompt("generation.assumptionSystem", ASSUMPTION_SYSTEM_PROMPT)
+        )
     generation_model = generation_draft_wire_model()
     generation_outputs: list[dict[str, Any]] = []
     cached_views = _CITATION_VIEWS.get() or {}
