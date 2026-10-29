@@ -96,6 +96,8 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "section_expansion_input_token_percent": (
             resolved_settings.rag_section_expansion_input_token_percent
         ),
+        # 生成に渡す根拠の原文の文字予算(#3776)。
+        "evidence_budget_chars": resolved_settings.rag_evidence_budget_chars,
         # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。
         "max_anchors_per_document": resolved_settings.rag_max_anchors_per_document,
         "auto_field_filter_enabled": resolved_settings.rag_auto_field_filter_enabled,

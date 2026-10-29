@@ -749,6 +749,8 @@ def build_engine_settings(
         "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT": str(
             settings.rag_section_expansion_input_token_percent
         ),
+        # 生成に渡す根拠の原文の文字予算(#3776。全体設定だけで決める)。
+        "RAG_ENGINE_EVIDENCE_BUDGET_CHARS": str(settings.rag_evidence_budget_chars),
         # rerank の後、起点に採る同じ文書の chunk の上限(#2167。検索・回答プロファイルで選ぶ)。
         "RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT": str(settings.rag_max_anchors_per_document),
         # 用途ごとの推論の量(#1499。model は空 = モデルの登録値のまま)・CRAG の評価の省略・
@@ -1184,6 +1186,8 @@ class AnswerEngine:
                     "reuse_context": result.reuse_context,
                     "counts": dict(result.counts),
                     "claim_checks": list(result.claim_checks),
+                    # 原質問・確認の答えとの両立の比較の、段落ごとの採否（#3800。ID と code だけ）。
+                    "premise_consistency_checks": list(result.premise_consistency_checks),
                     "missing_evidence_count": len(result.missing_evidence),
                     "stale_evidence_count": len(result.stale_evidence),
                     "confirmed_premises_count": len(premises),
@@ -4372,6 +4376,8 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         ],
         # 生成と監査の是正の round の時間の配分(#1516。各組の秒・見積もり・時間で打ち切った理由)。
         "round_budget": dict((result.generation_trace or {}).get("round_budget") or {}),
+        # 根拠の文字予算の設定値・実際に使った値・送った根拠ブロックの文字数(#3776。数値だけ)。
+        "evidence_budget": dict((result.generation_trace or {}).get("evidence_budget") or {}),
         "evidence_refinement": dict(
             (result.generation_trace or {}).get("evidence_refinement") or {}
         ),

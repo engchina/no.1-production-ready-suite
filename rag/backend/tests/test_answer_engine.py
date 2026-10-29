@@ -353,6 +353,40 @@ async def test_answer_diagnostics_keep_llm_usage_and_round_budget(
     assert "stop" not in budget
 
 
+async def test_answer_diagnostics_keep_the_evidence_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """全体設定の根拠の文字予算が回答の経路まで届き、使った予算と送った文字数を診断に残す(#3776)。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    engine = AnswerEngine(
+        Settings(rag_domain_keywords=["受注番号"], rag_evidence_budget_chars=64000),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+
+    outcome = await engine.run(
+        SearchRequest(query="受注の登録方法は？", filters={"knowledge_base_id": "kb-1"})
+    )
+
+    budget = outcome.diagnostics["evidence_budget"]
+    assert budget["configured_chars"] == 64000
+    assert budget["effective_chars"] >= 1
+    assert budget["source"] in {"configured", "section_expansion"}
+    assert budget["evidence_block_chars"] >= budget["evidence_text_chars"] > 0
+    assert set(budget) == {
+        "configured_chars",
+        "effective_chars",
+        "source",
+        "effective_exceeds_configured",
+        "span_count",
+        "evidence_text_chars",
+        "evidence_block_chars",
+        "evidence_block_tokens_estimate",
+    }
+
+
 async def test_execution_steps_carry_structured_details(monkeypatch: pytest.MonkeyPatch) -> None:
     """回答の記録の工程は、共有の詳細の形（見出しと値・行）の詳細を持つ（#2341）。"""
     import rag_engine.adapters.oci as engine_oci
