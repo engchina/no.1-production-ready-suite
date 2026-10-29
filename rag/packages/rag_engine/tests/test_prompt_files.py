@@ -13,6 +13,7 @@ from rag_engine.knowledge.prompt_files import (
     IMAGE_RETRIEVAL_PROMPT_KEY,
     VLM_ANSWER_PROMPT_KEY,
     PromptFile,
+    continue_prompt_steps,
     neutralize_boundary_markers,
     read_prompt,
     read_prompt_file,
@@ -338,3 +339,20 @@ def test_existing_custom_json_example_is_preserved_during_rendering():
     rendered = _render_prompt({}, template=saved)
     assert example in rendered
     assert "保存済みの説明" in rendered
+
+
+def test_continuation_steps_follow_the_last_step_of_the_preceding_part():
+    """続きの部品の Step の見出しだけを前の部分の続きに振り直す(#3810)。"""
+    continuation = "\n## Step 6: 合成の続き\n本文の Step 6 という語は変えない。\n\n## Step 7: 合成の出力\n返す。\n"
+    five = "".join(f"## Step {n}: 合成の手順 {n}\n内容。\n\n" for n in range(1, 6))
+    # 既定の組み合わせ(本体が 5 Step)では何も変えない。
+    assert continue_prompt_steps(five, continuation) == continuation
+    three = "## Step 1: 合成\n\n## Step 2: 合成\n\n## Step 3: 合成\n"
+    assert continue_prompt_steps(three, continuation) == continuation.replace("## Step 6:", "## Step 4:").replace(
+        "## Step 7:", "## Step 5:"
+    )
+    eight = "".join(f"## Step {n}: 合成\n" for n in range(1, 9))
+    assert "## Step 9: 合成の続き" in continue_prompt_steps(eight, continuation)
+    # 見出しの無い本体の後では Step 1 から振る。小節(###)だけの部品は変えない。
+    assert continue_prompt_steps("見出しの無い本体", continuation).startswith("\n## Step 1: 合成の続き")
+    assert continue_prompt_steps(three, "\n### 合成の小節\n- 規則。\n") == "\n### 合成の小節\n- 規則。\n"

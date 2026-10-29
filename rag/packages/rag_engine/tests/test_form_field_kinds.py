@@ -84,7 +84,8 @@ class OutputContractTests(unittest.TestCase):
         rendered = _render_prompt({}, template=saved)
         self.assertIn(saved, rendered)
         contract = _picture_output_contract()
-        self.assertTrue(rendered.endswith(contract))
+        # Step の見出しの無いテンプレートの後では、対象の指示が Step 1、出力契約が Step 2 になる(#3810)。
+        self.assertTrue(rendered.endswith(contract.replace("## Step 7:", "## Step 2:", 1)))
         schema = json.loads(contract.rsplit("\n", 1)[1])
         field = schema["$defs"]["FormFieldOutput"]
         self.assertIn("kind", field["required"])

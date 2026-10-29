@@ -71,7 +71,7 @@ from rag_engine.generation.semantic_observation import diagnostic_only, observat
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
 from rag_engine.generation.value_grounding import CURRENT_VALUE_REASON, unsupported_document_value_claim
-from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
+from rag_engine.knowledge.prompt_files import continue_prompt_steps, neutralize_boundary_markers
 from rag_engine.models.audit_wire import audit_wire_schema, canonical_audit_result
 from rag_engine.models.llm import (
     CatalogEvidenceReviews,
@@ -144,7 +144,7 @@ GENERATE_SYSTEM_PROMPT = (
 #### user message の構成
 - 質問契約: 変更してはいけない目的・条件（request_units の id と kind、requested_granularity など）。
 - 必須根拠（pinned）: 質問に適用できる限り必ず item に使う Evidence の ID。
-- 機能別の根拠: BEGIN_UNTRUSTED_RETRIEVED_CONTEXT と END_UNTRUSTED_RETRIEVED_CONTEXT の間。`=== 機能 F1: 文書名 / 版 / 機能見出し ===` の見出しで機能ごとに分かれ、各 Evidence は `[E1] p.頁 origin=… tags=… pinned catalog` の行で始まる。機能見出しは文書の節名であり、開く画面やメニューとは限らない。
+- 機能別の根拠: BEGIN_UNTRUSTED_RETRIEVED_CONTEXT と END_UNTRUSTED_RETRIEVED_CONTEXT の間。`=== 機能 F1: 文書名 / 版 / 機能見出し ===` の見出しで機能ごとに分かれ、各 Evidence は `[E1] p.頁 origin=… tags=… pinned catalog` の行で始まり、本文の後の `[/E1]` の行で終わる。機能見出しは文書の節名であり、開く画面やメニューとは限らない。
 - 前回の草稿の検査結果（是正時のみ）: 指摘を直し、支持済みの item は同じ citations のまま保持する。
 - 添付原画像と根拠レコードの対応（画像がある場合）: 各画像の bbox / context_bbox / target_highlight / asset_kind。
 - guide_task_scope は業務ガイドと確認済み条件で決まった本問の要求範囲。required=true の手順・依存関係・完了条件に沿って items を作り、原質問に語がない理由で対象外にしない。required=false の未確定分岐は勝手に選ばない。利用者が自分で行えない必須手順も省かず、資料で裏付けられない要件は gap に残す。
@@ -575,7 +575,10 @@ def audit_system_prompt(*, compact_reasons: bool = False, detailed: bool = True)
         if detailed
         else resolve_prompt("audit.factSystem", FACT_AUDIT_SYSTEM_PROMPT)
     )
-    return base + resolve_prompt("audit.compactRule", AUDIT_COMPACT_REASON_RULE) if compact_reasons else base
+    if not compact_reasons:
+        return base
+    # 保存した本体の Step の数が既定と違っても、つないだ規則の番号を続ける（#3810）。
+    return base + continue_prompt_steps(base, resolve_prompt("audit.compactRule", AUDIT_COMPACT_REASON_RULE))
 
 
 # 監査に渡す同じ機能の本文の上限（機能ごと）。手順は隣の span にあることが多く、機能全体を渡す必要はない。
@@ -3884,6 +3887,7 @@ def render_answer(
     summary_reasons: Sequence[Mapping[str, Any]] = (),
     answer_warnings: Sequence[Mapping[str, Any]] = (),
     guide_notes: tuple[str, Sequence[str]] | None = None,
+    guide_notes_first: bool = False,
 ) -> RenderedAnswer:
     """本文を組み立て、出典行ごとの根拠と、段落の印・外した段落・回答全体の警告を返す。
 
@@ -3902,7 +3906,9 @@ def render_answer(
     ``answer_warnings`` を先に）の節を足す（本文だけを読む利用者向け。#2738）。
 
     ``guide_notes`` は業務ガイドの（題名, 案内の行）。資料の記載と分けて「業務ガイドの案内」の節に出す（出典の行は
-    付けない。#2792）。
+    付けない。#2792）。``guide_notes_first`` なら、その節を末尾の節ではなく要約の直後（資料の説明の前）に置く。
+    分かっている条件で選んだ分岐の補足（担当者への依頼など）は、利用者がその条件で必ず守ることなので、資料の手順を
+    読む前に示す（#3769）。節は 1 つだけで、末尾には重ねない。
     """
     # 出典行ごとに、その表示項目を支える根拠だけを対応させる。
     citation_entries: list[list[CheckedItem]] = []
@@ -3966,10 +3972,12 @@ def render_answer(
         sections.append((answer_labels().unverified_section, [f"{bullet}{line}" for line in dict.fromkeys(unverified)]))
     if deadline:
         sections.append((answer_labels().deadline_section, [f"{bullet}{line}" for line in dict.fromkeys(deadline)]))
+    lead: list[tuple[str, list[str]]] = []
     if guide_notes and guide_notes[1]:
         title, notes = guide_notes
         labels = answer_labels()
-        sections.append((labels.guide_notes_section, [labels.guide_notes_note(title), *(f"{bullet}{line}" for line in notes)]))
+        guide_section = (labels.guide_notes_section, [labels.guide_notes_note(title), *(f"{bullet}{line}" for line in notes)])
+        (lead if guide_notes_first else sections).append(guide_section)
     if confirmations:
         sections.append((answer_labels().confirmations_section, [f"{bullet}{line}" for line in confirmations]))
     removed = [
@@ -3986,7 +3994,13 @@ def render_answer(
     marked_lines.extend(f"{bullet}{line}" for line in dict.fromkeys(unverified_requirements))
     if marked_lines:
         sections.append((answer_labels().marked_section, marked_lines))
-    body = "\n\n".join([*blocks, *(title + "\n\n" + "\n".join(content) for title, content in sections)])
+    body = "\n\n".join(
+        [
+            *(title + "\n\n" + "\n".join(content) for title, content in lead),
+            *blocks,
+            *(title + "\n\n" + "\n".join(content) for title, content in sections),
+        ]
+    )
     text = "\n\n".join(part for part in (summary.strip(), body) if part)
     return RenderedAnswer(
         text,
@@ -4605,7 +4619,11 @@ def _source_note(span: dict) -> str:
 def _rendered_evidence_span(
     span: Mapping[str, Any], *, units: Sequence[tuple[int, int]] | None = None, numbered: bool | None = None
 ) -> str:
-    """モデルへ示す根拠ブロック。引用行の本文と、引用対象外の補助情報を同じ版で記録する。"""
+    """モデルへ示す根拠ブロック。引用行の本文と、引用対象外の補助情報を同じ版で記録する。
+
+    本文の後を ``[/E1]`` の行で閉じる（#3806）。補助情報が長く本文が短いと、本文に最も近い ID が次のブロックの
+    見出しになり、モデルが本文を隣の根拠の ID に結び付けて出典を取り違えていた。
+    """
     return (
         f"[{span['label']}] {span.get('location') or 'p.' + str(span.get('page', ''))} origin={span.get('origin', 'unclassified')}"
         + (f" tags={','.join(span['tags'])}" if span.get("tags") else "")
@@ -4615,7 +4633,8 @@ def _rendered_evidence_span(
         + "\n"
         + _numbered_text(
             str(span.get("text") or ""), units if units is not None else citation_units(str(span.get("text") or "")), numbered=numbered
-        )
+        ).rstrip("\n")
+        + f"\n[/{span['label']}]"
     )
 
 
@@ -6421,9 +6440,12 @@ def run_round(
             neutralize_boundary_markers(fold_width(format_functions(selected))),
         )
         prompt += "\n要求ごとの根拠計画:\n" + scope_plan.model_dump_json()
-    generation_system = resolve_prompt("generation.system", GENERATE_SYSTEM_PROMPT) + (
-        resolve_prompt("generation.assumptionSystem", ASSUMPTION_SYSTEM_PROMPT) if assume_unconfirmed else ""
-    )
+    generation_system = resolve_prompt("generation.system", GENERATE_SYSTEM_PROMPT)
+    if assume_unconfirmed:
+        # 保存した本体の Step の数が既定と違っても、前提の部品の番号を本体の続きにする（#3810）。
+        generation_system += continue_prompt_steps(
+            generation_system, resolve_prompt("generation.assumptionSystem", ASSUMPTION_SYSTEM_PROMPT)
+        )
     generation_model = generation_draft_wire_model()
     generation_outputs: list[dict[str, Any]] = []
     cached_views = _CITATION_VIEWS.get() or {}
