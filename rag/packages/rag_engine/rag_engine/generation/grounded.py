@@ -3788,6 +3788,7 @@ def render_answer(
     confirmations: Sequence[str] = (),
     *,
     unverified: Sequence[str] = (),
+    unverified_requirements: Sequence[str] = (),
     deadline: Sequence[str] = (),
     applications: Sequence[CheckedApplication] = (),
     subquestions: Sequence[dict] = (),
@@ -3892,7 +3893,9 @@ def render_answer(
     warnings = [dict(item) for item in answer_warnings]
     if removed_lines := passage_marks.removed_section_lines(removed):
         sections.append((answer_labels().removed_section, removed_lines))
-    if marked_lines := passage_marks.marked_section_lines(merged, warnings):
+    marked_lines = passage_marks.marked_section_lines(merged, warnings)
+    marked_lines.extend(f"{bullet}{line}" for line in dict.fromkeys(unverified_requirements))
+    if marked_lines:
         sections.append((answer_labels().marked_section, marked_lines))
     body = "\n\n".join([*blocks, *(title + "\n\n" + "\n".join(content) for title, content in sections)])
     text = "\n\n".join(part for part in (summary.strip(), body) if part)
@@ -5140,28 +5143,14 @@ def guide_step_assignment(
     semantics: GuideStepSemantics | None = None,
     unsearched: Sequence[str] = (),
 ) -> tuple[list[dict[str, Any]], dict[int, str]]:
-    """業務ガイドの手順ごとの充足（#2491・#2649・#2685・#2706）と、手順の説明にした item（index → 手順 id）。
+    """手順の資料と回答itemの候補対応を記録する。全充足はapply_guide_contractsで別に確かめる。
 
-    手順の根拠（手順ごとの検索で取った chunk）を引いた item を手順の引用とする。同じ本文が別の chunk にも
-    あるので、手順の根拠の本文と照合できる引用（``_GUIDE_STEP_QUOTE_MIN_CHARS`` 以上）も手順の根拠を引いたと数える。
+    source IDと、同一の原文を持つ別chunkへの引用で候補を集める。共有候補の語・embeddingは操作範囲の
+    対応付けにだけ用い、広い原文引用やsourceの一致を本文の全充足へ昇格させない。独立した候補は
+    一つのitemを複数手順へ、一つの手順を複数itemへ保持できる。戻り値のindex→step IDは互換の代表値。
 
-    1 つの item が複数の手順の引用になる（手順が根拠の chunk を共有する・同じ原文が別の手順の根拠にもある）と、
-    chunk の共通の一文（末尾の確定の操作など）だけで全手順を説明したことになる（#2649）。そこで、複数の手順の
-    引用になる item は、まず語で決める: 引用（原文）が手順の語（題名と ``step_terms`` の検索の手がかり）を、手順の
-    根拠の中で手順の語を最も多く含む文（手順の主の操作の文。語で 1 つに決まるとき）と同じ数以上含めば、その手順の
-    item。どの手順でも語で決まらない item（手順の語が根拠に無い・主の操作の文が語で 1 つに決まらない・引用が語で
-    主の操作の文に届かない）は、``semantics`` が使えれば意味の近さで決める（`_guide_semantic_owners`）。使えない・
-    失敗なら語で決まる item だけを手順の説明にし、語で決まらない共有の item はどの手順の説明にもしない（#2685。
-    手順の語が 1 語しか当たらない文は共通の文のことがあるので、それで対応付けない）。独立に対応付けた item は複数の手順を説明してよい。単なる根拠の共有だけでは充足にしない。
-
-    ``unsearched`` は手順ごとの検索を期限・回数の上限で打ち切って検索しなかった手順（#2706）。その手順の根拠は
-    分からないので、1 つの手順の根拠だけを引いた item でも、検索しなかった手順と根拠を共有しうる item として、
-    共有の item と同じ判定（語・意味）を通す（共通の文だけの item を手順の説明にしない）。
-
-    手順の item に確かめた説明（原文のみ提示でも適用未確認でも印つきでもない）を割り当てられれば explained。手順の
-    item が原文のみ提示・適用未確認（unverified。「参考情報」の節に出る）・印の付いた説明（#2738）だけなら reference_only、
-    根拠は回答の材料にあるが手順の説明を引いていなければ unused、材料に無ければ no_evidence（検索しなかった手順は
-    not_searched）。required は回答の充足で必須の手順か（``optional`` は条件が決まらない分岐の行き先とその後続）。
+    未検索・根拠なし・未引用・参考情報を区別し、本文の対応と全要件の観察が未検証ならunknownとする。
+    word/semantic/exclusive_sourceの候補があるだけではexplainedにしない。本文はこの関数で削除しない。
     """
     by_source: dict[str, list[dict]] = {}
     for span in spans:

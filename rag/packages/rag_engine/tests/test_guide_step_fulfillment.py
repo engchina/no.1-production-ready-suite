@@ -240,7 +240,7 @@ class GuideStepFulfillmentTest(unittest.TestCase):
         self.assertEqual([step["status"] for step in rounds[0]["guide_steps"]], ["unknown", "reference_only"])
         self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "unknown", "guide:s2": "unknown"})
         self.assertEqual(result.envelope["outcome"], "conditional")
-        self.assertNotIn("業務ガイドの手順「", result.answer_text)
+        self.assertIn(grounded.answer_labels().marked_section, result.answer_text)
 
     def test_step_left_as_reference_is_not_settled_as_answered(self):
         """作り直しても B が参考情報に留まれば、要求 Q1 の判定とは別に B を一部の充足として示す。"""
@@ -301,7 +301,7 @@ class GuideStepFulfillmentTest(unittest.TestCase):
 
         self.assertEqual(len(_drafts(model)), 1)
         self.assertNotIn("guide:s3", _requests(result))
-        self.assertEqual(result.envelope["outcome"], "answered")
+        self.assertEqual(result.envelope["outcome"], "conditional")
         self.assertEqual([step["required"] for step in result.generation_trace["guide_step_coverage"]], [True, True, False])
 
     def test_explicit_requests_and_guide_steps_are_judged_separately(self):
@@ -402,7 +402,7 @@ class GuidePlanAfterEvidenceConditionTest(unittest.TestCase):
         coverage = result.generation_trace["guide_step_coverage"]
         # 外れた「分からない場合」の手順は回答の手順から外れ、決まった選択の分岐の手順が必須になる。
         self.assertEqual([(step["step_id"], step["required"]) for step in coverage], [("screen", True), ("code", True)])
-        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:screen": "addressed", "guide:code": "addressed"})
+        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:screen": "unknown", "guide:code": "unknown"})
         self.assertEqual(result.envelope["outcome"], "conditional")
         self.assertEqual([step["step_id"] for step in _audits(model)[0]["guide_steps"]], ["screen", "code"])
         trace = result.generation_trace["form_field_kinds"]
@@ -664,8 +664,8 @@ class GuideStepUnsearchedAnswerTest(unittest.TestCase):
         result = _run(model, ctx, knowledge).response
 
         self.assertEqual([step["status"] for step in result.generation_trace["guide_step_coverage"]], ["unknown", "not_searched"])
-        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "missing", "guide:s2": "missing"})
-        self.assertNotEqual(result.envelope["outcome"], "conditional")
+        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "unknown", "guide:s2": "missing"})
+        self.assertNotEqual(result.envelope["outcome"], "answered")
         self.assertIn("業務ガイドの手順「反映ボタンで反映する」は、手順ごとの検索を時間・回数の上限で打ち切った", result.answer_text)
 
 
@@ -975,7 +975,7 @@ class GuideStepSemanticAnswerTest(unittest.TestCase):
 
         self.assertEqual(embedder.calls, [])
         self.assertNotIn("guide_step_embedding", result.generation_trace)
-        self.assertEqual(result.envelope["outcome"], "answered")
+        self.assertEqual(result.envelope["outcome"], "conditional")
 
 
 class GuidePlanRequiredTest(unittest.TestCase):

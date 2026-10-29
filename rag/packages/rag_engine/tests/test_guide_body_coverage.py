@@ -103,3 +103,61 @@ def test_unperformed_or_failed_semantic_review_preserves_body_and_known_sources(
     assert all(row["validation"]["body_coverage"]["execution"] == execution for row in result)
     assert items[0].published and items[0].item.text == FIRST + SECOND
     assert all(row["status"] == "unknown" for row in guide_step_requests(result))
+
+
+@pytest.mark.parametrize("mode", ["none", "detailed"])
+def test_final_envelope_keeps_body_and_distinguishes_unreviewed_from_completed_steps(mode):
+    from dataclasses import replace
+    from pathlib import Path
+
+    from test_grounded_answer import FakeModel, context, draft, record
+    from test_grounded_answer import audit as draft_audit
+    from test_grounded_answer import item as draft_item
+
+    from rag_engine.config import get_settings
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.generation.answering import _grounded_spans, synthesize_grounded_answer
+    from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
+
+    question = "対象Aの変更手順を教えてください。"
+    ctx = context(replace(record(0, FIRST + SECOND, "合成の操作", source="sample.pdf"), chunk_uid="sample"))
+    knowledge = RuntimeKnowledgeContext(
+        original_question=question,
+        expanded_question=question,
+        path=Path("synthetic.json"),
+        guide_steps=STEPS,
+        guide_step_contracts=tuple(CONTRACTS),
+    )
+    settings = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode=mode)
+    evidence_id = _grounded_spans(question, ctx, (), knowledge)[0]["evidence_id"]
+    assessment = draft_audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")])
+    assessment["guide_requirement_reviews"] = [observation("r1", [0], FIRST), observation("r2", [1], SECOND)]
+    model = FakeModel(
+        [
+            draft(
+                draft_item(evidence_id, FIRST, FIRST, request_id="Q1"), draft_item(evidence_id, SECOND, SECOND, request_id="Q1"), summary=""
+            )
+        ],
+        [assessment],
+    )
+
+    def unused(*args, **kwargs):
+        pytest.fail("追加の外部呼び出しは不要")
+
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        response = synthesize_grounded_answer(question, ctx, settings, image_prompt_mode="text_only", runtime_knowledge=knowledge).response
+    assert FIRST in response.answer_text and SECOND in response.answer_text
+    guide_requests = {row["id"]: row["status"] for row in response.envelope["requests"] if row["id"].startswith("guide:")}
+    if mode == "none":
+        assert [schema for schema, _prompt in model.prompts] == ["GroundedDraft"]
+        assert guide_requests == {"guide:s1": "unknown", "guide:s2": "unknown"}
+        assert response.envelope["outcome"] == "conditional"
+        assert grounded.answer_labels().marked_section in response.answer_text
+        assert grounded.answer_labels().gaps_section not in response.answer_text
+        assert "unverified_requests" in response.envelope["handoff_reasons"]
+        assert all(row["validation"]["body_coverage"]["execution"] == "not_run" for row in response.generation_trace["guide_step_coverage"])
+    else:
+        assert [schema for schema, _prompt in model.prompts] == ["GroundedDraft", "GroundedAudit"]
+        assert guide_requests == {"guide:s1": "addressed", "guide:s2": "addressed"}
+        assert response.envelope["outcome"] == "answered"
+        assert all(row["status"] == "explained" for row in response.generation_trace["guide_step_coverage"])

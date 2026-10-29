@@ -2980,8 +2980,11 @@ def synthesize_grounded_answer(
         guide_notices,
         review_execution=current.review_execution,
     )
-    guide_gaps = [grounded.guide_step_gap_line(step) for step in grounded.unexplained_guide_steps(guide_coverage)]
-    unanswered += guide_gaps
+    guide_pending = grounded.unexplained_guide_steps(guide_coverage)
+    unverified_guide_statuses = {grounded.GUIDE_STEP_UNKNOWN, grounded.GUIDE_STEP_PARTIAL, grounded.GUIDE_STEP_NOT_SEARCHED}
+    guide_gaps = [grounded.guide_step_gap_line(step) for step in guide_pending if step["status"] not in unverified_guide_statuses]
+    guide_unverified = [grounded.guide_step_gap_line(step) for step in guide_pending if step["status"] in unverified_guide_statuses]
+    unanswered += [*guide_gaps, *guide_unverified]
     # 監査が「回答に必要なのに使われていない」と挙げた根拠。言い換えや適用の断定は加えず、原文のみ提示で示す (#1098)。
     needed = grounded.audit_needed_quotes(current, spans, question=question)
     if crag_projection.get("applied") and not any(entry.published for entry in current.checked):
@@ -3024,6 +3027,7 @@ def synthesize_grounded_answer(
             [*reviewed_unanswered, *guide_gaps, *crag_gaps],
             confirmation_section,
             unverified=unread_lines,
+            unverified_requirements=guide_unverified,
             deadline=deadline_lines,
             applications=current.applications,
             subquestions=subquestions,
@@ -3041,6 +3045,7 @@ def synthesize_grounded_answer(
             [*needed, *gap_items, *removed_entries],
             confirmations=confirmation_section,
             unverified=unread_lines,
+            unverified_requirements=guide_unverified,
             deadline=deadline_lines,
             answer_warnings=answer_warnings,
             guide_notes=guide_notes,
@@ -3053,6 +3058,7 @@ def synthesize_grounded_answer(
             [*reviewed_unanswered, *guide_gaps],
             confirmation_section,
             unverified=unread_lines,
+            unverified_requirements=guide_unverified,
             deadline=deadline_lines,
             applications=current.applications,
             subquestions=subquestions,
@@ -3083,6 +3089,7 @@ def synthesize_grounded_answer(
             [*related, *gap_items, *removed_entries],
             confirmations=confirmation_section,
             unverified=unread_lines,
+            unverified_requirements=guide_unverified,
             deadline=deadline_lines,
             answer_warnings=answer_warnings,
             guide_notes=guide_notes,
