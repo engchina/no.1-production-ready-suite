@@ -192,7 +192,10 @@ def test_actual_round_audit_primary_question_uses_compiled_task_without_more_cal
     assert unit["id"] == "Q1" and unit["text"] == actual["question"] and unit["original_text"] == ORIGINAL
     assert actual["evidence"] == {"stable-a": OPEN}
     assert actual["items"][0]["citations"] == [{"evidence_id": "stable-a", "quote": OPEN}]
-    assert result.audit is not None and result.audit.request_reviews[0].evidence_status == "missing"
-    assert result.audit.reviews[0].support == "supported" and result.audit.reviews[0].source_applicability == "matched"
+    assert result.audit is not None and result.audit.request_reviews[0].evidence_status == "unknown"
+    raw = result.timing["semantic_audit_observation"]["audit"]
+    assert raw["request_reviews"][0]["evidence_status"] == "missing"
+    assert raw["reviews"][0]["support"] == "supported" and raw["reviews"][0]["source_applicability"] == "matched"
+    assert result.timing["semantic_audit_observation"]["adopted"] is False
     finish = next(row for row in result.guide_steps if row["step_id"] == "finish")
     assert finish["status"] != "explained"

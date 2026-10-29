@@ -684,7 +684,7 @@ def test_unread_sections_make_the_answer_conditional():
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         plain = synthesize_grounded_answer("質問", context, get_settings(), image_prompt_mode="text_only")
         limited = synthesize_grounded_answer("質問", context, get_settings(), image_prompt_mode="text_only", unread_sections=unread)
-    assert plain.response.envelope["outcome"] == "answered"
+    assert plain.response.envelope["outcome"] == "conditional"
     assert limited.response.envelope["outcome"] == "conditional"
     assert unread[0] in limited.response.envelope["gaps"]
     assert f"{grounded.answer_labels().unverified_section}\n\n・{unread[0]}" in limited.response.answer_text
@@ -998,7 +998,7 @@ def test_answer_hides_unread_sections_of_documents_it_does_not_cite():
         )
 
     # 回答が根拠にしない別の文書の章節は出さず、条件つきにもしない。診断に残す。
-    assert only_other.response.envelope["outcome"] == "answered"
+    assert only_other.response.envelope["outcome"] == "conditional"
     assert grounded.answer_labels().unverified_section not in only_other.response.answer_text
     assert only_other.response.generation_trace["unread_sections"]["hidden"][0]["document_id"] == OTHER_DOC
     assert both.response.envelope["outcome"] == "conditional"

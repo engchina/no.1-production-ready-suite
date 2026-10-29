@@ -262,9 +262,12 @@ def test_run_round_delivers_authoritative_scope_and_keeps_supported_operation_as
     assert grounded.answer_use(entry) != "reference"
     assert "操作手順" in grounded.render(result.summary, result.checked)
     assert result.audit is not None
-    assert result.audit.reviews[0].observed_applicability == "matched"
-    assert result.audit.reviews[0].source_applicability == "matched"
-    assert result.audit.reviews[0].business_scope["required_step_ids"] == ["copy", "finish"]
+    assert result.audit.reviews == []
+    raw = result.timing["semantic_audit_observation"]["audit"]["reviews"][0]
+    assert raw["source_applicability"] == "matched"
+    assert raw["business_scope"]["required_step_ids"] == ["copy", "finish"]
+    assert result.timing["semantic_audit_observation"]["adopted"] is False
+    assert entry.review_assessment["effective_support"] == "unknown"
 
 
 def test_actual_strict_audit_schema_only_requires_source_applicability_without_business_scope() -> None:
@@ -324,7 +327,7 @@ def test_authoritative_inputs_keep_required_steps_without_material_and_override_
 
 
 @pytest.mark.parametrize("mode", ["none", "standard"])
-def test_generation_and_correction_preserve_confirmed_values_and_origins_without_inventing_free_text_premises(mode: str) -> None:
+def test_generation_and_observation_preserve_confirmed_values_and_origins_without_inventing_free_text_premises(mode: str) -> None:
     pairs = (("操作条件", "条件A"), ("対象の種類", "種類B"))
     origins = (("操作条件", "条件A", "user"), ("対象の種類", "種類B", "question"), ("未確認条件", "仮定値", "assumption"))
     expected = [
@@ -409,7 +412,7 @@ def test_generation_and_correction_preserve_confirmed_values_and_origins_without
 
     with bind_dependencies(AnswerDependencies(unused, unused, parser, unused, unused)):
         answering.synthesize_grounded_answer(QUESTION, context, config, runtime_knowledge=runtime, image_prompt_mode="text_only")
-    assert len(generated) == (1 if mode == "none" else 2)
+    assert len(generated) == 1
     for prompt in generated:
         match = re.search(r"confirmed_premises:\n(\[[^\n]*\])", prompt)
         assert match is not None
@@ -417,5 +420,5 @@ def test_generation_and_correction_preserve_confirmed_values_and_origins_without
     if mode == "none":
         assert not audited
     else:
-        assert len(audited) == 2
+        assert len(audited) == 1
         assert all(row["confirmed_premises"] == expected for row in audited)

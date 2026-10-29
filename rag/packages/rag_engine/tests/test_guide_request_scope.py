@@ -81,7 +81,7 @@ def test_valid_scope_retains_conditional_common_method_without_semantic_certific
     result, _ = run(relation, guide_candidate=True)
     entry = next(row for row in result.checked if row.item.text == METHOD)
     assert entry.published
-    assert not entry.review_assessment
+    assert entry.review_assessment == {"effective_support": "unknown"}
     assert entry.item.text.startswith("機能Zを備える対象では")
     assert entry.item.quote == METHOD
     assert result.review_execution == "not_run"
