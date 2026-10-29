@@ -3544,6 +3544,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     """回答の検索と生成の全体既定を .env と現在プロセスへ保存する(送った項目だけを変える。#593)。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_query_strategy", "auto_routing")
+    monkeypatch.setattr(settings, "rag_answer_evidence_refinement_mode", "legacy")
     monkeypatch.setattr(settings, "rag_answer_flow", "crag")
     monkeypatch.setattr(settings, "rag_answer_audit_mode", "none")
     monkeypatch.setattr(settings, "rag_neighbor_child_count", 3)
@@ -3568,6 +3569,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
         "query_strategy": "auto_routing",
         "answer_flow": "crag",
         "answer_audit_mode": "none",
+        "answer_evidence_refinement_mode": "legacy",
         "neighbor_child_count": 3,
         "rerank_enabled": True,
         "screen_linking_enabled": False,
@@ -3835,3 +3837,76 @@ def test_model_settings_rerank_probe_has_explicit_purpose(monkeypatch: MonkeyPat
     )
     assert response == {"ranked_count": 1, "top_score": 0.9}
     assert model_purpose_attributes() == {}
+
+
+@pytest.mark.parametrize("mode", ["legacy", "cited_only", "cited_required"])
+def test_answering_evidence_refinement_mode_is_persisted_and_independent(
+    monkeypatch: MonkeyPatch, tmp_path: Path, mode: str
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_answer_evidence_refinement_mode", "legacy")
+    monkeypatch.setattr(settings, "rag_answer_audit_mode", "none")
+    monkeypatch.setattr(settings, "rag_request_coverage_retrieval_enabled", False)
+    monkeypatch.setattr(settings, "rag_answer_max_correction_rounds", 0)
+    monkeypatch.delenv("RAG_ANSWER_EVIDENCE_REFINEMENT_MODE", raising=False)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    response = client.patch(
+        "/api/settings/answering", json={"answer_evidence_refinement_mode": mode}
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["answer_evidence_refinement_mode"] == mode
+    assert data["answer_audit_mode"] == "none"
+    assert data["request_coverage_retrieval_enabled"] is False
+    assert settings.rag_answer_max_correction_rounds == 0
+    assert f"RAG_ANSWER_EVIDENCE_REFINEMENT_MODE={mode}" in env_file.read_text()
+    reloaded = Settings(_env_file=env_file)
+    assert reloaded.rag_answer_evidence_refinement_mode == mode
+    from app.rag.answer_engine import build_engine_settings
+
+    assert (
+        build_engine_settings(settings, output_dir=tmp_path).answer_evidence_refinement_mode == mode
+    )
+    assert (
+        build_engine_settings(reloaded, output_dir=tmp_path).answer_evidence_refinement_mode == mode
+    )
+    # 別の設定の保存で選別方式を暗黙に戻さない。
+    changed = client.patch("/api/settings/answering", json={"neighbor_child_count": 2})
+    assert changed.json()["data"]["answer_evidence_refinement_mode"] == mode
+    assert (
+        client.get("/api/settings/answering").json()["data"]["answer_evidence_refinement_mode"]
+        == mode
+    )
+
+
+def test_answering_evidence_refinement_rejects_unknown_without_saving(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_answer_evidence_refinement_mode", "cited_required")
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    before = env_file.read_bytes() if env_file.exists() else None
+    response = client.patch(
+        "/api/settings/answering", json={"answer_evidence_refinement_mode": "automatic"}
+    )
+    assert response.status_code == 422
+    assert settings.rag_answer_evidence_refinement_mode == "cited_required"
+    assert (env_file.read_bytes() if env_file.exists() else None) == before
+
+
+def test_answering_evidence_refinement_defaults_to_legacy(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.delenv("RAG_ANSWER_EVIDENCE_REFINEMENT_MODE", raising=False)
+    assert Settings(_env_file=None).rag_answer_evidence_refinement_mode == "legacy"
+
+
+def test_answering_evidence_refinement_changes_runtime_fingerprint() -> None:
+    from app.rag.diagnostics import rag_config_fingerprint
+
+    base = Settings(_env_file=None)
+    fingerprints = {
+        rag_config_fingerprint(
+            base.model_copy(update={"rag_answer_evidence_refinement_mode": mode})
+        )
+        for mode in ("legacy", "cited_only", "cited_required")
+    }
+    assert len(fingerprints) == 3

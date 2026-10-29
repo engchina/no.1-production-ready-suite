@@ -2550,6 +2550,46 @@ def synthesize_grounded_answer(
     # vector を再利用する。注入が無ければ語の判定だけ。
     embedder = injected_embedder() if guide_steps else None
     guide_semantics = grounded.GuideStepSemantics(embedder.embed if embedder is not None else None)
+
+    def generate_round(
+        round_spans: Sequence[dict[str, Any]],
+        round_prompt: str,
+        *,
+        previous_round: Any = None,
+        round_knowledge: RuntimeKnowledgeContext | None = None,
+    ) -> Any:
+        round_steps, round_optional, round_terms = guide_view(round_knowledge)
+        return grounded.run_round(
+            question,
+            round_spans,
+            generation_settings,
+            prompt=round_prompt,
+            provider_id=provider,
+            audit_settings=audit_settings,
+            parse_text=parse_text_response,
+            parse_images=parse_multimodal_response,
+            previous=previous_round.checked if previous_round is not None else (),
+            previous_draft=previous_round.draft if previous_round is not None else None,
+            previous_dropped=previous_round.dropped if previous_round is not None else (),
+            known_gaps=known_gaps,
+            compact_audit_reasons=compact_audit_reasons,
+            guide_steps=round_steps,
+            guide_optional_steps=round_optional,
+            guide_step_terms=round_terms,
+            guide_step_semantics=guide_semantics,
+            guide_unsearched_steps=guide_unsearched,
+            guide_step_contracts=round_knowledge.guide_step_contracts if round_knowledge else (),
+            guide_notices=round_knowledge.guide_notices if round_knowledge else (),
+            audit_mode=audit_mode,
+            assume_unconfirmed=round_knowledge.assume_unconfirmed if round_knowledge else False,
+            image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
+            invalid_output=_invalid_structured_output,
+            glossary=_audit_glossary(round_knowledge),
+            confirmed_premises=settings.confirmed_premises,
+            confirmed_premise_sources=settings.confirmed_premise_sources,
+            guide_task_scope=round_knowledge.guide_task_scope if round_knowledge else (),
+        )
+
     for number in range(max_rounds):
         # 質問に名前が出た画面の図の項目の種類と、それで決まる業務ガイドの条件（#2404）と、その条件の手順の計画（#2689）。
         field_kinds = form_field_kinds.question_field_kinds(question, context)
@@ -2601,35 +2641,8 @@ def synthesize_grounded_answer(
             try:
                 # 生成は回答文の生成、監査は回答の監査の推論の量で呼ぶ (#1499 / #1528。run_round は settings を LLM の
                 # 呼び出しにだけ使う)。
-                current = grounded.run_round(
-                    question,
-                    spans,
-                    generation_settings,
-                    prompt=prompt,
-                    provider_id=provider,
-                    audit_settings=audit_settings,
-                    parse_text=parse_text_response,
-                    parse_images=parse_multimodal_response,
-                    previous=best[0].checked if best is not None else (),
-                    previous_draft=best[0].draft if best is not None else None,
-                    previous_dropped=best[0].dropped if best is not None else (),
-                    known_gaps=known_gaps,
-                    compact_audit_reasons=compact_audit_reasons,
-                    guide_steps=guide_steps,
-                    guide_optional_steps=guide_optional_steps,
-                    guide_step_terms=guide_step_terms,
-                    guide_step_semantics=guide_semantics,
-                    guide_unsearched_steps=guide_unsearched,
-                    guide_step_contracts=runtime_knowledge.guide_step_contracts if runtime_knowledge else (),
-                    guide_notices=runtime_knowledge.guide_notices if runtime_knowledge else (),
-                    audit_mode=audit_mode,
-                    assume_unconfirmed=runtime_knowledge.assume_unconfirmed if runtime_knowledge else False,
-                    image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
-                    invalid_output=_invalid_structured_output,
-                    glossary=_audit_glossary(runtime_knowledge),
-                    confirmed_premises=settings.confirmed_premises,
-                    confirmed_premise_sources=settings.confirmed_premise_sources,
-                    guide_task_scope=runtime_knowledge.guide_task_scope if runtime_knowledge else (),
+                current = generate_round(
+                    spans, prompt, previous_round=best[0] if best is not None else None, round_knowledge=runtime_knowledge
                 )
                 if number == 0:
                     # 監査の推論の量は、監査をする型のときだけ書く（#2966）。
@@ -2863,6 +2876,61 @@ def synthesize_grounded_answer(
                 remedy_step.field("回答の材料の根拠", evidence_summary(context.records))
             elif remedy["remedy"] == "images":
                 remedy_step.field("添付する画像", f"{len(images)} 件")
+
+    from rag_engine.generation.refinement_round import project_crag_view, project_knowledge, prompt_context_for, refine_answer
+
+    assert best is not None
+    baseline, baseline_context, baseline_spans, baseline_images, baseline_mode = best
+    baseline_conditions = form_field_kinds.resolve_conditions(
+        form_field_kinds.question_field_kinds(question, baseline_context), settings.evidence_conditions
+    )
+    baseline_knowledge = form_field_kinds.with_resolved_plan(base_knowledge, baseline_conditions, evidence_plans)
+
+    def generate_refinement(selected_spans: Sequence[dict[str, Any]], draft_review: dict[str, Any]) -> Any:
+        selected_knowledge = project_knowledge(baseline_knowledge, selected_spans)
+        selected_keys = {str(value) for span in selected_spans for value in (span.get("source_id"), span.get("evidence_id")) if value}
+        selected_images = [
+            image
+            for image in baseline_images
+            if any(str(image.get(key) or "") in selected_keys for key in ("chunk_id", "image_id", "source_id"))
+        ]
+        selected_prompt = _grounded_prompt(
+            question,
+            selected_spans,
+            prompt_context_for(baseline_context, selected_spans),
+            selected_images,
+            draft_review,
+            question_plan,
+            selected_knowledge,
+            inquiry_conditions,
+            query_expansion,
+            template=template,
+            known_gaps=known_gaps,
+            crag_assessment=project_crag_view(crag_generation.generation_view(crag_assessment, selected_spans, baseline_context)),
+            confirmed_premises=confirmed_premise_records(settings.confirmed_premises, settings.confirmed_premise_sources),
+        )
+        with _execution_step("選別した根拠で回答を作り直す") as refinement_step:
+            result = generate_round(selected_spans, selected_prompt, round_knowledge=selected_knowledge)
+            refinement_step.field("根拠の数", len(selected_spans))
+            return result
+
+    refinement = refine_answer(
+        baseline,
+        baseline_spans,
+        strategy=str(getattr(settings, "answer_evidence_refinement_mode", "legacy")),
+        knowledge=baseline_knowledge,
+        known_gaps=known_gaps,
+        next_round=len(rounds),
+        max_rounds=max_rounds,
+        budget=budget,
+        generate=generate_refinement,
+        images_present=mode == "vision_attachments" or baseline_mode == "vision_attachments",
+    )
+    if refinement.candidate is not None:
+        rounds.append({**refinement.candidate.trace(), "accepted": refinement.adopted, "remedy": {"remedy": "evidence_refinement"}})
+        if refinement.adopted:
+            best = (refinement.candidate, baseline_context, list(refinement.spans), baseline_images, baseline_mode)
+            best_number = len(rounds) - 1
 
     assert best is not None
     current, context, spans, images, mode = best
@@ -3146,6 +3214,7 @@ def synthesize_grounded_answer(
         "pipeline": "grounded",
         **({"crag_assessment": crag_view, "crag_partial_projection": crag_projection} if crag_view is not None else {}),
         "audit_mode": audit_mode,
+        "evidence_refinement": refinement.diagnostics,
         "task_contract": task_contract(question),
         "selected_evidence": [_public_span(s) for s in spans],
         "same_unit_fill": unit_fill,

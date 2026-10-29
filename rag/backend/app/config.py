@@ -1730,6 +1730,14 @@ class Settings(
             "0 は作り直さず、1 組目の検査と監査の結果で確定する。"
         ),
     )
+    rag_answer_evidence_refinement_mode: Literal["legacy", "cited_only", "cited_required"] = Field(
+        default="legacy",
+        description=(
+            "生成後の根拠の選別。legacy は既存方式を維持し、cited_only は引用済みの原文だけ、"
+            "cited_required は引用済みの原文と必須の補完根拠へ絞る。明示的に選んだ場合だけ、"
+            "既存の是正回数・時間予算内で最大 1 回再生成する。監査・補検索は自動で有効にしない。"
+        ),
+    )
     rag_answer_audit_mode: Literal["none", "standard", "detailed"] = Field(
         default="none",
         description=(
