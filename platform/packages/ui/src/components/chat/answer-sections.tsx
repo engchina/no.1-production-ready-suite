@@ -19,6 +19,7 @@ import {
 } from "./answer-passage-marks";
 import {
   matchAnswerPassageMarks,
+  visibleAnswerPassageRecords,
   type AnswerPassageMarkGroup,
   type AnswerPassageRecords,
 } from "./answer-passage-records";
@@ -312,10 +313,11 @@ export function AnswerSections({
   className,
   testId = "answer-text",
   labels = DEFAULT_ANSWER_SECTIONS_LABELS,
-  passages = null,
+  passages: rawPassages = null,
   passageLabels = DEFAULT_ANSWER_PASSAGE_LABELS,
   lang,
 }: AnswerSectionsProps) {
+  const passages = useMemo(() => rawPassages ? visibleAnswerPassageRecords(rawPassages) : null, [rawPassages]);
   const baseId = useId();
   // 回答の本文の言語（中国語の回答は中国語の字形で描く。#3335）。
   const contentLang = useMemo(() => resolveContentLang(lang, answerText(blocks)), [lang, blocks]);
