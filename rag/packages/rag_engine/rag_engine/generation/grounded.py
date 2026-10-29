@@ -61,7 +61,7 @@ from rag_engine.generation.audit_recovery import merge_audit_retry
 from rag_engine.generation.check_cues import check_cues
 from rag_engine.generation.citation_wire import bind_wire_range, canonical_generation_draft, generation_draft_wire_model
 from rag_engine.generation.confirmed_context import confirmed_premise_records
-from rag_engine.generation.guide_authority import authoritative_guide_inputs, bind_guide_authority
+from rag_engine.generation.guide_authority import authoritative_guide_inputs, bind_guide_authority, compile_guide_task_contract
 from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
@@ -6395,9 +6395,14 @@ def run_round(
             for _, entry in audited
             for cited in item_citations(entry)
         }
+        question_contract = _contract_view(question)
+        if guide_task_scope:
+            question_contract["original_question"] = question
+        effective_contract = compile_guide_task_contract(question_contract, guide_task_scope)
         inputs = {
-            "question": question,
-            "task_contract": _contract_view(question),
+            "question": effective_contract.get("current_request", question) if guide_task_scope else question,
+            **({"original_question": question} if guide_task_scope else {}),
+            "task_contract": effective_contract,
             "summary": str(draft.summary),
             "items": [
                 {

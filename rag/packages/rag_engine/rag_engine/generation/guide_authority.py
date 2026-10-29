@@ -1,5 +1,6 @@
 """業務ガイドの要求範囲を、資料適用・主張支持の監査から独立して記録する。"""
 
+import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
@@ -69,3 +70,43 @@ def authoritative_guide_inputs(
         )
         selected_contracts.append(contract)
     return tuple(selected_steps), tuple(optional), tuple(selected_contracts)
+
+
+def compile_guide_task_contract(original_contract: Mapping[str, Any], task_scope: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Guideの決定済み要求を主タスクへ編成する。根拠の支持や小問の所属は推定しない。"""
+    contract = deepcopy(dict(original_contract))
+    if not task_scope:
+        return contract
+    fields = (
+        "guide_id",
+        "revision",
+        "step_id",
+        "title",
+        "required",
+        "purpose",
+        "depends_on",
+        "requirements",
+        "evidence_requirements",
+        "done_when",
+    )
+    scope = [{key: deepcopy(row[key]) for key in fields if key in row} for row in task_scope]
+    required = [row for row in scope if row.get("required") is True]
+    unresolved = [row for row in scope if row.get("required") is not True]
+    original_request = str(contract.get("current_request") or "")
+    contract["original_question"] = contract.get("original_question", original_request)
+    contract["original_current_request"] = original_request
+    contract["scope_sources"] = ["original_question", "business_guide"]
+    contract["required_guide_scope"] = required
+    contract["unresolved_guide_scope"] = unresolved
+    if required:
+        contract["current_request"] = "\n".join(
+            value for value in (original_request, json.dumps({"required_guide_scope": required}, ensure_ascii=False)) if value
+        )
+        units = contract.get("request_units", [])
+        targets = [row for row in units if row.get("kind") != "context"]
+        if len(targets) == 1:
+            unit = targets[0]
+            unit["original_text"] = unit.get("text", "")
+            unit["text"] = contract["current_request"]
+            unit["scope_sources"] = ["original_question", "business_guide"]
+    return contract
