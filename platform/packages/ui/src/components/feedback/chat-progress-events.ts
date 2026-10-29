@@ -522,10 +522,12 @@ export function labelChatProgressSteps(
     if (meta) result.meta = meta;
     const level = spanMode ? treeLevel : definition?.level?.(values);
     if (level) result.level = level;
+    if (span?.parentId) result.parentId = span.parentId;
     const productDetails = definition?.details ? definition.details(step.status, values, step.details) : step.details;
     const details = span
       ? mergeDetails(productDetails, [
           ...traceSpanFields(undefined, span.name, span.attributes ?? EMPTY_PARAMS, traceLabels),
+          ...(span.parentId ? [{ label: "Parent span ID", value: span.parentId, mono: true }] : []),
           ...(span.product ? [{ label: "Product", value: span.product, mono: true }] : []),
         ])
       : productDetails;

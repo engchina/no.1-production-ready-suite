@@ -197,6 +197,8 @@ it.each(["done", "failed", "cancelled"])("論理的な並べ替え要求は%sで
   expect(tree.steps.map(step => step.level)).toEqual([0, 1, 2, 3, 2]);
   expect(tree.steps[2].label).toBe("候補の並べ替えを要求する（2 回目）");
   expect(tree.steps[3].label).toBe("質問との関連度で候補を並べ替える · synthetic-rerank");
+  expect(tree.steps[3].parentId).toBe("3".repeat(16));
+  expect(tree.steps[3].details?.fields).toContainEqual({ label: "Parent span ID", value: "3".repeat(16), mono: true });
   expect(tree.steps[4].label).toBe("候補の並べ替えを要求する");
   expect(tree.steps[2].details?.fields).toContainEqual({ label: "Span name", value: "rerank.request", mono: true });
   expect(request.operation_name).toBe("rerank.request");

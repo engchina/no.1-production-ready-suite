@@ -33,7 +33,6 @@ import {
   runTimelineBars,
   runTimelineHasChildren,
   runTimelineCurrentStepIndex,
-  RUN_TIMELINE_MAX_VISIBLE_DEPTH,
   runStepDetailsJson,
   hasRunStepDetails,
   setDisplayTimeZone,
@@ -601,7 +600,7 @@ describe("RunTimeline", () => {
     render(<RunTimeline steps={nested} showSummary={false} size="sm" stepTestIdPrefix="t" testId="timeline" />);
     expect(container.textContent).not.toContain("合計");
     expect(container.querySelector("[data-testid='t-step-b2a']")?.getAttribute("data-level")).toBe("2");
-    expect(container.querySelector("[data-testid='t-step-b2a'] .pl-8")).not.toBeNull();
+    expect(container.querySelector<HTMLElement>("[data-testid='t-step-b2a'] [data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("2rem");
     expect(container.querySelector("[data-testid='t-step-a'] .text-xs")).not.toBeNull();
     render(<RunTimeline steps={nested} showBars={false} testId="timeline" />);
     expect(container.querySelector("[data-run-timeline-bar]")).toBeNull();
@@ -629,8 +628,8 @@ describe("RunTimeline", () => {
     expect(container.querySelector("[data-run-timeline-step='sql']")?.textContent).toContain("失敗 · 0.3 秒");
     expect(container.querySelector("[data-run-timeline-step='plan'] .sr-only")?.textContent).toContain("完了");
     // 入れ子の段は字下げする。時間の線は飾り（aria-hidden）。
-    expect(container.querySelector("[data-run-timeline-step='tool'] .pl-4")).not.toBeNull();
-    expect(container.querySelector("[data-run-timeline-step='plan'] .pl-4")).toBeNull();
+    expect(container.querySelector<HTMLElement>("[data-run-timeline-step='tool'] [data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("1rem");
+    expect(container.querySelector<HTMLElement>("[data-run-timeline-step='plan'] [data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("0rem");
     expect(container.querySelector("[data-run-timeline-bar]")?.getAttribute("aria-hidden")).toBe("true");
     act(() => buttons[0].click());
     expect(buttons[0].getAttribute("aria-expanded")).toBe("true");
@@ -706,21 +705,23 @@ describe("入れ子の深さ（#3447）", () => {
   const nameCell = (id: string) =>
     container.querySelector<HTMLElement>(`[data-run-timeline-step='${id}'] [data-run-timeline-label]`)!.closest("div")!;
 
-  it("深さ 0〜6 は 1 段 1rem でそれぞれ違う字下げにし、6 段より深い段は 6 段の位置に深さの印を付ける", () => {
+  it("深さの上限で丸めず、深い一覧だけにキーボード操作できる内部スクロールを設ける", () => {
     render(<RunTimeline steps={steps} showBars={false} testId="timeline" />);
-    expect(RUN_TIMELINE_MAX_VISIBLE_DEPTH).toBe(6);
-    const indents = ["tool", "mcp", "rag", "stage", "embed", "d5", "d6"].map(
-      (id) => nameCell(id).className.match(/\bpl-(\d+)\b/)?.[1] ?? "0"
+    const indents = ["tool", "mcp", "rag", "stage", "embed", "d5", "d6", "d7", "d9"].map(
+      id => nameCell(id).style.paddingInlineStart
     );
-    expect(indents).toEqual(["0", "4", "8", "12", "16", "20", "24"]);
-    // 工程（深さ 3）と子の段（深さ 4）は違う位置。
-    expect(nameCell("stage").className).not.toBe(nameCell("embed").className);
-    for (const id of ["d7", "d9"]) {
-      expect(nameCell(id).className).toContain("pl-24");
-      expect(nameCell(id).className).toContain("before:border-dashed");
-      expect(container.querySelector(`[data-run-timeline-step='${id}']`)?.getAttribute("data-level")).toBe(id === "d7" ? "7" : "9");
-    }
-    expect(nameCell("d6").className).not.toContain("before:border-dashed");
+    expect(indents).toEqual(["0rem", "1rem", "2rem", "3rem", "4rem", "5rem", "6rem", "7rem", "9rem"]);
+    const viewport = container.querySelector<HTMLElement>("[data-run-timeline-scroll]")!;
+    expect(viewport.tabIndex).toBe(0);
+    expect(viewport.getAttribute("role")).toBe("region");
+    expect(viewport.firstElementChild?.getAttribute("style")).toContain("min-width: 25rem");
+    expect(container.querySelector("[data-run-timeline-step='d9']")?.getAttribute("data-level")).toBe("9");
+  });
+
+  it("浅い一覧は既存の幅を保ちスクロール用のフォーカスを増やさない", () => {
+    render(<RunTimeline steps={steps.slice(0, 5)} showBars={false} />);
+    expect(container.querySelector("[data-run-timeline-scroll]")).toBeNull();
+    expect(container.querySelector("[tabindex='0']")).toBeNull();
   });
 
   it("製品名は名前の後ろのタグにし、名前の左端を兄弟の段とそろえる", () => {

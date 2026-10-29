@@ -1,5 +1,5 @@
 import { CheckCircle2, Circle, CirclePause, CirclePlay, Clock3, MinusCircle, XCircle, type LucideIcon } from "lucide-react";
-import { createContext, useContext, useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useId, useMemo, useState, type ReactNode, type CSSProperties } from "react";
 
 import { CopyButton } from "../ui/copy-button";
 import type { TraceDetailsLabels } from "../../lib/trace-labels";
@@ -544,11 +544,12 @@ export interface RunTimelineStep {
   /** 開いて見る自由な中身（結果の表など。`details` の下に出す）。渡すと行に開閉のボタンが付く。 */
   children?: ReactNode;
   /**
-   * 入れ子の深さ（0 = 段、1 以上 = 段の中のツールの呼び出し・工程）。字下げは 1 段 1rem で 6 段まで（375px でも名前の
-   * 幅を残す）。6 段より深い段は 6 段の位置に置き、左に点線の印を付けて深さが潰れていることを示す（#3447）。
-   * 時刻の無い入れ子の段の線は、親（1 つ浅い直前の段）の始まりから積む。
+   * 入れ子の深さ（0 = 最上位）。1 段 1rem で全文字下げし、深い木は一覧内で横へ移動する。
+   * 時刻の無い段の線は親の始まりから積む。
    */
   level?: number;
+  /** 記録にある実際の親 ID。親不在でも推測で置き換えない。 */
+  parentId?: string;
 }
 
 const STEP_ICON: Record<Exclude<RunTimelineStepStatus, "running">, { icon: LucideIcon; className: string }> = {
@@ -568,35 +569,38 @@ const STEP_BAR: Record<RunTimelineStepStatus, string> = {
   pending: "bg-fg-subtle",
 };
 
-/**
- * 入れ子の字下げ（1 段 = 1rem。6 段で止める。#3447）。製品を跨ぐ trace（Agent のツール → MCP の呼び出し → RAG の検索
- * → RAG の工程 → 工程の中の段）は 5 段になる。3 段で止めると工程と子の段が同じ位置に並び、親子が見えなかった。
- * 6 段（6rem）でも 375px で名前の幅を残す。
- */
-const STEP_INDENT = ["", "pl-4", "pl-8", "pl-12", "pl-16", "pl-20", "pl-24"] as const;
-/** 見える深さの上限（これより深い段は上限の位置に置き、深さの印を付ける）。 */
-export const RUN_TIMELINE_MAX_VISIBLE_DEPTH = STEP_INDENT.length - 1;
-/** 上限より深い段の印（上限の字下げの中の点線。字下げで表せない深さがあることを示す）。 */
-const DEEPER_GUIDE =
-  "relative before:absolute before:inset-y-0 before:left-[5.25rem] before:border-l before:border-dashed before:border-border-strong before:content-['']";
+/** 深い木で一覧内のスクロールに切り替える深さ。深さそのものは制限しない。 */
+export const RUN_TIMELINE_SCROLL_DEPTH = 6;
+/** @deprecated 字下げの上限ではなく、一覧内スクロールに切り替える閾値。 */
+export const RUN_TIMELINE_MAX_VISIBLE_DEPTH = RUN_TIMELINE_SCROLL_DEPTH;
 
 function stepLevel(level: number | undefined): number {
   return typeof level === "number" && Number.isFinite(level) ? Math.max(0, Math.floor(level)) : 0;
 }
 
-function stepIndent(level: number | undefined): string {
-  const depth = stepLevel(level);
-  if (depth > RUN_TIMELINE_MAX_VISIBLE_DEPTH) return `${STEP_INDENT[RUN_TIMELINE_MAX_VISIBLE_DEPTH]} ${DEEPER_GUIDE}`;
-  return STEP_INDENT[depth];
+/** 実際の木の深さを 1 段 1rem で表示する。固定の上限へ丸めない。 */
+export function runTimelineStepIndentStyle(level: number | undefined): CSSProperties {
+  return { paddingInlineStart: `${stepLevel(level)}rem` };
 }
 
-/** 段の行の字下げ（`level`。6 段で止め、それより深い段は深さの印を付ける）。`RunTimeline` の外で同じ形の行を描く部品（チャットの実行中の段）が使う。 */
-export const runTimelineStepIndent = stepIndent;
+/** 深い木はページではなく一覧の中で横へ移動する。浅い一覧の幅は変えない。 */
+export function RunTimelineViewport({ depth, label, children }: { depth: number; label: string; children: ReactNode }) {
+  const deep = depth > RUN_TIMELINE_SCROLL_DEPTH;
+  return (
+    <div className="min-w-0 overflow-x-auto" tabIndex={deep ? 0 : undefined}
+      role={deep ? "region" : undefined} aria-label={deep ? label : undefined}
+      data-run-timeline-scroll={deep ? "true" : undefined}>
+      <div className="min-w-0" style={deep ? { minWidth: `${depth + 16}rem` } : undefined}>
+        {children}
+      </div>
+    </div>
+  );
+}
 
 /**
  * 段ごとに、子の段を持つか（一覧で直後の段が 1 段以上深い `level`）を返す（#3436）。子の段を持つ段は親の工程で、
  * 実行中でも回さない実行中の印（`CirclePlay`）で出す。回すのは実行中の末端の段（子を持たない段）だけ。
- * 字下げは 3 段で止めるが、親子の判定は `level` の値そのもので行う。
+ * 親子の判定は `level` の値そのもので行う。
  */
 export function runTimelineHasChildren(steps: readonly { level?: number | null }[]): boolean[] {
   return steps.map(
@@ -760,7 +764,7 @@ export interface RunTimelineProps {
  *
  * - 行の中身（ツールの引数と結果・SQL・エラー）は、行の開閉のボタン（`aria-expanded` + `DisclosureChevron`）で開く。
  *   失敗した段は最初から開く。
- * - 入れ子の段は `level` で字下げする（3 段まで）。補足（LLM の回数など）は名前の後ろの括弧に出す。
+ * - 入れ子の段は実際の `level` で字下げし、深い一覧は内部で横へ移動する。補足（LLM の回数など）は名前の後ろの括弧に出す。
  * - 狭い置き場所（36rem 未満）では線を隠し、名前と所要時間だけにする（container query）。
  * - 状態はアイコンの形と読み上げの文言で伝え、失敗・スキップ・応答待ちは画面にも文字で出す（色だけにしない）。
  */
@@ -808,6 +812,7 @@ export function RunTimeline({
           {labels.timelineSummary(steps.length, formatRunDuration(total, labels.notRecorded))}
         </p>
       ) : null}
+      <RunTimelineViewport depth={Math.max(0, ...steps.map(step => stepLevel(step.level)))} label={labels.timeline}>
       <ol className={cn("grid min-w-0", size === "sm" ? "gap-1.5" : "gap-1")} aria-label={labels.timeline}>
         {steps.map((step, index) => {
           const duration = stepDurationMs(step);
@@ -842,6 +847,7 @@ export function RunTimeline({
               className="min-w-0 rounded-md"
               data-status={step.status}
               data-level={level > 0 ? String(level) : undefined}
+              data-parent-id={step.parentId}
               data-run-timeline-step={step.id}
               data-testid={stepTestId}
             >
@@ -852,7 +858,7 @@ export function RunTimeline({
                   showBars && "@xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_7rem] @xl:items-center"
                 )}
               >
-                <div className={cn("flex min-w-0 items-start gap-2 leading-5", nameText, stepIndent(level))}>
+                <div className={cn("flex min-w-0 items-start gap-2 leading-5", nameText)} style={runTimelineStepIndentStyle(level)}>
                   <span className="pr-icon-line">
                     <StepIcon
                       status={step.status}
@@ -927,6 +933,7 @@ export function RunTimeline({
           );
         })}
       </ol>
+      </RunTimelineViewport>
     </div>
   );
 }
