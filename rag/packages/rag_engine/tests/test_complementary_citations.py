@@ -59,4 +59,7 @@ def test_complementary_sources_are_audited_as_one_citation_union():
     assert len(observed) == 1
     assert response.answer_text.count(claim) == 1
     assert {row["source"] for row in response.cited_evidence} == {"手順A.pdf", "手順B.pdf"}
-    assert response.generation_trace["rounds"][0]["validation_dimensions"]["claim_support"]["items"][0]["status"] == "supported"
+    assert response.generation_trace["rounds"][0]["validation_dimensions"]["claim_support"]["items"][0]["status"] == "unknown"
+    observation = response.generation_trace["semantic_audit_observation"]
+    assert observation["adopted"] is False
+    assert [row["support"] for row in observation["audit"]["reviews"]] == ["supported", "supported"]

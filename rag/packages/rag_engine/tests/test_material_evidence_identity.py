@@ -52,9 +52,14 @@ def test_uncited_direct_material_uses_a_stable_id_without_backfilling_claim_supp
     assert material["evidence_id"] in {row["evidence_id"] for row in spans}
     assert material["evidence_id"] not in {row["label"] for row in spans}
     plan = request_recovery_plan(result.unanswered, (), {row["evidence_id"] for row in spans})
-    assert plan[0]["action"] == "correction"
-    assert plan[0]["evidence_ids"] == [refs[SAVE]]
-    assert result.checked[0].review_assessment["effective_support"] == support
+    assert plan[0]["action"] == "retain" and plan[0]["evidence_ids"] == []
+    observation = result.timing["semantic_audit_observation"]
+    assert observation["adopted"] is False
+    raw = observation["audit"]["request_reviews"][0]
+    assert raw["evidence_status"] == "available" and raw["evidence_ids"] == [refs[SAVE]]
+    assert raw["evidence_support"] == [{"evidence_id": refs[SAVE], "source": material["source"], "quote": SAVE}]
+    assert result.checked[0].review_assessment["observed_support"] == support
+    assert result.checked[0].review_assessment["effective_support"] == "unknown"
     assert seen["input"]["items"][0]["citations"] == [{"evidence_id": refs[cited], "quote": cited}]
 
 

@@ -81,7 +81,7 @@ def test_an_unseen_suffix_is_not_accepted_as_direct_material():
 
 
 @pytest.mark.parametrize("mode", ["standard", "detailed", "none"])
-def test_existing_audit_routes_only_the_missing_operation_and_adds_no_call(mode):
+def test_existing_audit_records_the_missing_operation_without_routing_or_extra_calls(mode):
     ctx = context(record(0, OPEN, "設定", source=SOURCE), record(1, SAVE, "設定", source=SOURCE))
     refs = ids(ctx, QUESTION)
     received = {}
@@ -118,11 +118,12 @@ def test_existing_audit_routes_only_the_missing_operation_and_adds_no_call(mode)
     assert received["items"][0]["citations"] == [{"evidence_id": refs[OPEN], "quote": OPEN}]
     plan = request_recovery_plan(result.unanswered, (), set(refs.values()))
     if mode == "detailed":
-        assert plan[0]["action"] == "correction" and plan[0]["evidence_ids"] == [refs[SAVE]]
-        [feedback] = result.feedback()["unanswered_requests"]
-        assert feedback["missing_content"] == SAVE
-        assert feedback["evidence_support"] == [support(refs[SAVE], SAVE)]
-        assert refs[OPEN] not in feedback["evidence_ids"]
+        assert plan[0]["action"] == "retain" and plan[0]["evidence_ids"] == []
+        [observed] = result.timing["semantic_audit_observation"]["audit"]["request_reviews"]
+        assert observed["missing_content"] == SAVE
+        assert observed["evidence_support"] == [support(refs[SAVE], SAVE)]
+        assert observed["evidence_ids"] == [refs[SAVE]] and refs[OPEN] not in observed["evidence_ids"]
+        assert not result.feedback().get("unanswered_requests")
     else:
         assert plan[0]["action"] == "retain"
 
@@ -139,7 +140,7 @@ def test_missing_verdict_is_not_silently_overridden_by_id_existence():
     assert result.evidence_status == "missing" and result.evidence_ids == []
 
 
-def test_duplicate_request_with_a_gap_does_not_block_another_valid_omission_review():
+def test_duplicate_request_and_valid_omission_review_remain_distinct_diagnostics():
     ctx = context(record(0, OPEN + SAVE, "設定", source=SOURCE))
     eid = ids(ctx, QUESTION)[OPEN + SAVE]
     initial = audit(
@@ -160,5 +161,10 @@ def test_duplicate_request_with_a_gap_does_not_block_another_valid_omission_revi
     blocked = next(row for row in decisions if row["request_id"] == "Q2")
     assert blocked["action"] == "retain" and blocked["cause"] == "invalid_request_id"
     assert result.generation_trace["rounds"][0]["validation_dimensions"]["answer_completeness"]["execution"] == "partial"
-    assert decision["request_id"] == "Q1" and decision["action"] == "correction"
-    assert decision["evidence_ids"] == [eid]
+    assert decision["request_id"] == "Q1" and decision["action"] == "retain"
+    assert decision["evidence_ids"] == []
+    raw = result.generation_trace["semantic_audit_observation"]["audit"]["request_reviews"]
+    assert len(raw) == 1 and raw[0]["request_id"] == "Q1"
+    assert raw[0]["evidence_ids"] == [eid]
+    assert raw[0]["missing_content"] == SAVE
+    assert sum(name == "GroundedDraftWire" for name, _ in model.prompts) == 1
