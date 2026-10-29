@@ -616,6 +616,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "guide_notes_note_template",
         "guide_handoff_template",
         "guide_approval_template",
+        "guide_acquisition_incomplete_template",
         "passage_note_template",
         "answer_warning_template",
         ingest=False,
@@ -958,6 +959,7 @@ _COMPATIBLE_ANSWER_LABELS = frozenset(
         "crag_unknown_aspect_template",
         "crag_quote_only_note",
         "crag_definition_aspect_template",
+        "guide_acquisition_incomplete_template",
     }
 )
 
@@ -1133,7 +1135,7 @@ def pack_from_payload(payload: Mapping[str, Mapping[str, Any]] | str | None) -> 
         return None
     if "snapshot" in payload:
         if set(payload) != {"snapshot"} or not isinstance(payload["snapshot"], Mapping):
-            raise LanguagePackError("完全な言語資源の形式が正しくありません。")
+            raise LanguagePackError({"snapshot": "完全な言語資源の形式が正しくありません。"})
         return build_pack(payload["snapshot"])
     return resolve(builtin_pack(), payload)
 

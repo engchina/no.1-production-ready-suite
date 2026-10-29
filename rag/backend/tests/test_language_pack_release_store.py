@@ -105,10 +105,11 @@ _COMPAT_KEYS = (
     "crag_unknown_aspect_template",
     "crag_quote_only_note",
     "crag_definition_aspect_template",
+    "guide_acquisition_incomplete_template",
 )
 
 
-def legacy_release_row(mask: int = 31) -> dict[str, object]:
+def legacy_release_row(mask: int = 63) -> dict[str, object]:
     """旧形式の項目集合から独立に元の保存 hash を計算する。"""
     row = release_row()
     effective = builtin_pack().to_dict()
@@ -133,7 +134,7 @@ def legacy_release_row(mask: int = 31) -> dict[str, object]:
     return row
 
 
-@pytest.mark.parametrize("mask", range(32))
+@pytest.mark.parametrize("mask", range(64))
 def test_legacy_release_keeps_stored_payload_hash_and_custom_values(mask: int) -> None:
     from rag_parser_core.language import current_pack
 
