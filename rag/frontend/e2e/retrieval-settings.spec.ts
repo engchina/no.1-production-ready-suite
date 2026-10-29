@@ -274,7 +274,7 @@ for (const viewport of [
     await audit.click();
     await expect(page.getByRole("option")).toHaveText(["実行しない", "標準", "詳細"]);
     await page.getByRole("option", { name: "標準", exact: true }).click();
-    await expect(audit).toHaveAccessibleDescription(/事実の問題を最大 1 回是正.*説明の抜けだけでは作り直しません/);
+    await expect(audit).toHaveAccessibleDescription(/未校正の意味判定による自動是正は行いません.*是正予算は最大 1 回.*初回を含め最大 2 回/);
     await expect(save).toBeEnabled();
     await discard.click();
     await expect(audit).toContainText("実行しない");
@@ -283,7 +283,7 @@ for (const viewport of [
     for (const label of ["詳細", "実行しない", "標準"]) {
       await audit.click();
       await page.getByRole("option", { name: label, exact: true }).click();
-      if (label === "詳細") await expect(audit).toHaveAccessibleDescription(/説明の抜けも含めて最大 2 回是正/);
+      if (label === "詳細") await expect(audit).toHaveAccessibleDescription(/意味判定や説明の抜けの診断だけでは作り直しません.*是正予算は最大 2 回.*合計最大 3 回/);
       await save.click();
       await expect(save).toBeDisabled();
       await page.reload();
