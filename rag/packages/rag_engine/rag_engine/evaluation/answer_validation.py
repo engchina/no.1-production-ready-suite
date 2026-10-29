@@ -83,7 +83,8 @@ from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests,
 #     その段落だけで 1 回確かめ直す（support_check=figure_recheck。#2678）。
 # 16: 原質問の状態と操作対象も、確認の答えと同じ条件整合の検査に渡す（#2653）。
 # 17: 最終検証の支持を段落の実際の引用集合に限定し、未確認の対象は判定を保留する。
-VALIDATION_RUBRIC_VERSION = 17
+# 18: 制約が実行・提案のどちらを禁止するかを区別し、比較の採否を独立記録する（#3800）。
+VALIDATION_RUBRIC_VERSION = 18
 
 # 図の見た目だけで決まる主張（要素の配置・矢印の向き・つながり・分岐への所属など、図の本文が明示しない内容）の判定。
 # 根拠の本文では確かめられず、図の画像を読んだかどうかで扱いが決まる（#2678。検証に通さない判定に数える）。
@@ -614,7 +615,10 @@ PREMISE_CONSISTENCY_SYSTEM_PROMPT = (
     "- conflicts: recommendation が constraints と両立しない（限定より広い範囲・別の対象に及ぶ、除いた対象・操作を"
     "含む、別の処理や状態に対する結論・具体値を今回の操作に当てはめる）。資料に書かれた内容でも、constraints に合う手順が見つからない"
     "代わりに示した内容でも conflicts。\n"
-    "- fits: 両立する、または recommendation が空。\n"
+    "- fits: 両立する、または recommendation が空。unknown: 制約の対象や段落の意図を確定できない。\n"
+    "- constraint_scope は execution_only（実行のみ禁止）、proposal（提案も禁止）、content（対象・値などの条件）、unknown を区別する。\n"
+    "- passage_mode は proposal（案の提示）、execution（実行済みの報告・直ちに実行する指示）、explanation（説明）、unknown を区別する。実行禁止だけでは案の提示を矛盾にしない。\n"
+    "- constraint_quote は質問または確認の答え、passage_quote は当該段落から判断に使った原文をそのまま写す。書かれていない禁止や実行を補わない。\n"
     "- 例: 利用者の答えが「項目 A だけを変え、共有グループは変えない」で、段落が「共有グループの表示区分を変えて保存する」"
     "なら conflicts。「共有グループの表示区分を変えると全項目に反映される」という説明だけなら fits。\n"
     "\n## Step 4: 各段落の判定を構造化して返す\n"
@@ -628,7 +632,11 @@ class PremiseConsistencyCheck(BaseModel):
     answer_passage_id: str
     constraints: str
     recommendation: str
-    fit: Literal["fits", "conflicts"]
+    fit: Literal["fits", "conflicts", "unknown"]
+    constraint_scope: Literal["execution_only", "proposal", "content", "unknown"] = "unknown"
+    passage_mode: Literal["proposal", "execution", "explanation", "unknown"] = "unknown"
+    constraint_quote: str = ""
+    passage_quote: str = ""
 
 
 class PremiseConsistencyOutput(BaseModel):
@@ -642,6 +650,8 @@ def premise_conflicts(
     premises: Sequence[Mapping[str, Any]],
     settings: Any,
     provider_id: str | None = None,
+    *,
+    diagnostics: list[dict[str, Any]] | None = None,
 ) -> set[str]:
     """勧める内容が、原質問・確認の答えの条件・制約と両立しない段落の ID。
 
@@ -655,6 +665,10 @@ def premise_conflicts(
         STEPS_REQUEST in explicit_requests(question) and any(is_operation_instruction(passage["text"]) for passage in passages)
     )
     if (not answers and not has_question_constraints) or not passages or _deadline_passed():
+        if diagnostics is not None:
+            diagnostics.append(
+                {"status": "not_run", "decision": "deadline_exceeded" if _deadline_passed() else "not_required", "adopted": False}
+            )
         return set()
     inputs = {"question": question, "user_answers": answers, "answer_passages": [dict(passage) for passage in passages]}
     try:
@@ -668,12 +682,48 @@ def premise_conflicts(
             attempts=1,
             purpose="answer.premise_consistency",
         )
-    except Exception:
+    except Exception as exc:
         # 答えとの比較は主張の監査を補うだけ。失敗しても監査の判定を返す（答え・回答の本文は記録しない）。
         logger.warning("answer validation premise consistency check failed")
+        if diagnostics is not None:
+            diagnostics.append(
+                {
+                    "status": "timed_out" if isinstance(exc, (TimeoutError, DeadlineExceeded)) else "failed",
+                    "decision": "check_failed",
+                    "adopted": False,
+                }
+            )
         return set()
-    ids = {passage["id"] for passage in passages}
-    return {check.answer_passage_id for check in output.checks if check.fit == "conflicts" and check.answer_passage_id in ids}
+    by_id = {passage["id"]: passage["text"] for passage in passages}
+    returned = [check.answer_passage_id for check in output.checks]
+    conflicts: set[str] = set()
+    for check in output.checks:
+        passage = by_id.get(check.answer_passage_id)
+        reason = "not_conflicting"
+        if passage is None:
+            reason = "unknown_passage_id"
+        elif returned.count(check.answer_passage_id) != 1:
+            reason = "duplicate_passage_id"
+        elif check.fit == "unknown" or check.constraint_scope == "unknown" or check.passage_mode == "unknown":
+            reason = "scope_unverified"
+        elif not check.constraint_quote.strip() or not any(quote_in_text(check.constraint_quote, text) for text in [question, *answers]):
+            reason = "constraint_quote_unmatched"
+        elif not check.passage_quote.strip() or not quote_in_text(check.passage_quote, passage):
+            reason = "passage_quote_unmatched"
+        elif check.constraint_scope == "execution_only" and check.passage_mode in {"proposal", "explanation"}:
+            reason = "execution_prohibition_does_not_prohibit_proposal"
+        elif check.fit == "conflicts":
+            conflicts.add(check.answer_passage_id)
+            reason = "conflict_adopted"
+        if diagnostics is not None:
+            diagnostics.append({**check.model_dump(), "status": "completed", "adopted": reason == "conflict_adopted", "decision": reason})
+    if diagnostics is not None:
+        diagnostics.extend(
+            {"answer_passage_id": passage_id, "adopted": False, "decision": "missing_passage_id", "fit": "unknown"}
+            for passage_id in by_id
+            if passage_id not in returned
+        )
+    return conflicts
 
 
 def _revise_table_claims(
@@ -1336,13 +1386,14 @@ def validate_answer_claims(
     # 1 行の記録は 1 つの根拠に 1 行しか無く、別の行の根拠の値を結び付けた段落を根拠ごとには見つけられない）。
     table_texts = [str(item.get("text") or "") for item in evidence_items] + record_tables(evidence_items)
     # supported は、写した原文が根拠にあり・対象が同じで・表の行の対応に反しないものだけ（#2659・#2657・#2653）。
+    premise_diagnostics: list[dict[str, Any]] = []
     claims = _enforce_support(
         claims,
         passages,
         catalog,
         {str(item.get("chunk_uid") or item.get("id") or ""): str(item.get("text") or "") for item in sources},
         table_texts,
-        premise_conflicts=premise_conflicts(question, passages, premises, settings, provider_id),
+        premise_conflicts=premise_conflicts(question, passages, premises, settings, provider_id, diagnostics=premise_diagnostics),
     )
     # 根拠の表の対応と取り違えた段落は、表の正しい値に直せれば直した文を返す（#3005。直せなければ矛盾のまま）。
     claims = _revise_table_claims(claims, table_texts, settings, provider_id)
@@ -1358,6 +1409,7 @@ def validate_answer_claims(
         "claim_checks": [claim.model_dump() for claim in claims],
         "counts": counts,
         "evidence_truncated": truncated,
+        "premise_consistency_checks": premise_diagnostics,
         "evidence_ids": sorted({str(item.get("id")) for item in evidence if not is_premise_id(item.get("id"))}),
         "rechecked_passage_ids": rechecked,
         # 分類が食い違い、内容で監査し直した段落（#2625）。食い違ったまま決まらない段落は、判定の

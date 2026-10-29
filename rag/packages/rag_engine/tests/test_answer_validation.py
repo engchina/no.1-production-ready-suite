@@ -1615,6 +1615,10 @@ def test_paragraph_broader_than_the_users_scope_is_contradicted_by_the_premise()
                             "constraints": "項目 A だけ",
                             "recommendation": "共有グループの表示区分を変える",
                             "fit": "conflicts" if payload["user_answers"] else "fits",
+                            "constraint_scope": "content",
+                            "passage_mode": "execution",
+                            "constraint_quote": "項目 A だけ。グループは変えない",
+                            "passage_quote": payload["answer_passages"][0]["text"],
                         },
                         {
                             "answer_passage_id": ids[1],
