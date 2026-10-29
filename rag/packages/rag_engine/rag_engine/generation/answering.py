@@ -2489,22 +2489,30 @@ def _evidence_budget_trace(settings: Settings, evidence_budget_chars: int | None
 
     configured_chars は設定の文字予算（``evidence_budget_chars``。backend の ``RAG_EVIDENCE_BUDGET_CHARS``）、
     effective_chars は根拠の選択に実際に使った予算（章節を広げたときは ``_section_evidence_budget`` の値）。
-    evidence_block_chars は生成の入力の根拠ブロックの文字数（出典情報・補助情報・書式を含む）、
-    evidence_text_chars はそのうち根拠の本文の文字数の合計。token は ``estimate_tokens`` の見積もり。
+    evidence_block_chars は生成の入力の根拠ブロックの文字数（本文・補助情報・書式の合計）で、内訳は
+    evidence_text_chars（根拠の本文）・evidence_metadata_chars（補助情報。出典情報・文書の背景などを描いた形）・
+    evidence_format_chars（残り。見出し行・行番号・終わりの印・機能の見出し）。token は ``estimate_tokens`` の見積もり。
+    budget_counts は根拠の選択で予算が数える対象（#3831）: 本文と、描いた補助情報（``body_and_metadata``）。
+    書式は選択の時点では数えず、evidence_format_chars で別に示す。
     """
-    from rag_engine.generation.grounded import evidence_block_text
+    from rag_engine.generation.grounded import evidence_block_text, evidence_metadata_text
     from rag_engine.generation.section_expansion import estimate_tokens
 
     configured = int(getattr(settings, "evidence_budget_chars", 0) or 0) or EVIDENCE_BUDGET_CHARS
     effective = int(evidence_budget_chars or configured)
     block = evidence_block_text(spans)
+    text_chars = sum(len(str(span.get("text") or "")) for span in spans)
+    metadata_chars = sum(len(evidence_metadata_text(span)) for span in spans)
     return {
         "configured_chars": configured,
         "effective_chars": effective,
         "source": "section_expansion" if evidence_budget_chars is not None else "configured",
         "effective_exceeds_configured": effective > configured,
         "span_count": len(spans),
-        "evidence_text_chars": sum(len(str(span.get("text") or "")) for span in spans),
+        "budget_counts": "body_and_metadata",
+        "evidence_text_chars": text_chars,
+        "evidence_metadata_chars": metadata_chars,
+        "evidence_format_chars": max(0, len(block) - text_chars - metadata_chars),
         "evidence_block_chars": len(block),
         "evidence_block_tokens_estimate": estimate_tokens(block),
     }

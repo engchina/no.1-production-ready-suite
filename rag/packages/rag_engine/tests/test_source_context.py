@@ -81,3 +81,79 @@ def test_parent_excerpt_keeps_only_corresponding_child_source_context():
         assert info.get("search_context_header") == child.metadata.get("context_header")
         other = child_b if child is child_a else child_a
         assert all(c["source_id"] != other.id for c in children)
+
+
+def test_prompt_note_omits_repeated_values_but_keeps_each_full_path():
+    """モデルへ示す出典情報は、機能の見出しと同じ文書名・索引用のヘッダ・子の uid を繰り返さない（#3831）。"""
+    child_a = replace(make_record(1, ["分類 A", "説明"], enabled=True), parent_chunk_id="parent")
+    child_b = replace(make_record(2, ["共通分類"], enabled=True), parent_chunk_id="parent")
+    parent = replace(
+        make_record(0, ["共通分類"], enabled=True),
+        id="parent",
+        chunk_id="parent",
+        chunk_level="parent",
+        text=child_a.text + "\n" + child_b.text,
+    )
+    spans = evidence_spans("説明", [parent], scope_records=[child_a, child_b], budget=3000)
+    for span in spans:
+        stored = span["source_context"]
+        # 保存・照合用の完全な出典は変えない。
+        assert stored["search_context_header"] == "document-a.txt > 共通分類"
+        note = grounded._source_note(span)
+        assert grounded.CONTEXT_NOTE_BEGIN in note and span["text"] not in note
+        shown = json.loads(note.split("出典情報: ", 1)[1].split("\n", 1)[0])
+        assert shown["section_path"] == ["共通分類"]
+        assert set(shown) <= {"section_path", "children"}
+        for child in stored.get("children", []):
+            assert child["source_id"] not in note
+        # 子はブロックと違う章節だけを示す。
+        assert shown.get("children", []) == [
+            {"section_path": c["section_path"]} for c in stored.get("children", []) if c["section_path"] != ["共通分類"]
+        ]
+    assert any(span.get("source_context", {}).get("children") for span in spans)
+
+
+def test_prompt_note_keeps_values_that_differ_from_the_heading():
+    from rag_engine.retrieval.source_context import prompt_source_context
+
+    context = {
+        "document_name": "document-a.txt",
+        "section_path": ["分類 A"],
+        "search_context_header": "保存された別のヘッダ",
+        "search_context_header_enabled": True,
+        "children": [{"source_id": "c1", "document_name": "document-b.txt", "section_path": ["分類 A"]}],
+    }
+    assert prompt_source_context(context, document_name="document-a.txt") == {
+        "section_path": ["分類 A"],
+        "search_context_header": "保存された別のヘッダ",
+        "children": [{"document_name": "document-b.txt"}],
+    }
+    # 機能の見出しの文書名と違えば、文書名も示す。
+    assert prompt_source_context(context, document_name="other.txt")["document_name"] == "document-a.txt"
+
+
+def test_derivable_search_header_does_not_use_the_body_budget():
+    """索引用のヘッダは描かないので、ON / OFF で根拠に入る本文が変わらない（予算は描いた補助情報を数える。#3831）。"""
+    records = {
+        enabled: [replace(make_record(i, ["分類" + str(i), "機能", "説明"], enabled=enabled), text="本文" * 40) for i in range(6)]
+        for enabled in (True, False)
+    }
+    chosen = {enabled: evidence_spans("説明", rows, budget=700) for enabled, rows in records.items()}
+    assert [s["text"] for s in chosen[True]] == [s["text"] for s in chosen[False]]
+    assert chosen[True]
+
+
+def test_budget_trace_separates_body_metadata_and_format():
+    spans = _grounded_spans(
+        "各項目の説明",
+        AnswerContext(records=[make_record(1, ["分類 A", "説明"], enabled=True)], text=""),
+        (),
+        None,
+    )
+    from rag_engine.config import get_settings
+    from rag_engine.generation.answering import _evidence_budget_trace
+
+    trace = _evidence_budget_trace(get_settings(environ={}, dotenv_path=None), None, spans)
+    assert trace["budget_counts"] == "body_and_metadata"
+    assert trace["evidence_metadata_chars"] > 0 and trace["evidence_format_chars"] > 0
+    assert trace["evidence_text_chars"] + trace["evidence_metadata_chars"] + trace["evidence_format_chars"] == trace["evidence_block_chars"]
