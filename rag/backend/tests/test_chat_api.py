@@ -1501,25 +1501,28 @@ def test_create_conversation_with_legacy_active_language_pack(
 
     from app.clients.language_pack_release_store import _release
     from app.rag import published_language_runtime
+    from app.schemas.language_pack_release import LanguagePackRelease
     from tests.test_language_pack_release_store import legacy_release_row
 
     row = legacy_release_row()
     seen: list[str] = []
 
     class LegacyStore:
-        async def current(self):
+        async def current(self) -> LanguagePackRelease:
             return _release(row)
 
-    async def initialized():
+    async def initialized() -> LegacyStore:
         return LegacyStore()
 
     monkeypatch.setattr(published_language_runtime, "initialized_release_store", initialized)
     original_create = fake_oracle.create_conversation
 
-    async def capture_create(*args, **kwargs):
+    async def capture_create(
+        *, search_answer_profile_id: str, title: str | None = None
+    ) -> StoredConversation:
         seen.append(current_pack().text("answer_labels", "crag_refusal_summary"))
         seen.append(current_pack().text("answer_labels", "cause_gap"))
-        return await original_create(*args, **kwargs)
+        return await original_create(search_answer_profile_id=search_answer_profile_id, title=title)
 
     monkeypatch.setattr(fake_oracle, "create_conversation", capture_create)
     response = client.post(
@@ -1532,4 +1535,6 @@ def test_create_conversation_with_legacy_active_language_pack(
         builtin_pack().text("answer_labels", "crag_refusal_summary"),
         "合成の保存済み文言",
     ]
-    assert row["effective_json"]["answer_labels"].get("crag_refusal_summary") is None
+    effective = row["effective_json"]
+    assert isinstance(effective, dict)
+    assert effective["answer_labels"].get("crag_refusal_summary") is None
