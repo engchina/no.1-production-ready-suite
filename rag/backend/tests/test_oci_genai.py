@@ -560,3 +560,27 @@ async def test_embedding_purpose_uses_declared_input_type_and_preserves_probe(
     assert sdk.last_embed_request is not None
     assert sdk.last_embed_request.input_type == input_type
     assert sdk.embed_calls == 1
+
+
+async def test_rerank_cache_normalizes_only_query_presentation() -> None:
+    """原文送信を保持し、同じ質問の表記差だけをキャッシュで吸収する。"""
+    client = CountingRerankClient()
+    original = "ＡＢＣ  設定"
+    first = await client.rerank(original, ["本文 A", "本文 B"], top_n=2)
+    assert await client.rerank("ABC\t設定", ["本文 A", "本文 B"], top_n=2) == first
+    assert client.calls_args == [(original, ["本文 A", "本文 B"], 2)]
+
+    for query in ["ABC 設定 追加条件", "ABC設定", "abc 設定"]:
+        await client.rerank(query, ["本文 A", "本文 B"], top_n=2)
+    await client.rerank(original, ["本文 B", "本文 A"], top_n=2)
+    await client.rerank(original, ["本文 A", "本文 C"], top_n=2)
+    await client.rerank(original, ["本文 A", "本文 B"], top_n=1)
+    assert client.calls == 7
+
+
+def test_rerank_cache_key_keeps_model_boundary() -> None:
+    from app.clients.oci_genai import _rerank_cache_key
+
+    assert _rerank_cache_key(
+        query="ABC 設定", documents=["本文 A"], top_n=1, model_id="model-a"
+    ) != _rerank_cache_key(query="ABC 設定", documents=["本文 A"], top_n=1, model_id="model-b")

@@ -108,7 +108,18 @@ const slowSearchStream: TimedChunk[] = [
   },
   {
     afterMs: 1500,
-    text: [slowSearch.finish("search"), slowSearch.start("generate", ragSpan.step("回答の生成"))].join(""),
+    text: [
+      slowSearch.finish("search", "done", {
+        details: {
+          code: [{ label: "rerank", language: "json", text: JSON.stringify({
+            phase: "main_search", query_role: "original", question_index: 0,
+            cache_state: "hit", status: "completed", sdk_attempt_count: 0,
+            http_attempt_count: null,
+          }, null, 2) }],
+        },
+      }),
+      slowSearch.start("generate", ragSpan.step("回答の生成")),
+    ].join(""),
   },
   {
     afterMs: 600,
@@ -445,6 +456,14 @@ for (const viewport of [
     await expect(details).toBeHidden();
     await summary.click();
     await expect(process.getByText("検索文から根拠の候補を集める", { exact: true })).toBeVisible();
+    // 論理的なリランク要求と実SDK開始を既存の詳細部品で区別する。
+    await page.getByTestId(`search-run-progress-step-${spanStepId("search")}-toggle`).click();
+    const rerankDetails = page.getByTestId(`search-run-progress-step-${spanStepId("search")}-details`);
+    for (const expected of ['"phase": "main_search"', '"query_role": "original"', '"cache_state": "hit"', '"status": "completed"', '"sdk_attempt_count": 0', '"http_attempt_count": null']) {
+      await expect(rerankDetails).toContainText(expected);
+    }
+    await expectNoPageOverflow(page);
+    await process.screenshot({ path: `test-results/rerank-receipt-${viewport.name}.png` });
     // 開くとタイムラインの後ろ（中の最後の要素）に「処理の詳細」が出る。
     await expect(details).toHaveText("処理の詳細");
     const timelineBox = await page.getByTestId("search-run-progress-timeline").boundingBox();
