@@ -821,6 +821,8 @@ class GroundedAnswerTest(unittest.TestCase):
                             "reason": "結果の確認手順が省略されている",
                             "evidence_status": "available",
                             "evidence_ids": [eid],
+                            "missing_content": "結果を確認します。",
+                            "evidence_support": [{"evidence_id": eid, "source": "売上集計業務.pdf", "quote": "結果を確認します。"}],
                         }
                     ],
                 ),
@@ -855,6 +857,8 @@ class GroundedAnswerTest(unittest.TestCase):
                             "reason": "結果の確認手順が省略されている",
                             "evidence_status": "available",
                             "evidence_ids": [eid],
+                            "missing_content": "結果を確認します。",
+                            "evidence_support": [{"evidence_id": eid, "source": "売上集計業務.pdf", "quote": "結果を確認します。"}],
                         }
                     ],
                 )
@@ -1438,6 +1442,10 @@ class GroundedAnswerTest(unittest.TestCase):
                             "reason": "手順の原文が未使用",
                             "evidence_status": "available",
                             "evidence_ids": [eid],
+                            "missing_content": "一覧表を選択し、処理を選択します。",
+                            "evidence_support": [
+                                {"evidence_id": eid, "source": "売上集計業務.pdf", "quote": "一覧表を選択し、処理を選択します。"}
+                            ],
                         }
                     ],
                     unused=["E1"],
@@ -1682,6 +1690,8 @@ class GroundedAnswerTest(unittest.TestCase):
                     "reason": "結果の確認手順が省略されている",
                     "evidence_status": "available",
                     "evidence_ids": [eid],
+                    "missing_content": "結果を確認します。",
+                    "evidence_support": [{"evidence_id": eid, "source": "売上集計業務.pdf", "quote": "結果を確認します。"}],
                 }
             ],
         )
@@ -1695,6 +1705,8 @@ class GroundedAnswerTest(unittest.TestCase):
                     "reason": "結果の確認手順が省略されている",
                     "evidence_status": "available",
                     "evidence_ids": [eid],
+                    "missing_content": "結果を確認します。",
+                    "evidence_support": [{"evidence_id": eid, "source": "売上集計業務.pdf", "quote": "結果を確認します。"}],
                 }
             ],
             summary_supported=False,
@@ -1725,6 +1737,10 @@ class GroundedAnswerTest(unittest.TestCase):
                             "reason": "実行操作の省略",
                             "evidence_status": "available",
                             "evidence_ids": [eid],
+                            "missing_content": "実行ボタンを押して完了します。",
+                            "evidence_support": [
+                                {"evidence_id": eid, "source": "売上集計業務.pdf", "quote": "実行ボタンを押して完了します。"}
+                            ],
                         }
                     ],
                 ),
@@ -2296,6 +2312,8 @@ class CarryOverWithdrawalTest(unittest.TestCase):
                     "reason": "結果の確認手順が省略されている",
                     "evidence_status": "available",
                     "evidence_ids": [self.eid],
+                    "missing_content": "結果を確認します。",
+                    "evidence_support": [{"evidence_id": self.eid, "source": "売上集計業務.pdf", "quote": "結果を確認します。"}],
                 }
             ],
         )

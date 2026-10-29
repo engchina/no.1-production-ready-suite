@@ -446,7 +446,10 @@ AUDIT_SYSTEM_PROMPT = (
         "- evidence_status は回答に不足している内容の直接根拠が入力にあるかで決める。"
         "実際の引用が誤っていても、未引用の直接根拠が不足内容を支えれば available。未引用の根拠で support を supported に戻さない。\n"
         "- 材料候補: evidence と unused_evidence の両方を調べる。unused_evidence の直接根拠も、補写の材料として同じく使える。\n"
-        "- available の evidence_ids には、不足内容をそのまま補写できる直接根拠の evidence_id を返す。"
+        "- partial / missing では missing_content に補写すべき操作・対象・条件・順序を具体的に示す。"
+        "available の evidence_support には、その不足内容を引用集合で直接支える evidence_id・source・quote を返す。"
+        "同じ ID が説明済み部分にも使われていてよいが、quote は不足内容を支える範囲を選ぶ。"
+        "evidence_ids には evidence_support と同じ ID 集合を返す。"
         "説明済みの別操作・同じ画面の概要・見出しが関連するだけでは選ばない。複数の根拠を組み合わせてよい。\n"
         "- 例: 要求が手順甲と手順乙、回答が手順甲だけなら partial。手順乙を述べる直接根拠があれば available としてその ID を返す。"
         "手順甲の ID を代わりに返さない。手順乙の記載が無ければ missing。\n"
@@ -5418,7 +5421,13 @@ def _unused_evidence(question: str, spans: Sequence[dict], used: set[str]) -> li
             if len(selected) >= AUDIT_UNUSED_EVIDENCE_LIMIT:
                 break
     return [
-        {"evidence_id": s["evidence_id"], "function": _function_label(s), "text": s["text"][:AUDIT_UNUSED_EVIDENCE_CHARS]} for s in selected
+        {
+            "evidence_id": s["evidence_id"],
+            "source": s.get("source", ""),
+            "function": _function_label(s),
+            "text": s["text"][:AUDIT_UNUSED_EVIDENCE_CHARS],
+        }
+        for s in selected
     ]
 
 
@@ -5830,6 +5839,7 @@ def run_round(
             # （同じ機能の「別の」span の、生成説明を「除いた」本文という定義のため）ので、引用元を
             # 見せないと監査は根拠に書かれている操作まで「根拠にない」と判定する (#1086)。
             "evidence": {e.span["evidence_id"]: e.span.get("text", "")[:AUDIT_EVIDENCE_TEXT_CHARS] for _, e in audit_entries},
+            "evidence_sources": {e.span["evidence_id"]: e.span.get("source", "") for _, e in audit_entries},
             # 同じ機能の本文（生成説明を除く）。決定的検査（#676/#698）と同じく、隣の span にある手順を
             # text が書いただけで「引用にない操作」と判定させない (#706)。機能ごとに 1 回だけ載せる。
             "function_context": {
@@ -5924,6 +5934,7 @@ def run_round(
             apply_audit(checked, audit)
             checked, audit = deduplicate_audited_items(checked, audit, len(guide_notices))
             _reconcile_request_reviews(checked, audit)
+            _validate_missing_content_evidence(audit, inputs)
     procedures = [e for e in checked if e.item.kind in _PROCEDURE_KINDS and not e.added]
     timing["procedure_quotes"] = {
         "original": sum(e.span is not None and quote_in_text(e.item.text, e.span["text"]) for e in procedures),
@@ -6148,6 +6159,38 @@ def _unique_request_reviews(audit: GroundedAudit) -> tuple[GroundedAudit, tuple[
     if not duplicates:
         return audit, ()
     return audit.model_copy(update={"request_reviews": [row for row in audit.request_reviews if counts[row.request_id] == 1]}), duplicates
+
+
+def _validate_missing_content_evidence(audit: GroundedAudit, inputs: dict) -> None:
+    """補写材料の引用を実際の監査入力に束縛する。意味支持は監査の判断で、ここでは証明しない。"""
+    evidence = {key: (text, inputs.get("evidence_sources", {}).get(key, "")) for key, text in inputs.get("evidence", {}).items()}
+    evidence.update({row["evidence_id"]: (row["text"], row.get("source", "")) for row in inputs.get("unused_evidence", [])})
+    for review in audit.request_reviews:
+        if review.status not in {"partial", "missing"}:
+            continue
+        if review.evidence_status != "available":
+            review.evidence_ids = []
+            review.evidence_support = []
+            continue
+        refs = review.evidence_support
+        valid = (
+            bool(review.missing_content.strip())
+            and bool(refs)
+            and {ref.evidence_id for ref in refs} == set(review.evidence_ids)
+            and all(
+                ref.evidence_id in evidence
+                and bool(ref.source.strip())
+                and ref.source == evidence[ref.evidence_id][1]
+                and bool(ref.quote.strip())
+                and quote_in_text(ref.quote, evidence[ref.evidence_id][0])
+                for ref in refs
+            )
+        )
+        if not valid:
+            review.evidence_status = "unknown"
+            review.evidence_ids = []
+            review.evidence_support = []
+            review.reason = "不足内容を補う引用と出典を監査入力で確認できません。" + review.reason
 
 
 def _reconcile_request_reviews(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:

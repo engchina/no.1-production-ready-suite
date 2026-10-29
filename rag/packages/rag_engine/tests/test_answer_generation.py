@@ -1914,6 +1914,7 @@ class AnswerGenerationTests(unittest.TestCase):
                 side_effect=[
                     _crag_grade(
                         sufficient=False,
+                        relevant_chunk_ids=["chunk-bad"],
                         confidence=0.1,
                         reason="根拠が話題違い",
                         rewritten_query="better query",
@@ -3220,7 +3221,10 @@ def _crag_grade(
     from rag_engine.models.llm import CragCandidateVerdict
 
     return CragRetrievalGradeOutput(
-        candidate_verdicts=[CragCandidateVerdict(chunk_uid=uid, relevant=True, reason="関連") for uid in relevant_chunk_ids or []],
+        candidate_verdicts=[
+            CragCandidateVerdict(chunk_uid=uid, relevant=sufficient, reason="関連" if sufficient else "別の話題")
+            for uid in relevant_chunk_ids or []
+        ],
         sufficient=sufficient,
         confidence=confidence,
         reason=reason,
@@ -3230,7 +3234,10 @@ def _crag_grade(
             for aspect in ["business_object", "requested_result", "applicability", "procedure"]
         ]
         if sufficient
-        else [],
+        else [
+            dict(aspect=aspect, status="missing", source_ids=[], reason="必要な観点の説明がない")
+            for aspect in ["business_object", "requested_result", "applicability", "procedure"]
+        ],
     )
 
 

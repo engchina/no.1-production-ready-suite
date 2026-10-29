@@ -9,6 +9,7 @@ import {
 } from "@/lib/answer-diagnostics";
 import { answerPassageLabels, answerPassages } from "@/lib/answer-passages";
 import { t } from "@/lib/i18n";
+import { CragEvidenceDetails } from "./CragEvidenceDetails";
 import { AnswerGuideConditions } from "./AnswerGuideConditions";
 import { extractionFieldConditionLabel } from "./extraction-field-filters";
 
@@ -174,6 +175,7 @@ export function AnswerDetailsPanel({
           {t("search.answerDetails.rewritten", { question: data.rewrittenQuestion })}
         </p>
       ) : null}
+      {data.crag ? <CragEvidenceDetails data={data.crag} /> : null}
       {data.insufficientReason ? (
         <p className="text-xs leading-relaxed text-fg-muted">
           {t("search.answerDetails.insufficient", { reason: data.insufficientReason })}

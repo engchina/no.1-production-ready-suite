@@ -18,28 +18,29 @@ from rag_engine.retrieval.task_contract import task_contract
 # 十分性は business_object と relevant な候補で決まる（OR 型、#983）。他の観点の不足や根拠の無い data_confirmation は
 # 十分性を落とさず missing_aspects に残る。
 @pytest.mark.parametrize(
-    "aspect,status,source,reason,duplicate,expected,expected_missing",
+    "aspect,status,source,reason,duplicate,expected_unknown,expected_missing",
     [
-        ("requested_result", "data_confirmation", "a", "現在の出力を閲覧し位置を照合", False, True, ()),
-        ("applicability", "data_confirmation", "a", "設定値を閲覧し適用条件と照合", False, True, ()),
-        ("requested_result", "data_confirmation", "unknown", "実値を照合", False, True, ("requested_result",)),
-        ("requested_result", "data_confirmation", "a", " ", False, True, ("requested_result",)),
-        ("requested_result", "data_confirmation", "a", "実値を照合", True, True, ("requested_result",)),
-        ("procedure", "data_confirmation", "a", "操作自体は未確認", False, True, ("procedure",)),
-        ("business_object", "data_confirmation", "a", "対象不明", False, False, ("business_object",)),
-        ("applicability", "missing", "a", "適用版の文書が不足", False, True, ("applicability",)),
+        ("requested_result", "data_confirmation", "a", "現在の出力を閲覧し位置を照合", False, (), ()),
+        ("applicability", "data_confirmation", "a", "設定値を閲覧し適用条件と照合", False, (), ()),
+        ("requested_result", "data_confirmation", "unknown", "実値を照合", False, ("requested_result",), ()),
+        ("requested_result", "data_confirmation", "a", " ", False, ("requested_result",), ()),
+        ("requested_result", "data_confirmation", "a", "実値を照合", True, ("requested_result",), ()),
+        ("procedure", "data_confirmation", "a", "操作自体は未確認", False, ("procedure",), ()),
+        ("business_object", "data_confirmation", "a", "対象不明", False, ("business_object",), ()),
+        ("applicability", "missing", "a", "適用版の文書が不足", False, (), ("applicability",)),
     ],
 )
 def test_crag_sufficiency_needs_business_object_and_reports_other_gaps(
-    aspect, status, source, reason, duplicate, expected, expected_missing
+    aspect, status, source, reason, duplicate, expected_unknown, expected_missing
 ):
     question = "印字位置の確認方法"
     r = record("a", "帳票設定画面で位置設定を確認し、現在の出力と照合する。")
     checks = [
-        dict(aspect=k, status="supported", source_ids=["a"], reason="操作の根拠") for k in task_contract(question)["required_aspects"]
+        dict(aspect=k, status="supported", source_ids=["a"], evidence=[dict(source_id="a", quote=r.text)], reason="操作の根拠")
+        for k in task_contract(question)["required_aspects"]
     ]
     target = next(c for c in checks if c["aspect"] == aspect)
-    target.update(status=status, source_ids=[source], reason=reason)
+    target.update(status=status, source_ids=[source], evidence=[dict(source_id=source, quote=r.text)], reason=reason)
     if duplicate:
         checks.append(dict(target))
     output = CragRetrievalGradeOutput(
@@ -52,7 +53,8 @@ def test_crag_sufficiency_needs_business_object_and_reports_other_gaps(
     )
     with patch("rag_engine.generation.answering.parse_text_response", return_value=output) as parse:
         result = _grade_crag_retrieval(1, question, question, [question], AnswerContext(records=[r], text=r.text), object())
-    assert result.sufficient is expected
+    assert result.generation_usable
+    assert result.unknown_aspects == expected_unknown
     assert result.missing_aspects == expected_missing
     # 判定 prompt には共有方針の全文ではなく、十分性に関わる要約だけを載せる (#957)。
     assert OPERATION_GUIDANCE_POLICY not in parse.call_args.args[1]

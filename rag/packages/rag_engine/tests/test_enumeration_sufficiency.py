@@ -222,7 +222,13 @@ def test_non_enumeration_checks_are_unchanged():
 def _grade(question: str, items, *records: AnswerRecord):
     """評価器（スタブ）が全観点 supported・sufficient=true と答えたときの判定。"""
     checks = [
-        {"aspect": aspect, "status": "supported", "source_ids": [records[0].chunk_uid], "reason": "関連"}
+        {
+            "aspect": aspect,
+            "status": "supported",
+            "source_ids": [records[0].chunk_uid],
+            "evidence": [{"source_id": records[0].chunk_uid, "quote": records[0].text}],
+            "reason": "関連",
+        }
         for aspect in task_contract(question)["required_aspects"]
     ]
     output = CragRetrievalGradeOutput(

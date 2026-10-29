@@ -121,6 +121,10 @@ class SynthesizeRoundStopTest(unittest.TestCase):
                             "reason": "抽出条件の説明が省略されている",
                             "evidence_status": "available",
                             "evidence_ids": [ids(context(shown, hidden))[hidden.text]],
+                            "missing_content": hidden.text,
+                            "evidence_support": [
+                                {"evidence_id": ids(context(shown, hidden))[hidden.text], "source": hidden.source, "quote": hidden.text}
+                            ],
                         }
                     ],
                 ),
@@ -191,6 +195,10 @@ class SynthesizeRoundStopTest(unittest.TestCase):
                             "reason": "実行操作の説明が省略されている",
                             "evidence_status": "available",
                             "evidence_ids": [eid],
+                            "missing_content": "実行ボタンを押して完了します。",
+                            "evidence_support": [
+                                {"evidence_id": eid, "source": "売上集計業務.pdf", "quote": "実行ボタンを押して完了します。"}
+                            ],
                         }
                     ],
                 ),

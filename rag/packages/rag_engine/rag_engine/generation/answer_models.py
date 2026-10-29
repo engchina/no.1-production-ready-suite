@@ -347,7 +347,7 @@ class CragRetrievalAttempt:
     # 評価器が relevant=false と明示した候補（親 uid と、その検索命中子の uid）。生成用 context と回復用 pool から
     # 除外する (#1010)。未評価の候補は含めない（relevant_chunk_ids の補集合ではない）。
     rejected_chunk_ids: tuple[str, ...] = ()
-    # supported / data_confirmation にできなかった必須観点。十分性の門ではなく、文脈拡張と生成側への欠落の申し送り (#983)。
+    # 明示的に missing と判定した必須観点。未検証は unknown_aspects と分け、回復と生成へ申し送る。
     missing_aspects: tuple[str, ...] = ()
     new_evidence_count: int = 0
     stop_reason: str = ""
@@ -358,6 +358,12 @@ class CragRetrievalAttempt:
     # 文書の選択の trace（selected / deferred / restored。#1028）。選択が無効なら enabled=false だけ。
     document_selection: dict[str, Any] = field(default_factory=dict)
 
+    generation_usable: bool | None = None
+    required_aspect_coverage: str = "unknown"
+    unknown_aspects: tuple[str, ...] = ()
+    grade_execution: str = "not_run"
+    rule_signals: dict[str, Any] = field(default_factory=dict)
+
     def to_payload(self) -> dict[str, Any]:
         """UI と trace 保存に使う JSON 互換 payload へ変換します。"""
         payload = {
@@ -366,6 +372,11 @@ class CragRetrievalAttempt:
             "retrieval_queries": list(self.retrieval_queries),
             "executed_queries": list(self.executed_queries),
             "sufficient": self.sufficient,
+            "generation_usable": self.sufficient if self.generation_usable is None else self.generation_usable,
+            "required_aspect_coverage": self.required_aspect_coverage,
+            "unknown_aspects": list(self.unknown_aspects),
+            "grade_execution": "error" if self.grade_error else self.grade_execution,
+            "rule_signals": self.rule_signals,
             "confidence": self.confidence,
             "relevant_chunk_ids": list(self.relevant_chunk_ids),
             "rewritten_query": self.rewritten_query,

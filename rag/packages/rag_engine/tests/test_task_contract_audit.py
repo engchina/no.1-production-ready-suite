@@ -80,7 +80,7 @@ def test_crag_keeps_support_when_one_candidate_is_selected():
     assert {r.chunk_uid for r in result.records} == {"a", "b"}
 
 
-def test_crag_rejects_high_confidence_without_required_evidence():
+def test_crag_high_confidence_does_not_prove_required_coverage():
     r = record("a")
     grade = CragRetrievalGradeOutput(
         sufficient=True,
@@ -92,7 +92,8 @@ def test_crag_rejects_high_confidence_without_required_evidence():
     )
     with patch("rag_engine.generation.answering.parse_text_response", return_value=grade):
         result = _grade_crag_retrieval(1, "登録方法", "登録方法", ["登録方法"], AnswerContext(records=[r], text=r.text), object())
-    assert not result.sufficient
+    assert result.generation_usable and result.required_aspect_coverage == "unknown"
+    assert result.grade_execution == "partial"
 
 
 def test_crag_does_not_resolve_ambiguous_local_ids():
@@ -110,13 +111,24 @@ def test_crag_does_not_resolve_ambiguous_local_ids():
     )
     with patch("rag_engine.generation.answering.parse_text_response", return_value=grade):
         result = _grade_crag_retrieval(1, "登録方法", "登録方法", ["登録方法"], AnswerContext(records=[a, b], text="text"), object())
-    assert result.relevant_chunk_ids == () and not result.sufficient
+    assert result.relevant_chunk_ids == () and result.generation_usable
+    assert result.required_aspect_coverage == "unknown"
+    assert all(not c["source_ids"] for c in result.aspect_checks)
 
 
 def test_identical_retry_stops_before_another_grade_call():
     a = record("a")
     context = AnswerContext(records=[a], text=a.text)
-    grade = CragRetrievalGradeOutput(sufficient=False, confidence=0.1, reason="不足", rewritten_query="入力の前提")
+    grade = CragRetrievalGradeOutput(
+        sufficient=False,
+        confidence=0.1,
+        reason="不足",
+        rewritten_query="入力の前提",
+        aspect_checks=[
+            dict(aspect=k, status="missing", source_ids=[], reason="必要な操作の説明なし")
+            for k in task_contract("登録方法")["required_aspects"]
+        ],
+    )
     with (
         patch("rag_engine.generation.answering.build_adb_hybrid_answer_context", return_value=context) as search,
         patch("rag_engine.generation.answering.parse_text_response", return_value=grade) as parse,

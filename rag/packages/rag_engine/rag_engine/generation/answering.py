@@ -163,6 +163,9 @@ from rag_engine.generation.crag_support import (
     _build_crag_grade_prompt,
     _crag_confidence,
     _crag_grade_candidates,
+    _crag_quote_matches,
+    _crag_rule_signals,
+    _crag_task_contract,
     _format_crag_confidence,
     _merge_crag_evidence,
     _record_matches_crag_relevant_ids,
@@ -1315,17 +1318,6 @@ def build_crag_answer_context(
                 if context.records and context.text.strip():
                     return context, tuple(rewrites), tuple(attempts)
                 break
-            labels = definition_labels(question)
-            covered = {d["label"] for r in context.records for d in definition_ranges(r.text, labels)}
-            missing_definitions = [label for label in labels if label not in covered]
-            if missing_definitions:
-                # 列名だけの画像では定義要求を満たさない。追加検索も既存3回枠内で行う。
-                attempt = replace(
-                    attempt,
-                    sufficient=False,
-                    rewritten_query=question + " " + " ".join(f"「{v}」の意味・表示条件" for v in missing_definitions),
-                    reason=attempt.reason + " 定義本文が未確認: " + ", ".join(missing_definitions),
-                )
             if attempt_number >= CRAG_MAX_RETRIEVAL_ATTEMPTS and attempt.rewritten_query:
                 attempt = replace(attempt, rewritten_query="")
             attempt = replace(
@@ -1336,7 +1328,7 @@ def build_crag_answer_context(
             )
             attempts.append(attempt)
 
-            status = "十分" if attempt.sufficient else "不足"
+            status = "生成に利用可能" if attempt.sufficient else "生成に使える材料なし"
             step.result(
                 f"{status}（判定の確からしさ {_format_crag_confidence(attempt.confidence)}）",
                 *([f"理由: {attempt.reason}"] if attempt.reason else []),
@@ -1346,7 +1338,15 @@ def build_crag_answer_context(
             step.field("関係あり / なし", f"{len(attempt.relevant_chunk_ids)} 件 / {len(attempt.rejected_chunk_ids)} 件")
             if attempt.new_evidence_count and attempt_number > 1:
                 step.field("今回の新しい根拠", f"{attempt.new_evidence_count} 件")
-            step.field("足りない観点", aspect_labels(attempt.missing_aspects))
+            coverage_labels = {
+                "complete": "根拠を確認済み",
+                "partial": "一部を確認済み",
+                "missing": "必要な説明が不足",
+                "unknown": "未確認",
+            }
+            step.field("必須観点の充足", coverage_labels.get(attempt.required_aspect_coverage, "未確認"))
+            step.field("不足と確認した観点", aspect_labels(attempt.missing_aspects))
+            step.field("未確認の観点", aspect_labels(attempt.unknown_aspects))
             if not attempt.sufficient or attempt.missing_aspects:
                 step.field(
                     "次の対処",
@@ -1362,15 +1362,15 @@ def build_crag_answer_context(
         best_context = replace(
             best_context, preferred_child_ids=tuple(dict.fromkeys((*best_context.preferred_child_ids, *attempt.relevant_chunk_ids)))
         )
-        if attempt.sufficient and refined_context.records and refined_context.text.strip():
-            # 十分でも観点が欠けるときは、再検索・再評価をせず既取得 pool から文脈を 1 回だけ広げて生成へ進む
-            # （CRAG の「correct なら精錬して生成」に相当）。評価器の呼び出しは増やさない (#983)。
-            if attempt.missing_aspects and attempt.recovery_action != "rewrite":
+        if attempt.sufficient and not attempt.missing_aspects and refined_context.records and refined_context.text.strip():
+            # 不確定な観点だけなら、不足に変えず既取得poolで補い、部分回答の生成へ進む。
+            # この任意の文脈追加だけのために評価器を呼び直さない。
+            if attempt.unknown_aspects and attempt.recovery_action != "rewrite":
                 expanded, trace = _recover_crag_context(best_context, attempt, max_records=max_records, max_chars=max_chars)
                 attempts[-1] = replace(attempts[-1], recovery_trace=trace)
                 if expanded is not None:
                     merged = _merge_crag_evidence(refined_context, expanded, question, max_records=max_records, max_chars=max_chars)
-                    attempts[-1] = replace(attempts[-1], stop_reason="expanded_for_missing_aspects")
+                    attempts[-1] = replace(attempts[-1], stop_reason="expanded_for_unverified_aspects")
                     return (
                         replace(
                             merged,
@@ -1383,6 +1383,8 @@ def build_crag_answer_context(
                         tuple(rewrites),
                         tuple(attempts),
                     )
+            if attempt.unknown_aspects:
+                attempts[-1] = replace(attempts[-1], stop_reason="unverified_aspects_retained")
             return refined_context, tuple(rewrites), tuple(attempts)
 
         confirmed = {
@@ -1398,7 +1400,7 @@ def build_crag_answer_context(
         }
         if (
             any(item["status"] == "data_confirmation" for item in attempt.aspect_checks)
-            and set(task_contract(question)["required_aspects"]) <= confirmed
+            and set(_crag_task_contract(question)["required_aspects"]) <= confirmed
         ):
             attempts[-1] = replace(attempts[-1], stop_reason="data_confirmation_only")
             return refined_context, tuple(rewrites), tuple(attempts)
@@ -1432,7 +1434,7 @@ def build_crag_answer_context(
                 add_evidence_lines(step, pending_context.records, title="作り直した根拠")
             attempts[-1] = replace(attempts[-1], stop_reason=attempts[-1].stop_reason or "deferred_documents_restored")
             continue
-        if attempt_number >= CRAG_MAX_RETRIEVAL_ATTEMPTS and not attempt.sufficient:
+        if attempt_number >= CRAG_MAX_RETRIEVAL_ATTEMPTS and (not attempt.sufficient or attempt.missing_aspects):
             attempts[-1] = replace(attempts[-1], stop_reason="attempt_budget_exhausted")
 
         rewrite = _valid_crag_rewrite(attempt.rewritten_query, question, rewrites)
@@ -1620,7 +1622,7 @@ def _recover_crag_context(
 
 
 def _candidate_unit_text(uid: str, context: AnswerContext, all_records: Sequence[AnswerRecord]) -> str:
-    """評価候補の機能ユニットの本文（親本文・見出し・同じ親の子本文）。エラー文の決定的検査に使う (#999)。
+    """評価候補の機能ユニットの原文（親本文・見出し・同じ親の子本文）。引用の出所を照合する。
 
     uid が子なら親のユニット全体を見る。tree に無い record は本文と見出しだけ。
     """
@@ -1672,7 +1674,7 @@ def _grade_crag_retrieval(
     all_records = list(_records_for_prompt_injection_scan(context.records, context.evidence_tree))
     known_uids = {r.chunk_uid or r.id for r in all_records}
 
-    def canonical(value):
+    def canonical(value: str) -> str:
         if aliases:
             value = aliases.get(str(value).strip(), value)
         matches = {r.chunk_uid or r.id for r in all_records if value in {r.chunk_uid, r.chunk_id, r.id} and value}
@@ -1687,73 +1689,182 @@ def _grade_crag_retrieval(
         ]
         for parent in context.evidence_tree
     }
-    # 候補ごとの二値判定（relevant=true）を回答に使う候補にする。全体の sufficient より先に候補単位で判定させる
-    # のは CRAG の評価器（文書ごとの判定を OR で束ねる）と同じ (#983)。
-    # 質問がエラー文を示すとき、そのエラー文を含まない候補は別エラーの説明。prompt の規則だけでは守られない
-    # （別コードの説明を「一致する」と判定した）ので、生成側の検査と同じ fuzzy 一致で決定的に外す (#999)。
+    # 規則未認識は不適合ではない。同じ呼び出しの意味判定を使い、エラー対応を確定できない候補は保持する。
     from rag_engine.generation.grounded import mentions_error
 
+    sent_text: dict[str, str] = {}
+    for candidate in _crag_grade_candidates(context, question, max_candidates=max_candidates if compact else None):
+        uid = canonical(str(candidate.get("chunk_uid") or candidate.get("chunk_id") or candidate.get("image_id") or ""))
+        if uid:
+            sent_text[uid] = candidate["text"]
+        for child in candidate.get("retrieved_anchor_children", ()):
+            child_uid = canonical(str(child.get("chunk_uid") or child.get("chunk_id") or ""))
+            if child_uid:
+                sent_text[child_uid] = candidate["text"]
+
+    def verified_quote(uid: str, quote: str) -> bool:
+        return bool(
+            uid in sent_text
+            and _crag_quote_matches(quote, sent_text[uid])
+            and _crag_quote_matches(quote, _candidate_unit_text(uid, context, all_records))
+        )
+
     asked_errors = task_contract(question)["error_messages"]
-    verdicts: list[tuple[str, bool, str]] = []
+    verdicts: list[dict[str, Any]] = []
     for verdict in output.candidate_verdicts:
-        uid, relevant, reason = canonical(verdict.chunk_uid), verdict.relevant, verdict.reason
-        if not uid and aliases:
-            # 解決できない ID は、短い ID のときは元の chunk_uid に戻して残す（記録で候補が分かるように）。
-            uid = aliases.get(verdict.chunk_uid.strip(), "")
-        if relevant and asked_errors and uid and not mentions_error(_candidate_unit_text(uid, context, all_records), asked_errors):
-            relevant, reason = False, "質問のエラー文『" + "』『".join(asked_errors) + "』が候補に無い: " + reason
-        verdicts.append((uid or verdict.chunk_uid, relevant, reason))
+        uid = canonical(verdict.chunk_uid)
+        relation = verdict.relation or ("relevant" if verdict.relevant else "irrelevant")
+        quote_valid = verified_quote(uid, verdict.quote)
+        rule_match = bool(asked_errors and uid in sent_text and mentions_error(sent_text[uid], asked_errors))
+        error_relation = "unknown" if asked_errors and verdict.error_relation == "not_applicable" else verdict.error_relation
+        if asked_errors or error_relation in {"same", "shared_handling", "different"}:
+            if error_relation in {"same", "shared_handling", "different"} and not quote_valid:
+                error_relation = "unknown"
+            if error_relation == "different":
+                relation = "irrelevant"
+            elif error_relation not in {"same", "shared_handling"} and (
+                relation == "irrelevant" or relation == "relevant" and not rule_match
+            ):
+                relation = "unknown"
+        else:
+            error_relation = "not_applicable"
+        if not uid or uid not in sent_text:
+            relation = "unknown"
+        verdicts.append(
+            {
+                "chunk_uid": uid or verdict.chunk_uid,
+                "relevant": relation == "relevant",
+                "relation": relation,
+                "reason": _trim_generated_text(verdict.reason, 160),
+                "error_relation": error_relation,
+                "reported_error_relation": verdict.error_relation,
+                "quote": verdict.quote,
+                "evidence_validation": "matched" if quote_valid else "unverified",
+            }
+        )
     relevant_chunk_ids = tuple(
         dict.fromkeys(
-            chunk_uid
-            for uid, relevant, _reason in verdicts
-            if relevant and uid in known_uids
-            for chunk_uid in (uid, *anchors_of.get(uid, ()))
+            child
+            for row in verdicts
+            if row["relation"] == "relevant" and row["chunk_uid"] in known_uids
+            for child in (row["chunk_uid"], *anchors_of.get(row["chunk_uid"], ()))
         )
     )
-    # 明示的に relevant=false とした候補（親とその検索命中子）。生成用 context の末尾へ回し、回復用 pool から除く
-    # (#1010, #1122)。
-    # 同じ候補が true と false の両方で返った場合は true を優先する。
+    # 重複した候補判定を除外の根拠に使わない。
     rejected_chunk_ids = tuple(
         dict.fromkeys(
-            chunk_uid
-            for uid, relevant, _reason in verdicts
-            if not relevant and uid in known_uids
-            for chunk_uid in (uid, *anchors_of.get(uid, ()))
-            if chunk_uid not in relevant_chunk_ids
+            child
+            for row in verdicts
+            if row["relation"] == "irrelevant"
+            and row["chunk_uid"] in known_uids
+            and sum(v["chunk_uid"] == row["chunk_uid"] for v in verdicts) == 1
+            for child in (row["chunk_uid"], *anchors_of.get(row["chunk_uid"], ()))
+            if child not in relevant_chunk_ids
         )
     )
+    blocked_sources = set(rejected_chunk_ids)
+    for parent in context.evidence_tree:
+        members = {parent.record.chunk_uid or parent.record.id, *(child.record.chunk_uid or child.record.id for child in parent.children)}
+        if members & blocked_sources and not members & set(relevant_chunk_ids):
+            blocked_sources.update(members)
+    uncertain_error_sources = {
+        uid
+        for row in verdicts
+        if row["relation"] == "unknown" and row["error_relation"] == "unknown"
+        for uid in (row["chunk_uid"], *anchors_of.get(row["chunk_uid"], ()))
+    }
     checks = []
+    structure_partial = False
     for item in output.aspect_checks:
         raw = item.model_dump()
-        raw["source_ids"] = [canonical(value) for value in item.source_ids if canonical(value)]
-        if item.status == "supported" and not raw["source_ids"]:
-            raw["status"] = "missing"
+        raw["reported_source_ids"] = list(item.source_ids)
+        raw["reported_evidence"] = [value.model_dump() for value in item.evidence]
+        valid = []
+        for evidence in item.evidence:
+            uid = canonical(evidence.source_id)
+            if uid and uid not in blocked_sources and verified_quote(uid, evidence.quote):
+                valid.append({"source_id": uid, "quote": evidence.quote})
+        raw["source_ids"] = list(dict.fromkeys(v["source_id"] for v in valid))
+        raw["evidence"] = valid
+        raw["evidence_validation"] = (
+            "matched" if valid and len(valid) == len(item.evidence) else "invalid_source_or_quote" if item.evidence else "unverified"
+        )
+        if item.status in {"supported", "data_confirmation"} and raw["evidence_validation"] != "matched":
+            raw["status"] = "unknown"
+        if item.status in {"supported", "data_confirmation"} and set(raw["source_ids"]) & uncertain_error_sources:
+            raw["status"] = "unknown"
+            raw["reason"] = item.reason + " 候補と質問のエラーの対応が未確認のため、この観点の支持を確定しない。"
+        if item.status == "data_confirmation" and (item.aspect not in {"requested_result", "applicability"} or not item.reason.strip()):
+            raw["status"] = "unknown"
         checks.append(raw)
-    # 列挙・網羅の問は、件数・章の範囲の欠けを評価器の項目ごとの根拠から数える（自己申告に頼らない。#1503）。
-    checks = enumeration_check(question, checks, output.enumerated_items, context, all_records, canonical)
-    required = task_contract(question)["required_aspects"]
-    supported = {
-        item["aspect"] for item in checks if item["status"] == "supported" and sum(c["aspect"] == item["aspect"] for c in checks) == 1
-    }
-    # 実値の照合待ちは操作案内の不足と分ける。対象と操作そのものの根拠は必須。
-    # 閲覧方法の一意な出典と確認目的がない判定で十分性を緩和しない。
+    visible_items = [
+        item
+        for item in output.enumerated_items
+        if any(canonical(value) not in blocked_sources and verified_quote(canonical(value), item.quote) for value in item.source_ids)
+    ]
+    before_enumeration = checks
+    checks = enumeration_check(question, checks, visible_items, context, all_records, canonical)
+    for item in checks:
+        if item["aspect"] != "enumeration_coverage":
+            continue
+        previous = [row for row in before_enumeration if row["aspect"] == item["aspect"]]
+        if item["status"] == "missing" and (len(previous) != 1 or previous[0]["status"] == "unknown"):
+            item["status"] = "unknown"
+        item["evidence"] = [
+            {"source_id": canonical(source), "quote": entry.quote}
+            for entry in visible_items
+            for source in entry.source_ids
+            if verified_quote(canonical(source), entry.quote)
+        ]
+        item["evidence_validation"] = "matched" if item["evidence"] else "unverified"
+    required = _crag_task_contract(question)["required_aspects"]
+    normalized = []
+    for aspect in required:
+        rows = [item for item in checks if item["aspect"] == aspect]
+        if len(rows) != 1:
+            structure_partial = True
+            normalized.append(
+                {
+                    "aspect": aspect,
+                    "status": "unknown",
+                    "source_ids": [],
+                    "evidence": [],
+                    "evidence_validation": "unverified",
+                    "reason": "観点の判定が未出力または重複しており確認できない。",
+                }
+            )
+        else:
+            normalized.append(rows[0])
+    checks = normalized
+    supported = {item["aspect"] for item in checks if item["status"] == "supported"}
     confirmation_ready = {
         item["aspect"]
         for item in checks
-        if item["aspect"] in {"requested_result", "applicability"}
-        and item["status"] == "data_confirmation"
-        and item["source_ids"]
+        if item["status"] == "data_confirmation"
+        and item["aspect"] in {"requested_result", "applicability"}
+        and item.get("source_ids")
         and item["reason"].strip()
-        and sum(c["aspect"] == item["aspect"] for c in checks) == 1
     }
-    # 十分性はコードで決める（評価器の sufficient は参考値）。CRAG の評価器や LangGraph / LlamaIndex の grader と
-    # 同じく「同じ業務・機能の relevant な候補が 1 件でもあれば生成へ進む」OR 型にし、relevant な候補が一意に
-    # 解決できて business_object が supported なら十分とする。requested_result / applicability / procedure の
-    # missing は不足ではなく missing_aspects として生成側・回復に渡す。観点の AND を十分性の門にすると、資料が
-    # 一般手順しか書かないことを理由に誤拒答が繰り返された (#983)。
-    missing_aspects = tuple(aspect for aspect in required if aspect not in supported | confirmation_ready)
-    sufficient = bool(relevant_chunk_ids and context.records and context.text.strip() and "business_object" in supported)
+    confirmed = supported | confirmation_ready
+    missing_aspects = tuple(item["aspect"] for item in checks if item["status"] == "missing")
+    unknown_aspects = tuple(
+        item["aspect"]
+        for item in checks
+        if item["status"] == "unknown" or item["status"] == "data_confirmation" and item["aspect"] not in confirmation_ready
+    )
+    coverage = (
+        "complete"
+        if set(required) <= supported
+        else "partial"
+        if confirmed
+        else "missing"
+        if len(missing_aspects) == len(required)
+        else "unknown"
+    )
+    usable_context = _refine_crag_context(
+        context, relevant_chunk_ids, max_chars=max(1, len(context.text)), rejected_chunk_ids=rejected_chunk_ids
+    )
+    sufficient = bool(usable_context.records and usable_context.text.strip())
     rewrite = _trim_generated_text(output.rewritten_query, MAX_GENERATED_QUERY_CHARS)
     rejected_rewrite = query_rejection_reason(question, rewrite)
     if rejected_rewrite:
@@ -1768,11 +1879,14 @@ def _grade_crag_retrieval(
         rewritten_query=rewrite,
         reason=_trim_generated_text(output.reason, 240),
         aspect_checks=tuple(checks),
-        candidate_verdicts=tuple(
-            {"chunk_uid": uid, "relevant": relevant, "reason": _trim_generated_text(reason, 160)} for uid, relevant, reason in verdicts
-        ),
+        candidate_verdicts=tuple(verdicts),
         rejected_chunk_ids=rejected_chunk_ids,
         missing_aspects=missing_aspects,
+        unknown_aspects=unknown_aspects,
+        generation_usable=sufficient,
+        required_aspect_coverage=coverage,
+        grade_execution="partial" if structure_partial else "completed",
+        rule_signals=_crag_rule_signals(question, context, max_candidates=max_candidates if compact else None),
         recovery_action=output.recovery_action,
         recovery_anchor_ids=tuple(dict.fromkeys(uid for v in output.recovery_anchor_ids if (uid := canonical(v)))),
         stop_reason="rejected_rewrite: " + rejected_rewrite if rejected_rewrite else "",
@@ -2391,9 +2505,10 @@ def synthesize_grounded_answer(
         retrieval_remedy = None
         # 生成の gap は監査の要求判定と独立して補查する。監査が要求を返さない場合も失わない。
         recovery_plan = request_recovery_plan(
-            best[0].unanswered if audit_mode != grounded.AUDIT_MODE_NONE and best[0].review_execution == "completed" else (),
+            best[0].unanswered if audit_mode != grounded.AUDIT_MODE_NONE else (),
             [item.request_id for item in best[0].draft.items if item.kind == "gap" and item.request_id],
             {str(span["evidence_id"]) for span in best[2]},
+            blocked_request_ids=best[0].duplicate_request_ids,
         )
         rounds[-1]["request_recovery"] = {"phase": "after_generation", "decisions": recovery_plan}
         correction_ids = {row["request_id"] for row in recovery_plan if row["action"] == "correction"}
@@ -5414,7 +5529,8 @@ def _expand_context_by_sections(
             len(attempts) + level, question, question, queries, candidate, settings, answer_llm_provider=answer_llm_provider
         )
         graded.append(attempt)
-        return attempt
+        # 章節の制御用の互換値だけを分ける。診断には生成可用性と観点の状態を保持する。
+        return replace(attempt, sufficient=attempt.sufficient and not attempt.missing_aspects)
 
     rerank = rerank_text_with_scores if rerank_enabled and _rerank_configured(settings) else None
     from rag_engine.generation.section_extraction import SectionExtractor

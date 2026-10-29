@@ -147,19 +147,29 @@ class QueryExpansionOutput(_StrictModel):
 
 # CRAG 評価の出力契約は Field(description) に置く。構造化出力の JSON schema としてモデルへ渡るため、prompt に
 # 出力例を載せない (#983)。判定規則そのものは CRAG_GRADE_PROMPT_TEMPLATE にある。
+class CragEvidenceQuote(_StrictModel):
+    """観点を判断した候補と、その候補からの直接引用。"""
+
+    source_id: str = Field(description="原文を読んだ候補の chunk_uid。")
+    quote: str = Field(description="その候補から文字を変えずに写した直接の根拠。")
+
+
 class CragAspectCheck(_StrictModel):
     """質問の必要観点ごとの支持と、候補内の一意な出典ID。"""
 
     aspect: str = Field(
         description="task_contract.required_aspects の観点名（business_object / requested_result / applicability / procedure など）。"
     )
-    status: Literal["supported", "missing", "data_confirmation"] = Field(
-        description="supported=候補で説明できる。missing=どの候補にも無い。data_confirmation=一般規則はあり実値の照合だけが残る（requested_result / applicability のみ）。"
+    status: Literal["supported", "missing", "unknown", "data_confirmation"] = Field(
+        description="supported=直接根拠で説明できる。missing=閲覧した候補に必要な説明が無い。unknown=解釈・範囲・対応を確定できない。data_confirmation=一般規則はあり実値の照合だけが残る（requested_result / applicability のみ）。"
     )
     source_ids: list[str] = Field(
         default_factory=list, description="観点を支持する候補の chunk_uid。supported / data_confirmation では必須。"
     )
     reason: str = Field(description="判定の根拠を短く。data_confirmation では閲覧するデータと目的。")
+    evidence: list[CragEvidenceQuote] = Field(
+        default_factory=list, description="支持・確認方法の直接引用。複数の候補を組み合わせてよい。項目名だけを定義の根拠にしない。"
+    )
 
 
 class CragCandidateVerdict(_StrictModel):
@@ -167,9 +177,17 @@ class CragCandidateVerdict(_StrictModel):
 
     chunk_uid: str = Field(description="候補の chunk_uid。")
     relevant: bool = Field(
-        description="候補が原質問と同じ業務・機能の種類について、要求された操作・規則・確認方法・制限（できない・機能が無い）のいずれかを説明していれば true。質問固有の値が無くてもよい。別の変更項目だけの手順、別のエラー文・コード、話題違いは false。"
+        description="候補が原質問と同じ業務・機能の種類について、要求された操作・規則・確認方法・制限（できない・機能が無い）のいずれかを説明していれば true。質問固有の値が無くてもよい。別の変更項目だけの手順や明らかな話題違いは false。エラーは明確に別で共通処理関係が無い場合だけ irrelevant とし、対応不明は relation=unknown で保持する。"
     )
     reason: str = Field(description="判定の根拠を一文で。")
+    relation: Literal["relevant", "irrelevant", "unknown"] | None = Field(
+        default=None, description="回答に役立つかの意味判定。不確定は unknown として保持する。省略時は relevant の互換値。"
+    )
+    error_relation: Literal["same", "shared_handling", "different", "unknown", "not_applicable"] = Field(
+        default="not_applicable",
+        description="same=同じエラー。shared_handling=原文に共通の処理関係がある。different=明確に別のエラーで共通処理なし。unknown=対応を確定できない。not_applicable=エラーの質問ではない。別番号の出現だけで different にしない。",
+    )
+    quote: str = Field(default="", description="エラーの対応または共通処理関係を判断した候補の直接原文。")
 
 
 class CragEnumeratedItem(_StrictModel):
@@ -199,10 +217,12 @@ class CragRetrievalGradeOutput(_StrictModel):
     )
     reason: str = Field(description="十分・不足の理由を短く。不足なら欠けている観点と、どの候補が最も近いかを書く。")
     sufficient: bool = Field(
-        description="同じ業務・機能の relevant な候補があり business_object を supported にできるなら true。他の観点の missing は不足ではなく aspect_checks と recovery_action で示す。"
+        description="取得済み材料で部分回答の生成へ進めるなら true。全ての必須観点が支持されたという意味ではない。充足は aspect_checks に独立して記す。"
     )
     confidence: float = Field(description="判定の確からしさ（0.0〜1.0）。")
-    rewritten_query: str = Field(description="sufficient=false のとき次回検索に使う短い日本語の検索文。十分なら空文字。")
+    rewritten_query: str = Field(
+        description="missing 観点を補う短い日本語の検索文。部分回答できても不足があれば返す。unknown だけなら空文字。"
+    )
     recovery_action: Literal["rewrite", "neighbor_children", "parent", "neighbor_parents"] = Field(
         default="rewrite",
         description="不足時の回復手段。rewrite=別の話題・対象を探す。neighbor_children / parent / neighbor_parents=recovery_options にある文脈拡張。",
@@ -601,6 +621,14 @@ class ApplicationAudit(_StrictModel):
     )
 
 
+class MissingContentEvidence(_StrictModel):
+    """回答の不足内容を補うための原文と出典。意味支持は要求監査が判定する。"""
+
+    evidence_id: str = Field(description="不足内容の直接根拠の evidence_id。")
+    source: str = Field(default="", description="evidence_sources または unused_evidence の source をそのまま写す。")
+    quote: str = Field(default="", max_length=2000, description="不足操作・対象・条件・順序を支える入力原文。複数根拠の共同支持も可。")
+
+
 class GroundedRequestReview(_StrictModel):
     """原質問の要求単位ごとの充足。"""
 
@@ -611,9 +639,17 @@ class GroundedRequestReview(_StrictModel):
     reason: str = Field(description="質問と同じ言語で短く。")
     evidence_status: Literal["available", "missing", "unknown"] = Field(
         default="unknown",
-        description="要求に必要な材料が入力にある=available、足りない=missing、判断不能=unknown。回答の有無と別に判定する。",
+        description="不足内容を evidence_support の引用集合が支える=available、直接根拠が無い=missing、判断不能=unknown。説明済み部分の根拠では代用しない。",
     )
     evidence_ids: list[str] = Field(default_factory=list, max_length=64, description="available の判定を支える入力の evidence_id。")
+    missing_content: str = Field(
+        default="", max_length=2400, description="まだ回答していない具体的な操作・対象・条件・順序。partial / missing の補写対象。"
+    )
+    evidence_support: list[MissingContentEvidence] = Field(
+        default_factory=list,
+        max_length=64,
+        description="missing_content を共同で支える直接根拠。available では evidence_ids の全 ID と対応させ、説明済みの別操作の引用で代用しない。",
+    )
 
 
 class GuideRequirementReview(_StrictModel):

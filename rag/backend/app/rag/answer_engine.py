@@ -4181,6 +4181,7 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "generated_queries": list(result.generated_queries),
         "text_search_tokens": list(result.text_search_tokens),
         "crag_attempt_count": len(result.crag_attempts or ()),
+        "crag_attempts": [dict(attempt) for attempt in result.crag_attempts or ()],
         # 要求ごとの根拠の覆域と、根拠の無い要求の再検索(#1279)。
         "request_coverage": dict((result.generation_trace or {}).get("request_coverage") or {}),
         "request_recovery": [

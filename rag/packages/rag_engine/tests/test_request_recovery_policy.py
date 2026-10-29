@@ -37,3 +37,34 @@ def test_available_material_overrides_generated_gap_without_searching_again():
     plan = request_recovery_plan(rows, ["Q1"], {"E1"})
     assert plan[0]["action"] == "correction"
     assert plan[0]["evidence_ids"] == ["E1"]
+
+
+@pytest.mark.parametrize("status", ["partial", "missing"])
+def test_reviewed_unknown_is_not_overridden_by_a_generated_gap(status):
+    row = {"request_id": "Q1", "status": status, "reviewed": True, "evidence_status": "unknown", "evidence_ids": []}
+    [decision] = request_recovery_plan([row], ["Q1"], {"E1"})
+    assert decision["cause"] == "unverified_evidence" and decision["action"] == "retain"
+
+
+def test_reviewed_missing_can_still_search_with_a_generated_gap():
+    row = {"request_id": "Q1", "status": "partial", "reviewed": True, "evidence_status": "missing", "evidence_ids": []}
+    [decision] = request_recovery_plan([row], ["Q1"], set())
+    assert decision["cause"] == "evidence_missing" and decision["action"] == "retrieval"
+
+
+def test_an_unexecuted_review_alone_does_not_trigger_recovery():
+    row = {"request_id": "Q1", "status": "missing", "reviewed": False, "evidence_status": "missing"}
+    assert request_recovery_plan([row], (), set()) == []
+
+
+@pytest.mark.parametrize("reviewed", [False, True])
+def test_duplicate_review_blocks_a_generated_gap_instead_of_becoming_missing_material(reviewed):
+    row = {"request_id": "Q1", "status": "missing", "reviewed": reviewed, "evidence_status": "missing"}
+    [decision] = request_recovery_plan([row], ["Q1"], set(), blocked_request_ids=["Q1"])
+    assert decision["cause"] == "review_incomplete" and decision["action"] == "retain"
+    assert decision["evidence_ids"] == []
+
+
+def test_duplicate_without_a_verdict_keeps_an_unknown_status():
+    [decision] = request_recovery_plan([], ["Q1"], set(), blocked_request_ids=["Q1"])
+    assert decision["status"] == "unknown" and decision["action"] == "retain"
