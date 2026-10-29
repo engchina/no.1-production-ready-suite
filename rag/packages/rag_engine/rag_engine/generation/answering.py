@@ -225,6 +225,7 @@ from rag_engine.knowledge.runtime_knowledge import (
 from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput, RerankTextRank
 from rag_engine.models.storage import AdbHybridSearchUnavailable
 from rag_engine.resources.runtime import resolve_prompt
+from rag_engine.resources.structured_failures import structured_failure_details
 from rag_engine.resources.tracing import observe_call
 from rag_engine.retrieval.article_catalog import is_added_catalog_article
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
@@ -1301,6 +1302,14 @@ def build_crag_answer_context(
                     max_candidates=max_records,
                 )
             except Exception as exc:
+                from concurrent.futures import CancelledError
+
+                from rag_engine.resources.deadline import DeadlineExceeded, check_deadline
+
+                check_deadline()
+                status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+                if isinstance(exc, (PermissionError, CancelledError, DeadlineExceeded)) or status in {401, 403}:
+                    raise
                 # 判定を飛ばして取得済みの根拠で生成へ進んだことを、呼び出し元の診断に残す（#3286）。
                 report_degraded("crag_grade", exc)
                 attempt = CragRetrievalAttempt(
@@ -1310,7 +1319,9 @@ def build_crag_answer_context(
                     executed_queries=executed_queries,
                     sufficient=False,
                     reason="CRAG retrieval evaluator failed; using the best available retrieval context.",
-                    grade_error=type(exc).__name__,  # 例外の型の名前だけ（本文は残さない。#3259）
+                    grade_error=type(exc).__name__,  # 既存の型名と安全な構造診断を併記する。
+                    grade_failure=structured_failure_details(exc, CragRetrievalGradeOutput),
+                    grade_execution="error",
                     new_evidence_count=new_evidence_count,
                 )
                 step.status = "評価に失敗"
@@ -1329,7 +1340,13 @@ def build_crag_answer_context(
             )
             attempts.append(attempt)
 
-            status = "生成に利用可能" if attempt.sufficient else "生成に使える材料なし"
+            status = (
+                "生成に利用可能"
+                if attempt.sufficient
+                else "必要な説明が不足"
+                if attempt.grade_execution == "completed" and (attempt.missing_aspects or attempt.required_aspect_coverage == "missing")
+                else "生成に使える材料は未確認"
+            )
             step.result(
                 f"{status}（判定の確からしさ {_format_crag_confidence(attempt.confidence)}）",
                 *([f"理由: {attempt.reason}"] if attempt.reason else []),
@@ -1465,7 +1482,15 @@ def build_crag_answer_context(
             attempts[-1] = replace(attempts[-1], stop_reason=attempts[-1].stop_reason or "all_candidates_rejected")
     if attempts and not attempts[-1].sufficient and best_context.records:
         with _execution_step("根拠確認の結論") as step:
-            step.result("不足と判定されましたが、追加できる根拠がこれ以上ないため、取得済みの根拠で回答します。")
+            last = attempts[-1]
+            if (
+                last.grade_error
+                or last.grade_execution != "completed"
+                or not (last.missing_aspects or last.required_aspect_coverage == "missing")
+            ):
+                step.result("根拠の充足を確認できなかったため、取得済みの根拠で確認できる範囲を回答します。")
+            else:
+                step.result("不足と判定されましたが、追加できる根拠がこれ以上ないため、取得済みの根拠で回答します。")
             step.impact("回答では、根拠で確認できた範囲と確認できない点を分けて示します。")
     elif attempts and not best_context.records and rejected:
         with _execution_step("根拠確認の結論") as step:
@@ -2559,6 +2584,7 @@ def synthesize_grounded_answer(
             best[0].unanswered if audit_mode != grounded.AUDIT_MODE_NONE else (),
             [item.request_id for item in best[0].draft.items if item.kind == "gap" and item.request_id],
             {str(span["evidence_id"]) for span in best[2]},
+            expected_request_ids={row["id"] for row in best[0].requests},
             blocked_request_ids=(
                 *best[0].duplicate_request_ids,
                 *(row["id"] for row in best[0].requests if best[0].review_execution in {"error", "timed_out"}),

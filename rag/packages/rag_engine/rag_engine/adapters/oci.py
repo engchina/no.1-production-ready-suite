@@ -64,6 +64,7 @@ from rag_engine.resources.llm_usage import (
     response_usage,
 )
 from rag_engine.resources.runtime import resolve_prompt
+from rag_engine.resources.structured_failures import structured_failure_details
 from rag_engine.resources.tracing import observe_call
 
 VISION_SYSTEM_PROMPT = (
@@ -468,6 +469,8 @@ class IncompleteResponse(RuntimeError):
     def __init__(self, message: str, reason: str, *, user_message: str = "", detail: str = ""):
         super().__init__(message)
         self.reason = reason
+        self.provider_status = "incomplete"
+        self.incomplete_reason = reason
         self.user_message = user_message
         self.detail = detail
 
@@ -1212,6 +1215,7 @@ def _record_failed_call(
         max_output_tokens=max_output_tokens,
         deadline_capped=deadline_capped,
         timing=timing,
+        failure_details=structured_failure_details(exc, text_format if issubclass(text_format, BaseModel) else None),
     )
 
 
@@ -1241,6 +1245,7 @@ def _log_call(
     max_output_tokens: int | None,
     deadline_capped: bool = False,
     timing: _StreamTiming | None = None,
+    failure_details: dict[str, Any] | None = None,
 ) -> None:
     stream = _timing_fields(timing)
     record_llm_usage(
@@ -1277,6 +1282,7 @@ def _log_call(
             "llm_schema": getattr(text_format, "__name__", str(text_format)),
             "llm_seconds": round(seconds, 1),
             "llm_status": status,
+            **({"llm_failure": failure_details} if failure_details else {}),
             "llm_incomplete_reason": reason,
             "llm_attempt": attempt,
             **({"llm_max_output_tokens": max_output_tokens} if max_output_tokens is not None else {}),

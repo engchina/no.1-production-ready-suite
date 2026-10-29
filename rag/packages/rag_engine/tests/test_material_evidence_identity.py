@@ -90,8 +90,10 @@ def test_duplicate_request_reviews_are_unknown_without_last_wins_or_extra_calls(
     )
     assert len(model.prompts) == 2 and result.audit_calls == 1
     assert result.addressed == set()
-    assert result.unanswered == []
-    assert request_recovery_plan(result.unanswered, (), {row["evidence_id"] for row in spans}) == []
+    [unverified] = result.unanswered
+    assert unverified["request_id"] == "Q1" and unverified["status"] == "unknown"
+    assert unverified["reviewed"] is False
+    assert [row["action"] for row in request_recovery_plan(result.unanswered, (), {row["evidence_id"] for row in spans})] == ["retain"]
     dimension = result.trace()["validation_dimensions"]["answer_completeness"]
     assert dimension["execution"] == "partial"
     assert dimension["duplicate_request_ids"] == ["Q1"]
@@ -99,4 +101,4 @@ def test_duplicate_request_reviews_are_unknown_without_last_wins_or_extra_calls(
     assert request["reviewed"] is False
     assert request["review_execution"] == "error"
     assert request["evidence_status"] == "unknown" and request["evidence_ids"] == []
-    assert "status" not in request
+    assert request["status"] == "unknown"

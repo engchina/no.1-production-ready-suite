@@ -87,6 +87,7 @@ from rag_engine.resources.deadline import (
 )
 from rag_engine.resources.llm_usage import usage_delta, usage_line, usage_snapshot
 from rag_engine.resources.runtime import resolve_prompt
+from rag_engine.resources.structured_failures import structured_failure_details
 from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
 from rag_engine.retrieval.character_forms import fold_model_view, fold_text, fold_text_with_positions, fold_width
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
@@ -4414,6 +4415,37 @@ class Round:
     guide_steps: list[dict[str, Any]] = field(default_factory=list)
     # 重複した要求判定は採用せず、材料不足と区別して監査の構造エラーとして残す。
     duplicate_request_ids: tuple[str, ...] = ()
+    missing_request_ids: tuple[str, ...] = ()
+    invalid_request_ids: tuple[str, ...] = ()
+
+    @property
+    def request_contract_status(self) -> str:
+        if self.duplicate_request_ids or self.invalid_request_ids:
+            return "error"
+        if self.missing_request_ids:
+            return "partial"
+        return self.review_execution
+
+    @property
+    def unreviewed_requests(self) -> list[dict]:
+        context_ids = {unit["id"] for unit in self.requests if unit.get("kind") == "context"}
+        reasons = {
+            **{key: "要求の監査判定が返されておらず、充足と材料を確認できません。" for key in self.missing_request_ids},
+            **{key: "同じ要求に複数の監査判定があり、充足と材料を確認できません。" for key in self.duplicate_request_ids},
+        }
+        return [
+            {
+                "request_id": key,
+                "status": "unknown",
+                "reviewed": False,
+                "review_execution": "error" if key in self.duplicate_request_ids else "not_run",
+                "evidence_status": "unknown",
+                "evidence_ids": [],
+                "reason": reason,
+            }
+            for key, reason in reasons.items()
+            if key not in context_ids
+        ]
 
     @property
     def addressed(self) -> set[str]:
@@ -4444,7 +4476,7 @@ class Round:
             {**r.model_dump(), "reviewed": True}
             for r in self.audit.request_reviews
             if r.status in {"partial", "missing"} and r.request_id not in context_ids
-        ]
+        ] + self.unreviewed_requests
 
     @property
     def problems(self) -> int:
@@ -4682,24 +4714,25 @@ class Round:
                     ],
                 },
                 "answer_completeness": {
-                    "execution": "partial" if self.duplicate_request_ids else self.review_execution,
+                    "execution": "partial"
+                    if self.request_contract_status in {"partial", "error"} and self.audit is not None
+                    else self.review_execution,
+                    "review_execution": self.review_execution,
+                    "contract_validation": {
+                        "status": self.request_contract_status,
+                        "missing_request_ids": list(self.missing_request_ids),
+                        "invalid_request_ids": list(self.invalid_request_ids),
+                        "duplicate_request_ids": list(self.duplicate_request_ids),
+                    },
                     "requests": (
                         [row.model_dump() for row in self.audit.request_reviews]
                         if self.audit and self.review_execution in {"completed", "partial"}
                         else []
                     )
-                    + [
-                        {
-                            "request_id": request_id,
-                            "reviewed": False,
-                            "review_execution": "error",
-                            "evidence_status": "unknown",
-                            "evidence_ids": [],
-                            "reason": "同じ要求に複数の監査判定があり、充足と材料を確認できません。",
-                        }
-                        for request_id in self.duplicate_request_ids
-                    ],
+                    + self.unreviewed_requests,
                     **({"duplicate_request_ids": list(self.duplicate_request_ids)} if self.duplicate_request_ids else {}),
+                    **({"missing_request_ids": list(self.missing_request_ids)} if self.missing_request_ids else {}),
+                    **({"invalid_request_ids": list(self.invalid_request_ids)} if self.invalid_request_ids else {}),
                 },
             },
             "audit_calls": self.audit_calls,
@@ -6111,6 +6144,8 @@ def run_round(
     }
     audit, audit_calls, audit_cut = None, 0, False
     duplicate_request_ids: tuple[str, ...] = ()
+    missing_request_ids: tuple[str, ...] = ()
+    invalid_request_ids: tuple[str, ...] = ()
     # 印の付いた説明も監査する（根拠と矛盾すれば外す。#2738）。システムが補った原文・外した説明は監査しない。
     auditable = [(index, entry) for index, entry in enumerate(checked) if entry.span and entry.published]
     audit_index = {id(entry): index for index, entry in auditable}
@@ -6254,11 +6289,14 @@ def run_round(
             audit = None
             audit_cut = cut_short or isinstance(exc, (TimeoutError, TimeoutException, APITimeoutError))
             timing["audit_error_type"] = type(exc).__name__
+            timing["audit_failure"] = structured_failure_details(exc, GroundedAudit if detailed else GroundedFactAudit)
         timing.update(audit_seconds=round(monotonic() - started, 1), audit_prompt_chars=len(audit_prompt))
         if audit_usage := usage_delta(usage_before):
             timing["audit_usage"] = audit_usage
         if audit is not None:
-            audit, duplicate_request_ids = _unique_request_reviews(audit)
+            audit, duplicate_request_ids, missing_request_ids, invalid_request_ids = _validate_request_review_contract(
+                audit, inputs["task_contract"].get("request_units", [])
+            )
             audit = settle_citation_reviews(checked, audit, also_audited, dropped)
             recovered = recover_audited_quotes(
                 question, checked, audit, spans, guide_sources=[source for _id, _title, sources in guide_steps for source in sources]
@@ -6371,6 +6409,8 @@ def run_round(
         timing=timing,
         applications=applications,
         duplicate_request_ids=duplicate_request_ids,
+        missing_request_ids=missing_request_ids,
+        invalid_request_ids=invalid_request_ids,
         guide_steps=(
             apply_guide_contracts(
                 guide_step_coverage(
@@ -6488,6 +6528,19 @@ def _unique_request_reviews(audit: GroundedAudit) -> tuple[GroundedAudit, tuple[
     if not duplicates:
         return audit, ()
     return audit.model_copy(update={"request_reviews": [row for row in audit.request_reviews if counts[row.request_id] == 1]}), duplicates
+
+
+def _validate_request_review_contract(
+    audit: GroundedAudit, requests: Sequence[dict]
+) -> tuple[GroundedAudit, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """実際に監査へ渡した要求IDに束縛し、本文の支持判定は保持する。"""
+    audit, duplicates = _unique_request_reviews(audit)
+    expected = {unit["id"] for unit in requests}
+    invalid = ({row.request_id for row in audit.request_reviews} | set(duplicates)) - expected
+    duplicates = tuple(key for key in duplicates if key in expected)
+    audit = audit.model_copy(update={"request_reviews": [row for row in audit.request_reviews if row.request_id in expected]})
+    missing = expected - {row.request_id for row in audit.request_reviews} - set(duplicates)
+    return audit, duplicates, tuple(sorted(missing)), tuple(sorted(invalid))
 
 
 def _validate_missing_content_evidence(audit: GroundedAudit, inputs: dict) -> None:

@@ -136,7 +136,13 @@ class GroundedAnswerTest(unittest.TestCase):
                     item(eid, "実行ボタンを押して完了します。", "実行ボタンを押して完了します。"),
                 )
             ],
-            [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""))],
+            [
+                audit(
+                    (0, "supported", "matched", ""),
+                    (1, "supported", "matched", ""),
+                    requests=[("Q1", "addressed"), ("Q1.M1", "addressed"), ("Q1.M2", "addressed")],
+                )
+            ],
         )
         result = run(model, ctx).response
         self.assertEqual(
@@ -2864,12 +2870,20 @@ class ApplicabilityAuditTest(unittest.TestCase):
             item(eid, "実行ボタンを押して完了します。", "実行ボタンを押して完了します。", request_id="Q1"),
             confidence="high",
         )
-        conditional = audit((0, "supported", "conditional", "処理を選択"), (1, "supported", "matched", ""), requests=[("Q1", "addressed")])
+        conditional = audit(
+            (0, "supported", "conditional", "処理を選択"),
+            (1, "supported", "matched", ""),
+            requests=[("Q1", "addressed"), ("Q1.M1", "addressed"), ("Q1.M2", "addressed")],
+        )
         result = run(FakeModel([steps], [conditional]), ctx).response
         self.assertIn("（処理を選択の場合）一覧表を選択し", result.answer_text)
         self.assertEqual((result.confidence, result.needs_human_review), ("medium", False))
         self.assertTrue(result.answer_text.startswith("集計表出力から明細一覧を出力できます。"))  # matched の説明が残れば summary は公開
-        unknown = audit((0, "supported", "conditional", "原文に無い条件"), (1, "supported", "matched", ""), requests=[("Q1", "addressed")])
+        unknown = audit(
+            (0, "supported", "conditional", "原文に無い条件"),
+            (1, "supported", "matched", ""),
+            requests=[("Q1", "addressed"), ("Q1.M1", "addressed"), ("Q1.M2", "addressed")],
+        )
         result = run(FakeModel([steps], [unknown]), ctx).response
         # 該当が未確認の説明は注記を付けず、「参考情報」の節に原文の引用で置く（#2040・#2213）。
         self.assertIn(
