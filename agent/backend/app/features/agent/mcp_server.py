@@ -1604,12 +1604,17 @@ def build_agent_mcp_server(request: Request) -> McpServer:
     return McpServer(
         name=MCP_SERVER_NAME,
         version="1",
+        # 処理順の Step 形式（docs/agents/prompts.md。#3830）。
         instructions=(
-            "業務 Agent（社内の資料・業務データを調べて答える専門家）に質問する。"
-            "agent_list で使える業務 Agent を確かめ、agent_chat で質問する。"
+            "業務 Agent（社内の資料・業務データを調べて答える専門家）に質問する。\n\n"
+            "## Step 1: 業務 Agent を選んで質問する\n"
+            "agent_list で使える業務 Agent を確かめ、agent_chat で質問する。\n\n"
+            "## Step 2: 結果に応じて続ける\n"
             "in_progress なら agent_get_run で続きを読む。confirmation が返ったら、"
             "確認事項に agent_answer_confirmation で答える。続きの質問は返った thread_id を"
-            "agent_chat に渡す。回答の根拠は sources にある。"
+            "agent_chat に渡す。\n\n"
+            "## Step 3: 回答の根拠を読む\n"
+            "回答の根拠は sources にある。"
         ),
         tools=[
             McpTool(

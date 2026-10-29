@@ -87,6 +87,17 @@ def test_model_visible_texts_have_no_issue_numbers() -> None:
     assert [text for text in texts if _ISSUE_REF.search(text)] == []
 
 
+def test_instructions_are_step_format() -> None:
+    """MCP の instructions は、目的の文と処理順の `## Step N:` の見出し（docs/agents/prompts.md。
+    #3830）。見出しはすべて Step で、1 から順に置く。"""
+    text = INSTRUCTIONS
+    assert not text.startswith("#")
+    headings = re.findall(r"^#+ .*$", text, re.M)
+    steps = [int(number) for number in re.findall(r"^## Step (\d+): \S", text, re.M)]
+    assert steps and len(steps) == len(headings), headings
+    assert steps == list(range(1, len(steps) + 1)), steps
+
+
 def test_tool_error_codes_are_in_the_contract() -> None:
     """ツールが raise する code（`McpToolError` の最初の引数）と `*_CODE` の定数は、すべて
     契約の `errors`（`MCP_ERROR_CODES`）に載る（#3240。載っていない code で呼び出し側が分岐

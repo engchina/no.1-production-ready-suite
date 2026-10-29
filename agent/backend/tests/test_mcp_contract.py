@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -36,6 +37,17 @@ def test_agent_mcp_tools_match_platform_contract() -> None:
         "MCP ツールの定義が契約と違います。"
         "意図した変更なら UPDATE_MCP_CONTRACT=1 で契約を更新してください。"
     )
+
+
+def test_instructions_are_step_format() -> None:
+    """MCP の instructions は、目的の文と処理順の `## Step N:` の見出し（docs/agents/prompts.md。
+    #3830）。見出しはすべて Step で、1 から順に置く。"""
+    text = build_agent_mcp_server(cast(Request, None)).instructions or ""
+    assert not text.startswith("#")
+    headings = re.findall(r"^#+ .*$", text, re.M)
+    steps = [int(number) for number in re.findall(r"^## Step (\d+): \S", text, re.M)]
+    assert steps and len(steps) == len(headings), headings
+    assert steps == list(range(1, len(steps) + 1)), steps
 
 
 RAG_CONTRACT = CONTRACT.with_name("rag-tools.json")
