@@ -120,7 +120,7 @@ def test_actual_none_generation_keeps_opposite_claims_unverified_for_display(cla
                     {
                         "kind": "operation",
                         "text": claim,
-                        "citations": [{"evidence_id": "E1", "line_start": None, "line_end": None}],
+                        "citations": [{"evidence_id": "E1", "line_start": 1, "line_end": 1}],
                     }
                 ],
                 "summary": "",

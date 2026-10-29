@@ -94,7 +94,8 @@ def test_one_frozen_view_supplies_the_numbered_prompt_and_original_extraction(mo
     begin, end = view.units[1]
     assert not error and cited.quote == view.text[begin:end].strip()
     assert cited.citations[0]._extraction["view_sha256"] == view.view_sha256
-    assert cited.citations[0]._extraction["sent_view_sha256"] == view.view_sha256
+    assert cited.citations[0]._extraction["sent_view_status"] == "prepared"
+    assert cited.citations[0]._extraction["prepared_view_sha256"] == view.view_sha256
 
 
 def test_snapshots_and_labels_do_not_cross_siblings_or_reordered_rounds() -> None:
@@ -139,6 +140,22 @@ def test_current_input_snapshot_records_actual_block_and_missing_provider_raw_ex
     assert output["raw_output_status"] == "not_recorded" and output["provider_output_text"] is None
     assert output["input_prompt_sha256"] == hashlib.sha256(prompt.encode()).hexdigest()
     assert result.citation_trace["transport_attempts_recorded"] is False
+    assert result.checked[0].citation_resolution["sent_view_status"] == "matched"
+
+
+def test_prepared_block_absent_from_actual_prompt_is_not_recorded_as_sent() -> None:
+    evidence = span()
+    grounded.format_functions([evidence])
+    result = run_round([evidence], "今回の入力には証拠ブロックが含まれていません。")
+    assert result.citation_trace["input"]["snapshot_status"] == "partial"
+    assert not result.citation_trace["input"]["evidence"][0]["present_in_prompt"]
+    proof = result.checked[0].citation_resolution
+    assert proof["sent_view_status"] == "not_in_prompt"
+    assert "sent_view_sha256" not in proof
+    assert proof["prepared_view_sha256"] == proof["view_sha256"]
+    # 原文の実在と、モデルへの送達・意味支持は別の記録。
+    assert proof["authenticity"] == "verified"
+    assert result.review_execution == "not_run"
 
 
 @pytest.mark.parametrize("streamed", [False, True])
@@ -196,6 +213,8 @@ def test_sdk_raw_wire_is_private_and_separate_from_canonical_and_telemetry(
         client.close()
     assert len(sent) == 1
     assert sent[0]["text"]["format"]["strict"] is True
+    assert sent[0]["input"][0]["content"] == result.citation_trace["input"]["system_prompt"]
+    assert sent[0]["input"][1]["content"] == result.citation_trace["input"]["prompt"]
     assert "_provider_output_text" not in json.dumps(sent[0])
     output = result.citation_trace["outputs"][0]
     assert output["provider_output_text"] == raw and output["raw_output_status"] == "recorded"

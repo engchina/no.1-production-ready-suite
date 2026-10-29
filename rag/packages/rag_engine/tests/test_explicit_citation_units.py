@@ -57,7 +57,7 @@ def test_short_multiline_block_has_one_visible_unit_and_exact_original_quote() -
     assert "2|" not in prompt
     cited, error = extract(draft(1, 1), evidence)
     assert not error and cited.quote == "開く\n保存"
-    assert cited.citations[0]._extraction["sent_view_status"] == "matched"
+    assert cited.citations[0]._extraction["sent_view_status"] == "prepared"
 
 
 @pytest.mark.parametrize("text", ["実行", "42", "項目 | 値\nA | 1"])

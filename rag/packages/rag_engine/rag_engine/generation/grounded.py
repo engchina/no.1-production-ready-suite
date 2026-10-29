@@ -4186,6 +4186,7 @@ class CitationView:
     provenance_json: str
     rendered: str
     view_sha256: str
+    present_in_prompt: bool | None = field(default=None, compare=False)
 
 
 # リクエスト局所の実提示記録。span 自身へ proof を埋めず、JSON やモデル入力へ漏らさない。
@@ -4379,8 +4380,19 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequenc
     snapshot = (_CITATION_VIEWS.get() or {}).get(id(span))
     sent = snapshot[1] if snapshot is not None and snapshot[0] is span else None
     if isinstance(sent, CitationView):
-        metadata["sent_view_status"] = "matched" if sent == view else "mismatched"
-        metadata["sent_view_sha256"] = sent.view_sha256
+        metadata["sent_view_status"] = (
+            "mismatched"
+            if sent != view
+            else "matched"
+            if sent.present_in_prompt is True
+            else "not_in_prompt"
+            if sent.present_in_prompt is False
+            else "prepared"
+        )
+        if sent.present_in_prompt is True:
+            metadata["sent_view_sha256"] = sent.view_sha256
+        else:
+            metadata["prepared_view_sha256"] = sent.view_sha256
         if sent != view:
             return fail(
                 "citation_version_mismatch", "提示した根拠と現在の本文・ID・出典・行の版が一致しません。現在の引用を確定できません。"
@@ -6352,6 +6364,16 @@ def run_round(
         }
 
     input_rows = [snapshot_row(view) for view in input_views]
+    # format_functions は準備段階。今回の入力に含まれた視図だけに送達の証明を付ける。
+    present_views = {id(view) for view, row in zip(input_views, input_rows, strict=True) if row["present_in_prompt"]}
+    current_spans = {id(span): span for span in spans}
+    _CITATION_VIEWS.set(
+        {
+            key: (span, replace(view, present_in_prompt=id(view) in present_views))
+            for key, (span, view) in cached_views.items()
+            if current_spans.get(key) is span
+        }
+    )
     input_snapshot = {
         "capture_scope": "application_evidence_blocks",
         "transport_capture": "not_recorded",
