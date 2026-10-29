@@ -1642,16 +1642,39 @@ def _misattributed_labels(item: GroundedItem, draft: GroundedDraft, spans: Seque
     )
 
 
-def _request_plan_errors(draft: GroundedDraft, spans: Sequence[dict] = ()) -> list[str]:
-    """計画と説明の構造の不整合を列挙する。旧形式の応答は追加の欄を要求しない。"""
-    errors = []
+def _unknown_plan_label_errors(draft: GroundedDraft, spans: Sequence[dict]) -> list[str]:
+    """計画の evidence_ids のうち、送った根拠のどれにも当たらない label の指摘（業務ガイドの要件 ID を書いたなど。#3825）。
+
+    照合を足しても直らないので、照合の件数ではなく根拠の ID でないことを示す。別の ID へは付け替えない。
+    何の根拠も指さないので ``_outside_request_plan`` で何も許可せず、作り直しの後に残っても計画の内外の判定を
+    未決にしない（``plan_unsettled`` に入れない）。旧形式の応答（evidence_scope の無い計画）は検査しない。
+    """
+    return list(
+        dict.fromkeys(
+            f"{plan.request_id}: {label} は Evidence の ID ではありません。"
+            "evidence_ids には [E1] 形式の根拠の番号だけを書き、業務ガイドの要件は guide_coverage の requirement_id に書いてください。"
+            for plan in draft.request_coverage
+            if "evidence_scope" in plan.model_fields_set
+            for label in plan.evidence_ids
+            if not _label_spans(label, spans)
+        )
+    )
+
+
+def _request_plan_errors(draft: GroundedDraft, spans: Sequence[dict], *, unknown_labels: bool = True) -> list[str]:
+    """計画と説明の構造の不整合を列挙する。旧形式の応答は追加の欄を要求しない。
+
+    ``spans`` は送った根拠。``unknown_labels`` が偽なら、根拠でない label の指摘（``_unknown_plan_label_errors``）を
+    含めない（計画の内外の判定を未決にする不整合だけ）。
+    """
+    errors = _unknown_plan_label_errors(draft, spans) if unknown_labels else []
     if "request_coverage" in draft.model_fields_set and not draft.request_coverage and any(item.kind != "gap" for item in draft.items):
         errors.append(_MISSING_REQUEST_PLAN)
     for plan in draft.request_coverage:
         if "evidence_scope" not in plan.model_fields_set:
             continue
         for label in plan.evidence_ids:
-            if _attachment_label(label, spans):
+            if not _label_spans(label, spans) or _attachment_label(label, spans):
                 continue
             scopes = _scope_decisions(plan, label)
             if len(scopes) != 1:
@@ -6620,7 +6643,7 @@ def run_round(
             plan_unsettled = list(plan_errors)
         else:
             draft = draft.model_copy(update={"request_coverage": recovered.request_coverage})
-            plan_unsettled = _request_plan_errors(draft, spans) + _plan_undecided_errors(draft, spans)
+            plan_unsettled = _request_plan_errors(draft, spans, unknown_labels=False) + _plan_undecided_errors(draft, spans)
             plan_recovery = "planned"
         generation_calls += 1
     elif not range_only and plan_errors:
@@ -6656,10 +6679,12 @@ def run_round(
         generation_calls += 1
         if scope_plan is not None:
             draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
-        # 作り直しても残った不整合（#3228）。計画が決まらない説明は外さずに印を付けて残す（verify）。
-        plan_unsettled = _request_plan_errors(draft, spans)
+        # 作り直しても残った不整合（#3228）。計画が決まらない説明は外さずに印を付けて残す（verify）。根拠でない label は
+        # 何の根拠も指さず計画の内外を変えないので、残っても未決に数えず、無視した指摘として記録だけする（#3825）。
+        plan_unsettled = _request_plan_errors(draft, spans, unknown_labels=False)
         plan_repair_calls = 1
     plan_unsettled = list(dict.fromkeys([*plan_unsettled, *_plan_undecided_errors(draft, spans)]))
+    plan_ignored = _unknown_plan_label_errors(draft, spans)
     catalog_review: dict[str, Any] = {}
     if getattr(settings, "article_catalog_review", False) and audit_mode == AUDIT_MODE_NONE:
         catalog_review = {"execution": "not_run", "skipped": "audit_disabled", "reviewed": 0}
@@ -6733,6 +6758,9 @@ def run_round(
         timing["request_plan_recovery"] = plan_recovery
     if plan_unsettled:
         timing["request_plan_unsettled"] = plan_unsettled
+    if plan_ignored:
+        # 最後の草稿の計画に残った、送った根拠のどれにも当たらない label の指摘（計画の内外の判定には使わない）。
+        timing["request_plan_ignored"] = plan_ignored
     if image_fallback:
         timing["image_fallback"] = image_fallback
     if generation_usage := usage_delta(usage_before):
