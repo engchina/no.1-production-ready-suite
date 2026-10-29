@@ -12,6 +12,7 @@ from rag_parser_core.language import LanguagePack, per_pack
 from rag_parser_core.language.text import alternation, numbered, range_class, text_patterns
 
 from rag_engine.generation.answer_passage_vocabulary import alt as _v
+from rag_engine.parsing.structural_text import is_table_rule as is_table_rule
 from rag_engine.parsing.vision_prompt_rules import is_vision_enumeration_line
 from rag_engine.retrieval.task_contract import generic_target_words
 
@@ -400,11 +401,7 @@ def _section_ref() -> re.Pattern[str]:
 
 _REFERENCE_FILLER = re.compile(r"[|\s→>＞\-–—‑―、,，:：/／]+|同上|(?:ページ|頁|p\.|page)\s*[0-9０-９]+", re.I)
 _FILE_NAME = re.compile(r"[^\s「」『』（）()【】\[\]、,，|]+\.(?:pdf|docx?|xlsx?|pptx?|md|txt|html?|csv)\b", re.I)
-# Markdown の表の区切りの行（`|---|:---:|`）と区切り線（`---`）。
-_TABLE_SEPARATOR = re.compile(r"\|?(?:\s*:?-{3,}:?\s*\|)+(?:\s*:?-{3,}:?\s*)?|\|?\s*:?-{3,}:?\s*|\*{3,}|_{3,}")
 _TABLE_ROW = re.compile(r"\|.*\|")
-# 記号だけの段落（「**」。強調の閉じが句点の後の段落に分かれたもの）。
-_MARKUP_ONLY = re.compile(r"[*_`>#|~\-\s]+")
 _DOCUMENT_WORD = re.compile(
     r"\.(?:pdf|docx?|xlsx?|pptx?|md|txt|html?|csv)\b|\bpage\b|\bp\.\s*\d|\bpp\.|ページ|頁|\bsection\b|\bsheet\b|シート",
     re.I,
@@ -429,11 +426,6 @@ _INFO_REQUEST = re.compile(
     r".*(?:教えてください|お知らせください|お教えください|お聞かせください|ご回答ください|お答えください|確認させてください)[。．!！]?"
 )
 _BUNDLED_CLAIM = re.compile(r"ますが|ですが|ましたが|ませんが|ものの|けれど|けど|ただし")
-
-
-def is_table_rule(text: str) -> bool:
-    """Markdown の表の区切りの行（`|---|---|`）・区切り線（`---`）・記号だけの段落（`**`）か (#1317)。"""
-    return bool(_TABLE_SEPARATOR.fullmatch(text.strip()) or _MARKUP_ONLY.fullmatch(text.strip()))
 
 
 def table_header_lines(text: str) -> set[str]:
