@@ -4709,11 +4709,10 @@ class Round:
             else "根拠を引用した item がありません。質問に関係する原文が1つでもあれば、その原文を引用して答えられる範囲を示してください。本当に無関係なら gap のままで構いません。",
         }
         if diagnostic_only(self.timing):
-            result = {
-                key: value
-                for key, value in result.items()
-                if key in {"citation_range_issues", "dropped_items", "downgraded_items", "document_value_issues"}
-            }
+            deterministic_keys = {"citation_range_issues", "dropped_items", "downgraded_items", "document_value_issues"}
+            if self.timing.get("audit") == AUDIT_MODE_NONE:
+                deterministic_keys.add("no_cited_evidence")
+            result = {key: value for key, value in result.items() if key in deterministic_keys}
         result = {key: value for key, value in result.items() if value}
         if result:
             # 「保持する」対象は前回の草稿にしかない。指摘がある時だけ、公開できた item を添える。
@@ -6748,7 +6747,7 @@ def run_round(
     }
     if audit_mode == AUDIT_MODE_NONE:
         # 監査なしの型（#2800）: 要求の充足は説明の有無で決め、主張の支持・目的・要約は決定的な検査だけにする。
-        audit = unverified_projection(deterministic_audit(question, checked))
+        audit = deterministic_audit(question, checked)
         timing["audit"] = AUDIT_MODE_NONE
     if audit is None and spans and not diagnostic_only(timing):
         # 監査が時間の上限で切れた・応答が空だった round の説明は、原文との照合だけを済ませた未確認の説明（#2738）。
