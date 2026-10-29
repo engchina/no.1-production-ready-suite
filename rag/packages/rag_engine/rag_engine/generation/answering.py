@@ -2604,6 +2604,8 @@ def synthesize_grounded_answer(
                     parse_text=parse_text_response,
                     parse_images=parse_multimodal_response,
                     previous=best[0].checked if best is not None else (),
+                    previous_draft=best[0].draft if best is not None else None,
+                    previous_dropped=best[0].dropped if best is not None else (),
                     known_gaps=known_gaps,
                     compact_audit_reasons=compact_audit_reasons,
                     guide_steps=guide_steps,

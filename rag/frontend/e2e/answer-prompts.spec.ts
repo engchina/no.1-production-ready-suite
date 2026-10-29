@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "./fixtures/test";
+import { mockEditableStage } from "./_feature-prompt-helpers";
 import { DEFAULT_STAGES, FLOW_STAGES, type StageFixture } from "./_prompt-stage-fixtures";
 import { expectNoPageOverflow, mockLocalAuth, openSidebarNav } from "./_helpers";
 
@@ -393,4 +394,63 @@ test("資料との照合の指示を保存でき、既定への復帰は保存�
   expect(resetBox!.y).toBeGreaterThan(fieldBox!.y + fieldBox!.height);
   await expectNoPageOverflow(page);
   await stage.screenshot({ path: testInfo.outputPath("editable-stage.png") });
+});
+
+
+test("引用範囲の修復指示を保存・再読込でき、既定への復帰は保存まで取り消せる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const key = "generation.citationRepair";
+  const label = "引用範囲の修復（同じ根拠・版を特定でき、行範囲が未指定・不正・範囲外で、是正の予算が残るとき）";
+  const requests = await mockEditableStage(page, "generation", "generation", "citationRepair");
+  await page.goto("/settings/prompts");
+  const stage = page.getByTestId("answer-prompt-stage-generation");
+  await stage.locator("summary").click();
+  const field = stage.getByRole("textbox", { name: label, exact: true });
+  const actions = stage.getByRole("group", { name: "編集内容の操作" });
+  const save = actions.getByRole("button", { name: "プロンプトを保存", exact: true });
+  const discard = actions.getByRole("button", { name: "変更を破棄", exact: true });
+  const reset = actions.getByRole("button", { name: "既定に戻す", exact: true });
+  const builtin = "## Step 1: 合成の既定指示";
+  const custom = "## Step 1: 合成の引用範囲を確認する";
+  await expect(field).toBeEditable();
+  await expect(field).toHaveValue(builtin);
+  await field.fill(custom);
+  await save.click();
+  await expect(save).toBeDisabled();
+  expect(requests).toEqual([{ key, method: "PUT", content: custom }]);
+  await page.reload();
+  await stage.locator("summary").click();
+  await expect(field).toHaveValue(custom);
+  await field.fill("## Step 1: 破棄する変更");
+  await discard.click();
+  await expect(field).toHaveValue(custom);
+  await reset.click();
+  await expect(field).toHaveValue(builtin);
+  expect(requests).toHaveLength(1);
+  await discard.click();
+  await expect(field).toHaveValue(custom);
+  await reset.click();
+  await save.click();
+  await expect(save).toBeDisabled();
+  expect(requests).toEqual([{ key, method: "PUT", content: custom }, { key, method: "DELETE", content: null }]);
+  await page.reload();
+  await stage.locator("summary").click();
+  await expect(field).toHaveValue(builtin);
+  await expect(actions.getByRole("button")).toHaveText(["プロンプトを保存", "変更を破棄", "既定に戻す"]);
+  await expect(stage.getByText("既定値", { exact: true })).toHaveCount(0);
+  await actions.scrollIntoViewIfNeeded();
+  const boxes = await actions.getByRole("button").evaluateAll((buttons) => buttons.map((button) => {
+    const box = button.getBoundingClientRect();
+    return { x: box.x, y: box.y, right: box.right, bottom: box.bottom };
+  }));
+  const fieldBox = await field.boundingBox();
+  expect(boxes[2].y).toBeGreaterThanOrEqual(fieldBox!.y + fieldBox!.height);
+  if (testInfo.project.name === "mobile") {
+    expect(boxes[0].bottom).toBeLessThanOrEqual(boxes[1].y);
+    expect(boxes[1].bottom).toBeLessThanOrEqual(boxes[2].y);
+  } else {
+    expect(boxes[0].right).toBeLessThanOrEqual(boxes[1].x);
+    expect(boxes[1].right).toBeLessThanOrEqual(boxes[2].x);
+  }
+  await expectNoPageOverflow(page);
+  await stage.screenshot({ path: testInfo.outputPath("citation-range-prompt-editor.png") });
 });
