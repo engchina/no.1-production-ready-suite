@@ -12,6 +12,7 @@ from rag_parser_core.language import LanguagePack, per_pack
 from rag_parser_core.language.text import alternation, numbered, range_class, text_patterns
 
 from rag_engine.generation.answer_passage_vocabulary import alt as _v
+from rag_engine.generation.check_cues import check_cues
 from rag_engine.parsing.structural_text import is_table_rule as is_table_rule
 from rag_engine.parsing.vision_prompt_rules import is_vision_enumeration_line
 from rag_engine.retrieval.task_contract import generic_target_words
@@ -719,6 +720,33 @@ def missing_operation_terms(text: str, cited: list[dict[str, Any]]) -> list[str]
         next(term for term in family if term in text)
         for family in families
         if any(term in text for term in family) and not any(term in body for term in family)
+    ]
+
+
+# ボタン名とみなす最短の字数。1 字（「各ボタン」「同ボタン」）は指示語・接頭語で、ボタンの名前ではないことが多い。
+_MIN_BUTTON_NAME_CHARS = 2
+# 名前に付いたファンクションキー（「F5実行ボタン」）。キーの書き方（「(F5)実行」）は原文と違い得るので、名前から除いて比べる。
+_BUTTON_FUNCTION_KEY = re.compile(r"(?<![A-Za-z0-9])F(?:1[0-2]|[1-9])(?![0-9])")
+
+
+def button_names_absent(text: str, cited_texts: Collection[str], question: str = "") -> list[str]:
+    """説明が案内したボタン名（「実行ボタン」の「実行」）のうち、引いた根拠のどの本文にも名前が無いもの（#3822）。
+
+    説明が引いた原文より細かい操作（「入力して実行ボタンを押す」）を、画面を開く手順だけの原文で裏付けた形を見つける。
+    名前の文字列そのものが、引いたすべての根拠に無いことだけを見る。書き方の違い（「実行のボタン」「"実行"ボタン」）
+    では判定せず、名前が原文にあれば、その操作を原文が支えるか（意味の支持）は判定しない。質問にある名前、総称語、
+    1 字の名前は対象にしない。呼ぶ側は説明・根拠・質問を同じ文字の形（``check_view``）にそろえて渡す。
+    """
+
+    def compact(value: str) -> str:
+        return _BUTTON_FUNCTION_KEY.sub("", re.sub(r"\s+", "", value))
+
+    body, asked, generic = compact("\n".join(cited_texts)), compact(question), set(generic_target_words())
+    names = (compact(name) for name in check_cues().button.findall(re.sub(r"\s+", "", text)))
+    return [
+        name
+        for name in dict.fromkeys(names)
+        if len(name) >= _MIN_BUTTON_NAME_CHARS and name not in generic and name not in body and name not in asked
     ]
 
 

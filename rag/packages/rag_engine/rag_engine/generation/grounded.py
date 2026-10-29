@@ -20,7 +20,7 @@ import logging
 import math
 import re
 import unicodedata
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import CancelledError
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
@@ -65,7 +65,7 @@ from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.guide_authority import authoritative_guide_inputs, bind_guide_authority, compile_guide_task_contract
 from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.interaction_grounding import interaction_binding_error
-from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
+from rag_engine.generation.operation_audit import button_names_absent, deletion_target_supported, missing_operation_terms
 from rag_engine.generation.request_recovery import relabel_recovery_reviews
 from rag_engine.generation.semantic_observation import diagnostic_only, observation_policy, unverified_projection
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
@@ -149,6 +149,7 @@ GENERATE_SYSTEM_PROMPT = (
 - 添付原画像と根拠レコードの対応（画像がある場合）: 各画像の bbox / context_bbox / target_highlight / asset_kind。
 - guide_task_scope は業務ガイドと確認済み条件で決まった本問の要求範囲。required=true の手順・依存関係・完了条件に沿って items を作り、原質問に語がない理由で対象外にしない。required=false の未確定分岐は勝手に選ばない。利用者が自分で行えない必須手順も省かず、資料で裏付けられない要件は gap に残す。
 - 業務ガイドは本問の業務範囲を定める管理された指示で、資料の事実根拠とは別である。items の text には quote の原文が裏付ける内容だけを書き、業務ガイドの文（確認先・方針）を写さない。業務ガイドの窓口と引き継ぐ条件は、システムが「業務ガイドの案内」として本文に出す。
+- guide_condition_notices は確認済み条件で選んだ業務ガイドの分岐の補足で、システムが「業務ガイドの案内」として本文に出す（写さない）。summary と items には、補足と食い違う結論（補足が案内しないとした内容、補足と異なる依頼先・作業の担い手）を書かない。
 - この指示の quote は、citations の各出典（evidence_id と引用する行範囲）が指す根拠の原文を意味する。quote を別に生成するのではなく、その原文が支える内容を書く。
 #### Evidence の見出し行
 - origin（見出し行では `origin=` と表記）: document_text は解析された本文、image_extraction は画像からの生成説明・OCR、unclassified は未分類。
@@ -1212,6 +1213,7 @@ GENERATED_VALUE_CHECK = "生成説明の値"
 QUESTION_TARGET_CHECK = "質問の対象"
 QUESTION_ERROR_CHECK = "質問のエラー"
 OTHER_DOCUMENT_CHECK = "別文書の手順"
+CITED_BUTTON_CHECK = "ボタン名"
 # 警告の理由に添える原文の引用の長さ。
 MARK_QUOTE_MAX_CHARS = 80
 
@@ -1600,15 +1602,17 @@ def _attachment_label(label: str, spans: Sequence[dict]) -> bool:
 _MISSING_REQUEST_PLAN = "説明に使う要求ごとの根拠計画がありません。"
 
 
-def _misattributed_scopes(plan: RequestCoverage, spans: Sequence[dict]) -> dict[str, list[str]]:
+def _misattributed_scopes(plan: RequestCoverage, spans: Sequence[dict], cited: Collection[str] = ()) -> dict[str, list[str]]:
     """direct の照合に写した原文が、指した根拠に無く送信した別の根拠にある計画の行（出典 ID の取り違え。#3804）。
 
     戻り値は計画の表示 ID → 原文がある根拠の表示 ID。モデル自身の記述どうしの矛盾なので意味の判断は要らない。
     linked の原文は関係を明記した別の根拠にあってよいので対象外。どこにも無い原文（言い換え）・指した根拠にも
     ある原文・添付の根拠も、取り違えと言い切れないので対象外にする。別の ID へは付け替えない（作り直しに任せる）。
+    対象は evidence_ids の行と、``cited``（その小問の説明が引いた label）の行。evidence_ids に無い direct の行も
+    説明が引けば出典になる（#3827）が、説明が引かない行は出典にならないので作り直しの理由にしない。
     """
     found: dict[str, list[str]] = {}
-    used = set(plan.evidence_ids)
+    used = {*plan.evidence_ids, *cited}
     for scope in plan.evidence_scope:
         quote = scope.link_quote.strip()
         label = scope.evidence_id
@@ -1630,7 +1634,8 @@ def _misattributed_scopes(plan: RequestCoverage, spans: Sequence[dict]) -> dict[
 
 def _misattributed_labels(item: GroundedItem, draft: GroundedDraft, spans: Sequence[dict]) -> list[str]:
     """説明が出典に引いた根拠のうち、その小問の計画で原文と ID が食い違う表示 ID（#3804）。"""
-    labels = {label for plan in _item_request_plans(item, draft) for label in _misattributed_scopes(plan, spans)}
+    cited = [citation.evidence_id for citation in item.citations]
+    labels = {label for plan in _item_request_plans(item, draft) for label in _misattributed_scopes(plan, spans, cited)}
     flagged = {span["evidence_id"]: label for label in labels for span in _label_spans(label, spans)}
     return list(
         dict.fromkeys(
@@ -1642,16 +1647,45 @@ def _misattributed_labels(item: GroundedItem, draft: GroundedDraft, spans: Seque
     )
 
 
-def _request_plan_errors(draft: GroundedDraft, spans: Sequence[dict] = ()) -> list[str]:
-    """計画と説明の構造の不整合を列挙する。旧形式の応答は追加の欄を要求しない。"""
-    errors = []
+def _unknown_plan_label_errors(draft: GroundedDraft, spans: Sequence[dict], *, scope_plan: bool = False) -> list[str]:
+    """計画の evidence_ids のうち、送った根拠のどれにも当たらない label の指摘（業務ガイドの要件 ID を書いたなど。#3825）。
+
+    照合を足しても直らないので、照合の件数ではなく根拠の ID でないことを示す。別の ID へは付け替えない。
+    何の根拠も指さないので ``_outside_request_plan`` で何も許可せず、作り直しの後に残っても計画の内外の判定を
+    未決にしない（``plan_unsettled`` に入れない）。旧形式の応答（evidence_scope の無い計画）は検査しない。
+    ``scope_plan`` は計画を回答の草稿ではなく計画だけの出力（``RequestScopePlan``。guide_coverage の欄が無い）で
+    立てたか。その計画は作り直さないので、直し方ではなく計画の根拠として扱わないことを書く（#3827）。
+    """
+    advice = (
+        "計画の根拠として扱いません（evidence_ids に使えるのは [E1] 形式の根拠の番号だけです）。"
+        if scope_plan
+        else "evidence_ids には [E1] 形式の根拠の番号だけを書き、業務ガイドの要件は guide_coverage の requirement_id に書いてください。"
+    )
+    return list(
+        dict.fromkeys(
+            f"{plan.request_id}: {label} は Evidence の ID ではありません。{advice}"
+            for plan in draft.request_coverage
+            if "evidence_scope" in plan.model_fields_set
+            for label in plan.evidence_ids
+            if not _label_spans(label, spans)
+        )
+    )
+
+
+def _request_plan_errors(draft: GroundedDraft, spans: Sequence[dict], *, unknown_labels: bool = True) -> list[str]:
+    """計画と説明の構造の不整合を列挙する。旧形式の応答は追加の欄を要求しない。
+
+    ``spans`` は送った根拠。``unknown_labels`` が偽なら、根拠でない label の指摘（``_unknown_plan_label_errors``）を
+    含めない（計画の内外の判定を未決にする不整合だけ）。
+    """
+    errors = _unknown_plan_label_errors(draft, spans) if unknown_labels else []
     if "request_coverage" in draft.model_fields_set and not draft.request_coverage and any(item.kind != "gap" for item in draft.items):
         errors.append(_MISSING_REQUEST_PLAN)
     for plan in draft.request_coverage:
         if "evidence_scope" not in plan.model_fields_set:
             continue
         for label in plan.evidence_ids:
-            if _attachment_label(label, spans):
+            if not _label_spans(label, spans) or _attachment_label(label, spans):
                 continue
             scopes = _scope_decisions(plan, label)
             if len(scopes) != 1:
@@ -1660,7 +1694,13 @@ def _request_plan_errors(draft: GroundedDraft, spans: Sequence[dict] = ()) -> li
                 errors.append(f"{plan.request_id}: unrelated の {label} は evidence_ids と items に使えません。")
             elif scopes[0].relation == "linked" and not scopes[0].link_quote.strip():
                 errors.append(f"{plan.request_id}: linked の {label} は関係を明記した原文が必要です。")
-        for label, others in _misattributed_scopes(plan, spans).items():
+        cited = [
+            citation.evidence_id
+            for item in draft.items
+            if item.kind != "gap" and any(own is plan for own in _item_request_plans(item, draft))
+            for citation in item.citations
+        ]
+        for label, others in _misattributed_scopes(plan, spans, cited).items():
             errors.append(
                 f"{plan.request_id}: {label} の照合に写した原文は {label} に無く、{'・'.join(others)} にあります。"
                 "その原文で説明するなら、計画と items の出典をその原文がある根拠にしてください。"
@@ -1683,6 +1723,9 @@ def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, 
     """要求の根拠計画を最終説明にも適用する。計画の無い旧応答は従来の原文照合を使う。
 
     会話の添付の根拠（#3228）は、計画に載っていなくても計画の外にしない（利用者が明示した入力）。
+    計画の根拠は evidence_ids の label と、同じ計画の evidence_scope が direct、または原文のある linked と判断した
+    label（schema の evidence_ids の定義と同じ集合。片方にだけ書いた計画を外さない。#3827）。判断が 1 つに
+    まとまらない label・unrelated の label は許可しない。根拠でない label は何の根拠も指さない（#3825）。
     """
     if span.get("conversation_attachment"):
         return False
@@ -1693,7 +1736,7 @@ def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, 
         return True
     labels: set[str] = set()
     for plan in plans:
-        for label in plan.evidence_ids:
+        for label in dict.fromkeys([*plan.evidence_ids, *(scope.evidence_id for scope in plan.evidence_scope)]):
             if "evidence_scope" not in plan.model_fields_set or _attachment_label(label, spans):
                 labels.add(label)
                 continue
@@ -2115,6 +2158,10 @@ def verify(
         # 出典ごとに照合・検査し、通った出典を 1 つの主張にまとめる（#3526）。
         results = [check_citation(index, cited) for cited in item.single_citations()[:MAX_ITEM_CITATIONS]]
         kept_entries, notes, subs = merge_citations(index, item, results)
+        for entry in kept_entries:
+            if absent := _cited_button_gaps(question, entry):
+                # 案内したボタン名が、引いたどの原文にも無い（#3822）。本文と出典は変えず、段落に警告を付ける。
+                _mark_check(entry, CITED_BUTTON_CHECK, "引いた原文に無い: " + "、".join(absent))
         checked.extend(kept_entries)
         dropped.extend(notes)
     # 別機能の操作は render が手順を分けて示す。同じ文書の版違いだけは利用者に確認を求める。
@@ -2166,6 +2213,20 @@ def revise_table_conflicts(checked: Sequence[CheckedItem], parse: ParseText) -> 
             entry.correct(result.text, result.note)
             revised += 1
     return revised
+
+
+def _cited_button_gaps(question: str, entry: CheckedItem) -> list[str]:
+    """手順の説明が案内したボタン名のうち、説明が引いたすべての根拠（本文と見出し）に名前が無いもの（#3822）。
+
+    監査が意味の支持を確かめない回答では、引いた原文より細かい操作を含む説明が印なしで通る。名前が原文に無いことは
+    決定的に言えるので、その説明だけに警告を付ける。名前があってもその操作を原文が支えるかは判定しない。
+    出典の照合で既に印の付いた説明（引用範囲の不正・出典の取り違えなど）は、出典そのものが確かでないので重ねない。
+    """
+    if not entry.published or entry.added or entry.state or entry.item.kind not in _PROCEDURE_KINDS:
+        return []
+    views = [check_view(cited.span) for cited in item_citations(entry) if cited.span]
+    texts = [str(part) for view in views for part in (view.get("text", ""), *(view.get("section_path") or ()))]
+    return button_names_absent(fold_model_view(entry.item.text), texts, fold_model_view(question)) if views else []
 
 
 def _mark_check(entry: CheckedItem, name: str, reason: str, *, code: str = "item_check") -> None:
@@ -6642,7 +6703,7 @@ def run_round(
             plan_unsettled = list(plan_errors)
         else:
             draft = draft.model_copy(update={"request_coverage": recovered.request_coverage})
-            plan_unsettled = _request_plan_errors(draft, spans) + _plan_undecided_errors(draft, spans)
+            plan_unsettled = _request_plan_errors(draft, spans, unknown_labels=False) + _plan_undecided_errors(draft, spans)
             plan_recovery = "planned"
         generation_calls += 1
     elif not range_only and plan_errors:
@@ -6678,10 +6739,13 @@ def run_round(
         generation_calls += 1
         if scope_plan is not None:
             draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
-        # 作り直しても残った不整合（#3228）。計画が決まらない説明は外さずに印を付けて残す（verify）。
-        plan_unsettled = _request_plan_errors(draft, spans)
+        # 作り直しても残った不整合（#3228）。計画が決まらない説明は外さずに印を付けて残す（verify）。根拠でない label は
+        # 何の根拠も指さず計画の内外を変えないので、残っても未決に数えず、無視した指摘として記録だけする（#3825）。
+        plan_unsettled = _request_plan_errors(draft, spans, unknown_labels=False)
         plan_repair_calls = 1
     plan_unsettled = list(dict.fromkeys([*plan_unsettled, *_plan_undecided_errors(draft, spans)]))
+    # 計画だけの出力（answer.scope）で立てた計画には guide_coverage の欄が無く、作り直しも計画を変えない（#3827）。
+    plan_ignored = _unknown_plan_label_errors(draft, spans, scope_plan=scope_plan is not None or plan_recovery == "planned")
     catalog_review: dict[str, Any] = {}
     if getattr(settings, "article_catalog_review", False) and audit_mode == AUDIT_MODE_NONE:
         catalog_review = {"execution": "not_run", "skipped": "audit_disabled", "reviewed": 0}
@@ -6755,6 +6819,9 @@ def run_round(
         timing["request_plan_recovery"] = plan_recovery
     if plan_unsettled:
         timing["request_plan_unsettled"] = plan_unsettled
+    if plan_ignored:
+        # 最後の草稿の計画に残った、送った根拠のどれにも当たらない label の指摘（計画の内外の判定には使わない）。
+        timing["request_plan_ignored"] = plan_ignored
     if image_fallback:
         timing["image_fallback"] = image_fallback
     if generation_usage := usage_delta(usage_before):

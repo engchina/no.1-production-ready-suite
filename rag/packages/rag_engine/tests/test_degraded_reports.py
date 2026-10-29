@@ -217,12 +217,13 @@ def test_crag_grade_failure_is_reported(fail: bool) -> None:
         answer_flow=answering.CRAG_ANSWER_FLOW_LABEL,
     )
 
-    # 評価失敗を生成可能とみなさず、取得済みの根拠と失敗の診断を保持する。
+    # 評価の失敗は判定不能で、不足を確かめていない。取得済みの根拠で生成へ進み、失敗の診断を保持する（#3837）。
     if fail:
-        assert "fallback answer" not in result.answer
+        assert "fallback answer" in result.answer
         assert result.crag_attempts[0]["grade_execution"] == "error"
         assert result.crag_attempts[0]["required_aspect_coverage"] == "unknown"
-        assert result.generation_trace["crag_generation_gate"]["generation_calls"] == 0
+        assert result.generation_trace["crag_generation_gate"]["reason"] == "grading_incomplete"
+        assert result.generation_trace["crag_generation_gate"]["generation_usable"] is False
         assert ("crag_grade", "Boom") in reported
         assert SECRET not in result.question_display
     else:

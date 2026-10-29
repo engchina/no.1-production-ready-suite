@@ -152,10 +152,11 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
   `license`。本プロダクトの拡張は `metadata`（文字列 → 文字列）に置く:
   `production-ready-display-name`（画面の名前）・`production-ready-mcp-tools`（`<接続>:<ツール>` の空白区切り。
   `mcp_requirements` になる）・`production-ready-tags`。`AGENT_SKILLS_DIR` のスキルも同じ読み方をする。
-- 本文は 500 行以内。目的の文（MCP サーバー名と、ツールは素の名前で書くこと。Agent によって前置きが付く）→
-  `## 入力の種類を分ける` → `## 手順` → `## 結果ごとの対応` → `## 回答の書き方` → `## してはいけないこと`。使う見出しだけを
-  置く。`## 入力の種類を分ける`（#1929）は入力をあいさつ・お礼・その他の質問でない入力と質問に分け、質問でなければツールを
-  呼ばずに用件（スキルの対象について何を知りたいか）を聞き、質問（範囲外を含む）とあいさつの混ざる質問は `## 手順` に進める
+- 本文は 500 行以内。目的の文（MCP サーバー名と、ツールは素の名前で書くこと。Agent によって前置きが付く）の後の見出しは
+  すべて処理順の `## Step N: …`（1 から連番。入れ子の Step を置かない。root の `docs/agents/prompts.md`。#3830）で、
+  `入力の種類を分ける` → 手順の Step → `結果ごとの対応` → `回答の書き方` → `してはいけないこと` の順。使う Step だけを
+  置く。`入力の種類を分ける`（#1929）は入力をあいさつ・お礼・その他の質問でない入力と質問に分け、質問でなければツールを
+  呼ばずに用件（スキルの対象について何を知りたいか）を聞き、質問（範囲外を含む）とあいさつの混ざる質問は手順の Step に進める
   （用件を聞く返事は組み込み Runtime の拒答・差し戻しの対象外。`answer_passages.asks_for_request`）。長い参照は
   `references/*.md` に出し、本文から 1 段の深さでリンクする（Agent は索引だけを指示に入れ、`skill_reference_read` で
   読ませる）。毎回の手順で要る短い内容は本文に置く（`business-rag-research` の根拠の読み方（約 1,000 字）は参照文書に
@@ -168,13 +169,14 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
   手順）。配った後にスキルを変えたら `plugin.json` の `version` を上げる。
 - 旧 ID（`business_rag_research` など。#1573 の `rag_then_structured_data` も）の保存済みの業務 Agent は、システム
   テーブルの migration `20261014_013_rename_builtin_skill_ids` が新しい ID にする（読み込みで読み替えるコードは持たない）。
-- 手順の形は作業に合わせる: `business-rag-research` は順番が意味を持つ多段の質問なので `### Step N:` の一直線の手順
+- 手順の形は作業に合わせる: `business-rag-research` は順番が意味を持つ多段の質問なので一直線の手順の Step
   （各 Step に呼ぶツールと「→ Step N」の行き先）、`rag-and-structured-data` は順序を決めない判断のループ（足りないものを
-  判断 → ツールを呼ぶ → 結果を確かめて戻る）、`structured-data-query` は短い番号付きの手順と `status` ごとの対応。
+  判断 → ツールを呼ぶ → 結果を確かめて戻る）の Step、`structured-data-query`・`article-catalog-lookup` は短い番号付きの
+  手順を 1 つの Step に置き、`status` ごとの対応を `結果ごとの対応` の Step に置く。
 - `business-rag-research` は、元の指示の順（根拠を集める段の決まり → 多段の手順 → 検索の前の確認）を保ち、
   `rag_search` を独立の Step の見出しにしない。実モデル（`openai.gpt-oss-120b`）の比較で、`rag_search` の Step を
   分岐の先に置いた並びでは、多段の質問を `rag_search` から始めて 2 段目を引かない回答が増えた（#1795）。
-- ツールの結果の値（`outcome` / `status`）→ すること の対応を `## 結果ごとの対応` の箇条書きに
+- ツールの結果の値（`outcome` / `status`）→ すること の対応を `結果ごとの対応` の Step の箇条書きに
   まとめ、ツール名・フィールド名は `code` にする（組み込み Runtime は `code` の中の素のツール名も
   `<接続>__<ツール>` に書き直す）。
 - 書き方は root の `docs/agents/prompts.md`（プロンプト（LLM への指示・skill・ツールの説明）の書き方）に従う（#2269）。使うツールの

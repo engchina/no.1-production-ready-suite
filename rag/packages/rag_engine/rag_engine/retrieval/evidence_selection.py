@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 import unicodedata
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
 from rag_parser_core.language import current_pack
@@ -16,6 +16,7 @@ from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.structural_text import structural_only
 from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY, ARTICLE_UNIT_KEY, is_catalog_article
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
+from rag_engine.retrieval.character_forms import find_width_folded
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, definition_windows
 from rag_engine.retrieval.evidence_cues import evidence_cues
 from rag_engine.retrieval.task_contract import (
@@ -365,6 +366,7 @@ def evidence_spans(
     scope_records: Sequence[Any] = (),
     whole_records: bool = False,
     priority_source_groups: Sequence[Sequence[str]] = (),
+    verified_quotes: Mapping[str, Sequence[str]] | None = None,
     diagnostics: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """原文の文字予算内で安定IDを付け、照合済みanchorsの本文と頁を優先する。
@@ -375,6 +377,9 @@ def evidence_spans(
     scope_recordsは取得済みchildの所属照合専用で、全文の予算優先には使わない。
     whole_recordsは、全部の根拠の本文が予算（前置きの分の 1 割を除く）に入るとき、根拠ごとの配分で切らずに
     全文を渡す（章節の拡張で読んだ章節を切らない。#1436）。入らなければ通常の配分にする。
+    verified_quotes は出典の ID（根拠かまとめた別名の ID）ごとの、検索の評価が写しを確かめた原文（#3840）。
+    根拠の本文の中の位置（``find_width_folded``。照合をあいまいにしない）を必須の範囲にして予算の中で保ち、
+    span の分け目を写しの中に置かない。入らなかった写しは diagnostics に理由（``verified_quote``）を残す。
     """
     # 本文が同じ根拠（record_fingerprint）を先にまとめる。
     same_text: dict[str, list[Any]] = {}
@@ -405,6 +410,20 @@ def evidence_spans(
         member_keys[key] = {
             value for item in grouped for value in (getattr(item, "chunk_uid", ""), getattr(item, "chunk_id", ""), item.id) if value
         }
+    # 評価が写しを確かめた原文（#3840）を、まとめた根拠ごとに本文の中の位置へ戻す。
+    quote_order = list(
+        dict.fromkeys((str(source), str(quote)) for source, quotes in (verified_quotes or {}).items() for quote in quotes if quote)
+    )
+    quote_requests: dict[str, list[tuple[str, str]]] = {}
+    quote_ranges: dict[tuple[str, str], tuple[int, int]] = {}
+    for item in quote_order:
+        key = next((key for key, ids in member_keys.items() if item[0] in ids), None)
+        if key is None:
+            continue
+        quote_requests.setdefault(key, []).append(item)
+        located_quote = find_width_folded(unique[key].text, item[1])
+        if located_quote is not None:
+            quote_ranges[item] = located_quote
     labels = definition_labels(question)
     from rag_engine.retrieval.metadata_context import answer_metadata_context, document_context_key
 
@@ -570,6 +589,7 @@ def evidence_spans(
             parent_keys=parent_keys,
         )
         native_ranges = _native_ranges(record)
+        verified = sorted({quote_ranges[item] for item in quote_requests.get(key, ()) if item in quote_ranges})
         # CRAGのchild本文を保護し、同じ出典の親本文中の位置と実頁を引き継ぐ。
         pinned = [] if definitions_only else [(a, b) for a, b, _ in located]
         # 原文（解析本文）の短い範囲は質問の種類・画像の有無に関係なく先に確保し、残りの予算で生成説明・OCR を
@@ -578,11 +598,14 @@ def evidence_spans(
         # 全体の予算は既存の remaining で制限する。
         if not definitions_only:
             pinned.extend((a, b) for a, b in native_ranges if b - a <= 600)
-        required = sorted(set([*required, *pinned]))
+        # 評価が写しを確かめた原文も必須の範囲にする（予算の総額は増やさない）。
+        required = sorted(set([*required, *pinned, *verified]))
         needed = sum(b - a for a, b in required) + 8 * max(0, len(required) - 1)
         allowance = min(remaining, max(remaining // max(1, len(ordered) - index), needed))
         if not labels and not anchors:
             allowance = min(remaining, max(1, budget // max(1, len(unique))))
+        if verified:
+            allowance = min(remaining, max(allowance, sum(b - a for a, b in verified) + 8 * (len(verified) - 1)))
         # 取り置き分を超えない。ただし自分の必須範囲（原文・定義・照合済み child）は確保する。
         allowance = min(allowance, max(needed, remaining - reserve_after[index + 1]))
         if key in priority_keys:
@@ -596,7 +619,13 @@ def evidence_spans(
         child_only = bool(priority_ranges) and not whole
         if child_only:
             allowance = min(allowance, max(0, remaining - priority_extra_cost))
-            priority_ranges = affordable_priority_ranges
+            # 子の本文だけを切り出すときも、評価が写しを確かめた原文は子の本文の後に入れる。
+            priority_ranges = [*affordable_priority_ranges, *(item for item in verified if item not in affordable_priority_ranges)]
+        if verified and not whole:
+            # 写しを含む抜粋ごとに繰り返す出典の分を残す（抜粋の本文だけで残りの予算を使い切らない）。
+            allowance = min(
+                allowance, max(sum(b - a for a, b in verified) + 8 * (len(verified) - 1), remaining - source_cost * len(verified))
+            )
         excerpt = evidence_excerpt(
             question,
             text,
@@ -615,20 +644,26 @@ def evidence_spans(
             boundaries = [*((a, b) for a, b, _ in located), *native_ranges, *((a, b) for a, b, _, _ in scoped)]
             edges = sorted({edge for a, b in boundaries for edge in (a, b) if offset < edge < offset + len(part)})
             deferred = [edge for edge in edges if not _citation_partition_boundary(text, edge)]
-            if deferred and diagnostics is not None:
-                diagnostics.append(
-                    {
-                        "stage": "boundary_preserved",
-                        "reason_code": "mid_sentence_boundary",
-                        "source_id": getattr(record, "chunk_uid", "") or record.id,
-                        "positions": deferred,
-                    }
-                )
+            # 評価が写しを確かめた原文の中では切らない（写しが 2 つの span にまたがると、生成の根拠で照合できない）。
+            in_quote = [edge for edge in edges if edge not in deferred and any(a < edge < b for a, b in verified)]
+            for reason_code, positions in (("mid_sentence_boundary", deferred), ("verified_quote_range", in_quote)):
+                if positions and diagnostics is not None:
+                    diagnostics.append(
+                        {
+                            "stage": "boundary_preserved",
+                            "reason_code": reason_code,
+                            "source_id": getattr(record, "chunk_uid", "") or record.id,
+                            "positions": positions,
+                        }
+                    )
+            deferred += in_quote
             cuts = sorted({0, len(part), *(edge - offset for edge in edges if edge not in deferred)})
             parts.extend((offset + a, offset + b) for a, b in zip(cuts, cuts[1:], strict=False))
             cursor = offset + len(part)
         cursor = 0
-        for start, end in parts:
+        # 評価が写しを確かめた原文を含む抜粋。後に続くその抜粋の出典の分を、ほかの抜粋で使い切らない。
+        quote_parts = [any(start <= a and b <= end for a, b in verified) for start, end in parts]
+        for position, (start, end) in enumerate(parts):
             part = text[start:end]
             if not part:
                 continue
@@ -730,7 +765,8 @@ def evidence_spans(
             # 複数の抜粋では、出典を繰り返す分も予算に含める。階層を省略しない。
             if cursor:
                 extra_cost += source_cost
-            if extra_cost > remaining:
+            later_quotes = 0 if quote_parts[position] else sum(quote_parts[position + 1 :])
+            if extra_cost > remaining - source_cost * later_quotes:
                 result.pop()
                 continue
             remaining -= extra_cost
@@ -738,6 +774,7 @@ def evidence_spans(
             cursor = end
     result = _merge_adjacent_spans(result)
     if diagnostics is not None:
+        diagnostics.extend(_verified_quote_outcomes(quote_order, quote_requests, quote_ranges, unique, result))
         for group in priority_source_groups:
             wanted = set(group)
             ranges: list[tuple[str, int, int, str]] = []
@@ -783,6 +820,39 @@ def evidence_spans(
                 }
             )
     return result
+
+
+def _verified_quote_outcomes(
+    order: Sequence[tuple[str, str]],
+    requests: Mapping[str, Sequence[tuple[str, str]]],
+    ranges: Mapping[tuple[str, str], tuple[int, int]],
+    records: Mapping[str, Any],
+    spans: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """評価が写しを確かめた原文が、生成の根拠の span に入ったか（入らなければ理由）を写しごとに返す。本文は含めない。"""
+    parent_of = {item: key for key, items in requests.items() for item in items}
+    outcomes = []
+    for item in order:
+        key = parent_of.get(item)
+        entry: dict[str, Any] = {"stage": "verified_quote", "source_id": item[0], "quote_chars": len(item[1])}
+        if key is None:
+            outcomes.append({**entry, "status": "source_not_in_generation_records"})
+            continue
+        parent_id = str(getattr(records[key], "chunk_uid", "") or records[key].id)
+        entry["parent_id"] = parent_id
+        if item not in ranges:
+            outcomes.append({**entry, "status": "quote_not_in_source_text"})
+            continue
+        start, end = ranges[item]
+        own = [span for span in spans if span["source_id"] == parent_id]
+        if any(span["start"] <= start and end <= span["end"] for span in own):
+            status = "included"
+        elif any(span["start"] < end and start < span["end"] for span in own):
+            status = "split_across_spans"
+        else:
+            status = "excluded_by_budget"
+        outcomes.append({**entry, "start": start, "end": end, "status": status})
+    return outcomes
 
 
 def _merge_adjacent_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:

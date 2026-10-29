@@ -2090,15 +2090,20 @@ def _grounded_spans(
     *,
     budget: int | None = None,
     whole_records: bool = False,
+    crag_assessment: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """全出典へ本文予算を配分して原文を選び、機能キー・タグ・必須根拠を付ける。
 
     budget は原文の総予算（文字。`RAG_ENGINE_EVIDENCE_BUDGET_CHARS`）。None なら `evidence_spans` の既定値 (#1054)。
     whole_records は全部の根拠が予算に入るとき切らずに渡す（章節の拡張。#1436）。
+    crag_assessment は CRAG の評価。評価が写しを確かめた原文を、予算の中で必須の範囲にする（#3840）。
     """
     budget_option: dict[str, Any] = {"budget": int(budget)} if budget else {}
     if whole_records:
         budget_option["whole_records"] = True
+    quotes = crag_generation.verified_quotes(crag_assessment)
+    if quotes:
+        budget_option["verified_quotes"] = quotes
     if runtime_knowledge is not None and runtime_knowledge.guide_steps:
         optional = set(runtime_knowledge.guide_optional_steps)
         budget_option["priority_source_groups"] = [
@@ -2194,6 +2199,11 @@ def _grounded_prompt(
             runtime_knowledge.prompt_context() if runtime_knowledge is not None and runtime_knowledge.has_matches else "",
             ("guide_task_scope:\n" + json.dumps(runtime_knowledge.guide_task_scope, ensure_ascii=False))
             if runtime_knowledge is not None and runtime_knowledge.guide_task_scope
+            else "",
+            # 確定した条件で選んだ分岐の補足（ガイドの文そのもの）。本文の「業務ガイドの案内」と同じ文を、要約と items が
+            # 補足と食い違わないよう生成にも渡す（#3823）。
+            ("guide_condition_notices:\n" + json.dumps(list(runtime_knowledge.guide_condition_notices), ensure_ascii=False))
+            if runtime_knowledge is not None and runtime_knowledge.guide_condition_notices
             else "",
             ("guide_acquisition:\n" + json.dumps(prompt_acquisition_summary(runtime_knowledge.guide_acquisition), ensure_ascii=False))
             if runtime_knowledge is not None and runtime_knowledge.guide_acquisition
@@ -2564,6 +2574,7 @@ def synthesize_grounded_answer(
             image_evidence,
             runtime_knowledge,
             budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
+            crag_assessment=crag_assessment,
         )
         gate_view = crag_generation.generation_view(
             crag_assessment, gate_spans, context, budget_chars=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None)
@@ -2692,6 +2703,7 @@ def synthesize_grounded_answer(
             runtime_knowledge,
             budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
             whole_records=evidence_budget_chars is not None,
+            crag_assessment=crag_assessment,
         )
         crag_view = crag_generation.generation_view(
             crag_assessment, spans, context, budget_chars=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None)
@@ -5879,17 +5891,15 @@ def answer_question_result(
                 image_evidence,
                 runtime_knowledge,
                 budget=_section_evidence_budget(context, settings, section_expansion),
+                crag_assessment=crag_assessment,
             )
             if crag_assessment is not None
             else ()
         )
-        refusal = crag_generation.refusal_response(
-            request_text,
-            crag_generation.generation_view(
-                crag_assessment, gate_spans, context, budget_chars=_section_evidence_budget(context, settings, section_expansion)
-            ),
-            runtime_knowledge=runtime_knowledge,
+        gate_view = crag_generation.generation_view(
+            crag_assessment, gate_spans, context, budget_chars=_section_evidence_budget(context, settings, section_expansion)
         )
+        refusal = crag_generation.refusal_response(request_text, gate_view, runtime_knowledge=runtime_knowledge)
         if refusal is not None:
             grounded_answer = GroundedAnswer(
                 _with_guide_acquisition_notices(refusal, runtime_knowledge), context, tuple(image_evidence), image_prompt_mode
@@ -5915,9 +5925,16 @@ def answer_question_result(
             )
         # 是正で根拠や画像が増えた場合は、回答を生成した入力を参照欄と payload に使う。
         response, context = grounded_answer.response, grounded_answer.context
+        # 生成へ進んだ回も入口の判定を残す（確かめた部分の有無と、確かめられなかった写しの理由。#3837）。
+        entry_gate = {"crag_generation_gate": crag_generation.gate_record(gate_view)} if refusal is None and gate_view else {}
         response = replace(
             response,
-            generation_trace={**(response.generation_trace or {}), **evidence_trace, "extra_retrieval_budget": extra_budget.to_payload()},
+            generation_trace={
+                **entry_gate,
+                **(response.generation_trace or {}),
+                **evidence_trace,
+                "extra_retrieval_budget": extra_budget.to_payload(),
+            },
         )
         image_evidence, image_prompt_mode = grounded_answer.image_evidence, grounded_answer.image_prompt_mode
         if legacy_notice:

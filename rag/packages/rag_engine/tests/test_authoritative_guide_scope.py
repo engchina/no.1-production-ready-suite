@@ -66,6 +66,28 @@ def test_scope_reaches_generation_without_any_material_association() -> None:
     assert '"depends_on": ["open"]' in prompt
 
 
+def test_condition_notices_reach_generation_after_task_scope() -> None:
+    """確定した条件で選んだ分岐の補足は、生成の入力の guide_task_scope の直後に、ガイドの文のまま入る。"""
+    note = "合成の補足: 作業は担当者 B へ依頼するよう明記する。"
+    runtime = RuntimeKnowledgeContext(
+        original_question=QUESTION,
+        expanded_question=QUESTION,
+        path=Path("synthetic.json"),
+        guide_task_scope=plan().task_scope,
+        guide_condition_notices=(note,),
+    )
+    template = "{{question}}\n{{answer_context}}"
+    prompt = answering._grounded_prompt(QUESTION, [], context(), (), None, None, runtime, None, None, template=template)
+    without = answering._grounded_prompt(
+        QUESTION, [], context(), (), None, None, replace(runtime, guide_condition_notices=()), None, None, template=template
+    )
+    assert prompt.count(note) == 1
+    assert prompt.index("guide_task_scope:\n") < prompt.index("guide_condition_notices:\n") < prompt.index(note)
+    assert "guide_condition_notices" not in without
+    # 補足の節の読み方は system の 1 か所にだけある。
+    assert grounded.GENERATE_SYSTEM_PROMPT.count("guide_condition_notices") == 1
+
+
 @pytest.mark.parametrize("reason", ["disabled", "no_budget", "empty"])
 def test_formal_answer_keeps_scope_when_guide_search_has_no_material(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, reason: str) -> None:
     ctx = context(parent("a", "画面を開きます。"))

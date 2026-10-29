@@ -593,9 +593,12 @@ def _parse_rules(payload: Any) -> list[RuntimeRule]:
         triggers = _text_list(item.get("triggers") or item.get("terms") or item.get("keywords") or item.get("aliases") or item.get("when"))[
             :MAX_TRIGGERS_PER_RULE
         ]
-        content = _first_text(item, "content", "body", "text", "rule", max_chars=MAX_TEXT_CHARS)
-        source = _first_text(item, "source", "document", "path")
         tags = _text_list(item.get("tags"))
+        # 業務ガイドのルールはシステムが組み立てる文で、長さはガイドの項目の上限で決まる。利用者が登録する
+        # ルールの上限（MAX_TEXT_CHARS）で切ると、末尾の完了・引き継ぐ条件・制約の行が落ちるので切らない（#3838）。
+        content_limit = None if SUPPORT_GUIDE_RULE_TAG in tags else MAX_TEXT_CHARS
+        content = _first_text(item, "content", "body", "text", "rule", max_chars=content_limit)
+        source = _first_text(item, "source", "document", "path")
         status = _first_text(item, "status", "lifecycle_status", max_chars=80)
         updated_at = _first_text(item, "updated_at", max_chars=80)
         reviewed_at = _first_text(item, "reviewed_at", max_chars=80)
@@ -729,7 +732,7 @@ def _matches(text: str, label: str) -> bool:
     return normalized_label in normalized_text
 
 
-def _first_text(payload: dict[str, Any], *keys: str, max_chars: int = MAX_TEXT_CHARS) -> str:
+def _first_text(payload: dict[str, Any], *keys: str, max_chars: int | None = MAX_TEXT_CHARS) -> str:
     for key in keys:
         value = _clean_text(payload.get(key), max_chars)
         if value:
@@ -784,11 +787,12 @@ def _ordered_unique(values) -> list[str]:
     return out
 
 
-def _clean_text(value: Any, max_chars: int = 160) -> str:
+def _clean_text(value: Any, max_chars: int | None = 160) -> str:
+    """正規化して空白を畳み、``max_chars`` で切る（None は切らない）。"""
     text = _normalize(str(value or ""))
     text = re.sub(r"[\x00-\x1f\x7f]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
-    if len(text) > max_chars:
+    if max_chars is not None and len(text) > max_chars:
         text = text[:max_chars].rstrip()
     return text
 

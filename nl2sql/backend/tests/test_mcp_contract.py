@@ -72,3 +72,14 @@ def test_model_visible_texts_have_no_issue_numbers() -> None:
         descriptor = tool.descriptor()
         texts += [descriptor["description"], *_descriptions(descriptor["inputSchema"])]
     assert [text for text in texts if _ISSUE_REF.search(text)] == []
+
+
+def test_instructions_are_step_format() -> None:
+    """MCP の instructions は、目的の文と処理順の `## Step N:` の見出し（docs/agents/prompts.md。
+    #3830）。見出しはすべて Step で、1 から順に置く。"""
+    text = _INSTRUCTIONS
+    assert not text.startswith("#")
+    headings = re.findall(r"^#+ .*$", text, re.M)
+    steps = [int(number) for number in re.findall(r"^## Step (\d+): \S", text, re.M)]
+    assert steps and len(steps) == len(headings), headings
+    assert steps == list(range(1, len(steps) + 1)), steps

@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import mimetypes
+import re
 import threading
 import time
 from collections import deque
@@ -779,6 +780,9 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     ``STREAM_FAILED_RESENDS`` 回まで送り直す（#2814）。streaming の呼び出しで暴走の検出（`settings.llm_runaway_detection`）
     が ON なら、出力が同じ並びの繰り返し・空白だけで続いた呼び出しを打ち切り（`LlmRunawayOutput`）、推論の量を 1 段
     下げて（下げられなければそのまま）``RUNAWAY_RESENDS`` 回まで送り直す（#2966。出力の上限まで待たない）。
+    streaming しない呼び出しも、暴走の検出が ON なら、出力の上限で未完了の応答の出力の文に同じ暴走があるか
+    （`_runaway_response_reason`）を確かめ、上限を広げずに同じ送り直しにする（#3835。上限を広げても空白・繰り返しが
+    続くだけなので）。打ち切りの理由は工程の記録の `incomplete_reasons` と失敗の詳細（`cutoff_reason`）に残す。
     """
     budget = llm_output_token_limit(settings, provider)
     # 役目に合わせた上限（`bind_output_cap`）があれば、それで抑えて広げない。
@@ -795,7 +799,8 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     stall_resends = 0
     failed_resends = 0
     runaway_resends = 0
-    runaway = streamed and bool(getattr(settings, "llm_runaway_detection", False))
+    detect_runaway = bool(getattr(settings, "llm_runaway_detection", False))
+    runaway = streamed and detect_runaway
     while True:
         check_deadline()
         reasoning: dict[str, Any] = {"reasoning": {"effort": effort}} if effort else {}
@@ -823,17 +828,33 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                     response = client.responses.create(**wire_request) if is_audit_wire(text_format) else client.responses.parse(**request)
                 usage = _value(response, "usage")
                 observation.usage(usage.model_dump() if hasattr(usage, "model_dump") else usage)
+                if detect_runaway and not streamed and (cutoff := _runaway_response_reason(response)):
+                    # streaming しない呼び出しは途中で打ち切れない。出力の上限まで出た暴走を streaming と同じ送り直しにする（#3835）。
+                    raise LlmRunawayOutput(_runaway_message(cutoff), cutoff, None, response=response)
         except Exception as exc:
-            _record_failed_call(
-                exc,
-                provider,
-                text_format,
-                time.monotonic() - started,
-                max_output_tokens=send_budget,
-                attempt=attempt,
-                deadline_capped=time_capped,
-                timing=getattr(exc, "timing", None),
-            )
+            if isinstance(exc, LlmRunawayOutput) and exc.response is not None:
+                # 応答（token の数）は返っているので、使った token と打ち切りの理由を残す。
+                _record_usage(
+                    exc.response,
+                    provider,
+                    text_format,
+                    time.monotonic() - started,
+                    max_output_tokens=send_budget,
+                    attempt=attempt,
+                    deadline_capped=time_capped,
+                    cutoff_reason=exc.reason,
+                )
+            else:
+                _record_failed_call(
+                    exc,
+                    provider,
+                    text_format,
+                    time.monotonic() - started,
+                    max_output_tokens=send_budget,
+                    attempt=attempt,
+                    deadline_capped=time_capped,
+                    timing=getattr(exc, "timing", None),
+                )
             if isinstance(exc, LlmRunawayOutput):
                 if runaway_resends >= RUNAWAY_RESENDS:
                     raise
@@ -978,12 +999,40 @@ RUNAWAY_RESENDS = 1
 
 
 class LlmRunawayOutput(RuntimeError):
-    """streaming の出力が暴走した（#2966）。``reason`` は `runaway_repetition`（繰り返し）か `runaway_whitespace`（空白）。"""
+    """出力が暴走した（#2966）。``reason`` は `runaway_repetition`（繰り返し）か `runaway_whitespace`（空白）。
 
-    def __init__(self, message: str, reason: str, timing: _StreamTiming) -> None:
+    streaming で打ち切った呼び出しは ``timing`` を、streaming しない呼び出しで出力の上限まで出た応答から見分けた
+    ものは ``response``（未完了の応答。#3835）を持つ。
+    """
+
+    def __init__(self, message: str, reason: str, timing: _StreamTiming | None, *, response: Any = None) -> None:
         super().__init__(message)
         self.reason = reason
         self.timing = timing
+        self.response = response
+
+
+def _runaway_message(reason: str) -> str:
+    return f"LLM の出力が{'同じ並びの繰り返し' if reason == 'runaway_repetition' else '空白'}だけで続いたため、打ち切りました。"
+
+
+_WHITESPACE_RUN = re.compile(rf"\s{{{RUNAWAY_WHITESPACE_CHARS},}}")
+
+
+def _runaway_response_reason(response: Any) -> str | None:
+    """出力の上限で未完了の応答の出力の文に、streaming で打ち切る暴走（`_RunawayMonitor` と同じ基準）があれば理由を返す。
+
+    空白が ``RUNAWAY_WHITESPACE_CHARS`` 文字続いた箇所（途中でも）か、末尾の繰り返し（`repeating_tail`）。完了した
+    応答・ほかの理由の未完了は見ない（#3835）。
+    """
+    if _value(response, "status") != "incomplete":
+        return None
+    if str(_value(_value(response, "incomplete_details"), "reason") or "") != INCOMPLETE_OUTPUT_REASON:
+        return None
+    text = _response_output_text(response)
+    if _WHITESPACE_RUN.search(text):
+        return "runaway_whitespace"
+    return "runaway_repetition" if repeating_tail(text) else None
 
 
 class _RunawayMonitor:
@@ -1105,12 +1154,7 @@ def _stream_parsed(
                     if monitor is not None and kind == "response.output_text.delta":
                         reason = monitor.feed(str(_value(event, "delta") or ""))
                         if reason is not None:
-                            raise LlmRunawayOutput(
-                                f"LLM の出力が{'同じ並びの繰り返し' if reason == 'runaway_repetition' else '空白'}だけで"
-                                "続いたため、打ち切りました。",
-                                reason,
-                                timing,
-                            )
+                            raise LlmRunawayOutput(_runaway_message(reason), reason, timing)
                 elif kind in {"response.completed", "response.incomplete"}:
                     final = _value(event, "response")
                 elif kind in {"response.failed", "error"}:
@@ -1188,17 +1232,20 @@ def _record_usage(
     attempt: int = 0,
     deadline_capped: bool = False,
     timing: _StreamTiming | None = None,
+    cutoff_reason: str = "",
 ) -> None:
     """1 回の呼び出しの token の数と秒を、工程の記録の累積と log に残す（#1516。遅い工程の理由を確かめる）。
 
     応答が未完了（`status=incomplete`）なら理由（`incomplete_details.reason`）も残す。``attempt`` は出力の上限を
     広げた送り直しの何回目か（0 は最初の送信）、``max_output_tokens`` はその送信の出力の上限（#1527）、
     ``deadline_capped`` はその上限を回答の期限の残りで抑えたか（#1548）。streaming で受けた呼び出しは ``timing``
-    （最初の event までの秒・出力の速さ・最大の間隔。#1926）も残す。
+    （最初の event までの秒・出力の速さ・最大の間隔。#1926）も残す。``cutoff_reason`` は、出力の暴走と見分けた
+    未完了の応答の理由（`runaway_whitespace` など。#3835）で、未完了の理由の代わりに残す。
     """
     usage = response_usage(response)
     status = str(_value(response, "status") or "")
     reason = str(_value(_value(response, "incomplete_details"), "reason") or "unknown") if status == "incomplete" else ""
+    reason = cutoff_reason or reason
     _log_call(
         usage,
         seconds,
@@ -1453,13 +1500,7 @@ def _parsed_response[StructuredOutputT: BaseModel](
         refusal = _response_refusal(response)
         if refusal:
             raise RuntimeError(f"{provider.label} の Responses API が拒否を返しました: {refusal}")
-        text = _value(response, "output_text")
-        if not isinstance(text, str) or not text:
-            text = "".join(
-                str(_value(content, "text") or "")
-                for content in _iter_response_content(response)
-                if _value(content, "type") == "output_text"
-            )
+        text = _response_output_text(response)
         try:
             # 戻り値はBaseModelだがwire型ではない。呼出側がcanonicalと原wire診断を明示的に取り出す。
             return cast(StructuredOutputT, decode_audit_wire(text, text_format))
@@ -1515,6 +1556,16 @@ def _response_refusal(response: Any) -> str:
         if refusal:
             return str(refusal).strip()
     return ""
+
+
+def _response_output_text(response: Any) -> str:
+    """応答の出力の文（``output_text``。無ければ出力の content の output_text をつなぐ）。"""
+    text = _value(response, "output_text")
+    if isinstance(text, str) and text:
+        return text
+    return "".join(
+        str(_value(content, "text") or "") for content in _iter_response_content(response) if _value(content, "type") == "output_text"
+    )
 
 
 def _iter_response_content(response: Any):

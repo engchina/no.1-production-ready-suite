@@ -6,12 +6,18 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pytest import MonkeyPatch
+from rag_engine.knowledge.runtime_knowledge import (
+    MAX_TEXT_CHARS,
+    RUNTIME_KNOWLEDGE_FILE_NAME,
+    build_runtime_knowledge_context,
+)
 
 from app.api.routes import search as search_route
 from app.api.routes import search_answer_profile_knowledge as knowledge_route
@@ -200,6 +206,49 @@ def test_guide_becomes_a_pinned_rule_with_steps_and_hints() -> None:
     payload = with_guide_rule({"terms": [{"term": "x"}], "rules": [{"id": "r1"}]}, match)
     assert [item["id"] for item in payload["rules"]] == ["guide-g-grant", "r1"]
     assert payload["terms"] == [{"term": "x"}]
+
+
+def test_long_guide_rule_reaches_the_generation_input_to_its_last_line(tmp_path: Path) -> None:
+    """800 字を超える業務ガイドのルールも、最後の制約の行まで生成の入力に渡す（#3838）。"""
+    steps = [{"id": "open", "title": "詳細画面の権限タブを開く", "retrieval_hints": ["権限タブ"]}]
+    steps += [
+        {
+            "id": f"s{index}",
+            "title": f"合成の手順 {index} の操作を行う",
+            "depends_on": ["open"],
+            "purpose": f"合成の目的 {index} を満たす",
+            "done_when": f"合成の画面 {index} に完了が表示される",
+        }
+        for index in range(1, 12)
+    ]
+    steps.append({"id": "grant", "title": "権限を選んで付与する", "depends_on": ["open"]})
+    guide = grant_guide(
+        steps=steps,
+        completion=[
+            {
+                "id": "c1",
+                "description": "合成の完了の状態になる",
+                "check_method": "合成の一覧で状態を確かめる",
+            }
+        ],
+    )
+    match = match_guide([("g-long", 1, guide)], "グループにアクセス権限を付与したい")
+    assert match is not None
+    rule = guide_rule(match)
+    assert len(rule["content"]) > MAX_TEXT_CHARS
+    (tmp_path / RUNTIME_KNOWLEDGE_FILE_NAME).write_text(
+        json.dumps(with_guide_rule({}, match), ensure_ascii=False), encoding="utf-8"
+    )
+    prompt = build_runtime_knowledge_context(
+        "グループにアクセス権限を付与したい", tmp_path
+    ).prompt_context()
+    assert "[Runtime Glossary / Rules]" in prompt
+    lines = rule["content"].split("\n")
+    for prefix in ("完了の条件", "人へ引き継ぐ条件", "資料で確かめられない"):
+        assert any(line.startswith(prefix) for line in lines)
+    # 読み込みは NFKC で正規化し、改行を空白に畳む（他のルールと同じ）。行は落とさない。
+    for line in lines:
+        assert " ".join(unicodedata.normalize("NFKC", line).split()) in prompt
 
 
 def test_guide_rule_includes_only_visible_step_evidence_requirements() -> None:
