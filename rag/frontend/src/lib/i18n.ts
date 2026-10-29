@@ -4033,6 +4033,8 @@ export const ja = {
   "settings.answerPrompts.part.auditSystem": "監査の システムプロンプト",
   "settings.answerPrompts.part.answerChoice":
     "確認の自由入力の答えから選択肢を決める（選択肢そのものでない答えのときだけ）",
+  "settings.answerPrompts.part.citationRepair":
+    "引用範囲の修復（同じ根拠・版を特定でき、行範囲が未指定・不正・範囲外で、是正の予算が残るとき）",
   "settings.answerPrompts.part.tableRevision":
     "根拠の表と食い違う値を表の正しい値に直す（取り違えがあるときだけ）",
   "settings.answerPrompts.part.premiseConsistency":

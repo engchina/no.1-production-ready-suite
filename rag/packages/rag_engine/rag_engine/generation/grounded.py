@@ -547,7 +547,7 @@ AUDIT_MODES = (AUDIT_MODE_NONE, AUDIT_MODE_STANDARD, AUDIT_MODE_DETAILED)
 STANDARD_MAX_ROUNDS = 2
 # 通常の回答で作り直しに使う指摘（事実の問題）。完全性の不足（答えていない要求・未使用の根拠・説明していない手順・
 # 目的の一部だけ）は作り直さない。目的違い（off_target）は別の対象に答えた誤りなので直す。
-STANDARD_CORRECTION_KEYS = ("dropped_items", "downgraded_items", "no_cited_evidence", "summary_unsupported")
+STANDARD_CORRECTION_KEYS = ("citation_range_issues", "dropped_items", "downgraded_items", "no_cited_evidence", "summary_unsupported")
 # detailed だけの入力・出力の規則の行（監査の指示は 1 行 1 規則なので行の先頭で選ぶ）。
 _DETAILED_AUDIT_LINES = (
     "- 材料候補:",
@@ -4221,6 +4221,73 @@ def _line_citation_spans(item: GroundedItem, spans: Sequence[dict]) -> list[dict
     return direct if direct else _named_spans(item, spans)
 
 
+def citation_range_targets(
+    draft: GroundedDraft, spans: Sequence[dict], previous: Sequence[CheckedItem], dropped: Sequence[Mapping[str, Any]] = ()
+) -> list[dict[str, Any]]:
+    """今回の一意な根拠に結べる、不正な整数範囲だけを修復対象にする。"""
+    targets = []
+    for item_index, item in enumerate(draft.items):
+        for citation_index, citation in enumerate(item.citations):
+            if citation._wire_range is None:
+                continue
+            named = _line_citation_spans(item.model_copy(update={"citations": [citation]}), spans)
+            if len(named) != 1:
+                continue
+            view = _citation_view(named[0])
+            proofs = [
+                own.citation_resolution
+                for entry in previous
+                if entry.draft_index == item_index
+                for own in item_citations(entry)
+                if own.citation_resolution.get("requested_evidence_id") == citation.evidence_id
+            ]
+            proofs.extend(
+                entry["citation_resolution"]
+                for entry in dropped
+                if entry.get("index") == item_index
+                and isinstance(entry.get("citation_resolution"), dict)
+                and entry["citation_resolution"].get("requested_evidence_id") == citation.evidence_id
+            )
+            if not any(
+                proof.get("resolved_evidence_id") == view.evidence_id
+                and proof.get("source_id") == view.source_id
+                and bool(proof.get("view_sha256"))
+                and proof["view_sha256"] == view.view_sha256
+                for proof in proofs
+            ):
+                continue
+            numbered = _numbered(view.text, view.units)
+            binding = bind_wire_range(*citation._wire_range, unit_count=len(view.units), numbered=numbered)
+            if binding.reason_code not in {"citation_range_missing", "citation_range_invalid", "citation_range_out_of_bounds"}:
+                continue
+            targets.append(
+                {
+                    "item_index": item_index,
+                    "citation_index": citation_index,
+                    "evidence_id": citation.evidence_id,
+                    "unit_count": len(view.units),
+                    "numbered": numbered,
+                    "reason_code": binding.reason_code,
+                }
+            )
+    return targets
+
+
+def citation_range_issues(checked: Sequence[CheckedItem], dropped: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
+    """意味支持と分け、今回の根拠の範囲指定に失敗した引用だけを報告する。"""
+    observations = [
+        (entry.draft_index if entry.draft_index is not None and entry.draft_index >= 0 else index, own.citation_resolution)
+        for index, entry in enumerate(checked)
+        for own in item_citations(entry)
+    ] + [(entry.get("index", -1), entry["citation_resolution"]) for entry in dropped if isinstance(entry.get("citation_resolution"), dict)]
+    unique = {
+        (index, proof.get("requested_evidence_id", ""), proof["reason_code"])
+        for index, proof in observations
+        if proof.get("reason_code") in {"citation_range_missing", "citation_range_invalid", "citation_range_out_of_bounds"}
+    }
+    return [{"item_index": index, "evidence_id": evidence_id, "reason_code": reason} for index, evidence_id, reason in sorted(unique)]
+
+
 def cited_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem, str]:
     """本検証の ID と行から原文を抽出する。抽出・提示版・意味支持を別々に記録する。"""
     item = _with_extraction(item, {})  # モデルや旧 round の内部 flag は採用しない。
@@ -4580,6 +4647,7 @@ class Round:
         """次の生成へ渡す具体的な不足。何もなければ空。"""
         audit = self.audit
         result = {
+            "citation_range_issues": citation_range_issues(self.checked, self.dropped),
             # 原文と照合できず削除した引用には、写し方を添える。理由だけでは同じ形の引用が返ってくる (#1076)。
             "dropped_items": [
                 {**d, "hint": _VERBATIM_HINT + (_MISCOPIED_HINT if d.get("miscopied") else "")}
@@ -6039,6 +6107,8 @@ def run_round(
     parse_text: Callable[..., Any],
     parse_images: Callable[..., Any],
     previous: Sequence[CheckedItem] = (),
+    previous_draft: GroundedDraft | None = None,
+    previous_dropped: Sequence[Mapping[str, Any]] = (),
     known_gaps: Sequence[str] = (),
     audit_settings: Any = None,
     compact_audit_reasons: bool = False,
@@ -6093,6 +6163,8 @@ def run_round(
     image_fallback = ""
     presentation = _retrieved_heading_context(spans)
     scope_plan = None
+    range_only = previous_draft is not None and bool(citation_range_issues(previous, previous_dropped))
+    range_repair: dict[str, Any] = {}
 
     def plan_scope(evidence: Sequence[dict]) -> RequestScopePlan:
         """本文の生成と分けて、要求ごとに根拠の対象を照合する計画を立てる。"""
@@ -6125,7 +6197,7 @@ def run_round(
         )
 
     # 保存された章節が無く、原文から複数の対象を復元した場合だけ、対象の照合を本文生成から分ける。
-    if len({span["function"] for span in presentation}) > len({span["function"] for span in spans}):
+    if not range_only and len({span["function"] for span in presentation}) > len({span["function"] for span in spans}):
         scope_plan = plan_scope(presentation)
         planned = GroundedDraft(request_coverage=scope_plan.request_coverage, items=[], summary="", confidence="high")
         selected = [
@@ -6152,38 +6224,69 @@ def run_round(
         resolve_prompt("generation.assumptionSystem", ASSUMPTION_SYSTEM_PROMPT) if assume_unconfirmed else ""
     )
     generation_model = generation_draft_wire_model()
-    if image_paths:
-        try:
-            draft = call_with_model_purpose(
-                "answer.generate",
-                parse_images,
-                generation_system,
-                prompt,
-                list(image_paths),
+    if range_only:
+        from rag_engine.generation.citation_range_repair import (
+            CITATION_RANGE_REPAIR_SYSTEM_PROMPT,
+            CitationRangeRepair,
+            apply_range_repair,
+        )
+
+        assert previous_draft is not None
+        targets = citation_range_targets(previous_draft, spans, previous, previous_dropped)
+        draft = previous_draft.model_copy(deep=True)
+        generation_calls = 0
+        if targets:
+            repair_input = "## Step 1: 入力を読む\n" + json.dumps(
+                {"original_context": prompt, "immutable_draft": previous_draft.model_dump(mode="json"), "targets": targets},
+                ensure_ascii=False,
+            )
+            response = call_with_model_purpose(
+                "answer.repair",
+                parse_text,
+                resolve_prompt("generation.citationRepair", CITATION_RANGE_REPAIR_SYSTEM_PROMPT),
+                repair_input,
                 settings,
-                generation_model,
+                CitationRangeRepair,
                 provider_id=provider_id,
             )
-        except Exception as exc:
-            if invalid_output is None or not invalid_output(exc):
-                raise
-            # 画像の説明の文字は根拠のレコードに残るので、文字の根拠の範囲で作り直す（#2772）。
-            image_fallback = type(exc).__name__
+            draft, range_repair = apply_range_repair(previous_draft, response, targets)
+            generation_calls = 1
+        else:
+            range_repair = {"status": "not_run", "scope": "citation_range_only", "reason": "target_not_available"}
+    else:
+        if image_paths:
+            try:
+                draft = call_with_model_purpose(
+                    "answer.generate",
+                    parse_images,
+                    generation_system,
+                    prompt,
+                    list(image_paths),
+                    settings,
+                    generation_model,
+                    provider_id=provider_id,
+                )
+            except Exception as exc:
+                if invalid_output is None or not invalid_output(exc):
+                    raise
+                # 画像の説明の文字は根拠のレコードに残るので、文字の根拠の範囲で作り直す（#2772）。
+                image_fallback = type(exc).__name__
+                draft = call_with_model_purpose(
+                    "answer.generate", parse_text, generation_system, prompt, settings, generation_model, provider_id=provider_id
+                )
+        else:
             draft = call_with_model_purpose(
                 "answer.generate", parse_text, generation_system, prompt, settings, generation_model, provider_id=provider_id
             )
-    else:
-        draft = call_with_model_purpose(
-            "answer.generate", parse_text, generation_system, prompt, settings, generation_model, provider_id=provider_id
-        )
-    draft = canonical_generation_draft(draft)
-    if scope_plan is not None:
-        draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
-    generation_calls = 1 + int(scope_plan is not None)
+        draft = canonical_generation_draft(draft)
+        if scope_plan is not None:
+            draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
+        generation_calls = 1 + int(scope_plan is not None)
     plan_errors = _request_plan_errors(draft, spans)
     plan_unsettled: list[str] = []
     plan_recovery = ""
-    if plan_errors == [_MISSING_REQUEST_PLAN] and scope_plan is None:
+    plan_repair_calls = 0
+    if not range_only and plan_errors == [_MISSING_REQUEST_PLAN] and scope_plan is None:
         # 計画だけが無い草稿（#3394）。全体を同じ大きさの入力で作り直すと同じ省略を繰り返すので、説明が引いた
         # 根拠だけで計画を立て直し、説明はそのまま照合する（本文の生成と根拠の照合を分ける）。
         try:
@@ -6198,7 +6301,7 @@ def run_round(
             plan_unsettled = _request_plan_errors(draft, spans) + _plan_undecided_errors(draft, spans)
             plan_recovery = "planned"
         generation_calls += 1
-    elif plan_errors:
+    elif not range_only and plan_errors:
         # 構造の不整合だけを一度直す。回答の生成後の意味の監査や、無制限の是正にはしない。
         repair_prompt = (
             prompt
@@ -6233,12 +6336,14 @@ def run_round(
             draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
         # 作り直しても残った不整合（#3228）。計画が決まらない説明は外さずに印を付けて残す（verify）。
         plan_unsettled = _request_plan_errors(draft, spans)
+        plan_repair_calls = 1
     plan_unsettled = list(dict.fromkeys([*plan_unsettled, *_plan_undecided_errors(draft, spans)]))
     catalog_review: dict[str, Any] = {}
     if getattr(settings, "article_catalog_review", False) and audit_mode == AUDIT_MODE_NONE:
         catalog_review = {"execution": "not_run", "skipped": "audit_disabled", "reviewed": 0}
     if (
-        getattr(settings, "article_catalog_review", False)
+        not range_only
+        and getattr(settings, "article_catalog_review", False)
         and audit_mode != AUDIT_MODE_NONE
         and any(item.kind != "gap" for item in draft.items)
         and (unreviewed := unreviewed_catalog_spans(draft, spans))
@@ -6270,10 +6375,16 @@ def run_round(
         generation_calls += 1
     from rag_engine.generation.number_notation import format_draft_numbers
 
-    draft = format_draft_numbers(question, draft, spans)
-    draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
+    if not range_only:
+        draft = format_draft_numbers(question, draft, spans)
+    if not range_only:
+        draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
     timing["generation_calls"] = generation_calls
+    if range_repair:
+        timing["citation_range_repair"] = range_repair
+    if plan_repair_calls:
+        timing["request_plan_repair"] = {"calls": plan_repair_calls, "scope": "request_plan_and_draft"}
     if premise_records:
         timing["confirmed_premises"] = premise_records
     if plan_errors:
@@ -6729,8 +6840,10 @@ def correction_feedback(feedback: Mapping[str, Any], audit_mode: str, *, assume_
     if audit_mode == AUDIT_MODE_NONE:
         if assume_unconfirmed and feedback.get("no_cited_evidence"):
             return {"no_cited_evidence": _ASSUMPTION_NO_CITED_HINT}
-        if feedback.get("document_value_issues"):
-            return {key: feedback[key] for key in ("document_value_issues", "supported_items") if feedback.get(key)}
+        if feedback.get("document_value_issues") or feedback.get("citation_range_issues"):
+            return {
+                key: feedback[key] for key in ("citation_range_issues", "document_value_issues", "supported_items") if feedback.get(key)
+            }
         return {}
     if audit_mode == AUDIT_MODE_DETAILED:
         return dict(feedback)
@@ -6919,7 +7032,7 @@ NO_IMPROVEMENT_REASONS = frozenset(
 # （写し誤り）・印を付けた説明（downgraded_items。#2738 で降格から印に変えた）・根拠を引用した説明が無いこと。
 # 答えていない要求・使われていない根拠・質問の目的とのずれは、根拠を足す是正（取得済みの資料・原画像）で直す。
 # 業務ガイドの必須の手順を説明していないこと（#2491。手順の根拠は材料にある）も同じ。
-REGENERATION_FEEDBACK_KEYS = ("dropped_items", "downgraded_items", "no_cited_evidence", "guide_steps_unexplained")
+REGENERATION_FEEDBACK_KEYS = ("citation_range_issues", "dropped_items", "downgraded_items", "no_cited_evidence", "guide_steps_unexplained")
 
 
 def feedback_signature(feedback: dict[str, Any] | None) -> dict[str, Any]:
@@ -6935,6 +7048,10 @@ def feedback_signature(feedback: dict[str, Any] | None) -> dict[str, Any]:
         ),
         "unused": sorted(
             {json.dumps(ref, ensure_ascii=False, sort_keys=True, default=str) for ref in feedback.get("unused_evidence_ids") or ()}
+        ),
+        "citation_ranges": sorted(
+            (str(row.get("item_index")), str(row.get("evidence_id")), str(row.get("reason_code")))
+            for row in feedback.get("citation_range_issues") or ()
         ),
         "dropped": len(feedback.get("dropped_items") or ()),
         "downgraded": len(feedback.get("downgraded_items") or ()),
@@ -6973,6 +7090,7 @@ def downgraded_only(feedback: dict[str, Any] | None) -> bool:
     return bool(feedback.get("downgraded_items")) and not any(
         feedback.get(key)
         for key in (
+            "citation_range_issues",
             "dropped_items",
             "unanswered_requests",
             "unused_evidence_ids",
@@ -7151,6 +7269,8 @@ class RoundBudget:
 def pending_feedback_labels(feedback: dict[str, Any]) -> list[str]:
     """是正の指摘（`Round.feedback`）のうち、直していない不足の短い説明（#1516）。"""
     labels: list[str] = []
+    if count := len(feedback.get("citation_range_issues") or ()):
+        labels.append(f"範囲を確認できない引用 {count} 件")
     if count := len(feedback.get("unanswered_requests") or ()):
         labels.append(f"答えていない要求 {count} 件")
     if count := len(feedback.get("dropped_items") or ()):
