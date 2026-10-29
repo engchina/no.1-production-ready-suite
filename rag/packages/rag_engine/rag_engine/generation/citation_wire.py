@@ -10,6 +10,15 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field, StrictInt, create_model
 
+LINE_START_DESCRIPTION = (
+    "根拠内でコードが付けた「1|」から始まる引用単位の開始番号。PDFの頁・物理行ではない。"
+    "番号のない改行も同じ単位に含む。番号が表示されない短い根拠は null。"
+)
+LINE_END_DESCRIPTION = (
+    "同じ根拠ブロックの引用単位の終了番号。開始番号以上かつ表示された最大番号以下。"
+    "単一単位は開始と同じ値。番号なし根拠は開始・終了とも null。"
+)
+
 if TYPE_CHECKING:
     from rag_engine.models.llm import GroundedDraft
 
@@ -50,8 +59,8 @@ def generation_draft_wire_model() -> type[BaseModel]:
         "GroundedCitationWire",
         __base__=_StrictModel,
         evidence_id=(str, deepcopy(GroundedCitation.model_fields["evidence_id"])),
-        line_start=(StrictInt | None, Field(description="引用する原文行の開始番号。行番号の無い根拠は null。")),
-        line_end=(StrictInt | None, Field(description="引用する原文行の終了番号。単一行は開始番号と同じ値。行番号の無い根拠は null。")),
+        line_start=(StrictInt | None, Field(description=LINE_START_DESCRIPTION)),
+        line_end=(StrictInt | None, Field(description=LINE_END_DESCRIPTION)),
     )
     item_fields: dict[str, Any] = {"citations": (GenericAlias(list, citation), deepcopy(GroundedItem.model_fields["citations"]))}
     item = create_model("GroundedItemWire", __base__=GroundedItem, **item_fields)
