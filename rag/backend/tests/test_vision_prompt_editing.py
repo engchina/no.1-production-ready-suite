@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -28,6 +29,11 @@ from tests.test_answer_prompts import FakePromptOracle
 KEYS = tuple(f"picture_description.{part}" for part in ("system", "picture", "table", "rules"))
 BODY = "## Step 1: 合成の画像を読む\n{{image_metadata}}"
 LEGACY_RULES = "### 保存済みの読取規則\n原文の名称を保持する。"
+
+
+def _renumbered(text: str, step: int) -> str:
+    """1 つの Step で始まる部品の見出しの番号だけを置き換える。"""
+    return re.sub(r"^## Step \d+:", f"## Step {step}:", text, count=1)
 
 
 def _legacy() -> str:
@@ -100,9 +106,10 @@ def test_saved_rules_and_target_are_sent_verbatim_but_fixed_contract_cannot_be_s
         {"picture_description.rules": rules, "picture_description.table": target}
     ):
         prompt = _render_prompt({}, target_kind="table", template=_legacy())
-        assert rules in prompt and target in prompt
+        # BODY は Step 1 だけなので、保存した対象の指示と出力契約は Step 2・3 に振り直す(#3810)。
+        assert rules in prompt and _renumbered(target, 2) in prompt
         assert LEGACY_RULES not in prompt
-        assert prompt.endswith(_picture_output_contract())
+        assert prompt.endswith(_renumbered(_picture_output_contract(), 3))
         assert f"table_rows={MAX_TABLE_ROWS}" in prompt
         assert (
             _bounded_vision_description({"table_rows": [["合成"]] * 100})["table_rows"]
@@ -220,9 +227,10 @@ async def test_saved_vision_instructions_reach_serialized_http_payload(
             assert payload["instructions"] == saved["picture_description.system"]
             content = payload["input"][0]["content"]
             text = next(row["text"] for row in content if row["type"] == "input_text")
-            assert saved[f"picture_description.{target}"] in text
+            # BODY は Step 1 だけなので、対象の指示と出力契約は Step 2・3 に振り直す(#3810)。
+            assert _renumbered(saved[f"picture_description.{target}"], 2) in text
             assert saved["picture_description.rules"] in text
-            assert text.endswith(_picture_output_contract())
+            assert text.endswith(_renumbered(_picture_output_contract(), 3))
             assert (
                 payload["text"]["format"]["schema"] == PictureDescriptionOutput.model_json_schema()
             )

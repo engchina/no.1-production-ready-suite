@@ -33,7 +33,12 @@ from rag_engine.config import (
     llm_output_token_limit,
     oci_inference_endpoint,
 )
-from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY, read_prompt, render_prompt_template
+from rag_engine.knowledge.prompt_files import (
+    IMAGE_RETRIEVAL_PROMPT_KEY,
+    continue_prompt_steps,
+    read_prompt,
+    render_prompt_template,
+)
 from rag_engine.models.audit_wire import decode_audit_wire, is_audit_wire
 from rag_engine.models.llm import (
     PictureDescriptionOutput,
@@ -209,8 +214,9 @@ def _render_prompt(metadata: dict[str, Any], *, target_kind: str = "picture", te
         raise ValueError(f"Unknown Vision target kind: {target_kind}")
     if template is None:
         template = _image_retrieval_template()
+    refined = refine_image_retrieval_prompt(template)
     prompt = render_prompt_template(
-        refine_image_retrieval_prompt(template),
+        refined,
         {
             "image_metadata": _json_dumps(metadata),
             "image": _image_prompt_note(metadata),
@@ -222,7 +228,11 @@ def _render_prompt(metadata: dict[str, Any], *, target_kind: str = "picture", te
         if target_kind == "table"
         else resolve_prompt("picture_description.picture", PICTURE_EXTRACTION_INSTRUCTION)
     )
-    return prompt + "\n\n" + instruction + "\n\n" + _picture_output_contract()
+    # 保存したテンプレートの Step の数が既定と違っても、対象の指示と出力契約の番号を続けます（#3810）。
+    # 番号は差し込み前のテンプレートから数え、metadata などの根拠データの見出しで決めません。
+    instruction = continue_prompt_steps(refined, instruction)
+    contract = continue_prompt_steps(refined + "\n\n" + instruction, _picture_output_contract())
+    return prompt + "\n\n" + instruction + "\n\n" + contract
 
 
 def _picture_output_contract() -> str:
