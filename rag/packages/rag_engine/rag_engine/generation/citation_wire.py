@@ -69,12 +69,13 @@ def canonical_generation_draft(value: BaseModel) -> GroundedDraft:
         return value
     if not isinstance(value, wire):
         value = wire.model_validate(value.model_dump())
-    raw = value.model_dump()
+    # 未指定の計画を「空の計画を明示した応答」へ変え、不要な計画の再生成を起こさない。
+    raw = value.model_dump(exclude_unset=True)
     ranges: list[list[tuple[int | None, int | None]]] = []
-    for item in raw["items"]:
+    for item in raw.get("items", []):
         own: list[tuple[int | None, int | None]] = []
         converted = []
-        for citation in item["citations"]:
+        for citation in item.get("citations", []):
             start, end = citation["line_start"], citation["line_end"]
             own.append((start, end))
             # 不正範囲も消さず保持する。確定・失敗は実際の根拠の行数と照合して決める。
@@ -85,7 +86,8 @@ def canonical_generation_draft(value: BaseModel) -> GroundedDraft:
                 lines = ""
             converted.append({"evidence_id": citation["evidence_id"], "lines": lines})
         ranges.append(own)
-        item["citations"] = converted
+        if "citations" in item:
+            item["citations"] = converted
     draft = GroundedDraft.model_validate(raw)
     for item, own in zip(draft.items, ranges, strict=True):
         for citation, interval in zip(item.citations, own, strict=True):

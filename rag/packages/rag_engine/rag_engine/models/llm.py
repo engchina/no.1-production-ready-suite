@@ -621,6 +621,7 @@ class GroundedItemReview(_StrictModel):
         description="contradictedの複合itemに、独立に支持できる元の説明の部分がある場合だけ返す。各片は元textの厳密な抜粋と、このitemが実際に引用した出典・原文で裏付ける。判断不能ならunknownまたは空。",
     )
     # 原判定を保持し、採否への利用だけを別の方針にする。モデルの応答 schema には内部方針を出さない。
+    observed_support: SkipJsonSchema[str] = Field(default="", description="監査が答えた支持判定（応答の schema には出さない）。")
     observed_applicability: SkipJsonSchema[str] = Field(default="", description="監査が答えた適用性の記録（応答の schema には出さない）。")
     applicability_action: SkipJsonSchema[Literal["apply", "record_only"]] = Field(
         default="apply", description="適用性の原判定を本文へ反映するか。"
