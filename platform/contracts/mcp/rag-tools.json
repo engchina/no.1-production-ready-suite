@@ -6416,6 +6416,99 @@
             "title": "ExcerptRange",
             "type": "object"
           },
+          "GuideBodyCoverageValidation": {
+            "properties": {
+              "execution": {
+                "enum": [
+                  "completed",
+                  "not_run",
+                  "error",
+                  "timed_out",
+                  "partial",
+                  "unknown"
+                ],
+                "title": "Execution",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "explained",
+                  "missing",
+                  "partial",
+                  "unknown"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "reason": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Reason"
+              }
+            },
+            "required": [
+              "execution",
+              "status"
+            ],
+            "title": "GuideBodyCoverageValidation",
+            "type": "object"
+          },
+          "GuideSourceAssociationValidation": {
+            "properties": {
+              "execution": {
+                "enum": [
+                  "completed",
+                  "not_run",
+                  "error",
+                  "timed_out",
+                  "partial",
+                  "unknown"
+                ],
+                "title": "Execution",
+                "type": "string"
+              },
+              "linked": {
+                "title": "Linked",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "execution",
+              "linked"
+            ],
+            "title": "GuideSourceAssociationValidation",
+            "type": "object"
+          },
+          "GuideStepValidation": {
+            "properties": {
+              "body_coverage": {
+                "$ref": "#/$defs/GuideBodyCoverageValidation"
+              },
+              "source_association": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GuideSourceAssociationValidation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "body_coverage"
+            ],
+            "title": "GuideStepValidation",
+            "type": "object"
+          },
           "ValidatedClaim": {
             "properties": {
               "answer_quote": {
@@ -6546,6 +6639,18 @@
                 "description": "回答の充足で必須の手順か（分かっている条件で決まらない分岐の手順は false）。",
                 "title": "Required",
                 "type": "boolean"
+              },
+              "validation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GuideStepValidation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "出典の対応と本文の充足の検査状態。未実行・未完了は不足や誤りの確認を意味しない。古い結果では省略。"
               },
               "status": {
                 "description": "explained=必須の操作・対象・条件・順序を、根拠で裏付けた説明として確認した / partial=手順の一部だけ説明を確認した / unknown=説明の充足を検証できていない / reference_only=根拠の原文を参考として示しただけ / unused=手順の根拠は渡した根拠にあるが、手順を説明した段落が無い / no_evidence=手順の根拠が渡した根拠に無い（その手順の根拠を集めていない）/ not_searched=上限で検索を打ち切り、充足を検証していない。",
@@ -6740,7 +6845,7 @@
             "title": "Guide Revision"
           },
           "guide_steps": {
-            "description": "guide の手順ごとの説明の充足（分かっている条件で外れた分岐の手順は含めない。guide を渡さないか、段落の判定が出なければ空）。必須の手順で explained でないものは guide_step_unexplained の finding にもなる。",
+            "description": "guide の手順ごとの説明の充足（分かっている条件で外れた分岐の手順は含めない。guide を渡さないか、段落の判定が出なければ空）。本文の充足検査が完了し、不足を確認した必須の手順だけを guide_step_unexplained の finding にする。未実行・未確認は validation に残る。",
             "items": {
               "$ref": "#/$defs/ValidatedGuideStep"
             },

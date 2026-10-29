@@ -5,9 +5,8 @@
 
 - 確かめる手順: 公開の版の手順のうち、分かっている条件で外れた分岐の手順を除いたもの。条件で
   決まらない分岐の手順は必須に数えない（`answer_checks.conditional_steps`）。
-- 必須の手順で説明（explained）になっていないものは、warning の finding
-  （`guide_step_unexplained`）にして、回答の不足として示せるようにする（本文の不足の行と同じ文。
-  `grounded.guide_step_gap_line`）。
+- 本文の充足検査が完了して不足を確認した必須の手順だけを、warning の finding
+  （`guide_step_unexplained`）にする。候補の対応・未実行・未確認は検査状態として返す。
 - 順序・分岐・依存の検査（`answer_checks.check_guide_steps`）には、手順の説明にした段落の位置を
   渡す。
 
@@ -111,7 +110,11 @@ def guide_step_findings(
             step_id=step["step_id"],
         )
         for step in steps
-        if step["required"] and step["status"] != GUIDE_STEP_EXPLAINED
+        if step["required"]
+        and step["status"] != GUIDE_STEP_EXPLAINED
+        and step.get("validation", {}).get("body_coverage", {}).get("execution") == "completed"
+        and step.get("validation", {}).get("body_coverage", {}).get("status")
+        in {"missing", "partial"}
     ]
     return (
         findings,

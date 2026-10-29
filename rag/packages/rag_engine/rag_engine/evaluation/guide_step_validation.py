@@ -128,7 +128,7 @@ def validate_guide_steps(
     ``plan`` は確かめる手順（分かっている条件で外れた分岐の手順を除き、条件が決まらない分岐の手順は required=False）、
     ``claim_checks`` は主張の監査の判定（`validate_answer_claims` の ``claim_checks``）、``evidence`` は渡した根拠
     （``{id, document_id, page_start, page_end, text}``）。戻り値の ``steps`` は手順ごとの ``step_id``・``title``・
-    ``required``・``status``（explained / reference_only / unused / no_evidence）と、説明にした段落（``answer_quote``。
+    ``required``・候補の状態 ``status``・出典の対応と本文充足の検査状態 ``validation`` と、対応する段落（``answer_quote``。
     説明していなければ空）。``embedding`` は意味の判定の embedding の呼び出し（呼ばなければ None）。
     """
     sources = step_sources(plan, evidence)
@@ -163,6 +163,7 @@ def validate_guide_steps(
             # 最終の検証では、手順の根拠が渡した根拠に無いことを no_evidence（未検索）とする。
             "status": grounded.GUIDE_STEP_NO_EVIDENCE if step["status"] == grounded.GUIDE_STEP_NOT_SEARCHED else step["status"],
             "answer_quote": explaining.get(step["step_id"], ""),
+            "validation": step["validation"],
         }
         for step in coverage
     ]

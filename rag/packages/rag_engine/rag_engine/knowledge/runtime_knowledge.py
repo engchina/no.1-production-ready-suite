@@ -199,6 +199,9 @@ class RuntimeKnowledgeContext:
     guide_step_contracts: tuple[dict[str, Any], ...] = ()
     # 分岐を確定したガイドの回答範囲。検索の成否や引用の支持状態から推定しない。
     guide_task_scope: tuple[dict[str, Any], ...] = ()
+    # 必須範囲の取得機会と原文候補。意味支持や全範囲の読了とは別の状態。
+    guide_acquisition: tuple[dict[str, Any], ...] = ()
+    guide_acquisition_notices: tuple[str, ...] = ()
     # 業務ガイドの題名と案内の行（窓口・引き継ぐ条件・承認。#2792）。本文の「業務ガイドの案内」の節に資料とは分けて出す。
     guide_title: str = ""
     guide_notices: tuple[str, ...] = ()
@@ -326,6 +329,7 @@ class RuntimeKnowledgeContext:
             "scope_context": self.scope_context,
             "assume_unconfirmed": self.assume_unconfirmed,
             "unconfirmed_conditions": list(self.unconfirmed_conditions),
+            "guide_acquisition": list(self.guide_acquisition),
         }
 
 

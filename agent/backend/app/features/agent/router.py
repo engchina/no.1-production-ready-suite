@@ -3132,8 +3132,15 @@ async def get_run_artifact(
         artifact = await run_in_threadpool(runtime_repository.get_artifact, run_id, artifact_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="成果物が見つかりません。") from exc
-    unreadable = await _unreadable_evidence(request, [run], [artifact])
-    [checked] = withhold_artifacts([artifact], unreadable)
+    artifacts = (
+        await run_in_threadpool(runtime_repository.list_artifacts, run_id)
+        if artifact.kind == "answer"
+        else [artifact]
+    )
+    unreadable = await _unreadable_evidence(request, [run], artifacts)
+    checked = next(
+        item for item in withhold_artifacts(artifacts, unreadable) if item.id == artifact_id
+    )
     return ApiResponse(data=checked)
 
 

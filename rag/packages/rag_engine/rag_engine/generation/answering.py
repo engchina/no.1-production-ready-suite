@@ -183,6 +183,7 @@ from rag_engine.generation.execution_record import (
     _record_answer_execution,
     format_question_display,
 )
+from rag_engine.generation.guide_acquisition import prompt_acquisition_summary
 from rag_engine.generation.query_prompts import (
     MAX_GENERATED_QUERY_COUNT,
     _base_query_expansion,
@@ -255,8 +256,11 @@ from rag_engine.retrieval.guide_steps import (
     GUIDE_STEP_TRACE_SCHEMA_VERSION,
     GuidePlan,
     reference_step_sources,
+    required_guide_targets,
+    run_required_guide_searches,
     run_step_searches,
     select_step_parents,
+    target_records,
     unsearched_steps,
 )
 from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse, parse_inquiry_conditions
@@ -2138,6 +2142,9 @@ def _grounded_prompt(
             ("guide_task_scope:\n" + json.dumps(runtime_knowledge.guide_task_scope, ensure_ascii=False))
             if runtime_knowledge is not None and runtime_knowledge.guide_task_scope
             else "",
+            ("guide_acquisition:\n" + json.dumps(prompt_acquisition_summary(runtime_knowledge.guide_acquisition), ensure_ascii=False))
+            if runtime_knowledge is not None and runtime_knowledge.guide_acquisition
+            else "",
             inquiry_conditions.prompt_context() if inquiry_conditions is not None and inquiry_conditions.has_signals else "",
             (
                 "検索前の暫定データ確認観点（最終判定ではなく再確認する）:\n"
@@ -2484,7 +2491,9 @@ def synthesize_grounded_answer(
         )
         refusal = crag_generation.refusal_response(question, gate_view, runtime_knowledge=runtime_knowledge)
         if refusal is not None:
-            return GroundedAnswer(refusal, context, tuple(image_evidence), image_prompt_mode)
+            return GroundedAnswer(
+                _with_guide_acquisition_notices(refusal, runtime_knowledge), context, tuple(image_evidence), image_prompt_mode
+            )
     provider = answer_llm_provider
     source_provider = answer_llm_provider or settings.default_answer_llm
     generation_settings = settings_for_llm_purpose(settings, LLM_PURPOSE_GENERATION)
@@ -3087,6 +3096,20 @@ def synthesize_grounded_answer(
         guide_notices,
         review_execution=current.review_execution,
     )
+    acquisition_pending = {
+        step_id
+        for row in (runtime_knowledge.guide_acquisition if runtime_knowledge else ())
+        if not row.get("retained_source_ids")
+        for step_id in row.get("step_ids", ())
+    }
+    for row in guide_coverage:
+        if row["step_id"] in acquisition_pending:
+            row["status"] = grounded.GUIDE_STEP_UNKNOWN
+            row.setdefault("validation", {})["acquisition"] = {
+                "execution": "not_run",
+                "status": "unknown",
+                "reason": "required_acquisition_unverified",
+            }
     guide_pending = grounded.unexplained_guide_steps(guide_coverage)
     unverified_guide_statuses = {grounded.GUIDE_STEP_UNKNOWN, grounded.GUIDE_STEP_PARTIAL, grounded.GUIDE_STEP_NOT_SEARCHED}
     guide_gaps = [grounded.guide_step_gap_line(step) for step in guide_pending if step["status"] not in unverified_guide_statuses]
@@ -3134,7 +3157,7 @@ def synthesize_grounded_answer(
             [*reviewed_unanswered, *guide_gaps, *crag_gaps],
             confirmation_section,
             unverified=unread_lines,
-            unverified_requirements=guide_unverified,
+            unverified_requirements=[*guide_unverified, *(runtime_knowledge.guide_acquisition_notices if runtime_knowledge else ())],
             deadline=deadline_lines,
             applications=current.applications,
             subquestions=subquestions,
@@ -3152,7 +3175,7 @@ def synthesize_grounded_answer(
             [*needed, *gap_items, *removed_entries],
             confirmations=confirmation_section,
             unverified=unread_lines,
-            unverified_requirements=guide_unverified,
+            unverified_requirements=[*guide_unverified, *(runtime_knowledge.guide_acquisition_notices if runtime_knowledge else ())],
             deadline=deadline_lines,
             answer_warnings=answer_warnings,
             guide_notes=guide_notes,
@@ -3165,7 +3188,7 @@ def synthesize_grounded_answer(
             [*reviewed_unanswered, *guide_gaps],
             confirmation_section,
             unverified=unread_lines,
-            unverified_requirements=guide_unverified,
+            unverified_requirements=[*guide_unverified, *(runtime_knowledge.guide_acquisition_notices if runtime_knowledge else ())],
             deadline=deadline_lines,
             applications=current.applications,
             subquestions=subquestions,
@@ -3196,7 +3219,7 @@ def synthesize_grounded_answer(
             [*related, *gap_items, *removed_entries],
             confirmations=confirmation_section,
             unverified=unread_lines,
-            unverified_requirements=guide_unverified,
+            unverified_requirements=[*guide_unverified, *(runtime_knowledge.guide_acquisition_notices if runtime_knowledge else ())],
             deadline=deadline_lines,
             answer_warnings=answer_warnings,
             guide_notes=guide_notes,
@@ -3606,7 +3629,7 @@ def _cover_guide_steps(
     足した根拠は既存の根拠の後ろに置き、既存の根拠は追い出さない。戻り値は (回答に渡す context, 記録,
     手順ごとの根拠（手順 id, 題名, 根拠の chunk_uid の列）)。
     """
-    limit = extra_budget.allowance(int(getattr(settings, "guide_step_max_queries", 0) or 0))
+    targets = required_guide_targets(plan)
     trace: dict[str, Any] = {
         "schema_version": GUIDE_STEP_TRACE_SCHEMA_VERSION,
         "guide_id": plan.guide_id,
@@ -3615,11 +3638,29 @@ def _cover_guide_steps(
     }
     titles = {step.step_id: step.title for step in plan.steps}
     if not bool(getattr(settings, "guide_step_retrieval_enabled", False)):
-        trace["skipped"] = "disabled"
-        return context, trace, ()
-    if limit <= 0:
-        trace["skipped"] = "no_budget"
-        return context, trace, ()
+        extra_budget.reserve_required(0)
+        trace.update(
+            skipped="disabled",
+            unsearched_step_ids=[step.step_id for step in plan.steps],
+            required_acquisition={
+                "targets": [
+                    {
+                        **target.to_payload(),
+                        "execution": "not_run",
+                        "reason": "disabled",
+                        "acquisition": "unknown",
+                        "preparation": "unknown",
+                        "retained_source_ids": [],
+                        "retained_body_chars": 0,
+                        "actual_model_input": "not_observed",
+                    }
+                    for target in targets
+                ],
+                "incomplete_step_ids": list(dict.fromkeys(owner for target in targets for owner in target.owner_ids)),
+            },
+            budget=extra_budget.to_payload(),
+        )
+        return context, trace, tuple((step.step_id, step.title, ()) for step in plan.steps)
 
     search_settings = replace(
         settings,
@@ -3651,15 +3692,31 @@ def _cover_guide_steps(
         )
 
     started = clock()
-    results, stop = run_step_searches(
+    results, acquisitions, stop = run_required_guide_searches(
         question,
-        plan,
-        limit=limit,
+        targets,
+        budget=extra_budget,
+        existing_records=context.records,
         deadline_seconds=float(getattr(settings, "guide_step_deadline_seconds", 0.0) or 0.0),
         retrieve=retrieve,
         clock=clock,
     )
-    extra_budget.take(GUIDE_STEPS_KIND, len(results))
+    # 必須参照の取得後、参照なしの補助検索と任意手順だけを通常の枠から実行する。
+    optional_steps = tuple(
+        replace(step, references=()) if step.required else step for step in plan.steps if not step.required or step.references
+    )
+    optional_limit = extra_budget.allowance(int(getattr(settings, "guide_step_max_queries", 0) or 0))
+    optional_results, optional_stop = run_step_searches(
+        question,
+        replace(plan, steps=optional_steps),
+        limit=optional_limit,
+        deadline_seconds=max(0.0, float(getattr(settings, "guide_step_deadline_seconds", 0.0) or 0.0) - (clock() - started)),
+        retrieve=retrieve,
+        clock=clock,
+    )
+    extra_budget.take(GUIDE_STEPS_KIND, len(optional_results))
+    results.extend(optional_results)
+    stop = stop or optional_stop
     existing = {r.chunk_uid or r.id for r in context.records} | {p.record.chunk_uid or p.record.id for p in context.evidence_tree}
     selection = select_step_parents(results, existing, chunks_per_step=per_step, reference_max_chunks=reference_cap)
     added_keys: set[str] = set()
@@ -3714,12 +3771,37 @@ def _cover_guide_steps(
         if key in added_keys:
             added_by_step.setdefault(f"{step_id}:{kind}", []).append(key)
     sources = dict((step_id, keys) for step_id, _, keys in step_sources)
+    by_target = {target.target_id: target for target in targets}
+    for acquisition in acquisitions:
+        target = by_target[acquisition["target_id"]]
+        candidates = set(acquisition["candidate_source_ids"])
+        retained = [record for record in target_records(target, context.records) if (record.chunk_uid or record.id) in candidates]
+        acquisition["retained_source_ids"] = list(dict.fromkeys(record.chunk_uid or record.id for record in retained))
+        acquisition["retained_body_chars"] = sum(len(str(getattr(record, "body_text", "") or record.text).strip()) for record in retained)
+        acquisition["preparation"] = "candidate_available" if retained else "unknown"
+        acquisition["actual_model_input"] = "not_observed"
+        if not retained and not acquisition.get("reason"):
+            acquisition["reason"] = "body_not_retained" if candidates else "no_candidates"
+    incomplete_targets = [row["target_id"] for row in acquisitions if not row["retained_source_ids"]]
+    incomplete_steps = list(
+        dict.fromkeys(owner for row in acquisitions if row["target_id"] in incomplete_targets for owner in row["step_ids"])
+    )
     trace.update(
         {
             "stop_reason": stop or ("rejected:" + rejected if rejected else ""),
             "unsearched_step_ids": list(unsearched),
             "elapsed_ms": int((clock() - started) * 1000),
             "budget": extra_budget.to_payload(),
+            "required_acquisition": {
+                "planned_targets": len(targets),
+                "logical_attempts": sum(row["execution"] in {"completed", "error"} for row in acquisitions),
+                "external_sdk_attempts": "not_measured_here",
+                "targets": acquisitions,
+                "incomplete_target_ids": incomplete_targets,
+                "incomplete_step_ids": incomplete_steps,
+                "scope_coverage": "unknown",
+                "semantic_support": "not_run",
+            },
             "steps": [
                 {
                     "id": step.step_id,
@@ -3736,7 +3818,7 @@ def _cover_guide_steps(
                             **({"error": result.error} if result.error else {}),
                         }
                         for result in results
-                        if result.step_id == step.step_id
+                        if step.step_id in (result.owner_ids or (result.step_id,))
                     ],
                     "evidence_count": len(sources.get(step.step_id, ())),
                     "reference_chunk_count": len(added_by_step.get(f"{step.step_id}:reference", [])),
@@ -3749,6 +3831,23 @@ def _cover_guide_steps(
         }
     )
     return context, trace, step_sources
+
+
+def _with_guide_acquisition_notices(response: AnswerResponse, knowledge: RuntimeKnowledgeContext | None) -> AnswerResponse:
+    """生成前の終了でも、取得処理の未完了を資料不足と区別して残す。"""
+    if knowledge is None or not knowledge.guide_acquisition_notices:
+        return response
+    from rag_engine.generation.grounded import render_answer
+
+    rendered = render_answer(response.answer_text, (), unverified_requirements=knowledge.guide_acquisition_notices)
+    return replace(response, answer_text=rendered.text)
+
+
+def _guide_acquisition_notices(trace: dict[str, Any]) -> tuple[str, ...]:
+    """取得の未完了を業務上の案内や意味支持の判定と分けて示す。"""
+    from rag_engine.generation.guide_acquisition import acquisition_notices
+
+    return acquisition_notices((trace.get("required_acquisition") or {}).get("targets") or ())
 
 
 # 手順ごとの検索をしなかった理由の表示名（#2395）。
@@ -5269,6 +5368,8 @@ def answer_question_result(
         crag_attempts: tuple[CragRetrievalAttempt, ...] = ()
         crag_rewrites: tuple[str, ...] = ()
         extra_budget = ExtraRetrievalBudget.from_settings(settings)
+        if complete_evidence and guide_plan is not None and settings.guide_step_retrieval_enabled:
+            extra_budget.reserve_required(len(required_guide_targets(guide_plan)))
         coverage_usage = CoverageUsage()
         try:
             if selected_answer_flow == CRAG_ANSWER_FLOW:
@@ -5508,15 +5609,16 @@ def answer_question_result(
                     classification_filter=selected_classification_filter,
                     runtime_knowledge=runtime_knowledge,
                 )
-                if step_sources:
-                    runtime_knowledge = replace(
-                        runtime_knowledge,
-                        guide_steps=step_sources,
-                        guide_optional_steps=guide_plan.optional_step_ids,
-                        guide_step_terms=guide_plan.step_terms,
-                        guide_step_contracts=guide_plan.step_contracts,
-                        guide_unsearched_steps=tuple(guide_step_trace.get("unsearched_step_ids") or ()),
-                    )
+                runtime_knowledge = replace(
+                    runtime_knowledge,
+                    guide_steps=step_sources,
+                    guide_optional_steps=guide_plan.optional_step_ids,
+                    guide_step_terms=guide_plan.step_terms,
+                    guide_step_contracts=guide_plan.step_contracts,
+                    guide_unsearched_steps=tuple(guide_step_trace.get("unsearched_step_ids") or ()),
+                    guide_acquisition=tuple((guide_step_trace.get("required_acquisition") or {}).get("targets") or ()),
+                    guide_acquisition_notices=_guide_acquisition_notices(guide_step_trace),
+                )
                 skipped = str(guide_step_trace.get("skipped") or "")
                 if skipped:
                     guide_step.hide()
@@ -5563,6 +5665,7 @@ def answer_question_result(
                 needs_human_review=True,
                 generation_trace={"zero_evidence": zero_evidence, "query_overflow": overflow_trace},
             )
+            response = _with_guide_acquisition_notices(response, runtime_knowledge)
             if legacy_notice:
                 response = replace(response, answer_text=f"{response.answer_text}\n\n{legacy_notice}")
             return _answer_question_result(
@@ -5699,7 +5802,9 @@ def answer_question_result(
             runtime_knowledge=runtime_knowledge,
         )
         if refusal is not None:
-            grounded_answer = GroundedAnswer(refusal, context, tuple(image_evidence), image_prompt_mode)
+            grounded_answer = GroundedAnswer(
+                _with_guide_acquisition_notices(refusal, runtime_knowledge), context, tuple(image_evidence), image_prompt_mode
+            )
         else:
             grounded_answer = synthesize_grounded_answer(
                 request_text,

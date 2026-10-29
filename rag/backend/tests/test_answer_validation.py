@@ -630,13 +630,12 @@ async def test_validate_answer_runs_deterministic_checks(monkeypatch: MonkeyPatc
         guide=GuideCheckRef("sap-1", "guide-1", 2, {"target": "グループ"}),
     )
     # 手順の題名が回答にあっても、手順の根拠（参照の頁・検索の手がかり）が渡した根拠に無い手順は、
-    # 説明を確かめられない（#2708。warning なので valid は変えない）。条件で外れた分岐の手順
-    # （user）は確かめない。
+    # 本文の充足は未実行として診断に保ち、不足の発見にはしない。条件で外れた分岐は確かめない。
     assert result.valid is True
-    assert [(item.code, item.severity, item.step_id) for item in result.findings] == [
-        ("guide_step_unexplained", "warning", step)
-        for step in ("open", "group", "group_save", "verify")
-    ]
+    assert result.findings == []
+    assert all(
+        step["validation"]["body_coverage"]["execution"] == "not_run" for step in result.guide_steps
+    )
     assert [(step["step_id"], step["status"]) for step in result.guide_steps] == [
         ("open", "no_evidence"),
         ("group", "no_evidence"),
@@ -832,10 +831,10 @@ async def test_validate_answer_checks_each_guide_step_by_its_main_operation(
         for check in result.claim_checks
     )
     assert result.missing_evidence == []
-    assert [(item.code, item.step_id, item.severity) for item in result.findings] == [
-        ("guide_step_unexplained", "s1", "warning"),
-        ("guide_step_unexplained", "s2", "warning"),
-    ]
+    assert result.findings == []
+    assert all(
+        step["validation"]["body_coverage"]["status"] == "unknown" for step in result.guide_steps
+    )
     assert result.valid is True
     assert len(calls) == 1
 
@@ -847,12 +846,9 @@ async def test_validate_answer_checks_each_guide_step_by_its_main_operation(
     ]
     assert result.counts["supported"] == 1
     assert result.missing_evidence == []
-    assert [(item.code, item.step_id) for item in result.findings] == [
-        ("guide_step_unexplained", "s1"),
-        ("guide_step_unexplained", "s2"),
-    ]
-    assert result.findings[0].message == (
-        "業務ガイドの手順「値の登録」は、回答の説明との対応を確定できていません。説明と引用を確認してください。"
+    assert result.findings == []
+    assert all(
+        step["validation"]["body_coverage"]["execution"] == "not_run" for step in result.guide_steps
     )
 
     # 説明の段落の順が手順の依存と逆なら、題名が回答に無くても順序の誤りにする。
@@ -863,8 +859,6 @@ async def test_validate_answer_checks_each_guide_step_by_its_main_operation(
     result = await validate_answer("q", swapped, refs, get_settings(), oracle=oracle, guide=guide)
     assert [(item.code, item.severity) for item in result.findings] == [
         ("step_order", "error"),
-        ("guide_step_unexplained", "warning"),
-        ("guide_step_unexplained", "warning"),
     ]
     assert result.valid is False
 
@@ -949,7 +943,20 @@ def test_mcp_validate_answer_passes_requests_and_guide(
                     "required": True,
                     "status": "explained",
                 },
-                {"step_id": "user", "title": "利用者を選ぶ", "required": True, "status": "unused"},
+                {
+                    "step_id": "user",
+                    "title": "利用者を選ぶ",
+                    "required": True,
+                    "status": "unknown",
+                    "validation": {
+                        "source_association": {"execution": "completed", "linked": True},
+                        "body_coverage": {
+                            "execution": "not_run",
+                            "status": "unknown",
+                            "reason": "candidate_association_only",
+                        },
+                    },
+                },
             ],
         )
 
@@ -976,8 +983,27 @@ def test_mcp_validate_answer_passes_requests_and_guide(
     assert body["checks"] == ["requests", "guide", "guide_steps", "impact"]
     assert body["guide_revision"] == 3
     assert body["guide_steps"] == [
-        {"step_id": "open", "title": "権限タブを開く", "required": True, "status": "explained"},
-        {"step_id": "user", "title": "利用者を選ぶ", "required": True, "status": "unused"},
+        {
+            "step_id": "open",
+            "title": "権限タブを開く",
+            "required": True,
+            "status": "explained",
+            "validation": None,
+        },
+        {
+            "step_id": "user",
+            "title": "利用者を選ぶ",
+            "required": True,
+            "status": "unknown",
+            "validation": {
+                "source_association": {"execution": "completed", "linked": True},
+                "body_coverage": {
+                    "execution": "not_run",
+                    "status": "unknown",
+                    "reason": "candidate_association_only",
+                },
+            },
+        },
     ]
     assert body["findings"] == [
         {

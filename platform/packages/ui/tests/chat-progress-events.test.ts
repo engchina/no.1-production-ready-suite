@@ -414,3 +414,31 @@ describe("span の段（#3226）", () => {
     expect(chatProgressHasSpans(legacy)).toBe(false);
   });
 });
+
+
+describe("深い木の実際の親 ID（#3790）", () => {
+  it("複数 request の SDK を各親に結び、親不在や親なしを近接行へ結び直さない", () => {
+    const events: ChatProgressEvent[] = [step(1, "root", "done", { name: "agent.execute", root: true })];
+    let parent = "root";
+    for (let i = 0; i < 6; i++) {
+      const id = `stage-${i}`;
+      events.push(step(events.length + 1, id, "done", { name: "stage", parent_id: parent }));
+      parent = id;
+    }
+    for (const id of ["r1", "r2", "cache"]) {
+      events.push(step(events.length + 1, id, "done", { name: "rerank.request", parent_id: parent }));
+      if (id !== "cache") events.push(step(events.length + 1, `${id}-sdk`, "done", { name: "gen_ai.rerank", parent_id: id }));
+    }
+    events.push(step(events.length + 1, "orphan", "done", { name: "gen_ai.rerank", parent_id: "missing" }));
+    events.push(step(events.length + 1, "no-parent", "done", { name: "gen_ai.rerank" }));
+    const rows = chatProgressStepsFromEvents(events, {}, "job-1");
+    expect(rows.find(row => row.id === "r1-sdk")).toMatchObject({ level: 7, parentId: "r1" });
+    expect(rows.find(row => row.id === "r2-sdk")).toMatchObject({ level: 7, parentId: "r2" });
+    expect(rows.find(row => row.id === "cache")).toMatchObject({ level: 6, parentId: parent });
+    expect(rows.find(row => row.id === "orphan")).toMatchObject({ parentId: "missing" });
+    expect(rows.find(row => row.id === "orphan")?.level ?? 0).toBe(0);
+    expect(rows.find(row => row.id === "no-parent")?.parentId).toBeUndefined();
+    expect(rows.find(row => row.id === "no-parent")?.level ?? 0).toBe(0);
+    expect(rows).toHaveLength(13);
+  });
+});

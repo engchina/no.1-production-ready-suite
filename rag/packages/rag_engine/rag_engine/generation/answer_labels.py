@@ -63,6 +63,7 @@ class AnswerLabels:
     guide_notes_note_template: str
     guide_handoff_template: str
     guide_approval_template: str
+    guide_acquisition_incomplete_template: str
     # 節の 1 行の型（{text} に段落の短い引用、{reasons} に理由）と、回答全体の警告の行の型。
     passage_note_template: str
     answer_warning_template: str
@@ -193,6 +194,7 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         guide_notes_note_template=text("guide_notes_note_template"),
         guide_handoff_template=text("guide_handoff_template"),
         guide_approval_template=text("guide_approval_template"),
+        guide_acquisition_incomplete_template=text("guide_acquisition_incomplete_template"),
         passage_note_template=text("passage_note_template"),
         answer_warning_template=text("answer_warning_template"),
         predicate_endings=pack.words("answer_labels", "predicate_endings"),

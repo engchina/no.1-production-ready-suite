@@ -1125,6 +1125,8 @@ export const ja = {
   "settings.language.field.guide_handoff_template.help": "業務ガイドの引き継ぐ条件の行の型です。{contact} に窓口、{conditions} に条件が入ります。",
   "settings.language.field.guide_approval_template": "業務ガイドの承認の案内の型",
   "settings.language.field.guide_approval_template.help": "業務ガイドの承認の行の型です。{note} に承認の補足が入ります。",
+  "settings.language.field.guide_acquisition_incomplete_template": "必須参照の取得状況の案内の型",
+  "settings.language.field.guide_acquisition_incomplete_template.help": "必須の参照範囲の取得・保持を確認できないときの案内文です。{steps} に該当する手順 ID が入ります。資料の不存在や回答の誤りとは区別して表示します。",
   "settings.language.field.passage_note_template": "段落の印の行の型",
   "settings.language.field.passage_note_template.help": "節に並べる段落の行の型です。{text} に段落の短い引用、{reasons} に理由が入ります（例: {reasons}: 「{text}」）。",
   "settings.language.field.answer_warning_template": "回答全体の警告の行の型",

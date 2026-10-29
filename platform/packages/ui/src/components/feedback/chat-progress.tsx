@@ -10,7 +10,8 @@ import {
   RunTimeline,
   RunTimelineProduct,
   runTimelineHasChildren,
-  runTimelineStepIndent,
+  runTimelineStepIndentStyle,
+  RunTimelineViewport,
   type RunTimelineStep,
 } from "../data/run-detail";
 import { hasRunStepDetails, type RunStepDetails } from "../data/run-step-details";
@@ -56,8 +57,10 @@ export interface ChatProgressStep {
   durationMs?: number | null;
   /** 短い計測値（例:「LLM 1 回」）。一覧では名前の後ろの括弧に `detail` と並べて出す（#2265。実行の詳細と同じ）。 */
   meta?: string;
-  /** 入れ子の深さ（0 が最上位。1 以上は字下げする。親の工程の中の工程。最大 3 段まで字下げ）。 */
+  /** 入れ子の深さ（0 が最上位。1 以上は字下げする。親の工程の中の工程。実際の深さで字下げ）。 */
   level?: number;
+  /** 記録にある実際の親 ID。 */
+  parentId?: string;
   /** 別の製品の処理の行の製品名（製品の境目の行だけ。例「RAG」。#3272）。名前の前に控えめに出す。 */
   product?: string;
   /**
@@ -285,6 +288,7 @@ export function chatProgressTimelineStep(step: ChatProgressStep): RunTimelineSte
   if (typeof step.durationMs === "number" && Number.isFinite(step.durationMs)) result.durationMs = Math.max(0, step.durationMs);
   if (detail) result.detail = detail;
   if (step.level) result.level = step.level;
+  if (step.parentId) result.parentId = step.parentId;
   if (step.product) result.product = step.product;
   if (hasRunStepDetails(step.details)) result.details = step.details;
   if (step.children != null) result.children = step.children;
@@ -448,10 +452,13 @@ function CurrentStepRow({
       data-slow={slow ? "true" : "false"}
       data-reconnecting={reconnecting ? "true" : "false"}
     >
+      <RunTimelineViewport depth={step?.level ?? level ?? 0} label={labels.steps}>
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3"
         data-testid={testId && step ? `${testId}-step-${step.id}` : undefined}
-        data-status="running" aria-current="step">
-        <div className={cn("flex min-w-0 items-start gap-2 text-xs leading-5", runTimelineStepIndent(step ? step.level : level))}>
+        data-status="running" aria-current="step"
+        data-level={(step?.level ?? level ?? 0) > 0 ? String(step?.level ?? level) : undefined}
+        data-parent-id={step?.parentId}>
+        <div className="flex min-w-0 items-start gap-2 text-xs leading-5" style={runTimelineStepIndentStyle(step ? step.level : level)}>
           <span className="pr-icon-line">
             {activityIndicator ? <Spinner size={TEXT_ICON_SIZE.xs} className="text-accent-fg" /> : <Clock3 size={TEXT_ICON_SIZE.xs} className="text-fg-muted" aria-hidden />}
           </span>
@@ -469,6 +476,7 @@ function CurrentStepRow({
           {labels.formatDuration(Math.floor(current.elapsedMs / 1000) * 1000)}
         </span>
       </div>
+      </RunTimelineViewport>
     </div>
   );
 }

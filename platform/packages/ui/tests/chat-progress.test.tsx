@@ -511,7 +511,7 @@ describe("ChatProgress", () => {
     expect(host.querySelectorAll("svg.animate-spin")).toHaveLength(1);
     const search = q("p-step-search")!;
     expect(search.dataset.level).toBe("1");
-    expect(search.querySelector(".pl-4")).not.toBeNull();
+    expect(search.querySelector<HTMLElement>("[data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("1rem");
     expect(search.textContent).toContain("1.6 秒");
     expect(q("p-step-understand")!.textContent).toContain("質問の理解（LLM 1 回）");
     expect(q("p-step-understand")!.textContent).toContain("0.1 秒");
@@ -622,7 +622,7 @@ describe("ChatProgress", () => {
     expect(current.querySelector("svg.animate-spin")).not.toBeNull();
     expect(current.textContent).toContain("処理を続けています");
     // 親の 1 段下に字下げする。
-    expect(current.querySelector(".pl-4")).not.toBeNull();
+    expect(current.querySelector<HTMLElement>("[data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("1rem");
     // 待機中の段階は、親の工程が実行中の間は今の段階の代わりにしない。
     expect(q("p-step-s3")).toBeNull();
     // 閉じたときの見出しは親の工程の名前。
