@@ -2084,7 +2084,7 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertNotIn("原質問の検索結果を優先します", result.question_display)
         self.assertIn("全検索文を同じ重みで扱います", result.question_display)
 
-    def test_crag_retains_context_without_generating_when_grader_fails(self):
+    def test_crag_generates_from_retained_context_when_grader_fails(self):
         settings = get_settings()
         context = _answer_context(
             [
@@ -2116,9 +2116,11 @@ class AnswerGenerationTests(unittest.TestCase):
                 answer_flow=CRAG_ANSWER_FLOW_LABEL,
             )
 
-        self.assertNotIn("fallback answer", result.answer)
-        self.assertTrue(result.insufficient_reason)
-        self.assertEqual([call.args[3] for call in parse.call_args_list], [CragRetrievalGradeOutput])
+        # 評価の失敗は判定不能で、不足を確かめていない。取得済みの根拠で生成を 1 回だけ呼ぶ（#3837）。
+        self.assertIn("fallback answer", result.answer)
+        self.assertEqual(parse.call_count, 2)
+        self.assertEqual(parse.call_args_list[0].args[3], CragRetrievalGradeOutput)
+        self.assertEqual(result.generation_trace["crag_generation_gate"]["reason"], "grading_incomplete")
         self.assertEqual(len(result.crag_attempts), 1)
         # 例外の型の名前だけを残し、本文は残さない（#3259）。
         self.assertEqual(result.crag_attempts[0]["grade_error"], "RuntimeError")
@@ -2433,10 +2435,14 @@ class AnswerGenerationTests(unittest.TestCase):
             )
 
         grade_prompt = parse.call_args_list[0].args[1]
-        # 評価に見えた子の原文が生成文脈に無い場合は、生成済みとは扱わない。
-        self.assertNotIn("anchor-aware answer", result.answer)
-        self.assertTrue(result.insufficient_reason)
-        self.assertEqual(parse.call_count, 1)
+        # 評価に見えた子の原文が生成文脈に無いのは写しの照合の失敗（判定不能）で、不足ではない。
+        # 回答できる部分は確かめていない印のまま、取得済みの根拠で生成を 1 回だけ呼ぶ（#3837）。
+        self.assertIn("anchor-aware answer", result.answer)
+        self.assertEqual(parse.call_count, 2)
+        gate = result.generation_trace["crag_generation_gate"]
+        self.assertEqual(gate["reason"], "answerable_part_unverified")
+        self.assertFalse(gate["generation_usable"])
+        self.assertTrue(gate["unverified_binding_reasons"])
         self.assertIn("retrieved_anchor_children", grade_prompt)
         self.assertIn("child-late", grade_prompt)
         self.assertIn("late anchor answer detail for grader", grade_prompt)

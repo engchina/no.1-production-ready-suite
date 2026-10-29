@@ -5888,13 +5888,10 @@ def answer_question_result(
             if crag_assessment is not None
             else ()
         )
-        refusal = crag_generation.refusal_response(
-            request_text,
-            crag_generation.generation_view(
-                crag_assessment, gate_spans, context, budget_chars=_section_evidence_budget(context, settings, section_expansion)
-            ),
-            runtime_knowledge=runtime_knowledge,
+        gate_view = crag_generation.generation_view(
+            crag_assessment, gate_spans, context, budget_chars=_section_evidence_budget(context, settings, section_expansion)
         )
+        refusal = crag_generation.refusal_response(request_text, gate_view, runtime_knowledge=runtime_knowledge)
         if refusal is not None:
             grounded_answer = GroundedAnswer(
                 _with_guide_acquisition_notices(refusal, runtime_knowledge), context, tuple(image_evidence), image_prompt_mode
@@ -5920,9 +5917,16 @@ def answer_question_result(
             )
         # 是正で根拠や画像が増えた場合は、回答を生成した入力を参照欄と payload に使う。
         response, context = grounded_answer.response, grounded_answer.context
+        # 生成へ進んだ回も入口の判定を残す（確かめた部分の有無と、確かめられなかった写しの理由。#3837）。
+        entry_gate = {"crag_generation_gate": crag_generation.gate_record(gate_view)} if refusal is None and gate_view else {}
         response = replace(
             response,
-            generation_trace={**(response.generation_trace or {}), **evidence_trace, "extra_retrieval_budget": extra_budget.to_payload()},
+            generation_trace={
+                **entry_gate,
+                **(response.generation_trace or {}),
+                **evidence_trace,
+                "extra_retrieval_budget": extra_budget.to_payload(),
+            },
         )
         image_evidence, image_prompt_mode = grounded_answer.image_evidence, grounded_answer.image_prompt_mode
         if legacy_notice:
