@@ -2293,6 +2293,22 @@ class ValidationFinding(BaseModel):
     )
 
 
+class GuideBodyCoverageValidation(BaseModel):
+    execution: Literal["completed", "not_run", "error", "timed_out", "partial", "unknown"]
+    status: Literal["explained", "missing", "partial", "unknown"]
+    reason: str | None = None
+
+
+class GuideSourceAssociationValidation(BaseModel):
+    execution: Literal["completed", "not_run", "error", "timed_out", "partial", "unknown"]
+    linked: bool
+
+
+class GuideStepValidation(BaseModel):
+    body_coverage: GuideBodyCoverageValidation
+    source_association: GuideSourceAssociationValidation | None = None
+
+
 class ValidatedGuideStep(BaseModel):
     """業務ガイドの手順 1 つの、回答での説明の充足（#2708）。"""
 
@@ -2300,6 +2316,10 @@ class ValidatedGuideStep(BaseModel):
     title: str
     required: bool = Field(
         description="回答の充足で必須の手順か（分かっている条件で決まらない分岐の手順は false）。"
+    )
+    validation: GuideStepValidation | None = Field(
+        default=None,
+        description="出典の対応と本文の充足の検査状態。未実行・未完了は不足や誤りの確認を意味しない。古い結果では省略。",
     )
     status: Literal[
         "explained", "partial", "unknown", "reference_only", "unused", "no_evidence", "not_searched"
@@ -2354,8 +2374,8 @@ class ValidateAnswerOutput(VersionedOutput):
         default_factory=list,
         description=(
             "guide の手順ごとの説明の充足（分かっている条件で外れた分岐の手順は含めない。guide を"
-            "渡さないか、段落の判定が出なければ空）。必須の手順で explained でないものは "
-            "guide_step_unexplained の finding にもなる。"
+            "渡さないか、段落の判定が出なければ空）。本文の充足検査が完了し、不足を確認した必須の"
+            "手順だけを guide_step_unexplained の finding にする。未実行・未確認は validation に残る。"
         ),
     )
     reused_claims: int = Field(
