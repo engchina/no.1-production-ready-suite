@@ -144,7 +144,7 @@ GENERATE_SYSTEM_PROMPT = (
 #### user message の構成
 - 質問契約: 変更してはいけない目的・条件（request_units の id と kind、requested_granularity など）。
 - 必須根拠（pinned）: 質問に適用できる限り必ず item に使う Evidence の ID。
-- 機能別の根拠: BEGIN_UNTRUSTED_RETRIEVED_CONTEXT と END_UNTRUSTED_RETRIEVED_CONTEXT の間。`=== 機能 F1: 文書名 / 版 / 機能見出し ===` の見出しで機能ごとに分かれ、各 Evidence は `[E1] p.頁 origin=… tags=… pinned catalog` の行で始まる。機能見出しは文書の節名であり、開く画面やメニューとは限らない。
+- 機能別の根拠: BEGIN_UNTRUSTED_RETRIEVED_CONTEXT と END_UNTRUSTED_RETRIEVED_CONTEXT の間。`=== 機能 F1: 文書名 / 版 / 機能見出し ===` の見出しで機能ごとに分かれ、各 Evidence は `[E1] p.頁 origin=… tags=… pinned catalog` の行で始まり、本文の後の `[/E1]` の行で終わる。機能見出しは文書の節名であり、開く画面やメニューとは限らない。
 - 前回の草稿の検査結果（是正時のみ）: 指摘を直し、支持済みの item は同じ citations のまま保持する。
 - 添付原画像と根拠レコードの対応（画像がある場合）: 各画像の bbox / context_bbox / target_highlight / asset_kind。
 - guide_task_scope は業務ガイドと確認済み条件で決まった本問の要求範囲。required=true の手順・依存関係・完了条件に沿って items を作り、原質問に語がない理由で対象外にしない。required=false の未確定分岐は勝手に選ばない。利用者が自分で行えない必須手順も省かず、資料で裏付けられない要件は gap に残す。
@@ -4605,7 +4605,11 @@ def _source_note(span: dict) -> str:
 def _rendered_evidence_span(
     span: Mapping[str, Any], *, units: Sequence[tuple[int, int]] | None = None, numbered: bool | None = None
 ) -> str:
-    """モデルへ示す根拠ブロック。引用行の本文と、引用対象外の補助情報を同じ版で記録する。"""
+    """モデルへ示す根拠ブロック。引用行の本文と、引用対象外の補助情報を同じ版で記録する。
+
+    本文の後を ``[/E1]`` の行で閉じる（#3806）。補助情報が長く本文が短いと、本文に最も近い ID が次のブロックの
+    見出しになり、モデルが本文を隣の根拠の ID に結び付けて出典を取り違えていた。
+    """
     return (
         f"[{span['label']}] {span.get('location') or 'p.' + str(span.get('page', ''))} origin={span.get('origin', 'unclassified')}"
         + (f" tags={','.join(span['tags'])}" if span.get("tags") else "")
@@ -4615,7 +4619,8 @@ def _rendered_evidence_span(
         + "\n"
         + _numbered_text(
             str(span.get("text") or ""), units if units is not None else citation_units(str(span.get("text") or "")), numbered=numbered
-        )
+        ).rstrip("\n")
+        + f"\n[/{span['label']}]"
     )
 
 
