@@ -49,7 +49,8 @@ def apply_range_repair(
         else:
             binding = bind_wire_range(row.line_start, row.line_end, unit_count=target["unit_count"], numbered=target["numbered"])
             reason = binding.reason_code or ""
-            if not target["numbered"] and (row.line_start is not None or row.line_end is not None):
+            # 番号なしの根拠は全文の指定（null と、単位 1 つへの (1,1)）だけを受ける。判定は bind_wire_range にそろえる。
+            if not target["numbered"] and not binding.whole_text and (row.line_start is not None or row.line_end is not None):
                 reason = "citation_range_invalid"
         detail = {"item_index": row.item_index, "citation_index": row.citation_index}
         if reason:

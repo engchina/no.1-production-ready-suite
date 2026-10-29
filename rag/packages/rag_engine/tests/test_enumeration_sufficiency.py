@@ -22,6 +22,7 @@ from test_section_expansion import (
 )
 
 from rag_engine.generation import section_expansion as sections
+from rag_engine.generation.answer_models import CragRetrievalAttempt
 from rag_engine.generation.answering import AnswerContext, AnswerRecord, _grade_crag_retrieval
 from rag_engine.models.llm import CragRetrievalGradeOutput
 from rag_engine.retrieval.context_builder import ContextParentEvidence
@@ -158,7 +159,102 @@ def test_items_without_a_verbatim_quote_or_duplicated_are_not_counted():
 
     entry = _check(BUSINESS_DAY_FIVE, items, context)
 
-    assert entry["counted_items"] == 2 and entry["status"] == "missing"
+    # 原文を確かめられない 2 件を足しても要求の 5 件に届かないので、不足は確かめた項目だけで確定する（#3755）。
+    assert entry["counted_items"] == 2 and entry["unverified_items"] == 2
+    assert entry["status"] == "missing" and entry["shortfall_cause"] == "verified_shortfall"
+
+
+# ---- 写しの照合の失敗と、確かめた不足を分ける（#3755） ------------------------------------------------------------
+
+# 合成の文書（業務の内容を持たない匿名の手順）。
+STEPS = _record("s1", "手順 A は開始の 2 日前までに行います。手順 B は開始の 1 日前までに行います。", "第 2 章 準備")
+CLOSING = _record("s2", "手順 C は終了の 3 日以内に行います。手順 D は終了の 5 日以内に行います。", "第 3 章 後処理")
+FOUR_STEPS = "文書 A で、期限が決められている手順を 4 つすべて挙げてください。"
+SUPPORTED = [{"aspect": ENUMERATION_ASPECT, "status": "supported", "source_ids": ["s1"], "reason": "そろっている"}]
+
+
+def test_verified_shortfall_stays_missing():
+    items = _items(("s1", "手順 A は開始の 2 日前まで"), ("s1", "手順 B は開始の 1 日前まで"), ("s2", "手順 C は終了の 3 日以内"))
+
+    entry = _check(FOUR_STEPS, items, _context(STEPS, CLOSING), SUPPORTED)
+
+    assert entry["status"] == "missing" and entry["shortfall_cause"] == "verified_shortfall"
+    assert entry["counted_items"] == 3 and entry["unverified_items"] == 0
+
+
+def test_unverified_quotes_that_could_fill_the_count_are_unknown_not_missing():
+    # 評価器は 4 件を挙げて足りると判定したが、2 件の写しが本文と一致しない（言い換え）。照合の失敗は項目が無い根拠に
+    # ならないので、不足を確定せず unknown にする。
+    items = _items(
+        ("s1", "手順 A は開始の 2 日前まで"),
+        ("s1", "手順 B は開始の 1 日前まで"),
+        ("s2", "手順 C を終了後 3 日で行う"),
+        ("unknown-id", "手順 D は終了の 5 日以内"),
+    )
+
+    entry = _check(FOUR_STEPS, items, _context(STEPS, CLOSING), SUPPORTED)
+
+    assert entry["status"] == "unknown" and entry["shortfall_cause"] == "quote_unverified"
+    assert entry["counted_items"] == 2 and entry["unverified_items"] == 2 and entry["source_ids"] == []
+    assert "原文を確かめられない項目 2 件" in entry["reason"]
+
+
+def test_unverified_quotes_with_the_grader_reporting_missing_stay_missing():
+    items = _items(("s1", "手順 A は開始の 2 日前まで"), ("s1", "手順 B は開始の 1 日前まで"), ("s2", "手順 C を終了後 3 日で行う"))
+    items += _items(("s2", "手順 D を終了後 5 日で行う"))
+    grader_missing = [{**SUPPORTED[0], "status": "missing"}]
+
+    entry = _check(FOUR_STEPS, items, _context(STEPS, CLOSING), grader_missing)
+
+    assert entry["status"] == "missing" and entry["shortfall_cause"] == "grader_status"
+
+
+def test_unverified_items_passed_by_the_caller_are_not_counted_but_keep_the_shortfall_unknown():
+    context = _context(STEPS, CLOSING)
+    uids = {record.chunk_uid for record in context.records}
+    verified = _items(("s1", "手順 A は開始の 2 日前まで"), ("s1", "手順 B は開始の 1 日前まで"), ("s2", "手順 C は終了の 3 日以内"))
+    # 呼び出し側（送った本文）で確かめられなかった項目は、根拠の単位の本文にあっても数えない。
+    sent_unverified = _items(("s2", "手順 D は終了の 5 日以内"))
+
+    result = enumeration_check(
+        FOUR_STEPS, SUPPORTED, verified, context, context.records, lambda v: v if v in uids else "", unverified_items=sent_unverified
+    )
+
+    [entry] = [item for item in result if item["aspect"] == ENUMERATION_ASPECT]
+    assert entry["counted_items"] == 3 and entry["unverified_items"] == 1
+    assert entry["status"] == "unknown" and entry["shortfall_cause"] == "quote_unverified"
+
+
+def test_enough_verified_items_with_an_unverified_extra_are_supported():
+    items = _items(
+        ("s1", "手順 A は開始の 2 日前まで"),
+        ("s1", "手順 B は開始の 1 日前まで"),
+        ("s2", "手順 C は終了の 3 日以内"),
+        ("s2", "手順 D は終了の 5 日以内"),
+        ("s2", "手順 E を終了後 7 日で行う"),
+    )
+
+    entry = _check(FOUR_STEPS, items, _context(STEPS, CLOSING), SUPPORTED)
+
+    assert entry["status"] == "supported" and entry["shortfall_cause"] is None
+    assert entry["counted_items"] == 4 and entry["unverified_items"] == 1 and entry["source_ids"] == ["s1", "s2"]
+
+
+def test_chapter_shortfall_is_unknown_only_when_unverified_items_could_cover_the_lacking_chapter():
+    question = "文書 A の第 2 章から第 3 章までの各章で、決められている手順を章ごとにすべて挙げてください。"
+    context = _context(STEPS, CLOSING)
+    in_lacking_chapter = _items(("s1", "手順 A は開始の 2 日前まで"), ("s2", "手順 C を終了後 3 日で行う"))
+    assert _check(question, in_lacking_chapter, context, SUPPORTED)["status"] == "unknown"
+    # 確かめられない項目の根拠が確かめた章（第 2 章）にしか無ければ、第 3 章の欠けは確かめた不足。
+    in_covered_chapter = _items(("s1", "手順 A は開始の 2 日前まで"), ("s1", "手順 B を開始前日に行う"))
+    entry = _check(question, in_covered_chapter, context, SUPPORTED)
+    assert entry["status"] == "missing" and entry["shortfall_cause"] == "verified_shortfall"
+
+
+def test_open_enumeration_with_only_unverified_quotes_is_unknown():
+    question = "文書 A で、作業の前に行う手順をすべて挙げてください。"
+    entry = _check(question, _items(("s1", "手順 A を開始前に行う")), _context(STEPS), SUPPORTED)
+    assert entry["status"] == "unknown" and entry["shortfall_cause"] == "quote_unverified"
 
 
 def test_count_met_with_verified_items_is_supported():
@@ -259,6 +355,34 @@ def test_grader_saying_sufficient_still_reports_the_missing_enumeration():
     assert attempt.sufficient is True
     assert ENUMERATION_ASPECT in attempt.missing_aspects
     assert not sections.is_enough(attempt)
+
+
+def test_grade_keeps_unverified_enumeration_quotes_out_of_the_missing_aspects():
+    # 評価器は全観点を supported・足りると判定したが、列挙の項目の写しが送った本文と一致しない（#3755）。
+    paraphrased = _items(
+        ("s1", "手順 A は開始の 2 日前まで"),
+        ("s1", "手順 B を開始前日に行う"),
+        ("s2", "手順 C を終了後 3 日で行う"),
+        ("s2", "手順 D を終了後 5 日で行う"),
+    )
+    attempt = _grade(FOUR_STEPS, paraphrased, STEPS, CLOSING)
+
+    entry = next(item for item in attempt.aspect_checks if item["aspect"] == ENUMERATION_ASPECT)
+    assert entry["status"] == "unknown" and entry["shortfall_cause"] == "quote_unverified"
+    assert ENUMERATION_ASPECT not in attempt.missing_aspects and ENUMERATION_ASPECT in attempt.unknown_aspects
+    assert attempt.required_aspect_coverage == "partial"
+
+    verified = _items(
+        ("s1", "手順 A は開始の 2 日前まで"),
+        ("s1", "手順 B は開始の 1 日前まで"),
+        ("s2", "手順 C は終了の 3 日以内"),
+        ("s2", "手順 D は終了の 5 日以内"),
+    )
+    complete = _grade(FOUR_STEPS, verified, STEPS, CLOSING)
+    assert complete.required_aspect_coverage == "complete" and complete.missing_aspects == () and complete.unknown_aspects == ()
+
+    short = _grade(FOUR_STEPS, verified[:3], STEPS, CLOSING)
+    assert ENUMERATION_ASPECT in short.missing_aspects
 
 
 def test_grader_judgement_of_other_questions_is_unchanged():
@@ -397,3 +521,84 @@ def test_max_levels_before_the_reading_scope_still_returns_read_sections():
     # 読む範囲（文書全体）に届く前に段の上限で止めても、判定を飛ばした段で読んだ根拠は返す。
     assert grader.calls == [] and result.stop_reason == sections.STOP_MAX_LEVELS
     assert result.applied and "c2a" in _child_ids(result.context)
+
+
+# ---- 未確認の列挙の観点（#3755） -------------------------------------------------------------------------------
+
+
+def _unverified() -> CragRetrievalAttempt:
+    """足りると判定したが、列挙の観点が未確認（写しの照合の失敗など）の判定。"""
+    return replace(_attempt(sufficient=True), unknown_aspects=(ENUMERATION_ASPECT,))
+
+
+class _UnverifiedGrader:
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+
+    def __call__(self, context: AnswerContext, level: int) -> CragRetrievalAttempt:
+        self.calls.append(level)
+        return _unverified()
+
+
+def test_unverified_count_reads_one_more_level_without_grading_again():
+    # 件数の問で、当たった章節を読んだ後の判定が「足りる・列挙は未確認」。足りるとして止めず、評価器を呼び直さずに
+    # 上の章節（第3章）を 1 段だけ読んで生成へ渡す。
+    stub, grader = SectionStub(), _UnverifiedGrader()
+
+    result = _expand(_seed_context("c31a"), _settings(), grader, stub, last=_unverified(), question=BUSINESS_DAY_FIVE)
+
+    assert stub.read_calls == ["s3-1", "s3"] and grader.calls == [1]
+    assert result.stop_reason == sections.STOP_UNVERIFIED_EXPANDED and result.applied
+    assert set(_child_ids(result.context)) == set(_members("s3"))
+    assert result.trace["unverified_expansion"] == {"aspects": [ENUMERATION_ASPECT], "after_level": 1}
+    assert result.trace["levels"][1]["grade_skipped"] == "unverified_aspects"
+
+
+def test_unverified_count_with_the_section_in_context_climbs_without_any_grade():
+    stub, grader = SectionStub(), _UnverifiedGrader()
+
+    result = _expand(_seed_context("c31a", "c31b"), _settings(), grader, stub, last=_unverified(), question=BUSINESS_DAY_FIVE)
+
+    assert stub.read_calls == ["s3-1", "s3"] and grader.calls == []
+    assert result.stop_reason == sections.STOP_UNVERIFIED_EXPANDED
+
+
+def test_unverified_count_does_not_extract_large_sections():
+    # 未確認のために読む段では、入らない章節を抜き出さない（抜き出しはモデルを呼ぶ）。読めなかった章節は記録に残す。
+    stub, grader = SectionStub(), _UnverifiedGrader()
+    handed: list[object] = []
+
+    result = _expand(
+        _seed_context("c31a"),
+        _settings(answer_max_input_tokens=2400),
+        grader,
+        stub,
+        last=_unverified(),
+        question=BUSINESS_DAY_FIVE,
+        large_sections=lambda request: handed.append(request),
+    )
+
+    assert handed == [] and grader.calls == [1]
+    assert result.trace["large_section_handoff"] == "not_used_for_unverified_aspects"
+    assert result.stop_reason == sections.STOP_TOKEN_BUDGET
+    assert result.unread or result.omitted
+
+
+def test_unknown_non_enumeration_aspect_still_stops_as_sufficient():
+    stub, grader = SectionStub(), Grader(needs=set(_members("s3-1")))
+    last = replace(_attempt(sufficient=True), unknown_aspects=("procedure",))
+
+    result = _expand(_seed_context("c31a"), _settings(), grader, stub, last=last, question=BUSINESS_DAY_FIVE)
+
+    assert result.stop_reason == sections.STOP_SUFFICIENT
+    assert stub.read_calls == ["s3-1"] and grader.calls == [1]
+
+
+def test_standard_completion_ignores_unverified_enumeration():
+    # 標準 RAG（評価器なし）は最低範囲の補完だけ。未確認の観点で上へ広げない。
+    stub = SectionStub()
+
+    result = _expand(_seed_context("c31a"), _settings(), None, stub, last=_unverified(), question=BUSINESS_DAY_FIVE)
+
+    assert stub.read_calls == ["s3-1"]
+    assert "unverified_expansion" not in result.trace

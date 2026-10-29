@@ -47,6 +47,10 @@ def bind_wire_range(line_start: int | None, line_end: int | None, *, unit_count:
         return WireRangeBinding(lines, "citation_range_out_of_bounds")
     if line_start > line_end:
         return WireRangeBinding(lines, "citation_range_invalid")
+    if not numbered and unit_count == 1:
+        # 番号なしで単位が 1 つなら (1,1) は null と同じ本文を指す。経路で扱いを分けないよう、
+        # ここで全文の指定へそろえる（#3778）。0・逆順・範囲外は上で拒み、切り詰めない。
+        return WireRangeBinding(lines, whole_text=True)
     return WireRangeBinding(lines)
 
 

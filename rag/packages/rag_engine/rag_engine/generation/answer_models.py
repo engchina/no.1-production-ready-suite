@@ -366,6 +366,8 @@ class CragRetrievalAttempt:
     unknown_aspects: tuple[str, ...] = ()
     grade_execution: str = "not_run"
     rule_signals: dict[str, Any] = field(default_factory=dict)
+    # 回復を選んだ原因（``crag_recovery_cause`` の値。#3755）。確かめた不足だけに書き換え検索・追加の検索の枠を使う。
+    recovery_cause: str = ""
 
     def to_payload(self) -> dict[str, Any]:
         """UI と trace 保存に使う JSON 互換 payload へ変換します。"""
@@ -395,6 +397,7 @@ class CragRetrievalAttempt:
             "recovery_action": self.recovery_action,
             "recovery_anchor_ids": list(self.recovery_anchor_ids),
             "recovery_trace": self.recovery_trace,
+            "recovery_cause": self.recovery_cause,
             "document_selection": self.document_selection,
         }
         if self.grade_error:
@@ -402,6 +405,35 @@ class CragRetrievalAttempt:
         if self.grade_failure:
             payload["grade_failure"] = dict(self.grade_failure)
         return payload
+
+
+# CRAG の回復の原因（#3755）。評価の結果の種類で回復を分ける（Corrective RAG の correct / ambiguous / incorrect）。
+CRAG_CAUSE_SUFFICIENT = "sufficient"  # 生成に使え、必須の観点に不足・未確認が無い
+CRAG_CAUSE_VERIFIED_SHORTFALL = "verified_shortfall"  # 評価器が不足と判定した観点がある（missing）
+CRAG_CAUSE_UNVERIFIED = "unverified"  # 不足と確かめていない未確認の観点だけ（写しの照合の失敗・unknown・判定の欠け）
+CRAG_CAUSE_NO_RELEVANT = "no_relevant_evidence"  # 生成に使えず、関係ありと判定した候補が無い
+CRAG_CAUSE_GENERATION_UNUSABLE = "generation_unusable"  # 関係する候補はあるが、生成に使える根拠を確かめられない
+CRAG_CAUSE_GRADE_ERROR = "grade_error"  # 評価の実行に失敗した
+CRAG_CAUSE_GRADE_SKIPPED = "grade_skipped"  # 規則の信号で評価を飛ばした
+CRAG_CAUSE_NO_NEW_EVIDENCE = "no_new_evidence"  # 探し直しで新しい本文が得られなかった
+
+
+def crag_recovery_cause(attempt: CragRetrievalAttempt) -> str:
+    """評価の結果から回復の原因を決める（#3755）。
+
+    ``missing``（確かめた不足）を ``unknown``（未確認）より先に見る。未確認だけを不足に変えない。
+    """
+    if attempt.grade_error or attempt.grade_execution == "error":
+        return CRAG_CAUSE_GRADE_ERROR
+    if attempt.missing_aspects:
+        return CRAG_CAUSE_VERIFIED_SHORTFALL
+    if attempt.sufficient:
+        return CRAG_CAUSE_UNVERIFIED if attempt.unknown_aspects else CRAG_CAUSE_SUFFICIENT
+    if not attempt.relevant_chunk_ids:
+        return CRAG_CAUSE_NO_RELEVANT
+    if attempt.unknown_aspects or attempt.grade_execution == "partial":
+        return CRAG_CAUSE_UNVERIFIED
+    return CRAG_CAUSE_GENERATION_UNUSABLE
 
 
 @dataclass(frozen=True)

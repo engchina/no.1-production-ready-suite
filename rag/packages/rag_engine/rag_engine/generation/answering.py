@@ -74,6 +74,10 @@ from rag_engine.generation.answer_models import (
     AUTO_ROUTING_STRATEGY,
     CRAG_ANSWER_FLOW,
     CRAG_ANSWER_FLOW_LABEL,
+    CRAG_CAUSE_GRADE_ERROR,
+    CRAG_CAUSE_GRADE_SKIPPED,
+    CRAG_CAUSE_NO_NEW_EVIDENCE,
+    CRAG_CAUSE_UNVERIFIED,
     CRAG_MAX_RETRIEVAL_ATTEMPTS,
     DEFAULT_ANSWER_FLOW,
     DEFAULT_QUERY_STRATEGY,
@@ -111,6 +115,7 @@ from rag_engine.generation.answer_models import (
     _normalize_text,
     answer_flow_id,
     answer_flow_label,
+    crag_recovery_cause,
     extract_original_question,
     merge_answer_use,
     query_strategy_id,
@@ -249,7 +254,7 @@ from rag_engine.retrieval.context_builder import (
 from rag_engine.retrieval.context_recovery import ContextRecovery, recover_context_records, recover_definition_records
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
 from rag_engine.retrieval.enumeration import enumeration_check
-from rag_engine.retrieval.evidence_selection import evidence_spans
+from rag_engine.retrieval.evidence_selection import EVIDENCE_BUDGET_CHARS, evidence_spans
 from rag_engine.retrieval.evidence_selection import new_evidence_count as _new_evidence_count
 from rag_engine.retrieval.extra_retrieval import GUIDE_STEPS_KIND, REQUEST_COVERAGE_KIND, ExtraRetrievalBudget
 from rag_engine.retrieval.guide_steps import (
@@ -1311,6 +1316,7 @@ def build_crag_answer_context(
                         sufficient=False,
                         stop_reason="no_new_evidence",
                         reason="補正検索と局所拡張で新しい本文が得られないため、取得済みの根拠で回答する。",
+                        recovery_cause=CRAG_CAUSE_NO_NEW_EVIDENCE,
                     )
                 )
                 break
@@ -1357,6 +1363,7 @@ def build_crag_answer_context(
                     document_selection=dict(context.document_selection),
                     stop_reason=CRAG_SKIP_STOP_REASON,
                     recovery_trace={"grade_skipped": skip["trace"]},
+                    recovery_cause=CRAG_CAUSE_GRADE_SKIPPED,
                 )
             )
             return context, tuple(rewrites), tuple(attempts)
@@ -1404,6 +1411,7 @@ def build_crag_answer_context(
                     grade_failure=structured_failure_details(exc, CragRetrievalGradeOutput),
                     grade_execution="error",
                     new_evidence_count=new_evidence_count,
+                    recovery_cause=CRAG_CAUSE_GRADE_ERROR,
                 )
                 step.status = "評価に失敗"
                 step.add("根拠確認に失敗したため、取得済みの根拠を使います。")
@@ -1419,6 +1427,7 @@ def build_crag_answer_context(
                 document_selection=dict(context.document_selection),
                 executed_queries=executed_queries,
             )
+            attempt = replace(attempt, recovery_cause=crag_recovery_cause(attempt))
             attempts.append(attempt)
 
             status = (
@@ -1449,7 +1458,10 @@ def build_crag_answer_context(
             if not attempt.sufficient or attempt.missing_aspects:
                 step.field(
                     "次の対処",
-                    "取得済みの根拠で回答の作成へ進む"
+                    # 未確認だけなら探し直さず、取得済みの資料で補う（#3755）。
+                    "取得済みの資料から前後を補い、確認できる範囲で回答の作成へ進む"
+                    if attempt.recovery_cause == CRAG_CAUSE_UNVERIFIED
+                    else "取得済みの根拠で回答の作成へ進む"
                     if attempt_number >= CRAG_MAX_RETRIEVAL_ATTEMPTS
                     else recovery_label(attempt.recovery_action),
                 )
@@ -1503,6 +1515,38 @@ def build_crag_answer_context(
         ):
             attempts[-1] = replace(attempts[-1], stop_reason="data_confirmation_only")
             return refined_context, tuple(rewrites), tuple(attempts)
+
+        if attempt.recovery_cause == CRAG_CAUSE_UNVERIFIED and refined_context.records and refined_context.text.strip():
+            # 未確認の観点だけ（写しの照合の失敗・評価器の unknown・観点の判定の欠け）は、不足と確かめていない（#3755）。
+            # 書き換え検索・後回しの文書の戻し・追加の検索の枠を使わず、既取得の pool で前後を補って、確認できる範囲の
+            # 回答へ進む。この文脈の追加のために評価器を呼び直さない。確かめた不足（missing）は下の探し直しへ進む。
+            expanded, trace = _recover_crag_context(
+                best_context,
+                attempt,
+                max_records=max_records,
+                max_chars=max_chars,
+                fallback=attempt.recovery_action == "rewrite",
+                fallback_trigger="unverified_aspects",
+            )
+            attempts[-1] = replace(
+                attempts[-1],
+                recovery_trace={**trace, "cause": CRAG_CAUSE_UNVERIFIED},
+                stop_reason="expanded_for_unverified_aspects" if expanded is not None else "unverified_aspects_retained",
+            )
+            merged = (
+                _merge_crag_evidence(refined_context, expanded, question, max_records=max_records, max_chars=max_chars)
+                if expanded is not None
+                else refined_context
+            )
+            best_context = replace(
+                merged,
+                expansion_records=best_context.expansion_records,
+                preferred_child_ids=best_context.preferred_child_ids,
+                ranked_candidates=best_context.ranked_candidates,
+                deferred_records=best_context.deferred_records,
+                document_selection=best_context.document_selection,
+            )
+            break
 
         if attempt_number < CRAG_MAX_RETRIEVAL_ATTEMPTS and attempt.recovery_action != "rewrite":
             pending_context, trace = _recover_crag_context(best_context, attempt, max_records=max_records, max_chars=max_chars)
@@ -1909,8 +1953,16 @@ def _grade_crag_retrieval(
         for item in output.enumerated_items
         if any(canonical(value) not in blocked_sources and verified_quote(canonical(value), item.quote) for value in item.source_ids)
     ]
+    # 送った本文で原文の写しを確かめられなかった項目（除外した候補だけを根拠にした項目は除く）。数えないが、写しの照合の
+    # 失敗は項目が無い根拠にならないので、列挙の不足を確定しない材料として渡す（#3755）。
+    visible_ids = {id(item) for item in visible_items}
+    unverified_items = [
+        item
+        for item in output.enumerated_items
+        if id(item) not in visible_ids and not (item.source_ids and all(canonical(value) in blocked_sources for value in item.source_ids))
+    ]
     before_enumeration = checks
-    checks = enumeration_check(question, checks, visible_items, context, all_records, canonical)
+    checks = enumeration_check(question, checks, visible_items, context, all_records, canonical, unverified_items=unverified_items)
     for item in checks:
         if item["aspect"] != "enumeration_coverage":
             continue
@@ -2003,7 +2055,7 @@ def _grade_crag_retrieval(
     rejected_rewrite = query_rejection_reason(question, rewrite)
     if rejected_rewrite:
         rewrite = ""
-    return CragRetrievalAttempt(
+    attempt = CragRetrievalAttempt(
         attempt=attempt_number,
         query=active_query.strip(),
         retrieval_queries=_dedupe_queries(retrieval_queries),
@@ -2027,6 +2079,7 @@ def _grade_crag_retrieval(
         recovery_anchor_ids=tuple(dict.fromkeys(uid for v in output.recovery_anchor_ids if (uid := canonical(v)))),
         stop_reason="rejected_rewrite: " + rejected_rewrite if rejected_rewrite else "",
     )
+    return replace(attempt, recovery_cause=crag_recovery_cause(attempt))
 
 
 def _grounded_spans(
@@ -2419,6 +2472,32 @@ def _record_round_audit(step: _ExecutionStep, current: Any, *, accepted: bool, f
 
 def _public_span(span: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in span.items() if key not in _CHECK_ONLY_SPAN_KEYS}
+
+
+def _evidence_budget_trace(settings: Settings, evidence_budget_chars: int | None, spans: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """生成に渡した根拠の文字予算の診断（#3776）。技術の数値だけを残し、本文・プロンプトは残さない。
+
+    configured_chars は設定の文字予算（``evidence_budget_chars``。backend の ``RAG_EVIDENCE_BUDGET_CHARS``）、
+    effective_chars は根拠の選択に実際に使った予算（章節を広げたときは ``_section_evidence_budget`` の値）。
+    evidence_block_chars は生成の入力の根拠ブロックの文字数（出典情報・補助情報・書式を含む）、
+    evidence_text_chars はそのうち根拠の本文の文字数の合計。token は ``estimate_tokens`` の見積もり。
+    """
+    from rag_engine.generation.grounded import evidence_block_text
+    from rag_engine.generation.section_expansion import estimate_tokens
+
+    configured = int(getattr(settings, "evidence_budget_chars", 0) or 0) or EVIDENCE_BUDGET_CHARS
+    effective = int(evidence_budget_chars or configured)
+    block = evidence_block_text(spans)
+    return {
+        "configured_chars": configured,
+        "effective_chars": effective,
+        "source": "section_expansion" if evidence_budget_chars is not None else "configured",
+        "effective_exceeds_configured": effective > configured,
+        "span_count": len(spans),
+        "evidence_text_chars": sum(len(str(span.get("text") or "")) for span in spans),
+        "evidence_block_chars": len(block),
+        "evidence_block_tokens_estimate": estimate_tokens(block),
+    }
 
 
 def _span_document_id(span: Mapping[str, Any] | None) -> str:
@@ -3048,6 +3127,9 @@ def synthesize_grounded_answer(
     )
     guide_notices = runtime_knowledge.guide_notices if runtime_knowledge is not None else ()
     guide_notes = (runtime_knowledge.guide_title, guide_notices) if runtime_knowledge is not None and guide_notices else None
+    # 分かっている条件で選んだ分岐の補足（担当者への依頼など）があれば、案内の節を要約の直後に置く（#3769）。
+    # 生成が本文に書いたかどうかに依らず、業務ガイドの設定と確定した条件から決める。
+    guide_notes_first = bool(guide_notes and runtime_knowledge is not None and runtime_knowledge.guide_condition_notices)
     # 本文に出す根拠のある item（システムが補った原文を含む。根拠と矛盾して外した item は除く）と、本文に言い換えを
     # 出す item（引用元の決まらない印つきの説明を含む）。
     published = [entry for entry in current.checked if entry.span and not entry.removed]
@@ -3164,6 +3246,7 @@ def synthesize_grounded_answer(
             summary_reasons=summary_reasons,
             answer_warnings=answer_warnings,
             guide_notes=guide_notes,
+            guide_notes_first=guide_notes_first,
         )
     elif needed:
         # 本文に出す説明が無い（公開 item が無い、またはシステムが補った原文だけ）なら、根拠全体を見た監査が必要と
@@ -3179,6 +3262,7 @@ def synthesize_grounded_answer(
             deadline=deadline_lines,
             answer_warnings=answer_warnings,
             guide_notes=guide_notes,
+            guide_notes_first=guide_notes_first,
         )
     elif published:
         envelope_entries = published
@@ -3195,6 +3279,7 @@ def synthesize_grounded_answer(
             summary_reasons=summary_reasons,
             answer_warnings=answer_warnings,
             guide_notes=guide_notes,
+            guide_notes_first=guide_notes_first,
         )
     else:
         # 拒答でも、質問の語を含む原文があれば「資料の記載」として出典付きで示す。どの資料のどのページに
@@ -3223,6 +3308,7 @@ def synthesize_grounded_answer(
             deadline=deadline_lines,
             answer_warnings=answer_warnings,
             guide_notes=guide_notes,
+            guide_notes_first=guide_notes_first,
         )
     answer_text, citation_lines = rendered.text, rendered.citation_lines
     passage_record = rendered.record()
@@ -3245,6 +3331,8 @@ def synthesize_grounded_answer(
         "evidence_refinement": refinement.diagnostics,
         "task_contract": task_contract(question),
         "selected_evidence": [_public_span(s) for s in spans],
+        # 根拠の文字予算: 設定値・実際に使った値・送った根拠ブロックの文字数と見積もり token（#3776）。
+        "evidence_budget": _evidence_budget_trace(settings, evidence_budget_chars, spans),
         "same_unit_fill": unit_fill,
         "rounds": rounds,
         "round_budget": budget.trace(current),
@@ -5589,6 +5677,7 @@ def answer_question_result(
                         branch_notes=guide_plan.branch_notes,
                     )
                 ),
+                guide_condition_notices=guide_plan.branch_notes,
             )
             with _execution_step(
                 "業務ガイドの手順ごとの検索", "業務ガイドの手順ごとに検索し、手順が参照する資料の頁の根拠を回答の材料に加えます。"
@@ -6087,6 +6176,7 @@ _SECTION_STOP_LABELS = {
     "grade_error": "判定に失敗",
     "disabled": "無効",
     "scope_read": "必要な範囲まで読んだ",
+    "unverified_expanded": "未確認の観点を補うため上の章節を読んだ",
     "read_error": "原文の読取に失敗",
     "partial_read": "必要な範囲の一部が未読",
 }
