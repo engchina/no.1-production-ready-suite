@@ -2195,6 +2195,11 @@ def _grounded_prompt(
             ("guide_task_scope:\n" + json.dumps(runtime_knowledge.guide_task_scope, ensure_ascii=False))
             if runtime_knowledge is not None and runtime_knowledge.guide_task_scope
             else "",
+            # 確定した条件で選んだ分岐の補足（ガイドの文そのもの）。本文の「業務ガイドの案内」と同じ文を、要約と items が
+            # 補足と食い違わないよう生成にも渡す（#3823）。
+            ("guide_condition_notices:\n" + json.dumps(list(runtime_knowledge.guide_condition_notices), ensure_ascii=False))
+            if runtime_knowledge is not None and runtime_knowledge.guide_condition_notices
+            else "",
             ("guide_acquisition:\n" + json.dumps(prompt_acquisition_summary(runtime_knowledge.guide_acquisition), ensure_ascii=False))
             if runtime_knowledge is not None and runtime_knowledge.guide_acquisition
             else "",

@@ -149,6 +149,7 @@ GENERATE_SYSTEM_PROMPT = (
 - 添付原画像と根拠レコードの対応（画像がある場合）: 各画像の bbox / context_bbox / target_highlight / asset_kind。
 - guide_task_scope は業務ガイドと確認済み条件で決まった本問の要求範囲。required=true の手順・依存関係・完了条件に沿って items を作り、原質問に語がない理由で対象外にしない。required=false の未確定分岐は勝手に選ばない。利用者が自分で行えない必須手順も省かず、資料で裏付けられない要件は gap に残す。
 - 業務ガイドは本問の業務範囲を定める管理された指示で、資料の事実根拠とは別である。items の text には quote の原文が裏付ける内容だけを書き、業務ガイドの文（確認先・方針）を写さない。業務ガイドの窓口と引き継ぐ条件は、システムが「業務ガイドの案内」として本文に出す。
+- guide_condition_notices は確認済み条件で選んだ業務ガイドの分岐の補足で、システムが「業務ガイドの案内」として本文に出す（写さない）。summary と items には、補足と食い違う結論（補足が案内しないとした内容、補足と異なる依頼先・作業の担い手）を書かない。
 - この指示の quote は、citations の各出典（evidence_id と引用する行範囲）が指す根拠の原文を意味する。quote を別に生成するのではなく、その原文が支える内容を書く。
 #### Evidence の見出し行
 - origin（見出し行では `origin=` と表記）: document_text は解析された本文、image_extraction は画像からの生成説明・OCR、unclassified は未分類。
