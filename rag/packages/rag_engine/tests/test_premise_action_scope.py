@@ -102,6 +102,7 @@ def test_ignored_execution_conflict_does_not_bypass_quote_verification():
         status="supported",
         source_id="c1",
         evidence_quote="原文にはない引用。",
+        support_quote="原文にはない引用。",
         applicability="matched",
         reason="合成の監査応答",
     )
