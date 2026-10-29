@@ -24,8 +24,8 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
   （別の対象・表の行の対応）は警告（`warning`）の印を付ける。番号つきの手順で、外した操作・未確認
   の操作に続く操作は本文に残して警告の印を付ける（#2604・#2735 の続く手順）。外した操作を名前だけで
   示す番号つきの項目と、中身をすべて外した見出しは外し、残った項目の番号を詰める（#2692）。
-  決定的な検査の error（要求・業務ガイドの手順・影響範囲・版）・説明を確かめられない業務ガイドの
-  必須の手順（#2708）・根拠を 1 件も読めない（`no_evidence`。すべての段落を未確認にする）は本文を
+  決定的な検査の error（要求・業務ガイドの手順・影響範囲・版）・本文の検査で不足を確認した
+  業務ガイドの必須の手順・根拠を 1 件も読めない（`no_evidence`。すべての段落を未確認にする）は本文を
   置き換えず、回答全体の警告（`answer_warnings`）にする。印と回答の警告は節「確認が必要な点」に
   並べる（本文だけを読む MCP の利用者にも分かるように）。warning の指摘は出さない。
 - 検証そのもの（呼び出し・接続・応答）が失敗したら `unvalidated` にし、回答は消さずに
@@ -233,7 +233,15 @@ _STATUS_REASONS = {
 # 業務ガイドの手順の説明の充足（#2708）。`rag_validate_answer` の `guide_steps` の状態の強さの順
 # （接続をまたいでは最も良い状態を採る）と、説明の無い必須の手順の finding（warning。文は RAG の
 # 回答の不足の行と同じ）。
-GUIDE_STEP_STATUS_ORDER = ("explained", "reference_only", "unused", "no_evidence")
+GUIDE_STEP_STATUS_ORDER = (
+    "explained",
+    "partial",
+    "reference_only",
+    "unused",
+    "unknown",
+    "not_searched",
+    "no_evidence",
+)
 GUIDE_STEP_UNEXPLAINED = "guide_step_unexplained"
 # 業務ガイドの手順・影響範囲・版の検査（error は回答全体の警告 `guide_check`。回答の対応は
 # 人の確認）。
@@ -1231,14 +1239,20 @@ def merge_guide_steps(results: list[JsonObject]) -> list[JsonObject]:
 
 
 def unexplained_guide_steps(result: JsonObject) -> list[JsonObject]:
-    """必須の手順のうち、回答で説明を確かめられなかった手順（#2708）。
+    """本文の検査が完了し、不足を確認した必須の手順。
 
-    `rag_validate_answer` の `guide_steps` から選ぶ。
+    未実行や候補の対応だけでは不足としない。旧結果の実行状態の欠落も未確認として残す。
     """
     return [
         step
         for step in result.get("guide_steps") or []
-        if isinstance(step, dict) and step.get("required") and step.get("status") != "explained"
+        if isinstance(step, dict)
+        and step.get("required")
+        and step.get("status") in {"partial", "reference_only", "unused"}
+        and isinstance(validation := step.get("validation"), dict)
+        and isinstance(coverage := validation.get("body_coverage"), dict)
+        and coverage.get("execution") == "completed"
+        and coverage.get("status") in {"missing", "partial"}
     ]
 
 
@@ -1645,10 +1659,13 @@ def without_lookup_notes(answer: str) -> str:
 
 def error_findings(result: JsonObject) -> list[JsonObject]:
     """決定的な検査の error の指摘（valid にしない。回答全体の警告にする。warning は出さない）。"""
+    missing = {str(step.get("step_id")) for step in unexplained_guide_steps(result)}
     return [
         item
         for item in result.get("findings") or []
-        if isinstance(item, dict) and item.get("severity") == "error"
+        if isinstance(item, dict)
+        and item.get("severity") == "error"
+        and (item.get("code") != GUIDE_STEP_UNEXPLAINED or str(item.get("step_id")) in missing)
     ]
 
 
@@ -1728,8 +1745,9 @@ def answer_warnings(result: JsonObject) -> list[JsonObject]:
     """回答全体の警告（契約の `answer_warnings`。本文は置き換えない。#2738）。
 
     根拠を 1 件も読めなかった（`no_evidence`）、決定的な検査の error（要求の不足は `requests`、
-    業務ガイドの手順・影響範囲・版は `guide_check`）、説明を確かめられなかった業務ガイドの必須の
-    手順（#2708。`guide_check`）。`detail` は RAG の指摘の文。同じ理由と文は 1 つにする。
+    業務ガイドの手順・影響範囲・版は `guide_check`）、本文の検査で不足を確認した業務ガイドの必須の
+    手順（`guide_check`）。未実行・未確認の充足は診断に残す。
+    `detail` は RAG の指摘の文。同じ理由と文は 1 つにする。
     """
     warnings: list[JsonObject] = []
     seen: set[tuple[str, str]] = set()
