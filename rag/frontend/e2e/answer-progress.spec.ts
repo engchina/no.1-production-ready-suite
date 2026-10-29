@@ -9,6 +9,7 @@ import {
 } from "./_helpers";
 import {
   installTraceRecorder,
+  mockTraceApi,
   ragSpan,
   spanProgressRecorder,
   spanStartMark,
@@ -1032,3 +1033,73 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 }
+
+
+test("リランクの論理要求は新規配信と保存したtraceで同じ名前・階層を保つ", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const recorder = spanProgressRecorder("trace-rerank");
+  const begin = [
+    ...recorder.start("root", ragSpan.root()),
+    ...recorder.start("answer", ragSpan.stage("answer")),
+    ...recorder.start("rank-parent", ragSpan.step("Rerank")),
+    ...recorder.start("rank-request", ragSpan.technical("rerank.request", "rank-parent")),
+    ...recorder.start("rank-sdk", ragSpan.technical("gen_ai.rerank", "rank-request", { "gen_ai.request.model": "synthetic-rerank", "pr.attempt": 2 })),
+  ];
+  const finish = [
+    ...recorder.finish("rank-sdk"),
+    ...recorder.finish("rank-request", "done", { details: { code: [{ label: "rerank", language: "json", text: JSON.stringify({ cache_state: "miss", sdk_attempt_count: 1, sdk_attempts: [{ retry_number: 1, status: "completed" }] }, null, 2) }] } }),
+    ...recorder.start("rank-cache", ragSpan.technical("rerank.request", "rank-parent", { "pr.stage": "rerank.request" })),
+    ...recorder.finish("rank-cache", "done", { details: { code: [{ label: "rerank", language: "json", text: JSON.stringify({ cache_state: "hit", sdk_attempt_count: 0 }, null, 2) }] } }),
+    ...recorder.finish("rank-parent"), ...recorder.finish("answer"), ...recorder.finish("root"), ...recorder.terminal("done"),
+  ];
+  const content = "合成の回答です。";
+  const stream: TimedChunk[] = [
+    { afterMs: 0, text: sse("run", { trace_id: "trace-rerank" }) + traceSse(begin) },
+    { afterMs: 1200, text: traceSse(finish) + sse("metadata", { trace_id: "trace-rerank", elapsed_ms: 1200, guardrail_warnings: [], diagnostics: {} }) + sse("delta", { text: content }) + sse("done", { answer: content, citations: [] }) },
+  ];
+  await mockSearchPage(page, [stream]);
+  await enableSearchAnswer(page);
+  await page.getByRole("textbox", { name: "RAG 検索" }).fill("合成の質問");
+  await page.getByRole("button", { name: "検索", exact: true }).click();
+  await expect(page.getByTestId(`search-run-progress-step-${spanStepId("rank-request")}`)).toContainText("候補の並べ替えを要求する");
+  await expect(page.getByTestId("search-run-progress-summary")).toBeVisible();
+  await expect(page.getByText(content, { exact: true })).toBeVisible();
+  await page.getByTestId("search-run-progress-summary").click();
+
+  async function checkRows(prefix: string) {
+    const request = page.getByTestId(`${prefix}-step-${spanStepId("rank-request")}`);
+    const sdk = page.getByTestId(`${prefix}-step-${spanStepId("rank-sdk")}`);
+    const cached = page.getByTestId(`${prefix}-step-${spanStepId("rank-cache")}`);
+    await expect(request).toContainText("候補の並べ替えを要求する");
+    await expect(cached).toContainText("候補の並べ替えを要求する");
+    await expect(sdk).toContainText("質問との関連度で候補を並べ替える · synthetic-rerank（2 回目）");
+    await expect(request).toHaveAttribute("data-level", "2");
+    await expect(sdk).toHaveAttribute("data-level", "3");
+    await expect(cached).toHaveAttribute("data-level", "2");
+    await page.getByTestId(`${prefix}-step-${spanStepId("rank-request")}-toggle`).click();
+    const details = page.getByTestId(`${prefix}-step-${spanStepId("rank-request")}-details`);
+    await expect(details).toContainText("rerank.request");
+    await expect(details).toContainText('"cache_state": "miss"');
+    await expect(details).toContainText('"retry_number": 1');
+    await page.getByTestId(`${prefix}-step-${spanStepId("rank-cache")}-toggle`).click();
+    await expect(page.getByTestId(`${prefix}-step-${spanStepId("rank-cache")}-details`)).toContainText('"sdk_attempt_count": 0');
+    await request.scrollIntoViewIfNeeded();
+    await expectNoPageOverflow(page);
+  }
+  await checkRows("search-run-progress");
+  await screenshotBothThemes(page, (theme) => testInfo.outputPath(`rerank-live-${theme}.png`));
+
+  // 同じ保存済みイベントを会話のtrace APIから再読込する。記録は書き換えない。
+  await page.route("**/api/chat/models", route => route.fulfill({ json: { data: [], error_messages: [], warning_messages: [] } }));
+  const base = { conversation_id: "conv-rerank", model: null, citations: [], guardrail_warnings: [], status: "COMPLETE", created_at: new Date().toISOString() };
+  const conversation = { id: "conv-rerank", search_answer_profile_id: "bv-1", title: "合成の質問", status: "ACTIVE", message_count: 2, created_at: base.created_at, updated_at: base.created_at, messages: [
+    { ...base, message_id: "user-rerank", role: "USER", content: "合成の質問", reply_to_message_id: null, trace_id: null },
+    { ...base, message_id: "trace-rerank", role: "ASSISTANT", content, reply_to_message_id: "user-rerank", trace_id: "0123456789abcdef0123456789abcdef" },
+  ] };
+  await page.route("**/api/chat/conversations**", route => route.fulfill({ json: { data: new URL(route.request().url()).pathname.endsWith("/conversations") ? { items: [conversation], total: 1, limit: 50, offset: 0, has_next: false } : conversation, error_messages: [], warning_messages: [] } }));
+  await mockTraceApi(page, { "trace-rerank": [...begin, ...finish] });
+  await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-rerank");
+  await expect(page.getByText(content, { exact: true })).toBeVisible();
+  await page.getByTestId("chat-answer-progress-summary").click();
+  await checkRows("chat-answer-progress");
+  await screenshotBothThemes(page, (theme) => testInfo.outputPath(`rerank-saved-${theme}.png`));
+});

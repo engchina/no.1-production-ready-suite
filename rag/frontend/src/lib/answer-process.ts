@@ -47,6 +47,7 @@ const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
   "検索語の再確定（書き換え後）": "answer.step.redecideKeywords",
   "文書検索": "answer.step.searchDocuments",
   "Rerank": "answer.step.rerank",
+  "rerank.request": "answer.step.rerankRequest",
   "文書の選択": "answer.step.selectDocuments",
   "文書の選択の解除": "answer.step.unselectDocuments",
   "根拠確認": "answer.step.checkEvidence",

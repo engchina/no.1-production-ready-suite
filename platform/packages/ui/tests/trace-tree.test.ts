@@ -189,3 +189,15 @@ describe("モデル接続確認の用途", () => {
     expect(step.label).not.toContain("接続を確かめる");
   });
 });
+
+
+it.each(["done", "failed", "cancelled"])("論理的な並べ替え要求は%sでも日本語名にし、SDKと元IDを残す", (status) => {
+  const request = { ...span("3", "2"), operation_name: "rerank.request", status, attributes: { "pr.attempt": 2 } };
+  const tree = traceTimeline({ root_span_id: "1".repeat(16), spans: [span("1"), span("2", "1"), request, { ...span("4", "3"), operation_name: "gen_ai.rerank", attributes: { "gen_ai.request.model": "synthetic-rerank" } }, { ...span("5", "2"), operation_name: "rerank.request" }] });
+  expect(tree.steps.map(step => step.level)).toEqual([0, 1, 2, 3, 2]);
+  expect(tree.steps[2].label).toBe("候補の並べ替えを要求する（2 回目）");
+  expect(tree.steps[3].label).toBe("質問との関連度で候補を並べ替える · synthetic-rerank");
+  expect(tree.steps[4].label).toBe("候補の並べ替えを要求する");
+  expect(tree.steps[2].details?.fields).toContainEqual({ label: "Span name", value: "rerank.request", mono: true });
+  expect(request.operation_name).toBe("rerank.request");
+});
