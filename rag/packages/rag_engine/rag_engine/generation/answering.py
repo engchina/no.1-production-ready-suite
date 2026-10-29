@@ -3127,6 +3127,9 @@ def synthesize_grounded_answer(
     )
     guide_notices = runtime_knowledge.guide_notices if runtime_knowledge is not None else ()
     guide_notes = (runtime_knowledge.guide_title, guide_notices) if runtime_knowledge is not None and guide_notices else None
+    # 分かっている条件で選んだ分岐の補足（担当者への依頼など）があれば、案内の節を要約の直後に置く（#3769）。
+    # 生成が本文に書いたかどうかに依らず、業務ガイドの設定と確定した条件から決める。
+    guide_notes_first = bool(guide_notes and runtime_knowledge is not None and runtime_knowledge.guide_condition_notices)
     # 本文に出す根拠のある item（システムが補った原文を含む。根拠と矛盾して外した item は除く）と、本文に言い換えを
     # 出す item（引用元の決まらない印つきの説明を含む）。
     published = [entry for entry in current.checked if entry.span and not entry.removed]
@@ -3243,6 +3246,7 @@ def synthesize_grounded_answer(
             summary_reasons=summary_reasons,
             answer_warnings=answer_warnings,
             guide_notes=guide_notes,
+            guide_notes_first=guide_notes_first,
         )
     elif needed:
         # 本文に出す説明が無い（公開 item が無い、またはシステムが補った原文だけ）なら、根拠全体を見た監査が必要と
@@ -3258,6 +3262,7 @@ def synthesize_grounded_answer(
             deadline=deadline_lines,
             answer_warnings=answer_warnings,
             guide_notes=guide_notes,
+            guide_notes_first=guide_notes_first,
         )
     elif published:
         envelope_entries = published
@@ -3274,6 +3279,7 @@ def synthesize_grounded_answer(
             summary_reasons=summary_reasons,
             answer_warnings=answer_warnings,
             guide_notes=guide_notes,
+            guide_notes_first=guide_notes_first,
         )
     else:
         # 拒答でも、質問の語を含む原文があれば「資料の記載」として出典付きで示す。どの資料のどのページに
@@ -3302,6 +3308,7 @@ def synthesize_grounded_answer(
             deadline=deadline_lines,
             answer_warnings=answer_warnings,
             guide_notes=guide_notes,
+            guide_notes_first=guide_notes_first,
         )
     answer_text, citation_lines = rendered.text, rendered.citation_lines
     passage_record = rendered.record()
@@ -5670,6 +5677,7 @@ def answer_question_result(
                         branch_notes=guide_plan.branch_notes,
                     )
                 ),
+                guide_condition_notices=guide_plan.branch_notes,
             )
             with _execution_step(
                 "業務ガイドの手順ごとの検索", "業務ガイドの手順ごとに検索し、手順が参照する資料の頁の根拠を回答の材料に加えます。"

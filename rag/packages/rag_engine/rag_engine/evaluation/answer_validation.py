@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import re
+import unicodedata
 from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
@@ -17,8 +18,8 @@ from typing import Any, Literal
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
-from rag_parser_core.language import current_pack
-from rag_parser_core.language.text import alternation
+from rag_parser_core.language import LanguagePack, current_pack, per_pack
+from rag_parser_core.language.text import alternation, range_class
 
 from rag_engine.evaluation.answer_eval import (
     _CITED_CHUNK_ID,
@@ -46,6 +47,7 @@ from rag_engine.evaluation.answer_eval import (
 )
 from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERATION_GUIDANCE_POLICY, RELATION_SUPPORT_POLICY
+from rag_engine.generation.check_cues import check_cues
 from rag_engine.generation.grounded import output_field_claim, quote_in_text
 from rag_engine.generation.operation_audit import is_non_claim_passage, is_operation_instruction, list_heading_lines, table_header_lines
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
@@ -710,6 +712,14 @@ def premise_conflicts(
             reason = "constraint_quote_unmatched"
         elif not check.passage_quote.strip() or not quote_in_text(check.passage_quote, passage):
             reason = "passage_quote_unmatched"
+        elif check.constraint_scope in {"execution_only", "proposal"} and not _shares_target(
+            _constraint_target_texts(check.constraint_quote, question, premises), passage
+        ):
+            # 操作の禁止（実行・提案）との矛盾は「禁じた対象を段落が実行・提案する」ことなので、制約と段落が同じ対象を
+            # 名指す手がかりが要る。手がかりが無いときのモデルの scope / mode / fit は、答えに無い対象を補った結果の
+            # ことがある（実モデルの校正。#3800）ので、矛盾を採らずに判定を保留する。対象・値の条件（content）は、
+            # 別の対象に及ぶこと自体が矛盾なので、対象の共有を求めない。
+            reason = "scope_unverified"
         elif check.constraint_scope == "execution_only" and check.passage_mode in {"proposal", "explanation"}:
             reason = "execution_prohibition_does_not_prohibit_proposal"
         elif check.fit == "conflicts":
@@ -1180,20 +1190,71 @@ def _recheck_figure_supported(
     return result, [passage["id"] for passage in targets if passage["id"] in settled]
 
 
-def premise_items(premises: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """利用者が確認で答えた前提（``{question, answer}``）を、根拠と並べて渡す項目にする（#1898）。
-
-    id は ``premise:<番号>``、出典は ``PREMISE_SOURCE``（資料ではない）。答えの無い前提は渡さない。
-    """
-    items: list[dict[str, Any]] = []
+def _premise_pairs(premises: Sequence[Mapping[str, Any]]) -> list[tuple[str, str, str]]:
+    """答えのある前提の（確認の質問・利用者の答え・モデルに渡す本文）。空白をそろえ、上限で切る。"""
+    pairs: list[tuple[str, str, str]] = []
     for premise in list(premises)[:MAX_PREMISES]:
         question = " ".join(str(premise.get("question") or "").split())[:_MAX_PREMISE_QUESTION_CHARS]
         answer = " ".join(str(premise.get("answer") or "").split())[:_MAX_PREMISE_ANSWER_CHARS]
         if not answer:
             continue
         text = f"確認の質問: {question}\n利用者の答え: {answer}" if question else f"利用者の答え: {answer}"
-        items.append({"id": f"{PREMISE_ID_PREFIX}{len(items) + 1}", "source": PREMISE_SOURCE, "text": text})
-    return items
+        pairs.append((question, answer, text))
+    return pairs
+
+
+def premise_items(premises: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """利用者が確認で答えた前提（``{question, answer}``）を、根拠と並べて渡す項目にする（#1898）。
+
+    id は ``premise:<番号>``、出典は ``PREMISE_SOURCE``（資料ではない）。答えの無い前提は渡さない。
+    """
+    return [
+        {"id": f"{PREMISE_ID_PREFIX}{index}", "source": PREMISE_SOURCE, "text": text}
+        for index, (_question, _answer, text) in enumerate(_premise_pairs(premises), 1)
+    ]
+
+
+def _constraint_target_texts(quote: str, question: str, premises: Sequence[Mapping[str, Any]]) -> list[str]:
+    """``constraint_quote`` が写した制約の、対象を名指しうる原文（#3800）。
+
+    確認の答えから写したときは、その答えと、答えが応じた確認の質問（答えは対象を省き、問いが名指すことが多い）。
+    「確認の質問:」などの項目の名前は、システムが付けた文なので含めない。原質問から写したときは写した原文だけ
+    （原質問の全体は回答と同じ話題の語を含むので、制約と段落の結び付きの手がかりにならない）。
+    """
+    texts = [f"{premise_question}\n{answer}" for premise_question, answer, text in _premise_pairs(premises) if quote_in_text(quote, text)]
+    if quote_in_text(quote, question):
+        texts.append(quote)
+    return texts
+
+
+def _build_kanji_class(pack: LanguagePack) -> str:
+    return range_class(pack.words("search_terms", "kanji_chars"))
+
+
+_kanji_class = per_pack(_build_kanji_class)
+
+
+def _target_units(text: str) -> set[str]:
+    """対象を名指す字の単位。漢字は 1 字ずつ、カタカナ・英数字は続きごと。ひらがな（助詞・活用）と記号は数えない。
+
+    漢字を 1 字で数えるのは、同じ対象を語の形を変えて書く（名詞と動詞の語幹）ときにも字を共有するため。
+    字の種類は言語資源（``search_terms`` の字の範囲。``check_cues().word_chars``）。
+    """
+    kanji = _kanji_class()
+    units: set[str] = set()
+    for run in re.findall(f"{check_cues().word_chars}+", unicodedata.normalize("NFKC", text).casefold()):
+        units.update(re.findall(f"{kanji}|(?:(?!{kanji}).)+", run))
+    return units
+
+
+def _shares_target(texts: Sequence[str], passage: str) -> bool:
+    """制約の原文と段落が、対象を名指す字の単位を 1 つでも共有するか。
+
+    共有は結び付きの必要条件として見るだけ（共有があっても同じ対象とは限らない）。共有が 1 つも無いときは、
+    制約がその段落の対象を名指していると確かめられないので、矛盾を採らない側に倒す。
+    """
+    units = set().union(*(_target_units(text) for text in texts)) if texts else set()
+    return bool(units & _target_units(passage))
 
 
 def data_result_items(data_results: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
