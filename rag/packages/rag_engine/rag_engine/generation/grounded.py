@@ -57,6 +57,7 @@ from rag_engine.generation.applications import (
 )
 from rag_engine.generation.applications import audit_view as application_audit_view
 from rag_engine.generation.applications import render_lines as application_lines
+from rag_engine.generation.audit_recovery import merge_audit_retry
 from rag_engine.generation.check_cues import check_cues
 from rag_engine.generation.citation_wire import bind_wire_range, canonical_generation_draft, generation_draft_wire_model
 from rag_engine.generation.interaction_grounding import interaction_binding_error
@@ -6440,6 +6441,8 @@ def run_round(
                 # 支持済み item の多い round が採用されず、是正も起きない (#629)。同じ入力で 1 回だけ再試行する。
                 audit_calls += 1
                 audit = _parse_audit(parse_text, audit_system, audit_prompt, audit_settings, provider_id, detailed=detailed)
+                if audit_fallback is not None:
+                    audit = merge_audit_retry(audit_fallback, audit)
                 if _audit_is_empty(audit):
                     audit = audit_fallback
                     if audit_fallback is not None:
@@ -6474,9 +6477,18 @@ def run_round(
                 binding = audit._wire_validation["request_binding"]
                 returned_request_ids = tuple(binding["raw_key_sequence"])
                 states = binding["states"]
-                duplicate_request_ids = tuple(key for key, state in states.items() if state == "duplicate")
-                invalid_request_result_ids = tuple(key for key, state in states.items() if state == "invalid")
-                missing_request_ids = tuple(key for key, state in states.items() if state == "missing")
+                adopted = set(
+                    audit._wire_validation.get("retry_merge", {})
+                    .get("effective_request_binding", {})
+                    .get("adopted_ids", binding["adopted_ids"])
+                )
+                duplicate_request_ids = tuple(key for key, state in states.items() if state == "duplicate" and key not in adopted)
+                invalid_request_result_ids = tuple(key for key, state in states.items() if state == "invalid" and key not in adopted)
+                missing_request_ids = tuple(
+                    key
+                    for key in expected_request_ids
+                    if key not in adopted and key not in (*duplicate_request_ids, *invalid_request_result_ids)
+                )
                 invalid_request_ids = tuple(sorted(set(returned_request_ids) - set(expected_request_ids)))
             audit = citation_support_policy(checked, audit, also_audited)
             audit = settle_citation_reviews(checked, audit, also_audited, dropped)

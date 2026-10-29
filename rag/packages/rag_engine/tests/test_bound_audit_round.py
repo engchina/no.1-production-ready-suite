@@ -14,8 +14,9 @@ from rag_engine.models.audit_wire import decode_audit_wire, is_audit_wire
 from rag_engine.models.llm import GroundedAudit, GroundedCitation, GroundedDraft, GroundedItem
 
 
-def run(*, request_case="valid", omit_requirement=False, retry_case=None, use_alias=False):
+def run(*, request_case="valid", omit_requirement=False, retry_case=None, use_alias=False, first_contradiction=False):
     spans = [evidence()]
+    claim = "設定画面は開きません。" if first_contradiction else OPEN
     if use_alias:
         spans[0]["source_aliases"] = ["guide-source"]
     calls = []
@@ -26,7 +27,7 @@ def run(*, request_case="valid", omit_requirement=False, retry_case=None, use_al
         if schema is generation_draft_wire_model():
             return GroundedDraft(
                 items=[
-                    GroundedItem(kind="operation", request_id="Q1", text=OPEN, citations=[GroundedCitation(evidence_id="E1", lines="1")])
+                    GroundedItem(kind="operation", request_id="Q1", text=claim, citations=[GroundedCitation(evidence_id="E1", lines="1")])
                 ],
                 summary="",
                 confidence="low",
@@ -41,9 +42,21 @@ def run(*, request_case="valid", omit_requirement=False, retry_case=None, use_al
             if retry_case == "failure":
                 raise RuntimeError("合成の再監査失敗")
             empty = GroundedAudit(reviews=[], summary_supported=False, goal_alignment="partial")
-            return decode_audit_wire(json.dumps(legacy_audit_to_wire_fixture(empty, schema)), schema)
+            wire = legacy_audit_to_wire_fixture(empty, schema)
+            if retry_case == "partial":
+                valid = GroundedAudit(
+                    reviews=[{"index": 0, "support": "supported", "applicability": "matched", "reason": ""}],
+                    request_reviews=[{"request_id": "Q1", "status": "partial", "reason": "合成の部分回答"}],
+                    summary_supported=False,
+                    goal_alignment="partial",
+                )
+                wire = legacy_audit_to_wire_fixture(valid, schema)
+                wire["reviews"][0]["support"] = "invalid-status"
+            return decode_audit_wire(json.dumps(wire), schema)
         canonical = GroundedAudit(
-            reviews=[{"index": 0, "support": "supported", "applicability": "matched", "reason": ""}],
+            reviews=[
+                {"index": 0, "support": "contradicted" if first_contradiction else "supported", "applicability": "matched", "reason": ""}
+            ],
             summary_supported=True,
             goal_alignment="partial",
             request_reviews=[{"request_id": "Q1", "status": "partial", "reason": "保存は未説明"}],
@@ -84,8 +97,11 @@ def run(*, request_case="valid", omit_requirement=False, retry_case=None, use_al
         confirmed_premises=(("操作条件", "条件A"),),
     )
     assert len(calls) == (3 if retry_case else 2) and result.audit_calls == (2 if retry_case else 1)
-    entry = next(row for row in result.checked if row.item.text == OPEN)
-    assert entry.published and entry.confirmed and not entry.removed
+    entry = next(row for row in result.checked if row.item.text == claim)
+    if first_contradiction:
+        assert entry.removed and not entry.published
+    else:
+        assert entry.published and entry.confirmed and not entry.removed
     return result
 
 
@@ -139,3 +155,13 @@ def test_failed_conditional_retry_keeps_valid_first_reviews_and_discards_bad_obs
     assert result.audit.request_reviews[0].status == "partial"
     assert [row.requirement_id for row in result.audit.guide_requirement_reviews] == ["open:1"]
     assert result.guide_steps[0]["requirements"][0]["status"] == "unknown"
+
+
+def test_partial_second_audit_cannot_erase_first_confirmed_contradiction():
+    result = run(retry_case="partial", first_contradiction=True)
+    assert result.review_execution == "partial"
+    assert result.audit.reviews[0].support == "contradicted"
+    assert result.timing["audit_contract"]["strict_wire_validation"] == "failed"
+    merged = result.timing["audit_contract"]["retry_merge"]
+    assert merged["row_sources"]["reviews"] == [{"key": 0, "attempt": 1}]
+    assert merged["row_sources"]["request_reviews"] == [{"key": "Q1", "attempt": 2}]
