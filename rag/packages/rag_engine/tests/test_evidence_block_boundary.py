@@ -41,7 +41,9 @@ def test_each_block_closes_with_its_own_label_right_after_the_body():
 
 def test_the_end_line_does_not_change_units_or_extracted_quotes():
     evidence = span("E2", SECOND)
-    view = grounded._citation_view(evidence, explicit_units=True)
+    grounded.format_functions([evidence])  # 生成の表示（今の契約）を記録し、取り出しも同じ単位で読む。
+    view = grounded._citation_view(evidence)
+    assert view.contract_version == grounded.CITATION_UNIT_CONTRACT
     assert all("[/E2]" not in evidence["text"][a:b] for a, b in view.units)
     last = str(len(view.units))
     item = GroundedItem(kind="operation", text="名前を選びます。", citations=[GroundedCitation(evidence_id="E2", lines=last)])

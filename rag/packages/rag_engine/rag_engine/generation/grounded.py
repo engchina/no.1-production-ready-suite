@@ -4209,12 +4209,27 @@ _CLAIM_UNIT_WINDOW = 3
 _CLAIM_UNIT_MIN_SHARE = 0.5
 
 
-def citation_units(text: str) -> list[tuple[int, int]]:
-    """明示された見出しと直後の分割不能な長文を、同じ原文単位で示す。"""
+# 今の生成が根拠に付ける引用単位の契約。保存・送信済みの視図は記録した版の単位で読み直す（#3685・#3824）。
+CITATION_UNIT_CONTRACT = "explicit_units_v4"
+_EXPLICIT_UNIT_CONTRACTS = frozenset({"explicit_units_v2", "explicit_units_v3", CITATION_UNIT_CONTRACT})
+
+
+def _step_line(text: str, start: int) -> bool:
+    """``start`` が物理行の先頭で、その行が本文の手順の番号（①・(1)・1. など）で始まるか。"""
+    return (start == 0 or text[start - 1] == "\n") and check_cues().step_line_start.match(text, start) is not None
+
+
+def citation_units(text: str, *, step_lines: bool = True) -> list[tuple[int, int]]:
+    """明示された見出しと直後の分割不能な長文を、同じ原文単位で示す。
+
+    ``step_lines``（``explicit_units_v4``）では、本文の手順の番号で始まる行を前の行にまとめず、手順ごとに番号を
+    付ける。単位の先頭にだけ番号が付くため、複数の手順が 1 単位になると、本文の手順の番号を引用単位の番号と
+    読み違える（#3824）。手順の続きの行は従来どおりその手順の単位に含める。False は ``explicit_units_v3``。
+    """
     from rag_parser_core.language.markers import marker_patterns
 
     units: list[tuple[int, int]] = []
-    for start, end in _legacy_citation_units(text):
+    for start, end in _legacy_citation_units(text, step_lines=step_lines):
         body = text[start:end]
         if units and "\n" not in body:
             before_start, before_end = units[-1]
@@ -4229,6 +4244,8 @@ def citation_units(text: str) -> list[tuple[int, int]]:
                 and "|" not in body
                 and "\t" not in body
                 and not re.match(rf"^{marker_patterns().bullet}\s+\S", body.strip())
+                # 手順の行は箇条書きの印の行と同じく、前の見出しにまとめず自分の番号を持たせる。
+                and not (step_lines and _step_line(text, start))
                 and not _CITE_SENTENCE_END.search(prefix)
                 and text[before_end:start] == "\n"
                 and before_end - before_start <= CITE_UNIT_MAX_CHARS
@@ -4239,11 +4256,12 @@ def citation_units(text: str) -> list[tuple[int, int]]:
     return units
 
 
-def _legacy_citation_units(text: str) -> list[tuple[int, int]]:
+def _legacy_citation_units(text: str, *, step_lines: bool = False) -> list[tuple[int, int]]:
     """根拠の本文の引用の単位（本文の中の開始・終了の位置）。
 
     続く短い行は ``CITE_UNIT_MAX_CHARS`` まで 1 つの単位にまとめ、それを超える行は文の区切りで分ける
     （OCR・表の 1 語ずつの行に番号を付けて入力を膨らませない）。空の行だけの単位は作らない。
+    ``step_lines`` なら、本文の手順の番号で始まる行は前の単位にまとめない。
     """
     pieces: list[tuple[int, int]] = []
     position = 0
@@ -4262,7 +4280,7 @@ def _legacy_citation_units(text: str) -> list[tuple[int, int]]:
     for start, end in pieces:
         if not text[start:end].strip():
             continue
-        if units and end - units[-1][0] <= CITE_UNIT_MAX_CHARS:
+        if units and end - units[-1][0] <= CITE_UNIT_MAX_CHARS and not (step_lines and _step_line(text, start)):
             units[-1] = (units[-1][0], end)
         else:
             units.append((start, end))
@@ -4352,13 +4370,17 @@ _CITATION_VIEWS: ContextVar[dict[int, tuple[dict, CitationView]] | None] = Conte
 
 def _citation_view(span: Mapping[str, Any], *, explicit_units: bool | None = None) -> CitationView:
     text = str(span.get("text") or "")
-    contract_version = "explicit_units_v3" if explicit_units else "legacy_threshold_v1"
+    contract_version = CITATION_UNIT_CONTRACT if explicit_units else "legacy_threshold_v1"
     if explicit_units is None:
         cached = (_CITATION_VIEWS.get() or {}).get(id(span))
         if cached is not None and cached[0] is span:
             contract_version = cached[1].contract_version
-        explicit_units = contract_version in {"explicit_units_v2", "explicit_units_v3"}
-    units = tuple(citation_units(text) if contract_version == "explicit_units_v3" else _legacy_citation_units(text))
+        explicit_units = contract_version in _EXPLICIT_UNIT_CONTRACTS
+    units = tuple(
+        citation_units(text, step_lines=contract_version == CITATION_UNIT_CONTRACT)
+        if contract_version in {"explicit_units_v3", CITATION_UNIT_CONTRACT}
+        else _legacy_citation_units(text)
+    )
     numbered = bool(units) if explicit_units else _numbered(text, units)
     rendered = _rendered_evidence_span(span, units=units, numbered=numbered)
     displayed = neutralize_boundary_markers(fold_width(rendered))

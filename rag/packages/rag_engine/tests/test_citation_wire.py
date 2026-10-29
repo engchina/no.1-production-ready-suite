@@ -240,7 +240,7 @@ def test_short_unnumbered_block_is_a_single_unit_without_numbers():
     legacy = grounded._citation_view(_short_evidence(legacy=True)[0])
     assert (legacy.numbered, len(legacy.units), legacy.contract_version) == (False, 1, "legacy_threshold_v1")
     assert "1|" not in legacy.rendered
-    # 今の生成の表示（explicit_units_v3）は、単位 1 つの短い根拠にも「1|」を付ける。
+    # 今の生成の表示（explicit_units_v4）は、単位 1 つの短い根拠にも「1|」を付ける。
     current = grounded._citation_view(_short_evidence(legacy=False)[0])
     assert (current.numbered, len(current.units)) == (True, 1)
     assert "1| " in current.rendered
