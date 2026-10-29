@@ -101,6 +101,7 @@ const ANSWERING_SETTINGS = {
   query_strategy: "auto_routing",
   answer_flow: "standard_rag",
   answer_audit_mode: "none",
+  answer_evidence_refinement_mode: "legacy",
   neighbor_child_count: 3,
   rerank_enabled: true,
   screen_linking_enabled: false,
@@ -222,6 +223,7 @@ for (const viewport of [
           query_strategy: "rag_fusion",
           answer_flow: "crag",
           answer_audit_mode: "detailed",
+          answer_evidence_refinement_mode: "legacy",
           neighbor_child_count: 5,
           rerank_enabled: true,
           screen_linking_enabled: true,
@@ -482,4 +484,58 @@ test("検索方法の指示の編集内容を保存できる", { tag: "@responsi
   await expect(stage.getByRole("button", { name: "プロンプトを保存" })).toBeDisabled();
   expect(requests).toEqual([{ key: "routing.system", method: "PUT", content: "## Step 1: 合成の検索指示" }]);
   await expectNoPageOverflow(page);
+});
+
+
+// 選別は回答の全体設定で、監査・補検索を自動で有効にしない。
+test("生成後の根拠選別を独立して保存・破棄し再読込できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockRetrievalCards(page);
+  const saved: unknown[] = [];
+  await mockAnsweringSettings(page, saved);
+  await page.goto("/settings/retrieval");
+  const card = page.getByTestId("answering-settings-card");
+  const select = card.getByRole("combobox", { name: "生成後の根拠選別", exact: true });
+  const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
+  const discard = card.getByRole("button", { name: "変更を破棄", exact: true });
+  const audit = card.getByRole("combobox", { name: "AIによる確認", exact: true });
+  const coverage = card.getByRole("switch", { name: "根拠の無い要求を探し直す", exact: true });
+  await expect(select).toContainText("既存方式を維持");
+  await expect(save).toBeDisabled();
+  await select.click();
+  await expect(page.getByRole("option")).toHaveText([
+    "既存方式を維持", "引用済みの根拠だけ（比較用）", "引用と必須の補完根拠",
+  ]);
+  await page.getByRole("option", { name: "引用済みの根拠だけ（比較用）", exact: true }).click();
+  await expect(select).toHaveAccessibleDescription(/重要な根拠を落とすおそれ/);
+  await discard.click();
+  await expect(select).toContainText("既存方式を維持");
+  expect(saved).toEqual([]);
+  for (const label of ["引用済みの根拠だけ（比較用）", "引用と必須の補完根拠", "既存方式を維持"]) {
+    await select.click();
+    await page.getByRole("option", { name: label, exact: true }).click();
+    await save.click();
+    await expect(save).toBeDisabled();
+    await page.reload();
+    await expect(select).toContainText(label);
+    await expect(audit).toContainText("実行しない");
+    await expect(coverage).not.toBeChecked();
+    if (label === "引用と必須の補完根拠") {
+      await expect(select).toHaveAccessibleDescription(/意味の支持を保証しません/);
+      await page.getByTestId("answering-evidence-refinement").scrollIntoViewIfNeeded();
+      await expectNoPageOverflow(page);
+      await page.screenshot({ path: testInfo.outputPath("evidence-refinement-enabled.png") });
+    }
+  }
+  expect(saved).toEqual([
+    expect.objectContaining({ answer_evidence_refinement_mode: "cited_only", answer_audit_mode: "none", request_coverage_retrieval_enabled: false }),
+    expect.objectContaining({ answer_evidence_refinement_mode: "cited_required", answer_audit_mode: "none", request_coverage_retrieval_enabled: false }),
+    expect.objectContaining({ answer_evidence_refinement_mode: "legacy", answer_audit_mode: "none", request_coverage_retrieval_enabled: false }),
+  ]);
+  const section = page.getByTestId("answering-evidence-refinement");
+  await expect(section).toContainText("最大 1 回再生成");
+  await expect(section).toContainText("既存の是正回数・時間予算");
+  await expect(section).toContainText("意味の確認を暗黙に追加しません");
+  await section.scrollIntoViewIfNeeded();
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("evidence-refinement-settings.png") });
 });

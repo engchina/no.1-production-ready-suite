@@ -114,6 +114,7 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "answer_audit_compact_reasons": resolved_settings.rag_answer_audit_compact_reasons,
         "answer_max_correction_rounds": resolved_settings.rag_answer_max_correction_rounds,
         "answer_audit_mode": resolved_settings.rag_answer_audit_mode,
+        "answer_evidence_refinement_mode": resolved_settings.rag_answer_evidence_refinement_mode,
         "section_skip_regrade_at_scope": resolved_settings.rag_section_skip_regrade_at_scope,
         "crag_skip_on_strong_signals": resolved_settings.rag_crag_skip_on_strong_signals,
         "crag_skip_min_rerank_score": resolved_settings.rag_crag_skip_min_rerank_score,

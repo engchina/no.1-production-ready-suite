@@ -769,6 +769,7 @@ def build_engine_settings(
         "RAG_ENGINE_ANSWER_MAX_CORRECTION_ROUNDS": str(settings.rag_answer_max_correction_rounds),
         # 回答の監査の型(#2795)。
         "RAG_ENGINE_ANSWER_AUDIT_MODE": settings.rag_answer_audit_mode,
+        "RAG_ENGINE_ANSWER_EVIDENCE_REFINEMENT_MODE": settings.rag_answer_evidence_refinement_mode,
         # 停滞した LLM の呼び出しの打ち切りと送り直し(#1926)。
         "RAG_ENGINE_LLM_STALL_DETECTION": "1" if settings.rag_llm_stall_detection_enabled else "0",
         "RAG_ENGINE_LLM_STALL_IDLE_SECONDS": str(settings.rag_llm_stall_idle_seconds),
@@ -4259,6 +4260,9 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "grounded_draft": dict((result.generation_trace or {}).get("grounded_draft") or {}),
         # 生成と監査の是正の round の時間の配分(#1516。各組の秒・見積もり・時間で打ち切った理由)。
         "round_budget": dict((result.generation_trace or {}).get("round_budget") or {}),
+        "evidence_refinement": dict(
+            (result.generation_trace or {}).get("evidence_refinement") or {}
+        ),
         # 質問に名前が出た根拠の画面の図の項目の種類と、それで決まった業務ガイドの条件(#2404)。
         "form_field_kinds": dict((result.generation_trace or {}).get("form_field_kinds") or {}),
         # 採用した草稿の監査の目的との合い方(#2402。aligned / partial / off_target)。品質評価が

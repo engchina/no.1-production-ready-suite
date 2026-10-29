@@ -386,6 +386,7 @@ class Settings:
     # standard は未使用の根拠を列挙させず、作り直しは事実の問題の 1 組まで(完全性の不足は本文に
     # 示す)。detailed は未使用の根拠も列挙させ、完全性の不足でも作り直す(従来)。engine の既定は従来どおり detailed、
     # backend の既定は none。
+    answer_evidence_refinement_mode: str = "legacy"
     answer_audit_mode: str = "detailed"
     # 回答の期限のある LLM の呼び出しを streaming で受け、停滞（event が来ない・出力が直近の速さより遅い）を
     # 検出したら打ち切って送り直す(#1926。既定 off。backend が RAG_LLM_STALL_DETECTION_ENABLED で ON にする)。
@@ -626,6 +627,11 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         crag_short_candidate_ids=_env_bool(env, "RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS", False),
         answer_audit_compact_reasons=_env_bool(env, "RAG_ENGINE_ANSWER_AUDIT_COMPACT_REASONS", False),
         answer_max_correction_rounds=max(0, min(2, _env_int(env, "RAG_ENGINE_ANSWER_MAX_CORRECTION_ROUNDS", 2))),
+        answer_evidence_refinement_mode=(
+            refinement
+            if (refinement := env.get("RAG_ENGINE_ANSWER_EVIDENCE_REFINEMENT_MODE", "legacy")) in {"legacy", "cited_only", "cited_required"}
+            else "legacy"
+        ),
         answer_audit_mode=(mode if (mode := env.get("RAG_ENGINE_ANSWER_AUDIT_MODE", "")) in {"none", "standard"} else "detailed"),
         llm_stall_detection=_env_bool(env, "RAG_ENGINE_LLM_STALL_DETECTION", False),
         llm_stall_idle_seconds=max(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_IDLE_SECONDS", 20.0)),
