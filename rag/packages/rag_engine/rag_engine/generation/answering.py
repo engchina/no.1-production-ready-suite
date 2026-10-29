@@ -74,6 +74,10 @@ from rag_engine.generation.answer_models import (
     AUTO_ROUTING_STRATEGY,
     CRAG_ANSWER_FLOW,
     CRAG_ANSWER_FLOW_LABEL,
+    CRAG_CAUSE_GRADE_ERROR,
+    CRAG_CAUSE_GRADE_SKIPPED,
+    CRAG_CAUSE_NO_NEW_EVIDENCE,
+    CRAG_CAUSE_UNVERIFIED,
     CRAG_MAX_RETRIEVAL_ATTEMPTS,
     DEFAULT_ANSWER_FLOW,
     DEFAULT_QUERY_STRATEGY,
@@ -111,6 +115,7 @@ from rag_engine.generation.answer_models import (
     _normalize_text,
     answer_flow_id,
     answer_flow_label,
+    crag_recovery_cause,
     extract_original_question,
     merge_answer_use,
     query_strategy_id,
@@ -1311,6 +1316,7 @@ def build_crag_answer_context(
                         sufficient=False,
                         stop_reason="no_new_evidence",
                         reason="補正検索と局所拡張で新しい本文が得られないため、取得済みの根拠で回答する。",
+                        recovery_cause=CRAG_CAUSE_NO_NEW_EVIDENCE,
                     )
                 )
                 break
@@ -1357,6 +1363,7 @@ def build_crag_answer_context(
                     document_selection=dict(context.document_selection),
                     stop_reason=CRAG_SKIP_STOP_REASON,
                     recovery_trace={"grade_skipped": skip["trace"]},
+                    recovery_cause=CRAG_CAUSE_GRADE_SKIPPED,
                 )
             )
             return context, tuple(rewrites), tuple(attempts)
@@ -1404,6 +1411,7 @@ def build_crag_answer_context(
                     grade_failure=structured_failure_details(exc, CragRetrievalGradeOutput),
                     grade_execution="error",
                     new_evidence_count=new_evidence_count,
+                    recovery_cause=CRAG_CAUSE_GRADE_ERROR,
                 )
                 step.status = "評価に失敗"
                 step.add("根拠確認に失敗したため、取得済みの根拠を使います。")
@@ -1419,6 +1427,7 @@ def build_crag_answer_context(
                 document_selection=dict(context.document_selection),
                 executed_queries=executed_queries,
             )
+            attempt = replace(attempt, recovery_cause=crag_recovery_cause(attempt))
             attempts.append(attempt)
 
             status = (
@@ -1449,7 +1458,10 @@ def build_crag_answer_context(
             if not attempt.sufficient or attempt.missing_aspects:
                 step.field(
                     "次の対処",
-                    "取得済みの根拠で回答の作成へ進む"
+                    # 未確認だけなら探し直さず、取得済みの資料で補う（#3755）。
+                    "取得済みの資料から前後を補い、確認できる範囲で回答の作成へ進む"
+                    if attempt.recovery_cause == CRAG_CAUSE_UNVERIFIED
+                    else "取得済みの根拠で回答の作成へ進む"
                     if attempt_number >= CRAG_MAX_RETRIEVAL_ATTEMPTS
                     else recovery_label(attempt.recovery_action),
                 )
@@ -1503,6 +1515,38 @@ def build_crag_answer_context(
         ):
             attempts[-1] = replace(attempts[-1], stop_reason="data_confirmation_only")
             return refined_context, tuple(rewrites), tuple(attempts)
+
+        if attempt.recovery_cause == CRAG_CAUSE_UNVERIFIED and refined_context.records and refined_context.text.strip():
+            # 未確認の観点だけ（写しの照合の失敗・評価器の unknown・観点の判定の欠け）は、不足と確かめていない（#3755）。
+            # 書き換え検索・後回しの文書の戻し・追加の検索の枠を使わず、既取得の pool で前後を補って、確認できる範囲の
+            # 回答へ進む。この文脈の追加のために評価器を呼び直さない。確かめた不足（missing）は下の探し直しへ進む。
+            expanded, trace = _recover_crag_context(
+                best_context,
+                attempt,
+                max_records=max_records,
+                max_chars=max_chars,
+                fallback=attempt.recovery_action == "rewrite",
+                fallback_trigger="unverified_aspects",
+            )
+            attempts[-1] = replace(
+                attempts[-1],
+                recovery_trace={**trace, "cause": CRAG_CAUSE_UNVERIFIED},
+                stop_reason="expanded_for_unverified_aspects" if expanded is not None else "unverified_aspects_retained",
+            )
+            merged = (
+                _merge_crag_evidence(refined_context, expanded, question, max_records=max_records, max_chars=max_chars)
+                if expanded is not None
+                else refined_context
+            )
+            best_context = replace(
+                merged,
+                expansion_records=best_context.expansion_records,
+                preferred_child_ids=best_context.preferred_child_ids,
+                ranked_candidates=best_context.ranked_candidates,
+                deferred_records=best_context.deferred_records,
+                document_selection=best_context.document_selection,
+            )
+            break
 
         if attempt_number < CRAG_MAX_RETRIEVAL_ATTEMPTS and attempt.recovery_action != "rewrite":
             pending_context, trace = _recover_crag_context(best_context, attempt, max_records=max_records, max_chars=max_chars)
@@ -2011,7 +2055,7 @@ def _grade_crag_retrieval(
     rejected_rewrite = query_rejection_reason(question, rewrite)
     if rejected_rewrite:
         rewrite = ""
-    return CragRetrievalAttempt(
+    attempt = CragRetrievalAttempt(
         attempt=attempt_number,
         query=active_query.strip(),
         retrieval_queries=_dedupe_queries(retrieval_queries),
@@ -2035,6 +2079,7 @@ def _grade_crag_retrieval(
         recovery_anchor_ids=tuple(dict.fromkeys(uid for v in output.recovery_anchor_ids if (uid := canonical(v)))),
         stop_reason="rejected_rewrite: " + rejected_rewrite if rejected_rewrite else "",
     )
+    return replace(attempt, recovery_cause=crag_recovery_cause(attempt))
 
 
 def _grounded_spans(
@@ -6123,6 +6168,7 @@ _SECTION_STOP_LABELS = {
     "grade_error": "判定に失敗",
     "disabled": "無効",
     "scope_read": "必要な範囲まで読んだ",
+    "unverified_expanded": "未確認の観点を補うため上の章節を読んだ",
     "read_error": "原文の読取に失敗",
     "partial_read": "必要な範囲の一部が未読",
 }
