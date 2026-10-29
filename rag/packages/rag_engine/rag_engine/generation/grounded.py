@@ -57,13 +57,18 @@ from rag_engine.generation.applications import (
 )
 from rag_engine.generation.applications import audit_view as application_audit_view
 from rag_engine.generation.applications import render_lines as application_lines
+from rag_engine.generation.audit_recovery import merge_audit_retry
 from rag_engine.generation.check_cues import check_cues
+from rag_engine.generation.citation_wire import bind_wire_range, canonical_generation_draft, generation_draft_wire_model
+from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
+from rag_engine.generation.request_recovery import relabel_recovery_reviews
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
 from rag_engine.generation.value_grounding import CURRENT_VALUE_REASON, unsupported_document_value_claim
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
+from rag_engine.models.audit_wire import audit_wire_schema, canonical_audit_result
 from rag_engine.models.llm import (
     CatalogEvidenceReviews,
     GroundedAudit,
@@ -140,7 +145,7 @@ GENERATE_SYSTEM_PROMPT = (
 - 添付原画像と根拠レコードの対応（画像がある場合）: 各画像の bbox / context_bbox / target_highlight / asset_kind。
 - 業務ガイドがある場合は、目的・必要な根拠・終わりの条件を満たす説明を、前提の手順から順に items にする。業務ガイドの手順は質問で分かっている条件に合わせて選んであるので、すべて説明し、利用者が自分で行えない手順も省かない。資料で裏付けられない要件は gap にする。
 - 業務ガイドは答え方の指示で、資料ではない。items の text には quote の原文が裏付ける内容だけを書き、業務ガイドの文（確認先・方針）を写さない。業務ガイドの窓口と引き継ぐ条件は、システムが「業務ガイドの案内」として本文に出す。
-- この指示の quote は、citations の各出典（evidence_id と lines）が指す根拠の原文を意味する。quote を別に生成するのではなく、その原文が支える内容を書く。
+- この指示の quote は、citations の各出典（evidence_id と引用する行範囲）が指す根拠の原文を意味する。quote を別に生成するのではなく、その原文が支える内容を書く。
 #### Evidence の見出し行
 - origin（見出し行では `origin=` と表記）: document_text は解析された本文、image_extraction は画像からの生成説明・OCR、unclassified は未分類。
 - catalog: 条で構成された文書の条の目録から、質問の根拠の候補として選ばれた条。
@@ -260,6 +265,8 @@ AUDIT_SYSTEM_PROMPT = (
         "### 監査入力（JSON）\n"
         "- question / task_contract: 原質問と、変"
         "更してはいけない目的・条件（current_request、request_units など）。\n"
+        "- confirmed_premises: 利用者の回答や明示した質問で確認済みの条件（question、answer）。"
+        "適用条件は原質問とこれらの条件を合わせて判断する。\n"
         "- summary: 草稿の結論。\n"
         "- items: 監査対象。index、request_id、kin"
         "d、text（言い換え）、applies、condition、quo"
@@ -300,7 +307,9 @@ AUDIT_SYSTEM_PROMPT = (
         "\n"
         ""
         "## Step 2: 各主張を原文と照合する（support）\n"
-        "- quote_unmatched が true の item は quote を原文として扱わず、その item の evidence で text の全主張を照合する。支持するときは support_quote に連続した支持原文を写す。原文で裏付けられない主張は unsupported。\n"
+        "- citation_resolution が抽出失敗を示す引用は support=unknown とし、evidence の別の行で引用を置き換えて supported にしない。"
+        "evidence の全文は材料の有無を判断するために使う。"
+        "抽出失敗の記録がない旧形式の quote_unmatched は、引用元の原文を確定できる場合に限り support_quote にその原文を返す。\n"
         "- text の操作・画面・値・効果・原因・対象・適用条件・順序を、当該 item が実際に引用した citations の原文集合と照合する。"
         "複数の引用が別々の部分を共同で支持してよく、各引用が主張全体を単独で支える必要はない。"
         "集合が全主張を裏付け、かつ各 index の evidence_id 自身も少なくとも一部に寄与するときだけ supported。"
@@ -377,9 +386,9 @@ AUDIT_SYSTEM_PROMPT = (
         "- guide_steps の evidence_ids を引いた "
         "item は、その手順を質問の目的を果たす手順に含めて判定する。質問"
         "の文がその手順（前提・後続の手順）に触れていないことは not_ap"
-        "plicable・unknown の理由にならない。手順の根拠でも、"
-        "quote の対象（画面・機能・業務）が質問の対象と別なら not_"
-        "applicable。\n"
+        "plicable・unknown の理由にならない。後続手順の画面や機能が原質問と異なるだけでは対象違いにしない。"
+        "引用原文がガイドの手順と両立しない別の対象・条件に明示的に限定される場合は not_applicable。"
+        "ガイドは適用する手順を定めるが、操作・対象・順序の支持は引用原文で別に判定する。\n"
         "- applicability の「質問の対象」は質問が尋ねている物"
         "（システム・部署・画面・帳票・業務）で、尋ねている項目（期限・承認者"
         "・時間帯・保管期間）ではない。尋ねている項目を quote が述べて"
@@ -1625,6 +1634,8 @@ def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, 
     plans = _item_request_plans(item, draft)
     if not plans:
         return bool(draft.request_coverage) or "request_coverage" in draft.model_fields_set
+    if _plan_marks_unrelated(item, span, draft, spans):
+        return True
     labels: set[str] = set()
     for plan in plans:
         for label in plan.evidence_ids:
@@ -1778,7 +1789,7 @@ def _citation_dropped(note: Mapping[str, Any]) -> dict:
 
 # 引用が節の見出しだけの出典の指摘（#3544）。原文に無い引用と同じく印を付けて残し、次の生成に直し方を返す。
 HEADING_ONLY_DETAIL = "引用が節の見出しだけで、説明を支える本文ではありません。"
-HEADING_ONLY_REASON = "引用が節の見出しだけの出典。見出しではなく、説明を支える本文の行を lines に書いてください。"
+HEADING_ONLY_REASON = "引用が節の見出しだけの出典。見出しではなく、説明を支える本文の行範囲を指定してください。"
 
 
 def heading_only_quote(quote: str, span: Mapping[str, Any]) -> bool:
@@ -2193,7 +2204,7 @@ def recover_audited_quotes(
             or entry.removed
             or entry.span is None
             or review.support != "supported"
-            or entry.citation_resolution.get("reason_code") == "citation_version_mismatch"
+            or _citation_support_unverified(entry)
         ):
             continue
         quote = _original_quote(review.support_quote, entry.span["text"])
@@ -3130,6 +3141,8 @@ def settle_citation_reviews(
             former = replace(entry, also=[])
             entry.also = [cited for cited in entry.also if cited is not other]
             entry.item, entry.span, entry.quote_match, entry.hints = other.item, other.span, other.quote_match, list(other.hints)
+            entry.citation_resolution = dict(other.citation_resolution)
+            entry.unmatched = other.unmatched
             drop(entry, former, f"監査: {own.support}/{own.applicability} {own.reason}")
             promoted[primary_index] = review.model_copy(update={"index": primary_index})
     return audit.model_copy(
@@ -3231,13 +3244,15 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
             continue
         entry = checked[review.index]
         entry.review_assessment = {
-            "support": review.support,
+            "support": review.observed_support or review.support,
             "applicability": review.applicability,
+            "pre_audit_applicability": entry.item.applies,
+            "pre_audit_condition": entry.item.condition,
             "applicability_action": review.applicability_action,
             "policy_reason": review.applicability_policy_reason,
             "reason": review.reason,
         }
-        # 元のモデル判定は上に保持し、本文の採用を適用確認済みへの昇格と区別する。
+        # record_onlyは削除に使わない方針であり、適用を確認済みにする方針ではない。
         if review.applicability_action == "record_only" and entry.item.applies == "matched":
             entry.item = entry.item.model_copy(update={"applies": "unverified", "condition": ""})
         span = entry.span
@@ -4165,6 +4180,32 @@ def _citation_extraction(item: GroundedItem) -> dict[str, str]:
     return dict(item.citations[0]._extraction) if item.citations else {}
 
 
+def _citation_support_unverified(entry: CheckedItem) -> bool:
+    """今回指定した出典・範囲が不正なら、原文の支持判定に使える引用ではない。"""
+    return entry.citation_resolution.get("status") == "failed" and entry.citation_resolution.get("reason_code") in CITATION_EXTRACTION_CODES
+
+
+def citation_support_policy(
+    checked: Sequence[CheckedItem], audit: GroundedAudit, also_audited: Sequence[tuple[int, CheckedItem, CheckedItem]] = ()
+) -> GroundedAudit:
+    """無効な引用へのモデル判定を未確認として使い、原判定と他の有効な結果を残す。"""
+    entries = dict(enumerate(checked))
+    entries.update({index: other for index, _entry, other in also_audited})
+    reviews = []
+    for review in audit.reviews:
+        update: dict[str, Any] = {"observed_support": review.support}
+        entry = entries.get(review.index)
+        if entry is not None and _citation_support_unverified(entry):
+            update.update(
+                support="unknown",
+                support_quote="",
+                supported_fragments=[],
+                reason="指定した引用の原文・範囲を確認できないため、主張の裏付けは未検証です。" + review.reason,
+            )
+        reviews.append(review.model_copy(update=update))
+    return audit.model_copy(update={"reviews": reviews})
+
+
 def _with_extraction(item: GroundedItem, metadata: dict[str, str], *, quote: str | None = None) -> GroundedItem:
     """モデルが返せない内部属性に、現在の検証の結果だけを保存する。"""
     if not item.citations:
@@ -4228,7 +4269,22 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem
         return fail("citation_extraction_failed", "指定した根拠に抽出できる本文がありません。")
     first, last, origin = 1, len(units), "whole_text"
     metadata["requested_range_status"] = "missing" if _numbered(text, units) and not item.lines.strip() else "not_required"
-    if _numbered(text, units) or item.lines.strip():
+    interval = item.citations[0]._wire_range if item.citations else None
+    if interval is not None:
+        binding = bind_wire_range(*interval, unit_count=len(units), numbered=_numbered(text, units))
+        metadata["requested_lines"] = binding.lines
+        metadata["range_contract"] = "integer_pair"
+        if binding.reason_code:
+            metadata["requested_range_status"] = {
+                "citation_range_missing": "missing",
+                "citation_range_out_of_bounds": "out_of_bounds",
+            }.get(binding.reason_code, "invalid")
+            return fail(binding.reason_code, f"指定した引用範囲を確定できません。原文の行は 1〜{len(units)} です。")
+        if not binding.whole_text:
+            assert interval[0] is not None and interval[1] is not None
+            first, last, origin = interval[0], interval[1], "line_range"
+            metadata["requested_range_status"] = "valid"
+    elif _numbered(text, units) or item.lines.strip():
         found, listed = _CITE_RANGE.match(item.lines or ""), _CITE_LIST.match(item.lines or "")
         if found:
             first, last = int(found.group(1)), int(found.group(2) or found.group(1))
@@ -4420,12 +4476,13 @@ class Round:
     duplicate_request_ids: tuple[str, ...] = ()
     missing_request_ids: tuple[str, ...] = ()
     invalid_request_ids: tuple[str, ...] = ()
+    invalid_request_result_ids: tuple[str, ...] = ()
     expected_request_ids: tuple[str, ...] = ()
     returned_request_ids: tuple[str, ...] = ()
 
     @property
     def request_contract_status(self) -> str:
-        if self.duplicate_request_ids or self.invalid_request_ids:
+        if self.duplicate_request_ids or self.invalid_request_ids or self.invalid_request_result_ids:
             return "error"
         if self.missing_request_ids:
             return "partial"
@@ -4437,13 +4494,14 @@ class Round:
         reasons = {
             **{key: "要求の監査判定が返されておらず、充足と材料を確認できません。" for key in self.missing_request_ids},
             **{key: "同じ要求に複数の監査判定があり、充足と材料を確認できません。" for key in self.duplicate_request_ids},
+            **{key: "要求の監査判定が出力形式を満たさず、充足と材料を確認できません。" for key in self.invalid_request_result_ids},
         }
         return [
             {
                 "request_id": key,
                 "status": "unknown",
                 "reviewed": False,
-                "review_execution": "error" if key in self.duplicate_request_ids else "not_run",
+                "review_execution": "error" if key in (*self.duplicate_request_ids, *self.invalid_request_result_ids) else "not_run",
                 "evidence_status": "unknown",
                 "evidence_ids": [],
                 "reason": reason,
@@ -4625,6 +4683,10 @@ class Round:
     def review_execution(self) -> str:
         if self.timing.get("audit_error_type"):
             return "timed_out" if self.audit_cut else "error"
+        if self.timing.get("audit_retry_incomplete"):
+            return "partial"
+        if self.audit is not None and self.audit._wire_validation.get("status") in {"partial", "error"}:
+            return "partial"
         return (
             "partial"
             if self.audit_cut and self.audit is not None
@@ -4718,6 +4780,41 @@ class Round:
                         if entry.item.kind != "gap"
                     ],
                 },
+                "business_applicability": {
+                    "execution": self.review_execution,
+                    "confirmed_premises": self.timing.get("confirmed_premises", []),
+                    "items": [
+                        {
+                            "index": index,
+                            "status": entry.item.applies,
+                            "condition": entry.item.condition,
+                            "pre_audit_status": entry.review_assessment.get("pre_audit_applicability", entry.item.applies),
+                            "observed_status": entry.review_assessment.get("applicability", "unknown"),
+                            "action": entry.review_assessment.get("applicability_action", "not_run"),
+                            "policy_effect": "retain_unverified"
+                            if entry.review_assessment.get("applicability_action") == "record_only" and entry.item.applies == "unverified"
+                            else "apply_review"
+                            if entry.review_assessment.get("applicability_action") == "apply"
+                            else "retain_current_state",
+                            "confirmation_source": "unverified"
+                            if entry.item.applies == "unverified"
+                            else "semantic_audit"
+                            if entry.review_assessment and entry.review_assessment.get("applicability_action") == "apply"
+                            else "generation_and_basic_checks",
+                        }
+                        for index, entry in enumerate(self.checked)
+                        if entry.item.kind != "gap"
+                    ],
+                },
+                "body_retention": {
+                    "stage": "generation_round",
+                    "execution": "completed",
+                    "items": [
+                        {"index": index, "included": entry.published, "removed": entry.removed, "confirmed": entry.confirmed}
+                        for index, entry in enumerate(self.checked)
+                        if entry.item.kind != "gap"
+                    ],
+                },
                 "answer_completeness": {
                     "execution": "partial"
                     if self.audit is not None
@@ -4734,6 +4831,9 @@ class Round:
                         "missing_request_ids": list(self.missing_request_ids),
                         "invalid_request_ids": list(self.invalid_request_ids),
                         "duplicate_request_ids": list(self.duplicate_request_ids),
+                        **(
+                            {"invalid_request_result_ids": list(self.invalid_request_result_ids)} if self.invalid_request_result_ids else {}
+                        ),
                     },
                     "requests": (
                         [row.model_dump() for row in self.audit.request_reviews]
@@ -4855,6 +4955,8 @@ def _relabeled_feedback(feedback: dict, spans: Sequence[dict]) -> dict:
     今回の根拠に無い原文への指摘は、誤った根拠へ誘導しないよう表示IDを渡さない。
     """
     result = dict(feedback)
+    if "unanswered_requests" in result:
+        result["unanswered_requests"] = relabel_recovery_reviews(result["unanswered_requests"], spans)
     if "unused_evidence_ids" in result:
         labels = [_current_label(ref, spans) for ref in result.pop("unused_evidence_ids")]
         if any(labels):
@@ -5951,6 +6053,8 @@ def run_round(
     invalid_output: Callable[[Exception], bool] | None = None,
     glossary: Sequence[Mapping[str, Any]] = (),
     assume_unconfirmed: bool = False,
+    confirmed_premises: Sequence[tuple[str, str]] = (),
+    confirmed_premise_sources: Sequence[tuple[str, str, str]] = (),
 ) -> Round:
     """生成と監査。計画の構造不正だけは、生成を一度やり直す。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
@@ -5976,6 +6080,11 @@ def run_round(
     正式名で書いた根拠の対象を別と判定しないよう、監査の入力に渡す。
     """
     audit_settings = settings if audit_settings is None else audit_settings
+    premise_sources = {(label, value): source for label, value, source in confirmed_premise_sources if source in {"user", "question"}}
+    premise_records = [
+        {"question": label, "answer": value, **({"source": premise_sources[label, value]} if (label, value) in premise_sources else {})}
+        for label, value in confirmed_premises
+    ]
     detailed = audit_mode == AUDIT_MODE_DETAILED
     # 監査なしの型は業務ガイドの要件を判定しない（手順の充足は決定的な対応付けだけ。#2800）。
     contracts = () if audit_mode == AUDIT_MODE_NONE else guide_step_contracts
@@ -6042,6 +6151,7 @@ def run_round(
     generation_system = resolve_prompt("generation.system", GENERATE_SYSTEM_PROMPT) + (
         resolve_prompt("generation.assumptionSystem", ASSUMPTION_SYSTEM_PROMPT) if assume_unconfirmed else ""
     )
+    generation_model = generation_draft_wire_model()
     if image_paths:
         try:
             draft = call_with_model_purpose(
@@ -6051,7 +6161,7 @@ def run_round(
                 prompt,
                 list(image_paths),
                 settings,
-                GroundedDraft,
+                generation_model,
                 provider_id=provider_id,
             )
         except Exception as exc:
@@ -6060,12 +6170,13 @@ def run_round(
             # 画像の説明の文字は根拠のレコードに残るので、文字の根拠の範囲で作り直す（#2772）。
             image_fallback = type(exc).__name__
             draft = call_with_model_purpose(
-                "answer.generate", parse_text, generation_system, prompt, settings, GroundedDraft, provider_id=provider_id
+                "answer.generate", parse_text, generation_system, prompt, settings, generation_model, provider_id=provider_id
             )
     else:
         draft = call_with_model_purpose(
-            "answer.generate", parse_text, generation_system, prompt, settings, GroundedDraft, provider_id=provider_id
+            "answer.generate", parse_text, generation_system, prompt, settings, generation_model, provider_id=provider_id
         )
+    draft = canonical_generation_draft(draft)
     if scope_plan is not None:
         draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
     generation_calls = 1 + int(scope_plan is not None)
@@ -6109,18 +6220,20 @@ def run_round(
                 repair_prompt,
                 list(image_paths),
                 settings,
-                GroundedDraft,
+                generation_model,
                 provider_id=provider_id,
             )
         else:
             draft = call_with_model_purpose(
-                "answer.repair", parse_text, generation_system, repair_prompt, settings, GroundedDraft, provider_id=provider_id
+                "answer.repair", parse_text, generation_system, repair_prompt, settings, generation_model, provider_id=provider_id
             )
+        draft = canonical_generation_draft(draft)
         generation_calls += 1
         if scope_plan is not None:
             draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
         # 作り直しても残った不整合（#3228）。計画が決まらない説明は外さずに印を付けて残す（verify）。
         plan_unsettled = _request_plan_errors(draft, spans)
+    plan_unsettled = list(dict.fromkeys([*plan_unsettled, *_plan_undecided_errors(draft, spans)]))
     catalog_review: dict[str, Any] = {}
     if getattr(settings, "article_catalog_review", False) and audit_mode == AUDIT_MODE_NONE:
         catalog_review = {"execution": "not_run", "skipped": "audit_disabled", "reviewed": 0}
@@ -6161,6 +6274,8 @@ def run_round(
     draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
     timing["generation_calls"] = generation_calls
+    if premise_records:
+        timing["confirmed_premises"] = premise_records
     if plan_errors:
         timing["request_plan_errors"] = plan_errors
     if catalog_review:
@@ -6222,9 +6337,11 @@ def run_round(
         )
     }
     audit, audit_calls, audit_cut = None, 0, False
+    audit_fallback = None
     duplicate_request_ids: tuple[str, ...] = ()
     missing_request_ids: tuple[str, ...] = ()
     invalid_request_ids: tuple[str, ...] = ()
+    invalid_request_result_ids: tuple[str, ...] = ()
     expected_request_ids: tuple[str, ...] = ()
     returned_request_ids: tuple[str, ...] = ()
     # 印の付いた説明も監査する（根拠と矛盾すれば外す。#2738）。システムが補った原文・外した説明は監査しない。
@@ -6242,8 +6359,22 @@ def run_round(
         audit_entries = [*audited, *((index, other) for index, _entry, other in also_audited)]
         citation_groups = {
             id(cited): [
-                {"evidence_id": member.span["evidence_id"], "quote": member.item.quote} for member in item_citations(entry) if member.span
+                {"evidence_id": member.span["evidence_id"], "quote": member.item.quote}
+                for member in item_citations(entry)
+                if member.span and not _citation_support_unverified(member)
             ]
+            for _, entry in audited
+            for cited in item_citations(entry)
+        }
+        located_citation_groups = {
+            id(cited): {
+                member.span["evidence_id"]
+                for member in item_citations(entry)
+                if member.span
+                and (
+                    member.citation_resolution.get("authenticity") == "verified" or (member.quote_match == "exact" and not member.unmatched)
+                )
+            }
             for _, entry in audited
             for cited in item_citations(entry)
         }
@@ -6269,6 +6400,11 @@ def run_round(
                     "evidence_id": e.span["evidence_id"],
                     "checks": e.hints,
                     "quote_unmatched": e.unmatched,
+                    "citation_resolution": {
+                        key: value
+                        for key, value in e.citation_resolution.items()
+                        if key in {"status", "reason_code", "authenticity", "requested_range_status", "sent_view_status"}
+                    },
                     "function": _function_label(e.span),
                     "origin": e.span.get("origin", ""),
                     "heading": " > ".join(str(h) for h in e.span.get("section_path", []) or []),
@@ -6296,6 +6432,8 @@ def run_round(
         }
         if glossary:
             inputs["glossary"] = [dict(term) for term in glossary]
+        if premise_records:
+            inputs["confirmed_premises"] = premise_records
         if detailed:
             inputs["unused_evidence"] = _unused_evidence(question, spans, used)
         if contracts:
@@ -6307,11 +6445,13 @@ def run_round(
                 # 業務ガイドの案内の行（本文の「業務ガイドの案内」の節。#2792）。index は items の後ろに続ける。
                 inputs["guide_notes"] = [{"index": len(checked) + offset, "text": note} for offset, note in enumerate(guide_notices)]
         if guide_steps:
-            # 回答が沿う業務ガイドの手順と、手順ごとの根拠の表示 ID（#2491）。質問の文が後続の手順に触れていなくても、
+            # 監査のitems・evidenceと同じIDで手順の根拠を対応付ける。質問の文が後続の手順に触れていなくても、
             # 手順の根拠を引いた説明を質問の対象の手順として判定させる。
             labels: dict[str, list[str]] = {}
             for span in spans:
-                labels.setdefault(str(span.get("source_id") or ""), []).append(span["label"])
+                for source in (span.get("source_id"), *(span.get("source_aliases") or ())):
+                    if source:
+                        labels.setdefault(str(source), []).append(span["evidence_id"])
             inputs["guide_steps"] = [
                 {
                     "step_id": step_id,
@@ -6320,6 +6460,10 @@ def run_round(
                 }
                 for step_id, title, sources in guide_steps
             ]
+            for row, (_, entry) in zip(inputs["items"], audit_entries, strict=True):
+                row["guide_step_candidates"] = audit_guide_candidates(
+                    inputs["guide_steps"], contracts, located_citation_groups.get(id(entry), ())
+                )
         # 生成と同じく、根拠・引用・説明を文字の形をそろえて渡す。原文の引用（全角の ``ＨＲＭ``）と説明の
         # 半角の ``HRM`` を、監査が別の語として「根拠にない」と判定しないため (#1350)。
         expected_request_ids = tuple(row["id"] for row in inputs["task_contract"].get("request_units", []))
@@ -6341,8 +6485,16 @@ def run_round(
                     and not requirement_quote_matches(entry, checked, guide_notices)
                 }
             )
-            if _audit_is_empty(audit) or missing_requirements or invalid_answer_quotes:
-                if missing_requirements or invalid_answer_quotes:
+            if _audit_is_empty(audit) or invalid_answer_quotes:
+                if not _audit_is_empty(audit):
+                    audit_fallback = audit.model_copy(
+                        update={
+                            "guide_requirement_reviews": [
+                                row for row in audit.guide_requirement_reviews if row.requirement_id not in invalid_answer_quotes
+                            ]
+                        }
+                    )
+                if invalid_answer_quotes:
                     inputs["validation_error"] = {
                         "field": "guide_requirement_reviews",
                         "required_once": missing_requirements,
@@ -6354,8 +6506,12 @@ def run_round(
                 # 支持済み item の多い round が採用されず、是正も起きない (#629)。同じ入力で 1 回だけ再試行する。
                 audit_calls += 1
                 audit = _parse_audit(parse_text, audit_system, audit_prompt, audit_settings, provider_id, detailed=detailed)
+                if audit_fallback is not None:
+                    audit = merge_audit_retry(audit_fallback, audit)
                 if _audit_is_empty(audit):
-                    audit = None  # 監査なしの round として扱い、全要求を未回答にして是正へ進む
+                    audit = audit_fallback
+                    if audit_fallback is not None:
+                        timing["audit_retry_incomplete"] = True
         except Exception as exc:
             # 監査の失敗だけでは生成済みの本文を捨てない。権限拒否・取り消し・外側の期限は中断を維持する。
             cut_short = deadline_cut_short()
@@ -6368,7 +6524,7 @@ def run_round(
                 or (isinstance(exc, DeadlineExceeded) and not cut_short)
             ):
                 raise
-            audit = None
+            audit = audit_fallback
             audit_cut = cut_short or isinstance(exc, (TimeoutError, TimeoutException, APITimeoutError))
             timing["audit_error_type"] = type(exc).__name__
             timing["audit_failure"] = structured_failure_details(exc, GroundedAudit if detailed else GroundedFactAudit)
@@ -6376,10 +6532,30 @@ def run_round(
         if audit_usage := usage_delta(usage_before):
             timing["audit_usage"] = audit_usage
         if audit is not None:
+            if audit._wire_validation:
+                timing["audit_contract"] = audit._wire_validation
             returned_request_ids = tuple(row.request_id for row in audit.request_reviews)
             audit, duplicate_request_ids, missing_request_ids, invalid_request_ids = _validate_request_review_contract(
                 audit, inputs["task_contract"].get("request_units", [])
             )
+            if audit._wire_validation.get("request_binding"):
+                binding = audit._wire_validation["request_binding"]
+                returned_request_ids = tuple(binding["raw_key_sequence"])
+                states = binding["states"]
+                adopted = set(
+                    audit._wire_validation.get("retry_merge", {})
+                    .get("effective_request_binding", {})
+                    .get("adopted_ids", binding["adopted_ids"])
+                )
+                duplicate_request_ids = tuple(key for key, state in states.items() if state == "duplicate" and key not in adopted)
+                invalid_request_result_ids = tuple(key for key, state in states.items() if state == "invalid" and key not in adopted)
+                missing_request_ids = tuple(
+                    key
+                    for key in expected_request_ids
+                    if key not in adopted and key not in (*duplicate_request_ids, *invalid_request_result_ids)
+                )
+                invalid_request_ids = tuple(sorted(set(returned_request_ids) - set(expected_request_ids)))
+            audit = citation_support_policy(checked, audit, also_audited)
             audit = settle_citation_reviews(checked, audit, also_audited, dropped)
             recovered = recover_audited_quotes(
                 question, checked, audit, spans, guide_sources=[source for _id, _title, sources in guide_steps for source in sources]
@@ -6494,6 +6670,7 @@ def run_round(
         duplicate_request_ids=duplicate_request_ids,
         missing_request_ids=missing_request_ids,
         invalid_request_ids=invalid_request_ids,
+        invalid_request_result_ids=invalid_request_result_ids,
         expected_request_ids=expected_request_ids,
         returned_request_ids=returned_request_ids,
         guide_steps=(
@@ -6569,14 +6746,15 @@ def _parse_audit(
     parse_text: Callable[..., Any], system: str, prompt: str, settings: Any, provider_id: str | None, *, detailed: bool
 ) -> GroundedAudit:
     """監査を 1 回呼ぶ。通常の回答（#2795）は事実の監査の schema で受け、判定しない項目を空にして写す。"""
-    if detailed:
-        audit = call_with_model_purpose("answer.audit", parse_text, system, prompt, settings, GroundedAudit, provider_id=provider_id)
-    else:
-        audit = GroundedAudit.model_validate(
-            call_with_model_purpose(
-                "answer.audit", parse_text, system, prompt, settings, GroundedFactAudit, provider_id=provider_id
-            ).model_dump()
-        )
+    inputs = json.loads(prompt)
+    request_ids = tuple(row["id"] for row in inputs.get("task_contract", {}).get("request_units", []))
+    requirement_ids = tuple(row["id"] for contract in inputs.get("guide_contracts", []) for row in contract.get("requirements", []))
+    schema = audit_wire_schema(GroundedAudit if detailed else GroundedFactAudit, request_ids, requirement_ids)
+    result = canonical_audit_result(
+        call_with_model_purpose("answer.audit", parse_text, system, prompt, settings, schema, provider_id=provider_id), schema
+    )
+    audit = result.audit
+    audit._wire_validation = result.validation
     return applicability_policy(audit)
 
 

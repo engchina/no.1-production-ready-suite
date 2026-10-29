@@ -67,7 +67,7 @@ def test_audited_original_recovers_paraphrase_and_guide_step(mode):
     assert grounded.detach_unsourced(result.checked) == 0
     inputs = json.loads(model.prompts[-1][1])
     assert inputs["items"][0]["quote_unmatched"] is True
-    assert "その item の evidence で text の全主張を照合する" in grounded.audit_system_prompt(detailed=mode == "detailed")
+    assert "当該 item が実際に引用した citations の原文集合と照合する" in grounded.audit_system_prompt(detailed=mode == "detailed")
     assert result.timing["procedure_quotes"]["paraphrase_verified"] == 1
     assert result.dropped[0]["ignored"] is True
     assert "E1" not in result.summary

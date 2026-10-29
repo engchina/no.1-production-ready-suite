@@ -50,12 +50,23 @@ def test_confirmed_exact_summary_is_kept_with_unrelated_unconfirmed_body():
     ctx = context(record(0, TEXT, "合成設定", source="synthetic.pdf"))
     eid = ids(ctx, QUESTION)[TEXT]
     model = FakeModel(
-        [draft(item(eid, CLAIM, "追加ボタンがあります。"), item(eid, GOOD, GOOD), summary=GOOD)],
-        [{**audit((0, "unsupported", "matched", ""), (1, "supported", "matched", ""), summary_supported=True), "summary_basis": [GOOD]}],
+        [draft(item(eid, CLAIM, "追加ボタンがあります。", request_id="Q1"), item(eid, GOOD, GOOD, request_id="Q1"), summary=GOOD)],
+        [
+            {
+                **audit(
+                    (0, "unsupported", "matched", ""),
+                    (1, "supported", "matched", ""),
+                    requests=[("Q1", "addressed")],
+                    summary_supported=True,
+                ),
+                "summary_basis": [GOOD],
+            }
+        ],
     )
     with patch("test_grounded_answer.get_settings", return_value=replace(get_settings(), answer_max_correction_rounds=0)):
         result = run(model, ctx, QUESTION).response
     assert result.answer_text.startswith(GOOD)
     assert CLAIM in result.answer_text
     assert marks(result)[CLAIM] == ["unsupported"]
+    assert result.generation_trace["finalization"]["summary"]["status"] == "kept"
     assert len(model.prompts) == 2

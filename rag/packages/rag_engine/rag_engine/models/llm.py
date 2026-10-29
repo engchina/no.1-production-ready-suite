@@ -289,13 +289,16 @@ class GroundedCitation(_StrictModel):
 
     # モデル入力ではなく、本検証で毎回再作成する抽出の記録。旧 round の記録も信用しない。
     _extraction: dict[str, str] = PrivateAttr(default_factory=dict)
+    # 生成用の整数範囲からの変換記録。None は保存済みの lines 形式で、モデルの出力には含めない。
+    _wire_range: tuple[int | None, int | None] | None = PrivateAttr(default=None)
 
     evidence_id: str = Field(description="根拠の先頭にある [E1] 形式の番号（角括弧なし）。")
     lines: str = Field(
         default="",
         max_length=20,
         description="引用する行の範囲。行番号（`3| `）の付いた根拠では必ず、text を支える行の番号か範囲（例: 3、3-5）を書く。"
-        "text が述べる操作・値をすべて含む行にする。行番号の無い根拠は空（根拠の全文が引用になる）。",
+        "この出典が担う操作・値を含む行にする。複数の出典で text 全体を共同して支えてよい。"
+        "行番号の無い根拠は空（根拠の全文が引用になる）。",
     )
     # 引用の原文。モデルには出力させず（応答の schema に出さない）、evidence_id と lines からシステムが取り出す（#2830）。
     quote: SkipJsonSchema[str] = Field(
@@ -327,8 +330,9 @@ class GroundedItem(_StrictModel):
     )
     citations: list[GroundedCitation] = Field(
         default_factory=list,
-        description="text を支える出典。gap 以外は 1 つ以上必須、gap は空。各出典の原文はそれだけで text の全体を支える。"
-        "同じ内容を述べた原文が複数の文書にあれば（規則・要件を定めた条項と、それを説明・運用する手順書など）、item を分けずに文書ごとの出典を並べる。"
+        description="text を支える出典。gap 以外は 1 つ以上必須、gap は空。指定した出典の原文の集合で text 全体を支える。"
+        "異なる出典が操作・対象・条件・順序の別々の部分を共同して支えてよく、各出典が text 全体を単独で支える必要はない。"
+        "実際に指定していない原文で不足を補わない。"
         "同じ文書の同じ原文を重ねない。",
     )
     applies: Literal["matched", "conditional", "unverified"] = Field(
@@ -617,6 +621,7 @@ class GroundedItemReview(_StrictModel):
         description="contradictedの複合itemに、独立に支持できる元の説明の部分がある場合だけ返す。各片は元textの厳密な抜粋と、このitemが実際に引用した出典・原文で裏付ける。判断不能ならunknownまたは空。",
     )
     # 原判定を保持し、採否への利用だけを別の方針にする。モデルの応答 schema には内部方針を出さない。
+    observed_support: SkipJsonSchema[str] = Field(default="", description="監査が答えた支持判定（応答の schema には出さない）。")
     observed_applicability: SkipJsonSchema[str] = Field(default="", description="監査が答えた適用性の記録（応答の schema には出さない）。")
     applicability_action: SkipJsonSchema[Literal["apply", "record_only"]] = Field(
         default="apply", description="適用性の原判定を本文へ反映するか。"
@@ -742,6 +747,8 @@ class GroundedFactAudit(_StrictModel):
 
 class GroundedAudit(_StrictModel):
     """監査は降格と不足の指摘だけを行い、原文一致した内容を削除しない。"""
+
+    _wire_validation: dict[str, Any] = PrivateAttr(default_factory=dict)
 
     reviews: list[GroundedItemReview] = Field(max_length=40, description="各 item の局所監査。")
     guide_requirement_reviews: list[GuideRequirementReview] = Field(

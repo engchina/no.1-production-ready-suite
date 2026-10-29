@@ -14,7 +14,7 @@ from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pr_backend_core.llm_request_params_httpx import ParameterDroppingClient
 from pr_backend_core.observability.model_purpose import (
@@ -34,6 +34,7 @@ from rag_engine.config import (
     oci_inference_endpoint,
 )
 from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY, read_prompt, render_prompt_template
+from rag_engine.models.audit_wire import decode_audit_wire, is_audit_wire
 from rag_engine.models.llm import (
     PictureDescriptionOutput,
     RerankTextRank,
@@ -501,6 +502,18 @@ def is_invalid_structured_output(exc: Exception) -> bool:
     return isinstance(exc, ValidationError)
 
 
+def _audit_wire_request(request: dict[str, Any]) -> dict[str, Any]:
+    """固定キー監査だけはraw JSONをcodecで検査する。同じstrict schemaをSDKで送る。"""
+    if not is_audit_wire(request.get("text_format")):
+        return request
+    from openai.lib._parsing._responses import type_to_text_format_param
+
+    return {
+        **{key: value for key, value in request.items() if key != "text_format"},
+        "text": {"format": type_to_text_format_param(request["text_format"])},
+    }
+
+
 def _parse_text_once[StructuredOutputT: BaseModel](
     system_prompt: str,
     prompt: str,
@@ -790,14 +803,14 @@ def _openai_parsed[StructuredOutputT: BaseModel](
         started = time.monotonic()
         try:
             with observe_call("chat", provider.model) as observation:
+                wire_request = _audit_wire_request(request)
                 if streamed:
                     response, timing = _stream_parsed(
-                        _openai_client_for_provider(provider, settings), request, settings, limits, runaway=runaway
+                        _openai_client_for_provider(provider, settings), wire_request, settings, limits, runaway=runaway
                     )
                 else:
-                    response = _openai_client_with_deadline(_openai_client_for_provider(provider, settings), settings).responses.parse(
-                        **request
-                    )
+                    client = _openai_client_with_deadline(_openai_client_for_provider(provider, settings), settings)
+                    response = client.responses.create(**wire_request) if is_audit_wire(text_format) else client.responses.parse(**request)
                 usage = _value(response, "usage")
                 observation.usage(usage.model_dump() if hasattr(usage, "model_dump") else usage)
         except Exception as exc:
@@ -1425,6 +1438,23 @@ def _parsed_response[StructuredOutputT: BaseModel](
     if status == "incomplete":
         reason = str(_value(_value(response, "incomplete_details"), "reason") or "unknown")
         raise IncompleteResponse(f"{provider.label} の Responses API 応答が未完了です: {reason}", reason)
+
+    if is_audit_wire(text_format):
+        refusal = _response_refusal(response)
+        if refusal:
+            raise RuntimeError(f"{provider.label} の Responses API が拒否を返しました: {refusal}")
+        text = _value(response, "output_text")
+        if not isinstance(text, str) or not text:
+            text = "".join(
+                str(_value(content, "text") or "")
+                for content in _iter_response_content(response)
+                if _value(content, "type") == "output_text"
+            )
+        try:
+            # 戻り値はBaseModelだがwire型ではない。呼出側がcanonicalと原wire診断を明示的に取り出す。
+            return cast(StructuredOutputT, decode_audit_wire(text, text_format))
+        except (ValueError, TypeError) as exc:
+            raise InvalidStructuredOutput("固定キー監査の応答を構造検証できません。") from exc
 
     parsed = _value(response, "output_parsed")
     if parsed is not None:

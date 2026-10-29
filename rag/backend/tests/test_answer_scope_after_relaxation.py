@@ -15,6 +15,7 @@ from datetime import date
 from typing import Any, cast
 
 import pytest
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import CragRetrievalGradeOutput
 
 import app.rag.answer_engine as answer_engine
@@ -395,7 +396,10 @@ async def test_request_coverage_re_search_keeps_user_conditions_after_relaxation
 
     def explicit_gap(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
         result = _fake_llm(system, prompt, config, schema, **options)
-        if schema is GroundedDraft and "請求書の再発行は、請求一覧" not in prompt:
+        if (
+            schema in (GroundedDraft, generation_draft_wire_model())
+            and "請求書の再発行は、請求一覧" not in prompt
+        ):
             data = result.model_dump(exclude_unset=True)
             data["items"].append(
                 {

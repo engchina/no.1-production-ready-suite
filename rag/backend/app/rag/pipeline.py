@@ -188,6 +188,12 @@ def scope_with_history_confirmations(
         base,
         context="\n".join(filter(None, (base.context, context))),
         confirmed_premises=tuple([*inherited, *base.confirmed_premises]),
+        confirmed_premise_sources=tuple(
+            [
+                *((question, answer, "user") for question, answer in inherited),
+                *base.confirmed_premise_sources,
+            ]
+        ),
     )
 
 
@@ -379,6 +385,11 @@ class RagPipeline:
         """
         if request._rule_selection_scope:
             recognized = AnswerScope(**request._rule_selection_scope)
+            current_sources: dict[tuple[str, str], str] = {}
+            for question, answer, source in (
+                self._scope.confirmed_premise_sources if self._scope else ()
+            ):
+                current_sources.setdefault((question, answer), source)
             self._scope = AnswerScope(
                 context="\n".join(
                     value
@@ -403,6 +414,25 @@ class RagPipeline:
                         [
                             *(self._scope.confirmed_premises if self._scope else ()),
                             *recognized.confirmed_premises,
+                        ]
+                    )
+                ),
+                confirmed_premise_sources=tuple(
+                    dict.fromkeys(
+                        [
+                            *(
+                                tuple(
+                                    (
+                                        question,
+                                        answer,
+                                        current_sources.get((question, answer), "user"),
+                                    )
+                                    for question, answer in self._scope.confirmed_premises
+                                )
+                                if self._scope
+                                else ()
+                            ),
+                            *recognized.confirmed_premise_sources,
                         ]
                     )
                 ),

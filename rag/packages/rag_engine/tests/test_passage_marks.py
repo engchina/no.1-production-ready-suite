@@ -106,8 +106,9 @@ def test_state_prefers_unverified_and_reasons_are_merged_per_passage():
 
 
 def _run_example(step_review: str = "supported"):
+    question = "①設定を変更する手順を教えてください。②区分Ⅱで選ぶ選択肢の値を教えてください。"
     ctx = context(record(0, STEPS, "設定-(1)変更"), record(1, TABLE, "設定-(2)区分", page=21))
-    found = ids(ctx, QUESTION)
+    found = ids(ctx, question)
     steps, table = found[STEPS], found[TABLE]
     value = draft(
         item(steps, "対象の行の終了日を入力します。", "①対象の行の終了日を入力します。", request_id="Q1"),
@@ -124,7 +125,7 @@ def _run_example(step_review: str = "supported"):
         requests=[("Q1", "addressed"), ("Q2", "addressed")],
     )
     review["summary_basis"] = ["対象の行の終了日を入力します。", "新しい開始日の行を追加します。"]
-    return run(FakeModel([value], [review]), ctx, QUESTION).response
+    return run(FakeModel([value], [review]), ctx, question).response
 
 
 def test_contradicted_and_table_mismatched_items_are_removed():
@@ -135,6 +136,7 @@ def test_contradicted_and_table_mismatched_items_are_removed():
     labels = answer_labels()
     body = result.answer_text.split(labels.removed_section, 1)[0]
     assert result.answer_text.startswith(SUMMARY)
+    assert result.generation_trace["finalization"]["summary"]["status"] == "kept"
     assert "対象の行の終了日を入力します。" in body and "新しい開始日の行を追加します。" in body
     assert "変更は翌月から反映されます。" not in body
     assert "区分Ⅱの選択肢の値は 01 です。" not in body

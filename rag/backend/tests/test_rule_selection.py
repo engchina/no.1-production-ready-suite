@@ -105,6 +105,12 @@ async def test_positive_paraphrase_recognized_once_and_applied_to_same_request(
     applied = apply_rule_selection_scope(SearchRequest(query=text), PAYLOAD, answers)
     assert json.loads(applied.filters["page_ranges"])[0]["page_start"] == 2
     assert applied._rule_selection_scope["search_terms"] == ("検索A",)
+    assert applied._rule_selection_scope["confirmed_premises"] == (
+        ("どのモードですか？", "モードA"),
+    )
+    assert applied._rule_selection_scope["confirmed_premise_sources"] == (
+        ("どのモードですか？", "モードA", "question"),
+    )
     assert "対象はモードA" in applied._rule_selection_scope["context"]
     assert "_rule_selection_scope" not in applied.model_dump()
     assert await recognize_rule_selections(PAYLOAD, text, Settings(), answers=answers) == answers

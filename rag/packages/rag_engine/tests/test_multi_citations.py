@@ -204,7 +204,7 @@ def test_article_citations_do_not_enable_an_audit_in_none_mode():
 
     result = _run(model, ctx)
 
-    assert [name for name, _prompt in model.prompts] == ["GroundedDraft"]
+    assert [name for name, _prompt in model.prompts] == ["GroundedDraftWire"]
     assert not _audit_inputs(model)
     assert other not in marks(result)
     trace = result.generation_trace
@@ -236,7 +236,7 @@ def test_without_article_citations_the_audit_mode_none_calls_no_audit():
 
     result = _run(model, ctx)
 
-    assert [name for name, _prompt in model.prompts] == ["GroundedDraft"]
+    assert [name for name, _prompt in model.prompts] == ["GroundedDraftWire"]
     assert "article_audit_items" not in result.generation_trace["rounds"][0]["timing"]
 
 

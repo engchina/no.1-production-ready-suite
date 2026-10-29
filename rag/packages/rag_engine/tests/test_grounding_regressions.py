@@ -96,7 +96,7 @@ def test_requested_number_spelling_preserves_source_and_grounding(value, instruc
     assert text in result.answer_text
     assert not result.envelope["passage_marks"]
     assert source == ctx.records[0].text
-    generation_prompt = next(prompt for schema, prompt in model.prompts if schema == "GroundedDraft")
+    generation_prompt = next(prompt for schema, prompt in model.prompts if schema == "GroundedDraftWire")
     assert instruction in generation_prompt
     assert '"kind": "context"' in generation_prompt
 

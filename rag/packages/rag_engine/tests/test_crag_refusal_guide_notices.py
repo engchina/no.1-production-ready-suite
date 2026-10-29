@@ -68,7 +68,7 @@ def test_both_early_return_callers_forward_resolved_guide_notices(caller):
     else:
         with patch.object(a, "build_runtime_knowledge_context", return_value=knowledge):
             result, calls = run_answer(OVERVIEW, grade(OVERVIEW, partial=False), lambda context: pytest.fail("生成は不要"))
-        assert all(schema != "GroundedDraft" for schema, _ in calls)
+        assert all(schema not in {"GroundedDraft", "GroundedDraftWire"} for schema, _ in calls)
     assert NOTICE in result.answer_text
     assert result.generation_trace["crag_generation_gate"]["generation_calls"] == 0
     assert result.generation_trace["crag_assessment"]["input_stage"] == "prepared_for_generation"

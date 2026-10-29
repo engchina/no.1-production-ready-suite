@@ -576,6 +576,7 @@ def build_engine_settings(
     output_dir: Path,
     runtime_knowledge_path: Path | None = None,
     answer_model_id: str | None = None,
+    scope: AnswerScope | None = None,
 ) -> Any:
     """backend Settings から rag_engine の Settings を作る(env や .env は読まない)。
 
@@ -788,9 +789,14 @@ def build_engine_settings(
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
     engine_settings = engine_get_settings(environ=environ, dotenv_path=None)
+    premises = _confirmed_premise_records(settings, scope)
     return replace(
         engine_settings,
         domain_keywords_override=tuple(settings.rag_domain_keywords),
+        confirmed_premises=tuple((item["question"], item["answer"]) for item in premises),
+        confirmed_premise_sources=tuple(
+            (item["question"], item["answer"], item["source"]) for item in premises
+        ),
         known_conditions=guide_known_conditions(
             settings.rag_support_guide if settings.rag_support_guide_enabled else {}
         ),
@@ -835,13 +841,25 @@ class AnswerScope:
     label: str = ""
     # 実際に選んだ答え・自由入力だけ。設定された指示や仮定を利用者の事実にしない。
     confirmed_premises: tuple[tuple[str, str], ...] = ()
+    confirmed_premise_sources: tuple[tuple[str, str, str], ...] = ()
 
 
-def _confirmed_validation_premises(
+def _confirmed_premise_records(
     settings: Settings, scope: AnswerScope | None
 ) -> list[dict[str, str]]:
-    """生成に渡した確定条件を最終照合へ渡す。展示用 context の文章は解析しない。"""
-    pairs = list(scope.confirmed_premises) if scope is not None else []
+    """利用者の確定した前提の出所を保持する。展示用の自由文から事実を作らない。"""
+    records: dict[tuple[str, str], dict[str, str]] = {}
+    if scope is not None:
+        sources: dict[tuple[str, str], str] = {}
+        for question, answer, source in scope.confirmed_premise_sources:
+            sources.setdefault((question, answer), source)
+        for question, answer in scope.confirmed_premises:
+            # 既存scopeの明示的な組は、確認で実際に答えた値。質問から認識した組は出所を伴う。
+            source = sources.get((question, answer), "user")
+            if source in {"user", "question"} and answer.strip():
+                records.setdefault(
+                    (question, answer), {"question": question, "answer": answer, "source": source}
+                )
     known = (settings.rag_support_guide or {}).get("known_conditions")
     if settings.rag_support_guide_enabled and isinstance(known, list):
         for item in known:
@@ -854,11 +872,20 @@ def _confirmed_validation_premises(
             question = str(item.get("label") or "").strip()
             answer = str(item.get("value") or "").strip()
             if question and answer:
-                pairs.append((question, answer))
+                records.setdefault(
+                    (question, answer),
+                    {"question": question, "answer": answer, "source": str(item["source"])},
+                )
+    return list(records.values())
+
+
+def _confirmed_validation_premises(
+    settings: Settings, scope: AnswerScope | None
+) -> list[dict[str, str]]:
+    """最終照合の既存の質問・回答契約へ、同じ確定前提だけを写す。"""
     return [
-        {"question": question, "answer": answer}
-        for question, answer in dict.fromkeys(pairs)
-        if answer.strip()
+        {"question": item["question"], "answer": item["answer"]}
+        for item in _confirmed_premise_records(settings, scope)
     ]
 
 
@@ -979,6 +1006,7 @@ class AnswerEngine:
                 output_dir=work_dir,
                 runtime_knowledge_path=runtime_path,
                 answer_model_id=self._answer_model_id,
+                scope=self._scope,
             )
             # 回答の専用の thread で動かし、打ち切り・取り消しを thread に伝える(#1422)。
             result = await run_answer_in_thread(

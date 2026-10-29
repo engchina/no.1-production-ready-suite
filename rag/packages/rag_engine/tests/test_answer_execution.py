@@ -401,6 +401,7 @@ class AnswerExecutionTests(unittest.TestCase):
         # 回答の生成（草稿・監査）だけが回答の側に足される。根拠を集める LLM の呼び出しは同じ。
         self.assertEqual(search_calls, answer_calls[: len(search_calls)])
         self.assertNotIn("GroundedDraft", search_calls)
+        self.assertNotIn("GroundedDraftWire", search_calls)
         self.assertEqual(searched.answer_text, "")
         self.assertEqual(searched.answer_flow, answered.answer_flow)
         self.assertEqual(

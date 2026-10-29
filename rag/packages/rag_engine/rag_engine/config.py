@@ -407,6 +407,9 @@ class Settings:
     # 分かっている条件（業務ガイドの条件の名前と値。MCP の conditions・質問で決まった条件。#1492）。backend が
     # 業務ガイドの照合の結果から渡す。回答の確認の項目のうち、これを確かめる項目を決定的に除く。
     known_conditions: tuple[tuple[str, str], ...] = ()
+    # backendが利用者の確定した回答・質問から選別した前提。設定保存や環境変数からは読み込まない。
+    confirmed_premises: tuple[tuple[str, str], ...] = ()
+    confirmed_premise_sources: tuple[tuple[str, str, str], ...] = ()
     # 業務ガイドの照合で分からなかった選択の条件（#2404）。(条件の id, 名前, ((選択肢, (言い換え, ...)), ...))。
     # 選択肢が項目の種類に対応する条件だけを、根拠の画面の図の項目の種類で決める（generation.form_field_kinds）。
     evidence_conditions: tuple[tuple[str, str, tuple[tuple[str, tuple[str, ...]], ...]], ...] = ()

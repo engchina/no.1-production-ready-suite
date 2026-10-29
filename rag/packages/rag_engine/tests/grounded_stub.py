@@ -8,9 +8,12 @@ payload の検証を生成の出力形式から独立させる。
 import re
 from unittest.mock import patch
 
+from audit_fixtures import legacy_audit_result
 from pydantic import BaseModel, ConfigDict
 
 from rag_engine.generation import answering, grounded
+from rag_engine.generation.citation_wire import generation_draft_wire_model
+from rag_engine.models.audit_wire import is_audit_wire
 from rag_engine.models.llm import CitedEvidenceOutput, GroundedAudit, GroundedDraft, GroundedFactAudit
 
 
@@ -83,7 +86,8 @@ def stub_generation(testcase, target: str = "rag_engine.generation.answering.syn
 
 def echo_model(system, prompt, settings, schema, **options):
     """最初の根拠の先頭行をそのまま引用する。実際の生成経路で prompt の内容を確認する用途。"""
-    if schema is GroundedDraft:
+    if schema in (GroundedDraft, generation_draft_wire_model()):
+        # 既存fixtureの自由引用をcanonicalで再生する。生成wireの構造検証は専用テストで行う。
         source_prompt = re.sub(r"<補助情報[（(]quote 不可[）)]>.*?</補助情報>\n?", "", prompt, flags=re.S)
         match = re.search(r"\[(E[0-9]+)\][^\n]*\n([^\n]+)", source_prompt)
         # 長い根拠の行には行番号（`1| `）が付く（#2830）。番号を外した原文を引く。
@@ -91,8 +95,9 @@ def echo_model(system, prompt, settings, schema, **options):
         items = [{"kind": "rule", "text": line, "citations": [{"evidence_id": match.group(1), "quote": line}]}] if match else []
         return GroundedDraft.model_validate({"summary": "answer", "items": items, "confidence": "high"})
     # 通常の回答の監査（#2795）は事実の監査の schema で呼ぶ。
-    if schema in (GroundedAudit, GroundedFactAudit):
-        return schema.model_validate(
+    if is_audit_wire(schema) or schema in (GroundedAudit, GroundedFactAudit):
+        parse_fixture = (lambda value: legacy_audit_result(value, schema)) if is_audit_wire(schema) else schema.model_validate
+        return parse_fixture(
             {
                 "goal_alignment": "aligned",
                 "summary_supported": True,

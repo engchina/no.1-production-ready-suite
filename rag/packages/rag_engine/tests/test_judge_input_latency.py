@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from audit_fixtures import legacy_audit_result
 from test_answer_llm_latency import _settings as _engine_settings
 from test_enumeration_sufficiency import BUSINESS_DAY_FIVE, DO_NOT_TOUCH, REPORT, RESERVE, _items
 from test_section_expansion import Grader, SectionStub, _attempt, _expand, _members, _seed_context
@@ -22,6 +23,7 @@ from rag_engine.config import ENTERPRISE_AI_LLM_PROVIDER, LLM_PURPOSE_AUDIT, get
 from rag_engine.generation import crag_support
 from rag_engine.generation import section_expansion as sections
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
+from rag_engine.models.audit_wire import is_audit_wire
 from rag_engine.models.llm import CragRetrievalGradeOutput
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.retrieval.enumeration import ENUMERATION_ASPECT
@@ -72,20 +74,22 @@ def test_audit_uses_its_own_effort_separately_from_generation():
 
 def test_run_round_calls_the_audit_with_the_audit_settings():
     from rag_engine.generation import grounded
+    from rag_engine.generation.citation_wire import generation_draft_wire_model
     from rag_engine.models.llm import GroundedAudit, GroundedDraft
 
     calls = []
 
     def parse_text(system, prompt, settings, schema, **options):
-        calls.append((schema, settings))
-        if schema is GroundedDraft:
+        calls.append((schema.canonical_schema if is_audit_wire(schema) else schema, settings))
+        if schema in (GroundedDraft, generation_draft_wire_model()):
             return GroundedDraft(summary="", confidence="low", items=[])
-        return GroundedAudit(
+        result = GroundedAudit(
             reviews=[],
             request_reviews=[{"request_id": "R1", "status": "missing", "reason": "なし"}],
             summary_supported=False,
             goal_alignment="partial",
         )
+        return legacy_audit_result(result, schema) if is_audit_wire(schema) else result
 
     question = "経費精算の申請方法は？"
     context = AnswerContext(
@@ -103,7 +107,7 @@ def test_run_round_calls_the_audit_with_the_audit_settings():
         parse_images=None,
         audit_settings="audit",
     )
-    assert [(schema.__name__, settings) for schema, settings in calls] == [("GroundedDraft", "generation"), ("GroundedAudit", "audit")]
+    assert [(schema.__name__, settings) for schema, settings in calls] == [("GroundedDraftWire", "generation"), ("GroundedAudit", "audit")]
     calls.clear()
     # 渡さなければ監査も生成と同じ設定（従来の動き）。
     grounded.run_round(

@@ -355,11 +355,11 @@ def test_available_or_unverified_material_never_triggers_another_search(monkeypa
             recover_requests=lambda *args: searches.append(args),
         )
     assert not searches
-    generation_calls = [schema for schema, _ in model.prompts if schema == "GroundedDraft"]
+    generation_calls = [schema for schema, _ in model.prompts if schema == "GroundedDraftWire"]
     assert len(generation_calls) == (2 if audit_mode == "detailed" and evidence_status == "available" else 1)
     assert shown_text in result.response.answer_text
     if audit_mode == "none":
-        assert all(schema == "GroundedDraft" for schema, _ in model.prompts)
+        assert all(schema == "GroundedDraftWire" for schema, _ in model.prompts)
     else:
         decision = result.response.generation_trace["rounds"][0]["request_recovery"]["decisions"][0]
         assert decision["action"] == ("correction" if evidence_status == "available" else "retain")
@@ -441,7 +441,7 @@ def test_invalid_material_references_remain_unverified_without_search_or_rewrite
         result = a.synthesize_grounded_answer(
             QUESTION, old, settings(answer_audit_mode=audit_mode), image_prompt_mode="text_only", recover_requests=unused
         )
-    assert len([schema for schema, _ in model.prompts if schema == "GroundedDraft"]) == 1
+    assert len([schema for schema, _ in model.prompts if schema == "GroundedDraftWire"]) == 1
     decision = result.response.generation_trace["rounds"][0]["request_recovery"]["decisions"][0]
     assert decision["cause"] == "unverified_evidence" and decision["action"] == "retain"
     assert OLD_TEXT in result.response.answer_text
