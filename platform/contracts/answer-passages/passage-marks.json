@@ -12,6 +12,7 @@
     "citation_range_out_of_bounds": {"kind": "passage", "state": "unverified", "label": "引用行が根拠の範囲外"},
     "citation_extraction_failed": {"kind": "passage", "state": "unverified", "label": "引用原文を抽出できない"},
     "citation_heading_only": {"kind": "passage", "state": "unverified", "label": "引用した範囲が見出しだけ"},
+    "citation_content_unusable": {"kind": "passage", "state": "unverified", "label": "引用が区切り線・書式のみ"},
     "citation_version_mismatch": {"kind": "passage", "state": "unverified", "label": "引用元の版を確認できない"},
     "unassessed": {"kind": "passage", "state": "unverified", "label": "確かめが終わっていない"},
     "figure_not_read": {"kind": "passage", "state": "unverified", "label": "図の画像を読めておらず確かめられない"},

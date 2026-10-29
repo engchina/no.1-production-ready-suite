@@ -311,3 +311,61 @@ test("引用の原因別の表示を原文不一致と意味の未確認に分�
   await toggles.last().scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("citation-cause-semantic.png") });
 });
+
+// 区切り線の原文は存在するが、操作の裏付けとしては使わない。本文と閲覧経路は残す。
+test("区切り線だけの引用は局所的に案内し、存在する原文を引き続き開ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const contract = JSON.parse(readFileSync(`${__dirname}/../../../platform/contracts/answer-passages/passage-marks.json`, "utf8")) as { reason_codes: Record<string, { label: string }> };
+  const code = "citation_content_unusable";
+  const operation = "合成の操作を行います。";
+  const separator = "========================================";
+  const detail = "指定範囲の原文は取得できましたが、区切り線・書式記号だけのため、この説明の根拠として扱っていません。";
+  await page.route("**/api/documents/doc-a/content**", (route) =>
+    route.fulfill({ status: 200, contentType: "text/plain; charset=utf-8", body: separator })
+  );
+  const rawSource = citation("doc-a:c-separator", separator, {
+    evidence_model_used: false,
+    evidence_parent_used: false,
+  });
+  const answer = await ask(page, [rawSource], undefined, {
+    text: [
+      "資料により確認できた事項",
+      "・合成の確認済み説明。",
+      "",
+      "根拠で確かめきれていない事項",
+      "・" + operation,
+    ].join("\n"),
+    passages: {
+      passage_marks: [{
+        text: operation,
+        state: "unverified",
+        reasons: [{ code, label: contract.reason_codes[code].label, detail }],
+      }],
+      removed_passages: [],
+      answer_warnings: [],
+    },
+  });
+  await expect(answer.getByText(operation, { exact: true })).toBeVisible();
+  await answer.getByTestId("answer-passage-mark-toggle").click();
+  const reasons = answer.getByTestId("answer-passage-mark-reasons");
+  await expect(reasons).toContainText(contract.reason_codes[code].label);
+  await expect(reasons).toContainText(detail);
+  await expect(answer).not.toContainText(contract.reason_codes.quote_unmatched.label);
+  await expect(answer).not.toContainText("資料が不足");
+  // 有効な出典の行には結び付けず、実際に渡した箇所の一覧からは閲覧できる。
+  await expect(answer.getByRole("button", { name: /の原文を開く/ })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("citation-content-unusable-mark.png") });
+
+  const summary = page.locator("summary").filter({ hasText: "AI に渡した 1 件" });
+  await expect(summary).not.toContainText("回答で引用");
+  const card = page.getByTestId("evidence-card");
+  if (!(await card.isVisible())) await summary.click();
+  await card.getByRole("button", { name: "文書 A.pdf の根拠を表示" }).click();
+  const opened = await openedSheet(page);
+  expect(opened.excerpt).toBe(separator);
+  await expect(opened.sheet).not.toContainText(contract.reason_codes.quote_unmatched.label);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("citation-content-unusable-source.png") });
+  await closeSheet(page);
+  await expect(answer.getByText(operation, { exact: true })).toBeVisible();
+});
