@@ -86,48 +86,162 @@ def review_feedback(current: Any) -> dict[str, Any]:
     }
 
 
-def retention_check(candidate: Any, current: Any, selection: Mapping[str, Any]) -> tuple[bool, str]:
-    """件数や短さだけで改善としない。対応を確定できない書換えは前回答へ戻す。"""
+# 採否の理由コード（#3781）。``adoption`` は最初に当たった理由、``adoption_reasons`` は当たったすべて。
+ADOPTED = "deterministic_checks_improved"
+_RANGE_CODES = frozenset({"citation_range_missing", "citation_range_invalid", "citation_range_out_of_bounds"})
+UNAUDITED_REFINEMENT_DETAIL = "根拠を絞った再回答で加えた・言い換えた説明で、監査なしのため意味の支持を確かめていない"
+
+
+@dataclass(frozen=True)
+class AdoptionDecision:
+    adopted: bool
+    reason: str
+    reasons: tuple[str, ...]
+    checks: dict[str, Any]
+    candidate: Any
+
+
+def _normalized(text: str) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(text or "")))
+
+
+def _anchors(entry: Any) -> set[tuple[str, str]]:
+    """主張の根拠の位置（出典の永続 ID と抽出した原文）。表示ラベル・本文の言い回しに依らない。"""
     from rag_engine.generation import grounded
 
+    result = set()
+    for own in grounded.item_citations(entry):
+        if own.span is None:
+            continue
+        proof = own.citation_resolution
+        source = str(proof.get("source_id") or own.span.get("source_id") or own.span.get("evidence_id") or "")
+        quote = _normalized(proof.get("resolved_quote") or own.item.quote or "")
+        if source and quote:
+            result.add((source, quote))
+    return result
+
+
+def _covers(anchors: set[tuple[str, str]], anchor: tuple[str, str]) -> bool:
+    source, quote = anchor
+    return any(other_source == source and quote in other_quote for other_source, other_quote in anchors)
+
+
+def _claims(round_: Any) -> list[Any]:
+    return [entry for entry in round_.checked if entry.confirmed and entry.item.kind != "gap"]
+
+
+def _deterministic_counts(round_: Any) -> dict[str, int]:
+    """決定的な検査の結果だけを数える（意味の支持は含めない）。"""
+    from rag_engine.generation import grounded
+
+    marks = [mark.get("code", "") for entry in round_.checked for own in grounded.item_citations(entry) for mark in own.marks]
+    return {
+        # 監査の判定を診断だけにする設定では ``Round.verified`` が 0 になるため、印の無い説明を直接数える。
+        "confirmed": len(_claims(round_)),
+        "marked": round_.marked,
+        "citation_errors": sum(code in grounded.UNSOURCED_MARK_CODES and code not in _RANGE_CODES for code in marks)
+        + sum(1 for entry in round_.dropped if not entry.get("ignored") and not entry.get("kept")),
+        "citation_range_errors": len(grounded.citation_range_issues(round_.checked, round_.dropped)),
+        "plan_errors": len(round_.timing.get("request_plan_errors") or ()),
+        "required_guide_steps_explained": sum(
+            bool(step.get("required")) and step.get("status") == grounded.GUIDE_STEP_EXPLAINED for step in round_.guide_steps
+        ),
+    }
+
+
+def adoption_check(candidate: Any, current: Any, selection: Mapping[str, Any]) -> AdoptionDecision:
+    """決定的な検査が良くなり、確認済みの主張と必須の根拠を失わない候補だけを採る（#3781）。
+
+    主張の保持は本文の逐語ではなく、根拠の位置（出典と抽出した原文）で比べる。監査なし（none）では、加えた・
+    言い換えた説明に ``unassessed`` の印を付けて採り、要約は監査なしの警告のまま出す。件数や短さだけでは採らない。
+    """
+    from rag_engine.generation import grounded
+
+    reasons: list[str] = []
     if (
         selection.get("candidate_missing_required_groups")
         or selection.get("candidate_missing_uncertain_groups")
         or selection.get("unresolved_requirement_ids")
     ):
-        return False, "required_evidence_not_preserved"
+        reasons.append("required_evidence_not_preserved")
     if candidate.audit_cut:
-        return False, "review_incomplete"
+        reasons.append("review_incomplete")
+    if not any(entry.published and entry.item.kind != "gap" for entry in candidate.checked):
+        reasons.append("no_answer_content")
+    before, after = _deterministic_counts(current), _deterministic_counts(candidate)
+    candidate_claims = _claims(candidate)
+    candidate_anchors = set().union(*(_anchors(entry) for entry in candidate_claims))
+    previous = _claims(current)
+    # 根拠の位置を持たない確認済みの説明は、保持を確かめられないので失ったと扱う。
+    lost = [
+        entry for entry in previous if not (anchors := _anchors(entry)) or not all(_covers(candidate_anchors, anchor) for anchor in anchors)
+    ]
+    if lost:
+        reasons.append("previous_claim_lost")
+    for key, code in (
+        ("citation_errors", "citation_errors_increased"),
+        ("citation_range_errors", "citation_range_errors_increased"),
+        ("plan_errors", "plan_errors_increased"),
+    ):
+        if after[key] > before[key]:
+            reasons.append(code)
+    if after["required_guide_steps_explained"] < before["required_guide_steps_explained"]:
+        reasons.append("required_guide_step_lost")
+    if current.addressed - candidate.addressed - candidate.withdrawn_requests:
+        reasons.append("addressed_request_lost")
+    unchanged = {
+        (_normalized(entry.item.condition) + "\n" + _normalized(entry.item.text), anchor)
+        for entry in previous
+        for anchor in _anchors(entry)
+    }
 
-    def normalized(text: str) -> str:
-        return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
+    def verbatim(entry: Any) -> bool:
+        anchors = _anchors(entry)
+        text = _normalized(entry.item.condition) + "\n" + _normalized(entry.item.text)
+        return bool(anchors) and all((text, anchor) in unchanged for anchor in anchors)
 
-    published = [entry for entry in candidate.checked if entry.published and entry.item.kind != "gap"]
-    body = normalized("\n".join(entry.item.text for entry in published))
-    if not body:
-        return False, "no_answer_content"
-    cursor = 0
-    previous_body = normalized("\n".join(entry.item.text for entry in current.checked if entry.published and entry.item.kind != "gap"))
-    conditions = normalized("\n".join(entry.item.condition + entry.item.text for entry in published))
-    previous_conditions = normalized("\n".join(entry.item.condition + entry.item.text for entry in current.checked if entry.published))
-    if normalized(candidate.summary) != normalized(current.summary):
-        return False, "summary_change_support_unverified"
-    if any(entry.item.condition and normalized(entry.item.condition) not in previous_conditions for entry in published):
-        return False, "new_condition_support_unverified"
-    for entry in current.checked:
-        if entry.confirmed and entry.item.kind != "gap":
-            position = body.find(normalized(entry.item.text), cursor)
-            if position < 0:
-                return False, "previous_content_retention_unverified"
-            cursor = position + len(normalized(entry.item.text))
-            if entry.item.condition and normalized(entry.item.condition) not in conditions:
-                return False, "previous_condition_retention_unverified"
-    if any(normalized(entry.item.text) not in previous_body for entry in published):
-        return False, "new_claim_support_unverified"
-    gaps = {normalized(entry.item.text) for entry in candidate.checked if entry.item.kind == "gap"}
-    if any(normalized(entry.item.text) not in gaps for entry in current.checked if entry.item.kind == "gap"):
-        return False, "previous_gap_resolution_unverified"
-    return (True, "basic_checks_improved") if grounded.better(candidate, current) else (False, "no_verified_improvement")
+    rewritten = [entry for entry in candidate_claims if not verbatim(entry)]
+    rewritten_requests = {entry.item.request_id for entry in rewritten}
+    gaps = {_normalized(entry.item.text) for entry in candidate.checked if entry.item.kind == "gap"}
+    gap_requests = {entry.item.request_id for entry in candidate.checked if entry.item.kind == "gap"}
+    if any(
+        _normalized(entry.item.text) not in gaps
+        and not (entry.item.request_id and entry.item.request_id in gap_requests | rewritten_requests)
+        for entry in current.checked
+        if entry.item.kind == "gap"
+    ):
+        reasons.append("previous_gap_resolution_unverified")
+    improved = (
+        after["confirmed"] >= before["confirmed"]
+        and after["marked"] <= before["marked"]
+        and (after["confirmed"] > before["confirmed"] or after["marked"] < before["marked"])
+    )
+    if not improved:
+        reasons.append("no_deterministic_improvement")
+    unaudited = candidate.timing.get("audit") == grounded.AUDIT_MODE_NONE
+    checks: dict[str, Any] = {
+        "audit_mode": "none" if unaudited else "audited",
+        "before": before,
+        "after": after,
+        "previous_confirmed_claims": len(previous),
+        "previous_confirmed_claims_lost": len(lost),
+        "new_or_reworded_claims": len(rewritten),
+        "summary_changed": _normalized(candidate.summary) != _normalized(current.summary),
+        "unassessed_marked": 0,
+    }
+    if reasons:
+        return AdoptionDecision(False, reasons[0], tuple(reasons), checks, candidate)
+    if unaudited:
+        # 監査なしでは、加えた・言い換えた説明の意味の支持を確かめていない。確かめた説明として出さない。
+        for entry in rewritten:
+            entry.mark("unassessed", UNAUDITED_REFINEMENT_DETAIL)
+        checks["unassessed_marked"] = len(rewritten)
+        candidate = replace(
+            candidate,
+            audit=grounded.deterministic_request_audit(candidate.requests, candidate.checked),
+            summary_warning=candidate.summary_warning or ("監査なし" if str(candidate.summary or "").strip() else ""),
+        )
+    return AdoptionDecision(True, ADOPTED, (ADOPTED,), checks, candidate)
 
 
 def refine_answer(
@@ -187,11 +301,14 @@ def refine_answer(
         return RefinementResult(
             None, original, False, {**trace, "execution": "error", "error_type": type(exc).__name__, "initial_answer_retained": True}
         )
-    adopted, reason = retention_check(candidate, current, selection.diagnostics)
+    decision = adoption_check(candidate, current, selection.diagnostics)
+    adopted, candidate = decision.adopted, decision.candidate
     trace.update(
         execution="completed",
         additional_generation_calls=candidate.timing.get("generation_calls", 1),
-        adoption=reason,
+        adoption=decision.reason,
+        adoption_reasons=list(decision.reasons),
+        adoption_checks=decision.checks,
         adopted=adopted,
         initial_answer_retained=not adopted,
         final_generation_evidence_scope="selected_spans" if adopted else "initial_spans",

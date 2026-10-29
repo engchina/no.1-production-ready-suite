@@ -7158,7 +7158,12 @@ def deterministic_audit(question: str, checked: Sequence[CheckedItem]) -> Ground
     partial）、無ければ missing。要求の id の付いていない説明は、どの要求の説明か決められないので全要求の説明とする。
     主張ごとの判定（reviews）は返さない（決定的な検査の印だけ）。
     """
-    units = [unit for unit in task_contract(question)["request_units"] if unit.get("kind") != "context"]
+    return deterministic_request_audit(task_contract(question)["request_units"], checked)
+
+
+def deterministic_request_audit(request_units: Sequence[Mapping[str, Any]], checked: Sequence[CheckedItem]) -> GroundedAudit:
+    """``deterministic_audit`` を要求単位から作る。round の後で印を足したとき（#3781）に充足を決め直すために使う。"""
+    units = [unit for unit in request_units if unit.get("kind") != "context"]
     entries = [entry for entry in checked if entry.published and not entry.added and entry.item.kind != "gap"]
 
     def owns(unit_id: str, request_id: str) -> bool:
