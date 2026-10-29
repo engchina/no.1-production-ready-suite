@@ -2802,6 +2802,7 @@ export interface ChunkingSettingsUpdate {
 
 /** 回答の検索と生成の全体既定(全体設定だけで決め、検索・回答プロファイルでは上書きしない。#593)。 */
 export interface AnsweringSettingsData {
+  answer_audit_mode: "none" | "standard" | "detailed";
   query_strategy: QueryStrategyName;
   answer_flow: AnswerFlowName;
   neighbor_child_count: number;
@@ -5152,6 +5153,7 @@ export interface RunSummary {
   status: RunStatus;
   answer_outcome: string | null;
   verification: RunVerification | null;
+  validation_execution?: string | null;
   confidence: string | null;
   needs_human_review: boolean | null;
   citation_count: number;

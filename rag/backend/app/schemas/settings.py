@@ -751,6 +751,7 @@ class AnsweringSettingsData(BaseModel):
 
     query_strategy: QueryStrategy
     answer_flow: AnswerFlow
+    answer_audit_mode: Literal["none", "standard", "detailed"]
     neighbor_child_count: int = Field(ge=0, le=20)
     rerank_enabled: bool
     screen_linking_enabled: bool
@@ -771,6 +772,7 @@ class AnsweringSettingsUpdate(BaseModel):
 
     query_strategy: QueryStrategy | None = None
     answer_flow: AnswerFlow | None = None
+    answer_audit_mode: Literal["none", "standard", "detailed"] | None = None
     neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
     rerank_enabled: bool | None = None
     screen_linking_enabled: bool | None = None

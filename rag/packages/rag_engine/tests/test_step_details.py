@@ -158,15 +158,15 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
     def test_answer_round_without_audit_does_not_describe_an_audit(self):
         """監査の型が none なら、目的・推論の量・要求の充足に、行っていない監査を書かない（#2966）。
 
-        条を出典にした説明だけは監査するので、目的はその範囲を示す（#3561）。
+        条を出典にした説明にも監査を実行したとは表示しない。
         """
         from dataclasses import replace
 
         steps = _by_name(self.run_flow(replace(_rerank_ready_settings(), answer_audit_mode="none")))
         step = steps["回答文の生成と根拠確認（1回目）"]
         answer = _fields(step)
-        self.assertIn("生成の後の LLM の監査は、条を出典にした説明だけに掛けます", answer["目的"])
-        self.assertNotIn("監査はしません", answer["目的"])
+        self.assertIn("生成後の LLM 監査は実行しません", answer["目的"])
+        self.assertNotIn("条を出典にした説明だけに掛けます", answer["目的"])
         self.assertNotIn("別のLLM呼出で適用性を監査", answer["目的"])
         self.assertNotIn("監査した説明", answer)
         self.assertNotIn("要求の充足（監査）", answer)
@@ -180,14 +180,20 @@ class CragFlowStepDetailsTest(unittest.TestCase):
     def test_grade_and_rewrite_steps(self):
         grades = [
             _crag_grade(sufficient=False, confidence=0.1, reason="根拠が話題違い", rewritten_query="合成の探し直しの検索文"),
-            _crag_grade(sufficient=True, confidence=0.92, relevant_chunk_ids=["chunk-good"], reason="根拠が直接答えている"),
+            _crag_grade(
+                sufficient=True,
+                confidence=0.92,
+                relevant_chunk_ids=["chunk-good"],
+                reason="根拠が直接答えている",
+                support_text="設定画面を開いて保存ボタンを押します。",
+            ),
         ]
 
         def model(system, prompt, settings, schema, **options):
             return grades.pop(0) if schema is CragRetrievalGradeOutput else echo_model(system, prompt, settings, schema, **options)
 
         initial = _answer_context([_chunk_record("chunk-bad", "child", 1, "", "合成の別の話題")])
-        corrected = _answer_context([_chunk_record("chunk-good", "child", 2, "", "合成の正しい根拠")])
+        corrected = _answer_context([_chunk_record("chunk-good", "child", 2, "", "設定画面を開いて保存ボタンを押します。")])
         with (
             patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", return_value=_chunk_run_stub()),
             patch("rag_engine.generation.answering.check_adb_hybrid_search_ready"),
@@ -204,7 +210,7 @@ class CragFlowStepDetailsTest(unittest.TestCase):
             )
         steps = _by_name(result)
         first = _fields(steps["根拠確認（1回目）"])
-        self.assertTrue(first["結果"].startswith("不足"))
+        self.assertTrue(first["結果"].startswith("生成に使える材料なし"))
         self.assertEqual(first["判定した根拠"], "1 件")
         self.assertEqual(first["関係あり / なし"], "0 件 / 0 件")
         self.assertEqual(first["次の対処"], "検索文を書き換えて探し直す")
@@ -217,7 +223,7 @@ class CragFlowStepDetailsTest(unittest.TestCase):
         self.assertIn("回答に渡す根拠", _fields(second_search)["結果"])
         self.assertTrue(any("今回追加した 1 本" in line for line in _lines(second_search)))
         second = _fields(steps["根拠確認（2回目）"])
-        self.assertTrue(second["結果"].startswith("十分"))
+        self.assertTrue(second["結果"].startswith("生成に利用可能"))
         self.assertEqual(second["関係あり / なし"], "1 件 / 0 件")
         self.assertNotIn("次の対処", second)
         self.assertIn("検索文", _fields(steps["検索語の再確定（書き換え後）"]))

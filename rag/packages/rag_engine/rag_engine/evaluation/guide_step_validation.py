@@ -142,7 +142,7 @@ def validate_guide_steps(
     # 渡した根拠に根拠の無い手順は、呼び出し側が根拠を集めていない（根拠の共有が分からない）手順として照らす（#2706）。
     missing = [step_id for step_id, _title, keys in guide_steps if not keys]
     semantics = grounded.GuideStepSemantics(embed)
-    coverage, assigned = grounded.guide_step_assignment(
+    coverage, _assigned = grounded.guide_step_assignment(
         guide_steps,
         checked,
         spans,
@@ -151,7 +151,10 @@ def validate_guide_steps(
         semantics,
         missing,
     )
-    explaining = {step_id: paragraphs[index] for index, step_id in assigned.items()}
+    explaining = {
+        step["step_id"]: "\n".join(dict.fromkeys(paragraphs[index] for index in step["assignment"]["assigned_item_indexes"]))
+        for step in coverage
+    }
     steps = [
         {
             "step_id": step["step_id"],

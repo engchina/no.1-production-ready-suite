@@ -324,11 +324,21 @@ def test_equal_token_sets_preserve_distinct_original_request_ids(monkeypatch):
 def test_available_or_unverified_material_never_triggers_another_search(monkeypatch, audit_mode, evidence_status):
     from test_grounded_answer import audit
 
-    old = context(parent("old", OLD_TEXT))
-    eid = ids(old, QUESTION)[OLD_TEXT]
-    first = draft(item(eid, OLD_TEXT, OLD_TEXT, request_id="Q1"))
+    shown_text = "対象Aの設定画面を開きます。"
+    missing_text = "項目を選択して保存ボタンを押します。"
+    source_text = shown_text + missing_text
+    old = context(parent("old", source_text))
+    eid = ids(old, QUESTION)[source_text]
+    first = draft(item(eid, shown_text, shown_text, request_id="Q1"))
     assessment = audit((0, "supported", "matched", ""), requests=[("Q1", "partial")])
-    assessment["request_reviews"][0].update(evidence_status=evidence_status, evidence_ids=[eid] if evidence_status == "available" else [])
+    assessment["request_reviews"][0].update(
+        evidence_status=evidence_status,
+        evidence_ids=[eid] if evidence_status == "available" else [],
+        missing_content=missing_text,
+        evidence_support=[{"evidence_id": eid, "source": old.records[0].source, "quote": missing_text}]
+        if evidence_status == "available"
+        else [],
+    )
     completed = audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])
     if audit_mode == "standard":
         assessment.pop("unused_evidence_ids")
@@ -347,7 +357,7 @@ def test_available_or_unverified_material_never_triggers_another_search(monkeypa
     assert not searches
     generation_calls = [schema for schema, _ in model.prompts if schema == "GroundedDraft"]
     assert len(generation_calls) == (2 if audit_mode == "detailed" and evidence_status == "available" else 1)
-    assert OLD_TEXT in result.response.answer_text
+    assert shown_text in result.response.answer_text
     if audit_mode == "none":
         assert all(schema == "GroundedDraft" for schema, _ in model.prompts)
     else:
@@ -471,8 +481,9 @@ def test_standard_audit_can_retrieve_confirmed_material_shortage(monkeypatch):
 @pytest.mark.parametrize("crag_enabled", [False, True])
 @pytest.mark.parametrize("coverage_enabled", [False, True])
 def test_two_stage_switch_matrix_uses_existing_generation_and_optional_grading(monkeypatch, tmp_path, crag_enabled, coverage_enabled):
-    old = context(parent("old", OLD_TEXT))
-    merged = context(parent("old", OLD_TEXT), parent("new", NEW_TEXT))
+    initial_text = "対象Aの設定画面を開きます。続きの操作の記載はありません。"
+    old = context(parent("old", initial_text))
+    merged = context(parent("old", initial_text), parent("new", NEW_TEXT))
     new_id = ids(merged, QUESTION)[NEW_TEXT]
     model = FakeModel([gap(), draft(item(new_id, NEW_TEXT, NEW_TEXT, request_id="Q1"))], [])
     searches, grades = [], []
@@ -483,7 +494,22 @@ def test_two_stage_switch_matrix_uses_existing_generation_and_optional_grading(m
 
     def grade(*args, **kwargs):
         grades.append(1)
-        return a.CragRetrievalAttempt(1, QUESTION, tuple(args[3]), True)
+        return a.CragRetrievalAttempt(
+            1,
+            QUESTION,
+            tuple(args[3]),
+            True,
+            generation_usable=True,
+            answerable_parts=(
+                {
+                    "aspect": "requested_result",
+                    "kind": "operation",
+                    "claim": initial_text,
+                    "status": "supported",
+                    "evidence": [{"source_id": old.records[0].chunk_uid, "quote": initial_text}],
+                },
+            ),
+        )
 
     monkeypatch.setattr(a, "check_adb_hybrid_search_ready", lambda **kwargs: None)
     monkeypatch.setattr(a, "build_adb_hybrid_answer_context", search)

@@ -139,7 +139,20 @@ def _crag_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
     """CRAG の評価で「不足」とし、補正検索を 1 回させる(外した後の検索も確かめる)。"""
     if schema is CragRetrievalGradeOutput:
         return CragRetrievalGradeOutput(
-            reason="不足", sufficient=False, confidence=0.2, rewritten_query="登録の手順"
+            reason="後続の手順が不足",
+            sufficient=False,
+            confidence=0.2,
+            rewritten_query="登録の手順",
+            # 補正検索に渡す認可の範囲を試すため、意味評価の代役が明確な不足を返す。
+            # 空の観点は未検証であり、補正検索を要求する入力には使わない。
+            aspect_checks=[
+                {
+                    "aspect": "procedure",
+                    "status": "missing",
+                    "source_ids": [],
+                    "reason": "登録後の確認手順の説明が取得できていない。",
+                }
+            ],
         )
     return _fake_llm(system, prompt, settings, schema, **options)
 

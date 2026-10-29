@@ -222,13 +222,27 @@ def test_non_enumeration_checks_are_unchanged():
 def _grade(question: str, items, *records: AnswerRecord):
     """評価器（スタブ）が全観点 supported・sufficient=true と答えたときの判定。"""
     checks = [
-        {"aspect": aspect, "status": "supported", "source_ids": [records[0].chunk_uid], "reason": "関連"}
+        {
+            "aspect": aspect,
+            "status": "supported",
+            "source_ids": [records[0].chunk_uid],
+            "evidence": [{"source_id": records[0].chunk_uid, "quote": records[0].text}],
+            "reason": "関連",
+        }
         for aspect in task_contract(question)["required_aspects"]
     ]
     output = CragRetrievalGradeOutput(
         candidate_verdicts=[{"chunk_uid": item.chunk_uid, "relevant": True, "reason": "関連"} for item in records],
         enumerated_items=items,
         aspect_checks=checks,
+        answerable_parts=[
+            dict(
+                aspect="requested_result",
+                kind="rule",
+                claim=records[0].text,
+                evidence=[dict(source_id=records[0].chunk_uid, quote=records[0].text)],
+            )
+        ],
         reason="足りる",
         sufficient=True,
         confidence=0.95,
@@ -241,7 +255,7 @@ def _grade(question: str, items, *records: AnswerRecord):
 def test_grader_saying_sufficient_still_reports_the_missing_enumeration():
     attempt = _grade(BUSINESS_DAY_FIVE, _items(("p2", "5 営業日前までに"), ("p12", "3 営業日以内に")), RESERVE, REPORT)
 
-    # 十分性（再検索するか）は business_object で決める。足りない項目は内容の観点の欠けとして章節の拡張へ渡す。
+    # 一部の規則には直接根拠があっても、列挙の不足は章節の拡張へ渡す。
     assert attempt.sufficient is True
     assert ENUMERATION_ASPECT in attempt.missing_aspects
     assert not sections.is_enough(attempt)

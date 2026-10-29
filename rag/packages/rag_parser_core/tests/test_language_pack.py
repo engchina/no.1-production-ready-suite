@@ -11,6 +11,7 @@ from rag_parser_core.language import (
     FIELD_SPECS,
     LanguagePackError,
     bind_pack,
+    build_pack,
     builtin_pack,
     current_pack,
     overrides_from,
@@ -323,3 +324,44 @@ def test_numeric_layout_gaps_and_mixed_notation():
     assert arabic_numbers("一般と一部", kanji=False) == "一般と一部"
     for text in ["四万\t八千", "四万  八千", "四万 八万", "一 二"]:
         assert "48000" not in arabic_numbers(text)
+
+
+_CRAG_COMPAT_KEYS = (
+    "crag_refusal_summary",
+    "crag_missing_aspect_template",
+    "crag_unknown_aspect_template",
+    "crag_quote_only_note",
+    "crag_definition_aspect_template",
+)
+
+
+@pytest.mark.parametrize("mask", range(32))
+def test_build_pack_fills_only_absent_new_crag_labels(mask: int) -> None:
+    raw = builtin_pack().to_dict()
+    raw["answer_labels"]["cause_gap"] = "合成の独自文言"
+    raw["answer_labels"]["crag_quote_only_note"] = "合成の独自注記"
+    for index, key in enumerate(_CRAG_COMPAT_KEYS):
+        if mask & (1 << index):
+            del raw["answer_labels"][key]
+    saved = json.dumps(raw, ensure_ascii=False)
+    pack = build_pack(raw)
+    assert pack.text("answer_labels", "cause_gap") == "合成の独自文言"
+    for key in _CRAG_COMPAT_KEYS:
+        expected = raw["answer_labels"].get(key, builtin_pack().text("answer_labels", key))
+        assert pack.text("answer_labels", key) == expected
+    assert json.dumps(raw, ensure_ascii=False) == saved
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_new_crag_label_explicit_invalid_value_is_not_defaulted(value: object) -> None:
+    raw = builtin_pack().to_dict()
+    raw["answer_labels"]["crag_refusal_summary"] = value
+    with pytest.raises(LanguagePackError):
+        build_pack(raw)
+
+
+def test_other_missing_language_fields_still_fail() -> None:
+    raw = builtin_pack().to_dict()
+    del raw["answer_labels"]["cause_gap"]
+    with pytest.raises(LanguagePackError, match="cause_gap"):
+        build_pack(raw)

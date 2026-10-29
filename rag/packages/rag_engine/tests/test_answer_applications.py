@@ -157,19 +157,18 @@ class ApplicationStepTest(unittest.TestCase):
         self.assertEqual((trace["published"], trace["source"]), (True, "step"))
         self.assertEqual(result.generation_trace["application_step"], {"ran": True, "published": 1})
 
-    def test_step_keeps_the_unaudited_summary_with_a_warning_when_audit_rejects(self):
-        """当てはめの監査が誤りとしたら当てはめは出さず、草稿の summary は警告つきで残す（#2738）。"""
+    def test_step_withholds_the_unsupported_summary_when_audit_rejects(self):
+        """当てはめの監査が誤りとしたら結論を保留し、支持された本文を残す。"""
         rejected = {"application_reviews": [{"index": 0, "valid": False, "reason": "r"}], "summary_supported": True}
         result, _ = neutral_answer(QUESTION, self.STEP_DRAFT, rejected)
         self.assertNotIn(APPLICATIONS_SECTION_TITLE, result.answer_text)
-        self.assertTrue(result.answer_text.startswith("延滞料は1200円です。"))
-        (mark,) = [m for m in result.envelope["passage_marks"] if m["text"] == "延滞料は1200円です。"]
-        self.assertEqual(mark["reasons"][0]["code"], "summary_unaudited")
+        self.assertNotIn("延滞料は1200円です。", result.answer_text)
+        self.assertEqual(result.generation_trace["finalization"]["summary"]["status"], "withheld")
 
     def test_step_is_skipped_without_facts_and_survives_failure(self):
         _, model = neutral_answer("延滞料の計算方法を教えてください。", self.STEP_DRAFT, self.STEP_AUDIT)
         self.assertNotIn("ApplicationDraft", model.calls)
         result, _ = neutral_answer(QUESTION, RuntimeError("LLM 失敗"), self.STEP_AUDIT)
-        self.assertTrue(result.answer_text.startswith("延滞料は1200円です。"))
+        self.assertNotIn("延滞料は1200円です。", result.answer_text)
         self.assertEqual(result.generation_trace["application_step"]["error"], "RuntimeError")
-        self.assertIn("延滞料は1200円です。", [m["text"] for m in result.envelope["passage_marks"]])
+        self.assertEqual(result.generation_trace["finalization"]["summary"]["status"], "withheld")

@@ -36,11 +36,12 @@ def test_summary_output_field_requires_matching_real_definition(definition, matc
         ],
     )
     result = run(model, ctx, "CSVの項目を確認したい").response
-    assert result.answer_text.startswith(summary)
-    marks = [mark for mark in result.envelope["passage_marks"] if mark["text"] == summary]
-    assert bool(marks) is warning
+    assert result.answer_text.startswith(summary) is not warning
+    assert operation in result.answer_text
+    assert not [mark for mark in result.envelope["passage_marks"] if mark["text"] == summary]
     if warning:
-        assert marks[0]["reasons"][0]["code"] == "summary_unaudited"
+        assert summary not in result.answer_text
+        assert result.generation_trace["finalization"]["summary"]["status"] == "withheld"
         assert result.generation_trace["rounds"][0]["audit"]["summary_supported"] is False
     assert removed(result) == []
 

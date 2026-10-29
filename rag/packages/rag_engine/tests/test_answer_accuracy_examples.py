@@ -17,6 +17,7 @@ from rag_engine.evaluation.answer_validation import (
     PremiseConsistencyOutput,
     validate_answer_claims,
 )
+from rag_engine.generation import grounded
 from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.retrieval.context_builder import ContextParentEvidence
 from rag_engine.retrieval.request_coverage import CoverageBudget, coverage_targets, request_rows, run_targeted_retrievals
@@ -140,7 +141,14 @@ def test_summary_uses_the_audit_instead_of_deletion_word_heuristics(summary_key,
             replace(get_settings(), answer_audit_mode=mode),
             image_prompt_mode="text_only",
         ).response
-    assert response.answer_text.startswith(case[summary_key])
+    if mode == "detailed" and summary_key != "correct_summary":
+        assert response.answer_text.startswith(grounded.answer_labels().neutral_summary)
+        assert not response.answer_text.startswith(case[summary_key])
+        final = response.generation_trace["finalization"]["summary"]
+        assert final["status"] == "withheld" and final["reason"]
+        assert all(mark["text"] != case[summary_key] for mark in response.envelope["passage_marks"])
+    else:
+        assert response.answer_text.startswith(case[summary_key])
     warning = response.generation_trace["rounds"][0].get("summary_warning")
     assert bool(warning) is (mode == "none" or summary_key != "correct_summary")
     if mode == "none":

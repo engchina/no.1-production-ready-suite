@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
 
@@ -147,19 +147,40 @@ class QueryExpansionOutput(_StrictModel):
 
 # CRAG 評価の出力契約は Field(description) に置く。構造化出力の JSON schema としてモデルへ渡るため、prompt に
 # 出力例を載せない (#983)。判定規則そのものは CRAG_GRADE_PROMPT_TEMPLATE にある。
+class CragEvidenceQuote(_StrictModel):
+    """観点を判断した候補と、その候補からの直接引用。"""
+
+    source_id: str = Field(description="原文を読んだ候補の chunk_uid。")
+    quote: str = Field(description="その候補から文字を変えずに写した直接の根拠。")
+
+
+class CragAnswerablePart(_StrictModel):
+    """原質問への部分回答に使える、直接裏付けた操作・規則・確認方法。"""
+
+    aspect: str = Field(description="直接答えられる required_aspects の観点。business_object だけでは回答内容にしない。")
+    kind: Literal["operation", "rule", "verification", "definition"] = Field(
+        description="原質問に対する操作、規則・禁止、実値の確認方法、定義のいずれか。"
+    )
+    claim: str = Field(description="原文が直接裏付ける部分回答。業務の概説や機能名だけを操作・規則に言い換えない。")
+    evidence: list[CragEvidenceQuote] = Field(default_factory=list, description="この部分回答を直接裏付ける候補のIDと原文。")
+
+
 class CragAspectCheck(_StrictModel):
     """質問の必要観点ごとの支持と、候補内の一意な出典ID。"""
 
     aspect: str = Field(
         description="task_contract.required_aspects の観点名（business_object / requested_result / applicability / procedure など）。"
     )
-    status: Literal["supported", "missing", "data_confirmation"] = Field(
-        description="supported=候補で説明できる。missing=どの候補にも無い。data_confirmation=一般規則はあり実値の照合だけが残る（requested_result / applicability のみ）。"
+    status: Literal["supported", "missing", "unknown", "data_confirmation"] = Field(
+        description="supported=直接根拠で説明できる。missing=閲覧した候補に必要な説明が無い。unknown=解釈・範囲・対応を確定できない。data_confirmation=一般規則はあり実値の照合だけが残る（requested_result / applicability のみ）。"
     )
     source_ids: list[str] = Field(
         default_factory=list, description="観点を支持する候補の chunk_uid。supported / data_confirmation では必須。"
     )
     reason: str = Field(description="判定の根拠を短く。data_confirmation では閲覧するデータと目的。")
+    evidence: list[CragEvidenceQuote] = Field(
+        default_factory=list, description="支持・確認方法の直接引用。複数の候補を組み合わせてよい。項目名だけを定義の根拠にしない。"
+    )
 
 
 class CragCandidateVerdict(_StrictModel):
@@ -167,9 +188,17 @@ class CragCandidateVerdict(_StrictModel):
 
     chunk_uid: str = Field(description="候補の chunk_uid。")
     relevant: bool = Field(
-        description="候補が原質問と同じ業務・機能の種類について、要求された操作・規則・確認方法・制限（できない・機能が無い）のいずれかを説明していれば true。質問固有の値が無くてもよい。別の変更項目だけの手順、別のエラー文・コード、話題違いは false。"
+        description="候補が原質問と同じ業務・機能の種類について、要求された操作・規則・確認方法・制限（できない・機能が無い）のいずれかを説明していれば true。質問固有の値が無くてもよい。別の変更項目だけの手順や明らかな話題違いは false。エラーは明確に別で共通処理関係が無い場合だけ irrelevant とし、対応不明は relation=unknown で保持する。"
     )
     reason: str = Field(description="判定の根拠を一文で。")
+    relation: Literal["relevant", "irrelevant", "unknown"] | None = Field(
+        default=None, description="回答に役立つかの意味判定。不確定は unknown として保持する。省略時は relevant の互換値。"
+    )
+    error_relation: Literal["same", "shared_handling", "different", "unknown", "not_applicable"] = Field(
+        default="not_applicable",
+        description="same=同じエラー。shared_handling=原文に共通の処理関係がある。different=明確に別のエラーで共通処理なし。unknown=対応を確定できない。not_applicable=エラーの質問ではない。別番号の出現だけで different にしない。",
+    )
+    quote: str = Field(default="", description="エラーの対応または共通処理関係を判断した候補の直接原文。")
 
 
 class CragEnumeratedItem(_StrictModel):
@@ -197,12 +226,18 @@ class CragRetrievalGradeOutput(_StrictModel):
     aspect_checks: list[CragAspectCheck] = Field(
         default_factory=list, description="required_aspects ごとの判定。relevant な候補を合わせて確認し、全観点を必ず列挙する。"
     )
+    answerable_parts: list[CragAnswerablePart] = Field(
+        default_factory=list,
+        description="原質問の操作・規則・確認方法・定義に直接答えられる部分。業務が同じという概説だけなら空。複数資料の共同支持も可。",
+    )
     reason: str = Field(description="十分・不足の理由を短く。不足なら欠けている観点と、どの候補が最も近いかを書く。")
     sufficient: bool = Field(
-        description="同じ業務・機能の relevant な候補があり business_object を supported にできるなら true。他の観点の missing は不足ではなく aspect_checks と recovery_action で示す。"
+        description="answerable_parts に直接根拠を示せる部分があるなら true。関連候補や業務概述だけでは true にしない。全観点の充足とは区別する。"
     )
     confidence: float = Field(description="判定の確からしさ（0.0〜1.0）。")
-    rewritten_query: str = Field(description="sufficient=false のとき次回検索に使う短い日本語の検索文。十分なら空文字。")
+    rewritten_query: str = Field(
+        description="missing 観点を補う短い日本語の検索文。部分回答できても不足があれば返す。unknown だけなら空文字。"
+    )
     recovery_action: Literal["rewrite", "neighbor_children", "parent", "neighbor_parents"] = Field(
         default="rewrite",
         description="不足時の回復手段。rewrite=別の話題・対象を探す。neighbor_children / parent / neighbor_parents=recovery_options にある文脈拡張。",
@@ -251,6 +286,9 @@ class TextOutput(_StrictModel):
 # confidence、goal_alignment）の順に並べ、結論を先に書かせない。行動方針は GENERATE_SYSTEM_PROMPT / AUDIT_SYSTEM_PROMPT。
 class GroundedCitation(_StrictModel):
     """item の出典 1 つ（根拠の番号と引用する行）。引用の原文はシステムが取り出す（#2830）。"""
+
+    # モデル入力ではなく、本検証で毎回再作成する抽出の記録。旧 round の記録も信用しない。
+    _extraction: dict[str, str] = PrivateAttr(default_factory=dict)
 
     evidence_id: str = Field(description="根拠の先頭にある [E1] 形式の番号（角括弧なし）。")
     lines: str = Field(
@@ -539,6 +577,23 @@ class OutputFieldEvidence(_StrictModel):
         return self.asserts_output_fields and (not self.definition_quote.strip() or self.output_artifact_matches is not True)
 
 
+class GroundedFragmentCitation(_StrictModel):
+    """元の説明が実際に引用した原文の中で、局所的な支持に使う箇所。"""
+
+    evidence_id: str
+    quote: str = Field(min_length=1, max_length=600, description="このitemの実際の引用内から写した連続した支持原文。")
+
+
+class GroundedSupportedFragment(_StrictModel):
+    """複合した説明のうち、同じ監査で独立に支持を判定した元の説明の片。"""
+
+    text: str = Field(min_length=1, max_length=600, description="元item.textの連続した部分をそのまま写す。書き換えない。")
+    support: Literal["supported", "unknown"] = Field(
+        default="unknown", description="引用集合がこの片全体を支えると確認したときだけsupported。"
+    )
+    citations: list[GroundedFragmentCitation] = Field(default_factory=list, max_length=4)
+
+
 class GroundedItemReview(_StrictModel):
     """1 item の局所監査。引用が言い換えを支持するかと、質問への適用性を分ける。"""
 
@@ -555,6 +610,11 @@ class GroundedItemReview(_StrictModel):
         default="",
         max_length=600,
         description="段落を支持する連続した原文（根拠からの抜粋）。",
+    )
+    supported_fragments: list[GroundedSupportedFragment] = Field(
+        default_factory=list,
+        max_length=40,
+        description="contradictedの複合itemに、独立に支持できる元の説明の部分がある場合だけ返す。各片は元textの厳密な抜粋と、このitemが実際に引用した出典・原文で裏付ける。判断不能ならunknownまたは空。",
     )
     # 原判定を保持し、採否への利用だけを別の方針にする。モデルの応答 schema には内部方針を出さない。
     observed_applicability: SkipJsonSchema[str] = Field(default="", description="監査が答えた適用性の記録（応答の schema には出さない）。")
@@ -601,6 +661,14 @@ class ApplicationAudit(_StrictModel):
     )
 
 
+class MissingContentEvidence(_StrictModel):
+    """回答の不足内容を補うための原文と出典。意味支持は要求監査が判定する。"""
+
+    evidence_id: str = Field(description="不足内容の直接根拠の evidence_id。")
+    source: str = Field(default="", description="evidence_sources または unused_evidence の source をそのまま写す。")
+    quote: str = Field(default="", max_length=2000, description="不足操作・対象・条件・順序を支える入力原文。複数根拠の共同支持も可。")
+
+
 class GroundedRequestReview(_StrictModel):
     """原質問の要求単位ごとの充足。"""
 
@@ -611,9 +679,17 @@ class GroundedRequestReview(_StrictModel):
     reason: str = Field(description="質問と同じ言語で短く。")
     evidence_status: Literal["available", "missing", "unknown"] = Field(
         default="unknown",
-        description="要求に必要な材料が入力にある=available、足りない=missing、判断不能=unknown。回答の有無と別に判定する。",
+        description="不足内容を evidence_support の引用集合が支える=available、直接根拠が無い=missing、判断不能=unknown。説明済み部分の根拠では代用しない。",
     )
     evidence_ids: list[str] = Field(default_factory=list, max_length=64, description="available の判定を支える入力の evidence_id。")
+    missing_content: str = Field(
+        default="", max_length=2400, description="まだ回答していない具体的な操作・対象・条件・順序。partial / missing の補写対象。"
+    )
+    evidence_support: list[MissingContentEvidence] = Field(
+        default_factory=list,
+        max_length=64,
+        description="missing_content を共同で支える直接根拠。available では evidence_ids の全 ID と対応させ、説明済みの別操作の引用で代用しない。",
+    )
 
 
 class GuideRequirementReview(_StrictModel):
@@ -657,6 +733,7 @@ class GroundedFactAudit(_StrictModel):
     summary_output_fields: OutputFieldEvidence | None = Field(
         default=None, description="要約の出力項目について、定義の原文引用と対象の一致を返す。"
     )
+    summary_basis: list[str] = Field(default_factory=list, max_length=40, description="summary を支える items の text 全文。")
     summary_supported: bool = Field(description="summary が items の範囲を超える断定をしていなければ true。")
     goal_alignment: Literal["aligned", "partial", "off_target"] = Field(
         description="aligned=items 全体が目的に答えている。partial=一部だけ。off_target=別の対象・業務・目的に答えている。"
@@ -682,6 +759,7 @@ class GroundedAudit(_StrictModel):
     summary_output_fields: OutputFieldEvidence | None = Field(
         default=None, description="要約の出力項目について、定義の原文引用と対象の一致を返す。"
     )
+    summary_basis: list[str] = Field(default_factory=list, max_length=40, description="summary を支える items の text 全文。")
     summary_supported: bool = Field(description="summary が items の範囲を超える断定をしていなければ true。")
     goal_alignment: Literal["aligned", "partial", "off_target"] = Field(
         description="aligned=items 全体が目的に答えている。partial=一部だけ。off_target=別の対象・業務・目的に答えている。"

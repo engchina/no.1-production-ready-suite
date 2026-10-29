@@ -25,6 +25,7 @@ from app.api.routes.search import _stored_citation_rows
 from app.clients.oracle import OracleClient
 from app.clients.oracle_run_history import RunHistoryStore, owner_user_uuids
 from app.rag.request_context import current_audit_request_context
+from app.rag.run_history import answer_validation_execution
 from app.rag.saved_evidence import withhold_saved_answer
 from app.rag.trace_store import TraceSnapshot, run_trace_snapshot
 from app.schemas.common import ApiResponse, Page
@@ -60,6 +61,7 @@ def _summary_fields(row: dict[str, Any], names: dict[str, str]) -> dict[str, Any
     user_uuid = row.get("user_uuid")
     fields = {key: value for key, value in row.items() if key not in _INTERNAL_FIELDS}
     fields["answer_generated"] = bool(row.get("answer_generated"))
+    fields["validation_execution"] = row.get("validation_execution")
     review = row.get("needs_human_review")
     fields["needs_human_review"] = None if review is None else bool(review)
     fields["executed_by_me"] = (
@@ -126,6 +128,8 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
     fields.update(await _conversation_owner_fields(row))
     raw_stages = row.get("stages_json")
     stages: dict[str, Any] = raw_stages if isinstance(raw_stages, dict) else {}
+    if fields.get("validation_execution") is None:
+        fields["validation_execution"] = stages.get("validation_execution")
     detail: dict[str, Any] = {
         **{key: value for key, value in fields.items() if not key.endswith("_json")},
         "error_code": _text_or_none(stages.get("error_code")),
@@ -150,6 +154,8 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
             detail["citations"] = _citations(_stored_citation_rows(record.get("citations_json")))
             diagnostics = record.get("diagnostics_json")
             detail["answer_diagnostics"] = diagnostics if isinstance(diagnostics, dict) else None
+            if detail.get("validation_execution") is None and isinstance(diagnostics, dict):
+                detail["validation_execution"] = answer_validation_execution(diagnostics)
     # 保存した根拠と診断は、見る人の今の権限で確かめ直す（見られない根拠は数だけ。#3252）。
     (
         detail["citations"],

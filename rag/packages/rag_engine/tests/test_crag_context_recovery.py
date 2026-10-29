@@ -316,8 +316,8 @@ class RecoveryTests(unittest.TestCase):
         recovery.assert_not_called()
         self.assertEqual(attempts[-1].stop_reason, "data_confirmation_only")
 
-    def test_sufficient_with_missing_aspects_expands_once_without_regrade(self):
-        # 十分でも観点が欠ける回は、再評価せず pool から文脈を 1 回広げて生成へ進む (#983)。
+    def test_sufficient_with_unknown_aspects_expands_once_without_regrade(self):
+        # 不確定な観点だけなら pool から文脈を補い、取得済み根拠で部分回答へ進む。
         context = a.AnswerContext([self.child], self.child.text, expansion_records=tuple(self.pool))
         grade = a.CragRetrievalAttempt(
             1,
@@ -325,7 +325,7 @@ class RecoveryTests(unittest.TestCase):
             ("条件",),
             True,
             relevant_chunk_ids=("run:c1",),
-            missing_aspects=("procedure",),
+            unknown_aspects=("procedure",),
             recovery_action="parent",
             recovery_anchor_ids=("run:c1",),
         )
@@ -335,7 +335,7 @@ class RecoveryTests(unittest.TestCase):
         ):
             result, _, attempts = a.build_crag_answer_context("条件は", "source", ["docling"], get_settings(environ={}, dotenv_path=None))
         self.assertEqual((search.call_count, grader.call_count), (1, 1))
-        self.assertEqual(attempts[-1].stop_reason, "expanded_for_missing_aspects")
+        self.assertEqual(attempts[-1].stop_reason, "expanded_for_unverified_aspects")
         self.assertIn(self.parent.text, result.text)
         self.assertEqual(result.expansion_records, tuple(self.pool))
 

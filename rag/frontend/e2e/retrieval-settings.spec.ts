@@ -100,6 +100,7 @@ test("検索方法の権限が無い利用者は、削除した画面の URL か
 const ANSWERING_SETTINGS = {
   query_strategy: "auto_routing",
   answer_flow: "standard_rag",
+  answer_audit_mode: "none",
   neighbor_child_count: 3,
   rerank_enabled: true,
   screen_linking_enabled: false,
@@ -114,17 +115,19 @@ const ANSWERING_SETTINGS = {
   section_expansion_input_token_percent: 50,
 };
 
-async function mockAnsweringSettings(page: Page, saved: unknown[] = []) {
+async function mockAnsweringSettings(page: Page, saved: unknown[] = [], initial: Record<string, unknown> = {}) {
+  let current = { ...ANSWERING_SETTINGS, ...initial };
   await page.route("**/api/settings/answering", async (route) => {
     if (route.request().method() === "PATCH") {
       const body = route.request().postDataJSON() as Record<string, unknown>;
       saved.push(body);
+      current = { ...current, ...body };
       await route.fulfill({
-        json: { data: { ...ANSWERING_SETTINGS, ...body }, error_messages: [], warning_messages: [] },
+        json: { data: current, error_messages: [], warning_messages: [] },
       });
       return;
     }
-    await route.fulfill({ json: { data: ANSWERING_SETTINGS, error_messages: [], warning_messages: [] } });
+    await route.fulfill({ json: { data: current, error_messages: [], warning_messages: [] } });
   });
 }
 
@@ -133,7 +136,7 @@ for (const viewport of [
   { name: "mobile", width: 375, height: 900, collapse: true },
 ]) {
   for (const theme of ["light", "dark"] as const) {
-    test(`検索方法の画面で回答の検索と生成の既定を変えて保存できる (#593, ${viewport.name}, ${theme})`, async ({
+    test(`検索方法の画面で回答の検索と生成の既定を変えて保存できる (#593, ${viewport.name}, ${theme})`, { tag: "@responsive" }, async ({
       page,
     }, testInfo) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -205,6 +208,10 @@ for (const viewport of [
       await screenLinking.click();
       await autoFieldFilter.click();
       await requestCoverage.click();
+      const auditMode = page.getByRole("combobox", { name: "AIによる確認", exact: true });
+      await expect(auditMode).toContainText("実行しない");
+      await auditMode.click();
+      await page.getByRole("option", { name: "詳細", exact: true }).click();
       await graphExpansion.click();
       await expect(save).toBeEnabled();
       await save.click();
@@ -214,6 +221,7 @@ for (const viewport of [
         {
           query_strategy: "rag_fusion",
           answer_flow: "crag",
+          answer_audit_mode: "detailed",
           neighbor_child_count: 5,
           rerank_enabled: true,
           screen_linking_enabled: true,
@@ -232,6 +240,67 @@ for (const viewport of [
       await expectNoPageOverflow(page);
     });
   }
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900, collapse: false },
+  { name: "mobile", width: 375, height: 812, collapse: true },
+]) {
+  test(`生成後の回答確認は独立して保存・破棄し再読込できる (${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    if (viewport.collapse) await collapseSidebar(page);
+    await mockRetrievalCards(page);
+    const saved: unknown[] = [];
+    await mockAnsweringSettings(page, saved);
+    await page.goto("/settings/retrieval");
+    const card = page.getByTestId("answering-settings-card");
+    const audit = card.getByRole("combobox", { name: "AIによる確認", exact: true });
+    const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
+    const discard = card.getByRole("button", { name: "変更を破棄", exact: true });
+    await expect(card.getByRole("heading", { name: "生成後の回答確認", exact: true })).toBeVisible();
+    await expect(page.getByTestId("answering-audit-mode")).toContainText("引用ID・引用範囲の基本確認は、設定に関わらず実行します。");
+    await expect(audit).toContainText("実行しない");
+    await expect(audit).toHaveAccessibleDescription(/自動の生成後の LLM 監査.*行いません.*引用の ID・行範囲・原文との照合/);
+    const options = card.getByRole("group", { name: "回答の検索のオプション", exact: true });
+    expect(await options.locator("button[role=switch],button[role=combobox]").evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("id") || element.getAttribute("aria-label"))
+    )).toContain("answering-answer-audit-mode");
+    const section = card.getByRole("switch", { name: "章節で広げる根拠", exact: true });
+    const coverage = card.getByRole("switch", { name: "根拠の無い要求を探し直す", exact: true });
+    expect(await section.evaluate((element) => Boolean(element.compareDocumentPosition(document.getElementById("answering-answer-audit-mode")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+    expect(await audit.evaluate((element) => Boolean(element.compareDocumentPosition(document.querySelector('[aria-label="根拠の無い要求を探し直す"]')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+    await audit.click();
+    await expect(page.getByRole("option")).toHaveText(["実行しない", "標準", "詳細"]);
+    await page.getByRole("option", { name: "標準", exact: true }).click();
+    await expect(audit).toHaveAccessibleDescription(/事実の問題を最大 1 回是正.*説明の抜けだけでは作り直しません/);
+    await expect(save).toBeEnabled();
+    await discard.click();
+    await expect(audit).toContainText("実行しない");
+    await expect(save).toBeDisabled();
+    expect(saved).toEqual([]);
+    for (const label of ["詳細", "実行しない", "標準"]) {
+      await audit.click();
+      await page.getByRole("option", { name: label, exact: true }).click();
+      if (label === "詳細") await expect(audit).toHaveAccessibleDescription(/説明の抜けも含めて最大 2 回是正/);
+      await save.click();
+      await expect(save).toBeDisabled();
+      await page.reload();
+      await expect(audit).toContainText(label);
+      await expect(card.getByRole("combobox", { name: "回答の生成方式", exact: true })).toContainText("標準 RAG（既定）");
+      await expect(coverage).not.toBeChecked();
+      await expect(page.getByTestId("answering-audit-mode")).toContainText("独立した設定");
+      await expect(page.getByTestId("answering-audit-mode")).toContainText("共有の時間予算");
+    }
+    expect(saved).toHaveLength(3);
+    expect(saved).toEqual(expect.arrayContaining([
+      expect.objectContaining({ answer_audit_mode: "none", answer_flow: "standard_rag", request_coverage_retrieval_enabled: false }),
+      expect.objectContaining({ answer_audit_mode: "standard", answer_flow: "standard_rag", request_coverage_retrieval_enabled: false }),
+      expect.objectContaining({ answer_audit_mode: "detailed", answer_flow: "standard_rag", request_coverage_retrieval_enabled: false }),
+    ]));
+    await page.getByTestId("answering-audit-mode").scrollIntoViewIfNeeded();
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`answer-audit-mode-${viewport.name}.png`) });
+  });
 }
 
 test("回答の検索と生成の既定を読み込めないときは、その欄だけに理由を出す (#593)", async ({ page }) => {

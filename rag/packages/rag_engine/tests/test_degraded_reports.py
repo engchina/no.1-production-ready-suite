@@ -205,7 +205,11 @@ def test_runtime_knowledge_not_registered_is_not_reported(tmp_path: Path) -> Non
 
 @pytest.mark.parametrize("fail", [True, False], ids=["error", "graded"])
 def test_crag_grade_failure_is_reported(fail: bool) -> None:
-    grade = Boom(SECRET) if fail else _crag_grade(sufficient=True, confidence=0.9, relevant_chunk_ids=["chunk-safe"])
+    grade = (
+        Boom(SECRET)
+        if fail
+        else _crag_grade(sufficient=True, confidence=0.9, relevant_chunk_ids=["chunk-safe"], support_text="available evidence")
+    )
 
     result, reported = _answer(
         get_settings(),
@@ -213,12 +217,16 @@ def test_crag_grade_failure_is_reported(fail: bool) -> None:
         answer_flow=answering.CRAG_ANSWER_FLOW_LABEL,
     )
 
-    # 判定に失敗しても、取得済みの根拠で回答を続ける。
-    assert "fallback answer" in result.answer
+    # 評価失敗を生成可能とみなさず、取得済みの根拠と失敗の診断を保持する。
     if fail:
+        assert "fallback answer" not in result.answer
+        assert result.crag_attempts[0]["grade_execution"] == "error"
+        assert result.crag_attempts[0]["required_aspect_coverage"] == "unknown"
+        assert result.generation_trace["crag_generation_gate"]["generation_calls"] == 0
         assert ("crag_grade", "Boom") in reported
         assert SECRET not in result.question_display
     else:
+        assert "fallback answer" in result.answer
         assert "crag_grade" not in _kinds(reported)
 
 

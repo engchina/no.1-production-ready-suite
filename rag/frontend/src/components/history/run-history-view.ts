@@ -22,7 +22,7 @@ import {
 } from "@production-ready/ui";
 
 import { outcomeBadge, type AnswerOutcome } from "@/lib/answer-diagnostics";
-import { formatNumber } from "@/lib/format";
+import { validationExecutionBadge } from "@/lib/answer-validation";
 import type {
   RunDetail,
   RunExecutorFilter,
@@ -103,7 +103,9 @@ export function runOutcomeView(run: Pick<RunSummary, "answer_generated" | "statu
 }
 
 /** 資料との照合のバッジ。回答を作らなかった・止めた・失敗した実行は null（「—」）。 */
-export function runVerificationView(verification: RunVerification | null): BadgeView | null {
+export function runVerificationView(verification: RunVerification | null, execution?: string | null): BadgeView | null {
+  const explicit = validationExecutionBadge(execution);
+  if (explicit) return explicit;
   switch (verification) {
     case "verified":
       return { variant: "success", label: t("history.verification.verified") };

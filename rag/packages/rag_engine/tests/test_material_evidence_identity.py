@@ -27,7 +27,12 @@ def test_uncited_direct_material_uses_a_stable_id_without_backfilling_claim_supp
         material = next(row for row in payload["unused_evidence"] if row["text"] == SAVE)
         seen["input"] = payload
         result = audit((0, support, "matched", ""), requests=[("Q1", "partial")], summary_supported=False)
-        result["request_reviews"][0].update(evidence_status="available", evidence_ids=[material["evidence_id"]])
+        result["request_reviews"][0].update(
+            evidence_status="available",
+            evidence_ids=[material["evidence_id"]],
+            missing_content=SAVE,
+            evidence_support=[{"evidence_id": material["evidence_id"], "source": material["source"], "quote": SAVE}],
+        )
         return result
 
     model = FakeModel([draft(item(refs[cited], claim, cited, request_id="Q1"), summary="")], [review])

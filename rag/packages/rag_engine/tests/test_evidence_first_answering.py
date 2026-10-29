@@ -80,7 +80,7 @@ def test_crag_prompt_limits_insufficiency_and_carries_no_output_example():
     assert any("質問固有の値" in line and "不足の理由にしない" in line for line in rules)
     assert any("制限の記載" in line and "supported" in line for line in rules)
     assert any("複数の要求" in line and "別々の候補" in line for line in rules)
-    assert any("エラー文・エラーコード" in line and "missing" in line for line in rules)
+    assert any("エラー文・エラーコード" in line and "unknown" in line for line in rules)
     assert any("観点ごとに独立" in line for line in rules)
     assert "sufficient=false にするのは" in CRAG_GRADE_PROMPT_TEMPLATE
     context = AnswerContext(records=[record("p1", "登録画面で実行を押す")], text="full")
@@ -93,47 +93,27 @@ def test_crag_prompt_limits_insufficiency_and_carries_no_output_example():
     assert order.index("candidate_verdicts") < order.index("aspect_checks") < order.index("reason") < order.index("sufficient")
 
 
-def test_crag_grade_forces_candidates_without_the_asked_error_to_irrelevant():
-    """質問のエラー文を含まない候補は、評価器が true と言っても relevant=false。表記差のあるエラー文は残る (#999)。"""
-    from test_task_contract_audit import record
-
+def test_crag_grade_preserves_error_candidates_when_the_relation_is_unverified():
+    """エラー文字列の未認識だけでは不適合にしない。旧schemaの判定も未知として保持する。"""
     from rag_engine.generation.answering import _grade_crag_retrieval
     from rag_engine.models.llm import CragRetrievalGradeOutput
 
-    question = "入荷検品チェックリストで『仕入先コードが未登録です』のエラーが出ている。どうすればよいか。"
-    assert task_contract(question)["error_messages"] == ["仕入先コードが未登録です"]
-    other = record(
-        "a", "エラー番号 013 「【必須】仕入先コードが仕入先マスタに登録されていない」\n仕入先登録画面で仕入先コードを登録します。"
-    )
-    same = record("b", "（７）仕入先コード未登録です\n仕入先登録画面で仕入先コードを登録してから再確認します。")
-    checks = [dict(aspect=k, status="supported", source_ids=["b"], reason="関連") for k in task_contract(question)["required_aspects"]]
+    question = "処理画面で『対象が未登録です』のエラーが出る。対処方法は？"
+    text = "対象の登録がない場合は登録画面で追加して再実行する。"
+    candidate = record("a", text)
     grade = CragRetrievalGradeOutput(
-        candidate_verdicts=[
-            dict(chunk_uid="a", relevant=True, reason="別コードだが同じ業務"),
-            dict(chunk_uid="b", relevant=True, reason="同じエラー"),
-        ],
-        aspect_checks=checks,
-        reason="関連",
+        candidate_verdicts=[dict(chunk_uid="a", relevant=True, reason="同じ対処の可能性")],
+        aspect_checks=[],
+        reason="関連未確定",
         sufficient=True,
-        confidence=0.9,
+        confidence=0.5,
         rewritten_query="",
     )
     with patch("rag_engine.generation.answering.parse_text_response", return_value=grade):
-        result = _grade_crag_retrieval(1, question, question, [question], AnswerContext(records=[other, same], text="text"), object())
-    assert result.relevant_chunk_ids == ("b",) and result.sufficient
-    assert [v["relevant"] for v in result.candidate_verdicts] == [False, True]
-    assert result.candidate_verdicts[0]["reason"].startswith("質問のエラー文『仕入先コードが未登録です』が候補に無い")
-    only_other = CragRetrievalGradeOutput(
-        candidate_verdicts=[dict(chunk_uid="a", relevant=True, reason="別コードだが同じ業務")],
-        aspect_checks=[{**c, "source_ids": ["a"]} for c in checks],
-        reason="関連",
-        sufficient=True,
-        confidence=0.9,
-        rewritten_query="",
-    )
-    with patch("rag_engine.generation.answering.parse_text_response", return_value=only_other):
-        result = _grade_crag_retrieval(1, question, question, [question], AnswerContext(records=[other, same], text="text"), object())
-    assert result.relevant_chunk_ids == () and not result.sufficient
+        result = _grade_crag_retrieval(1, question, question, [question], AnswerContext(records=[candidate], text=text), object())
+    assert result.candidate_verdicts[0]["relation"] == "unknown"
+    assert result.rejected_chunk_ids == () and not result.generation_usable
+    assert result.required_aspect_coverage == "unknown"
 
 
 def test_crag_grade_uses_relevant_candidate_verdicts_as_relevant_ids():
@@ -142,10 +122,14 @@ def test_crag_grade_uses_relevant_candidate_verdicts_as_relevant_ids():
     from rag_engine.models.llm import CragRetrievalGradeOutput
 
     a, b = record("a", "登録画面で実行を押す"), record("b", "別機能の説明")
-    checks = [dict(aspect=k, status="supported", source_ids=["a"], reason="関連") for k in task_contract("登録方法")["required_aspects"]]
+    checks = [
+        dict(aspect=k, status="supported", source_ids=["a"], evidence=[dict(source_id="a", quote=a.text)], reason="関連")
+        for k in task_contract("登録方法")["required_aspects"]
+    ]
     grade = CragRetrievalGradeOutput(
         candidate_verdicts=[dict(chunk_uid="a", relevant=True, reason="同じ機能"), dict(chunk_uid="b", relevant=False, reason="別機能")],
         aspect_checks=checks,
+        answerable_parts=[dict(aspect="procedure", kind="operation", claim=a.text, evidence=[dict(source_id="a", quote=a.text)])],
         reason="関連",
         sufficient=True,
         confidence=0.9,
@@ -161,6 +145,7 @@ def test_crag_grade_uses_relevant_candidate_verdicts_as_relevant_ids():
     with patch("rag_engine.generation.answering.parse_text_response", return_value=none_relevant):
         result = _grade_crag_retrieval(1, "登録方法", "登録方法", ["登録方法"], AnswerContext(records=[a, b], text="text"), object())
     assert result.relevant_chunk_ids == () and not result.sufficient
+    assert result.required_aspect_coverage == "unknown"
 
 
 def test_crag_keeps_earlier_rule_when_rewrite_finds_other_context():

@@ -14,19 +14,24 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
 import re
 import unicodedata
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import CancelledError
 from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
 from time import monotonic
 from types import SimpleNamespace
 from typing import Any
 
+from httpx import TimeoutException
+from openai import APITimeoutError
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import alternation, arabic_numbers
@@ -75,13 +80,14 @@ from rag_engine.resources.deadline import (
     ANSWER_FINALIZE_RESERVE_SECONDS,
     DEFAULT_GENERATION_ROUND_SECONDS,
     Deadline,
+    DeadlineExceeded,
     bind_deadline,
     current_deadline,
     deadline_cut_short,
 )
 from rag_engine.resources.llm_usage import usage_delta, usage_line, usage_snapshot
 from rag_engine.resources.runtime import resolve_prompt
-from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY, ARTICLE_UNIT_KEY
+from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
 from rag_engine.retrieval.character_forms import fold_model_view, fold_text, fold_text_with_positions, fold_width
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
 from rag_engine.retrieval.evidence_cues import evidence_cues
@@ -294,15 +300,15 @@ AUDIT_SYSTEM_PROMPT = (
         ""
         "## Step 2: 各主張を原文と照合する（support）\n"
         "- quote_unmatched が true の item は quote を原文として扱わず、その item の evidence で text の全主張を照合する。支持するときは support_quote に連続した支持原文を写す。原文で裏付けられない主張は unsupported。\n"
-        "- quote が text の内容をそのまま裏付ければ suppo"
-        "rted。quote にない操作・画面・値・効果・原因を text "
-        "が足していれば unsupported。quote と逆なら con"
-        "tradicted。\n"
-        "- 操作・対象・適用条件・順序を、当該 item の citations が示す原文の集合と照合する。"
-        "複数の引用が共同で支持してよい。各 index の evidence_id 自身が主張の少なくとも一部を支え、"
-        "引用集合で全体が裏付けられるときだけ supported。関連するだけの引用は supported にしない。\n"
+        "- text の操作・画面・値・効果・原因・対象・適用条件・順序を、当該 item が実際に引用した citations の原文集合と照合する。"
+        "複数の引用が別々の部分を共同で支持してよく、各引用が主張全体を単独で支える必要はない。"
+        "集合が全主張を裏付け、かつ各 index の evidence_id 自身も少なくとも一部に寄与するときだけ supported。"
+        "集合にない内容を足した主張は unsupported。関連するだけの引用は supported にしない。\n"
         "- contradicted は引用原文と操作・値・可否・順序・対象が両立しない場合。"
         "書かれていないだけなら unsupported。判定できない場合は unknown。\n"
+        "- contradicted の item に独立に支持できる部分が残る場合、supported_fragments に元の text の連続した抜粋と supported/unknown を返す。"
+        "各片の citations はこの item が実際に引用した原文の範囲だけから選び、evidence_id と連続した支持原文を写す。"
+        "引用集合がその片全体を支持すると確認したときだけ supported。別資料の内容で補わず、支持できる片がなければ空にする。\n"
         "- text が quote の規則を述べ、quote にある例外・ただし書き・適用の条件だけを省いているときは unsupported にせず supported とし、"
         "省いた例外・条件は applicability で扱う。\n"
         "- 実データが未提供という理由だけで unsupported や n"
@@ -446,7 +452,10 @@ AUDIT_SYSTEM_PROMPT = (
         "- evidence_status は回答に不足している内容の直接根拠が入力にあるかで決める。"
         "実際の引用が誤っていても、未引用の直接根拠が不足内容を支えれば available。未引用の根拠で support を supported に戻さない。\n"
         "- 材料候補: evidence と unused_evidence の両方を調べる。unused_evidence の直接根拠も、補写の材料として同じく使える。\n"
-        "- available の evidence_ids には、不足内容をそのまま補写できる直接根拠の evidence_id を返す。"
+        "- partial / missing では missing_content に補写すべき操作・対象・条件・順序を具体的に示す。"
+        "available の evidence_support には、その不足内容を引用集合で直接支える evidence_id・source・quote を返す。"
+        "同じ ID が説明済み部分にも使われていてよいが、quote は不足内容を支える範囲を選ぶ。"
+        "evidence_ids には evidence_support と同じ ID 集合を返す。"
         "説明済みの別操作・同じ画面の概要・見出しが関連するだけでは選ばない。複数の根拠を組み合わせてよい。\n"
         "- 例: 要求が手順甲と手順乙、回答が手順甲だけなら partial。手順乙を述べる直接根拠があれば available としてその ID を返す。"
         "手順甲の ID を代わりに返さない。手順乙の記載が無ければ missing。\n"
@@ -470,6 +479,8 @@ AUDIT_SYSTEM_PROMPT = (
         "ても先の存在の主張は消えない。例:「列Aで抽出する。列定義は未確認。"
         "」も列の存在の主張。抽出条件や帳票一覧は項目定義ではない。存在の主張"
         "が無い場合だけnull。\n"
+        "- summary_basis: summary の結論を支える supported な items の text 全文を、そのまま列挙する。"
+        "複数項目をつなぐ場合は必要な全文をすべて含め、未確認・不支持の説明は使わない。\n"
         "- summary_supported: summary が ite"
         "ms の範囲を超える断定をしていなければ true。質問が原因・理由"
         "を尋ねている場合、summary が supported な ite"
@@ -1883,11 +1894,19 @@ def verify(
         subs: dict[str, str] = {}
         # 行の範囲で指した引用は、その原文を quote にする（#2830）。
         item, cite_error = cited_quote(item, spans)
+        provenance = _citation_extraction(item)
         match: dict = {}
-        span, quote = resolve_evidence(item, spans, match=match)
+        if provenance.get("status") == "extracted":
+            span, quote = _line_citation_spans(item, spans)[0], item.quote
+        elif cite_error:
+            span, quote = None, cite_error
+        else:
+            span, quote = resolve_evidence(item, spans, match=match)
         if span is None:
             # 次の生成は前回の草稿を見られないため、どの item への指摘かを本文で示す。
             entry = {"index": index, "evidence_id": item.evidence_id, "reason": cite_error or quote, "text": item.text, "quote": item.quote}
+            if provenance:
+                entry["citation_resolution"] = dict(provenance)
             miscopied = miscopied_sentence(item, spans)
             if miscopied:
                 entry["miscopied"] = miscopied
@@ -1902,7 +1921,7 @@ def verify(
                     "ratio": nearest["ratio"],
                 }
             # 言い換えは削除せず本文に残して印を付ける（#2738。以前は削除し、近い原文を原文のみ提示にしていた）。
-            if kept := _unmatched_item(item, index, spans, match, quote):
+            if kept := _unmatched_item(item, index, spans, match, cite_error or quote):
                 result = kept
                 entry["kept"] = True
             notes.append(entry)
@@ -1930,11 +1949,19 @@ def verify(
             entry = CheckedItem(
                 _normalized(item.with_citation(evidence_id=span["evidence_id"], quote=quote), view),
                 span,
-                quote_match="unmatched",
+                quote_match=match.get("kind", "exact"),
                 draft_index=index,
                 unmatched=True,
             )
-            entry.mark("quote_unmatched", HEADING_ONLY_DETAIL, reason=HEADING_ONLY_REASON)
+            entry.citation_resolution = {
+                **provenance,
+                "reason_code": "citation_heading_only",
+                "authenticity": "verified",
+                "resolved_evidence_id": span["evidence_id"],
+                "resolved_quote": quote,
+                "method": match.get("kind", "exact"),
+            }
+            entry.mark("citation_heading_only", HEADING_ONLY_DETAIL, reason=HEADING_ONLY_REASON)
             notes.append(
                 {
                     "index": index,
@@ -1942,6 +1969,7 @@ def verify(
                     "reason": HEADING_ONLY_REASON,
                     "text": item.text,
                     "quote": quote,
+                    "citation_resolution": dict(entry.citation_resolution),
                     "kept": True,
                 }
             )
@@ -1952,7 +1980,8 @@ def verify(
             quote_match=match.get("kind", "exact"),
             draft_index=index,
             citation_resolution={
-                "requested_evidence_id": item.evidence_id,
+                **provenance,
+                "requested_evidence_id": provenance.get("requested_evidence_id", item.evidence_id),
                 "requested_quote": item.quote,
                 "resolved_evidence_id": span["evidence_id"],
                 "resolved_quote": quote,
@@ -2099,9 +2128,11 @@ def _unmatched_item(item: GroundedItem, index: int, spans: Sequence[dict], match
         draft_index=index,
         unmatched=True,
     )
+    entry.citation_resolution = _citation_extraction(item)
+    code = entry.citation_resolution.get("reason_code") or code
     note = _quote_note(entry)
     # 引用元が決まらなければ照合の理由、近い原文に結んだならその原文を理由に添える。
-    detail = reason if span is None else (f"最も近い{note}" if nearest and note else "")
+    detail = reason if span is None or entry.citation_resolution else (f"最も近い{note}" if nearest and note else "")
     entry.mark(code, detail, reason=reason)
     return entry
 
@@ -2155,7 +2186,14 @@ def recover_audited_quotes(
         if not 0 <= review.index < len(checked) or sum(r.index == review.index for r in audit.reviews) != 1:
             continue
         entry = checked[review.index]
-        if not entry.unmatched or entry.carried or entry.removed or entry.span is None or review.support != "supported":
+        if (
+            not entry.unmatched
+            or entry.carried
+            or entry.removed
+            or entry.span is None
+            or review.support != "supported"
+            or entry.citation_resolution.get("reason_code") == "citation_version_mismatch"
+        ):
             continue
         quote = _original_quote(review.support_quote, entry.span["text"])
         if not quote:
@@ -2166,7 +2204,9 @@ def recover_audited_quotes(
         if replacement is None or replacement.unmatched or replacement.removed:
             continue
         entry.item, entry.span = replacement.item, replacement.span
-        entry.marks = [mark for mark in entry.marks if mark.get("code") != "quote_unmatched"] + replacement.marks
+        entry.marks = [
+            mark for mark in entry.marks if mark.get("code") not in {"quote_unmatched", *CITATION_EXTRACTION_CODES}
+        ] + replacement.marks
         entry.hints = replacement.hints
         entry.unmatched = False
         entry.quote_match = "audited_paraphrase"
@@ -3029,11 +3069,6 @@ def output_field_claim(fields: Any, text: str) -> Any:
     return fields if fields is not None and fields.asserts_output_fields and mentions_output_fields(text) else None
 
 
-def _article_unit(span: Mapping[str, Any] | None) -> bool:
-    """条で構成された文書の条の根拠か（文書の構造で決める。#3526）。"""
-    return bool(span and span.get(ARTICLE_UNIT_KEY))
-
-
 def _accepted_review(review: Any) -> bool:
     """出典が説明を支え、質問に当てはまらないとは判定されなかったか。"""
     return review.support == "supported" and (review.applicability != "not_applicable" or review.applicability_action == "record_only")
@@ -3107,6 +3142,77 @@ def settle_citation_reviews(
     )
 
 
+def _retain_supported_fragments(entry: CheckedItem, review: Any) -> bool:
+    """同次監査が支持した元説明の片だけを、元の引用の範囲内で残す。indexは変えない。"""
+    original = entry.item.text
+    actual = item_citations(entry)
+    accepted: list[tuple[int, str, list[CheckedItem]]] = []
+    rejected: list[dict[str, str]] = []
+    for fragment in review.supported_fragments:
+        text = fragment.text.strip()
+        sources: list[CheckedItem] = []
+        valid = fragment.support == "supported" and bool(text) and text != original and text in original and bool(fragment.citations)
+        for proof in fragment.citations:
+            source = next(
+                (
+                    cited
+                    for cited in actual
+                    if cited.span
+                    and bool(proof.evidence_id.strip())
+                    and bool(proof.quote.strip())
+                    and proof.evidence_id in {cited.item.evidence_id, cited.span["evidence_id"], cited.span.get("label")}
+                    and not cited.unmatched
+                    and cited.citation_resolution.get("authenticity") != "unverified"
+                    and proof.quote in cited.item.quote
+                    and proof.quote in cited.span["text"]
+                ),
+                None,
+            )
+            if source is None:
+                valid = False
+                break
+            sources.append(source)
+        if valid:
+            accepted.append((original.index(text), text, sources))
+        else:
+            rejected.append({"text": text, "reason": "unverified_fragment_or_nonactual_citation"})
+    if not accepted:
+        if review.supported_fragments:
+            entry.review_assessment["partial_salvage"] = {"status": "rejected", "original_text": original, "rejected": rejected}
+        return False
+    accepted.sort(key=lambda value: value[0])
+    retained_text = "\n".join(dict.fromkeys(text for _offset, text, _sources in accepted))
+    # 重なる片を連結して元の複合説明全体を支持済みに戻さない。
+    covered: set[int] = set()
+    for offset, text, _sources in accepted:
+        covered.update(range(offset, offset + len(text)))
+    if all(index in covered for index, char in enumerate(original) if not char.isspace()):
+        return False
+    selected = list({id(source): source for _offset, _text, sources in accepted for source in sources}.values())
+    primary = selected[0]
+    # 引用自体は元の検証済み引用を保持する。抽出provenanceを新しい引用へ流用しない。
+    entry.item = entry.item.model_copy(update={"text": retained_text, "citations": list(primary.item.citations)})
+    entry.span, entry.quote_match = primary.span, primary.quote_match
+    entry.citation_resolution = dict(primary.citation_resolution)
+    entry.also = [replace(source, item=source.item.model_copy(update={"text": retained_text}), also=[]) for source in selected[1:]]
+    entry.review_assessment.update(
+        effective_support="supported",
+        partial_salvage={
+            "status": "retained",
+            "original_text": original,
+            "original_support": review.support,
+            "discard_reason": review.reason,
+            "retained_text": retained_text,
+            "retained_sources": [{"evidence_id": source.item.evidence_id, "quote": source.item.quote} for source in selected],
+            "rejected": rejected,
+        },
+    )
+    if review.applicability != "matched":
+        entry.item = entry.item.model_copy(update={"applies": "unverified", "condition": ""})
+    entry.withdrawn = True
+    return True
+
+
 def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
     """監査の判定で段落の印を付ける（#2738）。supported を決定的検査の印から戻すことはしない。
 
@@ -3152,6 +3258,8 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
                 entry.mark("unsupported", "出力ファイルの項目定義の引用を根拠に確認できません。")
         reason = f"監査: {review.support}/{review.applicability} {review.reason}"
         if review.support == "contradicted":
+            if _retain_supported_fragments(entry, review):
+                continue
             entry.remove(review.reason, reason=reason)
             entry.withdrawn = True
             continue
@@ -3811,7 +3919,7 @@ def _body_sections(
     published = [entry for entry in checked if entry.published and not _shown_as_quote(entry)]
     # 資料の出典を付けない説明（引用が原文と照合できない・業務ガイドの文から来た。#2792）は、資料の節に置かず、
     # 出典の行の無い節に分ける。
-    # 回答は文書を単位に組み立て、別の文書の説明を交互に並べない。どの節も同じ文書の順にする。
+    # 規則・参考原文・不足は文書ごとにまとめる。操作の順序は後段で元の並びを使う。
     order = _document_order(checked)
     shown = _by_document([entry for entry in published if entry.span], order)
     unsourced = [entry for entry in published if not entry.span]
@@ -3827,19 +3935,13 @@ def _body_sections(
     # 規則を質問の事実に当てはめた結果（#2155）。確かめきれないものは警告つき（#2738）。出典は当てはめた規則の根拠。
     if applied := application_lines(applications, _citation, add_citation, mark_application):
         sections.append((APPLICATIONS_SECTION_TITLE, applied))
-    # 別機能の操作を一つの番号列に並べない。機能ごとに手順を分けて見出しに機能名を出す。
-    # 機能が 1 つでも機能名を出す。「どの画面・機能の手順か」が問い合わせ回答の中心情報で、item 本文が
-    # 画面名を含むかはモデルの揺れに依存するため (#701)。
-    # 文書ごとに分け、文書間を交互に並べない (#1022)。別の文書の手順を A → B → A の順に並べると、別業務の
-    # 手順の断片が連続した操作に見える。主文書（操作 item が最も多い文書）を先に、他の文書は初出順に後ろへ出す。
-    # 同じ文書の中では items の並びで機能が連続する範囲ごとに区切る。機能ごとに集約し直すと、機能を往復する
-    # 一連の操作（F1 で選択 → F2 で入力 → F1 で保存）が「選択 → 保存」「入力」の順に変わり、保存後に入力する
-    # 手順として表示されていた (#1009)。同じ機能が別の機能を挟んで再び現れれば別の節にし、items の順序は変えない。
+    # 操作の順序は草稿のまま保持し、同じ文書・機能の連続する操作だけを同じ節にする。
+    # 別文書を挟んで戻る操作を文書ごとに集約すると、後続操作が先へ移ってしまう。
     groups: list[tuple[Any, list[CheckedItem]]] = []
-    for entry in shown:
-        if entry.item.kind not in _PROCEDURE_KINDS:
+    for entry in published:
+        if entry.span is None or entry.item.kind not in _PROCEDURE_KINDS:
             continue
-        function = entry.span["function"] if entry.span else None
+        function = (_document_key(entry.span), entry.span["function"])
         if groups and groups[-1][0] == function:
             groups[-1][1].append(entry)
         else:
@@ -4024,39 +4126,144 @@ def _claim_units(claim: str, text: str, units: Sequence[tuple[int, int]]) -> tup
     return (first, last) if share >= _CLAIM_UNIT_MIN_SHARE else None
 
 
-def cited_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem, str]:
-    """evidence_id と lines が指す原文を quote にした item と、範囲が不正なときの理由（#2830）。
+@dataclass(frozen=True)
+class CitationView:
+    """モデルへ表示した本文・行区切りのスナップショット。引用の意味支持は表さない。"""
 
-    行番号の無い根拠は全文、行番号の付いた根拠は lines の範囲を引く。lines が番号の列なら最初から最後まで、原文の
-    書き出しならそれを含む行、空なら説明に最もよく重なる行を引く（#3534）。gap・根拠が決まらない item と、lines の無い
-    item に quote が既にあるとき（システムが補った引用・前の組の引き継ぎ）は変えない（従来の照合に任せる）。
-    """
+    evidence_id: str
+    label: str
+    source_id: str
+    source: str
+    text: str
+    units: tuple[tuple[int, int], ...]
+    view_sha256: str
+
+
+# リクエスト局所の実提示記録。span 自身へ proof を埋めず、JSON やモデル入力へ漏らさない。
+_CITATION_VIEWS: ContextVar[dict[int, tuple[dict, CitationView]] | None] = ContextVar("citation_views", default=None)
+
+
+def _citation_view(span: Mapping[str, Any]) -> CitationView:
+    text = str(span.get("text") or "")
+    displayed = neutralize_boundary_markers(fold_width(_rendered_evidence_span(span)))
+    return CitationView(
+        str(span.get("evidence_id", "")),
+        str(span.get("label", "")),
+        str(span.get("source_id", "")),
+        str(span.get("source", "")),
+        text,
+        tuple(citation_units(text)),
+        hashlib.sha256(displayed.encode()).hexdigest(),
+    )
+
+
+def _citation_extraction(item: GroundedItem) -> dict[str, str]:
+    return dict(item.citations[0]._extraction) if item.citations else {}
+
+
+def _with_extraction(item: GroundedItem, metadata: dict[str, str], *, quote: str | None = None) -> GroundedItem:
+    """モデルが返せない内部属性に、現在の検証の結果だけを保存する。"""
+    if not item.citations:
+        return item
+    citation = item.citations[0].model_copy(update={"quote": quote} if quote is not None else {})
+    citation._extraction = dict(metadata)
+    return item.model_copy(update={"citations": [citation, *item.citations[1:]]})
+
+
+def _line_citation_spans(item: GroundedItem, spans: Sequence[dict]) -> list[dict]:
+    # 安定 ID / 表示 ID の一致を、別の本文の出典 alias と混ぜない。
+    direct = [span for span in spans if item.evidence_id and item.evidence_id in {span["evidence_id"], span.get("label")}]
+    return direct if direct else _named_spans(item, spans)
+
+
+def cited_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem, str]:
+    """本検証の ID と行から原文を抽出する。抽出・提示版・意味支持を別々に記録する。"""
+    item = _with_extraction(item, {})  # モデルや旧 round の内部 flag は採用しない。
     if item.kind == "gap" or (item.quote.strip() and not item.lines.strip()):
-        return item, ""
-    named = _named_spans(item, spans)
+        return item, ""  # システムの補写・旧形式の自由引用は従来の原文照合に進む。
+    metadata = {
+        "requested_evidence_id": item.evidence_id,
+        "requested_lines": item.lines,
+        "status": "failed",
+        "authenticity": "unverified",
+        "sent_view_status": "not_recorded",
+        "requested_range_status": "unverified",
+    }
+
+    def fail(code: str, detail: str) -> tuple[GroundedItem, str]:
+        return _with_extraction(item, {**metadata, "reason_code": code}, quote=""), detail
+
+    named = _line_citation_spans(item, spans)
+    if not named:
+        return fail("citation_id_invalid", "引用の ID が今回の根拠にありません。今回の根拠に表示された ID を指定してください。")
     if len(named) != 1:
-        return item, ""
-    text = str(named[0].get("text") or "")
-    units = citation_units(text)
+        return fail("citation_id_ambiguous", "引用の ID が複数の根拠を指しています。一意な表示 ID を指定してください。")
+    span = named[0]
+    view = _citation_view(span)
+    metadata.update(
+        {
+            "resolved_evidence_id": view.evidence_id,
+            "source_id": view.source_id,
+            "source": view.source,
+            "content_sha256": hashlib.sha256(view.text.encode()).hexdigest(),
+            "view_sha256": view.view_sha256,
+            "view_scope": "evidence_block_after_width_and_boundary_normalization",
+        }
+    )
+    snapshot = (_CITATION_VIEWS.get() or {}).get(id(span))
+    sent = snapshot[1] if snapshot is not None and snapshot[0] is span else None
+    if isinstance(sent, CitationView):
+        metadata["sent_view_status"] = "matched" if sent == view else "mismatched"
+        metadata["sent_view_sha256"] = sent.view_sha256
+        if sent != view:
+            return fail(
+                "citation_version_mismatch", "提示した根拠と現在の本文・ID・出典・行の版が一致しません。現在の引用を確定できません。"
+            )
+    text, units = view.text, view.units
     if not units:
-        return item, ""
-    if not _numbered(text, units):
-        return item.with_citation(quote=text[units[0][0] : units[-1][1]].strip()), ""
-    found = _CITE_RANGE.match(item.lines or "")
-    listed = _CITE_LIST.match(item.lines or "")
-    if found:
-        first = int(found.group(1))
-        last = int(found.group(2) or first)
-    elif listed:
-        numbers = [int(value) for value in re.findall(r"\d+", listed.group(0))]
-        first, last = min(numbers), max(numbers)
-    elif located := _lines_text_units(item.lines, text, units) if item.lines.strip() else _claim_units(item.text, text, units):
-        first, last = located
-    else:
-        return item, f"行番号の付いた根拠は lines に引用する行の番号か範囲（1〜{len(units)}）を書く"
-    if not 1 <= first <= last <= len(units):
-        return item, f"lines の範囲 {item.lines} が根拠の行（1〜{len(units)}）の外にある"
-    return item.with_citation(quote=text[units[first - 1][0] : units[last - 1][1]].strip()), ""
+        return fail("citation_extraction_failed", "指定した根拠に抽出できる本文がありません。")
+    first, last, origin = 1, len(units), "whole_text"
+    metadata["requested_range_status"] = "missing" if _numbered(text, units) and not item.lines.strip() else "not_required"
+    if _numbered(text, units) or item.lines.strip():
+        found, listed = _CITE_RANGE.match(item.lines or ""), _CITE_LIST.match(item.lines or "")
+        if found:
+            first, last = int(found.group(1)), int(found.group(2) or found.group(1))
+            origin = "line_range"
+            metadata["requested_range_status"] = "valid"
+        elif listed:
+            numbers = [int(value) for value in re.findall(r"\d+", listed.group(0))]
+            first, last, origin = min(numbers), max(numbers), "line_list"
+            metadata["requested_range_status"] = "valid_list"
+        elif located := _lines_text_units(item.lines, text, units) if item.lines.strip() else _claim_units(item.text, text, units):
+            first, last = located
+            origin = "line_text" if item.lines.strip() else "claim_inferred"
+            metadata["requested_range_status"] = "invalid" if item.lines.strip() else "missing"
+        else:
+            metadata["requested_range_status"] = "invalid" if item.lines.strip() else "missing"
+            code = "citation_range_invalid" if item.lines.strip() else "citation_range_missing"
+            return fail(code, f"引用行を確定できません。今回の根拠の行番号か範囲（1〜{len(units)}）を指定してください。")
+        if first > last:
+            metadata["requested_range_status"] = "invalid"
+            return fail("citation_range_invalid", f"引用行の開始と終了が逆です: {item.lines}")
+        if not 1 <= first <= last <= len(units):
+            metadata["requested_range_status"] = "out_of_bounds"
+            return fail("citation_range_out_of_bounds", f"lines の範囲 {item.lines} が根拠の行（1〜{len(units)}）の外にあります。")
+    start, end = units[first - 1][0], units[last - 1][1]
+    quote = text[start:end].strip()
+    if not quote:
+        return fail("citation_extraction_failed", "指定範囲から原文を抽出できませんでした。")
+    metadata.update(
+        {
+            "status": "extracted",
+            "authenticity": "verified",
+            "quote_origin": origin,
+            "line_first": str(first),
+            "line_last": str(last),
+            "char_start": str(start),
+            "char_end": str(end),
+        }
+    )
+    return _with_extraction(item, metadata, quote=quote), ""
 
 
 def _retrieved_heading_context(spans: Sequence[dict]) -> list[dict]:
@@ -4114,8 +4321,22 @@ def _source_note(span: dict) -> str:
     return f"\n{CONTEXT_NOTE_BEGIN}\n" + "\n".join(parts) + f"\n{CONTEXT_NOTE_END}" if parts else ""
 
 
+def _rendered_evidence_span(span: Mapping[str, Any]) -> str:
+    """モデルへ示す根拠ブロック。引用行の本文と、引用対象外の補助情報を同じ版で記録する。"""
+    return (
+        f"[{span['label']}] {span.get('location') or 'p.' + str(span.get('page', ''))} origin={span.get('origin', 'unclassified')}"
+        + (f" tags={','.join(span['tags'])}" if span.get("tags") else "")
+        + (" pinned" if span.get("pinned") else "")
+        + (" catalog" if span.get(ARTICLE_CATALOG_KEY) else "")
+        + _source_note(dict(span))
+        + "\n"
+        + numbered_text(str(span.get("text") or ""))
+    )
+
+
 def format_functions(spans: Sequence[dict]) -> str:
     """根拠を機能ごとの見出しで分けて提示し、別機能の混合を入力の時点で防ぐ。"""
+    _CITATION_VIEWS.set({id(span): (span, _citation_view(span)) for span in spans})
     spans = _retrieved_heading_context(spans)
     groups: dict[tuple, list[dict]] = {}
     for span in spans:
@@ -4133,16 +4354,7 @@ def format_functions(spans: Sequence[dict]) -> str:
         header = f"=== 機能 F{number}: {_function_label(members[0])} ==="
         # 文書の補助情報は原文照合の対象外。表示IDの行より前に置くと直前の Evidence の本文に見え、
         # そこからの引用は「原文と一致しない」として削除されるため、IDの後ろに範囲を明示して置く。
-        body = "\n\n".join(
-            f"[{span['label']}] {span.get('location') or 'p.' + str(span.get('page', ''))} origin={span.get('origin', 'unclassified')}"
-            + (f" tags={','.join(span['tags'])}" if span["tags"] else "")
-            + (" pinned" if span["pinned"] else "")
-            + (" catalog" if span.get(ARTICLE_CATALOG_KEY) else "")
-            + _source_note(span)
-            + "\n"
-            + numbered_text(span["text"])
-            for span in members
-        )
+        body = "\n\n".join(_rendered_evidence_span(span) for span in members)
         blocks.append(header + "\n" + body)
     return "\n\n".join(blocks)
 
@@ -4211,19 +4423,19 @@ class Round:
     def unanswered(self) -> list[dict]:
         """充足を確認できていない要求。監査の partial / missing に加え、監査を省いた round では全要求を含める (#622)。
 
-        監査対象の item がなく監査を省いた round（audit=None）は、従来は未回答が 0 件になり是正が
-        起きず、根拠の取り違えによる全面拒答がそのまま公開された。監査が走った round では監査の判定に従う
-        （返さなかった id を欠落と決めつけない）。reviewed は監査由来、それ以外は status=missing。
+        監査が走った round では監査の判定に従う（返さなかった id を欠落と決めつけない）。
+        監査が完了しなかった要求は unknown とし、実行状態を材料不足と区別する。
         """
         context_ids = {unit["id"] for unit in self.requests if unit.get("kind") == "context"}  # 背景文は未回答にしない (#650)
         if self.audit is None:
             return [
                 {
                     "request_id": unit["id"],
-                    "status": "missing",
+                    "status": "unknown",
                     "reason": "監査で充足を確認できていない要求",
                     "text": unit.get("text", ""),
                     "reviewed": False,
+                    "review_execution": self.review_execution,
                 }
                 for unit in self.requests
                 if unit["id"] not in context_ids
@@ -4316,6 +4528,11 @@ class Round:
                 }
                 for step in unexplained_guide_steps(self.guide_steps)
                 if step["status"] in GUIDE_STEP_REGENERABLE
+                and (
+                    not step.get("requirements")
+                    or step.get("order_errors")
+                    or any(entry["status"] in {"partial", "missing"} for entry in step["requirements"])
+                )
             ],
             # 根拠があるのに全て gap で答えた草稿は、モデル自身の過剰な拒答であることがある。1回だけ見直させる。
             "no_cited_evidence": ""
@@ -4369,6 +4586,8 @@ class Round:
 
     @property
     def review_execution(self) -> str:
+        if self.timing.get("audit_error_type"):
+            return "timed_out" if self.audit_cut else "error"
         return (
             "partial"
             if self.audit_cut and self.audit is not None
@@ -4401,7 +4620,20 @@ class Round:
                     "carried": e.carried,
                     "withdrawn": e.withdrawn,
                     # 同じ主張の別の出典（#3526）。
-                    **({"also": [{"evidence_id": o.item.evidence_id, "quote": o.item.quote} for o in e.also]} if e.also else {}),
+                    **(
+                        {
+                            "also": [
+                                {
+                                    "evidence_id": o.item.evidence_id,
+                                    "quote": o.item.quote,
+                                    "citation_resolution": dict(o.citation_resolution),
+                                }
+                                for o in e.also
+                            ]
+                        }
+                        if e.also
+                        else {}
+                    ),
                     **({"marks": [dict(mark) for mark in e.marks]} if e.marks else {}),
                     **({"removed": True} if e.removed else {}),
                 }
@@ -4418,7 +4650,16 @@ class Round:
                             "citations": [
                                 {
                                     "evidence_id": cited.item.evidence_id,
-                                    "status": "unmatched" if cited.unmatched or cited.span is None else "matched",
+                                    "status": "matched"
+                                    if cited.citation_resolution.get("authenticity") == "verified"
+                                    else "unmatched"
+                                    if cited.unmatched or cited.span is None
+                                    else "matched",
+                                    **(
+                                        {"reason_code": cited.citation_resolution["reason_code"]}
+                                        if cited.citation_resolution.get("reason_code")
+                                        else {}
+                                    ),
                                     "match": cited.quote_match,
                                 }
                                 for cited in item_citations(entry)
@@ -4868,8 +5109,7 @@ def guide_step_assignment(
     item。どの手順でも語で決まらない item（手順の語が根拠に無い・主の操作の文が語で 1 つに決まらない・引用が語で
     主の操作の文に届かない）は、``semantics`` が使えれば意味の近さで決める（`_guide_semantic_owners`）。使えない・
     失敗なら語で決まる item だけを手順の説明にし、語で決まらない共有の item はどの手順の説明にもしない（#2685。
-    手順の語が 1 語しか当たらない文は共通の文のことがあるので、それで対応付けない）。さらに 1 つの item は 1 つの手順の説明にだけ数え（必須の手順を先に割り当てる）、同じ item を別の手順の
-    説明に重ねない。
+    手順の語が 1 語しか当たらない文は共通の文のことがあるので、それで対応付けない）。独立に対応付けた item は複数の手順を説明してよい。単なる根拠の共有だけでは充足にしない。
 
     ``unsearched`` は手順ごとの検索を期限・回数の上限で打ち切って検索しなかった手順（#2706）。その手順の根拠は
     分からないので、1 つの手順の根拠だけを引いた item でも、検索しなかった手順と根拠を共有しうる item として、
@@ -4979,22 +5219,14 @@ def guide_step_assignment(
         # 確かめた説明（印の無い説明）だけを手順の説明にする。印の付いた説明は本文に出るが、手順を確かめた説明ではない（#2738）。
         return checked[index].published and not checked[index].state and checked[index].item.applies != "unverified"
 
-    # 公開できる item を手順に 1 対 1 で割り当てる（増加路による最大の割り当て。必須の手順を先に割り当てる）。
+    # 独立に対応付けた説明を手順ごとに保持する。同じ説明が複数の操作を含んでもよい。
+    assigned_by_step = {step_id: [index for index, _score in pairs if publishable(index)] for step_id, pairs in own.items()}
+    explained = {step_id for step_id, indexes in assigned_by_step.items() if indexes}
+    # 戻り値の旧形式は代表の手順だけを保持する互換情報。充足の計算には使わない。
     assigned: dict[int, str] = {}
-
-    def assign(step_id: str, seen: set[int]) -> bool:
-        for index, _score in own[step_id]:
-            if index in seen or not publishable(index):
-                continue
-            seen.add(index)
-            if index not in assigned or assign(assigned[index], seen):
-                assigned[index] = step_id
-                return True
-        return False
-
-    for step_id in sorted((step[0] for step in guide_steps), key=lambda step_id: step_id in optional_ids):
-        assign(step_id, set())
-    explained = set(assigned.values())
+    for step_id in sorted(assigned_by_step, key=lambda step_id: step_id in optional_ids):
+        for index in assigned_by_step[step_id]:
+            assigned.setdefault(index, step_id)
     coverage: list[dict[str, Any]] = []
     for step_id, title, _sources in guide_steps:
         if step_id in explained:
@@ -5025,7 +5257,7 @@ def guide_step_assignment(
                 },
                 "assignment": {
                     "cited_item_indexes": cited[step_id],
-                    "assigned_item_indexes": [index for index, owner in assigned.items() if owner == step_id],
+                    "assigned_item_indexes": assigned_by_step[step_id],
                     "candidates": [
                         {
                             "item_index": index,
@@ -5102,11 +5334,11 @@ _REQUIREMENT_STATES = {"explained": "addressed", "partly_explained": "partial", 
 
 
 def requirement_status(review: Any, requirement: Mapping[str, Any], checked: Sequence[CheckedItem], notices: Sequence[str] = ()) -> str:
-    """要件の監査の観察を、要件の充足（addressed / partial / missing）にする（#2800）。"""
+    """要件の監査の観察を充足状態にする。監査のない要件は未確認のまま残す。"""
     if review is None:
-        return "missing"
+        return "unknown"
     if review.answer_state != "stated_unavailable":
-        return _REQUIREMENT_STATES[review.answer_state]
+        return _REQUIREMENT_STATES.get(review.answer_state, "unknown")
     if requirement.get("kind", "completion") != "completion":
         return "missing"
     states_unavailable = any(
@@ -5169,26 +5401,7 @@ def apply_guide_contracts(
             step["status"] = GUIDE_STEP_EXPLAINED
         elif step["status"] == GUIDE_STEP_EXPLAINED:
             step["status"] = GUIDE_STEP_UNUSED
-    # 一つの説明だけで複数の手順を完了にしない。必要な別操作は別の item として説明する。
-    assigned: dict[int, str] = {}
-
-    def assign_contract(step_id: str, seen: set[int]) -> bool:
-        for index in sorted(indexes.get(step_id, ())):
-            if index in seen:
-                continue
-            seen.add(index)
-            if index not in assigned or assign_contract(assigned[index], seen):
-                assigned[index] = step_id
-                return True
-        return False
-
-    for step in sorted(result, key=lambda step: not step["required"]):
-        if step["step_id"] in indexes and step["status"] == GUIDE_STEP_EXPLAINED:
-            assign_contract(step["step_id"], set())
-    allocated = set(assigned.values())
-    for step in result:
-        if step["step_id"] in indexes and step["status"] == GUIDE_STEP_EXPLAINED and step["step_id"] not in allocated:
-            step["status"] = GUIDE_STEP_UNUSED
+    # 同じ説明を複数の手順で使える。各要件の観察と引用の検証は上で個別に行う。
 
     def first_operation(step_id: str) -> int | None:
         # 順序は利用者が行う操作の説明の並びで比べる（#2732・#2795）。規則・要約・不足の文の位置は実行の順を表さない。
@@ -5241,7 +5454,19 @@ def guide_step_gap_line(step: dict[str, Any]) -> str:
 # 資料の出典を付けてよいのは、検索した資料の原文と照合できた説明だけ。引用が原文と照合できない説明（#2738 で本文に
 # 残す）と、引いた根拠に無く業務ガイドの文から来た説明は、印を付けて残すが資料の出典を付けない。業務ガイドは
 # 運用者が設定した答え方の指示で、資料ではない（確認先・引き継ぐ条件はシステムが「業務ガイドの案内」の節に出す）。
-UNSOURCED_MARK_CODES = frozenset({"quote_unmatched", "citation_error", "guide_text"})
+CITATION_EXTRACTION_CODES = frozenset(
+    {
+        "citation_id_invalid",
+        "citation_id_ambiguous",
+        "citation_range_missing",
+        "citation_range_invalid",
+        "citation_range_out_of_bounds",
+        "citation_extraction_failed",
+        "citation_heading_only",
+        "citation_version_mismatch",
+    }
+)
+UNSOURCED_MARK_CODES = frozenset({"quote_unmatched", "citation_error", "guide_text", *CITATION_EXTRACTION_CODES})
 # 説明の文が業務ガイドの文から来たかの判定。文の語（2 文字組）のうち引いた根拠に無いものの割合が
 # ``GUIDE_TEXT_NOVEL_RATIO`` 以上で、その語のうち業務ガイドの文にあるものの割合が ``GUIDE_TEXT_GUIDE_RATIO`` 以上なら
 # 業務ガイドの文とする。語の少ない文（``GUIDE_TEXT_MIN_WORDS`` 未満）は判定しない。業務ガイドの文は資料の言い回しを
@@ -5418,7 +5643,13 @@ def _unused_evidence(question: str, spans: Sequence[dict], used: set[str]) -> li
             if len(selected) >= AUDIT_UNUSED_EVIDENCE_LIMIT:
                 break
     return [
-        {"evidence_id": s["evidence_id"], "function": _function_label(s), "text": s["text"][:AUDIT_UNUSED_EVIDENCE_CHARS]} for s in selected
+        {
+            "evidence_id": s["evidence_id"],
+            "source": s.get("source", ""),
+            "function": _function_label(s),
+            "text": s["text"][:AUDIT_UNUSED_EVIDENCE_CHARS],
+        }
+        for s in selected
     ]
 
 
@@ -5433,6 +5664,114 @@ def summary_output_fields_error(audit: GroundedAudit | None, spans: Sequence[dic
     if not any(quote_in_text(fields.definition_quote, text) for text in texts):
         return "要約が主張する出力ファイルの項目定義の引用を根拠に確認できません。"
     return ""
+
+
+def summary_basis_snapshot(checked: Sequence[CheckedItem]) -> tuple[tuple[CheckedItem, str], ...]:
+    """専用監査へ渡した本文・引用元の版を、最終確定時の照合用に保持する。"""
+    return tuple(
+        (
+            entry,
+            hashlib.sha256(
+                json.dumps(
+                    [
+                        {
+                            "item": cited.item.model_dump(mode="json"),
+                            "source": {
+                                key: (cited.span or {}).get(key)
+                                for key in (
+                                    "evidence_id",
+                                    "source_id",
+                                    "source",
+                                    "text",
+                                    "version",
+                                    "document_version",
+                                    "source_run_id",
+                                    "chunk_uid",
+                                )
+                            },
+                        }
+                        for cited in item_citations(entry)
+                    ],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest(),
+        )
+        for entry in checked
+    )
+
+
+def application_summary_snapshot(applications: Sequence[CheckedApplication]) -> tuple[tuple[CheckedApplication, str], ...]:
+    """監査済み当てはめの結果・公開状態も最終時点と対応付ける。"""
+    return tuple((application, json.dumps(application.to_payload(), ensure_ascii=False, sort_keys=True)) for application in applications)
+
+
+def finalize_summary(
+    current: Round,
+    *,
+    application_summary: str = "",
+    application_basis: Sequence[tuple[CheckedItem, str]] = (),
+    application_state: Sequence[tuple[CheckedApplication, str]] = (),
+) -> Round:
+    """最終本文の状態を使い、未確認・撤回した主張を要約で確定し直さない。"""
+    summary = str(current.summary or "").strip()
+    if not summary or summary == answer_labels().neutral_summary:
+        return current
+    # 当てはめ専用監査の新しい結論は、旧草稿の摘要判定で上書きしない。依存した本文が変われば失効する。
+    if (
+        application_summary == summary
+        and application_basis
+        and application_state
+        and all(
+            any(application is final for final in current.applications) and application_summary_snapshot([application])[0][1] == signature
+            for application, signature in application_state
+        )
+        and any(application.source == "step" and application.published and not application.marks for application in current.applications)
+        and all(
+            any(entry is final for final in current.checked)
+            and entry.confirmed
+            and entry.review_assessment.get("effective_support") == "supported"
+            and summary_basis_snapshot([entry])[0][1] == signature
+            for entry, signature in application_basis
+        )
+    ):
+        return current
+    unsettled = [
+        entry
+        for entry in current.checked
+        if not entry.added
+        and entry.item.kind != "gap"
+        and (not entry.confirmed or entry.review_assessment.get("partial_salvage", {}).get("status") == "retained")
+    ]
+    exact_confirmed = any(entry.confirmed and summary == entry.item.text.strip() for entry in current.checked)
+    audit = current.audit if current.review_execution == "completed" else None
+    unsupported = audit is not None and not audit.summary_supported
+    basis = audit.summary_basis if audit is not None else []
+    confirmed_texts = {
+        entry.item.text for entry in current.checked if entry.confirmed and entry.review_assessment.get("effective_support") == "supported"
+    }
+    valid_basis = bool(basis) and all(text in confirmed_texts for text in basis)
+    if unsettled and not unsupported and valid_basis:
+        return current
+    # 要約と主張の意味の対応は語の類似度で推定しない。対応を確認できない混合要約だけを保留し、本文は残す。
+    if not unsupported and not unsettled and not current.summary_warning:
+        return current
+    # 未実行の表示だけで、確認済み本文と同じ要約まで捨てない。
+    if not unsupported and not unsettled and exact_confirmed:
+        return current
+    if not unsupported and not unsettled and current.summary_warning == "監査なし":
+        return current
+    reason = "最終本文に未確認・撤回した主張があり要約への依存を確認できない" if unsettled else "要約の支持を確認できない"
+    return replace(
+        current,
+        summary=answer_labels().neutral_summary,
+        summary_warning="",
+        summary_reason=reason,
+        timing={
+            **current.timing,
+            "summary_finalization": {"status": "withheld", "reason": reason, "body_items_retained": len(current.checked)},
+        },
+    )
 
 
 def summary_deletion_error(summary: str, checked: Sequence[CheckedItem]) -> str:
@@ -5671,8 +6010,11 @@ def run_round(
         # 作り直しても残った不整合（#3228）。計画が決まらない説明は外さずに印を付けて残す（verify）。
         plan_unsettled = _request_plan_errors(draft, spans)
     catalog_review: dict[str, Any] = {}
+    if getattr(settings, "article_catalog_review", False) and audit_mode == AUDIT_MODE_NONE:
+        catalog_review = {"execution": "not_run", "skipped": "audit_disabled", "reviewed": 0}
     if (
         getattr(settings, "article_catalog_review", False)
+        and audit_mode != AUDIT_MODE_NONE
         and any(item.kind != "gap" for item in draft.items)
         and (unreviewed := unreviewed_catalog_spans(draft, spans))
     ):
@@ -5772,19 +6114,12 @@ def run_round(
     # 印の付いた説明も監査する（根拠と矛盾すれば外す。#2738）。システムが補った原文・外した説明は監査しない。
     auditable = [(index, entry) for index, entry in enumerate(checked) if entry.span and entry.published]
     audit_index = {id(entry): index for index, entry in auditable}
-    # 監査なしの型でも、条で構成された文書の条を出典にした説明だけは事実の監査（standard）に掛ける（#3526）。
-    # 規則の出典が増えても、条の原文が支えない説明に条の出典を付けて公開しない（出典の適合率を守る）。
-    audited = (
-        [(index, entry) for index, entry in auditable if any(_article_unit(cited.span) for cited in item_citations(entry))]
-        if audit_mode == AUDIT_MODE_NONE
-        else auditable
-    )
+    # noneでは文書の形式によらずLLM監査を呼ばない。原文照合と決定的な検査は上で済ませる。
+    audited = [] if audit_mode == AUDIT_MODE_NONE else auditable
     # 同じ主張の別の出典（#3526）も出典ごとに監査する。index は items・業務ガイドの案内の後ろに続ける。
     also_base = len(checked) + len(guide_notices)
     also_audited = [(also_base + offset, entry, other) for offset, (entry, other) in enumerate((e, o) for _, e in audited for o in e.also)]
-    if spans and audited and audit_mode == AUDIT_MODE_NONE:
-        timing["article_audit_items"] = len(audited)
-    if spans and (audit_mode != AUDIT_MODE_NONE or audited):
+    if spans and audit_mode != AUDIT_MODE_NONE:
         # 未使用根拠の基準は草稿の items。システムが補った原文のみ提示（必須根拠・確定操作・但し書き）は草稿が
         # 使っていないので未使用に含め、gap だけの草稿でも見落とした根拠を監査に見せる (#1014)。
         used = {entry.span["evidence_id"] for entry in cited_entries(checked) if entry.span and not entry.added}
@@ -5830,6 +6165,7 @@ def run_round(
             # （同じ機能の「別の」span の、生成説明を「除いた」本文という定義のため）ので、引用元を
             # 見せないと監査は根拠に書かれている操作まで「根拠にない」と判定する (#1086)。
             "evidence": {e.span["evidence_id"]: e.span.get("text", "")[:AUDIT_EVIDENCE_TEXT_CHARS] for _, e in audit_entries},
+            "evidence_sources": {e.span["evidence_id"]: e.span.get("source", "") for _, e in audit_entries},
             # 同じ機能の本文（生成説明を除く）。決定的検査（#676/#698）と同じく、隣の span にある手順を
             # text が書いただけで「引用にない操作」と判定させない (#706)。機能ごとに 1 回だけ載せる。
             "function_context": {
@@ -5873,8 +6209,8 @@ def run_round(
         audit_prompt = json.dumps(fold_model_view(inputs), ensure_ascii=False)
         started, usage_before = monotonic(), usage_snapshot()
         try:
+            audit_calls += 1
             audit = _parse_audit(parse_text, audit_system, audit_prompt, audit_settings, provider_id, detailed=detailed)
-            audit_calls = 1
             expected_requirements = {entry["id"] for contract in contracts for entry in contract["requirements"]}
             returned_requirements = [entry.requirement_id for entry in audit.guide_requirement_reviews]
             missing_requirements = sorted(key for key in expected_requirements if returned_requirements.count(key) != 1)
@@ -5899,16 +6235,25 @@ def run_round(
                     audit_prompt = json.dumps(fold_model_view(inputs), ensure_ascii=False)
                 # reviews も request_reviews も空の応答は監査として使えない。そのまま使うと addressed が空になり、
                 # 支持済み item の多い round が採用されず、是正も起きない (#629)。同じ入力で 1 回だけ再試行する。
+                audit_calls += 1
                 audit = _parse_audit(parse_text, audit_system, audit_prompt, audit_settings, provider_id, detailed=detailed)
-                audit_calls = 2
                 if _audit_is_empty(audit):
                     audit = None  # 監査なしの round として扱い、全要求を未回答にして是正へ進む
-        except Exception:
-            # 回答の確定の分を残した期限（`RoundBudget`）で監査が切れたら、草稿は捨てずに監査なしの round にする
-            # （#1516。原文との照合は済んでいる）。外側の期限が切れた・取り消された・他の失敗はそのまま送出する。
-            if not deadline_cut_short():
+        except Exception as exc:
+            # 監査の失敗だけでは生成済みの本文を捨てない。権限拒否・取り消し・外側の期限は中断を維持する。
+            cut_short = deadline_cut_short()
+            deadline = current_deadline()
+            status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+            if (
+                isinstance(exc, (PermissionError, CancelledError))
+                or status in {401, 403}
+                or (deadline is not None and (deadline.cancelled or (deadline.expired and not cut_short)))
+                or (isinstance(exc, DeadlineExceeded) and not cut_short)
+            ):
                 raise
-            audit, audit_calls, audit_cut = None, audit_calls + 1, True
+            audit = None
+            audit_cut = cut_short or isinstance(exc, (TimeoutError, TimeoutException, APITimeoutError))
+            timing["audit_error_type"] = type(exc).__name__
         timing.update(audit_seconds=round(monotonic() - started, 1), audit_prompt_chars=len(audit_prompt))
         if audit_usage := usage_delta(usage_before):
             timing["audit_usage"] = audit_usage
@@ -5924,6 +6269,7 @@ def run_round(
             apply_audit(checked, audit)
             checked, audit = deduplicate_audited_items(checked, audit, len(guide_notices))
             _reconcile_request_reviews(checked, audit)
+            _validate_missing_content_evidence(audit, inputs)
     procedures = [e for e in checked if e.item.kind in _PROCEDURE_KINDS and not e.added]
     timing["procedure_quotes"] = {
         "original": sum(e.span is not None and quote_in_text(e.item.text, e.span["text"]) for e in procedures),
@@ -5931,12 +6277,6 @@ def run_round(
         "unmatched": sum(e.unmatched for e in procedures),
     }
     if audit_mode == AUDIT_MODE_NONE:
-        if audited and audit is None:
-            # 条の出典の説明の監査が時間の上限で切れた・応答が空だった（#3526）。原文との照合だけを済ませた未確認の説明。
-            detail = "回答の時間の上限までに監査が終わらなかった" if audit_cut else "監査の応答が得られなかった"
-            for _index, entry in audited:
-                if not entry.carried:
-                    entry.mark("unassessed", detail)
         # 監査なしの型（#2800）: 要求の充足は説明の有無で決め、主張の支持・目的・要約は決定的な検査だけにする。
         audit = deterministic_audit(question, checked)
         timing["audit"] = AUDIT_MODE_NONE
@@ -6148,6 +6488,38 @@ def _unique_request_reviews(audit: GroundedAudit) -> tuple[GroundedAudit, tuple[
     if not duplicates:
         return audit, ()
     return audit.model_copy(update={"request_reviews": [row for row in audit.request_reviews if counts[row.request_id] == 1]}), duplicates
+
+
+def _validate_missing_content_evidence(audit: GroundedAudit, inputs: dict) -> None:
+    """補写材料の引用を実際の監査入力に束縛する。意味支持は監査の判断で、ここでは証明しない。"""
+    evidence = {key: (text, inputs.get("evidence_sources", {}).get(key, "")) for key, text in inputs.get("evidence", {}).items()}
+    evidence.update({row["evidence_id"]: (row["text"], row.get("source", "")) for row in inputs.get("unused_evidence", [])})
+    for review in audit.request_reviews:
+        if review.status not in {"partial", "missing"}:
+            continue
+        if review.evidence_status != "available":
+            review.evidence_ids = []
+            review.evidence_support = []
+            continue
+        refs = review.evidence_support
+        valid = (
+            bool(review.missing_content.strip())
+            and bool(refs)
+            and {ref.evidence_id for ref in refs} == set(review.evidence_ids)
+            and all(
+                ref.evidence_id in evidence
+                and bool(ref.source.strip())
+                and ref.source == evidence[ref.evidence_id][1]
+                and bool(ref.quote.strip())
+                and quote_in_text(ref.quote, evidence[ref.evidence_id][0])
+                for ref in refs
+            )
+        )
+        if not valid:
+            review.evidence_status = "unknown"
+            review.evidence_ids = []
+            review.evidence_support = []
+            review.reason = "不足内容を補う引用と出典を監査入力で確認できません。" + review.reason
 
 
 def _reconcile_request_reviews(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:

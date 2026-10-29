@@ -269,11 +269,11 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         self.assertTrue(rounds[0]["audit_cut"])
         self.assertIsNone(rounds[0]["audit"])
         self.assertTrue(result.generation_trace["round_budget"]["adopted_audit_cut"])
-        # 原文と照合した説明は本文に残して未確認（unassessed）の印を付け、監査が終わらなかったことを示す。summary には
-        # 警告を付ける（#2738）。確かめた段落が 1 つも無いので insufficient_evidence（本文は出す）。
+        # 原文と照合した本文は未確認の印とともに保持し、確かめていない要約の結論だけを保留する。
         self.assertIn(GOOD, result.answer_text)
         self.assertEqual(marks(result)[GOOD], ["unassessed"])
-        self.assertEqual(marks(result)["集計表出力から明細一覧を出力できます。"], ["summary_unaudited"])
+        self.assertTrue(result.answer_text.startswith(grounded.answer_labels().neutral_summary))
+        self.assertEqual(result.generation_trace["finalization"]["summary"]["status"], "withheld")
         self.assertIn("確認（監査）が終わらなかったため", result.answer_text)
         self.assertEqual(result.envelope["outcome"], "insufficient_evidence")
 

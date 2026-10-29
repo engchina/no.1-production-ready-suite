@@ -110,6 +110,21 @@ class SectionMapStub:
         )
 
 
+def _direct_answer_part(question: str, context: Any) -> dict[str, Any]:
+    """生成入力に残る原文を、章補完フローの正例へ明示する。"""
+    from rag_engine.generation.answering import _grounded_spans
+
+    span = _grounded_spans(question, context, (), None)[0]
+    return {
+        "aspect": "procedure",
+        "kind": "operation",
+        "claim": span["text"],
+        "status": "supported",
+        "evidence": [{"source_id": span["source_id"], "quote": span["text"]}],
+        "evidence_validation": "matched",
+    }
+
+
 @pytest.fixture
 def section_map(monkeypatch: pytest.MonkeyPatch) -> SectionMapStub:
     stub = SectionMapStub()
@@ -172,8 +187,34 @@ async def test_answer_reads_the_section_of_the_hit_chunk_and_cites_chunks(
 
 @pytest.mark.usefixtures("stub_llm")
 async def test_max_levels_limit_makes_the_answer_conditional(
-    section_map: SectionMapStub,
+    section_map: SectionMapStub, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    import rag_engine.adapters.oci as engine_oci
+    from rag_engine.models.llm import CragRetrievalGradeOutput
+
+    def missing_procedure(
+        system: str, prompt: str, settings: Any, schema: type, **options: Any
+    ) -> Any:
+        if schema is CragRetrievalGradeOutput:
+            # 読み取り段数の上限を試すので、未評価ではなく未充足の操作を明示する。
+            supported = _fake_llm(system, prompt, settings, schema, **options)
+            return supported.model_copy(
+                update={
+                    "sufficient": False,
+                    "reason": "文書全体にある後続操作の説明が不足",
+                    "aspect_checks": [
+                        check.model_copy(
+                            update={"status": "missing", "source_ids": [], "evidence": []}
+                        )
+                        if check.aspect == "procedure"
+                        else check
+                        for check in supported.aspect_checks
+                    ],
+                }
+            )
+        return _fake_llm(system, prompt, settings, schema, **options)
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", missing_procedure)
     outcome = await _engine(rag_section_expansion_max_levels=1).run(
         SearchRequest(query="受注の登録方法は？")
     )
@@ -210,6 +251,7 @@ async def test_initial_sufficient_grade_still_adds_section_text_to_generation(
             query=query,
             retrieval_queries=tuple(queries),
             sufficient=True,
+            answerable_parts=(_direct_answer_part(question, context),),
             relevant_chunk_ids=tuple(
                 child.record.chunk_uid
                 for parent in context.evidence_tree
@@ -228,7 +270,7 @@ async def test_initial_sufficient_grade_still_adds_section_text_to_generation(
 
     assert section_map.reads and section_map.reads[0][0] == "s1"
     assert outcome.diagnostics["section_expansion"]["levels_read"] == 1
-    assert any(SECTION_TAIL[0].text in prompt for prompt in prompts)
+    assert any(SECTION_TAIL[0].text in prompt for prompt in prompts), outcome.diagnostics
 
 
 @pytest.mark.usefixtures("stub_llm")
@@ -576,7 +618,11 @@ async def test_section_completion_reaches_generation_in_both_answer_flows(
     ) -> CragRetrievalAttempt:
         grades.append(attempt)
         return CragRetrievalAttempt(
-            attempt=attempt, query=query, retrieval_queries=tuple(queries), sufficient=True
+            attempt=attempt,
+            query=query,
+            retrieval_queries=tuple(queries),
+            sufficient=True,
+            answerable_parts=(_direct_answer_part(question, context),),
         )
 
     def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
@@ -591,7 +637,7 @@ async def test_section_completion_reaches_generation_in_both_answer_flows(
     )
 
     assert bool(section_map.reads) is enabled
-    assert any(SECTION_TAIL[0].text in prompt for prompt in prompts) is enabled
+    assert any(SECTION_TAIL[0].text in prompt for prompt in prompts) is enabled, outcome.diagnostics
     if flow == "standard_rag":
         assert grades == []
     if enabled:

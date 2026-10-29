@@ -382,7 +382,7 @@ function runExtraColumns(): DataTableColumn<RunSummary>[] {
       ),
       className: "whitespace-nowrap",
       render: (run) => {
-        const view = runVerificationView(run.verification);
+        const view = runVerificationView(run.verification, run.validation_execution);
         return view ? <StatusBadge {...view} /> : <span className="text-fg-muted">{t("history.notRecorded")}</span>;
       },
     },
@@ -467,7 +467,7 @@ function RunDetailView({ run }: { run: RunDetail }) {
       : null;
   // 「RAG 検索で開く」（#3309）: 本人の RAG 検索の実行を、質問と条件を入れて RAG 検索の画面に開く（検索はしない）。
   const searchHref = runSearchHref(run, { canOpenSearch: hasPermission(MENU_PERMISSIONS.search) });
-  const verification = runVerificationView(run.verification);
+  const verification = runVerificationView(run.verification, run.validation_execution);
   const statusLabels = runStatusLabels();
   const traceLabels = useTraceDetailsLabels();
   const succeeded = run.status === "success";
@@ -520,9 +520,9 @@ function RunDetailView({ run }: { run: RunDetail }) {
   // 処理の詳細（#2325）: 回答の記録の詳細と技術的な識別子を、処理の経過のタイムラインの後ろに 1 か所で畳む。
   // チャット・RAG 検索の処理の経過の「処理の詳細」と同じ名前・同じ部品（`RunProcessDetails`）・同じ位置。
   const processDetails =
-    run.answer_diagnostics || technicalFacts.length ? (
+    run.answer_diagnostics || run.validation_execution || technicalFacts.length ? (
       <>
-        {run.answer_diagnostics ? <AnswerDetailsPanel diagnostics={run.answer_diagnostics} /> : null}
+        {run.answer_diagnostics || run.validation_execution ? <AnswerDetailsPanel diagnostics={run.answer_diagnostics ?? {}} validationExecution={run.validation_execution} /> : null}
         {technicalFacts.length ? <RunFactList facts={technicalFacts} /> : null}
       </>
     ) : null;
