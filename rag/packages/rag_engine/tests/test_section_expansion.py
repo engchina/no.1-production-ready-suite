@@ -664,7 +664,7 @@ def test_unread_sections_make_the_answer_conditional():
         "goal_alignment": "aligned",
         "summary_supported": True,
         "reviews": [{"index": 0, "support": "supported", "applicability": "matched", "condition": "", "reason": "r"}],
-        "request_reviews": [],
+        "request_reviews": [{"request_id": "Q1", "status": "addressed", "reason": "合成の要求に回答済み"}],
         "unused_evidence_ids": [],
     }
 
@@ -968,7 +968,7 @@ def test_answer_hides_unread_sections_of_documents_it_does_not_cite():
         "goal_alignment": "aligned",
         "summary_supported": True,
         "reviews": [{"index": 0, "support": "supported", "applicability": "matched", "condition": "", "reason": "r"}],
-        "request_reviews": [],
+        "request_reviews": [{"request_id": "Q1", "status": "addressed", "reason": "合成の要求に回答済み"}],
         "unused_evidence_ids": [],
     }
 
