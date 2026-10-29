@@ -52,7 +52,7 @@ def test_short_multiline_block_has_one_visible_unit_and_exact_original_quote() -
     view = grounded._citation_view(evidence[0])
     assert len(view.units) == 1
     assert view.numbered is True
-    assert view.contract_version == "explicit_units_v2"
+    assert view.contract_version == "explicit_units_v3"
     assert "1| 開く\n保存" in prompt
     assert "2|" not in prompt
     cited, error = extract(draft(1, 1), evidence)

@@ -4083,6 +4083,36 @@ _CLAIM_UNIT_MIN_SHARE = 0.5
 
 
 def citation_units(text: str) -> list[tuple[int, int]]:
+    """明示された見出しと直後の分割不能な長文を、同じ原文単位で示す。"""
+    from rag_parser_core.language.markers import marker_patterns
+
+    units: list[tuple[int, int]] = []
+    for start, end in _legacy_citation_units(text):
+        body = text[start:end]
+        if units and "\n" not in body:
+            before_start, before_end = units[-1]
+            prefix = text[before_start:before_end].strip()
+            # 箇条書きの印が明示された単一行だけを対象にし、空段落や表をまたがない。
+            marked = re.match(rf"^{marker_patterns().bullet}\s+\S", prefix)
+            if (
+                marked
+                and "\n" not in prefix
+                and "|" not in prefix
+                and "\t" not in prefix
+                and "|" not in body
+                and "\t" not in body
+                and not re.match(rf"^{marker_patterns().bullet}\s+\S", body.strip())
+                and not _CITE_SENTENCE_END.search(prefix)
+                and text[before_end:start] == "\n"
+                and before_end - before_start <= CITE_UNIT_MAX_CHARS
+            ):
+                units[-1] = (before_start, end)
+                continue
+        units.append((start, end))
+    return units
+
+
+def _legacy_citation_units(text: str) -> list[tuple[int, int]]:
     """根拠の本文の引用の単位（本文の中の開始・終了の位置）。
 
     続く短い行は ``CITE_UNIT_MAX_CHARS`` まで 1 つの単位にまとめ、それを超える行は文の区切りで分ける
@@ -4119,7 +4149,7 @@ def _numbered(text: str, units: Sequence[tuple[int, int]]) -> bool:
 
 def numbered_text(text: str) -> str:
     """長い根拠の本文に行番号を付ける。短い根拠は本文のまま示し、引用は全文になる（入力を増やさない）。"""
-    units = citation_units(text)
+    units = _legacy_citation_units(text)
     return _numbered_text(text, units)
 
 
@@ -4195,10 +4225,13 @@ _CITATION_VIEWS: ContextVar[dict[int, tuple[dict, CitationView]] | None] = Conte
 
 def _citation_view(span: Mapping[str, Any], *, explicit_units: bool | None = None) -> CitationView:
     text = str(span.get("text") or "")
-    units = tuple(citation_units(text))
+    contract_version = "explicit_units_v3" if explicit_units else "legacy_threshold_v1"
     if explicit_units is None:
         cached = (_CITATION_VIEWS.get() or {}).get(id(span))
-        explicit_units = bool(cached is not None and cached[0] is span and cached[1].contract_version == "explicit_units_v2")
+        if cached is not None and cached[0] is span:
+            contract_version = cached[1].contract_version
+        explicit_units = contract_version in {"explicit_units_v2", "explicit_units_v3"}
+    units = tuple(citation_units(text) if contract_version == "explicit_units_v3" else _legacy_citation_units(text))
     numbered = bool(units) if explicit_units else _numbered(text, units)
     rendered = _rendered_evidence_span(span, units=units, numbered=numbered)
     displayed = neutralize_boundary_markers(fold_width(rendered))
@@ -4210,7 +4243,7 @@ def _citation_view(span: Mapping[str, Any], *, explicit_units: bool | None = Non
         text,
         units,
         numbered,
-        "explicit_units_v2" if explicit_units else "legacy_threshold_v1",
+        contract_version,
         json.dumps(
             {key: span[key] for key in ("document_scope", "source_aliases", "start", "end", "child_ranges") if key in span},
             ensure_ascii=False,
