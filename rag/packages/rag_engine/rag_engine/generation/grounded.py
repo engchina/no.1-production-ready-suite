@@ -820,7 +820,7 @@ def _document_key(span: dict) -> tuple[str, ...]:
 # ---- item の検査 -------------------------------------------------------------
 
 # 引用が属する見出し（section_path）は見出し分類と番号表記からの推定で誤り得るが、画面経路の語の出所としては
-# LLM にも Section context として渡す (#808)。
+# LLM にも出典情報の section_path として渡す (#808・#3831)。
 # 見出しの画面経路（〔A⇒B⇒C〕、[画面：A⇒B]）の要素を item 本文が使うのは、根拠にない語や数値の追加ではない。
 # 【X】の直後に欄・項目などが続くのは欄名の参照で、節見出しではない。
 # 箇条書きの丸数字・括弧数字は順序記号で、年・金額・件数のような値ではない（NFKC で数字になる前に除く）。
@@ -2848,7 +2848,7 @@ def _heading_matches(quote: str, candidates: Sequence[dict], spans: Sequence[dic
     """根拠の見出し（section_path の要素、または `>` でつないだ末尾）そのものを引用した item を、
     その見出しに属する最初の span に結び付ける (#672)。
 
-    見出しは prompt に Section context として渡す推定の文脈で、モデルは節全体を指す引用に使う。
+    見出しは prompt に出典情報の section_path として渡す推定の文脈で、モデルは節全体を指す引用に使う。
     照合は `_canonical`（空白・全角半角だけ無視）の完全一致。同じ見出しが別の根拠（source_id）にも
     あれば引用元を推測しない。candidates は指名された span → 全 span の順で渡す。
     """
@@ -4724,11 +4724,17 @@ def _retrieved_heading_context(spans: Sequence[dict]) -> list[dict]:
 
 
 def _source_note(span: dict) -> str:
-    from rag_engine.retrieval.source_context import source_context_text
+    """根拠の補助情報。出典情報は機能の見出しと同じ文書名・索引用のヘッダ・子の uid を除いた形で示す（#3831）。
+
+    span の値だけで決まる（同じ根拠は、どの入力でも同じブロックになる。引用の版の照合が前提にする）。
+    """
+    from rag_engine.retrieval.source_context import prompt_source_context_text
 
     parts = []
-    if span.get("source_context"):
-        parts.append(source_context_text(span["source_context"]))
+    if span.get("source_context") and (
+        shown := prompt_source_context_text(span["source_context"], document_name=str(span.get("source") or ""))
+    ):
+        parts.append(shown)
     if span.get("answer_context"):
         parts.append(span["answer_context"])
     return f"\n{CONTEXT_NOTE_BEGIN}\n" + "\n".join(parts) + f"\n{CONTEXT_NOTE_END}" if parts else ""
@@ -6180,6 +6186,11 @@ def guide_notice_lines(
 def evidence_block_text(spans: Sequence[dict]) -> str:
     """生成の入力の根拠ブロック（``build_context_block`` の境界の内側）の本文。文字予算の診断も同じ本文で数える (#3776)。"""
     return neutralize_boundary_markers(fold_width(format_functions(spans)))
+
+
+def evidence_metadata_text(span: Mapping[str, Any]) -> str:
+    """根拠ブロックのうち補助情報（``<補助情報>`` の囲みを含む）の部分。文字予算の診断の内訳に使う (#3831)。"""
+    return neutralize_boundary_markers(fold_width(_source_note(dict(span))))
 
 
 def build_context_block(

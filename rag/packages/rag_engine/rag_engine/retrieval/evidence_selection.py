@@ -432,7 +432,11 @@ def evidence_spans(
         str(getattr(child, "chunk_uid", "") or getattr(child, "id", "")) for child in scope_records if is_catalog_article(child)
     }
 
-    from rag_engine.retrieval.source_context import source_context, source_context_text
+    from rag_engine.retrieval.source_context import prompt_source_context_text, source_context
+
+    def note_cost(context: dict[str, Any], record: Any) -> int:
+        """生成の入力に描く出典情報の字数（#3831）。予算は描いた本文と補助情報を数える。"""
+        return len(prompt_source_context_text(context, document_name=str(getattr(record, "source", "") or "")))
 
     remaining = max(0, budget)
     context_remaining = max(0, budget // 10)
@@ -485,8 +489,8 @@ def evidence_spans(
     def native_need(record: Any) -> int:
         ranges = [(a, b) for a, b in _native_ranges(record) if b - a <= 600]
         return (
-            len(source_context_text(source_context(record))) * (1 + len(ranges))
-            + len(answer_metadata_context(record, max_chars=1200))
+            note_cost(source_context(record), record) * (1 + len(ranges))
+            + len(answer_metadata_context(record, max_chars=1200, include_section=False))
             + min(NATIVE_RESERVE_CAP, sum(b - a for a, b in ranges) + 8 * max(0, len(ranges) - 1))
         )
 
@@ -510,7 +514,7 @@ def evidence_spans(
                     if info not in children:
                         children.append(info)
             info = {**source_context(record), **({"children": children} if children else {})}
-            total += len(source_context_text(info))
+            total += note_cost(info, record)
         return total
 
     whole = (
@@ -534,7 +538,7 @@ def evidence_spans(
         ]
         priority_ranges = list(dict.fromkeys(priority_ranges))
         source_info = source_context(record)
-        source_cost = len(source_context_text(source_info))
+        source_cost = note_cost(source_info, record)
         if source_cost >= remaining:
             continue
         remaining -= source_cost
@@ -563,7 +567,7 @@ def evidence_spans(
                     if info not in children:
                         children.append(info)
             info = {**source_info, **({"children": children} if children else {})}
-            identity_cost = len(source_context_text(info))
+            identity_cost = note_cost(info, record)
             cost = end - start + identity_cost + (8 if affordable_priority_ranges else 0)
             if priority_cost + cost <= remaining + source_cost:
                 affordable_priority_ranges.append((start, end))
@@ -580,6 +584,7 @@ def evidence_spans(
                 max(0, remaining // 10),
             ),
             include_first_page=document_key not in seen_documents,
+            include_section=False,
         )
         context_remaining -= len(prefix)
         remaining -= len(prefix)
@@ -761,7 +766,7 @@ def evidence_spans(
                     if child_info not in children:
                         children.append(child_info)
             info = {**source_info, **({"children": children} if children else {})}
-            extra_cost = len(source_context_text(info)) - source_cost
+            extra_cost = note_cost(info, record) - source_cost
             # 複数の抜粋では、出典を繰り返す分も予算に含める。階層を省略しない。
             if cursor:
                 extra_cost += source_cost

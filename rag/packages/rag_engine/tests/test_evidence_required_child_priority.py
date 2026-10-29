@@ -8,7 +8,7 @@ import pytest
 
 from rag_engine.generation.answer_models import AnswerRecord
 from rag_engine.retrieval.evidence_selection import evidence_excerpt, evidence_spans
-from rag_engine.retrieval.source_context import source_context_text
+from rag_engine.retrieval.source_context import prompt_source_context_text
 
 BODY = "対象を選択し、詳細を変更して確定します。"
 
@@ -44,7 +44,13 @@ def pair(index: int = 1) -> tuple[AnswerRecord, AnswerRecord]:
 
 
 def cost(spans: Sequence[dict[str, Any]]) -> int:
-    return sum(len(row["text"]) + len(row.get("answer_context", "")) + len(source_context_text(row["source_context"])) for row in spans)
+    """予算が数える字数: 本文と、生成の入力に描く補助情報（#3831）。"""
+    return sum(
+        len(row["text"])
+        + len(row.get("answer_context", ""))
+        + len(prompt_source_context_text(row["source_context"], document_name=row["source"]))
+        for row in spans
+    )
 
 
 def test_explicit_child_body_precedes_native_heading_and_optional_parents() -> None:
@@ -151,7 +157,7 @@ def test_partial_group_does_not_claim_complete_from_a_child_identifier() -> None
     spans = evidence_spans(
         "変更方法",
         [parent],
-        budget=210,
+        budget=150,
         anchors=[child, second],
         scope_records=[child, second],
         priority_source_groups=[(child.chunk_uid, second.chunk_uid)],
@@ -159,7 +165,7 @@ def test_partial_group_does_not_claim_complete_from_a_child_identifier() -> None
     )
     assert diagnostics[0]["body_status"] == "partial"
     assert 0 < diagnostics[0]["selected_chars"] < diagnostics[0]["required_chars"]
-    assert cost(spans) <= 210
+    assert cost(spans) <= 150
 
 
 def test_parent_source_priority_protects_its_verified_child() -> None:
