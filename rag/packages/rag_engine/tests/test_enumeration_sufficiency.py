@@ -22,6 +22,7 @@ from test_section_expansion import (
 )
 
 from rag_engine.generation import section_expansion as sections
+from rag_engine.generation.answer_models import CragRetrievalAttempt
 from rag_engine.generation.answering import AnswerContext, AnswerRecord, _grade_crag_retrieval
 from rag_engine.models.llm import CragRetrievalGradeOutput
 from rag_engine.retrieval.context_builder import ContextParentEvidence
@@ -520,3 +521,84 @@ def test_max_levels_before_the_reading_scope_still_returns_read_sections():
     # 読む範囲（文書全体）に届く前に段の上限で止めても、判定を飛ばした段で読んだ根拠は返す。
     assert grader.calls == [] and result.stop_reason == sections.STOP_MAX_LEVELS
     assert result.applied and "c2a" in _child_ids(result.context)
+
+
+# ---- 未確認の列挙の観点（#3755） -------------------------------------------------------------------------------
+
+
+def _unverified() -> CragRetrievalAttempt:
+    """足りると判定したが、列挙の観点が未確認（写しの照合の失敗など）の判定。"""
+    return replace(_attempt(sufficient=True), unknown_aspects=(ENUMERATION_ASPECT,))
+
+
+class _UnverifiedGrader:
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+
+    def __call__(self, context: AnswerContext, level: int) -> CragRetrievalAttempt:
+        self.calls.append(level)
+        return _unverified()
+
+
+def test_unverified_count_reads_one_more_level_without_grading_again():
+    # 件数の問で、当たった章節を読んだ後の判定が「足りる・列挙は未確認」。足りるとして止めず、評価器を呼び直さずに
+    # 上の章節（第3章）を 1 段だけ読んで生成へ渡す。
+    stub, grader = SectionStub(), _UnverifiedGrader()
+
+    result = _expand(_seed_context("c31a"), _settings(), grader, stub, last=_unverified(), question=BUSINESS_DAY_FIVE)
+
+    assert stub.read_calls == ["s3-1", "s3"] and grader.calls == [1]
+    assert result.stop_reason == sections.STOP_UNVERIFIED_EXPANDED and result.applied
+    assert set(_child_ids(result.context)) == set(_members("s3"))
+    assert result.trace["unverified_expansion"] == {"aspects": [ENUMERATION_ASPECT], "after_level": 1}
+    assert result.trace["levels"][1]["grade_skipped"] == "unverified_aspects"
+
+
+def test_unverified_count_with_the_section_in_context_climbs_without_any_grade():
+    stub, grader = SectionStub(), _UnverifiedGrader()
+
+    result = _expand(_seed_context("c31a", "c31b"), _settings(), grader, stub, last=_unverified(), question=BUSINESS_DAY_FIVE)
+
+    assert stub.read_calls == ["s3-1", "s3"] and grader.calls == []
+    assert result.stop_reason == sections.STOP_UNVERIFIED_EXPANDED
+
+
+def test_unverified_count_does_not_extract_large_sections():
+    # 未確認のために読む段では、入らない章節を抜き出さない（抜き出しはモデルを呼ぶ）。読めなかった章節は記録に残す。
+    stub, grader = SectionStub(), _UnverifiedGrader()
+    handed: list[object] = []
+
+    result = _expand(
+        _seed_context("c31a"),
+        _settings(answer_max_input_tokens=2400),
+        grader,
+        stub,
+        last=_unverified(),
+        question=BUSINESS_DAY_FIVE,
+        large_sections=lambda request: handed.append(request),
+    )
+
+    assert handed == [] and grader.calls == [1]
+    assert result.trace["large_section_handoff"] == "not_used_for_unverified_aspects"
+    assert result.stop_reason == sections.STOP_TOKEN_BUDGET
+    assert result.unread or result.omitted
+
+
+def test_unknown_non_enumeration_aspect_still_stops_as_sufficient():
+    stub, grader = SectionStub(), Grader(needs=set(_members("s3-1")))
+    last = replace(_attempt(sufficient=True), unknown_aspects=("procedure",))
+
+    result = _expand(_seed_context("c31a"), _settings(), grader, stub, last=last, question=BUSINESS_DAY_FIVE)
+
+    assert result.stop_reason == sections.STOP_SUFFICIENT
+    assert stub.read_calls == ["s3-1"] and grader.calls == [1]
+
+
+def test_standard_completion_ignores_unverified_enumeration():
+    # 標準 RAG（評価器なし）は最低範囲の補完だけ。未確認の観点で上へ広げない。
+    stub = SectionStub()
+
+    result = _expand(_seed_context("c31a"), _settings(), None, stub, last=_unverified(), question=BUSINESS_DAY_FIVE)
+
+    assert stub.read_calls == ["s3-1"]
+    assert "unverified_expansion" not in result.trace
