@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, StrictInt, create_model
 
 LINE_START_DESCRIPTION = (
     "根拠内でコードが付けた「1|」から始まる引用単位の開始番号。PDFの頁・物理行ではない。"
-    "番号のない改行も同じ単位に含む。番号が表示されない短い根拠は null。"
+    "番号のない改行も同じ単位に含む。番号が表示されない根拠は null。"
 )
 LINE_END_DESCRIPTION = (
     "同じ根拠ブロックの引用単位の終了番号。開始番号以上かつ表示された最大番号以下。"

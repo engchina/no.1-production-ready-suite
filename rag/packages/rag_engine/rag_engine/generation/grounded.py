@@ -4123,8 +4123,8 @@ def numbered_text(text: str) -> str:
     return _numbered_text(text, units)
 
 
-def _numbered_text(text: str, units: Sequence[tuple[int, int]]) -> str:
-    if not _numbered(text, units):
+def _numbered_text(text: str, units: Sequence[tuple[int, int]], *, numbered: bool | None = None) -> str:
+    if not (_numbered(text, units) if numbered is None else numbered):
         return text
     return "\n".join(f"{number}| {text[start:end]}" for number, (start, end) in enumerate(units, 1))
 
@@ -4181,6 +4181,9 @@ class CitationView:
     source: str
     text: str
     units: tuple[tuple[int, int], ...]
+    numbered: bool
+    contract_version: str
+    provenance_json: str
     rendered: str
     view_sha256: str
 
@@ -4189,10 +4192,14 @@ class CitationView:
 _CITATION_VIEWS: ContextVar[dict[int, tuple[dict, CitationView]] | None] = ContextVar("citation_views", default=None)
 
 
-def _citation_view(span: Mapping[str, Any]) -> CitationView:
+def _citation_view(span: Mapping[str, Any], *, explicit_units: bool | None = None) -> CitationView:
     text = str(span.get("text") or "")
     units = tuple(citation_units(text))
-    rendered = _rendered_evidence_span(span, units=units)
+    if explicit_units is None:
+        cached = (_CITATION_VIEWS.get() or {}).get(id(span))
+        explicit_units = bool(cached is not None and cached[0] is span and cached[1].contract_version == "explicit_units_v2")
+    numbered = bool(units) if explicit_units else _numbered(text, units)
+    rendered = _rendered_evidence_span(span, units=units, numbered=numbered)
     displayed = neutralize_boundary_markers(fold_width(rendered))
     return CitationView(
         str(span.get("evidence_id", "")),
@@ -4201,6 +4208,13 @@ def _citation_view(span: Mapping[str, Any]) -> CitationView:
         str(span.get("source", "")),
         text,
         units,
+        numbered,
+        "explicit_units_v2" if explicit_units else "legacy_threshold_v1",
+        json.dumps(
+            {key: span[key] for key in ("document_scope", "source_aliases", "start", "end", "child_ranges") if key in span},
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
         rendered,
         hashlib.sha256(displayed.encode()).hexdigest(),
     )
@@ -4293,7 +4307,7 @@ def citation_range_targets(
                 for proof in proofs
             ):
                 continue
-            numbered = _numbered(view.text, view.units)
+            numbered = view.numbered
             binding = bind_wire_range(*citation._wire_range, unit_count=len(view.units), numbered=numbered)
             if binding.reason_code not in {"citation_range_missing", "citation_range_invalid", "citation_range_out_of_bounds"}:
                 continue
@@ -4377,10 +4391,11 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequenc
     if not units:
         return fail("citation_extraction_failed", "指定した根拠に抽出できる本文がありません。")
     first, last, origin = 1, len(units), "whole_text"
-    metadata["requested_range_status"] = "missing" if _numbered(text, units) and not item.lines.strip() else "not_required"
+    metadata["citation_unit_contract"] = extraction_view.contract_version
+    metadata["requested_range_status"] = "missing" if extraction_view.numbered and not item.lines.strip() else "not_required"
     interval = item.citations[0]._wire_range if item.citations else None
     if interval is not None:
-        binding = bind_wire_range(*interval, unit_count=len(units), numbered=_numbered(text, units))
+        binding = bind_wire_range(*interval, unit_count=len(units), numbered=extraction_view.numbered)
         metadata["requested_lines"] = binding.lines
         metadata["range_contract"] = "integer_pair"
         if binding.reason_code:
@@ -4393,7 +4408,7 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequenc
             assert interval[0] is not None and interval[1] is not None
             first, last, origin = interval[0], interval[1], "line_range"
             metadata["requested_range_status"] = "valid"
-    elif _numbered(text, units) or item.lines.strip():
+    elif extraction_view.numbered or item.lines.strip():
         found, listed = _CITE_RANGE.match(item.lines or ""), _CITE_LIST.match(item.lines or "")
         if found:
             first, last = int(found.group(1)), int(found.group(2) or found.group(1))
@@ -4490,7 +4505,9 @@ def _source_note(span: dict) -> str:
     return f"\n{CONTEXT_NOTE_BEGIN}\n" + "\n".join(parts) + f"\n{CONTEXT_NOTE_END}" if parts else ""
 
 
-def _rendered_evidence_span(span: Mapping[str, Any], *, units: Sequence[tuple[int, int]] | None = None) -> str:
+def _rendered_evidence_span(
+    span: Mapping[str, Any], *, units: Sequence[tuple[int, int]] | None = None, numbered: bool | None = None
+) -> str:
     """モデルへ示す根拠ブロック。引用行の本文と、引用対象外の補助情報を同じ版で記録する。"""
     return (
         f"[{span['label']}] {span.get('location') or 'p.' + str(span.get('page', ''))} origin={span.get('origin', 'unclassified')}"
@@ -4499,14 +4516,16 @@ def _rendered_evidence_span(span: Mapping[str, Any], *, units: Sequence[tuple[in
         + (" catalog" if span.get(ARTICLE_CATALOG_KEY) else "")
         + _source_note(dict(span))
         + "\n"
-        + _numbered_text(str(span.get("text") or ""), units if units is not None else citation_units(str(span.get("text") or "")))
+        + _numbered_text(
+            str(span.get("text") or ""), units if units is not None else citation_units(str(span.get("text") or "")), numbered=numbered
+        )
     )
 
 
 def format_functions(spans: Sequence[dict]) -> str:
     """根拠を機能ごとの見出しで分けて提示し、別機能の混合を入力の時点で防ぐ。"""
     originals = spans
-    snapshots = {id(span): (span, _citation_view(span)) for span in originals}
+    snapshots = {id(span): (span, _citation_view(span, explicit_units=True)) for span in originals}
     _CITATION_VIEWS.set(snapshots)
     spans = _retrieved_heading_context(originals)
     displayed_views = {id(shown): snapshots[id(original)][1] for original, shown in zip(originals, spans, strict=True)}
@@ -6308,13 +6327,9 @@ def run_round(
     generation_model = generation_draft_wire_model()
     generation_outputs: list[dict[str, Any]] = []
     cached_views = _CITATION_VIEWS.get() or {}
-    input_views = tuple(
-        cached[1] for span in spans if (cached := cached_views.get(id(span))) is not None and cached[0] is span
-    )
+    input_views = tuple(cached[1] for span in spans if (cached := cached_views.get(id(span))) is not None and cached[0] is span)
     unrecorded_input_ids = [
-        str(span.get("evidence_id", ""))
-        for span in spans
-        if (cached := cached_views.get(id(span))) is None or cached[0] is not span
+        str(span.get("evidence_id", "")) for span in spans if (cached := cached_views.get(id(span))) is None or cached[0] is not span
     ]
 
     def snapshot_row(view: CitationView) -> dict[str, Any]:
@@ -6327,19 +6342,29 @@ def run_round(
             "source": view.source,
             "text": view.text,
             "citation_units": [list(unit) for unit in view.units],
-            "numbered": _numbered(view.text, view.units),
+            "numbered": view.numbered,
+            "contract_version": view.contract_version,
+            "provenance": json.loads(view.provenance_json),
             "prompt_block": prompt_block,
             "prompt_block_sha256": hashlib.sha256(prompt_block.encode()).hexdigest() if prompt_block is not None else None,
             "view_sha256": view.view_sha256,
             "present_in_prompt": prompt_block is not None,
         }
 
+    input_rows = [snapshot_row(view) for view in input_views]
     input_snapshot = {
         "capture_scope": "application_evidence_blocks",
         "transport_capture": "not_recorded",
+        "system_prompt": generation_system,
+        "prompt": prompt,
+        "image_payload_capture": "not_recorded" if image_paths else "not_applicable",
         "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
-        "evidence": [snapshot_row(view) for view in input_views],
-        "snapshot_status": "partial" if input_views and unrecorded_input_ids else "recorded" if input_views else "not_recorded",
+        "evidence": input_rows,
+        "snapshot_status": "partial"
+        if input_views and (unrecorded_input_ids or any(not row["present_in_prompt"] for row in input_rows))
+        else "recorded"
+        if input_views
+        else "not_recorded",
         "unrecorded_evidence_ids": unrecorded_input_ids,
     }
 
@@ -6349,6 +6374,8 @@ def run_round(
         generation_outputs.append(
             {
                 "purpose": purpose,
+                "input_system_prompt": generation_system,
+                "input_prompt": input_prompt,
                 "input_prompt_sha256": hashlib.sha256(input_prompt.encode()).hexdigest(),
                 "raw_output_status": "recorded" if provider_text is not None else "not_recorded",
                 "raw_output_representation": "provider_output_text" if provider_text is not None else None,
@@ -6387,16 +6414,32 @@ def run_round(
                 {"original_context": prompt, "immutable_draft": previous_draft.model_dump(mode="json"), "targets": targets},
                 ensure_ascii=False,
             )
+            repair_system = resolve_prompt("generation.citationRepair", CITATION_RANGE_REPAIR_SYSTEM_PROMPT)
             response = call_with_model_purpose(
                 "answer.repair",
                 parse_text,
-                resolve_prompt("generation.citationRepair", CITATION_RANGE_REPAIR_SYSTEM_PROMPT),
+                repair_system,
                 repair_input,
                 settings,
                 CitationRangeRepair,
                 provider_id=provider_id,
             )
             draft, range_repair = apply_range_repair(previous_draft, response, targets)
+            generation_outputs.append(
+                {
+                    "purpose": "answer.repair",
+                    "input_system_prompt": repair_system,
+                    "input_prompt": repair_input,
+                    "input_prompt_sha256": hashlib.sha256(repair_input.encode()).hexdigest(),
+                    "raw_output_status": "recorded" if response._provider_output_text is not None else "not_recorded",
+                    "raw_output_representation": "provider_output_text" if response._provider_output_text is not None else None,
+                    "provider_capture_scope": "returned_response_only",
+                    "provider_output_text": response._provider_output_text,
+                    "parsed_output_representation": "citation_range_repair",
+                    "parsed_output": response.model_dump(mode="json"),
+                    "canonical_output": draft.model_dump(mode="json", exclude_unset=True),
+                }
+            )
             generation_calls = 1
         else:
             range_repair = {"status": "not_run", "scope": "citation_range_only", "reason": "target_not_available"}
@@ -6525,7 +6568,14 @@ def run_round(
         draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
     citation_trace = {
-        "output_capture_scope": "returned_generation_drafts_only",
+        "capture_scope": "generation_citation_trace",
+        "document_ids": list(
+            dict.fromkeys(str(span["document_scope"][-1]) for span in spans if span.get("document_scope") and span["document_scope"][-1])
+        ),
+        "document_scope_status": "complete"
+        if spans and all(span.get("document_scope") and span["document_scope"][-1] for span in spans)
+        else "unknown",
+        "output_capture_scope": "returned_generation_and_range_repair_outputs",
         "transport_attempts_recorded": False,
         "input": input_snapshot,
         "outputs": generation_outputs,

@@ -1,14 +1,14 @@
 """引用の表示・提取と生応答の受管診断を、同じ版の合成入力で検証する。"""
 
-from contextlib import contextmanager
-from dataclasses import FrozenInstanceError
 import hashlib
 import json
+from contextlib import contextmanager
+from dataclasses import FrozenInstanceError
 from typing import Any
 
 import httpx
-from openai import OpenAI
 import pytest
+from openai import OpenAI
 
 from rag_engine.adapters import oci
 from rag_engine.config import get_settings
@@ -16,35 +16,72 @@ from rag_engine.generation import grounded
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
-
 LONG = "対象を選択します。" * 30 + "\n" + "結果を保存します。" * 30
 
 
 def span(index: int = 1, text: str = LONG) -> dict[str, Any]:
-    return {"evidence_id": f"stable-{index}", "label": f"E{index}", "source_id": f"parent-{index}", "source": "synthetic.pdf", "text": text,
-            "function": ("synthetic.pdf", "対象操作"), "tags": [], "source_order": (0, index, 0),
-            "child_ranges": [{"id": f"child-{index}", "start": 0, "end": len(text)}]}
+    return {
+        "evidence_id": f"stable-{index}",
+        "label": f"E{index}",
+        "source_id": f"parent-{index}",
+        "source": "synthetic.pdf",
+        "text": text,
+        "function": ("synthetic.pdf", "対象操作"),
+        "tags": [],
+        "source_order": (0, index, 0),
+        "child_ranges": [{"id": f"child-{index}", "start": 0, "end": len(text)}],
+    }
 
 
 def wire_value(evidence_id: str = "E1") -> dict[str, Any]:
-    return {"items": [{"kind": "operation", "text": "対象の結果を確認します。", "request_id": "Q1", "citations": [{"evidence_id": evidence_id, "line_start": 2, "line_end": 2}]}], "summary": "合成の回答です。", "confidence": "low"}
+    return {
+        "request_coverage": [
+            {
+                "request_id": "Q1",
+                "evidence_ids": [evidence_id],
+                "evidence_scope": [{"evidence_id": evidence_id, "target": "対象", "relation": "direct"}],
+            }
+        ],
+        "items": [
+            {
+                "kind": "operation",
+                "text": "対象の結果を確認します。",
+                "request_id": "Q1",
+                "citations": [{"evidence_id": evidence_id, "line_start": 2, "line_end": 2}],
+            }
+        ],
+        "summary": "合成の回答です。",
+        "confidence": "low",
+    }
 
 
 def run_round(spans: list[dict[str, Any]], prompt: str, parse: Any = None) -> grounded.Round:
     def fake(*args: Any, **kwargs: Any) -> Any:
         assert args[3] is generation_draft_wire_model()
         return args[3].model_validate(wire_value(spans[0]["label"]))
-    return grounded.run_round("対象の操作方法は？", spans, get_settings(environ={}, dotenv_path=None), prompt=prompt, image_paths=(), provider_id=None,
-                              parse_text=parse or fake, parse_images=lambda *_a, **_kw: pytest.fail("画像は不要"), audit_mode="none")
+
+    return grounded.run_round(
+        "対象の操作方法は？",
+        spans,
+        get_settings(environ={}, dotenv_path=None),
+        prompt=prompt,
+        image_paths=(),
+        provider_id=None,
+        parse_text=parse or fake,
+        parse_images=lambda *_a, **_kw: pytest.fail("画像は不要"),
+        audit_mode="none",
+    )
 
 
 def test_one_frozen_view_supplies_the_numbered_prompt_and_original_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
     evidence = span()
     actual_units = grounded.citation_units
     calls = []
+
     def units(text: str) -> list[tuple[int, int]]:
         calls.append(text)
         return actual_units(text)
+
     monkeypatch.setattr(grounded, "citation_units", units)
     prompt = grounded.format_functions([evidence])
     assert calls == [LONG]
@@ -105,30 +142,52 @@ def test_current_input_snapshot_records_actual_block_and_missing_provider_raw_ex
 
 
 @pytest.mark.parametrize("streamed", [False, True])
-def test_sdk_raw_wire_is_private_and_separate_from_canonical_and_telemetry(streamed: bool, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_sdk_raw_wire_is_private_and_separate_from_canonical_and_telemetry(
+    streamed: bool, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     from test_bound_audit_transport import response_bytes
+
     schema = generation_draft_wire_model()
     raw = json.dumps(schema.model_validate(wire_value()).model_dump(), ensure_ascii=False, indent=2) + "\n"
     sent: list[dict[str, Any]] = []
     telemetry: list[Any] = []
+
     def transport(request: httpx.Request) -> httpx.Response:
         sent.append(json.loads(request.content))
         body, headers = response_bytes(raw, streamed)
         return httpx.Response(200, content=body, headers=headers)
+
     class Observation:
         def usage(self, value: Any) -> None:
             telemetry.append(value)
+
     @contextmanager
     def observe(*args: Any, **kwargs: Any) -> Any:
         telemetry.append((args, kwargs))
         yield Observation()
+
     monkeypatch.setattr(oci, "observe_call", observe)
-    settings = get_settings(environ={"OCI_ENTERPRISE_AI_DEFAULT_MODEL": "synthetic", "OCI_ENTERPRISE_AI_ENDPOINT": "https://mock.invalid/v1", "OCI_ENTERPRISE_AI_API_KEY": "mock-only"}, dotenv_path=None, llm_stall_resends=0)
-    client = OpenAI(api_key="mock-only", base_url="https://mock.invalid/v1", max_retries=0, http_client=httpx.Client(transport=httpx.MockTransport(transport)))
+    settings = get_settings(
+        environ={
+            "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "synthetic",
+            "OCI_ENTERPRISE_AI_ENDPOINT": "https://mock.invalid/v1",
+            "OCI_ENTERPRISE_AI_API_KEY": "mock-only",
+        },
+        dotenv_path=None,
+        llm_stall_resends=0,
+    )
+    client = OpenAI(
+        api_key="mock-only",
+        base_url="https://mock.invalid/v1",
+        max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(transport)),
+    )
     monkeypatch.setattr(oci, "_openai_client_for_provider", lambda *_a: client)
     monkeypatch.setattr(oci, "_stall_detection_enabled", lambda _s: streamed)
+
     def parse(system: str, prompt: str, _settings: Any, output_schema: Any, **_options: Any) -> Any:
         return oci._parse_text_once(system, prompt, settings, output_schema, settings.llm_providers[settings.default_answer_llm])
+
     evidence = span()
     prompt = grounded.format_functions([evidence])
     try:

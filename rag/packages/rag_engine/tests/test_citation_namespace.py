@@ -16,8 +16,8 @@ def check(identity: str, *, guide_ids: tuple[str, ...] = ("guide-step-a",)):
         "text": "空条件でも上限件数まで処理します。",
     }
     grounded.format_functions([span])
-    citation = GroundedCitation(evidence_id=identity, lines="")
-    citation._wire_range = (None, None)
+    citation = GroundedCitation(evidence_id=identity, lines="1")
+    citation._wire_range = (1, 1)
     draft = GroundedDraft(
         items=[GroundedItem(kind="operation", text="合成の操作を行います。", citations=[citation])], summary="", confidence="low"
     )
