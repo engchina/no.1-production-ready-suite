@@ -187,3 +187,14 @@ async def test_saved_raw_positive_cannot_restore_supported_reuse(
     assert reused == ({} if diagnostic_only else {"合成の回答": ["chunk-a"]})
     assert answer_verification(diagnostics) == ("unverified" if diagnostic_only else "verified")
     assert answer_validation_execution(diagnostics) == ("unknown" if diagnostic_only else "passed")
+
+
+@pytest.mark.parametrize("alignment", ["aligned", "off_target", "partial"])
+def test_raw_goal_alignment_is_not_adopted_under_diagnostic_policy(alignment: str) -> None:
+    from app.rag.answer_engine import adopted_goal_alignment
+
+    trace: dict[str, Any] = {"rounds": [{"accepted": True, "audit": {"goal_alignment": alignment}}]}
+    assert adopted_goal_alignment(trace) == alignment
+    trace["semantic_audit_policy"] = dict(POLICY)
+    assert adopted_goal_alignment(trace) is None
+    assert trace["rounds"][0]["audit"]["goal_alignment"] == alignment

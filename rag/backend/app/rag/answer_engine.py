@@ -4389,6 +4389,10 @@ def adopted_goal_alignment(generation_trace: object) -> str | None:
 
     監査の無い round（時間の上限で監査を切った round など）・記録の無い回答は None。
     """
+    if isinstance(generation_trace, Mapping) and semantic_audit_is_diagnostic_only(
+        generation_trace
+    ):
+        return None
     rounds = generation_trace.get("rounds") if isinstance(generation_trace, Mapping) else None
     adopted: Mapping[str, Any] | None = None
     for item in rounds if isinstance(rounds, list) else ():
