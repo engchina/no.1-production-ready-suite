@@ -172,8 +172,33 @@ async def test_answer_reads_the_section_of_the_hit_chunk_and_cites_chunks(
 
 @pytest.mark.usefixtures("stub_llm")
 async def test_max_levels_limit_makes_the_answer_conditional(
-    section_map: SectionMapStub,
+    section_map: SectionMapStub, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    import rag_engine.adapters.oci as engine_oci
+    from rag_engine.models.llm import CragRetrievalGradeOutput
+
+    def missing_procedure(
+        system: str, prompt: str, settings: Any, schema: type, **options: Any
+    ) -> Any:
+        if schema is CragRetrievalGradeOutput:
+            # 読み取り段数の上限を試すので、未評価ではなく未充足の操作を明示する。
+            return CragRetrievalGradeOutput(
+                sufficient=False,
+                confidence=0.2,
+                reason="文書全体にある後続操作の説明が不足",
+                rewritten_query="",
+                aspect_checks=[
+                    {
+                        "aspect": "procedure",
+                        "status": "missing",
+                        "source_ids": [],
+                        "reason": "後続操作を含む文書全体の読み取りが必要。",
+                    }
+                ],
+            )
+        return _fake_llm(system, prompt, settings, schema, **options)
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", missing_procedure)
     outcome = await _engine(rag_section_expansion_max_levels=1).run(
         SearchRequest(query="受注の登録方法は？")
     )
