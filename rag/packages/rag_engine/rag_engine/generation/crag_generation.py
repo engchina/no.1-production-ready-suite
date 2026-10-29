@@ -32,6 +32,35 @@ def latest_assessment(attempts: Sequence[Any], expansion: Any) -> dict[str, Any]
     return dict(grades[-1]) if grades else attempts[-1].to_payload() if attempts else None
 
 
+# 評価が写しを確かめた観点の根拠（``aspect_checks[].evidence`` は評価が確かめた写しだけを残す）。
+_VERIFIED_ASPECT_EVIDENCE = frozenset({"matched", "invalid_source_or_quote"})
+
+
+def verified_quotes(assessment: Mapping[str, Any] | None) -> dict[str, list[str]]:
+    """評価が写しを確かめた原文を、出典の ID ごとに返す（生成の根拠の準備で必須の範囲にする。#3840）。
+
+    対象は、写しを確かめた回答できる部分（``status=supported``）の根拠と、観点の確かめた根拠。評価が確かめて
+    いない写しは足さない。
+    """
+    if not assessment:
+        return {}
+    rows = [
+        *(part.get("evidence") or () for part in assessment.get("answerable_parts") or () if part.get("status") == "supported"),
+        *(
+            check.get("evidence") or ()
+            for check in assessment.get("aspect_checks") or ()
+            if check.get("evidence_validation") in _VERIFIED_ASPECT_EVIDENCE
+        ),
+    ]
+    found: dict[str, list[str]] = {}
+    for evidence in rows:
+        for value in evidence:
+            source, quote = str(value.get("source_id") or ""), str(value.get("quote") or "")
+            if source and quote.strip() and quote not in found.setdefault(source, []):
+                found[source].append(quote)
+    return {source: quotes for source, quotes in found.items() if quotes}
+
+
 def generation_view(
     assessment: Mapping[str, Any] | None,
     spans: Sequence[dict],
