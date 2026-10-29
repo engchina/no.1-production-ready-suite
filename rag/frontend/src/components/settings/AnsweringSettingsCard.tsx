@@ -47,6 +47,9 @@ const ANSWER_FLOW_OPTIONS: SelectFieldOption<AnswerFlowName>[] = [
 const ANSWER_AUDIT_OPTIONS: SelectFieldOption<AnsweringSettingsData["answer_audit_mode"]>[] = (
   ["none", "standard", "detailed"] as const
 ).map((value) => ({ value, label: t(`settings.answering.auditMode.${value}`) }));
+const EVIDENCE_REFINEMENT_OPTIONS: SelectFieldOption<AnsweringSettingsData["answer_evidence_refinement_mode"]>[] = (
+  ["legacy", "cited_only", "cited_required"] as const
+).map((value) => ({ value, label: t(`settings.answering.evidenceRefinement.${value}`) }));
 // 0〜20（backend の rag_neighbor_child_count と同じ範囲）。SelectField は文字列値を扱う。
 const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 }, (_, n) => ({
   value: String(n),
@@ -60,6 +63,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     query_strategy: settings.query_strategy,
     answer_flow: settings.answer_flow,
     answer_audit_mode: settings.answer_audit_mode,
+    answer_evidence_refinement_mode: settings.answer_evidence_refinement_mode,
     neighbor_child_count: settings.neighbor_child_count,
     rerank_enabled: settings.rerank_enabled,
     screen_linking_enabled: settings.screen_linking_enabled,
@@ -254,6 +258,19 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           />
           <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditBasicHint")}</p>
           <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditBudgetHint")}</p>
+        </div>
+        <div className="space-y-3 px-3 py-3" data-testid="answering-evidence-refinement">
+          <SelectField
+            id="answering-evidence-refinement-mode"
+            label={t("settings.answering.evidenceRefinement")}
+            helper={t(`settings.answering.evidenceRefinementHint.${form.answer_evidence_refinement_mode}`)}
+            value={form.answer_evidence_refinement_mode}
+            options={EVIDENCE_REFINEMENT_OPTIONS}
+            width="lg"
+            disabled={disabled}
+            onValueChange={(value) => update({ answer_evidence_refinement_mode: value })}
+          />
+          <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.evidenceRefinementBudgetHint")}</p>
         </div>
         <SwitchRow
           id="answering-request-coverage"
