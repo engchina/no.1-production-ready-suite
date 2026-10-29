@@ -36,6 +36,11 @@ def run(*, request_case="valid", omit_requirement=False, retry_case=None, use_al
         inputs = json.loads(prompt)
         assert inputs["confirmed_premises"] == [{"question": "操作条件", "answer": "条件A"}]
         assert inputs["guide_steps"][0]["evidence_ids"] == [spans[0]["evidence_id"]]
+        candidates = inputs["items"][0]["guide_step_candidates"]
+        assert len(candidates) == 1 and candidates[0]["step_id"] == "open"
+        assert candidates[0]["association"] == "source_only"
+        assert candidates[0]["matched_evidence_ids"] == [spans[0]["evidence_id"]]
+        assert [row["id"] for row in candidates[0]["candidate_requirements"]] == ["open:0", "open:1"]
         assert schema.expected_request_ids == ("Q1",)
         assert schema.expected_requirement_ids == ("open:0", "open:1")
         if retry_case and len(calls) == 3:

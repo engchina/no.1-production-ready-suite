@@ -60,6 +60,7 @@ from rag_engine.generation.applications import render_lines as application_lines
 from rag_engine.generation.audit_recovery import merge_audit_retry
 from rag_engine.generation.check_cues import check_cues
 from rag_engine.generation.citation_wire import bind_wire_range, canonical_generation_draft, generation_draft_wire_model
+from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
 from rag_engine.generation.request_recovery import relabel_recovery_reviews
@@ -6365,6 +6366,18 @@ def run_round(
             for _, entry in audited
             for cited in item_citations(entry)
         }
+        located_citation_groups = {
+            id(cited): {
+                member.span["evidence_id"]
+                for member in item_citations(entry)
+                if member.span
+                and (
+                    member.citation_resolution.get("authenticity") == "verified" or (member.quote_match == "exact" and not member.unmatched)
+                )
+            }
+            for _, entry in audited
+            for cited in item_citations(entry)
+        }
         inputs = {
             "question": question,
             "task_contract": _contract_view(question),
@@ -6447,6 +6460,10 @@ def run_round(
                 }
                 for step_id, title, sources in guide_steps
             ]
+            for row, (_, entry) in zip(inputs["items"], audit_entries, strict=True):
+                row["guide_step_candidates"] = audit_guide_candidates(
+                    inputs["guide_steps"], contracts, located_citation_groups.get(id(entry), ())
+                )
         # 生成と同じく、根拠・引用・説明を文字の形をそろえて渡す。原文の引用（全角の ``ＨＲＭ``）と説明の
         # 半角の ``HRM`` を、監査が別の語として「根拠にない」と判定しないため (#1350)。
         expected_request_ids = tuple(row["id"] for row in inputs["task_contract"].get("request_units", []))
