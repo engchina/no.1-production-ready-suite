@@ -532,7 +532,8 @@
       "findings": [],
       "guide_revision": null,
       "guide_steps": [],
-      "reused_claims": 0
+      "reused_claims": 0,
+      "premise_checks": []
     }
   }
 }
