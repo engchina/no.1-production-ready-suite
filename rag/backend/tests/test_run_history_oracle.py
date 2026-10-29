@@ -142,6 +142,7 @@ async def test_run_history_round_trip_on_real_oracle() -> None:
         assert own["stages_json"] == {
             "stages": [{"stage": "answer", "outcome": "success"}],
             "usage": usage,
+            "validation_execution": "timed_out",
         }
         # 一覧は利用量の合計と計測の状態だけを JSON_VALUE で読む（#3466）。記録の無い実行は NULL。
         own_row = next(row for row in rows if row["run_id"] == run_ids[0])

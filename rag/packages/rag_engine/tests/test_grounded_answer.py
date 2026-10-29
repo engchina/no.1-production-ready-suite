@@ -2916,7 +2916,7 @@ class ReferenceSectionQuoteTest(unittest.TestCase):
 
 
 class DocumentGroupedProcedureTest(unittest.TestCase):
-    """手順の節は文書ごとに分け、起点以外の文書の手順は起点と同じ要求に答える場合だけ業務名の条件付きにする (#1022)。"""
+    """手順は文書の境界を示して入力順を保ち、規則・参考情報は文書別にまとめる。"""
 
     QUESTION = "帳票のファイル名を変更する手順を教えてください"
     SELECT = "①出力様式一覧から対象を選択します。"
@@ -2930,14 +2930,14 @@ class DocumentGroupedProcedureTest(unittest.TestCase):
             GroundedItem(kind="operation", text=text, citations=[GroundedCitation(evidence_id="", quote=text)]), span=span
         )
 
-    def test_render_puts_the_primary_document_first_and_never_interleaves_documents(self):
+    def test_render_keeps_input_order_instead_of_promoting_the_primary_document(self):
         a1 = self.entry("対象を選択します。", "出力様式設定", "架空変更手順.pdf")
         b1 = self.entry("名前を直接入力します。", "帳票設定", "架空管理説明書.pdf")
         a2 = self.entry("実行ボタンを押します。", "出力様式設定", "架空変更手順.pdf")
         body = grounded.render("", [b1, a1, a2])
-        self.assertLess(body.index("対象を選択"), body.index("名前を直接入力"))  # 操作 item が最も多い文書（主文書）が先
+        self.assertLess(body.index("名前を直接入力"), body.index("対象を選択"))  # 文書内の操作件数で入力順を変えない。
         self.assertIn("操作手順（出力様式設定）\n\n1. 対象を選択します。\n根拠：架空変更手順.pdf p.1\n2. 実行ボタンを押します。", body)
-        self.assertEqual(body.count("操作手順（出力様式設定）"), 1)  # 別文書を挟んでも同じ文書の手順は 1 つの節
+        self.assertEqual(body.count("操作手順（出力様式設定）"), 1)  # 入力順でも連続する同じ文書・機能は一つの節。
         self.assertIn("操作手順（帳票設定）\n\n・名前を直接入力します。", body)
 
     def test_render_never_interleaves_documents_in_facts_and_reference_sections(self):
@@ -2990,10 +2990,10 @@ class DocumentGroupedProcedureTest(unittest.TestCase):
         self.assertEqual(body, grounded.render("", [b1, a1, a2]))
         lines = [line for line in body.split("\n") if line.startswith(grounded.answer_labels().citation_prefix)]
         self.assertEqual(len(refs), len(lines))
-        # 同じ文書・頁の二つの項目はそれぞれ出典を持つ。主文書の手順が先。
-        self.assertEqual([ref["source_id"] for ref in refs], ["P-a1", "P-a2", "P-b1"])
-        self.assertEqual([ref["scope_source_ids"] for ref in refs[:2]], [["c-a1"], ["c-a2"]])
-        self.assertEqual((refs[2]["evidence_id"], refs[2]["page"]), ("EP-b1", 1))
+        # 同じ文書・頁の二つの項目も、それぞれ入力順の説明に出典を対応させる。
+        self.assertEqual([ref["source_id"] for ref in refs], ["P-b1", "P-a1", "P-a2"])
+        self.assertEqual([ref["scope_source_ids"] for ref in refs[1:]], [["c-a1"], ["c-a2"]])
+        self.assertEqual((refs[0]["evidence_id"], refs[0]["page"]), ("EP-b1", 1))
         rendered = body.splitlines()
         for entry in (a1, a2, b1):
             line = next(index for index, value in enumerate(rendered) if entry.item.text in value)

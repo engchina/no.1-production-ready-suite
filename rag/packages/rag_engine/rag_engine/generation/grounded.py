@@ -3919,7 +3919,7 @@ def _body_sections(
     published = [entry for entry in checked if entry.published and not _shown_as_quote(entry)]
     # 資料の出典を付けない説明（引用が原文と照合できない・業務ガイドの文から来た。#2792）は、資料の節に置かず、
     # 出典の行の無い節に分ける。
-    # 回答は文書を単位に組み立て、別の文書の説明を交互に並べない。どの節も同じ文書の順にする。
+    # 規則・参考原文・不足は文書ごとにまとめる。操作の順序は後段で元の並びを使う。
     order = _document_order(checked)
     shown = _by_document([entry for entry in published if entry.span], order)
     unsourced = [entry for entry in published if not entry.span]
@@ -3935,19 +3935,13 @@ def _body_sections(
     # 規則を質問の事実に当てはめた結果（#2155）。確かめきれないものは警告つき（#2738）。出典は当てはめた規則の根拠。
     if applied := application_lines(applications, _citation, add_citation, mark_application):
         sections.append((APPLICATIONS_SECTION_TITLE, applied))
-    # 別機能の操作を一つの番号列に並べない。機能ごとに手順を分けて見出しに機能名を出す。
-    # 機能が 1 つでも機能名を出す。「どの画面・機能の手順か」が問い合わせ回答の中心情報で、item 本文が
-    # 画面名を含むかはモデルの揺れに依存するため (#701)。
-    # 文書ごとに分け、文書間を交互に並べない (#1022)。別の文書の手順を A → B → A の順に並べると、別業務の
-    # 手順の断片が連続した操作に見える。主文書（操作 item が最も多い文書）を先に、他の文書は初出順に後ろへ出す。
-    # 同じ文書の中では items の並びで機能が連続する範囲ごとに区切る。機能ごとに集約し直すと、機能を往復する
-    # 一連の操作（F1 で選択 → F2 で入力 → F1 で保存）が「選択 → 保存」「入力」の順に変わり、保存後に入力する
-    # 手順として表示されていた (#1009)。同じ機能が別の機能を挟んで再び現れれば別の節にし、items の順序は変えない。
+    # 操作の順序は草稿のまま保持し、同じ文書・機能の連続する操作だけを同じ節にする。
+    # 別文書を挟んで戻る操作を文書ごとに集約すると、後続操作が先へ移ってしまう。
     groups: list[tuple[Any, list[CheckedItem]]] = []
-    for entry in shown:
-        if entry.item.kind not in _PROCEDURE_KINDS:
+    for entry in published:
+        if entry.span is None or entry.item.kind not in _PROCEDURE_KINDS:
             continue
-        function = entry.span["function"] if entry.span else None
+        function = (_document_key(entry.span), entry.span["function"])
         if groups and groups[-1][0] == function:
             groups[-1][1].append(entry)
         else:

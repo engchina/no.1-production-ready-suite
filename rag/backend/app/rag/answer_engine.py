@@ -4230,6 +4230,10 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         # 目的外の割合を集計する。
         "goal_alignment": adopted_goal_alignment(result.generation_trace),
         "generation_review": adopted_review_contract(result.generation_trace),
+        "crag_assessment": dict((result.generation_trace or {}).get("crag_assessment") or {}),
+        "crag_generation_gate": dict(
+            (result.generation_trace or {}).get("crag_generation_gate") or {}
+        ),
         "procedure_quotes": dict((result.generation_trace or {}).get("procedure_quotes") or {}),
         "execution_steps": steps,
         "evidence_tree": tree,

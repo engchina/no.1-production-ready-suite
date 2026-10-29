@@ -2344,8 +2344,10 @@ def synthesize_grounded_answer(
             runtime_knowledge,
             budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
         )
-        gate_view = crag_generation.generation_view(crag_assessment, gate_spans, context)
-        refusal = crag_generation.refusal_response(question, gate_view)
+        gate_view = crag_generation.generation_view(
+            crag_assessment, gate_spans, context, budget_chars=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None)
+        )
+        refusal = crag_generation.refusal_response(question, gate_view, runtime_knowledge=runtime_knowledge)
         if refusal is not None:
             return GroundedAnswer(refusal, context, tuple(image_evidence), image_prompt_mode)
     provider = answer_llm_provider
@@ -2428,7 +2430,9 @@ def synthesize_grounded_answer(
             budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
             whole_records=evidence_budget_chars is not None,
         )
-        crag_view = crag_generation.generation_view(crag_assessment, spans, context)
+        crag_view = crag_generation.generation_view(
+            crag_assessment, spans, context, budget_chars=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None)
+        )
         prompt = _grounded_prompt(
             question,
             spans,
@@ -2449,8 +2453,8 @@ def synthesize_grounded_answer(
             _execution_step(
                 f"回答文の生成と根拠確認（{number + 1}回目）",
                 (
-                    # 監査の型が none でも、条を出典にした説明だけは事実の監査に掛ける（#3541・#3561）。
-                    "主張と原文引用の対で回答を作り、引用を原文と照合します（生成の後の LLM の監査は、条を出典にした説明だけに掛けます）。"
+                    # 未実行の LLM 監査を、進捗の説明で実行済みと表示しない。
+                    "主張と原文引用の対で回答を作り、引用を原文と照合します。生成後の LLM 監査は実行しません。"
                     if audit_mode == grounded.AUDIT_MODE_NONE
                     else "主張と原文引用の対で回答を作り、引用を原文と照合してから、別のLLM呼出で適用性を監査します。"
                 )
@@ -2804,7 +2808,13 @@ def synthesize_grounded_answer(
     answer_warnings = [passage_marks.answer_warning("off_goal", grounded.answer_labels().off_goal_gap)] if off_goal else []
     if correction_failure:
         answer_warnings.append(passage_marks.answer_warning("correction_failed", correction_failure))
-    crag_view = crag_generation.generation_view(crag_assessment, spans, context)
+    crag_view = crag_generation.generation_view(
+        crag_assessment,
+        spans,
+        context,
+        budget_chars=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
+        input_stage="actually_sent",
+    )
     current, crag_projection = crag_generation.project_partial_answer(
         current, crag_view, spans, audited=audit_mode != grounded.AUDIT_MODE_NONE and current.audit is not None
     )
@@ -5453,7 +5463,13 @@ def answer_question_result(
             if crag_assessment is not None
             else ()
         )
-        refusal = crag_generation.refusal_response(request_text, crag_generation.generation_view(crag_assessment, gate_spans, context))
+        refusal = crag_generation.refusal_response(
+            request_text,
+            crag_generation.generation_view(
+                crag_assessment, gate_spans, context, budget_chars=_section_evidence_budget(context, settings, section_expansion)
+            ),
+            runtime_knowledge=runtime_knowledge,
+        )
         if refusal is not None:
             grounded_answer = GroundedAnswer(refusal, context, tuple(image_evidence), image_prompt_mode)
         else:
