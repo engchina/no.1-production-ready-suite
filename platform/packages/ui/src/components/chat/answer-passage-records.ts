@@ -72,6 +72,33 @@ function reasons(value: unknown): AnswerPassageReason[] {
   });
 }
 
+// 引用表示だけで除く書式。原文のtextや保存記録は変更しない。
+const DISPLAY_LINE_MARK = /^\s*(?:#{1,6}\s+|[-*+]\s+|[・•]\s*|[0-9０-９]{1,3}[.)．）]\s+)/gm;
+const DISPLAY_EVIDENCE_REF = /\s*[【〔［[]\s*(?:証拠|根拠|出典|evidence|source)[^】〕］\]\n]{0,200}[】〕］\]]/gi;
+
+/** 引用の見える本文。不可視文字や書式だけの記録を項目・件数へ変換しない。 */
+export function answerPassageDisplayText(text: string): string {
+  return text
+    .replace(/\p{Default_Ignorable_Code_Point}/gu, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(DISPLAY_LINE_MARK, "")
+    .replace(/^[ \t]*(?:[-*_]\s*){3,}$/gm, "")
+    .replace(/^[ \t]*(?:`{3,}|#{1,6}|>)[ \t]*$/gm, "")
+    .replace(/\*{2}|__|`/g, "")
+    .replace(DISPLAY_EVIDENCE_REF, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** 表示・件数・移動先を、同じ可視項目の集合で組み立てる。 */
+export function visibleAnswerPassageRecords(records: AnswerPassageRecords): AnswerPassageRecords {
+  return {
+    ...records,
+    marks: records.marks.filter((item) => answerPassageDisplayText(item.text)),
+    removed: records.removed.filter((item) => answerPassageDisplayText(item.text)),
+  };
+}
+
 /**
  * 回答の記録（RAG の回答の診断・Agent の成果物「資料との照合」の内容）から、段落の印・外した段落・回答全体の注意を
  * 読む。3 つの項目がどれも配列でなければ null（新しい記録の無い過去の回答）。
@@ -82,7 +109,7 @@ export function parseAnswerPassageRecords(source: unknown): AnswerPassageRecords
   if (![raw.passage_marks, raw.removed_passages, raw.answer_warnings].some(Array.isArray)) return null;
   const marks = records(raw.passage_marks).flatMap((item): AnswerPassageMark[] => {
     const text = str(item.text);
-    if (!text) return [];
+    if (!answerPassageDisplayText(text)) return [];
     const itemReasons = reasons(item.reasons);
     // 印の状態は unverified を優先する（契約）。知らない値は注意（warning）として出す。
     const state: AnswerPassageMarkState = item.state === "unverified" ? "unverified" : "warning";
@@ -90,7 +117,7 @@ export function parseAnswerPassageRecords(source: unknown): AnswerPassageRecords
   });
   const removed = records(raw.removed_passages).flatMap((item): AnswerRemovedPassage[] => {
     const text = str(item.text);
-    return text ? [{ text, reasons: reasons(item.reasons) }] : [];
+    return answerPassageDisplayText(text) ? [{ text, reasons: reasons(item.reasons) }] : [];
   });
   const warnings = records(raw.answer_warnings).flatMap((item): AnswerWarning[] => {
     const label = str(item.label);
@@ -104,16 +131,19 @@ export function parseAnswerPassageRecords(source: unknown): AnswerPassageRecords
 /** 印の数（バッジ）。 */
 export function answerPassageCounts(records: AnswerPassageRecords | null | undefined): AnswerPassageCounts {
   if (!records) return { unverified: 0, warning: 0, removed: 0 };
+  const visible = visibleAnswerPassageRecords(records);
   return {
-    unverified: records.marks.filter((mark) => mark.state === "unverified").length,
-    warning: records.marks.filter((mark) => mark.state === "warning").length,
-    removed: records.removed.length,
+    unverified: visible.marks.filter((mark) => mark.state === "unverified").length,
+    warning: visible.marks.filter((mark) => mark.state === "warning").length,
+    removed: visible.removed.length,
   };
 }
 
 /** 記録に出すもの（印・外した段落・回答全体の注意）が 1 つでもあるか。 */
 export function hasAnswerPassageRecords(records: AnswerPassageRecords | null | undefined): boolean {
-  return Boolean(records && (records.marks.length || records.removed.length || records.warnings.length));
+  if (!records) return false;
+  const visible = visibleAnswerPassageRecords(records);
+  return Boolean(visible.marks.length || visible.removed.length || visible.warnings.length);
 }
 
 // 行の先頭の箇条書き・番号・見出しの印（「- 」「・」「1. 」「（2）」「## 」）。

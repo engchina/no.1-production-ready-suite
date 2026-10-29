@@ -7,6 +7,7 @@ import { Banner } from "../ui/banner";
 import { TEXT_ICON_SIZE } from "../ui/text-icon";
 import {
   answerPassageCounts,
+  answerPassageDisplayText,
   type AnswerPassageMarkGroup,
   type AnswerPassageMarkState,
   type AnswerPassageReason,
@@ -89,19 +90,9 @@ const STATE_TOGGLE: Record<AnswerPassageMarkState, string> = {
   warning: "text-fg-muted hover:bg-surface-hover",
 };
 
-// 引用に出さない印: 行の先頭の箇条書き・番号・見出しの印、強調の印、根拠の ID の括弧（「【証拠 ID: …】」「【証拠 1】」）。
-const QUOTE_LINE_MARK = /^\s*(?:#{1,6}\s+|[-*+]\s+|[・•]\s*|[0-9０-９]{1,3}[.)．）]\s+)/gm;
-const QUOTE_EMPHASIS = /\*{2}|__|`/g;
-const QUOTE_EVIDENCE_REF = /\s*[【〔［[]\s*(?:証拠|根拠|出典|evidence|source)[^】〕］\]\n]{0,200}[】〕］\]]/gi;
-
-/** 引用の短い形（「確認が必要な点」「根拠と矛盾し除いた内容」の項目。印・根拠の ID は除き、長ければ切る）。 */
+/** 引用の短い形。可視性の判定は記録の解析・件数と共通にする。 */
 export function answerPassageQuote(text: string, limit = 80): string {
-  const flat = text
-    .replace(QUOTE_LINE_MARK, "")
-    .replace(QUOTE_EMPHASIS, "")
-    .replace(QUOTE_EVIDENCE_REF, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  const flat = answerPassageDisplayText(text);
   return `「${flat.length > limit ? `${flat.slice(0, limit)}…` : flat}」`;
 }
 

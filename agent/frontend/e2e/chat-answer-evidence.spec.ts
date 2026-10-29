@@ -331,6 +331,10 @@ function seedMarkedRun(mockApi: MockApi) {
       notice: undefined,
       withheld: { removed: 1, unverified: 1, warnings: 1, all: false, listed: 3 },
       passage_marks: [
+        // 可視内容がない過去の記録は、項目・件数・移動リンクを作らない。
+        ...["\u200b", "**\u200b**", "[\u200b](https://example.invalid)"].map((text) => ({
+          text, state: "unverified" as const, reasons: [{ code: "unsupported", label: "根拠で確かめられない", detail: "" }],
+        })),
         {
           text: "- 承認は担当の部署が行います。",
           state: "warning",
@@ -404,6 +408,8 @@ async function expectMarkedAnswer(page: Page, body: ReturnType<Page["getByTestId
     "「承認は担当の部署が行います。」要注意：根拠は別の対象についての記載",
     `「${MARKED_UNVERIFIED}」未確認：根拠で確かめられない`,
   ]);
+  await expect(points.getByTestId("answer-marked-passage-link")).toHaveCount(2);
+  await expect(points).not.toContainText("「」");
   // 項目を押すと本文の段落へ移り、フォーカスする。
   await points.getByTestId("answer-marked-passage-link").nth(1).click();
   await expect(marked.nth(1)).toBeFocused();
@@ -433,6 +439,7 @@ for (const viewport of VIEWPORTS) {
     for (const badge of await badges.all()) await expect(badge.locator("svg")).toHaveCount(1);
     await expect(turn).not.toContainText("省略");
     await expectNoHorizontalOverflow(page);
+    await turn.getByTestId("answer-marked-passages").scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath(`answer-marks-chat-${viewport.name}.png`), fullPage: true });
 
     // 実行の詳細は回答の印を保ち、概要見出しのバッジは出さない。

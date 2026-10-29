@@ -265,3 +265,30 @@ describe("AnswerPassageBadges", () => {
     expect(host.querySelector('[data-testid="answer-passage-badges"]')).toBeNull();
   });
 });
+
+
+describe("可視内容のない段落の記録", () => {
+  const empty = ["\u200b", "\u200c\u200d\u2060\ufeff", "**\u200b**", "- \u200b", "```\n\u200b\n```", "[\u200b](https://example.invalid)", "---"];
+  const valid = ["保存", "0", "-1", "A", "中", "👍", "👩‍💻", "**保存**", "[保存](https://example.invalid)", "A#1", "2*3", "_"];
+  it("不可視・書式だけの印を一覧と件数から除き、原文と短い有効文字を保つ", () => {
+    const raw = { passage_marks: [...empty, ...valid].map((text) => ({ text, state: "unverified", reasons: [] })), removed_passages: empty.map((text) => ({ text, reasons: [] })) };
+    const before = JSON.stringify(raw);
+    const records = parseAnswerPassageRecords(raw)!;
+    expect(records.marks.map((row) => row.text)).toEqual(valid);
+    expect(records.removed).toEqual([]);
+    expect(answerPassageCounts(records)).toEqual({ unverified: valid.length, warning: 0, removed: 0 });
+    expect(JSON.stringify(raw)).toBe(before);
+    expect(answerPassageQuote("[保存](https://example.invalid)")).toBe("「保存」");
+  });
+  it("直接入力にも同じ可視性を適用し、空リンクと空節とバッジを作らない", () => {
+    const records = { marks: empty.map((text) => ({ text, state: "unverified" as const, reasons: [] })), removed: empty.map((text) => ({ text, reasons: [] })), warnings: [] };
+    expect(answerPassageCounts(records)).toEqual({ unverified: 0, warning: 0, removed: 0 });
+    expect(hasAnswerPassageRecords(records)).toBe(false);
+    act(() => root.render(<><AnswerSections blocks={paragraphs("本文は保存します。")} passages={records} /><AnswerPassageBadges records={records} /></>));
+    expect(host.textContent).toContain("本文は保存します。");
+    expect(host.querySelector('[data-testid="answer-marked-passages"]')).toBeNull();
+    expect(host.querySelector('[data-testid="answer-removed-passages"]')).toBeNull();
+    expect(host.querySelector('[data-testid="answer-marked-passage-link"]')).toBeNull();
+    expect(host.querySelector('[data-status-variant]')).toBeNull();
+  });
+});
