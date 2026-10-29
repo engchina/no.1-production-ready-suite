@@ -231,6 +231,10 @@ def _units(context: Any, records: Sequence[Any]) -> dict[str, _Unit]:
     return units
 
 
+def _field(item: Any, key: str) -> Any:
+    return item.get(key) if isinstance(item, Mapping) else getattr(item, key, None)
+
+
 def enumeration_check(
     question: str,
     checks: Sequence[Mapping[str, Any]],
@@ -238,15 +242,24 @@ def enumeration_check(
     context: Any,
     records: Sequence[Any],
     canonical: Callable[[str], str],
+    *,
+    unverified_items: Sequence[Any] = (),
 ) -> list[dict[str, Any]]:
     """評価器の観点の判定に、列挙の観点（``ENUMERATION_ASPECT``）の数えた結果を入れて返す。
 
     ``items`` は評価器の ``enumerated_items``（``item`` / ``source_ids`` / ``quote``）。原文の写し（``quote``）が根拠の
-    本文（親と同じ親の子）にある項目だけを数え、同じ原文の項目は 1 つにする。
+    本文（親と同じ親の子）にある項目だけを数え、同じ原文の項目は 1 つにする。``unverified_items`` は呼び出し側で
+    原文の写しを確かめられなかった項目（数えないが、原文を確かめられない項目として扱う）。
 
     - 件数のある問: 数えた項目が件数に足りなければ missing。
     - 章の範囲のある問: 範囲の章のうち、数えた項目の根拠の見出しに無い章があれば missing。
     - どちらも無い問: 評価器の status（根拠のある項目が 1 つも無ければ missing）。読む範囲の規則は章節の拡張が持つ。
+
+    原文の写しを確かめられないこと（写しの照合の失敗）は、項目が無いことの根拠にならない。足りない分を原文を
+    確かめられない項目で埋められ、評価器が不足と判定していなければ、missing にせず unknown にする
+    （``shortfall_cause`` = ``quote_unverified``）。missing は、確かめた項目で数えても足りないとき
+    （``verified_shortfall``）、評価器が網羅を確かめていないとき（``grader_status``）、評価器が項目を挙げていないとき
+    （``no_items``）だけにする。
 
     列挙の問でなければ ``checks`` をそのまま返す。
     """
@@ -257,45 +270,83 @@ def enumeration_check(
     units = _units(context, records)
     counted: list[tuple[str, str]] = []  # (原文の写しの形, 根拠の uid)
     seen: set[str] = set()
-    for item in items:
-        quote = _folded(getattr(item, "quote", "") if not isinstance(item, Mapping) else item.get("quote", ""))
-        raw_sources = getattr(item, "source_ids", None) if not isinstance(item, Mapping) else item.get("source_ids")
-        sources = [uid for value in raw_sources or () if (uid := canonical(str(value))) and uid in units]
-        if len(quote) < 2 or quote in seen:
+    # 原文を確かめられない項目: 写しの形 → 根拠の章（根拠の chunk を候補に結べなければ None = どの章か分からない）。
+    unverified: dict[str, frozenset[int] | None] = {}
+
+    def note_unverified(index: int, quote: str, sources: Sequence[str]) -> None:
+        key = quote if len(quote) >= 2 else f"#{index}"
+        if key in seen or key in unverified:
+            return
+        unverified[key] = frozenset(number for uid in sources for number in units[uid].chapters) if sources else None
+
+    for index, item in enumerate(items):
+        quote = _folded(_field(item, "quote") or "")
+        sources = [uid for value in _field(item, "source_ids") or () if (uid := canonical(str(value))) and uid in units]
+        if len(quote) >= 2 and quote in seen:
             continue
-        found = next((uid for uid in sources if quote in _folded(units[uid].text)), "")
+        found = next((uid for uid in sources if quote in _folded(units[uid].text)), "") if len(quote) >= 2 else ""
         if not found:
+            note_unverified(index, quote, sources)
             continue
         seen.add(quote)
+        unverified.pop(quote, None)
         counted.append((quote, found))
+    for index, item in enumerate(unverified_items, start=len(items)):
+        quote = _folded(_field(item, "quote") or "")
+        sources = [uid for value in _field(item, "source_ids") or () if (uid := canonical(str(value))) and uid in units]
+        note_unverified(index, quote, sources)
     source_ids = list(dict.fromkeys(uid for _quote, uid in counted))
     reasons: list[str] = []
     llm = [item for item in result if item.get("aspect") == ENUMERATION_ASPECT]
+    claimed = llm[0].get("status") if len(llm) == 1 else None
+    cause: str | None = None
     if request.countable:
         ok = True
+        closable = bool(unverified)
         if request.expected_count is not None:
             if len(counted) < request.expected_count:
                 ok = False
+                closable = closable and len(counted) + len(unverified) >= request.expected_count
             reasons.append(f"要求 {request.expected_count} 件に対し、原文を確かめた項目 {len(counted)} 件")
         if request.chapters:
             covered = {number for uid in source_ids for number in units[uid].chapters}
             lacking = [number for number in request.chapters if number not in covered]
             if lacking:
                 ok = False
+                possible = list(unverified.values())
+                closable = closable and (None in possible or set(lacking) <= {n for chapters in possible if chapters for n in chapters})
                 reasons.append("根拠の無い章: " + "、".join(f"第 {number} 章" for number in lacking))
             else:
                 reasons.append("範囲の章（" + "、".join(f"第 {number} 章" for number in request.chapters) + "）すべてに根拠がある")
-        status = "supported" if ok else "missing"
+        if ok:
+            status = "supported"
+        elif not closable:
+            status, cause = "missing", "verified_shortfall"
+        elif claimed == "missing":
+            status, cause = "missing", "grader_status"
+        else:
+            status, cause = "unknown", "quote_unverified"
     else:
-        claimed = llm[0].get("status") if len(llm) == 1 else "missing"
-        status = "supported" if claimed == "supported" and counted else "missing"
+        if claimed == "supported" and counted:
+            status = "supported"
+        elif claimed == "supported" and unverified:
+            status, cause = "unknown", "quote_unverified"
+        else:
+            status, cause = "missing", "grader_status" if claimed != "supported" else "no_items"
         reasons.append(f"原文を確かめた項目 {len(counted)} 件" + ("" if claimed == "supported" else "（評価器は網羅を確かめていない）"))
+    if unverified:
+        reasons.append(
+            f"原文を確かめられない項目 {len(unverified)} 件"
+            + ("（写しの照合の失敗は項目が無い根拠にならないため、不足を確定しない）" if cause == "quote_unverified" else "")
+        )
     entry = {
         "aspect": ENUMERATION_ASPECT,
         "status": status,
         "source_ids": source_ids if status == "supported" else [],
         "reason": "。".join(reasons),
         "counted_items": len(counted),
+        "unverified_items": len(unverified),
+        "shortfall_cause": cause,
         "expected_count": request.expected_count,
         "chapters": list(request.chapters),
     }

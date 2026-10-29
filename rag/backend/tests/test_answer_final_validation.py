@@ -269,3 +269,44 @@ def test_disabled_guide_and_unstructured_scope_do_not_create_confirmed_facts() -
         },
     )
     assert _confirmed_validation_premises(settings, AnswerScope(context="前提: 推測の文章")) == []
+
+
+async def test_final_validation_records_the_premise_consistency_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回答の記録の診断に、両立の比較の採否を残す（#3800。Chat の診断が読む）。"""
+    engine = AnswerEngine(
+        settings=Settings(rag_answer_audit_mode="standard"),
+        oracle=cast(Any, object()),
+        genai=cast(Any, object()),
+    )
+    citation = RetrievedChunk(
+        document_id="doc-synthetic", chunk_id="chunk-synthetic", text="合成の根拠", score=1
+    )
+    outcome = AnswerOutcome(
+        answer="合成の回答", citations=[citation], diagnostics={}, context_text=citation.text
+    )
+    checks = [
+        {
+            "answer_passage_id": "A1",
+            "status": "completed",
+            "decision": "conflict_adopted",
+            "adopted": True,
+            "fit": "conflicts",
+            "constraint_scope": "proposal",
+            "passage_mode": "proposal",
+        }
+    ]
+    monkeypatch.setattr(
+        "app.rag.answer_validation.validate_answer",
+        AsyncMock(
+            return_value=AnswerValidation(
+                status="completed",
+                valid=False,
+                counts={"contradicted": 1},
+                premise_consistency_checks=checks,
+            )
+        ),
+    )
+    await engine._validate_outcome(SearchRequest(query="合成の質問"), outcome)
+    assert outcome.diagnostics["answer_validation"]["premise_consistency_checks"] == checks

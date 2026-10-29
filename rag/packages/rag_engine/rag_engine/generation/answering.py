@@ -1909,8 +1909,16 @@ def _grade_crag_retrieval(
         for item in output.enumerated_items
         if any(canonical(value) not in blocked_sources and verified_quote(canonical(value), item.quote) for value in item.source_ids)
     ]
+    # 送った本文で原文の写しを確かめられなかった項目（除外した候補だけを根拠にした項目は除く）。数えないが、写しの照合の
+    # 失敗は項目が無い根拠にならないので、列挙の不足を確定しない材料として渡す（#3755）。
+    visible_ids = {id(item) for item in visible_items}
+    unverified_items = [
+        item
+        for item in output.enumerated_items
+        if id(item) not in visible_ids and not (item.source_ids and all(canonical(value) in blocked_sources for value in item.source_ids))
+    ]
     before_enumeration = checks
-    checks = enumeration_check(question, checks, visible_items, context, all_records, canonical)
+    checks = enumeration_check(question, checks, visible_items, context, all_records, canonical, unverified_items=unverified_items)
     for item in checks:
         if item["aspect"] != "enumeration_coverage":
             continue

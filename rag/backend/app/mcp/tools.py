@@ -2335,6 +2335,42 @@ class ValidatedGuideStep(BaseModel):
     )
 
 
+class PremiseConsistencyResult(BaseModel):
+    """段落が勧める内容と、原質問・確認の答えの条件・制約との両立の比較 1 件の採否。"""
+
+    # 値は ID・状態・語彙の code だけ（#3800。モデルが書いた制約・推奨・原文は返さない）。
+    answer_range: ExcerptRange | None = Field(
+        default=None,
+        description=(
+            "渡した answer の中の段落の位置（段落に結び付かない記録・位置を決められない段落は"
+            " null）。"
+        ),
+    )
+    status: str | None = Field(
+        default=None,
+        description="比較の実行（completed / not_run / failed / timed_out）。",
+    )
+    decision: str = Field(
+        description=(
+            "採否の理由（conflict_adopted=矛盾として採った / not_conflicting / "
+            "execution_prohibition_does_not_prohibit_proposal / scope_unverified / "
+            "constraint_quote_unmatched / passage_quote_unmatched / unknown_passage_id / "
+            "duplicate_passage_id / missing_passage_id / not_required / deadline_exceeded / "
+            "check_failed）。"
+        )
+    )
+    adopted: bool = Field(description="矛盾として判定（contradicted）に採ったか。")
+    fit: str | None = Field(default=None, description="比較の判断（fits / conflicts / unknown）。")
+    constraint_scope: str | None = Field(
+        default=None,
+        description="制約の対象（execution_only / proposal / content / unknown）。",
+    )
+    passage_mode: str | None = Field(
+        default=None,
+        description="段落の様相（proposal / execution / explanation / unknown）。",
+    )
+
+
 class ValidateAnswerOutput(VersionedOutput):
     valid: bool = Field(
         description=(
@@ -2383,6 +2419,14 @@ class ValidateAnswerOutput(VersionedOutput):
         default=0,
         description=(
             "answer_trace_ids の回答の監査の判定を使い、モデルに渡さなかった段落の数（#1527）。"
+        ),
+    )
+    premise_checks: list[PremiseConsistencyResult] = Field(
+        default_factory=list,
+        description=(
+            "段落が勧める内容と、query・premises の条件・制約との両立の比較の採否。"
+            "adopted=true の段落は claims で contradicted になる。比較しなかったときは"
+            " status=not_run の 1 件。"
         ),
     )
 
@@ -2799,6 +2843,16 @@ def _answer_range(
         start = answer.find(quote)
         span = (start, start + len(quote))
     if span is None or answer[span[0] : span[1]] != quote:
+        return None
+    return ExcerptRange(start=span[0], end=span[1])
+
+
+def _passage_range(
+    passage_id: object, passage_ranges: Mapping[str, tuple[int, int]], answer: str
+) -> ExcerptRange | None:
+    """段落の ID の、回答の中の位置（ID が無い・位置が回答の範囲の外なら null）。"""
+    span = passage_ranges.get(str(passage_id or ""))
+    if span is None or not 0 <= span[0] < span[1] <= len(answer):
         return None
     return ExcerptRange(start=span[0], end=span[1])
 
@@ -5125,6 +5179,20 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             guide_revision=result.guide_revision,
             guide_steps=[ValidatedGuideStep.model_validate(step) for step in result.guide_steps],
             reused_claims=result.reused_claims,
+            premise_checks=[
+                PremiseConsistencyResult(
+                    answer_range=_passage_range(
+                        check.get("answer_passage_id"), passage_ranges, arguments.answer
+                    ),
+                    status=check.get("status"),
+                    decision=str(check.get("decision") or ""),
+                    adopted=bool(check.get("adopted")),
+                    fit=check.get("fit"),
+                    constraint_scope=check.get("constraint_scope"),
+                    passage_mode=check.get("passage_mode"),
+                )
+                for check in result.premise_consistency_checks
+            ],
         )
 
     return McpServer(
