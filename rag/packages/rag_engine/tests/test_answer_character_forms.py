@@ -114,7 +114,7 @@ def test_grounded_answer_reads_half_width_and_cites_the_original():
         [draft(item(eid, TEXT, QUOTE, kind="rule"), summary="HRM は第2水曜の保守枠です。")], [audit((0, "supported", "matched", ""))]
     )
     result = run(model, ctx, QUESTION).response
-    generation = next(prompt for name, prompt in model.prompts if name == "GroundedDraft")
+    generation = next(prompt for name, prompt in model.prompts if name == "GroundedDraftWire")
     assert "HRM:第2水曜 22:00〜24:00" in generation and "ＨＲＭ" not in generation
     audit_prompt = json.loads(next(prompt for name, prompt in model.prompts if name == "GroundedAudit"))
     assert audit_prompt["items"][0]["quote"] == "HRM:第2水曜 22:00〜24:00"

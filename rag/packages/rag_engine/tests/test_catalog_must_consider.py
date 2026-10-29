@@ -14,6 +14,7 @@ from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import AnswerContext, AnswerRecord, _grounded_spans, synthesize_grounded_answer
+from rag_engine.models.llm import GroundedDraft
 from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY, ARTICLE_UNIT_KEY
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.retrieval.evidence_selection import evidence_spans
@@ -88,14 +89,16 @@ class _Model:
     """schema ごとに用意した応答を順に返し、受け取った入力を記録する。"""
 
     def __init__(self, drafts: list, audits: list = (), reviews: list = ()):
-        self.sources = {"GroundedDraft": list(drafts), "CatalogEvidenceReviews": list(reviews)}
+        self.sources = {"GroundedDraftWire": list(drafts), "CatalogEvidenceReviews": list(reviews)}
         self.audits, self.prompts = list(audits), []
 
     def __call__(self, system, prompt, settings, schema, **options):
         self.prompts.append((schema.__name__, prompt))
         source = self.sources.get(schema.__name__, self.audits)
         value = source.pop(0) if len(source) > 1 else source[0]
-        return schema.model_validate(value(prompt) if callable(value) else value)
+        # 生成の既存quote fixtureをcanonical契約で再生する。
+        canonical_schema = GroundedDraft if schema.__name__ == "GroundedDraftWire" else schema
+        return canonical_schema.model_validate(value(prompt) if callable(value) else value)
 
     def names(self) -> list[str]:
         return [name for name, _prompt in self.prompts]
@@ -162,7 +165,7 @@ def test_a_chosen_article_the_draft_did_not_cite_is_reviewed_and_cited_where_it_
 
     result = _run(model, grounded.AUDIT_MODE_STANDARD, review=True)
 
-    assert model.names() == ["GroundedDraft", "CatalogEvidenceReviews", "GroundedFactAudit"]
+    assert model.names() == ["GroundedDraftWire", "CatalogEvidenceReviews", "GroundedFactAudit"]
     review_input = json.loads(model.prompts[1][1])
     # 検討するのは目録で選んだ条だけ。説明は index つきで渡す。
     assert [entry["text"].split("\n", 1)[0] for entry in review_input["evidence"]] == ["第一条"]
@@ -183,7 +186,7 @@ def test_an_article_supporting_no_claim_is_not_cited():
 
     result = _run(model, grounded.AUDIT_MODE_STANDARD, review=True)
 
-    assert model.names() == ["GroundedDraft", "CatalogEvidenceReviews", "GroundedFactAudit"]
+    assert model.names() == ["GroundedDraftWire", "CatalogEvidenceReviews", "GroundedFactAudit"]
     assert _sources(result) == {"手順書B.pdf"}
     assert len(_timing(result)["catalog_review"]["not_relevant"]) == 1
 
@@ -233,7 +236,7 @@ def test_the_review_is_off_by_default_and_makes_no_call():
 
     result = _run(model)
 
-    assert model.names() == ["GroundedDraft"]
+    assert model.names() == ["GroundedDraftWire"]
     assert "catalog_review" not in _timing(result)
     assert _sources(result) == {"手順書B.pdf"}
     assert any(line.endswith(" catalog") for line in model.prompts[0][1].splitlines() if line.startswith("[E"))
@@ -269,7 +272,7 @@ def test_a_claim_omitting_the_articles_exception_is_conditional_and_keeps_its_ci
 
     result = _run(model, grounded.AUDIT_MODE_STANDARD)
 
-    assert model.names() == ["GroundedDraft", "GroundedFactAudit"]
+    assert model.names() == ["GroundedDraftWire", "GroundedFactAudit"]
     assert not result.envelope["passage_marks"]
     body = result.answer_text
     assert grounded.answer_labels().condition(grounded._condition_phrase("第三号に該当する者を除く")) + CLAIM in body
@@ -282,7 +285,7 @@ def test_none_skips_saved_catalog_review_setting_without_changing_it():
     labels = _labels()
     model = _Model([_draft([_claim(labels["guide"])], [(labels["guide"], "direct")], [labels["guide"]])])
     result = _run(model, grounded.AUDIT_MODE_NONE, review=True)
-    assert model.names() == ["GroundedDraft"]
+    assert model.names() == ["GroundedDraftWire"]
     assert _timing(result)["catalog_review"] == {"execution": "not_run", "skipped": "audit_disabled", "reviewed": 0}
     assert result.generation_trace["rounds"][0]["audit_calls"] == 0
     assert _sources(result) == {"手順書B.pdf"}

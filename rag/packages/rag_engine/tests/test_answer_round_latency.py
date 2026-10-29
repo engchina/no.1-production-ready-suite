@@ -30,7 +30,7 @@ def _run(model, ctx, **overrides):
 
 
 def _drafts(model):
-    return [prompt for name, prompt in model.prompts if name == "GroundedDraft"]
+    return [prompt for name, prompt in model.prompts if name == "GroundedDraftWire"]
 
 
 class SystemCapturingModel(FakeModel):

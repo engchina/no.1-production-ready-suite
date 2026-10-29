@@ -43,7 +43,7 @@ class _Clock:
 
 
 def _drafts(model):
-    return [prompt for name, prompt in model.prompts if name == "GroundedDraft"]
+    return [prompt for name, prompt in model.prompts if name == "GroundedDraftWire"]
 
 
 class RoundBudgetUnitTest(unittest.TestCase):
@@ -211,7 +211,7 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         self.assertIn("一覧表を選択し、処理を選択します。", result.answer_text)
         self.assertTrue(result.needs_human_review)
         # 監査は呼ばない（草稿が無い）。
-        self.assertEqual([name for name, _ in model.prompts], ["GroundedDraft"])
+        self.assertEqual([name for name, _ in model.prompts], ["GroundedDraftWire"])
 
     def test_first_generation_capped_by_the_deadline_keeps_the_cut_call_usage(self):
         """1 組目の生成が、期限の残りで抑えた出力の上限に届いて切れた（#1548）。秒・token を round_budget に残す。"""

@@ -104,7 +104,7 @@ def test_incomplete_check_has_no_semantic_support_verdict(execution, monkeypatch
         original = model.__call__
 
         def parse(system, prompt, config, schema, **options):
-            if schema.__name__ != "GroundedDraft":
+            if schema.__name__ != "GroundedDraftWire":
                 raise TimeoutError("合成の監査期限")
             return original(system, prompt, config, schema, **options)
 

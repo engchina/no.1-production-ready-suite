@@ -72,13 +72,14 @@ def test_audit_uses_its_own_effort_separately_from_generation():
 
 def test_run_round_calls_the_audit_with_the_audit_settings():
     from rag_engine.generation import grounded
+    from rag_engine.generation.citation_wire import generation_draft_wire_model
     from rag_engine.models.llm import GroundedAudit, GroundedDraft
 
     calls = []
 
     def parse_text(system, prompt, settings, schema, **options):
         calls.append((schema, settings))
-        if schema is GroundedDraft:
+        if schema in (GroundedDraft, generation_draft_wire_model()):
             return GroundedDraft(summary="", confidence="low", items=[])
         return GroundedAudit(
             reviews=[],
@@ -103,7 +104,7 @@ def test_run_round_calls_the_audit_with_the_audit_settings():
         parse_images=None,
         audit_settings="audit",
     )
-    assert [(schema.__name__, settings) for schema, settings in calls] == [("GroundedDraft", "generation"), ("GroundedAudit", "audit")]
+    assert [(schema.__name__, settings) for schema, settings in calls] == [("GroundedDraftWire", "generation"), ("GroundedAudit", "audit")]
     calls.clear()
     # 渡さなければ監査も生成と同じ設定（従来の動き）。
     grounded.run_round(

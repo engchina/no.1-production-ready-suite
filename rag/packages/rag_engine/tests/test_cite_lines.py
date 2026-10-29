@@ -1,6 +1,7 @@
 """引用を根拠の行番号で指させ、原文はシステムが取り出す（#2830）。"""
 
 from rag_engine.generation import grounded
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
 # 各行は 1 行で引用の単位になる長さ（2 行を続けると単位の上限を超える）。
@@ -109,7 +110,11 @@ def test_generation_instructions_name_only_the_public_citation_fields():
     citation = schema["$defs"]["GroundedCitation"]["properties"]
     assert "quote" not in citation
     assert {"evidence_id", "lines"} <= set(citation)
-    assert "quote は、citations の各出典（evidence_id と lines）が指す根拠の原文" in grounded.GENERATE_SYSTEM_PROMPT
+    wire = generation_draft_wire_model().model_json_schema()
+    wire_citation = wire["$defs"]["GroundedCitationWire"]
+    assert set(wire_citation["properties"]) == {"evidence_id", "line_start", "line_end"}
+    assert set(wire_citation["required"]) == {"evidence_id", "line_start", "line_end"}
+    assert "quote は、citations の各出典（evidence_id と引用する行範囲）が指す根拠の原文" in grounded.GENERATE_SYSTEM_PROMPT
 
 
 def test_lines_holding_the_quote_text_use_the_line_that_contains_it():

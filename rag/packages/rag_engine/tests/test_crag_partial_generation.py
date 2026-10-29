@@ -10,6 +10,7 @@ from test_grounded_answer import draft, ids
 
 from rag_engine.config import get_settings
 from rag_engine.generation import answering as a
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.generation.crag_support import _crag_task_contract
 from rag_engine.models.llm import CragRetrievalGradeOutput, GroundedDraft
 
@@ -58,8 +59,9 @@ def run_answer(text, grade_output, generation):
         calls.append((schema.__name__, prompt))
         if schema is CragRetrievalGradeOutput:
             return grade_output
-        assert schema is GroundedDraft
-        return schema.model_validate(generation(context))
+        assert schema is generation_draft_wire_model()
+        # 既存のquote/lines応答はcanonical再生であり、wire検証ではない。
+        return GroundedDraft.model_validate(generation(context))
 
     with (
         patch.object(a, "load_latest_or_source_chunk_run", return_value=_chunk_run_stub()),
@@ -75,7 +77,7 @@ def run_answer(text, grade_output, generation):
 
 def test_same_business_overview_cannot_reach_operation_generation():
     result, calls = run_answer(OVERVIEW, grade(OVERVIEW, partial=False), lambda context: pytest.fail("概述だけで操作を生成してはいけない"))
-    assert all(schema != "GroundedDraft" for schema, _ in calls)
+    assert all(schema not in {"GroundedDraft", "GroundedDraftWire"} for schema, _ in calls)
     assert result.crag_attempts[-1]["generation_usable"] is False
     assert "直接裏付ける根拠を確認できていません" in result.answer_text
     assert not result.generation_trace["crag_generation_gate"]["generation_calls"]
@@ -95,7 +97,7 @@ def test_only_first_part_is_supported_and_invented_second_part_is_not_published(
         )
 
     result, calls = run_answer(OPEN, grade(OPEN, partial=True), generation)
-    prompts = [prompt for schema, prompt in calls if schema == "GroundedDraft"]
+    prompts = [prompt for schema, prompt in calls if schema == "GroundedDraftWire"]
     assert len(prompts) == 1
     assert "crag_assessment" in prompts[0] and OPEN in prompts[0]
     assert '"status": "supported"' in prompts[0] and '"status": "missing"' in prompts[0] and '"status": "unknown"' in prompts[0]

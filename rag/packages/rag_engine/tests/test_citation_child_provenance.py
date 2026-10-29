@@ -8,6 +8,7 @@ from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answer_payload import answer_evidence_items
 from rag_engine.generation.answering import AnswerContext, AnswerRecord, _grounded_spans, synthesize_grounded_answer
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.retrieval.evidence_selection import evidence_spans
@@ -68,7 +69,10 @@ class _Model:
         self.draft, self.audit = draft, audit
 
     def __call__(self, system, prompt, settings, schema, **options):
-        return schema.model_validate(self.draft if schema is GroundedDraft else self.audit)
+        if schema in (GroundedDraft, generation_draft_wire_model()):
+            # 既存quote fixtureを履歴契約で再生する。
+            return GroundedDraft.model_validate(self.draft)
+        return schema.model_validate(self.audit)
 
 
 def _run(items: list[dict]):

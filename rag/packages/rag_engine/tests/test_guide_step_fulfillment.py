@@ -59,7 +59,7 @@ def _ids(ctx, knowledge, question=QUESTION):
 
 
 def _drafts(model):
-    return [prompt for name, prompt in model.prompts if name == "GroundedDraft"]
+    return [prompt for name, prompt in model.prompts if name == "GroundedDraftWire"]
 
 
 def _audits(model):

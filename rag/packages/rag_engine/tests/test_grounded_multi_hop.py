@@ -176,7 +176,7 @@ def test_miscopied_sentence_of_a_repeated_table_is_pointed_out_in_the_correction
         "original": "生産本部に属します。",
         "verbatim_quote": "略号「製」: 製造部。生産本部に属します。",
     }
-    feedback = next(prompt for name, prompt in model.prompts[2:] if name == "GroundedDraft")
+    feedback = next(prompt for name, prompt in model.prompts[2:] if name == "GroundedDraftWire")
     assert '"original": "生産本部に属します。"' in feedback
 
 
@@ -277,10 +277,12 @@ def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
     assert "挙げた文書ごとに" in section
     assert "言い換えていても省かず" in section
     assert "説明の内容を支えない原文は、質問に関係していても出典にしない" in section
-    # 1 つの説明に文書ごとの出典を並べ、各出典がそれだけで説明を支える（規則は応答の schema の 1 か所）。
+    # 1つの説明を実際の引用集合で共同支持し、未引用の資料で不足を埋めない。
     citations = GroundedItem.model_json_schema()["properties"]["citations"]["description"]
-    assert "各出典の原文はそれだけで text の全体を支える" in citations
-    assert "item を分けずに文書ごとの出典を並べる" in citations
+    assert "指定した出典の原文の集合で text 全体を支える" in citations
+    assert "共同して支えてよく" in citations
+    assert "各出典が text 全体を単独で支える必要はない" in citations
+    assert "実際に指定していない原文で不足を補わない" in citations
     assert "重複する item をまとめ" not in generate
     assert "同じ根拠の同じ内容の item をまとめ" in generate
     relation = RequestEvidenceScope.model_json_schema()["properties"]["relation"]["description"]

@@ -30,7 +30,7 @@ def test_none_retains_basic_citation_checks_without_article_audit(identity, line
         parse_images=lambda *args, **kwargs: pytest.fail("画像は不要"),
         audit_mode="none",
     )
-    assert [name for name, _prompt in model.prompts] == ["GroundedDraft"]
+    assert [name for name, _prompt in model.prompts] == ["GroundedDraftWire"]
     assert result.audit_calls == 0
     assert result.checked[0].citation_resolution["reason_code"] == reason
     assert any(mark["code"] == reason for mark in result.checked[0].marks)

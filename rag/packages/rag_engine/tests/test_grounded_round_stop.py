@@ -17,7 +17,7 @@ GOOD = "一覧表を選択し、処理を選択します。"
 
 
 def _drafts(model):
-    return [prompt for name, prompt in model.prompts if name == "GroundedDraft"]
+    return [prompt for name, prompt in model.prompts if name == "GroundedDraftWire"]
 
 
 def _gap(request_id):

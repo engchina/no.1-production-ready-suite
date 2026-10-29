@@ -23,6 +23,7 @@ from rag_engine.generation.answering import (
     _section_evidence_budget,
     synthesize_grounded_answer,
 )
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import GroundedDraft
 from rag_engine.models.storage import StoredChunk
 from rag_engine.retrieval.context_builder import (
@@ -669,7 +670,10 @@ def test_unread_sections_make_the_answer_conditional():
     }
 
     def model(system, prompt, settings, schema, **options):
-        return schema.model_validate(draft if schema is GroundedDraft else audit)
+        if schema in (GroundedDraft, generation_draft_wire_model()):
+            # 既存quote fixtureのcanonical再生。wire出力の検証とは別。
+            return GroundedDraft.model_validate(draft)
+        return schema.model_validate(audit)
 
     unread = [f"「{FILE}」の「第3章 設備ごとの点検」（p.5〜7）は、読み込み量の上限に達したため未反映です。"]
     unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
@@ -973,7 +977,10 @@ def test_answer_hides_unread_sections_of_documents_it_does_not_cite():
     }
 
     def model(system, prompt, settings, schema, **options):
-        return schema.model_validate(draft if schema is GroundedDraft else audit)
+        if schema in (GroundedDraft, generation_draft_wire_model()):
+            # 既存quote fixtureのcanonical再生。wire出力の検証とは別。
+            return GroundedDraft.model_validate(draft)
+        return schema.model_validate(audit)
 
     unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
     cited, other = _unread(DOC, "s3-2"), _unread(OTHER_DOC, "o1")

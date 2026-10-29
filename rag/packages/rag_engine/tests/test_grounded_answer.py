@@ -19,6 +19,7 @@ from rag_engine.generation.answering import (
     _prompt_safe_warnings,
     synthesize_grounded_answer,
 )
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
 LIST_TEXT = "●集計表出力\n一覧表を選択し、処理を選択します。\n実行ボタンを押して完了します。"
@@ -57,9 +58,12 @@ class FakeModel:
     def __call__(self, system, prompt, settings, schema, **options):
         self.prompts.append((schema.__name__, prompt))
         self.captured_system_prompts.append((schema.__name__, system))
-        source = self.drafts if schema is GroundedDraft else self.audits
+        is_generation = schema in (GroundedDraft, generation_draft_wire_model())
+        source = self.drafts if is_generation else self.audits
         value = source.pop(0) if len(source) > 1 else source[0]
-        return schema.model_validate(value(prompt) if callable(value) else value)
+        # 既存のquote/lines fixtureをcanonicalの履歴として再生する。wire型を検証したとは扱わない。
+        canonical_schema = GroundedDraft if is_generation else schema
+        return canonical_schema.model_validate(value(prompt) if callable(value) else value)
 
 
 def run(model, ctx, question=QUESTION):
@@ -248,7 +252,7 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertEqual(marks(result)["存在しない根拠"], ["citation_error"])
         self.assertEqual((result.confidence, result.needs_human_review), ("low", True))
         self.assertEqual(result.envelope["outcome"], "insufficient_evidence")
-        drafts = [prompt for name, prompt in model.prompts if name == "GroundedDraft"]
+        drafts = [prompt for name, prompt in model.prompts if name == "GroundedDraftWire"]
         # 原文と一致しない引用は具体的に差し戻すが、同じ指摘だけの是正は1回で打ち切る。
         self.assertEqual(len(drafts), 2)
         self.assertIn("quote がどの Evidence の原文とも一致しない", drafts[1])
@@ -288,7 +292,7 @@ class GroundedAnswerTest(unittest.TestCase):
             [audit()],
         )
         result = run(model, ctx)
-        first_prompt = next(prompt for name, prompt in model.prompts if name == "GroundedDraft")
+        first_prompt = next(prompt for name, prompt in model.prompts if name == "GroundedDraftWire")
         self.assertIn("④出荷数量を0にします。", first_prompt)  # 全角の数字はそろえ、丸数字は残す (#1350)
         self.assertNotIn("得意先区分を通常に変更します。", first_prompt)
         self.assertEqual(result.response.generation_trace["same_unit_fill"]["added_chunk_ids"], ["run:r1"])
@@ -1004,7 +1008,7 @@ class GroundedAnswerTest(unittest.TestCase):
         )
         model = FakeModel([mixed], [audit((0, "supported", "matched", ""))])
         run(model, ctx)
-        correction = [prompt for name, prompt in model.prompts if name == "GroundedDraft"][1]
+        correction = [prompt for name, prompt in model.prompts if name == "GroundedDraftWire"][1]
         # 次の生成は前回の草稿を見られない。削除した item と保持する item を本文ごと渡す。
         self.assertIn('"text": "CSVを保存先へ出力します。"', correction)
         self.assertIn(
@@ -1027,7 +1031,7 @@ class GroundedAnswerTest(unittest.TestCase):
         )
         with patch("rag_engine.generation.answering.read_prompt", side_effect=lambda key: next(templates)) as reader:
             run(model, ctx)
-        drafts = [prompt for name, prompt in model.prompts if name == "GroundedDraft"]
+        drafts = [prompt for name, prompt in model.prompts if name == "GroundedDraftWire"]
         self.assertGreaterEqual(len(drafts), 2)
         self.assertTrue(all(prompt.startswith("初回 ") for prompt in drafts))
         self.assertEqual(reader.call_count, 1)
@@ -1197,7 +1201,7 @@ class GroundedAnswerTest(unittest.TestCase):
             synthesize_grounded_answer(
                 QUESTION, ctx, get_settings(), image_prompt_mode="text_only", known_gaps=("procedure", "applicability", "procedure")
             )
-        draft_prompt = next(prompt for name, prompt in model.prompts if name == "GroundedDraft")
+        draft_prompt = next(prompt for name, prompt in model.prompts if name == "GroundedDraftWire")
         self.assertIn("検索評価で未確認の観点（根拠があれば答え、無ければその観点の gap を書く）: 操作手順、適用条件", draft_prompt)
         audit_prompt = next(prompt for name, prompt in model.prompts if name == "GroundedAudit")
         self.assertIn('"known_gaps": ["操作手順", "適用条件"]', audit_prompt)
@@ -1469,7 +1473,7 @@ class GroundedAnswerTest(unittest.TestCase):
             ],
         )
         result = run(model, ctx).response
-        self.assertEqual([name for name, _ in model.prompts], ["GroundedDraft", "GroundedAudit", "GroundedDraft", "GroundedAudit"])
+        self.assertEqual([name for name, _ in model.prompts], ["GroundedDraftWire", "GroundedAudit", "GroundedDraftWire", "GroundedAudit"])
         first_audit = json.loads(model.prompts[1][1])
         self.assertEqual(first_audit["items"], [])  # 監査対象の item は無いが、要求と未使用根拠は渡す
         self.assertEqual(first_audit["unused_evidence"][0]["evidence_id"], eid)
@@ -1926,7 +1930,7 @@ class AuditRetryAndHeadingTest(unittest.TestCase):
         self.assertIn("・" + step, result.answer_text)
         self.assertEqual(result.generation_trace["llm_calls"], 3)  # 生成1 + 監査2（再試行）
         self.assertEqual(result.generation_trace["rounds"][0]["audit_calls"], 2)
-        self.assertEqual([name for name, _ in model.prompts], ["GroundedDraft", "GroundedAudit", "GroundedAudit"])
+        self.assertEqual([name for name, _ in model.prompts], ["GroundedDraftWire", "GroundedAudit", "GroundedAudit"])
 
     def test_audit_still_empty_after_retry_is_treated_as_unaudited(self):
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
@@ -2481,7 +2485,7 @@ class ImageGenerationFallbackTest(unittest.TestCase):
         self.assertEqual(current.verified, 1)
         self.assertEqual(current.timing["image_fallback"], "InvalidStructuredOutput")
         self.assertIn("画像なしで作り直し", grounded.round_timing_line(current))
-        self.assertEqual([schema for schema, _ in self.text_model.prompts][0], "GroundedDraft")
+        self.assertEqual([schema for schema, _ in self.text_model.prompts][0], "GroundedDraftWire")
 
     def test_other_failures_are_not_retried_without_images(self):
         from rag_engine.adapters.oci import is_invalid_structured_output
@@ -3164,7 +3168,7 @@ class OperationHintFeedbackTest(unittest.TestCase):
         result = run(model, ctx)
         rounds = result.response.generation_trace["rounds"]
         self.assertEqual(rounds[0]["items"][0]["hints"], [])
-        correction_prompt = [p for name, p in model.prompts if name == "GroundedDraft"][1]  # 2 回目の生成に渡した feedback
+        correction_prompt = [p for name, p in model.prompts if name == "GroundedDraftWire"][1]  # 2 回目の生成に渡した feedback
         self.assertNotIn("quote_operation_terms", correction_prompt)  # 引用にある語だけ（「変更」は無い）
         self.assertNotIn("kind=rule として原文の語で書く", correction_prompt)
 
@@ -4067,7 +4071,7 @@ class ScreenExampleValueTest(unittest.TestCase):
         with_value = draft(item(eid, "ユーザIDに demo01 を入力します。", "①ユーザIDとパスワードを入力します。"))
         model = FakeModel([with_value, with_value], [audit((0, "supported", "matched", "")), audit((0, "supported", "matched", ""))])
         run(model, ctx, question)
-        prompts = [p for name, p in model.prompts if name == "GroundedDraft"]
+        prompts = [p for name, p in model.prompts if name == "GroundedDraftWire"]
         self.assertEqual(len(prompts), 1)
         self.assertNotIn("値を書かず、項目名だけで手順を書く", prompts[0])
 
