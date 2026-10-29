@@ -1,4 +1,4 @@
-"""本文の最終状態から、未確認・撤回した結論を要約で復活させない。"""
+"""未校正の意味観察だけで要約を削らず、引用の基本検査は別に保つ。"""
 
 from dataclasses import replace
 from unittest.mock import patch
@@ -7,7 +7,6 @@ import pytest
 from test_grounded_answer import FakeModel, audit, context, draft, ids, item, marks, record, run
 
 from rag_engine.config import get_settings
-from rag_engine.generation import grounded
 
 QUESTION = "設定を変更する手順を教えてください。"
 TEXT = "追加ボタンがあります。実行ボタンを押します。"
@@ -26,7 +25,7 @@ PARAPHRASE = "設定機能を使えば一覧の初期化が可能です。"
         ("追加ボタンがあります。", "unknown", PARAPHRASE),
     ],
 )
-def test_mixed_unconfirmed_body_does_not_leave_a_definitive_summary(quote, support, summary):
+def test_mixed_body_keeps_summary_with_semantic_support_unverified(quote, support, summary):
     ctx = context(record(0, TEXT, "合成設定", source="synthetic.pdf"))
     eid = ids(ctx, QUESTION)[TEXT]
     reviews = ((0, support, "matched", ""), (1, "supported", "matched", ""))
@@ -38,15 +37,19 @@ def test_mixed_unconfirmed_body_does_not_leave_a_definitive_summary(quote, suppo
     )
     with patch("test_grounded_answer.get_settings", return_value=replace(get_settings(), answer_max_correction_rounds=0)):
         result = run(model, ctx, QUESTION).response
-    assert not result.answer_text.startswith(summary)
-    assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
+    assert result.answer_text.startswith(summary)
+    assert result.generation_trace["semantic_audit_policy"]["mode"] == "diagnostic_only"
+    assert result.generation_trace["semantic_audit_observation"]["adopted"] is False
     assert GOOD in result.answer_text
-    if support != "contradicted":
-        assert CLAIM in result.answer_text
+    assert CLAIM in result.answer_text
+    if quote == "存在しない引用":
+        assert "quote_unmatched" in marks(result)[CLAIM]
+    else:
+        assert CLAIM not in marks(result)
     assert len(model.prompts) == 2
 
 
-def test_confirmed_exact_summary_is_kept_with_unrelated_unconfirmed_body():
+def test_summary_basis_is_recorded_without_adopting_the_untrusted_review():
     ctx = context(record(0, TEXT, "合成設定", source="synthetic.pdf"))
     eid = ids(ctx, QUESTION)[TEXT]
     model = FakeModel(
@@ -67,6 +70,9 @@ def test_confirmed_exact_summary_is_kept_with_unrelated_unconfirmed_body():
         result = run(model, ctx, QUESTION).response
     assert result.answer_text.startswith(GOOD)
     assert CLAIM in result.answer_text
-    assert marks(result)[CLAIM] == ["unsupported"]
-    assert result.generation_trace["finalization"]["summary"]["status"] == "kept"
+    assert CLAIM not in marks(result)
+    observed = result.generation_trace["semantic_audit_observation"]
+    assert observed["audit"]["summary_basis"] == [GOOD]
+    assert observed["audit"]["reviews"][0]["support"] == "unsupported"
+    assert observed["adopted"] is False
     assert len(model.prompts) == 2

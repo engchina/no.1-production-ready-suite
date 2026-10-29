@@ -1,8 +1,7 @@
-"""回答の監査の型（#2795）。standard は未使用の根拠を列挙させず、作り直しは事実の問題の 1 組まで。
+"""監査モードの入力範囲と、未校正の意味観察の採否を分離する。
 
-完全性の不足（答えていない要求・未使用の根拠・説明していない手順）では作り直さず、本文の不足に示す（要求・業務ガイドの
-要件の充足は同じ 1 回の監査で判定する）。detailed は未使用の根拠も列挙させ、完全性の不足でも作り直す（従来）。誤った
-内容（根拠と矛盾・根拠に無い・引用の不一致）の検出は standard でも変えない。
+standard と detailed の schema・資料入力は維持するが、意味観察だけで本文を削除・修正しない。
+none の決定的な引用検査と条件付き回答の既存是正は維持する。純粋な判定部品は明示した入力で別に検証する。
 """
 
 from __future__ import annotations
@@ -81,12 +80,15 @@ def test_standard_does_not_regenerate_for_an_unanswered_request_only():
     assert STEP in result.answer_text
 
     detailed = FakeModel([draft(item(eid, STEP, STEP))], [response])
-    _run(detailed, ctx, grounded.AUDIT_MODE_DETAILED)
-    assert len(_drafts(detailed)) > 1
+    detailed_result = _run(detailed, ctx, grounded.AUDIT_MODE_DETAILED).response
+    assert len(_drafts(detailed)) == 1
+    observed = detailed_result.generation_trace["semantic_audit_observation"]
+    assert observed["audit"]["request_reviews"][0]["status"] == "partial"
+    assert observed["adopted"] is False
     assert "unused_evidence" in _audit_inputs(detailed)[0]
 
 
-def test_standard_still_corrects_and_marks_a_claim_without_support_once():
+def test_standard_records_unsupported_claim_without_automatic_correction():
     ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
     eid = ids(ctx)[LIST_TEXT]
     wrong = "一覧表を選択し、自動で集計が完了します。"
@@ -94,12 +96,15 @@ def test_standard_still_corrects_and_marks_a_claim_without_support_once():
 
     result = _run(model, ctx, grounded.AUDIT_MODE_STANDARD, answer_max_correction_rounds=2).response
 
-    # 作り直しは 1 組まで（1 組目と合わせて 2 回）。根拠に無い説明の印は standard でも付く。
-    assert len(_drafts(model)) == grounded.STANDARD_MAX_ROUNDS
-    assert marks(result)[wrong] == ["unsupported"]
+    # 原文の定位と未校正の意味観察を区別し、後者だけで本文を直さない。
+    assert len(_drafts(model)) == 1
+    assert wrong in result.answer_text and wrong not in marks(result)
+    observed = result.generation_trace["semantic_audit_observation"]
+    assert observed["audit"]["reviews"][0]["support"] == "unsupported"
+    assert observed["adopted"] is False
 
 
-def test_standard_removes_a_contradicted_claim():
+def test_standard_retains_body_and_records_contradiction_as_observation():
     ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
     eid = ids(ctx)[LIST_TEXT]
     wrong = "一覧表は選択できません。"
@@ -107,8 +112,12 @@ def test_standard_removes_a_contradicted_claim():
 
     result = _run(model, ctx, grounded.AUDIT_MODE_STANDARD).response
 
-    assert wrong not in result.answer_text.split(grounded.answer_labels().removed_section)[0]
-    assert [passage["text"] for passage in result.envelope["removed_passages"]] == [wrong]
+    assert wrong in result.answer_text
+    assert result.envelope["removed_passages"] == []
+    assert len(_drafts(model)) == 1
+    observed = result.generation_trace["semantic_audit_observation"]
+    assert observed["audit"]["reviews"][0]["support"] == "contradicted"
+    assert observed["adopted"] is False
 
 
 def test_correction_feedback_keeps_factual_problems_only():
@@ -140,7 +149,7 @@ def test_fact_audit_is_read_as_a_full_audit_with_empty_completeness_fields():
     assert full.reviews[0].support == "supported"
 
 
-def test_failed_correction_round_is_an_answer_warning():
+def test_untrusted_support_observation_never_enters_a_failing_second_generation():
     ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
     eid = ids(ctx)[LIST_TEXT]
     wrong = "一覧表を選択し、自動で集計が完了します。"
@@ -157,10 +166,10 @@ def test_failed_correction_round_is_an_answer_warning():
     model = FailingSecondDraft([draft(item(eid, wrong, STEP))], [_fact(audit((0, "unsupported", "matched", "")))])
     result = _run(model, ctx, grounded.AUDIT_MODE_STANDARD).response
 
-    assert [(warning["code"], warning["detail"]) for warning in result.envelope["answer_warnings"]] == [
-        ("correction_failed", "RuntimeError")
-    ]
+    assert calls["draft"] == 1
+    assert not any(warning["code"] == "correction_failed" for warning in result.envelope["answer_warnings"])
     assert wrong in result.answer_text
+    assert result.generation_trace["semantic_audit_observation"]["audit"]["reviews"][0]["support"] == "unsupported"
 
 
 # ---- 監査なしの型（#2800）と、要件の監査の観察（#2800） ------------------------------------

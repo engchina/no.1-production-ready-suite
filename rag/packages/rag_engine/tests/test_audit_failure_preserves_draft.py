@@ -67,8 +67,13 @@ def test_initial_audit_error_preserves_body_without_marking_support(monkeypatch,
     assert current.audit_calls == len(calls) == 1
     assert len(model.prompts) == 1
     entry = next(e for e in current.checked if e.item.text == TEXT)
-    assert entry.published and not entry.confirmed and not entry.removed
-    assert any(m["code"] == "unassessed" for m in entry.marks)
+    assert entry.published and not entry.removed
+    # このfixtureは旧自由引用で、整数範囲のproofは持たない。原文一致は独立に確認する。
+    assert entry.quote_match == "exact" and entry.item.quote == TEXT
+    assert entry.span is not None and TEXT in entry.span["text"]
+    assert not any(m["code"] in {"unsupported", "contradicted"} for m in entry.marks)
+    dimensions = current.trace()["validation_dimensions"]
+    assert all(row["status"] == "unknown" for row in dimensions["claim_support"]["items"])
     assert not current.addressed
 
 
@@ -84,7 +89,9 @@ def test_actual_audit_timeout_is_timed_out_not_completed(monkeypatch, error):
     current, _, calls = run_failed_audit(monkeypatch, error)
     assert current.review_execution == "timed_out" and current.audit is None
     assert current.audit_calls == len(calls) == 1
-    assert any(e.item.text == TEXT and e.published and not e.confirmed for e in current.checked)
+    assert any(e.item.text == TEXT and e.published for e in current.checked)
+    assert current.verified == 0
+    assert all(row["status"] == "unknown" for row in current.trace()["validation_dimensions"]["claim_support"]["items"])
 
 
 @pytest.mark.parametrize("error", [PermissionError("denied"), CancelledError(), asyncio.CancelledError(), DeadlineExceeded("outer")])
@@ -160,13 +167,13 @@ def test_normal_audit_none_without_a_verdict_still_allows_an_explicit_generated_
     [
         (["unknown"], [], False),
         (["addressed", "unknown"], [], False),
-        (["missing"], [], True),
-        (["partial", "unknown"], [], True),
-        (["unknown"], ["s0"], True),
-        ([], [], True),
+        (["missing"], [], False),
+        (["partial", "unknown"], [], False),
+        (["unknown"], ["s0"], False),
+        ([], [], False),
     ],
 )
-def test_only_confirmed_guide_omissions_or_order_errors_trigger_correction(monkeypatch, states, order_errors, expected):
+def test_failed_untrusted_guide_observations_never_trigger_semantic_correction(monkeypatch, states, order_errors, expected):
     current, _, _ = run_failed_audit(monkeypatch, ValueError("audit failed"))
     current.guide_steps = [
         {
