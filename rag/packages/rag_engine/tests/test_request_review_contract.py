@@ -174,3 +174,22 @@ def test_audit_prompt_explains_exact_id_and_unknown_without_duplicate_rule():
     prompt = grounded.audit_system_prompt(detailed=True)
     assert prompt.count("新規・改変・重複した id を作らない") == 1
     assert "元の id のまま unknown" in prompt
+
+
+@pytest.mark.parametrize("reviews", [[], [("Q999", "addressed")], [("Q1", "addressed"), ("Q1", "missing")], [("Q1", "unknown")]])
+def test_unverified_request_survives_final_envelope_with_supported_body(reviews):
+    from test_grounded_answer import run
+
+    ctx = context(record(0, TEXT, "対象A"))
+    reference = ids(ctx, QUESTION)[TEXT]
+    model = FakeModel(
+        [draft(item(reference, TEXT, TEXT, request_id="Q1"), summary="")],
+        [audit((0, "supported", "matched", ""), requests=reviews)],
+    )
+    response = run(model, ctx, QUESTION).response
+    assert response.envelope["requests"] == [{"id": "Q1", "text": QUESTION, "status": "unknown"}]
+    assert response.envelope["outcome"] == "conditional"
+    assert "unverified_requests" in response.envelope["handoff_reasons"]
+    assert "unanswered_requests" not in response.envelope["handoff_reasons"]
+    assert TEXT in response.answer_text
+    assert len(model.prompts) == 2

@@ -14,7 +14,13 @@ class AnswerEnvelopeFromGroundedAnswerTest(unittest.TestCase):
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
         eid = ids(ctx)[LIST_TEXT]
         steps = draft(item(eid, "一覧表を選択し、処理を選択します。", "一覧表を選択し、処理を選択します。", request_id="Q1"))
-        envelope = run(FakeModel([steps], [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])]), ctx).response.envelope
+        envelope = run(
+            FakeModel(
+                [steps],
+                [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed"), ("Q1.M1", "addressed"), ("Q1.M2", "addressed")])],
+            ),
+            ctx,
+        ).response.envelope
         self.assertEqual(envelope["schema_version"], ENVELOPE_SCHEMA_VERSION)
         self.assertEqual(envelope["outcome"], "answered")
         self.assertEqual(envelope["requests"][0]["status"], "addressed")
@@ -74,7 +80,7 @@ class AnswerEnvelopeBuildTest(unittest.TestCase):
         units = [{"id": "Q1", "kind": "request", "text": "説明 原文: 出力したい"}, {"id": "Q2", "kind": "context", "text": "背景"}]
         self.assertEqual(envelope_requests(units, None), [{"id": "Q1", "text": "出力したい", "status": "unknown"}])
         # 監査が返さなかった id は欠落と決めつけない。
-        self.assertEqual(envelope_requests(units, [])[0]["status"], "addressed")
+        self.assertEqual(envelope_requests(units, [])[0]["status"], "unknown")
 
     def test_quote_only_items_are_conditional_and_confirmations_without_items_need_data(self):
         quote = {"kind": "rule", "text": "原文", "applies": "quote_only", "condition": ""}

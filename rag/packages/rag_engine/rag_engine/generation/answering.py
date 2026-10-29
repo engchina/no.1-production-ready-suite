@@ -2340,10 +2340,15 @@ def _record_round_audit(step: _ExecutionStep, current: Any, *, accepted: bool, f
     label = "要求の充足（監査）" if audited else "要求の充足（原文との照合）"
     reviews = current.audit.request_reviews if current.audit is not None else []
     if reviews:
-        counts = {status: sum(1 for review in reviews if review.status == status) for status in ("addressed", "partial", "missing")}
-        step.field(label, f"答えた {counts['addressed']}・一部 {counts['partial']}・未回答 {counts['missing']}")
+        counts = {
+            status: sum(1 for review in reviews if review.status == status) for status in ("addressed", "partial", "missing", "unknown")
+        }
+        unknown = counts["unknown"] + len(current.unreviewed_requests)
+        summary = f"答えた {counts['addressed']}・一部 {counts['partial']}・未回答 {counts['missing']}"
+        step.field(label, summary + (f"・未確認 {unknown}" if unknown else ""))
     elif current.requests:
-        step.field(label, f"監査なし（要求 {len(current.requests)} 件を未確認として扱う）")
+        state = "対応する判定なし" if current.audit is not None else "監査なし"
+        step.field(label, f"{state}（要求 {len(current.requests)} 件を未確認として扱う）")
     if audited:
         step.field("監査した説明", f"{current.audited_items} 件（監査の呼び出し {current.audit_calls} 回）")
     if current.withdrawn:
