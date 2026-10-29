@@ -4,7 +4,9 @@ from copy import deepcopy
 
 import pytest
 from pydantic import ValidationError
+from test_cite_lines import SHORT
 
+from rag_engine.generation import grounded
 from rag_engine.generation.citation_wire import bind_wire_range, canonical_generation_draft, generation_draft_wire_model
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
@@ -112,6 +114,13 @@ def test_legacy_draft_is_not_rewritten(lines):
         (-2, -1, 4, True, "-2--1", "citation_range_out_of_bounds", False),
         (1, 5, 4, True, "1-5", "citation_range_out_of_bounds", False),
         (1, 1, 0, False, "", "citation_extraction_failed", False),
+        # 単位 1 つの番号なしの短い根拠に、範囲外の番号を返した（#3778。1 へ切り詰めない）。
+        (3, 3, 1, False, "3", "citation_range_out_of_bounds", False),
+        (4, 4, 1, False, "4", "citation_range_out_of_bounds", False),
+        (5, 5, 1, False, "5", "citation_range_out_of_bounds", False),
+        (3, 5, 1, False, "3-5", "citation_range_out_of_bounds", False),
+        (1, 3, 1, False, "1-3", "citation_range_out_of_bounds", False),
+        (3, 3, 1, True, "3", "citation_range_out_of_bounds", False),
     ],
 )
 def test_binding_keeps_each_failure_distinct_without_clamping(start, end, count, numbered, lines, reason, whole):
@@ -191,3 +200,89 @@ def test_actual_sdk_request_serializes_the_integer_contract_and_parses_locally()
     assert citation["properties"]["line_start"]["anyOf"] == [{"type": "integer"}, {"type": "null"}]
     draft = canonical_generation_draft(response.output_parsed)
     assert draft.items[0].citations[0]._wire_range == (2, 3)
+
+
+# 単位 1 つの番号なしの短い根拠への範囲外の番号（#3778）。実際の応答で、番号の無い短い根拠に 3 / 4 / 5 を
+# 返した事例を合成の根拠で再現する。
+
+
+def _short_evidence(*, legacy: bool) -> list[dict]:
+    spans = [
+        {
+            "evidence_id": "stable-a",
+            "label": "E1",
+            "source_id": "source-a",
+            "source": "synthetic.pdf",
+            "page": 1,
+            "text": SHORT,
+            "function": ("synthetic.pdf", "合成操作"),
+            "tags": [],
+        }
+    ]
+    grounded.format_functions(spans)
+    # 写した span は生成時の表示の記録に当たらず、番号なしの旧表示（legacy_threshold_v1）で照合する。
+    return [dict(span) for span in spans] if legacy else spans
+
+
+def _single_citation_item(start, end):
+    raw = payload([{"evidence_id": "E1", "line_start": start, "line_end": end}])
+    return canonical_generation_draft(generation_draft_wire_model().model_validate(raw)).items[0]
+
+
+def test_short_unnumbered_block_is_a_single_unit_without_numbers():
+    legacy = grounded._citation_view(_short_evidence(legacy=True)[0])
+    assert (legacy.numbered, len(legacy.units), legacy.contract_version) == (False, 1, "legacy_threshold_v1")
+    assert "1|" not in legacy.rendered
+    # 今の生成の表示（explicit_units_v3）は、単位 1 つの短い根拠にも「1|」を付ける。
+    current = grounded._citation_view(_short_evidence(legacy=False)[0])
+    assert (current.numbered, len(current.units)) == (True, 1)
+    assert "1| " in current.rendered
+
+
+@pytest.mark.parametrize("legacy", [True, False], ids=["unnumbered", "numbered-single-unit"])
+@pytest.mark.parametrize("start,end,lines", [(3, 3, "3"), (4, 4, "4"), (5, 5, "5"), (3, 5, "3-5")])
+def test_out_of_bounds_range_on_a_single_unit_block_is_not_clamped(legacy, start, end, lines):
+    item = _single_citation_item(start, end)
+    cited, error = grounded.cited_quote(item, _short_evidence(legacy=legacy))
+    extraction = grounded._citation_extraction(cited)
+    assert error and not cited.quote
+    assert extraction["reason_code"] == "citation_range_out_of_bounds"
+    assert extraction["requested_range_status"] == "out_of_bounds"
+    # 指定した番号をそのまま残し、1 や全文へ読み替えない。説明の本文は変えない。
+    assert (extraction["requested_lines"], cited.citations[0].lines) == (lines, lines)
+    assert cited.citations[0]._wire_range == (start, end)
+    assert cited.text == item.text
+
+
+def test_out_of_bounds_ranges_on_an_unnumbered_block_keep_other_citations_and_body():
+    raw = payload(
+        [
+            {"evidence_id": "E1", "line_start": 3, "line_end": 3},
+            {"evidence_id": "E1", "line_start": 3, "line_end": 5},
+            {"evidence_id": "E2", "line_start": None, "line_end": None},
+        ]
+    )
+    draft = canonical_generation_draft(generation_draft_wire_model().model_validate(raw))
+    item = draft.items[0]
+    assert item.text == raw["items"][0]["text"] and draft.summary == raw["summary"]
+    assert [citation.lines for citation in item.citations] == ["3", "3-5", ""]
+    results = [bind_wire_range(*citation._wire_range, unit_count=1, numbered=False) for citation in item.citations]
+    assert [(result.reason_code, result.whole_text) for result in results] == [
+        ("citation_range_out_of_bounds", False),
+        ("citation_range_out_of_bounds", False),
+        (None, True),
+    ]
+
+
+@pytest.mark.parametrize("start,end", [(1, 1), (None, None)], ids=["one", "null"])
+def test_unnumbered_single_unit_block_extracts_the_whole_text_for_one_and_null(start, end):
+    """今の振る舞いの固定（#3778）: 番号なしの単位 1 つの根拠では、通常の照合は 1 も null も全文を取り出す。
+
+    範囲の修復（citation_range_repair）は同じ根拠への 1 を citation_range_invalid として拒む
+    （tests/test_citation_range_repair.py）。2 つの経路の扱いをそろえるかは #3778 で決める。
+    """
+    cited, error = grounded.cited_quote(_single_citation_item(start, end), _short_evidence(legacy=True))
+    extraction = grounded._citation_extraction(cited)
+    assert not error and cited.quote == SHORT
+    assert extraction["status"] == "extracted" and extraction.get("reason_code") is None
+    assert extraction["requested_range_status"] == ("valid" if start == 1 else "not_required")
