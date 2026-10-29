@@ -142,7 +142,11 @@ def test_actual_none_generation_keeps_opposite_claims_unverified_for_display(cla
     entry = next(row for row in actual.checked if row.item.text == claim)
     assert len(calls) == 1 and actual.review_execution == "not_run"
     assert entry.quote_match == "exact" and entry.citation_resolution["authenticity"] == "verified"
-    assert not entry.marks and entry.review_assessment == {}
+    assert not entry.marks
+    assert entry.review_assessment == {"effective_support": "unknown"}
+    assert actual.audit_calls == 0
+    assert "semantic_audit_observation" not in actual.timing
+    assert actual.audit is not None and actual.audit.reviews == []
     result = _EngineResult(
         [{"chunk_id": "c", "is_model_used": True, "answer_use": grounded.answer_use(entry)}]
     )

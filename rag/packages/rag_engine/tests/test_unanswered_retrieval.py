@@ -4,7 +4,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from test_grounded_answer import FakeModel, draft, ids, item
+from test_grounded_answer import FakeModel, draft, ids, item, observed_audit
 from test_request_coverage import _patch_search, context, parent
 
 from rag_engine.config import get_settings
@@ -231,7 +231,7 @@ def test_same_focused_query_is_not_repeated_across_phases(monkeypatch):
     assert trace["re_retrieval"]["skipped"] == "same_query"
 
 
-def test_audit_confirmed_material_shortage_triggers_retrieval_even_without_gap(monkeypatch):
+def test_raw_audit_material_shortage_does_not_trigger_retrieval_without_generated_gap(monkeypatch):
     from test_grounded_answer import audit
 
     old = context(parent("old", OLD_TEXT))
@@ -256,9 +256,13 @@ def test_audit_confirmed_material_shortage_triggers_retrieval_even_without_gap(m
         result = a.synthesize_grounded_answer(
             QUESTION, old, settings(answer_audit_mode="detailed"), image_prompt_mode="text_only", recover_requests=recover
         )
-    assert calls == [[{"request_id": "Q1", "status": "partial"}]]
-    assert NEW_TEXT in result.response.answer_text
-    assert len(model.prompts) == 4
+    assert calls == []
+    assert OLD_TEXT in result.response.answer_text and NEW_TEXT not in result.response.answer_text
+    assert len(model.prompts) == 2
+    [raw] = observed_audit(result.response)["request_reviews"]
+    assert raw["status"] == "partial" and raw["evidence_status"] == "missing"
+    [decision] = result.response.generation_trace["rounds"][0]["request_recovery"]["decisions"]
+    assert decision["action"] == "retain" and decision["evidence_ids"] == []
 
 
 def test_unknown_request_does_not_search_unrelated_targets(monkeypatch):
@@ -356,13 +360,20 @@ def test_available_or_unverified_material_never_triggers_another_search(monkeypa
         )
     assert not searches
     generation_calls = [schema for schema, _ in model.prompts if schema == "GroundedDraftWire"]
-    assert len(generation_calls) == (2 if audit_mode == "detailed" and evidence_status == "available" else 1)
+    assert len(generation_calls) == 1
     assert shown_text in result.response.answer_text
     if audit_mode == "none":
         assert all(schema == "GroundedDraftWire" for schema, _ in model.prompts)
     else:
         decision = result.response.generation_trace["rounds"][0]["request_recovery"]["decisions"][0]
-        assert decision["action"] == ("correction" if evidence_status == "available" else "retain")
+        assert decision["action"] == "retain" and decision["evidence_ids"] == []
+        [raw] = observed_audit(result.response)["request_reviews"]
+        assert raw["evidence_status"] == evidence_status
+        assert raw["evidence_ids"] == ([eid] if evidence_status == "available" else [])
+        if evidence_status == "available":
+            assert raw["missing_content"] == missing_text
+            assert raw["evidence_support"] == [{"evidence_id": eid, "source": old.records[0].source, "quote": missing_text}]
+        assert result.response.generation_trace["rounds"][0]["audit_calls"] == 1
 
 
 @pytest.mark.parametrize("coverage_enabled", [False, True])
@@ -443,11 +454,15 @@ def test_invalid_material_references_remain_unverified_without_search_or_rewrite
         )
     assert len([schema for schema, _ in model.prompts if schema == "GroundedDraftWire"]) == 1
     decision = result.response.generation_trace["rounds"][0]["request_recovery"]["decisions"][0]
-    assert decision["cause"] == "unverified_evidence" and decision["action"] == "retain"
+    assert decision["cause"] == "review_incomplete" and decision["action"] == "retain"
+    [raw] = observed_audit(result.response)["request_reviews"]
+    # 原応答の不正 ID は診断で追跡し、採用側は未確認・空の根拠へ分離する。
+    assert raw["evidence_status"] == "available" and raw["evidence_ids"] == ["fabricated"]
+    assert decision["evidence_ids"] == [] and decision["status"] == "unknown"
     assert OLD_TEXT in result.response.answer_text
 
 
-def test_standard_audit_can_retrieve_confirmed_material_shortage(monkeypatch):
+def test_standard_audit_material_shortage_is_diagnostic_without_search(monkeypatch):
     from test_grounded_answer import audit
 
     old = context(parent("old", OLD_TEXT))
@@ -473,9 +488,13 @@ def test_standard_audit_can_retrieve_confirmed_material_shortage(monkeypatch):
         result = a.synthesize_grounded_answer(
             QUESTION, old, settings(answer_audit_mode="standard"), image_prompt_mode="text_only", recover_requests=recover
         )
-    assert calls == [[{"request_id": "Q1", "status": "partial"}]]
-    assert len(model.prompts) == 4
-    assert NEW_TEXT in result.response.answer_text
+    assert calls == []
+    assert len(model.prompts) == 2
+    assert OLD_TEXT in result.response.answer_text and NEW_TEXT not in result.response.answer_text
+    [raw] = observed_audit(result.response)["request_reviews"]
+    assert raw["status"] == "partial" and raw["evidence_status"] == "missing"
+    [decision] = result.response.generation_trace["rounds"][0]["request_recovery"]["decisions"]
+    assert decision["action"] == "retain" and decision["evidence_ids"] == []
 
 
 @pytest.mark.parametrize("crag_enabled", [False, True])

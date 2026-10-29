@@ -88,15 +88,28 @@ async def test_formal_answer_entry_passes_mode_and_observes_real_generation_audi
         validator.assert_not_awaited()
         assert result.diagnostics["answer_validation"] == {
             "status": "not_run",
-            "valid": False,
+            "valid": None,
             "reason": "audit_disabled",
+            "raw_valid": False,
+            "semantic_status": "unknown",
+            "automatic_actions": False,
         }
     else:
         assert len(audits) == 1 and audits[0][1] == "answer.audit"
         validator.assert_awaited_once()
         assert result.diagnostics["answer_validation"]["status"] == "completed"
-        assert result.diagnostics["answer_validation"]["valid"] is False
+        final_validation = result.diagnostics["answer_validation"]
+        assert final_validation["valid"] is None
+        assert final_validation["raw_valid"] is False
+        assert final_validation["semantic_status"] == "unknown"
+        assert final_validation["automatic_actions"] is False
+        assert final_validation["counts"] == {"unsupported": 1}
         assert result.diagnostics["needs_human_review"] is True
+        observed = result.diagnostics["round_budget"]["rounds"][0]["semantic_audit_observation"][
+            "audit"
+        ]
+        assert observed["request_reviews"][0]["status"] == "partial"
+        assert observed["request_reviews"][0]["evidence_status"] == "unknown"
 
 
 @pytest.mark.parametrize("mode", ["none", "standard", "detailed"])
@@ -202,9 +215,9 @@ async def test_none_can_retrieve_an_explicit_gap_without_enabling_an_audit(
     assert result.diagnostics["answer_validation"]["reason"] == "audit_disabled"
 
 
-@pytest.mark.parametrize("mode,expected_generations", [("standard", 1), ("detailed", 2)])
-async def test_formal_entry_correction_budget_allows_at_most_two_progressive_regenerations(
-    monkeypatch: pytest.MonkeyPatch, mode: str, expected_generations: int
+@pytest.mark.parametrize("mode", ["standard", "detailed"])
+async def test_formal_entry_does_not_spend_budget_on_uncalibrated_material_observation(
+    monkeypatch: pytest.MonkeyPatch, mode: str
 ) -> None:
     import re
 
@@ -323,12 +336,23 @@ async def test_formal_entry_correction_budget_allows_at_most_two_progressive_reg
             )
         )
     )
-    assert generations == expected_generations, json.dumps(
-        result.diagnostics["round_budget"], ensure_ascii=False
-    )
-    assert audits == expected_generations
+    assert generations == 1, json.dumps(result.diagnostics["round_budget"], ensure_ascii=False)
+    assert audits == 1
     assert generations <= 1 + settings.rag_answer_max_correction_rounds
     assert result.diagnostics["answer_validation"]["status"] == "completed"
+    assert result.diagnostics["answer_validation"]["valid"] is None
+    assert result.diagnostics["answer_validation"]["raw_valid"] is True
+    assert result.diagnostics["answer_validation"]["semantic_status"] == "unknown"
+    observed = result.diagnostics["round_budget"]["rounds"][0]["semantic_audit_observation"][
+        "audit"
+    ]
+    assert [row["request_id"] for row in observed["request_reviews"]] == ["Q1", "Q2", "Q3"]
+    assert [row["missing_content"] for row in observed["request_reviews"][1:]] == operations[1:]
+    assert all(row["evidence_status"] == "available" for row in observed["request_reviews"][1:])
+    assert [
+        row["evidence_support"][0]["quote"] for row in observed["request_reviews"][1:]
+    ] == operations[1:]
+    assert operations[0] in result.answer
 
 
 @pytest.mark.parametrize(

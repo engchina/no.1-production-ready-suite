@@ -13,7 +13,7 @@ from test_grounded_answer import FakeModel, audit, context, draft, item, record,
         ("CSVの列: 状態", True, True, False),
     ],
 )
-def test_summary_output_field_requires_matching_real_definition(definition, matches, in_source, warning):
+def test_uncalibrated_output_field_observation_preserves_summary_and_raw_evidence(definition, matches, in_source, warning):
     operation = "一覧表をCSVに出力できます。"
     summary = "CSVには状態列が含まれます。"
     body = operation + ("\n" + definition if in_source else "")
@@ -36,13 +36,19 @@ def test_summary_output_field_requires_matching_real_definition(definition, matc
         ],
     )
     result = run(model, ctx, "CSVの項目を確認したい").response
-    assert result.answer_text.startswith(summary) is not warning
+    assert result.answer_text.startswith(summary)
     assert operation in result.answer_text
     assert not [mark for mark in result.envelope["passage_marks"] if mark["text"] == summary]
-    if warning:
-        assert summary not in result.answer_text
-        assert result.generation_trace["finalization"]["summary"]["status"] == "withheld"
-        assert result.generation_trace["rounds"][0]["audit"]["summary_supported"] is False
+    assert result.generation_trace["finalization"]["summary"]["status"] == "kept"
+    observed = result.generation_trace["semantic_audit_observation"]["audit"]
+    assert observed["summary_output_fields"] == {
+        "asserts_output_fields": True,
+        "definition_quote": definition,
+        "output_artifact_matches": matches,
+    }
+    effective = result.generation_trace["rounds"][0]["audit"]
+    assert effective["summary_output_fields"] is None
+    assert result.generation_trace["semantic_audit_observation"]["adopted"] is False
     assert removed(result) == []
 
 

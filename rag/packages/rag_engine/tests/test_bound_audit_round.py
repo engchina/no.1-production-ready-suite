@@ -103,17 +103,23 @@ def run(*, request_case="valid", omit_requirement=False, retry_case=None, use_al
     )
     assert len(calls) == (3 if retry_case else 2) and result.audit_calls == (2 if retry_case else 1)
     entry = next(row for row in result.checked if row.item.text == claim)
-    if first_contradiction:
-        assert entry.removed and not entry.published
-    else:
-        assert entry.published and entry.confirmed and not entry.removed
+    assert entry.published and entry.confirmed and not entry.removed
+    assert result.verified == 0  # 原文照合は意味支持の認証ではない。
     return result
+
+
+def observed_audit(result):
+    observation = result.timing["semantic_audit_observation"]
+    assert observation["adopted"] is False
+    assert not result.audit.reviews
+    assert all(row.status == "unknown" for row in result.audit.request_reviews)
+    return GroundedAudit.model_validate(observation["audit"])
 
 
 def test_missing_guide_observation_preserves_valid_results_without_reauditing():
     result = run(omit_requirement=True)
     assert result.review_execution == "partial"
-    assert result.audit.request_reviews[0].status == "partial"
+    assert observed_audit(result).request_reviews[0].status == "partial"
     assert result.timing["audit_contract"]["requirements"] == {"open:0": "valid", "open:1": "missing"}
     assert result.guide_steps[0]["status"] != "explained"
     assert result.guide_steps[0]["requirements"][1]["status"] == "unknown"
@@ -129,8 +135,8 @@ def test_bad_request_binding_stays_unverified_and_preserves_the_other_review(cas
     assert row["request_id"] == "Q1" and row["status"] == "unknown"
     assert row["evidence_status"] == "unknown" and not row["evidence_ids"]
     assert row["review_execution"] == ("error" if case in {"invalid", "duplicate"} else "not_run")
-    assert result.audit.reviews[0].support == "supported"
-    assert result.audit.guide_requirement_reviews[0].requirement_id == "open:0"
+    assert observed_audit(result).reviews[0].support == "supported"
+    assert observed_audit(result).guide_requirement_reviews[0].requirement_id == "open:0"
     dimension = result.trace()["validation_dimensions"]["answer_completeness"]
     assert dimension["execution"] == "partial"
     if case == "duplicate":
@@ -143,29 +149,29 @@ def test_complete_wire_is_recorded_separately_from_partial_business_coverage():
     result = run()
     assert result.review_execution == "completed"
     assert result.timing["audit_contract"]["strict_wire_validation"] == "passed"
-    assert result.audit.request_reviews[0].status == "partial"
+    assert observed_audit(result).request_reviews[0].status == "partial"
     assert result.guide_steps[0]["status"] != "explained"
 
 
 def test_guide_source_alias_uses_the_same_ids_as_actual_audit_evidence():
     result = run(use_alias=True)
-    assert result.audit.reviews[0].support == "supported"
+    assert observed_audit(result).reviews[0].support == "supported"
 
 
 @pytest.mark.parametrize("case", ["failure", "empty"])
 def test_failed_conditional_retry_keeps_valid_first_reviews_and_discards_bad_observation(case):
     result = run(retry_case=case)
     assert result.review_execution == ("error" if case == "failure" else "partial")
-    assert result.audit.reviews[0].support == "supported"
-    assert result.audit.request_reviews[0].status == "partial"
-    assert [row.requirement_id for row in result.audit.guide_requirement_reviews] == ["open:1"]
+    assert observed_audit(result).reviews[0].support == "supported"
+    assert observed_audit(result).request_reviews[0].status == "partial"
+    assert [row.requirement_id for row in observed_audit(result).guide_requirement_reviews] == ["open:1"]
     assert result.guide_steps[0]["requirements"][0]["status"] == "unknown"
 
 
-def test_partial_second_audit_cannot_erase_first_confirmed_contradiction():
+def test_partial_second_audit_preserves_raw_contradiction_without_adopting_it():
     result = run(retry_case="partial", first_contradiction=True)
     assert result.review_execution == "partial"
-    assert result.audit.reviews[0].support == "contradicted"
+    assert observed_audit(result).reviews[0].support == "contradicted"
     assert result.timing["audit_contract"]["strict_wire_validation"] == "failed"
     merged = result.timing["audit_contract"]["retry_merge"]
     assert merged["row_sources"]["reviews"] == [{"key": 0, "attempt": 1}]

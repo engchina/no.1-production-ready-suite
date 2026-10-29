@@ -77,6 +77,7 @@ from app.rag.answer_threads import (
 )
 from app.rag.figure_region import figure_evidence_type
 from app.rag.guide_step_validation import guide_step_embed, guide_step_findings
+from app.rag.semantic_audit_policy import semantic_audit_is_diagnostic_only
 from app.schemas.support_guide import SupportGuideContent
 
 logger = logging.getLogger(__name__)
@@ -353,6 +354,8 @@ async def audited_answer_lines(
             continue
         diagnostics = row.get("diagnostics_json")
         if not isinstance(diagnostics, Mapping):
+            continue
+        if semantic_audit_is_diagnostic_only(diagnostics):
             continue
         validation = diagnostics.get("answer_validation")
         if (

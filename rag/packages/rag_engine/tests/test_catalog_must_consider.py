@@ -165,7 +165,7 @@ def _review(*supports: tuple[int, str]):
     return respond
 
 
-def test_a_chosen_article_the_draft_did_not_cite_is_reviewed_and_cited_where_it_supports_the_claim():
+def test_catalog_observation_does_not_add_an_uncited_article():
     labels = _labels()
     draft = _draft([_claim(labels["guide"])], [(labels["guide"], "direct")], [labels["guide"]])
     model = _Model([draft], [_audit("supported", "matched", "")], [_review((0, ""))])
@@ -177,10 +177,13 @@ def test_a_chosen_article_the_draft_did_not_cite_is_reviewed_and_cited_where_it_
     # 検討するのは目録で選んだ条だけ。説明は index つきで渡す。
     assert [entry["text"].split("\n", 1)[0] for entry in review_input["evidence"]] == ["第一条"]
     assert review_input["items"] == [{"index": 0, "kind": "rule", "text": CLAIM}]
-    assert _sources(result) == {"規則A.xml", "手順書B.pdf"}
+    assert _sources(result) == {"手順書B.pdf"}
     assert result.answer_text.count(CLAIM) == 1
     review = _timing(result)["catalog_review"]
-    assert (review["reviewed"], len(review["cited"]), review["not_relevant"], review["missing"]) == (1, 1, [], [])
+    assert review["execution"] == "completed" and review["adopted"] is False
+    assert len(review["observation"]["reviews"]) == 1
+    assert review["observation"]["reviews"][0]["supports"]
+    assert "cited" not in review
     assert _timing(result)["generation_calls"] == 2
 
 
@@ -195,7 +198,9 @@ def test_an_article_supporting_no_claim_is_not_cited():
 
     assert model.names() == ["GroundedDraftWire", "CatalogEvidenceReviews", "GroundedFactAudit"]
     assert _sources(result) == {"手順書B.pdf"}
-    assert len(_timing(result)["catalog_review"]["not_relevant"]) == 1
+    observation = _timing(result)["catalog_review"]
+    assert observation["adopted"] is False
+    assert observation["observation"]["reviews"][0]["supports"] == []
 
 
 def test_a_citation_added_by_the_review_is_dropped_when_the_audit_does_not_support_it():
@@ -271,7 +276,7 @@ def _audit(support: str, applicability: str, condition: str):
     return respond
 
 
-def test_a_claim_omitting_the_articles_exception_is_conditional_and_keeps_its_citation_line():
+def test_observed_exception_does_not_inject_condition_and_keeps_citation_line():
     """本則を述べ例外を省いた説明は、監査が conditional と判定すれば条件を添えて出典行を残す（unsupported にしない）。"""
     labels = _labels()
     draft = _draft([_claim(labels["article_1"])], [(labels["article_1"], "direct")], [labels["article_1"]])
@@ -282,7 +287,11 @@ def test_a_claim_omitting_the_articles_exception_is_conditional_and_keeps_its_ci
     assert model.names() == ["GroundedDraftWire", "GroundedFactAudit"]
     assert not result.envelope["passage_marks"]
     body = result.answer_text
-    assert grounded.answer_labels().condition(grounded._condition_phrase("第三号に該当する者を除く")) + CLAIM in body
+    assert CLAIM in body
+    assert grounded.answer_labels().condition(grounded._condition_phrase("第三号に該当する者を除く")) + CLAIM not in body
+    raw = _timing(result)["semantic_audit_observation"]
+    assert raw["adopted"] is False
+    assert raw["audit"]["reviews"][0]["applicability"] == "conditional"
     prefix = grounded.answer_labels().citation_prefix
     assert [line for line in body.splitlines() if line.startswith(prefix) and "規則A.xml" in line]
     assert "例外" in grounded.audit_system_prompt(detailed=False)

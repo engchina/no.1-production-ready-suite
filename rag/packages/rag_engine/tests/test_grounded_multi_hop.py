@@ -6,7 +6,7 @@
 支持）を決定的に再現する。
 """
 
-from test_grounded_answer import FakeModel, audit, context, draft, ids, item, record, run
+from test_grounded_answer import FakeModel, audit, context, draft, ids, item, observed_audit, observed_supports, record, run
 
 from rag_engine.generation import grounded
 from rag_engine.models.llm import GroundedCitation, GroundedItem
@@ -63,12 +63,8 @@ def test_conclusion_chained_from_split_hops_is_written_and_the_ledger_row_is_not
     assert "人事給与システムの担当部署は略号「労」です。" in text
 
 
-def test_summary_rejected_for_a_merged_hop_is_published_after_the_correction_splits_the_hops():
-    """初回は段を 1 つの item に混ぜて不支持（summary も不支持）、是正で段を分けて支持された (#1383)。
-
-    初回の不支持は summary が頼る item を公開できなかったことが理由で、是正で直っている。採用した是正の回の
-    監査が支持した結論は公開する。混ぜた item の言い換え（引用が支持しない部分）は本文に出さない。
-    """
+def test_merged_hop_observation_does_not_trigger_correction():
+    """段を混ぜた本文への不支持を診断に残し、本文・要約の自動変更や再生成には使わない。"""
     ctx = _context()
     by_text = ids(ctx, QUESTION)
     merged = item(by_text[APPROVERS], MERGED, "労務部の承認者は労務部長です。", kind="rule", request_id="Q1")
@@ -80,14 +76,16 @@ def test_summary_rejected_for_a_merged_hop_is_published_after_the_correction_spl
 
     result = run(model, ctx, QUESTION).response
 
-    assert [r["accepted"] for r in result.generation_trace["rounds"]] == [True, True]
+    assert [r["accepted"] for r in result.generation_trace["rounds"]] == [True]
     assert result.answer_text.startswith(CONCLUSION)
-    assert MERGED not in result.answer_text
+    assert MERGED in result.answer_text
+    assert observed_supports(result) == ["unsupported", "supported"]
+    assert not observed_audit(result)["summary_supported"]
     assert grounded.answer_labels().quote_only_section not in result.answer_text
 
 
-def test_summary_rejected_while_every_item_was_supported_keeps_a_warning():
-    """本文の全段が支持されても、一度不支持となった同じ要約の断定は保留する。"""
+def test_summary_rejection_is_observed_without_rewriting_or_extra_hops():
+    """要約の不支持と要求の部分回答は観測に残し、未校正の判定だけで本文や要約を変更しない。"""
     ctx = _context()
     by_text = ids(ctx, QUESTION)
     hops = _hops(by_text)
@@ -97,21 +95,18 @@ def test_summary_rejected_while_every_item_was_supported_keeps_a_warning():
 
     result = run(model, ctx, QUESTION).response
 
-    assert [r["accepted"] for r in result.generation_trace["rounds"]] == [True, True]
-    assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
-    assert guarantee not in result.answer_text
-    final = result.generation_trace["finalization"]["summary"]
-    assert final["status"] == "withheld" and final["reason"]
-    for hop in hops:
+    assert [r["accepted"] for r in result.generation_trace["rounds"]] == [True]
+    assert result.answer_text.startswith(guarantee)
+    assert result.generation_trace["finalization"]["summary"]["status"] == "kept"
+    assert not observed_audit(result)["summary_supported"]
+    assert observed_audit(result)["request_reviews"][0]["status"] == "partial"
+    for hop in hops[:2]:
         assert hop["text"] in result.answer_text
     assert not result.envelope["removed_passages"]
 
 
-def test_summary_rewritten_to_another_conclusion_follows_the_audit_of_the_accepted_round():
-    """不支持の summary（別の時間帯を結論にした）を是正で別の結論に書き直したら、採用した回の監査に従う (#1383)。
-
-    #621 の引き継ぎは同じ文を繰り返す summary だけに掛ける。不支持の文が残る summary には警告を付ける。
-    """
+def test_summary_rejection_does_not_select_an_unrequested_second_generation():
+    """用意された二回目の結論へ未校正の判定だけで差し替えない。低層の反復検出は別途維持する。"""
     ctx = _context()
     by_text = ids(ctx, QUESTION)
     hops = _hops(by_text)
@@ -121,15 +116,16 @@ def test_summary_rewritten_to_another_conclusion_follows_the_audit_of_the_accept
 
     result = run(model, ctx, QUESTION).response
 
-    assert result.answer_text.startswith(CONCLUSION)
-    assert wrong not in result.answer_text
+    assert result.answer_text.startswith(wrong)
+    assert len(result.generation_trace["rounds"]) == 1
+    assert not observed_audit(result)["summary_supported"]
     assert grounded.repeats_summary("一覧を出力します。" + wrong, wrong)
     assert grounded.repeats_summary(wrong.replace("、", ""), wrong)  # 読点の揺れは同じ文
     assert not grounded.repeats_summary(CONCLUSION, wrong)
 
 
-def test_missing_hop_keeps_the_conclusion_out_of_the_summary():
-    """欠けた段を要約で推測せず、確認済みの段と明示した不足を残す。"""
+def test_missing_hop_observation_keeps_generated_gap_and_summary():
+    """生成が明示した不足と本文は保持し、未校正の要約判定も独立して残す。"""
     ctx = context(
         record(2, APPROVERS, "第 3 章 部署の承認者", page=2, source="organization-rules.pdf"),
         record(3, DEADLINES, "承認の期限", page=1, source="approval-rules.pdf"),
@@ -145,10 +141,10 @@ def test_missing_hop_keeps_the_conclusion_out_of_the_summary():
     result = run(model, ctx, QUESTION).response
     text = result.answer_text
 
-    assert text.startswith(grounded.answer_labels().neutral_summary)
-    assert CONCLUSION not in text
-    final = result.generation_trace["finalization"]["summary"]
-    assert final["status"] == "withheld" and final["reason"]
+    assert text.startswith(CONCLUSION)
+    assert result.generation_trace["finalization"]["summary"]["status"] == "kept"
+    assert not observed_audit(result)["summary_supported"]
+    assert observed_audit(result)["request_reviews"][0]["status"] == "partial"
     for hop in hops:
         assert hop["text"] in text
     assert "人事給与システムの担当部署は取得した資料に記載がありません。" in text
@@ -180,11 +176,8 @@ def test_miscopied_sentence_of_a_repeated_table_is_pointed_out_in_the_correction
     assert '"original": "生産本部に属します。"' in feedback
 
 
-def test_rule_quote_with_a_miscopied_trailing_sentence_binds_to_its_verbatim_first_sentence():
-    """規則の item で、説明が使わない続きの文だけを写し誤った引用は、逐語の先頭の文に結び付けて段を残す (#1383)。
-
-    説明が写し誤った文の語を使う item と、操作の手順（原文にない手順を含む引用は落とす #678）は結び付けない。
-    """
+def test_uncalibrated_support_quote_does_not_recover_a_miscopied_citation():
+    """未校正の支持原文で写し誤りを解消しない。低層の引用候補抽出の既存境界も維持する。"""
     ctx = _context()
     by_text = ids(ctx, QUESTION)
     hops = list(_hops(by_text))
@@ -198,10 +191,12 @@ def test_rule_quote_with_a_miscopied_trailing_sentence_binds_to_its_verbatim_fir
 
     assert result.answer_text.startswith(CONCLUSION)
     assert "研究本部" not in result.answer_text
-    assert not result.envelope["passage_marks"]
+    (mark,) = result.envelope["passage_marks"]
+    assert [reason["code"] for reason in mark["reasons"]] == ["quote_unmatched"]
     assert result.generation_trace["finalization"]["summary"]["status"] == "kept"
-    assert result.generation_trace["rounds"][0]["dropped"] == []
-    assert result.generation_trace["rounds"][0]["items"][1]["quote_match"] == "audited_paraphrase"
+    assert result.generation_trace["rounds"][0]["items"][1]["quote_match"] != "audited_paraphrase"
+    assert observed_audit(result)["reviews"][1]["support_quote"] == "略号「労」: 労務部。"
+    assert result.generation_trace["rounds"][0]["items"][1]["review_assessment"]["effective_support"] == "unknown"
     spans = [{"evidence_id": "E1", "label": "E1", "text": CODES}]
 
     def bound(kind, text):
@@ -225,9 +220,10 @@ def test_miscopied_trailing_sentence_without_audit_support_quote_keeps_the_claim
     hops[1] = item(by_text[CODES], "略号「労」は労務部です。", "略号「労」: 労務部。研究本部に属します。", kind="rule", request_id="Q1")
     model = FakeModel([draft(*hops, summary=CONCLUSION)], [_supported(4)])
     result = run(model, ctx, QUESTION).response
-    assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
-    assert result.generation_trace["finalization"]["summary"]["status"] == "withheld"
-    assert result.generation_trace["finalization"]["summary"]["reason"]
+    assert result.answer_text.startswith(CONCLUSION)
+    assert result.generation_trace["finalization"]["summary"]["status"] == "kept"
+    assert observed_supports(result) == ["supported"] * 4
+    assert not observed_audit(result)["reviews"][1]["support_quote"]
     for hop in hops:
         assert hop["text"] in result.answer_text
     (mark,) = result.envelope["passage_marks"]

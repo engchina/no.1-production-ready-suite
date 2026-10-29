@@ -86,7 +86,7 @@ class UserConditionOutcomeTest(unittest.TestCase):
             [],
             external_data_required=False,
         )
-        self.assertEqual(plain.envelope["outcome"], "answered")
+        self.assertEqual(plain.envelope["outcome"], "conditional")
 
     def test_delete_account_with_approval_condition_is_conditional(self):
         # cr-delete-account: 部門長の承認を得たかは利用者に確かめる条件。

@@ -11,7 +11,7 @@ import json
 from dataclasses import replace
 
 import pytest
-from test_grounded_answer import FakeModel, audit, context, draft, ids, marks, record
+from test_grounded_answer import FakeModel, audit, context, draft, ids, marks, observed_audit, record
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -167,7 +167,7 @@ def _audit_by_evidence(unsupported: set[str]):
     return respond
 
 
-def test_each_citation_is_audited_on_its_own_and_unsupported_ones_are_dropped():
+def test_each_citation_is_audited_but_raw_unsupported_does_not_drop_it():
     ctx = _context()
     rule, guide = _labels(ctx)
     model = FakeModel([draft(_cite((rule, QUOTE), (guide, QUOTE)))], [_audit_by_evidence({guide})])
@@ -177,23 +177,25 @@ def test_each_citation_is_audited_on_its_own_and_unsupported_ones_are_dropped():
     inputs = _audit_inputs(model)[0]
     assert sorted(entry["evidence_id"] for entry in inputs["items"]) == sorted([rule, guide])
     assert len({entry["index"] for entry in inputs["items"]}) == 2
-    assert _sources(result) == {"規則A.xml"}
+    assert _sources(result) == {"規則A.xml", "手順書B.pdf"}
     assert result.answer_text.count(CLAIM) == 1
     assert not marks(result)
+    assert [row["support"] for row in observed_audit(result)["reviews"]] == ["supported", "unsupported"]
 
 
-def test_a_supported_second_citation_takes_over_when_the_first_is_not_supported():
+def test_raw_unsupported_first_citation_is_retained_beside_supported_second():
     ctx = _context()
     rule, guide = _labels(ctx)
     model = FakeModel([draft(_cite((rule, QUOTE), (guide, QUOTE)))], [_audit_by_evidence({rule})])
 
     result = _run(model, ctx, grounded.AUDIT_MODE_STANDARD)
 
-    assert _sources(result) == {"手順書B.pdf"}
+    assert _sources(result) == {"規則A.xml", "手順書B.pdf"}
     assert result.answer_text.count(CLAIM) == 1
     assert not marks(result)
+    assert [row["support"] for row in observed_audit(result)["reviews"]] == ["unsupported", "supported"]
     dropped = result.generation_trace["rounds"][0]["dropped"]
-    assert any(entry.get("citation_dropped") and entry["evidence_id"] == rule for entry in dropped)
+    assert not any(entry.get("citation_dropped") and entry["evidence_id"] == rule for entry in dropped)
 
 
 def test_article_citations_do_not_enable_an_audit_in_none_mode():
@@ -224,7 +226,8 @@ def test_enabled_audit_modes_review_both_article_and_other_sources(mode):
     result = _run(model, ctx, mode)
     inputs = _audit_inputs(model)[0]
     assert {entry["evidence_id"] for entry in inputs["items"]} == {rule, guide}
-    assert marks(result)[CLAIM] == ["unsupported"]
+    assert "unsupported" not in marks(result).get(CLAIM, [])
+    assert "unsupported" in [row["support"] for row in observed_audit(result)["reviews"]]
     assert other not in marks(result)
     assert result.generation_trace["rounds"][0]["audit_calls"] == 1
 

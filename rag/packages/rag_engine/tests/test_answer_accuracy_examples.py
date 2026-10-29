@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from test_grounded_answer import FakeModel, audit, context, draft, ids, item, record
+from test_grounded_answer import FakeModel, audit, context, draft, ids, item, observed_audit, record
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -17,7 +17,6 @@ from rag_engine.evaluation.answer_validation import (
     PremiseConsistencyOutput,
     validate_answer_claims,
 )
-from rag_engine.generation import grounded
 from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.retrieval.context_builder import ContextParentEvidence
 from rag_engine.retrieval.request_coverage import CoverageBudget, coverage_targets, request_rows, run_targeted_retrievals
@@ -118,7 +117,7 @@ def test_context_is_required_before_coverage_can_skip_additional_retrieval():
 
 @pytest.mark.parametrize("mode", ["none", "detailed"])
 @pytest.mark.parametrize("summary_key", ["wrong_summary", "missing_qualifier", "reversed_target", "correct_summary"])
-def test_summary_uses_the_audit_instead_of_deletion_word_heuristics(summary_key, mode):
+def test_summary_observation_does_not_rewrite_the_generated_conclusion(summary_key, mode):
     case = CASES["summary"]
     assert case["evidence"] in (EXAMPLES / "operations.txt").read_text()
     with (EXAMPLES / "rows.csv").open() as stream:
@@ -141,16 +140,13 @@ def test_summary_uses_the_audit_instead_of_deletion_word_heuristics(summary_key,
             replace(get_settings(), answer_audit_mode=mode),
             image_prompt_mode="text_only",
         ).response
-    if mode == "detailed" and summary_key != "correct_summary":
-        assert response.answer_text.startswith(grounded.answer_labels().neutral_summary)
-        assert not response.answer_text.startswith(case[summary_key])
-        final = response.generation_trace["finalization"]["summary"]
-        assert final["status"] == "withheld" and final["reason"]
-        assert all(mark["text"] != case[summary_key] for mark in response.envelope["passage_marks"])
-    else:
-        assert response.answer_text.startswith(case[summary_key])
-    warning = response.generation_trace["rounds"][0].get("summary_warning")
-    assert bool(warning) is (mode == "none" or summary_key != "correct_summary")
+    assert response.answer_text.startswith(case[summary_key])
+    assert response.generation_trace["finalization"]["summary"]["status"] == ("unverified" if mode == "none" else "kept")
     if mode == "none":
         assert response.generation_trace["rounds"][0]["review_execution"] == "not_run"
+        assert len([name for name, _ in model.prompts if name == "GroundedAudit"]) == 0
+    else:
+        assert observed_audit(response)["summary_supported"] is (summary_key == "correct_summary")
+        assert len([name for name, _ in model.prompts if name == "GroundedAudit"]) == 1
+        assert not response.envelope["removed_passages"]
     assert case["evidence"] in response.answer_text
