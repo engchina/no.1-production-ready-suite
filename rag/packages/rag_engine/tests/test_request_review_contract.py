@@ -60,6 +60,8 @@ def test_contract_failures_do_not_become_missing_material_or_remove_valid_body(r
     assert dimension["review_execution"] == "completed"
     assert dimension["contract_validation"] == {
         "status": validation,
+        "expected_request_ids": ["Q1"],
+        "returned_request_ids": [row[0] for row in requests],
         "missing_request_ids": missing,
         "invalid_request_ids": invalid,
         "duplicate_request_ids": duplicates,
@@ -155,3 +157,20 @@ def test_foreign_unknown_gap_does_not_block_a_valid_missing_material_search():
         ("Q1", "evidence_missing", "retrieval"),
         ("Q999", "invalid_request_id", "retain"),
     ]
+
+
+def test_explicit_unknown_uses_original_id_and_retains_body_without_remedy():
+    current = run_review([("Q1", "unknown")])
+    assert current.addressed == set()
+    [row] = current.unanswered
+    assert row["request_id"] == "Q1" and row["status"] == "unknown"
+    assert row["evidence_status"] == "unknown"
+    assert current.trace()["validation_dimensions"]["answer_completeness"]["execution"] == "partial"
+    [decision] = request_recovery_plan(current.unanswered, (), set(), expected_request_ids={"Q1"})
+    assert decision["action"] == "retain" and decision["cause"] == "review_incomplete"
+
+
+def test_audit_prompt_explains_exact_id_and_unknown_without_duplicate_rule():
+    prompt = grounded.audit_system_prompt(detailed=True)
+    assert prompt.count("新規・改変・重複した id を作らない") == 1
+    assert "元の id のまま unknown" in prompt

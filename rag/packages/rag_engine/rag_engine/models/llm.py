@@ -673,8 +673,8 @@ class GroundedRequestReview(_StrictModel):
     """原質問の要求単位ごとの充足。"""
 
     request_id: str = Field(description="request_units の id。")
-    status: Literal["addressed", "partial", "missing", "context"] = Field(
-        description="addressed=items が答えている。partial=一部。missing=無い。context=背景で答える対象ではない。"
+    status: Literal["addressed", "partial", "missing", "context", "unknown"] = Field(
+        description="addressed=items が答えている。partial=一部。missing=無い。context=背景で答える対象ではない。unknown=充足を判断できない。"
     )
     reason: str = Field(description="質問と同じ言語で短く。")
     evidence_status: Literal["available", "missing", "unknown"] = Field(

@@ -442,11 +442,11 @@ AUDIT_SYSTEM_PROMPT = (
         "を先に判定する。\n"
         "- application_reviews: 各 applicati"
         "on の index、valid、reason。\n"
-        "- request_reviews: task_contract.request_units の各 id を1回ずつ必ず返す。"
+        "- request_reviews: task_contract.request_units の各 id をそのまま1回ずつ返し、新規・改変・重複した id を作らない。"
         "各要求について、items（valid な applicatio"
         "ns を含む）が答えていれば addressed（複数の item "
         "をつないで答えていても addressed）、一部なら partia"
-        "l、なければ missing、背景なら context。reason"
+        "l、なければ missing、背景なら context、充足を判断できなければ元の id のまま unknown。reason"
         " は質問と同じ言語で書く。\n"
         "- 材料の判定では、各要求について回答がまだ説明していない具体的な操作・条件を reason に短く示す。"
         "説明済みの前置きと、補写が必要な内容を区別する。\n"
@@ -4417,6 +4417,8 @@ class Round:
     duplicate_request_ids: tuple[str, ...] = ()
     missing_request_ids: tuple[str, ...] = ()
     invalid_request_ids: tuple[str, ...] = ()
+    expected_request_ids: tuple[str, ...] = ()
+    returned_request_ids: tuple[str, ...] = ()
 
     @property
     def request_contract_status(self) -> str:
@@ -4475,7 +4477,7 @@ class Round:
         return [
             {**r.model_dump(), "reviewed": True}
             for r in self.audit.request_reviews
-            if r.status in {"partial", "missing"} and r.request_id not in context_ids
+            if r.status in {"partial", "missing", "unknown"} and r.request_id not in context_ids
         ] + self.unreviewed_requests
 
     @property
@@ -4715,11 +4717,17 @@ class Round:
                 },
                 "answer_completeness": {
                     "execution": "partial"
-                    if self.request_contract_status in {"partial", "error"} and self.audit is not None
+                    if self.audit is not None
+                    and (
+                        self.request_contract_status in {"partial", "error"}
+                        or any(row.status == "unknown" for row in self.audit.request_reviews)
+                    )
                     else self.review_execution,
                     "review_execution": self.review_execution,
                     "contract_validation": {
                         "status": self.request_contract_status,
+                        "expected_request_ids": list(self.expected_request_ids),
+                        "returned_request_ids": list(self.returned_request_ids),
                         "missing_request_ids": list(self.missing_request_ids),
                         "invalid_request_ids": list(self.invalid_request_ids),
                         "duplicate_request_ids": list(self.duplicate_request_ids),
@@ -6146,6 +6154,8 @@ def run_round(
     duplicate_request_ids: tuple[str, ...] = ()
     missing_request_ids: tuple[str, ...] = ()
     invalid_request_ids: tuple[str, ...] = ()
+    expected_request_ids: tuple[str, ...] = ()
+    returned_request_ids: tuple[str, ...] = ()
     # 印の付いた説明も監査する（根拠と矛盾すれば外す。#2738）。システムが補った原文・外した説明は監査しない。
     auditable = [(index, entry) for index, entry in enumerate(checked) if entry.span and entry.published]
     audit_index = {id(entry): index for index, entry in auditable}
@@ -6241,6 +6251,7 @@ def run_round(
             ]
         # 生成と同じく、根拠・引用・説明を文字の形をそろえて渡す。原文の引用（全角の ``ＨＲＭ``）と説明の
         # 半角の ``HRM`` を、監査が別の語として「根拠にない」と判定しないため (#1350)。
+        expected_request_ids = tuple(row["id"] for row in inputs["task_contract"].get("request_units", []))
         audit_prompt = json.dumps(fold_model_view(inputs), ensure_ascii=False)
         started, usage_before = monotonic(), usage_snapshot()
         try:
@@ -6294,6 +6305,7 @@ def run_round(
         if audit_usage := usage_delta(usage_before):
             timing["audit_usage"] = audit_usage
         if audit is not None:
+            returned_request_ids = tuple(row.request_id for row in audit.request_reviews)
             audit, duplicate_request_ids, missing_request_ids, invalid_request_ids = _validate_request_review_contract(
                 audit, inputs["task_contract"].get("request_units", [])
             )
@@ -6411,6 +6423,8 @@ def run_round(
         duplicate_request_ids=duplicate_request_ids,
         missing_request_ids=missing_request_ids,
         invalid_request_ids=invalid_request_ids,
+        expected_request_ids=expected_request_ids,
+        returned_request_ids=returned_request_ids,
         guide_steps=(
             apply_guide_contracts(
                 guide_step_coverage(
