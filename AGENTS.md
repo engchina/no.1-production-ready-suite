@@ -99,6 +99,7 @@
 詳細は [docs/agents/deploy.md](./docs/agents/deploy.md)。
 
 - 自前のコードは Docker を使わずネイティブで動かす（開発は `uv run` / `npm run dev`、本番は systemd + Nginx。Dockerfile・compose は持たない）。
+- **再配備は repo の直下で `sudo -n ./platform/deploy/suite-update.sh` を実行する。**
 - Terraform stack は `terraform/stack/` に 1 つだけ。選んだ製品を 1 台の Compute（Oracle Linux 9、ユーザー `opc`）に入れ、`platform/deploy/suite-init.sh` が各製品の `init_script.sh` を呼ぶ（製品は単独では配備しない）。Nginx の location は `platform/deploy/suite-nginx.sh` だけに書く。
 - 3 製品は既定で ADB のアプリ用の DB ユーザー（ADMIN ではない）で接続する。DB の新しい機能を使うときは付ける権限で足りるかを確かめる。release tag は `suite-v*` だけ。
 
