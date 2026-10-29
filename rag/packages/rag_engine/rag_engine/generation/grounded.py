@@ -3635,13 +3635,20 @@ def related_document_quotes(question: str, spans: Sequence[dict], *, limit: int 
     return [_quote_item(span, span["text"][:600], "拒答時の関連原文") for _, _, span in scored[:limit]]
 
 
-def deadline_document_quotes(question: str, spans: Sequence[dict], *, limit: int = RELATED_QUOTE_LIMIT) -> list[CheckedItem]:
+def deadline_document_quotes(
+    question: str,
+    spans: Sequence[dict],
+    *,
+    limit: int = RELATED_QUOTE_LIMIT,
+    note: str = "時間の上限で生成が終わらなかったときの根拠の抜粋",
+) -> list[CheckedItem]:
     """1 組目の生成が回答の時間の上限までに終わらなかった（草稿が無い）ときに示す、根拠の原文の抜粋（#1548）。
 
     根拠は検索・根拠の評価（CRAG）・章節の拡張を通って回答に渡すと決めたもので、草稿が無いのは時間の上限の
     ためで根拠の不足ではない。質問の語を含む原文（`related_document_quotes`）を先に、足りなければ根拠の順（検索の
     順位・読んだ章節の順）で、上限まで原文のみ提示（適用は未確認）の item にする。見出しだけ・項目名の羅列・画像
-    から作った説明は、拒答のときの関連原文と同じく除く。
+    から作った説明は、拒答のときの関連原文と同じく除く。生成の出力が契約を満たさず草稿が無いとき（#3849）も同じ
+    抜粋を示す（``note`` は item の理由の記録）。
     """
     quotes = related_document_quotes(question, spans, limit=limit)
     shown = {entry.span["evidence_id"] for entry in quotes if entry.span}
@@ -3657,7 +3664,7 @@ def deadline_document_quotes(question: str, spans: Sequence[dict], *, limit: int
         ):
             continue
         shown.add(span["evidence_id"])
-        quotes.append(_quote_item(span, span["text"][:600], "時間の上限で生成が終わらなかったときの根拠の抜粋"))
+        quotes.append(_quote_item(span, span["text"][:600], note))
     return quotes
 
 
@@ -6495,7 +6502,9 @@ def run_round(
     充足にこの行を引ける。業務ガイドの文（手順の目的・要件・案内）を引いた根拠に無いまま書いた説明には印を付ける。
     ``audit_mode`` は監査の型（#2795）。standard は未使用の根拠を渡さず列挙させない（detailed は列挙させる）。
     ``invalid_output`` は構造化出力の契約を満たさなかった例外か（再試行の後も）の判定。画像を添付した生成がこれで
-    失敗したら、画像を添付しない生成で 1 回だけ作り直す（#2772。1 組目には公開できる前の組が無く、回答全体が失敗する）。
+    失敗したら、画像を添付しない生成で 1 回だけ作り直す（#2772）。それでも（文字だけの生成も）失敗したら
+    `DraftGenerationInvalid` を送出する（#3849。呼び出し側が、前の round か草稿の無い round で確定する）。根拠の計画の
+    作り直しの出力が失敗したら、作り直す前の草稿を使い、残った不整合に印を付ける。
     ``glossary`` は質問に当たった検索・回答プロファイルの用語（名前と別名。#2823）。監査が別名で書いた質問の対象と
     正式名で書いた根拠の対象を別と判定しないよう、監査の入力に渡す。
     """
@@ -6646,6 +6655,8 @@ def run_round(
                 "provider_output_text": provider_text,
                 "parsed_output_representation": "generation_wire" if isinstance(value, generation_model) else "legacy_parsed_draft",
                 "parsed_output": value.model_dump(mode="json", exclude_unset=True),
+                # 検証の前に最初の 1 件へ寄せた、同じ内容の entry の数（#3849）。寄せる前の応答は provider_output_text。
+                **({"collapsed_duplicates": dict(canonical._collapsed_duplicates)} if canonical._collapsed_duplicates else {}),
                 "canonical_output": canonical.model_dump(mode="json", exclude_unset=True),
                 "citation_bindings": [
                     {
@@ -6707,30 +6718,37 @@ def run_round(
         else:
             range_repair = {"status": "not_run", "scope": "citation_range_only", "reason": "target_not_available"}
     else:
-        if image_paths:
-            try:
-                draft = call_with_model_purpose(
-                    "answer.generate",
-                    parse_images,
-                    generation_system,
-                    prompt,
-                    list(image_paths),
-                    settings,
-                    generation_model,
-                    provider_id=provider_id,
-                )
-            except Exception as exc:
-                if invalid_output is None or not invalid_output(exc):
-                    raise
-                # 画像の説明の文字は根拠のレコードに残るので、文字の根拠の範囲で作り直す（#2772）。
-                image_fallback = type(exc).__name__
+        try:
+            if image_paths:
+                try:
+                    draft = call_with_model_purpose(
+                        "answer.generate",
+                        parse_images,
+                        generation_system,
+                        prompt,
+                        list(image_paths),
+                        settings,
+                        generation_model,
+                        provider_id=provider_id,
+                    )
+                except Exception as exc:
+                    if invalid_output is None or not invalid_output(exc):
+                        raise
+                    # 画像の説明の文字は根拠のレコードに残るので、文字の根拠の範囲で作り直す（#2772）。
+                    image_fallback = type(exc).__name__
+                    draft = call_with_model_purpose(
+                        "answer.generate", parse_text, generation_system, prompt, settings, generation_model, provider_id=provider_id
+                    )
+            else:
                 draft = call_with_model_purpose(
                     "answer.generate", parse_text, generation_system, prompt, settings, generation_model, provider_id=provider_id
                 )
-        else:
-            draft = call_with_model_purpose(
-                "answer.generate", parse_text, generation_system, prompt, settings, generation_model, provider_id=provider_id
-            )
+        except Exception as exc:
+            if invalid_output is None or not invalid_output(exc):
+                raise
+            # 再実行の後も出力が構造化出力の契約を満たさず、この round の草稿が無い（#3849）。呼び出し側が、前の round の
+            # 回答か、草稿の無い round（関係する資料の記載だけ）で確定できるよう、ほかの失敗と分けて送出する。
+            raise DraftGenerationInvalid(type(exc).__name__) from exc
         draft = canonicalize_output(draft, "answer.generate", prompt)
         if scope_plan is not None:
             draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
@@ -6739,6 +6757,7 @@ def run_round(
     plan_unsettled: list[str] = []
     plan_recovery = ""
     plan_repair_calls = 0
+    plan_repair_error = ""
     if not range_only and plan_errors == [_MISSING_REQUEST_PLAN] and scope_plan is None:
         # 計画だけが無い草稿（#3394）。全体を同じ大きさの入力で作り直すと同じ省略を繰り返すので、説明が引いた
         # 根拠だけで計画を立て直し、説明はそのまま照合する（本文の生成と根拠の照合を分ける）。
@@ -6768,25 +6787,32 @@ def run_round(
                 ensure_ascii=False,
             )
         )
-        if image_paths and not image_fallback:
-            draft = call_with_model_purpose(
-                "answer.repair",
-                parse_images,
-                generation_system,
-                repair_prompt,
-                list(image_paths),
-                settings,
-                generation_model,
-                provider_id=provider_id,
-            )
+        try:
+            if image_paths and not image_fallback:
+                repaired = call_with_model_purpose(
+                    "answer.repair",
+                    parse_images,
+                    generation_system,
+                    repair_prompt,
+                    list(image_paths),
+                    settings,
+                    generation_model,
+                    provider_id=provider_id,
+                )
+            else:
+                repaired = call_with_model_purpose(
+                    "answer.repair", parse_text, generation_system, repair_prompt, settings, generation_model, provider_id=provider_id
+                )
+        except Exception as exc:
+            if invalid_output is None or not invalid_output(exc):
+                raise
+            # 作り直しの出力が契約を満たさなかった（#3849）。作り直す前の草稿を捨てず、残った不整合は下で印を付ける。
+            plan_repair_error = type(exc).__name__
         else:
-            draft = call_with_model_purpose(
-                "answer.repair", parse_text, generation_system, repair_prompt, settings, generation_model, provider_id=provider_id
-            )
-        draft = canonicalize_output(draft, "answer.repair", repair_prompt)
+            draft = canonicalize_output(repaired, "answer.repair", repair_prompt)
+            if scope_plan is not None:
+                draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
         generation_calls += 1
-        if scope_plan is not None:
-            draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
         # 作り直しても残った不整合（#3228）。計画が決まらない説明は外さずに印を付けて残す（verify）。根拠でない label は
         # 何の根拠も指さず計画の内外を変えないので、残っても未決に数えず、無視した指摘として記録だけする（#3825）。
         plan_unsettled = _request_plan_errors(draft, spans, unknown_labels=False)
@@ -6852,7 +6878,12 @@ def run_round(
     if range_repair:
         timing["citation_range_repair"] = range_repair
     if plan_repair_calls:
-        timing["request_plan_repair"] = {"calls": plan_repair_calls, "scope": "request_plan_and_draft"}
+        timing["request_plan_repair"] = {
+            "calls": plan_repair_calls,
+            "scope": "request_plan_and_draft",
+            # 作り直しの出力が契約を満たさず、作り直す前の草稿を使った（例外の型名。#3849）。
+            **({"error": plan_repair_error} if plan_repair_error else {}),
+        }
     if premise_records:
         timing["confirmed_premises"] = premise_records
     if guide_task_scope:
@@ -7817,8 +7848,18 @@ def pending_feedback_labels(feedback: dict[str, Any]) -> list[str]:
     return labels
 
 
-def timed_out_round(question: str) -> Round:
-    """1 組目の生成が回答の時間の上限までに終わらなかったときの、草稿の無い round（#1516）。"""
+class DraftGenerationInvalid(RuntimeError):
+    """回答文の生成の出力が、再実行の後も構造化出力の契約を満たさなかった（この round の草稿が無い。#3849）。
+
+    本文は元の例外の型名だけ（モデルの出力の文を持たない）。元の例外は ``__cause__``。
+    """
+
+
+def timed_out_round(question: str, *, reason: str = "時間の上限までに生成が終わらなかった") -> Round:
+    """1 組目の生成が終わらなかったときの、草稿の無い round（#1516）。
+
+    ``reason`` は要約を出さない理由（記録用）。時間の上限のほか、生成の出力が契約を満たさなかったとき（#3849）にも使う。
+    """
     draft = GroundedDraft(items=[], summary="", confidence="low")
     return Round(
         answer_labels().neutral_summary,
@@ -7827,7 +7868,7 @@ def timed_out_round(question: str) -> Round:
         [],
         None,
         requests=list(task_contract(question)["request_units"]),
-        summary_reason="時間の上限までに生成が終わらなかった",
+        summary_reason=reason,
     )
 
 

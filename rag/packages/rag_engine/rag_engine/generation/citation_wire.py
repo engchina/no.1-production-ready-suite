@@ -104,6 +104,8 @@ def canonical_generation_draft(value: BaseModel) -> GroundedDraft:
     draft = GroundedDraft.model_validate(raw)
     if isinstance(value, GroundedDraft):
         draft._provider_output_text = value._provider_output_text
+        # 応答の検証で寄せた重複の数（#3849）。寄せた後の値から作り直すので、ここで引き継ぐ。
+        draft._collapsed_duplicates = dict(value._collapsed_duplicates)
     for item, own in zip(draft.items, ranges, strict=True):
         for citation, interval in zip(item.citations, own, strict=True):
             citation._wire_range = interval

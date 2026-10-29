@@ -10,7 +10,7 @@ import re
 import threading
 import time
 from collections import deque
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -927,8 +927,59 @@ def _openai_parsed[StructuredOutputT: BaseModel](
         # 入力に無い置換文字を含む生成文は、破損した構造化出力として既存の上限内で再取得する。
         # 原文に元からある文字は改変しない。削除や推測による文字の補完もしない。
         if "\ufffd" not in json.dumps(input_messages, ensure_ascii=False) and "\ufffd" in parsed.model_dump_json():
-            raise InvalidStructuredOutput("生成文に入力にはない Unicode の置換文字が含まれています。再生成してください。")
+            # どの欄に出たか（JSON の path。本文は残さない）を例外と log に残す（#3849。退けた出力の原文は残らない）。
+            paths = replacement_char_paths(parsed.model_dump(mode="json"))
+            _log_rejected_output(provider, text_format, response, reason="replacement_character", paths=paths)
+            raise InvalidStructuredOutput(
+                f"生成文に入力にはない Unicode の置換文字が含まれています（欄: {', '.join(paths) or '不明'}）。再生成してください。"
+            )
         return parsed
+
+
+# 退けた出力の欄の path を残す数の上限（#3849）。
+REJECTED_PATHS_LIMIT = 8
+
+
+def replacement_char_paths(value: Any, path: str = "", *, limit: int = REJECTED_PATHS_LIMIT) -> list[str]:
+    """``U+FFFD`` を含む文字列の欄の JSON の path（例: ``items[2].text``）。本文は返さない。``limit`` 件まで。"""
+    found: list[str] = []
+
+    def walk(node: Any, where: str) -> None:
+        if len(found) >= limit:
+            return
+        if isinstance(node, str):
+            if "\ufffd" in node:
+                found.append(where or "$")
+        elif isinstance(node, Mapping):
+            for key, child in node.items():
+                walk(child, f"{where}.{key}" if where else str(key))
+        elif isinstance(node, list | tuple):
+            for position, child in enumerate(node):
+                walk(child, f"{where}[{position}]")
+
+    walk(value, path)
+    return found
+
+
+def _log_rejected_output(provider: LlmProviderSettings, text_format: type, response: Any, *, reason: str, paths: Sequence[str]) -> None:
+    """完了した応答を出力の検査で退けたことを WARNING で残す（#3849）。理由・欄の path・token の数だけで、本文は残さない。"""
+    usage = response_usage(response)
+    _logger.warning(
+        "LLM の出力を退けました: model=%s schema=%s reason=%s paths=%s output_tokens=%d",
+        provider.model,
+        getattr(text_format, "__name__", str(text_format)),
+        reason,
+        ",".join(paths) or "-",
+        usage["output_tokens"],
+        extra={
+            "event": "llm_output_rejected",
+            "llm_model": str(provider.model),
+            "llm_schema": getattr(text_format, "__name__", str(text_format)),
+            "llm_rejected_reason": reason,
+            "llm_rejected_paths": list(paths),
+            "output_tokens": usage["output_tokens"],
+        },
+    )
 
 
 # 停滞の検出（#1926）。OCI Enterprise AI の呼び出しがまれに通常の 1/10 以下の速さに落ちる（#1912 の記録の 206 件で

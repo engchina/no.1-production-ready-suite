@@ -2637,6 +2637,8 @@ def synthesize_grounded_answer(
     compact_audit_reasons = bool(getattr(settings, "answer_audit_compact_reasons", False))
     # 作り直しの組の LLM の呼び出しが失敗し、前の組を公開したときの例外の型（#2729）。
     correction_failure = ""
+    # 1 組目の生成の出力が契約を満たさず草稿が無い（元の例外の型名。#3849）。関係する資料の記載だけを示す。
+    generation_failure = ""
     # 業務ガイドの手順ごとの根拠と、充足で必須に数えない手順（#2491）。監査・是正・回答の構造で同じ単位を使う。
     # 根拠の画面の図で業務ガイドの条件が決まったら、round ごとにその条件の手順の計画に切り替える（#2689）。
     base_knowledge = runtime_knowledge
@@ -2764,27 +2766,44 @@ def synthesize_grounded_answer(
                 # 回答の確定の分を残した期限で切れた（#1516）なら、確かめ終わった round で確定する。1 組目の生成が
                 # 切れたときは草稿が無いので、関係する資料の記載だけを示す。外側の期限・取り消し・他の失敗は送出する。
                 cut = budget.cut_round(number, has_draft=best is not None)
-                if best is None and not cut:
+                # 1 組目の生成の出力が再実行の後も契約を満たさなかった（#3849）。根拠は回答に渡すと決めた後なので、
+                # 回答全体を失敗にせず、草稿の無い round で関係する資料の記載を示す。
+                invalid_draft = best is None and not cut and isinstance(exc, grounded.DraftGenerationInvalid)
+                if best is None and not cut and not invalid_draft:
                     raise
+                # 生成の出力の不合格は、包む前の例外の型名（InvalidStructuredOutput・ValidationError）で残す。
+                error_name = str(exc) if isinstance(exc, grounded.DraftGenerationInvalid) else type(exc).__name__
                 # 是正はより良くする試みなので、その LLM 呼出（生成・監査）の失敗で採用済みの回答を捨てない (#748)。
                 # 失敗した round は trace に理由だけ残し、直前に採用した round を公開する。
                 rounds.append(
                     {
-                        "error": type(exc).__name__,  # 例外の型の名前だけ（本文は残さない。#3259）
+                        "error": error_name,  # 例外の型の名前だけ（本文は残さない。#3259）
                         "accepted": False,
                         "audit_calls": 0,
                         **({"deadline_cut": True} if cut else {}),
                     }
                 )
-                if best is None:
+                if invalid_draft:
+                    generation_failure = error_name
+                    best = (
+                        grounded.timed_out_round(question, reason="生成の出力が構造化出力の契約を満たさなかった"),
+                        context,
+                        spans,
+                        images,
+                        mode,
+                    )
+                    step.result(
+                        f"回答文の生成の出力が形式の検査を通らなかったため、質問に関係する資料の記載だけを示します（{generation_failure}）"
+                    )
+                elif best is None:
                     best = (grounded.timed_out_round(question), context, spans, images, mode)
                     step.result("回答の時間の上限までに回答文の生成が終わらなかったため、質問に関係する資料の記載だけを示します")
                 elif cut:
                     step.result("回答の時間の上限が近いため、この作り直しを打ち切り、直前に採用した回答を公開します")
                 else:
-                    step.result(f"是正の生成に失敗したため、直前に採用した回答を公開します（{type(exc).__name__}）")
+                    step.result(f"是正の生成に失敗したため、直前に採用した回答を公開します（{error_name}）")
                     # 作り直しの失敗は根拠の不足と区別し、回答全体の警告に残す（#2729）。
-                    correction_failure = type(exc).__name__
+                    correction_failure = error_name
                 break
             quote_only = sum(e.quote_only for e in current.checked)
             step.result(
@@ -3304,13 +3323,23 @@ def synthesize_grounded_answer(
     else:
         # 拒答でも、質問の語を含む原文があれば「資料の記載」として出典付きで示す。どの資料のどのページに
         # 関連する記載があるかは、適用を判定できなくても利用者に必要な情報 (#722)。
-        no_draft = budget.stop.get("reason") == grounded.DEADLINE_NO_DRAFT
-        related = grounded.deadline_document_quotes(question, spans) if no_draft else grounded.related_document_quotes(question, spans)
+        deadline_no_draft = budget.stop.get("reason") == grounded.DEADLINE_NO_DRAFT
+        # 1 組目の生成の出力が契約を満たさず草稿が無い（#3849）ときも、時間の上限と同じく根拠の抜粋を示す。
+        no_draft = deadline_no_draft or bool(generation_failure)
+        related = (
+            grounded.deadline_document_quotes(
+                question,
+                spans,
+                **({} if deadline_no_draft else {"note": "生成の出力が契約を満たさなかったときの根拠の抜粋"}),
+            )
+            if no_draft
+            else grounded.related_document_quotes(question, spans)
+        )
         shown = related
         if no_draft:
-            # 1 組目の生成が時間の上限までに終わらなかった（#1516）。根拠は回答に渡すと決めた後なので、拒答
-            # （insufficient_evidence）ではなく、示した根拠の抜粋を回答の構造にも載せ、原文のみ提示（適用は未確認）の
-            # 条件つきの回答にする（#1548）。
+            # 1 組目の生成が時間の上限までに終わらなかった（#1516）・出力が契約を満たさなかった（#3849）。根拠は回答に
+            # 渡すと決めた後なので、拒答（insufficient_evidence）ではなく、示した根拠の抜粋を回答の構造にも載せ、
+            # 原文のみ提示（適用は未確認）の条件つきの回答にする（#1548）。
             envelope_entries = related
         # 拒答文では要求ごとの missing 行を重ねない。拒答文と gap がすでに「答えていない」ことを述べており、gap だけの
         # round も監査するようになって (#1014) 全要求が missing になるため、同じ内容の行が要求の数だけ増える。
@@ -3319,6 +3348,9 @@ def synthesize_grounded_answer(
             grounded.answer_labels().confirmation_only_summary
             if confirmation_section
             else grounded.answer_labels().deadline_summary
+            if deadline_no_draft
+            # 生成の出力が契約を満たさなかった（#3849）。時間の上限の文は使わず、資料の記載を示す定型の文にする。
+            else grounded.answer_labels().neutral_summary
             if no_draft
             else "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。",
             [*related, *gap_items, *removed_entries],
@@ -3356,6 +3388,8 @@ def synthesize_grounded_answer(
         "same_unit_fill": unit_fill,
         "rounds": rounds,
         "round_budget": budget.trace(current),
+        # 1 組目の生成の出力が契約を満たさず、関係する資料の記載だけを示した（元の例外の型名。#3849）。
+        **({"generation_failure": {"error": generation_failure, "stage": "answer.generate"}} if generation_failure else {}),
         "llm_calls": sum(r.get("timing", {}).get("generation_calls", 1) + r.get("audit_calls", int(bool(r.get("audit")))) for r in rounds),
         "image_fallback": image_decision,
         "final_fact_count": len(published),
