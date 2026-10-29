@@ -249,7 +249,7 @@ from rag_engine.retrieval.context_builder import (
 from rag_engine.retrieval.context_recovery import ContextRecovery, recover_context_records, recover_definition_records
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
 from rag_engine.retrieval.enumeration import enumeration_check
-from rag_engine.retrieval.evidence_selection import evidence_spans
+from rag_engine.retrieval.evidence_selection import EVIDENCE_BUDGET_CHARS, evidence_spans
 from rag_engine.retrieval.evidence_selection import new_evidence_count as _new_evidence_count
 from rag_engine.retrieval.extra_retrieval import GUIDE_STEPS_KIND, REQUEST_COVERAGE_KIND, ExtraRetrievalBudget
 from rag_engine.retrieval.guide_steps import (
@@ -2421,6 +2421,32 @@ def _public_span(span: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in span.items() if key not in _CHECK_ONLY_SPAN_KEYS}
 
 
+def _evidence_budget_trace(settings: Settings, evidence_budget_chars: int | None, spans: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """生成に渡した根拠の文字予算の診断（#3776）。技術の数値だけを残し、本文・プロンプトは残さない。
+
+    configured_chars は設定の文字予算（``evidence_budget_chars``。backend の ``RAG_EVIDENCE_BUDGET_CHARS``）、
+    effective_chars は根拠の選択に実際に使った予算（章節を広げたときは ``_section_evidence_budget`` の値）。
+    evidence_block_chars は生成の入力の根拠ブロックの文字数（出典情報・補助情報・書式を含む）、
+    evidence_text_chars はそのうち根拠の本文の文字数の合計。token は ``estimate_tokens`` の見積もり。
+    """
+    from rag_engine.generation.grounded import evidence_block_text
+    from rag_engine.generation.section_expansion import estimate_tokens
+
+    configured = int(getattr(settings, "evidence_budget_chars", 0) or 0) or EVIDENCE_BUDGET_CHARS
+    effective = int(evidence_budget_chars or configured)
+    block = evidence_block_text(spans)
+    return {
+        "configured_chars": configured,
+        "effective_chars": effective,
+        "source": "section_expansion" if evidence_budget_chars is not None else "configured",
+        "effective_exceeds_configured": effective > configured,
+        "span_count": len(spans),
+        "evidence_text_chars": sum(len(str(span.get("text") or "")) for span in spans),
+        "evidence_block_chars": len(block),
+        "evidence_block_tokens_estimate": estimate_tokens(block),
+    }
+
+
 def _span_document_id(span: Mapping[str, Any] | None) -> str:
     """根拠の箇所の文書 id（``document_scope`` の末尾の backend の文書 ID。#2828）。"""
     scope = (span or {}).get("document_scope") or ()
@@ -3245,6 +3271,8 @@ def synthesize_grounded_answer(
         "evidence_refinement": refinement.diagnostics,
         "task_contract": task_contract(question),
         "selected_evidence": [_public_span(s) for s in spans],
+        # 根拠の文字予算: 設定値・実際に使った値・送った根拠ブロックの文字数と見積もり token（#3776）。
+        "evidence_budget": _evidence_budget_trace(settings, evidence_budget_chars, spans),
         "same_unit_fill": unit_fill,
         "rounds": rounds,
         "round_budget": budget.trace(current),

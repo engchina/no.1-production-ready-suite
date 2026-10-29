@@ -1986,6 +1986,20 @@ class Settings(
         ),
     )
     rag_rerank_cache_max_entries: int = Field(default=1024, ge=0, le=100000)
+    rag_evidence_budget_chars: int = Field(
+        default=48000,
+        ge=1000,
+        le=500000,
+        description=(
+            "回答の生成に渡す根拠の原文の文字予算（文字。#3776）。"
+            "既定 48000 は rag_engine の既定と同じ。"
+            "根拠の本文・前置き・出典情報をこの予算で選ぶ。"
+            "全体設定だけで決め、検索・回答プロファイル・KB・文書レシピでは上書きしない。"
+            "章節の拡張（rag_section_expansion_input_token_percent）は読む章節を"
+            "入力 token の上限で別に数え、現在は広げた根拠をこの予算を超えて渡すことがある。"
+            "使った予算と送った根拠の文字数は回答の診断の evidence_budget に残る。"
+        ),
+    )
     rag_answer_timeout_seconds: float = Field(
         default=600.0,
         gt=0.0,
