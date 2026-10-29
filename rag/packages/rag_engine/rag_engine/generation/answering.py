@@ -2596,6 +2596,7 @@ def synthesize_grounded_answer(
                     invalid_output=_invalid_structured_output,
                     glossary=_audit_glossary(runtime_knowledge),
                     confirmed_premises=settings.confirmed_premises,
+                    confirmed_premise_sources=settings.confirmed_premise_sources,
                 )
                 if number == 0:
                     # 監査の推論の量は、監査をする型のときだけ書く（#2966）。

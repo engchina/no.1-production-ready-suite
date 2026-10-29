@@ -212,5 +212,15 @@ def apply_rule_selection_scope(
             dict.fromkeys(term for scope in scopes for term in scope.search_terms)
         ),
         "label": "、".join(scope.label for scope in scopes if scope.label),
+        "confirmed_premises": tuple(
+            dict.fromkeys(pair for scope in scopes for pair in scope.confirmed_premises)
+        ),
+        "confirmed_premise_sources": tuple(
+            dict.fromkeys(
+                (question, answer, "question")
+                for scope in scopes
+                for question, answer in scope.confirmed_premises
+            )
+        ),
     }
     return updated

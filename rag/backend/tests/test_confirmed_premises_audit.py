@@ -11,8 +11,15 @@ from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import GroundedDraft
 
 from app.config import Settings
-from app.rag.answer_engine import AnswerEngine, AnswerScope, build_engine_settings
+from app.rag.answer_engine import (
+    AnswerEngine,
+    AnswerScope,
+    _confirmed_validation_premises,
+    build_engine_settings,
+)
 from app.rag.answer_validation import AnswerValidation
+from app.rag.history_question import HistoryConfirmation
+from app.rag.pipeline import RagPipeline, scope_with_history_confirmations
 from app.schemas.search import SearchRequest
 from tests.audit_fixtures import is_audit_schema, legacy_audit_result
 from tests.test_answer_engine import FakeGenAi, FakeOracle, _fake_llm
@@ -48,6 +55,11 @@ def test_settings_keep_confirmed_sources_and_preserve_them_for_model_purpose(
 ) -> None:
     settings = build_engine_settings(guide_settings(source, state), output_dir=tmp_path)
     assert settings.confirmed_premises == (((LABEL, VALUE),) if expected else ())
+    assert settings.confirmed_premise_sources == (((LABEL, VALUE, source),) if expected else ())
+    assert (
+        settings_for_llm_purpose(settings, LLM_PURPOSE_AUDIT).confirmed_premise_sources
+        == settings.confirmed_premise_sources
+    )
     assert (
         settings_for_llm_purpose(settings, LLM_PURPOSE_AUDIT).confirmed_premises
         == settings.confirmed_premises
@@ -65,6 +77,26 @@ def test_scope_premises_are_explicit_and_do_not_parse_assumptions(tmp_path: Path
         scope=AnswerScope(context="利用者が選んだ値", confirmed_premises=((LABEL, VALUE),)),
     )
     assert explicit.confirmed_premises == ((LABEL, VALUE),)
+    assert explicit.confirmed_premise_sources == ((LABEL, VALUE, "user"),)
+
+
+@pytest.mark.parametrize(
+    "source,accepted",
+    [("user", True), ("question", True), ("assumption", False), ("unknown", False)],
+)
+def test_scope_source_is_preserved_without_promoting_untrusted_source(
+    source: str, accepted: bool, tmp_path: Path
+) -> None:
+    scope = AnswerScope(
+        context="表示用",
+        confirmed_premises=((LABEL, VALUE),),
+        confirmed_premise_sources=((LABEL, VALUE, source),),
+    )
+    settings = build_engine_settings(Settings(), output_dir=tmp_path, scope=scope)
+    assert settings.confirmed_premise_sources == (((LABEL, VALUE, source),) if accepted else ())
+    assert _confirmed_validation_premises(Settings(), scope) == (
+        [{"question": LABEL, "answer": VALUE}] if accepted else []
+    )
 
 
 @pytest.mark.parametrize("mode", ["none", "standard"])
@@ -149,7 +181,57 @@ async def test_formal_answer_forwards_confirmed_premises_and_does_not_leak_to_ne
         validator.assert_not_awaited()
     else:
         assert len(audit_inputs) == 2
-        assert audit_inputs[0]["confirmed_premises"] == [{"question": LABEL, "answer": VALUE}]
+        assert audit_inputs[0]["confirmed_premises"] == [
+            {"question": LABEL, "answer": VALUE, "source": "user"}
+        ]
         assert "confirmed_premises" not in audit_inputs[1]
         assert len(calls) == 4
         assert validator.await_count == 2
+
+
+def test_history_preserves_question_source_and_marks_actual_confirmation_user(
+    tmp_path: Path,
+) -> None:
+    scope = scope_with_history_confirmations(
+        AnswerScope(
+            context="現質問",
+            confirmed_premises=((LABEL, VALUE),),
+            confirmed_premise_sources=((LABEL, VALUE, "question"),),
+        ),
+        [HistoryConfirmation(id="saved-1", question="確認項目B", answer="選択B")],
+    )
+    settings = build_engine_settings(Settings(), output_dir=tmp_path, scope=scope)
+    assert settings.confirmed_premise_sources == (
+        ("確認項目B", "選択B", "user"),
+        (LABEL, VALUE, "question"),
+    )
+
+
+async def test_pipeline_keeps_recognized_pairs_and_explicit_confirmation_precedence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class StopBeforeSearch(Exception):
+        pass
+
+    def stop() -> str:
+        raise StopBeforeSearch()
+
+    monkeypatch.setattr("app.rag.pipeline.new_trace_id", stop)
+    request = SearchRequest(query=QUESTION)
+    request._rule_selection_scope = {
+        "context": "質問で特定した選択",
+        "confirmed_premises": ((LABEL, VALUE), ("項目B", "値B")),
+        "confirmed_premise_sources": ((LABEL, VALUE, "question"), ("項目B", "値B", "question")),
+    }
+    pipeline = RagPipeline(
+        settings=Settings(),
+        scope=AnswerScope(context="確認済み", confirmed_premises=((LABEL, VALUE),)),
+    )
+    with pytest.raises(StopBeforeSearch):
+        await pipeline.run(request)
+    settings = build_engine_settings(Settings(), output_dir=tmp_path, scope=pipeline._scope)
+    assert settings.confirmed_premises == ((LABEL, VALUE), ("項目B", "値B"))
+    assert settings.confirmed_premise_sources == (
+        (LABEL, VALUE, "user"),
+        ("項目B", "値B", "question"),
+    )
