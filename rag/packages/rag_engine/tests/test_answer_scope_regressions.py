@@ -271,7 +271,7 @@ def test_an_explicitly_empty_scope_does_not_authorize_an_operation():
             "confidence": "high",
         }
     )
-    assert _request_plan_errors(draft)
+    assert _request_plan_errors(draft, [span])
     assert _outside_request_plan(item, span, draft, [span])
 
 
@@ -317,7 +317,7 @@ def test_same_evidence_used_for_two_claims_can_repeat_a_consistent_scope_decisio
             "confidence": "high",
         }
     )
-    assert not _request_plan_errors(draft)
+    assert not _request_plan_errors(draft, [span])
     assert not _outside_request_plan(item, span, draft, [span])
 
 
@@ -343,7 +343,7 @@ def test_conflicting_scope_decisions_for_the_same_evidence_are_not_merged():
             "confidence": "high",
         }
     )
-    assert _request_plan_errors(draft)
+    assert _request_plan_errors(draft, [span])
     assert _outside_request_plan(item, span, draft, [span])
 
 
