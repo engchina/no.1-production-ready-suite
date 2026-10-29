@@ -2073,11 +2073,34 @@ def _grounded_spans(
     ]
     if not labels:
         anchors = _visual_evidence_anchors(context, image_evidence)
-    spans = evidence_spans(selection_question, records, anchors=anchors, scope_records=children, **budget_option)
+    # 指定された子、または指定された親の検索命中子を保護する。隣接子を一律に必須扱いしない。
+    # 検索表現と違う元本文も、所属と位置は抜粋時に再検証する。
+    guide_sources = {source for sources in budget_option.get("priority_source_groups", ()) for source in sources}
+    guide_anchors = [
+        replace(child.record, text=child.record.body_text or child.record.text)
+        for parent in context.evidence_tree
+        for child in parent.children
+        if guide_sources & {child.record.chunk_uid, child.record.chunk_id, child.record.id}
+        or (child.role == "retrieved_anchor" and guide_sources & {parent.record.chunk_uid, parent.record.chunk_id, parent.record.id})
+    ]
+    guide_keys = {(child.chunk_uid or child.id, child.source, child.source_run_id) for child in guide_anchors}
+    anchors = [
+        *guide_anchors,
+        *(child for child in anchors if (child.chunk_uid or child.id, child.source, child.source_run_id) not in guide_keys),
+    ]
+    preparation: list[dict[str, Any]] = []
+    spans = evidence_spans(selection_question, records, anchors=anchors, scope_records=children, diagnostics=preparation, **budget_option)
     available = {d["label"] for r in records for d in definition_ranges(r.text, labels)}
     if available - {d["label"] for s in spans for d in definition_ranges(s["text"], labels)}:
         # 本文予算で落ちた定義は、追加検索せず取得済み原文から先に回復する。
-        spans = evidence_spans(question, records, anchors=anchors, definitions_only=True, scope_records=children, **budget_option)
+        preparation.clear()
+        spans = evidence_spans(
+            question, records, anchors=anchors, definitions_only=True, scope_records=children, diagnostics=preparation, **budget_option
+        )
+    if preparation:
+        record_retrieval_stage(
+            {"stage": "generation_evidence_preparation", "input_stage": "prepared_for_generation", "groups": preparation}
+        )
     spans = form_field_kinds.with_field_kind_evidence(form_field_kinds.question_field_kinds(question, context), spans)
     return tag_spans(question, spans)
 
