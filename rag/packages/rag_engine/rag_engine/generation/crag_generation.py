@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
+from rag_engine.generation import passage_marks
 from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.crag_support import _crag_context_fingerprint, _crag_quote_matches
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
@@ -215,10 +216,51 @@ def gap_lines(question: str, view: Mapping[str, Any] | None) -> list[str]:
     return lines
 
 
+# 監査なしで、検索評価が確かめた部分の原文に結び付かない説明に付ける印の理由（#3843）。
+CRAG_UNBOUND_CLAIM_DETAIL = "検索評価で確かめた部分の原文に結び付かない説明で、監査なしのため意味の支持を確かめていない"
+
+
+def _bound_to_verified(entry: Any, allowed: Sequence[Mapping[str, Any]]) -> bool:
+    """説明の出典（別の出典を含む）のどれかが、評価が確かめた部分の写しの範囲を引くか（幅と空白だけを同一視）。"""
+    return any(
+        candidate.span
+        and candidate.span["evidence_id"] in value["evidence_ids"]
+        and _crag_quote_matches(candidate.item.quote, value["quote"])
+        for candidate in (entry, *(getattr(entry, "also", None) or ()))
+        for value in allowed
+    )
+
+
+def _add_verified_quotes(kept: list[Any], allowed: Sequence[Mapping[str, Any]], spans: Sequence[dict]) -> int:
+    """評価が確かめた写しのうち、説明が引いていないものを直接の原文（quote_only）として足す。足した件数を返す。"""
+    from rag_engine.generation import grounded
+
+    seen = {
+        (candidate.span["evidence_id"], candidate.item.quote)
+        for entry in kept
+        for candidate in (entry, *(getattr(entry, "also", None) or ()))
+        if candidate.span
+    }
+    added = 0
+    for value in allowed:
+        span = next((span for span in spans if span["evidence_id"] in value["evidence_ids"]), None)
+        if span is not None and (span["evidence_id"], value["quote"]) not in seen:
+            kept.append(grounded._quote_item(span, value["quote"], answer_labels().crag_quote_only_note))
+            seen.add((span["evidence_id"], value["quote"]))
+            added += 1
+    return added
+
+
 def project_partial_answer(
     current: Any, view: Mapping[str, Any] | None, spans: Sequence[dict], *, audited: bool
 ) -> tuple[Any, dict[str, Any]]:
-    """部分回答に限り、意味監査なしの言い換えを、許可した直接原文へ戻す。"""
+    """部分回答の説明を、評価が確かめた部分の原文と照らして扱う。
+
+    監査なし（``audited=False``）では説明を外さない（#3843・#2738）。確かめた部分の写しを引く説明は印なしで残し、
+    そのほかの説明は本文に残して ``unassessed`` の印を付け、確かめた写しを直接の原文として足す。要約・当てはめは
+    残す（監査なしの警告は通常の検査が付ける）。未確認・不足の観点は ``gap_lines`` で示す。
+    監査あり（意味監査を採用したとき）は、意味の支持を確かめた説明と確かめた写しだけに戻す。
+    """
     from rag_engine.generation.semantic_observation import diagnostic_only
 
     timing = getattr(current, "timing", {})
@@ -235,25 +277,37 @@ def project_partial_answer(
     allowed = [
         value for part in view.get("answerable_parts") or () if part.get("status") == "supported" for value in part.get("evidence") or ()
     ]
+    if not audited:
+        # 確かめた部分が増えても説明を減らさない（確かめた部分が無い回は上の分岐で説明をそのまま残す）。
+        kept = list(current.checked)
+        bound = marked = 0
+        for entry in kept:
+            if not entry.published:
+                continue
+            if _bound_to_verified(entry, allowed):
+                bound += 1
+            elif entry.state != passage_marks.UNVERIFIED:
+                entry.mark("unassessed", CRAG_UNBOUND_CLAIM_DETAIL)
+                marked += 1
+        added = _add_verified_quotes(kept, allowed, spans)
+        return replace(current, checked=kept), {
+            "applied": True,
+            "omitted_claims": [],
+            "bound_claims": bound,
+            "marked_claims": marked,
+            "added_quotes": added,
+            "summary_replaced": False,
+            "retained_reason": "unaudited_partial_answer_keeps_claims_with_marks",
+        }
     kept, omitted = [], []
     for entry in current.checked:
         if entry.item.kind == "gap" or (
-            audited
-            and entry.review_assessment.get("effective_support") == "supported"
-            and any(
-                entry.span and entry.span["evidence_id"] in value["evidence_ids"] and _crag_quote_matches(entry.item.quote, value["quote"])
-                for value in allowed
-            )
+            entry.review_assessment.get("effective_support") == "supported" and _bound_to_verified(entry, allowed)
         ):
             kept.append(entry)
         else:
             omitted.append({"text": entry.item.text, "reason": "no_semantic_support_within_answerable_parts"})
-    seen = {(entry.span["evidence_id"], entry.item.quote) for entry in kept if entry.span}
-    for value in allowed:
-        span = next((span for span in spans if span["evidence_id"] in value["evidence_ids"]), None)
-        if span is not None and (span["evidence_id"], value["quote"]) not in seen:
-            kept.append(grounded._quote_item(span, value["quote"], answer_labels().crag_quote_only_note))
-            seen.add((span["evidence_id"], value["quote"]))
+    _add_verified_quotes(kept, allowed, spans)
     return replace(current, checked=kept, summary=grounded.answer_labels().neutral_summary, applications=[]), {
         "applied": True,
         "omitted_claims": omitted,

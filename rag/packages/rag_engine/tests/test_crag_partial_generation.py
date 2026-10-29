@@ -83,7 +83,9 @@ def test_same_business_overview_cannot_reach_operation_generation():
     assert not result.generation_trace["crag_generation_gate"]["generation_calls"]
 
 
-def test_only_first_part_is_supported_and_invented_second_part_is_not_published():
+def test_unaudited_partial_answer_keeps_the_claim_and_summary_and_shows_the_missing_aspect():
+    # 監査なしでは説明を外さない（#3843・#2738）。確かめた部分の写しを引く説明は印なしで残し、確かめていない観点は
+    # 不足の行で、監査していない要約は警告で示す。
     def generation(context):
         eid = ids(context, QUESTION)[OPEN]
         return draft(
@@ -101,17 +103,20 @@ def test_only_first_part_is_supported_and_invented_second_part_is_not_published(
     assert len(prompts) == 1
     assert "crag_assessment" in prompts[0] and OPEN in prompts[0]
     assert '"status": "supported"' in prompts[0] and '"status": "missing"' in prompts[0] and '"status": "unknown"' in prompts[0]
-    assert OPEN in result.answer_text
-    assert "設定を保存して処理を完了します。" not in result.answer_text
-    assert "設定の保存まで完了できます。" not in result.answer_text
+    assert "設定を保存して処理を完了します。" in result.answer_text
+    assert "設定の保存まで完了できます。" in result.answer_text
     assert "手順については、検索評価で直接の根拠を確認できていません。" in result.answer_text
     assert "未確認" in result.answer_text
     trace = result.generation_trace
     assert trace["crag_assessment"]["required_aspect_coverage"] == "partial"
     # parser呼出が成功しても、この準備用spansだけで実送信の証明にはしない。
     assert trace["crag_assessment"]["input_stage"] == "prepared_for_generation"
-    assert trace["crag_partial_projection"]["applied"]
-    assert trace["crag_partial_projection"]["omitted_claims"]
+    projection = trace["crag_partial_projection"]
+    assert projection["applied"] and projection["omitted_claims"] == [] and not projection["summary_replaced"]
+    assert (projection["bound_claims"], projection["marked_claims"]) == (1, 0)
+    marks = {mark["text"]: {reason["code"] for reason in mark["reasons"]} for mark in result.envelope["passage_marks"]}
+    assert "unassessed" not in marks.get("設定を保存して処理を完了します。", set())
+    assert "summary_unaudited" in marks["設定の保存まで完了できます。"]
     assert result.needs_human_review
 
 
