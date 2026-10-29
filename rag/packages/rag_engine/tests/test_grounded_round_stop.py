@@ -169,7 +169,9 @@ class SynthesizeRoundStopTest(unittest.TestCase):
                 )
             ],
         )
-        result = run(model, ctx, question="明細一覧表を出力する手順と、店舗の抽出条件を教えてください").response
+        question = "1. 対象Aの出力手順を教えてください。\n2. 対象Bの抽出条件を教えてください。"
+        self.assertEqual([row["id"] for row in grounded.task_contract(question)["request_units"]], ["Q1", "Q2"])
+        result = run(model, ctx, question=question).response
         self.assertEqual(len(_drafts(model)), 1)
         rounds = result.generation_trace["rounds"]
         self.assertEqual(rounds[0]["improvement_stop"], grounded.NO_IMPROVEMENT_EVIDENCE_ONLY)
