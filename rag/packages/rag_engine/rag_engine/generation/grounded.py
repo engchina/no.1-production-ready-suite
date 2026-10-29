@@ -4088,7 +4088,8 @@ def citation_units(text: str) -> list[tuple[int, int]]:
 
     units: list[tuple[int, int]] = []
     for start, end in _legacy_citation_units(text):
-        if units and end - start > CITE_UNIT_MAX_CHARS:
+        body = text[start:end]
+        if units and "\n" not in body:
             before_start, before_end = units[-1]
             prefix = text[before_start:before_end].strip()
             # 箇条書きの印が明示された単一行だけを対象にし、空段落や表をまたがない。
@@ -4098,6 +4099,9 @@ def citation_units(text: str) -> list[tuple[int, int]]:
                 and "\n" not in prefix
                 and "|" not in prefix
                 and "\t" not in prefix
+                and "|" not in body
+                and "\t" not in body
+                and not re.match(rf"^{marker_patterns().bullet}\s+\S", body.strip())
                 and not _CITE_SENTENCE_END.search(prefix)
                 and text[before_end:start] == "\n"
                 and before_end - before_start <= CITE_UNIT_MAX_CHARS

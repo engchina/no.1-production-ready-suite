@@ -33,6 +33,13 @@ def test_marked_heading_and_long_indivisible_sentence_share_original_unit(headin
     assert grounded.citation_units(text) == [(0, len(text))]
 
 
+def test_combined_length_overflow_does_not_leave_a_standalone_heading() -> None:
+    body = "あ" * (grounded.CITE_UNIT_MAX_CHARS - 5) + "。"
+    text = "■ 概要\n" + body
+    assert len(body) <= grounded.CITE_UNIT_MAX_CHARS < len(text)
+    assert grounded.citation_units(text) == [(0, len(text))]
+
+
 @pytest.mark.parametrize("prefix", ["概要", "実行", "42", "項目 | 値", "■ 項目 | 値", "■ 説明します。"])
 def test_unproven_heading_table_button_and_completed_sentence_are_not_forced_together(prefix: str) -> None:
     text = prefix + "\n" + BODY
@@ -46,6 +53,14 @@ def test_blank_paragraph_boundary_does_not_join_marked_heading() -> None:
     units = grounded.citation_units(text)
     assert text[units[0][0] : units[0][1]] == "■ 概要"
     assert len(units) == 2
+
+
+@pytest.mark.parametrize("body", ["■ " + "あ" * 155, "欄 | " + "値" * 155, "欄\t" + "値" * 155])
+def test_next_marker_or_table_is_not_joined_to_previous_heading(body: str) -> None:
+    text = "■ 概要\n" + body
+    units = grounded.citation_units(text)
+    assert text[units[0][0] : units[0][1]] == "■ 概要"
+    assert text[units[1][0] : units[1][1]] == body
 
 
 def test_offsets_and_new_view_quote_use_same_original_heading_and_body() -> None:
