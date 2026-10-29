@@ -53,6 +53,30 @@ def test_related_source_and_exact_quote_do_not_override_unsupported_claim():
     assert dimensions["claim_support"]["items"][0]["status"] == "unsupported"
 
 
+@pytest.mark.parametrize("support", ["supported", "unsupported"])
+def test_record_only_retains_body_but_records_its_actual_applicability_effect(support):
+    ctx = context(record(0, OPERATION, "対象Aの設定"))
+    eid = ids(ctx, QUESTION)[OPERATION]
+    result, _ = run_round(
+        ctx,
+        draft(item(eid, OPERATION, OPERATION, request_id="Q1"), summary=""),
+        audit((0, support, "not_applicable", ""), requests=[("Q1", "partial")], summary_supported=False),
+    )
+    dimensions = result.trace()["validation_dimensions"]
+    assert dimensions["citation_validity"]["items"][0]["citations"][0]["status"] == "matched"
+    assert dimensions["claim_support"]["items"][0]["status"] == support
+    application = dimensions["business_applicability"]["items"][0]
+    assert application["pre_audit_status"] == "matched"
+    assert application["observed_status"] == "not_applicable"
+    assert application["status"] == "unverified"
+    assert application["action"] == "record_only" and application["policy_effect"] == "retain_unverified"
+    assert application["confirmation_source"] == "unverified"
+    retained = dimensions["body_retention"]["items"][0]
+    assert retained["included"] and not retained["removed"] and not retained["confirmed"]
+    assert dimensions["body_retention"]["stage"] == "generation_round"
+    assert dimensions["answer_completeness"]["requests"][0]["status"] == "partial"
+
+
 def test_generated_operation_without_a_matching_source_is_not_confirmed():
     ctx = context(record(0, RELATED, "対象Aの設定"))
     proposal = draft(item("unknown", OPERATION, OPERATION, request_id="Q1"))

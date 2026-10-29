@@ -1633,6 +1633,8 @@ def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, 
     plans = _item_request_plans(item, draft)
     if not plans:
         return bool(draft.request_coverage) or "request_coverage" in draft.model_fields_set
+    if _plan_marks_unrelated(item, span, draft, spans):
+        return True
     labels: set[str] = set()
     for plan in plans:
         for label in plan.evidence_ids:
@@ -3243,11 +3245,13 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
         entry.review_assessment = {
             "support": review.observed_support or review.support,
             "applicability": review.applicability,
+            "pre_audit_applicability": entry.item.applies,
+            "pre_audit_condition": entry.item.condition,
             "applicability_action": review.applicability_action,
             "policy_reason": review.applicability_policy_reason,
             "reason": review.reason,
         }
-        # 元のモデル判定は上に保持し、本文の採用を適用確認済みへの昇格と区別する。
+        # record_onlyは削除に使わない方針であり、適用を確認済みにする方針ではない。
         if review.applicability_action == "record_only" and entry.item.applies == "matched":
             entry.item = entry.item.model_copy(update={"applies": "unverified", "condition": ""})
         span = entry.span
@@ -4775,6 +4779,41 @@ class Round:
                         if entry.item.kind != "gap"
                     ],
                 },
+                "business_applicability": {
+                    "execution": self.review_execution,
+                    "confirmed_premises": self.timing.get("confirmed_premises", []),
+                    "items": [
+                        {
+                            "index": index,
+                            "status": entry.item.applies,
+                            "condition": entry.item.condition,
+                            "pre_audit_status": entry.review_assessment.get("pre_audit_applicability", entry.item.applies),
+                            "observed_status": entry.review_assessment.get("applicability", "unknown"),
+                            "action": entry.review_assessment.get("applicability_action", "not_run"),
+                            "policy_effect": "retain_unverified"
+                            if entry.review_assessment.get("applicability_action") == "record_only" and entry.item.applies == "unverified"
+                            else "apply_review"
+                            if entry.review_assessment.get("applicability_action") == "apply"
+                            else "retain_current_state",
+                            "confirmation_source": "unverified"
+                            if entry.item.applies == "unverified"
+                            else "semantic_audit"
+                            if entry.review_assessment and entry.review_assessment.get("applicability_action") == "apply"
+                            else "generation_and_basic_checks",
+                        }
+                        for index, entry in enumerate(self.checked)
+                        if entry.item.kind != "gap"
+                    ],
+                },
+                "body_retention": {
+                    "stage": "generation_round",
+                    "execution": "completed",
+                    "items": [
+                        {"index": index, "included": entry.published, "removed": entry.removed, "confirmed": entry.confirmed}
+                        for index, entry in enumerate(self.checked)
+                        if entry.item.kind != "gap"
+                    ],
+                },
                 "answer_completeness": {
                     "execution": "partial"
                     if self.audit is not None
@@ -6014,6 +6053,7 @@ def run_round(
     glossary: Sequence[Mapping[str, Any]] = (),
     assume_unconfirmed: bool = False,
     confirmed_premises: Sequence[tuple[str, str]] = (),
+    confirmed_premise_sources: Sequence[tuple[str, str, str]] = (),
 ) -> Round:
     """生成と監査。計画の構造不正だけは、生成を一度やり直す。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
@@ -6039,6 +6079,11 @@ def run_round(
     正式名で書いた根拠の対象を別と判定しないよう、監査の入力に渡す。
     """
     audit_settings = settings if audit_settings is None else audit_settings
+    premise_sources = {(label, value): source for label, value, source in confirmed_premise_sources if source in {"user", "question"}}
+    premise_records = [
+        {"question": label, "answer": value, **({"source": premise_sources[label, value]} if (label, value) in premise_sources else {})}
+        for label, value in confirmed_premises
+    ]
     detailed = audit_mode == AUDIT_MODE_DETAILED
     # 監査なしの型は業務ガイドの要件を判定しない（手順の充足は決定的な対応付けだけ。#2800）。
     contracts = () if audit_mode == AUDIT_MODE_NONE else guide_step_contracts
@@ -6187,6 +6232,7 @@ def run_round(
             draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
         # 作り直しても残った不整合（#3228）。計画が決まらない説明は外さずに印を付けて残す（verify）。
         plan_unsettled = _request_plan_errors(draft, spans)
+    plan_unsettled = list(dict.fromkeys([*plan_unsettled, *_plan_undecided_errors(draft, spans)]))
     catalog_review: dict[str, Any] = {}
     if getattr(settings, "article_catalog_review", False) and audit_mode == AUDIT_MODE_NONE:
         catalog_review = {"execution": "not_run", "skipped": "audit_disabled", "reviewed": 0}
@@ -6227,6 +6273,8 @@ def run_round(
     draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
     timing["generation_calls"] = generation_calls
+    if premise_records:
+        timing["confirmed_premises"] = premise_records
     if plan_errors:
         timing["request_plan_errors"] = plan_errors
     if catalog_review:
@@ -6371,8 +6419,8 @@ def run_round(
         }
         if glossary:
             inputs["glossary"] = [dict(term) for term in glossary]
-        if confirmed_premises:
-            inputs["confirmed_premises"] = [{"question": label, "answer": value} for label, value in confirmed_premises]
+        if premise_records:
+            inputs["confirmed_premises"] = premise_records
         if detailed:
             inputs["unused_evidence"] = _unused_evidence(question, spans, used)
         if contracts:
