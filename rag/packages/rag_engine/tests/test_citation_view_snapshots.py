@@ -78,9 +78,9 @@ def test_one_frozen_view_supplies_the_numbered_prompt_and_original_extraction(mo
     actual_units = grounded.citation_units
     calls = []
 
-    def units(text: str) -> list[tuple[int, int]]:
+    def units(text: str, **kwargs: bool) -> list[tuple[int, int]]:
         calls.append(text)
-        return actual_units(text)
+        return actual_units(text, **kwargs)
 
     monkeypatch.setattr(grounded, "citation_units", units)
     prompt = grounded.format_functions([evidence])
