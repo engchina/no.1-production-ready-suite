@@ -4168,6 +4168,13 @@ export const ja = {
   // 根拠の役割（回答エンジンの retrieval_role。英語の値は画面に出さない）。
   "search.citation.badge.vector": "Vector #{rank}",
   "search.citation.badge.keyword": "Keyword #{rank}",
+  "search.citation.supportNotRun": "内容の裏付け確認は未実施",
+  "search.citation.supportError": "内容確認で実行エラー・裏付け未確定",
+  "search.citation.supportTimeout": "内容確認が時間切れ・裏付け未確定",
+  "search.citation.supportCompletedUnknown": "内容確認実行済み・裏付け未確定",
+  "search.citation.supportPartial": "内容確認は一部のみ・裏付け未確定",
+  "search.citation.supportUnknown": "内容の裏付けは未確定",
+  "search.citation.supportDiagnostic": "内容の裏付け確認は診断のみ",
   "search.citation.badge.both": "Both",
   "search.citation.badge.rerank": "Rerank #{rank}",
   "search.citation.contextHeaderLabel": "検索用の文脈ヘッダ",

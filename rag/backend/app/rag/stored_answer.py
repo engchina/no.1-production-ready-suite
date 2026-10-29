@@ -70,6 +70,7 @@ _EVIDENCE_KEYS = (
     # 回答での使われ方（該当確認済み / 参考。#2040）と、親（まとまり）だけを参照した子の
     # 印（#2710）。
     "evidence_answer_use",
+    "evidence_claim_support",
     "evidence_parent_used",
     "evidence_role",
     "context_role",

@@ -20,6 +20,15 @@ export const EVIDENCE_LABELS = evidenceLabels();
 export function citationEvidenceItem(chunk: RetrievedChunk): EvidenceListItem {
   const recipeSlot = integerMetadataValue(chunk.metadata.recipe_slot_no);
   const tags: EvidenceTag[] = [];
+  const support = chunk.metadata.evidence_claim_support;
+  if (citationModelUsed(chunk) === true && support != null && typeof support === "object" && !Array.isArray(support)) {
+    const observation = support as Record<string, unknown>;
+    if (observation.status !== "supported") {
+      if (observation.policy === "diagnostic_only") tags.push({ id: "claim-support-policy", value: t("search.citation.supportDiagnostic"), tone: "neutral" });
+      const key = observation.execution === "not_run" ? "search.citation.supportNotRun" : observation.execution === "error" ? "search.citation.supportError" : ["timeout", "timed_out"].includes(String(observation.execution)) ? "search.citation.supportTimeout" : observation.execution === "completed" ? "search.citation.supportCompletedUnknown" : observation.execution === "partial" ? "search.citation.supportPartial" : "search.citation.supportUnknown";
+      tags.push({ id: "claim-support", value: t(key), tone: "neutral" });
+    }
+  }
   if (recipeSlot) tags.push({ id: "recipe", value: t("documents.recipes.name", { slot: recipeSlot }), icon: Layers });
   if (chunk.category_name) tags.push({ id: "category", value: chunk.category_name, tone: "info" });
   // チャットの添付の根拠（#2517）。文書の表に無いので、原文のプレビューは開かない。
