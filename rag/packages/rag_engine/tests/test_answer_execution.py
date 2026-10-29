@@ -27,7 +27,7 @@ class AnswerExecutionTests(unittest.TestCase):
         self.settings = get_settings()
         self.enterContext(patch.object(generation, "load_latest_or_source_chunk_run", return_value=_chunk_run_stub()))
         self.enterContext(patch.object(generation, "check_adb_hybrid_search_ready"))
-        self.context = _answer_context([_record("r1", "docling", 1, 1, "source evidence")])
+        self.context = _answer_context([_record("r1", "docling", 1, 1, "設定画面を開き、実行ボタンを押します。")])
         self.search = self.enterContext(patch.object(generation, "build_adb_hybrid_answer_context", return_value=self.context))
         self.parse = self.enterContext(patch.object(generation, "parse_text_response", side_effect=echo_model))
 
@@ -229,6 +229,16 @@ class AnswerExecutionTests(unittest.TestCase):
                             query="質問",
                             retrieval_queries=("質問",),
                             sufficient=True,
+                            generation_usable=True,
+                            answerable_parts=(
+                                {
+                                    "aspect": "requested_result",
+                                    "kind": "operation",
+                                    "claim": self.context.records[0].text,
+                                    "status": "supported",
+                                    "evidence": [{"source_id": "r1", "quote": self.context.records[0].text}],
+                                },
+                            ),
                         ),
                     ),
                 ):
@@ -410,7 +420,7 @@ class AnswerExecutionTests(unittest.TestCase):
 
     def test_retrieval_without_answer_runs_the_answer_evidence_flow_crag(self):
         # CRAG の回答フローなら、回答を作らない検索も同じ根拠確認（LLM）をする。
-        grade = _crag_grade(sufficient=True, confidence=0.9, relevant_chunk_ids=["r1"])
+        grade = _crag_grade(sufficient=True, confidence=0.9, relevant_chunk_ids=["r1"], support_text=self.context.records[0].text)
         steps, calls = self.assert_same_evidence_flow(generation.CRAG_ANSWER_FLOW_LABEL, grade)
         self.assertIn((1, "文書検索（1回目）"), steps)
         self.assertIn((1, "根拠確認（1回目）"), steps)
@@ -483,12 +493,14 @@ class AnswerExecutionTests(unittest.TestCase):
             heading("補正検索の準備"),
             heading("文書検索（2回目）"),
             "状態: エラーで中断",
-            heading("回答文の生成と根拠確認（1回目）"),
         )
         self.assertNotRegex(result.question_display, heading("根拠確認（2回目）"))
         self.assertEqual(result.crag_attempts[0]["stop_reason"], "retrieval_error")
         self.assertEqual(result.crag_attempts[0]["recovery_trace"]["retrieval_error"], "AdbHybridSearchUnavailable")
         self.assertEqual(self.search.call_count, 2)
+        self.assertEqual([call.args[3].__name__ for call in self.parse.call_args_list], ["CragRetrievalGradeOutput"])
+        self.assertEqual(result.generation_trace["crag_generation_gate"]["generation_calls"], 0)
+        self.assertNotRegex(result.question_display, heading("回答文の生成と根拠確認（1回目）"))
         self.assertTrue(result.answer_text)
 
     def test_llm_error_has_trace_and_does_not_leak_into_next_request(self):

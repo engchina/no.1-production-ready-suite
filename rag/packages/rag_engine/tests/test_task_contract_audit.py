@@ -92,7 +92,7 @@ def test_crag_high_confidence_does_not_prove_required_coverage():
     )
     with patch("rag_engine.generation.answering.parse_text_response", return_value=grade):
         result = _grade_crag_retrieval(1, "登録方法", "登録方法", ["登録方法"], AnswerContext(records=[r], text=r.text), object())
-    assert result.generation_usable and result.required_aspect_coverage == "unknown"
+    assert not result.generation_usable and result.required_aspect_coverage == "unknown"
     assert result.grade_execution == "partial"
 
 
@@ -111,7 +111,7 @@ def test_crag_does_not_resolve_ambiguous_local_ids():
     )
     with patch("rag_engine.generation.answering.parse_text_response", return_value=grade):
         result = _grade_crag_retrieval(1, "登録方法", "登録方法", ["登録方法"], AnswerContext(records=[a, b], text="text"), object())
-    assert result.relevant_chunk_ids == () and result.generation_usable
+    assert result.relevant_chunk_ids == () and not result.generation_usable
     assert result.required_aspect_coverage == "unknown"
     assert all(not c["source_ids"] for c in result.aspect_checks)
 

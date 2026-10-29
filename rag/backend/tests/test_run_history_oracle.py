@@ -72,7 +72,11 @@ async def test_run_history_round_trip_on_real_oracle() -> None:
                         "stages": {
                             "stages": [{"stage": "answer", "outcome": "success"}],
                             # 利用量（#3419）は a の実行だけ。b は記録の無い実行（未計測）。
-                            **({"usage": usage} if user == "a" else {}),
+                            **(
+                                {"usage": usage, "validation_execution": "timed_out"}
+                                if user == "a"
+                                else {}
+                            ),
                         },
                         "citations": None if user == "a" else [{"chunk_id": "c1"}],
                     }
@@ -123,6 +127,15 @@ async def test_run_history_round_trip_on_real_oracle() -> None:
         assert len(str(rows[0]["question"])) == 300
         assert hidden is None
         assert own is not None
+        assert own["validation_execution"] == "timed_out"
+        saved_stages = own["stages_json"]
+        assert isinstance(saved_stages, dict)
+        assert saved_stages["validation_execution"] == "timed_out"
+        assert (
+            next(row for row in rows if row["run_id"] == run_ids[0])["validation_execution"]
+            == "timed_out"
+        )
+        assert other is not None and other.get("validation_execution") is None
         assert own["user_uuid"] == "uuid-a"
         assert str(own["question"]).endswith("あ")
         assert len(str(own["question"])) > 300

@@ -496,11 +496,11 @@ class GuideStepSharedEvidenceTest(unittest.TestCase):
         reversed_checked = [self._entry(span, SHARED_B), self._entry(span, SHARED_A)]
         self.assertEqual(self._statuses(SHARED_GUIDE, reversed_checked, [span])[0], {"s1": "explained", "s2": "explained"})
 
-    def test_one_item_is_not_counted_for_two_steps(self):
-        """両手順の主の操作を 1 つの引用にまとめた item は、1 つの手順の説明にだけ数える。"""
+    def test_one_item_can_explain_two_independently_matched_steps(self):
+        """両手順の主の操作を含む item は、段落を分けなくても両手順を説明できる。"""
         span = self._span("run:s", SHARED)
         statuses, _ = self._statuses(SHARED_GUIDE, [self._entry(span, SHARED_A + SHARED_B)], [span])
-        self.assertEqual(sorted(statuses.values()), ["explained", "unused"])
+        self.assertEqual(sorted(statuses.values()), ["explained", "explained"])
 
     def test_same_text_in_another_chunk(self):
         """別の chunk の同じ原文: 共通の文は手順の説明にならず、手順の主の操作の文はその手順の説明になる。"""
@@ -516,11 +516,11 @@ class GuideStepSharedEvidenceTest(unittest.TestCase):
         self.assertEqual(self._statuses(steps, [self._entry(overview[0], SHARED_B)], overview)[0], {"s1": "unused", "s2": "explained"})
 
     def test_optional_branch_step_does_not_take_the_required_steps_item(self):
-        """不要な分岐（条件が決まらない分岐の手順）は、必須の手順の説明を奪わず、充足の判定にも数えない。"""
+        """任意分岐の説明が同じ段落にあっても、必須の手順の説明を奪わない。"""
         span = self._span("run:s", SHARED)
         steps = (SHARED_GUIDE[1], SHARED_GUIDE[0])
         statuses, coverage = self._statuses(steps, [self._entry(span, SHARED)], [span], optional=("s2",))
-        self.assertEqual(statuses, {"s1": "explained", "s2": "unused"})
+        self.assertEqual(statuses, {"s1": "explained", "s2": "explained"})
         self.assertEqual(grounded.unexplained_guide_steps(coverage), [])
 
     def test_missing_evidence_is_kept_apart(self):

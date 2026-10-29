@@ -90,6 +90,15 @@ def marks(result):
     }
 
 
+def assert_withheld_summary(result):
+    """本文はそのままに、最終確定で保留した要約と理由を確かめる。"""
+    assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
+    assert not any("summary_unaudited" in reasons for reasons in marks(result).values())
+    final = result.generation_trace["finalization"]["summary"]
+    assert final["status"] == "withheld"
+    assert final["reason"]
+
+
 def details(result):
     """本文の段落の印の理由の詳細（段落の文 → detail をつないだ文。本文の節には出さず記録だけに残る。#2738）。"""
     return {
@@ -1466,15 +1475,16 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertIn("items が空の草稿", grounded.AUDIT_SYSTEM_PROMPT)
 
     def test_summary_without_audited_items_gets_a_warning_even_if_the_audit_supports_it(self):
-        """監査対象の item がない round は、監査が summary_supported=true を返しても summary に警告を付ける (#1014・#2738)。"""
+        """監査対象の説明がない場合、監査が支持しても要約の結論は保留する。"""
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
         guarantee = "集計表出力で計上された明細を確認できます。"
         # 引用元の決まらない説明（未知の根拠）は本文に印つきで残るが、監査対象にはならない。
         unknown = draft(item("E-unknown", "年次集計を開いて実行ボタンを押します。", "x"), summary=guarantee)
         result = run(FakeModel([unknown], [audit(requests=[("Q1", "partial")], summary_supported=True)]), ctx).response
-        self.assertTrue(result.answer_text.startswith(guarantee))
-        self.assertEqual(marks(result)[guarantee], ["summary_unaudited"])
-        self.assertEqual(details(result)[guarantee], "監査対象の item がない")
+        assert_withheld_summary(result)
+        self.assertNotIn(guarantee, result.answer_text)
+        self.assertIn("年次集計を開いて実行ボタンを押します。", result.answer_text)
+        self.assertEqual(marks(result)["年次集計を開いて実行ボタンを押します。"], ["citation_error"])
 
     def test_unused_evidence_for_the_audit_is_ranked_by_relevance_to_the_question(self):
         """監査に渡す未使用根拠は先頭 30 件を盲目的に切らず、質問との関連度順に並べる (#1014)。"""
@@ -1662,15 +1672,16 @@ class GroundedAnswerTest(unittest.TestCase):
         claim = "【年次集計】を開いて実行ボタンを押します。"
         warned = draft(item(eid, claim, "実行ボタンを押して完了します。"), summary=guarantee)
         result = run(FakeModel([warned], [audit()]), ctx).response
-        self.assertTrue(result.answer_text.startswith(guarantee))
-        self.assertEqual(marks(result)[guarantee], ["summary_unaudited"])
+        assert_withheld_summary(result)
+        self.assertNotIn(guarantee, result.answer_text)
+        self.assertIn(claim, result.answer_text)
         self.assertEqual(marks(result)[claim], ["unassessed"])
         self.assertIn("監査の応答が得られなかった", details(result)[claim])
         self.assertTrue(all(r["audit"] is None for r in result.generation_trace["rounds"]))
         self.assertGreaterEqual(len(result.generation_trace["rounds"]), 2)
 
     def test_summary_flagged_in_a_rejected_round_gets_a_warning_in_the_accepted_round(self):
-        """初回監査が見逃した summary の保証を、後続 round の監査が不支持としたら警告を付ける (#621・#2738)。"""
+        """後続の監査で不支持となった同じ要約は、本文を残して保留する。"""
         source_text = LIST_TEXT + "\n結果を確認します。"
         ctx = context(record(0, source_text, "売上-(3)年次集計明細作成"))
         eid = ids(ctx)[source_text]
@@ -1713,9 +1724,8 @@ class GroundedAnswerTest(unittest.TestCase):
         )
         result = run(FakeModel([good], [first, second]), ctx).response
         self.assertEqual([r["accepted"] for r in result.generation_trace["rounds"]], [True, False])
-        self.assertTrue(result.answer_text.startswith(guarantee))
-        self.assertEqual(marks(result)[guarantee], ["summary_unaudited"])
-        self.assertEqual(details(result)[guarantee], "前の回の監査が同じ summary を不支持")
+        assert_withheld_summary(result)
+        self.assertNotIn(guarantee, result.answer_text)
         self.assertIn("1. 一覧表を選択し", result.answer_text)  # items は残す
 
     def test_correction_with_more_supported_steps_is_adopted_despite_a_dropped_item(self):
@@ -1807,7 +1817,10 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertEqual(marks(result)[guarantee], ["unsupported"])
         self.assertEqual(marks(result)[both], ["unsupported"])  # 未説明の文ごと引用しても、保証の裏付けにはならない
         self.assertNotIn(caveat, marks(result))
-        self.assertEqual(marks(result)[guarantee + "ただし完全に一致するかは保証できません。"], ["summary_unaudited"])
+        assert_withheld_summary(result)
+        self.assertNotIn(guarantee + "ただし完全に一致するかは保証できません。", result.answer_text)
+        self.assertIn(guarantee, result.answer_text)
+        self.assertIn(both, result.answer_text)
         self.assertIn(caveat, result.answer_text)
 
         import json as _json
@@ -1885,10 +1898,11 @@ class GroundedAnswerTest(unittest.TestCase):
             {
                 "2020年に倉庫マスタ登録画面で拠点倉庫名を入力します。": ["unsupported"],
                 "拠点倉庫名を削除し、実行ボタンを押します。": ["unsupported"],
-                # 本文の説明がすべて印つきなので、summary にも警告が付く。
-                "集計表出力から明細一覧を出力できます。": ["summary_unaudited"],
             },
         )
+        assert_withheld_summary(result)
+        self.assertIn(year["text"], result.answer_text)
+        self.assertIn(delete["text"], result.answer_text)
         self.assertNotIn(grounded.answer_labels().quote_only_section, result.answer_text)
         self.assertEqual(result.envelope["outcome"], "insufficient_evidence")  # 確かめた段落が 1 つも無い
 
@@ -1917,9 +1931,9 @@ class AuditRetryAndHeadingTest(unittest.TestCase):
         first = result.generation_trace["rounds"][0]
         self.assertIsNone(first["audit"])
         self.assertEqual(first["audit_calls"], 2)
-        # 監査なしの summary は残して警告を付ける（#2738）。
-        self.assertTrue(result.answer_text.startswith("集計表出力から明細一覧を出力できます。"))
-        self.assertEqual(marks(result)["集計表出力から明細一覧を出力できます。"], ["summary_unaudited"])
+        # 未監査の本文は印付きで残し、要約の結論は保留する。
+        assert_withheld_summary(result)
+        self.assertIn(step, result.answer_text)
         self.assertEqual(marks(result)[step], ["unassessed"])  # 監査が済んでいない説明は未確認
 
     def test_audit_receives_the_heading_of_the_quote(self):
@@ -2078,7 +2092,9 @@ class ObjectSubstitutionGuardTest(unittest.TestCase):
         result = run(model, ctx, question).response
         self.assertEqual(marks(result)[text], ["unsupported"])
         self.assertNotIn("『地区別売上集計表』は取得した資料に記載がありません。", result.answer_text)
-        self.assertEqual(marks(result)["地区別売上集計表は顧客名簿画面から出力できます。"], ["summary_unaudited"])
+        assert_withheld_summary(result)
+        self.assertNotIn("地区別売上集計表は顧客名簿画面から出力できます。", result.answer_text)
+        self.assertIn(text, result.answer_text)
         self.assertEqual(result.confidence, "low")
         result.generation_trace["rounds"][0]["items"][0]["reasons"]
         self.assertTrue(any("監査: unsupported/" in r for r in result.generation_trace["rounds"][0]["items"][0]["reasons"]))
@@ -2673,9 +2689,9 @@ class SummaryDeniedClaimTest(unittest.TestCase):
             ],
         )
         result = run(model, self.ctx, self.QUESTION).response
-        self.assertTrue(result.answer_text.startswith(claim))
+        assert_withheld_summary(result)
         texts = {mark["text"]: [reason["code"] for reason in mark["reasons"]] for mark in result.envelope["passage_marks"]}
-        self.assertEqual(texts, {claim: ["summary_unaudited"], "1. " + claim: ["unsupported"]})
+        self.assertEqual(texts, {"1. " + claim: ["unsupported"]})
         self.assertIn("2. 実行ボタンを押します。", result.answer_text)  # 支持された item は残す
         self.assertIn("1. " + claim, result.answer_text)  # 確かめられない主張は印つきで残す
         self.assertEqual(result.generation_trace["rounds"][0]["summary_reason"], "")
@@ -2692,7 +2708,12 @@ class SummaryDeniedClaimTest(unittest.TestCase):
                     summary=summary,
                 )
             ],
-            [audit((0, "unsupported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")])],
+            [
+                {
+                    **audit((0, "unsupported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")]),
+                    "summary_basis": [summary],
+                }
+            ],
         )
         result = run(model, self.ctx, self.QUESTION).response
         self.assertTrue(result.answer_text.startswith(summary))
@@ -2712,9 +2733,10 @@ class SummaryDeniedClaimTest(unittest.TestCase):
             [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])],
         )
         result = run(model, self.ctx, self.QUESTION).response
-        self.assertTrue(result.answer_text.startswith(dropped))
+        assert_withheld_summary(result)
+        self.assertIn("実行ボタンを押します。", result.answer_text)
         texts = {mark["text"]: [reason["code"] for reason in mark["reasons"]] for mark in result.envelope["passage_marks"]}
-        self.assertEqual(texts, {dropped: ["summary_unaudited"], "・" + dropped: ["quote_unmatched"]})
+        self.assertEqual(texts, {"・" + dropped: ["quote_unmatched"]})
 
     def test_summary_asserting_a_claim_without_a_source_gets_a_warning(self):
         """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""
@@ -2732,7 +2754,9 @@ class SummaryDeniedClaimTest(unittest.TestCase):
         result = run(model, self.ctx, self.QUESTION).response
         texts = {mark["text"]: [reason["code"] for reason in mark["reasons"]] for mark in result.envelope["passage_marks"]}
         self.assertEqual(texts["・" + claim], ["citation_error"])
-        self.assertEqual(texts["実行ボタンを押して進めます。設定ボタンの利用は一日に三回までです。"], ["summary_unaudited"])
+        assert_withheld_summary(result)
+        self.assertNotIn("実行ボタンを押して進めます。設定ボタンの利用は一日に三回までです。", result.answer_text)
+        self.assertIn("実行ボタンを押します。", result.answer_text)
         self.assertEqual(result.generation_trace["rounds"][0]["summary_warning"], "監査が summary を不支持")
 
     def test_summary_restating_only_sourced_claims_has_no_warning_beside_a_claim_without_a_source(self):
@@ -2816,7 +2840,7 @@ class ApplicabilityAuditTest(unittest.TestCase):
 
     def test_audit_prompt_requires_positive_support_and_rejects_other_function_operations(self):
         rules = [line for line in grounded.AUDIT_SYSTEM_PROMPT.splitlines() if line.startswith("- ")]
-        self.assertTrue(any("citations" in line and "操作・対象・適用条件・順序" in line and "supported" in line for line in rules))
+        self.assertTrue(any(all(term in line for term in ("citations", "操作", "対象", "適用条件", "順序", "supported")) for line in rules))
         self.assertTrue(any("function_context・未引用の補助資料・見出し" in line and "支持根拠として使わない" in line for line in rules))
         self.assertTrue(any("共通の操作語" in line and "not_applicable" in line for line in rules))
         self.assertTrue(
@@ -2863,9 +2887,8 @@ class ApplicabilityAuditTest(unittest.TestCase):
         )
         conditional = audit((0, "supported", "conditional", "処理を選択"), requests=[("Q1", "addressed")])
         result = run(FakeModel([steps], [conditional]), ctx).response
-        # summary は残し、条件を落とした断定になり得るので警告を付ける（#2738）。
-        self.assertTrue(result.answer_text.startswith("集計表出力から明細一覧を出力できます。"))
-        self.assertEqual(marks(result)["集計表出力から明細一覧を出力できます。"], ["summary_unaudited"])
+        # 条件を落とす要約は保留し、条件付きの操作説明を残す。
+        assert_withheld_summary(result)
         self.assertIn("（処理を選択の場合）一覧表を選択し", result.answer_text)
         self.assertEqual(result.generation_trace["rounds"][0]["summary_warning"], "支持された説明がすべて条件付き・適用未確認")
 
@@ -3831,7 +3854,7 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         self.assertEqual(result.generation_trace["rounds"][0]["items"][1]["reasons"], [])
 
     def test_summary_is_neutral_when_the_audit_marks_every_request_missing(self):
-        """監査が全要求を missing とした round の summary には警告を付ける。1 つでも addressed なら付けない (#732・#2738)。"""
+        """全要求が未回答なら要約を保留し、回答済みの根拠がある場合は保持する。"""
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
         eid = ids(ctx)[LIST_TEXT]
         claim = "集計表出力から明細一覧を出力できます。"
@@ -3840,8 +3863,8 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
             [audit((0, "supported", "matched", ""), requests=[("Q1", "missing", "手順は答えていない")])],
         )
         result = run(model, ctx).response
-        self.assertTrue(result.answer_text.startswith(claim))
-        self.assertEqual(marks(result)[claim], ["summary_unaudited"])
+        assert_withheld_summary(result)
+        self.assertNotIn(claim, result.answer_text)
         self.assertIn("一覧表を選択し、処理を選択します。", result.answer_text)  # items は公開する
         model = FakeModel(
             [draft(item(eid, "一覧表を選択し、処理を選択します。", "一覧表を選択し、処理を選択します。", request_id="Q1"), summary=claim)],

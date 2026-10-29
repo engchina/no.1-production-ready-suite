@@ -240,9 +240,12 @@ def test_stated_unavailable_may_omit_the_quote_only_for_gap_lines(kind, explaine
     assert (result[0]["status"] == "explained") is explained
 
 
-def test_one_answer_item_cannot_complete_two_distinct_steps():
+def test_one_operation_does_not_complete_a_distinct_missing_step():
     result = grounded.apply_guide_contracts(
-        coverage("a", "b"), [entry()], [contract("a", "対象選択"), contract("b", "保存確定")], audit(review("a:0", [0]), review("b:0", [0]))
+        coverage("a", "b"),
+        [entry()],
+        [contract("a", "対象選択"), contract("b", "保存確定")],
+        audit(review("a:0", [0]), {**review("b:0", [], "missing"), "answer_quote": ""}),
     )
     assert [step["status"] for step in result] == ["explained", "unused"]
 

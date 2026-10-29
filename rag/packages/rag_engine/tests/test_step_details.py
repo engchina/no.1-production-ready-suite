@@ -180,14 +180,20 @@ class CragFlowStepDetailsTest(unittest.TestCase):
     def test_grade_and_rewrite_steps(self):
         grades = [
             _crag_grade(sufficient=False, confidence=0.1, reason="根拠が話題違い", rewritten_query="合成の探し直しの検索文"),
-            _crag_grade(sufficient=True, confidence=0.92, relevant_chunk_ids=["chunk-good"], reason="根拠が直接答えている"),
+            _crag_grade(
+                sufficient=True,
+                confidence=0.92,
+                relevant_chunk_ids=["chunk-good"],
+                reason="根拠が直接答えている",
+                support_text="設定画面を開いて保存ボタンを押します。",
+            ),
         ]
 
         def model(system, prompt, settings, schema, **options):
             return grades.pop(0) if schema is CragRetrievalGradeOutput else echo_model(system, prompt, settings, schema, **options)
 
         initial = _answer_context([_chunk_record("chunk-bad", "child", 1, "", "合成の別の話題")])
-        corrected = _answer_context([_chunk_record("chunk-good", "child", 2, "", "合成の正しい根拠")])
+        corrected = _answer_context([_chunk_record("chunk-good", "child", 2, "", "設定画面を開いて保存ボタンを押します。")])
         with (
             patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", return_value=_chunk_run_stub()),
             patch("rag_engine.generation.answering.check_adb_hybrid_search_ready"),
@@ -204,7 +210,7 @@ class CragFlowStepDetailsTest(unittest.TestCase):
             )
         steps = _by_name(result)
         first = _fields(steps["根拠確認（1回目）"])
-        self.assertTrue(first["結果"].startswith("生成に利用可能"))
+        self.assertTrue(first["結果"].startswith("生成に使える材料なし"))
         self.assertEqual(first["判定した根拠"], "1 件")
         self.assertEqual(first["関係あり / なし"], "0 件 / 0 件")
         self.assertEqual(first["次の対処"], "検索文を書き換えて探し直す")

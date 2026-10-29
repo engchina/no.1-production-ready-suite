@@ -46,6 +46,7 @@ interface RunRow {
   status: "success" | "blocked" | "error";
   answer_outcome: string | null;
   verification: "verified" | "partial" | "unverified" | null;
+  validation_execution?: string | null;
   confidence: string | null;
   needs_human_review: boolean | null;
   citation_count: number;
@@ -1369,4 +1370,31 @@ test("実行履歴の主一覧は高い画面へ拡張してページ送りを�
   await mockRuns(page, Array.from({ length: 60 }, (_, index) => run(index + 1, { question: `合成の質問 ${index + 1}`, search_answer_profile_name: "プロファイル A" })));
   await page.goto("/history");
   await expectGrowingList(page, testInfo, "run-history");
+});
+
+
+test("資料照合の実行状態は未照合にまとめず、一覧と詳細で区別する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockLocalAuth(page);
+  const states = [
+    ["disabled", "設定で無効"], ["not_run", "未実行"], ["error", "確認処理でエラー"],
+    ["timed_out", "確認が時間切れ"], ["passed", "確認完了・問題なし"], ["failed", "確認完了・問題あり"],
+  ];
+  const rows = states.map(([execution], index) => run(index + 1, { answer_generated: true, verification: "unverified", validation_execution: execution }));
+  await mockRuns(page, rows);
+  await page.goto("/history");
+  if (testInfo.project.name === "desktop") {
+    for (const [index, [, label]] of states.entries()) {
+      await expect(page.getByTestId(`run-history-row-run-${index + 1}`)).toContainText(label);
+    }
+  }
+  for (const [index, [, label]] of states.entries()) {
+    await page.goto(`/history/run-${index + 1}`);
+    await page.getByTestId("run-history-timeline-summary").click();
+    await page.getByTestId("run-history-process-details").click();
+    const validation = page.getByTestId("answer-validation-status");
+    await expect(validation).toContainText(label);
+    await expect(validation).not.toContainText("未照合");
+  }
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("validation-execution-history.png") });
 });

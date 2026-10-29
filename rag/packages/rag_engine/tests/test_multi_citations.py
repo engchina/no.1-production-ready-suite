@@ -2,7 +2,7 @@
 
 規則を定めた条項と、それを説明する手順書が同じ内容を述べるとき、説明を 1 回だけ出し、出典を文書ごとに並べる。
 各出典は出典ごとに原文照合・決定的な検査・監査に掛け、通らない出典だけを外す（説明は残す）。条で構成された
-文書の条を出典にした説明は、監査なしの型でも事実の監査に掛ける。
+文書の条を出典にした説明も、設定した監査の型に従う。
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 
+import pytest
 from test_grounded_answer import FakeModel, audit, context, draft, ids, marks, record
 
 from rag_engine.config import get_settings
@@ -195,23 +196,37 @@ def test_a_supported_second_citation_takes_over_when_the_first_is_not_supported(
     assert any(entry.get("citation_dropped") and entry["evidence_id"] == rule for entry in dropped)
 
 
-def test_claims_citing_an_article_are_audited_even_without_the_audit_mode():
+def test_article_citations_do_not_enable_an_audit_in_none_mode():
+    ctx = _context(article=True)
+    rule, guide = _labels(ctx)
+    other = "窓口で受付印を受けます。"
+    model = FakeModel([draft(_cite((rule, QUOTE)), _cite((guide, other), text=other))], [])
+
+    result = _run(model, ctx)
+
+    assert [name for name, _prompt in model.prompts] == ["GroundedDraft"]
+    assert not _audit_inputs(model)
+    assert other not in marks(result)
+    trace = result.generation_trace
+    assert trace["audit_mode"] == grounded.AUDIT_MODE_NONE
+    assert trace["rounds"][0]["audit_calls"] == 0
+    semantic = trace["rounds"][0]["validation_dimensions"]["claim_support"]
+    assert semantic["execution"] == "not_run"
+    assert all(row["status"] == "unknown" for row in semantic["items"])
+
+
+@pytest.mark.parametrize("mode", [grounded.AUDIT_MODE_STANDARD, grounded.AUDIT_MODE_DETAILED])
+def test_enabled_audit_modes_review_both_article_and_other_sources(mode):
     ctx = _context(article=True)
     rule, guide = _labels(ctx)
     other = "窓口で受付印を受けます。"
     model = FakeModel([draft(_cite((rule, QUOTE)), _cite((guide, other), text=other))], [_audit_by_evidence({rule})])
-
-    result = _run(model, ctx)
-
-    # 監査は条の出典の説明だけ（standard の schema）。手順書だけの説明は監査しない。
-    assert [name for name, _prompt in model.prompts if name != "GroundedDraft"] == ["GroundedFactAudit"]
+    result = _run(model, ctx, mode)
     inputs = _audit_inputs(model)[0]
-    assert [entry["evidence_id"] for entry in inputs["items"]] == [rule]
+    assert {entry["evidence_id"] for entry in inputs["items"]} == {rule, guide}
     assert marks(result)[CLAIM] == ["unsupported"]
     assert other not in marks(result)
-    trace = result.generation_trace
-    assert trace["audit_mode"] == grounded.AUDIT_MODE_NONE
-    assert trace["rounds"][0]["timing"]["article_audit_items"] == 1
+    assert result.generation_trace["rounds"][0]["audit_calls"] == 1
 
 
 def test_without_article_citations_the_audit_mode_none_calls_no_audit():

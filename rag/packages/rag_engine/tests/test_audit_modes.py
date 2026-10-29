@@ -234,7 +234,7 @@ def test_requirement_status_decides_unavailable_scope_by_the_requirement_kind():
     assert grounded.requirement_status(review("explained", [0]), evidence, checked) == "addressed"
     assert grounded.requirement_status(review("partly_explained", [0]), completion, checked) == "partial"
     assert grounded.requirement_status(review("not_mentioned", []), completion, checked) == "missing"
-    assert grounded.requirement_status(None, completion, checked) == "missing"
+    assert grounded.requirement_status(None, completion, checked) == "unknown"
 
 
 # ---- 前提を示して回答する（未回答の確認事項。#3069） ------------------------------------

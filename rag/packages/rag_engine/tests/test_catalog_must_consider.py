@@ -160,7 +160,7 @@ def test_a_chosen_article_the_draft_did_not_cite_is_reviewed_and_cited_where_it_
     draft = _draft([_claim(labels["guide"])], [(labels["guide"], "direct")], [labels["guide"]])
     model = _Model([draft], [_audit("supported", "matched", "")], [_review((0, ""))])
 
-    result = _run(model, review=True)
+    result = _run(model, grounded.AUDIT_MODE_STANDARD, review=True)
 
     assert model.names() == ["GroundedDraft", "CatalogEvidenceReviews", "GroundedFactAudit"]
     review_input = json.loads(model.prompts[1][1])
@@ -179,11 +179,11 @@ def test_an_article_supporting_no_claim_is_not_cited():
     draft = _draft(
         [_claim(labels["guide"])], [(labels["guide"], "direct"), (labels["article_1"], "direct")], [labels["guide"], labels["article_1"]]
     )
-    model = _Model([draft], [], [_review()])
+    model = _Model([draft], [_audit("supported", "matched", "")], [_review()])
 
-    result = _run(model, review=True)
+    result = _run(model, grounded.AUDIT_MODE_STANDARD, review=True)
 
-    assert model.names() == ["GroundedDraft", "CatalogEvidenceReviews"]
+    assert model.names() == ["GroundedDraft", "CatalogEvidenceReviews", "GroundedFactAudit"]
     assert _sources(result) == {"手順書B.pdf"}
     assert len(_timing(result)["catalog_review"]["not_relevant"]) == 1
 
@@ -205,7 +205,7 @@ def test_a_citation_added_by_the_review_is_dropped_when_the_audit_does_not_suppo
 
     model = _Model([draft], [audit_by_source], [_review((0, ""))])
 
-    result = _run(model, review=True)
+    result = _run(model, grounded.AUDIT_MODE_STANDARD, review=True)
 
     assert _sources(result) == {"手順書B.pdf"}
     assert not result.envelope["passage_marks"]
@@ -219,7 +219,7 @@ def test_articles_cited_or_judged_unrelated_are_not_reviewed():
     ):
         model = _Model([draft], [_audit("supported", "matched", "")])
 
-        result = _run(model, review=True)
+        result = _run(model, grounded.AUDIT_MODE_STANDARD, review=True)
 
         assert "CatalogEvidenceReviews" not in model.names()
         assert "catalog_review" not in _timing(result)
@@ -267,7 +267,7 @@ def test_a_claim_omitting_the_articles_exception_is_conditional_and_keeps_its_ci
     draft = _draft([_claim(labels["article_1"])], [(labels["article_1"], "direct")], [labels["article_1"]])
     model = _Model([draft], [_audit("supported", "conditional", "第三号に該当する者を除く")])
 
-    result = _run(model)
+    result = _run(model, grounded.AUDIT_MODE_STANDARD)
 
     assert model.names() == ["GroundedDraft", "GroundedFactAudit"]
     assert not result.envelope["passage_marks"]
@@ -276,3 +276,13 @@ def test_a_claim_omitting_the_articles_exception_is_conditional_and_keeps_its_ci
     prefix = grounded.answer_labels().citation_prefix
     assert [line for line in body.splitlines() if line.startswith(prefix) and "規則A.xml" in line]
     assert "例外" in grounded.audit_system_prompt(detailed=False)
+
+
+def test_none_skips_saved_catalog_review_setting_without_changing_it():
+    labels = _labels()
+    model = _Model([_draft([_claim(labels["guide"])], [(labels["guide"], "direct")], [labels["guide"]])])
+    result = _run(model, grounded.AUDIT_MODE_NONE, review=True)
+    assert model.names() == ["GroundedDraft"]
+    assert _timing(result)["catalog_review"] == {"execution": "not_run", "skipped": "audit_disabled", "reviewed": 0}
+    assert result.generation_trace["rounds"][0]["audit_calls"] == 0
+    assert _sources(result) == {"手順書B.pdf"}

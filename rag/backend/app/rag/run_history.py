@@ -26,6 +26,7 @@ from pr_backend_core.observability.tracing import finish_operation_trace
 
 from app.config import Settings
 from app.rag.stored_answer import stored_citations
+from app.schemas.history import ValidationExecution
 from app.schemas.search import (
     EXTRACTION_FIELD_FILTER_KEY,
     SUPPORTED_SEARCH_CLASSIFICATION_FILTERS,
@@ -81,6 +82,34 @@ def search_run_conditions(request: SearchRequest) -> dict[str, object]:
         if isinstance(value := request.filters.get(key), str) and value.strip()
     }
     return {"top_k": request.top_k, **({"filters": filters} if filters else {})}
+
+
+def answer_validation_execution(
+    diagnostics: Mapping[str, Any] | None,
+) -> ValidationExecution | None:
+    """照合の実行状態だけを記録する。実行失敗を合格や内容不支持へ変換しない。"""
+    validation = diagnostics.get("answer_validation") if diagnostics is not None else None
+    if not isinstance(validation, Mapping):
+        return None
+    status = str(validation.get("status") or "").strip().lower()
+    if status == "disabled" or (
+        status == "not_run" and validation.get("reason") == "audit_disabled"
+    ):
+        return "disabled"
+    if status in {"not_run", "no_claims"}:
+        return "not_run"
+    if status == "error":
+        return "error"
+    if status in {"timed_out", "timeout"}:
+        return "timed_out"
+    if status == "partial":
+        return "partial"
+    if status in {"completed", "ok", "validated"}:
+        if validation.get("valid") is True:
+            return "passed"
+        if validation.get("valid") is False:
+            return "failed"
+    return "unknown"
 
 
 def answer_verification(diagnostics: Mapping[str, Any] | None) -> RunVerification | None:
@@ -218,6 +247,12 @@ class RunRecorder:
             "conversation_id": self.conversation_id,
             "message_id": self.message_id,
             "stages": {
+                **(
+                    {"validation_execution": validation_execution}
+                    if (validation_execution := answer_validation_execution(diagnostics))
+                    is not None
+                    else {}
+                ),
                 # 詳細の処理の経過（共通の span の表の trace id と工程の詳細。#3226）。
                 **({"trace": trace} if (trace := self._trace_record()) is not None else {}),
                 # 実行の条件（詳細の「RAG 検索で開く」が画面に戻す。#3309）。

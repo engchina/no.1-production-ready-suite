@@ -112,7 +112,7 @@ def test_crag_grade_preserves_error_candidates_when_the_relation_is_unverified()
     with patch("rag_engine.generation.answering.parse_text_response", return_value=grade):
         result = _grade_crag_retrieval(1, question, question, [question], AnswerContext(records=[candidate], text=text), object())
     assert result.candidate_verdicts[0]["relation"] == "unknown"
-    assert result.rejected_chunk_ids == () and result.generation_usable
+    assert result.rejected_chunk_ids == () and not result.generation_usable
     assert result.required_aspect_coverage == "unknown"
 
 
@@ -122,10 +122,14 @@ def test_crag_grade_uses_relevant_candidate_verdicts_as_relevant_ids():
     from rag_engine.models.llm import CragRetrievalGradeOutput
 
     a, b = record("a", "登録画面で実行を押す"), record("b", "別機能の説明")
-    checks = [dict(aspect=k, status="supported", source_ids=["a"], reason="関連") for k in task_contract("登録方法")["required_aspects"]]
+    checks = [
+        dict(aspect=k, status="supported", source_ids=["a"], evidence=[dict(source_id="a", quote=a.text)], reason="関連")
+        for k in task_contract("登録方法")["required_aspects"]
+    ]
     grade = CragRetrievalGradeOutput(
         candidate_verdicts=[dict(chunk_uid="a", relevant=True, reason="同じ機能"), dict(chunk_uid="b", relevant=False, reason="別機能")],
         aspect_checks=checks,
+        answerable_parts=[dict(aspect="procedure", kind="operation", claim=a.text, evidence=[dict(source_id="a", quote=a.text)])],
         reason="関連",
         sufficient=True,
         confidence=0.9,
@@ -140,7 +144,7 @@ def test_crag_grade_uses_relevant_candidate_verdicts_as_relevant_ids():
     none_relevant = grade.model_copy(update={"candidate_verdicts": [CragCandidateVerdict(chunk_uid="a", relevant=False, reason="別機能")]})
     with patch("rag_engine.generation.answering.parse_text_response", return_value=none_relevant):
         result = _grade_crag_retrieval(1, "登録方法", "登録方法", ["登録方法"], AnswerContext(records=[a, b], text="text"), object())
-    assert result.relevant_chunk_ids == () and result.sufficient
+    assert result.relevant_chunk_ids == () and not result.sufficient
     assert result.required_aspect_coverage == "unknown"
 
 

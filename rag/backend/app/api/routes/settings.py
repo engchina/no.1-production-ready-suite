@@ -509,6 +509,7 @@ async def update_answering_settings(
         for field, value in (
             ("rag_query_strategy", payload.query_strategy),
             ("rag_answer_flow", payload.answer_flow),
+            ("rag_answer_audit_mode", payload.answer_audit_mode),
             ("rag_neighbor_child_count", payload.neighbor_child_count),
             ("rag_rerank_enabled", payload.rerank_enabled),
             ("rag_screen_linking_enabled", payload.screen_linking_enabled),
@@ -547,6 +548,7 @@ async def update_answering_settings(
                 ),
                 "RAG_QUERY_STRATEGY": candidate.rag_query_strategy,
                 "RAG_ANSWER_FLOW": candidate.rag_answer_flow,
+                "RAG_ANSWER_AUDIT_MODE": candidate.rag_answer_audit_mode,
                 "RAG_NEIGHBOR_CHILD_COUNT": str(candidate.rag_neighbor_child_count),
                 "RAG_RERANK_ENABLED": _format_env_bool(candidate.rag_rerank_enabled),
                 "RAG_SCREEN_LINKING_ENABLED": _format_env_bool(
@@ -574,6 +576,7 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
     return AnsweringSettingsData(
         query_strategy=settings.rag_query_strategy,
         answer_flow=settings.rag_answer_flow,
+        answer_audit_mode=settings.rag_answer_audit_mode,
         neighbor_child_count=settings.rag_neighbor_child_count,
         rerank_enabled=settings.rag_rerank_enabled,
         screen_linking_enabled=settings.rag_screen_linking_enabled,

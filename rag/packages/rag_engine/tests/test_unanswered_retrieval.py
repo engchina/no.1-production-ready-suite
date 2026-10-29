@@ -481,8 +481,9 @@ def test_standard_audit_can_retrieve_confirmed_material_shortage(monkeypatch):
 @pytest.mark.parametrize("crag_enabled", [False, True])
 @pytest.mark.parametrize("coverage_enabled", [False, True])
 def test_two_stage_switch_matrix_uses_existing_generation_and_optional_grading(monkeypatch, tmp_path, crag_enabled, coverage_enabled):
-    old = context(parent("old", OLD_TEXT))
-    merged = context(parent("old", OLD_TEXT), parent("new", NEW_TEXT))
+    initial_text = "対象Aの設定画面を開きます。続きの操作の記載はありません。"
+    old = context(parent("old", initial_text))
+    merged = context(parent("old", initial_text), parent("new", NEW_TEXT))
     new_id = ids(merged, QUESTION)[NEW_TEXT]
     model = FakeModel([gap(), draft(item(new_id, NEW_TEXT, NEW_TEXT, request_id="Q1"))], [])
     searches, grades = [], []
@@ -493,7 +494,22 @@ def test_two_stage_switch_matrix_uses_existing_generation_and_optional_grading(m
 
     def grade(*args, **kwargs):
         grades.append(1)
-        return a.CragRetrievalAttempt(1, QUESTION, tuple(args[3]), True)
+        return a.CragRetrievalAttempt(
+            1,
+            QUESTION,
+            tuple(args[3]),
+            True,
+            generation_usable=True,
+            answerable_parts=(
+                {
+                    "aspect": "requested_result",
+                    "kind": "operation",
+                    "claim": initial_text,
+                    "status": "supported",
+                    "evidence": [{"source_id": old.records[0].chunk_uid, "quote": initial_text}],
+                },
+            ),
+        )
 
     monkeypatch.setattr(a, "check_adb_hybrid_search_ready", lambda **kwargs: None)
     monkeypatch.setattr(a, "build_adb_hybrid_answer_context", search)

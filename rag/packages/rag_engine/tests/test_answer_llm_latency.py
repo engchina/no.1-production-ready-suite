@@ -146,7 +146,9 @@ class PurposeEffortCallSiteTests(unittest.TestCase):
     def test_crag_grade_uses_judge_effort(self):
         context = _answer_context([_record("r1", "docling", 1, 1, "経費精算の申請方法")])
         with patch.object(
-            generation, "parse_text_response", side_effect=self.record(_crag_grade(sufficient=True, relevant_chunk_ids=["r1"]))
+            generation,
+            "parse_text_response",
+            side_effect=self.record(_crag_grade(sufficient=True, relevant_chunk_ids=["r1"], support_text=context.records[0].text)),
         ):
             generation._grade_crag_retrieval(1, "経費精算の申請方法は？", "経費精算の申請方法は？", ("経費精算",), context, self.settings)
         self.assertEqual([effort for _, effort in self.calls], ["low"])
@@ -194,7 +196,7 @@ class CragGradeSkipTests(unittest.TestCase):
         self.enterContext(patch.object(generation, "load_latest_or_source_chunk_run", return_value=_chunk_run_stub()))
 
     def build(self, context, settings=None, question=QUESTION):
-        grade = _crag_grade(sufficient=True, relevant_chunk_ids=["r1"])
+        grade = _crag_grade(sufficient=True, relevant_chunk_ids=["r1"], support_text=context.records[0].text)
         with (
             patch.object(generation, "build_adb_hybrid_answer_context", return_value=context),
             patch.object(generation, "parse_text_response", return_value=grade) as parse,

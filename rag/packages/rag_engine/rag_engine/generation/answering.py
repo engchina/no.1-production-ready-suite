@@ -2555,7 +2555,10 @@ def synthesize_grounded_answer(
             best[0].unanswered if audit_mode != grounded.AUDIT_MODE_NONE else (),
             [item.request_id for item in best[0].draft.items if item.kind == "gap" and item.request_id],
             {str(span["evidence_id"]) for span in best[2]},
-            blocked_request_ids=best[0].duplicate_request_ids,
+            blocked_request_ids=(
+                *best[0].duplicate_request_ids,
+                *(row["id"] for row in best[0].requests if best[0].review_execution in {"error", "timed_out"}),
+            ),
         )
         rounds[-1]["request_recovery"] = {"phase": "after_generation", "decisions": recovery_plan}
         correction_ids = {row["request_id"] for row in recovery_plan if row["action"] == "correction"}
@@ -2745,6 +2748,9 @@ def synthesize_grounded_answer(
     # 当てはめだけを作る段を 1 回行う（生成と監査で LLM 2 回。#2159）。生成の可否の欄（applications）をモデルが
     # 書かないことがあるため、専用の段で作る。失敗しても回答は作り直さず、理由を診断に残す。
     application_step: dict[str, Any] = {"ran": False}
+    application_summary = ""
+    application_basis: tuple = ()
+    application_state: tuple = ()
     if audit_mode != grounded.AUDIT_MODE_NONE and answer_applications.application_step_needed(
         question,
         current.summary == grounded.answer_labels().neutral_summary or bool(current.summary_warning),
@@ -2752,6 +2758,9 @@ def synthesize_grounded_answer(
         current.applications,
     ):
         application_step["ran"] = True
+        step_basis = grounded.summary_basis_snapshot(
+            list(answer_applications.application_step_inputs(question, current.checked, current.requests)[1].values())
+        )
         try:
             step_applications, step_summary = answer_applications.run_application_step(
                 question,
@@ -2766,6 +2775,9 @@ def synthesize_grounded_answer(
         except Exception as exc:  # noqa: BLE001 - 補う段の失敗で回答全体を止めない
             application_step["error"] = type(exc).__name__  # 例外の型の名前だけ（本文は残さない。#3259）
         else:
+            application_summary = step_summary
+            application_basis = step_basis if step_summary else ()
+            application_state = grounded.application_summary_snapshot(step_applications) if step_summary else ()
             application_step["published"] = sum(1 for application in step_applications if application.published)
             current = replace(
                 current,
@@ -2799,6 +2811,9 @@ def synthesize_grounded_answer(
     crag_gaps = crag_generation.gap_lines(question, crag_view)
     # 資料の原文と照合できない説明・業務ガイドの文から来た説明は、資料の出典・回答の根拠の一覧から外す（#2792）。
     grounded.detach_unsourced(current.checked)
+    current = grounded.finalize_summary(
+        current, application_summary=application_summary, application_basis=application_basis, application_state=application_state
+    )
     guide_notices = runtime_knowledge.guide_notices if runtime_knowledge is not None else ()
     guide_notes = (runtime_knowledge.guide_title, guide_notices) if runtime_knowledge is not None and guide_notices else None
     # 本文に出す根拠のある item（システムが補った原文を含む。根拠と矛盾して外した item は除く）と、本文に言い換えを
@@ -3003,6 +3018,10 @@ def synthesize_grounded_answer(
         **({"guide_step_embedding": guide_semantics.trace()} if guide_semantics.calls else {}),
         # 参照欄は公開した引用だけに同期する。
         "finalization": {
+            "summary": {
+                "status": "withheld" if current.summary_reason else "unverified" if current.summary_warning else "kept",
+                "reason": current.summary_reason or current.summary_warning,
+            },
             "filtered": bool(problems),
             "citations_synchronized": True,
             "off_goal": off_goal,

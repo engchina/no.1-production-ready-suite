@@ -44,6 +44,9 @@ const ANSWER_FLOW_OPTIONS: SelectFieldOption<AnswerFlowName>[] = [
   { value: "standard_rag", label: t("searchAnswerProfiles.answerFlow.standard_rag") },
   { value: "crag", label: t("searchAnswerProfiles.answerFlow.crag") },
 ];
+const ANSWER_AUDIT_OPTIONS: SelectFieldOption<AnsweringSettingsData["answer_audit_mode"]>[] = (
+  ["none", "standard", "detailed"] as const
+).map((value) => ({ value, label: t(`settings.answering.auditMode.${value}`) }));
 // 0〜20（backend の rag_neighbor_child_count と同じ範囲）。SelectField は文字列値を扱う。
 const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 }, (_, n) => ({
   value: String(n),
@@ -56,6 +59,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
   return {
     query_strategy: settings.query_strategy,
     answer_flow: settings.answer_flow,
+    answer_audit_mode: settings.answer_audit_mode,
     neighbor_child_count: settings.neighbor_child_count,
     rerank_enabled: settings.rerank_enabled,
     screen_linking_enabled: settings.screen_linking_enabled,
@@ -234,6 +238,22 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
               value={String(form.section_expansion_input_token_percent)} disabled={disabled} options={Array.from({ length: 81 }, (_, n) => { const value = n + 10; return { value: String(value), label: String(value) }; })}
               onValueChange={(value) => update({ section_expansion_input_token_percent: Number(value) })} />
           </FormGrid> : null}
+        </div>
+        <div className="space-y-3 px-3 py-3" data-testid="answering-audit-mode">
+          <h3 className="text-sm font-medium text-fg">{t("settings.answering.auditMode")}</h3>
+          <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditModeHint")}</p>
+          <SelectField
+            id="answering-answer-audit-mode"
+            label={t("settings.answering.auditModeField")}
+            helper={t(`settings.answering.auditModeHint.${form.answer_audit_mode}`)}
+            value={form.answer_audit_mode}
+            options={ANSWER_AUDIT_OPTIONS}
+            width="lg"
+            disabled={disabled}
+            onValueChange={(value) => update({ answer_audit_mode: value })}
+          />
+          <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditBasicHint")}</p>
+          <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditBudgetHint")}</p>
         </div>
         <SwitchRow
           id="answering-request-coverage"

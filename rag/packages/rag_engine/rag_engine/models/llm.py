@@ -577,6 +577,23 @@ class OutputFieldEvidence(_StrictModel):
         return self.asserts_output_fields and (not self.definition_quote.strip() or self.output_artifact_matches is not True)
 
 
+class GroundedFragmentCitation(_StrictModel):
+    """元の説明が実際に引用した原文の中で、局所的な支持に使う箇所。"""
+
+    evidence_id: str
+    quote: str = Field(min_length=1, max_length=600, description="このitemの実際の引用内から写した連続した支持原文。")
+
+
+class GroundedSupportedFragment(_StrictModel):
+    """複合した説明のうち、同じ監査で独立に支持を判定した元の説明の片。"""
+
+    text: str = Field(min_length=1, max_length=600, description="元item.textの連続した部分をそのまま写す。書き換えない。")
+    support: Literal["supported", "unknown"] = Field(
+        default="unknown", description="引用集合がこの片全体を支えると確認したときだけsupported。"
+    )
+    citations: list[GroundedFragmentCitation] = Field(default_factory=list, max_length=4)
+
+
 class GroundedItemReview(_StrictModel):
     """1 item の局所監査。引用が言い換えを支持するかと、質問への適用性を分ける。"""
 
@@ -593,6 +610,11 @@ class GroundedItemReview(_StrictModel):
         default="",
         max_length=600,
         description="段落を支持する連続した原文（根拠からの抜粋）。",
+    )
+    supported_fragments: list[GroundedSupportedFragment] = Field(
+        default_factory=list,
+        max_length=40,
+        description="contradictedの複合itemに、独立に支持できる元の説明の部分がある場合だけ返す。各片は元textの厳密な抜粋と、このitemが実際に引用した出典・原文で裏付ける。判断不能ならunknownまたは空。",
     )
     # 原判定を保持し、採否への利用だけを別の方針にする。モデルの応答 schema には内部方針を出さない。
     observed_applicability: SkipJsonSchema[str] = Field(default="", description="監査が答えた適用性の記録（応答の schema には出さない）。")
@@ -711,6 +733,7 @@ class GroundedFactAudit(_StrictModel):
     summary_output_fields: OutputFieldEvidence | None = Field(
         default=None, description="要約の出力項目について、定義の原文引用と対象の一致を返す。"
     )
+    summary_basis: list[str] = Field(default_factory=list, max_length=40, description="summary を支える items の text 全文。")
     summary_supported: bool = Field(description="summary が items の範囲を超える断定をしていなければ true。")
     goal_alignment: Literal["aligned", "partial", "off_target"] = Field(
         description="aligned=items 全体が目的に答えている。partial=一部だけ。off_target=別の対象・業務・目的に答えている。"
@@ -736,6 +759,7 @@ class GroundedAudit(_StrictModel):
     summary_output_fields: OutputFieldEvidence | None = Field(
         default=None, description="要約の出力項目について、定義の原文引用と対象の一致を返す。"
     )
+    summary_basis: list[str] = Field(default_factory=list, max_length=40, description="summary を支える items の text 全文。")
     summary_supported: bool = Field(description="summary が items の範囲を超える断定をしていなければ true。")
     goal_alignment: Literal["aligned", "partial", "off_target"] = Field(
         description="aligned=items 全体が目的に答えている。partial=一部だけ。off_target=別の対象・業務・目的に答えている。"

@@ -250,6 +250,8 @@ test("CRAG は生成利用可否と必須観点の不足・未確認・原文を
     }],
   }, []);
   const panel = (await ask(page)).getByTestId("answer-crag-details");
+  await expect(panel).toContainText("生成に使える材料（候補評価）");
+  await expect(panel).toContainText("実際の生成可否や回答の完成を保証しません");
   await expect(panel).toContainText("利用可能（部分回答を含む）");
   await expect(panel).toContainText("一部のみ確認済み");
   await expect(panel).toContainText("不足が確認された観点: procedure");
@@ -268,3 +270,19 @@ test("CRAG の省略・旧十分判定は全観点確認済みと表示しない
   await expect(panel).not.toContainText("すべて確認済み");
   await expectNoPageOverflow(page);
 });
+
+
+for (const [status, valid, label] of [
+  ["disabled", false, "設定で無効"], ["not_run", false, "未実行"], ["error", false, "確認処理でエラー"],
+  ["timed_out", false, "確認が時間切れ"], ["completed", true, "確認完了・問題なし"], ["completed", false, "確認完了・問題あり"],
+] as const) {
+  test(`最終回答の資料照合は実行状態と結果を区別する (${status}, ${valid})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await mockApi(page, { answer_validation: { status, valid } }, []);
+    const panel = (await ask(page)).getByTestId("answer-validation-status");
+    await expect(panel).toContainText("最終回答の資料照合");
+    await expect(panel).toContainText(label);
+    await expect(panel).not.toContainText("未照合");
+    await expectNoPageOverflow(page);
+    if (status === "completed" && !valid) await panel.screenshot({ path: testInfo.outputPath("answer-validation-failed.png") });
+  });
+}

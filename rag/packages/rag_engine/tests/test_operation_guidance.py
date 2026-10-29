@@ -15,8 +15,7 @@ from rag_engine.models.llm import CragRetrievalGradeOutput
 from rag_engine.retrieval.task_contract import task_contract
 
 
-# 十分性は business_object と relevant な候補で決まる（OR 型、#983）。他の観点の不足や根拠の無い data_confirmation は
-# 十分性を落とさず missing_aspects に残る。
+# 直接説明できる確認方法があれば、別観点の不足・未確認を保持した部分回答へ進める。
 @pytest.mark.parametrize(
     "aspect,status,source,reason,duplicate,expected_unknown,expected_missing",
     [
@@ -30,7 +29,7 @@ from rag_engine.retrieval.task_contract import task_contract
         ("applicability", "missing", "a", "適用版の文書が不足", False, (), ("applicability",)),
     ],
 )
-def test_crag_sufficiency_needs_business_object_and_reports_other_gaps(
+def test_crag_verified_confirmation_method_preserves_other_aspect_gaps(
     aspect, status, source, reason, duplicate, expected_unknown, expected_missing
 ):
     question = "印字位置の確認方法"
@@ -50,6 +49,7 @@ def test_crag_sufficiency_needs_business_object_and_reports_other_gaps(
         reason="操作案内",
         rewritten_query="",
         aspect_checks=checks,
+        answerable_parts=[dict(aspect="requested_result", kind="verification", claim=r.text, evidence=[dict(source_id="a", quote=r.text)])],
     )
     with patch("rag_engine.generation.answering.parse_text_response", return_value=output) as parse:
         result = _grade_crag_retrieval(1, question, question, [question], AnswerContext(records=[r], text=r.text), object())

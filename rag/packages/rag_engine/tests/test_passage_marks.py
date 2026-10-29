@@ -123,6 +123,7 @@ def _run_example(step_review: str = "supported"):
         (3, "supported", "matched", ""),
         requests=[("Q1", "addressed"), ("Q2", "addressed")],
     )
+    review["summary_basis"] = ["対象の行の終了日を入力します。", "新しい開始日の行を追加します。"]
     return run(FakeModel([value], [review]), ctx, QUESTION).response
 
 

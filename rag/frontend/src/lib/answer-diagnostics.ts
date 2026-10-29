@@ -3,6 +3,7 @@ import { hasRunStepDetails, type RunStepDetailField, type RunStepDetails } from 
 import type { ExtractionFieldCondition } from "@/components/search/extraction-field-filters";
 import { t } from "@/lib/i18n";
 import { parseCragDiagnostics, type CragDiagnostics } from "@/lib/crag-diagnostics";
+import { parseAnswerValidation } from "@/lib/answer-validation";
 
 /** 回答フローの診断(backend の diagnostics.answer)。 */
 /** 回答の対応（#1235。backend の diagnostics.answer.outcome）。 */
@@ -65,6 +66,7 @@ export type AnswerGuide = {
 };
 
 export type AnswerDiagnostics = {
+  validation: ReturnType<typeof parseAnswerValidation>;
   crag: CragDiagnostics | null;
   /** 回答の対応（#1235）。古い記録など、無ければ null。 */
   outcome: AnswerOutcome | null;
@@ -184,6 +186,7 @@ export function parseAnswerDiagnostics(
       ? (outcome as AnswerOutcome)
       : null,
     crag: parseCragDiagnostics(raw.crag_attempts),
+    validation: parseAnswerValidation(raw.answer_validation),
     guide: parseGuide(raw.guide),
     guideLoadFailed: raw.guide_load_failed === true,
     confidence: String(raw.confidence ?? ""),

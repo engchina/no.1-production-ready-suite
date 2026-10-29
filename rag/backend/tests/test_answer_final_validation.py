@@ -46,7 +46,11 @@ async def test_final_validation_follows_audit_mode_and_preserves_failed_verdict(
     if mode == "none":
         validator.assert_not_awaited()
         callback.assert_not_awaited()
-        assert outcome.diagnostics["answer_validation"] == {"status": "not_run", "valid": False}
+        assert outcome.diagnostics["answer_validation"] == {
+            "status": "not_run",
+            "valid": False,
+            "reason": "audit_disabled",
+        }
         return
     validator.assert_awaited_once_with(
         "合成の質問",
@@ -79,7 +83,7 @@ async def test_final_validation_failure_remains_unverified(monkeypatch: pytest.M
         "app.rag.answer_validation.validate_answer", AsyncMock(side_effect=TimeoutError())
     )
     await engine._validate_outcome(SearchRequest(query="合成の質問"), outcome)
-    assert outcome.diagnostics["answer_validation"] == {"status": "error", "valid": False}
+    assert outcome.diagnostics["answer_validation"] == {"status": "timed_out", "valid": False}
     assert outcome.diagnostics["needs_human_review"] is True
     assert outcome.answer == "合成の回答"
 

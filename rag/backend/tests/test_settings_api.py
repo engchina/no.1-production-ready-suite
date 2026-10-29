@@ -3545,6 +3545,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_query_strategy", "auto_routing")
     monkeypatch.setattr(settings, "rag_answer_flow", "crag")
+    monkeypatch.setattr(settings, "rag_answer_audit_mode", "none")
     monkeypatch.setattr(settings, "rag_neighbor_child_count", 3)
     monkeypatch.setattr(settings, "rag_rerank_enabled", True)
     monkeypatch.setattr(settings, "rag_screen_linking_enabled", False)
@@ -3566,6 +3567,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     assert client.get("/api/settings/answering").json()["data"] == {
         "query_strategy": "auto_routing",
         "answer_flow": "crag",
+        "answer_audit_mode": "none",
         "neighbor_child_count": 3,
         "rerank_enabled": True,
         "screen_linking_enabled": False,
@@ -3641,6 +3643,45 @@ def test_answering_settings_rejects_invalid_values() -> None:
     )
     assert (
         client.patch("/api/settings/answering", json={"neighbor_child_count": 21}).status_code
+        == 422
+    )
+
+
+@pytest.mark.parametrize("mode", ["none", "standard", "detailed"])
+def test_answering_audit_mode_round_trip_and_independent_settings(
+    monkeypatch: MonkeyPatch, tmp_path: Path, mode: str
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_answer_audit_mode", "none")
+    monkeypatch.setattr(settings, "rag_answer_flow", "standard_rag")
+    monkeypatch.setattr(settings, "rag_request_coverage_retrieval_enabled", False)
+    monkeypatch.setattr(settings, "rag_answer_max_correction_rounds", 0)
+    monkeypatch.delenv("RAG_ANSWER_AUDIT_MODE", raising=False)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    response = client.patch("/api/settings/answering", json={"answer_audit_mode": mode})
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["answer_audit_mode"] == mode
+    assert data["answer_flow"] == "standard_rag"
+    assert data["request_coverage_retrieval_enabled"] is False
+    assert settings.rag_answer_max_correction_rounds == 0
+    assert settings.rag_answer_audit_mode == mode
+    assert f"RAG_ANSWER_AUDIT_MODE={mode}" in env_file.read_text()
+    reloaded = Settings(_env_file=env_file)
+    assert reloaded.rag_answer_audit_mode == mode
+    from app.rag.answer_engine import build_engine_settings
+
+    assert build_engine_settings(settings, output_dir=tmp_path).answer_audit_mode == mode
+    assert build_engine_settings(reloaded, output_dir=tmp_path).answer_audit_mode == mode
+    assert client.get("/api/settings/answering").json()["data"]["answer_audit_mode"] == mode
+    # 別の項目だけの更新では、保存済みの確認範囲を変えない。
+    unchanged = client.patch("/api/settings/answering", json={"neighbor_child_count": 2})
+    assert unchanged.json()["data"]["answer_audit_mode"] == mode
+
+
+def test_answering_audit_mode_rejects_unknown_value() -> None:
+    assert (
+        client.patch("/api/settings/answering", json={"answer_audit_mode": "automatic"}).status_code
         == 422
     )
 

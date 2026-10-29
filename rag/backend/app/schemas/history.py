@@ -14,6 +14,9 @@ from app.schemas.search import RetrievedChunk, StorageFailure
 RunSurface = Literal["search", "chat"]
 RunStatus = Literal["success", "blocked", "error"]
 RunVerification = Literal["verified", "partial", "unverified"]
+ValidationExecution = Literal[
+    "disabled", "not_run", "error", "timed_out", "passed", "failed", "partial", "unknown"
+]
 
 
 class RunSummary(BaseModel):
@@ -33,6 +36,7 @@ class RunSummary(BaseModel):
     answer_outcome: str | None = None
     # 回答の検証（回答の監査で要求ごとに根拠で答えられたか）。回答を作らない実行は None。
     verification: RunVerification | None = None
+    validation_execution: ValidationExecution | None = None
     confidence: str | None = None
     needs_human_review: bool | None = None
     citation_count: int = 0

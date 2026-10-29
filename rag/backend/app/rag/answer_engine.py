@@ -42,11 +42,14 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
 
+import httpx
+from fastapi import HTTPException
+from openai import APITimeoutError
 from pr_backend_core.observability.tracing import ObservedSpan, SpanDisplay, observed_span
 from pr_backend_core.timezones import configured_timezone_name
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
-from rag_engine.resources.deadline import check_deadline, current_deadline
+from rag_engine.resources.deadline import DeadlineExceeded, check_deadline, current_deadline
 from rag_engine.resources.runtime import saved_prompt_overrides
 from rag_engine.resources.tracing import observe_call
 from rag_engine.retrieval.article_catalog import ARTICLE_UNIT_KEY
@@ -1086,7 +1089,13 @@ class AnswerEngine:
     ) -> None:
         """LLM 監査が有効な回答の最終の本文を、MCP と共通の検証で確かめる。"""
         if self._settings.rag_answer_audit_mode == "none" or not outcome.answer.strip():
-            outcome.diagnostics["answer_validation"] = {"status": "not_run", "valid": False}
+            outcome.diagnostics["answer_validation"] = {
+                "status": "not_run",
+                "valid": False,
+                "reason": "audit_disabled"
+                if self._settings.rag_answer_audit_mode == "none"
+                else "empty_answer",
+            }
             return
         # answer_validation は engine の設定変換も使うため、循環 import を避けてここで読む。
         from app.rag.answer_validation import (
@@ -1135,9 +1144,18 @@ class AnswerEngine:
                     if len(premises) > MAX_PREMISES
                     else 0,
                 }
-            except Exception:  # noqa: BLE001 - 検証の失敗は未確認として残し、回答の記録を失わない。
+            except Exception as exc:  # noqa: BLE001 - 検証の失敗は未確認として残し、回答の記録を失わない。
+                if isinstance(exc, (DeadlineExceeded, PermissionError)) or (
+                    isinstance(exc, HTTPException) and exc.status_code in {401, 403}
+                ):
+                    raise
                 logger.warning("answer final validation failed", exc_info=True)
-                validation = {"status": "error", "valid": False}
+                validation = {
+                    "status": "timed_out"
+                    if isinstance(exc, (TimeoutError, httpx.TimeoutException, APITimeoutError))
+                    else "error",
+                    "valid": False,
+                }
                 state = "error"
                 span.set_status("failed")
             span.set_display(

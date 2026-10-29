@@ -64,6 +64,15 @@ describe("実行履歴の表示の対応表", () => {
     expect(runVerificationView(null)).toBeNull();
   });
 
+  it.each([
+    ["disabled", "設定で無効"], ["not_run", "未実行"], ["error", "確認処理でエラー"],
+    ["timed_out", "確認が時間切れ"], ["passed", "確認完了・問題なし"],
+    ["failed", "確認完了・問題あり"], ["partial", "一部のみ確認"], ["unknown", "確認状態が不明"],
+  ])("照合の実行状態%sは旧集約値より優先する", (execution, label) => {
+    expect(runVerificationView("unverified", execution)?.label).toBe(label);
+    expect(runVerificationView("verified", execution)?.label).toBe(label);
+  });
+
   it("所要時間は共通の書式（記録なしは「—」）", () => {
     expect(formatRunElapsed(1234)).toBe("1.2 秒");
     expect(formatRunElapsed(null)).toBe("—");
