@@ -10,9 +10,7 @@ import pytest
 from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import (
     CragRetrievalGradeOutput,
-    GroundedAudit,
     GroundedDraft,
-    GroundedFactAudit,
     QueryRoutingOutput,
     RequestScopePlan,
 )
@@ -23,6 +21,7 @@ from app.config import EnterpriseAiConfiguredModel, Settings
 from app.rag.answer_engine import AnswerEngine
 from app.rag.stored_answer import STORED_CITATION_METADATA_KEYS
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
+from tests.audit_fixtures import is_audit_schema, legacy_audit_result
 
 PARENT_TEXT = "受注入力画面\n受注番号を入力し、登録ボタンを押します。"
 
@@ -223,8 +222,9 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
             {"summary": "手順", "items": items, "confidence": "high"}
         )
     # 通常の回答の監査（#2795）は事実の監査の schema で呼ぶ。
-    if schema in (GroundedAudit, GroundedFactAudit):
-        return schema.model_validate(
+    if is_audit_schema(schema):
+        return legacy_audit_result(
+            schema,
             {
                 "goal_alignment": "aligned",
                 "summary_supported": True,
@@ -236,7 +236,7 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
                         "reason": "原文",
                     }
                 ],
-            }
+            },
         )
     raise AssertionError(f"unexpected schema: {schema.__name__}")
 

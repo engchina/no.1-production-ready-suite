@@ -8,17 +8,18 @@ from unittest.mock import AsyncMock
 import pytest
 from rag_engine.config import LLM_PURPOSE_AUDIT, settings_for_llm_purpose
 from rag_engine.generation.citation_wire import generation_draft_wire_model
-from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedFactAudit
+from rag_engine.models.llm import GroundedDraft
 
 from app.config import Settings
 from app.rag.answer_engine import AnswerEngine, AnswerScope, build_engine_settings
 from app.rag.answer_validation import AnswerValidation
 from app.schemas.search import SearchRequest
+from tests.audit_fixtures import is_audit_schema, legacy_audit_result
 from tests.test_answer_engine import FakeGenAi, FakeOracle, _fake_llm
 
 LABEL = "操作担当の種別"
 VALUE = "担当A"
-QUESTION = "登録方法は？"
+QUESTION = "登録方法は?"
 
 
 def guide_settings(source: str, state: str, *, mode: str = "standard") -> Settings:
@@ -75,12 +76,13 @@ async def test_formal_answer_forwards_confirmed_premises_and_does_not_leak_to_ne
 
     def parser(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
         calls.append(schema.__name__)
-        if schema in (GroundedAudit, GroundedFactAudit):
+        if is_audit_schema(schema):
             data = json.loads(prompt)
             audit_inputs.append(data)
             assert data["question"] == QUESTION
             assert [unit["id"] for unit in data["task_contract"]["request_units"]] == ["Q1"]
-            return schema.model_validate(
+            return legacy_audit_result(
+                schema,
                 {
                     "goal_alignment": "aligned",
                     "summary_supported": True,
@@ -97,7 +99,7 @@ async def test_formal_answer_forwards_confirmed_premises_and_does_not_leak_to_ne
                     "request_reviews": [
                         {"request_id": "Q1", "status": "addressed", "reason": "合成の回答対応"}
                     ],
-                }
+                },
             )
         result = _fake_llm(system, prompt, config, schema, **options)
         if schema in (GroundedDraft, generation_draft_wire_model()):

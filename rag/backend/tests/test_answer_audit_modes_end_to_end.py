@@ -11,13 +11,13 @@ from fastapi import HTTPException
 from openai import APITimeoutError
 from pr_backend_core.observability.model_purpose import model_purpose_attributes
 from rag_engine.generation.citation_wire import generation_draft_wire_model
-from rag_engine.models.llm import GroundedAudit, GroundedFactAudit
 from rag_engine.resources.deadline import DeadlineExceeded
 
 from app.config import Settings
 from app.rag.answer_engine import AnswerEngine, AnswerOutcome, build_engine_settings
 from app.rag.answer_validation import AnswerValidation
 from app.schemas.search import SearchRequest
+from tests.audit_fixtures import is_audit_schema, legacy_audit_result
 from tests.test_answer_engine import FakeGenAi, FakeOracle, _fake_llm
 
 
@@ -31,6 +31,7 @@ async def test_formal_answer_entry_passes_mode_and_observes_real_generation_audi
         rag_section_expansion_enabled=False,
     )
     calls: list[tuple[str, str | None, str]] = []
+    audit_calls: list[tuple[str, str | None, str]] = []
 
     def model(system: str, prompt: str, engine_settings: Any, schema: type, **options: Any) -> Any:
         calls.append(
@@ -40,9 +41,11 @@ async def test_formal_answer_entry_passes_mode_and_observes_real_generation_audi
                 engine_settings.answer_audit_mode,
             )
         )
-        if schema in (GroundedAudit, GroundedFactAudit):
+        if is_audit_schema(schema):
+            audit_calls.append(calls[-1])
             data = json.loads(prompt)
-            return schema.model_validate(
+            return legacy_audit_result(
+                schema,
                 {
                     "goal_alignment": "aligned",
                     "summary_supported": True,
@@ -63,7 +66,7 @@ async def test_formal_answer_entry_passes_mode_and_observes_real_generation_audi
                             "evidence_status": "unknown",
                         }
                     ],
-                }
+                },
             )
         return _fake_llm(system, prompt, engine_settings, schema, **options)
 
@@ -76,7 +79,7 @@ async def test_formal_answer_entry_passes_mode_and_observes_real_generation_audi
         settings, oracle=cast(Any, FakeOracle()), genai=cast(Any, FakeGenAi())
     ).run(SearchRequest(query="登録方法と登録後の確認方法は？"))
     generation = [row for row in calls if row[0] in {"GroundedDraft", "GroundedDraftWire"}]
-    audits = [row for row in calls if row[0] in {"GroundedAudit", "GroundedFactAudit"}]
+    audits = audit_calls
     assert generation and all(row[1:] == ("answer.generate", mode) for row in generation)
     assert all(row[2] == mode for row in calls)
     assert len(generation) == 1  # unknownの材料を漏項だけで盲目的に作り直さない。
@@ -172,9 +175,12 @@ async def test_none_can_retrieve_an_explicit_gap_without_enabling_an_audit(
 
     original = existing._fake_llm
     calls: list[str] = []
+    audit_schemas: list[str] = []
 
     def model(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
         calls.append(schema.__name__)
+        if is_audit_schema(schema):
+            audit_schemas.append(schema.__name__)
         return original(system, prompt, config, schema, **options)
 
     monkeypatch.setattr(existing, "_fake_llm", model)
@@ -191,7 +197,7 @@ async def test_none_can_retrieve_an_explicit_gap_without_enabling_an_audit(
         result.diagnostics["request_coverage"]["after_generation"][0]["re_retrieval"]["applied"]
         is True
     )
-    assert not {"GroundedAudit", "GroundedFactAudit"} & set(calls)
+    assert audit_schemas == []
     validator.assert_not_awaited()
     assert result.diagnostics["answer_validation"]["reason"] == "audit_disabled"
 
@@ -250,7 +256,7 @@ async def test_formal_entry_correction_budget_allows_at_most_two_progressive_reg
                     ],
                 }
             )
-        if schema in (GroundedAudit, GroundedFactAudit):
+        if is_audit_schema(schema):
             audits += 1
             data = json.loads(prompt)
             key = next(iter(data["evidence"]))
@@ -276,7 +282,8 @@ async def test_formal_entry_correction_budget_allows_at_most_two_progressive_reg
                         ],
                     }
                 )
-            return schema.model_validate(
+            return legacy_audit_result(
+                schema,
                 {
                     "summary_supported": True,
                     "goal_alignment": "aligned",
@@ -290,7 +297,7 @@ async def test_formal_entry_correction_budget_allows_at_most_two_progressive_reg
                         for row in data["items"]
                     ],
                     "request_reviews": requests,
-                }
+                },
             )
         return _fake_llm(system, prompt, config, schema, **options)
 
