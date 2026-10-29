@@ -158,7 +158,8 @@ def project_partial_answer(
     """部分回答に限り、意味監査なしの言い換えを、許可した直接原文へ戻す。"""
     from rag_engine.generation.semantic_observation import diagnostic_only
 
-    if diagnostic_only(current.timing):
+    timing = getattr(current, "timing", {})
+    if diagnostic_only(timing) and timing.get("audit") != "none":
         return current, {"applied": False, "reason": "semantic_audit_diagnostic_only"}
     if view is None or view.get("required_aspect_coverage") == "complete":
         return current, {"applied": False}

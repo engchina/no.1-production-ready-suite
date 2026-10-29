@@ -6835,7 +6835,6 @@ def run_round(
     if any(entry.get("scope_excluded") for entry in dropped):
         summary_reason = summary_reason or "要求の根拠計画にない説明を除外したため、要約の結論を保留"
     if diagnostic_only(timing):
-        summary_reason = ""
         summary_warning = "監査なし" if audit_mode == AUDIT_MODE_NONE else ""
     summary = answer_labels().neutral_summary if summary_reason else draft.summary
     summary_warning = "" if summary_reason or not str(summary or "").strip() else summary_warning
