@@ -15,6 +15,7 @@ from rag_parser_core.language import (
     builtin_pack,
     current_pack,
     overrides_from,
+    pack_from_payload,
     resolve,
     set_default_pack,
 )
@@ -365,3 +366,46 @@ def test_other_missing_language_fields_still_fail() -> None:
     del raw["answer_labels"]["cause_gap"]
     with pytest.raises(LanguagePackError, match="cause_gap"):
         build_pack(raw)
+
+
+def test_legacy_pack_fills_acquisition_label_without_changing_saved_values() -> None:
+    raw = builtin_pack().to_dict()
+    del raw["answer_labels"]["guide_acquisition_incomplete_template"]
+    raw["answer_labels"]["cause_gap"] = "合成の保存済み表示"
+    original = json.dumps(raw, ensure_ascii=False)
+    pack = build_pack(raw)
+    assert pack.text(
+        "answer_labels", "guide_acquisition_incomplete_template"
+    ) == builtin_pack().text("answer_labels", "guide_acquisition_incomplete_template")
+    assert pack.text("answer_labels", "cause_gap") == "合成の保存済み表示"
+    assert pack.ingest_hash == builtin_pack().ingest_hash
+    assert json.dumps(raw, ensure_ascii=False) == original
+
+
+def test_acquisition_label_preserves_custom_text_and_only_changes_display_hash() -> None:
+    raw = builtin_pack().to_dict()
+    raw["answer_labels"]["guide_acquisition_incomplete_template"] = "合成の取得未完了: {steps}"
+    pack = build_pack(raw)
+    assert (
+        pack.text("answer_labels", "guide_acquisition_incomplete_template")
+        == "合成の取得未完了: {steps}"
+    )
+    assert pack.hash != builtin_pack().hash
+    assert pack.ingest_hash == builtin_pack().ingest_hash
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_acquisition_label_explicit_invalid_value_is_not_defaulted(value: object) -> None:
+    raw = builtin_pack().to_dict()
+    raw["answer_labels"]["guide_acquisition_incomplete_template"] = value
+    with pytest.raises(LanguagePackError):
+        build_pack(raw)
+
+
+@pytest.mark.parametrize("snapshot", [[], None, "invalid", 3])
+def test_invalid_snapshot_returns_field_error_instead_of_internal_exception(
+    snapshot: object,
+) -> None:
+    with pytest.raises(LanguagePackError, match="snapshot") as caught:
+        pack_from_payload(json.dumps({"snapshot": snapshot}))
+    assert set(caught.value.errors) == {"snapshot"}

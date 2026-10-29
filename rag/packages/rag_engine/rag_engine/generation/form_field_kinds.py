@@ -200,8 +200,17 @@ def with_resolved_plan(runtime_knowledge: Any, resolved: Sequence[ResolvedCondit
         replace(rule, content=rule_content) if rule_content and rule.rule_id == rule_id else rule
         for rule in runtime_knowledge.matched_rules
     )
+    from rag_engine.generation.guide_acquisition import acquisition_notices
+
+    acquisitions = tuple(
+        {**row, "step_ids": [step_id for step_id in row.get("step_ids", ()) if step_id in kept]}
+        for row in runtime_knowledge.guide_acquisition
+        if any(step_id in kept for step_id in row.get("step_ids", ()))
+    )
     return replace(
         runtime_knowledge,
+        guide_acquisition=acquisitions,
+        guide_acquisition_notices=acquisition_notices(acquisitions),
         matched_rules=rules,
         guide_steps=tuple(item for item in runtime_knowledge.guide_steps if item[0] in kept),
         guide_optional_steps=tuple(step_id for step_id, required in steps if not required),

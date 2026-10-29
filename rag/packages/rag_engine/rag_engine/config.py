@@ -294,7 +294,7 @@ class Settings:
     # 「回答に未反映の関連章節」に示す(#2800。backend の既定は False)。
     section_extraction_enabled: bool = True
     # 業務ガイドの手順ごとに検索し、手順が参照する資料の頁の根拠を回答の材料に入れる (#2395)。LLM は呼ばない。
-    # 手順ごとの検索の回数の上限・1 手順に確保する根拠の数・参照の頁から入れる根拠の数・期限で抑える。
+    # 必須対象は追加検索の合計枠を先に確保する。回数はその後の補助検索、参照数は最低1件以外の追加候補を制限する。
     guide_step_retrieval_enabled: bool = True
     guide_step_max_queries: int = 4
     guide_step_chunks_per_step: int = 2
