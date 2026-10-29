@@ -37,6 +37,7 @@ PASSAGE_REASON_STATES: dict[str, PassageState] = {
     "citation_range_out_of_bounds": UNVERIFIED,
     "citation_extraction_failed": UNVERIFIED,
     "citation_heading_only": UNVERIFIED,
+    "citation_content_unusable": UNVERIFIED,
     "citation_version_mismatch": UNVERIFIED,
     "unassessed": UNVERIFIED,
     "figure_not_read": UNVERIFIED,

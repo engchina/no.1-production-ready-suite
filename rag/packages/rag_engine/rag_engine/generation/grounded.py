@@ -58,6 +58,7 @@ from rag_engine.generation.applications import audit_view as application_audit_v
 from rag_engine.generation.applications import render_lines as application_lines
 from rag_engine.generation.audit_recovery import merge_audit_retry
 from rag_engine.generation.check_cues import check_cues
+from rag_engine.generation.citation_content import citation_content_unusable
 from rag_engine.generation.citation_wire import bind_wire_range, canonical_generation_draft, generation_draft_wire_model
 from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.guide_authority import authoritative_guide_inputs, bind_guide_authority, compile_guide_task_contract
@@ -1866,7 +1867,14 @@ def merge_citations(
                 )
         return [primary], notes, dict(primary_subs)
     chosen = next(
-        (result for result in results if result[0] is not None and result[0].span is not None and not result[0].unmatched),
+        (
+            result
+            for result in results
+            if result[0] is not None
+            and result[0].span is not None
+            and not result[0].unmatched
+            and not _citation_support_unverified(result[0])
+        ),
         next((result for result in results if result[0] is not None), results[0]),
     )
     notes = list(chosen[1])
@@ -1958,29 +1966,34 @@ def verify(
             if not scope_unsettled:
                 return result, notes, subs
         view = views.get(id(span)) or check_view(span)
-        if heading_only_quote(quote, span):
-            # 見出しは説明を支えない。原文に無い引用と同じく、言い換えを残して印を付け、出典にしない（#3544）。
+        unusable_content = citation_content_unusable(quote)
+        if unusable_content or heading_only_quote(quote, span):
+            code = "citation_content_unusable" if unusable_content else "citation_heading_only"
+            detail = passage_marks.reason(code)["label"] if unusable_content else HEADING_ONLY_DETAIL
+            reason = detail if unusable_content else HEADING_ONLY_REASON
+            # 構造だけの引用は説明の根拠にしない。原文・範囲の記録と本文を残し、局所的に未確認とする。
             entry = CheckedItem(
                 _normalized(item.with_citation(evidence_id=span["evidence_id"], quote=quote), view),
                 span,
                 quote_match=match.get("kind", "exact"),
                 draft_index=index,
-                unmatched=True,
+                unmatched=not unusable_content,
             )
             entry.citation_resolution = {
                 **provenance,
-                "reason_code": "citation_heading_only",
+                "reason_code": code,
+                **({"content_usability": "unusable"} if unusable_content else {}),
                 "authenticity": "verified",
                 "resolved_evidence_id": span["evidence_id"],
                 "resolved_quote": quote,
                 "method": match.get("kind", "exact"),
             }
-            entry.mark("citation_heading_only", HEADING_ONLY_DETAIL, reason=HEADING_ONLY_REASON)
+            entry.mark(code, detail, reason=reason)
             notes.append(
                 {
                     "index": index,
                     "evidence_id": span["evidence_id"],
-                    "reason": HEADING_ONLY_REASON,
+                    "reason": reason,
                     "text": item.text,
                     "quote": quote,
                     "citation_resolution": dict(entry.citation_resolution),
@@ -3262,6 +3275,9 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
         span = entry.span
         if entry.removed or span is None:
             continue
+        if entry.citation_resolution.get("content_usability") == "unusable":
+            entry.review_assessment["effective_support"] = "unknown"
+            continue
         fields = output_field_claim(review.output_fields, entry.item.text)
         if fields is not None and fields.output_fields_unconfirmed() and review.support == "supported":
             review = review.model_copy(
@@ -4185,8 +4201,10 @@ def _citation_extraction(item: GroundedItem) -> dict[str, str]:
 
 
 def _citation_support_unverified(entry: CheckedItem) -> bool:
-    """今回指定した出典・範囲が不正なら、原文の支持判定に使える引用ではない。"""
-    return entry.citation_resolution.get("status") == "failed" and entry.citation_resolution.get("reason_code") in CITATION_EXTRACTION_CODES
+    """原文の範囲が未確認か構造だけなら、意味支持の判定には使わない。"""
+    return entry.citation_resolution.get("content_usability") == "unusable" or (
+        entry.citation_resolution.get("status") == "failed" and entry.citation_resolution.get("reason_code") in CITATION_EXTRACTION_CODES
+    )
 
 
 def citation_support_policy(
@@ -4204,7 +4222,12 @@ def citation_support_policy(
                 support="unknown",
                 support_quote="",
                 supported_fragments=[],
-                reason="指定した引用の原文・範囲を確認できないため、主張の裏付けは未検証です。" + review.reason,
+                reason=(
+                    passage_marks.reason("citation_content_unusable")["label"]
+                    if entry.citation_resolution.get("content_usability") == "unusable"
+                    else "指定した引用の原文・範囲を確認できないため、主張の裏付けは未検証です。"
+                )
+                + review.reason,
             )
         reviews.append(review.model_copy(update=update))
     return audit.model_copy(update={"reviews": reviews})
@@ -5779,7 +5802,9 @@ CITATION_EXTRACTION_CODES = frozenset(
         "citation_version_mismatch",
     }
 )
-UNSOURCED_MARK_CODES = frozenset({"quote_unmatched", "citation_error", "guide_text", *CITATION_EXTRACTION_CODES})
+UNSOURCED_MARK_CODES = frozenset(
+    {"quote_unmatched", "citation_error", "citation_content_unusable", "guide_text", *CITATION_EXTRACTION_CODES}
+)
 # 説明の文が業務ガイドの文から来たかの判定。文の語（2 文字組）のうち引いた根拠に無いものの割合が
 # ``GUIDE_TEXT_NOVEL_RATIO`` 以上で、その語のうち業務ガイドの文にあるものの割合が ``GUIDE_TEXT_GUIDE_RATIO`` 以上なら
 # 業務ガイドの文とする。語の少ない文（``GUIDE_TEXT_MIN_WORDS`` 未満）は判定しない。業務ガイドの文は資料の言い回しを

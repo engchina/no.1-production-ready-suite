@@ -2462,6 +2462,7 @@
       "引用行が根拠の範囲外=citation_range_out_of_bounds",
       "引用原文を抽出できない=citation_extraction_failed",
       "引用した範囲が見出しだけ=citation_heading_only",
+      "引用が区切り線・書式のみ=citation_content_unusable",
       "引用元の版を確認できない=citation_version_mismatch",
       "確かめが終わっていない=unassessed",
       "図の画像を読めておらず確かめられない=figure_not_read",
