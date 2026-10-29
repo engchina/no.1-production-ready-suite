@@ -1,4 +1,4 @@
-"""物理行の少ない引用単位は、物理行ごとに番号を付ける（explicit_units_v5。#3847）。"""
+"""通常の本文は空でない物理行ごとに番号を付け、OCR・表の断片だけを短い行でまとめる（explicit_units_v5。#3847）。"""
 
 import hashlib
 from dataclasses import replace
@@ -47,19 +47,41 @@ def item(start: int, end: int) -> GroundedItem:
     return canonical_generation_draft(generation_draft_wire_model().model_validate(raw)).items[0]
 
 
-@pytest.mark.parametrize("count", [2, 3, grounded.CITE_UNIT_SPLIT_MAX_LINES], ids=["two", "three", "max"])
-def test_short_lines_up_to_the_limit_get_their_own_unit(count: int) -> None:
-    lines = [f"説明の行{index}です。" for index in range(count)]
+@pytest.mark.parametrize("count", [2, 3, 5, 18], ids=["two", "three", "five", "eighteen"])
+def test_every_non_blank_physical_line_is_its_own_unit(count: int) -> None:
+    lines = [f"説明の行{index}で対象と条件を確かめます。" for index in range(count)]
     text = "\n".join(lines)
     assert pieces(text) == lines
-    # v4 は短い行を 1 単位にまとめる（送信済みの視図の読み直し用）。
-    assert pieces(text, contract_version="explicit_units_v4") == [text]
+    # v4 は短い行を CITE_UNIT_MAX_CHARS までまとめる（送信済みの視図の読み直し用）。
+    assert len(pieces(text, contract_version="explicit_units_v4")) < count
 
 
-def test_many_short_fragments_stay_one_unit_to_keep_the_input_small() -> None:
-    # OCR・表の 1 語ずつの断片が続く行は、上限を超えればまとめたまま（番号で入力を膨らませない）。
-    text = "\n".join(["欄"] * (grounded.CITE_UNIT_SPLIT_MAX_LINES + 1))
-    assert pieces(text) == [text]
+def short_fragments(count: int) -> str:
+    return "\n".join(f"欄{index}" for index in range(count))
+
+
+def test_many_very_short_fragment_lines_keep_the_v4_merge() -> None:
+    # OCR・表の 1 セルずつの断片が続く本文は、字数の分布で見分けて v4 と同じくまとめる（番号で入力を膨らませない）。
+    text = short_fragments(grounded.CITE_FRAGMENT_MIN_LINES)
+    assert grounded._fragment_lines(text)
+    assert pieces(text) == pieces(text, contract_version="explicit_units_v4") == [text]
+    # 行が少ないか、行の字数の中央値が上限を超える本文は、通常の本文として物理行ごとに分ける。
+    fewer = short_fragments(grounded.CITE_FRAGMENT_MIN_LINES - 1)
+    assert not grounded._fragment_lines(fewer) and pieces(fewer) == fewer.split("\n")
+    longer = "\n".join("あ" * (grounded.CITE_UNIT_MAX_CHARS // 10) for _ in range(grounded.CITE_FRAGMENT_MIN_LINES))
+    assert not grounded._fragment_lines(longer) and len(pieces(longer)) == grounded.CITE_FRAGMENT_MIN_LINES
+
+
+@pytest.mark.parametrize(
+    "fields", [{"origin": "image_extraction"}, {"origin": "unclassified", "tags": ["image_generated"]}], ids=["origin", "tag"]
+)
+def test_image_text_keeps_the_v4_merge(fields: dict[str, Any]) -> None:
+    evidence = {**span(TWO), **fields}
+    assert grounded._image_text(evidence)
+    view = grounded._citation_view(evidence, explicit_units=True)
+    assert view.contract_version == "explicit_units_v5"
+    assert view.units == tuple(grounded.citation_units(TWO, contract_version="explicit_units_v4")) == ((0, len(TWO)),)
+    assert not grounded._image_text(span(TWO))
 
 
 def test_blank_lines_are_skipped_and_indentation_is_kept() -> None:
@@ -67,11 +89,15 @@ def test_blank_lines_are_skipped_and_indentation_is_kept() -> None:
     assert pieces(text) == ["説明の行です。", "  字下げの続きです。"]
 
 
-def test_sentence_pieces_of_one_long_line_are_not_split_further() -> None:
+def test_sentence_pieces_of_one_long_line_merge_only_within_that_line() -> None:
     long_line = "長い説明の文です。" * 30
     units = pieces(long_line)
     assert units == pieces(long_line, contract_version="explicit_units_v4")
     assert "".join(units) == long_line and all("\n" not in unit for unit in units)
+    # 長い行の最後の断片と次の短い行は、v4 ではまとまるが v5 では別の単位になる。
+    text = long_line + "\n続きの短い行です。"
+    assert all("\n" not in unit for unit in pieces(text)) and pieces(text)[-1] == "続きの短い行です。"
+    assert "\n" in pieces(text, contract_version="explicit_units_v4")[-1]
 
 
 def test_heading_keeps_its_long_body_but_short_heading_and_line_are_numbered() -> None:

@@ -55,7 +55,9 @@ def response(start: int | None, end: int | None, *, index: int = 0, identity: st
     )
 
 
-def evidence(text: str = LONG, *, identity: str = "stable-a", source: str = "source-a") -> list[dict[str, Any]]:
+def evidence(
+    text: str = LONG, *, identity: str = "stable-a", source: str = "source-a", origin: str = "document_text"
+) -> list[dict[str, Any]]:
     spans = [
         {
             "evidence_id": identity,
@@ -64,6 +66,7 @@ def evidence(text: str = LONG, *, identity: str = "stable-a", source: str = "sou
             "source": "synthetic.pdf",
             "page": 1,
             "text": text,
+            "origin": origin,
             "function": ("synthetic.pdf", "合成操作"),
             "tags": [],
         }
@@ -118,15 +121,15 @@ def test_range_from_a_longer_other_block_does_not_apply_to_the_shorter_target_bl
 
 
 def test_numbered_unit_includes_unnumbered_physical_newlines() -> None:
-    # 物理行が CITE_UNIT_SPLIT_MAX_LINES を超える短い行のまとまりは、v5 でも 1 単位（番号の無い改行を含む）。
-    text = "画面を開きます。\n対象を選びます。\n条件を確かめます。\n値を入れます。\n" + "補足説明。" * 10 + "\n" + LONG
-    units = grounded.citation_units(text)
+    # 画像からの生成説明・OCR の根拠は、v5 でも短い行を 1 単位にまとめる（番号の無い改行を含む）。
+    text = "画面を開きます。\n対象を選びます。\n" + "補足説明。" * 10 + "\n" + LONG
+    units = grounded.citation_units(text, image_text=True)
     start, end = units[0]
     assert "\n" in text[start:end]
     rendered = grounded.numbered_text(text)
     assert rendered.startswith("1| ") and "\n対象を選びます。" in rendered
     draft, diagnostic = apply_range_repair(proposal(), response(1, 1), [target(count=len(units))])
-    cited, error = grounded.cited_quote(draft.items[0], evidence(text))
+    cited, error = grounded.cited_quote(draft.items[0], evidence(text, origin="image_extraction"))
     assert not error and cited.quote == text[start:end]
     assert diagnostic["status"] == "completed"
 
