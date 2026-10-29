@@ -798,7 +798,7 @@ def _stub_embed(monkeypatch: MonkeyPatch) -> list[list[str]]:
 async def test_validate_answer_checks_each_guide_step_by_its_main_operation(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """言い回しの違う正しい説明は手順の説明になり、共通の文だけの回答はならない（#2708）。"""
+    """主張の支持と説明候補を保ち、手順全体の未検証を充足に昇格させない。"""
 
     async def published_contents(self: Any, profile_id: str) -> list[Any]:
         return [("guide-1", 2, _shared_guide())]
@@ -822,20 +822,31 @@ async def test_validate_answer_checks_each_guide_step_by_its_main_operation(
     )
     result = await validate_answer("q", reworded, refs, get_settings(), oracle=oracle, guide=guide)
     assert [(step["step_id"], step["status"]) for step in result.guide_steps] == [
-        ("s1", "explained"),
-        ("s2", "explained"),
+        ("s1", "unknown"),
+        ("s2", "unknown"),
     ]
-    # 題名の文字の一致で結び付けない（unmatched にしない）。順序は説明の段落の位置で確かめる。
-    assert result.findings == []
+    # 主張の支持・引用は確認済みでも、手順の全必須要件はこの検査では監査していない。
+    assert result.counts["supported"] == 3
+    assert all(
+        check["status"] == "supported" and check["source_id"] == "c2"
+        for check in result.claim_checks
+    )
+    assert result.missing_evidence == []
+    assert [(item.code, item.step_id, item.severity) for item in result.findings] == [
+        ("guide_step_unexplained", "s1", "warning"),
+        ("guide_step_unexplained", "s2", "warning"),
+    ]
     assert result.valid is True
     assert len(calls) == 1
 
     common = "保存ボタンを押して画面を閉じれば完了です。"
     result = await validate_answer("q", common, refs, get_settings(), oracle=oracle, guide=guide)
     assert [(step["step_id"], step["status"]) for step in result.guide_steps] == [
-        ("s1", "unused"),
-        ("s2", "unused"),
+        ("s1", "unknown"),
+        ("s2", "unknown"),
     ]
+    assert result.counts["supported"] == 1
+    assert result.missing_evidence == []
     assert [(item.code, item.step_id) for item in result.findings] == [
         ("guide_step_unexplained", "s1"),
         ("guide_step_unexplained", "s2"),
@@ -850,7 +861,11 @@ async def test_validate_answer_checks_each_guide_step_by_its_main_operation(
         "2. 設定画面を開き、設定 A に値を入れてください。"
     )
     result = await validate_answer("q", swapped, refs, get_settings(), oracle=oracle, guide=guide)
-    assert [(item.code, item.severity) for item in result.findings] == [("step_order", "error")]
+    assert [(item.code, item.severity) for item in result.findings] == [
+        ("step_order", "error"),
+        ("guide_step_unexplained", "warning"),
+        ("guide_step_unexplained", "warning"),
+    ]
     assert result.valid is False
 
 

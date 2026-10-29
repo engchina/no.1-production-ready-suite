@@ -5487,47 +5487,54 @@ def apply_guide_contracts(
             "reason": "requirement_observations" if audit is not None else "requirement_review_not_run",
         }
 
-    def first_operation(step_id: str) -> tuple[int, int] | None:
-        operations = [
-            (proof["item_index"], proof["start"])
+    def operation_spans(step_id: str) -> list[dict[str, Any]]:
+        return [
+            proof
             for proof in body_spans.get(step_id, ())
-            if proof["item_index"] < len(checked)
-            and checked[proof["item_index"]].item.kind in _PROCEDURE_KINDS
-            and proof["start"] is not None
-            and not proof["ambiguous"]
+            if proof["item_index"] < len(checked) and checked[proof["item_index"]].item.kind in _PROCEDURE_KINDS
         ]
-        return min(operations) if operations else None
+
+    def determinate(proofs: Sequence[dict[str, Any]]) -> bool:
+        return bool(proofs) and all(proof["start"] is not None and not proof["ambiguous"] for proof in proofs)
 
     for contract in contracts:
         step_id = contract["step_id"]
         if step_id not in by_id:
             continue
-        current = first_operation(step_id)
-        dependencies = tuple(contract.get("depends_on", ()))
-        operation_steps = {
-            key
-            for key in (step_id, *dependencies)
-            if any(0 <= index < len(checked) and checked[index].item.kind in _PROCEDURE_KINDS for index in indexes.get(key, ()))
-        }
-        uncertain_order = (
-            dependencies
-            and step_id in operation_steps
-            and (current is None or any(before in operation_steps and first_operation(before) is None for before in dependencies))
-        )
-        if uncertain_order and by_id[step_id]["status"] == GUIDE_STEP_EXPLAINED:
-            by_id[step_id]["status"] = GUIDE_STEP_UNKNOWN
-            by_id[step_id]["validation"]["body_coverage"].update(status=GUIDE_STEP_UNKNOWN, reason="operation_order_unverified")
-        if current is None:
+        current = operation_spans(step_id)
+        # 規則・案内・条件への言及は、実行操作の本文位置に数えない。
+        if not current:
             continue
-        wrong_order = [
-            predecessor
-            for predecessor in contract.get("depends_on", ())
-            if (before := first_operation(predecessor)) is not None and before > current
-        ]
+        wrong_order, uncertain = [], []
+        for predecessor in contract.get("depends_on", ()):
+            before = operation_spans(predecessor)
+            if not before:
+                continue
+            # 広い同一段落や重なる抜粋では、語の出現順を実操作順序に置き換えない。
+            if (
+                not determinate(current)
+                or not determinate(before)
+                or any(
+                    left["item_index"] == right["item_index"] and max(left["start"], right["start"]) < min(left["end"], right["end"])
+                    for left in before
+                    for right in current
+                )
+            ):
+                uncertain.append(predecessor)
+                continue
+            last_predecessor = max((proof["item_index"], proof["end"]) for proof in before)
+            first_current = min((proof["item_index"], proof["start"]) for proof in current)
+            if last_predecessor > first_current:
+                wrong_order.append(predecessor)
+        step = by_id[step_id]
         if wrong_order:
-            by_id[step_id]["status"] = GUIDE_STEP_PARTIAL
-            by_id[step_id]["order_errors"] = wrong_order
-            by_id[step_id]["validation"]["body_coverage"].update(status=GUIDE_STEP_PARTIAL, reason="operation_order_mismatch")
+            step["status"] = GUIDE_STEP_PARTIAL
+            step["order_errors"] = wrong_order
+            step["validation"]["body_coverage"].update(status=GUIDE_STEP_PARTIAL, reason="operation_order_mismatch")
+        elif uncertain and step["status"] == GUIDE_STEP_EXPLAINED:
+            step["status"] = GUIDE_STEP_UNKNOWN
+            step["order_unverified"] = uncertain
+            step["validation"]["body_coverage"].update(status=GUIDE_STEP_UNKNOWN, reason="operation_order_unverified")
     return result
 
 

@@ -20,13 +20,23 @@ def _spans():
     return _grounded_spans(QUESTION, context(record(0, ORIGINAL, "一覧画面", page=4, source="手順書 A.pdf")), (), None)
 
 
-def _run(*, quote=ORIGINAL, support="supported", mode="standard", suffix="", evidence_id="E1"):
+def _run(*, quote=ORIGINAL, support="supported", mode="standard", suffix="", evidence_id="E1", complete_guide=False):
     spans = _spans()
     generated = draft(item(evidence_id, PARAPHRASE + suffix, "対象を決めて提出してください。"), summary="操作の説明（E1）")
     response = audit((0, support, "matched", ""), requests=[("Q1", "addressed", "")])
     if mode == "standard":
         response.pop("unused_evidence_ids")
     response["reviews"][0]["support_quote"] = quote
+    if complete_guide:
+        response["guide_requirement_reviews"] = [
+            {
+                "requirement_id": "step-a:0",
+                "answer_state": "explained",
+                "item_indexes": [0],
+                "answer_quote": PARAPHRASE,
+                "reason": "本文で操作を説明",
+            }
+        ]
     model = FakeModel([generated], [response])
     result = grounded.run_round(
         QUESTION,
@@ -39,13 +49,16 @@ def _run(*, quote=ORIGINAL, support="supported", mode="standard", suffix="", evi
         parse_images=model,
         audit_mode=mode,
         guide_steps=[("step-a", "対象を送信", [spans[0]["source_id"]])],
+        guide_step_contracts=[{"step_id": "step-a", "requirements": [{"id": "step-a:0", "kind": "completion", "text": "対象を送信"}]}]
+        if complete_guide
+        else (),
     )
     return result, model, spans
 
 
 @pytest.mark.parametrize("mode", ["standard", "detailed"])
 def test_audited_original_recovers_paraphrase_and_guide_step(mode):
-    result, model, spans = _run(mode=mode, suffix="（E1）", evidence_id="")
+    result, model, spans = _run(mode=mode, suffix="（E1）", evidence_id="", complete_guide=True)
     entry = next(e for e in result.checked if e.draft_index == 0)
     assert entry.confirmed and entry.quote_match == "audited_paraphrase"
     assert entry.item.quote == ORIGINAL

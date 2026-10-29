@@ -161,3 +161,26 @@ def test_final_envelope_keeps_body_and_distinguishes_unreviewed_from_completed_s
         assert guide_requests == {"guide:s1": "addressed", "guide:s2": "addressed"}
         assert response.envelope["outcome"] == "answered"
         assert all(row["status"] == "explained" for row in response.generation_trace["guide_step_coverage"])
+
+
+def test_predecessor_must_finish_before_the_next_step_even_across_multiple_items():
+    left, right = "パネルAを開いて", "設定値を入力します。"
+    items = [item(left, left), item(SECOND, SECOND), item(right, right)]
+    result = grounded.apply_guide_contracts(
+        coverage(items), items, CONTRACTS, audit(observation("r1", [0, 2], left + "\n" + right), observation("r2", [1], SECOND))
+    )
+    assert result[0]["status"] == "explained"
+    assert result[1]["status"] == "partial" and result[1]["order_errors"] == ["s1"]
+    assert [entry.item.text for entry in items] == [left, SECOND, right]
+
+
+@pytest.mark.parametrize("shared_proof", [FIRST + SECOND, "反映は入力の後に行います。"])
+def test_broad_or_relative_order_description_is_unknown_instead_of_text_position_contradiction(shared_proof):
+    items = [item(shared_proof)]
+    result = grounded.apply_guide_contracts(
+        coverage(items), items, CONTRACTS, audit(observation("r1", [0], shared_proof), observation("r2", [0], shared_proof))
+    )
+    assert result[1]["status"] == "unknown"
+    assert result[1]["order_unverified"] == ["s1"]
+    assert "order_errors" not in result[1]
+    assert items[0].item.text == shared_proof
