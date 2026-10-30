@@ -4737,6 +4737,69 @@ def citation_range_targets(
     return targets
 
 
+def restore_previous_citation_ranges(
+    question: str, draft: GroundedDraft, spans: Sequence[dict], previous: Sequence[CheckedItem], previous_draft: GroundedDraft | None
+) -> tuple[GroundedDraft, list[dict[str, int]]]:
+    """同じ主張・同じ根拠の版で、退行した範囲だけを前の確認済み引用へ戻す。"""
+    if not previous or previous_draft is None:
+        return draft, []
+    checked, dropped = verify(question, draft, spans)
+    targets = citation_range_targets(draft, spans, checked, dropped)
+    restored: list[dict[str, int]] = []
+    result = draft.model_copy(deep=True)
+    for target in targets:
+        index, citation_index = target["item_index"], target["citation_index"]
+        item = result.items[index]
+        matches = [
+            entry
+            for entry in previous
+            if entry.confirmed
+            and not entry.added
+            and not entry.unmatched
+            and entry.draft_index is not None
+            and 0 <= entry.draft_index < len(previous_draft.items)
+            and all(
+                getattr(previous_draft.items[entry.draft_index], key) == getattr(item, key)
+                for key in ("request_id", "kind", "text", "applies", "condition")
+            )
+            and [ref.evidence_id for ref in previous_draft.items[entry.draft_index].citations]
+            == [ref.evidence_id for ref in item.citations]
+        ]
+        if len(matches) != 1:
+            continue
+        old = matches[0]
+        assert old.draft_index is not None
+        citation = previous_draft.items[old.draft_index].citations[citation_index]
+        named = _line_citation_spans(item.model_copy(update={"citations": [citation]}), spans)
+        if len(named) != 1:
+            continue
+        view = _citation_view(named[0])
+        proofs = [
+            own.citation_resolution
+            for own in item_citations(old)
+            if own.citation_resolution.get("requested_evidence_id") == citation.evidence_id
+        ]
+        if not any(
+            proof.get("resolved_evidence_id") == view.evidence_id
+            and proof.get("source_id") == view.source_id
+            and proof.get("view_sha256") == view.view_sha256
+            for proof in proofs
+        ):
+            continue
+        candidate = item.model_copy(deep=True)
+        candidate.citations[citation_index] = citation.model_copy(deep=True)
+        tested, failures = verify(
+            question,
+            draft.model_copy(update={"items": [candidate.model_copy(update={"citations": [candidate.citations[citation_index]]})]}),
+            spans,
+        )
+        if failures or not tested or citation_range_issues(tested, failures):
+            continue
+        item.citations[citation_index] = candidate.citations[citation_index]
+        restored.append({"item_index": index, "citation_index": citation_index})
+    return (result, restored) if restored else (draft, [])
+
+
 def citation_range_issues(checked: Sequence[CheckedItem], dropped: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
     """意味支持と分け、今回の根拠の範囲指定に失敗した引用と、見出しだけを指して印が付いた引用を報告する。"""
     observations = [
@@ -7167,6 +7230,9 @@ def run_round(
         timing["image_fallback"] = image_fallback
     if generation_usage := usage_delta(usage_before):
         timing["generation_usage"] = generation_usage
+    draft, restored_ranges = restore_previous_citation_ranges(question, draft, spans, previous, previous_draft)
+    if restored_ranges:
+        timing["citation_range_restored"] = restored_ranges
     checked, dropped = verify(
         question,
         draft,
