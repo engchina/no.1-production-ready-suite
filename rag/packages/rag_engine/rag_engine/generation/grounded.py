@@ -4705,7 +4705,7 @@ def citation_range_targets(
                 continue
             numbered = view.numbered
             binding = bind_wire_range(*citation._wire_range, unit_count=len(view.units), numbered=numbered)
-            reason_code = binding.reason_code or ""
+            reason_code: str = binding.reason_code or ""
             if reason_code not in CITATION_RANGE_ERROR_CODES:
                 # 有効な範囲は、今の範囲で見出しだけと判定した記録があるときだけ対象にする（別の範囲の古い記録は使わない）。
                 if reason_code or not any(heading_only and proof.get("requested_lines") == binding.lines for proof, heading_only in bound):
