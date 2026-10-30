@@ -552,7 +552,14 @@ AUDIT_MODES = (AUDIT_MODE_NONE, AUDIT_MODE_STANDARD, AUDIT_MODE_DETAILED)
 STANDARD_MAX_ROUNDS = 2
 # 通常の回答で作り直しに使う指摘（事実の問題）。完全性の不足（答えていない要求・未使用の根拠・説明していない手順・
 # 目的の一部だけ）は作り直さない。目的違い（off_target）は別の対象に答えた誤りなので直す。
-STANDARD_CORRECTION_KEYS = ("citation_range_issues", "dropped_items", "downgraded_items", "no_cited_evidence", "summary_unsupported")
+STANDARD_CORRECTION_KEYS = (
+    "button_name_issues",
+    "citation_range_issues",
+    "dropped_items",
+    "downgraded_items",
+    "no_cited_evidence",
+    "summary_unsupported",
+)
 # detailed だけの入力・出力の規則の行（監査の指示は 1 行 1 規則なので行の先頭で選ぶ）。
 _DETAILED_AUDIT_LINES = (
     "- 材料候補:",
@@ -1442,6 +1449,7 @@ class CheckedItem:
     # 同じ主張の別の出典（#3526）。出典ごとに原文照合・決定的な検査（と監査）を通った、出典を 1 つだけ持つ item。
     # 本文では主張を 1 回だけ出し、出典行を出典ごとに並べる。
     also: list[CheckedItem] = field(default_factory=list)
+    button_name_issues: list[str] = field(default_factory=list)
 
     def mark(self, code: str, detail: str = "", *, reason: str = "") -> None:
         """言い換えを本文に残したまま、段落に印（``code`` は契約の語彙）を付ける。``reason`` は trace・是正の指摘の文。"""
@@ -2313,6 +2321,7 @@ def verify(
         for entry in kept_entries:
             if absent := _cited_button_gaps(question, entry):
                 # 案内したボタン名が、引いたどの原文にも無い（#3822）。本文と出典は変えず、段落に警告を付ける。
+                entry.button_name_issues = list(absent)
                 _mark_check(entry, CITED_BUTTON_CHECK, "引いた原文に無い: " + "、".join(absent))
         checked.extend(kept_entries)
         dropped.extend(notes)
@@ -5199,6 +5208,15 @@ class Round:
                 and not e.unmatched
                 and (e.review_assessment.get("effective_support") != "unknown" or e.document_value_issue or e.removed or e.table_conflict)
             ],
+            "button_name_issues": [
+                {
+                    "text": e.item.text,
+                    "absent_buttons": e.button_name_issues,
+                    "hint": "引用原文にないボタン操作を加えず、原文に記載された操作で説明してください。",
+                }
+                for e in self.checked
+                if e.button_name_issues and not e.removed
+            ],
             "document_value_issues": [
                 {
                     "text": e.item.text,
@@ -5237,7 +5255,13 @@ class Round:
             else "根拠を引用した item がありません。質問に関係する原文が1つでもあれば、その原文を引用して答えられる範囲を示してください。本当に無関係なら gap のままで構いません。",
         }
         if diagnostic_only(self.timing):
-            deterministic_keys = {"citation_range_issues", "dropped_items", "downgraded_items", "document_value_issues"}
+            deterministic_keys = {
+                "button_name_issues",
+                "citation_range_issues",
+                "dropped_items",
+                "downgraded_items",
+                "document_value_issues",
+            }
             if self.timing.get("audit") == AUDIT_MODE_NONE:
                 deterministic_keys.add("no_cited_evidence")
             result = {key: value for key, value in result.items() if key in deterministic_keys}
@@ -6682,6 +6706,7 @@ def run_round(
     previous: Sequence[CheckedItem] = (),
     previous_draft: GroundedDraft | None = None,
     previous_dropped: Sequence[Mapping[str, Any]] = (),
+    repair_citation_ranges: bool = True,
     known_gaps: Sequence[str] = (),
     audit_settings: Any = None,
     compact_audit_reasons: bool = False,
@@ -6748,7 +6773,7 @@ def run_round(
         return raw_parse_text(system, user, call_settings, schema, **options)
 
     parse_text = bounded_parse_text
-    range_only = previous_draft is not None and bool(citation_range_issues(previous, previous_dropped))
+    range_only = repair_citation_ranges and previous_draft is not None and bool(citation_range_issues(previous, previous_dropped))
     range_repair: dict[str, Any] = {}
 
     def plan_scope(evidence: Sequence[dict]) -> RequestScopePlan:
@@ -7623,9 +7648,11 @@ def correction_feedback(feedback: Mapping[str, Any], audit_mode: str, *, assume_
     if audit_mode == AUDIT_MODE_NONE:
         if assume_unconfirmed and feedback.get("no_cited_evidence"):
             return {"no_cited_evidence": _ASSUMPTION_NO_CITED_HINT}
-        if feedback.get("document_value_issues") or feedback.get("citation_range_issues"):
+        if any(feedback.get(key) for key in ("document_value_issues", "citation_range_issues", "button_name_issues")):
             return {
-                key: feedback[key] for key in ("citation_range_issues", "document_value_issues", "supported_items") if feedback.get(key)
+                key: feedback[key]
+                for key in ("citation_range_issues", "document_value_issues", "button_name_issues", "supported_items")
+                if feedback.get(key)
             }
         return {}
     if audit_mode == AUDIT_MODE_DETAILED:
@@ -7802,7 +7829,10 @@ def better(candidate: Round, current: Round) -> bool:
     lost_requests = current.addressed - candidate.addressed - candidate.withdrawn_requests
     if lost_requests or candidate.verified + candidate.withdrawn < current.verified:
         return False
-    return candidate.score() > current.score()
+    range_progress = bool(getattr(candidate, "timing", {}).get("citation_range_repair", {}).get("adopted")) and len(
+        citation_range_issues(candidate.checked, candidate.dropped)
+    ) < len(citation_range_issues(current.checked, current.dropped))
+    return candidate.score() > current.score() or range_progress
 
 
 # 是正の round を時間で打ち切った・切れた理由（`RoundBudget.stop["reason"]`。#1516）。
@@ -7827,7 +7857,14 @@ NO_IMPROVEMENT_REASONS = frozenset(
 # （写し誤り）・印を付けた説明（downgraded_items。#2738 で降格から印に変えた）・根拠を引用した説明が無いこと。
 # 答えていない要求・使われていない根拠・質問の目的とのずれは、根拠を足す是正（取得済みの資料・原画像）で直す。
 # 業務ガイドの必須の手順を説明していないこと（#2491。手順の根拠は材料にある）も同じ。
-REGENERATION_FEEDBACK_KEYS = ("citation_range_issues", "dropped_items", "downgraded_items", "no_cited_evidence", "guide_steps_unexplained")
+REGENERATION_FEEDBACK_KEYS = (
+    "button_name_issues",
+    "citation_range_issues",
+    "dropped_items",
+    "downgraded_items",
+    "no_cited_evidence",
+    "guide_steps_unexplained",
+)
 
 
 def feedback_signature(feedback: dict[str, Any] | None) -> dict[str, Any]:
@@ -7844,6 +7881,7 @@ def feedback_signature(feedback: dict[str, Any] | None) -> dict[str, Any]:
         "unused": sorted(
             {json.dumps(ref, ensure_ascii=False, sort_keys=True, default=str) for ref in feedback.get("unused_evidence_ids") or ()}
         ),
+        **({"button_name_issues": len(feedback["button_name_issues"])} if feedback.get("button_name_issues") else {}),
         "citation_ranges": sorted(
             (str(row.get("item_index")), str(row.get("evidence_id")), str(row.get("reason_code")))
             for row in feedback.get("citation_range_issues") or ()
@@ -8066,6 +8104,8 @@ class RoundBudget:
 def pending_feedback_labels(feedback: dict[str, Any]) -> list[str]:
     """是正の指摘（`Round.feedback`）のうち、直していない不足の短い説明（#1516）。"""
     labels: list[str] = []
+    if count := len(feedback.get("button_name_issues") or ()):
+        labels.append(f"引用原文にないボタン操作 {count} 件")
     ranges = feedback.get("citation_range_issues") or ()
     if count := sum(row.get("reason_code") != CITATION_HEADING_ONLY for row in ranges):
         labels.append(f"範囲を確認できない引用 {count} 件")
