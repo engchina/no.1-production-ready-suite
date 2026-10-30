@@ -35,6 +35,14 @@ class CallStreamCapture:
             kind in {"response.completed", "response.incomplete", "response.failed"}
             and response is not None
         ):
+            if kind != "response.completed" and self.has_content and not _value(response, "output"):
+                response = {
+                    "status": _value(response, "status") or "incomplete",
+                    "output": self._output(),
+                    "provider_response": response,
+                    "capture_partial": True,
+                    "capture_truncated": self._truncated,
+                }
             self._terminal = True
             self._publish(response)
             return
@@ -68,6 +76,16 @@ class CallStreamCapture:
     def flush(self, *, interrupted: bool = False) -> None:
         if self._terminal or not self._parts:
             return
+        self._publish(
+            {
+                "status": "interrupted" if interrupted else "in_progress",
+                "output": self._output(),
+                "capture_truncated": self._truncated,
+            }
+        )
+        self._last = time.monotonic()
+
+    def _output(self) -> list[dict[str, Any]]:
         output: list[dict[str, Any]] = []
         for (_, _, kind), text in sorted(self._parts.items()):
             if kind == "function_call":
@@ -89,11 +107,4 @@ class CallStreamCapture:
                         "content": [{"type": kind, "text": text}],
                     }
                 )
-        self._publish(
-            {
-                "status": "interrupted" if interrupted else "in_progress",
-                "output": output,
-                "capture_truncated": self._truncated,
-            }
-        )
-        self._last = time.monotonic()
+        return output

@@ -11,11 +11,11 @@ from app.features.agent.builtin_runtime import _ObservedStream
 
 
 @pytest.mark.asyncio
-async def test_cancelled_stream_preserves_received_reasoning_and_input():
+async def test_cancelled_stream_preserves_received_reasoning_and_input() -> None:
     class Stream:
         count = 0
 
-        async def __anext__(self):
+        async def __anext__(self) -> SimpleNamespace:
             self.count += 1
             if self.count == 1:
                 return SimpleNamespace(
@@ -23,7 +23,7 @@ async def test_cancelled_stream_preserves_received_reasoning_and_input():
                 )
             raise asyncio.CancelledError()
 
-        async def close(self):
+        async def close(self) -> None:
             pass
 
     with (
@@ -37,6 +37,7 @@ async def test_cancelled_stream_preserves_received_reasoning_and_input():
             await stream.__anext__()
     record = next(item for item in result.spans if item.operation_name == "gen_ai.chat")
     assert record.status == "cancelled"
+    assert record.display and record.display.details and record.display.details.call
     call = record.display.details.call
     assert "合成の質問" in call.input.text
     assert json.loads(call.output.text)["output"][0]["content"][0]["text"] == "合成の思考"

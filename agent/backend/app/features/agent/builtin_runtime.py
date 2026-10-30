@@ -681,6 +681,7 @@ class _ObservedStream:
             self._span.set_status(
                 "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
             )
+            self._exhausted = True
             self._span.finish()
             raise
 

@@ -36,3 +36,13 @@ def test_terminal_response_wins_over_prefix_and_bounded_capture_is_explicit():
     capture.feed({"type": "response.completed", "response": final})
     capture.flush(interrupted=True)
     assert snapshots[-1] is final
+
+
+def test_failed_terminal_without_output_keeps_the_received_prefix():
+    snapshots = []
+    capture = CallStreamCapture(snapshots.append)
+    capture.feed({"type": "response.output_text.delta", "delta": "合成の途中の回答"})
+    capture.feed({"type": "response.failed", "response": {"status": "failed", "output": []}})
+    assert snapshots[-1]["status"] == "failed"
+    assert snapshots[-1]["output"][0]["content"][0]["text"] == "合成の途中の回答"
+    assert snapshots[-1]["capture_partial"] is True
