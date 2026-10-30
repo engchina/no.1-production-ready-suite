@@ -801,16 +801,22 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     failed_resends = 0
     runaway_resends = 0
     retry_messages = input_messages
+    retry_input_reserve = 0
     detect_runaway = bool(getattr(settings, "llm_runaway_detection", False))
     runaway = streamed and detect_runaway
     while True:
         check_deadline()
         reasoning: dict[str, Any] = {"reasoning": {"effort": effort}} if effort else {}
         send_budget, time_capped = deadline_output_budget(budget, provider)
+        # 追加の入力は UTF-8 の byte 数を上限として出力予約から引く。予約に入らなければ元の入力で再送する。
+        send_messages = input_messages
+        if retry_messages is not input_messages and retry_input_reserve < send_budget:
+            send_messages = retry_messages
+            send_budget -= retry_input_reserve
         limits = _stall_limits(provider, settings) if streamed and stall_resends < settings.llm_stall_resends else None
         request: dict[str, Any] = {
             "model": provider.model,
-            "input": retry_messages,
+            "input": send_messages,
             "text_format": text_format,
             "max_output_tokens": send_budget,
             "temperature": LLM_TEMPERATURE,
@@ -864,6 +870,8 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 # （出力の上限で未完了の送り直しと同じく、推論の量の下げは 1 回だけ）。
                 runaway_resends += 1
                 retry_messages = _runaway_retry_messages(input_messages, text_format, exc.reason)
+                extra = retry_messages[len(input_messages) :]
+                retry_input_reserve = len(json.dumps(extra, ensure_ascii=False).encode("utf-8")) if extra else 0
                 lower = "" if lowered else lower_reasoning_effort(effort)
                 if lower:
                     effort, lowered = lower, True

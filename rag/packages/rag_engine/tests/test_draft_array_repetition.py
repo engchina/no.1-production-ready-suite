@@ -83,9 +83,11 @@ def test_repetition_resend_receives_feedback_and_preserves_original_question(rec
         def __init__(self):
             super().__init__(clock, [])
             self.inputs = []
+            self.budgets = []
 
         def _stream(self, **kwargs):
             self.inputs.append(deepcopy(kwargs["input"]))
+            self.budgets.append(kwargs["max_output_tokens"])
             has_feedback = recovered and len(kwargs["input"]) > 1
             self.scripts.append(_text_script(['{"items":[]}'] if has_feedback else repeated, final=valid))
             return super()._stream(**kwargs)
@@ -111,6 +113,8 @@ def test_repetition_resend_receives_feedback_and_preserves_original_question(rec
     assert feedback.startswith("## Step 1:") and "## Step 2:" in feedback
     assert "同じ項目を同じ配列に繰り返さず" in feedback
     assert len(client.streams) == 2
+    reserve = len(json.dumps(client.inputs[1][1:], ensure_ascii=False).encode("utf-8"))
+    assert client.budgets[0] - client.budgets[1] == reserve
 
 
 @pytest.mark.parametrize("reason", ["runaway_repetition", "runaway_whitespace"])
@@ -124,7 +128,8 @@ def test_feedback_is_confined_to_draft_resends_and_contains_no_rejected_output(r
     assert ("空白だけの出力" if reason.endswith("whitespace") else "同じ内容の反復") in retried[-1]["content"][0]["text"]
 
 
-def test_nonstreaming_draft_repetition_resend_uses_the_same_feedback():
+@pytest.mark.parametrize("small_budget", [True, False])
+def test_nonstreaming_draft_repetition_resend_uses_the_same_feedback(small_budget):
     from test_llm_runaway_output import _NO_STREAM_USAGE, _runaway_incomplete
 
     class Client:
@@ -146,8 +151,13 @@ def test_nonstreaming_draft_repetition_resend_uses_the_same_feedback():
     client = Client()
     messages = [{"role": "user", "content": "合成の質問"}]
     settings = replace(get_settings(environ={}, dotenv_path=None), llm_runaway_detection=True, llm_stall_detection=False)
-    with patch.object(oci, "_openai_client_for_provider", return_value=client):
-        result = oci._openai_parsed(messages, settings, GroundedDraft, PROVIDER)
-    assert not result.items and len(client.inputs) == 2
-    assert client.inputs[1][:-1] == messages
-    assert "同じ内容の反復" in client.inputs[1][-1]["content"][0]["text"]
+    with patch.object(oci, "_openai_client_for_provider", return_value=client), oci.bind_output_cap(1 if small_budget else None):
+        if small_budget:
+            with pytest.raises(oci.LlmRunawayOutput):
+                oci._openai_parsed(messages, settings, GroundedDraft, PROVIDER)
+            assert client.inputs == [messages, messages]
+        else:
+            result = oci._openai_parsed(messages, settings, GroundedDraft, PROVIDER)
+            assert not result.items and len(client.inputs) == 2
+            assert client.inputs[1][:-1] == messages
+            assert "同じ内容の反復" in client.inputs[1][-1]["content"][0]["text"]
